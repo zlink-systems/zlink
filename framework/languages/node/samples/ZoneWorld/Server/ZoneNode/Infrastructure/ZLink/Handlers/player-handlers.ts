@@ -10,6 +10,7 @@ import {
   EnterZoneMsg,
   BotTickRes,
   JoinWorldRes,
+  MessageFollowProbeRes,
   MoveRejectedNotify,
   PacketNames,
 } from '../../../../../Shared/contracts';
@@ -18,7 +19,13 @@ import type { ZoneId } from '../../../../../Shared/spec';
 import { nextBotStep } from '../../../Domain/bot-patrol';
 import { validateMove } from '../../../Domain/move-policy';
 import { NodeRuntimeState } from '../../../Domain/node-runtime-state';
-import type { BotTickReq, EnterWorldReq, JoinWorldReq, MoveMsg } from '../../../../../Shared/contracts';
+import type {
+  BotTickReq,
+  EnterWorldReq,
+  JoinWorldReq,
+  MessageFollowProbeReq,
+  MoveMsg
+} from '../../../../../Shared/contracts';
 import type {
   ZLinkMessageContext,
   ZLinkSpotOutbound
@@ -195,6 +202,54 @@ class PlayerMoveHandler {
   }
 }
 
+/**
+ * Answers the runner-only Message Follow probe on whichever node currently
+ * owns the actor. Echoing the probe id and payload proves the followed
+ * request kept its payload and reply correlation (ZW-B6).
+ */
+@Injectable()
+@zlinkSpotActorRequestHandler({
+  spot: () => ZoneSpot,
+  actor: () => PlayerActor,
+  packetName: PacketNames.messageFollowProbeReq
+})
+class PlayerMessageFollowProbeHandler {
+  async handle(
+    _spot: ZoneSpot,
+    actor: PlayerActor,
+    _context: ZLinkMessageContext,
+    request: MessageFollowProbeReq
+  ): Promise<MessageFollowProbeRes> {
+    console.log(
+      `message-follow probe handled actor=${actor.actorId} probe=${request.probeId} payload=${request.payload}`
+    );
+    return new MessageFollowProbeRes(request.probeId, request.payload);
+  }
+}
+
+/**
+ * Records the one-way half of the Message Follow probe. A one-way send has no
+ * reply that could prove target execution, so the runner reads this log line.
+ */
+@Injectable()
+@zlinkSpotActorSendHandler({
+  spot: () => ZoneSpot,
+  actor: () => PlayerActor,
+  packetName: PacketNames.messageFollowProbeReq
+})
+class PlayerMessageFollowProbeSendHandler {
+  async handle(
+    _spot: ZoneSpot,
+    actor: PlayerActor,
+    _context: ZLinkMessageContext,
+    message: MessageFollowProbeReq
+  ): Promise<void> {
+    console.log(
+      `message-follow probe one-way handled actor=${actor.actorId} probe=${message.probeId} payload=${message.payload}`
+    );
+  }
+}
+
 @Injectable()
 @zlinkSpotActorRequestHandler({
   spot: () => ZoneSpot,
@@ -227,6 +282,8 @@ export {
   EntryEnterWorldHandler,
   EntryJoinWorldHandler,
   PlayerBotTickHandler,
+  PlayerMessageFollowProbeHandler,
+  PlayerMessageFollowProbeSendHandler,
   PlayerMoveHandler,
   PlayerMovement,
 };

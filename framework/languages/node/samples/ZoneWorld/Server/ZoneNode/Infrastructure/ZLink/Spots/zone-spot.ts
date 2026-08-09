@@ -203,15 +203,33 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
   }
 
   private async notifyActor(actorId: string, payload: unknown): Promise<void> {
-    await this.actorClient
-      .sendToActor(actorId, new DeliverZoneNotification(payload))
-      .submit();
+    try {
+      await this.actorClient
+        .sendToActor(actorId, new DeliverZoneNotification(payload))
+        .submit();
+    } catch (error) {
+      // A repeated relocation that returns an actor to this node (ZW-B7) can
+      // leave the first send resolving the previous tenure's cached route,
+      // which the framework refuses with a terminal stale error instead of
+      // guessing. The failure invalidates that cache, so one deterministic
+      // re-resolve retry reaches the committed owner. The framework never
+      // resubmits on its own; retrying is an application decision.
+      if (!isStaleRouteError(error)) throw error;
+      console.log(`actor notify re-resolved after stale route zone=${String(this.context.spotId)} player=${actorId}`);
+      await this.actorClient
+        .sendToActor(actorId, new DeliverZoneNotification(payload))
+        .submit();
+    }
   }
 
   private requireState(): ZoneState {
     if (this.state === undefined) throw new Error('Zone spot has not initialized.');
     return this.state;
   }
+}
+
+function isStaleRouteError(error: unknown): boolean {
+  return error instanceof Error && /stale/i.test(error.message);
 }
 
 export { ZoneSpot };

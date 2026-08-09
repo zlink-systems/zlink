@@ -29,6 +29,22 @@ class ZoneChangedNotify {
 class WorldAnnounceNotify { constructor(readonly announcementId: string, readonly text: string) {} }
 class MoveRejectedNotify { constructor(readonly reason: MoveRejectReason, readonly x: number, readonly y: number) {} }
 
+class ActorLocationProbeReq { constructor(readonly actorId: string) {} }
+class ActorLocationProbeRes {
+  constructor(
+    readonly actorId: string,
+    readonly objectGeneration: string,
+    readonly nodeRid: string,
+    readonly error: string | null = null
+  ) {}
+}
+class MessageFollowProbeReq {
+  constructor(readonly actorId: string, readonly probeId: string, readonly payload: string) {}
+}
+class MessageFollowProbeRes {
+  constructor(readonly probeId: string, readonly payload: string, readonly error: string | null = null) {}
+}
+
 class WatchNodesReq {}
 class WatchNodesRes { constructor(readonly nodes: NodeView[]) {} }
 class NodeStatusNotify {
@@ -130,6 +146,8 @@ class EnterZoneRes {
 }
 
 const PacketNames = {
+  actorLocationProbeReq: 'ActorLocationProbeReq', actorLocationProbeRes: 'ActorLocationProbeRes',
+  messageFollowProbeReq: 'MessageFollowProbeReq', messageFollowProbeRes: 'MessageFollowProbeRes',
   joinWorldReq: 'JoinWorldReq', joinWorldRes: 'JoinWorldRes', moveMsg: 'MoveMsg', zoneStateNotify: 'ZoneStateNotify',
   zoneChangedNotify: 'ZoneChangedNotify', worldAnnounceNotify: 'WorldAnnounceNotify',
   moveRejectedNotify: 'MoveRejectedNotify', watchNodesReq: 'WatchNodesReq', watchNodesRes: 'WatchNodesRes',
@@ -148,9 +166,11 @@ const PacketNames = {
 } as const;
 
 export {
+  ActorLocationProbeReq, ActorLocationProbeRes,
   AnnounceWorldReq, AnnounceWorldRes, ApplyNodeMaintenanceReq, ApplyNodeMaintenanceRes, BotTickReq, BotTickRes,
   DeliverAnnounceMsg, PlayerActorCreateReq, EnterWorldReq, EnterWorldRes,
   EnterZoneMsg, EnterZoneRes, GetNodeDiagnosticsReq, GetNodeDiagnosticsRes, JoinWorldReq, JoinWorldRes,
+  MessageFollowProbeReq, MessageFollowProbeRes,
   MoveMsg, MoveRejectedNotify, NodeAlertNotify, NodeDiagnosticsReq, NodeDiagnosticsRes,
   NodeMaintenanceChangedEvent, NodeStatusNotify, PacketNames, ReportNodeStatusMsg, ReportSpotEventMsg,
   SetMaintenanceReq, SetMaintenanceRes, WatchNodesReq, WatchNodesRes, WorldAnnounceEvent,

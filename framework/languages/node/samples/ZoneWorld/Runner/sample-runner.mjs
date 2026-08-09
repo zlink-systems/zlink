@@ -80,7 +80,23 @@ export async function runSample(ctx) {
     shared,
     client: { gatewayEndpoint: gateway.streamEndpoint, opsEndpoint: ops.streamEndpoint, scenarios: 'ZW-A1' }
   });
-  ctx.runNode(path.join(ctx.sampleRoot, 'dist/Client/main.js'), ['--config', clientPath]);
+  const mainClient = startScenarioClient(ctx, clientPath, 'main', 'dist/Client/main.js');
+  await mainClient.waitFor('scenario ZW-B2 passed');
+  await mainClient.waitFor('scenario ZW-B5 passed');
+  await mainClient.waitFor('scenario ZW-B6 passed');
+  // ZW-B7 completes the A->B->A round trip right where ZW-B2's flow ends.
+  await mainClient.waitFor('scenario ZW-B7 passed');
+  // Server-side halves of ZW-B6/ZW-B7 the client cannot see: the primed probe
+  // ran on the source owner, the followed probes ran on the target owner
+  // (exactly once for the one-way half), and the round trip re-entered the
+  // original node.
+  await ctx.waitLog('zone-node-1', 'message-follow probe handled actor=player-a1 probe=zw-b6-prime');
+  await ctx.waitLog('zone-node-2', 'message-follow probe handled actor=player-a1 probe=zw-b6-request');
+  await ctx.waitLog('zone-node-2', 'message-follow probe one-way handled actor=player-a1 probe=zw-b6-one-way');
+  await ctx.waitLog('zone-node-1', 'zone player entered zone=zone-nw player=player-a1 from=zone-node-2');
+  await mainClient.complete();
+  ctx.assertLogCount('zone-node-2', 'message-follow probe one-way handled actor=player-a1 probe=zw-b6-one-way', 1);
+  process.stdout.write(mainClient.output());
   await ctx.waitLog('zone-node-1', 'fanout subscriber received announcement');
   await ctx.waitLog('zone-node-2', 'fanout subscriber received announcement');
   for (const zoneId of ['zone-nw', 'zone-sw']) {
@@ -288,7 +304,8 @@ function startScenarioClient(ctx, configPath, name, relativeExecutable = 'dist/C
         await delay(50);
       }
     },
-    complete
+    complete,
+    output: () => output
   };
 }
 
