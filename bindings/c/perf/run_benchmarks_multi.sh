@@ -1005,6 +1005,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ "${HAS_EXPLICIT_MSG_SIZES}" -eq 1 ]]; then
+  STREAM_MSG_SIZES="${MSG_SIZES}"
+fi
+
 if [[ -n "${HWM}" || -n "${SNDHWM}" || -n "${RCVHWM}" || -n "${SNDBUF}" || -n "${RCVBUF}" ]]; then
   if [[ "${ALLOW_MANUAL_SOCKET_OVERRIDES}" != "1" ]]; then
     echo "Error: manual HWM/SNDBUF/RCVBUF overrides are debug-only." >&2

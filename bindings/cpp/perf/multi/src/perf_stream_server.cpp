@@ -259,6 +259,8 @@ bool perf_stream_server (const std::string &lib_name, const std::string &transpo
     try {
         const perf::multi::multi_bench_settings_t settings =
           perf::multi::resolve_multi_bench_settings ();
+        const size_t effective_msg_size =
+          msg_size > 0 ? msg_size : perf::multi::resolve_case_msg_sizes (64).front ();
 
         perf::multi::ctx_guard_t ctx;
         zlink::stream_socket_t server (ctx.ctx ());
@@ -280,7 +282,7 @@ bool perf_stream_server (const std::string &lib_name, const std::string &transpo
         options.recv_timeout (std::chrono::milliseconds (io_timeout_ms));
         options.linger (std::chrono::milliseconds (0));
         options.tcp_no_delay (true);
-        if (!perf::multi::apply_benchmark_auto_hwm_msg_unit (ctx, msg_size)
+        if (!perf::multi::apply_benchmark_auto_hwm_msg_unit (ctx, effective_msg_size)
             || !perf::multi::recalculate_auto_hwm (ctx))
             return false;
 
@@ -298,8 +300,8 @@ bool perf_stream_server (const std::string &lib_name, const std::string &transpo
             : perf::multi::normalize_endpoint_host (server.options ().last_endpoint ());
         if (endpoint.empty ())
             return false;
-        perf::multi::emit_auto_hwm_detail (server, "server", "server", transport, msg_size,
-                                           "stream");
+        perf::multi::emit_auto_hwm_detail (server, "server", "server", transport,
+                                           effective_msg_size, "stream");
 
         g_stop_requested.store (false, std::memory_order_release);
         install_signal_handlers ();

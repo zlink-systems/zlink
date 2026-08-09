@@ -5,6 +5,7 @@
 
 #include <cerrno>
 #include <csignal>
+#include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
@@ -78,6 +79,13 @@ int main (int argc, char **argv)
     const bench_cpu_sample_t cpu_start = bench_capture_cpu_sample ();
     const bench_settings_t settings = resolve_bench_settings ();
     const std::vector<size_t> sizes = resolve_bench_msg_sizes (64);
+    const size_t msg_size = argc >= 4
+                              ? static_cast<size_t> (std::strtoull (argv[3], NULL, 10))
+                              : (sizes.empty () ? 64 : sizes.front ());
+    if (msg_size == 0) {
+        zlink_close (server);
+        return 1;
+    }
 
     const int linger_ms = 0;
     set_sockopt_int (server, ZLINK_OPT_LINGER, linger_ms, "ZLINK_OPT_LINGER");
@@ -108,9 +116,19 @@ int main (int argc, char **argv)
         return 1;
     }
 
+    if (!apply_benchmark_context_auto_hwm_msg_unit (ctx.get (), msg_size)) {
+        if (bench_debug_enabled ()) {
+            std::cerr << "[multi-stream-server] auto-HWM setup failed errno=" << zlink_errno ()
+                      << std::endl;
+        }
+        zlink_close (server);
+        return 1;
+    }
+    perf_print_auto_hwm_snapshot (server, false, "server", transport, true, msg_size,
+                                  ZLINK_SOCKET_STREAM);
+
     perf_stop_requested ().store (false, std::memory_order_release);
-    perf_multi_stream::reset_session (&g_stream_session, ctx.get (), server, ZLINK_SOCKET_STREAM,
-                                      settings.hwm, transport);
+    perf_multi_stream::reset_session (&g_stream_session, ctx.get (), server, transport);
     perf_multi_stream::packet_handler_context_t packet_handler_ctx;
     packet_handler_ctx.session = &g_stream_session;
     packet_handler_ctx.stop_token = k_stop_token;

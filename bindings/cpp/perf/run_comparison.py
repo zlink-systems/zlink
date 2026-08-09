@@ -1825,7 +1825,9 @@ def run_sizes_test_stream_shared(
     set_env_pair(env, "PERF_SERVER_READY_TIMEOUT_MS", ready_timeout_ms)
     set_env_pair(env, "PERF_SERVER_SHUTDOWN_TIMEOUT_MS", shutdown_timeout_ms)
     set_env_pair(env, "PERF_SERVER_BIND_PORT", bind_port)
-    server_cmd = build_bench_cmd(server_binary_path, [lib_name, transport])
+    server_cmd = build_bench_cmd(
+        server_binary_path, [lib_name, transport, str(sizes[0] if sizes else 64)]
+    )
     shared_client_args = [
         "--transport",
         transport,

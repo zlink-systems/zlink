@@ -1492,7 +1492,9 @@ def run_sizes_test_stream_shared(
     set_env_pair(env, "PERF_SERVER_READY_TIMEOUT_MS", ready_timeout_ms)
     set_env_pair(env, "PERF_SERVER_SHUTDOWN_TIMEOUT_MS", shutdown_timeout_ms)
     set_env_pair(env, "PERF_SERVER_BIND_PORT", bind_port)
-    server_cmd = build_bench_cmd(server_binary_path, [lib_name, transport])
+    server_cmd = build_bench_cmd(
+        server_binary_path, [lib_name, transport, str(sizes[0] if sizes else 64)]
+    )
     shared_client_args = [
         "--transport",
         transport,
@@ -2644,11 +2646,8 @@ def run_sizes_test(
     size_start_callback=None,
     size_result_callback=None,
 ):
-    # Split multi socket patterns by size so every case has an isolated
-    # server/client lifecycle. STREAM uses one shared lifecycle for its size
-    # list because its client keeps all high-CCU connections open while it
-    # changes the active message size; repeatedly tearing down that many
-    # sockets exhausts the Windows runtime during the next case.
+    # Split every multi pattern, including STREAM, by size so each paired
+    # case has the same isolated server/client lifecycle.
     size_list = list(sizes) if sizes else [64]
 
     if pattern_name in STREAM_VARIANT_PATTERNS:
@@ -2663,28 +2662,18 @@ def run_sizes_test(
                 "warnings": [],
             }
 
-        for size in size_list:
-            if size_start_callback is not None:
-                try:
-                    size_start_callback(transport, size)
-                except Exception:
-                    pass
+        def run_one_size_case(case_size):
+            return run_sizes_test_stream_shared(
+                server_binary,
+                lib_name,
+                transport,
+                [case_size],
+                pattern_name,
+                result_line_callback=result_line_callback,
+            )
 
-        shared_outcome = run_sizes_test_stream_shared(
-            server_binary,
-            lib_name,
-            transport,
-            size_list,
-            pattern_name,
-            result_line_callback=result_line_callback,
-        )
-        if size_result_callback is not None and shared_outcome.get("status") == "success":
-            for size in size_list:
-                try:
-                    size_result_callback(transport, size, shared_outcome)
-                except Exception:
-                    pass
-        return shared_outcome
+        # Continue through the common per-size aggregation below so C and
+        # binding STREAM cases use identical lifecycle boundaries.
 
     else:
         names = resolve_binary_names(pattern_name)
