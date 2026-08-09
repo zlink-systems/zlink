@@ -72,6 +72,7 @@ public final class ZLinkRelocationStartupScanner {
             new ArrayList<>();
         List<ZLinkAuthorityEntry> authorities = new ArrayList<>();
         List<String> settled = new ArrayList<>();
+        List<String> pointers = new ArrayList<>();
         var first = new AtomicReference<
             ZLinkCanonicalRelocationAuthorityStateCodec.Published>();
         CompletionStage<Void> reads = CompletableFuture.completedFuture(null);
@@ -139,6 +140,10 @@ public final class ZLinkRelocationStartupScanner {
                                 + participant.authorityKey());
                     }
                     first.compareAndSet(null, publication);
+                    pointers.add(participant.authorityKey()
+                        + "->" + publication.reference()
+                        + "/" + publication.checksumCrc32c()
+                        + "/cleanup=" + publication.sourceCleanupCompleted());
                     authorities.add(new ZLinkAuthorityEntry(
                         participant.authorityKey(), snapshot));
                     expected.add(
@@ -179,6 +184,33 @@ public final class ZLinkRelocationStartupScanner {
                     marker.progress().reference(),
                     marker.progress().checksumCrc32c(),
                     cancellation)
+                .whenComplete((root, readFailure) -> {
+                    if (readFailure != null) {
+                        LOGGER.log(
+                            Level.WARNING,
+                            () -> "relocation startup root read failed."
+                                + " aggregate=" + fence.aggregateId()
+                                + " generation=" + fence.aggregateGeneration()
+                                + " markerRef=" + marker.progress().reference()
+                                + " markerCrc="
+                                + marker.progress().checksumCrc32c()
+                                + " phase=" + marker.progress().phase()
+                                + " cleanup="
+                                + marker.progress().sourceCleanupCompleted()
+                                + " terminals="
+                                + marker.progress().terminalCompletionCount()
+                                + " pendingRelays="
+                                + marker.progress().pendingRelayCount()
+                                + " targetOwner=" + target.ownerId()
+                                + "/" + target.leaseGeneration()
+                                + " targetNode="
+                                + marker.request().targetDescriptor().rid()
+                                + "/" + marker.request()
+                                    .targetDescriptorLifecycleGeneration()
+                                + " published=" + pointers
+                                + " cause=" + readFailure);
+                    }
+                })
                 .thenCompose(root -> {
                     var envelope = ZLinkServiceRelocationEnvelopeCodec.decode(
                         root.payload());

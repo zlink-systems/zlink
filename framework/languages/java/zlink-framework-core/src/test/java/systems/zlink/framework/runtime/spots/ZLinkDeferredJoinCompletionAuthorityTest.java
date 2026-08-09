@@ -180,6 +180,126 @@ final class ZLinkDeferredJoinCompletionAuthorityTest {
             "authority clear precedes deletion of the Delivered manifest");
     }
 
+    @Test
+    void deferredJoinCursorKeepsTheAggregateMarkerOnAStoredRoot() {
+        MemoryLocationStore locations = new MemoryLocationStore();
+        MemoryRelocationStore roots = new MemoryRelocationStore();
+        String actorId = "actor-a";
+        String authorityKey = ZLinkAuthorityKeyCodec.actor(actorId);
+        UUID relocationId = new UUID(17, 29);
+        var fence = new ZLinkAggregateFence(relocationId, 1);
+        commitDirectJoinAggregate(locations, roots, actorId, relocationId);
+
+        var journal = new ZLinkDeferredJoinCompletionAuthority(
+            locations, roots);
+        var operation = new ZLinkActorJoinOperationId(41, 73);
+        var actor = new ZLinkBackendActorRef(
+            RoutingId.from("node-b"), actorId, 17);
+        journal.awaitTargetCommit(relocationId, 1, actor, Duration.ofSeconds(1))
+            .toCompletableFuture().join();
+        String committedReference = locations.readAggregateProgress(fence, NEVER)
+            .toCompletableFuture().join().orElseThrow().progress().reference();
+        assertTrue(roots.values.containsKey(committedReference));
+
+        //  Every cursor write publishes an immutable successor and deletes the
+        //  root it supersedes. The committed aggregate marker names the same
+        //  reference as the authority row, and startup recovery resolves the
+        //  immutable root through the marker, so a marker left on the deleted
+        //  root fails every later start in the same Location scope.
+        var prepared = journal.prepare(operation, actor, "\"ok\""
+                .getBytes(StandardCharsets.UTF_8))
+            .toCompletableFuture().join();
+        assertMarkerResolves(locations, roots, fence, authorityKey);
+        assertFalse(
+            roots.values.containsKey(committedReference),
+            "a superseded root that no record names is still deleted");
+
+        journal.advance(prepared, actor, 2).toCompletableFuture().join();
+        assertMarkerResolves(locations, roots, fence, authorityKey);
+
+        //  The replacement process resolves the immutable root through the
+        //  marker while the participant is still published, so a marker left
+        //  on a deleted root aborts its startup with DataLost.
+        var candidates = new ZLinkRelocationStartupScanner(locations, roots)
+            .scan(NEVER)
+            .toCompletableFuture().join();
+        assertEquals(1, candidates.size());
+        assertEquals(
+            locations.readAggregateProgress(fence, NEVER)
+                .toCompletableFuture().join().orElseThrow()
+                .progress().reference(),
+            candidates.getFirst().reference());
+    }
+
+    private static void assertMarkerResolves(
+        MemoryLocationStore locations,
+        MemoryRelocationStore roots,
+        ZLinkAggregateFence fence,
+        String authorityKey) {
+        var marker = locations.readAggregateProgress(fence, NEVER)
+            .toCompletableFuture().join().orElseThrow();
+        assertTrue(
+            roots.values.containsKey(marker.progress().reference()),
+            "aggregate progress marker must name a stored relocation root");
+        assertEquals(
+            locations.reference(locations.rows.get(authorityKey).payload()),
+            marker.progress().reference(),
+            "marker and authority row must name the same published root");
+    }
+
+    private static void commitDirectJoinAggregate(
+        MemoryLocationStore locations,
+        MemoryRelocationStore roots,
+        String actorId,
+        UUID relocationId) {
+        String authorityKey = ZLinkAuthorityKeyCodec.actor(actorId);
+        byte[] steady = new ZLinkActorAuthorityPayloadCodec().encode(
+            ZLinkActorAuthorityPayloadCodec.State.READY,
+            "Player",
+            actorId,
+            "entry-a",
+            1,
+            1,
+            "owner-a",
+            5,
+            "game",
+            RoutingId.from("node-a"),
+            7);
+        byte[] root = ZLinkCanonicalActorRelocationEnvelope.encode(
+            relocationId,
+            actorId,
+            17,
+            9,
+            false,
+            new byte[0],
+            List.of());
+        var source = new ZLinkAggregateRelocationCoordinator.Participant(
+            authorityKey,
+            ZLinkPlacementObjectKind.ACTOR,
+            17,
+            9,
+            "source-v1",
+            ZLinkAuthorityGenerationTransition.NEW_OWNER,
+            steady,
+            new byte[] {1});
+        var request = new ZLinkAggregateRelocationCoordinator.Request(
+            relocationId,
+            1,
+            List.of(source),
+            root,
+            new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-b")),
+            11,
+            ZLinkPlacementCapacityBundle.actor(1),
+            new ZLinkLocationOwnerToken("owner-b", 12));
+        locations.source = source;
+        var aggregate = new ZLinkAggregateRelocationCoordinator(
+            locations, roots);
+        aggregate.commit(
+                aggregate.prepare(request, NEVER).toCompletableFuture().join(),
+                NEVER)
+            .toCompletableFuture().join();
+    }
+
     private static void assertPublished(
         ZLinkDeferredJoinCompletionAuthority journal,
         MemoryLocationStore locations,

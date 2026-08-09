@@ -1028,13 +1028,79 @@ public final class ZLinkDeferredJoinCompletionAuthority {
                                     new IllegalStateException(
                                         "deferred Join authority CAS conflicted")));
                     }
-                    return ZLinkRelocationTreeStore.delete(
-                            relocation,
-                            current.publication().reference(),
-                            NEVER)
+                    return releaseSupersededRoot(current, stored, successor)
                         .thenCompose(ignored ->
                             read(current.root().object().objectId()));
                 }));
+    }
+
+    /**
+     * Stops every Location Store record from naming the superseded root before
+     * its payload is deleted.
+     *
+     * <p>The authority row is not the only record that names a published
+     * relocation reference: the committed aggregate progress marker names the
+     * same reference from the moment the aggregate commits, and startup
+     * recovery resolves the immutable root through the marker. Deleting the
+     * payload after only the row moved on left the marker pointing at bytes the
+     * Relocation Store no longer holds, which failed every later start in the
+     * same Location scope with an unrecoverable {@code DataLost}. Spec 23 §6
+     * requires the end of use of a published reference to be committed in the
+     * Location Store before its payload is deleted, so the marker is advanced
+     * to the successor first and the superseded payload is deleted only once no
+     * record names it. A marker that cannot be advanced keeps its payload,
+     * which retention removes on its own schedule.</p>
+     */
+    private CompletionStage<Void> releaseSupersededRoot(
+        Current current,
+        ZLinkRelocationTreeStore.Stored stored,
+        ZLinkServiceRelocationEnvelopeCodec.Envelope successor) {
+        String superseded = current.publication().reference();
+        var fence = new ZLinkAggregateFence(
+            current.publication().aggregateId(),
+            current.publication().aggregateGeneration());
+        return advanceAggregateProgress(fence, superseded, stored, successor)
+            .thenCompose(released -> released
+                ? ZLinkRelocationTreeStore.delete(
+                    relocation,
+                    superseded,
+                    NEVER)
+                : CompletableFuture.completedFuture(null));
+    }
+
+    /** Returns whether no committed marker names {@code superseded} any more. */
+    private CompletionStage<Boolean> advanceAggregateProgress(
+        ZLinkAggregateFence fence,
+        String superseded,
+        ZLinkRelocationTreeStore.Stored stored,
+        ZLinkServiceRelocationEnvelopeCodec.Envelope successor) {
+        return authority.readAggregateProgress(fence, NEVER)
+            .thenCompose(read -> {
+                if (read.isEmpty()
+                    || !read.get().progress().reference().equals(superseded)) {
+                    return CompletableFuture.completedFuture(true);
+                }
+                ZLinkAggregateProgressSnapshot marker = read.get();
+                var next = new ZLinkAggregateProgress(
+                    stored.root().reference(),
+                    stored.root().checksumCrc32c(),
+                    marker.progress().phase(),
+                    marker.progress().sourceCleanupCompleted(),
+                    successor.terminalCompletions().size(),
+                    successor.pendingRelayCount());
+                return authority.compareExchangeAggregateProgress(
+                        fence,
+                        marker.storeVersion(),
+                        next,
+                        NEVER)
+                    .thenCompose(result ->
+                        result instanceof ZLinkAggregateProgressStored
+                            ? CompletableFuture.completedFuture(true)
+                            : authority.readAggregateProgress(fence, NEVER)
+                                .thenApply(latest -> latest.isEmpty()
+                                    || !latest.get().progress().reference()
+                                        .equals(superseded)));
+            });
     }
 
     private CompletionStage<
