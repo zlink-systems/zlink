@@ -34,6 +34,29 @@ bool wait_for_start_signal (size_t msg_size)
     return perf::multi::wait_for_start_from_stdin (msg_size);
 }
 
+bool wait_for_publish_ready (zlink::poller_t &publisher_poller)
+{
+    while (!g_stop_requested) {
+        zlink::poll_event_t event;
+        try {
+            const size_t ready_count =
+              publisher_poller.wait (&event, 1, std::chrono::milliseconds (100));
+            if (ready_count > 0
+                && (static_cast<int> (event.revents)
+                    & static_cast<int> (zlink::poll_event_flag_t::pollout)) != 0)
+                return true;
+        }
+        catch (const zlink::binding_error_t &err) {
+            const int err_no = err.internal_errno ();
+            if (err_no == EINTR || err_no == EAGAIN)
+                continue;
+            return false;
+        }
+    }
+
+    return true;
+}
+
 // Publish the wire-level stop token on the active topic with a blocking
 // publish so subscribers are woken from their -1 poller wait and learn the
 // active phase has ended. Matches C reference publish_stop_token() in
@@ -62,6 +85,7 @@ bool publish_stop_token (::perf::socket_t &publisher)
 }
 
 bool run_phase (::perf::socket_t &publisher,
+                zlink::poller_t &publisher_poller,
                 std::vector<char> &payload,
                 size_t msg_size,
                 uint32_t run_id,
@@ -77,18 +101,19 @@ bool run_phase (::perf::socket_t &publisher,
         return true;
 
     try {
+        const size_t send_size =
+          std::min (payload.size (), std::max<size_t> (static_cast<size_t> (1), msg_size));
+        if (!perf_metric::stamp_payload (payload.data (), send_size, run_id, phase, msg_size,
+                                         seq++, perf_metric::now_ns ()))
+            return false;
+
         const auto deadline = std::chrono::steady_clock::now () + duration;
         while (std::chrono::steady_clock::now () < deadline) {
-            if (!perf_metric::stamp_payload (payload.data (), payload.size (), run_id, phase,
-                                             msg_size, seq++, perf_metric::now_ns ())) {
-                return false;
-            }
-
-            zlink::message_t payload_part (payload.size ());
+            zlink::message_t payload_part (send_size);
             if (!payload_part.valid ())
                 return false;
-            if (!payload.empty ()) {
-                std::memcpy (payload_part.data (), payload.data (), payload.size ());
+            if (send_size > 0) {
+                std::memcpy (payload_part.data (), payload.data (), send_size);
             }
 
             const int sent = publisher.publish (k_topic, payload_part,
@@ -96,8 +121,11 @@ bool run_phase (::perf::socket_t &publisher,
             if (sent == 0)
                 continue;
 
-            if (errno == EAGAIN || errno == EINTR)
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if (!wait_for_publish_ready (publisher_poller))
+                    return false;
                 continue;
+            }
             return false;
         }
 
@@ -138,6 +166,8 @@ bool perf_pubsub_server (const std::string &lib_name, const std::string &transpo
       publisher.sock (), transport, "cpp_multi_pubsub", settings.server_bind_port);
     if (endpoint.empty ())
         return false;
+    zlink::poller_t publisher_poller;
+    publisher.sock ().poller_add (publisher_poller, zlink::poll_event_flag_t::pollout);
     perf::multi::emit_auto_hwm_detail (publisher.sock (), "server", "server", transport, msg_size,
                                        "pub");
 
@@ -153,7 +183,8 @@ bool perf_pubsub_server (const std::string &lib_name, const std::string &transpo
     const uint32_t run_id = 1U;
     uint64_t seq = 1;
 
-    if (!run_phase (publisher.sock (), payload, msg_size, run_id, seq, perf_metric::phase_active,
+    if (!run_phase (publisher.sock (), publisher_poller, payload, msg_size, run_id, seq,
+                    perf_metric::phase_active,
                     std::chrono::seconds (std::max (1, settings.duration_seconds)), true))
         return false;
 
