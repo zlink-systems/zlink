@@ -213,6 +213,10 @@ class spot_node_builder_state_t
       delivered_join_completions;
     std::set<std::pair<std::uint64_t, std::uint64_t>>
       delivering_join_completions;
+    /* At most one completion-only finalize per transfer may run at a time:
+     * the durable-state convergence poll and a late completion leg would
+     * otherwise interleave delivery and cleanup of the same durable root. */
+    std::set<std::string> completing_transfers;
         std::shared_ptr<runtime::stateful::relocation_store_port_t>
           relocation_store;
         std::shared_ptr<runtime::stateful::authority_relocation_port_t>
@@ -874,7 +878,22 @@ class spot_node_runtime_t
     std::size_t cleanup_expired_actor_admissions ();
     std::size_t cleanup_expired_actor_admissions_at (
       std::chrono::steady_clock::time_point now);
+    // Deferred-commit completion-loss convergence: once the join window
+    // elapses without the completion-only leg, opens target admission from
+    // the durable owner state instead of staying closed behind the staged
+    // backlog. The completion leg stays the fast path.
+    std::size_t poll_deferred_actor_join_completions (
+      service_provider_t &services);
+    // Admission gate for that poll: fails closed unless the durable owner
+    // row provably carries this target's committed completion root.
+    bool deferred_actor_commit_authority_committed_strict (
+      const pending_actor_admission_t &admission) const noexcept;
     std::string next_actor_transfer_id ();
+    // Transfer ID stamped on a still-reserved deferred join, so the remote
+    // join reuses the correlation already carried by preserved handoff
+    // markers instead of allocating a second ID.
+    std::optional<std::string>
+    reserved_actor_transfer_id (const actor_ref_t &actor_ref) const;
     result_t<std::shared_ptr<deferred_barrier_t>>
     reserve_actor_join_barrier (const actor_ref_t &actor_ref);
     std::pair<std::uint64_t, std::uint64_t>

@@ -53,12 +53,13 @@ std::size_t handoff_packet_bytes (const handoff_packet_t &packet) noexcept
 
 } // namespace
 
-bool actor_transfer_coordinator_t::try_reserve_source (const std::string &actor_key)
+bool actor_transfer_coordinator_t::try_reserve_source (const std::string &actor_key,
+                                                       std::string transfer_id)
 {
     std::lock_guard lock (_mutex);
     return _moves.emplace (
                    actor_key,
-                   move_state_t{actor_move_phase_t::source_reserved, std::string{}})
+                   move_state_t{actor_move_phase_t::source_reserved, std::move (transfer_id)})
       .second;
 }
 
@@ -557,6 +558,58 @@ void actor_transfer_coordinator_t::complete_commit (const std::string &transfer_
     _completed_admissions.insert_or_assign (
       transfer_id, found->second);
     _admissions.erase (found);
+}
+
+bool actor_transfer_coordinator_t::mark_commit_finalized (const std::string &transfer_id)
+{
+    std::lock_guard lock (_mutex);
+    const auto found = _admissions.find (transfer_id);
+    if (found == _admissions.end ()) {
+        return false;
+    }
+    const auto moving = _moves.find (found->second.actor_key);
+    if (moving == _moves.end () || moving->second.transfer_id != transfer_id
+        || moving->second.phase != actor_move_phase_t::target_committing) {
+        return false;
+    }
+    found->second.commit_finalized = true;
+    return true;
+}
+
+std::vector<deferred_actor_completion_t>
+actor_transfer_coordinator_t::due_deferred_completions (
+  std::chrono::steady_clock::time_point now)
+{
+    std::lock_guard lock (_mutex);
+    std::vector<deferred_actor_completion_t> due;
+    for (auto &[transfer_id, admission] : _admissions) {
+        if (!admission.commit_finalized) {
+            continue;
+        }
+        const auto moving = _moves.find (admission.actor_key);
+        if (moving == _moves.end () || moving->second.transfer_id != transfer_id
+            || moving->second.phase != actor_move_phase_t::target_committing) {
+            continue;
+        }
+        if (!admission.completion_poll_due) {
+            if (admission.deadline > now) {
+                continue;
+            }
+            // The join window elapsed without the completion-only leg. Keep
+            // the admission visible past its original deadline so a late leg
+            // still terminates on the completed commit, then let the runtime
+            // converge from the durable owner state.
+            admission.completion_poll_due = true;
+            admission.deadline = now + actor_deferred_completion_retention;
+        }
+        if (admission.next_completion_poll_at > now) {
+            continue;
+        }
+        admission.next_completion_poll_at =
+          now + actor_deferred_completion_retry_interval;
+        due.push_back (deferred_actor_completion_t{transfer_id, admission});
+    }
+    return due;
 }
 
 std::vector<expired_actor_admission_t>

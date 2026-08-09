@@ -4164,6 +4164,80 @@ spot_node_runtime_t::cleanup_expired_actor_admissions_at (std::chrono::steady_cl
     return removed;
 }
 
+bool spot_node_runtime_t::deferred_actor_commit_authority_committed_strict (
+  const pending_actor_admission_t &admission) const noexcept
+{
+    // Admission gate (internals 12 §10, the moment of Ready): an absent or
+    // unreadable authority store must fail closed so admission never opens
+    // unless the durable owner row provably carries this target's committed
+    // completion root. Mirrors the stateful path's
+    // relocation_target_authority_committed_strict.
+    if (!_state->relocation_authority || !_state->relocation_store
+        || admission.completion_root_reference.empty ()
+        || admission.completion_root_checksum == 0) {
+        return false;
+    }
+    try {
+        const auto &source_actor = admission.source_actor;
+        const auto target_node_id = detail::effective_spot_node_rid (_state->snapshot);
+        const auto current = _state->relocation_authority->read (
+          runtime::stateful::object_kind_t::actor,
+          std::string (source_actor.actor_id ().value ()));
+        if (!current || current->target.kind != runtime::stateful::object_kind_t::actor
+            || current->target.key != source_actor.actor_id ().value ()
+            || current->target.object_generation != source_actor.object_generation ()
+            || current->target.node_id != target_node_id
+            || current->target.authority_owner_generation
+                 <= current->source.authority_owner_generation
+            || current->relocation_reference != admission.completion_root_reference
+            || current->checksum_crc32c != admission.completion_root_checksum) {
+            return false;
+        }
+        runtime::stateful::durable_join_completion_store_t store (_state->relocation_store);
+        const auto record = store.recover (runtime::stateful::durable_join_completion_root_t{
+          admission.completion_root_reference, admission.completion_root_checksum});
+        return record
+               && record->cursor == runtime::stateful::join_completion_cursor_t::committed
+               && record->actor == current->target;
+    }
+    catch (...) {
+        return false;
+    }
+}
+
+std::size_t
+spot_node_runtime_t::poll_deferred_actor_join_completions (service_provider_t &services)
+{
+    // A deferred Join whose completion-only leg was lost (the source died
+    // after the commit) must not leave target admission closed behind the
+    // staged backlog. Once the join window elapses, re-poll the durable owner
+    // state and run the retained completion locally when it proves this
+    // target's commit; the completion leg stays the fast path and a late leg
+    // terminates on the completed commit.
+    if (!_state->relocation_store || !_state->relocation_authority) {
+        return 0;
+    }
+    auto due = _state->actor_transfer_coordinator.due_deferred_completions (
+      std::chrono::steady_clock::now ());
+    std::size_t converged = 0;
+    for (auto &pending : due) {
+        if (!deferred_actor_commit_authority_committed_strict (pending.admission)) {
+            continue;
+        }
+        const auto completed = finalize_remote_actor_to_spot (
+          pending.transfer_id, pending.admission.source_actor,
+          pending.admission.target_spot_id, {}, services, nullptr, std::nullopt,
+          false, true);
+        if (!completed) {
+            continue;
+        }
+        emit_actor_transfer_marker ("completion_converged", pending.admission.source_actor,
+                                    pending.transfer_id, pending.admission.target_spot_id);
+        ++converged;
+    }
+    return converged;
+}
+
 std::vector<handoff_packet_t>
 spot_node_runtime_t::take_actor_handoff_backlog (const actor_ref_t &actor_ref)
 {
@@ -4612,6 +4686,17 @@ std::string spot_node_runtime_t::next_actor_transfer_id ()
       detail::effective_spot_node_rid (_state->snapshot));
 }
 
+std::optional<std::string>
+spot_node_runtime_t::reserved_actor_transfer_id (const actor_ref_t &actor_ref) const
+{
+    const auto key = actor_key (actor_ref);
+    if (_state->actor_transfer_coordinator.phase (key)
+        != actor_move_phase_t::source_reserved) {
+        return std::nullopt;
+    }
+    return _state->actor_transfer_coordinator.transfer_id (key);
+}
+
 std::pair<std::uint64_t, std::uint64_t>
 spot_node_runtime_t::actor_join_operation_id (std::string_view transfer_id) const
 {
@@ -4649,7 +4734,8 @@ spot_node_runtime_t::reserve_actor_join_barrier (const actor_ref_t &actor_ref)
     }
 
     const auto key = actor_key (actor_ref);
-    if (!_state->actor_transfer_coordinator.try_reserve_source (key)) {
+    if (!_state->actor_transfer_coordinator.try_reserve_source (key,
+                                                               next_actor_transfer_id ())) {
         return result_t<std::shared_ptr<deferred_barrier_t>>::failure (
           framework_error_kind_t::rejected,
           "Actor join is already reserved or moving");
@@ -5464,6 +5550,31 @@ result_t<actor_join_reply_t> spot_node_runtime_t::finalize_remote_actor_to_spot 
           framework_error_kind_t::protocol_error,
           "remote actor finalize has no matching prepared commit");
     }
+    /* One completion-only run per transfer at a time: the durable-state
+     * convergence poll and a late completion leg deliver the same durable
+     * root, and interleaving its delivery/cleanup must be excluded. */
+    struct completion_exclusion_guard_t
+    {
+        std::shared_ptr<spot_node_builder_state_t> node;
+        std::string transfer_id;
+        ~completion_exclusion_guard_t ()
+        {
+            if (!node)
+                return;
+            std::lock_guard<std::recursive_mutex> guard_lock (node->mutex);
+            node->completing_transfers.erase (transfer_id);
+        }
+    };
+    completion_exclusion_guard_t completion_exclusion;
+    if (completion_only) {
+        if (!_state->completing_transfers.insert (transfer_id).second) {
+            return result_t<actor_join_reply_t>::failure (
+              framework_error_kind_t::unavailable,
+              "remote Actor completion is already being delivered");
+        }
+        completion_exclusion.node = _state;
+        completion_exclusion.transfer_id = transfer_id;
+    }
     std::optional<std::pair<framework_error_kind_t, std::string>> completion_failure;
     const auto committed = ::zlink::framework::detail::actor_ref_access_t::make (
       node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot)),
@@ -5743,6 +5854,12 @@ result_t<actor_join_reply_t> spot_node_runtime_t::finalize_remote_actor_to_spot 
     }
     if (deliver_completion_now)
         _state->actor_transfer_coordinator.complete_commit (transfer_id);
+    else
+        // The durable owner CAS is committed and only the completion-only leg
+        // is outstanding. Record that boundary so a lost leg converges from
+        // the durable state (poll_deferred_actor_join_completions).
+        (void) _state->actor_transfer_coordinator.mark_commit_finalized (
+          transfer_id);
     return result_t<actor_join_reply_t>::success (
       actor_join_reply_t{0, committed, zlink::message_t{}});
 }

@@ -1128,6 +1128,259 @@ bool verify_remote_actor_prepare_is_idempotent ()
            && admission_calls == 1;
 }
 
+class scripted_authority_port_t final
+    : public zlink::framework::runtime::stateful::authority_relocation_port_t
+{
+  public:
+    using authority_publish_result_t =
+      zlink::framework::runtime::stateful::authority_publish_result_t;
+    using authority_publish_status_t =
+      zlink::framework::runtime::stateful::authority_publish_status_t;
+    using authority_relocation_reference_t =
+      zlink::framework::runtime::stateful::authority_relocation_reference_t;
+    using object_kind_t = zlink::framework::runtime::stateful::object_kind_t;
+    using object_ref_t = zlink::framework::runtime::stateful::object_ref_t;
+
+    authority_publish_result_t publish (
+      const object_ref_t &,
+      const object_ref_t &,
+      zlink::framework::location_owner_token_t,
+      zlink::framework::relocation_capacity_fence_t,
+      std::string,
+      std::uint32_t,
+      zlink::framework::runtime::stateful::inventory_digest_t,
+      std::vector<std::byte>) override
+    {
+        return {};
+    }
+
+    std::optional<authority_relocation_reference_t>
+    read (object_kind_t, const std::string &) override
+    {
+        std::lock_guard lock (mutex);
+        if (throw_on_read) {
+            throw std::runtime_error ("authority store is unavailable");
+        }
+        return current;
+    }
+
+    authority_publish_result_t replace_completion (object_kind_t,
+                                                   const std::string &,
+                                                   std::uint64_t,
+                                                   const std::string &old_reference,
+                                                   std::uint32_t,
+                                                   std::string new_reference,
+                                                   std::uint32_t new_checksum) override
+    {
+        std::lock_guard lock (mutex);
+        if (!current || current->relocation_reference != old_reference) {
+            return {authority_publish_status_t::failed, current};
+        }
+        current->relocation_reference = std::move (new_reference);
+        current->checksum_crc32c = new_checksum;
+        return {authority_publish_status_t::published, current};
+    }
+
+    bool release_completion (object_kind_t,
+                             const std::string &,
+                             std::uint64_t,
+                             const std::string &reference,
+                             std::uint32_t) override
+    {
+        std::lock_guard lock (mutex);
+        return current && current->relocation_reference == reference;
+    }
+
+    std::mutex mutex;
+    bool throw_on_read = false;
+    std::optional<authority_relocation_reference_t> current;
+};
+
+bool verify_deferred_actor_join_completion_converges_from_durable_state ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    serializer_registry_t serializers;
+    auto node = std::make_shared<spot_node_builder_state_t> (
+      "deferred-completion-node");
+    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+    // The join window: the completion-only leg must arrive within it before
+    // the target converges from the durable owner state.
+    node->channel_runtime->default_request_timeout = std::chrono::milliseconds (200);
+    auto target = std::make_shared<spot_context_state_t> ();
+    target->node = node;
+    target->node_rid = node_rid_t::from_string ("deferred-completion-node");
+    target->spot_id = spot_id_t ("target-spot");
+    target->spot_name = "target";
+    target->spot_instance = std::make_shared<int> (1);
+    target->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    target->channel_runtime->serializers = &serializers;
+    target->serial_executor = std::make_shared<runtime::offload_executor_t> (
+      2, 64, "deferred-completion");
+    target->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+      *target->serial_executor, 64,
+      runtime::serial_execution_queue_t::error_handler_t{},
+      runtime::serial_lane_policy_t::spot_wide ());
+    node->spot_contexts_by_id.emplace (
+      target->spot_id, spot_context_access_t::create (target));
+
+    spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    factory.create_instance = [] (std::string) { return std::make_shared<int> (7); };
+    factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
+    node->actor_factories.emplace ("player", std::move (factory));
+    spot_actor_admission_callbacks_t callbacks;
+    callbacks.join = [] (void *, std::string_view, const zlink::message_t &,
+                         serializer_registry_t &) {
+        return spot_actor_join_result_t::accept (
+          message_t::from (std::string ("accepted")));
+    };
+    target->actor_admissions.emplace (std::type_index (typeid (int)), std::move (callbacks));
+
+    std::atomic_int replayed{0};
+    target->handlers.push_back (spot_handler_descriptor_t{
+      spot_handler_kind_t::actor_send, "BacklogPacket", "",
+      std::type_index (typeid (int)), std::type_index (typeid (int)),
+      std::type_index (typeid (int)), std::type_index (typeid (void))});
+    target->handler_invokers.push_back (
+      [&replayed] (void *, void *, service_provider_t &, serializer_registry_t &,
+                   const zlink::message_t &, const spot_inbound_message_t &)
+        -> task_t<zlink::message_t> {
+          ++replayed;
+          co_return zlink::message_t{};
+      });
+
+    spot_node_runtime_t owner (node);
+    const auto relocation_store =
+      std::make_shared<runtime::in_memory_relocation_store_t> ();
+    const auto relocation_repository =
+      std::make_shared<runtime::provider_relocation_repository_t> (*relocation_store);
+    const auto relocation_port =
+      std::make_shared<runtime::stateful::public_relocation_store_adapter_t> (
+        relocation_repository);
+    owner.bind_relocation_store (relocation_port);
+    const auto authority = std::make_shared<scripted_authority_port_t> ();
+    owner.bind_relocation_authority (authority);
+
+    const auto actor = actor_ref_access_t::make (
+      node_rid_t::from_string ("source-node"), "player", "actor-c2", 7);
+    const std::string transfer_id = "transfer-c2";
+    const std::string key = "player:actor-c2";
+    const auto admitted = owner.admit_remote_actor_to_spot (
+      transfer_id, actor, spot_id_t ("source-spot"), target->spot_id,
+      zlink::message_t::from (std::string ("prepare")), 11, 13, 19);
+    if (!admitted || !admitted.value ().accepted) {
+        return false;
+    }
+    const auto prepared = owner.prepare_remote_actor_to_spot (
+      transfer_id, actor, target->spot_id, zlink::message_t{},
+      actor_gateway_runtime_t{}.actor_context (actor), true);
+    if (!prepared) {
+        return false;
+    }
+
+    // Simulate the durable effects of the finalize leg's authority commit:
+    // the completion root moves to the committed cursor and the durable owner
+    // row carries it for this target.
+    const auto prepared_root = owner.pending_join_completion_root (transfer_id);
+    if (!prepared_root) {
+        return false;
+    }
+    runtime::stateful::durable_join_completion_store_t completion_store (relocation_port);
+    const auto committed_root = completion_store.commit (*prepared_root, false);
+    const auto committed_record = completion_store.recover (committed_root);
+    if (!committed_record
+        || committed_record->cursor != runtime::stateful::join_completion_cursor_t::committed) {
+        return false;
+    }
+    if (!node->actor_transfer_coordinator.update_completion_root (
+          transfer_id, committed_root.reference, committed_root.checksum_crc32c)) {
+        return false;
+    }
+    {
+        auto source_ref = committed_record->actor;
+        source_ref.authority_owner_generation = 19;
+        source_ref.node_id = "source-node";
+        std::lock_guard lock (authority->mutex);
+        authority->current = runtime::stateful::authority_relocation_reference_t{
+          source_ref, committed_record->actor, committed_root.reference,
+          committed_root.checksum_crc32c, {}, location_owner_token_t{"owner-1", 3}, {}};
+    }
+
+    service_collection_t services;
+    auto provider = services.build_provider ();
+    std::vector<handoff_packet_t> backlog;
+    backlog.push_back (handoff_packet_t{
+      "BacklogPacket", {1, 2, 3}, "application/x-test", {}, false});
+    // The deferred finalize commits and stages the backlog; the
+    // completion-only leg is withheld (the source died after the commit).
+    const auto finalized = owner.finalize_remote_actor_to_spot (
+      transfer_id, actor, target->spot_id, std::move (backlog), provider, nullptr,
+      std::nullopt, true, false);
+    if (!finalized || !node->actor_transfer_coordinator.blocks_dispatch (key)) {
+        return false;
+    }
+
+    // Inside the join window the poll must not open admission.
+    if (owner.poll_deferred_actor_join_completions (provider) != 0
+        || !node->actor_transfer_coordinator.blocks_dispatch (key)) {
+        return false;
+    }
+
+    std::this_thread::sleep_for (std::chrono::milliseconds (250));
+    // Fail closed: an unreadable authority store keeps admission closed.
+    {
+        std::lock_guard lock (authority->mutex);
+        authority->throw_on_read = true;
+    }
+    if (owner.poll_deferred_actor_join_completions (provider) != 0
+        || !node->actor_transfer_coordinator.blocks_dispatch (key)) {
+        return false;
+    }
+    {
+        std::lock_guard lock (authority->mutex);
+        authority->throw_on_read = false;
+    }
+    // The re-poll converges from the durable owner state once it proves the
+    // commit: admission opens and the staged backlog drains exactly once.
+    std::size_t converged = 0;
+    for (int attempt = 0; attempt < 100 && converged == 0; ++attempt) {
+        converged = owner.poll_deferred_actor_join_completions (provider);
+        if (converged == 0) {
+            std::this_thread::sleep_for (std::chrono::milliseconds (10));
+        }
+    }
+    if (converged != 1 || node->actor_transfer_coordinator.blocks_dispatch (key)
+        || replayed.load () != 1) {
+        return false;
+    }
+    if (!owner.completed_remote_actor_commit (transfer_id, actor, target->spot_id)) {
+        return false;
+    }
+    // A late completion-only leg is idempotent: the completed commit stays
+    // visible and the duplicate does not double-dispatch or close admission.
+    const auto duplicate = owner.finalize_remote_actor_to_spot (
+      transfer_id, actor, target->spot_id, {}, provider, nullptr,
+      std::nullopt, false, true);
+    if (duplicate || node->actor_transfer_coordinator.blocks_dispatch (key)
+        || replayed.load () != 1
+        || !owner.completed_remote_actor_commit (transfer_id, actor, target->spot_id)) {
+        return false;
+    }
+    std::this_thread::sleep_for (std::chrono::milliseconds (300));
+    if (owner.poll_deferred_actor_join_completions (provider) != 0) {
+        return false;
+    }
+
+    target->serial_queue->close ();
+    target->serial_queue->drain ();
+    target->serial_executor->drain ();
+    return true;
+}
+
 } // namespace
 
 int main ()
@@ -1294,6 +1547,9 @@ int main ()
     }
     if (!verify_remote_actor_prepare_is_idempotent ()) {
         return 58;
+    }
+    if (!verify_deferred_actor_join_completion_converges_from_durable_state ()) {
+        return 59;
     }
 
     std::atomic_int unsupported_submit_count = 0;

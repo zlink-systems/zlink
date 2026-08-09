@@ -1709,7 +1709,12 @@ result_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot
         return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
                                                       "source Actor is not joined to a local Spot");
     }
-    const auto transfer_id = spot_runtime.next_actor_transfer_id ();
+    // A deferred join already reserved its transfer ID at the join barrier so
+    // packets preserved before transfer-out share the final correlation.
+    auto reserved_transfer_id = spot_runtime.reserved_actor_transfer_id (actor);
+    const auto transfer_id = reserved_transfer_id
+                               ? std::move (*reserved_transfer_id)
+                               : spot_runtime.next_actor_transfer_id ();
     const auto completion_operation_id_low =
       _state->next_join_completion_operation.fetch_add (1, std::memory_order_relaxed);
     const auto completion_operation_id_high =

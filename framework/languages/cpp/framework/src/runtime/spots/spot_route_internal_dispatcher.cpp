@@ -270,7 +270,10 @@ result_t<zlink::message_t> spot_route_internal_dispatcher_t::dispatch_request (
             auto actor_ref = actor_ref_from_spot_route (request);
             auto runtime = _runtime;
             std::uint64_t committed_authority_owner_generation = 0;
-            if (request.finalize && !request.completion_only) {
+            /* A finalize retry and a late completion-only leg after the
+             * target converged from durable state both terminate on the
+             * completed commit (idempotent). */
+            if (request.finalize) {
                 const auto completed =
                   runtime.completed_remote_actor_commit (
                     request.transfer_id, actor_ref,

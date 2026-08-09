@@ -31,6 +31,10 @@ inline void scenario_runner_t::run_st_c2_scenario ()
                                "transfer|" + actor_id + "|transfer_in|61",
                                "transfer|" + actor_id + "|joined|" + spot_id + ":61",
                              });
+    // "Source down after commit" means after the whole transfer, including the
+    // completion leg that opens target admission. Shutting down inside the
+    // commit->completion window is a different (uncovered) failure mode.
+    wait_evidence (_nodes.a, {"message_flow|" + actor_id + "|commit_ack|"});
     const auto before_shutdown = get_actor_ref (_nodes.b, actor_id);
     require (before_shutdown.node_rid == "actor-b",
              "ST-C2 target ref expected actor-b, got " + before_shutdown.node_rid);

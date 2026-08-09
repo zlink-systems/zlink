@@ -2828,6 +2828,7 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                   _inbound_budget->can_start_application_receive ());
                 detail::spot_node_runtime_t maintenance (registration->spot_state);
                 (void) maintenance.cleanup_expired_actor_admissions ();
+                (void) maintenance.poll_deferred_actor_join_completions (*_services);
                 if (count == 0)
                     (void) node->native_node ().wait_for_dispatch_activity (
                       std::chrono::milliseconds (100),

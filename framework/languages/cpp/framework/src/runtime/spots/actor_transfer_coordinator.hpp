@@ -43,6 +43,13 @@ struct pending_actor_admission_t
     std::optional<message_t> completion_reply;
     std::string completion_root_reference;
     std::uint32_t completion_root_checksum = 0;
+    // Deferred-commit completion-loss window: the deferred finalize committed
+    // durably while the completion-only leg is still outstanding. Once the
+    // join window elapses without that leg, the target converges from the
+    // durable owner state; next_completion_poll_at paces the re-poll.
+    bool commit_finalized = false;
+    bool completion_poll_due = false;
+    std::chrono::steady_clock::time_point next_completion_poll_at{};
 
     bool matches_prepare (const actor_ref_t &actor,
                           const spot_id_t &source_spot,
@@ -52,6 +59,12 @@ struct pending_actor_admission_t
 };
 
 struct expired_actor_admission_t
+{
+    std::string transfer_id;
+    pending_actor_admission_t admission;
+};
+
+struct deferred_actor_completion_t
 {
     std::string transfer_id;
     pending_actor_admission_t admission;
@@ -120,6 +133,13 @@ struct actor_move_completion_t
 inline constexpr std::size_t actor_handoff_backlog_max_messages = 1024;
 inline constexpr std::size_t actor_handoff_backlog_max_bytes = 16u * 1024u * 1024u;
 
+// Deferred-commit completion-loss convergence: the pace of the durable-state
+// re-poll, and how long a converged commit stays visible so a late
+// completion-only leg still terminates idempotently.
+inline constexpr std::chrono::milliseconds
+  actor_deferred_completion_retry_interval{250};
+inline constexpr std::chrono::seconds actor_deferred_completion_retention{30};
+
 enum class handoff_append_result_t
 {
     appended,
@@ -131,7 +151,10 @@ enum class handoff_append_result_t
 class actor_transfer_coordinator_t
 {
   public:
-    bool try_reserve_source (const std::string &actor_key);
+    // The reservation may carry the transfer ID that the deferred join will
+    // use, so packets preserved before transfer-out already emit their
+    // handoff markers under the final transfer correlation.
+    bool try_reserve_source (const std::string &actor_key, std::string transfer_id = {});
     bool try_begin_local (const std::string &actor_key);
     bool try_begin_source_remote (const std::string &actor_key, std::string transfer_id = {});
     void cancel_move (const std::string &actor_key);
@@ -211,6 +234,15 @@ class actor_transfer_coordinator_t
       std::uint32_t checksum);
     void fail_commit (const std::string &transfer_id, bool reconcile);
     void complete_commit (const std::string &transfer_id);
+    // Deferred-commit convergence (completion-loss window): marks a commit
+    // whose completion-only leg is still outstanding, and returns the
+    // admissions whose join window elapsed without that leg so the runtime
+    // can re-poll the durable owner state. Each returned attempt re-arms
+    // after the retry interval; the admission deadline is extended so a late
+    // completion leg still finds the completed commit and stays idempotent.
+    bool mark_commit_finalized (const std::string &transfer_id);
+    std::vector<deferred_actor_completion_t>
+    due_deferred_completions (std::chrono::steady_clock::time_point now);
     std::vector<expired_actor_admission_t>
     cleanup_expired (std::chrono::steady_clock::time_point now);
     std::size_t pending_count () const;
