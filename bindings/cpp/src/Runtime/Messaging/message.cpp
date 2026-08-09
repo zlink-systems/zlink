@@ -101,7 +101,11 @@ zlink_config_result_t init_owned_message_storage (zlink_msg_t *message_, size_t 
 {
     constexpr size_t pooled_size_min = 128u * 1024u;
     constexpr size_t pooled_size_max = 1024u * 1024u;
-    if (size_ < pooled_size_min || size_ > pooled_size_max)
+    // Core 0.10.1 measurements use the native allocator for large payloads.
+    // The binding pool was slower on the selected request/reply cells; keep
+    // ownership and the native message callback shape unchanged.
+    constexpr bool use_large_message_pool = false;
+    if (!use_large_message_pool || size_ < pooled_size_min || size_ > pooled_size_max)
         return zlink_msg_init_size (message_, size_);
 
     // This allocation is a measured hot path for large messages. Keep reuse in
