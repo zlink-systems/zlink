@@ -181,7 +181,7 @@ int resolve_single_pubsub_ready_settle_ms ()
 
 int resolve_single_connect_ready_timeout_ms ()
 {
-    return parse_positive_env ("PERF_CONNECT_READY_TIMEOUT_MS", 3000);
+    return parse_positive_env ("PERF_CONNECT_READY_TIMEOUT_MS", 1000);
 }
 
 uint64_t resolve_single_socket_hwm (bool send_)
@@ -420,13 +420,15 @@ bool setup_connected_pair (perf_socket_t &bind_socket_,
     apply_single_benchmark_socket_options (bind_socket_, transport_);
     apply_single_benchmark_socket_options (connect_socket_, transport_);
     const int connect_ready_timeout_ms = resolve_single_connect_ready_timeout_ms ();
-    if (!wait_socket_monitor_event_with_activity (
+    const bool bind_ready = wait_socket_monitor_event_with_activity (
           bind_monitor, &bind_socket_,
           static_cast<uint64_t> (zlink::monitor_event::connection_ready),
-          connect_ready_timeout_ms)
-        || !wait_socket_monitor_event (
-          connect_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready),
-          connect_ready_timeout_ms)) {
+          connect_ready_timeout_ms);
+    const bool connect_ready = wait_socket_monitor_event_with_activity (
+          connect_monitor, &connect_socket_,
+          static_cast<uint64_t> (zlink::monitor_event::connection_ready),
+          connect_ready_timeout_ms);
+    if (!bind_ready || !connect_ready) {
         return false;
     }
     return true;
