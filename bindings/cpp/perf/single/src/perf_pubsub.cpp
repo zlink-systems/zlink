@@ -93,9 +93,6 @@ bool run_pattern_pubsub (const std::string &transport, size_t msg_size, const st
         return false;
     }
 
-    const int recv_timeout = perf::single::resolve_single_pubsub_recv_timeout_ms ();
-    subscriber.options ().recv_timeout (std::chrono::milliseconds (recv_timeout));
-
     std::this_thread::sleep_for (
       std::chrono::milliseconds (perf::single::resolve_single_pubsub_ready_settle_ms ()));
     const size_t payload_size = std::max<size_t> (msg_size, perf_single_metric::header_size ());
@@ -110,6 +107,20 @@ bool run_pattern_pubsub (const std::string &transport, size_t msg_size, const st
       perf::single::resolve_single_latency_sample_cap ());
     const auto active_deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (duration_s);
+
+    // PERF_SINGLE_TEST_POLICY § 1.4: match the C reference runner by
+    // waiting for subscriber readiness through the public poller and
+    // draining messages with DONTWAIT.  A blocking subscribe with a
+    // receive timeout is not equivalent to this policy.
+    zlink::poller_t recv_poller;
+    try {
+        recv_poller.add (subscriber, zlink::poll_event_flag_t::pollin, 0);
+    }
+    catch (const zlink::config_error_t &) {
+        if (perf_debug_enabled ())
+            std::cerr << "pubsub: subscriber poller setup failed" << std::endl;
+        return false;
+    }
 
     std::thread sender_thread ([&] () {
         uint64_t seq = 1;
@@ -142,37 +153,23 @@ bool run_pattern_pubsub (const std::string &transport, size_t msg_size, const st
                && perf::single::is_stop_token_message (message_.parts ()[0]);
     };
 
+    zlink::topic_message_t message;
     bool stop_received = false;
     while (!stop_received) {
-        // PERF_SINGLE_TEST_POLICY § 1.4: blocking subscribe wakes when
-        // the stop token arrives on the wire.
-        zlink::topic_message_t message;
         try {
-            const int rc = subscriber.subscribe (message);
-            if (rc != static_cast<int> (zlink::recv_result_t::ok))
+            zlink::poll_event_t event;
+            if (recv_poller.wait (&event, 1, std::chrono::milliseconds (-1)) == 0)
                 continue;
         }
-        catch (const zlink::recv_error_t &error) {
-            const int err = error.internal_errno ();
-            if (err == EINTR || err == EAGAIN || err == EWOULDBLOCK || err == ETIMEDOUT)
-                continue;
-            sender_ok.store (false, std::memory_order_release);
-            break;
-        }
-        if (is_stop_message (message)) {
-            stop_received = true;
-            break;
-        }
-
-        if (!record_if_active (message)) {
+        catch (const zlink::recv_error_t &) {
             sender_ok.store (false, std::memory_order_release);
             break;
         }
 
         for (;;) {
             try {
-                const int rc =
-                  subscriber.subscribe (message, static_cast<int> (zlink::send_flags_t::dontwait));
+                const int rc = subscriber.subscribe (
+                  message, static_cast<int> (zlink::recv_flags_t::dontwait));
                 if (rc == static_cast<int> (zlink::recv_result_t::no_data))
                     break;
                 if (rc != static_cast<int> (zlink::recv_result_t::ok)) {
@@ -182,11 +179,12 @@ bool run_pattern_pubsub (const std::string &transport, size_t msg_size, const st
             }
             catch (const zlink::recv_error_t &error) {
                 const int err = error.internal_errno ();
-                if (err == EINTR || err == EAGAIN || err == EWOULDBLOCK || err == ETIMEDOUT)
+                if (err == EINTR || err == EAGAIN || err == EWOULDBLOCK)
                     break;
                 sender_ok.store (false, std::memory_order_release);
                 break;
             }
+
             if (is_stop_message (message)) {
                 stop_received = true;
                 break;
@@ -201,8 +199,7 @@ bool run_pattern_pubsub (const std::string &transport, size_t msg_size, const st
 
     sender_thread.join ();
     // Stop token is the last in-flight message, so any earlier payloads
-    // have already been recorded above. No bounded drain loop needed.
-    (void) recv_timeout;
+    // have already been recorded above. No bounded drain loop is needed.
 
     const unsigned long long received = received_count.load (std::memory_order_acquire);
     if (!sender_ok.load (std::memory_order_acquire) || received == 0

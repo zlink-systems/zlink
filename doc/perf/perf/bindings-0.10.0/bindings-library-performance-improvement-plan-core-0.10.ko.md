@@ -614,7 +614,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/cpp/perf`
 - Single 상태: `진행 중` — `PAIR / inproc`, `PAIR / tcp`, `PAIR / ws`, `PUBSUB / tcp`,
-  `PUBSUB / ws`, `PUBSUB / wss`, `PUBSUB / tls`의 선택된 size paired 측정을 현재 소스 기준으로 완료했지만, 전체
+  `PUBSUB / ws`, `PUBSUB / wss`, `PUBSUB / tls`, `PUBSUB / inproc`의 선택된 size paired 측정을 현재 소스 기준으로 완료했지만, 전체
   Single transport·pattern 완료
   판정은 아직 하지 않았다. `socket_access_t::native_handle()` inline과 등록된
   `zlink_poller_wait()` 사용은 private implementation 최적화로 유지했다. contract
@@ -651,110 +651,86 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
   제거해도 중앙값 목표를 해결하지 못하고, public ownership·builder 계약을 유지하면서
   제거할 일반 binding 전용 병목을 확인하지 못했다. `sol` follow-up에서 IPC source
   optimization은 no-go로 판정했다.
-  `PUBSUB / ws`의 기존 full sweep ratio는 82.32%, 93.89%, 102.39%, 96.17%,
-  93.72%, 97.06%이고 size 중앙값은 95.03%였지만 64B 경계 재검증은 84.51%였다.
-  `subscription_reader.hpp`에서 single-part 수신 성공 시 임시 `topic_message_t`를
-  만들지 않고 기존 `lazy_message_parts_t::replace(message_t)`를 사용하는 private
-  friend helper를 추가했다. 이 변경은 caller output의 vector capacity를 유지하며
-  public API, object layout, ABI와 ownership을 변경하지 않는다. 후보의 64B paired
-  재검증 ratio는 89.96%였고 C++ 변동 폭은 3.49%였다. 후보 full sweep ratio는
-  89.47%, 93.96%, 100.57%, 94.56%, 93.84%, 98.73%이고 size 중앙값은 94.26%다.
-  모든 개별 셀은 최소 기준을 넘었지만 size 중앙값 목표 95%에는 미달하므로
-  후보 source는 유지하고 `PUBSUB / ws` transport는 미달 상태로 기록한다.
-  `PUBSUB / wss`의 candidate full sweep ratio는 89.49%, 99.20%, 99.36%, 98.24%,
-  97.75%, 98.59%이고 size 중앙값은 98.42%다. 모든 개별 셀이 85% 이상이고
-  transport 목표를 통과했다. 262144B boundary revalidation은 Round 1에서
-  C/C++ 3180.4/3197.0 msg/s(100.52%), Round 2에서 3198.8/3213.6 msg/s(100.46%)였다.
-  두 round 모두 C++ 변동 폭은 약 12.8%였지만 throughput 기준은 통과했고, WSS
-  encryption과 WebSocket framing·Core I/O가 비용을 지배하므로 추가 source 변경은
+  기존 `PUBSUB` C++ paired 결과는 subscriber를 200ms blocking receive로 읽어 C 기준의
+  public poller 의미와 달랐으므로 최종 비교에서 제외한다. C++ harness를 persistent
+  public `poller_t`의 `wait(-1)` 뒤 `recv_flags_t::dontwait` drain으로 수정하고,
+  `topic_message_t`를 drain loop 밖에서 재사용했다. 이 수정은 public API, wire payload,
+  ownership과 집계 의미를 바꾸지 않으며, 이후 수치는 모두 수정된 harness의 결과다.
+  `subscription_reader.hpp`의 single-part 수신 성공 경로는 기존
+  `lazy_message_parts_t::replace(message_t)`를 사용하는 private friend helper를
+  유지한다. `PUBSUB / tcp` 재측정 ratio는 90.38%, 99.55%, 103.99%, 89.70%, 93.15%,
+  95.96%이고 size 중앙값은 94.56%로 미달이다. 모든 개별 셀은 85% 이상이며 추가
+  binding hot path 근거가 없어 source 변경은 하지 않는다.
+  `PUBSUB / ws` 재측정 ratio는 84.17%, 93.47%, 102.77%, 94.58%, 94.85%, 96.92%이고
+  size 중앙값은 94.71%다. 64B 개별 기준과 중앙값 목표가 미달이며, WebSocket framing,
+  Core poller와 공통 publisher 비용이 중심이므로 기존 replacement 후보 외 추가 변경은
   하지 않는다.
-  `PUBSUB / tls`의 candidate full sweep ratio는 88.56%, 100.25%, 97.90%, 95.13%,
-  91.62%, 99.36%이고 size 중앙값은 96.52%다. 모든 개별 셀이 85% 이상이고
-  transport 목표를 통과했다. 131072B boundary ratio는 97.22%였고, 262144B는
-  Round 1 87.76%, Round 2 91.74%였다. 262144B C++ 변동 폭은 두 round에서
-  약 18%와 16.7%로 높았지만 throughput 최소 기준을 유지했으며, TLS encryption과
-  Core I/O 비용이 중심이므로 추가 source 변경은 하지 않는다.
+  `PUBSUB / wss` 재측정 ratio는 92.00%, 100.79%, 99.83%, 98.08%, 98.78%, 97.22%이고
+  size 중앙값은 98.43%다. 모든 개별 셀이 85% 이상이고 transport 목표를 통과했다.
+  WSS encryption·WebSocket framing·Core I/O가 비용을 지배하므로 추가 source 변경은
+  하지 않는다.
+  `PUBSUB / tls` 재측정 ratio는 89.83%, 101.92%, 97.85%, 95.67%, 92.12%, 88.19%이고
+  size 중앙값은 93.89%다. 모든 개별 셀은 85% 이상이지만 중앙값 목표에는 미달하며,
+  TLS encryption과 Core I/O가 비용을 지배하므로 추가 source 변경은 하지 않는다.
+  `PUBSUB / inproc` 재측정 ratio는 93.17%, 93.27%, 98.13%, 31.59%, 61.80%, 70.10%이고
+  size 중앙값은 81.64%다. 64B·256B·1024B만 개별 기준을 통과하고 65536B 이상은
+  크게 미달했다. 정책 정렬 Release profile에서 C++ `read_subscription_message`는
+  2.10%, `zlink_subscribe_part`는 2.94%, `malloc`은 3.36%였고 C/C++ 공통의
+  anonymous libc·Core mutex·allocation·poller 비용이 중심이었다. Sol review는
+  direct receive, allocator와 builder 변경을 no-go로 판정했으므로 추가 source 변경은
+  하지 않는다.
 - Multi 상태: `미측정`
-- 다음 작업: 현재 대상의 large-message 병목은 Release profiler와 단일 진단에서
-  copy/allocation, Core send/receive, poller 비용을 확인했지만, public contract와
-  ownership을 유지하면서 제거할 수 있는 C++ binding 전용 hot path는 확인하지 못했다.
-  gprof로 확인한 raw send builder 호출 비용 후보는 64B 재측정에서 재현되지 않아
-  제거했고, private constructor inline과 `operation_builder_base_t` 변경은 근거 부족과
-  pooling·rollback 수명 위험 때문에 실행하지 않았다. `socket_access_t` 후보는
-  profile에서 기존 out-of-line wrapper symbol이 사라지고 같은 시점 baseline보다
-  64B ratio가 87.62%에서 94.88~95.05%로 올라갔지만, 변동성 gate 미통과 상태다.
-  persistent poller 구현은 유지했지만 65536B 반복 median 개선은 121~124K에 그쳤고
-  최신 inproc full sweep ratio는 24.77%다. `message.cpp`의 128KiB pool 하한을
-  64KiB로 낮추는 후보도 `sol` 리뷰에서 검토했지만, allocation만 줄여 이론상 ratio가 약
-  29%에 그치고 global mutex·release callback·linear search 비용을 추가하므로 실행하지
-  않고 폐기했다. 추가 allocator, buffer reuse, receive object reuse 또는 정식 public
-  contract가 아닌 direct send 경로는 만들지 않으며, 새 per-message 차이를 분리할 profiler
-  근거가 생길 때까지 추가 source 후보를 보류한다. `PAIR / tcp`는 throughput 목표를
-  충족했지만 64B 변동성만 반복되어 이동했고, `PAIR / ws`도 모든 개별 셀이 85% 이상,
-  size 중앙값 97.10%로 목표를 충족했다. WS framing과 Core I/O가 남은 차이의 주된
-  영역이며 binding 전용 hot path 근거가 없어 source 변경 없이 `wss / PAIR`를
-  진행했다. WSS도 모든 개별 셀이 85% 이상이고 size 중앙값 98.23%로 목표를
-  충족했지만, encryption·WebSocket framing·Core I/O가 전체 비용을 지배해 추가
-  source 후보를 no-go로 판정했다. TLS는 모든 개별 셀이 최소 기준을 넘었지만 size
-  중앙값 목표에 미달했다. native allocation A/B도 page fault와 throughput 기준을
-  개선하지 못해 제거했고, 추가 binding source 후보는 보류한다. `PAIR`의 Single
-  transport 측정은 `tcp`, `ws`, `wss`, `tls`, `inproc`, `ipc`까지
-  완료했지만 `inproc`, `tcp`, `tls`, `ipc`는 중앙값 목표에 미달한다. 각 transport의
-  profiler와 `sol` review에서 public contract를 보존하는 추가 source 후보가 no-go로
-  판정되었으므로 PAIR의 미달 상태는 유지하고 다음 pattern인 `PUBSUB / tcp`를 같은
-  C → C++ 순서로 선택한다. `PUBSUB / tcp` 첫 full sweep은 size 중앙값 94.75%였지만
-  목표 경계 안에 있어 같은 6개 size를 다시 측정했다. 최종 boundary revalidation
-  ratio는 88.16%, 97.00%, 101.27%, 89.27%, 93.03%, 98.06%이고 size 중앙값은
-  95.01%다. 모든 개별 셀이 최소 기준을 넘었고 C 64B 및 C++ 64B·1024B 변동 폭만
-  10%를 넘었지만 C++ 전용 병목 근거는 없으므로 source 변경 없이 `PUBSUB / ws`로
-  이동한다. `PUBSUB / ws`에서는 profile이 C와 C++ 공통의 mutex, clock, WS/Core
-  poller 비용을 보였지만 subscriber single-part output 교체의 반복 allocation은
-  일반 binding hot path 후보로 확인됐다. 후보 적용 후 C++ 64B는 기존 876,587.2에서
-  927,067.8 msg/s로 개선됐고, 평균 latency가 기존 full sweep보다 10% 넘게 증가한
-  size는 없었다. `sol` follow-up은 후보를 유지하되 size 중앙값 94.26%를 미달로
-  기록하고 추가 후보는 권장하지 않는다고 판정했다. 따라서 source 변경을 유지하고
-  다음 선택 대상인 `PUBSUB / wss`로 이동한다. `PUBSUB / wss`는 모든 개별 셀과
-  size 중앙값 목표를 충족했고, 262144B 변동성은 boundary 두 round에서 반복됐지만
-  ratio가 100.52%와 100.46%로 기준을 유지했다. source 변경 없이 다음 선택 대상인
-  `PUBSUB / tls`로 이동한다. `PUBSUB / tls`는 모든 개별 셀과 size 중앙값 목표를
-  충족했고, 131072B와 262144B boundary revalidation도 최소 기준을 충족했다.
-  262144B의 반복 변동은 환경 변동으로 기록하고 source 변경 없이 다음 선택 대상인
-  `PUBSUB / inproc`로 이동한다.
+- 다음 작업: C++ PUBSUB harness는 C 기준과 같은 persistent public poller
+  `wait(-1) → DONTWAIT drain` 의미로 정렬했고 `topic_message_t`도 drain loop 밖에서
+  재사용한다. 이 변경은 public API·wire payload·ownership을 바꾸지 않으므로 유지한다.
+  `PUBSUB / tcp`는 ratio 90.38%, 99.55%, 103.99%, 89.70%, 93.15%, 95.96%와
+  size 중앙값 94.56%로 미달했고, `PUBSUB / ws`는 84.17%, 93.47%, 102.77%,
+  94.58%, 94.85%, 96.92%와 size 중앙값 94.71%로 미달했다. `PUBSUB / wss`는
+  92.00%, 100.79%, 99.83%, 98.08%, 98.78%, 97.22%와 size 중앙값 98.43%로
+  통과했고, `PUBSUB / tls`는 89.83%, 101.92%, 97.85%, 95.67%, 92.12%, 88.19%와
+  size 중앙값 93.89%로 미달했다. 이전 poller 불일치 결과는 모두 공식 비교에서
+  제외한다. WSS/TLS의 encryption·WebSocket·Core I/O와 TCP/WS의 공통 poller·socket
+  비용이 중심이라 추가 source 변경은 하지 않는다.
+  `PUBSUB / inproc`은 정책 정렬 후 ratio 93.17%, 93.27%, 98.13%, 31.59%, 61.80%,
+  70.10%와 size 중앙값 81.64%로 미달했다. C++ `read_subscription_message` 2.10%,
+  `zlink_subscribe_part` 2.94%, `malloc` 3.36% 외에는 C/C++ 공통 비용이 profile을
+  지배했고, `sol` review는 direct receive·allocator·builder 변경을 no-go로 판정했다.
+  따라서 현재 source 후보만 유지하고 다음 선택 대상인 `PUBSUB / ipc`로 이동한다.
 
 #### 9.1.1 Single suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
 | `tcp` | `PAIR` | 미달 (94.82%) | 통과 (95.78%) | 통과 (98.91%) | 통과 (87.80%) | 통과 (91.09%) | 통과 (97.02%) | full sweep size 중앙값 95.30%다. 256B·1024B·262144B는 boundary revalidation에서 C/C++ 변동 폭 8.44%/4.38%, 6.04%/3.89%, 1.48%/4.90%로 안정됐고, 64B는 세 번째 재검증에서도 11.66%/11.32%로 gate를 넘었다. |
-| `tcp` | `PUBSUB` | 통과 (88.16%) | 통과 (97.00%) | 통과 (101.27%) | 통과 (89.27%) | 통과 (93.03%) | 통과 (98.06%) | boundary revalidation size 중앙값 95.01%로 통과했다. 첫 full sweep은 ratio 88.63%, 96.47%, 101.86%, 89.49%, 93.04%, 96.54%, size 중앙값 94.75%였고 경계 재검증으로 보완했다. 최종 C/C++ 변동 폭은 64B 13.64%/10.35%, 256B 9.63%/2.92%, 1024B 6.44%/11.26%, 65536B 2.84%/5.73%, 131072B 2.91%/8.73%, 262144B 2.49%/5.22%다. |
+| `tcp` | `PUBSUB` | 통과 (90.38%) | 통과 (99.55%) | 통과 (103.99%) | 통과 (89.70%) | 통과 (93.15%) | 통과 (95.96%) | C++ PUBSUB poller parity 후 full sweep size 중앙값은 94.56%로 미달이다. 기존 blocking-subscribe 결과는 제외한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_164718_pubsub-tcp-poller-parity-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_165025_pubsub-tcp-poller-parity-cpp.txt` |
 | `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `PAIR` | 통과 (96.22%) | 통과 (97.97%) | 통과 (99.80%) | 통과 (95.27%) | 통과 (94.38%) | 통과 (98.33%) | full sweep size 중앙값 97.10%다. C/C++ 변동 폭은 64B 11.04%/10.00%, 256B 6.41%/7.74%, 1024B 4.73%/5.06%, 65536B 3.78%/5.62%, 131072B 3.02%/5.01%, 262144B 3.77%/2.32%다. 64B C 변동 폭은 10%를 조금 넘었지만 C++ 전용 병목 근거가 없고 `sol` 리뷰에서 source 변경 후보를 no-go로 판정했다. |
-| `ws` | `PUBSUB` | 통과 (89.47%) | 통과 (93.96%) | 통과 (100.57%) | 통과 (94.56%) | 통과 (93.84%) | 통과 (98.73%) | 후보 full sweep size 중앙값 94.26%로 transport 목표 95%에는 미달하지만 모든 개별 셀은 85% 이상이다. 64B boundary revalidation은 89.96%였고 C++ 변동 폭은 3.49%였다. `subscription_reader.hpp`의 private single-part replacement candidate는 output vector capacity를 보존하며 public API·ABI를 변경하지 않는다. 기존 full sweep 대비 C++ 64B는 5.78% 개선됐고 다른 size 절대 throughput 회귀는 5% 이내다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_153106_pubsub-ws-all-sizes-replace-candidate-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_153417_pubsub-ws-all-sizes-replace-candidate-cpp.txt` |
+| `ws` | `PUBSUB` | 미달 (84.17%) | 통과 (93.47%) | 통과 (102.77%) | 통과 (94.58%) | 통과 (94.85%) | 통과 (96.92%) | C++ PUBSUB poller parity 후 full sweep size 중앙값은 94.71%로 미달이고 64B 개별 기준도 미달이다. `topic_message_access_t::replace_single()` 후보는 유지하지만 추가 source 변경은 하지 않는다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_165343_pubsub-ws-poller-parity-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_165651_pubsub-ws-poller-parity-cpp.txt` |
 | `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `PAIR` | 통과 (94.89%) | 통과 (97.93%) | 통과 (99.24%) | 통과 (98.76%) | 통과 (97.99%) | 통과 (98.46%) | full sweep size 중앙값 98.23%다. C/C++ 변동 폭은 64B 8.10%/2.35%, 256B 2.83%/3.17%, 1024B 6.14%/3.02%, 65536B 4.84%/3.01%, 131072B 3.68%/2.06%, 262144B 2.67%/13.90%다. 262144B boundary revalidation은 Round 1 ratio 100.01%, C/C++ 변동 폭 6.76%/10.47%, Round 2 ratio 90.22%, 변동 폭 2.63%/14.55%였다. 반복 변동은 기록했지만 throughput 목표는 충족했고 `sol` 리뷰에서 WSS source 후보를 no-go로 판정했다. |
-| `wss` | `PUBSUB` | 통과 (89.49%) | 통과 (99.20%) | 통과 (99.36%) | 통과 (98.24%) | 통과 (97.75%) | 통과 (98.59%) | candidate full sweep size 중앙값 98.42%로 통과했다. 262144B boundary revalidation은 Round 1 100.52%, Round 2 100.46%였고 두 round의 C++ 변동 폭은 약 12.8%로 반복됐다. throughput 기준은 통과했으며 WSS encryption·WebSocket framing·Core I/O가 비용을 지배하므로 추가 source 변경은 하지 않는다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_154456_pubsub-wss-all-sizes-after-ws-replace-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_154804_pubsub-wss-all-sizes-after-ws-replace-cpp.txt` |
+| `wss` | `PUBSUB` | 통과 (92.00%) | 통과 (100.79%) | 통과 (99.83%) | 통과 (98.08%) | 통과 (98.78%) | 통과 (97.22%) | C++ PUBSUB poller parity 후 full sweep size 중앙값은 98.43%로 통과했다. WSS encryption·WebSocket framing·Core I/O가 비용을 지배하므로 추가 source 변경은 하지 않는다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_170004_pubsub-wss-poller-parity-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_170312_pubsub-wss-poller-parity-cpp.txt` |
 | `wss` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `PAIR` | 통과 (93.79%) | 통과 (96.17%) | 통과 (99.00%) | 통과 (91.19%) | 통과 (92.72%) | 통과 (86.04%) | full sweep size 중앙값 93.25%로 transport 목표 95%에 미달한다. 64B/262144B boundary revalidation ratio는 Round 1 88.89%/82.36%, Round 2 92.25%/86.88%였다. TLS/262144B allocator A/B는 C++ throughput 3.33% 개선과 page fault 감소를 충족하지 못해 제거했다. |
-| `tls` | `PUBSUB` | 통과 (88.56%) | 통과 (100.25%) | 통과 (97.90%) | 통과 (95.13%) | 통과 (91.62%) | 통과 (99.36%) | candidate full sweep size 중앙값 96.52%로 통과했다. 131072B boundary ratio는 97.22%, 262144B는 Round 1 87.76%, Round 2 91.74%였다. 262144B C++ 변동 폭은 약 18%와 16.7%로 높았지만 두 결과 모두 최소 기준을 넘었고 TLS encryption·Core I/O가 비용을 지배하므로 추가 source 변경은 하지 않는다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_155614_pubsub-tls-all-sizes-after-ws-replace-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_155922_pubsub-tls-all-sizes-after-ws-replace-cpp.txt` |
+| `tls` | `PUBSUB` | 통과 (89.83%) | 통과 (101.92%) | 통과 (97.85%) | 통과 (95.67%) | 통과 (92.12%) | 통과 (88.19%) | C++ PUBSUB poller parity 후 full sweep size 중앙값은 93.89%로 미달이다. TLS encryption·Core I/O가 비용을 지배하므로 추가 source 변경은 하지 않는다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_170628_pubsub-tls-poller-parity-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_170936_pubsub-tls-poller-parity-cpp.txt` |
 | `tls` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `PAIR` | 미달 (89.97%) | 통과 (99.60%) | 미달 (93.02%) | 미달 (24.77%) | 미달 (67.02%) | 미달 (73.84%) | 최신 contract-clean size 중앙값은 81.91%다. 256B C/C++ throughput 변동 폭은 5.64%/8.60%로 gate를 통과했지만, 64B는 20.14%/12.25%, 1024B는 4.06%/13.23%, 65536B는 9.21%/28.28%로 변동성 gate를 넘었고 128KiB 이상은 최소 기준에 미달했다. 두 report는 라운드 기록 참고 |
-| `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `inproc` | `PUBSUB` | 통과 (93.17%) | 통과 (93.27%) | 통과 (98.13%) | 미달 (31.59%) | 미달 (61.80%) | 미달 (70.10%) | C++ PUBSUB poller parity 후 full sweep size 중앙값은 81.64%다. 65536B profile에서 C++ `read_subscription_message` 2.10%, `zlink_subscribe_part` 2.94%, `malloc` 3.36%가 관측됐고 Sol review는 direct receive·allocator·builder 변경을 no-go로 판정했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_163619_pubsub-inproc-poller-parity-reuse-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_163926_pubsub-inproc-poller-parity-reuse-cpp.txt` |
 | `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1264,7 +1240,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 |------|------|------------------|
 | 버전 3곳 일치 | 확인 | `VERSION`, `core/CMakeLists.txt`, `core/include/zlink.h`가 모두 0.10.1이다. |
 | 실제 runtime 버전 | 확인 | GitHub `core/v0.10.1` release prefix와 package provenance를 사용했다. |
-| runner inventory | 선택 대상 확인 | `PAIR / inproc`, `PAIR / tcp`, `PAIR / ws`, `PAIR / wss`, `PAIR / tls`, `PAIR / ipc`, `PUBSUB / tcp`, `PUBSUB / ws`, `PUBSUB / wss`, `PUBSUB / tls`의 C·C++ runner 및 실제 `cpp_perf_pair`·`cpp_perf_pubsub` binary mapping을 확인했다. 전체 inventory는 미완료다. |
+| runner inventory | 선택 대상 확인 | `PAIR / inproc`, `PAIR / tcp`, `PAIR / ws`, `PAIR / wss`, `PAIR / tls`, `PAIR / ipc`, `PUBSUB / tcp`, `PUBSUB / ws`, `PUBSUB / wss`, `PUBSUB / tls`, `PUBSUB / inproc`의 C·C++ runner 및 실제 `cpp_perf_pair`·`cpp_perf_pubsub` binary mapping을 확인했다. 전체 inventory는 미완료다. |
 | Multi size 정책 | 미확인 |  |
 | 무시되는 runner option | 선택 대상 확인 | Effective Options에서 pattern, transport, size, duration, runs, I/O thread, HWM, timeout을 C·C++ 모두 확인했다. |
 | memory guard | Single 해당 없음 | 이번 선택 범위는 Single이며 multi memory guard는 실행하지 않았다. |
@@ -1275,17 +1251,17 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | 구분 | 상태 | 결과 파일 / 메모 |
 |------|------|------------------|
 | 현재 언어 | C++ |  |
-| 현재 pattern | 진행 중 | `PUBSUB / tls`를 최신 선택 대상으로 측정했다. `PUBSUB / ws` 후보 full sweep은 모든 개별 셀이 85% 이상이지만 size 중앙값 94.26%로 미달이고, `PUBSUB / wss`와 `PUBSUB / tls`는 각각 size 중앙값 98.42%, 96.52%로 통과했다. 다음 선택 대상은 `PUBSUB / inproc`다. 전체 pattern·transport 완료는 아니다. |
-| paired C | 완료 | `status: complete`, 최신 `PUBSUB / tls` candidate full sweep 6개 size × 5회 paired report를 생성했다. C와 C++은 Core v0.10.1 release, auto-HWM, I/O thread 1, timeout 200ms 조건이 일치한다. C median은 1,157,743.6 / 688,542.0 / 283,054.2 / 11,760.6 / 6,911.6 / 3,777.2 msg/s다. |
-| binding paired 결과 | 유효 결과·통과 | `status: complete`. `PUBSUB / tls` C++ candidate median은 1,025,340.6 / 690,270.0 / 277,107.2 / 11,188.0 / 6,332.6 / 3,753.0 msg/s다. 최종 ratio는 88.56%, 100.25%, 97.90%, 95.13%, 91.62%, 99.36%이고 size 중앙값은 96.52%다. 131072B boundary ratio는 97.22%, 262144B boundary는 Round 1 C/C++ 3,794.4/3,329.8 msg/s(87.76%), Round 2 3,795.0/3,481.6 msg/s(91.74%)였다. |
-| 개선 반복 | 완료 | C++ active blocking send와 1ms retry, PAIR stop-token retry, C reference 수신 poller parity, raw single-part send state와 runtime binary mapping을 수정했다. C++ Single latency sampler를 C reference와 동일한 bounded reservoir 방식으로 맞췄다. `message_t` accessor inline 후보는 contract tree의 `<zlink.h>` 금지 규칙을 위반해 원래 out-of-line public contract로 복구했다. 이전 C++ `DONTWAIT` active send 결과는 C의 blocking 의미와 달라 공식 비교에서 제외했다. native poller, large-message native allocation, receiver object reuse, constructor storage 초기화 제거, private raw/slow 경로 분리 후보는 각각 측정 후 제거했다. `PUBSUB / ws`에서는 `topic_message_access_t::replace_single()`이 기존 `lazy_message_parts_t::replace(message_t)`를 사용해 output vector capacity를 보존하도록 구현했다. Release 11/11, ASAN/UBSAN 11/11 contract suite가 통과했고, 64B C++ median은 기존 876,587.2에서 927,067.8 msg/s로 개선됐다. full sweep에서 평균 latency 10% 초과 악화와 개별 size 5% 초과 throughput 회귀는 없었다. `sol` follow-up은 후보를 유지하고 추가 후보는 권장하지 않는다고 판정했다. |
-| 커밋과 푸시 | 완료 | `PUBSUB / tls` paired 결과와 boundary revalidation을 `4fb50f7a9c`로 commit하고 `origin/core-0.10.0-bindings-performance`에 push했다. |
+| 현재 pattern | 진행 중 | C++ PUBSUB harness를 C 기준의 public poller `wait(-1) → DONTWAIT drain`으로 정렬한 뒤 `tcp`, `ws`, `wss`, `tls`, `inproc`을 C → C++ 순서로 다시 측정했다. 유효한 size 중앙값은 각각 94.56%, 94.71%, 98.43%, 93.89%, 81.64%이며, poller 불일치 상태의 이전 PUBSUB 결과는 공식 비교에서 제외한다. 다음 선택 대상은 `PUBSUB / ipc`다. 전체 pattern·transport 완료는 아니다. |
+| paired C | 완료 | `status: complete`, 최신 정책 정렬 `PUBSUB / inproc` full sweep 6개 size × 5회 paired report를 생성했다. C와 C++은 Core v0.10.1 release, auto-HWM, I/O thread 1, timeout 200ms 조건이 일치한다. C median은 1,196,169.0 / 1,080,341.2 / 975,033.4 / 379,884.2 / 164,765.0 / 76,097.2 msg/s다. |
+| binding paired 결과 | 유효 결과·미달 | `status: complete`. 정책 정렬 `PUBSUB / inproc` C++ median은 1,114,511.6 / 1,007,584.6 / 956,799.2 / 119,989.2 / 101,831.2 / 53,343.6 msg/s다. ratio는 93.17%, 93.27%, 98.13%, 31.59%, 61.80%, 70.10%이고 size 중앙값은 81.64%다. 64B·256B·1024B만 개별 기준을 통과하고 65536B 이상은 미달한다. |
+| 개선 반복 | 완료 | C++ active blocking send와 1ms retry, PAIR stop-token retry, C reference 수신 poller parity, raw single-part send state와 runtime binary mapping을 수정했다. C++ Single latency sampler를 C reference와 동일한 bounded reservoir 방식으로 맞췄다. `message_t` accessor inline 후보는 contract tree의 `<zlink.h>` 금지 규칙을 위반해 원래 out-of-line public contract로 복구했다. 이전 C++ `DONTWAIT` active send 결과는 C의 blocking 의미와 달라 공식 비교에서 제외했다. native poller, large-message native allocation, receiver object reuse, constructor storage 초기화 제거, private raw/slow 경로 분리 후보는 각각 측정 후 제거했다. `PUBSUB / ws`에서는 `topic_message_access_t::replace_single()`이 기존 `lazy_message_parts_t::replace(message_t)`를 사용해 output vector capacity를 보존하도록 구현했다. 추가로 C++ PUBSUB를 persistent public poller `wait(-1) → DONTWAIT drain`으로 맞추고 `topic_message_t`를 drain loop 밖에서 재사용했다. Release build 후 smoke와 contract suite를 다시 확인하며, policy-aligned inproc profile에서 C++ binding 전용 dominant hotspot은 확인하지 못했다. Sol review는 direct receive·allocator·builder 변경을 no-go로 판정했다. |
+| 커밋과 푸시 | 진행 중 | 정책 정렬 harness, paired report, profile·Sol review와 계획서 변경을 검증한 뒤 commit하고 `origin/core-0.10.0-bindings-performance`에 push한다. |
 
 ### 10.3 언어 진행 상태
 
 | 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
 |------|------|-------------|------------|-----------|
-| 1 | C++ | 진행 중 | 미측정 | `PUBSUB / inproc`를 C → C++ 순서로 선택한다. `PUBSUB / ws`의 private single-part replacement 개선과 size median 미달 근거, `PUBSUB / wss`·`PUBSUB / tls` 통과 결과를 보존하며 전체 Single pattern·transport를 완료하기 전에는 다음 언어로 이동하지 않는다. |
+| 1 | C++ | 진행 중 | 미측정 | `PUBSUB / ipc`를 C → C++ 순서로 선택한다. `PUBSUB / ws`의 private single-part replacement 개선과 size median 미달 근거, `PUBSUB / wss`·`PUBSUB / tls` 통과 결과, `PUBSUB / inproc` 대형 메시지 미달과 profile 근거를 보존하며 전체 Single pattern·transport를 완료하기 전에는 다음 언어로 이동하지 않는다. |
 | 2 | .NET | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 3 | Java | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
@@ -1354,6 +1330,15 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | 2026-08-09 | C++ | 변동성 재검증 / Single / PUBSUB / wss / 262144B | `pubsub-wss-262144-boundary-after-ws-replace-1-2` | full sweep에서 C++ 262144B variation이 10%를 넘어 같은 조건으로 C → C++ 순서의 5회 boundary revalidation을 두 차례 수행했다. | Round 1 C/C++ median은 3,180.4/3,197.0 msg/s(100.52%)이고 C++ variation은 약 12.8%다. Round 2는 3,198.8/3,213.6 msg/s(100.46%)이고 C++ variation도 약 12.8%다. 두 결과 모두 최소 기준을 넘고 ratio가 100% 부근을 유지하므로 환경 변동으로 기록한다. WSS source 변경은 하지 않고 `PUBSUB / tls`로 이동한다. | Round 1 C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_155129_pubsub-wss-262144-boundary-after-ws-replace.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_155206_pubsub-wss-262144-boundary-after-ws-replace.txt`; Round 2 C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_155246_pubsub-wss-262144-boundary-after-ws-replace-2.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_155324_pubsub-wss-262144-boundary-after-ws-replace-2.txt` |
 | 2026-08-09 | C++ | 최종 paired / Single / PUBSUB / tls / 64·256·1024·65536·131072·262144B | `pubsub-tls-all-sizes-after-ws-replace` | `PUBSUB / ws`의 general single-part replacement 개선을 유지한 상태에서 TLS를 C → C++ 순서로 6개 size, 5회씩 측정했다. Core v0.10.1 release, auto-HWM, I/O thread 1, timeout 200ms 조건을 유지했고 perf process는 직렬 실행했다. | 두 report 모두 `status: complete`. C median은 1,157,743.6 / 688,542.0 / 283,054.2 / 11,760.6 / 6,911.6 / 3,777.2 msg/s이고 C++ median은 1,025,340.6 / 690,270.0 / 277,107.2 / 11,188.0 / 6,332.6 / 3,753.0 msg/s다. ratio는 88.56%, 100.25%, 97.90%, 95.13%, 91.62%, 99.36%이고 size 중앙값은 96.52%다. 모든 개별 셀이 85% 이상이라 transport를 통과했다. TLS encryption과 Core I/O가 비용을 지배하므로 추가 source 변경은 하지 않는다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_155614_pubsub-tls-all-sizes-after-ws-replace-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_155922_pubsub-tls-all-sizes-after-ws-replace-cpp.txt`; Core provenance: `/home/hep7hep7/.cache/zlink/core/0.10.1/linux-x64/share/zlink/core-package-provenance.json` |
 | 2026-08-09 | C++ | 변동성 재검증 / Single / PUBSUB / tls / 131072·262144B | `pubsub-tls-boundary-after-ws-replace-1-2` | full sweep에서 C++ 131072B·262144B variation이 10%를 넘어 두 size를 같은 조건으로 C → C++ 순서의 5회 boundary revalidation으로 확인했다. 262144B는 변동이 반복되어 한 차례 더 측정했다. | Round 1 C/C++ median은 131072B 6,960.4/6,766.6 msg/s(97.22%), 262144B 3,794.4/3,329.8 msg/s(87.76%)다. Round 1의 C++ variation은 각각 약 6.2%와 18%였다. Round 2 262144B는 C/C++ 3,795.0/3,481.6 msg/s(91.74%), C++ variation 약 16.7%였다. 모든 결과가 최소 기준을 넘었고 반복 변동은 환경 변동으로 기록한다. TLS source 변경은 하지 않고 `PUBSUB / inproc`로 이동한다. | Round 1 C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_160243_pubsub-tls-boundary-after-ws-replace.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_160357_pubsub-tls-boundary-after-ws-replace.txt`; Round 2 C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_160509_pubsub-tls-262144-boundary-after-ws-replace-2.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_160556_pubsub-tls-262144-boundary-after-ws-replace-2.txt` |
+| 2026-08-09 | C++ | 최종 paired / Single / PUBSUB / inproc / 64·256·1024·65536·131072·262144B | `pubsub-inproc-all-sizes-after-ws-replace` | `PUBSUB / ws`의 private single-part replacement 개선을 유지한 상태에서 inproc을 C → C++ 순서로 6개 size, 5회씩 측정했다. Core v0.10.1 release, auto-HWM, I/O thread 1, timeout 200ms 조건을 유지했고 perf process는 직렬 실행했다. | 두 report 모두 `status: complete`. C median은 1,210,888.4 / 1,078,370.2 / 976,327.6 / 384,937.8 / 160,547.8 / 76,191.2 msg/s이고 C++ median은 1,117,761.8 / 1,002,246.6 / 944,171.2 / 79,499.8 / 102,347.2 / 50,538.4 msg/s다. ratio는 92.31%, 92.94%, 96.70%, 20.65%, 63.75%, 66.33%이고 size 중앙값은 79.32%다. 64B·256B·1024B만 개별 기준을 통과하고 65536B 이상은 미달하므로 transport는 미달 상태다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_160848_pubsub-inproc-all-sizes-after-ws-replace-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_161157_pubsub-inproc-all-sizes-after-ws-replace-cpp.txt`; Core provenance: `/home/hep7hep7/.cache/zlink/core/0.10.1/linux-x64/share/zlink/core-package-provenance.json` |
+| 2026-08-09 | C++ | Release profile·Sol review / Single / PUBSUB / inproc / 65536B | `pubsub-inproc-profile-review` | C와 C++을 별도 perf process로 순차 프로파일링하고 `perf report --no-children --percent-limit 1`로 비교했다. profile은 Core v0.10.1 release runtime과 동일한 paired runner를 사용했다. | C++ profile은 anonymous libc frame 33.82%, `pthread_mutex_lock` 7.25%, `malloc` 3.86%, `clock_gettime` 3.38%, Core ypipe read 1.93%였다. C++ binding 수신 조립은 `read_subscription_message` 1.45%, `zlink_subscribe_part` 1.45%였고 C profile도 anonymous libc 41.14%, Core mutex·clock·pipe 경로가 중심이었다. C/C++ 공통 Core·allocator·scheduler 비용이 지배하므로 public contract와 ownership을 유지하는 추가 binding source 후보는 no-go로 판정하고 inproc source는 변경하지 않는다. | C profile: `/tmp/zlink-perf-tools-0070B1/profile-latest/pubsub-inproc-c-65536-after-ws-replace.data`; C++ profile: `/tmp/zlink-perf-tools-0070B1/profile-latest/pubsub-inproc-cpp-65536-after-ws-replace.data`; Core provenance: `/home/hep7hep7/.cache/zlink/core/0.10.1/linux-x64/share/zlink/core-package-provenance.json` |
+| 2026-08-09 | C++ | 측정 정책 보정 / Single / PUBSUB / tcp·ws·wss·tls·inproc | `pubsub-poller-parity-correction` | Sol review에서 기존 C++ PUBSUB의 200ms blocking `subscribe()`가 C 기준의 persistent public poller `wait(-1)` 뒤 `DONTWAIT drain`과 다름을 확인했다. C++ harness를 `poller_t` 등록, 무한 대기, `recv_flags_t::dontwait` drain으로 수정하고 `topic_message_t`를 drain loop 밖에서 재사용했다. | 보정 전 C++ PUBSUB report와 그에 대응하는 C paired report는 wire payload와 조건은 기록용으로 보존하지만 최종 비교에서 제외한다. 보정 후 모든 수치는 C → C++ 순서와 Core v0.10.1 release runtime으로 다시 측정했다. 변경은 public API·wire payload·ownership·집계 의미를 바꾸지 않는다. | source: `/home/hep7hep7/project/zlink/bindings/cpp/perf/single/src/perf_pubsub.cpp`; policy: `/home/hep7hep7/project/zlink/doc/perf/PERF_SINGLE_TEST_POLICY.md`; sol review: `72e66e1d-ba4a-4881-b4c8-f77c19304a60` |
+| 2026-08-09 | C++ | 최종 paired / Single / PUBSUB / tcp / 64·256·1024·65536·131072·262144B | `pubsub-tcp-poller-parity` | 보정된 C++ PUBSUB harness를 사용해 C → C++ 순서로 같은 Core v0.10.1 release, auto-HWM, I/O thread 1, timeout 200ms 조건에서 6개 size를 5회씩 측정했다. | 두 report 모두 `status: complete`. C median은 1,314,119.4 / 847,344.6 / 518,443.2 / 36,257.8 / 23,668.2 / 14,211.4 msg/s이고 C++ median은 1,187,759.6 / 843,496.0 / 539,124.2 / 32,523.0 / 22,047.8 / 13,637.0 msg/s다. ratio는 90.38%, 99.55%, 103.99%, 89.70%, 93.15%, 95.96%이고 size 중앙값은 94.56%로 미달한다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_164718_pubsub-tcp-poller-parity-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_165025_pubsub-tcp-poller-parity-cpp.txt`; Core provenance: `/home/hep7hep7/.cache/zlink/core/0.10.1/linux-x64/share/zlink/core-package-provenance.json` |
+| 2026-08-09 | C++ | 최종 paired / Single / PUBSUB / ws / 64·256·1024·65536·131072·262144B | `pubsub-ws-poller-parity` | 보정된 C++ PUBSUB harness와 `topic_message_access_t::replace_single()` 후보를 유지해 C → C++ 순서로 6개 size를 5회씩 측정했다. | 두 report 모두 `status: complete`. C median은 1,012,412.2 / 760,809.4 / 381,039.4 / 23,314.6 / 15,513.2 / 10,369.6 msg/s이고 C++ median은 852,153.4 / 711,113.8 / 391,594.6 / 22,050.8 / 14,713.8 / 10,050.2 msg/s다. ratio는 84.17%, 93.47%, 102.77%, 94.58%, 94.85%, 96.92%이고 size 중앙값은 94.71%다. 64B 개별 기준과 중앙값 목표가 미달하며 추가 source 변경은 하지 않는다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_165343_pubsub-ws-poller-parity-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_165651_pubsub-ws-poller-parity-cpp.txt`; Core provenance: `/home/hep7hep7/.cache/zlink/core/0.10.1/linux-x64/share/zlink/core-package-provenance.json` |
+| 2026-08-09 | C++ | 최종 paired / Single / PUBSUB / wss / 64·256·1024·65536·131072·262144B | `pubsub-wss-poller-parity` | 보정된 C++ PUBSUB harness와 existing single-part replacement 후보를 유지해 C → C++ 순서로 6개 size를 5회씩 측정했다. | 두 report 모두 `status: complete`. C median은 973,471.4 / 577,334.6 / 218,499.8 / 9,365.8 / 5,680.8 / 3,154.4 msg/s이고 C++ median은 895,610.2 / 581,888.8 / 218,119.2 / 9,186.2 / 5,611.6 / 3,066.8 msg/s다. ratio는 92.00%, 100.79%, 99.83%, 98.08%, 98.78%, 97.22%이고 size 중앙값은 98.43%로 통과한다. WSS encryption·WebSocket framing·Core I/O가 비용을 지배하므로 source 변경은 하지 않는다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_170004_pubsub-wss-poller-parity-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_170312_pubsub-wss-poller-parity-cpp.txt`; Core provenance: `/home/hep7hep7/.cache/zlink/core/0.10.1/linux-x64/share/zlink/core-package-provenance.json` |
+| 2026-08-09 | C++ | 최종 paired / Single / PUBSUB / tls / 64·256·1024·65536·131072·262144B | `pubsub-tls-poller-parity` | 보정된 C++ PUBSUB harness와 existing single-part replacement 후보를 유지해 C → C++ 순서로 6개 size를 5회씩 측정했다. | 두 report 모두 `status: complete`. C median은 1,139,570.6 / 671,286.8 / 283,111.4 / 11,626.6 / 6,841.2 / 3,741.4 msg/s이고 C++ median은 1,023,635.0 / 684,162.0 / 277,033.6 / 11,123.0 / 6,301.8 / 3,299.6 msg/s다. ratio는 89.83%, 101.92%, 97.85%, 95.67%, 92.12%, 88.19%이고 size 중앙값은 93.89%로 미달한다. TLS encryption·Core I/O가 비용을 지배하므로 source 변경은 하지 않는다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_170628_pubsub-tls-poller-parity-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_170936_pubsub-tls-poller-parity-cpp.txt`; Core provenance: `/home/hep7hep7/.cache/zlink/core/0.10.1/linux-x64/share/zlink/core-package-provenance.json` |
+| 2026-08-09 | C++ | 최종 paired / Single / PUBSUB / inproc / 64·256·1024·65536·131072·262144B | `pubsub-inproc-poller-parity-reuse` | 보정된 C++ PUBSUB harness에서 poller wait와 message object reuse를 적용한 상태로 C → C++ 순서로 6개 size를 5회씩 측정했다. | 두 report 모두 `status: complete`. C median은 1,196,169.0 / 1,080,341.2 / 975,033.4 / 379,884.2 / 164,765.0 / 76,097.2 msg/s이고 C++ median은 1,114,511.6 / 1,007,584.6 / 956,799.2 / 119,989.2 / 101,831.2 / 53,343.6 msg/s다. ratio는 93.17%, 93.27%, 98.13%, 31.59%, 61.80%, 70.10%이고 size 중앙값은 81.64%다. 64B·256B·1024B만 개별 기준을 통과하고 65536B 이상은 미달한다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_163619_pubsub-inproc-poller-parity-reuse-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_163926_pubsub-inproc-poller-parity-reuse-cpp.txt`; Core provenance: `/home/hep7hep7/.cache/zlink/core/0.10.1/linux-x64/share/zlink/core-package-provenance.json` |
+| 2026-08-09 | C++ | Release profile·Sol review / Single / PUBSUB / inproc / 65536B | `pubsub-inproc-poller-parity-profile-review` | 정책 정렬 harness의 C와 C++을 별도 perf process로 C → C++ 순서로 프로파일링하고 `perf report --no-children --percent-limit 1`로 비교했다. | C profile은 anonymous libc 38.07%, `pthread_mutex_lock` 7.40%, clock 3.02%, mutex unlock 3.02%, Core ypipe flush 2.27%였다. C++ profile은 anonymous libc 28.57%, `pthread_mutex_lock` 5.46%, `malloc` 3.36%, `zlink_subscribe_part` 2.94%, `read_subscription_message` 2.10%, handle-state hash 2.52%였다. off-CPU wait/backpressure 변동과 C/C++ 공통 Core 비용이 중심이며 추가 binding source 후보는 no-go다. Sol은 poller parity와 message reuse만 유지하고 direct receive·allocator·builder 변경은 권장하지 않았다. | C profile: `/tmp/zlink-perf-tools-0070B1/profile-latest/pubsub-inproc-c-65536-poller-parity.data`; C++ profile: `/tmp/zlink-perf-tools-0070B1/profile-latest/pubsub-inproc-cpp-65536-poller-parity.data`; sol review: `72e66e1d-ba4a-4881-b4c8-f77c19304a60`; Core provenance: `/home/hep7hep7/.cache/zlink/core/0.10.1/linux-x64/share/zlink/core-package-provenance.json` |
 
 ## 12. 완료 기준
 
