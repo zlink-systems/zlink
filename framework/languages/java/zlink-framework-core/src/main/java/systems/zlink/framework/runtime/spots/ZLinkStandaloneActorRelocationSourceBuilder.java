@@ -4,6 +4,7 @@ import java.util.function.Predicate;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -56,6 +57,14 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
     private final Map<String, RelocatableActorFactory<?>>
         factories;
     private final ZLinkSpotRuntime relocationReplies;
+    //  Command 42 sender. Absent one the captured Session route keeps the
+    //  source's own high-water and the owner falls back to its monotonic gate.
+    private final systems.zlink.framework.runtime.actors
+        .ZLinkSessionRelocationPeerClient sessionSealer;
+    //  Command 42 loss policy is `retransmit-until-sealed-or-deadline`
+    //  (service-wire-v1.schema.json relocationStateMachine.commandRules).
+    private static final Duration SESSION_SEAL_DEADLINE =
+        Duration.ofSeconds(5);
     private final ZLinkActorAuthorityPayloadCodec authorities =
         new ZLinkActorAuthorityPayloadCodec();
 
@@ -70,7 +79,10 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         ZLinkRelocationAdapterRegistry adapters,
         Map<String, RelocatableActorFactory<?>>
             factories,
-        ZLinkSpotRuntime relocationReplies) {
+        ZLinkSpotRuntime relocationReplies,
+        systems.zlink.framework.runtime.actors
+            .ZLinkSessionRelocationPeerClient sessionSealer) {
+        this.sessionSealer = sessionSealer;
         this.meshName = requireText(meshName, "meshName");
         this.localNodeRid = Objects.requireNonNull(
             localNodeRid, "localNodeRid");
@@ -271,12 +283,15 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                         admission.target(),
                         relocationId,
                         initialRoot);
-                    Optional<ZLinkSpotRetireControl.SessionRouteFence> sessionRoute =
-                        admission.sessionRoute().or(() ->
+                    Optional<ZLinkSpotRetireControl.SessionRouteFence>
+                        capturedRoute = admission.sessionRoute().or(() ->
                             capturedSessionRoute(
                                 admission.owned(),
                                 seal.captured()));
-                    return coordinator.stageRoot(request, cancellation)
+                    return sealSessionRoute(
+                        admission.owned(), relocationId, capturedRoute)
+                        .thenCompose(sessionRoute ->
+                            coordinator.stageRoot(request, cancellation)
                         .thenApply(staged -> new PreparedSource(
                             coordinator,
                             actors,
@@ -293,7 +308,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                 admission,
                                 relocationId,
                                 staged,
-                                sessionRoute)));
+                                sessionRoute))));
                 }).exceptionallyCompose(failure -> {
                     relocationReplies.resumeActorTimersAfterRelocationAbort(
                         admission.owned().actorId());
@@ -535,6 +550,84 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                 actor.snapshot().objectGeneration(),
                 actor.snapshot().authorityOwnerGeneration())),
             sessionRoute.stream().toList());
+    }
+
+    /**
+     * Spec 20 §5 step 1: once the Actor lane is sealed the relocation source
+     * asks each bound Session owner to seal its ingress boundary (command 42)
+     * and answer with the accepted high-water it recorded there (command 43).
+     * That number replaces the source's own captured sequence in the Session
+     * route fence, so the value the target replays in command 44 is the one
+     * the owner itself reported and the owner's step 7 check is an equality.
+     *
+     * <p>Ported from the C++ source-side seal
+     * (`runtime/stateful/public_host_runtime.cpp:1430`
+     * `seal_session_remote`, which journals
+     * `sealed.last_accepted_session_sequence` into the durable relocation
+     * record). A seal that cannot complete inside the deadline keeps the
+     * captured value: the owner records nothing when it refuses, so the
+     * fallback lands on its monotonic gate.</p>
+     */
+    private CompletionStage<
+        Optional<ZLinkSpotRetireControl.SessionRouteFence>> sealSessionRoute(
+            Owned actor,
+            UUID relocationId,
+            Optional<ZLinkSpotRetireControl.SessionRouteFence> captured) {
+        if (sessionSealer == null || captured.isEmpty()) {
+            return CompletableFuture.completedFuture(captured);
+        }
+        ZLinkSpotRetireControl.SessionRouteFence route = captured.orElseThrow();
+        var seal = new systems.zlink.framework.runtime.internal.service
+            .ZLinkServiceM6BWireCodec.SessionRelocationSeal(
+                new systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceM6BWireCodec.RelocationIdentity(
+                        relocationId.getMostSignificantBits(),
+                        relocationId.getLeastSignificantBits()),
+                new systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
+                        actor.snapshot().ownerId(),
+                        actor.snapshot().ownerLeaseGeneration(),
+                        localNodeRid,
+                        localNodeGeneration,
+                        route.sourceAuthorityStoreVersion()),
+                systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
+                new systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceM6BWireCodec.ActorRouteFence(
+                        new systems.zlink.framework.runtime.internal.backend
+                            .ZLinkBackendActorRef(
+                                localNodeRid,
+                                route.actorId(),
+                                route.actorObjectGeneration()),
+                        localNodeGeneration,
+                        route.sourceAuthorityOwnerGeneration(),
+                        actor.snapshot().ownerLeaseGeneration()),
+                new systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                        route.sessionOwnerNodeRid(),
+                        route.sessionOwnerNodeGeneration(),
+                        route.sessionOwnerId(),
+                        route.sessionOwnerLeaseGeneration(),
+                        route.sessionRid(),
+                        route.bindingGeneration()));
+        //  The command 43 ACK completes on the mesh transport dispatch thread;
+        //  staging the relocation root must not run there.
+        return sessionSealer.sealRouteUntilAck(seal, SESSION_SEAL_DEADLINE)
+            .<Optional<ZLinkSpotRetireControl.SessionRouteFence>>thenApplyAsync(
+                sealed -> Optional.of(
+                    new ZLinkSpotRetireControl.SessionRouteFence(
+                        route.actorId(),
+                        route.actorObjectGeneration(),
+                        route.sourceAuthorityOwnerGeneration(),
+                        route.sourceAuthorityStoreVersion(),
+                        route.sessionOwnerNodeRid(),
+                        route.sessionOwnerNodeGeneration(),
+                        route.sessionOwnerId(),
+                        route.sessionOwnerLeaseGeneration(),
+                        route.sessionRid(),
+                        route.bindingGeneration(),
+                        sealed.lastAcceptedSessionSequence())))
+            .exceptionally(failure -> captured);
     }
 
     private Optional<ZLinkSpotRetireControl.SessionRouteFence>

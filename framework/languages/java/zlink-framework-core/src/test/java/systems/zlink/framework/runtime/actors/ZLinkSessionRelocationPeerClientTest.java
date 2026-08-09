@@ -223,6 +223,80 @@ final class ZLinkSessionRelocationPeerClientTest {
         assertEquals(List.of("failed"), terminals);
     }
 
+    //  Command 42 loss policy is `retransmit-until-sealed-or-deadline`: an
+    //  unanswered seal is retransmitted on the spec 20 §5 step 8 schedule and
+    //  the deadline - not the caller - stops the loop.
+    @Test
+    void command42RetransmitsUntilTheSealedAckOrTheDeadline() {
+        var codec = new ZLinkServiceM6BWireCodec();
+        var seal = seal();
+        AtomicInteger submissions = new AtomicInteger();
+        ZLinkInternalMeshNode retrying = sealNode((target, encoded) -> {
+            assertEquals(SESSION_OWNER, target);
+            assertEquals(seal, codec.decodeSessionRelocationSeal(encoded));
+            if (submissions.incrementAndGet() < 2) {
+                throw new ZlinkRequestException(RequestResult.TIMED_OUT);
+            }
+            return codec.encodeSessionRelocationSealed(
+                new ZLinkServiceM6BWireCodec.SessionRelocationSealed(
+                    seal.relocation(), seal.coordinator(), seal.actor(),
+                    seal.session(), 23));
+        });
+
+        var sealed = new ZLinkSessionRelocationPeerClient(retrying, codec)
+            .sealRouteUntilAck(seal, Duration.ofSeconds(10))
+            .toCompletableFuture().join();
+
+        assertEquals(23, sealed.lastAcceptedSessionSequence());
+        assertEquals(2, submissions.get());
+
+        //  An ACK that does not echo the seal is terminal - retransmitting the
+        //  same bytes can never make a different fence match.
+        ZLinkInternalMeshNode divergent = sealNode((target, encoded) ->
+            codec.encodeSessionRelocationSealed(
+                new ZLinkServiceM6BWireCodec.SessionRelocationSealed(
+                    seal.relocation(), seal.coordinator(), seal.actor(),
+                    new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                        SESSION_OWNER, 7, "session-owner", 8, SESSION, 10),
+                    23)));
+        assertThrows(CompletionException.class, () ->
+            new ZLinkSessionRelocationPeerClient(divergent, codec)
+                .sealRouteUntilAck(seal, Duration.ofSeconds(2))
+                .toCompletableFuture().join());
+    }
+
+    private static ZLinkServiceM6BWireCodec.SessionRelocationSeal seal() {
+        return new ZLinkServiceM6BWireCodec.SessionRelocationSeal(
+            new ZLinkServiceM6BWireCodec.RelocationIdentity(1, 2),
+            new ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
+                "coordinator", 3, SOURCE, 4, "store-v5"),
+            ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
+            new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                new systems.zlink.framework.runtime.internal.backend
+                    .ZLinkBackendActorRef(SOURCE, "actor", 6),
+                4, 10, 11),
+            new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                SESSION_OWNER, 7, "session-owner", 8, SESSION, 9));
+    }
+
+    private static ZLinkInternalMeshNode sealNode(Sender sender) {
+        return (ZLinkInternalMeshNode) Proxy.newProxyInstance(
+            ZLinkSessionRelocationPeerClientTest.class.getClassLoader(),
+            new Class<?>[] {ZLinkInternalMeshNode.class},
+            (proxy, method, arguments) -> {
+                if (method.getName().equals("requestSessionRelocationSeal")) {
+                    try {
+                        return CompletableFuture.completedFuture(sender.send(
+                            (RoutingId) arguments[0], (byte[]) arguments[1]));
+                    } catch (RuntimeException failure) {
+                        return CompletableFuture.failedFuture(failure);
+                    }
+                }
+                if (method.getName().equals("toString")) return "peer";
+                throw new UnsupportedOperationException(method.getName());
+            });
+    }
+
     private static ZLinkInternalMeshNode node(Sender sender) {
         return (ZLinkInternalMeshNode) Proxy.newProxyInstance(
             ZLinkSessionRelocationPeerClientTest.class.getClassLoader(),

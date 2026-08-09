@@ -440,6 +440,9 @@ public final class ZLinkFrameworkRuntime
                 node.setSessionRelocationRouteHandler(
                     this.streams::handleSessionRelocationRoute));
             this.meshNodes.nodesByName().values().forEach(node ->
+                node.setSessionRelocationSealHandler(
+                    this.streams::handleSessionRelocationSeal));
+            this.meshNodes.nodesByName().values().forEach(node ->
                 node.setBoundSessionReplacedHandler(
                     this.streams::handleBoundSessionReplaced));
         }

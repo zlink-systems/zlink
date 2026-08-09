@@ -345,6 +345,25 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         // Alternate backends may not support command 44/45 dispatch.
     }
 
+    default void setSessionRelocationSealHandler(
+        SessionRelocationSealHandler handler) {
+        // Alternate backends may not support command 42/43 dispatch.
+    }
+
+    /**
+     * Submits one exact command 42 record and returns its command 43 ACK.
+     * The Session owner answers with its accepted bound-Session high-water at
+     * the seal point; an identical retransmit returns the cached ACK.
+     */
+    default CompletionStage<byte[]> requestSessionRelocationSeal(
+        RoutingId sessionOwnerNodeRid,
+        byte[] command42,
+        Duration timeout) {
+        return CompletableFuture.failedFuture(
+            new UnsupportedOperationException(
+                "Session relocation seal is unavailable"));
+    }
+
     /**
      * Submits one exact command 44 record and returns its command 45 ACK.
      * The same operation is never re-resolved or submitted to another owner.
@@ -563,6 +582,13 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         CompletionStage<byte[]> handle(
             RoutingId sourceNodeRid,
             byte[] command44);
+    }
+
+    @FunctionalInterface
+    interface SessionRelocationSealHandler {
+        CompletionStage<byte[]> handle(
+            RoutingId sourceNodeRid,
+            byte[] command42);
     }
 
     @FunctionalInterface

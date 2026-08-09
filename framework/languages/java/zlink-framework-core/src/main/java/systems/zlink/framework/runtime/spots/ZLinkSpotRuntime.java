@@ -2061,13 +2061,17 @@ public final class ZLinkSpotRuntime
                 packet.acceptedJournalRecord()));
         ZLinkInternalMeshNode relocationMesh =
             routeMeshNodesByName.get(primaryNodeSourceName);
+        var sessionRelocationPeer = relocationMesh == null
+            ? null
+            : new systems.zlink.framework.runtime.actors
+                .ZLinkSessionRelocationPeerClient(relocationMesh);
         actorAdmissions.attach(
             actorRuntime,
             this::isDraining,
-            relocationMesh == null
-                ? null
-                : new systems.zlink.framework.runtime.actors
-                    .ZLinkSessionRelocationPeerClient(relocationMesh));
+            sessionRelocationPeer);
+        //  The same peer client also carries command 42 from the relocation
+        //  source to the bound Session owner (spec 20 §5 step 1).
+        actorRuntime.setSessionRelocationSealer(sessionRelocationPeer);
         actorRuntime.setLocalJoinCompleter(new ZLinkActorRuntime.LocalJoinCompleter() {
             @Override
             public CompletionStage<Void> complete(ZLinkActor actor) {

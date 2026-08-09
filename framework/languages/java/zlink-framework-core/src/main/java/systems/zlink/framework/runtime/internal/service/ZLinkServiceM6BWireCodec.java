@@ -1193,6 +1193,76 @@ public final class ZLinkServiceM6BWireCodec {
         return routed;
     }
 
+    //  Command 42 `sessionRelocationSeal`. Body order is fixed by
+    //  `runtime/protocol/service-wire-v1.schema.json` (command 42): relocation
+    //  id, coordinator fence, senderRole, `actor-route-fence`, then the six
+    //  session-owner fields. The same order is produced by the C++ reference
+    //  encoder `encode_session_relocation_seal`
+    //  (framework/src/runtime/protocol/service_wire_codec.cpp:1139).
+    public byte[] encodeSessionRelocationSeal(SessionRelocationSeal seal) {
+        Objects.requireNonNull(seal, "seal");
+        Writer writer = prefix(
+            ServiceWireConstants.COMMAND_SESSION_RELOCATION_SEAL, 0);
+        writeRelocationIdentity(writer, seal.relocation());
+        writeCoordinatorFence(writer, seal.coordinator());
+        writer.u8(seal.senderRole().wireValue);
+        writeActorRoute(writer, seal.actor());
+        writeSessionOwner(writer, seal.session());
+        return writer.toByteArray();
+    }
+
+    public SessionRelocationSeal decodeSessionRelocationSeal(byte[] frame) {
+        Reader reader = new Reader(frame);
+        Header header = reader.prefix();
+        if (header.command() != ServiceWireConstants.COMMAND_SESSION_RELOCATION_SEAL
+            || header.flags() != 0) {
+            throw protocol("command is not sessionRelocationSeal");
+        }
+        SessionRelocationSeal seal = new SessionRelocationSeal(
+            readRelocationIdentity(reader),
+            readCoordinatorFence(reader),
+            RelocationRole.fromWire(reader.u8("senderRole")),
+            readActorRoute(reader),
+            readSessionOwner(reader));
+        reader.end();
+        return seal;
+    }
+
+    //  Command 43 `sessionRelocationSealed`. Identical to 42 minus the
+    //  senderRole byte, plus the owner's `lastAcceptedSessionSequence` as an
+    //  `ordinal-or-zero` u64 - zero is legal for a Session that never
+    //  forwarded a bound message. Mirrors
+    //  `encode_session_relocation_sealed` (service_wire_codec.cpp:1238).
+    public byte[] encodeSessionRelocationSealed(
+        SessionRelocationSealed sealed) {
+        Objects.requireNonNull(sealed, "sealed");
+        Writer writer = prefix(
+            ServiceWireConstants.COMMAND_SESSION_RELOCATION_SEALED, 0);
+        writeRelocationIdentity(writer, sealed.relocation());
+        writeCoordinatorFence(writer, sealed.coordinator());
+        writeActorRoute(writer, sealed.actor());
+        writeSessionOwner(writer, sealed.session());
+        writer.u64(sealed.lastAcceptedSessionSequence());
+        return writer.toByteArray();
+    }
+
+    public SessionRelocationSealed decodeSessionRelocationSealed(byte[] frame) {
+        Reader reader = new Reader(frame);
+        Header header = reader.prefix();
+        if (header.command() != ServiceWireConstants.COMMAND_SESSION_RELOCATION_SEALED
+            || header.flags() != 0) {
+            throw protocol("command is not sessionRelocationSealed");
+        }
+        SessionRelocationSealed sealed = new SessionRelocationSealed(
+            readRelocationIdentity(reader),
+            readCoordinatorFence(reader),
+            readActorRoute(reader),
+            readSessionOwner(reader),
+            reader.u64("lastAcceptedSessionSequence"));
+        reader.end();
+        return sealed;
+    }
+
     public enum RelocationRole {
         SOURCE(1), TARGET(2), COORDINATOR(3);
         private final int wireValue;
@@ -1252,6 +1322,59 @@ public final class ZLinkServiceM6BWireCodec {
                 || bindingGeneration <= 0) {
                 throw protocol("Session owner generations must be nonzero");
             }
+        }
+    }
+
+    /**
+     * Command 42. The relocation source asks the Session owner to seal this
+     * binding's ingress boundary. `commandRules` in the service wire schema
+     * fixes senderRole to `source` and the phase to `preparing`; the C++
+     * encoder additionally tolerates `coordinator`, so the byte-level check
+     * mirrors that and the state-machine role restriction stays a caller
+     * concern.
+     */
+    public record SessionRelocationSeal(
+        RelocationIdentity relocation, RelocationCoordinatorFence coordinator,
+        RelocationRole senderRole, ActorRouteFence actor,
+        SessionOwnerFence session) {
+        public SessionRelocationSeal {
+            Objects.requireNonNull(relocation, "relocation");
+            Objects.requireNonNull(coordinator, "coordinator");
+            Objects.requireNonNull(senderRole, "senderRole");
+            Objects.requireNonNull(actor, "actor");
+            Objects.requireNonNull(session, "session");
+            if (senderRole != RelocationRole.SOURCE
+                && senderRole != RelocationRole.COORDINATOR) {
+                throw protocol("Session relocation seal sender is invalid");
+            }
+        }
+    }
+
+    /**
+     * Command 43. Echoes every command 42 field except senderRole and adds the
+     * Session owner's accepted bound-Session high-water at the seal point.
+     */
+    public record SessionRelocationSealed(
+        RelocationIdentity relocation, RelocationCoordinatorFence coordinator,
+        ActorRouteFence actor, SessionOwnerFence session,
+        long lastAcceptedSessionSequence) {
+        public SessionRelocationSealed {
+            Objects.requireNonNull(relocation, "relocation");
+            Objects.requireNonNull(coordinator, "coordinator");
+            Objects.requireNonNull(actor, "actor");
+            Objects.requireNonNull(session, "session");
+            if (lastAcceptedSessionSequence < 0) {
+                throw protocol("sealed high-water is invalid");
+            }
+        }
+
+        /** True when this ACK echoes the seal it answers, field for field. */
+        public boolean echoes(SessionRelocationSeal seal) {
+            return seal != null
+                && relocation.equals(seal.relocation())
+                && coordinator.equals(seal.coordinator())
+                && actor.equals(seal.actor())
+                && session.equals(seal.session());
         }
     }
 

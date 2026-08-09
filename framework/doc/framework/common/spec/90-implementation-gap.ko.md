@@ -36,8 +36,8 @@ message의 전달은 이 검증이 아니라 Message Follow가 보장한다.
 | C++ | 없음. Command 42/43을 service wire로 주고받는다. | 종결 |
 | Node.js | 없음. Seal 의미를 in-process binding registry로 구현하며 route publish를 seal과 대응시킨다. | 종결 |
 | .NET | 없음. Seal 의미를 내부 relay로 구현하고 commit 시 exact fence와 idempotent 재수신을 구분한다. | 종결 |
-| Java/Kotlin | Source 쪽 seal은 구현한다 — relocation barrier가 실행 lane을 봉인하고 그 시점의 accepted session sequence를 기록해 relocation에 싣는다. 빠진 것은 session owner 쪽 seal(command 42/43)과 seal 뒤 도착한 message의 ingress hold다. Owner는 봉인 시점을 통보받지 못하므로 비교할 기준값이 없고, 그래서 high-water gate는 등식이 아니라 monotonic으로 둔다 — 이미 적용된 값보다 역행한 high-water는 superseded relocation으로 거부한다. Seal 뒤 이전 route로 도착한 message는 Message Follow가 target Actor queue로 전달한다. | Command 42/43과 ingress hold를 구현해 owner가 봉인 경계를 기록하게 하고 등식 비교로 전환 |
+| Java/Kotlin | Command 42/43을 service wire로 주고받으며, 핸드셰이크를 마친 relocation에 대해서는 등식 비교가 종결됐다. Session owner는 봉인 시점에 기록한 accepted bound-session high-water를 command 43으로 답하고, source는 자기가 포착한 sequence 대신 그 ACK 값을 relocation에 싣는다. Target은 그 값을 command 44로 되돌려 보내고, owner는 relocation id별로 보관한 seal 값과 정확히 같은지 비교한다. C++와 의도적으로 다른 두 지점 — owner는 살아 있는 counter가 아니라 왕복해 돌아온 seal token을 비교하고, ingress barrier를 걸지 않는다. 그래서 봉인 뒤 message는 이전 route로 계속 흐르며 Message Follow가 target Actor queue로 전달한다(spec 20 §5 5단계). Seal 없이 도착한 relocation — 재시작 뒤 durable journal에서 복원한 route, 또는 deadline 안에 seal을 마치지 못한 source — 은 monotonic gate를 그대로 쓴다. | 봉인된 relocation에 대해 종결. 재시작 복원 route 경로는 여전히 monotonic gate로 물러난다 |
 
-Java/Kotlin의 monotonic gate는 이 항목 앞의 ObjectGeneration·AuthorityOwnerGeneration·binding
+Java/Kotlin의 대체 gate는 이 항목 앞의 ObjectGeneration·AuthorityOwnerGeneration·binding
 generation 검증을 모두 통과한 요청에만 적용된다. 지연 도착한 이전 relocation의 route 요청은
 그 fence들과 monotonic gate에서 거부된다.

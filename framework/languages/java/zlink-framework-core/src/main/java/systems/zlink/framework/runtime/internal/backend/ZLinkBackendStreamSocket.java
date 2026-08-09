@@ -30,6 +30,17 @@ public interface ZLinkBackendStreamSocket
         // Alternate test backends may not own a native STREAM transport.
     }
 
+    /**
+     * Returns the last bound-Session sequence this owner handed to an Actor,
+     * or zero when it has forwarded nothing. This is the Session owner's
+     * accepted high-water reported in the command 43 seal ACK; it is the Java
+     * equivalent of the C++ `next_inbound_sequence - 1` read by
+     * `stream_session_registry_t::seal_remote_route`.
+     */
+    default long boundSessionSequenceHighWater() {
+        return 0;
+    }
+
     void onTransportError(ZLinkBackendStreamErrorHandler handler);
 
     void startSessionService();

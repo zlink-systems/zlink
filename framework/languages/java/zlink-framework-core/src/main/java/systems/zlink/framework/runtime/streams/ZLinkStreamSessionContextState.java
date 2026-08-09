@@ -223,6 +223,17 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
         return runtime.applyRelocationRouteCommand(command);
     }
 
+    CompletionStage<ZLinkServiceM6BWireCodec
+        .SessionRelocationSealed> applyRelocationSealCommand(
+            ZLinkServiceM6BWireCodec
+                .SessionRelocationSeal command) {
+        if (!(actors instanceof ZLinkSessionActorsRuntime runtime)) {
+            return CompletableFuture.failedFuture(new ZLinkConfigurationException(
+                "Session is not attached to Actor routing"));
+        }
+        return runtime.applyRelocationSealCommand(command);
+    }
+
     @Override
     public CompletionStage<Void> close() {
         return closeAction.get();

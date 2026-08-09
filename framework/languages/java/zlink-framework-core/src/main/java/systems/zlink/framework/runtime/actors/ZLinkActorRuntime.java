@@ -255,6 +255,13 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 "eligible Entry Spot selection is unavailable"));
     private ZLinkRelayMetadataPolicy metadataPolicy = ZLinkRelayMetadataPolicy.EMPTY;
     private final ZLinkOneWayCalls oneWayCalls;
+    //  Command 42 loss policy is `retransmit-until-sealed-or-deadline`
+    //  (service-wire-v1.schema.json, relocationStateMachine.commandRules).
+    //  The Actor lane is already sealed when this runs, so the deadline is
+    //  short enough that an unreachable or refusing Session owner degrades to
+    //  the pre-42/43 behaviour instead of stalling the move.
+    private static final Duration SESSION_SEAL_DEADLINE = Duration.ofSeconds(5);
+    private volatile ZLinkSessionRelocationPeerClient sessionRelocationSealer;
     private volatile ZLinkDeferredJoinAcceptedRecovery deferredJoinAcceptedRecovery;
     private volatile MessageFollowNoticeSender messageFollowNoticeSender;
 
@@ -2830,22 +2837,121 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 session));
     }
 
+    /**
+     * Installs the command 42 sender. Absent one (a backend without service
+     * wire relocation, or a host that never attached a Spot runtime) the
+     * direct-Join route command keeps carrying the source's own captured
+     * high-water and the Session owner falls back to its monotonic gate.
+     */
+    public void setSessionRelocationSealer(
+        ZLinkSessionRelocationPeerClient sealer) {
+        this.sessionRelocationSealer = sealer;
+    }
+
     CompletionStage<byte[]> directJoinSessionRouteCommand(
         ZLinkActor actor,
         ZLinkBackendActorRef actorRef,
         RoutingId targetNodeRid,
         UUID relocationId) {
         return directJoinSessionRoute(actor, targetNodeRid)
-            .thenApply(route -> {
+            .thenCompose(route -> {
                 if (route == null) {
-                    return new byte[0];
+                    return CompletableFuture.completedFuture(new byte[0]);
                 }
-                var authority = route.authority();
-                var session = route.session();
-                var source = authority.sourceActorOwner();
-                var sessionOwner = authority.sessionOwner();
-                var target = authority.targetActorOwner();
-                var intent =
+                return sealBoundSessionRoute(actorRef, relocationId, route)
+                    .thenApply(highWater -> directJoinSessionRouteCommand(
+                        actorRef, targetNodeRid, relocationId, route,
+                        highWater));
+            });
+    }
+
+    /**
+     * Runs the spec 20 §5 step 1 seal against the bound Session owner:
+     * command 42 carries the exact source fence, and the owner answers with
+     * the accepted bound-Session high-water it recorded at that point
+     * (command 43). That number - not the source's own ingress count - is what
+     * travels in the relocation and comes back in command 44, which is what
+     * makes the owner's step 7 comparison an equality.
+     *
+     * <p>A seal that cannot be completed inside {@link #SESSION_SEAL_DEADLINE}
+     * falls back to the source's captured sequence. The owner records nothing
+     * when it refuses a seal, so the fallback lands on its monotonic gate -
+     * exactly the behaviour that predates commands 42/43.</p>
+     */
+    private CompletionStage<Long> sealBoundSessionRoute(
+        ZLinkBackendActorRef actorRef,
+        UUID relocationId,
+        DirectJoinSessionRoute route) {
+        var session = route.session();
+        ZLinkSessionRelocationPeerClient sealer = sessionRelocationSealer;
+        if (sealer == null) {
+            return CompletableFuture.completedFuture(
+                session.lastAcceptedSessionSequence());
+        }
+        var authority = route.authority();
+        var source = authority.sourceActorOwner();
+        var sessionOwner = authority.sessionOwner();
+        var seal = new systems.zlink.framework.runtime.internal.service
+            .ZLinkServiceM6BWireCodec.SessionRelocationSeal(
+                new systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceM6BWireCodec.RelocationIdentity(
+                        relocationId.getMostSignificantBits(),
+                        relocationId.getLeastSignificantBits()),
+                new systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
+                        authority.sourceAuthorityOwnerId(),
+                        authority.sourceAuthorityOwnerLeaseGeneration(),
+                        source.rid(),
+                        source.lifecycleGeneration(),
+                        authority.sourceAuthorityStoreVersion()),
+                systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
+                new systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceM6BWireCodec.ActorRouteFence(
+                        new ZLinkBackendActorRef(
+                            source.rid(),
+                            actorRef.actorId(),
+                            actorRef.generation()),
+                        source.lifecycleGeneration(),
+                        authority.sourceAuthorityOwnerGeneration(),
+                        authority.sourceAuthorityOwnerLeaseGeneration()),
+                new systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                        session.sessionOwnerNodeRid(),
+                        sessionOwner.lifecycleGeneration(),
+                        sessionOwner.ownerId(),
+                        sessionOwner.leaseGeneration(),
+                        session.sessionRid(),
+                        session.bindingGeneration()));
+        //  The command 43 ACK completes on the mesh transport dispatch thread.
+        //  Everything the Join does after this point - begin remote move,
+        //  transfer out, manifest prepare - must not run there or it stalls
+        //  every other inbound record on this node, so the continuation is
+        //  handed to the default async pool before the caller chains on it.
+        return sealer.sealRouteUntilAck(seal, SESSION_SEAL_DEADLINE)
+            .thenApplyAsync(sealed -> sealed.lastAcceptedSessionSequence())
+            .exceptionally(failure -> {
+                LOGGER.warning(
+                    "[zlink-java-stream-trace] session-seal unavailable actor="
+                        + actorRef.actorId()
+                        + " session=" + session.sessionRid()
+                        + " error=" + failure.getMessage());
+                return session.lastAcceptedSessionSequence();
+            });
+    }
+
+    private byte[] directJoinSessionRouteCommand(
+        ZLinkBackendActorRef actorRef,
+        RoutingId targetNodeRid,
+        UUID relocationId,
+        DirectJoinSessionRoute route,
+        long lastAcceptedSessionSequence) {
+        var authority = route.authority();
+        var session = route.session();
+        var source = authority.sourceActorOwner();
+        var sessionOwner = authority.sessionOwner();
+        var target = authority.targetActorOwner();
+        var intent =
                     new systems.zlink.framework.runtime.internal.service
                         .ZLinkServiceM6BWireCodec.SessionRelocationRouteIntent(
                             new systems.zlink.framework.runtime.internal.service
@@ -2881,11 +2987,10 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                             authority.sourceAuthorityOwnerGeneration(),
                             targetNodeRid,
                             target.lifecycleGeneration(),
-                            session.lastAcceptedSessionSequence());
-                return new systems.zlink.framework.runtime.internal.service
-                    .ZLinkServiceM6BWireCodec()
-                    .encodeSessionRelocationRouteIntent(intent);
-            });
+                            lastAcceptedSessionSequence);
+        return new systems.zlink.framework.runtime.internal.service
+            .ZLinkServiceM6BWireCodec()
+            .encodeSessionRelocationRouteIntent(intent);
     }
 
     record DirectJoinSessionRoute(

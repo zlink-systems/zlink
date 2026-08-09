@@ -306,6 +306,144 @@ final class ZLinkSessionActorBindingContractTest {
         assertEquals(ack, replay);
     }
 
+    //  Spec 20 §5 step 1/step 7: the seal fixes where the Session owner's
+    //  accepted sequence stood, and command 43 reports that number back so the
+    //  target can replay it in command 44.
+    @Test
+    void command42ReportsTheOwnersAcceptedSequenceAndIsIdempotent() {
+        FakeStream stream = new FakeStream();
+        stream.boundSessionHighWater = 23;
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A))
+            .toCompletableFuture().join();
+        var seal = seal(relocation(), 7, NODE_A, 9);
+
+        var sealed = runtime.applyRelocationSealCommand(seal)
+            .toCompletableFuture().join();
+
+        assertEquals(23, sealed.lastAcceptedSessionSequence());
+        assertTrue(sealed.echoes(seal));
+
+        //  A retransmitted byte-identical command 42 must answer from the
+        //  cached terminal instead of re-reading the counter.
+        stream.boundSessionHighWater = 91;
+        assertEquals(sealed, runtime.applyRelocationSealCommand(seal)
+            .toCompletableFuture().join());
+    }
+
+    @Test
+    void aConflictingCommand42ForTheSameRelocationIsRefused() {
+        FakeStream stream = new FakeStream();
+        stream.boundSessionHighWater = 5;
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A))
+            .toCompletableFuture().join();
+        runtime.applyRelocationSealCommand(seal(relocation(), 7, NODE_A, 9))
+            .toCompletableFuture().join();
+
+        //  Same relocation id, different Actor authority fence.
+        assertThrows(CompletionException.class,
+            () -> runtime.applyRelocationSealCommand(
+                    seal(relocation(), 7, NODE_A, 11))
+                .toCompletableFuture().join());
+
+        //  A seal whose fence does not match the current binding is refused
+        //  outright, so nothing is recorded and the owner keeps its gate.
+        assertThrows(CompletionException.class,
+            () -> runtime.applyRelocationSealCommand(
+                    seal(new ZLinkServiceM6BWireCodec
+                        .RelocationIdentity(31, 32), 8, NODE_A, 9))
+                .toCompletableFuture().join());
+    }
+
+    @Test
+    void command44MustReplayTheSealedHighWaterExactly() {
+        FakeStream stream = new FakeStream();
+        stream.boundSessionHighWater = 23;
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        ZLinkSessionActor actor = runtime.bind(
+            new ActorRef("actor-1", 7, MESH, NODE_A))
+            .toCompletableFuture().join();
+        var relocation = relocation();
+        runtime.applyRelocationSealCommand(seal(relocation, 7, NODE_A, 9))
+            .toCompletableFuture().join();
+
+        //  A high-water above the sealed one no longer passes: the monotonic
+        //  gate is replaced by spec 20 §5 step 7 equality once a seal exists.
+        var stale = runtime.applyRelocationRouteCommand(
+                route(relocation, 24)).toCompletableFuture().join();
+        assertEquals(ZLinkServiceM6BWireCodec
+            .SessionRelocationRouteAction.ABORT, stale.action());
+        assertEquals(NODE_A, actor.ref().nodeRid());
+
+        var ack = runtime.applyRelocationRouteCommand(
+                route(relocation, 23)).toCompletableFuture().join();
+        assertEquals(ZLinkServiceM6BWireCodec
+            .SessionRelocationRouteAction.COMMIT, ack.action());
+        assertEquals(23, ack.lastAcceptedSessionSequence());
+        assertEquals(NODE_B, actor.ref().nodeRid());
+
+        //  The already-applied branch stays ahead of the gate: a retransmit
+        //  after the seal was consumed must re-ACK, never flip to ABORT.
+        assertEquals(ack, runtime.applyRelocationRouteCommand(
+            route(relocation, 23)).toCompletableFuture().join());
+    }
+
+    //  Without a completed command 42 handshake the owner has no reference
+    //  value, so the monotonic gate stays in force for that relocation.
+    @Test
+    void anUnsealedCommand44KeepsTheMonotonicGate() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        ZLinkSessionActor actor = runtime.bind(
+            new ActorRef("actor-1", 7, MESH, NODE_A))
+            .toCompletableFuture().join();
+
+        var ack = runtime.applyRelocationRouteCommand(
+                route(relocation(), 17)).toCompletableFuture().join();
+
+        assertEquals(ZLinkServiceM6BWireCodec
+            .SessionRelocationRouteAction.COMMIT, ack.action());
+        assertEquals(NODE_B, actor.ref().nodeRid());
+    }
+
+    private static ZLinkServiceM6BWireCodec.RelocationIdentity relocation() {
+        return new ZLinkServiceM6BWireCodec.RelocationIdentity(8, 9);
+    }
+
+    private static ZLinkServiceM6BWireCodec.SessionRelocationSeal seal(
+        ZLinkServiceM6BWireCodec.RelocationIdentity relocation,
+        long objectGeneration,
+        RoutingId actorNodeRid,
+        long authorityOwnerGeneration) {
+        return new ZLinkServiceM6BWireCodec.SessionRelocationSeal(
+            relocation,
+            new ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
+                "coordinator", 2, NODE_A, 3, "store-v4"),
+            ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
+            new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                new ZLinkBackendActorRef(
+                    actorNodeRid, "actor-1", objectGeneration),
+                3, authorityOwnerGeneration, 4),
+            new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                NODE_A, 3, "session-owner", 4, SESSION, 1));
+    }
+
+    private static ZLinkServiceM6BWireCodec.SessionRelocationRoute route(
+        ZLinkServiceM6BWireCodec.RelocationIdentity relocation,
+        long highWater) {
+        return new ZLinkServiceM6BWireCodec.SessionRelocationRoute(
+            relocation,
+            new ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
+                "coordinator", 2, NODE_A, 3, "store-v4"),
+            ZLinkServiceM6BWireCodec.RelocationRole.TARGET,
+            new ZLinkServiceM6BWireCodec.ActorIdentity("actor-1", 7),
+            new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                NODE_A, 3, "session-owner", 4, SESSION, 1),
+            ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.COMMIT,
+            9, 10, NODE_B, 4, highWater);
+    }
+
     @Test
     void command44AbortAcksTerminallyWithoutChangingTheRoute() {
         FakeStream stream = new FakeStream();
@@ -396,6 +534,11 @@ final class ZLinkSessionActorBindingContractTest {
         private CompletableFuture<List<Message>> pendingDisconnectNotification;
         private int disconnectNotifications;
         private boolean closed;
+        private long boundSessionHighWater;
+
+        @Override public long boundSessionSequenceHighWater() {
+            return boundSessionHighWater;
+        }
 
         @Override public String name() { return "session-contract"; }
         @Override public void close() { closed = true; }

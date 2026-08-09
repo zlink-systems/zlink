@@ -95,7 +95,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                     registration,
                     ZLinkHandlerActivator.reflection()),
                 nodeRegistration.relocatableActorFactories(),
-                runtime);
+                runtime,
+                null);
 
             var prepared = builder.prepare(
                     "actor-a",
@@ -182,7 +183,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                 runtime.actorSessions(),
                 adapters,
                 nodeRegistration.relocatableActorFactories(),
-                runtime);
+                runtime,
+                null);
             var prepared = builder.prepare(
                     "actor-b",
                     rollingToVersionOne(),

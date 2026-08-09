@@ -403,6 +403,44 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     }
 
     /**
+     * Command 42 endpoint. The relocation source addresses the seal to this
+     * Session owner; the sender fence is the Actor owner node the binding
+     * still points at (senderRole `source`) or the coordinator node
+     * (senderRole `coordinator`), mirroring the C++ admission check in
+     * `raw_mesh_node_owner.cpp:2937-2960`.
+     */
+    public CompletionStage<byte[]> handleSessionRelocationSeal(
+        RoutingId transportSource,
+        byte[] command42) {
+        var codec = new systems.zlink.framework.runtime.internal.service
+            .ZLinkServiceM6BWireCodec();
+        var command = codec.decodeSessionRelocationSeal(command42);
+        RoutingId expectedSource = command.senderRole()
+                == systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceM6BWireCodec.RelocationRole.SOURCE
+            ? command.actor().actor().nodeRid()
+            : command.coordinator().nodeRid();
+        if (!expectedSource.equals(transportSource)) {
+            return CompletableFuture.failedFuture(new ZLinkConfigurationException(
+                "command 42 transport source differs from the sender fence"));
+        }
+        List<SessionState> matches;
+        synchronized (sessions) {
+            matches = sessions.values().stream()
+                .filter(state -> state.routingId().equals(
+                    command.session().sessionRid()))
+                .toList();
+        }
+        if (matches.size() != 1) {
+            return CompletableFuture.failedFuture(new ZLinkConfigurationException(
+                "command 42 requires one exact local Session"));
+        }
+        return matches.getFirst().context()
+            .applyRelocationSealCommand(command)
+            .thenApply(codec::encodeSessionRelocationSealed);
+    }
+
+    /**
      * Handles the one-way boundSessionReplaced notice without putting it in a
      * user application mailbox. The callback is started on the Session's
      * serial lane, while its completion and both close timers are observed by

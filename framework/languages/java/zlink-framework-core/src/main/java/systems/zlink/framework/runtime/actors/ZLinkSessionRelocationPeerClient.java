@@ -150,6 +150,78 @@ public final class ZLinkSessionRelocationPeerClient {
         }
     }
 
+    /**
+     * Sends command 42 and returns the Session owner's command 43 ACK,
+     * retransmitting the identical seal on the spec 20 §5 step 8 schedule
+     * until the ACK arrives or {@code deadline} elapses. The schema fixes the
+     * loss policy for command 42 as `retransmit-until-sealed-or-deadline`, so
+     * the deadline is mandatory: the caller has already sealed the Actor lane
+     * and must not wait on an unreachable owner forever. Retransmitting the
+     * identical seal is safe — the owner answers a byte-identical retransmit
+     * from its cached terminal without re-sealing.
+     */
+    public CompletionStage<ZLinkServiceM6BWireCodec.SessionRelocationSealed>
+        sealRouteUntilAck(
+            ZLinkServiceM6BWireCodec.SessionRelocationSeal command,
+            Duration deadline) {
+        Objects.requireNonNull(command, "command");
+        Objects.requireNonNull(deadline, "deadline");
+        byte[] command42 = codec.encodeSessionRelocationSeal(command);
+        CompletableFuture<ZLinkServiceM6BWireCodec.SessionRelocationSealed>
+            settled = new CompletableFuture<>();
+        attemptSeal(command, command42,
+            System.nanoTime() + deadline.toNanos(), settled, 0);
+        return settled;
+    }
+
+    private void attemptSeal(
+        ZLinkServiceM6BWireCodec.SessionRelocationSeal command,
+        byte[] command42,
+        long deadlineNanos,
+        CompletableFuture<
+            ZLinkServiceM6BWireCodec.SessionRelocationSealed> settled,
+        int attempt) {
+        long remainingNanos = deadlineNanos - System.nanoTime();
+        if (remainingNanos <= 0) {
+            settled.completeExceptionally(new ZLinkConfigurationException(
+                "Session relocation seal deadline elapsed before command 43"));
+            return;
+        }
+        Duration remaining = Duration.ofNanos(remainingNanos);
+        Duration interval = retransmitInterval(attempt);
+        Duration window =
+            remaining.compareTo(interval) < 0 ? remaining : interval;
+        long sentAt = System.nanoTime();
+        node.requestSessionRelocationSeal(
+                command.session().nodeRid(), command42, window)
+            .thenApply(codec::decodeSessionRelocationSealed)
+            .whenComplete((ack, failure) -> {
+                if (failure == null) {
+                    if (ack.echoes(command)) {
+                        settled.complete(ack);
+                        return;
+                    }
+                    //  An ACK that does not echo the seal is terminal: the
+                    //  owner answered a different fence, so retransmitting the
+                    //  same bytes can never succeed.
+                    settled.completeExceptionally(
+                        new ZLinkConfigurationException(
+                            "command 43 ACK differs from the command 42 fence"));
+                    return;
+                }
+                //  The retransmission clock is anchored at the previous send,
+                //  so an attempt that failed early still waits out the spec
+                //  interval instead of hot-looping on the Session owner.
+                Duration delay = interval.minusNanos(
+                    System.nanoTime() - sentAt);
+                ZLinkActorRetryScheduler.scheduleRouteAfter(
+                    () -> attemptSeal(
+                        command, command42, deadlineNanos, settled,
+                        attempt + 1),
+                    delay);
+            });
+    }
+
     public CompletionStage<ZLinkServiceM6BWireCodec.SessionRelocationRouted>
         switchRoute(
             ZLinkServiceM6BWireCodec.SessionRelocationRoute command,

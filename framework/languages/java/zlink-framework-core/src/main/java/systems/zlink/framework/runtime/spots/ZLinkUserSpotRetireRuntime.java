@@ -224,7 +224,8 @@ public final class ZLinkUserSpotRetireRuntime {
                             spots.actorSessions(),
                             adapters,
                             relocatableActors,
-                            spots),
+                            spots,
+                            peerClient),
                         new ZLinkStandaloneActorRelocationScheduler(),
                         relocationClient,
                         node));

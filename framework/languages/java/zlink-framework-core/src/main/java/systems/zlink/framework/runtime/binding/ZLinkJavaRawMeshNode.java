@@ -258,6 +258,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         new AtomicBoolean();
     private volatile ZLinkInternalMeshNode.SessionRelocationRouteHandler
         sessionRelocationRouteHandler;
+    private volatile ZLinkInternalMeshNode.SessionRelocationSealHandler
+        sessionRelocationSealHandler;
     private volatile ZLinkInternalMeshNode.BoundSessionReplacedHandler
         boundSessionReplacedHandler;
     private final Map<UserSpotOperationKey, UserSpotTerminalSlot>
@@ -2787,6 +2789,74 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     @Override
+    public void setSessionRelocationSealHandler(
+        ZLinkInternalMeshNode.SessionRelocationSealHandler handler) {
+        sessionRelocationSealHandler = Objects.requireNonNull(
+            handler, "handler");
+    }
+
+    @Override
+    public CompletionStage<byte[]> requestSessionRelocationSeal(
+        RoutingId sessionOwnerNodeRid,
+        byte[] command42,
+        Duration timeout) {
+        Objects.requireNonNull(
+            sessionOwnerNodeRid, "sessionOwnerNodeRid");
+        byte[] record = Objects.requireNonNull(
+            command42, "command42").clone();
+        Objects.requireNonNull(timeout, "timeout");
+        statefulWire.decodeSessionRelocationSeal(record);
+        streamTrace("request session seal target=" + sessionOwnerNodeRid
+            + " local=" + sessionOwnerNodeRid.equals(routingId)
+            + " timeout=" + timeout);
+        if (sessionOwnerNodeRid.equals(routingId)) {
+            var handler = sessionRelocationSealHandler;
+            if (handler == null) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                        "local Session relocation seal handler is unavailable"));
+            }
+            return handler.handle(routingId, record).thenApply(reply -> {
+                statefulWire.decodeSessionRelocationSealed(reply);
+                streamTrace("request session seal local ACK target="
+                    + sessionOwnerNodeRid);
+                return reply.clone();
+            });
+        }
+        CompletableFuture<byte[]> completion = new CompletableFuture<>();
+        boolean submitted = port.request(
+            requireStarted(),
+            sessionOwnerNodeRid,
+            List.of(record),
+            timeout,
+            (result, reply) -> {
+                streamTrace("request session seal result target="
+                    + sessionOwnerNodeRid + " result=" + result
+                    + " replyFrames=" + reply.size());
+                if (result != RequestResult.OK || reply.size() != 1) {
+                    completion.completeExceptionally(
+                        new ZlinkRequestException(result));
+                    return;
+                }
+                try {
+                    statefulWire.decodeSessionRelocationSealed(
+                        reply.getFirst());
+                    completion.complete(reply.getFirst().clone());
+                } catch (RuntimeException invalid) {
+                    completion.completeExceptionally(invalid);
+                }
+            });
+        if (!submitted) {
+            completion.completeExceptionally(
+                new ZlinkRequestException(RequestResult.NOT_CONNECTED));
+        }
+        streamTrace("request session seal "
+            + (submitted ? "accepted" : "rejected") + " target="
+            + sessionOwnerNodeRid);
+        return completion;
+    }
+
+    @Override
     public CompletionStage<byte[]> requestSessionRelocationRoute(
         RoutingId sessionOwnerNodeRid,
         byte[] command44,
@@ -4088,6 +4158,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             return;
         }
         if (command
+            == ServiceWireConstants.COMMAND_SESSION_RELOCATION_SEAL) {
+            dispatchSessionRelocationSeal(inbound);
+            return;
+        }
+        if (command
             == ServiceWireConstants.COMMAND_BOUND_SESSION_REPLACED) {
             dispatchBoundSessionReplaced(inbound);
             return;
@@ -4575,6 +4650,57 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             } catch (RuntimeException invalid) {
                 // Invalid ACKs never cross the infrastructure boundary.
                 streamTrace("session-route-ack-invalid source="
+                    + inbound.source() + " error=" + invalid.getMessage());
+            }
+        });
+    }
+
+    private void dispatchSessionRelocationSeal(
+        ZLinkJavaRawServicePort.Inbound inbound) {
+        var handler = sessionRelocationSealHandler;
+        if (handler == null
+            || inbound.requestSequence() == null
+            || inbound.frames().size() != 1) {
+            return;
+        }
+        byte[] command42 = inbound.frames().getFirst();
+        try {
+            statefulWire.decodeSessionRelocationSeal(command42);
+        } catch (RuntimeException invalid) {
+            return;
+        }
+        CompletionStage<byte[]> completion;
+        try {
+            completion = Objects.requireNonNull(
+                handler.handle(inbound.source(), command42.clone()),
+                "Session relocation seal handler returned null");
+        } catch (RuntimeException failure) {
+            completion = CompletableFuture.failedFuture(failure);
+        }
+        completion.whenComplete((ack, failure) -> {
+            if (failure != null || ack == null) {
+                Throwable cause = failure == null ? null : unwrap(failure);
+                String diagnostic = "session-seal-handler-failed source="
+                    + inbound.source()
+                    + " request=" + inbound.requestSequence()
+                    + " error=" + (cause == null
+                        ? "missing-ack"
+                        : cause.getClass().getSimpleName() + ": "
+                            + String.valueOf(cause.getMessage()));
+                LOGGER.warning(diagnostic);
+                streamTrace(diagnostic);
+                return;
+            }
+            try {
+                statefulWire.decodeSessionRelocationSealed(ack);
+                port.reply(
+                    requireStarted(),
+                    inbound.source(),
+                    inbound.requestSequence(),
+                    List.of(ack));
+            } catch (RuntimeException invalid) {
+                // Invalid ACKs never cross the infrastructure boundary.
+                streamTrace("session-seal-ack-invalid source="
                     + inbound.source() + " error=" + invalid.getMessage());
             }
         });

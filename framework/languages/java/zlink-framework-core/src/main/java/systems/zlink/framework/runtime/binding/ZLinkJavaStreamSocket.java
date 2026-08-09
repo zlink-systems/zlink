@@ -503,6 +503,10 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         return (ZLinkJavaRawSpotNode) meshNode.spotNode();
     }
 
+    @Override public long boundSessionSequenceHighWater() {
+        return nextBoundSessionSequence.get() - 1;
+    }
+
     private long allocateBoundSessionSequence() {
         return nextBoundSessionSequence.getAndUpdate(
             current -> current == Long.MAX_VALUE ? 1 : current + 1);
