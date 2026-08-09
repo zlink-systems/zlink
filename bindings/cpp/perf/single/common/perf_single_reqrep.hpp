@@ -96,6 +96,7 @@ inline bool run_reqrep_pattern (const reqrep_config_t &config_,
         return false;
 
     const size_t payload_size = std::max<size_t> (msg_size_, perf_single_metric::header_size ());
+    std::vector<char> payload (payload_size, 'r');
     const int duration_s = std::max (1, resolve_single_duration_seconds ());
     const int request_timeout_ms = parse_positive_env ("PERF_SINGLE_REQREP_TIMEOUT_MS", 200);
     const int drain_timeout_ms = parse_positive_env ("PERF_SINGLE_REQREP_DRAIN_TIMEOUT_MS", 10000);
@@ -120,7 +121,27 @@ inline bool run_reqrep_pattern (const reqrep_config_t &config_,
                 continue;
             try {
                 zlink::message_t &part = received.parts ().front ();
-                std::move (received.reply ().message (part)).submit ();
+                bool replied = false;
+                const auto retry_deadline =
+                  std::chrono::steady_clock::now ()
+                  + std::chrono::milliseconds (drain_timeout_ms);
+                while (!replied && std::chrono::steady_clock::now () < retry_deadline) {
+                    try {
+                        std::move (received.reply ().message (part)).submit ();
+                        replied = true;
+                    }
+                    catch (const zlink::binding_error_t &err) {
+                        if (!reqrep_transient_errno (err.internal_errno ())) {
+                            server_ok.store (false, std::memory_order_release);
+                            return;
+                        }
+                        std::this_thread::yield ();
+                    }
+                }
+                if (!replied) {
+                    server_ok.store (false, std::memory_order_release);
+                    return;
+                }
             }
             catch (const zlink::binding_error_t &err) {
                 if (reqrep_transient_errno (err.internal_errno ()))
@@ -141,7 +162,6 @@ inline bool run_reqrep_pattern (const reqrep_config_t &config_,
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (duration_s);
     while (std::chrono::steady_clock::now () < deadline
            && !state.fatal.load (std::memory_order_acquire)) {
-        bool submitted = false;
         // This is the measured request hot path. Match the C reference's
         // count-and-byte bound so expired requests cannot accumulate in queues.
         for (unsigned int burst = 0;
@@ -149,7 +169,6 @@ inline bool run_reqrep_pattern (const reqrep_config_t &config_,
              && state.in_flight.load (std::memory_order_acquire) < max_in_flight
              && std::chrono::steady_clock::now () < deadline;
              ++burst) {
-            std::vector<char> payload (payload_size, 'r');
             if (!perf_single_metric::stamp_payload (payload.data (), payload.size (), state.run_id,
                                                     perf_single_metric::phase_active,
                                                     state.msg_size, seq,
@@ -195,7 +214,6 @@ inline bool run_reqrep_pattern (const reqrep_config_t &config_,
                     state.in_flight.fetch_sub (1, std::memory_order_release);
                     break;
                 }
-                submitted = true;
                 ++seq;
             }
             catch (const zlink::submit_error_t &err) {
@@ -208,7 +226,7 @@ inline bool run_reqrep_pattern (const reqrep_config_t &config_,
             }
         }
         zlink::poll_event_t event;
-        (void) poller.wait (&event, 1, std::chrono::milliseconds (submitted ? 0 : 10));
+        (void) poller.wait (&event, 1, std::chrono::milliseconds (50));
     }
 
     const auto drain_deadline =
