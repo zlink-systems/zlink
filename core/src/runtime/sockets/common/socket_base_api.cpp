@@ -696,6 +696,16 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
         if (pair_it != _transport_pairs.end ()) {
             application_attached = pair_it->second.application_attached;
             paired_pipe = completion ? pair_it->second.application : pair_it->second.completion;
+            //  The sibling lane runs its own termination, and both lanes of a
+            //  pair can be acknowledged on different mailbox executors at the
+            //  same time (an application thread inside process_commands and
+            //  the async mailbox worker). Once this map slot is cleared the
+            //  sibling owes nothing to us any more and may finish
+            //  process_pipe_term_ack - which deallocates it - before we reach
+            //  the terminate() call below. Pin its lifetime here, while the
+            //  map still guarantees it is alive, and drop the pin afterwards.
+            if (paired_pipe && !paired_pipe->retain_lifetime_ref ())
+                paired_pipe = NULL;
             if (completion)
                 pair_it->second.completion = NULL;
             else
@@ -761,8 +771,13 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
           request_reply_state (), pair_id, pair_generation,
           routing_id_data, routing_id_size, ENOTCONN);
     }
-    if (paired_pipe && !is_terminating ()) {
-        paired_pipe->terminate (false);
+    if (paired_pipe) {
+        if (!is_terminating ())
+            paired_pipe->terminate (false);
+        //  Releases the pin taken above; this is the last reference when the
+        //  sibling already completed its own termination, so the deallocation
+        //  happens here instead of racing us.
+        paired_pipe->release_lifetime_ref ();
     }
 }
 
