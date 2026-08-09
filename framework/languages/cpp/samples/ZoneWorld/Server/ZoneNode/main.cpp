@@ -45,6 +45,9 @@ class player_actor_t final : public fw::actor_t
             std::cerr << "zoneworld-join-accepted player=" << player_id
                       << " zone=" << zone_id << '\n';
             initial_entry = false;
+        } else if (const auto *failed = std::get_if<fw::actor_join_failed_t> (&completion)) {
+            std::cerr << "zoneworld-join-failed player=" << player_id
+                      << " kind=" << static_cast<int> (failed->error_kind) << '\n';
         } else if (const auto *rejected = std::get_if<fw::actor_join_rejected_t> (&completion)) {
             std::cerr << "zoneworld-join-rejected player=" << player_id << '\n';
             auto reason = std::string (reject_reason_t::zone_maintenance);
@@ -147,6 +150,8 @@ class zone_entry_spot_t final : public fw::entry_spot_t<player_actor_t>
         actor.x = request.x; actor.y = request.y; actor.zone_id = zone_of (request.x, request.y);
         actor.is_bot = request.is_bot; actor.dir_x = request.dir_x; actor.dir_y = request.dir_y;
         actor.initial_entry = true;
+        std::cerr << "zoneworld-enter-world player=" << actor.player_id
+                  << " zone=" << actor.zone_id << '\n';
         actor.context ().join_spot (actor.zone_id,
           enter_zone_msg_t{actor.player_id, actor.x, actor.y, actor.is_bot, true, std::nullopt})
           .defer ();

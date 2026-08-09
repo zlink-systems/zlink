@@ -2221,10 +2221,13 @@ int main ()
       "Message Follow still relies only on the hop ceiling for loop detection");
     gate.require (
       actor_transfer_coordinator.find (
-        "found->second.old_generation != generation")
-          != std::string::npos,
+        "candidate.source_fence == source_fence")
+          != std::string::npos
+        && actor_transfer_coordinator.find (
+             "source_fence.object_generation != generation")
+             != std::string::npos,
       "CPP-FOLLOW-001",
-      "Message Follow does not preserve its exact Actor generation fence");
+      "Message Follow does not preserve its exact Actor source fence");
 
     /* CPP-LIFE-001 — a general message addresses the logical Actor or Spot.
      * Owner authority and lease remain fences, while ObjectGeneration is

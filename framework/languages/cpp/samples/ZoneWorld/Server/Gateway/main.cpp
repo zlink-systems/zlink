@@ -127,10 +127,17 @@ class bot_bootstrap_handler_t
         }
         for (std::size_t index = 0; index < routes.size (); ++index) {
             const auto &route = routes[index];
-            (void) co_await _actors
-              .request (actor_ids[index],
-                        enter_world_req_t{route.x, route.y, true, route.dx, route.dy})
-              .submit<enter_world_res_t> ();
+            try {
+                const auto entered = co_await _actors
+                  .request (actor_ids[index],
+                            enter_world_req_t{route.x, route.y, true, route.dx, route.dy})
+                  .submit<enter_world_res_t> ();
+                std::cerr << "zoneworld-bot-entered bot=" << route.id
+                          << " zone=" << entered.zone_id << '\n';
+            } catch (const std::exception &error) {
+                std::cerr << "zoneworld-bot-enter-failed bot=" << route.id
+                          << " error=" << error.what () << '\n';
+            }
         }
         co_return bot_bootstrap_res_t{created_count};
     }

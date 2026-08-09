@@ -23,7 +23,7 @@ cleanup() {
     for log in "$LOG_DIR"/*.log; do
       [[ -f "$log" ]] || continue
       echo "===== $log" >&2
-      sed -n '1,240p' "$log" >&2
+      sed -n '1,2400p' "$log" >&2
     done
   fi
   for ((i=${#PIDS[@]}-1; i>=0; i--)); do kill "${PIDS[$i]}" >/dev/null 2>&1 || true; done
@@ -64,7 +64,7 @@ wait_port() {
     if (echo >/dev/tcp/127.0.0.1/"$port") >/dev/null 2>&1; then return 0; fi
     sleep 0.1
   done
-  for log in "$LOG_DIR"/*.log; do echo "===== $log" >&2; sed -n '1,240p' "$log" >&2; done
+  for log in "$LOG_DIR"/*.log; do echo "===== $log" >&2; sed -n '1,2400p' "$log" >&2; done
   return 1
 }
 
@@ -82,11 +82,15 @@ start_role gateway ZONEWORLD_MESH_ENDPOINT="$GATEWAY_MESH" ZONEWORLD_PEER_ENDPOI
 wait_port "$GAME_STREAM"
 
 sleep 5
-ZONEWORLD_GAME_ENDPOINT="$GAME_STREAM" ZONEWORLD_OPS_ENDPOINT="$OPS_STREAM" "$BIN_DIR/sample_cpp_framework_zoneworld_client" |& tee "$LOG_DIR/client.log"
+"$BIN_DIR/sample_cpp_framework_zoneworld_client" --game-endpoint "$GAME_STREAM" \
+  --ops-endpoint "$OPS_STREAM" |& tee "$LOG_DIR/client.log"
 grep -q '^zoneworld=completed$' "$LOG_DIR/client.log"
 grep -q '^zoneworld-relocation=completed$' "$LOG_DIR/client.log"
 grep -q '^zoneworld-border=completed$' "$LOG_DIR/client.log"
 grep -q '^zoneworld-ops=completed$' "$LOG_DIR/client.log"
+for scenario in ZW-A3 ZW-A5 ZW-B2 ZW-B6 ZW-B7 ZW-C1 ZW-D1; do
+  grep -q "^scenario $scenario passed\$" "$LOG_DIR/client.log"
+done
 curl --max-time 30 -fsS -X POST -H 'content-type: application/json' -d '{}' "${GATEWAY_HTTP/tcp:/http:}/bootstrap-bots" >/dev/null
 sleep 6
 [[ "$(grep -h -c 'zoneworld-actor-joined.*player=bot-' "$LOG_DIR"/zone-node-*.log | awk '{ total += $1 } END { print total + 0 }')" -ge 8 ]]

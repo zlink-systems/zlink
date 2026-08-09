@@ -121,6 +121,7 @@ class spot_node_builder_state_t
     struct pending_handoff_request_t
     {
         actor_ref_t actor;
+        runtime::protocol::actor_route_fence_t source_fence;
         std::uint64_t reply_route_id = 0;
         service::reply_token_t reply_token;
         runtime::messaging::envelope_header_t request_header;
@@ -143,6 +144,7 @@ class spot_node_builder_state_t
     struct pending_remote_source_cleanup_t
     {
         actor_ref_t source_actor;
+        runtime::protocol::actor_route_fence_t source_fence;
         std::string transfer_id;
         spot_id_t target_spot_id;
         std::chrono::steady_clock::time_point not_before;
@@ -688,8 +690,6 @@ class spot_node_runtime_t
     result_t<bool> destroy_actor (const actor_ref_t &actor_ref);
     void record_actor_spot (const actor_ref_t &actor_ref, spot_id_t spot_id);
     std::optional<spot_route_t> actor_route (const actor_ref_t &actor_ref) const;
-    std::optional<actor_message_follow_target_t>
-    actor_message_follow_target (const actor_ref_t &actor_ref) const;
     bool matches_actor_message_follow_source (
       const actor_ref_t &actor_ref,
       const runtime::protocol::actor_route_fence_t &source_fence) const;
@@ -698,12 +698,14 @@ class spot_node_runtime_t
       const actor_ref_t &actor_ref,
       std::size_t payload_bytes,
       std::size_t hop_count,
-      const runtime::protocol::actor_route_fence_t *source_fence = nullptr);
+      const runtime::protocol::actor_route_fence_t &source_fence);
     void release_actor_message_follow (
       const actor_ref_t &actor_ref,
+      const runtime::protocol::actor_route_fence_t &source_fence,
       std::size_t payload_bytes) noexcept;
     bool mark_actor_message_follow_notified (
       const actor_ref_t &actor_ref,
+      const runtime::protocol::actor_route_fence_t &source_fence,
       const zlink::routing_id_t &source_node);
     void record_actor_route (const actor_ref_t &actor_ref, spot_route_t route);
     std::optional<std::string> actor_route_transport_name () const;

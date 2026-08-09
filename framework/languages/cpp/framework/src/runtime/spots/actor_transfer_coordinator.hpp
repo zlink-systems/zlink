@@ -74,7 +74,7 @@ struct deferred_actor_completion_t
 struct removed_actor_message_follow_t
 {
     std::string actor_key;
-    std::uint64_t old_generation = 0;
+    runtime::protocol::actor_route_fence_t source_fence;
     std::string transfer_id;
 };
 
@@ -189,9 +189,9 @@ class actor_transfer_coordinator_t
                                                 handoff_packet_t packet);
     std::vector<handoff_packet_t> take_backlog (const std::string &actor_key);
 
-    // Message Follow route lifetime (§10.4): activated when the source confirms
-    // the target commit, refreshed on re-transfer (at most one entry per actor),
-    // and removed after the configured duration so retained state cannot pile up.
+    // Message Follow route lifetime (§10.4): each committed source fence keeps
+    // its own bounded route until the configured duration expires. Rapid
+    // repeated relocations can retain more than one source fence for one Actor.
     void activate_message_follow (const std::string &actor_key,
                                   runtime::protocol::actor_route_fence_t source_fence,
                                   actor_ref_t target_actor,
@@ -202,23 +202,22 @@ class actor_transfer_coordinator_t
     bool matches_message_follow_source (
       const std::string &actor_key,
       const runtime::protocol::actor_route_fence_t &source_fence) const;
-    bool can_follow_stale_generation (const std::string &actor_key,
-                                      std::uint64_t generation) const;
-    std::optional<actor_message_follow_target_t>
-    message_follow_target (const std::string &actor_key, std::uint64_t generation) const;
+    std::optional<actor_message_follow_target_t> message_follow_target (
+      const std::string &actor_key,
+      const runtime::protocol::actor_route_fence_t &source_fence) const;
+    bool has_message_follow_route (const std::string &actor_key) const;
     result_t<std::optional<actor_message_follow_target_t>>
     try_acquire_message_follow (const std::string &actor_key,
                                 std::uint64_t generation,
                                 std::size_t payload_bytes,
                                 std::size_t hop_count,
-                                const runtime::protocol::actor_route_fence_t *
-                                  source_fence = nullptr);
+                                const runtime::protocol::actor_route_fence_t &source_fence);
     void release_message_follow (const std::string &actor_key,
-                                 std::uint64_t generation,
+                                 const runtime::protocol::actor_route_fence_t &source_fence,
                                  std::size_t payload_bytes) noexcept;
     bool mark_message_follow_notified (
       const std::string &actor_key,
-      std::uint64_t generation,
+      const runtime::protocol::actor_route_fence_t &source_fence,
       std::vector<std::uint8_t> source_node_routing_id);
     std::vector<removed_actor_message_follow_t>
     remove_expired_message_follow (std::chrono::steady_clock::time_point now);
@@ -285,7 +284,7 @@ class actor_transfer_coordinator_t
     std::map<std::string, pending_actor_admission_t> _completed_admissions;
     std::map<std::string, std::vector<handoff_packet_t>> _backlogs;
     std::map<std::string, std::size_t> _backlog_bytes;
-    std::map<std::string, message_follow_route_t> _message_follow_routes;
+    std::map<std::string, std::vector<message_follow_route_t>> _message_follow_routes;
     std::uint64_t _next_transfer_id = 1;
 };
 

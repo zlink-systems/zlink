@@ -1313,59 +1313,87 @@ void verify_bounded_message_follow ()
     assert (!coordinator.matches_message_follow_source (
       "player:actor-message-follow", wrong_source_fence));
     const auto wrong_source = coordinator.try_acquire_message_follow (
-      "player:actor-message-follow", 7, 1, 0, &wrong_source_fence);
+      "player:actor-message-follow", 7, 1, 0, wrong_source_fence);
     assert (!wrong_source
             && wrong_source.error_kind ()
                  == framework_error_kind_t::unavailable);
     const auto exact_source = coordinator.try_acquire_message_follow (
-      "player:actor-message-follow", 7, 1, 0, &source_fence);
+      "player:actor-message-follow", 7, 1, 0, source_fence);
     assert (exact_source && exact_source.value ());
     assert (exact_source.value ()->source_fence == source_fence);
     assert (exact_source.value ()->target_fence == target_fence);
     coordinator.release_message_follow (
-      "player:actor-message-follow", 7, 1);
+      "player:actor-message-follow", source_fence, 1);
 
     const auto missing = coordinator.try_acquire_message_follow (
-      "player:missing", 7, 1, 0);
+      "player:missing", 7, 1, 0, source_fence);
     assert (missing && !missing.value ());
+    auto newer_generation_source = source_fence;
+    newer_generation_source.object_generation = 8;
     const auto stale_generation = coordinator.try_acquire_message_follow (
-      "player:actor-message-follow", 8, 1, 0);
+      "player:actor-message-follow", 7, 1, 0, newer_generation_source);
     assert (!stale_generation
             && stale_generation.error_kind ()
                  == framework_error_kind_t::invalid_operation);
     const auto hop_bound = coordinator.try_acquire_message_follow (
-      "player:actor-message-follow", 7, 1, 8);
+      "player:actor-message-follow", 7, 1, 8, source_fence);
     assert (!hop_bound
             && hop_bound.error_kind ()
                  == framework_error_kind_t::unavailable);
     const auto byte_bound = coordinator.try_acquire_message_follow (
-      "player:actor-message-follow", 7, 16u * 1024u * 1024u + 1u, 0);
+      "player:actor-message-follow", 7, 16u * 1024u * 1024u + 1u, 0,
+      source_fence);
     assert (!byte_bound
             && byte_bound.error_kind ()
                  == framework_error_kind_t::capacity_exceeded);
     for (std::size_t index = 0; index != 1024; ++index) {
         const auto acquired = coordinator.try_acquire_message_follow (
-          "player:actor-message-follow", 7, 1, 0);
+          "player:actor-message-follow", 7, 1, 0, source_fence);
         assert (acquired && acquired.value ());
     }
     const auto message_bound = coordinator.try_acquire_message_follow (
-      "player:actor-message-follow", 7, 1, 0);
+      "player:actor-message-follow", 7, 1, 0, source_fence);
     assert (!message_bound
             && message_bound.error_kind ()
                  == framework_error_kind_t::capacity_exceeded);
-    coordinator.release_message_follow ("player:actor-message-follow", 7, 1);
+    coordinator.release_message_follow (
+      "player:actor-message-follow", source_fence, 1);
     const auto after_release = coordinator.try_acquire_message_follow (
-      "player:actor-message-follow", 7, 1, 0);
+      "player:actor-message-follow", 7, 1, 0, source_fence);
     assert (after_release && after_release.value ());
-    coordinator.release_message_follow ("player:actor-message-follow", 7, 1);
+    coordinator.release_message_follow (
+      "player:actor-message-follow", source_fence, 1);
     for (std::size_t index = 1; index != 1024; ++index)
-        coordinator.release_message_follow ("player:actor-message-follow", 7, 1);
+        coordinator.release_message_follow (
+          "player:actor-message-follow", source_fence, 1);
+
+    auto repeated_source_fence = source_fence;
+    repeated_source_fence.authority_owner_generation = 19;
+    repeated_source_fence.owner_lease_generation = 23;
+    auto repeated_target_fence = target_fence;
+    repeated_target_fence.authority_owner_generation = 24;
+    repeated_target_fence.owner_lease_generation = 29;
+    coordinator.activate_message_follow (
+      "player:actor-message-follow", repeated_source_fence, target, route,
+      repeated_target_fence, expires, "relocation-2");
+    const auto first_retained_source = coordinator.try_acquire_message_follow (
+      "player:actor-message-follow", 7, 1, 0, source_fence);
+    const auto second_retained_source = coordinator.try_acquire_message_follow (
+      "player:actor-message-follow", 7, 1, 0, repeated_source_fence);
+    assert (first_retained_source && first_retained_source.value ());
+    assert (second_retained_source && second_retained_source.value ());
+    assert (first_retained_source.value ()->target_fence == target_fence);
+    assert (second_retained_source.value ()->target_fence == repeated_target_fence);
+    coordinator.release_message_follow (
+      "player:actor-message-follow", source_fence, 1);
+    coordinator.release_message_follow (
+      "player:actor-message-follow", repeated_source_fence, 1);
 
     coordinator.activate_message_follow (
       "player:expired-message-follow", source_fence, target, route, target_fence,
       std::chrono::steady_clock::now () - 1ms, "relocation-expired");
     const auto expired = coordinator.try_acquire_message_follow (
-      "player:expired-message-follow", 7, 1, 0);
+      "player:expired-message-follow", 7, 1, 0, source_fence);
     assert (!expired
             && expired.error_kind ()
                  == framework_error_kind_t::unavailable);

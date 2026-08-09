@@ -890,7 +890,8 @@ TEST (CppFrameworkSampleParity, PublicSampleNamesDoNotUseVariantSuffixes)
 {
     const auto samples_root = cpp_language_root () / "samples";
     const std::vector<std::string> expected_samples{
-      "Bingo", "TicTacToe", "DeliveryDispatch", "GameQuest", "SupportChat", "ShoppingMall"};
+      "Bingo",       "TicTacToe",    "DeliveryDispatch", "GameQuest",
+      "SupportChat", "ShoppingMall", "ZoneWorld"};
 
     for (const auto &sample : expected_samples) {
         EXPECT_TRUE (std::filesystem::is_directory (samples_root / sample))

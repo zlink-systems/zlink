@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
-#include "../Server/Configuration/configuration.hpp"
 #include "../Shared/world_rules.hpp"
 
 #include <zlink/stream_connector.hpp>
@@ -14,6 +13,30 @@
 namespace zlink::samples::zoneworld
 {
 namespace se = zlink::stream_e2e_client;
+
+struct client_topology_t
+{
+    std::string game_endpoint = "tcp://127.0.0.1:35201";
+    std::string ops_endpoint = "tcp://127.0.0.1:35202";
+};
+
+inline client_topology_t load_client_topology (int argc, char **argv)
+{
+    client_topology_t topology;
+    for (int index = 1; index < argc; ++index) {
+        const std::string arg = argv[index] == nullptr ? std::string{} : argv[index];
+        if (arg.rfind ("--game-endpoint=", 0) == 0) {
+            topology.game_endpoint = arg.substr (16);
+        } else if (arg == "--game-endpoint" && index + 1 < argc) {
+            topology.game_endpoint = argv[++index];
+        } else if (arg.rfind ("--ops-endpoint=", 0) == 0) {
+            topology.ops_endpoint = arg.substr (15);
+        } else if (arg == "--ops-endpoint" && index + 1 < argc) {
+            topology.ops_endpoint = argv[++index];
+        }
+    }
+    return topology;
+}
 
 inline void require (bool condition, const char *message)
 {
@@ -49,6 +72,7 @@ se::task_t<bool> run (se::coroutine_connector_t &game, se::coroutine_connector_t
     require (std::all_of (nodes.nodes.begin (), nodes.nodes.end (),
                           [] (const auto &n) { return n.registered && n.connected; }),
              "ZoneNodes must be registered and connected");
+    std::cout << "scenario ZW-C1 passed\n";
 
     std::cerr << "zoneworld-step=join-alice\n";
     auto first_state_wait = game.wait_for<zone_state_notify_t> ().async ();
@@ -62,15 +86,18 @@ se::task_t<bool> run (se::coroutine_connector_t &game, se::coroutine_connector_t
     require (first_state.zone_id == "zone-nw", "initial ZoneStateNotify must be zone-nw");
 
     std::cerr << "zoneworld-step=join-bob\n";
-    auto neighbor_initial = neighbor.wait_for<zone_state_notify_t> ().async ();
+    // ZW-A3 needs a snapshot that actually contains both players; the shared
+    // zone ticks every 100ms, so await the first state that shows two players.
+    auto neighbor_initial = neighbor.wait_for<zone_state_notify_t> ()
+      .where ([] (const auto &n) { return n.players.size () > 1; }).async ();
     (void) co_await neighbor.request (join_world_req_t{"player-bob"}).async<join_world_res_t> ();
     const auto shared_state = co_await neighbor_initial;
     std::cerr << "zoneworld-step=join-bob-state\n";
-    if (shared_state.players.size () > 1)
-        require (std::is_sorted (shared_state.players.begin (), shared_state.players.end (),
-                  [] (const auto &left, const auto &right) {
-                      return left.player_id < right.player_id;
-                  }), "ZoneStateNotify players are not sorted by PlayerId UTF-8 bytes");
+    require (std::is_sorted (shared_state.players.begin (), shared_state.players.end (),
+              [] (const auto &left, const auto &right) {
+                  return left.player_id < right.player_id;
+              }), "ZoneStateNotify players are not sorted by PlayerId UTF-8 bytes");
+    std::cout << "scenario ZW-A3 passed\n";
     auto same_zone_wait = game.wait_for<zone_state_notify_t> ()
       .where ([] (const auto &n) {
           return std::any_of (n.players.begin (), n.players.end (), [] (const auto &player) {
@@ -82,6 +109,7 @@ se::task_t<bool> run (se::coroutine_connector_t &game, se::coroutine_connector_t
     require (std::any_of (same_zone.players.begin (), same_zone.players.end (), [] (const auto &player) {
                 return player.player_id == "player-alice" && player.zone_id == "zone-nw";
              }), "same-zone move changed zone");
+    std::cout << "scenario ZW-A5 passed\n";
 
     auto rejected_wait = game.wait_for<move_rejected_notify_t> ().async ();
     game.send (move_msg_t{-1, 27}).submit ();
@@ -109,6 +137,7 @@ se::task_t<bool> run (se::coroutine_connector_t &game, se::coroutine_connector_t
     game.send (move_msg_t{52, 27}).submit ();
     const auto changed = co_await changed_wait;
     require (changed.player_id == "player-alice", "relocation changed ActorId");
+    std::cout << "scenario ZW-B2 passed\n";
 
     const std::vector<std::uint8_t> payload{1, 3, 5, 7};
     const auto probe = co_await game.request (
@@ -116,6 +145,41 @@ se::task_t<bool> run (se::coroutine_connector_t &game, se::coroutine_connector_t
       .async<message_follow_probe_res_t> ();
     require (probe.probe_id == "follow-1" && probe.payload == payload,
              "Message Follow probe changed payload or reply route");
+    std::cout << "scenario ZW-B6 passed\n";
+
+    // ZW-B7 — repeated relocation round trip (A→B→A): the same player crosses
+    // the same boundary back to the node that owned it first. The return-leg
+    // ZoneChangedNotify is taken from the single awaited wait — a second
+    // identically-filtered waiter would race it for the one notify — and the
+    // identity assertion is that the same ActorId reports the return over the
+    // stream session that was bound before either crossing.
+    auto returned_wait = game.wait_for<zone_changed_notify_t> ()
+      .where ([] (const auto &n) { return n.zone_id == "zone-nw"; }).async ();
+    game.send (move_msg_t{48, 27}).submit ();
+    const auto returned = co_await returned_wait;
+    require (returned.player_id == "player-alice", "return relocation changed ActorId");
+    // Settle with one awaited move to a coordinate this walk has never
+    // produced (all earlier zone-nw positions used y=25 or y=27), so the
+    // ZoneStateNotify naming it provably postdates the return leg and arrives
+    // on the same bound session.
+    auto settled_wait = game.wait_for<zone_state_notify_t> ()
+      .where ([] (const auto &n) {
+          return n.zone_id == "zone-nw"
+                 && std::any_of (n.players.begin (), n.players.end (), [] (const auto &player) {
+                        return player.player_id == "player-alice" && player.x == 44
+                               && player.y == 24;
+                    });
+      }).async ();
+    game.send (move_msg_t{44, 24}).submit ();
+    const auto settled = co_await settled_wait;
+    require (settled.zone_id == "zone-nw"
+               && std::any_of (settled.players.begin (), settled.players.end (),
+                    [] (const auto &player) {
+                        return player.player_id == "player-alice"
+                               && player.zone_id == "zone-nw";
+                    }),
+             "round trip did not settle in the original zone");
+    std::cout << "scenario ZW-B7 passed\n";
 
     auto announcement_wait = game.wait_for<world_announce_notify_t> ().async ();
     const auto announcement = co_await ops.request (announce_world_req_t{"maintenance soon"})
@@ -125,6 +189,7 @@ se::task_t<bool> run (se::coroutine_connector_t &game, se::coroutine_connector_t
     require (announced.announcement_id == announcement.announcement_id
                && announced.text == "maintenance soon",
              "announcement did not reach the bound game client");
+    std::cout << "scenario ZW-D1 passed\n";
     const auto maintenance = co_await ops.request (set_maintenance_req_t{"zone-node-2", true})
       .async<set_maintenance_res_t> ();
     require (!maintenance.error && maintenance.enabled, "targeted maintenance was not applied");
@@ -147,13 +212,14 @@ se::task_t<bool> run (se::coroutine_connector_t &game, se::coroutine_connector_t
 
 } // namespace zlink::samples::zoneworld
 
-int main ()
+int main (int argc, char **argv)
 {
     using namespace zlink::samples::zoneworld;
     try {
-        auto game_core = make_connector (env ("ZONEWORLD_GAME_ENDPOINT", "tcp://127.0.0.1:35201"));
-        auto neighbor_core = make_connector (env ("ZONEWORLD_GAME_ENDPOINT", "tcp://127.0.0.1:35201"));
-        auto ops_core = make_connector (env ("ZONEWORLD_OPS_ENDPOINT", "tcp://127.0.0.1:35202"));
+        const auto topology = load_client_topology (argc, argv);
+        auto game_core = make_connector (topology.game_endpoint);
+        auto neighbor_core = make_connector (topology.game_endpoint);
+        auto ops_core = make_connector (topology.ops_endpoint);
         auto game = zlink::stream_e2e_client::use (game_core);
         auto neighbor = zlink::stream_e2e_client::use (neighbor_core);
         auto ops = zlink::stream_e2e_client::use (ops_core);
