@@ -36,10 +36,10 @@ not by this verification.
 
 | Language | Current implementation difference | Closing condition |
 |---|---|---|
-| C++ | None. | Closed |
+| C++ | None. Frames commands 42/43 on the service wire. | Closed |
 | Node.js | None. Implements the seal semantics in its in-process binding registry and correlates a route publish with its seal. | Closed |
 | .NET | None. Implements the seal semantics over an internal relay and separates an exact-fence commit from an idempotent retransmit. | Closed |
-| Java/Kotlin | Commands 42/43 are not implemented. The owner keeps no accepted-sequence counter, so the stored value is the last applied route update's high-water while the command carries the source Actor owner's ingress count. The two are counted against different baselines, so the equality cannot hold and the gate stays monotonic — a high-water that regressed below an already applied one is a superseded relocation and is rejected. | Implement commands 42/43 and a per-binding accepted-sequence counter, then switch to the equality comparison |
+| Java/Kotlin | The source-side seal is implemented: the relocation barrier seals the execution lane and records the accepted session sequence at that point, which travels with the relocation. Missing are the session-owner-side seal (commands 42/43) and the ingress hold for messages that arrive after the seal. The owner is never told where the seal fell, so it has no reference value to compare against, and the high-water gate is monotonic rather than an equality — a high-water that regressed below an already applied one is a superseded relocation and is rejected. Messages arriving on the previous route after the seal are carried to the target Actor queue by Message Follow. | Implement commands 42/43 and the ingress hold so the owner records the seal boundary, then switch to the equality comparison |
 
 The Java/Kotlin monotonic gate applies only to requests that already passed the ObjectGeneration,
 AuthorityOwnerGeneration, and binding generation checks that precede it. A late-arriving route

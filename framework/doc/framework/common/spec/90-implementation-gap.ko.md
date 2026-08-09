@@ -33,10 +33,10 @@ message의 전달은 이 검증이 아니라 Message Follow가 보장한다.
 
 | 언어 | 현재 구현 차이 | 종결 조건 |
 |---|---|---|
-| C++ | 없음. | 종결 |
+| C++ | 없음. Command 42/43을 service wire로 주고받는다. | 종결 |
 | Node.js | 없음. Seal 의미를 in-process binding registry로 구현하며 route publish를 seal과 대응시킨다. | 종결 |
 | .NET | 없음. Seal 의미를 내부 relay로 구현하고 commit 시 exact fence와 idempotent 재수신을 구분한다. | 종결 |
-| Java/Kotlin | Command 42/43 미구현. Owner가 accepted-sequence 카운터를 유지하지 않아 저장값은 마지막으로 적용된 route update의 high-water이고, command는 source Actor owner의 ingress count를 싣는다. 두 값의 기준이 달라 등식이 성립하지 않으므로 gate는 monotonic으로 둔다 — 이미 적용된 값보다 역행한 high-water는 superseded relocation으로 거부한다. | Command 42/43과 binding별 accepted-sequence 카운터를 구현해 등식 비교로 전환 |
+| Java/Kotlin | Source 쪽 seal은 구현한다 — relocation barrier가 실행 lane을 봉인하고 그 시점의 accepted session sequence를 기록해 relocation에 싣는다. 빠진 것은 session owner 쪽 seal(command 42/43)과 seal 뒤 도착한 message의 ingress hold다. Owner는 봉인 시점을 통보받지 못하므로 비교할 기준값이 없고, 그래서 high-water gate는 등식이 아니라 monotonic으로 둔다 — 이미 적용된 값보다 역행한 high-water는 superseded relocation으로 거부한다. Seal 뒤 이전 route로 도착한 message는 Message Follow가 target Actor queue로 전달한다. | Command 42/43과 ingress hold를 구현해 owner가 봉인 경계를 기록하게 하고 등식 비교로 전환 |
 
 Java/Kotlin의 monotonic gate는 이 항목 앞의 ObjectGeneration·AuthorityOwnerGeneration·binding
 generation 검증을 모두 통과한 요청에만 적용된다. 지연 도착한 이전 relocation의 route 요청은
