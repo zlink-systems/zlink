@@ -2942,15 +2942,6 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
 
         if is_multi:
             pattern_runs = num_runs
-            if pattern_name in STREAM_VARIANT_PATTERNS:
-                stream_runs_limit = max(
-                    1,
-                    parse_env_int(
-                        "PERF_STREAM_RUNS",
-                        parse_env_int("PERF_STREAM_RUNS", 1),
-                    ),
-                )
-                pattern_runs = min(num_runs, stream_runs_limit)
 
             show_run_labels = pattern_runs > 1
 
