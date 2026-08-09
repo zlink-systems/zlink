@@ -22,8 +22,8 @@
 namespace
 {
 
-static const char *k_pattern_env = "ROUTER_ROUTER";
-static const char *k_pattern_result = "MULTI_ROUTER_ROUTER";
+static const char *k_pattern_env = "ROUTER_ROUTER_SENDSEND";
+static const char *k_pattern_result = "MULTI_ROUTER_ROUTER_SENDSEND";
 static const char k_payload_fill = 'r';
 
 bool perf_debug_enabled ()

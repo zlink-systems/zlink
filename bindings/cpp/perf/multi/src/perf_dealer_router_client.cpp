@@ -20,8 +20,8 @@
 namespace
 {
 
-static const char *k_pattern_env = "DEALER_ROUTER";
-static const char *k_pattern_result = "MULTI_DEALER_ROUTER";
+static const char *k_pattern_env = "DEALER_ROUTER_SENDSEND";
+static const char *k_pattern_result = "MULTI_DEALER_ROUTER_SENDSEND";
 static const char k_payload_fill = 'r';
 
 struct phase_config_t

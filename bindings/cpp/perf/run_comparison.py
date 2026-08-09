@@ -49,16 +49,20 @@ STREAM_SERVER_BINARY_BY_PATTERN = {
 PATTERN_SUFFIX = {
     "DEALER_DEALER": "dealer_dealer",
     "DEALER_ROUTER": "dealer_router",
+    "DEALER_ROUTER_SENDSEND": "dealer_router",
     "DEALER_ROUTER_REQREP": "dealer_router_reqrep",
     "ROUTER_ROUTER": "router_router",
+    "ROUTER_ROUTER_SENDSEND": "router_router",
     "ROUTER_ROUTER_REQREP": "router_router_reqrep",
     "PUBSUB": "pubsub",
     "STREAM": "stream",
 }
 ECHO_PATTERNS = {
     "DEALER_ROUTER",
+    "DEALER_ROUTER_SENDSEND",
     "DEALER_ROUTER_REQREP",
     "ROUTER_ROUTER",
+    "ROUTER_ROUTER_SENDSEND",
     "ROUTER_ROUTER_REQREP",
     "STREAM",
 }
@@ -83,9 +87,9 @@ SINGLE_COMPARISONS = [
 ]
 MULTI_COMPARISONS = [
     ("cpp_comp_src_dealer_dealer_client", "DEALER_DEALER"),
-    ("cpp_comp_src_dealer_router_client", "DEALER_ROUTER"),
+    ("cpp_comp_src_dealer_router_client", "DEALER_ROUTER_SENDSEND"),
     ("cpp_comp_src_dealer_router_reqrep_client", "DEALER_ROUTER_REQREP"),
-    ("cpp_comp_src_router_router_client", "ROUTER_ROUTER"),
+    ("cpp_comp_src_router_router_client", "ROUTER_ROUTER_SENDSEND"),
     ("cpp_comp_src_router_router_reqrep_client", "ROUTER_ROUTER_REQREP"),
     ("cpp_comp_src_pubsub_client", "PUBSUB"),
     ("perf_stream_client", "STREAM"),
@@ -94,8 +98,10 @@ MULTI_PATTERN_NAMES = {pattern for _, pattern in MULTI_COMPARISONS}
 SUPPORTED_MULTI_RECV_MODES = {
     "DEALER_DEALER": ("recv",),
     "DEALER_ROUTER": ("recv",),
+    "DEALER_ROUTER_SENDSEND": ("recv",),
     "DEALER_ROUTER_REQREP": ("recv",),
     "ROUTER_ROUTER": ("recv",),
+    "ROUTER_ROUTER_SENDSEND": ("recv",),
     "ROUTER_ROUTER_REQREP": ("recv",),
     "PUBSUB": ("recv",),
     "STREAM": ("recv",),
@@ -152,6 +158,11 @@ def normalize_multi_pattern_name(pattern_name):
     pattern = (pattern_name or "").strip().upper()
     if pattern.startswith("MULTI_"):
         pattern = pattern[6:]
+    if ALLOW_MULTI:
+        if pattern == "DEALER_ROUTER":
+            return "DEALER_ROUTER_SENDSEND"
+        if pattern == "ROUTER_ROUTER":
+            return "ROUTER_ROUTER_SENDSEND"
     return pattern
 
 
@@ -4035,7 +4046,13 @@ def build_effective_option_items(args, selected_patterns):
             "routed_echo_borrow_payload",
             "tcp"
             if any(
-                pattern in ("DEALER_ROUTER", "ROUTER_ROUTER")
+                pattern
+                in (
+                    "DEALER_ROUTER",
+                    "DEALER_ROUTER_SENDSEND",
+                    "ROUTER_ROUTER",
+                    "ROUTER_ROUTER_SENDSEND",
+                )
                 for pattern in selected_patterns
             )
             and "tcp" in unique_transports
