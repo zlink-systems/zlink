@@ -21,10 +21,14 @@ namespace detail
 
 struct topic_message_access_t
 {
-    static topic_message_t
-    make_single (std::optional<routing_id_t> source_, std::string topic_, message_t part_)
+    static void replace_single (topic_message_t &message_out_,
+                                std::optional<routing_id_t> source_,
+                                std::string topic_,
+                                message_t part_)
     {
-        return topic_message_t (std::move (source_), std::move (topic_), std::move (part_));
+        message_out_._routing_id = std::move (source_);
+        message_out_._topic = std::move (topic_);
+        message_out_._parts.replace (std::move (part_));
     }
 };
 
@@ -90,8 +94,8 @@ template <typename ReceivePart>
     adopt_native_message (first_part, native_part.get ());
 
     if (has_more == ZLINK_PART_FINAL) {
-        message_out_ =
-          topic_message_access_t::make_single (source, std::move (topic), std::move (first_part));
+        topic_message_access_t::replace_single (message_out_, source, std::move (topic),
+                                                 std::move (first_part));
         return 0;
     }
 
