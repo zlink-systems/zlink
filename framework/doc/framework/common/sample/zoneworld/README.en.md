@@ -685,6 +685,8 @@ names.
 - The movement rejection order, zone geometry, tick, sort, and expiry rules are the same across
   every language.
 - A cross-node join preserves the same ActorId and ObjectGeneration and the kept session binding.
+- A repeated relocation that returns the Actor to a previously visited node preserves the same
+  identity and the bound session (the A→B→A round trip, ZW-B7).
 - Message Follow's stated limits and terminal errors are confirmed by the self-check.
 - Border sync uses only adjacent topics and doesn't publish to diagonal zones.
 - Announce and maintenance use classic fanout, and node status uses runtime events and explicit
@@ -695,3 +697,18 @@ names.
   routes, or custom owner selection added.
 - A Ready owner failure is not shown as crash failover, and the Unavailable boundary is kept.
 - The runner performs build, readiness, browser/headless self-check, evidence, and cleanup.
+
+### 11.1 Scenario ID Families
+
+The self-check scenario IDs (`ZW-*`) are grouped by intent. Each family covers one of the
+criteria above; the runner's evidence names the individual IDs.
+
+| Family | Intent |
+| --- | --- |
+| ZW-A | Movement basics: entry, in-zone movement, rejection order, visibility, ordering |
+| ZW-B | Relocation and session: border sync, cross-node relocation, identity and binding continuity — including ZW-B7, the A→B→A round trip back to a previously visited node |
+| ZW-C | Ops observation: node status, shutdown, disconnect, spot event reports |
+| ZW-D | Fanout announce: one publish reaching every node's subscriber and zone spots |
+| ZW-E | Maintenance: targeted enable/disable, entry refusal, restart persistence, diagnostics |
+| ZW-F | Bots: unattended movement, population, no client push, reversal on rejection |
+| ZW-G | Node identity and replacement: NodeId vs transport RID, routing ID gate, replacement |

@@ -859,7 +859,7 @@ phase() {
 
 # Only a full run can claim a phase. A selective run proves one scenario, not a capability.
 if [[ "$SCENARIO" == "all" ]]; then
-  phase "zoneworld-relocation=completed"      ZW-B2 ZW-B3 ZW-B5 ZW-B6 ZW-F2
+  phase "zoneworld-relocation=completed"      ZW-B2 ZW-B3 ZW-B5 ZW-B6 ZW-B7 ZW-F2
   phase "zoneworld-border-sync=completed"     ZW-B1 ZW-B4
   phase "zoneworld-ops-observe=completed"     ZW-C1 ZW-C2 ZW-C3 ZW-C4
   phase "zoneworld-ops-announce=completed"    ZW-D1 ZW-D1-subscribers ZW-D1-spots ZW-D2
@@ -869,7 +869,7 @@ if [[ "$SCENARIO" == "all" ]]; then
   # a scenario can fail without its id ever reaching the log.
   phase "zoneworld=completed" \
     ZW-A1 ZW-A2 ZW-A3 ZW-A4 ZW-A5 \
-    ZW-B1 ZW-B2 ZW-B3 ZW-B4 ZW-B5 ZW-B6 \
+    ZW-B1 ZW-B2 ZW-B3 ZW-B4 ZW-B5 ZW-B6 ZW-B7 \
     ZW-C1 ZW-C2 ZW-C3 ZW-C4 \
     ZW-D1 ZW-D1-subscribers ZW-D1-spots ZW-D2 \
     ZW-E1 ZW-E2 ZW-E3 ZW-E4 ZW-E5 ZW-E5-arm ZW-E6 \
