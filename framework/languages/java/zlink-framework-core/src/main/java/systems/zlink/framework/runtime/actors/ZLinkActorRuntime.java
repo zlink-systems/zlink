@@ -1235,34 +1235,82 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         requireActorId(actorId);
         Class<? extends ZLinkActorFactory> factoryType =
             requireFactory(actorType);
-        ZLinkBackendActorRef reentryActorRef =
-            detachMessageFollowProxyForReentry(actorId);
-        if (actorRegistry.contains(actorId)) {
-            return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                    "target runtime already owns actor: " + actorId));
-        }
-        if (adapterKey != null && !adapterKey.equals(actorType)) {
-            return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                    "actor transfer adapter key does not match actor type: "
-                        + adapterKey));
-        }
-        ZLinkMessage transferState = ZLinkMessage.fromEncoded(
-            ZLinkEncodedPayload.from(root.applicationState()),
-            serializer);
-        return prepareTransferredActor(
-            actorId,
-            actorType,
-            adapterKey,
-            transferState,
-            factoryType,
-            reentryActorRef == null
-                ? new ZLinkBackendActorRef(
-                    spotNode.routingId(),
+        //  An Actor that relocates straight back (A→B→A) can reach its old
+        //  runtime again before that runtime finished releasing the Actor it
+        //  just handed off. Internals 12 §"Ready 시점" makes the source's own
+        //  resource cleanup follow-up work that runs after commit and does not
+        //  gate admission, so a lagging local release is not an authority
+        //  conflict and must not turn the new relocation into a terminal
+        //  failure. Wait for the retiring registration inside a bounded local
+        //  window; if it never clears, the same rejection stands.
+        return ZLinkActorRetryScheduler.waitUntilRelayOrContinue(
+                retiringSourceReleaseWindow(request),
+                () -> localActorSlotFree(actorId))
+            .thenCompose(ignored -> {
+                ZLinkBackendActorRef reentryActorRef =
+                    detachMessageFollowProxyForReentry(actorId);
+                if (actorRegistry.contains(actorId)) {
+                    return CompletableFuture
+                        .<PreparedTransferredActor>failedFuture(
+                            new ZLinkConfigurationException(
+                                "target runtime already owns actor: "
+                                    + actorId));
+                }
+                if (adapterKey != null && !adapterKey.equals(actorType)) {
+                    return CompletableFuture
+                        .<PreparedTransferredActor>failedFuture(
+                            new ZLinkConfigurationException(
+                                "actor transfer adapter key does not match "
+                                    + "actor type: " + adapterKey));
+                }
+                ZLinkMessage transferState = ZLinkMessage.fromEncoded(
+                    ZLinkEncodedPayload.from(root.applicationState()),
+                    serializer);
+                return prepareTransferredActor(
                     actorId,
-                    request.actorGeneration())
-                : reentryActorRef);
+                    actorType,
+                    adapterKey,
+                    transferState,
+                    factoryType,
+                    reentryActorRef == null
+                        ? new ZLinkBackendActorRef(
+                            spotNode.routingId(),
+                            actorId,
+                            request.actorGeneration())
+                        : reentryActorRef);
+            });
+    }
+
+    private static final Duration RETIRING_SOURCE_RELEASE_WINDOW =
+        Duration.ofSeconds(2);
+
+    private static Duration retiringSourceReleaseWindow(
+        ZLinkActorSpotRoutePackets.TransferRequest request) {
+        Duration deadline = Duration.ofMillis(
+            Math.max(1L, request.timeoutMillis()));
+        return deadline.compareTo(RETIRING_SOURCE_RELEASE_WINDOW) < 0
+            ? deadline
+            : RETIRING_SOURCE_RELEASE_WINDOW;
+    }
+
+    /**
+     * Reports whether this runtime can take the stable Actor identity: either
+     * nothing is registered, or the only registration is the Message Follow
+     * proxy that {@code detachMessageFollowProxyForReentry} releases.
+     */
+    private synchronized boolean localActorSlotFree(String actorId) {
+        ZLinkActor current = actorRegistry.actor(actorId);
+        if (current == null) {
+            return !actorRegistry.contains(actorId);
+        }
+        ZLinkActorTransferHandoff.MessageFollowSource followSource =
+            handoff.messageFollowSource(actorId).orElse(null);
+        if (followSource == null) {
+            return false;
+        }
+        DefaultActorContext context = actorRegistry.context(current);
+        return context != null
+            && followSource.targetActorRef().equals(context.actorRef());
     }
 
     /**

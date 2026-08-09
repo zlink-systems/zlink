@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Proxy;
 import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
@@ -122,7 +124,9 @@ final class ZLinkSessionRelocationPeerClientTest {
                     supersededChecks.incrementAndGet() >= 2))
             .toCompletableFuture().join();
 
-        Thread.sleep(200);
+        //  Spec 20 §5 step 8: the first retransmission is one second after the
+        //  first send, so the second submission cannot be observed earlier.
+        Thread.sleep(1400);
         assertEquals(2, submissions.get(),
             "the retry stops once the store proves supersession");
         assertEquals(2, supersededChecks.get());
@@ -151,9 +155,72 @@ final class ZLinkSessionRelocationPeerClientTest {
                 () -> CompletableFuture.completedFuture(false))
             .toCompletableFuture().join();
 
-        assertTrue(converged.await(2, TimeUnit.SECONDS),
+        //  The spec retransmission schedule puts the second send one second
+        //  after the first (spec 20 §5 step 8).
+        assertTrue(converged.await(3, TimeUnit.SECONDS),
             "the failed route keeps retrying after finalize settles");
         assertEquals(2, submissions.get());
+    }
+
+    @Test
+    void onlyTheCommand45AckReportsTheRouteAsSwitched()
+        throws InterruptedException {
+        var codec = new ZLinkServiceM6BWireCodec();
+        var command = command();
+        AtomicInteger submissions = new AtomicInteger();
+        List<String> terminals = new CopyOnWriteArrayList<>();
+        CountDownLatch reported = new CountDownLatch(1);
+        ZLinkInternalMeshNode node = node((target, encoded) -> {
+            if (submissions.incrementAndGet() == 1) {
+                throw new CompletionException(
+                    new IllegalStateException("route switch failed"));
+            }
+            return codec.encodeSessionRelocationRouted(ack(command));
+        });
+
+        //  The returned stage settles after the first attempt whatever the
+        //  outcome, so it can never mean "switched". Only the terminal
+        //  callback may report that, and only when a command 45 ACK arrived.
+        new ZLinkSessionRelocationPeerClient(node, codec)
+            .switchRouteUntilTerminal(
+                command,
+                Duration.ofSeconds(1),
+                () -> CompletableFuture.completedFuture(false),
+                (routed, failure) -> {
+                    terminals.add(routed == null ? "failed" : "switched");
+                    reported.countDown();
+                })
+            .toCompletableFuture().join();
+
+        assertTrue(terminals.isEmpty(),
+            "a retrying route has not switched yet");
+        assertTrue(reported.await(3, TimeUnit.SECONDS));
+        Thread.sleep(120);
+        assertEquals(List.of("switched"), terminals);
+    }
+
+    @Test
+    void aSupersededRouteReportsATerminalFailureInsteadOfASwitch()
+        throws InterruptedException {
+        var codec = new ZLinkServiceM6BWireCodec();
+        var command = command();
+        List<String> terminals = new CopyOnWriteArrayList<>();
+        ZLinkInternalMeshNode node = node((target, encoded) -> {
+            throw new CompletionException(new ZLinkConfigurationException(
+                "Session relocation route command has a stale binding fence"));
+        });
+
+        new ZLinkSessionRelocationPeerClient(node, codec)
+            .switchRouteUntilTerminal(
+                command,
+                Duration.ofSeconds(1),
+                () -> CompletableFuture.completedFuture(false),
+                (routed, failure) ->
+                    terminals.add(routed == null ? "failed" : "switched"))
+            .toCompletableFuture().join();
+
+        Thread.sleep(120);
+        assertEquals(List.of("failed"), terminals);
     }
 
     private static ZLinkInternalMeshNode node(Sender sender) {

@@ -237,12 +237,27 @@ final class ZLinkAdmissionRuntime {
                     emptyKeys.forEach(queues::remove);
                 } else {
                     ArrayDeque<Pending> queue = queues.get(key);
-                    Pending item = queue == null ? null : pollLive(queue);
+                    //  A BOUND_SESSION ready edge is a binding-state change,
+                    //  not one unit of send capacity: the remote bound-session
+                    //  binding was installed and every push that parked while
+                    //  it was missing can now be attempted. The install emits
+                    //  exactly one edge, so releasing only the queue head
+                    //  would strand the rest until their send deadline. Drain
+                    //  the key in FIFO order; an item whose attempt still
+                    //  cannot submit re-queues through `drive`, which leaves
+                    //  the capacity semantics of every other kind unchanged.
+                    boolean drain = key.kind()
+                        == ZLinkBackendAdmissionKey.Kind.BOUND_SESSION;
+                    Pending item;
+                    while (queue != null
+                        && (item = pollLive(queue)) != null) {
+                        items.add(item);
+                        if (!drain) {
+                            break;
+                        }
+                    }
                     if (queue != null && queue.isEmpty()) {
                         queues.remove(key);
-                    }
-                    if (item != null) {
-                        items.add(item);
                     }
                 }
             }

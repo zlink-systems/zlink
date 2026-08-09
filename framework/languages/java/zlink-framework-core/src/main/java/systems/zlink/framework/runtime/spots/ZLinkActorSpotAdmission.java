@@ -483,21 +483,23 @@ final class ZLinkActorSpotAdmission {
                     primaryNode);
                 runtime.traceActorTransferMarker(
                     "target_session_bound", actor.context().actorId(), request.transferId());
-                CompletionStage<Void> boundSessionRoute = startBoundSessionRouteUpdate(
+                // Spec 20 §5 step 6 and §5.1: the target sends
+                // `sessionActorLocationUpdateReqMsg` and does NOT suspend the
+                // target Actor to wait for the response; §5 and §9 state the
+                // update blocks neither Join completion nor Actor message
+                // processing, and internals 12 §"Ready 시점" lists the Session
+                // Actor location update response among the follow-up work that
+                // must not gate target admission. The route switch therefore
+                // starts here and converges on the spec retransmission
+                // schedule in the background.
+                startBoundSessionRouteUpdate(
                     request,
                     primaryNode,
                     committed.authorityOwnerGeneration());
-                return boundSessionRoute
-                    // Command 45 is the terminal route-switch acknowledgement. It
-                    // is emitted only after the source Session has rebound its
-                    // actor and the target has accepted the remote binding. Do
-                    // not invoke user Join completion before that barrier: the
-                    // callback is allowed to send through the bound Session.
-                    .thenCompose(ignored ->
-                        ZLinkAsyncSerialQueue
-                            .yieldCurrent(
-                                CompletableFuture.completedFuture(null)
-                                    .thenRun(() -> completeRemoteMove(runtime, prepared))))
+                return ZLinkAsyncSerialQueue
+                    .yieldCurrent(
+                        CompletableFuture.completedFuture(null)
+                            .thenRun(() -> completeRemoteMove(runtime, prepared)))
                     .thenCompose(ignored -> {
                         boolean entryTarget = spotSurface instanceof ZLinkEntrySpot<?>;
                         if (!entryTarget) {
@@ -570,30 +572,26 @@ final class ZLinkActorSpotAdmission {
     }
 
     /**
-     * The route-switch acknowledgement is the target-side readiness barrier.
-     * It confirms that the source Session has rebound the actor and that the
-     * target has installed the remote bound-session binding before user Join
-     * completion or backlog replay can send through that binding.
+     * Starts `sessionRelocationRouteUpdate` for the direct-Join relocation.
+     * Decoding, fence validation and the local Actor authority record are
+     * synchronous — a mismatch there is a protocol defect, not a transient,
+     * and stays fatal to the commit. Waiting for command 45 is not: spec 20
+     * §5 step 6 forbids suspending the target for that response, so the ACK
+     * is awaited only by the background retransmission loop.
      */
-    private CompletionStage<Void> startBoundSessionRouteUpdate(
+    private void startBoundSessionRouteUpdate(
         ZLinkActorSpotRoutePackets.TransferRequest request,
         ZLinkInternalSpotNode primaryNode,
         long authorityOwnerGeneration) {
-        CompletionStage<Void> update;
         try {
-            update = switchBoundSessionRoute(
+            switchBoundSessionRoute(
                 request,
                 primaryNode,
                 authorityOwnerGeneration);
-        } catch (Throwable failure) {
-            reportBoundSessionRouteUpdateFailure(request, failure);
-            return CompletableFuture.failedFuture(failure);
+        } catch (RuntimeException invalid) {
+            reportBoundSessionRouteUpdateFailure(request, invalid);
+            throw invalid;
         }
-        return update.whenComplete((ignored, failure) -> {
-            if (failure != null) {
-                reportBoundSessionRouteUpdateFailure(request, failure);
-            }
-        });
     }
 
     private void reportBoundSessionRouteUpdateFailure(
@@ -608,18 +606,17 @@ final class ZLinkActorSpotAdmission {
                 + failure);
     }
 
-    private CompletionStage<Void> switchBoundSessionRoute(
+    private void switchBoundSessionRoute(
         ZLinkActorSpotRoutePackets.TransferRequest request,
         ZLinkInternalSpotNode primaryNode,
         long authorityOwnerGeneration) {
         byte[] command44 = request.sessionRouteCommand44();
         if (command44.length == 0) {
-            return CompletableFuture.completedFuture(null);
+            return;
         }
         if (sessionRoutes == null) {
-            return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                    "bound Session relocation route runtime is unavailable"));
+            throw new ZLinkConfigurationException(
+                "bound Session relocation route runtime is unavailable");
         }
         var codec = new ZLinkServiceM6BWireCodec();
         var intent = codec.decodeSessionRelocationRouteIntent(command44);
@@ -633,25 +630,64 @@ final class ZLinkActorSpotAdmission {
             || intent.actor().generation()
                 != request.actorGeneration()
             || !intent.targetNodeRid().equals(primaryNode.routingId())) {
-            return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                    "bound Session route command does not match direct Join"));
+            throw new ZLinkConfigurationException(
+                "bound Session route command does not match direct Join");
         }
         var command = intent.materialize(authorityOwnerGeneration);
+        ZLinkBackendActorRef targetActor = new ZLinkBackendActorRef(
+            primaryNode.routingId(),
+            request.actorId(),
+            request.actorGeneration());
+        //  The session owner rebinds with command 38 while it applies command
+        //  44; `acceptRemoteStreamBinding` compares that bind against the
+        //  local Actor authority, so the authority record must be installed
+        //  before the first send leaves this node.
         primaryNode.rememberActorAuthority(
-            new ZLinkBackendActorRef(
-                primaryNode.routingId(),
-                request.actorId(),
-                request.actorGeneration()),
+            targetActor,
             command.currentAuthorityOwnerGeneration(),
             primaryNode.localAuthorityLeaseGeneration());
-        return sessionRoutes.switchRoute(
-                command,
-                Duration.ofMillis(Math.max(1L, request.timeoutMillis())))
-            .thenRun(() -> requireActors().traceActorTransferMarker(
-                "session_route_switched",
-                request.actorId(),
-                request.transferId()));
+        requireActors().traceActorTransferMarker(
+            "session_route_update_started",
+            request.actorId(),
+            request.transferId());
+        //  The returned stage settles after the first attempt whatever the
+        //  outcome, so the terminal callback - not that stage - is what proves
+        //  the switch. A command 45 ACK traces `session_route_switched`;
+        //  stopping without one means the relocation was superseded and is
+        //  traced as a failure.
+        sessionRoutes.switchRouteUntilTerminal(
+            command,
+            Duration.ofMillis(Math.max(1L, request.timeoutMillis())),
+            () -> CompletableFuture.completedFuture(
+                routeSwitchSuperseded(primaryNode, targetActor)),
+            (ack, failure) -> {
+                if (ack == null) {
+                    reportBoundSessionRouteUpdateFailure(request, failure);
+                    return;
+                }
+                requireActors().traceActorTransferMarker(
+                    "session_route_switched",
+                    request.actorId(),
+                    request.transferId());
+            });
+    }
+
+    /**
+     * Spec 20 §5.1: only the running target runtime continues the location
+     * update retransmission. Once this node no longer holds that exact Actor
+     * incarnation the relocation it was announcing is over, so the retry is
+     * terminal.
+     */
+    private static boolean routeSwitchSuperseded(
+        ZLinkInternalSpotNode primaryNode,
+        ZLinkBackendActorRef targetActor) {
+        ZLinkBackendActorRef current;
+        try {
+            current = primaryNode.actorLookup(targetActor.actorId());
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
+        return current == null || !current.equals(targetActor);
     }
 
     private static ZLinkBackendActorRef completeRemoteMove(

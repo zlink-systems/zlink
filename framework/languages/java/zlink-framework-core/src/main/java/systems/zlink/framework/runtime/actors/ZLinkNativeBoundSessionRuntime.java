@@ -96,7 +96,7 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
                 currentActorRef.actorId(),
                 currentActorRef.generation()),
             () -> sendBoundSessionFrame(
-                spotNode, currentActorRef, frame),
+                spotNode, actorRuntime, actor, currentActorRef, frame),
             frame::close,
             timeout).thenApply(ignored -> null);
     }
@@ -188,7 +188,7 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
                     currentActorRef.actorId(),
                     currentActorRef.generation()),
                 () -> sendBoundSessionFrame(
-                    spotNode, currentActorRef, frame),
+                    spotNode, actorRuntime, actor, currentActorRef, frame),
                 frame::close,
                 timeout);
         }
@@ -197,13 +197,38 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
 
     private static boolean sendBoundSessionFrame(
         ZLinkInternalSpotNode spotNode,
-        ZLinkBackendActorRef actor,
+        ZLinkActorRuntime actorRuntime,
+        ZLinkActor actor,
+        ZLinkBackendActorRef actorRef,
         Message frame) {
-        if (spotNode.boundSessionRoute(actor).isEmpty()) {
+        if (spotNode.boundSessionRoute(actorRef).isEmpty()) {
+            //  Spec 20 §5 step 6: the target Actor keeps processing while
+            //  `sessionRelocationRouteUpdate` is still in flight, so a push
+            //  can be produced before the Session owner has rebound this
+            //  target (the remote binding is installed by the owner's
+            //  command 38, which it sends while applying command 44). The
+            //  binding this Actor still holds is the proof that a route is
+            //  coming: park the one-way submission in the admission queue
+            //  until the remote binding goes ready instead of failing it.
+            //  A cleared binding leaves nothing to wait for and stays
+            //  `NOT_FOUND`.
+            if (awaitsRelocatedSessionRoute(actorRuntime, actor)) {
+                return false;
+            }
             throw new ZlinkSubmitException(SubmitResult.NOT_FOUND);
         }
         return spotNode.sendActorBoundSession(
-            actor, List.of(frame), SendFlags.DONT_WAIT);
+            actorRef, List.of(frame), SendFlags.DONT_WAIT);
+    }
+
+    private static boolean awaitsRelocatedSessionRoute(
+        ZLinkActorRuntime actorRuntime,
+        ZLinkActor actor) {
+        try {
+            return actorRuntime.boundSessionRoute(actor).isPresent();
+        } catch (RuntimeException unmanaged) {
+            return false;
+        }
     }
 
 }

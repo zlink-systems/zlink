@@ -32,6 +32,18 @@ final class ZLinkActorRetryScheduler {
         schedule(attempt, ROUTE_RETRY_DELAY);
     }
 
+    /**
+     * Schedules the next Session route retransmission at an explicit spec
+     * interval (spec 20 §5 step 8: 1s, 1s, 2s, 4s, 5s and then 5s).
+     */
+    static void scheduleRouteAfter(Runnable attempt, Duration delay) {
+        if (delay == null || delay.isNegative() || delay.isZero()) {
+            execute(attempt);
+            return;
+        }
+        schedule(attempt, delay);
+    }
+
     static CompletionStage<Void> delayRoute() {
         CompletableFuture<Void> delayed = new CompletableFuture<>();
         scheduleRoute(() -> delayed.complete(null));

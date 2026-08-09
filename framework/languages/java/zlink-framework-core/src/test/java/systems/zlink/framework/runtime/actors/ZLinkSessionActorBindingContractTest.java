@@ -306,6 +306,49 @@ final class ZLinkSessionActorBindingContractTest {
         assertEquals(ack, replay);
     }
 
+    @Test
+    void command44AbortAcksTerminallyWithoutChangingTheRoute() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        ZLinkSessionActor actor = runtime.bind(
+            new ActorRef("actor-1", 7, MESH, NODE_A))
+            .toCompletableFuture().join();
+        var abort = new systems.zlink.framework.runtime.internal.service
+            .ZLinkServiceM6BWireCodec.SessionRelocationRoute(
+                new systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceM6BWireCodec.RelocationIdentity(8, 9),
+                new systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
+                        "coordinator", 2, NODE_A, 3, "store-v4"),
+                ZLinkServiceM6BWireCodec.RelocationRole.TARGET,
+                new systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceM6BWireCodec.ActorIdentity("actor-1", 7),
+                new systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                        NODE_A, 3, "session-owner", 4, SESSION, 1),
+                ZLinkServiceM6BWireCodec
+                    .SessionRelocationRouteAction.ABORT,
+                0, 10, null, 0, 0);
+
+        //  Internals 12 §"Ready 시점" and §"Session route": a pre-owner-change
+        //  abort never moved the Session route, and spec 20 §6 forbids rolling
+        //  a committed route back to the source. The abort therefore changes
+        //  nothing, but it still has to be answered so the sender stops
+        //  retransmitting (spec 20 §5 step 8).
+        var ack = runtime.applyRelocationRouteCommand(abort)
+            .toCompletableFuture().join();
+
+        assertEquals(NODE_A, actor.ref().nodeRid());
+        assertEquals(
+            ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.ABORT,
+            ack.action());
+        assertEquals(10, ack.currentAuthorityOwnerGeneration());
+        assertEquals(abort.relocation(), ack.relocation());
+        assertEquals(abort.session(), ack.session());
+        assertEquals(ack, runtime.applyRelocationRouteCommand(abort)
+            .toCompletableFuture().join());
+    }
+
     private static ZLinkSessionActorsRuntime runtime(FakeStream stream) {
         return new ZLinkSessionActorsRuntime(
             stream,

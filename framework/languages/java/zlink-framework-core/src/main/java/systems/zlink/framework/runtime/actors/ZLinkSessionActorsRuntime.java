@@ -560,11 +560,26 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         applyRelocationRouteCommand(
             ZLinkServiceM6BWireCodec.SessionRelocationRoute command) {
         Objects.requireNonNull(command, "command");
-        if (command.action()
-                != ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.COMMIT
-            || !sessionRid.equals(command.session().sessionRid())) {
+        if (!sessionRid.equals(command.session().sessionRid())) {
             return CompletableFuture.failedFuture(new ZLinkConfigurationException(
                 "Session relocation route command does not target this Session"));
+        }
+        if (command.action()
+                != ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.COMMIT) {
+            //  Abort route update. Internals 12 §"Ready 시점": a pre-owner-change
+            //  abort never changed the Session route, so there is no route to
+            //  cancel and nobody waits for a cancel response; §"Session route":
+            //  commands 44/45 are used only for the post-`Completed` route
+            //  switch and its ACK; spec 20 §6: after commit the route is never
+            //  rolled back to the source. So an abort action must leave this
+            //  binding's route and location snapshot untouched. It still gets a
+            //  terminal ACK — an unanswered command 44 is retransmitted for as
+            //  long as the sender lives (spec 20 §5 step 8).
+            LOGGER.warning("[zlink-java-stream-trace] session-route abort"
+                + " acknowledged without a route change actor="
+                + command.actor().actorId()
+                + " authority=" + command.currentAuthorityOwnerGeneration());
+            return CompletableFuture.completedFuture(echoRouted(command));
         }
         StoredBindingRoute observed = bindingRoutes.get(command.actor().actorId());
         //  Idempotent retransmit (AlreadyApplied): a command 44 whose target
@@ -584,6 +599,18 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 + " authority=" + command.currentAuthorityOwnerGeneration());
             return CompletableFuture.completedFuture(echoRouted(command));
         }
+        //  Spec 20 §5 asks the Session owner to check that the request's
+        //  generation and high-water equal the values recorded in the current
+        //  binding. Exact equality presumes the `sessionRelocationSeal(42)` /
+        //  `sessionRelocationSealed(43)` handshake, which makes the source's
+        //  captured high-water and this owner's accepted high-water provably
+        //  the same number. Commands 42/43 are not implemented here, so this
+        //  owner has no accepted-sequence counter to compare against: the
+        //  stored value is only the last applied route update's high-water
+        //  (zero before the first relocation) while the command carries the
+        //  source Actor owner's ingress count. Until 42/43 exist the gate
+        //  stays monotonic — a command whose high-water regressed below an
+        //  already applied one is a superseded relocation and is rejected.
         if (observed == null
             || observed.bindingGeneration()
                 != command.session().bindingGeneration()
