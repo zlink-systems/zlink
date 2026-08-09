@@ -470,6 +470,16 @@ context_options.auto_hwm_msg_unit_bytes (
   zlink::byte_count_t::bytes (planning_unit)); // Auto HWM 계산용 64-bit byte 입력이다.
 ```
 
+`context_options.auto_hwm_msg_unit_bytes(...)`는 계산 결과가 아니라 Core planner에
+전달할 입력을 설정한다. Core는 선택한 message slot 수에 planning unit을 곱해
+planned byte HWM을 정한다. 사용자가 `send_hwm(...)` 또는 `recv_hwm(...)`을
+호출한 방향은 수동 override가 되므로 Auto-HWM 재계산 대상에서 제외된다.
+
+실제 send/receive admission은 C++ 바인딩이 판단하지 않는다. Core pipe가 보관한
+accounted byte가 적용된 HWM에 도달하면 Core가 backpressure를 반환한다. C++
+바인딩은 그 결과와 timeout을 기존 operation builder 계약에 따라 전달한다.
+`0 bytes`는 무제한이며 message 한 건을 허용한다는 뜻이 아니다.
+
 Monitor snapshot은 Core monitoring ABI v2를 투영한다. Planned, applied, deferred와 in-flight
 HWM field는 `_bytes` 접미사와 `uint64_t`를 사용한다. Deferred field의 유효 여부는 별도
 boolean으로 제공한다. Pending message와 profile slot은 count 진단값으로 남으며 byte field와

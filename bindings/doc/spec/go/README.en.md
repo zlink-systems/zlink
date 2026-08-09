@@ -23,6 +23,7 @@ matching projection at the module root.
 | [Module and public package](#module-and-public-package) | Import path, the internal boundary, the Core 0.9.0 raw scope |
 | [Public contract categories](#public-contract-categories) | A table of public concepts by category |
 | [Context and resource lifetime](#context-and-resource-lifetime) | Ownership/release rules for Context/socket/monitor/poller/timer |
+| [Byte HWM and Auto-HWM](#byte-hwm-and-auto-hwm) | Mapping between Go `int` and Core `uint64_t` byte HWM |
 | [Message and ownership](#message-and-ownership) | Native storage, ownership per builder path |
 | [Socket operation](#socket-operation) | Builder terminal signatures, per-socket operations, ROUTER completion control |
 | [Receive and eventing](#receive-and-eventing) | Caller-provided receive return values; monitor/poller/timer |
@@ -77,6 +78,29 @@ A socket or timer a poller has registered borrows that resource's handle.
 The source must therefore be removed from the poller before it is
 `Close`d, and the caller serializes add, modify, remove, and wait calls
 against a single poller.
+
+## Byte HWM and Auto-HWM
+
+Core owns HWM calculation and queue admission. The Go binding validates the
+`int` passed to `SetSendHighWaterMark(int)` and
+`SetReceiveHighWaterMark(int)`, then converts it to Core's 8-byte `uint64_t`
+option. Negative values are rejected, and the public range is `0` through the
+executing platform's `MaxInt`. If a value read from Core exceeds `MaxInt`, the
+getter returns an overflow error instead of narrowing it. `0` means unlimited.
+
+`ContextOptions.SetAutoHwmMsgUnitBytes(int)` sends the planning unit to Core
+under the same range rule. Core multiplies the selected message-slot count by
+the planning unit to calculate the planned byte HWM. The value is neither an
+average message size nor the actual admission charge. Setting a directional
+HWM makes that direction a manual override and excludes it from automatic HWM
+recalculation.
+
+Core decides backpressure when the accounted bytes retained by a pipe reach
+the applied HWM. The Go binding does not recount messages and passes Core's
+result through the existing operation and error contract. Planned, applied,
+and deferred HWM and in-flight usage in `MonitorStatus` are `uint64` bytes.
+Only pending-message fields and `AutoHwmSocketMessageSlots` are count
+diagnostics.
 
 ## Message and ownership
 

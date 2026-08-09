@@ -35,6 +35,7 @@ sockets, eventing, service, errors는 리뷰어가 C 헤더를 읽을 때 사용
 | [API 변경 절차](#api-변경-절차) | 기능 추가·변경 순서 |
 | [라이브러리 형태](#라이브러리-형태) | 네이티브 ABI 함수 네이밍·플래그·멀티파트 규칙 |
 | [인터페이스 형태 예외](#인터페이스-형태-예외) | 상위 바인딩 래퍼 규칙이 C에 적용되지 않는 부분 |
+| [Byte HWM과 Auto-HWM](#byte-hwm과-auto-hwm) | Core ABI의 byte HWM 설정·계산·admission 규칙 |
 | [필수 기능 커버리지](#필수-기능-커버리지) | 리뷰가 점검하는 헤더 기능 그룹 |
 | [Spot Get-Or-New](#spot-get-or-new) | `zlink_spot_node_spot_get_or_new` 계약 |
 | [Ownership과 생명주기](#ownership과-생명주기) | 핸들·메시지 소유권 이동 규칙 |
@@ -133,6 +134,32 @@ C는 ABI 기준선이며 래퍼 바인딩 인터페이스 규칙을 채택하지
   바인딩 규칙은 C에 적용되지 않는다. C 헬퍼가 공개라면 반드시
   `core/include/zlink.h`에 선언한다. 그렇지 않으면 내부 헬퍼다.
 - C 샘플과 perf는 공개 헤더를 include하고 공개 C ABI를 직접 호출한다.
+
+## Byte HWM과 Auto-HWM
+
+C에서는 Core ABI가 HWM 계약을 직접 제공한다. `ZLINK_OPT_SNDHWM`과
+`ZLINK_OPT_RCVHWM`은 `uint64_t` accounted-byte 상한이며
+`zlink_set_option()`과 `zlink_get_option()`에 정확히 8-byte 저장 공간을
+전달한다. 수동 기본값은 `4,096,000 bytes`이고 `0`은 무제한이다.
+
+`ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES`는 `zlink_ctx_set_data()`와
+`zlink_ctx_get_data()`로 설정한다. 이 값은 Core planner의 byte 단위 입력이다.
+Core는 profile, socket role과 connection bucket으로 message slot 수를 고른 뒤
+다음 식으로 planned byte HWM을 계산한다.
+
+```text
+planned HWM bytes = selected message slots * planning unit bytes
+```
+
+사용자가 방향별 HWM을 직접 설정하면 그 방향은 수동 override가 된다. Auto-HWM은
+override하지 않은 방향만 다시 계산한다. 실제 admission은 Core pipe에 보관된
+accounted byte를 기준으로 하며 C 호출자가 message 수나 payload 크기를 따로
+누적하지 않는다. HWM에 도달한 submit은 해당 socket의 blocking·non-blocking과
+timeout 계약에 따라 backpressure 결과를 반환한다.
+
+`zlink_monitor_status_t` ABI version 2의 planned, applied, deferred HWM과
+in-flight 사용량은 byte 단위다. `snd_pending_msgs`, `rcv_pending_msgs`와
+`auto_hwm_socket_message_slots`는 진단용 count이며 admission 기준이 아니다.
 
 ## 필수 기능 커버리지
 

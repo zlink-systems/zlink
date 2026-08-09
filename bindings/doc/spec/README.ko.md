@@ -1211,6 +1211,12 @@ streamSocket.bindActor(sessionRid, actorRef)
   `Actor Dispatch Binding Contract` 절과 `Actor Dispatch Policy` 절을 따른다.
 #### Auto-HWM와 SpotNode 옵션
 
+- HWM의 계산과 queue admission은 Core가 담당한다. 바인딩은 Core의 option과
+  monitoring 결과를 언어별 타입으로 변환할 뿐, message 수를 세거나 HWM을 다시
+  계산하지 않는다.
+- `ZLINK_OPT_SNDHWM`과 `ZLINK_OPT_RCVHWM`은 방향별 pipe에 실제로 보관된
+  accounted byte의 상한이다. 수동 기본값은 `4,096,000 bytes`이고 `0`은
+  무제한이다. 이 값은 queue에 넣을 수 있는 message 개수를 뜻하지 않는다.
 - `ZLINK_CTX_OPT_AUTO_HWM_PROFILE` 과
   `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES` 는 모든 바인딩에서 typed context option
   으로 노출해야 한다. profile 값은 compact, low latency, balanced, throughput
@@ -1221,6 +1227,53 @@ streamSocket.bindActor(sessionRid, actorRef)
   unit budget, size cap, socket message slots, effective message bytes,
   applied HWM, recent recalculation reason enum, deferred shrink, blocked ratio 는
   public snapshot 계약에 포함된다.
+
+##### HWM 계산과 admission
+
+`ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES`는 메시지 크기 제한이 아니라 자동 HWM
+planner에 전달하는 byte 단위 입력이다. Core는 profile, socket role과 관찰한
+connection 수로 message slot 수를 선택하고 다음 식으로 byte HWM을 계산한다.
+
+```text
+planned HWM bytes = selected message slots * planning unit bytes
+```
+
+Context planning unit이 `0`이면 STREAM은 `1,024 bytes`, 그 밖의 raw socket은
+`4,096 bytes`를 사용한다. Raw socket에 값을 명시하면 그 socket의 계산에만
+적용한다. Planning unit은 관찰한 평균 message 크기가 아니며 실제 message의
+크기를 이 값으로 고정해서 계산하지 않는다.
+
+Auto-HWM은 사용자가 방향별 HWM을 직접 지정하지 않은 socket에만 planned 값을
+적용한다. Connection 수가 달라지면 debounce와 bucket hysteresis를 거쳐 다시
+계산한다. 새 HWM이 현재 보관량보다 작으면 Core는 queue의 message를 삭제하지
+않고 보관량이 새 상한 아래로 감소할 때까지 적용을 보류한다.
+
+실제 write admission은 Core가 pipe에 보관한 frame의 accounted byte를 누적하여
+판단한다. Accounted byte가 HWM에 도달하면 이후 write는 byte credit이 반환될
+때까지 backpressure를 받는다. 비어 있는 pipe에는 HWM보다 큰 complete message
+하나를 허용할 수 있지만, 그 뒤의 write는 다시 제한한다. 끝나지 않은 multipart
+message에는 이 예외를 적용하지 않는다.
+
+`auto_hwm_socket_message_slots`, `snd_pending_msgs`, `rcv_pending_msgs`는
+count 단위의 진단값이다. 이 값은 admission 기준이 아니다. Planned, applied,
+deferred HWM과 `snd_bytes_in_flight`, `rcv_bytes_in_flight`는 byte 단위이며,
+바인딩은 Core monitoring ABI v2의 값과 유효성 flag를 그대로 보존한다.
+
+언어별 HWM 값 표현과 범위는 다음과 같다.
+
+| 바인딩 | 공개 값 표현 | Core 전달 규칙 |
+|---|---|---|
+| C | `uint64_t` | 정확히 8-byte option 값으로 전달한다. |
+| C++ | `byte_count_t` | 내부 `uint64_t` byte 값을 정확히 8-byte option 값으로 전달한다. |
+| .NET | `ulong` | `uint64_t` 전체 범위를 손실 없이 전달한다. |
+| Java/Kotlin | `long` | 64개 bit를 unsigned 값으로 해석하여 그대로 전달한다. |
+| Node.js | `bigint` | `0`부터 `2^64-1`까지 허용하고 정확히 8 byte로 전달한다. |
+| Python | `int` | 음수가 아닌 `uint64_t` 범위만 허용하고 정확히 8 byte로 전달한다. |
+| Go | `int` | `0`부터 platform `MaxInt`까지 허용한 뒤 `uint64`로 변환한다. 조회값이 `MaxInt`를 넘으면 overflow error를 반환한다. |
+| Rust | `u64` | `uint64_t`와 같은 범위를 손실 없이 전달한다. |
+
+##### SpotNode HWM 옵션
+
 - SPOT node option 이름은 core 공개 enum을 그대로 따른다. 방향별 HWM option이나
   delivery queue hard-limit option은 노출하지 않는다. 노출 대상은
   `ZLINK_SPOT_NODE_OPT_ROUTER_HWM_PROFILE`, `ZLINK_SPOT_NODE_OPT_ROUTER_HWM`,
@@ -1232,8 +1285,7 @@ streamSocket.bindActor(sessionRid, actorRef)
   override로만 유지한다. 언어별 고수준 바인딩은 이 값을 socket/SpotNode/Spot
   public facade로 노출하지 않고, context option만 canonical API로 노출한다.
   SPOT node와 SPOT handle에는 raw socket 공통 옵션을 설정할 수 없으며,
-  호출하면 `EINVAL`로 실패한다. 이 값은 메시지 크기 제한이 아니라 자동 HWM
-  예산을 슬롯 수로 바꿀 때 쓰는 계획 단위다.
+  호출하면 `EINVAL`로 실패한다.
   dispatch worker option은 `SpotNode` 소유 callback worker pool의 크기만
   조정하며, `ZLINK_IO_THREADS`나 data-plane thread 수를 뜻하지 않는다.
   `min`은 1 이상, `max`는 `min` 이상이어야 한다. 명시 설정이 없으면

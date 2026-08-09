@@ -46,6 +46,7 @@ private `runtime` 모듈이 소스 소유권을 조직화하고, `lib.rs`가 어
 | [계약 카테고리 맵](#계약-카테고리-맵) | 카테고리 → 모듈 매핑 |
 | [표준 인터페이스 규칙](#표준-인터페이스-규칙) | recv 시그니처, builder 시작 메서드, 이름 제약 |
 | [Crate 레이아웃](#crate-레이아웃) | 공개 모듈 분류 |
+| [Byte HWM과 Auto-HWM](#byte-hwm과-auto-hwm) | Rust `u64`와 Core byte HWM의 매핑 |
 | [필수 능력 커버리지](#필수-능력-커버리지) | 정렬 완료 시 보장해야 할 사용자 대상 능력 |
 | [Spot Get-Or-Create](#spot-get-or-create) | `get_or_create_spot` 계약 |
 | [Receive와 Subscribe 형태](#receive와-subscribe-형태) | 저장소 재사용, no-data 구분 |
@@ -401,6 +402,25 @@ Crate는 명확한 공개 모듈 또는 re-export를 노출해야 한다.
 
 공개 crate는 자주 쓰이는 타입을 crate root에서 re-export할 수 있지만, private
 FFI 모듈은 private으로 유지한다.
+
+## Byte HWM과 Auto-HWM
+
+HWM의 계산과 queue admission은 Core가 담당한다.
+`CommonSocketOptions::set_send_high_water_mark(u64)`와
+`set_receive_high_water_mark(u64)`는 byte 값을 손실 없이 Core의 8-byte option으로
+전달한다. Getter도 Core의 전체 `uint64_t` 범위를 `u64`로 반환한다. 값 `0`은
+무제한이다.
+
+`ContextOptions::set_auto_hwm_msg_unit_bytes(u64)`는 Core planner 입력을
+설정한다. Core는 선택한 message slot 수에 planning unit을 곱해 planned byte
+HWM을 계산한다. Caller가 방향별 HWM을 설정하면 그 방향은 수동 override가 되어
+Auto-HWM 재계산에서 제외된다.
+
+실제 pipe에 쌓인 accounted byte가 applied HWM에 도달하면 Core가
+backpressure를 결정한다. Rust 바인딩은 message 수를 다시 세지 않고 Core result를
+`Result` 기반 operation 계약으로 전달한다. `MonitorStatus`의 planned, applied,
+deferred HWM과 in-flight 사용량은 `u64` byte다. Pending message와
+`auto_hwm_socket_message_slots`만 count 진단값이다.
 
 ## 필수 능력 커버리지
 

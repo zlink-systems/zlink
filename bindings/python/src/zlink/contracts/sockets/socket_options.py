@@ -21,8 +21,10 @@ class CommonSocketOptions(Protocol):
 
     Attributes:
         linger_ms: How long, in ms, ``close`` waits to deliver queued messages.
-        send_high_water_mark: Max outbound messages queued before back-pressure; 0 means no limit.
-        receive_high_water_mark: Max inbound messages queued before back-pressure; 0 means no limit.
+        send_high_water_mark: Maximum outbound accounted bytes retained before
+            backpressure; 0 means no limit.
+        receive_high_water_mark: Maximum inbound accounted bytes retained before
+            backpressure; 0 means no limit.
         send_timeout_ms: How long, in ms, a blocking send waits before failing.
         receive_timeout_ms: How long, in ms, a blocking receive waits before failing.
         immediate: Whether messages queue only to fully established connections.

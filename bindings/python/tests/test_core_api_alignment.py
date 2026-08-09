@@ -85,6 +85,27 @@ class CoreApiAlignmentTests(unittest.TestCase):
             self.assertGreaterEqual(message.ref_count(), 1)
         self.assertEqual(message.to_bytes(), b"")
 
+    def test_socket_hwm_uses_unsigned_64_bit_byte_options(self):
+        boundary = 2**63 + 17
+        with zlink.create_context() as ctx:
+            with zlink.create_pair_socket(ctx) as socket:
+                self.assertGreater(socket.options.send_high_water_mark, 0)
+                self.assertGreater(socket.options.receive_high_water_mark, 0)
+
+                socket.options.send_high_water_mark = boundary
+                socket.options.receive_high_water_mark = 2**64 - 1
+                self.assertEqual(socket.options.send_high_water_mark, boundary)
+                self.assertEqual(socket.options.receive_high_water_mark, 2**64 - 1)
+
+                socket.options.send_high_water_mark = 0
+                self.assertEqual(socket.options.send_high_water_mark, 0)
+
+                for invalid in (-1, 2**64):
+                    with self.assertRaises(OverflowError):
+                        socket.options.send_high_water_mark = invalid
+                with self.assertRaises(TypeError):
+                    socket.options.receive_high_water_mark = 1.0
+
     def test_pair_multipart_roundtrip_uses_caller_received_storage(self):
         with zlink.create_context() as ctx:
             with zlink.create_pair_socket(ctx) as left:

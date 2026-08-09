@@ -31,19 +31,19 @@ class CommonSocketOptions:
 
     @property
     def send_high_water_mark(self):
-        return self._socket._get_common_int_option(SocketOption.SNDHWM)
+        return self._socket._get_common_uint64_option(SocketOption.SNDHWM)
 
     @send_high_water_mark.setter
     def send_high_water_mark(self, value):
-        self._socket._set_common_int_option(SocketOption.SNDHWM, value)
+        self._socket._set_common_uint64_option(SocketOption.SNDHWM, value)
 
     @property
     def receive_high_water_mark(self):
-        return self._socket._get_common_int_option(SocketOption.RCVHWM)
+        return self._socket._get_common_uint64_option(SocketOption.RCVHWM)
 
     @receive_high_water_mark.setter
     def receive_high_water_mark(self, value):
-        self._socket._set_common_int_option(SocketOption.RCVHWM, value)
+        self._socket._set_common_uint64_option(SocketOption.RCVHWM, value)
 
     @property
     def send_timeout_ms(self):

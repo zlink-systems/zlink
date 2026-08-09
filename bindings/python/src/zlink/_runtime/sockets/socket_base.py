@@ -24,8 +24,10 @@ from ..buffers.payload_buffers import (
     _bool_bytes,
     _int32_bytes,
     _int64_bytes,
+    _uint64_bytes,
     _read_int32,
     _read_int64,
+    _read_uint64,
 )
 from ..options.option_mapping import (
     create_common_socket_options,
@@ -472,6 +474,12 @@ class _BaseSocket:
 
     def _get_common_int_option(self, option: int):
         return _read_int32(self._get_raw_option(lib().zlink_get_option, option, 4))
+
+    def _set_common_uint64_option(self, option: int, value):
+        self._set_raw_option(lib().zlink_set_option, option, _uint64_bytes(value))
+
+    def _get_common_uint64_option(self, option: int):
+        return _read_uint64(self._get_raw_option(lib().zlink_get_option, option, 8))
 
     def _set_common_bool_option(self, option: int, value):
         self._set_raw_option(lib().zlink_set_option, option, _bool_bytes(value))

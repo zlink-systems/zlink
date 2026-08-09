@@ -40,6 +40,7 @@ folders.
 | [API change procedure](#api-change-procedure) | The order for adding or changing a feature |
 | [Library shape](#library-shape) | Native ABI function naming, flag, and multipart rules |
 | [Interface shape exceptions](#interface-shape-exceptions) | Where the higher-level binding wrapper rules don't apply to C |
+| [Byte HWM and Auto-HWM](#byte-hwm-and-auto-hwm) | Core ABI byte-HWM configuration, calculation, and admission rules |
 | [Required feature coverage](#required-feature-coverage) | The header feature groups a review checks |
 | [Spot Get-Or-New](#spot-get-or-new) | The `zlink_spot_node_spot_get_or_new` contract |
 | [Ownership and lifecycle](#ownership-and-lifecycle) | Handle/message ownership transfer rules |
@@ -128,6 +129,34 @@ rules.
 - C does not expose an operation builder, a staged interface, or a fluent helper object.
 - The wrapper-binding rules for public static facades, builder convenience helpers, and contract/runtime folders do not apply to C. A public C helper must be declared in `core/include/zlink.h`; otherwise it is an internal helper.
 - C samples and perf include the public header and call the public C ABI directly.
+
+## Byte HWM and Auto-HWM
+
+In C, the Core ABI provides the HWM contract directly. `ZLINK_OPT_SNDHWM`
+and `ZLINK_OPT_RCVHWM` are `uint64_t` accounted-byte limits, and
+`zlink_set_option()` and `zlink_get_option()` receive exactly 8 bytes of
+storage. The manual default is `4,096,000 bytes`, and `0` means unlimited.
+
+`ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES` is configured through
+`zlink_ctx_set_data()` and `zlink_ctx_get_data()`. It is a byte input to Core's
+planner. Core selects a message-slot count from the profile, socket role, and
+connection bucket, then calculates the planned byte HWM as follows.
+
+```text
+planned HWM bytes = selected message slots * planning unit bytes
+```
+
+Setting a directional HWM makes that direction a manual override. Automatic
+HWM recalculates only directions without an override. Core decides actual
+admission from the accounted bytes retained by its pipe; the C caller does not
+accumulate a separate message count or payload size. A submit that reaches the
+HWM reports backpressure according to that socket's blocking, non-blocking, and
+timeout contract.
+
+In `zlink_monitor_status_t` ABI version 2, planned, applied, and deferred HWM
+values and in-flight usage use bytes. `snd_pending_msgs`, `rcv_pending_msgs`,
+and `auto_hwm_socket_message_slots` are count diagnostics, not admission
+inputs.
 
 ## Required feature coverage
 
