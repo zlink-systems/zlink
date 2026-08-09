@@ -148,18 +148,18 @@ internal sealed class ZLinkAttributedSessionPacketHandlerDescriptor<TMessage>(
                 $"Active session owner '{HandlerType.FullName}' is not available for attributed packet dispatch.");
 
         var message = payload.Decode<TMessage>();
-        var argumentCount = 1 + (passDispatch ? 1 : 0) + (passCancellationToken ? 1 : 0);
+        object? arg1 = passDispatch
+            ? dispatch
+            : passCancellationToken ? cancellationToken : null;
+        object? arg2 = passDispatch && passCancellationToken
+            ? cancellationToken
+            : null;
         await ZLinkHandlerInvocationEngine.InvokeAsync(
                 session,
                 invoker,
-                argumentCount,
-                arguments =>
-                {
-                    var index = 0;
-                    arguments[index++] = message;
-                    if (passDispatch) arguments[index++] = dispatch;
-                    if (passCancellationToken) arguments[index] = cancellationToken;
-                })
+                message,
+                arg1,
+                arg2)
             .ConfigureAwait(false);
     }
 }

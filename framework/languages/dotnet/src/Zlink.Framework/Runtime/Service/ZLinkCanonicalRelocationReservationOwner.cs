@@ -1075,6 +1075,14 @@ internal sealed class ZLinkCanonicalRelocationReservationOwner
         finally
         {
             completionGate.Release();
+            // The fallback gate map is keyed per reservation and previously
+            // grew without bound. Drop the entry once no holder remains (the
+            // standalone runtime's stage gates use the same policy); a racing
+            // waiter that already holds the semaphore still completes safely.
+            if (terminal is null && completionGate.CurrentCount == 1)
+                _completionGates.TryRemove(
+                    new KeyValuePair<ReservationKey, SemaphoreSlim>(
+                        key, completionGate));
         }
     }
 

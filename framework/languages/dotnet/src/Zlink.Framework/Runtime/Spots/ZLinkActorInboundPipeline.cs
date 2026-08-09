@@ -301,7 +301,8 @@ internal sealed class ZLinkActorInboundPipeline(
             capture = allowCapture
                 ? state.Handoff.TryCapture(
                     frame,
-                    () => EnsureRelocationReplyRoute(runtime, frame))
+                    runtime,
+                    static (rt, fr) => EnsureRelocationReplyRoute(rt, fr))
                 : ZLinkActorHandoffCaptureResult.NotSealed;
         }
         catch (ZLinkActorHandoffRejectedException)
@@ -450,7 +451,8 @@ internal sealed class ZLinkActorInboundPipeline(
             {
                 retryCapture = state.Handoff.TryCapture(
                     frame,
-                    () => EnsureRelocationReplyRoute(runtime, frame));
+                    runtime,
+                    static (rt, fr) => EnsureRelocationReplyRoute(rt, fr));
             }
             catch (ZLinkActorHandoffRejectedException)
             {

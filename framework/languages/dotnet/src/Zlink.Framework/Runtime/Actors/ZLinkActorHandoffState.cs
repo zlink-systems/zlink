@@ -308,9 +308,12 @@ internal sealed class ZLinkActorHandoffState(
         return completion.WaitAsync(cancellationToken);
     }
 
-    public ZLinkActorHandoffCaptureResult TryCapture(
+    // Generic state overload so per-frame call sites can use a cached static
+    // lambda instead of allocating a closure over (runtime, frame) per frame.
+    public ZLinkActorHandoffCaptureResult TryCapture<TState>(
         ZLinkSpotActorFrame frame,
-        Action? prepareCapture = null)
+        TState prepareState,
+        Action<TState, ZLinkSpotActorFrame>? prepareCapture)
     {
         lock (_gate)
         {
@@ -370,7 +373,7 @@ internal sealed class ZLinkActorHandoffState(
                     $"Actor '{actorId}' cannot accept a direct request without "
                     + "an exact ingress request-source fence.");
 
-            prepareCapture?.Invoke();
+            prepareCapture?.Invoke(prepareState, frame);
             var captured = ZLinkActorHandoffFrames.Capture(frame, _arrivalIndex);
             var encodedBytes = capturesSourceIngress || capturesTargetIngress
                 ? ZLinkActorHandoffFrames.CanonicalEncodedLength(

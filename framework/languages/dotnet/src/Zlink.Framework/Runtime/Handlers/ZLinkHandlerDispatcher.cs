@@ -41,13 +41,9 @@ internal sealed class ZLinkHandlerDispatcher(
                 return await ZLinkHandlerInvocationEngine.InvokeAsync(
                         handler,
                         descriptor.Invoker,
-                        3,
-                        arguments =>
-                        {
-                            arguments[0] = message;
-                            arguments[1] = context;
-                            arguments[2] = ct;
-                        })
+                        message,
+                        context,
+                        ct)
                     .ConfigureAwait(false);
             },
             cancellationToken);
