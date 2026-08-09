@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <cstdlib>
 #include <vector>
 
 namespace perf
@@ -20,10 +22,15 @@ struct latency_sampler_stats_t
 class latency_sampler_t
 {
   public:
-    explicit latency_sampler_t (size_t reserve_hint = 200000) : _count (0), _sum (0.0)
+    explicit latency_sampler_t (size_t = 0) :
+        _count (0),
+        _sum (0.0),
+        _sample_cap (resolve_sample_cap ()),
+        _samples_seen (0),
+        _rng (0xA341316Cu)
     {
-        if (reserve_hint > 0)
-            _samples.reserve (reserve_hint);
+        if (_sample_cap > 0)
+            _samples.reserve (_sample_cap);
     }
 
     void add (double latency_ns)
@@ -31,20 +38,27 @@ class latency_sampler_t
         const double sample = latency_ns >= 0.0 ? latency_ns : 0.0;
         ++_count;
         _sum += sample;
-        _samples.push_back (sample);
+        add_sample (sample);
     }
 
-    void merge_from (const latency_sampler_t &other)
+    void reset ()
     {
-        if (other._count == 0)
-            return;
-
-        _sum += other._sum;
-        _count += other._count;
-        _samples.insert (_samples.end (), other._samples.begin (), other._samples.end ());
+        _count = 0;
+        _sum = 0.0;
+        _samples_seen = 0;
+        _rng = 0xA341316Cu;
+        _samples.clear ();
     }
 
     unsigned long long count () const { return _count; }
+    double sum_ns () const { return _sum; }
+
+    void append_samples (std::vector<double> *out_) const
+    {
+        if (!out_ || _samples.empty ())
+            return;
+        out_->insert (out_->end (), _samples.begin (), _samples.end ());
+    }
 
     latency_sampler_stats_t snapshot ()
     {
@@ -62,10 +76,6 @@ class latency_sampler_t
         std::sort (_samples.begin (), _samples.end ());
         out.p95_ns = percentile (_samples, 0.95);
         out.p99_ns = percentile (_samples, 0.99);
-        if (out.p95_ns < out.mean_ns)
-            out.p95_ns = out.mean_ns;
-        if (out.p99_ns < out.p95_ns)
-            out.p99_ns = out.p95_ns;
         return out;
     }
 
@@ -86,8 +96,45 @@ class latency_sampler_t
         return values[lo] + (values[hi] - values[lo]) * frac;
     }
 
+    static size_t resolve_sample_cap ()
+    {
+        const char *value = std::getenv ("PERF_MULTI_LATENCY_SAMPLE_CAP");
+        if (!value || !*value)
+            return 65536;
+
+        char *end = NULL;
+        const unsigned long long parsed = std::strtoull (value, &end, 10);
+        if (!end || *end != '\0')
+            return 65536;
+        return static_cast<size_t> (parsed);
+    }
+
+    uint32_t next_random ()
+    {
+        _rng = (_rng * 1664525u) + 1013904223u;
+        return _rng;
+    }
+
+    void add_sample (double sample_)
+    {
+        ++_samples_seen;
+        if (_sample_cap == 0)
+            return;
+        if (_samples.size () < _sample_cap) {
+            _samples.push_back (sample_);
+            return;
+        }
+
+        const unsigned long long slot = next_random () % _samples_seen;
+        if (slot < _samples.size ())
+            _samples[static_cast<size_t> (slot)] = sample_;
+    }
+
     unsigned long long _count;
     double _sum;
+    size_t _sample_cap;
+    unsigned long long _samples_seen;
+    uint32_t _rng;
     std::vector<double> _samples;
 };
 
