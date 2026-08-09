@@ -10,6 +10,7 @@ SAMPLE_RUNNERS=(
   SupportChat/run_sample.sh
   GameQuest/run_sample.sh
   ShoppingMall/run_sample.sh
+  ZoneWorld/run_sample.sh
 )
 
 SELECTED_RUNNERS=()

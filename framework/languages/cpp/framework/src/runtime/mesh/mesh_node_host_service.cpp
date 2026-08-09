@@ -2459,7 +2459,9 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                 .object_kind =
                   placement_object_kind_t::user_spot,
                 .stable_type = stable_type,
-                .usage = {}});
+                .usage = {
+                  .limit = registration->spot_state->spot_stable_type_limits.at (
+                    stable_type)}});
         }
         for (const auto &stable_type :
              registration->spot_state->snapshot.instance_spot_names) {
@@ -2490,7 +2492,9 @@ void mesh_node_host_service_t::start (service_provider_t &services)
               spot_type_capacity_t{
                 .object_kind = placement_object_kind_t::instance_spot,
                 .stable_type = stable_type,
-                .usage = {}});
+                .usage = {
+                  .limit = registration->spot_state->spot_stable_type_limits.at (
+                    stable_type)}});
         }
         std::sort (
           descriptor.object_capabilities.begin (),

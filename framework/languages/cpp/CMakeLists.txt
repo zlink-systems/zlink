@@ -2293,6 +2293,31 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES)
     zlink::http_client
     zlink::stream_connector
     zlink::stream_e2e_client)
+  add_zlink_framework_sample(
+    sample_cpp_framework_zoneworld_zone_node
+    samples/ZoneWorld/Server/ZoneNode/main.cpp
+    "framework-sample-zoneworld;framework-sample-zone-node"
+    zlink::framework
+    zlink::framework_locations_redis)
+  add_zlink_framework_sample(
+    sample_cpp_framework_zoneworld_gateway
+    samples/ZoneWorld/Server/Gateway/main.cpp
+    "framework-sample-zoneworld;framework-sample-gateway"
+    zlink::framework
+    zlink::framework_locations_redis
+    zlink::stream_connector)
+  add_zlink_framework_sample(
+    sample_cpp_framework_zoneworld_ops
+    samples/ZoneWorld/Server/Ops/main.cpp
+    "framework-sample-zoneworld;framework-sample-ops"
+    zlink::framework
+    zlink::framework_locations_redis
+    zlink::stream_connector)
+  add_executable(sample_cpp_framework_zoneworld_client
+    samples/ZoneWorld/Client/main.cpp)
+  target_link_libraries(sample_cpp_framework_zoneworld_client PRIVATE
+    zlink::stream_connector
+    zlink::stream_e2e_client)
 
   function(add_zlink_framework_sample_runner sample_name labels timeout_seconds)
     add_test(
@@ -2329,6 +2354,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES)
     SupportChat
     "framework-sample-supportchat;framework-sample-api;framework-sample-session;framework-sample-support"
     240)
+  add_zlink_framework_sample_runner(
+    ZoneWorld
+    "framework-sample-zoneworld;framework-sample-gateway;framework-sample-zone-node;framework-sample-ops"
+    420)
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS AND ZLINK_FRAMEWORK_CPP_ENABLE_COVERAGE)
