@@ -19,12 +19,6 @@ bool perf_debug_enabled ()
     return std::getenv ("PERF_DEBUG") != NULL;
 }
 
-zlink::routing_id_t routing_id_from_ascii (const char *value_)
-{
-    return zlink::routing_id_t::from (reinterpret_cast<const uint8_t *> (value_),
-                                      std::strlen (value_));
-}
-
 struct router_router_recv_state_t
 {
     router_router_recv_state_t () : run_id (0), msg_size (0), payload_size (0), latency () {}
@@ -35,87 +29,6 @@ struct router_router_recv_state_t
     std::optional<zlink::routing_id_t> target_rid;
     perf::single::latency_stats_builder_t latency;
 };
-
-bool complete_handshake (::perf::socket_t &receiver,
-                         ::perf::socket_t &sender,
-                         zlink::routing_id_t *target_rid_out_)
-{
-    zlink::routing_id_t receiver_rid = routing_id_from_ascii (k_receiver_id);
-
-    const auto deadline = std::chrono::steady_clock::now ()
-                          + std::chrono::milliseconds (perf::single::parse_positive_env (
-                            "PERF_ROUTER_HANDSHAKE_TIMEOUT_MS", 3000));
-    bool connected = false;
-    std::optional<zlink::routing_id_t> sender_actual_rid;
-    zlink::poller_t poller;
-    receiver.poller_add (poller, zlink::poll_event_flag_t::pollin);
-    while (!connected && std::chrono::steady_clock::now () < deadline) {
-        zlink::message_t outbound = zlink::message_t::from ("PING");
-        if (!outbound.valid ())
-            return false;
-
-        if (perf::send_socket (sender, receiver_rid, outbound,
-                               static_cast<int> (zlink::send_flags_t::dontwait))
-            != 0) {
-            const int err = errno;
-            if (err != EAGAIN && err != EINTR && err != EHOSTUNREACH && err != ENOTCONN) {
-                if (perf_debug_enabled ())
-                    std::cerr << "router_router: handshake request failed errno=" << err
-                              << std::endl;
-                return false;
-            }
-        } else {
-            for (;;) {
-                zlink::received_t inbound;
-                if (receiver.receive (inbound, static_cast<int> (zlink::send_flags_t::dontwait))
-                    != 0) {
-                    if (errno == EAGAIN || errno == EINTR)
-                        break;
-                    if (perf_debug_enabled ())
-                        std::cerr << "router_router: handshake receive failed errno=" << errno
-                                  << std::endl;
-                    return false;
-                }
-                connected = inbound.routing_id ().has_value () && inbound.parts ().size () == 1
-                            && inbound.parts ()[0].to_string () == "PING";
-                if (connected) {
-                    sender_actual_rid = *inbound.routing_id ();
-                    break;
-                }
-            }
-        }
-
-        if (!connected) {
-            zlink::poll_event_t event;
-            (void) poller.wait (&event, 1, std::chrono::milliseconds (-1));
-        }
-    }
-
-    if (!connected || !sender_actual_rid.has_value ())
-        return false;
-
-    zlink::message_t reply = zlink::message_t::from ("PONG");
-    if (!reply.valid () || perf::send_socket (receiver, *sender_actual_rid, reply) != 0) {
-        if (perf_debug_enabled ())
-            std::cerr << "router_router: handshake reply send failed errno=" << errno << std::endl;
-        return false;
-    }
-
-    zlink::received_t response;
-    if (sender.receive (response, 0) != 0) {
-        if (perf_debug_enabled ())
-            std::cerr << "router_router: handshake response recv failed errno=" << errno
-                      << std::endl;
-        return false;
-    }
-    const bool ok = response.routing_id ().has_value () && response.parts ().size () == 1
-                    && response.parts ()[0].to_string () == "PONG";
-    if (ok && target_rid_out_)
-        *target_rid_out_ = *response.routing_id ();
-    if (!ok && perf_debug_enabled ())
-        std::cerr << "router_router: handshake response failed errno=" << errno << std::endl;
-    return ok;
-}
 
 bool record_router_router_sample (uint32_t run_id_,
                                   size_t msg_size_,
@@ -228,10 +141,11 @@ bool run_pattern_router_router (const std::string &transport,
     }
 
     router_router_recv_state_t state;
-    state.target_rid = routing_id_from_ascii (k_receiver_id);
+    state.target_rid = zlink::routing_id_t::from (std::string (k_receiver_id));
     if (!perf::single::setup_connected_pair (receiver.sock (), sender.sock (), transport,
                                              lib_name + "_router_router")
-        || !complete_handshake (receiver.sock (), sender.sock (), &(*state.target_rid))) {
+        || !perf::single::complete_router_router_handshake (
+          receiver.sock (), sender.sock (), *state.target_rid, &(*state.target_rid))) {
         perf::single::print_fail_result (lib_name, "ROUTER_ROUTER", transport, msg_size);
         return false;
     }

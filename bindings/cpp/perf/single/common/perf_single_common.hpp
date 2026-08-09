@@ -16,6 +16,7 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <optional>
 #include <span>
 #include <string>
 #include <thread>
@@ -272,6 +273,82 @@ bool setup_connected_pair (BindSocketLike &bind_socket_,
     }
     return true;
 }
+
+// Performs the one-shot routed self-check required by the C single runner.
+// It validates both the peer route observed by the receiver and the return
+// route used by the sender before the measured request/reply phase starts.
+inline bool complete_router_router_handshake (perf_socket_t &receiver_,
+                                              perf_socket_t &sender_,
+                                              const zlink::routing_id_t &receiver_rid_,
+                                              zlink::routing_id_t *target_rid_out_ = nullptr)
+{
+    const auto deadline = std::chrono::steady_clock::now ()
+                          + std::chrono::milliseconds (parse_positive_env (
+                            "PERF_ROUTER_HANDSHAKE_TIMEOUT_MS", 3000));
+    bool connected = false;
+    std::optional<zlink::routing_id_t> sender_actual_rid;
+    zlink::poller_t poller;
+    try {
+        receiver_.poller_add (poller, zlink::poll_event_flag_t::pollin);
+    }
+    catch (const zlink::binding_error_t &) {
+        return false;
+    }
+
+    while (!connected && std::chrono::steady_clock::now () < deadline) {
+        zlink::message_t outbound = zlink::message_t::from ("PING");
+        if (!outbound.valid ())
+            return false;
+
+        if (perf::send_socket (sender_, receiver_rid_, outbound,
+                               static_cast<int> (zlink::send_flags_t::dontwait))
+            != 0) {
+            const int err = errno;
+            if (err != EAGAIN && err != EINTR && err != EHOSTUNREACH && err != ENOTCONN)
+                return false;
+        } else {
+            for (;;) {
+                zlink::received_t inbound;
+                if (receiver_.receive (inbound,
+                                       static_cast<int> (zlink::send_flags_t::dontwait))
+                    != 0) {
+                    if (errno == EAGAIN || errno == EINTR)
+                        break;
+                    return false;
+                }
+                if (inbound.routing_id ().has_value () && inbound.parts ().size () == 1
+                    && inbound.parts ()[0].to_string () == "PING") {
+                    sender_actual_rid = *inbound.routing_id ();
+                    connected = true;
+                    break;
+                }
+            }
+        }
+
+        if (!connected) {
+            zlink::poll_event_t event;
+            (void) poller.wait (&event, 1, std::chrono::milliseconds (-1));
+        }
+    }
+
+    if (!connected || !sender_actual_rid.has_value ())
+        return false;
+
+    zlink::message_t reply = zlink::message_t::from ("PONG");
+    if (!reply.valid () || perf::send_socket (receiver_, *sender_actual_rid, reply) != 0)
+        return false;
+
+    zlink::received_t response;
+    if (sender_.receive (response, 0) != 0)
+        return false;
+    const bool ok = response.routing_id ().has_value ()
+                    && *response.routing_id () == receiver_rid_ && response.parts ().size () == 1
+                    && response.parts ()[0].to_string () == "PONG";
+    if (ok && target_rid_out_)
+        *target_rid_out_ = *response.routing_id ();
+    return ok;
+}
+
 // Migrated to unified perf::wait_socket_monitor_event in
 // common/perf_monitor_wait.hpp.
 using ::perf::wait_socket_monitor_event;

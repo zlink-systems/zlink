@@ -94,6 +94,8 @@ inline bool run_reqrep_pattern (const reqrep_config_t &config_,
         || !setup_connected_pair (server.sock (), client.sock (), transport_,
                                   lib_name_ + "_" + config_.pattern))
         return false;
+    if (!complete_router_router_handshake (server.sock (), client.sock (), server_rid))
+        return false;
 
     const size_t payload_size = std::max<size_t> (msg_size_, perf_single_metric::header_size ());
     std::vector<char> payload (payload_size, 'r');
@@ -206,10 +208,10 @@ inline bool run_reqrep_pattern (const reqrep_config_t &config_,
                 const bool ok = config_.routed_request
                                   ? client.sock ().request (
                                       server_rid, part, std::chrono::milliseconds (request_timeout_ms),
-                                      static_cast<int> (zlink::send_flags_t::dontwait), callback)
+                                      static_cast<int> (zlink::send_flags_t::none), callback)
                                   : client.sock ().request (
                                       part, std::chrono::milliseconds (request_timeout_ms),
-                                      static_cast<int> (zlink::send_flags_t::dontwait), callback);
+                                      static_cast<int> (zlink::send_flags_t::none), callback);
                 if (!ok) {
                     state.in_flight.fetch_sub (1, std::memory_order_release);
                     break;

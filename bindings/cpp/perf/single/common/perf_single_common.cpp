@@ -145,12 +145,12 @@ size_t resolve_single_latency_sample_cap ()
 {
     const char *value = std::getenv ("PERF_SINGLE_LATENCY_SAMPLE_CAP");
     if (!value || !*value)
-        return 1000000;
+        return 4000000;
 
     char *end = nullptr;
     const unsigned long long parsed = std::strtoull (value, &end, 10);
     if (!end || *end != '\0')
-        return 1000000;
+        return 4000000;
     return static_cast<size_t> (parsed);
 }
 
