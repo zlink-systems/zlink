@@ -175,12 +175,31 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
             }
             pair_application = pair.application;
         }
+        //  reject_pipes[1] and [2] were read out of the table, and the table
+        //  slot is the only thing that keeps them alive: the sibling lane's
+        //  own pipe_terminated clears its slot under this same mutex and then
+        //  finishes process_pipe_term_ack, which deallocates it. Both can run
+        //  on a second mailbox executor while this attach is in flight, so pin
+        //  them here - where a non-NULL slot still proves liveness - and drop
+        //  the pins once terminate() has run below. reject_pipes[0] is the
+        //  pipe being attached and is owned by this call, so it needs no pin.
+        for (size_t i = 1; i < 3; ++i) {
+            if (reject_pipes[i] && !reject_pipes[i]->retain_lifetime_ref ())
+                reject_pipes[i] = NULL;
+        }
     }
 
     if (reject_pipes[0]) {
         for (size_t i = 0; i < 3; ++i) {
             if (reject_pipes[i])
                 reject_pipes[i]->terminate (false);
+        }
+        //  A failed retain above left the slot NULL, which is behaviourally
+        //  identical: that lane already completed its own termination and
+        //  terminate() would have returned immediately.
+        for (size_t i = 1; i < 3; ++i) {
+            if (reject_pipes[i])
+                reject_pipes[i]->release_lifetime_ref ();
         }
         return;
     }
@@ -791,9 +810,15 @@ zlink::socket_base_t::completion_pipe_for_application (pipe_t *application_pipe_
       application_pipe_->get_transport_pair_generation ());
     scoped_lock_t lock (_transport_pairs_sync);
     transport_pairs_t::const_iterator it = _transport_pairs.find (pair_key);
-    return it == _transport_pairs.end () || !it->second.ready
-             ? NULL
-             : it->second.completion;
+    if (it == _transport_pairs.end () || !it->second.ready)
+        return NULL;
+    //  The caller dereferences the result after this mutex is dropped, and
+    //  the table slot is what keeps the pipe alive: the lane's own
+    //  pipe_terminated clears the slot under this mutex and only afterwards
+    //  finishes process_pipe_term_ack, which deallocates it. Pin the pipe
+    //  while the slot still proves liveness; the caller releases the pin.
+    pipe_t *completion = it->second.completion;
+    return completion && completion->retain_lifetime_ref () ? completion : NULL;
 }
 
 zlink::pipe_t *
@@ -806,10 +831,14 @@ zlink::socket_base_t::application_pipe_for_completion (pipe_t *completion_pipe_)
       completion_pipe_->get_transport_pair_generation ());
     scoped_lock_t lock (_transport_pairs_sync);
     transport_pairs_t::const_iterator it = _transport_pairs.find (pair_key);
-    return it == _transport_pairs.end () || !it->second.ready
-             || it->second.completion != completion_pipe_
-             ? NULL
-             : it->second.application;
+    if (it == _transport_pairs.end () || !it->second.ready
+        || it->second.completion != completion_pipe_)
+        return NULL;
+    //  Pinned for the same reason as completion_pipe_for_application; the
+    //  caller releases the pin after its last dereference.
+    pipe_t *application = it->second.application;
+    return application && application->retain_lifetime_ref () ? application
+                                                              : NULL;
 }
 
 zlink::pipe_t *
@@ -836,7 +865,9 @@ zlink::socket_base_t::completion_pipe_for_peer (const zlink_routing_id_t *peer_r
             selected_generation = it->first.second;
         }
     }
-    return selected;
+    //  Pinned for the same reason as completion_pipe_for_application; the
+    //  caller releases the pin after its last dereference.
+    return selected && selected->retain_lifetime_ref () ? selected : NULL;
 }
 
 zlink::pipe_t *zlink::socket_base_t::completion_pipe_for_transport_pair (
