@@ -3543,7 +3543,20 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 + actorSummary(binding.actor())
                 + " session=" + binding.sessionRid()
                 + " binding=" + binding.bindingGeneration()
-                + " reason=route-or-binding-fence");
+                + " reason=route-or-binding-fence"
+                + " peerPresent=" + peer.isPresent()
+                + " peerGeneration=" + peer.map(value ->
+                    value.descriptor().lifecycleGeneration()).orElse(-1L)
+                + " expectedOwnerGeneration="
+                + binding.sessionOwnerNodeGeneration()
+                + " ready=" + isReadyPeer(binding.sessionOwnerNodeRid())
+                + " localDescriptor=" + (localDescriptor != null)
+                + " currentBoundActor=" + ((ZLinkJavaRawSpotNode) spotNode())
+                    .isCurrentBoundActor(binding.actor())
+                + " localAuthority=" + ((ZLinkJavaRawSpotNode) spotNode())
+                    .actorAuthorityOwnerGeneration(binding.actor())
+                + " bindingAuthority=" + binding.authorityOwnerGeneration()
+                + " ownerLease=" + ownerLeaseGeneration);
             return false;
         }
         List<byte[]> frames = List.of(
@@ -4429,6 +4442,15 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
         completion.whenComplete((ack, failure) -> {
             if (failure != null || ack == null) {
+                Throwable cause = failure == null ? null : unwrap(failure);
+                String diagnostic = "relocation-reply-relay-failed source="
+                    + inbound.source()
+                    + " error=" + (cause == null
+                        ? "missing-ack"
+                        : cause.getClass().getSimpleName() + ": "
+                            + String.valueOf(cause.getMessage()));
+                LOGGER.warning(diagnostic);
+                streamTrace(diagnostic);
                 return;
             }
             try {
@@ -4531,6 +4553,16 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
         completion.whenComplete((ack, failure) -> {
             if (failure != null || ack == null) {
+                Throwable cause = failure == null ? null : unwrap(failure);
+                String diagnostic = "session-route-handler-failed source="
+                    + inbound.source()
+                    + " request=" + inbound.requestSequence()
+                    + " error=" + (cause == null
+                        ? "missing-ack"
+                        : cause.getClass().getSimpleName() + ": "
+                            + String.valueOf(cause.getMessage()));
+                LOGGER.warning(diagnostic);
+                streamTrace(diagnostic);
                 return;
             }
             try {
@@ -4542,6 +4574,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     List.of(ack));
             } catch (RuntimeException invalid) {
                 // Invalid ACKs never cross the infrastructure boundary.
+                streamTrace("session-route-ack-invalid source="
+                    + inbound.source() + " error=" + invalid.getMessage());
             }
         });
     }

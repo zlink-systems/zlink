@@ -3,6 +3,7 @@ import java.util.concurrent.CompletionStage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -64,6 +65,32 @@ final class ZLinkActorContextStateRelocationTest {
         assertEquals(binding, sealed.bindingGeneration());
         assertEquals(1, sealed.sessionSequence());
         assertEquals(1, state.boundSessionSourceSnapshot().sessionSequence());
+    }
+
+    @Test
+    void importsSessionOwnerFenceAcrossTargetBindingRecreation() {
+        RoutingId actorNode = RoutingId.from("actor-node");
+        RoutingId sessionOwner = RoutingId.from("session-owner");
+        RoutingId session = RoutingId.from("session-a");
+        var state = new ZLinkActorContextState(
+            new ZLinkBackendActorRef(actorNode, "actor-a", 7),
+            "mesh",
+            "entry-a");
+
+        state.bindSession(new TestBoundSession(), sessionOwner, session);
+        long localBindingToken = state.bindSession(
+            new TestBoundSession(),
+            sessionOwner,
+            session,
+            41,
+            9);
+
+        var imported = state.boundSessionSourceSnapshot();
+        assertEquals(41, imported.bindingGeneration());
+        assertEquals(9, imported.sessionSequence());
+        assertNotEquals(41, localBindingToken);
+        assertEquals(10, state.nextBoundSessionSource().sessionSequence());
+        assertTrue(state.clearBoundSession(localBindingToken));
     }
 
     @Test

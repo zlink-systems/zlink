@@ -298,9 +298,12 @@ final class ZLinkSessionActorBindingContractTest {
         assertEquals(7, actor.ref().objectGeneration());
         assertEquals(10, ack.currentAuthorityOwnerGeneration());
         assertEquals(17, ack.lastAcceptedSessionSequence());
-        assertThrows(CompletionException.class,
-            () -> runtime.applyRelocationRouteCommand(command)
-                .toCompletableFuture().join());
+        //  Spec 20 §5: the session owner must answer a retransmitted command
+        //  44 with the same result instead of failing the source-fence CAS,
+        //  or a lost command 45 leaves the target retrying forever.
+        var replay = runtime.applyRelocationRouteCommand(command)
+            .toCompletableFuture().join();
+        assertEquals(ack, replay);
     }
 
     private static ZLinkSessionActorsRuntime runtime(FakeStream stream) {

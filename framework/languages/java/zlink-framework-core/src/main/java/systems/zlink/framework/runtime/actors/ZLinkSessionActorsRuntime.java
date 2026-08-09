@@ -493,7 +493,21 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         if (observed == null || !observed.matchesSource(update)) {
             return CompletableFuture.failedFuture(new ZLinkConfigurationException(
                 "stored binding route does not match relocation source: "
-                    + update.actorId()));
+                    + update.actorId()
+                    + (observed == null
+                        ? " observed=none"
+                        : " observedNode=" + observed.nodeRid()
+                            + " observedAuthority="
+                            + observed.authorityOwnerGeneration()
+                            + " observedBinding=" + observed.bindingGeneration()
+                            + " observedSeq="
+                            + observed.lastAcceptedSessionSequence()
+                            + " sourceNode=" + update.sourceNodeRid()
+                            + " sourceAuthority="
+                            + update.sourceAuthorityOwnerGeneration()
+                            + " updateBinding=" + update.bindingGeneration()
+                            + " updateSeq="
+                            + update.lastAcceptedSessionSequence())));
         }
         ZLinkBackendActorRef target = new ZLinkBackendActorRef(
             update.targetNodeRid(),
@@ -553,33 +567,117 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 "Session relocation route command does not target this Session"));
         }
         StoredBindingRoute observed = bindingRoutes.get(command.actor().actorId());
+        //  Idempotent retransmit (AlreadyApplied): a command 44 whose target
+        //  route this owner already installed must re-ACK instead of failing
+        //  the source-fence CAS, or a lost command 45 leaves the target
+        //  retrying forever (spec 20 §5 idempotency).
+        if (observed != null
+            && observed.bindingGeneration()
+                == command.session().bindingGeneration()
+            && observed.objectGeneration() == command.actor().generation()
+            && observed.nodeRid().equals(command.targetNodeRid())
+            && observed.authorityOwnerGeneration()
+                == command.currentAuthorityOwnerGeneration()) {
+            LOGGER.warning("[zlink-java-stream-trace] session-route already-applied"
+                + " actor=" + command.actor().actorId()
+                + " target=" + command.targetNodeRid()
+                + " authority=" + command.currentAuthorityOwnerGeneration());
+            return CompletableFuture.completedFuture(echoRouted(command));
+        }
         if (observed == null
             || observed.bindingGeneration()
                 != command.session().bindingGeneration()
             || observed.lastAcceptedSessionSequence()
                 > command.lastAcceptedSessionSequence()) {
-            return CompletableFuture.failedFuture(new ZLinkConfigurationException(
-                "Session relocation route command has a stale binding fence"));
+            LOGGER.warning(staleFenceDiagnostic(command, observed));
+            return CompletableFuture.completedFuture(rejectedRouted(command));
         }
-        RelocationRouteUpdate update = new RelocationRouteUpdate(
-            command.actor().actorId(),
-            command.actor().generation(),
-            observed.nodeRid(),
-            command.targetNodeRid(),
-            command.targetNodeGeneration(),
-            command.previousAuthorityOwnerGeneration(),
-            command.currentAuthorityOwnerGeneration(),
-            command.session().bindingGeneration(),
-            command.lastAcceptedSessionSequence());
-        return applyRelocationRouteUpdate(update).thenApply(ignored ->
-            new ZLinkServiceM6BWireCodec.SessionRelocationRouted(
-                command.relocation(),
-                command.coordinator(),
-                command.actor(),
-                command.session(),
-                command.action(),
+        RelocationRouteUpdate update;
+        try {
+            update = new RelocationRouteUpdate(
+                command.actor().actorId(),
+                command.actor().generation(),
+                observed.nodeRid(),
+                command.targetNodeRid(),
+                command.targetNodeGeneration(),
+                command.previousAuthorityOwnerGeneration(),
                 command.currentAuthorityOwnerGeneration(),
-                command.lastAcceptedSessionSequence()));
+                command.session().bindingGeneration(),
+                command.lastAcceptedSessionSequence());
+        } catch (RuntimeException invalid) {
+            LOGGER.warning(staleFenceDiagnostic(command, observed)
+                + " reason=" + invalid.getMessage());
+            return CompletableFuture.completedFuture(rejectedRouted(command));
+        }
+        return applyRelocationRouteUpdate(update).handle((ignored, failure) -> {
+            if (failure == null) {
+                return CompletableFuture.completedFuture(echoRouted(command));
+            }
+            Throwable cause = failure;
+            while (cause instanceof CompletionException && cause.getCause() != null) {
+                cause = cause.getCause();
+            }
+            if (cause instanceof ZLinkConfigurationException) {
+                //  Source-fence mismatch is terminal for this command: the
+                //  stored route diverged, so retransmitting the same fence can
+                //  never succeed. Reply the rejection so the target stops.
+                LOGGER.warning(staleFenceDiagnostic(command,
+                        bindingRoutes.get(command.actor().actorId()))
+                    + " reason=" + cause.getMessage());
+                return CompletableFuture.completedFuture(rejectedRouted(command));
+            }
+            //  Transient failures (route-ready timeout, relay submit) stay
+            //  unreplied; the target retries the same fence.
+            return CompletableFuture.<ZLinkServiceM6BWireCodec
+                .SessionRelocationRouted>failedFuture(failure);
+        }).thenCompose(stage -> stage);
+    }
+
+    private static ZLinkServiceM6BWireCodec.SessionRelocationRouted echoRouted(
+        ZLinkServiceM6BWireCodec.SessionRelocationRoute command) {
+        return new ZLinkServiceM6BWireCodec.SessionRelocationRouted(
+            command.relocation(),
+            command.coordinator(),
+            command.actor(),
+            command.session(),
+            command.action(),
+            command.currentAuthorityOwnerGeneration(),
+            command.lastAcceptedSessionSequence());
+    }
+
+    //  Rejection ACK: echoes the command identity with the action flipped to
+    //  ABORT. The target treats an action flip as the spec `Stale` result -
+    //  terminal for this relocation's route command.
+    private static ZLinkServiceM6BWireCodec.SessionRelocationRouted rejectedRouted(
+        ZLinkServiceM6BWireCodec.SessionRelocationRoute command) {
+        return new ZLinkServiceM6BWireCodec.SessionRelocationRouted(
+            command.relocation(),
+            command.coordinator(),
+            command.actor(),
+            command.session(),
+            ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.ABORT,
+            command.currentAuthorityOwnerGeneration(),
+            command.lastAcceptedSessionSequence());
+    }
+
+    private static String staleFenceDiagnostic(
+        ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
+        StoredBindingRoute observed) {
+        return "[zlink-java-stream-trace] session-route stale-fence rejected"
+            + " actor=" + command.actor().actorId()
+            + " commandBinding=" + command.session().bindingGeneration()
+            + " commandSeq=" + command.lastAcceptedSessionSequence()
+            + " commandPrevAuthority=" + command.previousAuthorityOwnerGeneration()
+            + " commandTargetAuthority=" + command.currentAuthorityOwnerGeneration()
+            + " commandTarget=" + command.targetNodeRid()
+            + " commandGeneration=" + command.actor().generation()
+            + (observed == null
+                ? " observed=none"
+                : " observedBinding=" + observed.bindingGeneration()
+                    + " observedSeq=" + observed.lastAcceptedSessionSequence()
+                    + " observedAuthority=" + observed.authorityOwnerGeneration()
+                    + " observedNode=" + observed.nodeRid()
+                    + " observedGeneration=" + observed.objectGeneration());
     }
 
     record RelocationRouteUpdate(

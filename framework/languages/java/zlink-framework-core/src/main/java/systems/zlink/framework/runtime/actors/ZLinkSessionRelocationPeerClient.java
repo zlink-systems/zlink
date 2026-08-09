@@ -93,11 +93,22 @@ public final class ZLinkSessionRelocationPeerClient {
                         command.session().nodeRid(), command44, timeout)
                     .thenApply(codec::decodeSessionRelocationRouted),
                 ZLinkSessionRelocationPeerClient::isRouteNotConnected)
-            .thenCompose(ack -> validateAck(command, ack)
-                ? CompletableFuture.completedFuture(ack)
-                : CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                        "command 45 ACK differs from command 44 fence")));
+            .thenCompose(ack -> {
+                if (ack.action() != command.action()) {
+                    //  The session owner replied with the action flipped: the
+                    //  spec `Stale` result. This relocation's route command
+                    //  was superseded - terminal, stop retrying.
+                    return CompletableFuture.failedFuture(
+                        new ZLinkConfigurationException(
+                            "session owner rejected command 44 with a "
+                                + "stale binding fence"));
+                }
+                return validateAck(command, ack)
+                    ? CompletableFuture.completedFuture(ack)
+                    : CompletableFuture.failedFuture(
+                        new ZLinkConfigurationException(
+                            "command 45 ACK differs from command 44 fence"));
+            });
     }
 
     private static boolean isRouteNotConnected(Throwable error) {

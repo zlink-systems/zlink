@@ -31,6 +31,7 @@ import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinRequest;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
 
@@ -44,6 +45,11 @@ final class ZLinkActorSpotAdmission {
     private record CommittedJoin(
         ZLinkActorRuntime.PreparedTransferredActor prepared,
         long authorityOwnerGeneration) {
+    }
+
+    private record BoundSessionFence(
+        long bindingGeneration,
+        long lastAcceptedSessionSequence) {
     }
 
     private ZLinkActorRuntime actors;
@@ -615,9 +621,7 @@ final class ZLinkActorSpotAdmission {
                 new ZLinkConfigurationException(
                     "bound Session relocation route runtime is unavailable"));
         }
-        var codec =
-            new systems.zlink.framework.runtime.internal.service
-                .ZLinkServiceM6BWireCodec();
+        var codec = new ZLinkServiceM6BWireCodec();
         var intent = codec.decodeSessionRelocationRouteIntent(command44);
         UUID relocationId =
             UUID.fromString(request.transferId());
@@ -665,12 +669,15 @@ final class ZLinkActorSpotAdmission {
         ZLinkInternalSpotNode primaryNode) {
         ZLinkActorSpotRoutePackets.TransferRequest request = pending.request();
         if (request.hasSourceSessionRoute()) {
+            BoundSessionFence fence = boundSessionFence(request);
             return runtime.bindNativeSession(
                 actor,
                 primaryNode,
                 actorRef,
                 request.sourceNodeRid(),
-                request.sourceSessionRid());
+                request.sourceSessionRid(),
+                fence.bindingGeneration(),
+                fence.lastAcceptedSessionSequence());
         }
         if (pending.routeChannelName() != null || pending.sourcePeerRid() != null) {
             return runtime.bindRoutedSession(
@@ -683,6 +690,20 @@ final class ZLinkActorSpotAdmission {
                 request.actorRef());
         }
         return runtime.bindNativeSession(actor, primaryNode, actorRef);
+    }
+
+    private static BoundSessionFence boundSessionFence(
+        ZLinkActorSpotRoutePackets.TransferRequest request) {
+        byte[] command44 = request.sessionRouteCommand44();
+        if (command44.length == 0) {
+            return new BoundSessionFence(0, 0);
+        }
+        ZLinkServiceM6BWireCodec.SessionRelocationRouteIntent intent =
+            new ZLinkServiceM6BWireCodec()
+                .decodeSessionRelocationRouteIntent(command44);
+        return new BoundSessionFence(
+            intent.session().bindingGeneration(),
+            intent.lastAcceptedSessionSequence());
     }
 
     private static CompletionStage<ZLinkSpotActorJoinResult> invokeAdmissionCallback(

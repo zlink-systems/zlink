@@ -356,7 +356,14 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                 timeout.toMillis(),
                 TimeUnit.MILLISECONDS)
             .handle((ignored, notifyError) -> notifyError)
-            .thenCompose(notifyError -> stream.unbindActor(sessionRid, ref.actorId())
+            //  The disconnect notification can complete inline inside the
+            //  transport's reply callback, still inside the native router
+            //  submit that carried it. Submitting the unbind request from that
+            //  frame re-enters the same socket while its non-reentrant public
+            //  API sync is held and livelocks the service pump (observed as a
+            //  shutdown hang that ends in SIGKILL). Always hop off the
+            //  completing thread before the unbind submit.
+            .thenComposeAsync(notifyError -> stream.unbindActor(sessionRid, ref.actorId())
                 .submit(timeout)
                 .handle((ignored, unbindError) -> {
                     if (notifyError != null) {
