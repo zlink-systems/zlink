@@ -101,7 +101,7 @@ production source와 unit test다. 실행 순서는 먼저 production runtime �
 | 문서 | GAP | PARTIAL | 비고 |
 |---|---:|---:|---|
 | 01-layering | 0 | 5 | relocation 재시도와 target propagation wait 종결 |
-| 02-serialization | 1 | 3 | 락 횟수, self-wait 오류 종류(source 수정 완료·E2E 검증 대기) |
+| 02-serialization | 1 | 3 | GAP 1건은 `CPP-EXEC-001` 락 횟수(2026-08-09 재확인: `spot_runtime.cpp:1353-1372` admission의 중첩 2락 — sealing gate의 queue 이관 또는 lock-free 재설계가 필요한 구조 항목). self-wait 오류 종류는 source 완료·E2E 대기 |
 | 03-progress-isolation | 0 | 2 | owner HOL 블로킹과 executor 포화 process 종료 결함 종결 |
 | 04-completion | 0 | 3 | 완료 방식은 domain owner별 terminal-once 경계를 사용하며 이동 오류 분류의 검증이 남음 |
 | 05-relocation-continuity | 0 | 3 | 오류 종류 축약 |
@@ -110,7 +110,7 @@ production source와 unit test다. 실행 순서는 먼저 production runtime �
 | 08-object-lifecycle | 0 | 3 | generation 필터링과 Ready owner loss 판정 |
 | 09-session-binding | 0 | 4 | command 36/38·51 구현과 callback/timer 경로는 있으나 전체 conformance matrix 검증 중 |
 | 10-liveness-and-state | 0 | 1 | `CPP-OBS-002` 종결 |
-| 11-message-ownership | 0 | 8 | 복사/보관 규율 전반 미준수. `CPP-OWN-005` 종결 |
+| 11-message-ownership | 0 | 8 | 2026-08-09 재검증: "전반 미준수"는 stale — OWN-001/002/004/006/007/009는 현재 source 준수 확인(증거 대기), 잔존은 OWN-003(relocation 경계의 payload 이중 보관, 재구조화 필요)과 OWN-008(erased outbound 경로의 map find×2 — 해소에 public serializer 계약 변경 필요)뿐. `CPP-OWN-005` 종결 |
 | 12-service-wire-protocol | 0 | 7 | 스토어 키 포맷, json-v1 프로파일, Base64 source 구현 완료·cross-language 검증 대기 |
 | **internals 소계** | **1** | **45** | source 수정 완료 항목은 E2E·package 증거 부족이면 PARTIAL로 유지함 |
 | C++ exact public interface | 0 | 0 | diagnostics 2건, object query, STREAM timeout, Client role 오류와 HTTP builder 종결 |

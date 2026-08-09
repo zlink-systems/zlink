@@ -143,13 +143,13 @@ production source와 unit test다. 실행 순서는 먼저 production runtime �
 | DOTNET-LAYER-004 | 중 | STREAM protocol ownership | 완료 — connector protocol 구현을 client와 Framework server가 함께 사용한다 |
 | DOTNET-OWN-001 | 중 | payload ownership/copy | 완료 — public defensive copy는 유지하고 runtime-owned payload는 내부 ownership 이전 경로를 사용한다 |
 | SPEC-TIMER-001 | 중 | timer relocation contract | 완료 — non-catch-up의 무시되는 값은 canonical 기본값으로 normalize하고 bounded 값은 보존한다 |
-| DOTNET-SESS-REPLACE-001 | 상 | 이전 session replacement callback | **BLOCKED** — runtime과 owner regression은 반영했지만 canonical protocol integration이 formal protocol 변경·승인을 요구한다 |
+| DOTNET-SESS-REPLACE-001 | 상 | 이전 session replacement callback | 완료(2026-08-09 재검증) — schema가 command 51을 정식 정의하고(`service-wire-v1.schema.json:4735-4759`, reserved는 52..255) golden·generator·validator 통합이 gate에서 통과하므로 blocker가 소멸했다 |
 | DOTNET-SESS-REPLACE-002 | 상 | replacement callback failure | 완료 — application `OperationCanceledException`과 실제 callback deadline을 분리하고 fixed 100 ms grace를 검증한다 |
 | DOTNET-SESS-REPLACE-TEST-001 | 상 | replacement lifecycle regression | 완료 — closing·send 허용·fixed timer·deadline·stale/duplicate·direct exact fence lookup·multi-Actor cleanup·admission retry를 owner layer에서 검증한다 |
 | DOTNET-SESS-REPLACE-TEST-002 | 중 | replacement transport fence regression | 완료 — 실제 두 Framework runtime의 MeshNode transport가 source/lifecycle admission과 exact owner ID·lease·session RID·binding generation rejection을 runtime handler까지 검증한다 |
-| DOTNET-CONTRACT-INTEGRATION-001 | 상 | command 51 canonical source | **BLOCKED** — `main` schema는 51을 reserved로 두며 golden·generator·validator 통합에는 formal protocol 변경·승인이 필요하다 |
-| DOTNET-DOC-001 | 중 | .NET exact interface 상태 | **BLOCKED** — 보호 spec의 구현 차이 표가 완료된 runtime을 여전히 미구현으로 기록하며 보호 문서 수정 승인이 필요하다 |
-| DOTNET-DOC-002 | 중 | 공통 implementation gap 상태 | **BLOCKED** — 보호된 `90-implementation-gap`의 .NET 행도 command 51·callback이 없다고 기록하며 보호 문서 수정 승인이 필요하다 |
+| DOTNET-CONTRACT-INTEGRATION-001 | 상 | command 51 canonical source | 완료(2026-08-09 재검증) — schema·golden(`bound-session-replaced-v1.json`)·generated constants(`ServiceWireConstants.g.cs:55`)·decoder fixture gate(`boundSessionReplaced=pass`)가 모두 canonical 통합 상태다 |
+| DOTNET-DOC-001 | 중 | .NET exact interface 상태 | 완료(2026-08-09) — 사용자 승인 아래 `dotnet/interfaces/07-stream-session.{ko,en}.md`의 구현 차이 행을 현재 구현 상태로 갱신했다 |
+| DOTNET-DOC-002 | 중 | 공통 implementation gap 상태 | 완료(2026-08-09) — 사용자 승인 아래 `90-implementation-gap.{ko,en}.md`의 .NET 행을 종결 상태로 갱신했다 |
 | DOTNET-HTTP-SERIALIZATION-001 | 상 | public ActorRef HTTP JSON | 완료 — `ActorRef`·`SpotRef`가 기본 `System.Text.Json`에서 exact object-reference JSON을 encode/decode하고, invalid ID·generation·mesh·RID와 default encode를 거부한다 |
 | DOTNET-WINDOWS-EVIDENCE-001 | 중 | Windows PowerShell runner | **미실행** — regression matrix의 5개 gap이 Windows 환경의 PowerShell runner를 남은 evidence로 명시한다 |
 | DOTNET-E2E-INSTANCE-001 | 상 | Config 14 Instance Spot | **미완료** — 36개 중 다수가 미구현이며 IS-E2E-06은 PARTIAL이고 default/all runner가 exit 2다 |
