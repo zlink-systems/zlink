@@ -15,10 +15,10 @@ a blocking wait, or occupation of a session serial lane or worker.
 
 | Language | Current implementation difference | Closure condition |
 |---|---|---|
-| C++ | Uses a separate JSON packet instead of canonical commands 36/38 and discards the expected binding generation. Command 51 and the public callback are absent. | Commands 36/38 conformance, command 51, callback, non-blocking 100 ms timer, and process rebind evidence |
-| Node.js | Waits for previous tombstone-cleanup acknowledgment and rolls back the new binding on failure. Command 51 and the public callback are absent. | No-ACK transition, command 51, callback, non-blocking 100 ms timer, and package/process evidence |
-| .NET | Switches the route after confirming previous binding cleanup. Command 51 and the public callback are absent. | Command 51, callback, exact retired fence, non-blocking 100 ms timer, and package/process evidence |
-| Java/Kotlin | Completes bind after the previous cleanup callback terminal. Command 51 and both language callbacks are absent. | Java/Kotlin callback bridge, command 51, non-blocking 100 ms timer, and package/process evidence |
+| C++ | None. Canonical commands 36/38 with the expected binding generation, one-way command 51, the public callback, and the non-blocking 100 ms timer are implemented. | Closed |
+| Node.js | None. The new binding becomes current without waiting for acknowledgment and is never rolled back; one-way command 51, the public callback, and the non-blocking 100 ms timer are implemented. | Closed |
+| .NET | None — publishes the new binding as current first and implements the command 51 one-way notification, the public callback, the exact retired fence, and the non-blocking 100 ms timer. | Closed — command 51 canonical schema/golden, owner regression, package, and process evidence passed |
+| Java/Kotlin | None. The Java callback and the Kotlin suspending bridge, one-way command 51, and the non-blocking 100 ms timer are implemented; bind does not wait for the previous cleanup. | Closed |
 
 Every language must produce the same result for the canonical and malformed bytes and the pre-restart
 session-owner lifecycle rejection in `runtime/protocol/golden/bound-session-replaced-v1.json`. An

@@ -180,7 +180,7 @@ new bind does not wait for this callback or close.
 
 | Implementation difference | Current state |
 |---|---|
-| Session Actor binding replacement | The C++ runtime does not yet implement command 51, this callback, or the non-blocking 100 ms close timer. Commands 36/38 codec conformance is also pending. |
+| Session Actor binding replacement | None. The C++ runtime implements commands 36/38 codec conformance, the one-way command 51, this callback, and the non-blocking 100 ms close timer. |
 
 After bind, relay/request relay and `notify_disconnected()` use a
 per-Actor stored route and don't look up Location Store for every

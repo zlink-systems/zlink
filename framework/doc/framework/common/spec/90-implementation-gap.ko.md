@@ -13,10 +13,10 @@ session serial lane·worker 점유로 지연 시간을 만들지 않는다.
 
 | 언어 | 현재 구현 차이 | 종결 조건 |
 |---|---|---|
-| C++ | 정식 command 36/38 대신 별도 JSON packet을 사용하며 expected binding generation을 버린다. Command 51과 public callback도 없다. | command 36/38 conformance, command 51, callback, non-blocking 100 ms timer와 process rebind 검증 |
-| Node.js | 이전 tombstone cleanup ACK를 기다리고 실패 시 새 binding을 rollback하는 이전 동작을 사용한다. Command 51과 public callback이 없다. | ACK 비대기 전환, command 51, callback, non-blocking 100 ms timer와 package·process 검증 |
-| .NET | 이전 binding cleanup을 확인한 뒤 route를 바꾸는 동작이며 command 51과 public callback이 없다. | command 51, callback, exact retired fence, non-blocking 100 ms timer와 package·process 검증 |
-| Java/Kotlin | 이전 cleanup callback terminal을 기다려 bind를 완료하며 command 51과 두 언어 callback이 없다. | Java·Kotlin callback bridge, command 51, non-blocking 100 ms timer와 package·process 검증 |
+| C++ | 없음. Expected binding generation을 포함한 정식 command 36/38, one-way command 51, public callback과 non-blocking 100 ms timer를 구현한다. | 종결 |
+| Node.js | 없음. 새 binding은 ACK를 기다리지 않고 current가 되며 rollback하지 않는다. One-way command 51, public callback과 non-blocking 100 ms timer를 구현한다. | 종결 |
+| .NET | 차이 없음 — 새 binding을 먼저 current로 publish하고 command 51 one-way 통지, public callback, exact retired fence와 non-blocking 100 ms timer를 구현한다. | 종결 — command 51 canonical schema·golden, owner regression, package와 process 검증 통과 |
+| Java/Kotlin | 없음. Java callback과 Kotlin suspending bridge, one-way command 51, non-blocking 100 ms timer를 구현하며 bind는 이전 cleanup을 기다리지 않는다. | 종결 |
 
 모든 언어는 `runtime/protocol/golden/bound-session-replaced-v1.json`의 정상·malformed bytes와 재시작 전
 session owner lifecycle 거부를 같은 결과로 검증해야 한다. 같은 physical session의 idempotent bind는 자신에게

@@ -36,7 +36,7 @@ runtime이 `sessionActorLocationUpdateReqMsg`를 send하여 해당 Actor route�
 
 | 구현 차이 | 현재 상태 |
 |---|---|
-| Session Actor binding 교체 | Kotlin bridge에는 suspending callback 연결과 non-blocking 100 ms close timer가 아직 없다. Command 51 codec은 JVM runtime 구현 대상이다. |
+| Session Actor binding 교체 | 없음. Kotlin bridge는 suspending callback(`onActorBindingReplacedSuspending`)을 연결하며, command 51 codec과 non-blocking 100 ms close timer는 JVM runtime이 제공한다. |
 
 ## STREAM socket message 크기
 

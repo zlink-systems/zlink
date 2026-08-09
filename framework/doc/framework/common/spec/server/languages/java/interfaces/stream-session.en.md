@@ -62,7 +62,7 @@ doesn't rebind to learn about relocation.
 
 | Implementation difference | Current state |
 |---|---|
-| Session Actor binding replacement | The JVM runtime does not yet implement command 51, the Java callback, or the non-blocking 100 ms close timer. |
+| Session Actor binding replacement | None. The JVM runtime implements the one-way command 51, the Java callback, and the non-blocking 100 ms close timer. |
 
 ## STREAM Socket Message Size
 

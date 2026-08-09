@@ -175,7 +175,7 @@ close를 기다리지 않는다.
 
 | 구현 차이 | 현재 상태 |
 |---|---|
-| Session Actor binding 교체 | C++ runtime에는 command 51 송수신, 이 callback과 non-blocking 100 ms close timer가 아직 없다. Command 36/38 codec conformance도 별도 구현 대상이다. |
+| Session Actor binding 교체 | 없음. C++ runtime은 command 36/38 codec conformance, one-way command 51, 이 callback과 non-blocking 100 ms close timer를 구현한다. |
 
 Bind 뒤 relay·request relay와 `notify_disconnected()`는 Actor별 저장 route를 사용하며 message마다 Location
 Store를 조회하지 않는다. Physical disconnect는 Framework가 current binding 전체에 automatic all-settled

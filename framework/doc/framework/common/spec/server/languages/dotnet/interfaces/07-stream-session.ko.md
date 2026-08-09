@@ -154,7 +154,7 @@ close를 기다리지 않는다.
 
 | 구현 차이 | 현재 상태 |
 |---|---|
-| Session Actor binding 교체 | .NET runtime에는 command 51 송수신, 이 callback과 non-blocking 100 ms close timer가 아직 없다. |
+| Session Actor binding 교체 | .NET runtime은 command 51 송수신, 이 callback과 non-blocking 100 ms close timer를 구현한다. 남은 구현 차이가 없다. |
 
 Bind 뒤 `RelayAsync(...)`와 `NotifyDisconnectedAsync(...)`는 Actor별 binding을 사용한다. Physical disconnect는
 Framework가 current binding 전체에 통지하고 exact binding identity마다 Spot callback을 최대 한 번 실행한다.
