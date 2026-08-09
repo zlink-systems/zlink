@@ -439,6 +439,8 @@ inline void apply_benchmark_socket_options (SocketLike &socket,
     // Manual HWM is a debug-only override; the default benchmark surface uses
     // context auto-HWM.
     apply_benchmark_hwm (socket, settings.sndhwm, settings.rcvhwm);
+    if (transport == "tcp")
+        (void) set_common_socket_option (socket, perf::options::socket_options::tcp_nodelay, 1);
     apply_debug_timeouts (socket, transport);
 }
 

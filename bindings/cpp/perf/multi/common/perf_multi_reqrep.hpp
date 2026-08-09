@@ -25,6 +25,7 @@ struct config_t
     const char *env_pattern;
     const char *result_pattern;
     bool routed_client;
+    bool server_has_routing_id;
 };
 
 inline bool transient (int err_)
@@ -96,8 +97,12 @@ template <typename SocketT> class client_bench_t
             }
             if (!submitted) {
                 try {
+                    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
+                      deadline - std::chrono::steady_clock::now ());
+                    const int wait_ms = static_cast<int> (
+                      std::max<int64_t> (1, std::min<int64_t> (50, remaining.count ())));
                     (void) _poller.wait (_events.data (), _events.size (),
-                                         std::chrono::milliseconds (-1));
+                                         std::chrono::milliseconds (wait_ms));
                 }
                 catch (const zlink::binding_error_t &err) {
                     if (err.internal_errno () != EINTR)
@@ -141,11 +146,12 @@ template <typename SocketT> class client_bench_t
                 slot->socket.reset (new SocketT (_ctx.ctx ()));
                 if (!slot->socket || !slot->socket->valid ())
                     return false;
-                const std::string rid = std::string ("REQREP-") + std::to_string (i);
+                const std::string rid = std::string ("client_") + std::to_string (i);
                 slot->socket->set_routing_id (zlink::routing_id_t::from (
                   reinterpret_cast<const uint8_t *> (rid.data ()), rid.size ()));
-                if constexpr (std::is_same<SocketT, zlink::router_socket_t>::value)
-                    slot->socket->options ().mandatory (true);
+                if constexpr (std::is_same<SocketT, zlink::router_socket_t>::value) {
+                    slot->socket->options ().connect_routing_id (_target_rid);
+                }
                 apply_benchmark_socket_options (*slot->socket, _settings, _transport);
                 if (!apply_benchmark_auto_hwm_msg_unit (_ctx, _msg_size)
                     || !setup_tls_client (*slot->socket, _transport))
@@ -218,13 +224,13 @@ template <typename SocketT> class client_bench_t
                 ok = std::move (slot_.socket->request (_target_rid))
                        .message (request)
                        .timeout (std::chrono::milliseconds (std::max (1, _settings.rcvtimeo_ms)))
-                       .flags (static_cast<int> (zlink::send_flags_t::dontwait))
+                       .flags (static_cast<int> (zlink::send_flags_t::none))
                        .submit (callback);
             } else {
                 ok = std::move (slot_.socket->request ())
                        .message (request)
                        .timeout (std::chrono::milliseconds (std::max (1, _settings.rcvtimeo_ms)))
-                       .flags (static_cast<int> (zlink::send_flags_t::dontwait))
+                       .flags (static_cast<int> (zlink::send_flags_t::none))
                        .submit (callback);
             }
             if (!ok) {
@@ -296,8 +302,8 @@ inline bool run_server (const config_t &config_,
     const multi_bench_settings_t settings = resolve_multi_bench_settings ();
     ctx_guard_t ctx;
     zlink::router_socket_t server (ctx.ctx ());
-    server.set_routing_id (zlink::routing_id_t::from (std::string ("SERVER")));
-    server.options ().mandatory (true);
+    if (config_.server_has_routing_id)
+        server.set_routing_id (zlink::routing_id_t::from (std::string ("SERVER")));
     apply_benchmark_socket_options (server, settings, transport_);
     if (!apply_benchmark_auto_hwm_msg_unit (ctx, msg_size_)
         || !setup_tls_server (server, transport_))
