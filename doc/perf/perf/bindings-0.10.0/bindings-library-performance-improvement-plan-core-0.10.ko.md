@@ -8,7 +8,9 @@
 >
 > 이 문서는 core 0.10.1을 기준으로 bindings 라이브러리 성능 개선을 처음부터
 > 진행하기 위한 실행 문서다. 이전 계획 문서의 측정값과 완료 판정은 가져오지 않는다.
-> 새 C 기준 결과와 각 binding의 새 결과만 이 문서에 기록한다.
+> 새 C 기준 결과와 각 binding의 새 결과만 이 문서에 기록한다. 이 문서에는 측정 대상,
+> 측정 조건, report 경로, 비교값과 판정만 남긴다. 실행 명령, 후보 검토, 프로파일과
+> 같은 과정 설명은 이 문서가 있는 폴더의 `log/`에 기록한다.
 
 ## 1. 기준 버전과 시작 상태
 
@@ -582,13 +584,16 @@ transport 세부 정보, perf 전용 option을 노출하지 않는다. 새 helpe
 - `미달(비율%)`: 유효한 결과가 있지만 목표에 도달하지 못했고 내부 개선이 필요하다.
 - `보류(비율%)`: 내부 개선 후보를 검증했지만 목표에 도달하지 못했으며, 필요한 계약
   변경과 근거를 별도 항목으로 기록했다.
+- `measurement-stability blocker`: report는 complete이지만 반복 변동 또는 하향 drift가
+  안정성 한계를 반복해서 넘어 공식 pass/fail을 확정할 수 없다.
 - `해당 없음`: 공식 C runner와 binding 정책 모두 측정하지 않는 조합이다.
 
 timeout, no result, runtime mismatch, message size 불일치, client 수 불일치는 통과나
 보류가 아니다. 원인을 수정해 수치가 생성될 때까지 `미달` 또는 `미측정`으로
 유지한다.
 
-각 결과 파일 / 메모 칸에는 최소한 다음 내용을 남긴다.
+계획서의 결과 표에는 다음 측정 기록과 결과만 남긴다. 실행 과정, 후보 검토, 프로파일과
+구현 변경은 이 문서가 있는 폴더의 `log/`에 남긴다.
 
 - paired session tag
 - C report와 binding report 경로
@@ -599,11 +604,8 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 - Effective Options 일치 여부
 - auto-HWM의 `MsgUnit(B)` 일치 여부
 - 실제 client 수, STREAM client 수, memory guard cap 발생 여부
-- server/client의 CPU 피크와 최대 `nlwp`
-- profiler 또는 allocation/copy/native 경계 근거
-- 검토한 두 가지 개선안, 선택 이유, 예상 영향 셀, 폐기 기준
-- 대상이 아닌 대표 셀의 throughput과 평균 latency 회귀 결과
-- 미달이면 다음 병목 후보, 보류이면 필요한 계약 변경
+- 안정성 gate 결과와 최종 판정
+- 필요한 경우 판정에 사용하지 않은 진단값과 제외 이유
 
 ## 9. 언어별 성능 확인 표
 
@@ -801,7 +803,8 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
   transport 목표 95%에 미달한다. latency 비율은 모두 1.057배 이내이고 boundary
   C/C++ 변동 폭도 7.38%/4.69%, 2.35%/5.09%로 안정됐지만, binding-only hot-path
   후보는 확인되지 않았다. 수정은 측정 전 setup parity correction이며 performance
-  optimization으로 계산하지 않고, 다음 선택 대상은 `DEALER_ROUTER_REQREP / ws`다.
+  optimization으로 계산하지 않는다. 다음 대상은 `DEALER_ROUTER_REQREP / ws`의
+  안정성 판정이다.
 
 #### 9.1.1 Single suite
 
@@ -818,7 +821,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `ws` | `PUBSUB` | 미달 (84.17%) | 통과 (93.47%) | 통과 (102.77%) | 통과 (94.58%) | 통과 (94.85%) | 통과 (96.92%) | full sweep 중앙값은 94.71%로 미달이고 64B 개별 기준도 미달했지만, boundary 재검증에서 C/C++ 1,030,946.8/914,824.8 msg/s, ratio 88.74%로 64B 기준을 통과했다. 중앙값을 구성한 65536B·131072B도 C/C++ 24,084.4/22,329.4 및 15,829.4/14,936.6 msg/s, ratio 92.71%/94.36%로 미달을 재현했다. profile은 C/C++ 모두 mutex·clock·Core pipe/poller가 중심이고 C++ `read_subscription_message`는 1.59%뿐이었다. `sol`은 추가 source optimization을 no-go로 판정했다. C full: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_165343_pubsub-ws-poller-parity-c.txt`; C++ full: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_165651_pubsub-ws-poller-parity-cpp.txt`; C/C++ 64B boundary: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_172915_pubsub-ws-64-poller-parity-boundary-revalidate-c1.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_172951_pubsub-ws-64-poller-parity-boundary-revalidate-c1.txt`; C/C++ median cells: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_174812_pubsub-ws-median-cells-poller-parity-revalidate-c1.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_174919_pubsub-ws-median-cells-poller-parity-revalidate-c1.txt`; profile C/C++: `/tmp/zlink-perf-tools-0070B1/profile-latest/pubsub-ws-c-64-poller-parity.data`, `/tmp/zlink-perf-tools-0070B1/profile-latest/pubsub-ws-cpp-64-poller-parity.data` |
 | `ws` | `DEALER_DEALER` | 통과 (87.31%) | 통과 (88.77%) | 통과 (94.07%) | 통과 (91.85%) | 통과 (92.32%) | 통과 (95.31%) | full sweep size 중앙값 92.08%로 transport 목표 95%에 미달한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_181249_dealer-dealer-ws-poller-parity-c1.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_181529_dealer-dealer-ws-poller-parity-c1.txt`; 64B profile C/C++: `/tmp/zlink-perf-tools-0070B1/profile-latest/dealer-dealer-ws-c-64-poller-parity.data`, `/tmp/zlink-perf-tools-0070B1/profile-latest/dealer-dealer-ws-cpp-64-poller-parity.data`; typed A/B full sweep C/C++: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_182802_dealer-dealer-ws-typed-c1.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_183040_dealer-dealer-ws-typed-c1.txt`; typed full sweep size 중앙값 91.39%로 개선을 재현하지 못해 typed 경로는 제거했다. Sol review: `51bb1842-4485-4bd0-91e2-8b9e22998d37` |
 | `ws` | `DEALER_ROUTER` | 미달 (87.85%) | 미달 (89.52%) | 통과 (99.61%) | 통과 (93.71%) | 통과 (92.05%) | 통과 (97.13%) | size 중앙값 92.88%, 평균 latency 비율 1.067배/1.042배/1.009배/1.075배/1.081배/1.027배다. C 변동 폭은 7.6%/12.5%/7.6%/2.9%/3.0%/3.3%, C++ 변동 폭은 9.1%/14.0%/12.7%/13.9%/16.7%/4.6%다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_200556_dealer-router-ws-policy-c1.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_200838_dealer-router-ws-policy-c1.txt`; Sol review: `4b2cf27a-87c1-4143-8aaf-117b3831f102` |
-| `ws` | `DEALER_ROUTER_REQREP` | 통과 (92.00%) | 통과 (88.68%) | 통과 (89.73%) | 통과 (88.55%) | 통과 (98.67%) | 통과 (93.61%) | full sweep size 중앙값은 90.86%로 transport 목표 95%에 미달한다. C/C++ throughput 변동 폭은 9.27%/11.08%, 10.27%/9.47%, 11.65%/10.51%, 6.96%/7.54%, 4.64%/10.64%, 1.67%/8.69%다. latency ratio는 1.072배/1.110배/1.120배/1.127배/1.010배/1.058배다. Sol review와 boundary 재검증 여부를 확인 중이다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_214653_dealer-router-reqrep-ws-policy-c1.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_214934_dealer-router-reqrep-ws-policy-c1.txt` |
+| `ws` | `DEALER_ROUTER_REQREP` | 통과 (96.25%, 재검증) | 통과 (92.11%, 재검증) | 보류 (안정성 미확정) | 통과 (97.01%, 재검증) | 통과 (98.97%) | 통과 (94.82%) | 공식 채택 셀은 64B·256B·65536B·131072B·262144B다. 1024B 진단 ratio는 86.03%지만 C/C++ 변동 폭 20.77%/18.72%와 하향 drift 때문에 공식값에서 제외한다. WS transport는 `measurement-stability blocker`로 pass/fail을 확정하지 않으며 binding-only source optimization은 no-go다. C/C++ c3 256B: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_221848_dealer-router-reqrep-ws-boundary-256-c3-repeat.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_221920_dealer-router-reqrep-ws-boundary-256-c3-repeat.txt`; C/C++ c3 1024B: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_221953_dealer-router-reqrep-ws-boundary-1024-c3-repeat.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_222026_dealer-router-reqrep-ws-boundary-1024-c3-repeat.txt`; C/C++ stable cells: 64B `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_220013_dealer-router-reqrep-ws-parity-64-c2.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_220043_dealer-router-reqrep-ws-parity-64-c2.txt`; 65536B `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_220115_dealer-router-reqrep-ws-parity-65536-c2.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_220146_dealer-router-reqrep-ws-parity-65536-c2.txt`; 131072B `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_221103_dealer-router-reqrep-ws-boundary-131072-c3.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_221134_dealer-router-reqrep-ws-boundary-131072-c3.txt`; 262144B `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_221309_dealer-router-reqrep-ws-boundary-262144-c3.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_221341_dealer-router-reqrep-ws-boundary-262144-c3.txt`; Sol review: `SOL-REQREP-WS-C3-FINAL-20260809` |
 | `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `PAIR` | 통과 (94.89%) | 통과 (97.93%) | 통과 (99.24%) | 통과 (98.76%) | 통과 (97.99%) | 통과 (98.46%) | full sweep size 중앙값 98.23%다. C/C++ 변동 폭은 64B 8.10%/2.35%, 256B 2.83%/3.17%, 1024B 6.14%/3.02%, 65536B 4.84%/3.01%, 131072B 3.68%/2.06%, 262144B 2.67%/13.90%다. 262144B boundary revalidation은 Round 1 ratio 100.01%, C/C++ 변동 폭 6.76%/10.47%, Round 2 ratio 90.22%, 변동 폭 2.63%/14.55%였다. 반복 변동은 기록했지만 throughput 목표는 충족했고 `sol` 리뷰에서 WSS source 후보를 no-go로 판정했다. |
@@ -1357,24 +1360,24 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | 구분 | 상태 | 결과 파일 / 메모 |
 |------|------|------------------|
 | 현재 언어 | C++ |  |
-| 현재 pattern | 진행 중 | `DEALER_ROUTER_REQREP / tcp`는 boundary 재검증 반영 중앙값 94.87%로 no-go 처리했다. 현재 `DEALER_ROUTER_REQREP / ws` full sweep ratio는 92.00%, 88.68%, 89.73%, 88.55%, 98.67%, 93.61%, 중앙값 90.86%이며 Sol review 및 boundary 재검증을 진행한다. |
+| 현재 pattern | 진행 중·안정성 blocker | `DEALER_ROUTER_REQREP / tcp`는 boundary 재검증 반영 중앙값 94.87%로 no-go 처리했다. `DEALER_ROUTER_REQREP / ws`는 64B·256B·65536B·131072B·262144B의 공식 ratio가 96.25%, 92.11%, 97.01%, 98.97%, 94.82%다. 1024B는 진단 ratio 86.03%지만 C/C++ 변동 폭 20.77%/18.72%와 하향 drift 때문에 공식 판정을 보류한다. |
 | paired C | 완료 | `status: complete`. 정책 정렬 `PUBSUB`, `DEALER_DEALER`의 paired 결과와 `DEALER_ROUTER / tcp`, `/ ws`, `/ wss`, `/ tls`, `/ inproc`, `/ ipc`를 C → C++ 순서로 측정했다. `DEALER_ROUTER / inproc` C full median은 2,247,755.0 / 1,605,539.6 / 1,598,773.6 / 439,708.2 / 173,491.8 / 79,539.8 msg/s이고, `/ ipc` full median은 2,185,331.8 / 1,205,057.4 / 750,265.2 / 38,045.2 / 25,042.0 / 14,905.8 msg/s다. `/ ipc` boundary C median은 2,089,866.2 / 1,194,847.8 / 751,513.0 / 37,585.4 / 25,169.8 msg/s다. 모든 report는 Core v0.10.1 release, auto-HWM, I/O thread 1, timeout 200ms 조건을 사용했다. |
-| binding paired 결과 | 유효 결과·미달 포함 | `status: complete`. 정책 정렬 `PUBSUB`와 `DEALER_DEALER` 결과에 이어 `DEALER_ROUTER / tcp` ratio는 82.99%, 98.00%, 98.29%, 85.24%, 87.99%, 94.93%, `/ ws` ratio는 87.85%, 89.52%, 99.61%, 93.71%, 92.05%, 97.13%, `/ wss` full sweep ratio는 84.52%, 97.28%, 98.28%, 99.43%, 97.65%, 87.18%, `/ tls` c2 ratio는 73.67%, 93.26%, 91.18%, 91.09%, 89.59%, 81.33%, `/ inproc` full sweep ratio는 82.15%, 87.87%, 87.46%, 33.80%, 63.11%, 68.82%, `/ ipc` full sweep ratio는 76.98%, 92.83%, 98.78%, 82.71%, 84.56%, 89.69%다. size 중앙값은 각각 91.46%, 92.88%, 97.46%, 90.34%, 75.49%, 87.13%이며, `/ inproc` boundary ratio는 85.68%, 93.39%, 92.89%, 26.72%, `/ ipc` boundary ratio는 81.99%, 93.76%, 96.51%, 85.35%, 85.86%다. |
-| 개선 결과 | 기록 | C 기준과 의미가 다른 harness 결과는 공식 판정에서 제외하고, 정책 정렬 후의 C → C++ 결과만 9.1.1과 11절에 기록했다. `DEALER_ROUTER / tcp`, `/ ws`, `/ tls`, `/ inproc`, `/ ipc`는 목표 미달이고 `/ wss`는 64B boundary 재검증 후 통과했으며, 다섯 transport 모두 binding-only source optimization은 no-go다. 과정 로그는 `log/`에 기록한다. |
+| binding paired 결과 | 유효 결과·미달 포함 | `status: complete`. 정책 정렬 후의 C → C++ 결과만 공식 비교에 사용한다. `DEALER_ROUTER_REQREP / ws`의 공식 채택 cell은 5개이며 1024B는 stability blocker다. 모든 report는 Core v0.10.1 release, auto-HWM, I/O thread 1, timeout 200ms 조건을 사용했다. |
+| 개선 결과 | no-go·안정성 blocker | WS의 안정된 5개 cell에서 binding-only source hotspot은 확인되지 않았다. 1024B 저하는 C와 C++ 모두에서 재현된 하향 drift로 공식 성능 미달로 확정하지 않는다. |
 
 | request/reply paired C | 완료 | `DEALER_ROUTER_REQREP / tcp` C report median: 212,245.6 / 192,437.8 / 176,009.8 / 17,174.8 / 11,981.0 / 7,339.6 msg/s. C++ 구형 실행은 공식 비교에서 제외했으며, parity 보정 후 C++을 다시 측정했다. |
 | request/reply binding paired 결과 | 완료·미달 | C++ full sweep ratio: 95.10%, 93.51%, 96.72%, 94.99%, 95.76%, 93.89%, 중앙값 95.05%. 1024B·65536B boundary 재검증 ratio: 94.64%, 95.73%. 공식 재계산 중앙값 94.87%, latency ratio 모두 1.057배 이내. |
 | request/reply 개선 결과 | no-go | 모든 개별 ratio는 85% 이상이지만 공식 중앙값이 95%에 미달한다. boundary 변동 폭은 C/C++ 7.38%/4.69%, 2.35%/5.09%로 안정됐고 binding-only hot-path 근거가 없어 source optimization을 수행하지 않는다. |
 
-| request/reply ws 결과 | 진행 중 | `DEALER_ROUTER_REQREP / ws` C → C++ full sweep은 complete다. 개별 ratio는 92.00%, 88.68%, 89.73%, 88.55%, 98.67%, 93.61%, 중앙값 90.86%다. C++ 변동성이 64B·1024B·131072B에서 10%를 넘었고, Sol review 후 boundary만 재검증한다. |
+| request/reply ws 결과 | 안정성 blocker | 공식 채택 ratio는 64B 96.25%, 256B 92.11%, 65536B 97.01%, 131072B 98.97%, 262144B 94.82%다. 1024B 진단 ratio 86.03%는 C/C++ 변동 폭 20.77%/18.72%와 하향 drift 때문에 제외한다. WS transport의 pass/fail은 확정하지 않으며 binding-only source optimization은 no-go다. |
 
-| request/reply ws parity boundary | 완료 | C++ measured-loop parity 수정 후 64B ratio 96.25%, 65536B ratio 97.01%를 재현했다. latency ratio는 각각 1.004배/1.030배이고 C/C++ 변동 폭은 6.96%/7.28%, 3.27%/1.82%다. boundary는 안정됐으며 6-size full sweep을 다시 수행한다. |
+| request/reply ws parity boundary | 공식 5 cell·1024B blocker | C++ measured-loop parity 수정 후 공식 5개 cell을 채택했다. 256B ratio는 92.11%, C/C++ 변동 폭은 4.34%/7.06%다. 131072B와 262144B ratio는 98.97%/94.82%, 변동 폭은 6.31%/4.96%와 4.71%/4.96%다. 1024B 재측정 ratio는 86.03%지만 변동 폭 20.77%/18.72%와 하향 drift 때문에 안정성 blocker로 남긴다. |
 
 ### 10.3 언어 진행 상태
 
 | 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
 |------|------|-------------|------------|-----------|
-| 1 | C++ | 진행 중 | 미측정 | `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER`의 선택 transport 측정을 완료했다. `DEALER_ROUTER_REQREP / tcp`는 boundary 재검증 반영 중앙값 94.87%로 미달했으며 binding-only source optimization은 no-go다. 다음 선택 대상은 `DEALER_ROUTER_REQREP / ws`다. |
+| 1 | C++ | 진행 중·안정성 blocker | 미측정 | `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER`의 선택 transport 측정을 완료했다. `DEALER_ROUTER_REQREP / tcp`는 공식 중앙값 94.87%로 미달했고, `/ ws`는 1024B 안정성 blocker로 남았다. 두 request/reply transport 모두 binding-only source optimization은 no-go다. |
 | 2 | .NET | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 3 | Java | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
@@ -1417,10 +1420,8 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | 2026-08-09 | C++ | Single / DEALER_ROUTER_REQREP / tcp / 65536B boundary | `dealer-router-reqrep-tcp-boundary-65536-c1` | 95.73% | 95.73% | 통과·재계산 대상 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_213143_dealer-router-reqrep-tcp-boundary-65536-c1.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_213219_dealer-router-reqrep-tcp-boundary-65536-c1.txt` |
 | 2026-08-09 | C++ | Single / DEALER_ROUTER_REQREP / tcp 최종 | `dealer-router-reqrep-tcp-policy-final` | 95.10%, 93.51%, 94.64%, 95.73%, 95.76%, 93.89% | 94.87% | 미달·no-go | latency ratio 1.022배/1.057배/0.964배/1.041배/1.036배/1.047배. boundary 재검증 후 공식 중앙값이 95%에 미달하고 binding-only hot-path 근거가 없어 개선하지 않는다. |
 
-| 2026-08-09 | C++ | Single / DEALER_ROUTER_REQREP / ws full sweep | `dealer-router-reqrep-ws-policy-c1` | 92.00%, 88.68%, 89.73%, 88.55%, 98.67%, 93.61% | 90.86% | 미달·review 진행 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_214653_dealer-router-reqrep-ws-policy-c1.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_214934_dealer-router-reqrep-ws-policy-c1.txt` |
-
-| 2026-08-09 | C++ | Single / DEALER_ROUTER_REQREP / ws / 64B parity boundary | dealer-router-reqrep-ws-parity-64-c2 | 96.25% | 96.25% | 통과·안정 | C: /home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_220013_dealer-router-reqrep-ws-parity-64-c2.txt; C++: /home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_220043_dealer-router-reqrep-ws-parity-64-c2.txt |
-| 2026-08-09 | C++ | Single / DEALER_ROUTER_REQREP / ws / 65536B parity boundary | dealer-router-reqrep-ws-parity-65536-c2 | 97.01% | 97.01% | 통과·안정 | C: /home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_220115_dealer-router-reqrep-ws-parity-65536-c2.txt; C++: /home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_220146_dealer-router-reqrep-ws-parity-65536-c2.txt |
+| 2026-08-09 | C++ | Single / DEALER_ROUTER_REQREP / ws / 64·256·65536·131072·262144B 공식 cell | `dealer-router-reqrep-ws-policy-final-c3` | 96.25%, 92.11%, 97.01%, 98.97%, 94.82% | 미산출 (1024B blocker) | 5개 cell 채택·stability blocker | C/C++ official reports: 64B `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_220013_dealer-router-reqrep-ws-parity-64-c2.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_220043_dealer-router-reqrep-ws-parity-64-c2.txt`; 256B `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_221848_dealer-router-reqrep-ws-boundary-256-c3-repeat.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_221920_dealer-router-reqrep-ws-boundary-256-c3-repeat.txt`; 65536B `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_220115_dealer-router-reqrep-ws-parity-65536-c2.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_220146_dealer-router-reqrep-ws-parity-65536-c2.txt`; 131072B `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_221103_dealer-router-reqrep-ws-boundary-131072-c3.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_221134_dealer-router-reqrep-ws-boundary-131072-c3.txt`; 262144B `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_221309_dealer-router-reqrep-ws-boundary-262144-c3.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_221341_dealer-router-reqrep-ws-boundary-262144-c3.txt`; Sol review: `SOL-REQREP-WS-C3-FINAL-20260809` |
+| 2026-08-09 | C++ | Single / DEALER_ROUTER_REQREP / ws / 1024B 진단 cell | `dealer-router-reqrep-ws-boundary-1024-c3-repeat` | 86.03% (진단값) | 86.03% | measurement-stability blocker·공식 제외 | C/C++ report: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_221953_dealer-router-reqrep-ws-boundary-1024-c3-repeat.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_222026_dealer-router-reqrep-ws-boundary-1024-c3-repeat.txt`; C/C++ throughput 변동 폭 20.77%/18.72%, 하향 drift; Sol review: `SOL-REQREP-WS-C3-FINAL-20260809` |
 
 ## 12. 완료 기준
 

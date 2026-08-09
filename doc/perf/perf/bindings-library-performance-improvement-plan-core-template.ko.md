@@ -11,7 +11,9 @@
 >
 > 이 문서는 core {{CORE_VERSION}}을 기준으로 bindings 라이브러리 성능 개선을 처음부터
 > 진행하기 위한 실행 문서다. 이전 계획 문서의 측정값과 완료 판정은 가져오지 않는다.
-> 새 C 기준 결과와 각 binding의 새 결과만 이 문서에 기록한다.
+> 새 C 기준 결과와 각 binding의 새 결과만 이 문서에 기록한다. 이 계획서에는 측정 대상,
+> 측정 조건, report 경로, 비교값과 판정만 남긴다. 실행 명령, 후보 검토, 프로파일과 같은
+> 과정 설명은 이 문서가 있는 폴더의 `log/`에 기록한다.
 
 ## 1. 기준 버전과 시작 상태
 
@@ -299,8 +301,8 @@ binding report에서 실제 client 수와 STREAM client 수가 같은지, memory
 
 ## 6. 재현 환경 기록
 
-C와 binding을 paired 측정할 때 같은 session tag를 사용하고 다음 정보를 라운드 로그에
-기록한다.
+C와 binding을 paired 측정할 때 같은 session tag를 사용하고 다음 정보를 이 문서가 있는
+폴더의 `log/`에 기록한다. 계획서의 결과 표에는 비교에 필요한 조건과 결과만 요약한다.
 
 | 항목 | 기록 내용 |
 |------|-----------|
@@ -447,7 +449,8 @@ sleep 증가, 유리한 실행 결과만 선택하는 방식은 사용하지 않
 ### 7.4 작업 순서
 
 1. inventory gate를 통과시키고 정책, runner, 상세 표의 측정 범위를 일치시킨다.
-2. core {{CORE_VERSION}}을 빌드하고 재현 환경 manifest를 기록한다.
+2. GitHub `core/v{{CORE_VERSION}}` release asset과 package provenance를 준비하고 재현
+   환경 manifest를 기록한다. Core source를 다시 build하지 않는다.
 3. C++, .NET, Java, Node, Go, Rust, Python 순서로 진행한다.
 4. 현재 언어에서 진행할 pattern 하나를 선택한다. C 전체 pattern이나 다음 언어를 미리
    측정하지 않는다.
@@ -554,13 +557,15 @@ transport 세부 정보, perf 전용 option을 노출하지 않는다. 새 helpe
 - `미달(비율%)`: 유효한 결과가 있지만 목표에 도달하지 못했고 내부 개선이 필요하다.
 - `보류(비율%)`: 내부 개선 후보를 검증했지만 목표에 도달하지 못했으며, 필요한 계약
   변경과 근거를 별도 항목으로 기록했다.
+- `measurement-stability blocker`: report는 complete이지만 반복 변동 또는 하향 drift가
+  안정성 한계를 반복해서 넘어 공식 pass/fail을 확정할 수 없다.
 - `해당 없음`: 공식 C runner와 binding 정책 모두 측정하지 않는 조합이다.
 
 timeout, no result, runtime mismatch, message size 불일치, client 수 불일치는 통과나
 보류가 아니다. 원인을 수정해 수치가 생성될 때까지 `미달` 또는 `미측정`으로
 유지한다.
 
-각 결과 파일 / 메모 칸에는 최소한 다음 내용을 남긴다.
+계획서의 결과 표에는 다음 측정 기록과 결과만 남긴다. 나머지 과정은 `log/`에 남긴다.
 
 - paired session tag
 - C report와 binding report 경로
@@ -571,11 +576,8 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 - Effective Options 일치 여부
 - auto-HWM의 `MsgUnit(B)` 일치 여부
 - 실제 client 수, STREAM client 수, memory guard cap 발생 여부
-- server/client의 CPU 피크와 최대 `nlwp`
-- profiler 또는 allocation/copy/native 경계 근거
-- 검토한 두 가지 개선안, 선택 이유, 예상 영향 셀, 폐기 기준
-- 대상이 아닌 대표 셀의 throughput과 평균 latency 회귀 결과
-- 미달이면 다음 병목 후보, 보류이면 필요한 계약 변경
+- 안정성 gate 결과와 최종 판정
+- 필요한 경우 판정에 사용하지 않은 진단값과 제외 이유
 
 ## 9. 언어별 성능 확인 표
 
@@ -1161,14 +1163,14 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | 6 | Rust | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 7 | Python | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 
-## 11. 라운드 기록
+## 11. 측정 기록과 결과
 
-측정 또는 구현 변경을 수행할 때마다 아래 표에 한 행을 추가하고, 상세 설명이 길면
-`doc/perf/perf/log/` 아래에 별도 라운드 문서를 작성해 연결한다.
+paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 한 행으로 추가한다. 실행 과정,
+후보 검토, 프로파일과 구현 변경은 이 문서가 있는 폴더의 `log/`에 별도로 기록한다.
 
-| 날짜 | 언어 | suite / 범위 | pair tag | 변경 또는 측정 | 결과 | report / 로그 |
+| 날짜 | 언어 | suite / 범위 | pair tag | 측정 조건 | 결과 | report |
 |------|------|---------------|----------|----------------|------|---------------|
-| 2026-08-07 | 전체 | 계획 초기화 | - | core {{CORE_VERSION}} 기준으로 성능 측정표와 진행 상태를 초기화했다. | 계획 작성 | 이 문서 |
+| 2026-08-07 | 전체 | 계획 초기화 | - | Core {{CORE_VERSION}} release, C 기준과 binding paired 비교, 단일 perf process 조건을 사용한다. | 계획 작성 | 이 문서 |
 
 ## 12. 완료 기준
 
