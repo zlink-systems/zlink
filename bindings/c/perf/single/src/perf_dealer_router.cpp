@@ -16,6 +16,14 @@
 namespace
 {
 
+enum dealer_router_recv_result_t
+{
+    dealer_router_recv_error = -1,
+    dealer_router_recv_again = 0,
+    dealer_router_recv_payload = 1,
+    dealer_router_recv_stop = 2
+};
+
 struct dealer_router_recv_state_t
 {
     dealer_router_recv_state_t () : run_id (0), msg_size (0), payload_size (0), active_received (0)
@@ -319,6 +327,10 @@ bool run_active_phase (void *sender_,
     std::atomic<bool> sender_ok (true);
     unsigned long long received = 0;
     latency_stats_builder_t latency_builder;
+    poller_guard_t recv_poller;
+    if (!recv_poller.valid () || !recv_poller.add (receiver_, receiver_, ZLINK_POLLIN))
+        return false;
+
     // PERF_SINGLE_TEST_POLICY § 1.4: sender thread emits active samples,
     // then sends a wire-level stop token so the receiver loop terminates
     // without consulting any atomic flag.
@@ -329,32 +341,65 @@ bool run_active_phase (void *sender_,
         sender_ok.store (active_ok && stop_ok, std::memory_order_release);
     });
 
-    // Receiver: blocking recv, exit on stop-token receipt. Socket
-    // recv_timeout still bounds individual recv calls; phase end is
-    // signaled purely by the stop token arriving on the wire.
-    const int recv_flags = 0;
-    while (true) {
-        perf_single_metric::header_t header;
-        bool header_ok = false;
-        const int recv_rc =
-          recv_router_header_flags (receiver_, state_->payload_size, recv_flags, &header, &header_ok);
-        if (recv_rc == 1) {
-            if (header_ok && single_header_matches_run (*state_, header)) {
-                ++received;
-                latency_builder.add (single_latency_ns (header));
+    // PERF_SINGLE_TEST_POLICY § 1.1 and § 1.4: wait through the public
+    // poller with an infinite timeout, receive with DONTWAIT, and drain all
+    // currently ready routed parts. The wire-level stop token terminates the
+    // receiver after the active samples have arrived.
+    std::thread receiver_thread ([&] () {
+        while (true) {
+            zlink_poller_event_t event;
+            const int poll_rc = recv_poller.wait (&event, -1);
+            if (poll_rc < 0) {
+                const int err = zlink_errno ();
+                if (err == EINTR || err == EAGAIN)
+                    continue;
+                sender_ok.store (false, std::memory_order_release);
+                return;
             }
-            continue;
+            if (poll_rc == 0)
+                continue;
+
+            perf_single_metric::header_t header;
+            bool header_ok = false;
+            const int recv_rc = recv_router_header_flags (
+              receiver_, state_->payload_size, ZLINK_DONTWAIT, &header, &header_ok);
+            if (recv_rc == dealer_router_recv_payload) {
+                if (header_ok && single_header_matches_run (*state_, header)) {
+                    ++received;
+                    latency_builder.add (single_latency_ns (header));
+                }
+            } else if (recv_rc == dealer_router_recv_stop) {
+                return;
+            } else if (recv_rc == dealer_router_recv_error) {
+                sender_ok.store (false, std::memory_order_release);
+                return;
+            }
+
+            for (;;) {
+                perf_single_metric::header_t burst_header;
+                bool burst_header_ok = false;
+                const int burst_rc = recv_router_header_flags (
+                  receiver_, state_->payload_size, ZLINK_DONTWAIT, &burst_header,
+                  &burst_header_ok);
+                if (burst_rc == dealer_router_recv_payload) {
+                    if (burst_header_ok && single_header_matches_run (*state_, burst_header)) {
+                        ++received;
+                        latency_builder.add (single_latency_ns (burst_header));
+                    }
+                    continue;
+                }
+                if (burst_rc == dealer_router_recv_again)
+                    break;
+                if (burst_rc == dealer_router_recv_stop)
+                    return;
+                sender_ok.store (false, std::memory_order_release);
+                return;
+            }
         }
-        if (recv_rc == 0) {
-            continue;
-        }
-        if (recv_rc == 2)
-            break;
-        sender_ok.store (false, std::memory_order_release);
-        break;
-    }
+    });
 
     sender_thread.join ();
+    receiver_thread.join ();
 
     if (!sender_ok.load (std::memory_order_acquire)) {
         if (bench_debug_enabled ()) {
