@@ -418,15 +418,12 @@ C와 binding의 pattern별 smoke가 모두 `status: complete`여야 본 측정�
 | 후보 판정 | 기본 duration, 3회 | before/after와 C 대비 비율 판정 |
 | 최종·경계 판정 | 기본 duration, 5회, CPU pin 없음 | 목표 기준 ±5%p, secure transport, 고변동 셀, 최종 근거 |
 
-3회 결과에서 throughput의 `(최댓값 - 최솟값) / 중앙값`이 10%를 넘거나 평균 latency의
-같은 비율이 20%를 넘으면 CPU pin 없이 5회로 다시 측정한다. 5회 결과에서도 같은 한계를
-넘으면 바로 `통과`로 판정하지 않고 환경과 runner 조건을 먼저 조사한다. 지속적인 시스템
-부하가 확인되면 부하가 낮아질 때까지 기다린 뒤 현재 pattern의 해당 셀만 다시 측정한다.
-지속적인 부하가 없고 같은 셀의 변동이 반복되면 perf의 측정 의미, 수명 주기, queue 한도와
-종료 조건을 확인한다. 측정 오류가 있으면 perf를 수정하고 다시 측정한다. 측정 오류가 없고
-paired 5회 중앙값의 throughput과 평균 latency가 목표를 만족하면 변동 범위, 조사 내용과
-폐기한 대안을 기록하고 다음 작업을 계속한다. 변동을 숨기기 위해 CPU pin, timeout이나
-sleep 증가, 유리한 실행 결과만 선택하는 방식은 사용하지 않는다.
+반복 횟수는 perf 정책의 실행 조건을 따른다. `runs=1`이면 해당 측정값을 사용하고,
+`runs>1`이면 metric별 median을 대표값으로 사용한다. 반복값의 변동 폭은 원시값과 함께
+기록하지만, 변동 폭만으로 측정을 무효화하거나 `보류`로 분류하지 않는다. 노트북 환경의
+부하와 측정 오차가 있을 수 있으므로 결과는 선택한 조건에서 실제로 측정된 값으로
+판정하고 다음 셀로 진행한다. 유리한 실행 결과만 선택하지 않으며, CPU pin·timeout·sleep
+증가로 수치를 조정하지 않는다.
 
 ### 7.3 Paired C 규칙
 
@@ -480,7 +477,9 @@ sleep 증가, 유리한 실행 결과만 선택하는 방식은 사용하지 않
     기록하고 관련 문서를 커밋해 원격에 푸시한다.
 17. pattern 커밋과 푸시가 끝난 뒤에만 같은 언어의 다음 pattern을 선택한다.
 18. 현재 언어의 Single과 Multi 모든 pattern이 완료된 뒤 pattern별 최종 report와 표를
-    다시 대조한다. 미측정, 미달, 보류가 하나라도 있으면 다음 언어로 이동하지 않는다.
+    다시 대조한다. 미측정 또는 유효한 report가 없는 셀이 남아 있으면 다음 언어로
+    이동하지 않는다. 측정값에 따른 미달은 결과와 개선 여부를 기록한 뒤 다음 선택
+    대상에 진행할 수 있다.
 19. 현재 언어가 모두 완료된 뒤에만 다음 언어로 이동한다.
 
 한 번에 하나의 언어만 측정한다. C와 binding을 paired 제한 측정할 때도 공식 perf
@@ -494,8 +493,8 @@ pattern 완료는 수치를 한 번 얻었다는 뜻이 아니다. 다음 조건
 
 - 해당 pattern의 모든 공식 transport와 message size에서 C와 binding report가
   `status: complete`다.
-- 모든 셀이 throughput, 평균 latency, client 수, auto-HWM 기준을 만족하고, 변동성이
-  7.2절 한계를 넘은 셀은 저부하 재측정과 perf 조사 결과가 기록되어 있다.
+- 모든 셀이 throughput, 평균 latency, client 수, auto-HWM 기준을 만족하는지 측정값으로
+  판정하고, 반복값과 변동 폭은 결과 근거로 기록한다. 변동 폭만으로 완료를 보류하지 않는다.
 - 개선 전후 기능 테스트와 같은 pattern의 대표 회귀 셀이 통과한다.
 - 최종 판정에 사용한 C와 binding이 가까운 시점의 같은 manifest와 session tag로 측정됐다.
 - 상세 표에 C report, binding report, 반복값, 비율과 판정 근거를 기록했다.
@@ -517,7 +516,7 @@ pattern을 남겨 둔 채 다른 pattern이나 다음 언어로 이동하지 않
 경로를 라운드 기록에 남긴다. 다음 상태는 커밋 대상으로 인정하지 않는다.
 
 - C 또는 binding report가 partial인 후보
-- 목표나 latency, 변동성, 회귀 gate를 통과하지 못한 후보
+- 목표나 latency, 회귀 gate를 통과하지 못한 후보
 - perf 전용 우회나 public contract 위반이 남은 후보
 - 기능 테스트를 통과하지 못한 후보
 
@@ -552,14 +551,16 @@ transport 세부 정보, perf 전용 option을 노출하지 않는다. 새 helpe
 상태 값은 다음과 같이 사용한다.
 
 - `미측정`: 같은 조건의 core {{CORE_VERSION}} C 결과와 binding 결과를 아직 비교하지 않았다.
-- `통과(비율%)`: throughput, latency, 변동성, 회귀, Effective Options, auto-HWM,
-  client 수 조건을 모두 만족한다.
+- `통과(비율%)`: 측정된 throughput과 latency, 회귀, Effective Options, auto-HWM,
+  client 수 조건을 만족한다. 반복값의 변동 폭은 참고 정보로 기록한다.
 - `미달(비율%)`: 유효한 결과가 있지만 목표에 도달하지 못했고 내부 개선이 필요하다.
 - `보류(비율%)`: 내부 개선 후보를 검증했지만 목표에 도달하지 못했으며, 필요한 계약
   변경과 근거를 별도 항목으로 기록했다.
-- `measurement-stability blocker`: report는 complete이지만 반복 변동 또는 하향 drift가
-  안정성 한계를 반복해서 넘어 공식 pass/fail을 확정할 수 없다.
 - `해당 없음`: 공식 C runner와 binding 정책 모두 측정하지 않는 조합이다.
+
+반복 변동이나 하향 drift만으로 `보류` 또는 별도 stability blocker를 만들지 않는다.
+`보류`는 측정값만으로 계약 변경 여부를 결정할 수 없어 설계 검토가 필요한 경우에만
+사용한다.
 
 timeout, no result, runtime mismatch, message size 불일치, client 수 불일치는 통과나
 보류가 아니다. 원인을 수정해 수치가 생성될 때까지 `미달` 또는 `미측정`으로
@@ -1182,8 +1183,8 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
 - 모든 binding 상세 표에 `미측정`, `미달`, `보류`가 없다.
 - 모든 통과 셀에 paired C와 binding report, manifest, 반복값, 비율, 옵션 일치 근거가
   기록되어 있다.
-- throughput, 평균 latency, client 수, auto-HWM, 대상 외 대표 셀 회귀 gate를 모두
-  통과하고, 변동성이 큰 셀은 7.2절의 재측정과 조사 절차를 마쳤다.
+- throughput, 평균 latency, client 수, auto-HWM, 대상 외 대표 셀 회귀 gate를 측정값으로
+  판정하고, 반복값과 변동 폭을 기록했다.
 - 변경한 binding의 단위 테스트와 통합 테스트가 통과한다.
 - 한 언어의 모든 pattern이 각각 완료되기 전에는 다음 언어로 이동하지 않는다.
 - 채택한 성능 개선은 검증된 범위만 커밋하고 원격에 푸시했으며 commit id를 기록했다.

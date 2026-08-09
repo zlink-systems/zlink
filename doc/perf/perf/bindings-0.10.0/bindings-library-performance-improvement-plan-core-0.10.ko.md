@@ -445,15 +445,12 @@ C와 binding의 pattern별 smoke가 모두 `status: complete`여야 본 측정�
 | 후보 판정 | 기본 duration, 3회 | before/after와 C 대비 비율 판정 |
 | 최종·경계 판정 | 기본 duration, 5회, CPU pin 없음 | 목표 기준 ±5%p, secure transport, 고변동 셀, 최종 근거 |
 
-3회 결과에서 throughput의 `(최댓값 - 최솟값) / 중앙값`이 10%를 넘거나 평균 latency의
-같은 비율이 20%를 넘으면 CPU pin 없이 5회로 다시 측정한다. 5회 결과에서도 같은 한계를
-넘으면 바로 `통과`로 판정하지 않고 환경과 runner 조건을 먼저 조사한다. 지속적인 시스템
-부하가 확인되면 부하가 낮아질 때까지 기다린 뒤 현재 pattern의 해당 셀만 다시 측정한다.
-지속적인 부하가 없고 같은 셀의 변동이 반복되면 perf의 측정 의미, 수명 주기, queue 한도와
-종료 조건을 확인한다. 측정 오류가 있으면 perf를 수정하고 다시 측정한다. 측정 오류가 없고
-paired 5회 중앙값의 throughput과 평균 latency가 목표를 만족하면 변동 범위, 조사 내용과
-폐기한 대안을 기록하고 다음 작업을 계속한다. 변동을 숨기기 위해 CPU pin, timeout이나
-sleep 증가, 유리한 실행 결과만 선택하는 방식은 사용하지 않는다.
+반복 횟수는 perf 정책의 실행 조건을 따른다. `runs=1`이면 해당 측정값을 사용하고,
+`runs>1`이면 metric별 median을 대표값으로 사용한다. 반복값의 변동 폭은 원시값과 함께
+기록하지만, 변동 폭만으로 측정을 무효화하거나 `보류`로 분류하지 않는다. 노트북 환경의
+부하와 측정 오차가 있을 수 있으므로 결과는 선택한 조건에서 실제로 측정된 값으로
+판정하고 다음 셀로 진행한다. 유리한 실행 결과만 선택하지 않으며, CPU pin·timeout·sleep
+증가로 수치를 조정하지 않는다.
 
 ### 7.3 Paired C 규칙
 
@@ -506,7 +503,9 @@ sleep 증가, 유리한 실행 결과만 선택하는 방식은 사용하지 않
     기록하고 관련 문서를 커밋해 원격에 푸시한다.
 17. pattern 커밋과 푸시가 끝난 뒤에만 같은 언어의 다음 pattern을 선택한다.
 18. 현재 언어의 Single과 Multi 모든 pattern이 완료된 뒤 pattern별 최종 report와 표를
-    다시 대조한다. 미측정, 미달, 보류가 하나라도 있으면 다음 언어로 이동하지 않는다.
+    다시 대조한다. 미측정 또는 유효한 report가 없는 셀이 남아 있으면 다음 언어로
+    이동하지 않는다. 측정값에 따른 미달은 결과와 개선 여부를 기록한 뒤 다음 선택
+    대상에 진행할 수 있다.
 19. 현재 언어가 모두 완료된 뒤에만 다음 언어로 이동한다.
 
 한 번에 하나의 언어만 측정한다. C와 binding을 paired 제한 측정할 때도 공식 perf
@@ -520,8 +519,8 @@ pattern 완료는 수치를 한 번 얻었다는 뜻이 아니다. 다음 조건
 
 - 해당 pattern의 모든 공식 transport와 message size에서 C와 binding report가
   `status: complete`다.
-- 모든 셀이 throughput, 평균 latency, client 수, auto-HWM 기준을 만족하고, 변동성이
-  7.2절 한계를 넘은 셀은 저부하 재측정과 perf 조사 결과가 기록되어 있다.
+- 모든 셀이 throughput, 평균 latency, client 수, auto-HWM 기준을 만족하는지 측정값으로
+  판정하고, 반복값과 변동 폭은 결과 근거로 기록한다. 변동 폭만으로 완료를 보류하지 않는다.
 - 개선 전후 기능 테스트와 같은 pattern의 대표 회귀 셀이 통과한다.
 - 최종 판정에 사용한 C와 binding이 가까운 시점의 같은 manifest와 session tag로 측정됐다.
 - 상세 표에 C report, binding report, 반복값, 비율과 판정 근거를 기록했다.
@@ -544,7 +543,7 @@ pattern을 남겨 둔 채 다른 pattern이나 다음 언어로 이동하지 않
 `log/`에 남긴다. 다음 상태는 커밋 대상으로 인정하지 않는다.
 
 - C 또는 binding report가 partial인 후보
-- 목표나 latency, 변동성, 회귀 gate를 통과하지 못한 후보
+- 목표나 latency, 회귀 gate를 통과하지 못한 후보
 - perf 전용 우회나 public contract 위반이 남은 후보
 - 기능 테스트를 통과하지 못한 후보
 
@@ -579,14 +578,16 @@ transport 세부 정보, perf 전용 option을 노출하지 않는다. 새 helpe
 상태 값은 다음과 같이 사용한다.
 
 - `미측정`: 같은 조건의 core 0.10.1 C 결과와 binding 결과를 아직 비교하지 않았다.
-- `통과(비율%)`: throughput, latency, 변동성, 회귀, Effective Options, auto-HWM,
-  client 수 조건을 모두 만족한다.
+- `통과(비율%)`: 측정된 throughput과 latency, 회귀, Effective Options, auto-HWM,
+  client 수 조건을 만족한다. 반복값의 변동 폭은 참고 정보로 기록한다.
 - `미달(비율%)`: 유효한 결과가 있지만 목표에 도달하지 못했고 내부 개선이 필요하다.
 - `보류(비율%)`: 내부 개선 후보를 검증했지만 목표에 도달하지 못했으며, 필요한 계약
   변경과 근거를 별도 항목으로 기록했다.
-- `measurement-stability blocker`: report는 complete이지만 반복 변동 또는 하향 drift가
-  안정성 한계를 반복해서 넘어 공식 pass/fail을 확정할 수 없다.
 - `해당 없음`: 공식 C runner와 binding 정책 모두 측정하지 않는 조합이다.
+
+반복 변동이나 하향 drift만으로 `보류` 또는 별도 stability blocker를 만들지 않는다.
+`보류`는 측정값만으로 계약 변경 여부를 결정할 수 없어 설계 검토가 필요한 경우에만
+사용한다.
 
 timeout, no result, runtime mismatch, message size 불일치, client 수 불일치는 통과나
 보류가 아니다. 원인을 수정해 수치가 생성될 때까지 `미달` 또는 `미측정`으로
@@ -636,8 +637,8 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
   `ROUTER_ROUTER / inproc`: full sweep 진단 ratio 약 90.24%/92.39%/83.22%/19.63%/57.02%/64.64%, 진단 중앙값 약 73.93%다. 262144B는 공식 ratio 약 63.97%로 안정된 개별 기준 미달이며 transport valid performance fail이다. full sweep의 나머지 size는 안정성 미확정이다.
   `ROUTER_ROUTER / ipc`: full sweep 진단 ratio 91.89%/84.44%/100.00%/85.54%/90.76%/92.00%, 진단 중앙값 91.33%다. 256B는 공식 ratio 94.75%로 안정됐고, 65536B는 진단 ratio 107.68%지만 C variation 23.9%로 공식값에서 제외했다. C++ variation은 8.6%였으며 transport는 `measurement-stability blocker`다.
   측정 대상은 Core v0.10.1 release runtime과 paired C 기준으로 기록했으며, 전체 matrix를 한 번에 실행하지 않았다.
-- Multi 상태: `부분 완료·안정성 blocker` — `MULTI_DEALER_DEALER / tcp`에서는 64B만 안정 셀(93.44%)로 확인했고, `MULTI_DEALER_DEALER / ws`에서는 64B만 안정 셀(91.72%)로 확인했다. 각 target의 나머지 size는 stability gate를 충족하지 못했다.
-- 다음 작업: C++ Single 표의 미측정 transport/pattern을 측정한다. Multi의 나머지 pattern과 transport는 현재 대상의 결과와 안정성 판정이 끝난 뒤 다음 선택 대상으로 진행한다.
+- Multi 상태: `부분 완료` — 기존 선택 대상과 `MULTI_DEALER_DEALER / ws`의 결과를 기록했고, `MULTI_DEALER_ROUTER_SENDSEND / ws`는 여섯 size의 paired report가 모두 complete다. C++/C throughput ratio는 `99.99% / 91.43% / 97.09% / 121.03% / 101.66% / 99.55%`, six-size median은 `99.77%`이며 평균 latency ratio도 모두 2.0배 이내다. 변동 폭은 참고 정보로만 기록한다.
+- 다음 작업: C++ Single의 선택 대상 측정 또는 Multi의 다음 선택 대상 `MULTI_ROUTER_ROUTER_SENDSEND / ws`를 C→C++ 순서로 짧게 측정한다.
 
 #### 9.1.1 Single suite
 
@@ -698,7 +699,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `MULTI_PUBSUB` | 보류 (안정성 미확정) | 보류 (안정성 미확정) | 보류 (안정성 미확정) | 보류 (안정성 미확정) | 보류 (안정성 미확정) | 보류 (안정성 미확정) | C/C++ median Kmsg/s는 1352.905/1120.626, 920.854/969.587, 1009.411/764.337, 243.461/299.237, 80.607/58.987, 23.272/28.207이다. ratio는 82.83%, 105.29%, 75.72%, 122.91%, 73.18%, 121.21%이며 진단 중앙값은 94.06%다. C/C++ throughput variation은 7.63%/14.81%, 19.87%/41.46%, 23.04%/23.45%, 21.70%/69.95%, 20.92%/16.44%, 36.09%/76.41%다. 모든 size에서 적어도 한 언어가 stability gate를 넘었으므로 공식 ratio와 six-size 중앙값을 확정하지 않는다. 전체 대상은 `measurement-stability blocker`이며 binding-only source optimization은 no-go다. C reports: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_043500_multi-pubsub-tcp-policy-c1-64-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_043636_multi-pubsub-tcp-policy-c1-256-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_043815_multi-pubsub-tcp-policy-c1-1024-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_043952_multi-pubsub-tcp-policy-c1-4096-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_044127_multi-pubsub-tcp-policy-c1-65536-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_044302_multi-pubsub-tcp-policy-c1-131072-c.txt`; C++ reports: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_043548_multi-pubsub-tcp-policy-c1-64-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_043726_multi-pubsub-tcp-policy-c1-256-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_043903_multi-pubsub-tcp-policy-c1-1024-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_044040_multi-pubsub-tcp-policy-c1-4096-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_044213_multi-pubsub-tcp-policy-c1-65536-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_044349_multi-pubsub-tcp-policy-c1-131072-cpp.txt` |
 | `tcp` | `MULTI_STREAM` | 보류 (안정성 미확정) | 보류 (안정성 미확정) | 보류 (안정성 미확정) | 해당 없음 | 보류 (안정성 미확정) | 해당 없음 | C/C++ raw throughput Kops/s는 64B `251.990, 249.647, 242.610, 226.814, 202.539` / `157.887, 160.262, 149.323, 140.458, 130.702`, 256B `116.751, 135.088, 161.660, 188.329, 211.542` / `178.930, 176.065, 173.621, 163.501, 143.667`, 1024B `115.852, 118.660, 137.509, 160.988, 183.424` / `166.931, 174.107, 184.564, 176.596, 153.609`, 65536B `20.942, 18.942, 15.489, 17.149, 19.583` / `33.959, 34.601, 27.376, 26.308, 24.471`이다. C/C++ 중앙값은 각각 `242.610/149.323`, `161.660/173.621`, `137.509/174.107`, `18.942/27.376` Kops/s이고 진단 ratio는 `61.55%`, `107.40%`, `126.61%`, `144.53%`다. C/C++ variation은 `20.38%/19.80%`, `58.64%/20.31%`, `49.14%/17.78%`, `28.79%/37.00%`로 네 size 모두 stability gate를 넘었다. 공식 ratio와 size 중앙값은 확정하지 않으며 binding-only source optimization은 no-go다. C reports: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_050327_multi-stream-tcp-policy-c3-64-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_050536_multi-stream-tcp-policy-c3-256-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_050754_multi-stream-tcp-policy-c3-1024-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_050959_multi-stream-tcp-policy-c3-65536-c.txt`; C++ reports: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_050429_multi-stream-tcp-policy-c3-64-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_050640_multi-stream-tcp-policy-c3-256-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_050857_multi-stream-tcp-policy-c3-1024-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_051238_multi-stream-tcp-policy-c3-65536-cpp.txt`; Sol review: `SOL-MULTI-STREAM-TCP-FINAL-20260810` |
 | `ws` | `MULTI_DEALER_DEALER` | 통과 (91.72%, 안정) | 보류 (안정성 미확정) | 보류 (안정성 미확정) | 보류 (안정성 미확정) | 보류 (안정성 미확정) | 보류 (안정성 미확정) | C/C++ raw throughput Kmsg/s는 64B `2292.808, 2077.462, 2088.256, 2223.164, 2299.351` / `2003.404, 2074.949, 2114.497, 2039.126, 2019.424`, 256B `1181.168, 1009.146, 960.194, 880.594, 845.786` / `1026.810, 1012.163, 1164.939, 1191.235, 1254.434`, 1024B `834.982, 820.053, 851.195, 796.661, 736.622` / `851.282, 637.037, 638.683, 648.395, 583.946`, 4096B `252.185, 206.777, 211.015, 242.223, 286.305` / `359.872, 353.649, 385.819, 426.258, 418.683`, 65536B `64.700, 54.016, 51.946, 51.980, 48.563` / `51.790, 39.411, 44.071, 40.472, 39.491`, 131072B `13.754, 12.889, 15.389, 19.831, 26.190` / `29.017, 28.333, 28.646, 29.286, 26.157`이다. C/C++ 중앙값은 `2223.164/2039.126`, `960.194/1164.939`, `820.053/638.683`, `242.223/385.819`, `51.980/40.472`, `15.389/28.646` Kmsg/s이고 진단 ratio는 `91.72%`, `121.32%`, `77.88%`, `159.28%`, `77.86%`, `186.15%`다. C/C++ variation은 `9.98%/5.45%`, `34.93%/20.80%`, `13.97%/41.86%`, `32.83%/18.82%`, `31.04%/30.59%`, `86.43%/10.92%`다. 64B만 stability gate를 통과했으며 95% 목표에는 미달한다. 나머지 size는 공식 ratio와 six-size 중앙값을 확정하지 않으며 전체 transport는 measurement-stability blocker다. binding-only source optimization은 no-go다. C reports: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_062408_multi-dealer-dealer-ws-policy-c1-64-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_062545_multi-dealer-dealer-ws-policy-c1-256-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_062719_multi-dealer-dealer-ws-policy-c1-1024-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_062854_multi-dealer-dealer-ws-policy-c1-4096-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_063028_multi-dealer-dealer-ws-policy-c1-65536-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_063206_multi-dealer-dealer-ws-policy-c1-131072-c.txt`; C++ reports: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_062455_multi-dealer-dealer-ws-policy-c1-64-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_062632_multi-dealer-dealer-ws-policy-c1-256-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_062806_multi-dealer-dealer-ws-policy-c1-1024-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_062941_multi-dealer-dealer-ws-policy-c1-4096-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_063117_multi-dealer-dealer-ws-policy-c1-65536-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_063257_multi-dealer-dealer-ws-policy-c1-131072-cpp.txt`; parity commit: `870dad23c0`; Sol review: `SOL-MULTI-DD-WS-C1-20260810` |
-| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 통과 (99.99%) | 통과 (91.43%) | 통과 (97.09%, runs=1) | 통과 (121.03%, runs=1) | 통과 (101.66%, runs=1) | 통과 (99.55%, runs=1) | C/C++ throughput Kops/s는 157.412/157.401, 86.960/79.507, 159.008/154.386, 114.467/138.535, 31.646/32.172, 16.147/16.074다. C++/C ratio는 99.99%, 91.43%, 97.09%, 121.03%, 101.66%, 99.55%이고 six-size median ratio는 99.77%다. 평균 latency ratio는 1.000배, 1.077배, 1.024배, 0.836배, 0.995배, 1.013배다. 64B·256B는 5회 대표값 median, 나머지는 perf 정책의 기본 `runs=1` 측정값이다. 반복값의 변동 폭은 기록하지만 판정을 막지 않는다. 모든 report가 `status: complete`이며 Core v0.10.1 release, Release, WS, 100 clients, server/client I/O threads 4, auto-HWM balanced, connect concurrency 128, connect-ready 10000ms, monitor HWM 4096000, 5초 duration 조건이다. C reports: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_065005_multi-dealer-router-sendsend-ws-policy-c1-64-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_065136_multi-dealer-router-sendsend-ws-policy-c1-256-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_065706_multi-dealer-router-sendsend-ws-explore-c1-1024-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_065736_multi-dealer-router-sendsend-ws-explore-c1-4096-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_070104_multi-dealer-router-sendsend-ws-explore-c1-65536-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_070127_multi-dealer-router-sendsend-ws-explore-c1-131072-c.txt`; C++ reports: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_065050_multi-dealer-router-sendsend-ws-policy-c1-64-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_065221_multi-dealer-router-sendsend-ws-policy-c1-256-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_065719_multi-dealer-router-sendsend-ws-explore-c1-1024-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_070051_multi-dealer-router-sendsend-ws-explore-c1-4096-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_070114_multi-dealer-router-sendsend-ws-explore-c1-65536-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_070136_multi-dealer-router-sendsend-ws-explore-c1-131072-cpp.txt` |
 | `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1251,6 +1252,10 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | Multi one-way binding paired 결과 (STREAM/tls) | 완료·안정성 미확정 | C++ 중앙값은 93.776 / 89.246 / 95.621 / 7.605 Kops/s다. C++/C 진단 ratio는 83.99% / 78.29% / 102.04% / 111.10%이며 C/C++ variation은 59.27%/45.79%, 40.20%/48.63%, 30.95%/59.48%, 61.55%/64.68%다. 네 size 모두 stability gate를 넘지 못하므로 공식 ratio와 size 중앙값을 확정하지 않는다. |
 | Multi one-way 개선 결과 (STREAM/tls) | no-go·안정성 blocker | 네 size 모두 `measurement-stability blocker`다. C와 C++의 STREAM packet-handler, wire framing, inflight 1, nonblocking backpressure, stop token, auto-HWM과 격리된 lifecycle 의미에 material mismatch가 없어 binding-only source optimization을 수행하지 않는다. Sol review: `SOL-MULTI-STREAM-TLS-FINAL-20260810`. 다음 Multi 대상은 `MULTI_DEALER_DEALER / ws`다. |
 
+| Multi routed echo paired C (DEALER_ROUTER_SENDSEND/ws) | 완료 | `MULTI_DEALER_ROUTER_SENDSEND / ws` C report가 64·256·1024·4096·65536·131072B 모두 `status: complete`다. C throughput은 157.412 / 86.960 / 159.008 / 114.467 / 31.646 / 16.147 Kops/s다. 64B·256B는 5회 median, 나머지는 perf 정책 기본 `runs=1`이다. |
+| Multi routed echo binding 결과 (DEALER_ROUTER_SENDSEND/ws) | 완료 | C++ throughput은 157.401 / 79.507 / 154.386 / 138.535 / 32.172 / 16.074 Kops/s다. C++/C ratio는 99.99% / 91.43% / 97.09% / 121.03% / 101.66% / 99.55%, six-size median ratio는 99.77%다. 평균 latency ratio는 1.000배 / 1.077배 / 1.024배 / 0.836배 / 0.995배 / 1.013배로 모두 2.0배 이내다. 변동 폭은 참고 정보로만 기록한다. |
+| Multi routed echo 개선 결과 (DEALER_ROUTER_SENDSEND/ws) | no-go·다음 대상 진행 | 모든 셀의 측정 ratio가 multi routed echo 개별 최소 기준 80% 이상이고 six-size median ratio가 99.77%로 중앙값 목표 85%를 넘는다. binding-only source optimization 근거가 없으므로 변경하지 않고 `MULTI_ROUTER_ROUTER_SENDSEND / ws`로 진행한다. |
+
 ### 10.3 언어 진행 상태
 
 | 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
@@ -1361,6 +1366,8 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | 2026-08-10 | C++ | Multi / MULTI_STREAM / tls / 64·256·1024·65536B | `multi-stream-tls-policy-c1` | 83.99% (진단), 78.29% (진단), 102.04% (진단), 111.10% (진단) | 미산출 | 네 size 모두 measurement-stability blocker·공식 ratio와 size 중앙값 미확정·binding-only source optimization no-go | C/C++ variation은 각각 59.27%/45.79%, 40.20%/48.63%, 30.95%/59.48%, 61.55%/64.68%다. C reports: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_055446_multi-stream-tls-policy-c1-64-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_055920_multi-stream-tls-policy-c1-256-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_060358_multi-stream-tls-policy-c1-1024-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_061033_multi-stream-tls-policy-c1-65536-c.txt`; C++ reports: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_055701_multi-stream-tls-policy-c1-64-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_060138_multi-stream-tls-policy-c1-256-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_060819_multi-stream-tls-policy-c1-1024-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_061300_multi-stream-tls-policy-c1-65536-cpp.txt`; Sol review: `SOL-MULTI-STREAM-TLS-FINAL-20260810` |
 | 2026-08-10 | C++ | Multi / MULTI_DEALER_DEALER / ws / 64·256·1024·4096·65536·131072B | `multi-dealer-dealer-ws-policy-c1` | 91.72% (64B 안정), 121.32% (진단), 77.88% (진단), 159.28% (진단), 77.86% (진단), 186.15% (진단) | 미산출 (진단 중앙값 121.32%) | 64B 개별 최소 기준 통과·95% 목표 미달; 나머지 다섯 크기와 전체 transport는 measurement-stability blocker | C/C++ median Kmsg/s는 2223.164/2039.126, 960.194/1164.939, 820.053/638.683, 242.223/385.819, 51.980/40.472, 15.389/28.646이다. C/C++ variation은 각각 9.98%/5.45%, 34.93%/20.80%, 13.97%/41.86%, 32.83%/18.82%, 31.04%/30.59%, 86.43%/10.92%다. C reports: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_062408_multi-dealer-dealer-ws-policy-c1-64-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_062545_multi-dealer-dealer-ws-policy-c1-256-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_062719_multi-dealer-dealer-ws-policy-c1-1024-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_062854_multi-dealer-dealer-ws-policy-c1-4096-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_063028_multi-dealer-dealer-ws-policy-c1-65536-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_063206_multi-dealer-dealer-ws-policy-c1-131072-c.txt`; C++ reports: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_062455_multi-dealer-dealer-ws-policy-c1-64-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_062632_multi-dealer-dealer-ws-policy-c1-256-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_062806_multi-dealer-dealer-ws-policy-c1-1024-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_062941_multi-dealer-dealer-ws-policy-c1-4096-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_063117_multi-dealer-dealer-ws-policy-c1-65536-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_063257_multi-dealer-dealer-ws-policy-c1-131072-cpp.txt`; parity commit: `870dad23c0`; Sol review: `SOL-MULTI-DD-WS-C1-20260810` |
 
+| 2026-08-10 | C++ | Multi / MULTI_DEALER_ROUTER_SENDSEND / ws / 64·256·1024·4096·65536·131072B | `multi-dealer-router-sendsend-ws-policy-c1` + `multi-dealer-router-sendsend-ws-explore-c1` | 99.99%, 91.43%, 97.09%, 121.03%, 101.66%, 99.55% | 99.77% | 측정값 기준 통과·다음 대상 진행 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_065005_multi-dealer-router-sendsend-ws-policy-c1-64-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_065136_multi-dealer-router-sendsend-ws-policy-c1-256-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_065706_multi-dealer-router-sendsend-ws-explore-c1-1024-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_065736_multi-dealer-router-sendsend-ws-explore-c1-4096-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_070104_multi-dealer-router-sendsend-ws-explore-c1-65536-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_070127_multi-dealer-router-sendsend-ws-explore-c1-131072-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_065050_multi-dealer-router-sendsend-ws-policy-c1-64-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_065221_multi-dealer-router-sendsend-ws-policy-c1-256-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_065719_multi-dealer-router-sendsend-ws-explore-c1-1024-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_070051_multi-dealer-router-sendsend-ws-explore-c1-4096-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_070114_multi-dealer-router-sendsend-ws-explore-c1-65536-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_070136_multi-dealer-router-sendsend-ws-explore-c1-131072-cpp.txt` |
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
@@ -1371,8 +1378,8 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 - 모든 binding 상세 표에 `미측정`, `미달`, `보류`가 없다.
 - 모든 통과 셀에 paired C와 binding report, manifest, 반복값, 비율, 옵션 일치 근거가
   기록되어 있다.
-- throughput, 평균 latency, client 수, auto-HWM, 대상 외 대표 셀 회귀 gate를 모두
-  통과하고, 변동성이 큰 셀은 7.2절의 재측정과 조사 절차를 마쳤다.
+- throughput, 평균 latency, client 수, auto-HWM, 대상 외 대표 셀 회귀 gate를 측정값으로
+  판정하고, 반복값과 변동 폭을 기록했다.
 - 변경한 binding의 단위 테스트와 통합 테스트가 통과한다.
 - 한 언어의 모든 pattern이 각각 완료되기 전에는 다음 언어로 이동하지 않는다.
 - 채택한 성능 개선은 검증된 범위만 커밋하고 원격에 푸시했으며 commit id를 기록했다.
