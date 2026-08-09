@@ -862,13 +862,6 @@ public sealed partial class UnhandledDispatchPolicyTests
         }
     }
 
-    private sealed class TestActor(string actorId) : IZLinkActor
-    {
-        public string ActorId { get; } = actorId;
-
-        public IZLinkActorContext Context { get; } = new TestActorContext(actorId);
-    }
-
     private sealed class TestActorSpot;
 
     private sealed class TestActorSendProbe

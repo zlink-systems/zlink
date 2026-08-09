@@ -12,7 +12,7 @@ public sealed class RelocationStartupRecoveryTests
     public async Task StandaloneActorSourceOwnedPrecommitRootIsRecovered(
         byte phase)
     {
-        var relocation = new RecoveryRelocationStore();
+        var relocation = new InMemoryRelocationStore();
         var canonical = CreateCanonicalActorRoot();
         var stored = await ZLinkRelocationTreeStore.PutAsync(
             relocation,
@@ -70,7 +70,7 @@ public sealed class RelocationStartupRecoveryTests
         ]);
         var recovery = new ZLinkRelocationStartupRecovery(
             authority,
-            new RecoveryRelocationStore());
+            new InMemoryRelocationStore());
         var offered = 0;
         ZLinkAuthorityEntry? preparing = null;
 
@@ -225,7 +225,7 @@ public sealed class RelocationStartupRecoveryTests
     public async Task PreparedRootCanBeReadByManifestBeforeAuthorityPublication()
     {
         var authority = new RecoveryAuthorityStore([]);
-        var relocation = new RecoveryRelocationStore();
+        var relocation = new InMemoryRelocationStore();
         var coordinator = new ZLinkRelocationPublicationCoordinator(
             authority,
             relocation);
@@ -271,7 +271,7 @@ public sealed class RelocationStartupRecoveryTests
 
     private sealed record RecoveryFixture(
         RecoveryAuthorityStore Authority,
-        RecoveryRelocationStore Relocation,
+        InMemoryRelocationStore Relocation,
         string Reference,
         ZLinkRelocationEnvelope Envelope)
     {
@@ -279,7 +279,7 @@ public sealed class RelocationStartupRecoveryTests
             ZLinkPlacementObjectKind spotKind =
                 ZLinkPlacementObjectKind.UserSpot)
         {
-            var relocation = new RecoveryRelocationStore();
+            var relocation = new InMemoryRelocationStore();
             var envelope = CreateEnvelope(spotKind);
             var coordinator = new ZLinkRelocationPublicationCoordinator(
                 new RecoveryAuthorityStore([]),
@@ -467,83 +467,6 @@ public sealed class RelocationStartupRecoveryTests
                 new ZLinkCapacityVector(1, 0, null)),
             null,
             DateTimeOffset.UnixEpoch));
-
-    private sealed class RecoveryRelocationStore : IZLinkRelocationRepository
-    {
-        private readonly Dictionary<string, byte[]> _roots =
-            new(StringComparer.Ordinal);
-
-        internal void Remove(string reference) => _roots.Remove(reference);
-        internal bool Contains(string reference) => _roots.ContainsKey(reference);
-
-        public ValueTask<ZLinkRelocationStored> PutRelocationAsync(
-            ReadOnlyMemory<byte> payload,
-            TimeSpan retention,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var bytes = payload.ToArray();
-            var reference = Convert.ToHexString(
-                System.Security.Cryptography.SHA256.HashData(bytes));
-            _roots[reference] = bytes;
-            var now = DateTimeOffset.UnixEpoch;
-            return ValueTask.FromResult(new ZLinkRelocationStored(
-                reference,
-                ZLinkCrc32C.Compute(bytes),
-                now + retention,
-                now));
-        }
-
-        public ValueTask<ZLinkRelocationStored> PutRelocationAtAsync(
-            string reference,
-            ReadOnlyMemory<byte> payload,
-            TimeSpan retention,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var bytes = payload.ToArray();
-            if (_roots.TryGetValue(reference, out var current)
-                && !current.AsSpan().SequenceEqual(bytes))
-                throw new InvalidDataException("Relocation reference collision.");
-            _roots[reference] = bytes;
-            var now = DateTimeOffset.UnixEpoch;
-            return ValueTask.FromResult(new ZLinkRelocationStored(
-                reference,
-                ZLinkCrc32C.Compute(bytes),
-                now + retention,
-                now));
-        }
-
-        public ValueTask<ZLinkRelocationReadResult> GetRelocationAsync(
-            string reference,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult<ZLinkRelocationReadResult>(
-                _roots.TryGetValue(reference, out var root)
-                    ? new ZLinkRelocationReadResult.Found(root)
-                    : new ZLinkRelocationReadResult.Missing());
-
-        public ValueTask<ZLinkRelocationRenewResult> RenewRelocationAsync(
-            string reference,
-            TimeSpan retention,
-            CancellationToken cancellationToken = default)
-        {
-            var now = DateTimeOffset.UnixEpoch;
-            return ValueTask.FromResult<ZLinkRelocationRenewResult>(
-                _roots.ContainsKey(reference)
-                    ? new ZLinkRelocationRenewResult.Renewed(
-                        now + retention,
-                        now)
-                    : new ZLinkRelocationRenewResult.Missing());
-        }
-
-        public ValueTask<ZLinkRelocationDeleteResult> DeleteRelocationAsync(
-            string reference,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult(
-                _roots.Remove(reference)
-                    ? ZLinkRelocationDeleteResult.Deleted
-                    : ZLinkRelocationDeleteResult.Missing);
-    }
 
     private sealed class RecoveryAuthorityStore(
         IReadOnlyList<ZLinkAuthorityEntry> entries) : ZLinkLocationStoreTestDouble

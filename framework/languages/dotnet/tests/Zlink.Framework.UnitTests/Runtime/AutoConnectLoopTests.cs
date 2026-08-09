@@ -103,7 +103,7 @@ public sealed class AutoConnectLoopTests
         var tracker = new ZLinkOwnerLeaseTracker(store, options, time);
         var resolvers = new ZLinkStoreLocationResolvers(
             store, tracker, new ZLinkObservedLocationGenerations());
-        var executor = new RecordingExecutor();
+        var executor = new RecordingAutoConnectExecutor();
         var local = new ZLinkAutoConnectLocal(
             ZLinkLocationAutoConnectType.ClientServer, Mesh("play"), ZLinkLocationRole.Dealer,
             NodeRid: null, Endpoint: string.Empty);
@@ -188,7 +188,7 @@ public sealed class AutoConnectLoopTests
         await runtime.RenewOwnerLeaseOnceAsync();
         var peer = InMemoryLocationStoreTests.MeshNode("peer-owner", "tcp://r:1", "r1");
         var resolver = new SwitchablePeerResolver([peer]);
-        var executor = new RecordingExecutor();
+        var executor = new RecordingAutoConnectExecutor();
         var local = new ZLinkAutoConnectLocal(
             ZLinkLocationAutoConnectType.ClientServer, Mesh("play"), ZLinkLocationRole.Dealer,
             NodeRid: null, Endpoint: string.Empty);
@@ -214,17 +214,6 @@ public sealed class AutoConnectLoopTests
         time.Advance(options.OwnerLeaseRenewInterval + TimeSpan.FromMilliseconds(1));
         await loop.TickAsync();
         Assert.Single(executor.Disconnected);
-    }
-
-    private sealed class RecordingExecutor : IZLinkAutoConnectExecutor
-    {
-        public List<ZLinkAutoConnectTarget> Connected { get; } = [];
-
-        public List<ZLinkAutoConnectTarget> Disconnected { get; } = [];
-
-        public bool Connect(ZLinkAutoConnectTarget target) { Connected.Add(target); return true; }
-
-        public bool Disconnect(ZLinkAutoConnectTarget target) { Disconnected.Add(target); return true; }
     }
 
     private sealed class CountingPeerResolver(IZLinkMeshNodeLocationResolver inner)

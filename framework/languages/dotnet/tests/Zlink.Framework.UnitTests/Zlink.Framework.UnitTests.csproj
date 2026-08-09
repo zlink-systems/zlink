@@ -50,9 +50,13 @@
         <Compile Include="Contracts/ScaffoldSmokeTests.cs"/>
         <Compile Include="Contracts/SpotContractTests.cs"/>
         <Compile Include="Documentation/Regression.cs"/>
-        <Compile Include="Support/TestActorContext.cs"/>
-        <Compile Include="Support/OwnerLeaseTestSupport.cs"/>
-        <Compile Include="Support/ZLinkLocationStoreTestDouble.cs"/>
+        <Compile Include="Support/Actors/TestActor.cs"/>
+        <Compile Include="Support/Actors/TestActorContext.cs"/>
+        <Compile Include="Support/AutoConnect/RecordingAutoConnectExecutor.cs"/>
+        <Compile Include="Support/Locations/OwnerLeaseTestSupport.cs"/>
+        <Compile Include="Support/Locations/ZLinkLocationStoreTestDouble.cs"/>
+        <Compile Include="Support/Relocation/InMemoryRelocationStore.cs"/>
+        <Compile Include="Support/Sessions/TestSession.cs"/>
         <Compile Include="Runtime/AutoConnectLoopTests.cs"/>
         <Compile Include="Runtime/AutoConnectLifecycleCoordinatorTests.cs"/>
         <Compile Include="Runtime/AutoConnectReconcilerTests.cs"/>

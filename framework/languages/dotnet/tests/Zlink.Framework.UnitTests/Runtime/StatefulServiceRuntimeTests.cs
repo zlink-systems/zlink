@@ -2299,7 +2299,7 @@ public sealed class StatefulServiceRuntimeTests
     [Fact]
     public async Task InstanceSpotMonitoringIncludesPreparedActivation()
     {
-        var relocationStore = new TestRelocationStore();
+        var relocationStore = new InMemoryRelocationStore();
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
         {
@@ -2356,7 +2356,7 @@ public sealed class StatefulServiceRuntimeTests
     public async Task InstanceSpotIdleInspectionRotatesWithABoundedBatch()
     {
         const string stableType = "Tests.IdleBatchInstanceSpot";
-        var relocationStore = new TestRelocationStore();
+        var relocationStore = new InMemoryRelocationStore();
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
         {
@@ -2484,7 +2484,7 @@ public sealed class StatefulServiceRuntimeTests
         var targetEndpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
         var sourceEndpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
         const string stableType = "Tests.ProductionUserSpot";
-        var relocationStore = new TestRelocationStore();
+        var relocationStore = new InMemoryRelocationStore();
 
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
@@ -4079,75 +4079,4 @@ public sealed class StatefulServiceRuntimeTests
     }
 
     private sealed record ProductionCreateReply(string Value);
-
-    private sealed class TestRelocationStore : IZLinkRelocationRepository
-    {
-        private readonly Dictionary<string, byte[]> _payloads =
-            new(StringComparer.Ordinal);
-
-        public ValueTask<ZLinkRelocationStored> PutRelocationAsync(
-            ReadOnlyMemory<byte> payload,
-            TimeSpan retention,
-            CancellationToken cancellationToken = default)
-        {
-            var bytes = payload.ToArray();
-            var reference = Convert.ToHexString(
-                System.Security.Cryptography.SHA256.HashData(bytes));
-            _payloads[reference] = bytes;
-            var now = DateTimeOffset.UtcNow;
-            return ValueTask.FromResult(new ZLinkRelocationStored(
-                reference,
-                Zlink.Framework.Runtime.Locations.ZLinkCrc32C.Compute(bytes),
-                now + retention,
-                now));
-        }
-
-        public ValueTask<ZLinkRelocationStored> PutRelocationAtAsync(
-            string reference,
-            ReadOnlyMemory<byte> payload,
-            TimeSpan retention,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var bytes = payload.ToArray();
-            if (_payloads.TryGetValue(reference, out var current)
-                && !current.AsSpan().SequenceEqual(bytes))
-                throw new InvalidDataException("Relocation reference collision.");
-            _payloads[reference] = bytes;
-            var now = DateTimeOffset.UtcNow;
-            return ValueTask.FromResult(new ZLinkRelocationStored(
-                reference,
-                Zlink.Framework.Runtime.Locations.ZLinkCrc32C.Compute(bytes),
-                now + retention,
-                now));
-        }
-
-        public ValueTask<ZLinkRelocationReadResult> GetRelocationAsync(
-            string reference,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult<ZLinkRelocationReadResult>(
-                _payloads.TryGetValue(reference, out var payload)
-                    ? new ZLinkRelocationReadResult.Found(payload)
-                    : new ZLinkRelocationReadResult.Missing());
-
-        public ValueTask<ZLinkRelocationRenewResult> RenewRelocationAsync(
-            string reference,
-            TimeSpan retention,
-            CancellationToken cancellationToken = default)
-        {
-            var now = DateTimeOffset.UtcNow;
-            return ValueTask.FromResult<ZLinkRelocationRenewResult>(
-                _payloads.ContainsKey(reference)
-                    ? new ZLinkRelocationRenewResult.Renewed(now + retention, now)
-                    : new ZLinkRelocationRenewResult.Missing());
-        }
-
-        public ValueTask<ZLinkRelocationDeleteResult> DeleteRelocationAsync(
-            string reference,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult(
-                _payloads.Remove(reference)
-                    ? ZLinkRelocationDeleteResult.Deleted
-                    : ZLinkRelocationDeleteResult.Missing);
-    }
 }

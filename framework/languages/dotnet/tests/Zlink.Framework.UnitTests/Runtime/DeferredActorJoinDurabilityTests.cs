@@ -11,7 +11,7 @@ public sealed class DeferredActorJoinDurabilityTests
     public async Task Aggregate_actor_without_join_completion_is_a_no_op()
     {
         var authority = CreateAuthority();
-        var relocation = new TestRelocationStore();
+        var relocation = new InMemoryRelocationStore();
         var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey("actor-1");
         var envelope = new ZLinkRelocationEnvelope(
             Guid.NewGuid(),
@@ -95,7 +95,7 @@ public sealed class DeferredActorJoinDurabilityTests
     public async Task Completion_publication_preserves_the_canonical_relocation_participant()
     {
         var authority = CreateAuthority();
-        var relocation = new TestRelocationStore();
+        var relocation = new InMemoryRelocationStore();
         var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey("actor-1");
         var applicationState = new byte[] { 1, 3, 5, 7 };
         var acceptedJob = new ZLinkRelocationQueuedJob(9, new byte[] { 2, 4, 6 });
@@ -173,7 +173,7 @@ public sealed class DeferredActorJoinDurabilityTests
         bool legacyRecovery)
     {
         var authority = CreateAuthority();
-        var relocation = new TestRelocationStore();
+        var relocation = new InMemoryRelocationStore();
         var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey("actor-1");
         Assert.True(ZLinkActorAuthorityPayloadCodec.TryDecodeDirect(
             authority.Snapshot.Payload.Span,
@@ -433,7 +433,7 @@ public sealed class DeferredActorJoinDurabilityTests
     public async Task Prepared_completion_survives_journal_recreation_with_raw_reply()
     {
         var authority = CreateAuthority();
-        var relocation = new TestRelocationStore();
+        var relocation = new InMemoryRelocationStore();
         var actor = new ActorRef("actor-1", 7, "play", RoutingId.From("node-target"));
         var operation = new ZLinkActorJoinOperationId(11, 29);
 
@@ -466,7 +466,7 @@ public sealed class DeferredActorJoinDurabilityTests
     public async Task Committed_cursor_retries_callback_without_repeating_owner_commit()
     {
         var authority = CreateAuthority();
-        var relocation = new TestRelocationStore();
+        var relocation = new InMemoryRelocationStore();
         var actor = new ActorRef("actor-1", 7, "play", RoutingId.From("node-target"));
         var operation = new ZLinkActorJoinOperationId(13, 31);
         var journal = new ZLinkDeferredActorJoinCompletionJournal(authority, relocation);
@@ -499,7 +499,7 @@ public sealed class DeferredActorJoinDurabilityTests
     public async Task Delivered_cursor_deduplicates_retry_and_releases_root_in_order()
     {
         var authority = CreateAuthority();
-        var relocation = new TestRelocationStore();
+        var relocation = new InMemoryRelocationStore();
         var actor = new ActorRef("actor-1", 7, "play", RoutingId.From("node-target"));
         var operation = new ZLinkActorJoinOperationId(17, 37);
         var journal = new ZLinkDeferredActorJoinCompletionJournal(authority, relocation);
@@ -657,80 +657,5 @@ public sealed class DeferredActorJoinDurabilityTests
                 new ZLinkAuthorityCompareExchangeResult.Stored(Snapshot));
         }
 
-    }
-
-    private sealed class TestRelocationStore : IZLinkRelocationRepository
-    {
-        internal Dictionary<string, byte[]> Payloads { get; } = [];
-
-        public ValueTask<ZLinkRelocationStored> PutRelocationAsync(
-            ReadOnlyMemory<byte> payload,
-            TimeSpan retention,
-            CancellationToken cancellationToken = default)
-        {
-            var reference = Guid.NewGuid().ToString("n");
-            Payloads.Add(reference, payload.ToArray());
-            var now = DateTimeOffset.UtcNow;
-            return ValueTask.FromResult(
-                new ZLinkRelocationStored(
-                    reference,
-                    ZLinkCrc32C.Compute(payload.Span),
-                    now + retention,
-                    now));
-        }
-
-        public ValueTask<ZLinkRelocationStored> PutRelocationAtAsync(
-            string reference,
-            ReadOnlyMemory<byte> payload,
-            TimeSpan retention,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var bytes = payload.ToArray();
-            if (Payloads.TryGetValue(reference, out var current)
-                && !current.AsSpan().SequenceEqual(bytes))
-                throw new InvalidDataException("Relocation reference collision.");
-            Payloads[reference] = bytes;
-            var now = DateTimeOffset.UtcNow;
-            return ValueTask.FromResult(new ZLinkRelocationStored(
-                reference,
-                ZLinkCrc32C.Compute(bytes),
-                now + retention,
-                now));
-        }
-
-        public ValueTask<ZLinkRelocationReadResult> GetRelocationAsync(
-            string reference,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult<ZLinkRelocationReadResult>(
-                Payloads.TryGetValue(reference, out var payload)
-                    ? new ZLinkRelocationReadResult.Found(payload)
-                    : new ZLinkRelocationReadResult.Missing());
-
-        public ValueTask<ZLinkRelocationRenewResult> RenewRelocationAsync(
-            string reference,
-            TimeSpan retention,
-            CancellationToken cancellationToken = default)
-        {
-            var now = DateTimeOffset.UtcNow;
-            return ValueTask.FromResult<ZLinkRelocationRenewResult>(
-                Payloads.ContainsKey(reference)
-                    ? new ZLinkRelocationRenewResult.Renewed(now + retention, now)
-                    : new ZLinkRelocationRenewResult.Missing());
-        }
-
-        public ValueTask<ZLinkRelocationDeleteResult> DeleteRelocationAsync(
-            string reference,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult(
-                Payloads.Remove(reference)
-                    ? ZLinkRelocationDeleteResult.Deleted
-                    : ZLinkRelocationDeleteResult.Missing);
-    }
-
-    private sealed class TestActor(string actorId) : IZLinkActor
-    {
-        public string ActorId { get; } = actorId;
-        public IZLinkActorContext Context { get; } = new TestActorContext(actorId);
     }
 }

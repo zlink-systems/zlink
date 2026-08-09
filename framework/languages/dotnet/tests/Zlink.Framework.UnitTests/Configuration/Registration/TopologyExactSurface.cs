@@ -128,20 +128,4 @@ public sealed class TopologyExactSurfaceTests
     private static HashSet<string> PropertyNames<T>() =>
         typeof(T).GetProperties().Select(static property => property.Name)
             .ToHashSet(StringComparer.Ordinal);
-
-    private sealed class TestSession : IZLinkSession
-    {
-        public IZLinkSessionContext Context => null!;
-
-        public ValueTask OnConnectedAsync(CancellationToken cancellationToken) =>
-            ValueTask.CompletedTask;
-
-        public ValueTask OnDisconnectedAsync(CancellationToken cancellationToken) =>
-            ValueTask.CompletedTask;
-
-        public ValueTask OnErrorAsync(
-            ZLinkStreamError error,
-            CancellationToken cancellationToken) =>
-            ValueTask.CompletedTask;
-    }
 }
