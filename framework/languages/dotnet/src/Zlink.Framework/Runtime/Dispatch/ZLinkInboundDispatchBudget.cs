@@ -44,8 +44,6 @@ internal sealed class ZLinkInboundDispatchBudget
 
     internal ulong MaximumMessageBytes => _maximumMessageBytes;
 
-    internal int MaximumConcurrentReceives => _maximumConcurrentReceives;
-
     internal int OverageReservationCount =>
         Volatile.Read(ref _overageReservations);
 

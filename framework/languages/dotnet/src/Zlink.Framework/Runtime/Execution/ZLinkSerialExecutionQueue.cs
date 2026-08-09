@@ -29,6 +29,11 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     private readonly SemaphoreSlim _drainGate = new(1, 1);
     private readonly IZLinkRuntimeFailureReporter _errorSink;
     private readonly CancellationToken _executionToken;
+    // Instance method groups convert to a fresh delegate at every use site;
+    // these run once per drained work item, so cache them.
+    private readonly Func<ZLinkSerialTurn, Action, ZLinkSerialPostAdmission> _postResume;
+    private readonly Func<Func<CancellationToken, ValueTask>, bool> _tryPostCallback;
+    private readonly Action<Exception> _reportHandlerException;
     private readonly Queue<ZLinkSerialWorkItem> _applicationQueue = new();
     private readonly Queue<ZLinkSerialWorkItem> _lifecycleQueue = new();
     private readonly ZLinkRuntimeTaskRunner _taskRunner;
@@ -93,6 +98,9 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         _taskRunner = taskRunner;
         _errorSink = errorSink;
         _executionToken = executionToken;
+        _postResume = PostResume;
+        _tryPostCallback = TryPostCallback;
+        _reportHandlerException = ReportHandlerException;
         _applicationCapacity = capacity > 0
             ? capacity
             : throw new ArgumentOutOfRangeException(nameof(capacity));
@@ -201,9 +209,13 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 lane: ZLinkSerialWorkLane.Application,
                 accountingBytes: WorkItemFixedCostBytes);
             _applicationQueue.Enqueue(item);
-            ScheduleDrain();
-            return true;
         }
+
+        // Outside _admissionGate: the item is already visible in the queue,
+        // and DrainAsync re-checks HasQueuedWork after clearing the flag, so
+        // no wakeup can be lost.
+        ScheduleDrain();
+        return true;
     }
 
     public bool TryPostApplication(
@@ -249,9 +261,10 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 lane: ZLinkSerialWorkLane.Application,
                 accountingBytes: accountingBytes);
             _applicationQueue.Enqueue(item);
-            ScheduleDrain();
-            return ZLinkSerialPostAdmission.Accepted;
         }
+
+        ScheduleDrain();
+        return ZLinkSerialPostAdmission.Accepted;
     }
 
     public bool TryPostNext(
@@ -286,9 +299,10 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 lane: ZLinkSerialWorkLane.Lifecycle,
                 accountingBytes: WorkItemFixedCostBytes);
             _lifecycleQueue.Enqueue(item);
-            ScheduleDrain();
-            return ZLinkSerialPostAdmission.Accepted;
         }
+
+        ScheduleDrain();
+        return ZLinkSerialPostAdmission.Accepted;
     }
 
     public ZLinkAcceptedWorkAdmission TryPostAccepted(
@@ -826,12 +840,12 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             while (TryTakeNext(out var item, out var claimGeneration))
             {
                 var turn = new ZLinkSerialTurn(
-                    PostResume,
-                    TryPostCallback,
-                    ReportHandlerException,
+                    _postResume,
+                    _tryPostCallback,
+                    _reportHandlerException,
                     _executionToken);
                 var result = await item.InvokeAsync(
-                    ReportHandlerException,
+                    _reportHandlerException,
                     _executionToken,
                     turn).ConfigureAwait(false);
                 lock (_admissionGate)

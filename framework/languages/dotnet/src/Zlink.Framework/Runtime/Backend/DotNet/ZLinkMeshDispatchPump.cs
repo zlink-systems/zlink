@@ -564,11 +564,32 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         if (parts.Count == 0) return;
         state.RaiseActor(
             parts,
-            TrackApplication(
-                batch,
-                index,
-                record.Domain,
-                parts.Select(static part => part.Message).ToArray()));
+            TrackApplication(batch, index, record.Domain, parts));
+    }
+
+    // Actor-part overload: materializing a Message[] up front is wasted work
+    // on the two common branches (lease already taken, or non-application
+    // domain); build it only when the budget actually measures the parts.
+    private ZLinkInboundDispatchLease? TrackApplication(
+        MeshReceiveBatch batch,
+        int index,
+        MeshReadyDomains domain,
+        IReadOnlyList<ZLinkBackendActorPart> actorParts)
+    {
+        var admitted = batch.TakeInboundDispatchLease(index);
+        if (admitted is not null) return admitted;
+
+        if (domain != MeshReadyDomains.Application
+            || _inboundDispatchBudget is null)
+            return null;
+
+        if (batch.GetApplicationPayloadBytes(index) is { } payloadBytes)
+            return _inboundDispatchBudget.Track(payloadBytes);
+
+        var messages = new Message[actorParts.Count];
+        for (var partIndex = 0; partIndex < actorParts.Count; partIndex++)
+            messages[partIndex] = actorParts[partIndex].Message;
+        return _inboundDispatchBudget.Track(messages);
     }
 
     private bool TryTrackApplication(

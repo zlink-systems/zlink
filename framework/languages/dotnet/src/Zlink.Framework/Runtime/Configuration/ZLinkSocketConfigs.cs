@@ -128,12 +128,3 @@ internal sealed class ZLinkSpotPublisherConfig : IZLinkSpotPublisherConfig
 
     public TimeSpan? Linger { get; set; }
 }
-
-internal sealed class ZLinkSpotSubscriberConfig : IZLinkSpotSubscriberConfig
-{
-    public ulong ReceiveHighWaterMark { get; set; }
-
-    public TimeSpan? ReceiveTimeout { get; set; }
-
-    public TimeSpan? Linger { get; set; }
-}

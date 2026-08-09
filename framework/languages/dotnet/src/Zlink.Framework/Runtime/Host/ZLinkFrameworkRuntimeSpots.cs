@@ -170,16 +170,6 @@ internal sealed partial class ZLinkFrameworkRuntime
             .ConfigureAwait(false);
     }
 
-    internal async ValueTask<ZLinkSpotActivation?> GetSpotActivationByRidAsync(
-        string spotId,
-        CancellationToken cancellationToken)
-    {
-        using var operation = EnterOperation();
-        var state = await GetStartedStateForRoutingAsync(cancellationToken)
-            .ConfigureAwait(false);
-        return _spots.GetActivationBySpotId(state, spotId);
-    }
-
     public async ValueTask<IReadOnlyList<ZLinkSpotInfo>> ListAsync(
         CancellationToken cancellationToken = default)
     {
@@ -239,11 +229,6 @@ internal sealed partial class ZLinkFrameworkRuntime
             .SingleOrDefault(static node =>
                 node.Registration.Router is not null
                 && node.Registration.ActorFactories.Count > 0);
-    }
-
-    internal IZLinkBackendSpotNode GetActorClientSpotNode()
-    {
-        return GetActorClientSpotNodeRuntime().Node;
     }
 
     /// <summary>Any router-capable node, or null before startup — the
@@ -360,22 +345,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                 relocationReplay,
                 cancellationToken);
         });
-    }
-
-    internal async ValueTask NotifyEntrySpotActorJoinedAsync(
-        IZLinkActor actor,
-        RoutingId? targetNodeRid = null,
-        CancellationToken cancellationToken = default)
-    {
-        using var operation = EnterOperation();
-        if (_state is null) return;
-
-        await _spots.EntrySpotActors.NotifyJoinedAsync(
-                _state,
-                actor,
-                targetNodeRid,
-                cancellationToken)
-            .ConfigureAwait(false);
     }
 
     internal async ValueTask<ZLinkActorCreateResponse> NotifyEntrySpotActorCreatedAsync(

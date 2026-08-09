@@ -1746,41 +1746,6 @@ internal static partial class ZLinkServiceWireCodec
         writer.Text8(value);
     }
 
-    private static void WriteOptionalRid(WireWriter writer, RoutingId value)
-    {
-        if (value.IsEmpty)
-        {
-            writer.U8(0);
-            return;
-        }
-        writer.Rid(value);
-    }
-
-    private static bool TryReadOptionalRid(
-        ref WireReader reader,
-        out RoutingId value)
-    {
-        value = default;
-        if (!reader.TryU8(out var length))
-            return false;
-        if (length == 0) return true;
-        if (!reader.TrySlice(length, out var encoded))
-            return false;
-        value = RoutingId.From(encoded);
-        return true;
-    }
-
-    private static bool TryReadOptionalText8(
-        ref WireReader reader,
-        out string? value)
-    {
-        value = null;
-        if (!reader.TryU8(out var present) || present > 1)
-            return false;
-        if (present == 0) return true;
-        return reader.TryText8(out value);
-    }
-
     private static bool TryReadReservation(
         ref WireReader reader,
         out ObjectReservationFence reservation)

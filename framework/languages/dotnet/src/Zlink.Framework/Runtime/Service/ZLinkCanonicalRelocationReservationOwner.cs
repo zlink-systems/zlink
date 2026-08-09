@@ -2953,15 +2953,6 @@ internal sealed class ZLinkCanonicalRelocationReservationOwner
         return true;
     }
 
-    private static ulong SumBytes(
-        IReadOnlyList<ZLinkServiceWireCodec.RelocationParticipantRecord> values)
-    {
-        ulong result = 0;
-        foreach (var value in values)
-            result = checked(result + value.AllowanceBytes);
-        return result;
-    }
-
     private static ZLinkAuthorityKey AuthorityKey(
         ZLinkServiceWireCodec.RelocationObjectRecord value) =>
         ObjectKind(value.Kind) == ZLinkPlacementObjectKind.Actor

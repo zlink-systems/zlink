@@ -2046,17 +2046,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         stage.AuthorityPublished = true;
     }
 
-    internal bool IsAuthorityPublished(
-        ZLinkServiceWireCodec.RelocationPrepareRecord prepare)
-    {
-        var key = new AttemptKey(
-            prepare.RelocationId.High,
-            prepare.RelocationId.Low,
-            prepare.TargetAttemptGeneration);
-        return _targetStages.TryGetValue(key, out var stage)
-               && stage.AuthorityPublished;
-    }
-
     internal void RetainTargetPermit(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
         ZLinkRelocationPermitPool.ZLinkRelocationPermitLease permit)

@@ -143,7 +143,8 @@ internal sealed class ZLinkActorMessageFollower
                 messageFollowRoute.TargetOwnerLeaseGeneration);
             while (!_queues.GetOrAdd(
                        key,
-                       _ => new ActorQueue(this, key))
+                       static (queueKey, follower) => new ActorQueue(follower, queueKey),
+                       this)
                    .TryEnqueue(frame))
             {
             }
@@ -326,7 +327,9 @@ internal sealed class ZLinkActorMessageFollower
             ZLinkMessageParts.DisposeAll(parts);
             return true;
         }
-        var frames = parts.Select(static part => part.ToArray()).ToArray();
+        var frames = new byte[parts.Count][];
+        for (var index = 0; index < parts.Count; index++)
+            frames[index] = parts[index].ToArray();
         ZLinkMessageParts.DisposeAll(parts);
         var outcome = DirectReplyDeliveryResult.Interrupted;
         try
@@ -514,13 +517,13 @@ internal sealed class ZLinkActorMessageFollower
         IReadOnlyList<byte[]> frames,
         CancellationToken cancellationToken)
     {
+        var messages = new Message[frames.Count];
         while (!pending.IsExpired)
         {
             cancellationToken.ThrowIfCancellationRequested();
             SubmitResult result;
-            var messages = frames
-                .Select(static frame => Message.From(frame))
-                .ToArray();
+            for (var index = 0; index < frames.Count; index++)
+                messages[index] = Message.From(frames[index]);
             try
             {
                 result = pending.Reply(messages, SendFlags.DontWait);

@@ -819,14 +819,11 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         }
     }
 
-    internal bool HasPendingApplicationWork
-    {
-        get
-        {
-            lock (_barrierGate)
-                return _activeApplicationClaims != 0;
-        }
-    }
+    // Advisory read for the idle-eviction sweep: a lock-free stale read is
+    // tolerated because eviction re-validates before closing, and taking
+    // _barrierGate here would contend with every message's claim/release.
+    internal bool HasPendingApplicationWork =>
+        Volatile.Read(ref _activeApplicationClaims) != 0;
 
     internal bool HasRelocationBarrier
     {

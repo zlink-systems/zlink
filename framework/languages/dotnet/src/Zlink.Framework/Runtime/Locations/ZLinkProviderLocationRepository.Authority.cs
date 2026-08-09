@@ -5591,13 +5591,6 @@ internal sealed partial class ZLinkProviderLocationRepository
         ulong TargetAuthorityOwnerGeneration,
         byte[] RequestFingerprint);
 
-    private sealed record AggregateParticipantFingerprint(
-        string Key,
-        string ExpectedStoreVersion,
-        ZLinkAuthorityGenerationTransition OwnerTransition,
-        byte[] AuthorityPayloadSha256,
-        byte[] MembershipMutationSha256);
-
     private sealed record StoredAggregateParticipant(
         AggregateParticipantRecord Metadata,
         ReadOnlyMemory<byte> Payload);

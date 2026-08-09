@@ -201,11 +201,12 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
         {
             var lane = _actorLanes.GetOrAdd(
                 actorId,
-                _ => new ActorLane(
-                    this,
-                    actorId,
-                    _actorLaneCapacity,
-                    _actorLaneByteCapacity));
+                static (id, pump) => new ActorLane(
+                    pump,
+                    id,
+                    pump._actorLaneCapacity,
+                    pump._actorLaneByteCapacity),
+                this);
             var admission = lane.TryEnqueue(frames, retainedBytes, ingressBytes);
             if (admission == ZLinkSerialPostAdmission.Accepted)
                 return;

@@ -1504,32 +1504,6 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         }
     }
 
-    private static bool CanRetryTransferredActorCommit(
-        ZLinkAuthorityReadResult current,
-        ZLinkAuthoritySnapshot expectedSnapshot,
-        ZLinkActorAuthorityPayload expectedAuthority)
-    {
-        return current is ZLinkAuthorityReadResult.Found found
-               && found.Snapshot.ObjectGeneration
-               == expectedSnapshot.ObjectGeneration
-               && found.Snapshot.AuthorityOwnerGeneration
-               == expectedSnapshot.AuthorityOwnerGeneration
-               && TryDecodeCurrentActorAuthority(
-                   found.Snapshot.Payload.Span,
-                   out var authority)
-               && authority.NodeRid == expectedAuthority.NodeRid
-               && authority.NodeGeneration == expectedAuthority.NodeGeneration
-               && authority.OwnerLeaseGeneration
-               == expectedAuthority.OwnerLeaseGeneration
-               && authority.CurrentSpotGeneration
-               == expectedAuthority.CurrentSpotGeneration
-               && authority.CurrentSpotKind == expectedAuthority.CurrentSpotKind
-               && string.Equals(
-                   authority.CurrentSpotId,
-                   expectedAuthority.CurrentSpotId,
-                   StringComparison.Ordinal);
-    }
-
     private static bool IsTransferredAuthority(
         ZLinkAuthoritySnapshot expectedSourceSnapshot,
         ZLinkAuthoritySnapshot currentSnapshot)

@@ -644,9 +644,6 @@ internal static class ZLinkRuntimeMetrics
             _ => "transport_error"
         };
 
-    private static long StartTimestamp(Histogram<double> histogram) =>
-        histogram.Enabled ? Stopwatch.GetTimestamp() : 0;
-
     private static void RecordElapsed(Histogram<double> histogram, long startedTimestamp)
     {
         if (startedTimestamp == 0 || !histogram.Enabled) return;
@@ -1060,13 +1057,6 @@ internal static class ZLinkRuntimeMetrics
                 { "mesh_name", MeshName },
                 { "object_kind", ObjectKind },
                 { "policy", Policy }
-            };
-
-        internal TagList ObjectTags =>
-            new()
-            {
-                { "mesh_name", MeshName },
-                { "object_kind", ObjectKind }
             };
 
         internal TagList TerminalTags(string outcome) =>

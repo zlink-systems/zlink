@@ -249,7 +249,14 @@ internal static class ZLinkEnvelopeCodec
                 $"ZLink envelope header is invalid: {error.Message}");
         }
         ValidateProtocolHeader(header);
-        AddDecodedHeaderCacheEntry(bytes, hash, header);
+        // Correlated, deadline-stamped, or flow-stamped headers are byte-unique
+        // per message (correlation ids come from a counter), so caching them
+        // guarantees misses while evicting the repeatable command/publish
+        // entries this cache exists for.
+        if (header.CorrelationId is null
+            && header.Deadline is null
+            && header.FlowId is null)
+            AddDecodedHeaderCacheEntry(bytes, hash, header);
         return header;
     }
 

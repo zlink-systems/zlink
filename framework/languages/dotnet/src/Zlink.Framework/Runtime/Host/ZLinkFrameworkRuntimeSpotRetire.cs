@@ -895,18 +895,6 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
     }
 
-    internal async ValueTask CompleteInboundSpotAggregateAsync(
-        TargetStage stage,
-        CancellationToken cancellationToken)
-    {
-        await CompleteInboundSpotAggregateReplayAsync(
-                stage,
-                cancellationToken)
-            .ConfigureAwait(false);
-        await OpenInboundSpotAggregateAdmissionAsync(stage)
-            .ConfigureAwait(false);
-    }
-
     internal async ValueTask CompleteInboundSpotAggregateReplayAsync(
         TargetStage stage,
         CancellationToken cancellationToken)

@@ -414,9 +414,6 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         }
     }
 
-    internal void ReopenRetireAdmissionsAfterRollback() =>
-        _ = TryReopenRetireAdmissionsAfterRollback();
-
     internal bool TryReopenRetireAdmissionsAfterRollback()
     {
         var expectedGeneration = Volatile.Read(ref _relocationFenceGeneration);

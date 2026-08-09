@@ -433,24 +433,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                 && peer.State == MeshPeerState.Admitted));
     }
 
-    internal static async ValueTask<bool> WaitForExactPeerReadinessAsync(
-        Func<bool> isReady,
-        TimeSpan pollingInterval,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            while (!isReady())
-                await Task.Delay(pollingInterval, cancellationToken)
-                    .ConfigureAwait(false);
-            return true;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            return false;
-        }
-    }
-
     internal static string? ResolveActorDrainMeshName(
         ZLinkFrameworkRegistration registration,
         string actorType)

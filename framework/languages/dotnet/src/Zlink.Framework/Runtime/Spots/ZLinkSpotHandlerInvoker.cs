@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Handlers;
 
@@ -188,12 +189,18 @@ internal sealed class ZLinkSpotHandlerInvoker(
                             cancellationToken)
                         .ConfigureAwait(false);
                     var encoded = ZLinkStreamPacketPayloadCodec.Encode(reply, descriptor.ReplyType, codecs);
+                    // Encode always wraps a freshly allocated array, so unwrap
+                    // it instead of copying the reply body a second time.
+                    var payload = MemoryMarshal.TryGetArray(encoded.Payload, out var segment)
+                                  && segment.Offset == 0
+                                  && segment.Array is { } array
+                                  && segment.Count == array.Length
+                        ? array
+                        : encoded.Payload.ToArray();
                     return ZLinkActorReply.FromPayload(
                         encoded.Codec,
-                        encoded.Payload.ToArray(),
-                        new ZLinkSpotActorReplyOptionsSnapshot(
-                            new Dictionary<string, string>(StringComparer.Ordinal),
-                            false),
+                        payload,
+                        ZLinkSpotActorReplyOptionsSnapshot.Default,
                         compressionCodec);
                 })
             .ConfigureAwait(false);

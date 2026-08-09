@@ -46,11 +46,6 @@ internal sealed class ZLinkObservedLocationGenerations
             new ZLinkSpotLocationKey(row.SpotId),
             new ObservedVersion(row.SpotGeneration, 0));
 
-    internal void ObserveSpot(ZLinkResolvedSpotLocation row) =>
-        _spots.Observe(
-            new ZLinkSpotLocationKey(row.SpotId),
-            new ObservedVersion(row.SpotGeneration, 0));
-
     // Membership epoch is the major axis: it increases monotonically across
     // joins and cross-node transfers, while the actor generation is a
     // per-node counter that legitimately restarts when the actor moves to
@@ -58,13 +53,6 @@ internal sealed class ZLinkObservedLocationGenerations
     // would reject the post-transfer row as a lagging replica forever.
     internal bool AcceptActor(ZLinkResolvedActorLocation row) =>
         _actors.Accept(
-            new ZLinkActorLocationKey(row.ActorId),
-            new ObservedVersion(
-                row.MembershipEpoch,
-                row.ActorRef.ObjectGeneration));
-
-    internal void ObserveActor(ZLinkResolvedActorLocation row) =>
-        _actors.Observe(
             new ZLinkActorLocationKey(row.ActorId),
             new ObservedVersion(
                 row.MembershipEpoch,

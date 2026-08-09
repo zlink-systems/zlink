@@ -228,20 +228,6 @@ internal abstract partial class ZLinkSpotActivation
         }
     }
 
-    internal async ValueTask CompleteRelocationReadyAsync(
-        ZLinkSpotRelocationReadyOutcome outcome,
-        CancellationToken cancellationToken)
-    {
-        lock (_relocationReadyGate)
-        {
-            if (!_relocationReadyCompletionPending)
-                return;
-            _relocationReadyCompletionPending = false;
-        }
-        await InvokeRelocationReadyCompletedAsync(outcome, cancellationToken)
-            .ConfigureAwait(false);
-    }
-
     internal async ValueTask CompleteRelocationReadyBeforeAbortAsync(
         ZLinkSpotRelocationSeal admissionSeal,
         CancellationToken cancellationToken)
@@ -2225,54 +2211,6 @@ internal abstract partial class ZLinkSpotActivation
         return captured
                ?? throw new InvalidOperationException(
                    "SPOT relocation capture did not complete.");
-    }
-
-    internal async ValueTask RestoreRelocationApplicationStateAsync(
-        ZLinkSpotRelocationApplicationState state,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(state);
-        await _serial.ExecuteLifecycleAsync(
-                async (activation, ct) =>
-                {
-                    await activation.RestoreInstanceAsync(
-                            activation.ResolveSpotRelocationRegistration(),
-                            activation.Spot,
-                            state.SpotState,
-                            ct)
-                        .ConfigureAwait(false);
-                    var actors = activation._actors.Snapshot();
-                    for (var first = 0;
-                         first < actors.Count;
-                         first += MaxConcurrentRelocationAdapterCallbacks)
-                    {
-                        var count = Math.Min(
-                            MaxConcurrentRelocationAdapterCallbacks,
-                            actors.Count - first);
-                        await Task.WhenAll(
-                                actors.Skip(first).Take(count).Select(
-                                    async actor =>
-                                    {
-                                        var actorId = ZLinkActorId.FromBoundary(
-                                            actor.Context.ActorId,
-                                            nameof(actor));
-                                        if (!state.ActorStates.TryGetValue(
-                                                actorId,
-                                                out var actorState))
-                                            throw new InvalidDataException(
-                                                $"Relocation state for Actor '{actor.Context.ActorId}' is missing.");
-                                        await activation.RestoreInstanceAsync(
-                                                activation.ResolveActorRelocationRegistration(actor),
-                                                actor,
-                                                actorState,
-                                                ct)
-                                            .ConfigureAwait(false);
-                                    }))
-                            .ConfigureAwait(false);
-                    }
-                },
-                cancellationToken)
-            .ConfigureAwait(false);
     }
 
     private async ValueTask<IReadOnlyDictionary<ZLinkActorId, ReadOnlyMemory<byte>>>

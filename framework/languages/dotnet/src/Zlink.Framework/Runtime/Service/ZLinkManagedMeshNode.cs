@@ -1645,9 +1645,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             : SubmitResult.Backpressured;
     }
 
-    internal int RetainedActorCreateOperationCount =>
-        _remoteActorCreateOperations.Count;
-
     internal int PendingCanonicalRelocationReservationCount =>
         _pendingRelocationReservations.Count;
 
@@ -7415,19 +7412,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             channelName: channelName ?? string.Empty);
         return SubmitResult.Ok;
     }
-
-    private SubmitResult SendReply(
-        RoutingId targetRid,
-        ulong correlation,
-        IReadOnlyList<Message> parts,
-        SendFlags flags) =>
-        SendTerminalReply(
-            targetRid,
-            correlation,
-            RequestResult.Ok,
-            0,
-            parts,
-            flags);
 
     private SubmitResult SendNativeApplicationReply(
         RoutingId targetRid,

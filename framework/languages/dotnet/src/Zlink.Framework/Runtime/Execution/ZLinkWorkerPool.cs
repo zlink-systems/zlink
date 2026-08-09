@@ -19,6 +19,7 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
     private readonly object _sync = new();
     private readonly HashSet<Thread> _threads = [];
     private TaskCompletionSource _directCapacityChanged = NewCapacitySignal();
+    private int _directCapacityWaiters;
     private bool _disposed;
     private Task? _disposeTask;
     private int _idleThreads;
@@ -233,22 +234,30 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
                 }
 
                 capacityChanged = _directCapacityChanged.Task;
+                _directCapacityWaiters++;
             }
 
-            var remaining = deadline - DateTimeOffset.UtcNow;
-            if (remaining <= TimeSpan.Zero) return ZLinkWorkerSubmitResult.Full;
-            if (!_directWaiterSlots.Wait(0)) return ZLinkWorkerSubmitResult.Full;
             try
             {
-                await capacityChanged.WaitAsync(remaining, cancellationToken).ConfigureAwait(false);
-            }
-            catch (TimeoutException)
-            {
-                return ZLinkWorkerSubmitResult.Full;
+                var remaining = deadline - DateTimeOffset.UtcNow;
+                if (remaining <= TimeSpan.Zero) return ZLinkWorkerSubmitResult.Full;
+                if (!_directWaiterSlots.Wait(0)) return ZLinkWorkerSubmitResult.Full;
+                try
+                {
+                    await capacityChanged.WaitAsync(remaining, cancellationToken).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    return ZLinkWorkerSubmitResult.Full;
+                }
+                finally
+                {
+                    _directWaiterSlots.Release();
+                }
             }
             finally
             {
-                _directWaiterSlots.Release();
+                lock (_sync) _directCapacityWaiters--;
             }
         }
     }
@@ -325,6 +334,10 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
 
     private void SignalDirectCapacityChanged()
     {
+        // Waiters register under _sync (every caller holds it), so with no
+        // waiters the old signal is unobservable: skip the per-item TCS
+        // rotation and its thread-pool completion.
+        if (_directCapacityWaiters == 0) return;
         var signal = _directCapacityChanged;
         _directCapacityChanged = NewCapacitySignal();
         signal.TrySetResult();

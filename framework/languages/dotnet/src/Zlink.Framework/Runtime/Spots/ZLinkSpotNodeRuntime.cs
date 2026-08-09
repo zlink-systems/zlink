@@ -495,16 +495,6 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     internal ZLinkSpotOutboundTransport EntryOutbound => _entryOutbound
         ?? throw new InvalidOperationException($"SPOT node '{Name}' entry outbound transport is not initialized.");
 
-    internal bool TrySendToNodeOnce(
-        RoutingId targetNodeRid,
-        IReadOnlyList<Message> parts,
-        ReadOnlyMemory<byte> metadata = default)
-    {
-        return ZLinkSubmitFailureMapper.AcceptOrThrow(
-            Node.SendToNode(targetNodeRid, parts, SendFlags.DontWait, metadata),
-            $"node '{targetNodeRid}'");
-    }
-
     internal ValueTask<ZLinkOneWaySubmitResult> SendToNodeAsync(
         RoutingId targetNodeRid,
         IReadOnlyList<Message> parts,
