@@ -112,7 +112,7 @@ final class ZLinkSessionRelocationPeerClientTest {
     }
 
     @Test
-    void aRefusedRouteKeepsRetransmittingUntilTheCallerSaysSuperseded()
+    void anUnansweredRouteKeepsRetransmittingUntilTheCallerSaysSuperseded()
         throws InterruptedException {
         var codec = new ZLinkServiceM6BWireCodec();
         var command = command();
@@ -124,10 +124,11 @@ final class ZLinkSessionRelocationPeerClientTest {
                 "Session relocation route command has a stale binding fence"));
         });
 
-        //  Command 45 has no result field, so a refused command 44 reaches the
-        //  source as an unanswered request. Spec 20 §5 keeps retransmitting
-        //  until the caller's own superseded check ends it - the refusal text
-        //  is not a terminal signal.
+        //  A command 44 that never produced a command 45 - the owner is
+        //  unreachable, or the request failed in transport - is not terminal.
+        //  Spec 20 §5 keeps retransmitting until the caller's own superseded
+        //  check ends it; only one of the four results stops the loop by
+        //  itself.
         new ZLinkSessionRelocationPeerClient(node, codec)
             .switchRouteUntilTerminal(
                 command,
