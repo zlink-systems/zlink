@@ -1228,6 +1228,24 @@ public final class ZLinkSpotRuntime
             String stableType,
             long deadlineUnixMs,
             Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
+        return selectUserSpotTarget(
+            locations,
+            meshName,
+            stableType,
+            deadlineUnixMs,
+            excludedTargets,
+            0);
+    }
+
+    private CompletionStage<
+        ZLinkMeshNodeDescriptor>
+        selectUserSpotTarget(
+            ZLinkLocationRepository locations,
+            String meshName,
+            String stableType,
+            long deadlineUnixMs,
+            Set<ZLinkMeshNodeDescriptorKey> excludedTargets,
+            int refreshAttempt) {
         return locations.listMeshNodes(
                 meshName,
                 new ZLinkPageRequest(
@@ -1240,54 +1258,29 @@ public final class ZLinkSpotRuntime
                 ZLinkInternalMeshNode source =
                     routeMeshNodesByName.get(meshName);
                 List<ZLinkMeshNodeDescriptor> candidates =
-                        page.items().stream()
-                            .filter(node ->
-                                node.state()
-                                    == systems.zlink.framework.runtime.host
-                                        .ZLinkFrameworkRuntimeState.SERVING
-                                    && node.objectRole()
-                                        == ZLinkMeshNodeObjectRole.SERVER
-                                    && node.placementWeight() > 0
-                                    && isExactReadyUserSpotTarget(node, source)
-                                    && !excludedTargets.contains(
-                                        descriptorKey(node))
-                                    && node.objectCapabilities().stream()
-                                        .anyMatch(capability ->
-                                            capability.objectKind()
-                                                == systems.zlink.framework
-                                                    .locations
-                                                    .ZLinkPlacementObjectKind
-                                                    .USER_SPOT
-                                            && capability.stableType()
-                                                .equals(stableType)
-                                            && hasCapacity(
-                                                node,
-                                                capability)))
-                            .toList();
+                    userSpotPlacementCandidates(
+                        page.items(), stableType, source, excludedTargets);
                 if (candidates.isEmpty()) {
-                    boolean capacityKnown = page.items().stream()
-                        .filter(node ->
-                            node.state()
-                                == systems.zlink.framework.runtime.host
-                                    .ZLinkFrameworkRuntimeState.SERVING
-                            && node.objectRole()
-                                == systems.zlink.framework.locations
-                                    .ZLinkMeshNodeObjectRole.SERVER
-                            && node.placementWeight() > 0)
-                        .filter(node -> isExactReadyUserSpotTarget(node, source))
-                        .flatMap(node -> node.objectCapabilities().stream())
-                        .anyMatch(capability ->
-                            capability.objectKind()
-                                == systems.zlink.framework.locations
-                                    .ZLinkPlacementObjectKind.USER_SPOT
-                            && capability.stableType().equals(stableType));
-                    if (capacityKnown) {
+                    UserSpotPlacementVerdict verdict = userSpotPlacementVerdict(
+                        page.items(), stableType, source, excludedTargets);
+                    if (STREAM_TRACE) {
+                        tracePlacement(
+                            "user-spot-create stableType=" + stableType
+                            + " verdict=" + verdict
+                            + " attempt=" + refreshAttempt
+                            + " nodes=" + page.items().stream()
+                                .map(node -> node.rid() + "/" + node.state()
+                                    + "/w" + node.placementWeight())
+                                .toList());
+                    }
+                    if (verdict == UserSpotPlacementVerdict.TERMINAL) {
                         throw new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
                             "User Spot capacity exceeded");
                     }
                     if (System.currentTimeMillis() >= deadlineUnixMs) {
-                        throw new IllegalStateException(
+                        throw new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
                             "No Ready User Spot placement target");
                     }
                     return null;
@@ -1313,13 +1306,131 @@ public final class ZLinkSpotRuntime
                 : CompletableFuture.supplyAsync(
                         () -> null,
                         CompletableFuture.delayedExecutor(
-                            10, TimeUnit.MILLISECONDS))
+                            placementRefreshBackoffMillis(refreshAttempt),
+                            TimeUnit.MILLISECONDS))
                     .thenCompose(ignored -> selectUserSpotTarget(
                         locations,
                         meshName,
                         stableType,
                         deadlineUnixMs,
-                        excludedTargets)));
+                        excludedTargets,
+                        refreshAttempt + 1)));
+    }
+
+    /**
+     * The MeshNode descriptor's capacity projection is a candidate-selection
+     * hint, not the final judgment ([13-mesh-node] §5.1) — the Location Store
+     * reservation is. A single read that finds no candidate therefore can't by
+     * itself be a terminal verdict.
+     */
+    enum UserSpotPlacementVerdict {
+        /** At least one target can be reserved right now. */
+        SELECT,
+        /**
+         * No target right now, but the mesh is still converging: re-list until
+         * the caller's deadline.
+         */
+        RETRY,
+        /**
+         * Every node that serves this stable type is out of room. For
+         * Create/GetOrCreate that is `CapacityExceeded`
+         * ([06-framework-api] §13, [13-mesh-node] §5.1).
+         */
+        TERMINAL
+    }
+
+    static long placementRefreshBackoffMillis(int refreshAttempt) {
+        return 1L << Math.min(Math.max(refreshAttempt, 0), 6);
+    }
+
+    static List<ZLinkMeshNodeDescriptor> userSpotPlacementCandidates(
+        List<ZLinkMeshNodeDescriptor> nodes,
+        String stableType,
+        ZLinkInternalMeshNode source,
+        Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
+        return nodes.stream()
+            .filter(node ->
+                node.state()
+                    == systems.zlink.framework.runtime.host
+                        .ZLinkFrameworkRuntimeState.SERVING
+                    && node.objectRole()
+                        == ZLinkMeshNodeObjectRole.SERVER
+                    && node.placementWeight() > 0
+                    && isExactReadyUserSpotTarget(node, source)
+                    && !excludedTargets.contains(descriptorKey(node))
+                    && servesUserSpotTypeWithRoom(node, stableType))
+            .toList();
+    }
+
+    static UserSpotPlacementVerdict userSpotPlacementVerdict(
+        List<ZLinkMeshNodeDescriptor> nodes,
+        String stableType,
+        ZLinkInternalMeshNode source,
+        Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
+        if (!userSpotPlacementCandidates(
+                nodes, stableType, source, excludedTargets).isEmpty()) {
+            return UserSpotPlacementVerdict.SELECT;
+        }
+        boolean capacityKnown = nodes.stream()
+            .filter(node ->
+                node.state()
+                    == systems.zlink.framework.runtime.host
+                        .ZLinkFrameworkRuntimeState.SERVING
+                    && node.objectRole()
+                        == ZLinkMeshNodeObjectRole.SERVER
+                    && node.placementWeight() > 0
+                    && isExactReadyUserSpotTarget(node, source))
+            .anyMatch(node -> servesUserSpotType(node, stableType));
+        if (!capacityKnown) {
+            return UserSpotPlacementVerdict.RETRY;
+        }
+        // A node that has published its descriptor but not yet `Serving`
+        // advertises weight 0 and has no admitted route, so it can never be
+        // selected — yet it is a target that is still becoming one, not a node
+        // without room ([13-mesh-node] §6 publishes the descriptor at step 4
+        // and `Serving` only at step 5). The same holds for a `Serving` node
+        // whose peer admission hasn't completed on this source. Neither is a
+        // capacity verdict, so both keep re-listing until the deadline.
+        boolean converging = nodes.stream()
+            .filter(node ->
+                node.objectRole() == ZLinkMeshNodeObjectRole.SERVER
+                    && !excludedTargets.contains(descriptorKey(node))
+                    && servesUserSpotTypeWithRoom(node, stableType))
+            .anyMatch(node ->
+                node.state()
+                    == systems.zlink.framework.runtime.host
+                        .ZLinkFrameworkRuntimeState.PREPARING
+                    || (node.state()
+                            == systems.zlink.framework.runtime.host
+                                .ZLinkFrameworkRuntimeState.SERVING
+                        && node.placementWeight() > 0
+                        && !isExactReadyUserSpotTarget(node, source)));
+        return converging
+            ? UserSpotPlacementVerdict.RETRY
+            : UserSpotPlacementVerdict.TERMINAL;
+    }
+
+    private static boolean servesUserSpotType(
+        ZLinkMeshNodeDescriptor node,
+        String stableType) {
+        return node.objectCapabilities().stream()
+            .anyMatch(capability ->
+                capability.objectKind()
+                    == systems.zlink.framework.locations
+                        .ZLinkPlacementObjectKind.USER_SPOT
+                    && capability.stableType().equals(stableType));
+    }
+
+    private static boolean servesUserSpotTypeWithRoom(
+        ZLinkMeshNodeDescriptor node,
+        String stableType) {
+        return node.objectCapabilities().stream()
+            .anyMatch(capability ->
+                capability.objectKind()
+                    == systems.zlink.framework.locations
+                        .ZLinkPlacementObjectKind.USER_SPOT
+                    && capability.stableType().equals(stableType)
+                    && hasCapacity(node, capability));
     }
 
     static boolean hasCapacity(
@@ -3961,6 +4072,13 @@ public final class ZLinkSpotRuntime
                             .ZLinkAuthorityDeleted;
                 });
         });
+    }
+
+    private static void tracePlacement(String message) {
+        if (STREAM_TRACE) {
+            LOGGER.warning(
+                "[zlink-java-stream-trace] placement " + message);
+        }
     }
 
     private static void traceInstanceLifecycle(String message) {
