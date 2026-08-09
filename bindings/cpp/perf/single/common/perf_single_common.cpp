@@ -7,6 +7,64 @@ namespace perf
 namespace single
 {
 
+namespace
+{
+
+bool wait_socket_monitor_event_with_activity (zlink::socket_monitor_t &monitor_,
+                                               perf_socket_t *activity_socket_,
+                                               uint64_t success_event_,
+                                               int timeout_ms_)
+{
+    for (;;) {
+        const std::optional<zlink::monitor_event_t> event =
+          monitor_.recv (static_cast<int> (zlink::send_flags_t::dontwait));
+        if (!event)
+            break;
+        if (static_cast<uint64_t> (event->event) == success_event_)
+            return true;
+    }
+
+    zlink::poller_t poller;
+    constexpr std::uintptr_t monitor_slot = 1;
+    constexpr std::uintptr_t activity_slot = 2;
+    try {
+        poller.add (monitor_, zlink::poll_event_flag_t::pollin, monitor_slot);
+        if (activity_socket_)
+            activity_socket_->poller_add (poller, zlink::poll_event_flag_t::pollin,
+                                           activity_slot);
+    }
+    catch (const zlink::binding_error_t &) {
+        return false;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now ()
+                          + std::chrono::milliseconds (timeout_ms_ > 0 ? timeout_ms_ : 1);
+    while (std::chrono::steady_clock::now () < deadline) {
+        const auto remaining = deadline - std::chrono::steady_clock::now ();
+        long wait_ms = std::chrono::duration_cast<std::chrono::milliseconds> (remaining).count ();
+        if (wait_ms < 1)
+            wait_ms = 1;
+
+        zlink::poll_event_t event;
+        if (poller.wait (&event, 1, std::chrono::milliseconds (wait_ms)) == 0)
+            continue;
+        if (event.slot != monitor_slot)
+            continue;
+
+        for (;;) {
+            const std::optional<zlink::monitor_event_t> monitor_event =
+              monitor_.recv (static_cast<int> (zlink::send_flags_t::dontwait));
+            if (!monitor_event)
+                break;
+            if (static_cast<uint64_t> (monitor_event->event) == success_event_)
+                return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
 ctx_guard_t::ctx_guard_t () : _ctx ()
 {
     if (_ctx.valid ())
@@ -362,9 +420,10 @@ bool setup_connected_pair (perf_socket_t &bind_socket_,
     apply_single_benchmark_socket_options (bind_socket_, transport_);
     apply_single_benchmark_socket_options (connect_socket_, transport_);
     const int connect_ready_timeout_ms = resolve_single_connect_ready_timeout_ms ();
-    if (!wait_socket_monitor_event (bind_monitor,
-                                    static_cast<uint64_t> (zlink::monitor_event::connection_ready),
-                                    connect_ready_timeout_ms)
+    if (!wait_socket_monitor_event_with_activity (
+          bind_monitor, &bind_socket_,
+          static_cast<uint64_t> (zlink::monitor_event::connection_ready),
+          connect_ready_timeout_ms)
         || !wait_socket_monitor_event (
           connect_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready),
           connect_ready_timeout_ms)) {
