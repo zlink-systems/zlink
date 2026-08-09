@@ -1,5 +1,9 @@
-package systems.zlink.e2e.pubsub.subscriber.Endpoints;
+package Endpoints;
 
+import com.sun.net.httpserver.HttpExchange;
+import systems.zlink.e2e.pubsub.subscriber.Configuration;
+import systems.zlink.e2e.pubsub.subscriber.Endpoints;
+import systems.zlink.e2e.pubsub.subscriber.Infrastructure;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
@@ -240,7 +244,7 @@ public final class OperationalEndpoints implements SmartLifecycle {
         return value;
     }
 
-    private void writeJson(com.sun.net.httpserver.HttpExchange exchange, Object value) {
+    private void writeJson(HttpExchange exchange, Object value) {
         try {
             byte[] body = json.writeValueAsBytes(value);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
@@ -253,7 +257,7 @@ public final class OperationalEndpoints implements SmartLifecycle {
     }
 
     private static void writeText(
-        com.sun.net.httpserver.HttpExchange exchange,
+        HttpExchange exchange,
         int status,
         String value) {
         try {

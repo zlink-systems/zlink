@@ -1,6 +1,7 @@
-package systems.zlink.e2e.spotservice.client.Scenarios;
+package Scenarios;
 
 
+import systems.zlink.e2e.spotservice.client.Scenarios;
 public final class SmE3Scenario extends SpotServiceScenarioContext {
     private SmE3Scenario(SpotServiceScenarioContext context) {
         super(context);

@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.instancespot.owner
 
+
+import java.util.concurrent.ExecutorService
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.sun.net.httpserver.HttpServer
 import java.util.concurrent.Executors
@@ -14,7 +16,7 @@ class OwnerEndpoints(
     private val json: ObjectMapper,
 ) : SmartLifecycle {
     private var server: HttpServer? = null
-    private var executor: java.util.concurrent.ExecutorService? = null
+    private var executor: ExecutorService? = null
 
     override fun start() {
         val http = HttpSupport.server(options.httpEndpoint)

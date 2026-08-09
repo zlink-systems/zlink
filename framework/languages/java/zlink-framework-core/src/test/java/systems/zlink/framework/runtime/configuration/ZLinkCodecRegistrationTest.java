@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.configuration;
+import java.util.Optional;
 
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 
@@ -105,14 +106,14 @@ final class ZLinkCodecRegistrationTest {
             " application/x-protobuf ", ZLinkStreamCodec.PROTOBUF);
 
         assertEquals(
-            java.util.Optional.of(ZLinkStreamCodec.JSON),
+            Optional.of(ZLinkStreamCodec.JSON),
             registration.streamCodecForReceivedContentType("APPLICATION/JSON"));
         assertEquals(
-            java.util.Optional.of(ZLinkStreamCodec.PROTOBUF),
+            Optional.of(ZLinkStreamCodec.PROTOBUF),
             registration.streamCodecForReceivedContentType(
                 "application/x-protobuf"));
         assertEquals(
-            java.util.Optional.empty(),
+            Optional.empty(),
             registration.streamCodecForReceivedContentType(
                 "application/x-unregistered"));
     }

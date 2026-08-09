@@ -1,4 +1,8 @@
 package systems.zlink.samples.deliverydispatch.client;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import java.net.URI;
 import java.time.Duration;
@@ -18,13 +22,13 @@ public final class Program {
         ZLinkStreamConnector customer = createClient(options.customerStreamEndpoint());
         ZLinkStreamConnector courierA = createClient(options.courierStreamEndpoint());
         ZLinkStreamConnector courierB = createClient(options.courierStreamEndpoint());
-        java.util.concurrent.ScheduledExecutorService processLifetime =
-            java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
-        processLifetime.schedule(() -> { }, 5, java.util.concurrent.TimeUnit.MINUTES);
+        ScheduledExecutorService processLifetime =
+            Executors.newSingleThreadScheduledExecutor();
+        processLifetime.schedule(() -> { }, 5, TimeUnit.MINUTES);
         new DeliveryDispatchClientScenario(options.dispatchHttpEndpoint()).run(customer, courierA, courierB)
             .toCompletableFuture()
-            .orTimeout(2, java.util.concurrent.TimeUnit.MINUTES)
-            .whenComplete((ignored, error) -> java.util.concurrent.CompletableFuture.allOf(
+            .orTimeout(2, TimeUnit.MINUTES)
+            .whenComplete((ignored, error) -> CompletableFuture.allOf(
                     customer.close().submit().toCompletableFuture(),
                     courierA.close().submit().toCompletableFuture(),
                     courierB.close().submit().toCompletableFuture())

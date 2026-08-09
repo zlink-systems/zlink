@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime;
+import java.util.concurrent.atomic.AtomicReference;
+import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
+import systems.zlink.framework.spots.ZLinkSpotClosingContext;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -145,7 +148,7 @@ final class InstanceSpotRuntimeIntegrationTest {
     public static final class SourceEntrySpot
         implements ZLinkEntrySpot<ZLinkActor> {
         static CompletableFuture<Void> start;
-        static java.util.concurrent.atomic.AtomicReference<Request> request;
+        static AtomicReference<Request> request;
         static CompletableFuture<String> reply;
         private final ZLinkEntrySpotContext context;
 
@@ -155,7 +158,7 @@ final class InstanceSpotRuntimeIntegrationTest {
 
         static void reset() {
             start = new CompletableFuture<>();
-            request = new java.util.concurrent.atomic.AtomicReference<>();
+            request = new AtomicReference<>();
             reply = new CompletableFuture<>();
         }
 
@@ -231,7 +234,7 @@ final class InstanceSpotRuntimeIntegrationTest {
     public static final class IdleSourceEntrySpot
         implements ZLinkEntrySpot<ZLinkActor> {
         static CompletableFuture<Void> start;
-        static java.util.concurrent.atomic.AtomicReference<Request> request;
+        static AtomicReference<Request> request;
         static CompletableFuture<String> reply;
         static ZLinkInMemoryLocationStore store;
         static String spotId;
@@ -243,7 +246,7 @@ final class InstanceSpotRuntimeIntegrationTest {
 
         static void reset() {
             start = new CompletableFuture<>();
-            request = new java.util.concurrent.atomic.AtomicReference<>();
+            request = new AtomicReference<>();
             reply = new CompletableFuture<>();
         }
 
@@ -326,7 +329,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         String spotId,
         long deadlineNanos) {
         return store.read(
-                systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec
+                ZLinkAuthorityKeyCodec
                     .spot(spotId),
                 () -> false)
             .thenCompose(read -> {
@@ -357,10 +360,10 @@ final class InstanceSpotRuntimeIntegrationTest {
     public static final class EchoInstanceSpot implements ZLinkInstanceSpot {
         static final AtomicInteger initializations = new AtomicInteger();
         static final AtomicInteger sends = new AtomicInteger();
-        static final java.util.concurrent.atomic.AtomicReference<Boolean> closes =
-            new java.util.concurrent.atomic.AtomicReference<>();
-        static final java.util.concurrent.atomic.AtomicReference<ZLinkSpotCloseReason>
-            closeReason = new java.util.concurrent.atomic.AtomicReference<>();
+        static final AtomicReference<Boolean> closes =
+            new AtomicReference<>();
+        static final AtomicReference<ZLinkSpotCloseReason>
+            closeReason = new AtomicReference<>();
         static volatile CompletableFuture<Void> idleEvicted =
             new CompletableFuture<>();
         private final ZLinkInstanceSpotContext context;
@@ -386,7 +389,7 @@ final class InstanceSpotRuntimeIntegrationTest {
 
         @Override
         public CompletionStage<Void> onClosing(
-            systems.zlink.framework.spots.ZLinkSpotClosingContext closing) {
+            ZLinkSpotClosingContext closing) {
             closeReason.set(closing.reason());
             if (closing.reason() == ZLinkSpotCloseReason.IDLE_EVICTED) {
                 idleEvicted.complete(null);

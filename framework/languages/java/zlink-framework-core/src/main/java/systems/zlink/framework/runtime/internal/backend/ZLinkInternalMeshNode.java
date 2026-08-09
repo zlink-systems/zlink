@@ -1,4 +1,9 @@
 package systems.zlink.framework.runtime.internal.backend;
+import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 
 import java.util.List;
 import java.util.Optional;
@@ -53,7 +58,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     }
 
     default void setObjectRole(
-        systems.zlink.framework.locations.ZLinkMeshNodeObjectRole role) {
+        ZLinkMeshNodeObjectRole role) {
         // Optional for alternate backends that do not publish Framework
         // service admission descriptors.
     }
@@ -183,8 +188,8 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         return new PeerChannels(List.of(), List.of());
     }
 
-    default java.util.Map<String, Integer> channelWeights() {
-        return java.util.Map.of();
+    default Map<String, Integer> channelWeights() {
+        return Map.of();
     }
 
     default MeshNodeMonitor openMonitor() {
@@ -243,7 +248,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     }
 
     default CompletionStage<Void> refreshLocalAuthorityFence() {
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     /**
@@ -264,7 +269,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         RoutingId targetNodeRid,
         byte[] command,
         Duration timeout) {
-        return java.util.concurrent.CompletableFuture.failedFuture(
+        return CompletableFuture.failedFuture(
             new UnsupportedOperationException(
                 "Remote relocation control is unavailable"));
     }
@@ -286,7 +291,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     default CompletionStage<Void> sendCanonicalRelocationControl(
         RoutingId targetNodeRid,
         byte[] command) {
-        return java.util.concurrent.CompletableFuture.failedFuture(
+        return CompletableFuture.failedFuture(
             new UnsupportedOperationException(
                 "Canonical relocation control is unavailable"));
     }
@@ -308,7 +313,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     default CompletionStage<Void> sendMessageFollow(
         RoutingId targetNodeRid,
         ZLinkServiceMessageFollowWireCodec.Notice notice) {
-        return java.util.concurrent.CompletableFuture.failedFuture(
+        return CompletableFuture.failedFuture(
             new UnsupportedOperationException(
                 "Message Follow notification is unavailable"));
     }
@@ -330,7 +335,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         byte[] command33,
         List<byte[]> payload,
         Duration timeout) {
-        return java.util.concurrent.CompletableFuture.failedFuture(
+        return CompletableFuture.failedFuture(
             new UnsupportedOperationException(
                 "Relocation reply relay is unavailable"));
     }
@@ -348,7 +353,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         RoutingId sessionOwnerNodeRid,
         byte[] command44,
         Duration timeout) {
-        return java.util.concurrent.CompletableFuture.failedFuture(
+        return CompletableFuture.failedFuture(
             new UnsupportedOperationException(
                 "Session relocation routing is unavailable"));
     }
@@ -370,7 +375,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     default CompletionStage<Void> sendBoundSessionReplaced(
         RoutingId sessionOwnerNodeRid,
         ZLinkServiceM6BWireCodec.BoundSessionReplaced replacement) {
-        return java.util.concurrent.CompletableFuture.failedFuture(
+        return CompletableFuture.failedFuture(
             new UnsupportedOperationException(
                 "Bound Session replacement notification is unavailable"));
     }
@@ -380,7 +385,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         RoutingId targetNodeRid,
         ActorCreateIntent intent,
         Duration timeout) {
-        return java.util.concurrent.CompletableFuture.failedFuture(
+        return CompletableFuture.failedFuture(
             new UnsupportedOperationException(
                 "Remote Actor create is unavailable"));
     }
@@ -390,7 +395,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
             RoutingId targetNodeRid,
             UserSpotCreateIntent intent,
             Duration timeout) {
-        return java.util.concurrent.CompletableFuture.failedFuture(
+        return CompletableFuture.failedFuture(
             new UnsupportedOperationException(
                 "Remote User Spot create is unavailable"));
     }
@@ -400,7 +405,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
             RoutingId targetNodeRid,
             UserSpotCloseIntent intent,
             Duration timeout) {
-        return java.util.concurrent.CompletableFuture.failedFuture(
+        return CompletableFuture.failedFuture(
             new UnsupportedOperationException(
                 "Remote User Spot close is unavailable"));
     }
@@ -453,8 +458,8 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         String stableType,
         String sourceSpotId,
         byte[] metadata,
-        List<systems.zlink.contracts.messaging.Message> parts) {
-        return java.util.concurrent.CompletableFuture.failedFuture(
+        List<Message> parts) {
+        return CompletableFuture.failedFuture(
             new UnsupportedOperationException(
                 "Remote Instance Spot send is unavailable"));
     }
@@ -464,21 +469,21 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         String stableType,
         String sourceSpotId,
         byte[] metadata,
-        List<systems.zlink.contracts.messaging.Message> parts,
+        List<Message> parts,
         Duration timeout) {
         return submitInstanceSpotSend(
             route, stableType, sourceSpotId, metadata, parts);
     }
 
-    default CompletionStage<List<systems.zlink.contracts.messaging.Message>>
+    default CompletionStage<List<Message>>
         requestInstanceSpot(
         ZLinkServiceM6BWireCodec.InstanceRouteFence route,
         String stableType,
         String sourceSpotId,
             byte[] metadata,
-            List<systems.zlink.contracts.messaging.Message> parts,
+            List<Message> parts,
             Duration timeout) {
-        return java.util.concurrent.CompletableFuture.failedFuture(
+        return CompletableFuture.failedFuture(
             new UnsupportedOperationException(
                 "Remote Instance Spot request is unavailable"));
     }
@@ -510,7 +515,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         String ownerId,
         long ownerLeaseGeneration) {
         public PeerAuthorityFence {
-            java.util.Objects.requireNonNull(
+            Objects.requireNonNull(
                 sourceNodeRid, "sourceNodeRid");
             if (sourceNodeGeneration <= 0
                 || ownerLeaseGeneration <= 0) {
@@ -573,9 +578,9 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         ZLinkServiceM6BWireCodec.ReservationFence reservation,
         long deadlineUnixMs) {
         public UserSpotCreateIntent {
-            java.util.Objects.requireNonNull(spotId, "spotId");
-            java.util.Objects.requireNonNull(stableType, "stableType");
-            java.util.Objects.requireNonNull(
+            Objects.requireNonNull(spotId, "spotId");
+            Objects.requireNonNull(stableType, "stableType");
+            Objects.requireNonNull(
                 reservation, "reservation");
         }
     }
@@ -588,9 +593,9 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         long operationLow,
         long deadlineUnixMs) {
         public ActorCreateIntent {
-            java.util.Objects.requireNonNull(actorId, "actorId");
-            java.util.Objects.requireNonNull(stableType, "stableType");
-            java.util.Objects.requireNonNull(
+            Objects.requireNonNull(actorId, "actorId");
+            Objects.requireNonNull(stableType, "stableType");
+            Objects.requireNonNull(
                 reservation, "reservation");
             if (operationHigh == 0 && operationLow == 0) {
                 throw new IllegalArgumentException(
@@ -603,7 +608,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         ZLinkServiceM6BWireCodec.UserSpotCloseFence target,
         long deadlineUnixMs) {
         public UserSpotCloseIntent {
-            java.util.Objects.requireNonNull(target, "target");
+            Objects.requireNonNull(target, "target");
         }
     }
 
@@ -635,20 +640,20 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         ZLinkServiceM6BWireCodec.UserSpotCreateResult result,
         String spotId,
         long objectGeneration,
-        List<systems.zlink.contracts.messaging.Message>
+        List<Message>
             applicationReply) {
         public UserSpotCreateResponse {
-            java.util.Objects.requireNonNull(result, "result");
-            java.util.Objects.requireNonNull(spotId, "spotId");
+            Objects.requireNonNull(result, "result");
+            Objects.requireNonNull(spotId, "spotId");
             applicationReply = List.copyOf(
-                java.util.Objects.requireNonNull(
+                Objects.requireNonNull(
                     applicationReply, "applicationReply"));
         }
     }
 
     record ActorCreateResponse(byte[] terminalEnvelope) {
         public ActorCreateResponse {
-            terminalEnvelope = java.util.Objects.requireNonNull(
+            terminalEnvelope = Objects.requireNonNull(
                 terminalEnvelope, "terminalEnvelope").clone();
         }
 
@@ -672,12 +677,12 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         String meshName,
         String storeVersion) {
         public SpotAuthorityRoute {
-            java.util.Objects.requireNonNull(spotId, "spotId");
-            java.util.Objects.requireNonNull(
+            Objects.requireNonNull(spotId, "spotId");
+            Objects.requireNonNull(
                 targetNodeRid, "targetNodeRid");
-            java.util.Objects.requireNonNull(ownerId, "ownerId");
-            java.util.Objects.requireNonNull(meshName, "meshName");
-            java.util.Objects.requireNonNull(
+            Objects.requireNonNull(ownerId, "ownerId");
+            Objects.requireNonNull(meshName, "meshName");
+            Objects.requireNonNull(
                 storeVersion, "storeVersion");
         }
     }

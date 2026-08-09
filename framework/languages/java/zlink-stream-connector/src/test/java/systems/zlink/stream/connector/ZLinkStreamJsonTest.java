@@ -1,4 +1,5 @@
 package systems.zlink.stream.connector;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -48,7 +49,7 @@ final class ZLinkStreamJsonTest {
 
         assertEquals(
             "{\"value\":\"42\"}",
-            new String(encoded.payload().toByteArray(), java.nio.charset.StandardCharsets.UTF_8));
+            new String(encoded.payload().toByteArray(), StandardCharsets.UTF_8));
         assertEquals(
             42L,
             ZLinkStreamJson.decode(encoded, LongPayload.class).value());
@@ -58,7 +59,7 @@ final class ZLinkStreamJsonTest {
     void frameworkJsonProfileRejectsNumericInt64() {
         ZLinkStreamEncodedPayload numeric = new ZLinkStreamEncodedPayload(
             "counter",
-            Message.from("{\"value\":42}".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+            Message.from("{\"value\":42}".getBytes(StandardCharsets.UTF_8)),
             Map.of(),
             ZLinkStreamCodec.JSON);
 

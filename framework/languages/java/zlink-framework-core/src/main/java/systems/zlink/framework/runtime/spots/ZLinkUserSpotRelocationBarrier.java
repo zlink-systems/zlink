@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Collections;
+import java.util.Objects;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -33,9 +35,9 @@ final class ZLinkUserSpotRelocationBarrier {
     ZLinkUserSpotRelocationBarrier(
         DefaultSpotContext context,
         ZLinkActorSessionCoordinator actors) {
-        this.context = java.util.Objects.requireNonNull(
+        this.context = Objects.requireNonNull(
             context, "context");
-        this.actors = java.util.Objects.requireNonNull(
+        this.actors = Objects.requireNonNull(
             actors, "actors");
     }
 
@@ -44,7 +46,7 @@ final class ZLinkUserSpotRelocationBarrier {
     }
 
     Optional<Seal> trySeal(Predicate<Preview> admission) {
-        java.util.Objects.requireNonNull(admission, "admission");
+        Objects.requireNonNull(admission, "admission");
         byte[] timerEnvelope;
         List<String> participantActorIds;
         Optional<ZLinkCompositeRelocationBarrier.Seal> localSeal =
@@ -128,13 +130,13 @@ final class ZLinkUserSpotRelocationBarrier {
     CompletionStage<Optional<Seal>> sealAtTurnBoundary(
         Predicate<Preview> admission,
         BooleanSupplier cancelled) {
-        java.util.Objects.requireNonNull(admission, "admission");
-        java.util.Objects.requireNonNull(cancelled, "cancelled");
+        Objects.requireNonNull(admission, "admission");
+        Objects.requireNonNull(cancelled, "cancelled");
         List<String> participantActorIds;
         LinkedHashMap<String, ZLinkAsyncSerialQueue> lanes;
         synchronized (this) {
             if (active != null || sealing || committing) {
-                return java.util.concurrent.CompletableFuture
+                return CompletableFuture
                     .completedFuture(Optional.empty());
             }
             participantActorIds =
@@ -275,7 +277,7 @@ final class ZLinkUserSpotRelocationBarrier {
             completion = CompletableFuture.completedFuture(null);
         } else {
             try {
-                completion = java.util.Objects.requireNonNull(
+                completion = Objects.requireNonNull(
                     context.runRelocationReadyCompletion(
                         systems.zlink.framework.spots
                             .ZLinkSpotRelocationReadyOutcome.CONTINUED),
@@ -376,7 +378,7 @@ final class ZLinkUserSpotRelocationBarrier {
         held.putAll(barrier.freezeIngress(seal.composite)
             .orElseThrow(() -> new IllegalStateException(
                 "User Spot barrier freeze lost a lane")));
-        return Optional.of(java.util.Collections.unmodifiableMap(held));
+        return Optional.of(Collections.unmodifiableMap(held));
     }
 
     private void rollback(ZLinkCompositeRelocationBarrier.Seal seal) {

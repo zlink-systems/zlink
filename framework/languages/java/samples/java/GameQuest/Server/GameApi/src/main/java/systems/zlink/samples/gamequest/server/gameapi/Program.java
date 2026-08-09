@@ -1,4 +1,8 @@
 package systems.zlink.samples.gamequest.server.gameapi;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
@@ -140,7 +144,7 @@ public class Program {
         return server;
     }
 
-    private static java.util.concurrent.CompletionStage<Void> handleProjection(
+    private static CompletionStage<Void> handleProjection(
         HttpExchange exchange,
         ObjectMapper json,
         GameQuestStore store,
@@ -173,12 +177,12 @@ public class Program {
                 .inMesh(SampleNames.PlayerQuestSpotDiscovery)
                 .submit(Messages.QuestProgress.class)
                 .thenAccept(rebuilt -> {
-                    store.mergeProjection(playerId, java.util.List.of(rebuilt));
+                    store.mergeProjection(playerId, List.of(rebuilt));
                     writeJsonUnchecked(exchange, json, 200, rebuilt);
                 });
         }
         writeJsonUnchecked(exchange, json, 404, new ErrorBody("unknown projection action"));
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     private static void writeJsonUnchecked(
@@ -189,7 +193,7 @@ public class Program {
         try {
             writeJson(exchange, json, status, body);
         } catch (IOException error) {
-            throw new java.util.concurrent.CompletionException(error);
+            throw new CompletionException(error);
         }
     }
 

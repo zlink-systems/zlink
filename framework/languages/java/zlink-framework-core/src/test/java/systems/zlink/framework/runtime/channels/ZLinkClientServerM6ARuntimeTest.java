@@ -1,4 +1,9 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.concurrent.CompletionStage;
+import systems.zlink.framework.locations.ZLinkLocationRole;
+import systems.zlink.framework.locations.ZLinkPageRequest;
+import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptorKey;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -534,7 +539,7 @@ final class ZLinkClientServerM6ARuntimeTest {
                     systems.zlink.framework.runtime.internal.locations
                         .ZLinkAutoConnectType.CLIENT_SERVER,
                 "orders",
-                systems.zlink.framework.locations.ZLinkLocationRole.DEALER,
+                ZLinkLocationRole.DEALER,
                 RoutingId.from("client"),
                 "",
                 100,
@@ -545,7 +550,7 @@ final class ZLinkClientServerM6ARuntimeTest {
                     systems.zlink.framework.runtime.internal.locations
                         .ZLinkAutoConnectType.CLIENT_SERVER,
                 "orders",
-                systems.zlink.framework.locations.ZLinkLocationRole.ROUTER,
+                ZLinkLocationRole.ROUTER,
                 descriptor.serverRid(),
                 descriptor.endpoint(),
                 descriptor.weight(),
@@ -639,30 +644,30 @@ final class ZLinkClientServerM6ARuntimeTest {
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<ZLinkLocationWriteResult>
+        public CompletionStage<ZLinkLocationWriteResult>
             updateClientServer(
                 ZLinkClientServerServerDescriptor value,
-                systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent intent) {
+                ZLinkLocationWriteIntent intent) {
             return CompletableFuture.completedFuture(
                 ZLinkLocationWriteResult.stored(
                     value.leaseGeneration(), Instant.now()));
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<ZLinkLocationWriteStatus>
+        public CompletionStage<ZLinkLocationWriteStatus>
             removeClientServer(
-                systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptorKey key,
+                ZLinkClientServerServerDescriptorKey key,
                 ZLinkLocationOwnerToken owner) {
             return CompletableFuture.completedFuture(
                 ZLinkLocationWriteStatus.STORED);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<
+        public CompletionStage<
             ZLinkLocationPage<ZLinkClientServerServerDescriptor>>
             listClientServers(
                 String channelName,
-                systems.zlink.framework.locations.ZLinkPageRequest page) {
+                ZLinkPageRequest page) {
             return CompletableFuture.completedFuture(
                 new ZLinkLocationPage<>(List.of(descriptor), null));
         }

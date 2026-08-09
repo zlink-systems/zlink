@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.backend;
+import java.util.Objects;
 
 import java.util.List;
 import java.util.Optional;
@@ -73,10 +74,10 @@ public final class ZLinkBackendReceived implements AutoCloseable {
         this.applicationMetadata = applicationMetadata == null
             ? new byte[0]
             : applicationMetadata.clone();
-        this.acceptedJournalRecordSupplier = java.util.Objects.requireNonNull(
+        this.acceptedJournalRecordSupplier = Objects.requireNonNull(
             acceptedJournalRecordSupplier, "acceptedJournalRecordSupplier");
         this.acceptedJournalRecordSizeHint = Math.max(0, acceptedJournalRecordSizeHint);
-        this.parts = java.util.Objects.requireNonNull(parts, "parts");
+        this.parts = Objects.requireNonNull(parts, "parts");
         this.reply = reply;
         this.closeAction = closeAction == null ? () -> { } : closeAction;
         this.contentType = contentType;
@@ -311,7 +312,7 @@ public final class ZLinkBackendReceived implements AutoCloseable {
         }
         synchronized (this) {
             if (acceptedJournalRecord == null) {
-                acceptedJournalRecord = java.util.Objects.requireNonNull(
+                acceptedJournalRecord = Objects.requireNonNull(
                     acceptedJournalRecordSupplier.get(),
                     "accepted journal supplier returned null");
             }

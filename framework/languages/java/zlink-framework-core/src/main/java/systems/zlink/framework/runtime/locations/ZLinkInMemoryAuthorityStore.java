@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.locations;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityRestore;
+import systems.zlink.framework.runtime.internal.locations.ZLinkPendingObjectCreation;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -133,7 +137,7 @@ final class ZLinkInMemoryAuthorityStore {
                     nextVersion(),
                     now));
             }
-            if (mutation instanceof systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityRestore restore) {
+            if (mutation instanceof ZLinkAuthorityRestore restore) {
                 if (current == null
                     || current.allocation.state()
                         != ZLinkPlacementAllocationState.ACTIVE
@@ -600,7 +604,7 @@ final class ZLinkInMemoryAuthorityStore {
         ZLinkObjectReservation reservation,
         ZLinkCreationOperationTerminal terminal,
         ZLinkCreationTerminalState expectedState) {
-        java.util.Objects.requireNonNull(terminal, "terminal");
+        Objects.requireNonNull(terminal, "terminal");
         if (!reservation.equals(terminal.reservation())) {
             throw new IllegalArgumentException(
                 "terminal reservation must match the exact reservation");
@@ -615,10 +619,10 @@ final class ZLinkInMemoryAuthorityStore {
         }
         byte[] computed;
         try {
-            computed = java.security.MessageDigest
+            computed = MessageDigest
                 .getInstance("SHA-256")
                 .digest(terminal.terminalEnvelope());
-        } catch (java.security.NoSuchAlgorithmException impossible) {
+        } catch (NoSuchAlgorithmException impossible) {
             throw new IllegalStateException(impossible);
         }
         if (!Arrays.equals(computed, terminal.terminalSha256())) {
@@ -1418,7 +1422,7 @@ final class ZLinkInMemoryAuthorityStore {
         ZLinkPlacementCapacityBundle requested = request.capacityBundle();
         return actors == requested.actorSlots()
             && spots == requested.spotSlots()
-            && java.util.Objects.equals(
+            && Objects.equals(
                 expectedSpotType,
                 requested.spotType().orElse(null));
     }
@@ -1707,9 +1711,9 @@ final class ZLinkInMemoryAuthorityStore {
     }
 
     private ZLinkAuthoritySnapshot snapshot(Row row, Instant now) {
-        java.util.Optional<
-            systems.zlink.framework.runtime.internal.locations.ZLinkPendingObjectCreation> pending =
-            java.util.Optional.empty();
+        Optional<
+            ZLinkPendingObjectCreation> pending =
+            Optional.empty();
         if (row.allocation.state()
                 == ZLinkPlacementAllocationState.PENDING) {
             ReservationState state = reservations.values().stream()
@@ -1720,8 +1724,8 @@ final class ZLinkInMemoryAuthorityStore {
                 .findFirst()
                 .orElse(null);
             if (state != null) {
-                pending = java.util.Optional.of(
-                    new systems.zlink.framework.runtime.internal.locations.ZLinkPendingObjectCreation(
+                pending = Optional.of(
+                    new ZLinkPendingObjectCreation(
                             state.reservation
                                 .reservationVersion(),
                             state.request

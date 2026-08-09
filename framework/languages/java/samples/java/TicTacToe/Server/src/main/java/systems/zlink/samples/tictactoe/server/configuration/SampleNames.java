@@ -1,4 +1,5 @@
 package systems.zlink.samples.tictactoe.server.configuration;
+import java.time.Duration;
 
 public final class SampleNames {
     public static final String ApiChannel = "tictactoe-api";
@@ -8,7 +9,7 @@ public final class SampleNames {
     public static final String PlayStream = "play-stream";
     public static final String PlayActor = "play-actor";
     public static final int RequiredLevel = 3;
-    public static final java.time.Duration RequestTimeout = java.time.Duration.ofSeconds(5);
+    public static final Duration RequestTimeout = Duration.ofSeconds(5);
 
     private SampleNames() {
     }

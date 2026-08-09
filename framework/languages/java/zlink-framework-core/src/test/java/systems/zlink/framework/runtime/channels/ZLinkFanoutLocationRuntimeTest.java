@@ -1,4 +1,9 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.concurrent.CompletionStage;
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.locations.ZLinkPageRequest;
+import systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptorKey;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -120,36 +125,36 @@ final class ZLinkFanoutLocationRuntimeTest {
                 100,
                 (channel, message) ->
                     message.parts().forEach(
-                        systems.zlink.contracts.messaging.Message::close));
+                        Message::close));
     }
 
     private static final class EmptyStore
         extends ZLinkLocationStoreTestAdapter {
         @Override
-        public java.util.concurrent.CompletionStage<ZLinkLocationWriteResult>
+        public CompletionStage<ZLinkLocationWriteResult>
             updateFanoutPublisher(
                 ZLinkFanoutPublisherDescriptor descriptor,
-                systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent
+                ZLinkLocationWriteIntent
                     intent) {
             return CompletableFuture.completedFuture(
                 ZLinkLocationWriteResult.stored(1, Instant.now()));
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<ZLinkLocationWriteStatus>
+        public CompletionStage<ZLinkLocationWriteStatus>
             removeFanoutPublisher(
-                systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptorKey key,
+                ZLinkFanoutPublisherDescriptorKey key,
                 ZLinkLocationOwnerToken owner) {
             return CompletableFuture.completedFuture(
                 ZLinkLocationWriteStatus.STORED);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<
+        public CompletionStage<
             ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>>
             listFanoutPublishers(
                 String channelName,
-                systems.zlink.framework.locations.ZLinkPageRequest page) {
+                ZLinkPageRequest page) {
             return CompletableFuture.completedFuture(
                 new ZLinkLocationPage<>(List.of(), null));
         }

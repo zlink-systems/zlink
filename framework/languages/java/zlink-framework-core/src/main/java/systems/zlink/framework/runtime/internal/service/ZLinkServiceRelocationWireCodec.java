@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.internal.service;
+import java.nio.ByteBuffer;
+import java.util.Arrays;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.CharacterCodingException;
@@ -121,7 +123,7 @@ public final class ZLinkServiceRelocationWireCodec {
             throw invalid("service reply relay prefix");
         }
         return new Reader(
-            java.util.Arrays.copyOfRange(
+            Arrays.copyOfRange(
                 encoded, PREFIX_BYTES, encoded.length));
     }
 
@@ -357,7 +359,7 @@ public final class ZLinkServiceRelocationWireCodec {
         Reader slice(int length) { return new Reader(raw(length)); }
         byte[] raw(int length) {
             require(length);
-            byte[] result = java.util.Arrays.copyOfRange(
+            byte[] result = Arrays.copyOfRange(
                 bytes, offset, offset + length);
             offset += length;
             return result;
@@ -368,7 +370,7 @@ public final class ZLinkServiceRelocationWireCodec {
                 String value = StandardCharsets.UTF_8.newDecoder()
                     .onMalformedInput(CodingErrorAction.REPORT)
                     .onUnmappableCharacter(CodingErrorAction.REPORT)
-                    .decode(java.nio.ByteBuffer.wrap(raw(length)))
+                    .decode(ByteBuffer.wrap(raw(length)))
                     .toString();
                 requireText(value, "text");
                 return value;

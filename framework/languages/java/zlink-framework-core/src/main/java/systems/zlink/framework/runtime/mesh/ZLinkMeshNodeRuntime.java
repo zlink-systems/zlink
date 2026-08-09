@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.mesh;
+import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 
 import java.time.Duration;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
@@ -51,10 +52,10 @@ public final class ZLinkMeshNodeRuntime implements AutoCloseable {
             node.setAdvertiseHost(registration.advertiseHost());
             node.setObjectRole(
                 registration.objectServer()
-                    ? systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.SERVER
+                    ? ZLinkMeshNodeObjectRole.SERVER
                     : registration.objectRoleEnabled()
-                        ? systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.CLIENT
-                        : systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.NONE);
+                        ? ZLinkMeshNodeObjectRole.CLIENT
+                        : ZLinkMeshNodeObjectRole.NONE);
             node.setPlacementWeight(registration.placementWeight());
             //  The HWM is an accounted byte count and stays 64-bit. The pending
             //  admission capacity is a message count, so a byte HWM larger than

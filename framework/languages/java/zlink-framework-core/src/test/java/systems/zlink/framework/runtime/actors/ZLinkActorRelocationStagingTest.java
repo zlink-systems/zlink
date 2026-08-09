@@ -284,7 +284,7 @@ final class ZLinkActorRelocationStagingTest {
             (proxy, method, arguments) -> switch (method.getName()) {
                 case "routingId" -> RoutingId.from("node-a");
                 case "createActor" -> {
-                    ((systems.zlink.contracts.messaging.Message) arguments[1]).close();
+                    ((Message) arguments[1]).close();
                     yield new ZLinkBackendActorRef(
                         RoutingId.from("node-a"),
                         (String) arguments[0],
@@ -325,7 +325,7 @@ final class ZLinkActorRelocationStagingTest {
 
     public static final class ProbeFactory implements ZLinkActorFactory {
         @Override
-        public java.util.concurrent.CompletionStage<ZLinkActor> create(
+        public CompletionStage<ZLinkActor> create(
             ZLinkActorContext context) {
             return CompletableFuture.completedFuture(new ProbeActor(context));
         }

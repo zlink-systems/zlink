@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Optional;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -126,7 +127,7 @@ final class ZLinkRoutedActorTransferHandler {
         List<Message> replies,
         ZLinkBackendActorRef actorRef,
         ZLinkActorSpotRoutePackets.WireHandoffPacket packet,
-        java.util.Optional<Message> reply) {
+        Optional<Message> reply) {
         try {
             if (packet.replyRoute() == null || reply.isEmpty()) {
                 replies.add(reply.map(Message::from)

@@ -1,5 +1,7 @@
-package systems.zlink.e2e.registrationcodec.client.Scenarios;
+package Scenarios;
 
+import systems.zlink.e2e.registrationcodec.client.Scenarios;
+import systems.zlink.e2e.registrationcodec.client.Support;
 import java.util.List;
 import systems.zlink.e2e.registrationcodec.client.Support.ScenarioAssert;
 import systems.zlink.e2e.registrationcodec.client.Support.ScenarioContext;

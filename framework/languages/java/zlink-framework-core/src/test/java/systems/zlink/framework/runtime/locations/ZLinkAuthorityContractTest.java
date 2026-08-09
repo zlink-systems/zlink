@@ -1,4 +1,9 @@
 package systems.zlink.framework.runtime.locations;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDelete;
+import systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationIdentity;
+import systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationTerminal;
+import systems.zlink.framework.runtime.internal.locations.ZLinkCreationTerminalReadResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectRejectResult;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -133,7 +138,7 @@ final class ZLinkAuthorityContractTest {
             Set.of(
                 ZLinkAuthorityPut.class,
                 ZLinkAuthorityRestore.class,
-                systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDelete.class),
+                ZLinkAuthorityDelete.class),
             Set.of(ZLinkAuthorityMutation.class.getPermittedSubclasses()));
     }
 
@@ -215,7 +220,7 @@ final class ZLinkAuthorityContractTest {
             Instant.EPOCH);
         ZLinkAuthorityPut put = new ZLinkAuthorityPut(
             payload,
-            systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityGenerationTransition.PRESERVE,
+            ZLinkAuthorityGenerationTransition.PRESERVE,
             Optional.empty(),
             Optional.empty());
         ZLinkAuthorityStored stored = new ZLinkAuthorityStored(
@@ -295,15 +300,15 @@ final class ZLinkAuthorityContractTest {
         public CompletionStage<ZLinkObjectCommitResult> commit(
             ZLinkObjectReservation reservation,
             byte[] readyPayload,
-            systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationTerminal terminal,
+            ZLinkCreationOperationTerminal terminal,
             ZLinkStoreCancellation cancellation) {
             throw new AssertionError();
         }
 
         @Override
-        public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkObjectRejectResult> reject(
+        public CompletionStage<ZLinkObjectRejectResult> reject(
             ZLinkObjectReservation reservation,
-            systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationTerminal terminal,
+            ZLinkCreationOperationTerminal terminal,
             ZLinkStoreCancellation cancellation) {
             throw new AssertionError();
         }
@@ -318,15 +323,15 @@ final class ZLinkAuthorityContractTest {
         @Override
         public CompletionStage<ZLinkObjectAbortResult> abort(
             ZLinkObjectReservation reservation,
-            systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationTerminal terminal,
+            ZLinkCreationOperationTerminal terminal,
             ZLinkStoreCancellation cancellation) {
             throw new AssertionError();
         }
 
         @Override
-        public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkCreationTerminalReadResult>
+        public CompletionStage<ZLinkCreationTerminalReadResult>
             readCreationTerminal(
-                systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationIdentity operation,
+                ZLinkCreationOperationIdentity operation,
                 ZLinkStoreCancellation cancellation) {
             throw new AssertionError();
         }

@@ -9,7 +9,7 @@ public final class Program {
 
     public static void main(String[] args) {
         Inputs inputs = parseInputs(args);
-        var options = systems.zlink.e2e.registrymessaging.client.Support.ClientOptions.load(inputs.configPath());
+        var options = Support.ClientOptions.load(inputs.configPath());
         try (RegistryMessagingHttp http = new RegistryMessagingHttp(options)) {
             new ScenarioCatalog(http, options).run(inputs.scenario());
         }

@@ -1,5 +1,6 @@
-package systems.zlink.e2e.spotservice.client.Scenarios;
+package Scenarios;
 
+import systems.zlink.e2e.spotservice.client.Scenarios;
 import java.util.List;
 import java.util.UUID;
 import systems.zlink.e2e.spotservice.shared.Contracts;
@@ -15,7 +16,7 @@ public final class SmE1Scenario extends SpotServiceScenarioContext {
 
     private void execute() {
         String ownerEndpoint = options().httpAEndpoint();
-        String spotRid = "spot-sm-e1-" + java.util.UUID.randomUUID().toString().replace("-", "");
+        String spotRid = "spot-sm-e1-" + UUID.randomUUID().toString().replace("-", "");
         Contracts.CreateSpotRes created = postJson(
             ownerEndpoint,
             "/spot/create",

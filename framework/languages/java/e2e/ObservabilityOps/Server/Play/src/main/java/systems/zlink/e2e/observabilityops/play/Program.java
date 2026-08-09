@@ -1,4 +1,10 @@
 package systems.zlink.e2e.observabilityops.play;
+import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+import systems.zlink.e2e.automaticturn.shared.PersistentRoomEvents;
+import systems.zlink.framework.actors.ZLinkActorManager;
+import systems.zlink.framework.channels.ZLinkRouteClient;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Path;
@@ -74,19 +80,19 @@ public final class Program {
         ZLinkFrameworkLifecycle lifecycle,
         DrainEvidence drainEvidence,
         ZLinkSpotManager spots,
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        ZLinkRouteClient routes,
         PlayOptions config) {
         return new EvidenceHttpServer(
             evidence, json, config.httpEndpoint(), metrics,
             lifecycle, lifecycle::monitoringLocationRuntimeQuery, drainEvidence,
             spotRid -> spots.find(spotRid.toString()).thenCompose(found ->
                 found.map(spots::close).orElse(
-                    java.util.concurrent.CompletableFuture.completedFuture(false))),
+                    CompletableFuture.completedFuture(false))),
             () -> routes.requestToNode(
                     Contracts.ROUTE_CHANNEL,
                     RoutingId.from(Contracts.PLAY_NODE_B),
                     new Contracts.EnsureSpotReq("obs-c5-source-route-ready"))
-                .timeout(java.time.Duration.ofSeconds(30))
+                .timeout(Duration.ofSeconds(30))
                 .submit(Contracts.EnsureSpotRes.class)
                 .thenApply(Contracts.EnsureSpotRes::nodeRid));
     }
@@ -103,7 +109,7 @@ public final class Program {
     MaintenanceHttpServer maintenanceHttpServer(
         ObjectMapper json,
         MeterRegistry metrics,
-        ObjectProvider<systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime> runtime,
+        ObjectProvider<ZLinkFrameworkRuntime> runtime,
         ZLinkSpotManager spots,
         PlayOptions config,
         MaintenanceGate gate) {
@@ -111,8 +117,8 @@ public final class Program {
     }
 
     @Bean(destroyMethod = "close")
-    systems.zlink.e2e.automaticturn.shared.PersistentRoomEvents persistentRoomEvents(PlayOptions config) {
-        return new systems.zlink.e2e.automaticturn.shared.PersistentRoomEvents(
+    PersistentRoomEvents persistentRoomEvents(PlayOptions config) {
+        return new PersistentRoomEvents(
             config.redisLocationEndpoint(), config.locationKeyPrefix());
     }
 
@@ -326,7 +332,7 @@ public final class Program {
 
     @Bean
     PlayBindActorsHandler playBindActorsHandler(
-        systems.zlink.framework.actors.ZLinkActorManager actors,
+        ZLinkActorManager actors,
         ZLinkSpotManager spots,
         EvidenceStore evidence) {
         return new PlayBindActorsHandler(actors, spots, evidence);

@@ -1,4 +1,6 @@
 package systems.zlink.samples.tictactoe.server.api;
+import java.net.InetAddress;
+import java.net.URI;
 
 import java.nio.file.Path;
 import org.springframework.boot.WebApplicationType;
@@ -58,8 +60,8 @@ public final class ApiServerApplication {
     @Bean
     WebServerFactoryCustomizer<ConfigurableServletWebServerFactory> apiHttpServer(ApiSettings settings) {
         return server -> {
-            var endpoint = java.net.URI.create(settings.apiBindUrl());
-            server.setAddress(java.net.InetAddress.getLoopbackAddress());
+            var endpoint = URI.create(settings.apiBindUrl());
+            server.setAddress(InetAddress.getLoopbackAddress());
             server.setPort(endpoint.getPort());
         };
     }

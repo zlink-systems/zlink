@@ -1,5 +1,11 @@
-package systems.zlink.e2e.kotlin.registrymessaging.provider.Handlers
+package Handlers
 
+
+import systems.zlink.e2e.kotlin.registrymessaging.provider.Handlers
+import systems.zlink.e2e.kotlin.registrymessaging.provider.Infrastructure
+import java.util.logging.Handler
+import java.util.logging.LogRecord
+import java.util.logging.Logger
 import java.security.MessageDigest
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
@@ -92,10 +98,10 @@ class RoutePingHandler(
 
 class EvidenceDispatchErrorHandler(
     private val evidence: EvidenceStore,
-) : java.util.logging.Handler() {
-    fun install() = java.util.logging.Logger.getLogger(LOGGER_NAME).addHandler(this)
+) : Handler() {
+    fun install() = Logger.getLogger(LOGGER_NAME).addHandler(this)
 
-    override fun publish(record: java.util.logging.LogRecord) {
+    override fun publish(record: LogRecord) {
         val fields = diagnosticsFields(record.message) ?: return
         if (fields["outcome"] != "ERROR") return
         evidence.add(
@@ -110,7 +116,7 @@ class EvidenceDispatchErrorHandler(
     }
 
     override fun flush() = Unit
-    override fun close() = java.util.logging.Logger.getLogger(LOGGER_NAME).removeHandler(this)
+    override fun close() = Logger.getLogger(LOGGER_NAME).removeHandler(this)
 
     private fun diagnosticsFields(message: String?): Map<String, String>? {
         if (message?.startsWith("message flow ") != true) return null

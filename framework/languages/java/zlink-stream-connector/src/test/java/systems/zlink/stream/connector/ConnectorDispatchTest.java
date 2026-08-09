@@ -1,4 +1,8 @@
 package systems.zlink.stream.connector;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -15,8 +19,8 @@ final class ConnectorDispatchTest {
     @Test
     void dispatchModeSurfaceUsesContractNames() {
         assertEquals(
-            java.util.List.of("MANUAL", "IMMEDIATE"),
-            java.util.Arrays.stream(ZLinkStreamDispatchMode.values())
+            List.of("MANUAL", "IMMEDIATE"),
+            Arrays.stream(ZLinkStreamDispatchMode.values())
                 .map(Enum::name)
                 .toList());
     }
@@ -62,7 +66,7 @@ final class ConnectorDispatchTest {
         try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
             ZLinkStreamConnector connector =
                 ZLinkStreamConnectorFactory.create(server.options(ZLinkStreamDispatchMode.MANUAL));
-            java.util.List<ZLinkStreamConnectionState> states = new java.util.ArrayList<>();
+            List<ZLinkStreamConnectionState> states = new ArrayList<>();
             AtomicInteger disconnected = new AtomicInteger();
             connector.onConnectionStateChanged(state -> {
                 states.add(state);
@@ -74,10 +78,10 @@ final class ConnectorDispatchTest {
             });
 
             ConnectorTestAwait.await(connector.connect());
-            assertEquals(java.util.List.of(), states);
+            assertEquals(List.of(), states);
             ConnectorTestAwait.await(connector.dispatch());
             assertEquals(
-                java.util.List.of(
+                List.of(
                     ZLinkStreamConnectionState.CONNECTING,
                     ZLinkStreamConnectionState.CONNECTED),
                 states);
@@ -139,16 +143,16 @@ final class ConnectorDispatchTest {
     @Test
     void dispatchQueueDropsNewestReceivedMessageWhenBounded() {
         ZLinkStreamDispatchQueue queue = new ZLinkStreamDispatchQueue(1);
-        java.util.List<String> handled = new java.util.ArrayList<>();
+        List<String> handled = new ArrayList<>();
 
         queue.addMessage(message("push-0"),
-            () -> { handled.add("push-0"); return java.util.concurrent.CompletableFuture.completedFuture(null); },
+            () -> { handled.add("push-0"); return CompletableFuture.completedFuture(null); },
             () -> true, false);
         queue.addMessage(message("push-1"),
-            () -> { handled.add("push-1"); return java.util.concurrent.CompletableFuture.completedFuture(null); },
+            () -> { handled.add("push-1"); return CompletableFuture.completedFuture(null); },
             () -> true, false);
         queue.addMessage(message("push-2"),
-            () -> { handled.add("push-2"); return java.util.concurrent.CompletableFuture.completedFuture(null); },
+            () -> { handled.add("push-2"); return CompletableFuture.completedFuture(null); },
             () -> true, false);
 
         assertEquals(1, queue.size());
@@ -156,7 +160,7 @@ final class ConnectorDispatchTest {
 
         queue.drainAsync().toCompletableFuture().join();
 
-        assertEquals(java.util.List.of("push-0"), handled);
+        assertEquals(List.of("push-0"), handled);
         assertEquals(0, queue.receivedCount("Push"));
     }
 
@@ -219,7 +223,7 @@ final class ConnectorDispatchTest {
                 assertEquals(1, dropped.get());
                 assertEquals(1, connector.receivedCount("Drop"));
                 var retained = connector.waitFor("Drop")
-                    .timeout(java.time.Duration.ofSeconds(1))
+                    .timeout(Duration.ofSeconds(1))
                     .submit()
                     .toCompletableFuture()
                     .get();
@@ -301,14 +305,14 @@ final class ConnectorDispatchTest {
                 TcpStreamConnectorTestServer.awaitCondition(
                     () -> connector.pendingDispatchCount() == 1);
                 var message = connector.waitFor("Late")
-                    .timeout(java.time.Duration.ofSeconds(1))
+                    .timeout(Duration.ofSeconds(1))
                     .submit()
                     .toCompletableFuture()
                     .get();
                 try {
                     assertEquals("queued", new String(
                         message.payload().payload().toByteArray(),
-                        java.nio.charset.StandardCharsets.UTF_8));
+                        StandardCharsets.UTF_8));
                 } finally {
                     message.payload().payload().close();
                 }

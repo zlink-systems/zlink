@@ -1,4 +1,7 @@
 package systems.zlink.e2e.storefailure.client.support;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.function.Predicate;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -329,7 +332,7 @@ public final class ClientContext implements AutoCloseable {
                 http.get("/location/object?kind=spot&id=" + encoded));
             return new ObjectLookup(
                 root.path("found").asBoolean(false),
-                root.path("state").asText("").toLowerCase(java.util.Locale.ROOT));
+                root.path("state").asText("").toLowerCase(Locale.ROOT));
         } catch (Exception error) {
             throw new IllegalStateException("SF-C5A exact object lookup failed for " + spotId, error);
         }
@@ -370,7 +373,7 @@ public final class ClientContext implements AutoCloseable {
     }
 
     private Map<String, String> readObjectLocationStates(int pageSize, int expectedCount) {
-        Map<String, String> observed = new java.util.LinkedHashMap<>();
+        Map<String, String> observed = new LinkedHashMap<>();
         String continuation = null;
         int pages = 0;
         do {
@@ -394,7 +397,7 @@ public final class ClientContext implements AutoCloseable {
                         "SF-C5 returned a duplicate object " + globalId);
                     observed.put(
                         globalId,
-                        item.path("state").asText("").toLowerCase(java.util.Locale.ROOT));
+                        item.path("state").asText("").toLowerCase(Locale.ROOT));
                 }
                 continuation = root.path("continuationToken").asText("");
                 continuation = continuation.isBlank() ? null : continuation;
@@ -724,7 +727,7 @@ public final class ClientContext implements AutoCloseable {
 
     public JsonNode waitForStatus(
         Duration timeout,
-        java.util.function.Predicate<JsonNode> accept,
+        Predicate<JsonNode> accept,
         String failureMessage) {
         return Wait.until(
             timeout,

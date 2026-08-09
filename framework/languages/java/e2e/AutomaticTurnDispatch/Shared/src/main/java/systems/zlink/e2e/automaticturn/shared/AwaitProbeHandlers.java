@@ -1,4 +1,8 @@
 package systems.zlink.e2e.automaticturn.shared;
+import java.util.ArrayList;
+import java.util.List;
+import systems.zlink.framework.spots.ZLinkSpotOutbound;
+import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
 
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
@@ -21,13 +25,13 @@ import systems.zlink.framework.channels.ZLinkFanoutClient;
 
 public final class AwaitProbeHandlers {
     public static final class PersistentRoomStateHandler
-        implements systems.zlink.framework.spots.ZLinkSpotRequestHandler<AwaitProbeSpot,
+        implements ZLinkSpotRequestHandler<AwaitProbeSpot,
             Contracts.PersistentRoomStateReq, Contracts.PersistentRoomStateRes> {
         @Override
-        public java.util.concurrent.CompletionStage<Contracts.PersistentRoomStateRes> handle(
+        public CompletionStage<Contracts.PersistentRoomStateRes> handle(
             AwaitProbeSpot spot,
             Contracts.PersistentRoomStateReq request) {
-            return java.util.concurrent.CompletableFuture.completedFuture(
+            return CompletableFuture.completedFuture(
                 spot.persistentState(request));
         }
     }
@@ -235,7 +239,7 @@ public final class AwaitProbeHandlers {
     }
 
     public static final class CounterReadHandler
-        implements systems.zlink.framework.spots.ZLinkSpotRequestHandler<AwaitProbeSpot,
+        implements ZLinkSpotRequestHandler<AwaitProbeSpot,
             Contracts.CounterReadReq, Contracts.CounterReadRes> {
         @Override
         public CompletionStage<Contracts.CounterReadRes> handle(
@@ -272,7 +276,7 @@ public final class AwaitProbeHandlers {
     }
 
     public static final class IoWorkerBatchReqHandler
-        implements systems.zlink.framework.spots.ZLinkSpotRequestHandler<AwaitProbeSpot,
+        implements ZLinkSpotRequestHandler<AwaitProbeSpot,
             Contracts.IoWorkerBatchReq, Contracts.IoWorkerBatchRes> {
         private final EvidenceStore evidence;
 
@@ -283,7 +287,7 @@ public final class AwaitProbeHandlers {
         @Override
         public CompletionStage<Contracts.IoWorkerBatchRes> handle(
             AwaitProbeSpot spot, Contracts.IoWorkerBatchReq request) {
-            java.util.List<CompletionStage<String>> calls = new java.util.ArrayList<>();
+            List<CompletionStage<String>> calls = new ArrayList<>();
             for (int index = 0; index < request.count(); index++) {
                 int operation = index;
                 calls.add(spot.context().runIoWorker(cancellation -> {
@@ -834,7 +838,7 @@ public final class AwaitProbeHandlers {
     }
 
     private static CompletionStage<Contracts.ActorAwaitRes> actorAwait(
-        systems.zlink.framework.spots.ZLinkSpotOutbound outbound,
+        ZLinkSpotOutbound outbound,
         String spotRid,
         AwaitActor actor,
         Contracts.ActorAwaitReq request,

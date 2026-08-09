@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.Objects;
+import java.util.logging.Logger;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -24,7 +26,7 @@ final class ZLinkActorHandoffPacket implements AutoCloseable {
         this.header = header;
         this.payload = Message.from(payload);
         this.replyRoute = replyRoute;
-        byte[] journal = java.util.Objects.requireNonNull(
+        byte[] journal = Objects.requireNonNull(
             acceptedJournalRecord, "acceptedJournalRecord");
         if (journal.length == 0) {
             throw new IllegalArgumentException(
@@ -78,7 +80,7 @@ final class ZLinkActorHandoffPacket implements AutoCloseable {
 
     private void trace(String detail) {
         if ("1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"))) {
-            java.util.logging.Logger.getLogger(
+            Logger.getLogger(
                     ZLinkActorHandoffPacket.class.getName())
                 .warning("[zlink-java-stream-trace] handoff packet "
                     + arrivalIndex + " " + detail);

@@ -1,5 +1,15 @@
 package systems.zlink.framework.kotlin
 
+
+import org.junit.jupiter.api.Assertions
+import java.lang.reflect.Method
+import java.util.Optional
+import java.util.function.Supplier
+import systems.zlink.framework.actors.ZLinkActorJoinCall
+import systems.zlink.framework.channels.ZLinkRequestHandler
+import systems.zlink.framework.handlers.ZLinkSpotTimer
+import systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology
+import systems.zlink.framework.spots.ZLinkTimerTick
 import java.time.Duration
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
@@ -170,11 +180,11 @@ final class KotlinSuspendAnnotationHandlerTest {
             arrayOf(ProfileRequest("Ada"), requestContext("profile")),
         )
         val unsupportedInvoker = object : ZLinkSuspendInvocationAdapter {
-            override fun supports(method: java.lang.reflect.Method): Boolean = false
+            override fun supports(method: Method): Boolean = false
 
             override fun invoke(
                 handler: Any,
-                method: java.lang.reflect.Method,
+                method: Method,
                 logicalArguments: Array<Any>,
             ) = CompletableFuture.failedFuture<Any>(AssertionError("unsupported invoker must not run"))
         }
@@ -439,7 +449,7 @@ final class KotlinSuspendAnnotationHandlerTest {
     fun lifecycleAcceptsKotlinSuspendingSpotActorInterfaceHandlers() {
         val options = DefaultZLinkFrameworkOptions()
         options.addHandlersFromPackageOf(KotlinSuspendHandlerMarker::class.java)
-        val node = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addSpotMesh(options, "rooms")
+        val node = ZLinkLegacyTopology.addSpotMesh(options, "rooms")
         node.enableRouter("inproc://rooms")
         node.objects().server().addSpotFactory("InterfaceSpot", InterfaceSpot::class.java) { factory -> factory.disableRelocation() }
         node.objects().server().addActorFactory("player", PlayerActor::class.java, PlayerActorFactory::class.java) { factory -> factory.recreateOnRelocation() }
@@ -462,7 +472,7 @@ final class KotlinSuspendAnnotationHandlerTest {
             val backendFactory = FakeZLinkBackendAdapterFactory()
             context.registerBean(
                 ZLinkBackendAdapterProvider::class.java,
-                java.util.function.Supplier { backendFactory },
+                Supplier { backendFactory },
             )
             context.register(
                 SpringSuspendFrameworkConfig::class.java,
@@ -479,12 +489,12 @@ final class KotlinSuspendAnnotationHandlerTest {
 
     private fun requestContext(channelName: String) =
         object : ZLinkMessageContext {
-            override fun meshName() = java.util.Optional.empty<String>()
-            override fun channelName() = java.util.Optional.of(channelName)
+            override fun meshName() = Optional.empty<String>()
+            override fun channelName() = Optional.of(channelName)
             override fun packetName() = "ProfileRequest"
-            override fun contentType() = java.util.Optional.empty<String>()
+            override fun contentType() = Optional.empty<String>()
             override fun metadata() = emptyMap<String, String>()
-            override fun correlationId() = java.util.Optional.empty<String>()
+            override fun correlationId() = Optional.empty<String>()
         }
 }
 
@@ -501,10 +511,10 @@ class KotlinSuspendingInterfaceRequestHandler :
 }
 
 @ZLinkHandlerGroup("kotlin-interface-spot")
-@systems.zlink.framework.handlers.ZLinkSpotTimer(name = "interface-timer", periodMillis = 1000)
+@ZLinkSpotTimer(name = "interface-timer", periodMillis = 1000)
 class KotlinSuspendingInterfaceTimerHandler :
     ZLinkSuspendingSpotTimerHandler<InterfaceSpot> {
-    override suspend fun handle(spot: InterfaceSpot, tick: systems.zlink.framework.spots.ZLinkTimerTick) {
+    override suspend fun handle(spot: InterfaceSpot, tick: ZLinkTimerTick) {
     }
 }
 
@@ -585,7 +595,7 @@ class KotlinSuspendFailureHandler {
     }
 }
 
-class JavaProfileRequestHandler : systems.zlink.framework.channels.ZLinkRequestHandler<ProfileRequest, ProfileReply> {
+class JavaProfileRequestHandler : ZLinkRequestHandler<ProfileRequest, ProfileReply> {
     override fun handle(
         request: ProfileRequest,
         context: ZLinkMessageContext,
@@ -688,7 +698,7 @@ class PlayerActor(private val id: String) : ZLinkActor {
         override fun actorId(): String = id
         override fun objectGeneration(): Long = 1L
         override fun meshName(): String = "test"
-        override fun spotId() = java.util.Optional.empty<String>()
+        override fun spotId() = Optional.empty<String>()
         override fun boundSession() = null
         override fun joinSpot(spotId: String) = unsupportedJoinCall()
         override fun joinSpot(spotId: String, request: Any) =
@@ -697,7 +707,7 @@ class PlayerActor(private val id: String) : ZLinkActor {
         override fun joinEntrySpot(request: Any) = unsupportedJoinCall()
     }
 
-    private fun unsupportedJoinCall(): systems.zlink.framework.actors.ZLinkActorJoinCall =
+    private fun unsupportedJoinCall(): ZLinkActorJoinCall =
         throw UnsupportedOperationException("test actor does not join spots")
 }
 

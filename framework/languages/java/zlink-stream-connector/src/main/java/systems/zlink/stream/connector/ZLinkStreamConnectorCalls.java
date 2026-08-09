@@ -1,4 +1,5 @@
 package systems.zlink.stream.connector;
+import java.nio.charset.StandardCharsets;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -138,7 +139,7 @@ record ZLinkStreamConnectorRequestCall(
                     + " as "
                     + replyType.getName()
                     + " payload="
-                    + new String(reply.payload().toByteArray(), java.nio.charset.StandardCharsets.UTF_8),
+                    + new String(reply.payload().toByteArray(), StandardCharsets.UTF_8),
                 ex);
         }
     }

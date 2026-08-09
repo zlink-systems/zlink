@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.spots;
+import org.junit.jupiter.api.Assertions;
+import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -55,9 +57,9 @@ final class ZLinkPendingActorTransfersTest {
         transfers.add(request("admission", "transfer-1", "actor-1", "player", 10), null, null);
 
         CountDownLatch deadline = new CountDownLatch(1);
-        java.util.concurrent.CompletableFuture.delayedExecutor(100, TimeUnit.MILLISECONDS)
+        CompletableFuture.delayedExecutor(100, TimeUnit.MILLISECONDS)
             .execute(deadline::countDown);
-        org.junit.jupiter.api.Assertions.assertTrue(deadline.await(1, TimeUnit.SECONDS));
+        Assertions.assertTrue(deadline.await(1, TimeUnit.SECONDS));
 
         assertThrows(
             ZLinkConfigurationException.class,

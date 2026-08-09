@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime;
+import systems.zlink.contracts.errors.ZlinkRequestException;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology;
 
 import systems.zlink.framework.spots.SpotHandleResolver;
 import systems.zlink.framework.spots.SpotHandle;
@@ -171,7 +175,7 @@ final class ChannelMessagingTest {
                     .requestToChannel("profile", new EchoRequest("hello")));
 
             assertEquals(
-                systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                ZLinkFrameworkErrorKind
                     .NOT_FOUND,
                 failure.kind());
         }
@@ -959,12 +963,12 @@ final class ChannelMessagingTest {
         ROUTE_REQUEST_CHANNEL.set(null);
 
         DefaultZLinkFrameworkOptions sourceOptions = new DefaultZLinkFrameworkOptions();
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(sourceOptions, "route"); channel.enableServer(sourceEndpoint);
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(sourceOptions, "route"); channel.enableServer(sourceEndpoint);
             channel.setRoutingId(sourceRid);
             channel.enableClient(targetEndpoint); };
 
         DefaultZLinkFrameworkOptions targetOptions = new DefaultZLinkFrameworkOptions();
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(targetOptions, "route"); channel.enableServer(targetEndpoint);
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(targetOptions, "route"); channel.enableServer(targetEndpoint);
             channel.setRoutingId(targetRid);
             channel.enableClient(sourceEndpoint);
             channel.addRequestHandler(RouteEchoHandler.class, EchoRequest.class, String.class, "Echo"); };
@@ -988,12 +992,12 @@ final class ChannelMessagingTest {
         RoutingId targetRid = RoutingId.from("route-missing-target");
 
         DefaultZLinkFrameworkOptions sourceOptions = new DefaultZLinkFrameworkOptions();
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(sourceOptions, "route"); channel.enableServer(sourceEndpoint);
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(sourceOptions, "route"); channel.enableServer(sourceEndpoint);
             channel.setRoutingId(sourceRid);
             channel.enableClient(targetEndpoint); };
 
         DefaultZLinkFrameworkOptions targetOptions = new DefaultZLinkFrameworkOptions();
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(targetOptions, "route"); channel.enableServer(targetEndpoint);
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(targetOptions, "route"); channel.enableServer(targetEndpoint);
             channel.setRoutingId(targetRid);
             channel.enableClient(sourceEndpoint); };
 
@@ -1019,7 +1023,7 @@ final class ChannelMessagingTest {
         DefaultZLinkFrameworkOptions initiatorOptions = new DefaultZLinkFrameworkOptions();
         initiatorOptions.addLocationStore(store);
         initiatorOptions.configureLocations().setPollingInterval(Duration.ofMillis(50));
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(initiatorOptions, "route");
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(initiatorOptions, "route");
             channel.enableServer(initiatorEndpoint);
             channel.enableClient(nonInitiatorEndpoint);
             channel.setRoutingId(initiatorRid);
@@ -1028,7 +1032,7 @@ final class ChannelMessagingTest {
         DefaultZLinkFrameworkOptions nonInitiatorOptions = new DefaultZLinkFrameworkOptions();
         nonInitiatorOptions.addLocationStore(store);
         nonInitiatorOptions.configureLocations().setPollingInterval(Duration.ofMillis(50));
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(nonInitiatorOptions, "route");
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(nonInitiatorOptions, "route");
             channel.enableServer(nonInitiatorEndpoint);
             channel.setRoutingId(nonInitiatorRid); };
 
@@ -1051,13 +1055,13 @@ final class ChannelMessagingTest {
         RoutingId targetRid = RoutingId.from("route-scanned-target");
 
         DefaultZLinkFrameworkOptions sourceOptions = new DefaultZLinkFrameworkOptions();
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(sourceOptions, "route"); channel.enableServer(sourceEndpoint);
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(sourceOptions, "route"); channel.enableServer(sourceEndpoint);
             channel.setRoutingId(sourceRid);
             channel.enableClient(targetEndpoint); };
 
         DefaultZLinkFrameworkOptions targetOptions = new DefaultZLinkFrameworkOptions();
         targetOptions.addHandlersFromPackageOf(ChannelMessagingTest.class);
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(targetOptions, "route"); channel.enableServer(targetEndpoint);
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(targetOptions, "route"); channel.enableServer(targetEndpoint);
             channel.setRoutingId(targetRid);
             channel.enableClient(sourceEndpoint);
             channel.addHandlerGroup("route-shared"); };
@@ -1081,13 +1085,13 @@ final class ChannelMessagingTest {
         FILTER_KIND.set(null);
 
         DefaultZLinkFrameworkOptions sourceOptions = new DefaultZLinkFrameworkOptions();
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(sourceOptions, "route"); channel.enableServer(sourceEndpoint);
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(sourceOptions, "route"); channel.enableServer(sourceEndpoint);
             channel.setRoutingId(sourceRid);
             channel.enableClient(targetEndpoint); };
 
         DefaultZLinkFrameworkOptions targetOptions = new DefaultZLinkFrameworkOptions();
         targetOptions.useFilter(ReplyDecoratingFilter.class);
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(targetOptions, "route"); channel.enableServer(targetEndpoint);
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(targetOptions, "route"); channel.enableServer(targetEndpoint);
             channel.setRoutingId(targetRid);
             channel.enableClient(sourceEndpoint);
             channel.addRequestHandler(RouteEchoHandler.class, EchoRequest.class, String.class, "Echo"); };
@@ -1117,12 +1121,12 @@ final class ChannelMessagingTest {
         RoutingId targetRid = RoutingId.from("route-seq-target");
 
         DefaultZLinkFrameworkOptions sourceOptions = new DefaultZLinkFrameworkOptions();
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(sourceOptions, "route"); channel.enableServer(sourceEndpoint);
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(sourceOptions, "route"); channel.enableServer(sourceEndpoint);
             channel.setRoutingId(sourceRid);
             channel.enableClient(targetEndpoint); };
 
         DefaultZLinkFrameworkOptions targetOptions = new DefaultZLinkFrameworkOptions();
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(targetOptions, "route"); channel.enableServer(targetEndpoint);
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(targetOptions, "route"); channel.enableServer(targetEndpoint);
             channel.setRoutingId(targetRid);
             channel.enableClient(sourceEndpoint);
             channel.addRequestHandler(DelayedRouteEchoHandler.class, SharedPacket.class, String.class, "SharedPacket"); };
@@ -1161,12 +1165,12 @@ final class ChannelMessagingTest {
         ROUTE_SEND_SOURCE.set(null);
 
         DefaultZLinkFrameworkOptions sourceOptions = new DefaultZLinkFrameworkOptions();
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(sourceOptions, "route"); channel.enableServer(sourceEndpoint);
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(sourceOptions, "route"); channel.enableServer(sourceEndpoint);
             channel.setRoutingId(sourceRid);
             channel.enableClient(targetEndpoint); };
 
         DefaultZLinkFrameworkOptions targetOptions = new DefaultZLinkFrameworkOptions();
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(targetOptions, "route"); channel.enableServer(targetEndpoint);
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(targetOptions, "route"); channel.enableServer(targetEndpoint);
             channel.setRoutingId(targetRid);
             channel.enableClient(sourceEndpoint);
             channel.addSendHandler(RouteNoticeHandler.class, RouteNotice.class, "Notice"); };
@@ -1238,11 +1242,11 @@ final class ChannelMessagingTest {
     private static String describeZlinkFailure(Throwable error) {
         Throwable current = error;
         while (current != null) {
-            if (current instanceof systems.zlink.contracts.errors.ZlinkRequestException request) {
+            if (current instanceof ZlinkRequestException request) {
                 return "request result=" + request.getResult()
                     + ", errno=" + request.getNativeErrno();
             }
-            if (current instanceof systems.zlink.contracts.errors.ZlinkSubmitException submit) {
+            if (current instanceof ZlinkSubmitException submit) {
                 return "submit result=" + submit.getResult()
                     + ", errno=" + submit.getNativeErrno();
             }

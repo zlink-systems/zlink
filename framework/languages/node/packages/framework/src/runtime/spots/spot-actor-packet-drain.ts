@@ -234,7 +234,7 @@ export class ZLinkSpotActorPacketDrain {
       'payload'
     );
     try {
-      return RuntimeMessage.from(Buffer.from(encodeStreamFrame({
+      return RuntimeMessage.fromOwned(Buffer.from(encodeStreamFrame({
         kind,
         codec: streamCodecForContentType(encoded.contentType),
         flags: ZLinkStreamHeaderFlags.None,

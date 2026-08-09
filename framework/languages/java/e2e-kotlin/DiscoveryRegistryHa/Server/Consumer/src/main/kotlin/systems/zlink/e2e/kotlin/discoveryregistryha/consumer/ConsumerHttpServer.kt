@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.discoveryregistryha.consumer
 
+
+import java.util.Locale
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
@@ -247,7 +249,7 @@ class ConsumerHttpServer(
                     "meshName" to entry.meshName(),
                     "ownerNodeRid" to entry.nodeRid().toString(),
                     "objectGeneration" to entry.objectGeneration(),
-                    "state" to entry.state().name.lowercase(java.util.Locale.ROOT),
+                    "state" to entry.state().name.lowercase(Locale.ROOT),
                 )
             }
         }

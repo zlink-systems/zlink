@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -28,8 +31,8 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
     final ZLinkBackendSpot backendSpot;
     final C context;
     private final Set<ZLinkBackendReceived> activeRouteReceives =
-        java.util.Collections.synchronizedSet(
-            java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()));
+        Collections.synchronizedSet(
+            Collections.newSetFromMap(new IdentityHashMap<>()));
     private ZLinkBackendActorReceived pendingActorHeader;
 
     SpotActivationBase(
@@ -96,7 +99,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
             index = read.nextIndex();
             pendingActorHeader = read.nextPendingHeader();
             if (!read.complete()) {
-                return java.util.concurrent.CompletableFuture.completedFuture(null);
+                return CompletableFuture.completedFuture(null);
             }
             boolean pendingHeader = read.fromPendingHeader();
             ZLinkBackendActorReceived headerPart = read.headerPart();
@@ -151,7 +154,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
 
     final CompletionStage<Void> drainActorLifecycleEvents() {
         CompletionStage<Void> tail =
-            java.util.concurrent.CompletableFuture.completedFuture(null);
+            CompletableFuture.completedFuture(null);
         ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
         while (batch.canReceiveNext()) {
             if (host.isClosing()) {
@@ -195,7 +198,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                     received, packet.packetName(), context.spotId());
             }
             closeRouteReceived(received);
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
         SpotPacketHandlerRegistration handler =
             context.handlerCatalog().packetHandler(packet.packetName());
@@ -211,7 +214,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                 host.reportSpotRouteSendDropped(received, packet.packetName(), context.spotId());
             }
             closeRouteReceived(received);
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
         if (received.requestSeq().isPresent()) {
             if (!handler.request()) {
@@ -222,7 +225,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                     ZLinkDispatchErrorReason.HANDLER_MISSING,
                     null);
                 closeRouteReceived(received);
-                return java.util.concurrent.CompletableFuture.completedFuture(null);
+                return CompletableFuture.completedFuture(null);
             }
             Message payloadCopy = Message.from(packet.payload());
             ZLinkInboundDispatchBudget.Lease lease =
@@ -230,13 +233,13 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                     ? received.inboundDispatchLease()
                     : host.inboundDispatchBudget().track(payloadCopy.size());
             return appendSpotHandler(
-                java.util.concurrent.CompletableFuture.completedFuture(null),
+                CompletableFuture.completedFuture(null),
                 payloadCopy.size(),
                 () -> host.inboundDispatchBudget().acquireCompletionPermit()
                     .thenCompose(permit -> {
                         try {
                             lease.handlerStarted();
-                            return systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext.propagate(
+                            return ZLinkFlowContext.propagate(
                                 host.runWithOutbound(context.dispatchOutbound(), () ->
                                     handlerInvoker.invokeRequest(
                                         handler,
@@ -282,7 +285,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
         if (handler.request()) {
             host.reportSpotRouteSendDropped(received, packet.packetName(), context.spotId());
             closeRouteReceived(received);
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
         Message payloadCopy = Message.from(packet.payload());
         ZLinkInboundDispatchBudget.Lease lease =
@@ -292,7 +295,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
         String packetName = packet.packetName();
         releaseRouteParts(received);
         return appendSpotHandler(
-            java.util.concurrent.CompletableFuture.completedFuture(null),
+            CompletableFuture.completedFuture(null),
             payloadCopy.size(),
             () ->
             startSpotHandler(lease, () ->
@@ -414,7 +417,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                     null,
                     context.spotId(),
                     ZLinkDispatchErrorReason.INVALID_FRAME);
-                return java.util.concurrent.CompletableFuture.completedFuture(null);
+                return CompletableFuture.completedFuture(null);
             }
             ParsedPacket packet = host.parsePacket(received.parts());
             Map<String, String> metadata;
@@ -427,7 +430,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                     null,
                     context.spotId(),
                     ZLinkDispatchErrorReason.INVALID_FRAME);
-                return java.util.concurrent.CompletableFuture.completedFuture(null);
+                return CompletableFuture.completedFuture(null);
             }
             host.traceMessageFlow(
                 ZLinkMessageFlowOutcome.RECEIVED,
@@ -441,7 +444,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                 context.spotId().toString(),
                 null);
             CompletionStage<Void> tail =
-                java.util.concurrent.CompletableFuture.completedFuture(null);
+                CompletableFuture.completedFuture(null);
             ZLinkInboundDispatchBudget.Lease sharedLease =
                 received.inboundDispatchLease();
             for (SpotSubscriptionHandlerRegistration handler :

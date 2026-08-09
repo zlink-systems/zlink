@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.concurrent.ConcurrentHashMap;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -279,12 +282,12 @@ final class ZLinkSessionActorBindingContractTest {
             .ZLinkServiceM6BWireCodec.SessionRelocationRoute(
                 relocation,
                 coordinator,
-                systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                ZLinkServiceM6BWireCodec
                     .RelocationRole.TARGET,
                 new systems.zlink.framework.runtime.internal.service
                     .ZLinkServiceM6BWireCodec.ActorIdentity("actor-1", 7),
                 session,
-                systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                ZLinkServiceM6BWireCodec
                     .SessionRelocationRouteAction.COMMIT,
                 9, 10, NODE_B, 4, 17);
 
@@ -316,7 +319,7 @@ final class ZLinkSessionActorBindingContractTest {
         return new ZLinkStreamHeader(
             ZLinkStreamMessageKind.SEND,
             ZLinkStreamCodec.RAW,
-            EnumSet.noneOf(systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag.class),
+            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
             Optional.empty(),
             name,
             Map.of());
@@ -340,7 +343,7 @@ final class ZLinkSessionActorBindingContractTest {
         private final List<String> unbinds = new ArrayList<>();
         private final List<String> relays = new ArrayList<>();
         private final Map<String, CompletableFuture<Void>> pendingUnbinds =
-            new java.util.concurrent.ConcurrentHashMap<>();
+            new ConcurrentHashMap<>();
         private boolean deferUnbind;
         private SubmitResult relayFailure;
         private CompletableFuture<List<Message>> pendingBoundRequest;
@@ -413,7 +416,7 @@ final class ZLinkSessionActorBindingContractTest {
             }
             return true;
         }
-        @Override public java.util.concurrent.CompletionStage<List<Message>>
+        @Override public CompletionStage<List<Message>>
             requestBoundActor(
                 RoutingId sessionRid,
                 String actorId,
@@ -435,7 +438,7 @@ final class ZLinkSessionActorBindingContractTest {
             return CompletableFuture.completedFuture(
                 List.of(Message.from(new byte[0])));
         }
-        @Override public java.util.concurrent.CompletionStage<List<Message>>
+        @Override public CompletionStage<List<Message>>
             requestExactActor(
                 ZLinkBackendActorRef actor,
                 ZLinkStreamHeader header,

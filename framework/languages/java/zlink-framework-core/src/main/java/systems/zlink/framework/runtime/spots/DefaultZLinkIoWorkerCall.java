@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -107,14 +108,14 @@ final class DefaultZLinkIoWorkerCall<T> implements ZLinkWorkerCall<T> {
                     new ZLinkWorkerFailedException("I/O worker call failed", error));
             }
         }
-        return systems.zlink.framework.execution.ZLinkAsyncSerialQueue.manageCurrent(result);
+        return ZLinkAsyncSerialQueue.manageCurrent(result);
     }
 
     @Override
     public CompletionStage<T> yield() {
         systems.zlink.framework.runtime.internal.handlers
             .ZLinkSuspendInvocationContext.requireYieldAllowed("I/O worker");
-        return systems.zlink.framework.execution.ZLinkAsyncSerialQueue
+        return ZLinkAsyncSerialQueue
             .yieldCurrent(submit());
     }
 }

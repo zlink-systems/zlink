@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.concurrent.CompletionException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -255,7 +256,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         source.get().publish(
                 targetRid, request.fence(), Duration.ofSeconds(2))
             .toCompletableFuture().join();
-        assertThrows(java.util.concurrent.CompletionException.class, () ->
+        assertThrows(CompletionException.class, () ->
             source.get().finalizeAfterCompletion(
                     targetRid, request.fence(), Duration.ofSeconds(2))
                 .toCompletableFuture().join());

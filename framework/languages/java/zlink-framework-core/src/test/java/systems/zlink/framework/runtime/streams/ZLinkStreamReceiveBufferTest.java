@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.streams;
 
+import org.junit.jupiter.api.Assertions;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -90,6 +91,6 @@ final class ZLinkStreamReceiveBufferTest {
     }
 
     private static void assertEquals(Object expected, Object actual) {
-        org.junit.jupiter.api.Assertions.assertEquals(expected, actual);
+        Assertions.assertEquals(expected, actual);
     }
 }

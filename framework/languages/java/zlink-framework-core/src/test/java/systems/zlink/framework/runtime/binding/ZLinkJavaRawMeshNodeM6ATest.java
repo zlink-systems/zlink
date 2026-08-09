@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.binding;
+import java.nio.ByteBuffer;
+import java.util.concurrent.ExecutionException;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -800,7 +803,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                             systems.zlink.framework.runtime.protocol
                                 .ServiceWireConstants.COMMAND_LIVENESS_PROBE,
                             0,
-                            List.of(java.nio.ByteBuffer
+                            List.of(ByteBuffer
                                 .allocate(Long.BYTES)
                                 .putLong(1)
                                 .array()))).getFirst());
@@ -849,7 +852,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                     List.of(oversized)));
         }
 
-        List<Message> tooMany = java.util.stream.IntStream.range(0, 65)
+        List<Message> tooMany = IntStream.range(0, 65)
             .mapToObj(ignored -> Message.from(new byte[0]))
             .toList();
         try {
@@ -1132,7 +1135,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             }
 
             var failure = assertThrows(
-                java.util.concurrent.ExecutionException.class,
+                ExecutionException.class,
                 () -> request.toCompletableFuture().get(2, TimeUnit.SECONDS));
             assertTrue(failure.getCause() instanceof ZlinkRequestException);
             assertEquals(

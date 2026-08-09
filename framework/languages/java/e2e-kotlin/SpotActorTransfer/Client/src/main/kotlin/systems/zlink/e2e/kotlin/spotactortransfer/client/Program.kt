@@ -1,5 +1,8 @@
 package systems.zlink.e2e.kotlin.spotactortransfer.client
 
+
+import systems.zlink.e2e.spotactortransfer.client.Program
+import systems.zlink.framework.kotlin.ZLinkKotlinStreamConnector
 import com.fasterxml.jackson.databind.ObjectMapper
 import java.net.URI
 import java.net.http.HttpClient
@@ -32,7 +35,7 @@ fun main(vararg args: String) = runBlocking {
     when (scenario) {
         "ST-E1", "ST-E2" ->
             KotlinBoundSessionScenario(scenario, loadOptions(args[1])).run()
-        else -> systems.zlink.e2e.spotactortransfer.client.Program.main(*args)
+        else -> Program.main(*args)
     }
 }
 
@@ -94,7 +97,7 @@ private class KotlinBoundSessionScenario(
     }
 
     private suspend fun assertBoundPush(
-        connector: systems.zlink.framework.kotlin.ZLinkKotlinStreamConnector,
+        connector: ZLinkKotlinStreamConnector,
         actorId: String,
         marker: String,
         expectedNode: String,

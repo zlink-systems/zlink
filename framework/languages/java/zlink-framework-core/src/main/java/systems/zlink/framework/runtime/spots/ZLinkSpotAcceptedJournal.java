@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.spots;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -39,7 +43,7 @@ final class ZLinkSpotAcceptedJournal {
                 decoded.metadataFrame(),
                 List.of(
                     decoded.packetName().getBytes(
-                        java.nio.charset.StandardCharsets.UTF_8),
+                        StandardCharsets.UTF_8),
                     decoded.payload()),
                 decoded.operationHigh(),
                 decoded.operationLow(),
@@ -76,7 +80,7 @@ final class ZLinkSpotAcceptedJournal {
             writeBytes(
                 output,
                 value.orElseThrow().getBytes(
-                    java.nio.charset.StandardCharsets.UTF_8));
+                    StandardCharsets.UTF_8));
         }
     }
 
@@ -87,17 +91,17 @@ final class ZLinkSpotAcceptedJournal {
         }
         byte[] encoded = readBytes(input);
         try {
-            String spotId = java.nio.charset.StandardCharsets.UTF_8
+            String spotId = StandardCharsets.UTF_8
                 .newDecoder()
-                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onMalformedInput(CodingErrorAction.REPORT)
                 .onUnmappableCharacter(
-                    java.nio.charset.CodingErrorAction.REPORT)
-                .decode(java.nio.ByteBuffer.wrap(encoded))
+                    CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(encoded))
                 .toString();
             return Optional.of(
                 systems.zlink.framework.runtime.internal.spots
                     .ZLinkSpotIdValidator.requireValid(spotId));
-        } catch (java.nio.charset.CharacterCodingException error) {
+        } catch (CharacterCodingException error) {
             throw new IllegalArgumentException(
                 "accepted Spot journal contains invalid SpotId UTF-8",
                 error);

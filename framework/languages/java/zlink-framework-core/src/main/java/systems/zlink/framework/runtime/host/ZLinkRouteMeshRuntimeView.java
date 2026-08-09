@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.host;
+import java.util.concurrent.TimeUnit;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -104,7 +106,7 @@ final class ZLinkRouteMeshRuntimeView
                 .toList();
         boolean hasAdmittedPeer = nativePeers.stream().anyMatch(peer ->
             peer.state()
-                == systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState.ADMITTED);
+                == MeshPeerState.ADMITTED);
         if (state == ZLinkTopologyState.READY
             && hasAdmittedPeer
             && channels.stream().anyMatch(channel -> !channel.isReady())) {
@@ -233,7 +235,7 @@ final class ZLinkRouteMeshRuntimeView
             return runtime.monitoringLocationRuntimeQuery()
                 .getStatus()
                 .toCompletableFuture()
-                .orTimeout(500, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .orTimeout(500, TimeUnit.MILLISECONDS)
                 .join()
                 .storeHealthy();
         } catch (ZLinkConfigurationException notConfigured) {

@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.ArrayList;
 
 import java.time.Instant;
 import java.util.List;
@@ -155,7 +156,7 @@ final class ZLinkFanoutRuntimeView implements ZLinkFanoutRuntime {
     public ZLinkFanoutStatus snapshot(String channelName) {
         requireChannel(channelName);
         ZLinkFanoutLocationRuntime location = locationRuntime.get();
-        List<ZLinkMeshPeerSnapshot> publishers = new java.util.ArrayList<>();
+        List<ZLinkMeshPeerSnapshot> publishers = new ArrayList<>();
         if (location != null) {
             publishers.addAll(location.publisherSnapshots(channelName).stream()
                 .map(publisher -> new ZLinkMeshPeerSnapshot(

@@ -1,4 +1,8 @@
-package systems.zlink.e2e.registrymessaging.workflow.Handlers;
+package Handlers;
+import systems.zlink.e2e.registrymessaging.workflow.Handlers;
+import systems.zlink.e2e.registrymessaging.workflow.Infrastructure;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.e2e.registrymessaging.shared.Contracts;
 import systems.zlink.e2e.registrymessaging.workflow.Infrastructure.ScenarioState;
@@ -16,11 +20,11 @@ public final class WorkflowReqHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Contracts.WorkflowRes> handle(
+    public CompletionStage<Contracts.WorkflowRes> handle(
         Contracts.WorkflowReq request,
         ZLinkMessageContext context) {
         state.record("workflow-request", request.value());
-        return java.util.concurrent.CompletableFuture.completedFuture(
+        return CompletableFuture.completedFuture(
             new Contracts.WorkflowRes("workflow:" + request.value(), state.providerRid()));
     }
 }

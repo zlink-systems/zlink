@@ -1,4 +1,6 @@
 package systems.zlink.e2e.channelegress.shared;
+import java.time.Duration;
+import java.util.List;
 
 import java.util.ArrayList;
 import java.util.concurrent.CompletableFuture;
@@ -42,18 +44,18 @@ public final class ChannelProbeRequestHandler
                 .requestToChannel(
                     Contracts.AUDIT_CHANNEL,
                     new Contracts.ChannelProbeReq(request.id() + "-audit"))
-                .timeout(java.time.Duration.ofSeconds(5))
+                .timeout(Duration.ofSeconds(5))
                 .submit(Contracts.ChannelProbeRes.class);
             CompletionStage<Contracts.ChannelProbeRes> workflow = channels
                 .requestToChannel(
                     Contracts.WORKFLOW_CHANNEL,
                     new Contracts.ChannelProbeReq(request.id() + "-workflow"))
-                .timeout(java.time.Duration.ofSeconds(5))
+                .timeout(Duration.ofSeconds(5))
                 .submit(Contracts.ChannelProbeRes.class);
             return release
                 .thenCompose(ignored -> audit.thenCombine(
                     workflow,
-                    (auditReply, workflowReply) -> new ArrayList<>(java.util.List.of(
+                    (auditReply, workflowReply) -> new ArrayList<>(List.of(
                         auditReply.role() + ":" + auditReply.channel(),
                         workflowReply.role() + ":" + workflowReply.channel()))))
                 .thenApply(downstream -> response(request, channel, downstream));

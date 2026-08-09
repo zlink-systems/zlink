@@ -1,4 +1,5 @@
 package systems.zlink.framework.locations.redis;
+import java.util.function.Function;
 
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationDescriptorCodec;
 
@@ -110,9 +111,9 @@ final class ZLinkRedisLocationRows {
             String channelName,
             ZLinkPageRequest page,
             String channelIndex,
-            java.util.function.Function<String, String> rowPhysicalKey,
+            Function<String, String> rowPhysicalKey,
             RowDeserializer<T> deserializer,
-            java.util.function.Function<T, ServiceOwner> owner) {
+            Function<T, ServiceOwner> owner) {
         ZLinkPageRequest safePage =
             page == null ? ZLinkPageRequest.firstPage() : page;
         int pageSize =
@@ -157,9 +158,9 @@ final class ZLinkRedisLocationRows {
             RedisAsyncCommands<String, String> redis,
             List<String> members,
             int pageSize,
-            java.util.function.Function<String, String> rowPhysicalKey,
+            Function<String, String> rowPhysicalKey,
             RowDeserializer<T> deserializer,
-            java.util.function.Function<T, ServiceOwner> owner) {
+            Function<T, ServiceOwner> owner) {
         return loadServicePage(
             redis,
             members,
@@ -179,9 +180,9 @@ final class ZLinkRedisLocationRows {
             RedisAsyncCommands<String, String> redis,
             List<String> members,
             int pageSize,
-            java.util.function.Function<String, String> rowPhysicalKey,
+            Function<String, String> rowPhysicalKey,
             RowDeserializer<T> deserializer,
-            java.util.function.Function<T, ServiceOwner> owner,
+            Function<T, ServiceOwner> owner,
             int index,
             ServicePageAccumulator<T> accumulator) {
         if (index >= members.size()

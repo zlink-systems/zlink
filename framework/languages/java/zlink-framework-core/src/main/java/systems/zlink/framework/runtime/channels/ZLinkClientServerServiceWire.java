@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.Arrays;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
@@ -499,7 +500,7 @@ final class ZLinkClientServerServiceWire {
                     .decode(ByteBuffer.wrap(bytes))
                     .toString();
                 if (value.indexOf('\0') >= 0
-                    || !java.util.Arrays.equals(
+                    || !Arrays.equals(
                         value.getBytes(StandardCharsets.UTF_8), bytes)) {
                     throw protocol(field + " is not canonical UTF-8");
                 }

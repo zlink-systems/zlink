@@ -1,4 +1,9 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.Comparator;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -39,7 +44,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
     private final AtomicLong arrivalIndex = new AtomicLong();
     private final Map<String, MessageFollowSource> messageFollowSources =
         new ConcurrentHashMap<>();
-    private final java.util.Set<Retention> retirements = ConcurrentHashMap.newKeySet();
+    private final Set<Retention> retirements = ConcurrentHashMap.newKeySet();
     private final AtomicLong messageFollowToken = new AtomicLong();
     private boolean closed;
 
@@ -143,7 +148,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
             }
             backlog.packets.clear();
             backlog.bytes = 0;
-            restored.sort(java.util.Comparator.comparingLong(
+            restored.sort(Comparator.comparingLong(
                 ZLinkActorHandoffPacket::arrivalIndex));
             return List.copyOf(restored);
         }
@@ -246,7 +251,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         String actorId,
         long objectGeneration,
         long payloadBytes,
-        java.util.function.Supplier<CompletionStage<T>> submission) {
+        Supplier<CompletionStage<T>> submission) {
         return followWithQueueSnapshot(
                 actorId, objectGeneration, payloadBytes, submission)
             .thenApply(FollowResult::value);
@@ -256,23 +261,23 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         String actorId,
         long objectGeneration,
         long payloadBytes,
-        java.util.function.Supplier<CompletionStage<T>> submission) {
+        Supplier<CompletionStage<T>> submission) {
         MessageFollowSource source = messageFollowSources.get(actorId);
         if (source == null) {
-            return java.util.concurrent.CompletableFuture.failedFuture(
+            return CompletableFuture.failedFuture(
                 new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.UNAVAILABLE,
                     "committed Message Follow route is unavailable"));
         }
         if (source.sourceActorRef().generation() != objectGeneration
             || source.targetActorRef().generation() != objectGeneration) {
-            return java.util.concurrent.CompletableFuture.failedFuture(
+            return CompletableFuture.failedFuture(
                 new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.INVALID_OPERATION,
                     "committed Message Follow generation does not match"));
         }
         if (!source.tryAcquire(payloadBytes)) {
-            return java.util.concurrent.CompletableFuture.failedFuture(
+            return CompletableFuture.failedFuture(
                 new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
                     "committed Message Follow route queue exceeds 1024 messages or 16 MiB"));
@@ -280,11 +285,11 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         MessageFollowQueueSnapshot queueSnapshot = source.queueSnapshot();
         CompletionStage<T> submitted;
         try {
-            submitted = java.util.Objects.requireNonNull(
+            submitted = Objects.requireNonNull(
                 submission.get(), "Message Follow submission returned null");
         } catch (RuntimeException failure) {
             source.release(payloadBytes);
-            return java.util.concurrent.CompletableFuture.failedFuture(failure);
+            return CompletableFuture.failedFuture(failure);
         }
         return submitted
             .thenApply(value -> new FollowResult<>(value, queueSnapshot))
@@ -385,9 +390,9 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
             SpotTransportAddress targetAddress,
             ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute,
             long token) {
-            this.sourceActorRef = java.util.Objects.requireNonNull(
+            this.sourceActorRef = Objects.requireNonNull(
                 sourceActorRef, "sourceActorRef");
-            this.targetActorRef = java.util.Objects.requireNonNull(
+            this.targetActorRef = Objects.requireNonNull(
                 targetActorRef, "targetActorRef");
             this.targetAddress = targetAddress;
             this.targetRoute = targetRoute;

@@ -1,4 +1,6 @@
 package systems.zlink.e2e.kotlin.toactormessaging.actor;
+import java.util.List;
+import java.util.Map;
 
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.WebApplicationType;
@@ -74,7 +76,7 @@ public final class Program {
         boot("http create");
         JsonHttp http = new JsonHttp(Env.get("actorHttpEndpoint"));
         boot("http route health");
-        http.get("/health", () -> java.util.Map.of("status", "ok"));
+        http.get("/health", () -> Map.of("status", "ok"));
         boot("http route evidence");
         http.get("/evidence", evidence::all);
         boot("http route ensure");
@@ -208,7 +210,7 @@ public final class Program {
     ApplicationRunner createBaselineActors(ZLinkActorManager actors) {
         return ignored -> {
             boot("baselineActors start");
-            for (String actorId : java.util.List.of("ta-a1", "ta-a2", "ta-a3", "ta-a4", "ta-b2", "ta-b3")) {
+            for (String actorId : List.of("ta-a1", "ta-a2", "ta-a3", "ta-a4", "ta-b2", "ta-b3")) {
                 boot("baselineActors getOrCreate actorId=" + actorId);
                 actors.getOrCreate(actorId, Contracts.ACTOR_TYPE, ZLinkMessage.of("create"))
                     .toCompletableFuture()

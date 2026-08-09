@@ -1,4 +1,6 @@
 package systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.sessions;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.streams.ZLinkSession;
@@ -26,29 +28,29 @@ public final class PlaySession implements ZLinkSession {
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onConnected() {
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+    public CompletionStage<Void> onConnected() {
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onDisconnected() {
-        return java.util.concurrent.CompletableFuture.allOf(context.actors().bound().stream()
+    public CompletionStage<Void> onDisconnected() {
+        return CompletableFuture.allOf(context.actors().bound().stream()
             .map(actor -> actor.notifyDisconnected().toCompletableFuture())
-            .toArray(java.util.concurrent.CompletableFuture[]::new));
+            .toArray(CompletableFuture[]::new));
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onError(ZLinkStreamError error) {
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+    public CompletionStage<Void> onError(ZLinkStreamError error) {
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onDispatch(
+    public CompletionStage<Void> onDispatch(
         ZLinkSessionDispatchContext header,
         ZLinkMessage payload) {
         return handlers.tryHandle(context, header, payload).thenCompose(handled ->
             handled
-                ? java.util.concurrent.CompletableFuture.completedFuture(null)
+                ? CompletableFuture.completedFuture(null)
                 : requireActor(header.packetName()).relay(header, payload).thenApply(ignored -> null));
     }
 

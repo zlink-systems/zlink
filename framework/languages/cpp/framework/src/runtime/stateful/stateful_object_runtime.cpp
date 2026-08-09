@@ -321,10 +321,8 @@ stateful_error_t stateful_object_runtime_t::adopt_reserved_actor_owner (
     if (record.reference.mesh_name != reserved.mesh_name
         || record.reference.node_id == reserved.node_id
         || record.reference.authority_owner_generation == 0
-        || record.reference.authority_owner_generation
-             == std::numeric_limits<std::uint64_t>::max ()
         || reserved.authority_owner_generation
-             != record.reference.authority_owner_generation + 1) {
+             <= record.reference.authority_owner_generation) {
         return stateful_error_t::generation_stale;
     }
     record.reference = reserved;

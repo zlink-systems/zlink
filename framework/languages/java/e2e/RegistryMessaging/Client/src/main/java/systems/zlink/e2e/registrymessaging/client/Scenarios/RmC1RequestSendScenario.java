@@ -1,4 +1,8 @@
-package systems.zlink.e2e.registrymessaging.client.Scenarios;
+package Scenarios;
+import systems.zlink.e2e.registrymessaging.client.Scenarios;
+import systems.zlink.e2e.registrymessaging.client.Support;
+import java.util.Arrays;
+import java.util.UUID;
 
 import systems.zlink.e2e.registrymessaging.client.Support.ScenarioAssert;
 import systems.zlink.e2e.registrymessaging.shared.Contracts;
@@ -14,15 +18,15 @@ public final class RmC1RequestSendScenario {
             .body(new Contracts.ProfileReq(requestValue))
             .submit(Contracts.ProfileRes.class).toCompletableFuture().join().body();
         ScenarioAssert.that(("profile:" + requestValue).equals(reply.value()), "RM-C1 reply mismatch");
-        String commandId = "cmd-c1-" + java.util.UUID.randomUUID();
+        String commandId = "cmd-c1-" + UUID.randomUUID();
         providerA.post("/profile/command")
             .body(new Contracts.ProfileMsg(commandId))
             .submit(Object.class).toCompletableFuture().join().body();
         String[] evidence = ScenarioAssert.waitAnyEvidence(providerA, providerB, commandId);
-        ScenarioAssert.that(java.util.Arrays.stream(evidence)
+        ScenarioAssert.that(Arrays.stream(evidence)
                 .anyMatch(line -> line.contains("ProfileReq") && line.contains(requestValue)),
             "RM-C1 request evidence missing");
-        ScenarioAssert.that(java.util.Arrays.stream(evidence)
+        ScenarioAssert.that(Arrays.stream(evidence)
                 .anyMatch(line -> line.contains("ProfileMsg") && line.contains(commandId)),
             "RM-C1 send evidence missing");
         System.out.println("scenario RM-C1 passed");

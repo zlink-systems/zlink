@@ -1,5 +1,7 @@
-package systems.zlink.e2e.kotlin.registrymessaging.client.Scenarios
+package Scenarios
 
+import systems.zlink.e2e.kotlin.registrymessaging.client.Scenarios
+import systems.zlink.e2e.kotlin.registrymessaging.client.Support
 import java.util.concurrent.CompletableFuture
 import systems.zlink.e2e.kotlin.registrymessaging.client.Support.HttpJson
 import systems.zlink.e2e.kotlin.registrymessaging.client.Support.ScenarioAssert

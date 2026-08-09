@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.concurrent.CancellationException;
+import java.util.function.Predicate;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -176,7 +178,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
     private ZLinkMeshNodeDescriptor requirePinnedTarget(
         ZLinkMeshNodeDescriptor pinned,
         List<ZLinkMeshNodeDescriptor> descriptors,
-        java.util.function.Predicate<ZLinkMeshNodeDescriptor> capability) {
+        Predicate<ZLinkMeshNodeDescriptor> capability) {
         return descriptors.stream()
             .filter(candidate -> candidate.rid().equals(pinned.rid()))
             .filter(candidate -> candidate.lifecycleGeneration()
@@ -879,7 +881,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
     }
 
     private static <T> CompletionStage<T> cancelled() {
-        return failed(new java.util.concurrent.CancellationException());
+        return failed(new CancellationException());
     }
 
     private static <T> CompletionStage<T> failed(Throwable failure) {

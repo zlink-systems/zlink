@@ -1,5 +1,6 @@
 package systems.zlink.framework.kotlin
 
+import org.junit.jupiter.api.Assertions
 import java.time.Duration
 import java.util.Optional
 import java.util.concurrent.CompletableFuture
@@ -455,7 +456,7 @@ class KotlinFrameworkExtensionsContractTest {
 
         override fun findSpot(
             actorId: String,
-        ): CompletionStage<Optional<systems.zlink.framework.spots.SpotRef>> =
+        ): CompletionStage<Optional<SpotRef>> =
             CompletableFuture.completedFuture(Optional.empty())
 
         override fun destroy(actor: ActorRef): CompletionStage<Boolean> =

@@ -1,4 +1,5 @@
 package systems.zlink.samples.shoppingmall.server.commerceapi;
+import systems.zlink.framework.spots.ZLinkSpotRequestCall;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -140,7 +141,7 @@ public final class CommerceApiService {
             cart.currency());
     }
 
-    private systems.zlink.framework.spots.ZLinkSpotRequestCall workflowRequest(
+    private ZLinkSpotRequestCall workflowRequest(
         String orderId,
         Object request) {
         return routes.requestToSpot(orderId, request)

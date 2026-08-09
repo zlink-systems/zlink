@@ -1,4 +1,5 @@
 package systems.zlink.samples.supportchat.server.support.handlers;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
@@ -17,7 +18,7 @@ public final class AllocateConversationHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Messages.AllocateConversationRes> handle(
+    public CompletionStage<Messages.AllocateConversationRes> handle(
         Messages.AllocateConversationReq request,
         ZLinkMessageContext context) {
         return allocator.allocate(

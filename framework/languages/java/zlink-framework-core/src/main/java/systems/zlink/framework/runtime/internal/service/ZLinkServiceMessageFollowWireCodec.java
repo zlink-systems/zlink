@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.service;
+import java.util.Arrays;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
@@ -366,7 +367,7 @@ public final class ZLinkServiceMessageFollowWireCodec {
                     .decode(ByteBuffer.wrap(bytes))
                     .toString();
                 if (value.indexOf('\0') >= 0
-                    || !java.util.Arrays.equals(
+                    || !Arrays.equals(
                         bytes, value.getBytes(StandardCharsets.UTF_8))) {
                     throw protocol(field + " is not canonical UTF-8");
                 }

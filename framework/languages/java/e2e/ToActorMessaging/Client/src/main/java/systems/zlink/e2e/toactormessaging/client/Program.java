@@ -1,4 +1,7 @@
 package systems.zlink.e2e.toactormessaging.client;
+import java.util.ArrayList;
+import java.util.Set;
+import java.util.stream.Stream;
 
 import java.net.URI;
 import java.time.Duration;
@@ -27,7 +30,7 @@ public final class Program {
         String sessionAStream = options.sessionAStreamEndpoint();
         String sessionBStream = options.sessionBStreamEndpoint();
         String selector = args[3];
-        require(java.util.Set.of("all", "TA-A1", "TA-A2", "TA-A3", "TA-A4",
+        require(Set.of("all", "TA-A1", "TA-A2", "TA-A3", "TA-A4",
             "TA-B1", "TA-B2", "TA-B3").contains(selector),
             "unknown ToActorMessaging selector: " + selector);
 
@@ -233,7 +236,7 @@ public final class Program {
         String sessionBUrl,
         String actorId,
         String message) {
-        boolean bound = java.util.stream.Stream.concat(
+        boolean bound = Stream.concat(
                 sessionEvidence(sessionAUrl).stream(), sessionEvidence(sessionBUrl).stream())
             .anyMatch(item -> actorId.equals(item.actorId()) && "actor-bound".equals(item.kind()));
         require(!bound, message);
@@ -377,7 +380,7 @@ public final class Program {
     }
 
     private static void assertActorEvidence(String actorUrl, String actorBUrl, String selector) {
-        List<Contracts.ActorEvidence> evidence = new java.util.ArrayList<>(List.of(
+        List<Contracts.ActorEvidence> evidence = new ArrayList<>(List.of(
             ToActorHttpClient.getJson(actorUrl + "/evidence", Contracts.ActorEvidence[].class)));
         if (selected(selector, "TA-B3")) {
             evidence.addAll(List.of(

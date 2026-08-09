@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.configuration;
+import java.util.Optional;
+import java.util.stream.Collectors;
+import systems.zlink.framework.runtime.channels.ChannelKind;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -76,8 +79,8 @@ public final class ZLinkFrameworkRegistration {
         this.applicationVersion = applicationVersion;
     }
 
-    public java.util.Optional<String> maintenanceWave() {
-        return java.util.Optional.ofNullable(maintenanceWave);
+    public Optional<String> maintenanceWave() {
+        return Optional.ofNullable(maintenanceWave);
     }
 
     void setMaintenanceWave(String maintenanceWave) {
@@ -244,9 +247,9 @@ public final class ZLinkFrameworkRegistration {
         }
         Set<String> clientServerChannelNames = channels.stream()
             .filter(channel -> channel.kind()
-                == systems.zlink.framework.runtime.channels.ChannelKind.CLIENT_SERVER)
+                == ChannelKind.CLIENT_SERVER)
             .map(ChannelRegistration::name)
-            .collect(java.util.stream.Collectors.toSet());
+            .collect(Collectors.toSet());
         int actorCapableNodes = 0;
         boolean objectRoleConfigured = false;
         boolean relocationStoreRequired = false;

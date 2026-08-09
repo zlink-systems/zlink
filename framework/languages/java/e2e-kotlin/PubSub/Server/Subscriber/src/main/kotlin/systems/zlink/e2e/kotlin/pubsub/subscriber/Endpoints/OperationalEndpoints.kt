@@ -1,5 +1,8 @@
 package systems.zlink.e2e.kotlin.pubsub.subscriber
 
+
+import com.sun.net.httpserver.HttpExchange
+import systems.zlink.e2e.kotlin.pubsub.shared.Contracts
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
@@ -155,7 +158,7 @@ class OperationalEndpoints(
     }
 
     private fun fanoutStatus(): Map<String, Any?> {
-        val status = runtime.getObject().fanoutRuntime().snapshot(systems.zlink.e2e.kotlin.pubsub.shared.Contracts.EVENT_CHANNEL)
+        val status = runtime.getObject().fanoutRuntime().snapshot(Contracts.EVENT_CHANNEL)
         return mapOf(
             "channelName" to status.channelName(),
             "state" to status.state().name,
@@ -176,14 +179,14 @@ class OperationalEndpoints(
     private fun required(query: Map<String, String>, name: String): String =
         query[name]?.takeIf { it.isNotBlank() } ?: throw IllegalArgumentException("$name is required")
 
-    private fun com.sun.net.httpserver.HttpExchange.writeJson(value: Any) {
+    private fun HttpExchange.writeJson(value: Any) {
         val body = json.writeValueAsBytes(value)
         responseHeaders.add("Content-Type", "application/json")
         sendResponseHeaders(200, body.size.toLong())
         responseBody.use { it.write(body) }
     }
 
-    private fun com.sun.net.httpserver.HttpExchange.writeText(status: Int, value: String) {
+    private fun HttpExchange.writeText(status: Int, value: String) {
         val body = value.toByteArray(StandardCharsets.UTF_8)
         sendResponseHeaders(status, body.size.toLong())
         responseBody.use { it.write(body) }

@@ -961,7 +961,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       }
       try {
         const reply = decodeChannelReply<unknown>(completion.parts, this.codecs);
-        return [ZLinkBufferMessage.from(Buffer.from(JSON.stringify(reply)))];
+        return [ZLinkBufferMessage.fromOwned(Buffer.from(JSON.stringify(reply)))];
       } finally {
         closeMeshCompletion(completion);
       }

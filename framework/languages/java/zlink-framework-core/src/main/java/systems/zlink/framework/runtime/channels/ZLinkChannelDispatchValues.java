@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.Objects;
 
 import java.util.Map;
 import java.util.Optional;
@@ -22,9 +23,9 @@ final class DefaultHandlerFilterContext
     DefaultHandlerFilterContext(
         ZLinkMessageContext message,
         ZLinkHandlerDispatchKind dispatchKind) {
-        this.message = java.util.Objects.requireNonNull(message, "message");
+        this.message = Objects.requireNonNull(message, "message");
         this.dispatchKind =
-            java.util.Objects.requireNonNull(dispatchKind, "dispatchKind");
+            Objects.requireNonNull(dispatchKind, "dispatchKind");
     }
 
     @Override

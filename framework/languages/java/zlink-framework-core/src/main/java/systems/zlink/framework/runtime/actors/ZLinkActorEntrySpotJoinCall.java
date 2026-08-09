@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
@@ -22,8 +25,8 @@ final class ZLinkActorEntrySpotJoinCall implements ZLinkActorJoinCall {
     private final Message request;
     private final Duration timeout;
     private final Services services;
-    private java.util.concurrent.atomic.AtomicBoolean deferred =
-        new java.util.concurrent.atomic.AtomicBoolean();
+    private AtomicBoolean deferred =
+        new AtomicBoolean();
 
     ZLinkActorEntrySpotJoinCall(
         ZLinkActorRuntime.DefaultActorContext context,
@@ -152,7 +155,7 @@ final class ZLinkActorEntrySpotJoinCall implements ZLinkActorJoinCall {
                  .ZLinkSuspendInvocationContext.enterApplicationExecution(null)) {
             return bounded.execute().handle((result, error) -> {
                     if (error != null) {
-                        Throwable cause = error instanceof java.util.concurrent.CompletionException
+                        Throwable cause = error instanceof CompletionException
                             && error.getCause() != null ? error.getCause() : error;
                         ZLinkFrameworkErrorKind kind = cause instanceof ZLinkFrameworkException framework
                             ? framework.kind()
@@ -191,7 +194,7 @@ final class ZLinkActorEntrySpotJoinCall implements ZLinkActorJoinCall {
     }
 
     private static <T> CompletionStage<T> manage(CompletionStage<T> stage) {
-        return systems.zlink.framework.execution.ZLinkAsyncSerialQueue.manageCurrent(stage);
+        return ZLinkAsyncSerialQueue.manageCurrent(stage);
     }
 
     private void rejectSameGateWait() {

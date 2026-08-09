@@ -1,4 +1,11 @@
 package systems.zlink.framework.runtime.host;
+import java.time.Duration;
+import java.util.UUID;
+import java.util.concurrent.Flow;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerSource;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -29,12 +36,12 @@ final class ZLinkFrameworkRuntimeDrainRouteTest {
             new DefaultZLinkFrameworkOptions();
         options.addFanoutChannel("manual-events")
             .enablePublisher(
-                "inproc://manual-events-" + java.util.UUID.randomUUID());
+                "inproc://manual-events-" + UUID.randomUUID());
         ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntimeTestAccess.start(
             options,
             new ZLinkJavaBackendAdapterFactory());
         long readyDeadline = System.nanoTime()
-            + java.time.Duration.ofSeconds(1).toNanos();
+            + Duration.ofSeconds(1).toNanos();
         while (!runtime.isReady() && System.nanoTime() < readyDeadline) {
             Thread.sleep(1);
         }
@@ -43,7 +50,7 @@ final class ZLinkFrameworkRuntimeDrainRouteTest {
                 new ZLinkFrameworkRelocationOptions(
                     ZLinkFrameworkRelocationMode.PLANNED_MAINTENANCE,
                     null,
-                    java.time.Duration.ofSeconds(1)))
+                    Duration.ofSeconds(1)))
             .toCompletableFuture()
             .get(2, TimeUnit.SECONDS);
 
@@ -54,7 +61,7 @@ final class ZLinkFrameworkRuntimeDrainRouteTest {
         assertEquals(
             ZLinkFrameworkRuntimeState.SERVING,
             runtime.status().state());
-        runtime.shutdown(java.time.Duration.ofSeconds(1))
+        runtime.shutdown(Duration.ofSeconds(1))
             .toCompletableFuture()
             .get(2, TimeUnit.SECONDS);
     }
@@ -67,16 +74,16 @@ final class ZLinkFrameworkRuntimeDrainRouteTest {
             options,
             new ZLinkJavaBackendAdapterFactory());
         long deadline = System.nanoTime()
-            + java.time.Duration.ofSeconds(1).toNanos();
+            + Duration.ofSeconds(1).toNanos();
         while (!runtime.isReady() && System.nanoTime() < deadline) {
             Thread.sleep(1);
         }
         CompletableFuture<ZLinkFrameworkTerminationResult> observed =
             new CompletableFuture<>();
-        runtime.observe().subscribe(new java.util.concurrent.Flow.Subscriber<>() {
+        runtime.observe().subscribe(new Flow.Subscriber<>() {
             @Override
             public void onSubscribe(
-                java.util.concurrent.Flow.Subscription subscription) {
+                Flow.Subscription subscription) {
                 subscription.request(Long.MAX_VALUE);
             }
 
@@ -99,7 +106,7 @@ final class ZLinkFrameworkRuntimeDrainRouteTest {
         });
 
         ZLinkFrameworkTerminationResult result = runtime.shutdown(
-                java.time.Duration.ofSeconds(1))
+                Duration.ofSeconds(1))
             .toCompletableFuture()
             .get(2, TimeUnit.SECONDS);
 
@@ -132,8 +139,8 @@ final class ZLinkFrameworkRuntimeDrainRouteTest {
     @Test
     void drainTransferUsesSpotMeshRouteChannel() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "game-spots");
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addSpotMesh(options, "game-spots");
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "game-spots");
+        ZLinkLegacyTopology.addSpotMesh(options, "game-spots");
 
         assertEquals(
             "game-spots",
@@ -173,23 +180,23 @@ final class ZLinkFrameworkRuntimeDrainRouteTest {
             "green-owner",
             7,
             Instant.now());
-        var admitted = new systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry(
+        var admitted = new MeshPeerEntry(
             green,
             "tcp://green:9000",
             1,
-            systems.zlink.framework.runtime.internal.binding.spot.MeshPeerSource.DISCOVERY,
-            systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState.ADMITTED,
+            MeshPeerSource.DISCOVERY,
+            MeshPeerState.ADMITTED,
             7,
             1,
             0,
             0,
             0);
-        var stale = new systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry(
+        var stale = new MeshPeerEntry(
             green,
             "tcp://green:9000",
             1,
-            systems.zlink.framework.runtime.internal.binding.spot.MeshPeerSource.DISCOVERY,
-            systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState.ADMITTED,
+            MeshPeerSource.DISCOVERY,
+            MeshPeerState.ADMITTED,
             6,
             1,
             0,

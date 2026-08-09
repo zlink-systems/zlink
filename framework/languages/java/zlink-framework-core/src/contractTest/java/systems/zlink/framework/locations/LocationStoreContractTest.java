@@ -1,4 +1,5 @@
 package systems.zlink.framework.locations;
+import java.lang.reflect.ParameterizedType;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -40,13 +41,13 @@ final class LocationStoreContractTest {
                 ZLinkLocationObjectFilter.class, ZLinkPageRequest.class);
 
         assertEquals(CompletionStage.class,
-            java.lang.reflect.ParameterizedType.class.cast(actor.getGenericReturnType())
+            ParameterizedType.class.cast(actor.getGenericReturnType())
                 .getRawType());
         assertEquals(CompletionStage.class,
-            java.lang.reflect.ParameterizedType.class.cast(spot.getGenericReturnType())
+            ParameterizedType.class.cast(spot.getGenericReturnType())
                 .getRawType());
         assertEquals(CompletionStage.class,
-            java.lang.reflect.ParameterizedType.class.cast(list.getGenericReturnType())
+            ParameterizedType.class.cast(list.getGenericReturnType())
                 .getRawType());
         assertEquals(ZLinkPlacementObjectKind.ACTOR,
             ZLinkLocationObjectFilter.of(ZLinkPlacementObjectKind.ACTOR).objectKind());

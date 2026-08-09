@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.Objects;
+import java.util.logging.Logger;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -16,8 +18,8 @@ import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 final class ZLinkActorDispatchSerials {
     private static final boolean STREAM_TRACE =
         "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
-    private static final java.util.logging.Logger LOGGER =
-        java.util.logging.Logger.getLogger(ZLinkActorDispatchSerials.class.getName());
+    private static final Logger LOGGER =
+        Logger.getLogger(ZLinkActorDispatchSerials.class.getName());
     private final Object runtimeScope;
     private final Function<String, Object> incarnationResolver;
     private final Executor executor;
@@ -43,9 +45,9 @@ final class ZLinkActorDispatchSerials {
         Object runtimeScope,
         Function<String, Object> incarnationResolver,
         Executor executor) {
-        this.runtimeScope = java.util.Objects.requireNonNull(
+        this.runtimeScope = Objects.requireNonNull(
             runtimeScope, "runtimeScope");
-        this.incarnationResolver = java.util.Objects.requireNonNull(
+        this.incarnationResolver = Objects.requireNonNull(
             incarnationResolver, "incarnationResolver");
         this.executor = executor;
     }
@@ -353,7 +355,7 @@ final class ZLinkActorDispatchSerials {
              ZLinkDeferredActorJoinScope.Scope joins =
                  ZLinkDeferredActorJoinScope.enter(
                      runtimeScope,
-                     java.util.Objects.requireNonNull(
+                     Objects.requireNonNull(
                          incarnationResolver.apply(actorId),
                          "actor incarnation"),
                      actorId)) {

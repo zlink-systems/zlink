@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.observabilityops.trigger
 
+
+import systems.zlink.framework.kotlin.ZLinkKotlinStreamConnector
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.micrometer.core.instrument.Metrics
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
@@ -87,7 +89,7 @@ private suspend fun metricsB1(endpoint: String, output: Path) {
     }
 }
 
-private suspend fun probeLifecycle(connector: systems.zlink.framework.kotlin.ZLinkKotlinStreamConnector) {
+private suspend fun probeLifecycle(connector: ZLinkKotlinStreamConnector) {
     try {
         connector.request(raw("MetricsLifecycleProbe", byteArrayOf(1)))
             .timeout(Duration.ofSeconds(5))

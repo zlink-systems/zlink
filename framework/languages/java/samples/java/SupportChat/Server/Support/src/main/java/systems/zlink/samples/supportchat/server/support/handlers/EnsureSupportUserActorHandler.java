@@ -1,4 +1,7 @@
 package systems.zlink.samples.supportchat.server.support.handlers;
+import java.util.concurrent.CompletionStage;
+import systems.zlink.framework.actors.ActorRef;
+import systems.zlink.framework.actors.ZLinkActorCreateResult;
 
 import systems.zlink.framework.actors.ActorRefSnapshot;
 import systems.zlink.framework.actors.ZLinkActorManager;
@@ -18,7 +21,7 @@ public final class EnsureSupportUserActorHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Messages.EnsureSupportUserActorRes> handle(
+    public CompletionStage<Messages.EnsureSupportUserActorRes> handle(
         Messages.EnsureSupportUserActorReq request,
         ZLinkMessageContext context) {
         return actors.getOrCreate(request.actorId(), SampleNames.SupportActorType)
@@ -28,12 +31,12 @@ public final class EnsureSupportUserActorHandler
                 ActorRefSnapshot.from(actorRef(result))));
     }
 
-    private static systems.zlink.framework.actors.ActorRef actorRef(
-        systems.zlink.framework.actors.ZLinkActorCreateResult result) {
-        if (result instanceof systems.zlink.framework.actors.ZLinkActorCreateResult.Created created) {
+    private static ActorRef actorRef(
+        ZLinkActorCreateResult result) {
+        if (result instanceof ZLinkActorCreateResult.Created created) {
             return created.actor();
         }
-        if (result instanceof systems.zlink.framework.actors.ZLinkActorCreateResult.Existing existing) {
+        if (result instanceof ZLinkActorCreateResult.Existing existing) {
             return existing.actor();
         }
         throw new IllegalStateException("Support actor creation was rejected");

@@ -1,5 +1,7 @@
-package systems.zlink.e2e.pubsub.subscriber.Infrastructure;
+package Infrastructure;
 
+import systems.zlink.e2e.pubsub.subscriber.Configuration;
+import systems.zlink.e2e.pubsub.subscriber.Infrastructure;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;

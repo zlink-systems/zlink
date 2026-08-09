@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.streams;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
@@ -93,7 +94,7 @@ record ZLinkStreamSessionSendCall(
     ZLinkStreamCompressionCodec compressionCodec,
     ZLinkOneWayCalls oneWayCalls,
     Duration timeout,
-    java.util.concurrent.atomic.AtomicBoolean submitGate)
+    AtomicBoolean submitGate)
     implements ZLinkSessionSendCall {
     ZLinkStreamSessionSendCall(
         ZLinkBackendStreamSocket stream,
@@ -107,7 +108,7 @@ record ZLinkStreamSessionSendCall(
         ZLinkOneWayCalls oneWayCalls) {
         this(stream, routingId, payload, packetName, metadata, compressed, codec,
             compressionCodec, oneWayCalls, null,
-            new java.util.concurrent.atomic.AtomicBoolean());
+            new AtomicBoolean());
     }
     @Override
     public ZLinkSessionSendCall metadata(String key, String value) {
@@ -220,7 +221,7 @@ record ZLinkStreamSessionReplyCall(
     String packetName,
     boolean compressed,
     ZLinkStreamCompressionCodec compressionCodec,
-    java.util.concurrent.atomic.AtomicBoolean submitGate)
+    AtomicBoolean submitGate)
     implements ZLinkSessionReplyCall {
     ZLinkStreamSessionReplyCall(
         ZLinkBackendStreamSocket stream,
@@ -231,7 +232,7 @@ record ZLinkStreamSessionReplyCall(
         boolean compressed,
         ZLinkStreamCompressionCodec compressionCodec) {
         this(stream, routingId, payload, context, packetName, compressed, compressionCodec,
-            new java.util.concurrent.atomic.AtomicBoolean());
+            new AtomicBoolean());
     }
     @Override
     public ZLinkSessionReplyCall compress() {

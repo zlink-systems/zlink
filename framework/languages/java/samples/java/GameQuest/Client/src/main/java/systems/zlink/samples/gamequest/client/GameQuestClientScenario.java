@@ -35,7 +35,7 @@ public final class GameQuestClientScenario {
             if (message.payload().playerId().equals("player-bob")) {
                 aliceSawBobProgress.incrementAndGet();
             }
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         });
 
         CompletionStage<ZLinkStreamMessage<Messages.QuestProgressNotify>> firstProgress =
@@ -224,14 +224,12 @@ public final class GameQuestClientScenario {
     private void verifyScaleOut(
         ZLinkStreamConnector apiAStream,
         ZLinkStreamConnector apiBStream) {
-        CompletableFuture.allOf(
-            apiAStream.connect().submit().toCompletableFuture(),
-            apiBStream.connect().submit().toCompletableFuture()).join();
-        CompletableFuture.allOf(
-            apiAStream.request(new Messages.JoinSessionReq("player-scale-a"))
-                .submit(Messages.JoinSessionRes.class).toCompletableFuture(),
-            apiBStream.request(new Messages.JoinSessionReq("player-scale-b"))
-                .submit(Messages.JoinSessionRes.class).toCompletableFuture()).join();
+        apiAStream.connect().submit().toCompletableFuture().join();
+        apiBStream.connect().submit().toCompletableFuture().join();
+        apiAStream.request(new Messages.JoinSessionReq("player-scale-a"))
+            .submit(Messages.JoinSessionRes.class).toCompletableFuture().join();
+        apiBStream.request(new Messages.JoinSessionReq("player-scale-b"))
+            .submit(Messages.JoinSessionRes.class).toCompletableFuture().join();
 
         CompletableFuture<ZLinkStreamMessage<Messages.QuestProgressNotify>> progressA =
             apiAStream.waitFor(Messages.QuestProgressNotify.class)

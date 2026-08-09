@@ -1,5 +1,6 @@
-package systems.zlink.e2e.registrymessaging.client.Support;
+package Support;
 
+import systems.zlink.e2e.registrymessaging.client.Support;
 public final class ScenarioWait {
     private ScenarioWait() {
     }

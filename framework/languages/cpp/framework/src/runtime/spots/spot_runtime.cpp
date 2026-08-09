@@ -720,6 +720,7 @@ void erase_actor_route_unlocked (detail::spot_node_builder_state_t &state, const
     state.actor_spot_ids.erase (key);
     state.actor_routes.erase (key);
     state.actor_generations.erase (key);
+    state.actor_authority_fences.erase (key);
     state.native_actors.erase (key);
 }
 
@@ -3370,16 +3371,19 @@ spot_manager_t::relay_actor_packet (const actor_ref_t &actor_ref,
                                     const zlink::message_t &message,
                                     service_provider_t &services,
                                     serializer_registry_t &serializers,
-                                    spot_inbound_message_t metadata)
+                                    spot_inbound_message_t metadata,
+                                    const runtime::protocol::actor_route_fence_t *
+                                      admitted_message_follow_target)
 {
     if (_state->actor_packet_relay) {
         return _state->actor_packet_relay (actor_ref, std::move (actor_context), message_kind,
                                            packet_name, message, services, serializers,
-                                           std::move (metadata));
+                                           std::move (metadata),
+                                           admitted_message_follow_target);
     }
     return detail::spot_node_runtime_t (_state).relay_actor_packet (
       actor_ref, std::move (actor_context), message_kind, packet_name, message, services,
-      serializers, std::move (metadata));
+      serializers, std::move (metadata), admitted_message_follow_target);
 }
 
 spot_publisher_client_t::spot_publisher_client_t (spot_manager_t manager,
@@ -4955,6 +4959,10 @@ void spot_node_runtime_t::fail_remote_actor_transfer (const actor_ref_t &actor_r
 void spot_node_runtime_t::complete_remote_actor_transfer (const actor_ref_t &source_actor,
                                                           const actor_ref_t &target_actor,
                                                           spot_route_t target_route,
+                                                          runtime::protocol::actor_route_fence_t
+                                                            source_fence,
+                                                          runtime::protocol::actor_route_fence_t
+                                                            target_fence,
                                                           std::string transfer_id)
 {
     std::function<result_t<std::optional<zlink::message_t>> (
@@ -4971,11 +4979,14 @@ void spot_node_runtime_t::complete_remote_actor_transfer (const actor_ref_t &sou
     const auto late_transfer_id = transfer_id;
     const auto target_spot_id = target_route.spot_id;
     // Keep the old-generation Message Follow route independent from the actor's
-    // current route. On A→B→A, recording the final local route must not erase
-    // the generation-1 A→B hop that still chains through B to generation 3.
+    // A later relocation can return the same Actor incarnation to this node.
+    // Retain the committed source fence; the authority owner generation, node
+    // lifecycle, and owner lease distinguish it from the newer local target.
     _state->actor_transfer_coordinator.activate_message_follow (
-      key, source_actor.object_generation (), target_actor, target_route,
-      std::chrono::steady_clock::now () + _state->message_follow_duration, transfer_id);
+      key, std::move (source_fence), target_actor, target_route,
+      std::move (target_fence),
+      std::chrono::steady_clock::now () + _state->message_follow_duration,
+      transfer_id);
     detail::record_actor_route_unlocked (*_state, key, std::move (target_route),
                                          target_actor.object_generation ());
     // Commit acknowledgement fixes the new owner and Message Follow route first.
@@ -5430,6 +5441,18 @@ spot_node_runtime_t::commit_remote_actor_authority (const std::string &transfer_
         return result_t<void>::failure (
           framework_error_kind_t::unavailable,
           "remote Actor authority commit conflicted with current authority");
+    }
+    {
+        std::lock_guard<std::recursive_mutex> lock (_state->mutex);
+        _state->actor_authority_fences.insert_or_assign (
+          actor_key (target_actor),
+          runtime::protocol::actor_route_fence_t{
+            std::string (target_actor.actor_id ().value ()),
+            target_actor.object_generation (),
+            native->status ().routing_id ().to_bytes (),
+            target_node_lifecycle_generation,
+            current->target.authority_owner_generation,
+            static_cast<std::uint64_t> (target_owner.lease_generation)});
     }
     if (committed_authority_owner_generation != nullptr)
         *committed_authority_owner_generation = current->target.authority_owner_generation;
@@ -5924,7 +5947,9 @@ void spot_node_runtime_t::on_actor_packet_relay (
                                                            const zlink::message_t &,
                                                            service_provider_t &,
                                                            serializer_registry_t &,
-                                                           spot_inbound_message_t)> relay)
+                                                           spot_inbound_message_t,
+                                                           const runtime::protocol::
+                                                             actor_route_fence_t *)> relay)
 {
     _state->actor_packet_relay = std::move (relay);
 }
@@ -5993,7 +6018,9 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
                                          const zlink::message_t &message,
                                          service_provider_t &services,
                                          serializer_registry_t &serializers,
-                                         spot_inbound_message_t metadata)
+                                         spot_inbound_message_t metadata,
+                                         const runtime::protocol::actor_route_fence_t *
+                                           admitted_message_follow_target)
 {
     if (::zlink::framework::detail::actor_ref_access_t::empty (actor_ref)) {
         return result_t<std::optional<zlink::message_t>>::failure (
@@ -6006,6 +6033,23 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
         if (_state->retiring_actor_keys.contains (key)) {
             return result_t<std::optional<zlink::message_t>>::failure (
               framework_error_kind_t::not_found, "actor destruction is pending");
+        }
+    }
+    if (admitted_message_follow_target != nullptr) {
+        bool targets_current_authority = false;
+        {
+            std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+            const auto current = _state->actor_authority_fences.find (key);
+            targets_current_authority =
+              current != _state->actor_authority_fences.end ()
+              && current->second == *admitted_message_follow_target;
+        }
+        if (!targets_current_authority
+            && !matches_actor_message_follow_source (
+              actor_ref, *admitted_message_follow_target)) {
+            return result_t<std::optional<zlink::message_t>>::failure (
+              framework_error_kind_t::unavailable,
+              "Actor Message Follow target fence is not admitted");
         }
     }
     const auto handoff = metadata.values.find ("__zlink.actorHandoffBacklog");
@@ -6055,13 +6099,46 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
                                              "actor transfer is in progress"));
         }
 
-        // The move can become committed between route selection and backlog
-        // admission. Recheck the already-published Message Follow route before
-        // local dispatch so that this boundary packet cannot return to the
-        // retired Actor incarnation.
-        if (_state->actor_transfer_coordinator.message_follow_target (
-              key, actor_ref.object_generation ())
+        // A node can become the current owner again while an older source
+        // route for the same Actor incarnation is still retained. Only the
+        // exact committed target fence may bypass that older Message Follow
+        // route; matching the node or ObjectGeneration alone is insufficient.
+        bool targets_current_authority = admitted_message_follow_target == nullptr;
+        {
+            std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+            if (admitted_message_follow_target != nullptr) {
+                const auto current = _state->actor_authority_fences.find (key);
+                targets_current_authority =
+                  current != _state->actor_authority_fences.end ()
+                  && current->second == *admitted_message_follow_target;
+            }
+        }
+        const bool targets_committed_source =
+          admitted_message_follow_target != nullptr
+          && matches_actor_message_follow_source (
+            actor_ref, *admitted_message_follow_target);
+        if (!targets_current_authority && !targets_committed_source) {
+            return result_t<std::optional<zlink::message_t>>::failure (
+              framework_error_kind_t::unavailable,
+              "Actor Message Follow target fence is no longer current");
+        }
+        if ((targets_committed_source
+             || (admitted_message_follow_target == nullptr
+                 && _state->actor_transfer_coordinator.message_follow_target (
+                   key, actor_ref.object_generation ())))
             && _state->actor_message_follow_relay) {
+            std::uint8_t incoming_hop_count = 0;
+            if (const auto hop = metadata.values.find (
+                  "__zlink.messageFollowHopCount");
+                hop != metadata.values.end ()) {
+                const auto parsed = std::stoul (hop->second);
+                if (parsed > runtime::protocol::messageFollowHopCount) {
+                    return result_t<std::optional<zlink::message_t>>::failure (
+                      framework_error_kind_t::protocol_error,
+                      "Actor Message Follow hop count is invalid");
+                }
+                incoming_hop_count = static_cast<std::uint8_t> (parsed);
+            }
             runtime::messaging::envelope_header_t header;
             header.kind = is_request ? runtime::messaging::message_kind_t::request
                                      : runtime::messaging::message_kind_t::command;
@@ -6072,7 +6149,10 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
             return _state->actor_message_follow_relay (actor_ref, header, message,
                                                        std::chrono::seconds (30),
                                                        zlink::routing_id_t::from (std::uint32_t{0}),
-                                                       runtime::protocol::actor_route_fence_t{}, 0,
+                                                       admitted_message_follow_target
+                                                         ? *admitted_message_follow_target
+                                                         : runtime::protocol::actor_route_fence_t{},
+                                                       incoming_hop_count,
                                                        runtime::protocol::wire_operation_id_t{}, 0);
         }
     }
@@ -7138,13 +7218,24 @@ spot_node_runtime_t::actor_message_follow_target (const actor_ref_t &actor_ref) 
       actor_key (actor_ref), actor_ref.object_generation ());
 }
 
+bool spot_node_runtime_t::matches_actor_message_follow_source (
+  const actor_ref_t &actor_ref,
+  const runtime::protocol::actor_route_fence_t &source_fence) const
+{
+    return _state->actor_transfer_coordinator.matches_message_follow_source (
+      actor_key (actor_ref), source_fence);
+}
+
 result_t<std::optional<actor_message_follow_target_t>>
 spot_node_runtime_t::try_acquire_actor_message_follow (const actor_ref_t &actor_ref,
                                                        std::size_t payload_bytes,
-                                                       std::size_t hop_count)
+                                                       std::size_t hop_count,
+                                                       const runtime::protocol::
+                                                         actor_route_fence_t *source_fence)
 {
     return _state->actor_transfer_coordinator.try_acquire_message_follow (
-      actor_key (actor_ref), actor_ref.object_generation (), payload_bytes, hop_count);
+      actor_key (actor_ref), actor_ref.object_generation (), payload_bytes,
+      hop_count, source_fence);
 }
 
 void spot_node_runtime_t::release_actor_message_follow (const actor_ref_t &actor_ref,
@@ -8029,6 +8120,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
         const actor_ref_t actor = ::zlink::framework::detail::actor_ref_access_t::make (
           node_rid_t::from_string (std::string (owner.actor->node_rid ().value ())), actor_type,
           std::string (owner.actor->actor_id ().value ()), owner.actor->object_generation ());
+        bool targets_current_authority = false;
         if (record.actor_route) {
             const auto &route = *record.actor_route;
             const auto native = _state->native_node.lock ();
@@ -8040,17 +8132,18 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
             const bool targets_exact_incarnation =
               targets_local_actor && route.object_generation == actor.object_generation ();
             const bool follows_committed_source =
-              targets_exact_incarnation && actor_message_follow_target (actor).has_value ();
+              targets_exact_incarnation
+              && matches_actor_message_follow_source (actor, route);
             const bool follows_in_flight_source =
               targets_exact_incarnation && actor_transfer_in_progress (actor);
             const bool requires_exact_incarnation =
               header.value ().message_name == actor_bound_session_bind_route_request_t::packet_name
               || header.value ().message_name == actor_bound_session_route_request_t::packet_name;
-            const bool current_authority_admitted =
+            targets_current_authority =
               _state->actor_route_admission && _state->actor_route_admission (route);
             const bool admitted = targets_local_actor
                                   && (!requires_exact_incarnation || targets_exact_incarnation)
-                                  && (follows_committed_source || current_authority_admitted
+                                  && (follows_committed_source || targets_current_authority
                                       || (follows_in_flight_source && !requires_exact_incarnation));
             if (!admitted) {
                 if (const auto *trace = std::getenv ("ZLINK_CPP_AUTO_CONNECT_TRACE");
@@ -8060,7 +8153,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                               << " exact=" << targets_exact_incarnation
                               << " follow=" << follows_committed_source
                               << " moving=" << follows_in_flight_source
-                              << " authority=" << current_authority_admitted
+                              << " authority=" << targets_current_authority
                               << " routeNodeGen=" << route.target_node_generation
                               << " localNodeGen=" << local.lifecycle_generation ()
                               << " routeAuthority=" << route.authority_owner_generation
@@ -8188,10 +8281,13 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
              * sending it through Message Follow would route it back to this
              * node and create a self-relay cycle. */
             const auto follows_committed_source =
-              actor_packet && actor_message_follow_target (actor).has_value ();
+              actor_packet && record.actor_route
+              && matches_actor_message_follow_source (
+                actor, *record.actor_route);
             const auto follows_in_flight_source =
               actor_packet && actor_transfer_in_progress (actor);
             if (follows_committed_source && !follows_in_flight_source
+                && !targets_current_authority
                 && _state->actor_message_follow_relay) {
                 return _state->actor_message_follow_relay (
                   actor, header.value (), body.value (), std::chrono::seconds (30),
@@ -8249,7 +8345,11 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                                        semantic_send ? stream_message_kind_t::send
                                                      : stream_message_kind_t::request,
                                        header.value ().message_name, body.value (), services,
-                                       serializers, std::move (relay_metadata));
+                                       serializers, std::move (relay_metadata),
+                                       targets_current_authority && record.actor_route
+                                           && actor_message_follow_target (actor)
+                                         ? &*record.actor_route
+                                         : nullptr);
         }();
         if (deferred_handoff_request && relayed && !relayed.value ().has_value ()) {
             return true;

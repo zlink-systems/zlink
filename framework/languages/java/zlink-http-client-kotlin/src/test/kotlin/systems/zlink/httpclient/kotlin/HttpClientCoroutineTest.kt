@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient.kotlin
 
+import org.junit.jupiter.api.Assertions
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpHandler
 import com.sun.net.httpserver.HttpServer

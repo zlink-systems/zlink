@@ -1,5 +1,6 @@
 package systems.zlink.e2e.kotlin.registrationcodec.main.endpoints
 
+import com.sun.net.httpserver.HttpServer
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.google.protobuf.StringValue
 import com.sun.net.httpserver.HttpExchange
@@ -34,7 +35,7 @@ class RegistrationScenarioEndpoints(
     private val client: ZLinkClient,
     private val json: ObjectMapper,
 ) {
-    fun map(httpServer: com.sun.net.httpserver.HttpServer) {
+    fun map(httpServer: HttpServer) {
         httpServer.createContext("/registration/auto") { exchange ->
             exchange.writeJson(request(EchoAutoReq("auto-request"), EchoAutoRes::class.java).thenApply { reply ->
                 client.sendToChannel(Contracts.CHANNEL, EchoAutoMsg("auto-send")).submit()

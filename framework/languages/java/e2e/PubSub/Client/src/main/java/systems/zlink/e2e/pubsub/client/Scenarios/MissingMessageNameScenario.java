@@ -1,5 +1,7 @@
-package systems.zlink.e2e.pubsub.client.Scenarios;
+package Scenarios;
 
+import systems.zlink.e2e.pubsub.client.Scenarios;
+import systems.zlink.e2e.pubsub.client.Support;
 import systems.zlink.e2e.pubsub.client.Support.ScenarioAssert;
 import systems.zlink.e2e.pubsub.client.Support.ScenarioContext;
 import systems.zlink.e2e.pubsub.shared.Contracts;

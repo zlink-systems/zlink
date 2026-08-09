@@ -1,4 +1,8 @@
 package systems.zlink.e2e.toactormessaging.actor;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletionException;
 
 import org.springframework.boot.ApplicationRunner;
 import java.nio.file.Path;
@@ -69,7 +73,7 @@ public final class Program {
         boot("http create");
         JsonHttp http = new JsonHttp(config.actorHttpEndpoint());
         boot("http route health");
-        http.get("/health", () -> java.util.Map.of("status", "ok"));
+        http.get("/health", () -> Map.of("status", "ok"));
         boot("http route evidence");
         http.get("/evidence", evidence::all);
         boot("http route ensure");
@@ -207,11 +211,11 @@ public final class Program {
         };
     }
 
-    private static java.util.List<String> baselineActorIds(ActorOptions config) {
+    private static List<String> baselineActorIds(ActorOptions config) {
         if (config.baselineActorIds().isBlank()) {
-            return java.util.List.of("ta-a1", "ta-a2", "ta-a3", "ta-a4", "ta-b2", "ta-b3");
+            return List.of("ta-a1", "ta-a2", "ta-a3", "ta-a4", "ta-b2", "ta-b3");
         }
-        return java.util.Arrays.stream(config.baselineActorIds().split(","))
+        return Arrays.stream(config.baselineActorIds().split(","))
             .map(String::trim)
             .filter(value -> !value.isBlank())
             .toList();
@@ -415,7 +419,7 @@ public final class Program {
 
     private static String errorKind(Throwable error) {
         Throwable current = error;
-        while (current instanceof java.util.concurrent.CompletionException
+        while (current instanceof CompletionException
             && current.getCause() != null) {
             current = current.getCause();
         }

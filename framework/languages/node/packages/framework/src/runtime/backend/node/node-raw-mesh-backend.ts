@@ -1990,7 +1990,8 @@ class MailboxClaim implements RawClaim {
         throw error;
       }
       const nextParts = decoded.parts.length;
-      const nextBytes = decoded.parts.reduce((sum, part) => sum + part.size(), 0);
+      let nextBytes = 0;
+      for (const part of decoded.parts) nextBytes += part.size();
       if (
         records.length >= capacity.messageCapacity
         || parts + nextParts > capacity.partCapacity
@@ -2250,15 +2251,18 @@ function statefulOperationFailure(error: unknown): RawServiceRequestResult {
 function encodeMultipart(parts: MessageLike | readonly MessageLike[]) {
   const values = Array.isArray(parts) ? parts : [parts];
   if (values.length === 0) throw new TypeError('Multipart payload must contain at least one part.');
-  const bytes = values.map(messageBytes);
-  const size = 4 + bytes.reduce((sum, part) => sum + 4 + part.byteLength, 0);
+  //  messageBytesView aliases the caller's buffer; the parts are consumed
+  //  synchronously by the copy loop below and never retained.
+  const bytes = values.map(messageBytesView);
+  let size = 4;
+  for (const part of bytes) size += 4 + part.byteLength;
   const payload = Buffer.alloc(size);
   payload.writeUInt32BE(bytes.length, 0);
   let offset = 4;
   for (const part of bytes) {
     payload.writeUInt32BE(part.byteLength, offset);
     offset += 4;
-    part.copy(payload, offset);
+    payload.set(part, offset);
     offset += part.byteLength;
   }
   return {
@@ -2354,13 +2358,6 @@ function decodeMultipartBuffers(payload: Uint8Array): Buffer[] {
     throw new ServiceWireProtocolError('Multipart payload has trailing bytes.');
   }
   return result;
-}
-
-function messageBytes(value: MessageLike): Buffer {
-  if (typeof value === 'object' && 'data' in value) {
-    return Buffer.from(value.data());
-  }
-  return Buffer.from(value);
 }
 
 function messageBytesView(value: MessageLike): Uint8Array {

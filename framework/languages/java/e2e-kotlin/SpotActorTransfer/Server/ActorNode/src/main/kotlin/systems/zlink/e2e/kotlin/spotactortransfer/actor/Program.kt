@@ -1,5 +1,10 @@
 package systems.zlink.e2e.kotlin.spotactortransfer.actor
 
+
+import systems.zlink.framework.actors.ZLinkActorClient
+import systems.zlink.framework.actors.ZLinkActorManager
+import systems.zlink.framework.spots.ZLinkSpotManager
+import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle
 import com.fasterxml.jackson.databind.ObjectMapper
 import java.time.Duration
 import java.nio.file.Path
@@ -47,10 +52,10 @@ class Application {
         json: ObjectMapper,
         evidence: EvidenceStore,
         gates: GateStore,
-        spots: systems.zlink.framework.spots.ZLinkSpotManager,
-        actors: systems.zlink.framework.actors.ZLinkActorManager,
-        actorClient: systems.zlink.framework.actors.ZLinkActorClient,
-        lifecycle: systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle,
+        spots: ZLinkSpotManager,
+        actors: ZLinkActorManager,
+        actorClient: ZLinkActorClient,
+        lifecycle: ZLinkFrameworkLifecycle,
         config: ActorNodeOptions,
     ): ActorNodeHttpServer {
         val requiredPeerCount = config.meshPeers.split(',')

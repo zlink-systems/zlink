@@ -1,4 +1,10 @@
 package systems.zlink.framework.runtime.host;
+import java.util.concurrent.atomic.AtomicInteger;
+import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityGenerationTransition;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
+import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -178,10 +184,10 @@ class ZLinkFrameworkLocationRuntimeTest {
                     authority.nodeGeneration());
             repository(store).compareExchange(
                     key,
-                    new systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound(snapshot.storeVersion()),
-                    new systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut(
+                    new ZLinkAuthorityExpectFound(snapshot.storeVersion()),
+                    new ZLinkAuthorityPut(
                         closing,
-                        systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityGenerationTransition.PRESERVE,
+                        ZLinkAuthorityGenerationTransition.PRESERVE,
                         Optional.empty(),
                         Optional.empty()),
                     () -> false)
@@ -229,7 +235,7 @@ class ZLinkFrameworkLocationRuntimeTest {
                     .ZLinkActorCreateResult.Created.class,
                 created);
             var authority = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot.class,
+                ZLinkAuthoritySnapshot.class,
                 repository(store).read(
                         systems.zlink.framework.runtime.locations
                             .ZLinkAuthorityKeyCodec.actor(
@@ -238,7 +244,7 @@ class ZLinkFrameworkLocationRuntimeTest {
                     .toCompletableFuture()
                     .get());
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState.ACTIVE,
+                ZLinkPlacementAllocationState.ACTIVE,
                 authority.allocation().state());
             assertTrue(authority.pendingCreation().isEmpty());
         }
@@ -341,11 +347,11 @@ class ZLinkFrameworkLocationRuntimeTest {
             assertEquals("rooms", actor.context().meshName());
 
             assertThrows(
-                systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                ZLinkFrameworkException.class,
                 () -> actor.context()
                     .joinSpot(
                         spotId,
-                        systems.zlink.framework.messaging.ZLinkMessage.empty())
+                        ZLinkMessage.empty())
                     .defer());
 
             var snapshot = assertInstanceOf(
@@ -438,7 +444,7 @@ class ZLinkFrameworkLocationRuntimeTest {
         @Override
         public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
             String actorId,
-            systems.zlink.framework.messaging.ZLinkMessage request) {
+            ZLinkMessage request) {
             return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
         }
 
@@ -466,8 +472,8 @@ class ZLinkFrameworkLocationRuntimeTest {
 
     public static final class BlockingLocationActorFactory
         implements ZLinkActorFactory {
-        static final java.util.concurrent.atomic.AtomicInteger invocations =
-            new java.util.concurrent.atomic.AtomicInteger();
+        static final AtomicInteger invocations =
+            new AtomicInteger();
         static CompletableFuture<Void> release;
 
         static void reset() {

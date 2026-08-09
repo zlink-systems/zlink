@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.streams;
+import systems.zlink.framework.streams.ZLinkSession;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -36,7 +37,7 @@ final class StreamNetworkDefaultsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         var stream = options.addStreamNode("gateway");
         stream.bind("inproc://gateway");
-        stream.registerSession(systems.zlink.framework.streams.ZLinkSession.class);
+        stream.registerSession(ZLinkSession.class);
         stream.configureSocket().setMaxMessageSize(0);
         options.configureInboundDispatch().setApplicationHwmBytes(1024);
 

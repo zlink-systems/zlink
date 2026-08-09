@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.spots;
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -25,7 +27,7 @@ final class ZLinkSpotAcceptedJournalTest {
                 "target-spot",
                 17,
                 "packet",
-                java.util.Map.of(),
+                Map.of(),
                 new byte[] {6, 7}),
             List.of(Message.from("packet"), Message.from(new byte[] {6, 7})),
             null,
@@ -40,7 +42,7 @@ final class ZLinkSpotAcceptedJournalTest {
         assertEquals(received.spotId(), record.spotId());
         assertEquals(received.requestSeq(), record.requestSequence());
         assertArrayEquals(new byte[0], record.applicationMetadata());
-        assertArrayEquals("packet".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+        assertArrayEquals("packet".getBytes(StandardCharsets.UTF_8),
             record.parts().get(0));
         assertArrayEquals(new byte[] {6, 7}, record.parts().get(1));
         received.close();

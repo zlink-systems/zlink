@@ -1,4 +1,8 @@
-package systems.zlink.e2e.registrationcodec.main.Handlers;
+package Handlers;
+import systems.zlink.e2e.registrationcodec.main.Handlers;
+import systems.zlink.e2e.registrationcodec.main.Infrastructure;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.e2e.registrationcodec.shared.Contracts;
 import systems.zlink.e2e.registrationcodec.main.Infrastructure.EvidenceStore;
@@ -14,11 +18,11 @@ public final class ManualRequestHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Contracts.EchoRes> handle(
+    public CompletionStage<Contracts.EchoRes> handle(
         Contracts.EchoManualReq request,
         ZLinkMessageContext context) {
         state.record("Request", context.packetName(), request.value());
-        return java.util.concurrent.CompletableFuture.completedFuture(
+        return CompletableFuture.completedFuture(
             new Contracts.EchoRes("echo:" + request.value(), "manual"));
     }
 }

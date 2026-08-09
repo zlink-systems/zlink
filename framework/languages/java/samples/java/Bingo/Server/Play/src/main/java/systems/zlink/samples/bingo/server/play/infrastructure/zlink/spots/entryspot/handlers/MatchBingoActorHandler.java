@@ -1,4 +1,5 @@
 package systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.entryspot.handlers;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorSendHandler;
@@ -15,7 +16,7 @@ public final class MatchBingoActorHandler
         PlayerActor,
         Messages.MatchBingoReq> {
     @Override
-    public java.util.concurrent.CompletionStage<Void> handle(
+    public CompletionStage<Void> handle(
         BingoEntrySpot entrySpot,
         PlayerActor actor,
         ZLinkMessageContext context,

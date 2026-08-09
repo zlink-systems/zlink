@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.Objects;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
 
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 
@@ -48,10 +51,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     private final ZLinkStreamCodec defaultCodec;
     private final ZLinkMessageFlowTracer flow;
     private final List<ZLinkSessionActor> bound = new CopyOnWriteArrayList<>();
-    private final java.util.concurrent.ConcurrentHashMap<String, StoredBindingRoute>
-        bindingRoutes = new java.util.concurrent.ConcurrentHashMap<>();
-    private final java.util.concurrent.ConcurrentHashMap<String, CompletableFuture<Void>>
-        bindingTransitions = new java.util.concurrent.ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, StoredBindingRoute>
+        bindingRoutes = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, CompletableFuture<Void>>
+        bindingTransitions = new ConcurrentHashMap<>();
     private final AtomicLong bindingGenerations = new AtomicLong();
     private ZLinkRelayMetadataPolicy metadataPolicy = ZLinkRelayMetadataPolicy.EMPTY;
 
@@ -221,7 +224,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     }
 
     public CompletionStage<Void> notifyDisconnectedAll(Duration timeout) {
-        java.util.Objects.requireNonNull(timeout, "timeout");
+        Objects.requireNonNull(timeout, "timeout");
         List<ZLinkSessionActor> current = List.copyOf(bound);
         return CompletableFuture.allOf(current.stream()
             .map(actor -> notifyDisconnectedSafely(actor, timeout))
@@ -485,7 +488,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
      */
     CompletionStage<Void> applyRelocationRouteUpdate(
         RelocationRouteUpdate update) {
-        java.util.Objects.requireNonNull(update, "update");
+        Objects.requireNonNull(update, "update");
         StoredBindingRoute observed = bindingRoutes.get(update.actorId());
         if (observed == null || !observed.matchesSource(update)) {
             return CompletableFuture.failedFuture(new ZLinkConfigurationException(
@@ -542,7 +545,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     public CompletionStage<ZLinkServiceM6BWireCodec.SessionRelocationRouted>
         applyRelocationRouteCommand(
             ZLinkServiceM6BWireCodec.SessionRelocationRoute command) {
-        java.util.Objects.requireNonNull(command, "command");
+        Objects.requireNonNull(command, "command");
         if (command.action()
                 != ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.COMMIT
             || !sessionRid.equals(command.session().sessionRid())) {
@@ -614,8 +617,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 throw new IllegalArgumentException(
                     "relocation binding-route generations are invalid");
             }
-            java.util.Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");
-            java.util.Objects.requireNonNull(targetNodeRid, "targetNodeRid");
+            Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");
+            Objects.requireNonNull(targetNodeRid, "targetNodeRid");
         }
     }
 
@@ -694,7 +697,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
 
     private static String errorSummary(Throwable error) {
         Throwable current = error;
-        while (current instanceof java.util.concurrent.CompletionException
+        while (current instanceof CompletionException
             && current.getCause() != null) {
             current = current.getCause();
         }

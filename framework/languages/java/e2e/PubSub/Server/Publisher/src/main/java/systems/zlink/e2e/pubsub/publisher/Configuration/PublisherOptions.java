@@ -1,4 +1,6 @@
-package systems.zlink.e2e.pubsub.publisher.Configuration;
+package Configuration;
+import systems.zlink.e2e.pubsub.publisher.Configuration;
+import systems.zlink.e2e.pubsub.shared.Contracts;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -21,7 +23,7 @@ public record PublisherOptions(
                 "e2e.publisher-endpoint or e2e.publisher-port is required");
         }
         channelName = channelName == null || channelName.isBlank()
-            ? systems.zlink.e2e.pubsub.shared.Contracts.EVENT_CHANNEL
+            ? Contracts.EVENT_CHANNEL
             : channelName;
         if (redisLocationEndpoint != null && !redisLocationEndpoint.isBlank()) {
             required(locationKeyPrefix, "location-key-prefix");

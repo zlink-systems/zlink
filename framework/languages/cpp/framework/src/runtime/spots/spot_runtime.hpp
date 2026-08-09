@@ -103,6 +103,8 @@ class spot_node_builder_state_t
     std::atomic_bool stopping{false};
     std::map<std::string, spot_id_t> actor_spot_ids;
     std::map<std::string, std::uint64_t> actor_generations;
+    std::map<std::string, runtime::protocol::actor_route_fence_t>
+      actor_authority_fences;
     std::map<std::string, std::string> actor_types_by_id;
     std::set<std::string> actor_created_keys;
     /* Destruction requested from an active handler is deferred until the
@@ -173,7 +175,9 @@ class spot_node_builder_state_t
                                                              const zlink::message_t &,
                                                              service_provider_t &,
                                                              serializer_registry_t &,
-                                                             spot_inbound_message_t)>
+                                                             spot_inbound_message_t,
+                                                             const runtime::protocol::
+                                                               actor_route_fence_t *)>
       actor_packet_relay;
     std::function<result_t<std::optional<zlink::message_t>> (
         const actor_ref_t &, const runtime::messaging::envelope_header_t &,
@@ -686,11 +690,15 @@ class spot_node_runtime_t
     std::optional<spot_route_t> actor_route (const actor_ref_t &actor_ref) const;
     std::optional<actor_message_follow_target_t>
     actor_message_follow_target (const actor_ref_t &actor_ref) const;
+    bool matches_actor_message_follow_source (
+      const actor_ref_t &actor_ref,
+      const runtime::protocol::actor_route_fence_t &source_fence) const;
     result_t<std::optional<actor_message_follow_target_t>>
     try_acquire_actor_message_follow (
       const actor_ref_t &actor_ref,
       std::size_t payload_bytes,
-      std::size_t hop_count);
+      std::size_t hop_count,
+      const runtime::protocol::actor_route_fence_t *source_fence = nullptr);
     void release_actor_message_follow (
       const actor_ref_t &actor_ref,
       std::size_t payload_bytes) noexcept;
@@ -786,7 +794,9 @@ class spot_node_runtime_t
                                                                const zlink::message_t &,
                                                                service_provider_t &,
                                                                serializer_registry_t &,
-                                                               spot_inbound_message_t)>
+                                                               spot_inbound_message_t,
+                                                               const runtime::protocol::
+                                                                 actor_route_fence_t *)>
         relay);
     void on_actor_message_follow (
       std::function<result_t<std::optional<zlink::message_t>> (
@@ -936,6 +946,8 @@ class spot_node_runtime_t
     void complete_remote_actor_transfer (const actor_ref_t &source_actor,
                                          const actor_ref_t &target_actor,
                                          spot_route_t target_route,
+                                         runtime::protocol::actor_route_fence_t source_fence,
+                                         runtime::protocol::actor_route_fence_t target_fence,
                                          std::string transfer_id = {});
     // Emits an internal transfer lifecycle boundary through the configured
     // public message-flow observer. The transfer id is both the correlation
@@ -968,7 +980,9 @@ class spot_node_runtime_t
                         const zlink::message_t &message,
                         service_provider_t &services,
                         serializer_registry_t &serializers,
-                        spot_inbound_message_t metadata = {});
+                        spot_inbound_message_t metadata = {},
+                        const runtime::protocol::actor_route_fence_t *
+                          admitted_message_follow_target = nullptr);
     result_t<void> notify_actor_disconnected_erased (const actor_ref_t &actor_ref) const;
 
     template <typename TActor>

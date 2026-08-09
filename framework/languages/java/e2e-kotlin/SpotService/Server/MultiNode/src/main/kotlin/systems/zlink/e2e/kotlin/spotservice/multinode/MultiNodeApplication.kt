@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.spotservice.multinode
 
+
+import systems.zlink.framework.actors.ZLinkActorCreateResult
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
@@ -127,13 +129,13 @@ class MultiNodeApplication {
     companion object {
         @JvmStatic
         fun run(vararg args: String): AutoCloseable {
-            systems.zlink.e2e.kotlin.spotservice.Env.configure(args)
+            Env.configure(args)
             val options = MultiNodeOptions.parse(args)
             val builder = SpringApplicationBuilder(MultiNodeApplication::class.java)
                 .web(WebApplicationType.NONE)
                 .properties(options.toProperties())
             builder.application().setKeepAlive(true)
-            val context = builder.run(*systems.zlink.e2e.kotlin.spotservice.Env.applicationArgs(args))
+            val context = builder.run(*Env.applicationArgs(args))
             return AutoCloseable { context.close() }
         }
 
@@ -275,9 +277,9 @@ class MultiNodeHttpServer(
             .toCompletableFuture()
             .join()
         val actorId = when (actor) {
-            is systems.zlink.framework.actors.ZLinkActorCreateResult.Existing -> actor.actor().actorId()
-            is systems.zlink.framework.actors.ZLinkActorCreateResult.Created -> actor.actor().actorId()
-            is systems.zlink.framework.actors.ZLinkActorCreateResult.Rejected ->
+            is ZLinkActorCreateResult.Existing -> actor.actor().actorId()
+            is ZLinkActorCreateResult.Created -> actor.actor().actorId()
+            is ZLinkActorCreateResult.Rejected ->
                 throw IllegalStateException("actor creation was rejected")
         }
         return actorClient.requestToActor(

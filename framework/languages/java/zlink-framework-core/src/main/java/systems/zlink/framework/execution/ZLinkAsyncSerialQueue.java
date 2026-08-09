@@ -1,4 +1,7 @@
 package systems.zlink.framework.execution;
+import java.util.Objects;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -201,7 +204,7 @@ public final class ZLinkAsyncSerialQueue {
      */
     public synchronized CompletionStage<Void> enqueueBarrierNext(
         Supplier<CompletionStage<Void>> operation) {
-        java.util.Objects.requireNonNull(operation, "operation");
+        Objects.requireNonNull(operation, "operation");
         if (relocated) {
             return CompletableFuture.failedFuture(
                 new IllegalStateException("queue owner has relocated"));
@@ -241,7 +244,7 @@ public final class ZLinkAsyncSerialQueue {
      */
     public synchronized CompletionStage<Void> enqueueLifecycleBarrier(
         Supplier<CompletionStage<Void>> operation) {
-        java.util.Objects.requireNonNull(operation, "operation");
+        Objects.requireNonNull(operation, "operation");
         if (relocation != null) {
             return CompletableFuture.failedFuture(
                 new IllegalStateException("queue relocation is in progress"));
@@ -279,8 +282,8 @@ public final class ZLinkAsyncSerialQueue {
         byte[] record,
         Supplier<CompletionStage<Void>> operation,
         Runnable relocationRelease) {
-        java.util.Objects.requireNonNull(record, "record");
-        java.util.Objects.requireNonNull(relocationRelease, "relocationRelease");
+        Objects.requireNonNull(record, "record");
+        Objects.requireNonNull(relocationRelease, "relocationRelease");
         if (relocated) {
             return CompletableFuture.failedFuture(
                 new IllegalStateException("queue owner has relocated"));
@@ -297,9 +300,9 @@ public final class ZLinkAsyncSerialQueue {
         long recordSizeHint,
         Supplier<CompletionStage<Void>> operation,
         Runnable relocationRelease) {
-        java.util.Objects.requireNonNull(record, "record");
-        java.util.Objects.requireNonNull(operation, "operation");
-        java.util.Objects.requireNonNull(relocationRelease, "relocationRelease");
+        Objects.requireNonNull(record, "record");
+        Objects.requireNonNull(operation, "operation");
+        Objects.requireNonNull(relocationRelease, "relocationRelease");
         validatePayloadBytes(recordSizeHint);
         if (relocated || relocation != null && relocation.frozen) {
             return CompletableFuture.failedFuture(
@@ -359,7 +362,7 @@ public final class ZLinkAsyncSerialQueue {
     public synchronized boolean tryEnqueueRelocatable(
         byte[] record,
         Supplier<CompletionStage<Void>> operation) {
-        java.util.Objects.requireNonNull(record, "record");
+        Objects.requireNonNull(record, "record");
         if (relocated || relocation != null && relocation.frozen
             || !canRepresentWorkByteCost(record.length)
             || !canReserve(Lane.APPLICATION, workByteCost(record.length))) {
@@ -370,7 +373,7 @@ public final class ZLinkAsyncSerialQueue {
     }
 
     public synchronized void onCapacityAvailable(Runnable callback) {
-        capacityAvailable = java.util.Objects.requireNonNull(callback, "callback");
+        capacityAvailable = Objects.requireNonNull(callback, "callback");
     }
 
     private CompletionStage<Void> enqueueAccepted(
@@ -391,7 +394,7 @@ public final class ZLinkAsyncSerialQueue {
         long payloadBytes,
         Supplier<CompletionStage<Void>> operation,
         Runnable relocationRelease) {
-        java.util.Objects.requireNonNull(operation, "operation");
+        Objects.requireNonNull(operation, "operation");
         validatePayloadBytes(payloadBytes);
         if (relocated) {
             return CompletableFuture.failedFuture(
@@ -491,8 +494,8 @@ public final class ZLinkAsyncSerialQueue {
 
     private CompletionStage<Void> capacityFailure(String message) {
         return CompletableFuture.failedFuture(
-            new systems.zlink.framework.errors.ZLinkFrameworkException(
-                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
+            new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
                 message));
     }
 
@@ -833,7 +836,7 @@ public final class ZLinkAsyncSerialQueue {
                      ZLinkFlowContext.Scope ignored = flow == null
                          ? () -> { }
                          : ZLinkFlowContext.enter(flow)) {
-                    CompletionStage<Void> execution = java.util.Objects.requireNonNull(
+                    CompletionStage<Void> execution = Objects.requireNonNull(
                         operation.get(), "operation result");
                     execution.whenComplete((value, error) -> {
                         if (error != null) {
@@ -878,7 +881,7 @@ public final class ZLinkAsyncSerialQueue {
     }
 
     public static <T> CompletionStage<T> manageCurrent(CompletionStage<T> stage) {
-        java.util.Objects.requireNonNull(stage, "stage");
+        Objects.requireNonNull(stage, "stage");
         SerialTurn turn = currentTurn();
         ZLinkAsyncSerialQueue queue = turn == null ? null : turn.queue;
         if (queue == null) {
@@ -993,7 +996,7 @@ public final class ZLinkAsyncSerialQueue {
     }
 
     public static <T> CompletionStage<T> yieldCurrent(CompletionStage<T> stage) {
-        java.util.Objects.requireNonNull(stage, "stage");
+        Objects.requireNonNull(stage, "stage");
         SerialTurn turn = currentTurn();
         ZLinkAsyncSerialQueue queue = turn == null ? null : turn.queue;
         CompletableFuture<Void> gate = turn == null ? null : turn.gate;
@@ -1118,7 +1121,7 @@ public final class ZLinkAsyncSerialQueue {
     }
 
     public static Executor propagateCurrent(Executor executor) {
-        java.util.Objects.requireNonNull(executor, "executor");
+        Objects.requireNonNull(executor, "executor");
         return command -> {
             ZLinkAsyncSerialQueue queue = CURRENT.get();
             CompletableFuture<Void> gate = CURRENT_GATE.get();
@@ -1178,7 +1181,7 @@ public final class ZLinkAsyncSerialQueue {
     }
 
     public static <T> CompletionStage<T> deferCurrentReleaseUntil(CompletionStage<T> entered) {
-        java.util.Objects.requireNonNull(entered, "entered");
+        Objects.requireNonNull(entered, "entered");
         SerialTurn turn = currentTurn();
         CompletableFuture<Void> gate = turn == null ? null : turn.gate;
         if (gate == null) {
@@ -1232,7 +1235,7 @@ public final class ZLinkAsyncSerialQueue {
                 throw new IllegalArgumentException(
                     "queue record sequence must be positive");
             }
-            payload = java.util.Objects.requireNonNull(
+            payload = Objects.requireNonNull(
                 payload,
                 "payload").clone();
         }
@@ -1337,7 +1340,7 @@ public final class ZLinkAsyncSerialQueue {
             boolean continuation) {
             this.sequence = sequence;
             this.record = null;
-            this.lazyRecord = java.util.Objects.requireNonNull(
+            this.lazyRecord = Objects.requireNonNull(
                 lazyRecord, "lazyRecord");
             this.operation = operation;
             this.relocationRelease = relocationRelease;
@@ -1355,7 +1358,7 @@ public final class ZLinkAsyncSerialQueue {
 
         private synchronized QueuedRecord queuedRecord() {
             if (record == null) {
-                record = java.util.Objects.requireNonNull(
+                record = Objects.requireNonNull(
                     lazyRecord.get(), "relocation record supplier returned null");
             }
             return new QueuedRecord(sequence, record);

@@ -1,4 +1,5 @@
 package systems.zlink.samples.supportchat.server.session.sessions;
+import systems.zlink.framework.actors.ActorRef;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -137,7 +138,7 @@ public final class SupportChatSession implements ZLinkSession {
     }
 
     private CompletionStage<ZLinkSessionActor> bindOrGet(
-        systems.zlink.framework.actors.ActorRef actorRef) {
+        ActorRef actorRef) {
         ZLinkSessionActor existing = context.actors().find(actorRef.actorId()).orElse(null);
         return existing == null
             ? context.actors().bind(actorRef)

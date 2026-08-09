@@ -1,4 +1,6 @@
 package systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.entryspot;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 
 import systems.zlink.framework.messaging.ZLinkMessage;
@@ -31,39 +33,39 @@ public final class BingoEntrySpot implements ZLinkEntrySpot<PlayerActor> {
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<ZLinkActorCreateResponse> onCreateActor(
+    public CompletionStage<ZLinkActorCreateResponse> onCreateActor(
         PlayerActor actor,
         ZLinkMessage createRequest) {
         Messages.EnsurePlayerActorReq request =
             createRequest.decode(Messages.EnsurePlayerActorReq.class);
         actor.setDisplayName(request.getDisplayName());
-        return java.util.concurrent.CompletableFuture.completedFuture(
+        return CompletableFuture.completedFuture(
             ZLinkActorCreateResponse.accept());
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onJoinedActor(
+    public CompletionStage<Void> onJoinedActor(
         PlayerActor actor) {
         if (actor.destroyAfterEntrySpotJoin()) {
             return context.destroyActor(actor);
         }
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onLeaveActor(
+    public CompletionStage<Void> onLeaveActor(
         PlayerActor actor) {
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onDisconnectActor(
+    public CompletionStage<Void> onDisconnectActor(
         PlayerActor actor) {
         actor.markDisconnected();
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
-    public java.util.concurrent.CompletionStage<Messages.ObserveBingoEventsRes> observeEvents(
+    public CompletionStage<Messages.ObserveBingoEventsRes> observeEvents(
         PlayerActor actor,
         Messages.ObserveBingoEventsReq request) {
         String observerSpotId = "observe:" + request.getRoomId() + ":" + actor.actorId();

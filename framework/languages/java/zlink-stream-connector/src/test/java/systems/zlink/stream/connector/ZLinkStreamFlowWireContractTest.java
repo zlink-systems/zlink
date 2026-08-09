@@ -1,4 +1,5 @@
 package systems.zlink.stream.connector;
+import systems.zlink.contracts.messaging.Message;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -38,7 +39,7 @@ final class ZLinkStreamFlowWireContractTest {
                     message.payload().payload().close();
                     connector.send(new ZLinkStreamEncodedPayload(
                         "Outbound",
-                        systems.zlink.contracts.messaging.Message.from("reply"),
+                        Message.from("reply"),
                         Map.of())).submit();
                     return CompletableFuture.completedFuture(null);
                 });

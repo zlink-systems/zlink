@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.streams;
+import java.net.URI;
+import java.net.URISyntaxException;
 
 import java.util.List;
 import java.util.ArrayList;
@@ -84,13 +86,13 @@ public final class StreamNodeRegistration {
             || !actualEndpoint.startsWith("tcp://")) {
             return actualEndpoint;
         }
-        java.net.URI value = java.net.URI.create(actualEndpoint);
+        URI value = URI.create(actualEndpoint);
         try {
-            return new java.net.URI(
+            return new URI(
                 value.getScheme(), value.getUserInfo(), advertiseHost,
                 value.getPort(), value.getPath(), value.getQuery(), value.getFragment())
                 .toString();
-        } catch (java.net.URISyntaxException invalid) {
+        } catch (URISyntaxException invalid) {
             throw new ZLinkConfigurationException(
                 "invalid stream advertise host: " + advertiseHost);
         }

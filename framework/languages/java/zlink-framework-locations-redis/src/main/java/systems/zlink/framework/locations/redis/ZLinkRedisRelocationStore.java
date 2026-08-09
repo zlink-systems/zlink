@@ -1,4 +1,5 @@
 package systems.zlink.framework.locations.redis;
+import java.util.concurrent.CancellationException;
 
 import io.lettuce.core.ScriptOutputType;
 import java.nio.charset.StandardCharsets;
@@ -214,7 +215,7 @@ public final class ZLinkRedisRelocationStore
 
     private static <T> CompletionStage<T> cancelledStage() {
         return CompletableFuture.failedFuture(
-            new java.util.concurrent.CancellationException(
+            new CancellationException(
                 "store operation was cancelled before I/O"));
     }
 

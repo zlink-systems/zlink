@@ -1,4 +1,5 @@
 package systems.zlink.samples.gamequest.server.gameapi.sessions;
+import java.util.concurrent.CompletableFuture;
 
 import java.time.Instant;
 import java.util.concurrent.CompletionStage;
@@ -46,16 +47,16 @@ public final class GameQuestSession implements ZLinkSession {
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onConnected() {
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+    public CompletionStage<Void> onConnected() {
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onDisconnected() {
+    public CompletionStage<Void> onDisconnected() {
         String disconnectedPlayerId = playerId;
         ZLinkSessionActor disconnectedActor = playerActor;
-        java.util.concurrent.CompletionStage<Void> actorDisconnected = disconnectedActor == null
-            ? java.util.concurrent.CompletableFuture.completedFuture(null)
+        CompletionStage<Void> actorDisconnected = disconnectedActor == null
+            ? CompletableFuture.completedFuture(null)
             : disconnectedActor.notifyDisconnected();
         return actorDisconnected.thenRun(() -> {
             if (disconnectedPlayerId != null) {
@@ -65,12 +66,12 @@ public final class GameQuestSession implements ZLinkSession {
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onError(ZLinkStreamError error) {
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+    public CompletionStage<Void> onError(ZLinkStreamError error) {
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onDispatch(
+    public CompletionStage<Void> onDispatch(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload) {
         return switch (dispatch.packetName()) {
@@ -86,7 +87,7 @@ public final class GameQuestSession implements ZLinkSession {
         };
     }
 
-    private java.util.concurrent.CompletionStage<Void> handleJoin(Messages.JoinSessionReq request) {
+    private CompletionStage<Void> handleJoin(Messages.JoinSessionReq request) {
         playerId = request.playerId();
         store.bind(request.playerId(), topology.gameApi().instanceName());
         return ensurePlayerActor(request)
@@ -108,7 +109,7 @@ public final class GameQuestSession implements ZLinkSession {
             });
     }
 
-    private java.util.concurrent.CompletionStage<Void> handleGetProgress(Messages.GetQuestProgressReq request) {
+    private CompletionStage<Void> handleGetProgress(Messages.GetQuestProgressReq request) {
         return channels
             .requestToSpot(request.playerId(), request)
             .timeout(SampleTimings.RequestTimeout)
@@ -121,7 +122,7 @@ public final class GameQuestSession implements ZLinkSession {
             });
     }
 
-    private java.util.concurrent.CompletionStage<Void> handleSync(Messages.SyncQuestProgressReq request) {
+    private CompletionStage<Void> handleSync(Messages.SyncQuestProgressReq request) {
         return channels
             .requestToSpot(request.playerId(), request)
             .timeout(SampleTimings.RequestTimeout)
@@ -134,7 +135,7 @@ public final class GameQuestSession implements ZLinkSession {
             });
     }
 
-    private java.util.concurrent.CompletionStage<Void> handleKill(Messages.KillMonsterReq request) {
+    private CompletionStage<Void> handleKill(Messages.KillMonsterReq request) {
         Messages.GameplayMsg event = event(
             request.playerId(),
             request.idempotencyKey(),
@@ -147,7 +148,7 @@ public final class GameQuestSession implements ZLinkSession {
             context.client().reply(new Messages.KillMonsterRes(event.eventId())).submit());
     }
 
-    private java.util.concurrent.CompletionStage<Void> handleCollect(Messages.CollectItemReq request) {
+    private CompletionStage<Void> handleCollect(Messages.CollectItemReq request) {
         Messages.GameplayMsg event = event(
             request.playerId(),
             request.idempotencyKey(),
@@ -160,7 +161,7 @@ public final class GameQuestSession implements ZLinkSession {
             context.client().reply(new Messages.CollectItemRes(event.eventId())).submit());
     }
 
-    private java.util.concurrent.CompletionStage<Void> handleMission(Messages.CompleteMissionReq request) {
+    private CompletionStage<Void> handleMission(Messages.CompleteMissionReq request) {
         Messages.GameplayMsg event = event(
             request.playerId(),
             request.idempotencyKey(),
@@ -173,7 +174,7 @@ public final class GameQuestSession implements ZLinkSession {
             context.client().reply(new Messages.CompleteMissionRes(event.eventId())).submit());
     }
 
-    private java.util.concurrent.CompletionStage<Void> handleArea(Messages.EnterAreaReq request) {
+    private CompletionStage<Void> handleArea(Messages.EnterAreaReq request) {
         Messages.GameplayMsg event = event(
             request.playerId(),
             request.idempotencyKey(),
@@ -186,7 +187,7 @@ public final class GameQuestSession implements ZLinkSession {
             context.client().reply(new Messages.EnterAreaRes(event.eventId())).submit());
     }
 
-    private java.util.concurrent.CompletionStage<Void> handleFeature(Messages.UnlockFeatureReq request) {
+    private CompletionStage<Void> handleFeature(Messages.UnlockFeatureReq request) {
         Messages.GameplayMsg event = event(
             request.playerId(),
             request.idempotencyKey(),
@@ -199,7 +200,7 @@ public final class GameQuestSession implements ZLinkSession {
             context.client().reply(new Messages.UnlockFeatureRes(event.eventId())).submit());
     }
 
-    private java.util.concurrent.CompletionStage<Void> process(
+    private CompletionStage<Void> process(
         Messages.GameplayMsg event) {
         return channels.sendToSpot(event.playerId(), event)
             .instanceSpot(SampleNames.PlayerQuestSpotType)

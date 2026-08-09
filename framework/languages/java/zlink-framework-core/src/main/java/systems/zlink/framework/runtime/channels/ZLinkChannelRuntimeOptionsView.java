@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.channels;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
 
 import systems.zlink.framework.channels.ZLinkClientServerChannelRuntimeOptions;
 import systems.zlink.framework.channels.ZLinkRouteMeshChannelRuntimeOptions;
@@ -41,7 +42,7 @@ final class DefaultChannelSocketRuntimeOptions implements ZLinkSocketRuntimeOpti
     @Override
     public void maxMessageSize(long value) {
         if (value < 0) {
-            throw new systems.zlink.framework.errors.ZLinkConfigurationException(
+            throw new ZLinkConfigurationException(
                 "MaxMessageSize must be zero or a positive byte count.");
         }
         host.serverSocket(channelName).setMaxMessageSize(value);

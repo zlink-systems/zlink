@@ -1,5 +1,10 @@
 package systems.zlink.e2e.kotlin.observabilityops.a5.server
 
+
+import org.springframework.beans.factory.ObjectProvider
+import java.net.URI
+import systems.zlink.framework.channels.ZLinkRouteClient
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.boot.WebApplicationType
 import org.springframework.boot.autoconfigure.SpringBootApplication
@@ -26,8 +31,8 @@ class A5Application {
     fun httpServer(
         json: ObjectMapper,
         runtimeOptions: ZLinkChannelRuntimeOptions,
-        runtime: org.springframework.beans.factory.ObjectProvider<systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime>,
-        routes: systems.zlink.framework.channels.ZLinkRouteClient,
+        runtime: ObjectProvider<ZLinkFrameworkRuntime>,
+        routes: ZLinkRouteClient,
         evidence: FlowEvidence,
     ) = A5HttpServer(json, runtimeOptions, runtime, routes, evidence)
 
@@ -48,7 +53,7 @@ class A5Application {
             options.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
-            val endpoint = java.net.URI.create(Env.get("e2e.route.endpoint"))
+            val endpoint = URI.create(Env.get("e2e.route.endpoint"))
             val channel = options.addClientServerChannel(Contracts.CHANNEL)
             channel
                 .server()

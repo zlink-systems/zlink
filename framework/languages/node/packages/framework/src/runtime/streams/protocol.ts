@@ -210,50 +210,6 @@ function publicStreamMetadata(metadata: ReadonlyMap<string, string>): ReadonlyMa
   return visible;
 }
 
-export function tryGetStreamFrameHeader(header: unknown): ZLinkStreamFrameHeader | undefined {
-  if (typeof header !== 'object' || header === null) {
-    return undefined;
-  }
-  const value = header as {
-    kind?: unknown;
-    codec?: unknown;
-    flags?: unknown;
-    requestSeq?: unknown;
-    name?: unknown;
-    metadata?: { values?: ReadonlyMap<string, string> };
-    correlationId?: unknown;
-    flowId?: unknown;
-    flowOrigin?: unknown;
-  };
-  if (
-    typeof value.kind !== 'number'
-    || typeof value.codec !== 'number'
-    || typeof value.flags !== 'number'
-    || typeof value.name !== 'string'
-  ) {
-    return undefined;
-  }
-  return {
-    kind: value.kind as ZLinkStreamMessageKind,
-    codec: value.codec as ZLinkStreamCodec,
-    flags: value.flags as ZLinkStreamHeaderFlags,
-    requestSeq: typeof value.requestSeq === 'bigint' ? value.requestSeq : undefined,
-    name: value.name,
-    metadata: value.metadata?.values ?? new Map(),
-    correlationId: typeof value.correlationId === 'string' ? value.correlationId : undefined,
-    flowId: typeof value.flowId === 'string' ? value.flowId : undefined,
-    flowOrigin: isFlowOrigin(value.flowOrigin) ? value.flowOrigin : undefined
-  };
-}
-
-export function requireStreamFrameHeader(header: unknown): ZLinkStreamFrameHeader {
-  const parsed = tryGetStreamFrameHeader(header);
-  if (parsed === undefined) {
-    throw new Error('Stream relay requires a decoded stream header.');
-  }
-  return parsed;
-}
-
 export function createStreamReplyHeader(
   requestHeader: ZLinkStreamFrameHeader,
   kind: ZLinkStreamReplyMessageKind,
@@ -283,10 +239,6 @@ function encodeFlowOrigin(origin: ZLinkFlowOrigin | undefined): number | undefin
 
 function decodeFlowOrigin(origin: number | undefined): ZLinkFlowOrigin | undefined {
   return origin === undefined ? undefined : ({ 1: 'Inbound', 2: 'Timer', 3: 'Application', 4: 'Lifecycle' } as const)[origin];
-}
-
-function isFlowOrigin(origin: unknown): origin is ZLinkFlowOrigin {
-  return origin === 'Inbound' || origin === 'Timer' || origin === 'Application' || origin === 'Lifecycle';
 }
 
 export function messageToBytes(message: Message): Uint8Array {

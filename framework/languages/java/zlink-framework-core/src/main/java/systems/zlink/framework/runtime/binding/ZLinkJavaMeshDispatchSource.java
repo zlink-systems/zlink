@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.binding;
+import java.util.Set;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -34,7 +35,7 @@ final class ZLinkJavaMeshDispatchSource implements ZLinkJavaMeshDispatchPump.Sou
     private static final int BYTE_CAPACITY = 1024 * 1024;
 
     private final MeshNode node;
-    private final java.util.Set<PendingClaim> pendingClaims =
+    private final Set<PendingClaim> pendingClaims =
         ConcurrentHashMap.newKeySet();
     private final AtomicBoolean closed = new AtomicBoolean();
     private ReadyBatch readyBatch = ReadyBatch.create(READY_CAPACITY);

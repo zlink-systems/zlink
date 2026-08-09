@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.host;
+import systems.zlink.framework.actors.ZLinkActorCreateResult;
 
 import systems.zlink.framework.spots.SpotHandleResolver;
 
@@ -295,12 +296,12 @@ final class NodesAndServicesTest {
 
         try (ZLinkFrameworkRuntime runtime =
                  ZLinkFrameworkRuntimeTestAccess.start(options, new ZLinkJavaBackendAdapterFactory())) {
-            systems.zlink.framework.actors.ZLinkActorCreateResult result = runtime.actorManager()
+            ZLinkActorCreateResult result = runtime.actorManager()
                 .create("player-1", "player")
                 .submit()
                 .toCompletableFuture()
                 .join();
-            ActorRef actor = ((systems.zlink.framework.actors.ZLinkActorCreateResult.Created) result)
+            ActorRef actor = ((ZLinkActorCreateResult.Created) result)
                 .actor();
 
             assertEquals("player-1", actor.actorId());
@@ -310,7 +311,7 @@ final class NodesAndServicesTest {
                     .submit()
                     .toCompletableFuture()
                     .join()
-                    instanceof systems.zlink.framework.actors.ZLinkActorCreateResult.Existing);
+                    instanceof ZLinkActorCreateResult.Existing);
         }
     }
 
@@ -320,7 +321,7 @@ final class NodesAndServicesTest {
 
         try (ZLinkFrameworkRuntime runtime =
                  ZLinkFrameworkRuntimeTestAccess.start(options, new ZLinkJavaBackendAdapterFactory())) {
-            ActorRef first = ((systems.zlink.framework.actors.ZLinkActorCreateResult.Created)
+            ActorRef first = ((ZLinkActorCreateResult.Created)
                 runtime.actorManager().create("player-destroy", "player")
                     .submit().toCompletableFuture().join()).actor();
 
@@ -329,7 +330,7 @@ final class NodesAndServicesTest {
             assertFalse(runtime.actorManager().destroy(first)
                 .toCompletableFuture().join());
 
-            ActorRef second = ((systems.zlink.framework.actors.ZLinkActorCreateResult.Created)
+            ActorRef second = ((ZLinkActorCreateResult.Created)
                 runtime.actorManager().create("player-destroy", "player")
                     .submit().toCompletableFuture().join()).actor();
             assertNotEquals(first.objectGeneration(), second.objectGeneration());
@@ -366,11 +367,11 @@ final class NodesAndServicesTest {
                  ZLinkFrameworkRuntimeTestAccess.start(
                      options,
                      new ZLinkJavaBackendAdapterFactory())) {
-            CompletionStage<systems.zlink.framework.actors.ZLinkActorCreateResult>
+            CompletionStage<ZLinkActorCreateResult>
                 first = runtime.actorManager().getOrCreate(
                     "player-serial",
                     "blocking-player").submit();
-            CompletionStage<systems.zlink.framework.actors.ZLinkActorCreateResult>
+            CompletionStage<ZLinkActorCreateResult>
                 second = runtime.actorManager().getOrCreate(
                     "player-serial",
                     "blocking-player").submit();
@@ -469,7 +470,7 @@ final class NodesAndServicesTest {
         }
         try {
             return "completed:" + future.getNow(null);
-        } catch (java.util.concurrent.CompletionException ex) {
+        } catch (CompletionException ex) {
             return "failed:" + ex.getCause();
         }
     }

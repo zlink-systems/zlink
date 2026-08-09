@@ -1,4 +1,6 @@
 package systems.zlink.e2e.spotservice.shared;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
@@ -11,10 +13,10 @@ public final class NoopIngressHandler implements ZLinkRequestHandler<Contracts.S
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<String> handle(
+    public CompletionStage<String> handle(
         Contracts.StateReq request,
         ZLinkMessageContext context) {
         state.record("IngressReq", "channel", request.op());
-        return java.util.concurrent.CompletableFuture.completedFuture(request.op());
+        return CompletableFuture.completedFuture(request.op());
     }
 }

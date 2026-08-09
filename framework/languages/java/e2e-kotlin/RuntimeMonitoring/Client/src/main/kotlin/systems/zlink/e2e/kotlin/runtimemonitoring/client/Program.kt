@@ -1,9 +1,11 @@
 package systems.zlink.e2e.kotlin.runtimemonitoring.client
 
+
+import systems.zlink.e2e.kotlin.runtimemonitoring.Env
 import com.fasterxml.jackson.databind.ObjectMapper
 
 fun main(args: Array<String>) {
-    systems.zlink.e2e.kotlin.runtimemonitoring.Env.configure(args)
+    Env.configure(args)
     try {
         ClientScenario(ObjectMapper()).run()
     } catch (blocked: ScenarioBlocker) {

@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.messaging;
 
+import org.junit.jupiter.api.Assertions;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -36,7 +37,7 @@ final class ZLinkApplicationMetadataTest {
 
         assertEquals(0, first.length);
         assertEquals(0, second.length);
-        org.junit.jupiter.api.Assertions.assertSame(first, second);
+        Assertions.assertSame(first, second);
     }
 
     @Test

@@ -1,4 +1,8 @@
-package systems.zlink.e2e.registrationcodec.main.Handlers;
+package Handlers;
+import systems.zlink.e2e.registrationcodec.main.Handlers;
+import systems.zlink.e2e.registrationcodec.main.Infrastructure;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import com.google.protobuf.StringValue;
 import systems.zlink.e2e.registrationcodec.main.Infrastructure.EvidenceStore;
@@ -14,11 +18,11 @@ public final class ProtobufSendHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> handle(
+    public CompletionStage<Void> handle(
         StringValue message,
         ZLinkMessageContext context) {
         state.record("Send", "ProtobufEcho", message.getValue());
         state.record("ContentType", "ProtobufEcho", context.contentType().orElse(""));
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 }

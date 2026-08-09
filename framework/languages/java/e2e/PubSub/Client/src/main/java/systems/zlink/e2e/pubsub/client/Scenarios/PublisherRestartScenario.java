@@ -1,5 +1,7 @@
-package systems.zlink.e2e.pubsub.client.Scenarios;
+package Scenarios;
 
+import systems.zlink.e2e.pubsub.client.Scenarios;
+import systems.zlink.e2e.pubsub.client.Support;
 import java.util.Set;
 import systems.zlink.e2e.pubsub.client.Support.ScenarioAssert;
 import systems.zlink.e2e.pubsub.client.Support.ScenarioContext;

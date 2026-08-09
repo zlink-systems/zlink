@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.internal.locations;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.concurrent.CompletionException;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -63,7 +67,7 @@ final class ZLinkAggregateRelocationCoordinatorTest {
             new ZLinkAggregateRelocationCoordinator(authority, relocation);
 
         var failure = assertThrows(
-            java.util.concurrent.CompletionException.class,
+            CompletionException.class,
             () -> coordinator.prepare(request(), NEVER)
                 .toCompletableFuture().join());
         assertInstanceOf(
@@ -387,7 +391,7 @@ final class ZLinkAggregateRelocationCoordinatorTest {
                         value.objectGeneration(),
                         value.authorityOwnerGeneration()))
                 .toList();
-        expected = new java.util.ArrayList<>(expected);
+        expected = new ArrayList<>(expected);
         var first = expected.getFirst();
         expected.set(0, new ZLinkAggregateRelocationCoordinator
             .ExpectedParticipant(
@@ -397,7 +401,7 @@ final class ZLinkAggregateRelocationCoordinatorTest {
 
         var exact = expected;
         var failure = assertThrows(
-            java.util.concurrent.CompletionException.class,
+            CompletionException.class,
             () -> coordinator.readPublishedAggregate(
                     exact,
                     published.fence(),
@@ -468,7 +472,7 @@ final class ZLinkAggregateRelocationCoordinatorTest {
 
         relocation.corruptChunk();
         var failure = assertThrows(
-            java.util.concurrent.CompletionException.class,
+            CompletionException.class,
             () -> ZLinkRelocationTreeStore.read(
                     relocation,
                     stored.root().reference(),
@@ -618,7 +622,7 @@ final class ZLinkAggregateRelocationCoordinatorTest {
                 try {
                     var match = LOGICAL_HEX.matcher(Files.readString(fixture));
                     if (match.find()) return HexFormat.of().parseHex(match.group(1));
-                } catch (java.io.IOException failure) {
+                } catch (IOException failure) {
                     throw new IllegalStateException(failure);
                 }
             }
@@ -874,7 +878,7 @@ final class ZLinkAggregateRelocationCoordinatorTest {
                     == expected)
                 .map(value -> new ZLinkAuthorityEntry(
                     value.getKey(), value.getValue()))
-                .sorted(java.util.Comparator.comparing(
+                .sorted(Comparator.comparing(
                     ZLinkAuthorityEntry::key))
                 .toList();
             return CompletableFuture.completedFuture(

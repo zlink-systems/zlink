@@ -1,4 +1,10 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.Objects;
+import java.util.logging.Logger;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 
 import java.time.Duration;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
@@ -76,10 +82,10 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         this.stream = stream;
         this.sessionRid = sessionRid;
         this.ref = ref;
-        this.meshName = java.util.Objects.requireNonNull(meshName, "meshName");
+        this.meshName = Objects.requireNonNull(meshName, "meshName");
         this.managedActor = managedActor;
         this.actors = actors;
-        this.serializer = java.util.Objects.requireNonNull(serializer, "serializer");
+        this.serializer = Objects.requireNonNull(serializer, "serializer");
         this.bindingToken = bindingToken;
         this.routeReady = routeReady == null ? ignored -> true : routeReady;
         this.localActorDispatcher = localActorDispatcher;
@@ -125,7 +131,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
 
     CompletionStage<Void> rebindNativeActorRoute(
         ZLinkBackendActorRef targetActor,
-        java.time.Duration timeout) {
+        Duration timeout) {
         if (!ref.actorId().equals(targetActor.actorId())
             || ref.generation() != targetActor.generation()) {
             return CompletableFuture.failedFuture(
@@ -161,7 +167,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         String stage,
         ZLinkBackendActorRef targetActor) {
         if ("1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"))) {
-            java.util.logging.Logger.getLogger(
+            Logger.getLogger(
                     ZLinkBoundActor.class.getName())
                 .warning("[zlink-java-stream-trace] relocation " + stage
                     + " actor=" + targetActor.actorId()
@@ -212,15 +218,15 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
 
     private void traceRelay(ZLinkStreamHeader header) {
         if (flow == null
-            || !flow.enabled(systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome.SENT)) {
+            || !flow.enabled(ZLinkMessageFlowOutcome.SENT)) {
             return;
         }
-        flow.trace(new systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent(
-            systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome.SENT,
-            systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface.SPOT_ACTOR,
+        flow.trace(new ZLinkMessageFlowEvent(
+            ZLinkMessageFlowOutcome.SENT,
+            ZLinkDispatchErrorSurface.SPOT_ACTOR,
             header.requestSequence().isPresent()
-                ? systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind.ACTOR_REQUEST
-                : systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind.ACTOR_SEND,
+                ? ZLinkDispatchMessageKind.ACTOR_REQUEST
+                : ZLinkDispatchMessageKind.ACTOR_SEND,
             header.packetName(),
             null,
             null,
@@ -320,7 +326,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
     }
 
     CompletionStage<Void> notifyDisconnected(Duration timeout) {
-        java.util.Objects.requireNonNull(timeout, "timeout");
+        Objects.requireNonNull(timeout, "timeout");
         CompletableFuture<Void> result;
         boolean bindingCurrent;
         synchronized (this) {

@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.io.IOException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -87,7 +88,7 @@ final class ActorPacketFramesTest {
                 var json = new ObjectMapper().readTree(decoded.body());
                 assertEquals("IllegalStateException", json.get("code").asText());
                 assertEquals("handler failed", json.get("message").asText());
-            } catch (java.io.IOException failure) {
+            } catch (IOException failure) {
                 throw new AssertionError("error payload is not JSON", failure);
             }
         }
@@ -114,7 +115,7 @@ final class ActorPacketFramesTest {
                 var json = new ObjectMapper().readTree(decoded.body());
                 assertEquals("NotFound", json.get("code").asText());
                 assertEquals("actor was not found", json.get("message").asText());
-            } catch (java.io.IOException failure) {
+            } catch (IOException failure) {
                 throw new AssertionError("error payload is not JSON", failure);
             }
         }

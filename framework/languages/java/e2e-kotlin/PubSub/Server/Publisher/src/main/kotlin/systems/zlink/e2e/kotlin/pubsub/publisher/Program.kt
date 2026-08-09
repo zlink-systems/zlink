@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.pubsub.publisher
 
+
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.boot.WebApplicationType
 import org.springframework.boot.autoconfigure.SpringBootApplication
@@ -41,7 +43,7 @@ class PublisherApplication {
         fanout: ZLinkFanoutClient,
         json: ObjectMapper,
         application: ConfigurableApplicationContext,
-        runtime: ObjectProvider<systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime>,
+        runtime: ObjectProvider<ZLinkFrameworkRuntime>,
     ): PublisherEndpoints =
         PublisherEndpoints(fanout, json, options.httpEndpoint, options.channelName, application, runtime)
 

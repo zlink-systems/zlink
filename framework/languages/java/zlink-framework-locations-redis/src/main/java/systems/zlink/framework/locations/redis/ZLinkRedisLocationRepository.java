@@ -1,4 +1,17 @@
 package systems.zlink.framework.locations.redis;
+import java.util.Map;
+import systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationIdentity;
+import systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationTerminal;
+import systems.zlink.framework.runtime.internal.locations.ZLinkCreationTerminalReadResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectRejectResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReadResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReleaseResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityAbortResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityFence;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReservationRequest;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReserveResult;
 
 import java.time.Duration;
 import java.util.List;
@@ -74,7 +87,7 @@ final class ZLinkRedisLocationRepository implements
     @Override
     public CompletionStage<ZLinkLocationWriteStatus> removeMeshNode(
         ZLinkMeshNodeDescriptorKey key,
-        systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken owner) {
+        ZLinkLocationOwnerToken owner) {
         return scripts.removeMeshNode(
             Objects.requireNonNull(key, "key"),
             Objects.requireNonNull(owner, "owner"));
@@ -168,14 +181,14 @@ final class ZLinkRedisLocationRepository implements
         return authority.readMembershipMutation(authorityKey);
     }
 
-    CompletionStage<java.util.Map<String, String>>
+    CompletionStage<Map<String, String>>
         readMeshNodeHashFields(
             ZLinkMeshNodeDescriptorKey key) {
         return scripts.readMeshNodeHashFields(key);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimResult>
+    public CompletionStage<ZLinkOwnerLeaseClaimResult>
         claimOwnerLease(
         String ownerId,
         Duration leaseTtl) {
@@ -183,23 +196,23 @@ final class ZLinkRedisLocationRepository implements
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReadResult>
+    public CompletionStage<ZLinkOwnerLeaseReadResult>
         readOwnerLease(String ownerId) {
         return scripts.readOwnerLeaseAsync(ownerId);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewResult>
+    public CompletionStage<ZLinkOwnerLeaseRenewResult>
         renewOwnerLease(
-            systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken token,
+            ZLinkLocationOwnerToken token,
             Duration leaseTtl) {
         return scripts.renewOwnerLeaseAsync(token, leaseTtl);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReleaseResult>
+    public CompletionStage<ZLinkOwnerLeaseReleaseResult>
         releaseOwnerLease(
-            systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken token) {
+            ZLinkLocationOwnerToken token) {
         return scripts.releaseOwnerLeaseAsync(token);
     }
 
@@ -259,7 +272,7 @@ final class ZLinkRedisLocationRepository implements
     public CompletionStage<ZLinkObjectCommitResult> commit(
         ZLinkObjectReservation reservation,
         byte[] readyPayload,
-        systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationTerminal terminal,
+        ZLinkCreationOperationTerminal terminal,
         ZLinkStoreCancellation cancellation) {
         return authority.commit(
             reservation,
@@ -269,9 +282,9 @@ final class ZLinkRedisLocationRepository implements
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkObjectRejectResult> reject(
+    public CompletionStage<ZLinkObjectRejectResult> reject(
         ZLinkObjectReservation reservation,
-        systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationTerminal terminal,
+        ZLinkCreationOperationTerminal terminal,
         ZLinkStoreCancellation cancellation) {
         return authority.reject(reservation, terminal, cancellation);
     }
@@ -286,31 +299,31 @@ final class ZLinkRedisLocationRepository implements
     @Override
     public CompletionStage<ZLinkObjectAbortResult> abort(
         ZLinkObjectReservation reservation,
-        systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationTerminal terminal,
+        ZLinkCreationOperationTerminal terminal,
         ZLinkStoreCancellation cancellation) {
         return authority.abort(reservation, terminal, cancellation);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkCreationTerminalReadResult>
+    public CompletionStage<ZLinkCreationTerminalReadResult>
         readCreationTerminal(
-            systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationIdentity operation,
+            ZLinkCreationOperationIdentity operation,
             ZLinkStoreCancellation cancellation) {
         return authority.readCreationTerminal(operation, cancellation);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReserveResult>
+    public CompletionStage<ZLinkRelocationCapacityReserveResult>
         reserveRelocationCapacity(
-            systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReservationRequest request,
+            ZLinkRelocationCapacityReservationRequest request,
             ZLinkStoreCancellation cancellation) {
         return authority.reserveRelocationCapacity(request, cancellation);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityAbortResult>
+    public CompletionStage<ZLinkRelocationCapacityAbortResult>
         abortRelocationCapacity(
-            systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityFence fence,
+            ZLinkRelocationCapacityFence fence,
             ZLinkStoreCancellation cancellation) {
         return authority.abortRelocationCapacity(fence, cancellation);
     }

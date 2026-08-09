@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
@@ -46,8 +47,8 @@ final class ZLinkSpotDirectOutbound {
             new ZLinkOneWayCalls((backend, key) -> (submission, cleanup) -> {
                 try {
                     return submission.get()
-                        ? java.util.concurrent.CompletableFuture.completedFuture(null)
-                        : java.util.concurrent.CompletableFuture.failedFuture(
+                        ? CompletableFuture.completedFuture(null)
+                        : CompletableFuture.failedFuture(
                             new IllegalStateException(
                                 "one-way submission was not admitted"));
                 } finally {
@@ -330,7 +331,7 @@ final class ZLinkSpotDirectOutbound {
 }
 
 final class ZLinkSpotDirectSendCall implements ZLinkSendCall {
-    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
+    private final AtomicBoolean submitGate;
     private final ZLinkSpotDirectOutbound outbound;
     private final ZLinkBackendSpot spot;
     private final RoutingId targetNodeRid;
@@ -393,7 +394,7 @@ final class ZLinkSpotDirectSendCall implements ZLinkSendCall {
         String contentType,
         ZLinkApplicationMetadata metadata) {
         this(outbound, spot, targetNodeRid, spotId, spotGeneration, payload, packetName,
-            contentType, metadata, new java.util.concurrent.atomic.AtomicBoolean());
+            contentType, metadata, new AtomicBoolean());
     }
 
     private ZLinkSpotDirectSendCall(
@@ -406,7 +407,7 @@ final class ZLinkSpotDirectSendCall implements ZLinkSendCall {
         Optional<String> packetName,
         String contentType,
         ZLinkApplicationMetadata metadata,
-        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        AtomicBoolean submitGate) {
         this.submitGate = submitGate;
         this.outbound = outbound;
         this.spot = spot;
@@ -483,7 +484,7 @@ final class ZLinkSpotDirectSendCall implements ZLinkSendCall {
 }
 
 final class ZLinkSpotDirectRequestCall implements ZLinkRequestCall {
-    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
+    private final AtomicBoolean submitGate;
     private final ZLinkSpotDirectOutbound outbound;
     private final ZLinkBackendSpot spot;
     private final RoutingId targetNodeRid;
@@ -552,7 +553,7 @@ final class ZLinkSpotDirectRequestCall implements ZLinkRequestCall {
         Duration timeout,
         ZLinkApplicationMetadata metadata) {
         this(outbound, spot, targetNodeRid, spotId, spotGeneration, payload, packetName,
-            contentType, timeout, metadata, new java.util.concurrent.atomic.AtomicBoolean());
+            contentType, timeout, metadata, new AtomicBoolean());
     }
 
     private ZLinkSpotDirectRequestCall(
@@ -566,7 +567,7 @@ final class ZLinkSpotDirectRequestCall implements ZLinkRequestCall {
         String contentType,
         Duration timeout,
         ZLinkApplicationMetadata metadata,
-        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        AtomicBoolean submitGate) {
         this.submitGate = submitGate;
         this.outbound = outbound;
         this.spot = spot;
@@ -652,7 +653,7 @@ final class ZLinkSpotDirectRequestCall implements ZLinkRequestCall {
         }
         systems.zlink.framework.runtime.internal.handlers
             .ZLinkSuspendInvocationContext.rejectSameSpotWait(spotId);
-        return systems.zlink.framework.execution.ZLinkAsyncSerialQueue.manageCurrent(
+        return ZLinkAsyncSerialQueue.manageCurrent(
             outbound.submitRequest(
             spot,
             targetNodeRid,
@@ -670,14 +671,14 @@ final class ZLinkSpotDirectRequestCall implements ZLinkRequestCall {
     public <TReply> CompletionStage<TReply> yield(Class<TReply> replyType) {
         systems.zlink.framework.runtime.internal.handlers
             .ZLinkSuspendInvocationContext.requireYieldAllowed("Spot request");
-        return systems.zlink.framework.execution.ZLinkAsyncSerialQueue
+        return ZLinkAsyncSerialQueue
             .yieldCurrent(submit(replyType));
     }
 
 }
 
 final class ZLinkSpotDirectPublishCall implements ZLinkPublishCall {
-    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
+    private final AtomicBoolean submitGate;
     private final ZLinkSpotDirectOutbound outbound;
     private final ZLinkBackendSpot spot;
     private final String channelName;
@@ -734,7 +735,7 @@ final class ZLinkSpotDirectPublishCall implements ZLinkPublishCall {
         String contentType,
         ZLinkApplicationMetadata metadata) {
         this(outbound, spot, channelName, topic, payload, packetName, contentType, metadata,
-            new java.util.concurrent.atomic.AtomicBoolean());
+            new AtomicBoolean());
     }
 
     private ZLinkSpotDirectPublishCall(
@@ -746,7 +747,7 @@ final class ZLinkSpotDirectPublishCall implements ZLinkPublishCall {
         Optional<String> packetName,
         String contentType,
         ZLinkApplicationMetadata metadata,
-        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        AtomicBoolean submitGate) {
         this.submitGate = submitGate;
         this.outbound = outbound;
         this.spot = spot;

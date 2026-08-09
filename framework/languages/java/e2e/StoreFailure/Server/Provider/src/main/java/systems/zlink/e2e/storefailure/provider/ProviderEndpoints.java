@@ -1,4 +1,5 @@
 package systems.zlink.e2e.storefailure.provider;
+import java.util.Map;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -51,7 +52,7 @@ public final class ProviderEndpoints implements SmartLifecycle {
                 HttpSupport.writeJson(exchange, json, c4Probe(request));
             });
             server.createContext("/shutdown", exchange -> {
-                HttpSupport.writeJson(exchange, json, java.util.Map.of("status", "stopping"));
+                HttpSupport.writeJson(exchange, json, Map.of("status", "stopping"));
                 HttpSupport.shutdownAsync();
             });
             server.start();
@@ -61,7 +62,7 @@ public final class ProviderEndpoints implements SmartLifecycle {
         }
     }
 
-    private java.util.Map<String, Object> c4Probe(Contracts.C4ProbeReq request) {
+    private Map<String, Object> c4Probe(Contracts.C4ProbeReq request) {
         if (!options.c4Roles()) {
             throw new IllegalStateException("C4 roles are not configured");
         }
@@ -77,7 +78,7 @@ public final class ProviderEndpoints implements SmartLifecycle {
                 .toCompletableFuture()
                 .join();
             evidence.record("c4-fanout-published", marker);
-            return java.util.Map.of(
+            return Map.of(
                 "fanout", "published",
                 "marker", marker);
         } catch (RuntimeException error) {

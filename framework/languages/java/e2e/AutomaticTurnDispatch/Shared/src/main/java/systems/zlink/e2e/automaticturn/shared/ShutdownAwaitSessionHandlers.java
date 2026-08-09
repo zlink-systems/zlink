@@ -157,16 +157,16 @@ public final class ShutdownAwaitSessionHandlers {
         int remainingAttempts) {
         return spots.resolveSpotHandle(spotRid).thenCompose(handle -> {
             if (handle.isPresent()) {
-                return java.util.concurrent.CompletableFuture.completedFuture(
+                return CompletableFuture.completedFuture(
                     handle.get().spotId());
             }
             if (remainingAttempts <= 1) {
-                return java.util.concurrent.CompletableFuture.failedFuture(
+                return CompletableFuture.failedFuture(
                     new IllegalStateException("spot location was not published: " + spotRid));
             }
-            return java.util.concurrent.CompletableFuture.runAsync(
+            return CompletableFuture.runAsync(
                     () -> { },
-                    java.util.concurrent.CompletableFuture.delayedExecutor(100, TimeUnit.MILLISECONDS))
+                    CompletableFuture.delayedExecutor(100, TimeUnit.MILLISECONDS))
                 .thenCompose(ignored -> resolveSpotId(spots, spotRid, remainingAttempts - 1));
         });
     }

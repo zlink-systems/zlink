@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import systems.zlink.framework.locationprovider.ZLinkRelocationStore;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -274,7 +275,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
 
     private static DefaultZLinkFrameworkOptions options(
         ZLinkInMemoryLocationStore locations,
-        systems.zlink.framework.locationprovider.ZLinkRelocationStore relocations) {
+        ZLinkRelocationStore relocations) {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(locations);
         options.addRelocationStore(relocations);

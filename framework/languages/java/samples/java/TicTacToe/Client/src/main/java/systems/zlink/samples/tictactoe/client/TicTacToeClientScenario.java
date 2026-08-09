@@ -244,7 +244,7 @@ public final class TicTacToeClientScenario {
                 + milestone.actorId()
                 + " wins=" + milestone.wins());
 
-            java.util.concurrent.CompletableFuture.allOf(
+            CompletableFuture.allOf(
                 host.send(new LeaveGameReq(game.roomId()))
                     .submit().toCompletableFuture(),
                 guest.send(new LeaveGameReq(game.roomId()))

@@ -244,9 +244,10 @@ actor_transfer_coordinator_t::take_backlog (const std::string &actor_key)
 
 void actor_transfer_coordinator_t::activate_message_follow (
   const std::string &actor_key,
-  std::uint64_t old_generation,
+  runtime::protocol::actor_route_fence_t source_fence,
   actor_ref_t target_actor,
   spot_route_t target_route,
+  runtime::protocol::actor_route_fence_t target_fence,
   std::chrono::steady_clock::time_point remove_at,
   std::string transfer_id)
 {
@@ -255,9 +256,22 @@ void actor_transfer_coordinator_t::activate_message_follow (
     // target and restarts the bounded Message Follow duration.
     _message_follow_routes.insert_or_assign (
       actor_key,
-      message_follow_route_t{old_generation, std::move (target_actor),
-                             std::move (target_route), remove_at,
+      message_follow_route_t{std::move (source_fence),
+                             std::move (target_actor),
+                             std::move (target_route),
+                             std::move (target_fence), remove_at,
                              std::move (transfer_id), 0, 0, {}});
+}
+
+bool actor_transfer_coordinator_t::matches_message_follow_source (
+  const std::string &actor_key,
+  const runtime::protocol::actor_route_fence_t &source_fence) const
+{
+    std::lock_guard lock (_mutex);
+    const auto found = _message_follow_routes.find (actor_key);
+    return found != _message_follow_routes.end ()
+           && found->second.remove_at > std::chrono::steady_clock::now ()
+           && found->second.source_fence == source_fence;
 }
 
 bool actor_transfer_coordinator_t::can_follow_stale_generation (
@@ -267,7 +281,7 @@ bool actor_transfer_coordinator_t::can_follow_stale_generation (
     std::lock_guard lock (_mutex);
     const auto found = _message_follow_routes.find (actor_key);
     return found != _message_follow_routes.end ()
-           && generation <= found->second.old_generation;
+           && generation <= found->second.source_fence.object_generation;
 }
 
 std::optional<actor_message_follow_target_t>
@@ -277,12 +291,13 @@ actor_transfer_coordinator_t::message_follow_target (const std::string &actor_ke
     std::lock_guard lock (_mutex);
     const auto found = _message_follow_routes.find (actor_key);
     if (found == _message_follow_routes.end ()
-        || found->second.old_generation != generation
+        || found->second.source_fence.object_generation != generation
         || found->second.remove_at <= std::chrono::steady_clock::now ()) {
         return std::nullopt;
     }
     return actor_message_follow_target_t{
-      found->second.target_actor, found->second.target_route};
+      found->second.target_actor, found->second.target_route,
+      found->second.source_fence, found->second.target_fence};
 }
 
 result_t<std::optional<actor_message_follow_target_t>>
@@ -290,7 +305,8 @@ actor_transfer_coordinator_t::try_acquire_message_follow (
   const std::string &actor_key,
   std::uint64_t generation,
   std::size_t payload_bytes,
-  std::size_t hop_count)
+  std::size_t hop_count,
+  const runtime::protocol::actor_route_fence_t *source_fence)
 {
     constexpr std::size_t max_messages =
       zlink::framework::runtime::protocol::messageFollowMessages;
@@ -304,10 +320,16 @@ actor_transfer_coordinator_t::try_acquire_message_follow (
         return result_t<std::optional<actor_message_follow_target_t>>::success (
           std::nullopt);
     }
-    if (found->second.old_generation != generation) {
+    if (found->second.source_fence.object_generation != generation) {
         return result_t<std::optional<actor_message_follow_target_t>>::failure (
           framework_error_kind_t::invalid_operation,
           "Actor Message Follow generation does not match the committed source");
+    }
+    if (source_fence != nullptr
+        && found->second.source_fence != *source_fence) {
+        return result_t<std::optional<actor_message_follow_target_t>>::failure (
+          framework_error_kind_t::unavailable,
+          "Actor Message Follow source fence does not match the committed route");
     }
     if (found->second.remove_at <= std::chrono::steady_clock::now ()) {
         return result_t<std::optional<actor_message_follow_target_t>>::failure (
@@ -330,7 +352,8 @@ actor_transfer_coordinator_t::try_acquire_message_follow (
     found->second.in_flight_bytes += payload_bytes;
     return result_t<std::optional<actor_message_follow_target_t>>::success (
       actor_message_follow_target_t{
-        found->second.target_actor, found->second.target_route});
+        found->second.target_actor, found->second.target_route,
+        found->second.source_fence, found->second.target_fence});
 }
 
 void actor_transfer_coordinator_t::release_message_follow (
@@ -341,7 +364,7 @@ void actor_transfer_coordinator_t::release_message_follow (
     std::lock_guard lock (_mutex);
     const auto found = _message_follow_routes.find (actor_key);
     if (found == _message_follow_routes.end ()
-        || found->second.old_generation != generation)
+        || found->second.source_fence.object_generation != generation)
         return;
     if (found->second.in_flight_messages != 0)
         --found->second.in_flight_messages;
@@ -361,7 +384,7 @@ bool actor_transfer_coordinator_t::mark_message_follow_notified (
     std::lock_guard lock (_mutex);
     const auto found = _message_follow_routes.find (actor_key);
     if (found == _message_follow_routes.end ()
-        || found->second.old_generation != generation
+        || found->second.source_fence.object_generation != generation
         || found->second.remove_at <= std::chrono::steady_clock::now ())
         return false;
     return found->second.notified_sources.insert (
@@ -379,7 +402,8 @@ actor_transfer_coordinator_t::remove_expired_message_follow (
          found != _message_follow_routes.end ();) {
         if (found->second.remove_at <= now) {
             removed.push_back (
-              removed_actor_message_follow_t{found->first, found->second.old_generation,
+              removed_actor_message_follow_t{
+                found->first, found->second.source_fence.object_generation,
                                               found->second.transfer_id});
             found = _message_follow_routes.erase (found);
         } else {

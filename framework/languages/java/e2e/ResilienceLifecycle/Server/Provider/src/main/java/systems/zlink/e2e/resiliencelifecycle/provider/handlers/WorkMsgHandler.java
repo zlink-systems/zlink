@@ -1,4 +1,6 @@
 package systems.zlink.e2e.resiliencelifecycle.provider.handlers;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.e2e.resiliencelifecycle.shared.Contracts;
 import systems.zlink.e2e.resiliencelifecycle.provider.infrastructure.ScenarioState;
@@ -15,10 +17,10 @@ public final class WorkMsgHandler implements ZLinkSendHandler<Contracts.WorkMsg>
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> handle(
+    public CompletionStage<Void> handle(
         Contracts.WorkMsg message,
         ZLinkMessageContext context) {
         state.record("WorkMsg", message.value());
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 }

@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Arrays;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -47,13 +50,13 @@ class DefaultZLinkWorkerCallTest {
         try (var ignored = systems.zlink.framework.runtime.internal.handlers
                  .ZLinkSuspendInvocationContext.enterApplicationExecution(execution)) {
             var failure = assertThrows(
-                systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                ZLinkFrameworkException.class,
                 () -> new DefaultZLinkWorkerCall<>(pool, cancellation -> {
                     executions.incrementAndGet();
                     return 1;
                 }).yield());
             assertEquals(
-                systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                ZLinkFrameworkErrorKind
                     .NOT_CONFIGURED,
                 failure.kind());
         }
@@ -148,12 +151,12 @@ class DefaultZLinkWorkerCallTest {
     @Test
     void workerSurfaceSeparatesCpuAndIoWithoutLegacyEntryPoint() throws Exception {
         assertEquals(1, ZLinkSpotContext.class.getMethods().length > 0
-            ? java.util.Arrays.stream(ZLinkSpotContext.class.getMethods())
+            ? Arrays.stream(ZLinkSpotContext.class.getMethods())
                 .filter(method -> method.getName().equals("runCpuWorker")).count()
             : 0);
-        assertEquals(1, java.util.Arrays.stream(ZLinkSpotContext.class.getMethods())
+        assertEquals(1, Arrays.stream(ZLinkSpotContext.class.getMethods())
             .filter(method -> method.getName().equals("runIoWorker")).count());
-        assertEquals(0, java.util.Arrays.stream(ZLinkSpotContext.class.getMethods())
+        assertEquals(0, Arrays.stream(ZLinkSpotContext.class.getMethods())
             .filter(method -> method.getName().equals("runWorker")).count());
         assertEquals(
             ZLinkWorkerCancellation.class,

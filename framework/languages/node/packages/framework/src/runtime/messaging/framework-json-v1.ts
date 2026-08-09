@@ -13,37 +13,45 @@ export function stringifyFrameworkJsonV1(value: unknown, schema?: ZLinkJsonSchem
   if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
     throw new TypeError('framework-json-v1 payload is not a JSON value.');
   }
-  const root = value;
-  const encoded = JSON.stringify(root, function (key, item: unknown) {
-    const source = key === '' ? root : (this as Record<string, unknown>)[key];
-    if (typeof source === 'number' && !Number.isFinite(source)) {
-      throw new TypeError('framework-json-v1 only accepts finite JSON numbers.');
-    }
-    if (typeof source === 'bigint') {
-      if (source < SIGNED_64_MIN || source > UNSIGNED_64_MAX) {
-        throw new RangeError('framework-json-v1 64-bit integer is outside the supported range.');
-      }
-      return source.toString(10);
-    }
-    if (source instanceof Uint8Array) {
-      return Buffer.from(source.buffer, source.byteOffset, source.byteLength).toString('base64');
-    }
-    if (source instanceof Date) {
-      throw new TypeError('framework-json-v1 does not implicitly encode Date values.');
-    }
-    if (
-      typeof source === 'object'
-      && source !== null
-      && typeof (source as { readonly toJSON?: unknown }).toJSON === 'function'
-    ) {
-      throw new TypeError('framework-json-v1 does not implicitly invoke custom toJSON methods.');
-    }
-    return item;
-  });
+  const encoded = JSON.stringify(value, frameworkJsonV1Replacer);
   if (schema !== undefined) {
     validateFrameworkJsonV1Value(JSON.parse(encoded), schema, '$', false);
   }
   return encoded;
+}
+
+//  Module-level so JSON.stringify does not allocate a fresh closure per
+//  encoded message. On the root call `this` is the {'': value} wrapper, so
+//  this[key] resolves the raw (pre-toJSON) source for every key including ''.
+function frameworkJsonV1Replacer(
+  this: Record<string, unknown>,
+  key: string,
+  item: unknown
+): unknown {
+  const source = this[key];
+  if (typeof source === 'number' && !Number.isFinite(source)) {
+    throw new TypeError('framework-json-v1 only accepts finite JSON numbers.');
+  }
+  if (typeof source === 'bigint') {
+    if (source < SIGNED_64_MIN || source > UNSIGNED_64_MAX) {
+      throw new RangeError('framework-json-v1 64-bit integer is outside the supported range.');
+    }
+    return source.toString(10);
+  }
+  if (source instanceof Uint8Array) {
+    return Buffer.from(source.buffer, source.byteOffset, source.byteLength).toString('base64');
+  }
+  if (source instanceof Date) {
+    throw new TypeError('framework-json-v1 does not implicitly encode Date values.');
+  }
+  if (
+    typeof source === 'object'
+    && source !== null
+    && typeof (source as { readonly toJSON?: unknown }).toJSON === 'function'
+  ) {
+    throw new TypeError('framework-json-v1 does not implicitly invoke custom toJSON methods.');
+  }
+  return item;
 }
 
 export function parseFrameworkJsonV1(
@@ -60,6 +68,10 @@ export function parseFrameworkJsonV1(
     ? parsed
     : validateFrameworkJsonV1Value(parsed, schema, '$', true);
 }
+
+//  Sticky pattern shared across scans; matching happens synchronously so the
+//  mutable lastIndex never crosses calls.
+const NUMBER_TOKEN_PATTERN = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/uy;
 
 const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
 const INT32_MIN = -2_147_483_648;
@@ -246,13 +258,19 @@ class JsonPropertyScanner {
 
   private scanString(): string {
     const start = this.index++;
+    let sawEscape = false;
     for (;;) {
       if (this.index >= this.text.length) this.fail('unterminated string');
       const character = this.text[this.index++]!;
       if (character === '"') {
-        return JSON.parse(this.text.slice(start, this.index)) as string;
+        //  Without escapes the token content is verbatim; the outer
+        //  JSON.parse pass still rejects any raw control characters.
+        return sawEscape
+          ? JSON.parse(this.text.slice(start, this.index)) as string
+          : this.text.slice(start + 1, this.index - 1);
       }
       if (character === '\\') {
+        sawEscape = true;
         if (this.index >= this.text.length) this.fail('unterminated escape');
         const escaped = this.text[this.index++]!;
         if (escaped === 'u') this.index += 4;
@@ -266,15 +284,20 @@ class JsonPropertyScanner {
   }
 
   private scanNumber(): void {
-    const match = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/u
-      .exec(this.text.slice(this.index));
+    NUMBER_TOKEN_PATTERN.lastIndex = this.index;
+    const match = NUMBER_TOKEN_PATTERN.exec(this.text);
     if (match === null) this.fail('JSON value');
     this.index += match[0].length;
   }
 
   private skipWhitespace(): void {
-    while (/\s/u.test(this.text[this.index] ?? '') && this.text[this.index] !== '\ufeff') {
-      this.index++;
+    for (;;) {
+      const code = this.text.charCodeAt(this.index);
+      if (code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d) {
+        this.index += 1;
+        continue;
+      }
+      return;
     }
   }
 

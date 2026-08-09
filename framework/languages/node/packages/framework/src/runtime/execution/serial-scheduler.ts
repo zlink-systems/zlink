@@ -32,13 +32,17 @@ export const ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS: Required<
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 
 interface SerialLaneState {
-  readonly records: SerialWorkRecord<unknown>[];
+  //  Dequeued with a head index instead of shift(): the application lane
+  //  admits up to 4096 records, and shift() memmoves the whole backlog on
+  //  every turn. Same pattern as the waiter queue below.
+  readonly records: Array<SerialWorkRecord<unknown> | undefined>;
   readonly waiters: Array<SerialCapacityWaiter | undefined>;
   readonly messageCapacity: number;
   readonly byteCapacity: number;
   readonly waiterCapacity: number;
   messageCount: number;
   byteCount: number;
+  recordHead: number;
   waiterHead: number;
   waiterCount: number;
 }
@@ -331,8 +335,8 @@ export class ZLinkBoundedSerialScheduler {
   }
 
   private takeNext(): ZLinkSerialWorkRecord<unknown> | undefined {
-    const applicationReady = this.application.records.length > 0;
-    const lifecycleReady = this.lifecycle.records.length > 0;
+    const applicationReady = pendingRecordCount(this.application) > 0;
+    const lifecycleReady = pendingRecordCount(this.lifecycle) > 0;
     if (!applicationReady && !lifecycleReady) return undefined;
 
     let lane: ZLinkSerialWorkLane;
@@ -351,12 +355,12 @@ export class ZLinkBoundedSerialScheduler {
       if (applicationReady && this.lifecycleStreak >= this.lifecycleBurstLimit) {
         this.lifecycleDebt = true;
       }
-      return this.lifecycle.records.shift();
+      return takeRecord(this.lifecycle);
     }
 
     this.lifecycleStreak = 0;
     this.lifecycleDebt = false;
-    return this.application.records.shift();
+    return takeRecord(this.application);
   }
 
   private shouldYield(): boolean {
@@ -365,7 +369,8 @@ export class ZLinkBoundedSerialScheduler {
   }
 
   private hasReady(): boolean {
-    return this.application.records.length > 0 || this.lifecycle.records.length > 0;
+    return pendingRecordCount(this.application) > 0
+      || pendingRecordCount(this.lifecycle) > 0;
   }
 
   private resolveIdleWaiters(): void {
@@ -394,6 +399,7 @@ function createLane(messageCapacity: number, byteCapacity: number): SerialLaneSt
     waiterCapacity: messageCapacity,
     messageCount: 0,
     byteCount: 0,
+    recordHead: 0,
     waiterHead: 0,
     waiterCount: 0
   };
@@ -409,6 +415,25 @@ function reserve(lane: SerialLaneState, byteCost: number): boolean {
   lane.messageCount += 1;
   lane.byteCount += byteCost;
   return true;
+}
+
+function pendingRecordCount(lane: SerialLaneState): number {
+  return lane.records.length - lane.recordHead;
+}
+
+function takeRecord(lane: SerialLaneState): SerialWorkRecord<unknown> | undefined {
+  if (lane.recordHead >= lane.records.length) return undefined;
+  const record = lane.records[lane.recordHead];
+  lane.records[lane.recordHead] = undefined;
+  lane.recordHead += 1;
+  if (lane.recordHead >= lane.records.length) {
+    lane.records.length = 0;
+    lane.recordHead = 0;
+  } else if (lane.recordHead >= 1024 && lane.recordHead * 2 >= lane.records.length) {
+    lane.records.splice(0, lane.recordHead);
+    lane.recordHead = 0;
+  }
+  return record;
 }
 
 function advanceWaiterHead(lane: SerialLaneState): void {

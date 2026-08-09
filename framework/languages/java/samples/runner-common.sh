@@ -331,9 +331,11 @@ wait_framework_peer_ready_counts() {
 
 gradle_run() {
   if declare -p ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS >/dev/null 2>&1; then
-    ../../gradlew "${ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS[@]}" --no-daemon --no-parallel "$@" --quiet
+    ../../gradlew "${ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS[@]}" \
+      --no-daemon --no-parallel --max-workers=1 "$@" --quiet
   else
-    ../../gradlew --settings-file standalone.settings.gradle.kts --no-daemon --no-parallel "$@" --quiet
+    ../../gradlew --settings-file standalone.settings.gradle.kts \
+      --no-daemon --no-parallel --max-workers=1 "$@" --quiet
   fi
 }
 

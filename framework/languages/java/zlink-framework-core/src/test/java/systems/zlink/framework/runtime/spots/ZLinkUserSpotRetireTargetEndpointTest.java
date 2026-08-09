@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.ArrayList;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -329,7 +332,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                 + " command 35 delivered");
         assertEquals(2, relays.get(),
             "command 33 is retried until command 46 reports terminal");
-        assertThrows(java.util.concurrent.CompletionException.class, () ->
+        assertThrows(CompletionException.class, () ->
             recoveredEndpoint.finalizeAfterCompletion(request)
                 .toCompletableFuture()
                 .join());
@@ -450,11 +453,11 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
 
         AtomicInteger relays = new AtomicInteger();
         List<RoutingId> relayDestinations =
-            new java.util.concurrent.CopyOnWriteArrayList<>();
+            new CopyOnWriteArrayList<>();
         List<systems.zlink.framework.runtime.internal.service
             .ZLinkServiceRelocationWireCodec.RequestSourceFence>
             relayExpectedSources =
-                new java.util.concurrent.CopyOnWriteArrayList<>();
+                new CopyOnWriteArrayList<>();
         FakeStagingBackend backend = new FakeStagingBackend();
         var staging = new ZLinkUserSpotAggregateStagingOwner(backend);
         var wire = new ZLinkServiceM6BWireCodec();
@@ -569,8 +572,8 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             wire,
             operations,
             relays,
-            new java.util.concurrent.CopyOnWriteArrayList<>(),
-            new java.util.concurrent.CopyOnWriteArrayList<>());
+            new CopyOnWriteArrayList<>(),
+            new CopyOnWriteArrayList<>());
     }
 
     private static ZLinkInternalMeshNode recoveryNode(
@@ -820,10 +823,10 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
 
     private static final class FakeStagingBackend
         implements ZLinkUserSpotAggregateStagingOwner.StagingBackend {
-        private final java.util.ArrayList<String> operations =
-            new java.util.ArrayList<>();
-        private final java.util.ArrayList<String> live =
-            new java.util.ArrayList<>();
+        private final ArrayList<String> operations =
+            new ArrayList<>();
+        private final ArrayList<String> live =
+            new ArrayList<>();
         private int replaySequence;
 
         @Override public CompletionStage<Object> prepareSpot(

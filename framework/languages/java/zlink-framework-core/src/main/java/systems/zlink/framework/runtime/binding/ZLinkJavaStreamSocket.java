@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.binding;
+import java.util.Optional;
+import java.util.function.Supplier;
+import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -159,7 +162,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
 
     static CompletionStage<Void> submitBoundSessionUntilAccepted(
         Duration timeout,
-        java.util.function.Supplier<Boolean> submit) {
+        Supplier<Boolean> submit) {
         if (timeout == null || timeout.isZero() || timeout.isNegative()) {
             throw new IllegalArgumentException(
                 "bound Session submission timeout must be positive");
@@ -325,10 +328,10 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             SessionBinding binding = requireBinding(sessionRid, actorId);
             long requestSequence = allocateBoundSessionRequestSequence();
             ZLinkStreamHeader requestHeader = new ZLinkStreamHeader(
-                systems.zlink.framework.streams.ZLinkStreamMessageKind.REQUEST,
+                ZLinkStreamMessageKind.REQUEST,
                 header.codec(),
                 header.flags(),
-                java.util.Optional.of(requestSequence),
+                Optional.of(requestSequence),
                 header.name(),
                 header.metadata(),
                 header.correlationId(),
@@ -361,10 +364,10 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         try {
             long requestSequence = allocateBoundSessionRequestSequence();
             ZLinkStreamHeader requestHeader = new ZLinkStreamHeader(
-                systems.zlink.framework.streams.ZLinkStreamMessageKind.REQUEST,
+                ZLinkStreamMessageKind.REQUEST,
                 header.codec(),
                 header.flags(),
-                java.util.Optional.of(requestSequence),
+                Optional.of(requestSequence),
                 header.name(),
                 header.metadata(),
                 header.correlationId(),

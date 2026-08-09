@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace ShoppingMall.Shared.Contracts;
 
 public sealed record StartOrderReq(
@@ -21,7 +23,7 @@ public sealed record OrderState(
     string? ReservationId,
     string? PaymentId,
     string? Reason,
-    decimal? Amount,
+    [property: JsonConverter(typeof(NullableDecimalNumberJsonConverter))] decimal? Amount,
     string? Currency,
     long UpdatedAtUnixMs);
 
@@ -32,7 +34,7 @@ public sealed record OrderLineInput(
 public sealed record CartSeed(
     string CartId,
     OrderLineInput[] Lines,
-    decimal Amount,
+    [property: JsonConverter(typeof(DecimalNumberJsonConverter))] decimal Amount,
     string Currency);
 
 public sealed record InventorySeed(
@@ -52,7 +54,7 @@ public sealed record StartOrderWorkflowReq(
     string IdempotencyKey,
     string SourceCommandId,
     OrderLineInput[] Lines,
-    decimal Amount,
+    [property: JsonConverter(typeof(DecimalNumberJsonConverter))] decimal Amount,
     string Currency);
 
 public sealed record StartOrderWorkflowRes(OrderState State);

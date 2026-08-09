@@ -1,4 +1,5 @@
 package systems.zlink.samples.tictactoe.server.api;
+import java.net.URI;
 
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
@@ -18,7 +19,7 @@ public final class ApiServer {
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.configureLocations();
             options.addHandlersFromPackageOf(ApiServer.class);
-            java.net.URI apiEndpoint = java.net.URI.create(settings.apiChannelEndpoint());
+            URI apiEndpoint = URI.create(settings.apiChannelEndpoint());
             options.addClientServerChannel(SampleNames.ApiChannel)
                 .server()
                 .setBindHost(apiEndpoint.getHost())

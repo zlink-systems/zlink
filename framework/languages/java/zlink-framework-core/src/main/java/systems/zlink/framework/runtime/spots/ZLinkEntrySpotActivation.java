@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.spots;
+import java.time.Instant;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
@@ -129,8 +131,8 @@ final class EntrySpotActivation
                     actor,
                     createRequest));
         }
-        java.util.concurrent.CompletableFuture<ZLinkActorCreateResponse> response =
-            new java.util.concurrent.CompletableFuture<>();
+        CompletableFuture<ZLinkActorCreateResponse> response =
+            new CompletableFuture<>();
         context.enqueueDispatch(() -> ZLinkHandlerStages.fromStageSupplier(() ->
                 (CompletionStage<ZLinkActorCreateResponse>)
                     rawEntrySpot.onCreateActor(actor, createRequest))
@@ -178,7 +180,7 @@ final class EntrySpotActivation
 
     CompletionStage<Void> handleDispatchEvent(ZLinkBackendSpotDispatchInfo info) {
         if (host.isClosing()) {
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
         if (info.event() == ZLinkBackendSpotDispatchEvent.ROUTED_READABLE) {
             drainRoutes();
@@ -200,7 +202,7 @@ final class EntrySpotActivation
         for (ZLinkBackendActorReceived actorMessage : info.actorMessages()) {
             actorMessage.close();
         }
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     private void drainRoutes() {
@@ -233,7 +235,7 @@ final class EntrySpotActivation
     private void dispatchRoute(ZLinkBackendReceived received) {
         var incomingFlow = ZLinkSpotFlowFrame.decode(received.parts());
         var flowScope = incomingFlow == null ? null
-            : systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext.enter(incomingFlow);
+            : ZLinkFlowContext.enter(incomingFlow);
         try {
         trackRouteReceived(received);
         if (ZLinkSpotRuntime.isProbeFrame(received.parts())) {
@@ -263,7 +265,7 @@ final class EntrySpotActivation
                 host.primaryNode(),
                 backendSpot.spotId(),
                 entrySpot,
-                (actorId, request) -> java.util.concurrent.CompletableFuture.completedFuture(
+                (actorId, request) -> CompletableFuture.completedFuture(
                     ZLinkSpotActorJoinResult.accept()),
                 actor -> host.notifySpotActorLifecycleAndSuppressBackendEvent(
                     entrySpot, actor, backendSpot.spotId(), true));
@@ -357,7 +359,7 @@ final class EntrySpotActivation
             host.primaryNode(),
             backendSpot.spotId(),
             entrySpot,
-            (actorId, request) -> java.util.concurrent.CompletableFuture.completedFuture(
+            (actorId, request) -> CompletableFuture.completedFuture(
                 ZLinkSpotActorJoinResult.accept()),
             actor -> host.notifySpotActorLifecycleAndSuppressBackendEvent(
                 entrySpot, actor, backendSpot.spotId(), true));
@@ -488,7 +490,7 @@ final class EntrySpotActivation
                     "remote joined actor packet forward failed: "
                         + actor.context().actorId()));
             }
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         } finally {
             payload.close();
             headerPart.close();
@@ -543,7 +545,7 @@ final class EntrySpotActivation
         return host.actorAdmissions().admitEntryActor(
             request,
             backendSpot.spotId(),
-            actorId -> java.util.concurrent.CompletableFuture.completedFuture(
+            actorId -> CompletableFuture.completedFuture(
                 ZLinkSpotActorJoinResult.accept()));
     }
 
@@ -562,10 +564,10 @@ final class EntrySpotActivation
 
     @Override
     public void close() {
-        close(java.time.Instant.now());
+        close(Instant.now());
     }
 
-    void close(java.time.Instant deadline) {
+    void close(Instant deadline) {
         try {
             host.awaitClosing(context.enqueueDispatch(() ->
                 host.runWithOutbound(context.dispatchOutbound(), () ->

@@ -1,5 +1,6 @@
-package systems.zlink.e2e.pubsub.client.Support;
+package Support;
 
+import systems.zlink.e2e.pubsub.client.Support;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import systems.zlink.httpclient.RawHttpResponse;
 

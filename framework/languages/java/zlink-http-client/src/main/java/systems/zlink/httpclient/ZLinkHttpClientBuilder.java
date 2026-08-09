@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient;
+import java.util.Locale;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -39,7 +40,7 @@ public final class ZLinkHttpClientBuilder {
 
     public ZLinkHttpClientBuilder defaultHeader(String name, String value) {
         HttpClientText.requireNonBlank(name, "HTTP client default header name is required");
-        this.headers.put(name.toLowerCase(java.util.Locale.ROOT), value);
+        this.headers.put(name.toLowerCase(Locale.ROOT), value);
         return this;
     }
 
@@ -125,7 +126,7 @@ public final class ZLinkHttpClientBuilder {
     public ZLinkHttpClient build() {
         HttpClientText.requireNonBlank(baseUrl, "HTTP client base_url is required");
         HttpClientText.requirePositiveTimeout(timeout);
-        String lower = baseUrl.toLowerCase(java.util.Locale.ROOT);
+        String lower = baseUrl.toLowerCase(Locale.ROOT);
         if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
             throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "HTTP client base_url must start with http:// or https://");
         }

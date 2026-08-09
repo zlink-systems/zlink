@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.concurrent.CompletableFuture;
 
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 
@@ -47,7 +48,7 @@ final class ZLinkFilterPipeline {
         return next.invoke().thenCompose(ignored -> {
             CompletionStage<T> invoked = terminalStage.get();
             if (invoked == null) {
-                return java.util.concurrent.CompletableFuture.completedFuture(
+                return CompletableFuture.completedFuture(
                     new Result<>(false, null));
             }
             return invoked.thenApply(value -> new Result<>(true, value));

@@ -1,5 +1,6 @@
-package systems.zlink.e2e.registrationcodec.main.Handlers;
+package Handlers;
 
+import systems.zlink.e2e.registrationcodec.main.Handlers;
 import java.util.Optional;
 import systems.zlink.e2e.registrationcodec.shared.Contracts;
 

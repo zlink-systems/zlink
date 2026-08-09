@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.binding;
+import java.util.ArrayList;
+import java.util.Objects;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
@@ -105,13 +109,13 @@ final class ZLinkJavaRawSpotNode
     @Override
     public void setAdmissionReadyHandler(
         Consumer<ZLinkBackendAdmissionKey> handler) {
-        admissionReadyHandler = java.util.Objects.requireNonNull(
+        admissionReadyHandler = Objects.requireNonNull(
             handler, "handler");
     }
 
     @Override
     public void setAdmissionShutdownHandler(Runnable handler) {
-        admissionShutdownHandler = java.util.Objects.requireNonNull(
+        admissionShutdownHandler = Objects.requireNonNull(
             handler, "handler");
     }
 
@@ -191,14 +195,14 @@ final class ZLinkJavaRawSpotNode
 
     @Override
     public void setApplicationReceiver(ZLinkMeshApplicationReceiver receiver) {
-        applicationReceiver = java.util.Objects.requireNonNull(receiver, "receiver");
+        applicationReceiver = Objects.requireNonNull(receiver, "receiver");
         receiver.setLocalNodeReadyHandler(() -> { });
     }
 
     @Override
     public void setMessageFollowRelayHandler(
         ZLinkInternalSpotNode.MessageFollowRelayHandler handler) {
-        messageFollowRelayHandler = java.util.Objects.requireNonNull(
+        messageFollowRelayHandler = Objects.requireNonNull(
             handler, "handler");
     }
 
@@ -362,7 +366,7 @@ final class ZLinkJavaRawSpotNode
 
     @Override
     public ZLinkBackendSpot createSpot(String spotId) {
-        java.util.Objects.requireNonNull(spotId, "spotId");
+        Objects.requireNonNull(spotId, "spotId");
         return createSpot(spotId, nextGeneration.getAndIncrement());
     }
 
@@ -370,7 +374,7 @@ final class ZLinkJavaRawSpotNode
     public ZLinkBackendSpot createSpot(
         String spotId,
         long lifecycleGeneration) {
-        java.util.Objects.requireNonNull(spotId, "spotId");
+        Objects.requireNonNull(spotId, "spotId");
         if (lifecycleGeneration <= 0) {
             throw new IllegalArgumentException(
                 "Spot lifecycle generation must be positive");
@@ -481,7 +485,7 @@ final class ZLinkJavaRawSpotNode
         ZLinkBackendActorRef actor,
         String spotId,
         long membershipEpoch) {
-        java.util.Objects.requireNonNull(actor, "actor");
+        Objects.requireNonNull(actor, "actor");
         if (!routingId().equals(actor.nodeRid())
             || actor.generation() <= 0
             || spotId == null
@@ -765,10 +769,10 @@ final class ZLinkJavaRawSpotNode
         if (timeout != null && !timeout.isNegative() && !timeout.isZero()) {
             CompletableFuture.delayedExecutor(
                 timeout.toNanos(),
-                java.util.concurrent.TimeUnit.NANOSECONDS).execute(() -> {
+                TimeUnit.NANOSECONDS).execute(() -> {
                     if (actorRequests.remove(requestId, completion)) {
                         completion.completeExceptionally(
-                            new java.util.concurrent.TimeoutException(
+                            new TimeoutException(
                                 "Actor request timed out"));
                     }
                 });
@@ -803,7 +807,7 @@ final class ZLinkJavaRawSpotNode
         long sourceSessionSequence,
         long requestSequence,
         String packetName,
-        java.util.Map<String, String> metadata,
+        Map<String, String> metadata,
         byte[] payload) {
         return owner.encodeLocalActorAccepted(
             actor,
@@ -1119,13 +1123,13 @@ final class ZLinkJavaRawSpotNode
     }
 
     @Override
-    public java.util.Optional<ZLinkInternalSpotNode.BoundSessionRoute>
+    public Optional<ZLinkInternalSpotNode.BoundSessionRoute>
         boundSessionRoute(ZLinkBackendActorRef actor) {
         RemoteStreamBinding remote = remoteStreamBindings.get(actor.actorId());
         if (remote == null || !remote.actor().equals(actor)) {
-            return java.util.Optional.empty();
+            return Optional.empty();
         }
-        return java.util.Optional.of(
+        return Optional.of(
             new ZLinkInternalSpotNode.BoundSessionRoute(
                 remote.sessionOwnerNodeRid(),
                 remote.sessionOwnerNodeGeneration(),
@@ -1649,11 +1653,11 @@ final class ZLinkJavaRawSpotNode
             actorRemoteReplies.put(requestId, reply);
             CompletableFuture.delayedExecutor(
                 30,
-                java.util.concurrent.TimeUnit.SECONDS).execute(
+                TimeUnit.SECONDS).execute(
                     () -> actorRemoteReplies.remove(requestId, reply));
         }
         List<ZLinkBackendActorReceived> messages =
-            new java.util.ArrayList<>(parts.size());
+            new ArrayList<>(parts.size());
         for (int index = 0; index < parts.size(); index++) {
             messages.add(index == 0
                 ? ZLinkBackendActorReceived.lazyJournal(
@@ -1831,13 +1835,6 @@ final class ZLinkJavaRawSpotNode
         RemoteStreamBinding replaced = null;
         ZLinkBackendAdmissionKey readyKey = null;
         synchronized (this) {
-            if (!isCurrentActor(actor)) {
-                streamTrace("remote bind reject actor=" + actorSummary(actor)
-                    + " source=" + sourceNodeRid
-                    + " active=" + command.active()
-                    + " reason=not-current-actor");
-                return false;
-            }
             if (!routingId().equals(actor.nodeRid())) {
                 streamTrace("remote bind reject actor=" + actorSummary(actor)
                     + " source=" + sourceNodeRid
@@ -1852,16 +1849,6 @@ final class ZLinkJavaRawSpotNode
                     + " reason=node-generation expected="
                     + owner.lifecycleGeneration() + " actual="
                     + route.targetNodeGeneration());
-                return false;
-            }
-            if (actorAuthorityOwnerGeneration(actor)
-                    != route.authorityOwnerGeneration()) {
-                streamTrace("remote bind reject actor=" + actorSummary(actor)
-                    + " source=" + sourceNodeRid
-                    + " active=" + command.active()
-                    + " reason=authority-generation expected="
-                    + actorAuthorityOwnerGeneration(actor) + " actual="
-                    + route.authorityOwnerGeneration());
                 return false;
             }
             RemoteStreamBinding candidate = new RemoteStreamBinding(
@@ -1882,6 +1869,21 @@ final class ZLinkJavaRawSpotNode
                     + " source=" + sourceNodeRid
                     + " binding=" + command.bindingGeneration());
                 return true;
+            }
+            if (!isCurrentActor(actor)) {
+                streamTrace("remote bind reject actor=" + actorSummary(actor)
+                    + " source=" + sourceNodeRid
+                    + " active=true reason=not-current-actor");
+                return false;
+            }
+            if (actorAuthorityOwnerGeneration(actor)
+                    != route.authorityOwnerGeneration()) {
+                streamTrace("remote bind reject actor=" + actorSummary(actor)
+                    + " source=" + sourceNodeRid
+                    + " active=true reason=authority-generation expected="
+                    + actorAuthorityOwnerGeneration(actor) + " actual="
+                    + route.authorityOwnerGeneration());
+                return false;
             }
             RemoteStreamBinding current =
                 remoteStreamBindings.get(actor.actorId());
@@ -1990,6 +1992,7 @@ final class ZLinkJavaRawSpotNode
         List<Message> parts) {
         StreamBinding binding =
             streamBindings.get(command.actor().actor().actorId());
+        String packetName = boundSessionPacketName(parts);
         boolean accepted = binding != null
             && binding.actor().equals(command.actor().actor())
             && binding.bindingGeneration()
@@ -2006,8 +2009,24 @@ final class ZLinkJavaRawSpotNode
             + " actor=" + actorSummary(command.actor().actor())
             + " source=" + sourceNodeRid
             + " binding=" + command.expectedBindingGeneration()
-            + " hasBinding=" + (binding != null));
+            + " hasBinding=" + (binding != null)
+            + " packet=" + packetName);
         return accepted;
+    }
+
+    private static String boundSessionPacketName(List<Message> parts) {
+        if (!STREAM_TRACE || parts == null || parts.size() != 1) {
+            return "unknown";
+        }
+        try {
+            return ZLinkStreamFrameCodec.tryDecode(parts.getFirst().toByteArray())
+                .map(ZLinkStreamFrameCodec.DecodedFrame::header)
+                .map(ZLinkStreamHeaderCodec::decodeOrPlain)
+                .map(ZLinkStreamHeader::name)
+                .orElse("unknown");
+        } catch (RuntimeException invalidFrame) {
+            return "invalid";
+        }
     }
 
     private void removeStreamBinding(
@@ -2115,7 +2134,7 @@ final class ZLinkJavaRawSpotNode
     void registerInstanceSpotAuthority(
         String stableType,
         ZLinkServiceM6BWireCodec.InstanceRouteFence route) {
-        java.util.Objects.requireNonNull(route, "route");
+        Objects.requireNonNull(route, "route");
         if (!routingId().equals(route.targetNodeRid())) {
             throw new IllegalArgumentException(
                 "Instance authority target is not local");
@@ -2133,7 +2152,7 @@ final class ZLinkJavaRawSpotNode
     void reconcileInstanceSpotAuthority(
         String stableType,
         ZLinkServiceM6BWireCodec.InstanceRouteFence route) {
-        java.util.Objects.requireNonNull(route, "route");
+        Objects.requireNonNull(route, "route");
         if (!routingId().equals(route.targetNodeRid())) {
             return;
         }
@@ -2427,7 +2446,7 @@ final class ZLinkJavaRawSpotNode
             requestId,
             parts);
         List<ZLinkBackendActorReceived> messages =
-            new java.util.ArrayList<>(copied.size());
+            new ArrayList<>(copied.size());
         for (int index = 0; index < copied.size(); index++) {
             messages.add(new ZLinkBackendActorReceived(
                 actor,
@@ -2697,7 +2716,7 @@ final class ZLinkJavaRawSpotNode
         if (timeout != null && !timeout.isNegative() && !timeout.isZero()) {
             CompletableFuture.delayedExecutor(
                 timeout.toNanos(),
-                java.util.concurrent.TimeUnit.NANOSECONDS).execute(() -> {
+                TimeUnit.NANOSECONDS).execute(() -> {
                     if (terminal.tryWin(ZLinkTerminalWinner.Cause.TIMEOUT)) {
                         callback.handle(new systems.zlink.framework.runtime.internal.backend
                             .ZLinkBackendReceived(

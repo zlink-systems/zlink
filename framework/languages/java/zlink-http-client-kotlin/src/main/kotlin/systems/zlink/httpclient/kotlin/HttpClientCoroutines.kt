@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient.kotlin
 
+
+import java.util.concurrent.CompletionException
+import java.util.concurrent.CompletionStage
+import java.util.concurrent.ExecutionException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -73,7 +77,7 @@ suspend inline fun <reified T> ZLinkHttpServerRequestBuilder.yield(): HttpRespon
  * HTTP operation keeps its retry, body-read, and client-lease ownership.
  */
 @PublishedApi
-internal suspend fun <T> java.util.concurrent.CompletionStage<T>
+internal suspend fun <T> CompletionStage<T>
     .awaitWithoutCancellingOperation(): T = suspendCancellableCoroutine { continuation ->
     whenComplete { value, error ->
         if (error == null) {
@@ -86,8 +90,8 @@ internal suspend fun <T> java.util.concurrent.CompletionStage<T>
 
 private fun unwrapCompletionFailure(error: Throwable): Throwable {
     var cause = error
-    while ((cause is java.util.concurrent.CompletionException
-        || cause is java.util.concurrent.ExecutionException)
+    while ((cause is CompletionException
+        || cause is ExecutionException)
         && cause.cause != null) {
         cause = cause.cause!!
     }

@@ -1,4 +1,15 @@
 package systems.zlink.framework.runtime.channels;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import java.util.LinkedHashMap;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executors;
+import java.util.function.Consumer;
+import systems.zlink.framework.runtime.host.ZLinkTestAdmissionFactory;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology;
+import systems.zlink.framework.runtime.messaging.OneWayTestStatus;
+import systems.zlink.framework.spots.ZLinkSpotKind;
 
 import systems.zlink.framework.spots.SpotHandles;
 
@@ -55,13 +66,13 @@ import systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRunti
 final class ZLinkChannelRuntimeTest {
     private static ZLinkHandlerActivator handlers() {
         SpotTransportAddressResolver resolver = spotId ->
-            java.util.concurrent.CompletableFuture.completedFuture(Optional.of(
+            CompletableFuture.completedFuture(Optional.of(
                 new SpotTransportAddress(
                     "play.route",
                     RoutingId.from("play-node"),
                     spotId,
                     1L,
-                    systems.zlink.framework.spots.ZLinkSpotKind.USER)));
+                    ZLinkSpotKind.USER)));
         return handlers(resolver);
     }
 
@@ -74,7 +85,7 @@ final class ZLinkChannelRuntimeTest {
     @Test
     void exactMessageContextsExposeTheirContractFields() {
         Map<String, String> metadata = Map.of("tenant", "blue");
-        var request = new systems.zlink.framework.runtime.channels.DefaultRequestContext(
+        var request = new DefaultRequestContext(
             "profile", "ProfileRequest", "application/json", metadata);
         assertEquals(Optional.empty(), request.meshName());
         assertEquals(Optional.of("profile"), request.channelName());
@@ -191,7 +202,7 @@ final class ZLinkChannelRuntimeTest {
             handlers())) {
             runtime.registerSpotRouterNode("play", backend.spotNode);
 
-            ExecutionException error = org.junit.jupiter.api.Assertions.assertThrows(
+            ExecutionException error = Assertions.assertThrows(
                 ExecutionException.class,
                 () -> runtime.requestToChannel(
                         "play",
@@ -226,7 +237,7 @@ final class ZLinkChannelRuntimeTest {
 
     @Test
     void methodArgumentsBindMessageAndContextOnly() throws Exception {
-        DefaultRequestContext context = new DefaultRequestContext();
+        FakeRequestContext context = new FakeRequestContext();
         Method method = ContextHandler.class.getMethod(
             "handle",
             String.class,
@@ -243,7 +254,7 @@ final class ZLinkChannelRuntimeTest {
     void routeBridgeRawRequestCompletesWhenRouteLoopReceivesRawReply() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
             .enableServer("inproc://play-route");
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         backend.bridge.completeRequests = false;
@@ -280,7 +291,7 @@ final class ZLinkChannelRuntimeTest {
     void routeClientSpotRequestUsesRouteBridge() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
             .enableServer("inproc://play-route");
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         backend.bridge.requestReplyParts = List.of(Message.from(
@@ -308,7 +319,7 @@ final class ZLinkChannelRuntimeTest {
     @Test
     void routeClientSpotSendUsesRouteBridge() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
             .enableServer("inproc://play-route");
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         try (ZLinkChannelRuntime runtime = new ZLinkChannelRuntime(
@@ -332,7 +343,7 @@ final class ZLinkChannelRuntimeTest {
     @Test
     void routeReceiveLoopSkipsRouterProbeFrame() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
             .enableServer("inproc://play-route");
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         try (ZLinkChannelRuntime runtime = new ZLinkChannelRuntime(
@@ -356,7 +367,7 @@ final class ZLinkChannelRuntimeTest {
     @Test
     void routeMeshDoesNotApplyClientServerMessageSizeOption() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology
+        ZLinkLegacyTopology
             .addRouteMeshChannel(options, "play.route")
             .enableServer("inproc://play-route");
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
@@ -398,7 +409,7 @@ final class ZLinkChannelRuntimeTest {
     void routeRequestRetriesRetriableSubmitFailure() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
             .enableServer("inproc://play-route")
             .enableClient("inproc://play-peer");
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
@@ -420,13 +431,13 @@ final class ZLinkChannelRuntimeTest {
         }
     }
 
-    @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.EnumSource(
+    @ParameterizedTest
+    @EnumSource(
         value = ZLinkBackendRequestResult.class,
         names = {"TIMED_OUT", "NOT_CONNECTED", "TERMINATED"})
     void routeRequestDeliversTerminalCallbackResultWithoutResubmitting(
         ZLinkBackendRequestResult terminalResult) throws Exception {
-        var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+        var scheduler = Executors.newSingleThreadScheduledExecutor();
         FakeRouterSocket router = new FakeRouterSocket();
         router.requestResult = terminalResult;
         router.requestReplyParts = List.of(Message.from("same-payload".getBytes()));
@@ -457,7 +468,7 @@ final class ZLinkChannelRuntimeTest {
 
     @Test
     void routeRequestAcceptsReplyThatEqualsTheOriginalPayload() throws Exception {
-        var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+        var scheduler = Executors.newSingleThreadScheduledExecutor();
         FakeRouterSocket router = new FakeRouterSocket();
         router.requestResult = ZLinkBackendRequestResult.OK;
         router.requestReplyParts = List.of(Message.from("same-payload".getBytes()));
@@ -516,7 +527,7 @@ final class ZLinkChannelRuntimeTest {
                     backend.spotNode.lastMetadata));
 
             Map<String, String> source =
-                new java.util.LinkedHashMap<>(Map.of("tenant", "blue"));
+                new LinkedHashMap<>(Map.of("tenant", "blue"));
             TestReply reply = runtime.requestToChannel(
                     "play",
                     new TestRequest("channel"))
@@ -587,7 +598,7 @@ final class ZLinkChannelRuntimeTest {
             assertFalse(result.isDone());
             assertEquals(1, backend.spotNode.localNodeAttempts);
             backend.spotNode.signalLocalNodeReady();
-            assertEquals(0, systems.zlink.framework.runtime.messaging.OneWayTestStatus.status(result));
+            assertEquals(0, OneWayTestStatus.status(result));
             assertEquals(2, backend.spotNode.localNodeAttempts);
         }
     }
@@ -615,7 +626,7 @@ final class ZLinkChannelRuntimeTest {
 
             assertEquals(
                 2,
-                systems.zlink.framework.runtime.messaging.OneWayTestStatus.status(result));
+                OneWayTestStatus.status(result));
             backend.spotNode.signalLocalNodeReady();
             assertEquals(1, backend.spotNode.localNodeAttempts);
         }
@@ -663,8 +674,8 @@ final class ZLinkChannelRuntimeTest {
             new ZLinkJsonMessageSerializer(), handlers())) {
             runtime.registerSpotRouterNode("play.route", backend.spotNode);
 
-            var failure = org.junit.jupiter.api.Assertions.assertThrows(
-                java.util.concurrent.CompletionException.class,
+            var failure = Assertions.assertThrows(
+                CompletionException.class,
                 () -> runtime.requestToSpot(
                     "room-spot",
                     new TestRequest("hello"))
@@ -674,10 +685,10 @@ final class ZLinkChannelRuntimeTest {
                 .join());
 
             var frameworkError = assertInstanceOf(
-                systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                ZLinkFrameworkException.class,
                 failure.getCause());
             assertEquals(
-                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
                 frameworkError.kind());
             assertEquals(1, backend.spotNode.entrySpot.requestAttempts);
         }
@@ -718,7 +729,7 @@ final class ZLinkChannelRuntimeTest {
             new ZLinkJsonMessageSerializer(), handlers())) {
             runtime.registerSpotRouterNode("play.route", backend.spotNode);
 
-            CompletionException error = org.junit.jupiter.api.Assertions.assertThrows(
+            CompletionException error = Assertions.assertThrows(
                 CompletionException.class,
                 () -> runtime.requestToSpot(
                         "room-spot",
@@ -747,7 +758,7 @@ final class ZLinkChannelRuntimeTest {
         AtomicInteger invalidations = new AtomicInteger();
         SpotTransportAddressResolver resolver = new SpotTransportAddressResolver() {
             @Override
-            public java.util.concurrent.CompletionStage<Optional<SpotTransportAddress>>
+            public CompletionStage<Optional<SpotTransportAddress>>
                 resolve(String spotId) {
                 long generation = resolves.incrementAndGet();
                 return CompletableFuture.completedFuture(Optional.of(
@@ -756,7 +767,7 @@ final class ZLinkChannelRuntimeTest {
                         RoutingId.from("play-node"),
                         spotId,
                         generation,
-                        systems.zlink.framework.spots.ZLinkSpotKind.USER)));
+                        ZLinkSpotKind.USER)));
             }
 
             @Override
@@ -803,7 +814,7 @@ final class ZLinkChannelRuntimeTest {
             runtime.registerSpotRouterNode("play.route", backend.spotNode);
             runtime.registerInstanceSpotCallRuntime(new ZLinkInstanceSpotCallRuntime() {
                 @Override
-                public java.util.concurrent.CompletionStage<Void> send(
+                public CompletionStage<Void> send(
                     String spotId,
                     String stableType,
                     String meshName,
@@ -815,7 +826,7 @@ final class ZLinkChannelRuntimeTest {
                 }
 
                 @Override
-                public java.util.concurrent.CompletionStage<List<Message>> request(
+                public CompletionStage<List<Message>> request(
                     String spotId,
                     String stableType,
                     String meshName,
@@ -855,7 +866,7 @@ final class ZLinkChannelRuntimeTest {
     void routeBridgeRawRequestConsumesNativeReplyEvenWhenRequestSeqIsPresent() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
             .enableServer("inproc://play-route");
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         backend.bridge.completeRequests = false;
@@ -893,7 +904,7 @@ final class ZLinkChannelRuntimeTest {
     void routeBridgeRawRequestUnwrapsRoutedSpotEnvelopeReply() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
             .enableServer("inproc://play-route");
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         backend.bridge.completeRequests = false;
@@ -936,7 +947,7 @@ final class ZLinkChannelRuntimeTest {
     void routeBridgeNativeCallbackRequestUnwrapsRoutedSpotEnvelopeReply() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
             .enableServer("inproc://play-route");
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         backend.bridge.requestReplyParts = List.of(
@@ -971,7 +982,7 @@ final class ZLinkChannelRuntimeTest {
     void routeBridgeNativeCallbackRequestStripsSpotPacketNameReply() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
             .enableServer("inproc://play-route");
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         backend.bridge.requestReplyParts = List.of(
@@ -1005,7 +1016,7 @@ final class ZLinkChannelRuntimeTest {
     void routeBridgeRequestIgnoresNativeRequestEchoAndWaitsForRouterReply() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
             .enableServer("inproc://play-route");
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         backend.bridge.requestReplyParts = List.of(
@@ -1048,7 +1059,7 @@ final class ZLinkChannelRuntimeTest {
     void routeBridgeRequestIgnoresRouterRequestEchoAndWaitsForRouterReply() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
             .enableServer("inproc://play-route");
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         backend.bridge.completeRequests = false;
@@ -1097,7 +1108,7 @@ final class ZLinkChannelRuntimeTest {
         throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
             .enableServer("inproc://play-route");
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         try (ZLinkChannelRuntime runtime = new ZLinkChannelRuntime(
@@ -1136,7 +1147,7 @@ final class ZLinkChannelRuntimeTest {
     void routeBridgeRawRequestCompletesBeforeBridgeConsumesActorJoinReply() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
             .enableServer("inproc://play-route");
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         backend.bridge.completeRequests = false;
@@ -1174,7 +1185,7 @@ final class ZLinkChannelRuntimeTest {
     void routeBridgeRawRequestFailsOnFrameworkErrorReplyWithoutBridgeFeedback() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
             .enableServer("inproc://play-route");
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         backend.bridge.completeRequests = false;
@@ -1199,7 +1210,7 @@ final class ZLinkChannelRuntimeTest {
                     Message.from("ZLinkFrameworkError".getBytes()),
                     Message.from("missing route handler".getBytes()))));
 
-            ExecutionException error = org.junit.jupiter.api.Assertions.assertThrows(
+            ExecutionException error = Assertions.assertThrows(
                 ExecutionException.class,
                 () -> request.toCompletableFuture().get(1, TimeUnit.SECONDS));
             assertInstanceOf(ZLinkFrameworkException.class, error.getCause());
@@ -1212,7 +1223,7 @@ final class ZLinkChannelRuntimeTest {
     void routeMeshFrameworkErrorRequestIsDroppedWithoutErrorReply() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
             .enableServer("inproc://play-route");
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         try (ZLinkChannelRuntime runtime = new ZLinkChannelRuntime(
@@ -1243,7 +1254,7 @@ final class ZLinkChannelRuntimeTest {
     void routeBridgeDrainFailureDoesNotStopLaterRawReplyCompletion() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
             .enableServer("inproc://play-route");
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         backend.bridge.completeRequests = false;
@@ -1286,7 +1297,7 @@ final class ZLinkChannelRuntimeTest {
     void routeBridgeNoDataDrainDoesNotStopLaterRawReplyCompletion() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
             .enableServer("inproc://play-route");
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         backend.bridge.completeRequests = false;
@@ -1342,7 +1353,7 @@ final class ZLinkChannelRuntimeTest {
                 .timeout(Duration.ofMillis(300))
                 .submit(String.class);
 
-            ExecutionException error = org.junit.jupiter.api.Assertions.assertThrows(
+            ExecutionException error = Assertions.assertThrows(
                 ExecutionException.class,
                 () -> request.toCompletableFuture().get(1, TimeUnit.SECONDS));
             assertInstanceOf(ZLinkFrameworkException.class, error.getCause());
@@ -1474,7 +1485,7 @@ final class ZLinkChannelRuntimeTest {
             new ZLinkJsonMessageSerializer(), handlers())) {
             var socket = runtime.clientServerChannel("api").configureServerSocket();
 
-            org.junit.jupiter.api.Assertions.assertThrows(
+            Assertions.assertThrows(
                 ZLinkConfigurationException.class,
                 () -> socket.maxMessageSize(-1));
         }
@@ -1493,10 +1504,10 @@ final class ZLinkChannelRuntimeTest {
             new ZLinkJsonMessageSerializer(), handlers())) {
             var socket = runtime.clientServerChannel("api").configureServerSocket();
 
-            org.junit.jupiter.api.Assertions.assertThrows(
+            Assertions.assertThrows(
                 ZLinkConfigurationException.class,
                 () -> socket.weight(-1));
-            org.junit.jupiter.api.Assertions.assertThrows(
+            Assertions.assertThrows(
                 ZLinkConfigurationException.class,
                 () -> socket.weight(10_001));
         }
@@ -1509,15 +1520,15 @@ final class ZLinkChannelRuntimeTest {
         }
     }
 
-    private static final class DefaultRequestContext implements ZLinkMessageContext {
+    private static final class FakeRequestContext implements ZLinkMessageContext {
         @Override
-        public java.util.Optional<String> meshName() {
-            return java.util.Optional.empty();
+        public Optional<String> meshName() {
+            return Optional.empty();
         }
 
         @Override
-        public java.util.Optional<String> channelName() {
-            return java.util.Optional.of("profile");
+        public Optional<String> channelName() {
+            return Optional.of("profile");
         }
 
         @Override
@@ -1526,18 +1537,18 @@ final class ZLinkChannelRuntimeTest {
         }
 
         @Override
-        public java.util.Optional<String> contentType() {
-            return java.util.Optional.empty();
+        public Optional<String> contentType() {
+            return Optional.empty();
         }
 
         @Override
-        public java.util.Map<String, String> metadata() {
-            return java.util.Map.of();
+        public Map<String, String> metadata() {
+            return Map.of();
         }
 
         @Override
-        public java.util.Optional<String> correlationId() {
-            return java.util.Optional.empty();
+        public Optional<String> correlationId() {
+            return Optional.empty();
         }
     }
 
@@ -1975,7 +1986,7 @@ final class ZLinkChannelRuntimeTest {
     }
 
     private static final class FakeSpotNode implements ZLinkInternalSpotNode,
-        systems.zlink.framework.runtime.host.ZLinkTestAdmissionFactory.Backend {
+        ZLinkTestAdmissionFactory.Backend {
         private final FakeSpotRouteBridge bridge;
         private final FakeSpot entrySpot = new FakeSpot();
         private volatile byte[] lastMetadata = new byte[0];
@@ -1987,7 +1998,7 @@ final class ZLinkChannelRuntimeTest {
         private Optional<Integer> channelTargetClassification = Optional.empty();
         private final ArrayDeque<Integer> localNodeStatuses =
             new ArrayDeque<>();
-        private java.util.function.Consumer<ZLinkBackendAdmissionKey> admissionReady =
+        private Consumer<ZLinkBackendAdmissionKey> admissionReady =
             ignored -> { };
         private Duration admissionTimeout = Duration.ofSeconds(1);
         private int localNodeAttempts;
@@ -2011,10 +2022,10 @@ final class ZLinkChannelRuntimeTest {
         @Override public ZLinkBackendSpot entrySpot() { return entrySpot; }
         @Override public Duration admissionTimeout() { return admissionTimeout; }
         @Override public void setAdmissionReadyHandler(
-            java.util.function.Consumer<ZLinkBackendAdmissionKey> handler) {
+            Consumer<ZLinkBackendAdmissionKey> handler) {
             admissionReady = handler;
         }
-        @Override public java.util.Optional<Integer> submitLocalNodeSend(
+        @Override public Optional<Integer> submitLocalNodeSend(
             RoutingId sourceNodeRid,
             byte[] metadata,
             List<Message> parts) {
@@ -2022,7 +2033,7 @@ final class ZLinkChannelRuntimeTest {
             Integer status = localNodeStatuses.isEmpty()
                 ? 0
                 : localNodeStatuses.removeFirst();
-            return java.util.Optional.of(status);
+            return Optional.of(status);
         }
         @Override public Optional<Integer> classifyChannelTarget(String channelName) {
             return channelTargetClassification;
@@ -2084,14 +2095,14 @@ final class ZLinkChannelRuntimeTest {
         }
         @Override public ZLinkBackendActorRef createActor(String actorId, Message createRequest) { throw new UnsupportedOperationException(); }
         @Override public ZLinkBackendActorRef actorLookup(String actorId) { throw new UnsupportedOperationException(); }
-        @Override public java.util.concurrent.CompletionStage<ZLinkBackendActorJoinResult> joinActor(ZLinkBackendActorRef actor, RoutingId targetNodeRid, String targetSpotId, List<Message> parts, Duration timeout) { throw new UnsupportedOperationException(); }
-        @Override public java.util.concurrent.CompletionStage<ZLinkBackendActorJoinEntrySpotResult> joinActorEntrySpot(ZLinkBackendActorRef actor, RoutingId targetNodeRid, Message request, Duration timeout) { throw new UnsupportedOperationException(); }
-        @Override public java.util.concurrent.CompletionStage<List<Message>> leaveActor(ZLinkBackendActorRef actor, String currentSpotId, Duration timeout) { throw new UnsupportedOperationException(); }
-        @Override public java.util.concurrent.CompletionStage<Void> destroyActor(ZLinkBackendActorRef actor, Duration timeout) { throw new UnsupportedOperationException(); }
+        @Override public CompletionStage<ZLinkBackendActorJoinResult> joinActor(ZLinkBackendActorRef actor, RoutingId targetNodeRid, String targetSpotId, List<Message> parts, Duration timeout) { throw new UnsupportedOperationException(); }
+        @Override public CompletionStage<ZLinkBackendActorJoinEntrySpotResult> joinActorEntrySpot(ZLinkBackendActorRef actor, RoutingId targetNodeRid, Message request, Duration timeout) { throw new UnsupportedOperationException(); }
+        @Override public CompletionStage<List<Message>> leaveActor(ZLinkBackendActorRef actor, String currentSpotId, Duration timeout) { throw new UnsupportedOperationException(); }
+        @Override public CompletionStage<Void> destroyActor(ZLinkBackendActorRef actor, Duration timeout) { throw new UnsupportedOperationException(); }
         @Override public boolean sendActorBoundSession(ZLinkBackendActorRef actor, List<Message> parts, SendFlags flags) { return false; }
         @Override public void replyActorNoBind(ZLinkBackendActorRef actor, RoutingId sourceNodeRid, RoutingId sourceSessionRid, long requestId, int flags, List<Message> parts) { throw new UnsupportedOperationException(); }
         @Override public boolean sendToActor(ZLinkBackendActorRef actor, List<Message> parts, SendFlags flags) { return false; }
-        @Override public java.util.concurrent.CompletionStage<List<Message>> requestToActor(ZLinkBackendActorRef actor, List<Message> parts, SendFlags flags, Duration timeout) { throw new UnsupportedOperationException(); }
+        @Override public CompletionStage<List<Message>> requestToActor(ZLinkBackendActorRef actor, List<Message> parts, SendFlags flags, Duration timeout) { throw new UnsupportedOperationException(); }
         @Override public boolean forwardActorBoundSession(ZLinkBackendActorRef actor, RoutingId sourceNodeRid, RoutingId sourceSessionRid, List<Message> parts, SendFlags flags) { return false; }
         @Override public void bindRemoteActorBoundSession(ZLinkBackendActorRef actor, RoutingId sourceNodeRid, RoutingId sourceSessionRid) { }
         @Override public void closeActorBoundSession(ZLinkBackendActorRef actor, Duration timeout) { }

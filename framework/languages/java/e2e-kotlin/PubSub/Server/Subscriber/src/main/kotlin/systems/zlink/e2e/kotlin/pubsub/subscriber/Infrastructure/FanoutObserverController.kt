@@ -21,7 +21,7 @@ class FanoutObserverController(
     private val runtime: ObjectProvider<ZLinkFrameworkRuntime>,
 ) {
     private val observers = linkedMapOf<String, ControlledObserver>()
-    private val monitor = java.lang.Object()
+    private val monitor = Object()
     private val entries = mutableListOf<FanoutObserverEntry>()
 
     fun start(name: String, capacity: Int, slow: Boolean) {

@@ -1,4 +1,5 @@
 package systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.spots.tictactoegamespot.handlers;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.handlers.ZLinkHandlerGroup;
 import systems.zlink.framework.handlers.ZLinkSpotActorSend;
@@ -11,7 +12,7 @@ import systems.zlink.samples.tictactoe.shared.contracts.LeaveGameReq;
 @ZLinkHandlerGroup(SampleNames.PlayActor)
 public final class PlayActorLeaveGameHandler {
     @ZLinkSpotActorSend
-    public java.util.concurrent.CompletionStage<Void> leaveGame(
+    public CompletionStage<Void> leaveGame(
         TicTacToeGame spot,
         PlayActor actor,
         ZLinkMessageContext context,

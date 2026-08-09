@@ -1,5 +1,4 @@
 import { loadBinding } from '../node-backend-adapter';
-import type { ZLinkBackendObject } from '../contracts';
 import { ZLinkBackendResultError } from '../runtime-values';
 
 export type ZLinkBindingModule = typeof import('@zlink-systems/zlink');
@@ -23,120 +22,6 @@ interface ZLinkBindingRequestSubmitOperation {
   submit(callback: unknown): boolean;
 }
 
-export interface ZLinkBindingPromiseRequestSubmitOperation<TParts extends unknown[]> {
-  submit(callback: (result: number, parts: TParts) => void): boolean;
-}
-
-export function unwrapBackendObject(value: unknown): unknown {
-  if (typeof value === 'object' && value !== null) {
-    const nativeInstance = (value as Partial<ZLinkBackendObject>).nativeInstance;
-    if (nativeInstance !== undefined) {
-      return nativeInstance;
-    }
-  }
-  return value;
-}
-
-export function closeBindingMessages(messages: readonly { close(): void }[]): void {
-  for (const message of messages) {
-    message.close();
-  }
-}
-
-export function waitForBindingOperation<T>(
-  pending: Promise<T>,
-  signal: AbortSignal | undefined,
-  releaseLateResult: (result: T) => void
-): Promise<T> {
-  if (signal === undefined) {
-    return pending;
-  }
-  signal.throwIfAborted();
-  return new Promise<T>((resolve, reject) => {
-    let completed = false;
-    const onAbort = () => {
-      if (completed) {
-        return;
-      }
-      completed = true;
-      reject(signal.reason);
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-    pending.then(
-      result => {
-        if (completed) {
-          releaseLateResult(result);
-          return;
-        }
-        completed = true;
-        signal.removeEventListener('abort', onAbort);
-        resolve(result);
-      },
-      error => {
-        if (completed) {
-          return;
-        }
-        completed = true;
-        signal.removeEventListener('abort', onAbort);
-        reject(error);
-      }
-    );
-  });
-}
-
-export function submitSendOperation(operation: unknown, payload: unknown, flags: number): boolean {
-  let current = appendOperationParts(operation, payload);
-  if (flags !== 0 && hasOperationMethod(current, 'flags')) {
-    current = current.flags(flags) as ZLinkBindingOperation;
-  }
-  if (!hasOperationMethod(current, 'submit')) {
-    throw new TypeError('Binding send operation does not expose submit().');
-  }
-  return Boolean(current.submit());
-}
-
-export function submitActorSendOperation(
-  target: unknown,
-  actor: unknown,
-  payload: unknown,
-  flags: number
-): Promise<boolean> {
-  const parts = Array.isArray(payload) ? payload : [payload];
-  if (parts.length === 0) {
-    throw new TypeError('Binding operation payload must contain at least one part.');
-  }
-  return new Promise<boolean>((resolve, reject) => {
-    try {
-      const accepted = (target as {
-        sendToActorCallback(
-          actor: unknown,
-          parts: readonly unknown[],
-          callback: (result: number, replyParts: readonly unknown[]) => void,
-          flags: number,
-          timeoutMs: number
-        ): boolean;
-      }).sendToActorCallback(
-        actor,
-        parts,
-        result => {
-          if (result === zlink.RequestResult.Ok) {
-            resolve(true);
-          } else {
-            reject(new zlink.RequestError(result as typeof zlink.RequestResult[keyof typeof zlink.RequestResult], 0));
-          }
-        },
-        flags,
-        0
-      );
-      if (!accepted) {
-        resolve(false);
-      }
-    } catch (error) {
-      reject(error);
-    }
-  });
-}
-
 export function submitRequestOperation(
   operation: unknown,
   payload: unknown,
@@ -145,25 +30,6 @@ export function submitRequestOperation(
   timeoutMs?: number
 ): boolean {
   let current = appendOperationParts(operation, payload);
-  if (timeoutMs !== undefined && timeoutMs > 0 && hasOperationMethod(current, 'timeout')) {
-    current = current.timeout(timeoutMs) as ZLinkBindingOperation;
-  }
-  if (flags !== 0 && hasOperationMethod(current, 'flags')) {
-    current = current.flags(flags) as ZLinkBindingOperation;
-  }
-  if (!hasOperationMethod(current, 'submit')) {
-    throw new TypeError('Binding request operation does not expose submit().');
-  }
-  return Boolean(current.submit(callback));
-}
-
-export function submitPreparedRequestOperation(
-  operation: unknown,
-  callback: unknown,
-  flags: number,
-  timeoutMs?: number
-): boolean {
-  let current = operation;
   if (timeoutMs !== undefined && timeoutMs > 0 && hasOperationMethod(current, 'timeout')) {
     current = current.timeout(timeoutMs) as ZLinkBindingOperation;
   }
@@ -267,23 +133,6 @@ export function submitBindingRequestCallback(
   } catch (error) {
     throw translateBindingResultError(error);
   }
-}
-
-export function submitBindingRequest<TParts extends unknown[]>(
-  operation: ZLinkBindingPromiseRequestSubmitOperation<TParts>
-): Promise<TParts> {
-  return new Promise((resolve, reject) => {
-    const accepted = operation.submit((result, parts) => {
-      if (result !== 0) {
-        reject(new Error(`Binding request failed with result ${result}.`));
-        return;
-      }
-      resolve(parts);
-    });
-    if (!accepted) {
-      reject(new Error('Binding request submit was not accepted.'));
-    }
-  });
 }
 
 export async function closeWithBusyRetry(target: { close(): void }): Promise<void> {

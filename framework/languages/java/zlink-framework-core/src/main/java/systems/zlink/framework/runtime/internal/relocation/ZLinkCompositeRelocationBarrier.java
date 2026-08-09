@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.internal.relocation;
+import java.util.Collections;
+import java.util.Objects;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -45,7 +47,7 @@ public final class ZLinkCompositeRelocationBarrier {
                 : lanes.entrySet()) {
                 String laneId = requireLaneId(lane.getKey());
                 ZLinkAsyncSerialQueue queue =
-                    java.util.Objects.requireNonNull(
+                    Objects.requireNonNull(
                         lane.getValue(), "relocation lane");
                 if (laneSnapshot.putIfAbsent(laneId, queue) != null) {
                     throw new IllegalArgumentException(
@@ -65,9 +67,9 @@ public final class ZLinkCompositeRelocationBarrier {
         }
         Seal result = new Seal(
             nextGeneration++,
-            java.util.Collections.unmodifiableMap(
+            Collections.unmodifiableMap(
                 new LinkedHashMap<>(laneSnapshot)),
-            java.util.Collections.unmodifiableMap(
+            Collections.unmodifiableMap(
                 new LinkedHashMap<>(seals)));
         active = result;
         return Optional.of(result);
@@ -81,7 +83,7 @@ public final class ZLinkCompositeRelocationBarrier {
     public CompletionStage<Optional<Seal>> sealAtTurnBoundary(
         Map<String, ZLinkAsyncSerialQueue> lanes,
         BooleanSupplier cancelled) {
-        java.util.Objects.requireNonNull(cancelled, "cancelled");
+        Objects.requireNonNull(cancelled, "cancelled");
         LinkedHashMap<String, ZLinkAsyncSerialQueue> snapshot =
             validateLanes(lanes);
         return attemptTurnBoundary(snapshot, cancelled);
@@ -157,9 +159,9 @@ public final class ZLinkCompositeRelocationBarrier {
         }
         Seal result = new Seal(
             nextGeneration++,
-            java.util.Collections.unmodifiableMap(
+            Collections.unmodifiableMap(
                 new LinkedHashMap<>(lanes)),
-            java.util.Collections.unmodifiableMap(
+            Collections.unmodifiableMap(
                 new LinkedHashMap<>(seals)));
         active = result;
         return Optional.of(result);
@@ -171,7 +173,7 @@ public final class ZLinkCompositeRelocationBarrier {
         }
         List<String> laneIds =
             new ArrayList<>(seal.lanes.keySet());
-        java.util.Collections.reverse(laneIds);
+        Collections.reverse(laneIds);
         boolean restored = true;
         for (String laneId : laneIds) {
             restored &= seal.lanes.get(laneId).abortRelocation(
@@ -240,7 +242,7 @@ public final class ZLinkCompositeRelocationBarrier {
                     .orElseThrow(() -> new IllegalStateException(
                         "composite relocation freeze lost a lane fence")));
         }
-        return Optional.of(java.util.Collections.unmodifiableMap(held));
+        return Optional.of(Collections.unmodifiableMap(held));
     }
 
     public <T> CompletionStage<T> runCapture(
@@ -252,7 +254,7 @@ public final class ZLinkCompositeRelocationBarrier {
                     "capture requires the active relocation barrier generation");
             }
         }
-        return java.util.Objects.requireNonNull(
+        return Objects.requireNonNull(
             capture.get(), "capture result");
     }
 
@@ -269,14 +271,14 @@ public final class ZLinkCompositeRelocationBarrier {
                 laneId,
                 seal.seals.get(laneId).captured());
         }
-        return Optional.of(java.util.Collections.unmodifiableMap(captured));
+        return Optional.of(Collections.unmodifiableMap(captured));
     }
 
     private static void rollback(
         Map<String, ZLinkAsyncSerialQueue> lanes,
         Map<String, ZLinkAsyncSerialQueue.RelocationSeal> seals) {
         List<String> laneIds = new ArrayList<>(seals.keySet());
-        java.util.Collections.reverse(laneIds);
+        Collections.reverse(laneIds);
         for (String laneId : laneIds) {
             if (!lanes.get(laneId).abortRelocation(seals.get(laneId))) {
                 throw new IllegalStateException(
@@ -297,7 +299,7 @@ public final class ZLinkCompositeRelocationBarrier {
             String required = requireLaneId(laneId);
             if (snapshot.putIfAbsent(
                     required,
-                    java.util.Objects.requireNonNull(
+                    Objects.requireNonNull(
                         queue, "relocation lane")) != null) {
                 throw new IllegalArgumentException(
                     "duplicate relocation lane: " + required);

@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -1410,9 +1414,9 @@ final class ZLinkCanonicalRelocationStateMachine
         });
         CompletableFuture.delayedExecutor(
             timeout.toMillis(),
-            java.util.concurrent.TimeUnit.MILLISECONDS)
+            TimeUnit.MILLISECONDS)
             .execute(() -> result.completeExceptionally(
-                new java.util.concurrent.TimeoutException(
+                new TimeoutException(
                     operation + " timed out")));
         return result;
     }
@@ -1433,7 +1437,7 @@ final class ZLinkCanonicalRelocationStateMachine
             }
             CompletableFuture.delayedExecutor(
                 25,
-                java.util.concurrent.TimeUnit.MILLISECONDS)
+                TimeUnit.MILLISECONDS)
                 .execute(() -> attemptUntilAck(
                     targetRid, command, ack, deadline, result));
         });
@@ -1534,17 +1538,17 @@ final class ZLinkCanonicalRelocationStateMachine
         });
         CompletableFuture.delayedExecutor(
             timeout.toMillis(),
-            java.util.concurrent.TimeUnit.MILLISECONDS)
+            TimeUnit.MILLISECONDS)
             .execute(() -> result.completeExceptionally(
-                new java.util.concurrent.TimeoutException(
+                new TimeoutException(
                     operation + " timed out")));
         return result;
     }
 
     private static Throwable unwrap(Throwable failure) {
         Throwable current = failure;
-        while ((current instanceof java.util.concurrent.CompletionException
-            || current instanceof java.util.concurrent.ExecutionException)
+        while ((current instanceof CompletionException
+            || current instanceof ExecutionException)
             && current.getCause() != null) {
             current = current.getCause();
         }

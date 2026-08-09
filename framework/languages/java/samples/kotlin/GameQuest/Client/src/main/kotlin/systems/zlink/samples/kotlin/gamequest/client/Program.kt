@@ -1,5 +1,7 @@
 package systems.zlink.samples.kotlin.gamequest.client
 
+
+import java.util.Properties
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
@@ -226,7 +228,7 @@ data class GameQuestClientOptions(
             require(args.size == 2 && args[0] == "--config" && args[1].isNotBlank()) {
                 "Usage: Client --config <path>"
             }
-            val properties = java.util.Properties().apply {
+            val properties = Properties().apply {
                 Files.newBufferedReader(Path.of(args[1])).use(::load)
             }
             fun required(name: String): String =

@@ -1,4 +1,10 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.Comparator;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
+import systems.zlink.framework.locations.ZLinkLocationRole;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -58,11 +64,11 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
     private final int pageSize;
     private final BiConsumer<String, ZLinkBackendTopicMessage> dispatch;
     private final Map<String, Published> published =
-        new java.util.concurrent.ConcurrentHashMap<>();
+        new ConcurrentHashMap<>();
     private final Map<String, Connection> connections =
-        new java.util.concurrent.ConcurrentHashMap<>();
+        new ConcurrentHashMap<>();
     private final Set<String> automaticChannels =
-        java.util.concurrent.ConcurrentHashMap.newKeySet();
+        ConcurrentHashMap.newKeySet();
     private final ScheduledExecutorService executor =
         Executors.newSingleThreadScheduledExecutor(task -> {
             Thread thread = new Thread(
@@ -153,11 +159,11 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         List<ZLinkChannelRuntime.AutoConnectSurface> surfaces) {
         for (ZLinkChannelRuntime.AutoConnectSurface surface : surfaces) {
             if (surface.type()
-                != systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType.FANOUT) {
+                != ZLinkAutoConnectType.FANOUT) {
                 continue;
             }
             if (surface.role()
-                == systems.zlink.framework.locations.ZLinkLocationRole.PUB) {
+                == ZLinkLocationRole.PUB) {
                 if (published.putIfAbsent(
                         surface.meshName(),
                         new Published(
@@ -175,7 +181,7 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                                 + surface.meshName());
                 }
             } else if (surface.role()
-                == systems.zlink.framework.locations.ZLinkLocationRole.SUB) {
+                == ZLinkLocationRole.SUB) {
                 automaticChannels.add(surface.meshName());
             }
         }
@@ -209,7 +215,7 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                     : ZLinkLocationWriteIntent.NEW_CLAIM)
                 .thenAccept(result -> {
                     if (result.status()
-                        != systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus.STORED) {
+                        != ZLinkLocationWriteStatus.STORED) {
                         throw new IllegalStateException(
                             "fanout publisher descriptor write was fenced");
                     }
@@ -563,7 +569,7 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
     }
 
     private static long positiveNonce() {
-        long value = java.util.concurrent.ThreadLocalRandom.current()
+        long value = ThreadLocalRandom.current()
             .nextLong(1, Long.MAX_VALUE);
         return value == 0 ? 1 : value;
     }
@@ -600,7 +606,7 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
             .map(connection -> new FanoutPublisherSnapshot(
                 connection.descriptor.publisherRid(),
                 connection.ready))
-            .sorted(java.util.Comparator.comparing(
+            .sorted(Comparator.comparing(
                 snapshot -> snapshot.nodeRid().toHex()))
             .toList();
     }

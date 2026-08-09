@@ -1,4 +1,8 @@
 package systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.actors;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
@@ -15,8 +19,8 @@ public final class PlayActor implements ZLinkActor {
     private PlayerInfo player;
     private String joinedRoomId;
     private String pendingRoomId;
-    private final java.util.Set<ZLinkActorJoinOperationId>
-        completedJoinOperations = new java.util.HashSet<>();
+    private final Set<ZLinkActorJoinOperationId>
+        completedJoinOperations = new HashSet<>();
     private boolean destroyAfterEntrySpotJoin;
     private boolean disconnected;
 
@@ -75,7 +79,7 @@ public final class PlayActor implements ZLinkActor {
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onJoinCompleted(
+    public CompletionStage<Void> onJoinCompleted(
         ZLinkActorJoinCompletion completion) {
         ZLinkActorJoinOperationId operationId = completion
             instanceof ZLinkActorJoinCompletion.Accepted accepted
@@ -84,7 +88,7 @@ public final class PlayActor implements ZLinkActor {
                     ? rejected.operationId()
                     : ((ZLinkActorJoinCompletion.Failed) completion).operationId();
         if (!completedJoinOperations.add(operationId)) {
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
         String roomId = pendingRoomId;
         pendingRoomId = null;

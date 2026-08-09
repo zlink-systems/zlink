@@ -110,7 +110,7 @@ export function encodeFrameworkPayload(
 
   return {
     message: rememberContentType(
-      RuntimeMessage.from(Buffer.from(stringifyFrameworkJsonV1(
+      RuntimeMessage.fromOwned(Buffer.from(stringifyFrameworkJsonV1(
         payload,
         (resolveFrameworkPacketJsonContract(payload, packetName)
           ?? (packetName === undefined ? undefined : readZLinkPacketJsonContract(packetName)))?.[contractPart]

@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.channels;
+import org.junit.jupiter.api.Assertions;
+import systems.zlink.framework.ZLinkMessageContext;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -100,7 +102,7 @@ final class ZLinkChannelHandlerFilterContractTest {
     void requestShortCircuitIsRejectedWithoutSerializingFilterValue() {
         Probe probe = new Probe();
         probe.stopRequests = true;
-        CompletionException failure = org.junit.jupiter.api.Assertions.assertThrows(
+        CompletionException failure = Assertions.assertThrows(
             CompletionException.class,
             () -> invoker(probe, null)
                 .invokeRequestHandler(
@@ -247,7 +249,7 @@ final class ZLinkChannelHandlerFilterContractTest {
         @Override
         public CompletionStage<Void> handle(
             String message,
-            systems.zlink.framework.ZLinkMessageContext context) {
+            ZLinkMessageContext context) {
             probe.handlerCalls++;
             return CompletableFuture.completedFuture(null);
         }
@@ -258,7 +260,7 @@ final class ZLinkChannelHandlerFilterContractTest {
         @Override
         public CompletionStage<String> handle(
             String request,
-            systems.zlink.framework.ZLinkMessageContext context) {
+            ZLinkMessageContext context) {
             probe.handlerCalls++;
             return CompletableFuture.completedFuture(request);
         }

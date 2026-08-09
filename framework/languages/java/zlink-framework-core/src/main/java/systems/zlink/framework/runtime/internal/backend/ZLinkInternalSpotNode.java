@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.internal.backend;
+import java.util.Map;
+import java.util.Optional;
 
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinEntrySpotResult;
@@ -59,16 +61,16 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         // Alternate backends may not support the raw service Actor relay.
     }
 
-    default java.util.Optional<Integer> submitLocalNodeSend(
+    default Optional<Integer> submitLocalNodeSend(
         RoutingId targetNodeRid,
         byte[] metadata,
         List<Message> parts) {
-        return java.util.Optional.empty();
+        return Optional.empty();
     }
 
-    default java.util.Optional<Integer> classifyNodeSendTarget(
+    default Optional<Integer> classifyNodeSendTarget(
         RoutingId targetNodeRid) {
-        return java.util.Optional.empty();
+        return Optional.empty();
     }
 
     /**
@@ -76,9 +78,9 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
      * Implementations return an admission status only when the channel has no
      * selectable target; an empty result preserves the normal transport path.
      */
-    default java.util.Optional<Integer> classifyChannelTarget(
+    default Optional<Integer> classifyChannelTarget(
         String channelName) {
-        return java.util.Optional.empty();
+        return Optional.empty();
     }
 
     ZLinkBackendSpotRouteBridge createRouteBridge();
@@ -331,7 +333,7 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         long sourceSessionSequence,
         long requestSequence,
         String packetName,
-        java.util.Map<String, String> metadata,
+        Map<String, String> metadata,
         byte[] payload) {
         return new byte[0];
     }
@@ -341,9 +343,9 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         RoutingId sourceNodeRid,
         RoutingId sourceSessionRid);
 
-    default java.util.Optional<BoundSessionRoute> boundSessionRoute(
+    default Optional<BoundSessionRoute> boundSessionRoute(
         ZLinkBackendActorRef actor) {
-        return java.util.Optional.empty();
+        return Optional.empty();
     }
 
     void closeActorBoundSession(ZLinkBackendActorRef actor, Duration timeout);

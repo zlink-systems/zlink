@@ -1,4 +1,5 @@
 package systems.zlink.e2e.toactormessaging.caller;
+import java.util.Map;
 
 import java.time.Duration;
 import java.nio.file.Path;
@@ -55,7 +56,7 @@ public final class Program {
         boot("http create");
         JsonHttp http = new JsonHttp(config.callerHttpEndpoint());
         boot("http route health");
-        http.get("/health", () -> java.util.Map.of("status", "ok"));
+        http.get("/health", () -> Map.of("status", "ok"));
         http.get("/route-status", () -> {
             boolean ready = meshRuntime.snapshot(Contracts.SPOT_MESH).peers().stream()
                 .anyMatch(peer -> peer.nodeRid().toString().equals(config.actorRouteRid())

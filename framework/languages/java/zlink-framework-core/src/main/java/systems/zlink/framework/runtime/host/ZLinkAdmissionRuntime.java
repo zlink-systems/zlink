@@ -1,4 +1,9 @@
 package systems.zlink.framework.runtime.host;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.ToIntFunction;
+import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -29,7 +34,7 @@ final class ZLinkAdmissionRuntime {
     private ZLinkAdmissionRuntime() {
     }
 
-    static systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.Admission factory(
+    static ZLinkOneWayCalls.Admission factory(
         systems.zlink.framework.runtime.internal.backend
             .ZLinkBackendAdapterProvider provider) {
         var source = provider.admissionSource();
@@ -41,14 +46,14 @@ final class ZLinkAdmissionRuntime {
             source, timeout, capacity, readyRegistrar, shutdownRegistrar);
     }
 
-    static systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.Admission factory(
-        java.util.function.Function<ZLinkBackendObject, ZLinkBackendObject> source,
-        java.util.function.Function<ZLinkBackendObject, Duration> timeout,
-        java.util.function.ToIntFunction<ZLinkBackendObject> capacity,
-        java.util.function.BiConsumer<
+    static ZLinkOneWayCalls.Admission factory(
+        Function<ZLinkBackendObject, ZLinkBackendObject> source,
+        Function<ZLinkBackendObject, Duration> timeout,
+        ToIntFunction<ZLinkBackendObject> capacity,
+        BiConsumer<
             ZLinkBackendObject,
-            java.util.function.Consumer<ZLinkBackendAdmissionKey>> readyRegistrar,
-        java.util.function.BiConsumer<ZLinkBackendObject, Runnable>
+            Consumer<ZLinkBackendAdmissionKey>> readyRegistrar,
+        BiConsumer<ZLinkBackendObject, Runnable>
             shutdownRegistrar) {
         return (backend, key, submission, cleanup, timeoutOverride) ->
             submit(
@@ -69,14 +74,14 @@ final class ZLinkAdmissionRuntime {
         ZLinkBackendAdmissionKey key,
         Supplier<Boolean> attempt,
         Runnable cleanup,
-        java.util.function.Function<ZLinkBackendObject, ZLinkBackendObject>
+        Function<ZLinkBackendObject, ZLinkBackendObject>
             sourceResolver,
-        java.util.function.Function<ZLinkBackendObject, Duration> timeoutResolver,
-        java.util.function.ToIntFunction<ZLinkBackendObject> capacityResolver,
-        java.util.function.BiConsumer<
+        Function<ZLinkBackendObject, Duration> timeoutResolver,
+        ToIntFunction<ZLinkBackendObject> capacityResolver,
+        BiConsumer<
             ZLinkBackendObject,
-            java.util.function.Consumer<ZLinkBackendAdmissionKey>> readyRegistrar,
-        java.util.function.BiConsumer<ZLinkBackendObject, Runnable>
+            Consumer<ZLinkBackendAdmissionKey>> readyRegistrar,
+        BiConsumer<ZLinkBackendObject, Runnable>
             shutdownRegistrar) {
         return submit(
             backend,
@@ -96,14 +101,14 @@ final class ZLinkAdmissionRuntime {
         ZLinkBackendAdmissionKey key,
         Supplier<Boolean> attempt,
         Runnable cleanup,
-        java.util.function.Function<ZLinkBackendObject, ZLinkBackendObject>
+        Function<ZLinkBackendObject, ZLinkBackendObject>
             sourceResolver,
-        java.util.function.Function<ZLinkBackendObject, Duration> timeoutResolver,
-        java.util.function.ToIntFunction<ZLinkBackendObject> capacityResolver,
-        java.util.function.BiConsumer<
+        Function<ZLinkBackendObject, Duration> timeoutResolver,
+        ToIntFunction<ZLinkBackendObject> capacityResolver,
+        BiConsumer<
             ZLinkBackendObject,
-            java.util.function.Consumer<ZLinkBackendAdmissionKey>> readyRegistrar,
-        java.util.function.BiConsumer<ZLinkBackendObject, Runnable>
+            Consumer<ZLinkBackendAdmissionKey>> readyRegistrar,
+        BiConsumer<ZLinkBackendObject, Runnable>
             shutdownRegistrar,
         Duration timeoutOverride) {
         ZLinkBackendObject admissionSource = sourceResolver.apply(backend);
@@ -143,10 +148,10 @@ final class ZLinkAdmissionRuntime {
     private static Source source(
         ZLinkBackendObject backend,
         int pendingCapacity,
-        java.util.function.BiConsumer<
+        BiConsumer<
             ZLinkBackendObject,
-            java.util.function.Consumer<ZLinkBackendAdmissionKey>> readyRegistrar,
-        java.util.function.BiConsumer<ZLinkBackendObject, Runnable>
+            Consumer<ZLinkBackendAdmissionKey>> readyRegistrar,
+        BiConsumer<ZLinkBackendObject, Runnable>
             shutdownRegistrar) {
         synchronized (SOURCES) {
             Source current = SOURCES.get(backend);

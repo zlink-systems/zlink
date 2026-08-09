@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
@@ -85,7 +86,7 @@ import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 
 
 final class PublishCall implements ZLinkFanoutPublishCall {
-    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
+    private final AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final ZLinkBackendPublisherSocket publisher;
     private final String topic;
@@ -111,7 +112,7 @@ final class PublishCall implements ZLinkFanoutPublishCall {
         Optional<String> packetName,
         String contentType) {
         this(runtime, publisher, topic, payload, packetName, contentType,
-            new java.util.concurrent.atomic.AtomicBoolean());
+            new AtomicBoolean());
     }
 
     private PublishCall(
@@ -121,7 +122,7 @@ final class PublishCall implements ZLinkFanoutPublishCall {
         Message payload,
         Optional<String> packetName,
         String contentType,
-        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        AtomicBoolean submitGate) {
         this.submitGate = submitGate;
         this.runtime = runtime;
         this.publisher = publisher;
@@ -163,7 +164,7 @@ final class PublishCall implements ZLinkFanoutPublishCall {
 }
 
 final class SendCall implements ZLinkSendCall {
-    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
+    private final AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final ZLinkBackendDealerSocket client;
     private final Message payload;
@@ -186,7 +187,7 @@ final class SendCall implements ZLinkSendCall {
         Optional<String> packetName,
         String contentType) {
         this(runtime, client, payload, packetName, contentType,
-            new java.util.concurrent.atomic.AtomicBoolean());
+            new AtomicBoolean());
     }
 
     private SendCall(
@@ -195,7 +196,7 @@ final class SendCall implements ZLinkSendCall {
         Message payload,
         Optional<String> packetName,
         String contentType,
-        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        AtomicBoolean submitGate) {
         this.submitGate = submitGate;
         this.runtime = runtime;
         this.client = client;
@@ -238,7 +239,7 @@ final class SendCall implements ZLinkSendCall {
 }
 
 final class RequestCall implements ZLinkRequestCall {
-    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
+    private final AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final ZLinkBackendDealerSocket client;
     private final Message payload;
@@ -271,7 +272,7 @@ final class RequestCall implements ZLinkRequestCall {
         ZLinkRequestMetricTags metricTags,
         String contentType) {
         this(runtime, client, payload, packetName, timeout, metricTags,
-            contentType, new java.util.concurrent.atomic.AtomicBoolean());
+            contentType, new AtomicBoolean());
     }
 
     private RequestCall(
@@ -282,7 +283,7 @@ final class RequestCall implements ZLinkRequestCall {
         Duration timeout,
         ZLinkRequestMetricTags metricTags,
         String contentType,
-        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        AtomicBoolean submitGate) {
         this.submitGate = submitGate;
         this.metricTags = metricTags;
         this.runtime = runtime;
@@ -366,14 +367,14 @@ final class RequestCall implements ZLinkRequestCall {
                 }
             },
             result);
-        return systems.zlink.framework.execution.ZLinkAsyncSerialQueue.manageCurrent(result);
+        return ZLinkAsyncSerialQueue.manageCurrent(result);
     }
 
     @Override
     public <TReply> CompletionStage<TReply> yield(Class<TReply> replyType) {
         systems.zlink.framework.runtime.internal.handlers
             .ZLinkSuspendInvocationContext.requireYieldAllowed("Channel request");
-        return systems.zlink.framework.execution.ZLinkAsyncSerialQueue
+        return ZLinkAsyncSerialQueue
             .yieldCurrent(submit(replyType));
     }
 

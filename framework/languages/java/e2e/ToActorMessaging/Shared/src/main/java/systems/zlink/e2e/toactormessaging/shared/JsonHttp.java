@@ -1,4 +1,5 @@
 package systems.zlink.e2e.toactormessaging.shared;
+import java.util.function.Supplier;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
@@ -62,7 +63,7 @@ public final class JsonHttp implements AutoCloseable {
         });
     }
 
-    public void get(String path, java.util.function.Supplier<Object> handler) {
+    public void get(String path, Supplier<Object> handler) {
         server.createContext(path, exchange -> sendJson(exchange, handler.get()));
     }
 

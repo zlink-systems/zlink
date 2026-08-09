@@ -1,5 +1,5 @@
 package systems.zlink.e2e.toactormessaging.client;
-import java.io.Reader; import java.nio.file.Files; import java.nio.file.Path; import java.util.Properties;
+import Reader; import java.nio.file.Files; import java.nio.file.Path; import java.util.Properties;
 public record ClientOptions(String actorHttpEndpoint,String actorBHttpEndpoint,String callerHttpEndpoint,String sessionAHttpEndpoint,
     String sessionBHttpEndpoint,String sessionAStreamEndpoint,String sessionBStreamEndpoint) {
     public ClientOptions { required(actorHttpEndpoint,"actorHttpEndpoint"); required(callerHttpEndpoint,"callerHttpEndpoint");

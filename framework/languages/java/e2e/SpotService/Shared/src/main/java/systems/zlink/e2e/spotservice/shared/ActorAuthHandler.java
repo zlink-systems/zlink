@@ -1,4 +1,6 @@
 package systems.zlink.e2e.spotservice.shared;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.actors.ActorRef;
@@ -25,13 +27,13 @@ public final class ActorAuthHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> handle(
+    public CompletionStage<Void> handle(
         ZLinkSessionContext context,
         ZLinkSessionDispatchContext dispatch,
         Contracts.ActorAuthReq request) {
         return actors.find(request.actorId())
-            .thenCompose(existing -> existing.<java.util.concurrent.CompletionStage<ActorRef>>map(
-                java.util.concurrent.CompletableFuture::completedFuture)
+            .thenCompose(existing -> existing.<CompletionStage<ActorRef>>map(
+                CompletableFuture::completedFuture)
                 .orElseGet(() -> actors.create(request.actorId(), "scenario")
                     .request(request)
                     .submit()

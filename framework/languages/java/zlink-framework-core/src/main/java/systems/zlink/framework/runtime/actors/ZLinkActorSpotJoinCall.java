@@ -1,4 +1,12 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.logging.Logger;
+import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.spots.SpotHandleResolver;
+import systems.zlink.framework.spots.ZLinkSpotKind;
 
 import java.time.Duration;
 import java.util.List;
@@ -46,8 +54,8 @@ import systems.zlink.framework.spots.ZLinkSpot;
 final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
     private static final boolean STREAM_TRACE =
         "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
-    private static final java.util.logging.Logger LOGGER =
-        java.util.logging.Logger.getLogger(ZLinkActorSpotJoinCall.class.getName());
+    private static final Logger LOGGER =
+        Logger.getLogger(ZLinkActorSpotJoinCall.class.getName());
     private final ZLinkActorRuntime.DefaultActorContext context;
     private final String spotId;
     private final Message request;
@@ -397,7 +405,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
     }
 
     private static <T> CompletionStage<T> manage(CompletionStage<T> stage) {
-        return systems.zlink.framework.execution.ZLinkAsyncSerialQueue.manageCurrent(stage);
+        return ZLinkAsyncSerialQueue.manageCurrent(stage);
     }
 
     private void rejectSameGateWait() {
@@ -507,16 +515,16 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         Supplier<CompletionStage<Void>> cleanup = () -> rebound
             .thenCompose(ignored -> {
                 CompletionStage<
-                    java.util.Optional<ZLinkStoreLocationResolvers.ActorRoute>>
+                    Optional<ZLinkStoreLocationResolvers.ActorRoute>>
                     targetRoute = retainMessageFollowSource
                             && !sourceCleanupWasStarted
                         ? services.actors().resolveMessageFollowTargetRoute(
                             result.actor(),
-                            java.util.Objects.requireNonNull(
+                            Objects.requireNonNull(
                                 messageFollowAddress.get(),
                                 "committed Message Follow address"))
                         : CompletableFuture.completedFuture(
-                            java.util.Optional.empty());
+                            Optional.empty());
                 return targetRoute.thenCompose(route -> {
                     if (requiresMessageFollowTargetRoute(
                         retainMessageFollowSource,
@@ -549,7 +557,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                         && messageFollowInstalled.compareAndSet(false, true)) {
                         services.actors().retainMessageFollowSource(
                             context.actor(), sourceActorRef, result.actor(),
-                            java.util.Objects.requireNonNull(
+                            Objects.requireNonNull(
                                 messageFollowAddress.get(),
                                 "committed Message Follow address"),
                             toMessageFollowActorRoute(route.orElseThrow()));
@@ -602,7 +610,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                     spotId,
                     0L,
                     0L,
-                    systems.zlink.framework.spots.ZLinkSpotKind.ENTRY))
+                    ZLinkSpotKind.ENTRY))
                 : resolveHandle(services.remoteAddressResolver(), spotId)
             .thenCompose(services.remoteAddressResolver()::resolve)
             .thenApply(address -> address.map(value -> explicitTargetNode == null
@@ -624,8 +632,9 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                 internalTargetNode.toString(),
                 0L,
                 0L,
-                systems.zlink.framework.spots.ZLinkSpotKind.ENTRY));
+                ZLinkSpotKind.ENTRY));
         return resolved.thenCompose(target -> {
+                rememberResolvedSpotAuthority(target);
                 messageFollowAddress.set(target);
                 ZLinkBackendActorRef currentActorRef = context.actorRef();
                 String actorType = actorTypeOrEmpty(currentActorRef.actorId());
@@ -676,6 +685,20 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                     throw error;
                 }
             });
+    }
+
+    private void rememberResolvedSpotAuthority(SpotTransportAddress target) {
+        if (target.spotGeneration() <= 0
+            || target.authorityOwnerGeneration() <= 0
+            || target.ownerLeaseGeneration() <= 0) {
+            return;
+        }
+        services.spotNode().entrySpot().rememberSpotAuthority(
+            target.targetNodeRid(),
+            target.spotId(),
+            target.spotGeneration(),
+            target.authorityOwnerGeneration(),
+            target.ownerLeaseGeneration());
     }
 
     private CompletionStage<ZLinkBackendActorJoinResult> commitRemoteTransfer(
@@ -1042,11 +1065,11 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
     }
 
     private static List<
-        systems.zlink.framework.execution.ZLinkAsyncSerialQueue.QueuedRecord>
+        ZLinkAsyncSerialQueue.QueuedRecord>
         canonicalJournal(List<ZLinkActorHandoffPacket> backlog) {
         return backlog.stream()
             .map(packet ->
-                new systems.zlink.framework.execution.ZLinkAsyncSerialQueue
+                new ZLinkAsyncSerialQueue
                     .QueuedRecord(
                         packet.arrivalIndex(),
                         systems.zlink.framework.runtime.streams
@@ -1157,11 +1180,11 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
             return CompletableFuture.completedFuture(null);
         }
         List<ZLinkActorHandoffPacket> packets =
-            new java.util.ArrayList<>(
+            new ArrayList<>(
                 committedBacklog.size() + lateBacklog.size());
         packets.addAll(committedBacklog);
         packets.addAll(lateBacklog);
-        packets.sort(java.util.Comparator.comparingLong(
+        packets.sort(Comparator.comparingLong(
             ZLinkActorHandoffPacket::arrivalIndex));
         // The target's accepted-journal fence makes this replay idempotent if
         // the original commit reached the target but its reply was lost.
@@ -1260,11 +1283,11 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
             Throwable cause,
             long deadlineNanos) {
         Duration remaining = remainingTimeout(deadlineNanos);
-        CompletionStage<java.util.Optional<systems.zlink.framework.actors.ActorRef>>
+        CompletionStage<Optional<systems.zlink.framework.actors.ActorRef>>
             committedStage;
         if (remaining == null) {
             committedStage = CompletableFuture.completedFuture(
-                java.util.Optional.empty());
+                Optional.empty());
         } else {
             committedStage = ZLinkActorRetryScheduler.retryRouteUntilPresent(
                 remaining,
@@ -1367,7 +1390,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                             throw new CompletionException(error);
                         }
                         if ("1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"))) {
-                            java.util.logging.Logger.getLogger(
+                            Logger.getLogger(
                                     ZLinkActorSpotJoinCall.class.getName())
                                 .warning("[zlink-java-stream-trace] late backlog reply"
                                     + " parts=" + replyParts.size()
@@ -1380,8 +1403,8 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                         packet.complete(replyParts.isEmpty()
                             || ZLinkActorSpotRoutePackets
                                 .isHandoffDirectReplyAck(replyParts.get(0))
-                            ? java.util.Optional.empty()
-                            : java.util.Optional.of(
+                            ? Optional.empty()
+                            : Optional.of(
                                 Message.from(replyParts.get(0))));
                         return null;
                     } finally {
@@ -1425,8 +1448,8 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                 ZLinkActorHandoffPacket packet = backlog.get(index);
                 Message response = replyParts.get(index + 1);
                 packet.complete(response.toByteArray().length == 0
-                    ? java.util.Optional.empty()
-                    : java.util.Optional.of(Message.from(response)));
+                    ? Optional.empty()
+                    : Optional.of(Message.from(response)));
                 packet.close();
             }
             Message commitReply = reply.reply();
@@ -1519,13 +1542,13 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
             spotId,
             0L,
             0L,
-            systems.zlink.framework.spots.ZLinkSpotKind.USER);
+            ZLinkSpotKind.USER);
     }
 
     private static CompletionStage<SpotHandle> resolveHandle(
         SpotTransportAddressResolver resolver,
         String spotId) {
-        if (!(resolver instanceof systems.zlink.framework.spots.SpotHandleResolver handles)) {
+        if (!(resolver instanceof SpotHandleResolver handles)) {
             return CompletableFuture.failedFuture(new ZLinkConfigurationException(
                 "SPOT transport resolver does not provide opaque handles"));
         }

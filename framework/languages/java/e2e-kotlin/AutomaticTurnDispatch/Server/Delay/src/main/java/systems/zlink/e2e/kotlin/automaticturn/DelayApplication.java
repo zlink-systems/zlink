@@ -1,4 +1,5 @@
 package systems.zlink.e2e.kotlin.automaticturn;
+import java.net.URI;
 
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -36,7 +37,7 @@ public final class DelayApplication {
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.addClientServerChannel(Contracts.DELAY_CHANNEL)
                 .server()
-                .listen(java.net.URI.create(Env.get("delayEndpoint")).getPort())
+                .listen(URI.create(Env.get("delayEndpoint")).getPort())
                 .addRequestHandler(
                 DelayHandler.class,
                 Contracts.DelayReq.class,

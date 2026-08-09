@@ -1,4 +1,11 @@
 package systems.zlink.e2e.registrymessaging.workflow;
+import java.net.URI;
+import java.time.Duration;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import java.util.concurrent.CompletableFuture;
 import java.nio.file.Path;
@@ -57,15 +64,15 @@ public final class Program {
             options.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.configureLocations()
-                .setOwnerLeaseRenewInterval(java.time.Duration.ofMillis(500));
-            options.configureLocations().setOwnerLeaseTtl(java.time.Duration.ofSeconds(3));
-            options.configureLocations().setPollingInterval(java.time.Duration.ofMillis(250));
+                .setOwnerLeaseRenewInterval(Duration.ofMillis(500));
+            options.configureLocations().setOwnerLeaseTtl(Duration.ofSeconds(3));
+            options.configureLocations().setPollingInterval(Duration.ofMillis(250));
             options.addHandlersFromPackageOf(ProfileReqHandler.class);
 
             String apiEndpoint = server.apiEndpoint();
             if (!apiEndpoint.isBlank()) {
                 var api = options.addClientServerChannel(Contracts.API_CHANNEL);
-                var endpoint = java.net.URI.create(apiEndpoint);
+                var endpoint = URI.create(apiEndpoint);
                 api.server()
                     .setBindHost(endpoint.getHost())
                     .setAdvertiseHost(endpoint.getHost())
@@ -93,7 +100,7 @@ public final class Program {
             String workflowEndpoint = server.workflowEndpoint();
             if (!workflowEndpoint.isBlank()) {
                 var workflow = options.addClientServerChannel(Contracts.WORKFLOW_CHANNEL);
-                var endpoint = java.net.URI.create(workflowEndpoint);
+                var endpoint = URI.create(workflowEndpoint);
                 workflow.server()
                     .setBindHost(endpoint.getHost())
                     .setAdvertiseHost(endpoint.getHost())
@@ -163,10 +170,10 @@ public final class Program {
     }
 
     private static void installDispatchErrorHandler(ScenarioState state) {
-        java.util.logging.Logger.getLogger(
+        Logger.getLogger(
             "systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer")
-            .addHandler(new java.util.logging.Handler() {
-                @Override public void publish(java.util.logging.LogRecord record) {
+            .addHandler(new Handler() {
+                @Override public void publish(LogRecord record) {
                     var fields = diagnosticsFields(record.getMessage());
                     if (!"ERROR".equals(fields.get("outcome"))) {
                         return;
@@ -182,8 +189,8 @@ public final class Program {
             });
     }
 
-    private static java.util.Map<String, String> diagnosticsFields(String message) {
-        java.util.Map<String, String> fields = new java.util.HashMap<>();
+    private static Map<String, String> diagnosticsFields(String message) {
+        Map<String, String> fields = new HashMap<>();
         if (message == null || !message.startsWith("message flow ")) {
             return fields;
         }

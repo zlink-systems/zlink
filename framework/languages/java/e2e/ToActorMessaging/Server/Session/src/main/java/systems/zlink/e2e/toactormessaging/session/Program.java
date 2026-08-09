@@ -1,4 +1,6 @@
 package systems.zlink.e2e.toactormessaging.session;
+import java.util.Map;
+import systems.zlink.framework.messaging.ZLinkMessage;
 
 import java.util.concurrent.CompletableFuture;
 import java.nio.file.Path;
@@ -52,7 +54,7 @@ public final class Program {
     @Bean(destroyMethod = "close")
     JsonHttp http(EvidenceStore evidence, SessionOptions config) {
         JsonHttp http = new JsonHttp(config.sessionHttpEndpoint());
-        http.get("/health", () -> java.util.Map.of(
+        http.get("/health", () -> Map.of(
             "status", "ok", "rid", config.sessionRid()));
         http.get("/evidence", evidence::all);
         http.start();
@@ -131,7 +133,7 @@ public final class Program {
         @Override
         public CompletionStage<Void> onDispatch(
             ZLinkSessionDispatchContext dispatch,
-            systems.zlink.framework.messaging.ZLinkMessage payload) {
+            ZLinkMessage payload) {
             return handlers.tryHandle(context, dispatch, payload).thenCompose(handled -> {
                 if (handled) {
                     return CompletableFuture.completedFuture(null);

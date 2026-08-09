@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.concurrent.CompletionException;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -59,7 +60,7 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
             new ZLinkUserSpotAggregateStagingOwner(backend);
 
         assertThrows(
-            java.util.concurrent.CompletionException.class,
+            CompletionException.class,
             () -> owner.stage(request(), () -> false)
                 .toCompletableFuture().join());
 

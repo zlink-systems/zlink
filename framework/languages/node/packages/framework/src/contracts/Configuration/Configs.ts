@@ -25,7 +25,3 @@ export interface ZLinkSpotPublisherConfig {
   sendTimeoutMs?: number;
   lingerMs?: number;
 }
-
-export interface ZLinkSpotSubscriberConfig {
-  topic: string;
-}

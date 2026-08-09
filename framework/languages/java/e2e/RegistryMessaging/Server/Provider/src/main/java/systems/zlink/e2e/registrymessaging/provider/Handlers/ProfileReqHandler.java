@@ -1,4 +1,8 @@
-package systems.zlink.e2e.registrymessaging.provider.Handlers;
+package Handlers;
+import systems.zlink.e2e.registrymessaging.provider.Handlers;
+import systems.zlink.e2e.registrymessaging.provider.Infrastructure;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.e2e.registrymessaging.provider.Infrastructure.ScenarioState;
 import systems.zlink.e2e.registrymessaging.provider.Infrastructure.ProfileGate;
@@ -19,7 +23,7 @@ public final class ProfileReqHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Contracts.ProfileRes> handle(
+    public CompletionStage<Contracts.ProfileRes> handle(
         Contracts.ProfileReq request,
         ZLinkMessageContext context) {
         if (request.value().startsWith("rm-b3-inflight-")) {
@@ -34,7 +38,7 @@ public final class ProfileReqHandler
             }
         }
         state.record("ProfileReq", request.value());
-        return java.util.concurrent.CompletableFuture.completedFuture(new Contracts.ProfileRes(
+        return CompletableFuture.completedFuture(new Contracts.ProfileRes(
             "profile:" + request.value(),
             state.providerRid(),
             state.instanceId()));

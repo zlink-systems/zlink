@@ -1,4 +1,5 @@
 package systems.zlink.framework.locations.redis;
+import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -27,7 +28,7 @@ class ZLinkRedisOpaqueLocationStoreTest {
     @Test
     void publicStoreImplementsOpaqueProviderContract() {
         assertTrue(
-            systems.zlink.framework.locationprovider.ZLinkLocationStore.class
+            ZLinkLocationStore.class
                 .isAssignableFrom(ZLinkRedisLocationStore.class));
     }
 

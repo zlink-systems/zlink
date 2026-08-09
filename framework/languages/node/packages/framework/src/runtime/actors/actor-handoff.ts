@@ -2,8 +2,7 @@ import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException, inte
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import type { ActorRef } from '../../contracts';
 import {
-  ZLinkFrameworkException,
-  ZLinkSpotKind
+  ZLinkFrameworkException
 } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
@@ -38,13 +37,6 @@ const MAX_MESSAGE_FOLLOW_HOPS = 8;
 const MAX_MESSAGE_FOLLOW_MESSAGES = 1024;
 const MAX_MESSAGE_FOLLOW_BYTES = 16 * 1024 * 1024;
 const RELOCATION_REPLY_RETENTION_MS = 24 * 60 * 60 * 1_000;
-
-export interface ZLinkActorHandoffTarget {
-  readonly routerChannelId: string;
-  readonly targetNodeRid: string;
-  readonly spotId: string;
-  readonly spotKind?: ZLinkSpotKind;
-}
 
 export interface ZLinkActorHandoffPacket {
   readonly index: number;

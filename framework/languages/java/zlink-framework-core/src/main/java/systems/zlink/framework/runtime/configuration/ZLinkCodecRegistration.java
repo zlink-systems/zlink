@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.internal.configuration;
+import systems.zlink.framework.ZLinkEncodedPayload;
+import systems.zlink.framework.configuration.ZLinkCodecExtension;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -28,7 +30,7 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
     private final Map<ZLinkStreamCodec, String> contentTypesByStreamCodec = new LinkedHashMap<>();
 
     @Override
-    public void use(systems.zlink.framework.configuration.ZLinkCodecExtension extension) {
+    public void use(ZLinkCodecExtension extension) {
         Objects.requireNonNull(extension, "extension").register(this);
     }
 
@@ -269,7 +271,7 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
         }
 
         @Override
-        public <T> systems.zlink.framework.ZLinkEncodedPayload serialize(T value) {
+        public <T> ZLinkEncodedPayload serialize(T value) {
             if (value != null) {
                 return serializerFor(value.getClass()).serialize(value);
             }
@@ -277,7 +279,7 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
         }
 
         @Override
-        public <T> T deserialize(systems.zlink.framework.ZLinkEncodedPayload payload, Class<T> type) {
+        public <T> T deserialize(ZLinkEncodedPayload payload, Class<T> type) {
             return serializerFor(type).deserialize(payload, type);
         }
 

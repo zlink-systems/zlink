@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.service;
+import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -29,7 +30,7 @@ final class ZLinkCanonicalRelocationControlCodecTest {
             assertEquals(entry.path("command").asInt(), decoded.command());
             assertArrayEquals(bytes, codec.encode(decoded));
 
-            byte[] truncated = java.util.Arrays.copyOf(bytes, bytes.length - 1);
+            byte[] truncated = Arrays.copyOf(bytes, bytes.length - 1);
             assertThrows(IllegalArgumentException.class, () -> codec.decode(truncated));
         }
     }

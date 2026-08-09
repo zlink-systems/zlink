@@ -1,4 +1,9 @@
 package systems.zlink.framework;
+import java.time.Duration;
+import java.util.Map;
+import systems.zlink.framework.actors.ZLinkActorRequestCall;
+import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
+import systems.zlink.framework.spots.ZLinkWorkerCall;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -148,7 +153,7 @@ final class HandlerContractTest {
     @Test
     void metadataContractsMatchTheExactInterface() throws NoSuchMethodException {
         assertEquals(
-            java.util.Map.class,
+            Map.class,
             ZLinkMessageContext.class.getMethod("metadata").getReturnType());
         assertEquals(
             ZLinkMetadataPolicyBuilder.class,
@@ -196,26 +201,26 @@ final class HandlerContractTest {
         ZLinkEntrySpotActorSendHandler.class.getMethod(
             "handle",
             ZLinkEntrySpot.class,
-            systems.zlink.framework.actors.ZLinkActor.class,
-            systems.zlink.framework.ZLinkMessageContext.class,
+            ZLinkActor.class,
+            ZLinkMessageContext.class,
             Object.class);
         ZLinkEntrySpotActorRequestHandler.class.getMethod(
             "handle",
             ZLinkEntrySpot.class,
-            systems.zlink.framework.actors.ZLinkActor.class,
-            systems.zlink.framework.ZLinkMessageContext.class,
+            ZLinkActor.class,
+            ZLinkMessageContext.class,
             Object.class);
         ZLinkSpotActorSendHandler.class.getMethod(
             "handle",
             ZLinkSpot.class,
-            systems.zlink.framework.actors.ZLinkActor.class,
-            systems.zlink.framework.ZLinkMessageContext.class,
+            ZLinkActor.class,
+            ZLinkMessageContext.class,
             Object.class);
         ZLinkSpotActorRequestHandler.class.getMethod(
             "handle",
             ZLinkSpot.class,
-            systems.zlink.framework.actors.ZLinkActor.class,
-            systems.zlink.framework.ZLinkMessageContext.class,
+            ZLinkActor.class,
+            ZLinkMessageContext.class,
             Object.class);
     }
 
@@ -284,7 +289,7 @@ final class HandlerContractTest {
         ZLinkActorContext.class.getMethod("joinSpot", String.class, Object.class);
         ZLinkActorContext.class.getMethod("joinEntrySpot");
         ZLinkActorContext.class.getMethod("joinEntrySpot", Object.class);
-        ZLinkActorJoinCall.class.getMethod("timeout", java.time.Duration.class);
+        ZLinkActorJoinCall.class.getMethod("timeout", Duration.class);
         ZLinkActorJoinCall.class.getMethod("defer");
         assertFalse(hasMethod(ZLinkActorJoinCall.class, "submit"));
         assertFalse(hasMethod(ZLinkActorJoinCall.class, "yield"));
@@ -298,18 +303,18 @@ final class HandlerContractTest {
         assertTrue(Modifier.isAbstract(
             ZLinkRequestCall.class.getMethod("yield", Class.class).getModifiers()));
         assertTrue(Modifier.isAbstract(
-            systems.zlink.framework.actors.ZLinkActorRequestCall.class
+            ZLinkActorRequestCall.class
                 .getMethod("yield", Class.class)
                 .getModifiers()));
         assertTrue(Modifier.isAbstract(
-            systems.zlink.framework.spots.ZLinkWorkerCall.class
+            ZLinkWorkerCall.class
                 .getMethod("yield")
                 .getModifiers()));
         assertFalse(hasMethod(ZLinkActorJoinCall.class, "yield"));
 
         assertEquals(
             1,
-            systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode
+            ZLinkUserSpotExecutionMode
                 .PER_ACTOR.value());
     }
 

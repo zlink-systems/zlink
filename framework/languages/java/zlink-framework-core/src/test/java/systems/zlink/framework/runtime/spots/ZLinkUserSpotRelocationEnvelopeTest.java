@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -110,7 +111,7 @@ final class ZLinkUserSpotRelocationEnvelopeTest {
             false,
             new byte[0],
             List.of(),
-            java.util.Map.of());
+            Map.of());
         UUID relocationId = UUID.randomUUID();
         var participants = List.of(
             new ZLinkSpotRetireControl.ParticipantFence(
@@ -129,7 +130,7 @@ final class ZLinkUserSpotRelocationEnvelopeTest {
         assertThrows(
             IllegalArgumentException.class,
             () -> ZLinkCanonicalUserSpotRelocationEnvelope.decode(
-                java.util.Arrays.copyOf(encoded, encoded.length + 1),
+                Arrays.copyOf(encoded, encoded.length + 1),
                 node,
                 ignored -> TestSpot.class,
                 stage));

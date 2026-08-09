@@ -1,4 +1,10 @@
 package systems.zlink.samples.supportchat.server.support.actors;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
 
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
@@ -15,8 +21,8 @@ public final class SupportUserActor implements ZLinkActor {
     private String participantId;
     private String conversationId = "";
     private String pendingConversationId;
-    private final java.util.Set<systems.zlink.framework.actors.ZLinkActorJoinOperationId>
-        completedJoinOperations = new java.util.HashSet<>();
+    private final Set<ZLinkActorJoinOperationId>
+        completedJoinOperations = new HashSet<>();
 
     public SupportUserActor(String actorId, ZLinkActorContext context) {
         this.actorId = actorId;
@@ -70,13 +76,13 @@ public final class SupportUserActor implements ZLinkActor {
             : conversationId;
     }
 
-    public java.util.Set<systems.zlink.framework.actors.ZLinkActorJoinOperationId>
+    public Set<ZLinkActorJoinOperationId>
         completedJoinOperations() {
-        return java.util.Set.copyOf(completedJoinOperations);
+        return Set.copyOf(completedJoinOperations);
     }
 
     public void restoreCompletedJoinOperations(
-        java.util.Collection<systems.zlink.framework.actors.ZLinkActorJoinOperationId> operationIds) {
+        Collection<ZLinkActorJoinOperationId> operationIds) {
         completedJoinOperations.addAll(operationIds);
     }
 
@@ -103,9 +109,9 @@ public final class SupportUserActor implements ZLinkActor {
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onJoinCompleted(
+    public CompletionStage<Void> onJoinCompleted(
         ZLinkActorJoinCompletion completion) {
-        systems.zlink.framework.actors.ZLinkActorJoinOperationId operationId;
+        ZLinkActorJoinOperationId operationId;
         if (completion instanceof ZLinkActorJoinCompletion.Accepted accepted) {
             operationId = accepted.operationId();
         } else if (completion instanceof ZLinkActorJoinCompletion.Rejected rejected) {
@@ -114,10 +120,10 @@ public final class SupportUserActor implements ZLinkActor {
             operationId = ((ZLinkActorJoinCompletion.Failed) completion).operationId();
         }
         if (!completedJoinOperations.add(operationId)) {
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
         if (pendingConversationId == null) {
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
         String pending = pendingConversationId;
         if (completion instanceof ZLinkActorJoinCompletion.Accepted accepted) {
@@ -142,7 +148,7 @@ public final class SupportUserActor implements ZLinkActor {
                 .metadata(SampleNames.ConversationIdMetadataKey, pending)
                 .submit();
         }
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     public void push(Object message) {

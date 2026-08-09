@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.configuration;
+import java.nio.charset.StandardCharsets;
+import java.util.Optional;
+import systems.zlink.framework.configuration.ZLinkInboundDispatchOptions;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -78,7 +81,7 @@ public final class DefaultZLinkFrameworkOptions
             return;
         }
         int encodedSize = waveId.getBytes(
-            java.nio.charset.StandardCharsets.UTF_8).length;
+            StandardCharsets.UTF_8).length;
         if (encodedSize < 1 || encodedSize > 255
             || waveId.indexOf('\0') >= 0) {
             throw new ZLinkConfigurationException(
@@ -188,7 +191,7 @@ public final class DefaultZLinkFrameworkOptions
     }
 
     @Override
-    public systems.zlink.framework.configuration.ZLinkInboundDispatchOptions
+    public ZLinkInboundDispatchOptions
         configureInboundDispatch() {
         return registration.inboundDispatch();
     }
@@ -210,8 +213,8 @@ public final class DefaultZLinkFrameworkOptions
         }
 
         @Override
-        public java.util.Optional<String> advertiseHost() {
-            return java.util.Optional.ofNullable(advertiseHost);
+        public Optional<String> advertiseHost() {
+            return Optional.ofNullable(advertiseHost);
         }
 
         @Override

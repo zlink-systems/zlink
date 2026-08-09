@@ -7,12 +7,12 @@ import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BiFunction;
-import java.util.function.Supplier;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
@@ -25,9 +25,8 @@ import systems.zlink.framework.actors.ZLinkBoundSessionSendCall;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
@@ -37,9 +36,10 @@ final class ZLinkBoundSessionSendCallContractTest {
     void immutableSendOptionsShareTheOneWaySubmissionGate() {
         AtomicInteger sends = new AtomicInteger();
         ZLinkInternalSpotNode spotNode = spotNode(sends);
-        BiFunction<ZLinkBackendObject, ZLinkBackendAdmissionKey,
-            BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>> admission =
-            (ignoredBackend, ignoredKey) -> (submission, cleanup) -> {
+        AtomicReference<Duration> admissionTimeout = new AtomicReference<>();
+        ZLinkOneWayCalls.Admission admission =
+            (ignoredBackend, ignoredKey, submission, cleanup, timeout) -> {
+                admissionTimeout.set(timeout);
                 try {
                     if (submission.get()) {
                         return CompletableFuture.completedFuture(null);
@@ -87,9 +87,72 @@ final class ZLinkBoundSessionSendCallContractTest {
         assertEquals(ZLinkFrameworkErrorKind.INVALID_OPERATION,
             ((ZLinkFrameworkException) duplicate.getCause()).kind());
         assertEquals(1, sends.get());
+        assertEquals(Duration.ofSeconds(1), admissionTimeout.get());
+    }
+
+    @Test
+    void missingBoundSessionRouteFailsWithoutTransportRetry() {
+        AtomicInteger sends = new AtomicInteger();
+        AtomicInteger attempts = new AtomicInteger();
+        ZLinkInternalSpotNode spotNode = spotNode(sends, false);
+        ZLinkOneWayCalls.Admission admission =
+            (ignoredBackend, ignoredKey, submission, cleanup, timeout) -> {
+                attempts.incrementAndGet();
+                CompletableFuture<Void> submitted = new CompletableFuture<>();
+                try {
+                    if (submission.get()) {
+                        submitted.complete(null);
+                    } else {
+                        submitted.completeExceptionally(
+                            new AssertionError("missing route was treated as backpressure"));
+                    }
+                } catch (RuntimeException failure) {
+                    submitted.completeExceptionally(failure);
+                } finally {
+                    cleanup.run();
+                }
+                return ZLinkOneWayCalls.adaptOneWay(submitted);
+            };
+        ZLinkActorRuntime actors = new ZLinkActorRuntime(
+            spotNode,
+            Map.of("probe", ProbeFactory.class),
+            Map.of(),
+            Duration.ofSeconds(1),
+            Duration.ofSeconds(1),
+            new ZLinkJsonMessageSerializer(),
+            ZLinkHandlerActivator.reflection(),
+            ZLinkStreamCodec.RAW,
+            admission);
+        ZLinkActor actor = actors.getOrCreateLocalActor("actor-1", ZLinkActor.class)
+            .toCompletableFuture()
+            .join()
+            .orElseThrow();
+        actors.bindNativeSession(
+            actor,
+            spotNode,
+            new ZLinkBackendActorRef(
+                RoutingId.from("node-a"),
+                "actor-1",
+                7));
+
+        CompletionException failure = assertThrows(
+            CompletionException.class,
+            () -> actor.context().boundSession().send("payload")
+                .submit().toCompletableFuture().join());
+
+        assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND,
+            ((ZLinkFrameworkException) failure.getCause()).kind());
+        assertEquals(1, attempts.get());
+        assertEquals(0, sends.get());
     }
 
     private static ZLinkInternalSpotNode spotNode(AtomicInteger sends) {
+        return spotNode(sends, true);
+    }
+
+    private static ZLinkInternalSpotNode spotNode(
+        AtomicInteger sends,
+        boolean hasBoundSessionRoute) {
         return (ZLinkInternalSpotNode) Proxy.newProxyInstance(
             ZLinkInternalSpotNode.class.getClassLoader(),
             new Class<?>[] {ZLinkInternalSpotNode.class},
@@ -108,6 +171,14 @@ final class ZLinkBoundSessionSendCallContractTest {
                     sends.incrementAndGet();
                     yield true;
                 }
+                case "boundSessionRoute" -> hasBoundSessionRoute
+                    ? Optional.of(new ZLinkInternalSpotNode.BoundSessionRoute(
+                        RoutingId.from("session-node"),
+                        1,
+                        RoutingId.from("session-1"),
+                        1,
+                        0))
+                    : Optional.empty();
                 case "destroyActor" -> CompletableFuture.completedFuture(null);
                 case "close" -> null;
                 default -> defaultValue(method.getReturnType());

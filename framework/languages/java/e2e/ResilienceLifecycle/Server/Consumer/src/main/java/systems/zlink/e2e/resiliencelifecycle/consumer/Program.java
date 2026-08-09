@@ -1,4 +1,6 @@
 package systems.zlink.e2e.resiliencelifecycle.consumer;
+import systems.zlink.framework.channels.ZLinkRouteClient;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
@@ -46,8 +48,8 @@ public final class Program {
     @Bean
     ConsumerEndpoints consumerEndpoints(
         ObjectMapper json,
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
-        systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime meshRuntime,
+        ZLinkRouteClient routes,
+        ZLinkRouteMeshRuntime meshRuntime,
         ZLinkFrameworkLifecycle lifecycle,
         ConsumerOptions options) {
         return new ConsumerEndpoints(

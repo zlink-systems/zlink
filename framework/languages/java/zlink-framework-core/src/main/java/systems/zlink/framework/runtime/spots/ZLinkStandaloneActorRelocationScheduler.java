@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Map;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -52,7 +53,7 @@ final class ZLinkStandaloneActorRelocationScheduler {
                         systems.zlink.framework.runtime.internal.metrics
                             .ZLinkRuntimeMetrics.increment(
                                 "zlink.drain.actors.handed_off",
-                                java.util.Map.of());
+                                Map.of());
                     });
             });
         return operation.exceptionallyCompose(failure -> {

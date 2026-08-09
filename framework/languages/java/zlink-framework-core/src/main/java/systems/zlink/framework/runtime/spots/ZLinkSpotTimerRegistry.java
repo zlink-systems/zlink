@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.logging.Logger;
 
 import java.lang.reflect.InvocationTargetException;
 import java.time.Duration;
@@ -201,7 +202,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         Throwable error,
         boolean stopped) {
         Throwable failure = unwrap(error);
-        java.util.logging.Logger.getLogger(
+        Logger.getLogger(
             ZLinkSpotTimerRegistry.class.getName()).warning(
                 (stopped ? "Spot timer stopped" : "Spot timer handler failed")
                     + ": source=" + sourceName
@@ -376,7 +377,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         public CompletionStage<Void> cancel() {
             close();
             removeTimer(name, this);
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
 
         @Override

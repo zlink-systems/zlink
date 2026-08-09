@@ -1,4 +1,8 @@
-package systems.zlink.e2e.registrationcodec.main.Handlers;
+package Handlers;
+import systems.zlink.e2e.registrationcodec.main.Handlers;
+import systems.zlink.e2e.registrationcodec.main.Infrastructure;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import org.springframework.beans.factory.ObjectProvider;
 import systems.zlink.e2e.registrationcodec.shared.Contracts;
@@ -24,7 +28,7 @@ public final class DiLifecycleReqHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Contracts.DiLifecycleRes> handle(
+    public CompletionStage<Contracts.DiLifecycleRes> handle(
         Contracts.DiLifecycleReq request,
         ZLinkMessageContext context) {
         int scopedId;
@@ -35,7 +39,7 @@ public final class DiLifecycleReqHandler
                 context.packetName(),
                 scopedId + ":" + singleton.id() + ":" + request.value());
         }
-        return java.util.concurrent.CompletableFuture.completedFuture(new Contracts.DiLifecycleRes(
+        return CompletableFuture.completedFuture(new Contracts.DiLifecycleRes(
             "echo:" + request.value(),
             scopedId,
             singleton.id(),

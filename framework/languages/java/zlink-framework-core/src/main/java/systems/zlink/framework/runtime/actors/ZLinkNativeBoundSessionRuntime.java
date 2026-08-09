@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
@@ -11,8 +12,10 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
+import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkBoundSession;
@@ -92,9 +95,10 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
                 currentActorRef.nodeRid(),
                 currentActorRef.actorId(),
                 currentActorRef.generation()),
-            () -> spotNode.sendActorBoundSession(
-                currentActorRef, List.of(frame), SendFlags.DONT_WAIT),
-            frame::close).thenApply(ignored -> null);
+            () -> sendBoundSessionFrame(
+                spotNode, currentActorRef, frame),
+            frame::close,
+            timeout).thenApply(ignored -> null);
     }
 
     @Override
@@ -117,7 +121,7 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
         Duration timeout,
         ZLinkBoundSessionSendOptions options,
         ZLinkRelayMetadataPolicy metadataPolicy,
-        java.util.concurrent.atomic.AtomicBoolean submitGate)
+        AtomicBoolean submitGate)
         implements ZLinkBoundSessionSendCall {
         SendCall(
             ZLinkInternalSpotNode spotNode,
@@ -131,7 +135,7 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
             ZLinkRelayMetadataPolicy metadataPolicy) {
             this(spotNode, actorRuntime, actor, sourceNodeRid, sourceSessionRid, payload,
                 timeout, options, metadataPolicy,
-                new java.util.concurrent.atomic.AtomicBoolean());
+                new AtomicBoolean());
         }
         public ZLinkBoundSessionSendCall packetName(String packetName) {
             return new SendCall(
@@ -183,11 +187,23 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
                     currentActorRef.nodeRid(),
                     currentActorRef.actorId(),
                     currentActorRef.generation()),
-                () -> spotNode.sendActorBoundSession(
-                    currentActorRef, List.of(frame), SendFlags.DONT_WAIT),
-                frame::close);
+                () -> sendBoundSessionFrame(
+                    spotNode, currentActorRef, frame),
+                frame::close,
+                timeout);
         }
 
+    }
+
+    private static boolean sendBoundSessionFrame(
+        ZLinkInternalSpotNode spotNode,
+        ZLinkBackendActorRef actor,
+        Message frame) {
+        if (spotNode.boundSessionRoute(actor).isEmpty()) {
+            throw new ZlinkSubmitException(SubmitResult.NOT_FOUND);
+        }
+        return spotNode.sendActorBoundSession(
+            actor, List.of(frame), SendFlags.DONT_WAIT);
     }
 
 }

@@ -1,4 +1,6 @@
 package systems.zlink.e2e.registrymessaging.objectclient;
+import java.util.Locale;
+import java.util.concurrent.CompletionException;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -43,12 +45,12 @@ public final class ObjectClientEndpoints {
             .map(peer -> {
                 Map<String, Object> value = new LinkedHashMap<>();
                 value.put("rid", peer.nodeRid().toString());
-                value.put("state", peer.state().name().toLowerCase(java.util.Locale.ROOT));
+                value.put("state", peer.state().name().toLowerCase(Locale.ROOT));
                 value.put("ready", peer.state() == ZLinkPeerState.READY);
                 value.put(
                     "lastFailure",
                     peer.unavailableReason()
-                        .map(reason -> reason.name().toLowerCase(java.util.Locale.ROOT))
+                        .map(reason -> reason.name().toLowerCase(Locale.ROOT))
                         .orElse(""));
                 return value;
             })
@@ -89,7 +91,7 @@ public final class ObjectClientEndpoints {
 
     private static ZLinkFrameworkErrorKind errorKind(Throwable failure) {
         Throwable current = failure;
-        while (current instanceof java.util.concurrent.CompletionException
+        while (current instanceof CompletionException
             && current.getCause() != null) {
             current = current.getCause();
         }

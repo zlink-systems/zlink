@@ -1,5 +1,7 @@
 package systems.zlink.framework.kotlin
 
+
+import systems.zlink.framework.spots.ZLinkEntrySpotContext
 import java.util.concurrent.CompletionStage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -235,9 +237,9 @@ abstract class ZLinkSuspendingSpot<TActor : ZLinkActor> : ZLinkSpot<TActor> {
 }
 
 abstract class ZLinkSuspendingEntrySpot<TActor : ZLinkActor> : ZLinkEntrySpot<TActor> {
-    abstract val context: systems.zlink.framework.spots.ZLinkEntrySpotContext
+    abstract val context: ZLinkEntrySpotContext
 
-    final override fun context(): systems.zlink.framework.spots.ZLinkEntrySpotContext = context
+    final override fun context(): ZLinkEntrySpotContext = context
 
     final override fun onInitialize(): CompletionStage<Void> = coroutineVoidStage { onInitializeSuspending() }
 

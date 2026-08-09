@@ -1,5 +1,10 @@
 package systems.zlink.framework.kotlin
 
+
+import org.junit.jupiter.api.Assertions
+import systems.zlink.framework.spots.ZLinkEntrySpotContext
+import systems.zlink.framework.spots.ZLinkSpotClosingContext
+import systems.zlink.framework.spots.ZLinkSpotContext
 import java.lang.reflect.Modifier
 import java.nio.file.Files
 import java.nio.file.Path
@@ -298,11 +303,11 @@ class KotlinPublicSurfaceContractTest {
     fun `suspending Spot lifecycle matches the exact interface`() {
         assertSuspendingSpotLifecycle(
             ZLinkSuspendingSpot::class.java,
-            systems.zlink.framework.spots.ZLinkSpotContext::class.java,
+            ZLinkSpotContext::class.java,
         )
         assertSuspendingSpotLifecycle(
             ZLinkSuspendingEntrySpot::class.java,
-            systems.zlink.framework.spots.ZLinkEntrySpotContext::class.java,
+            ZLinkEntrySpotContext::class.java,
         )
 
         val timerSpotBound = ZLinkSuspendingSpotTimerHandler::class.java
@@ -321,7 +326,7 @@ class KotlinPublicSurfaceContractTest {
 
         val closingBridge = type.getDeclaredMethod(
             "onClosing",
-            systems.zlink.framework.spots.ZLinkSpotClosingContext::class.java,
+            ZLinkSpotClosingContext::class.java,
         )
         assertTrue(Modifier.isFinal(closingBridge.modifiers))
         assertEquals(CompletionStage::class.java, closingBridge.returnType)
@@ -331,7 +336,7 @@ class KotlinPublicSurfaceContractTest {
 
         val suspending = type.getDeclaredMethod(
             "onClosingSuspending",
-            systems.zlink.framework.spots.ZLinkSpotClosingContext::class.java,
+            ZLinkSpotClosingContext::class.java,
             Continuation::class.java,
         )
         assertTrue(Modifier.isProtected(suspending.modifiers))

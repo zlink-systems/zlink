@@ -1,5 +1,6 @@
-package systems.zlink.e2e.spotservice.client.Scenarios;
+package Scenarios;
 
+import systems.zlink.e2e.spotservice.client.Scenarios;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
@@ -276,7 +277,7 @@ public class SpotServiceScenarioContext {
 
     protected static <T> void awaitUnchecked(
         ZLinkStreamConnector connector,
-        java.util.concurrent.CompletionStage<T> stage) {
+        CompletionStage<T> stage) {
         try {
             stage.toCompletableFuture().join();
         } catch (Exception error) {

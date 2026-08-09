@@ -1,4 +1,5 @@
 package systems.zlink.framework.spring;
+import systems.zlink.framework.spots.SpotRef;
 
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
 
@@ -27,7 +28,7 @@ final class ZLinkFrameworkActorManagerBean implements ZLinkActorManager {
     }
 
     @Override
-    public CompletionStage<Optional<systems.zlink.framework.spots.SpotRef>> findSpot(
+    public CompletionStage<Optional<SpotRef>> findSpot(
         String actorId) {
         return lifecycle.actorManager().findSpot(actorId);
     }

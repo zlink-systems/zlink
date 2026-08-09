@@ -1,4 +1,6 @@
 package systems.zlink.e2e.observabilityops.client;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.TimeoutException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -186,8 +188,8 @@ public final class ObservabilityScenarioSupport {
         try {
             pending.toCompletableFuture().join();
             pendingCompleted = true;
-        } catch (java.util.concurrent.CompletionException timeout) {
-            pendingCompleted = timeout.getCause() instanceof java.util.concurrent.TimeoutException;
+        } catch (CompletionException timeout) {
+            pendingCompleted = timeout.getCause() instanceof TimeoutException;
         }
         waitForMetricValue(
             options.playHttpEndpoint() + "/metrics",

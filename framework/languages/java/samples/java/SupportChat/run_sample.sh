@@ -97,7 +97,8 @@ EOF
 chmod 0600 "$api_config" "$session_config" "$support_config"
 
 cd "$ROOT_DIR"
-../../gradlew --settings-file standalone.settings.gradle.kts --no-daemon \
+../../gradlew --settings-file standalone.settings.gradle.kts \
+  --no-daemon --no-parallel --max-workers=1 \
   :Server:Api:installDist \
   :Server:Session:installDist \
   :Server:Support:installDist \

@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.binding;
+import java.util.Objects;
 
 import java.time.Duration;
 import java.util.List;
@@ -86,7 +87,7 @@ final class ZLinkJavaRawSpot
 
     @Override
     public void setRoutingId(String value) {
-        owner.rekeySpot(this, spotId, java.util.Objects.requireNonNull(
+        owner.rekeySpot(this, spotId, Objects.requireNonNull(
             value, "spotId"));
         spotId = value;
     }

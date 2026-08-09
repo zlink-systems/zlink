@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.spots;
+import java.time.Instant;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.spots.ZLinkSpotCloseReason;
+import systems.zlink.framework.spots.ZLinkSpotClosingContext;
 
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
@@ -150,7 +154,7 @@ final class SpotActivation
         return host.actorSessions().dispatch(actor, () ->
             context.enqueueActorDispatch(actor.context().actorId(), () -> {
             if (host.isClosing()) {
-                return java.util.concurrent.CompletableFuture.completedFuture(null);
+                return CompletableFuture.completedFuture(null);
             }
             Supplier<CompletionStage<Void>> transition = host.actorLifecycleTransition(
                 spot,
@@ -159,7 +163,7 @@ final class SpotActivation
                 actor,
                 context.spotId());
             if (transition == null) {
-                return java.util.concurrent.CompletableFuture.completedFuture(null);
+                return CompletableFuture.completedFuture(null);
             }
             return transition.get();
         }));
@@ -212,7 +216,7 @@ final class SpotActivation
         if (info.event() == ZLinkBackendSpotDispatchEvent.ACTOR_LIFECYCLE_READABLE) {
             return drainActorLifecycleEvents();
         }
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     private CompletionStage<Void> drainRoutesForDispatch() {
@@ -296,12 +300,12 @@ final class SpotActivation
     private CompletionStage<Void> dispatchRouteAsync(ZLinkBackendReceived received) {
         var incomingFlow = ZLinkSpotFlowFrame.decode(received.parts());
         var flowScope = incomingFlow == null ? null
-            : systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext.enter(incomingFlow);
+            : ZLinkFlowContext.enter(incomingFlow);
         try {
         trackRouteReceived(received);
         if (ZLinkSpotRuntime.isProbeFrame(received.parts())) {
             closeRouteReceived(received);
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
         ParsedPacket packet = ZLinkSpotRuntime.parsePacket(received.parts());
         ZLinkSpotRuntime.traceSpotRouteDispatch("spot-dispatch", backendSpot, received, packet);
@@ -574,7 +578,7 @@ final class SpotActivation
                     true),
                 actorRef -> replayHandoff(actorRef, backlog))
                 .thenApply(join -> {
-                    List<Message> replies = new java.util.ArrayList<>();
+                    List<Message> replies = new ArrayList<>();
                     replies.add(encodeRoutedJoinReply(join.actorRef(), join.response()));
                     replies.addAll(join.handoffReplies());
                     return List.copyOf(replies);
@@ -604,7 +608,7 @@ final class SpotActivation
         ZLinkBackendActorRef actorRef,
         List<ZLinkActorSpotRoutePackets.WireHandoffPacket> backlog) {
         CompletionStage<List<Message>> tail =
-            CompletableFuture.completedFuture(new java.util.ArrayList<>());
+            CompletableFuture.completedFuture(new ArrayList<>());
         for (ZLinkActorSpotRoutePackets.WireHandoffPacket packet : backlog) {
             host.actorAdmissions().traceTransferMarker(
                 "backlog_enqueued", actorRef.actorId(), packet.arrivalIndex());
@@ -691,13 +695,13 @@ final class SpotActivation
     @Override
     public void close() {
         close(
-            systems.zlink.framework.spots.ZLinkSpotCloseReason.EXPLICIT_CLOSE,
-            java.time.Instant.now());
+            ZLinkSpotCloseReason.EXPLICIT_CLOSE,
+            Instant.now());
     }
 
     void close(
-        systems.zlink.framework.spots.ZLinkSpotCloseReason reason,
-        java.time.Instant deadline) {
+        ZLinkSpotCloseReason reason,
+        Instant deadline) {
         if (spot == null) {
             closeResources();
             return;
@@ -706,7 +710,7 @@ final class SpotActivation
             host.awaitClosing(context.enqueueLifecycle(() ->
                 host.runWithOutbound(context.dispatchOutbound(), () ->
                     ZLinkHandlerStages.fromStageSupplier(() -> spot.onClosing(
-                        new systems.zlink.framework.spots.ZLinkSpotClosingContext(
+                        new ZLinkSpotClosingContext(
                             reason,
                             deadline))))));
         } finally {

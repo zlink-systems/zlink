@@ -935,6 +935,29 @@ void verify_global_identity_remote_create_and_generation_fence ()
     assert (runtime.destroy_actor (original)
             == stateful::stateful_error_t::generation_stale);
 
+    // A node can retain an Actor reference while the Actor changes membership
+    // on another node. When the Actor returns, the committed owner generation
+    // may therefore advance by more than one from the retained local value.
+    const auto returning_actor = create_ready (
+      runtime,
+      {stateful::object_kind_t::actor, "returning-actor", "player",
+       std::string ("mesh-a"), {}, false, false});
+    auto remote_owner = returning_actor;
+    remote_owner.authority_owner_generation++;
+    remote_owner.node_id = "node-b";
+    assert (runtime.adopt_reserved_actor_owner (remote_owner, "player")
+            == stateful::stateful_error_t::none);
+    auto returned_owner = remote_owner;
+    returned_owner.authority_owner_generation += 3;
+    returned_owner.node_id = "node-a";
+    assert (runtime.adopt_reserved_actor_owner (returned_owner, "player")
+            == stateful::stateful_error_t::none);
+    auto stale_owner = returned_owner;
+    stale_owner.authority_owner_generation--;
+    stale_owner.node_id = "node-b";
+    assert (runtime.adopt_reserved_actor_owner (stale_owner, "player")
+            == stateful::stateful_error_t::generation_stale);
+
     // Application actors created from a globally reserved reference use the
     // same local placement capacity as actors created through begin_create.
     // Destroying that actor must release the capacity before the next
@@ -1273,9 +1296,34 @@ void verify_bounded_message_follow ()
         node_rid_t::from_string ("node-b"), "player", "actor-message-follow", 7);
     const spot_route_t route{
       node_rid_t::from_string ("node-b"), "spot-b", "game"};
+    const auto source_fence = runtime::protocol::actor_route_fence_t{
+      "actor-message-follow", 7,
+      zlink::routing_id_t::from ("node-a").to_bytes (), 11, 13, 17};
+    const auto target_fence = runtime::protocol::actor_route_fence_t{
+      "actor-message-follow", 7,
+      zlink::routing_id_t::from ("node-b").to_bytes (), 12, 16, 18};
     const auto expires = std::chrono::steady_clock::now () + 30s;
     coordinator.activate_message_follow (
-      "player:actor-message-follow", 7, target, route, expires, "relocation-1");
+      "player:actor-message-follow", source_fence, target, route, target_fence,
+      expires, "relocation-1");
+    assert (coordinator.matches_message_follow_source (
+      "player:actor-message-follow", source_fence));
+    auto wrong_source_fence = source_fence;
+    ++wrong_source_fence.authority_owner_generation;
+    assert (!coordinator.matches_message_follow_source (
+      "player:actor-message-follow", wrong_source_fence));
+    const auto wrong_source = coordinator.try_acquire_message_follow (
+      "player:actor-message-follow", 7, 1, 0, &wrong_source_fence);
+    assert (!wrong_source
+            && wrong_source.error_kind ()
+                 == framework_error_kind_t::unavailable);
+    const auto exact_source = coordinator.try_acquire_message_follow (
+      "player:actor-message-follow", 7, 1, 0, &source_fence);
+    assert (exact_source && exact_source.value ());
+    assert (exact_source.value ()->source_fence == source_fence);
+    assert (exact_source.value ()->target_fence == target_fence);
+    coordinator.release_message_follow (
+      "player:actor-message-follow", 7, 1);
 
     const auto missing = coordinator.try_acquire_message_follow (
       "player:missing", 7, 1, 0);
@@ -1314,7 +1362,7 @@ void verify_bounded_message_follow ()
         coordinator.release_message_follow ("player:actor-message-follow", 7, 1);
 
     coordinator.activate_message_follow (
-      "player:expired-message-follow", 7, target, route,
+      "player:expired-message-follow", source_fence, target, route, target_fence,
       std::chrono::steady_clock::now () - 1ms, "relocation-expired");
     const auto expired = coordinator.try_acquire_message_follow (
       "player:expired-message-follow", 7, 1, 0);

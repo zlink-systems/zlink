@@ -1,4 +1,10 @@
 package systems.zlink.framework.runtime.binding;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ExecutionException;
+import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -52,7 +58,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             target.setRoutingId(targetRid);
             target.setBind(endpoint);
             target.setObjectRole(
-                systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.SERVER);
+                ZLinkMeshNodeObjectRole.SERVER);
             target.deferServiceReadyPublication();
             source.setRoutingId(sourceRid);
             source.setBind("inproc://jvm-service-ready-source-"
@@ -235,7 +241,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             }
 
             assertThrows(
-                java.util.concurrent.ExecutionException.class,
+                ExecutionException.class,
                 () -> source.requestUserSpotCreate(
                         targetRid,
                         intent,
@@ -351,7 +357,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             .ZLinkBackendActorReceived::close);
                 }
             });
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef actor;
+            ZLinkBackendActorRef actor;
             try (Message create = Message.from("create")) {
                 actor = node.spotNode().createActor("actor-content-type", create);
             }
@@ -419,7 +425,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 List.of(),
                 ignored -> { }));
 
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef actor;
+            ZLinkBackendActorRef actor;
             try (Message create = Message.from("create")) {
                 actor = spots.createActor("owner-actor", create);
             }
@@ -453,7 +459,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             node.start();
             ZLinkJavaRawSpotNode spots =
                 (ZLinkJavaRawSpotNode) node.spotNode();
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef
+            ZLinkBackendActorRef
                 current;
             try (Message create = Message.from("create")) {
                 current = spots.createActor("relay-actor", 2, create);
@@ -505,8 +511,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 Message.from(ZLinkStreamHeaderCodec.encode(
                     new ZLinkStreamHeader(
                         "RelayReq",
-                        java.util.Map.of(),
-                        java.util.Optional.empty()))),
+                        Map.of(),
+                        Optional.empty()))),
                 Message.from("payload"));
             boolean accepted = spots.enqueueRemoteActor(
                 sourceRid,
@@ -593,7 +599,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 target.replyActorJoin(request, 0, List.of());
             });
 
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef actor;
+            ZLinkBackendActorRef actor;
             try (Message create = Message.from("create")) {
                 actor = node.spotNode().createActor("actor-1", create);
             }
@@ -760,14 +766,14 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 (meshName, candidateRid, candidateGeneration) ->
                     CompletableFuture.completedFuture(
                         candidateRid.equals(leftRid)
-                            ? java.util.Optional.of(
+                            ? Optional.of(
                                 new ZLinkInternalMeshNode
                                     .PeerAuthorityFence(
                                         leftRid,
                                         candidateGeneration,
                                         "target-owner",
                                         1))
-                            : java.util.Optional.empty()));
+                            : Optional.empty()));
             CompletableFuture<ZLinkBackendRequestResult> stale =
                 new CompletableFuture<>();
             try (Message message = Message.from("stale-source")) {
@@ -819,7 +825,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             .ZLinkBackendActorReceived::close);
                 }
             });
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef actor;
+            ZLinkBackendActorRef actor;
             try (Message create = Message.from("create")) {
                 actor = node.spotNode().createActor("actor-local", create);
             }
@@ -871,7 +877,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 }
                 accepted.complete(info.actorMessages().getFirst());
             });
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef
+            ZLinkBackendActorRef
                 actor;
             try (Message create = Message.from("create")) {
                 actor = node.spotNode().createActor(
@@ -952,7 +958,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             .ZLinkBackendActorReceived::close);
                 }
             });
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef actor;
+            ZLinkBackendActorRef actor;
             try (Message create = Message.from("create")) {
                 actor = left.spotNode().createActor("actor-remote", create);
             }
@@ -1005,7 +1011,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             left.setRoutingId(leftRid);
             left.setBind(endpoint);
             left.setObjectRole(
-                systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.SERVER);
+                ZLinkMeshNodeObjectRole.SERVER);
             left.addChannel("events");
             left.setChannelWeight("events", 10_000);
             right.setRoutingId(rightRid);
@@ -1050,7 +1056,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     List.of(packet, payload));
             }
 
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage
+            ZLinkBackendTopicMessage
                 received = null;
             while (received == null && System.nanoTime() < deadline) {
                 received = remote.subscribe(
@@ -1260,7 +1266,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     systems.zlink.framework.runtime.internal.backend
                         .ZLinkBackendActorReceived::close);
             });
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef actor;
+            ZLinkBackendActorRef actor;
             try (Message create = Message.from("create")) {
                 actor = node.spotNode().createActor("actor-stream", create);
             }
@@ -1362,6 +1368,49 @@ final class ZLinkJavaRawSpotNodeM6BTest {
     }
 
     @Test
+    void remoteUnbindIsIdempotentAfterActorIsNoLongerCurrent()
+        throws Exception {
+        try (var context = Zlink.createContext();
+             var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            RoutingId nodeRid = RoutingId.from("jvm-m6b-unbind-node");
+            RoutingId sourceRid = RoutingId.from("jvm-m6b-unbind-source");
+            node.setRoutingId(nodeRid);
+            node.setBind("inproc://jvm-m6b-unbind-" + System.nanoTime());
+            node.start();
+
+            ZLinkJavaRawSpotNode target =
+                (ZLinkJavaRawSpotNode) node.spotNode();
+            var actor = new systems.zlink.framework.runtime.internal.backend
+                .ZLinkBackendActorRef(nodeRid, "retired-actor", 1);
+            var route = new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                actor,
+                node.lifecycleGeneration(),
+                41,
+                1);
+            var inactive = new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                1,
+                route,
+                RoutingId.from("jvm-m6b-unbind-session"),
+                false,
+                3);
+
+            assertTrue(target.acceptRemoteStreamBinding(
+                sourceRid, 7, inactive));
+            assertTrue(target.acceptRemoteStreamBinding(
+                sourceRid, 7, inactive));
+            assertFalse(target.acceptRemoteStreamBinding(
+                sourceRid,
+                7,
+                new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                    2,
+                    route,
+                    inactive.sessionRid(),
+                    true,
+                    3)));
+        }
+    }
+
+    @Test
     void remoteBindingIdentityFencesOldOwnerEpochWithoutGlobalCounter()
         throws Exception {
         try (var context = Zlink.createContext();
@@ -1374,7 +1423,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             actorNode.start();
             ZLinkJavaRawSpotNode target =
                 (ZLinkJavaRawSpotNode) actorNode.spotNode();
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef
+            ZLinkBackendActorRef
                 actor;
             try (Message create = Message.from("create")) {
                 actor = target.createActor("actor-owner-epoch", create);
@@ -1872,7 +1921,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     systems.zlink.framework.runtime.internal.backend
                         .ZLinkBackendActorReceived::close);
             });
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef
+            ZLinkBackendActorRef
                 actor;
             try (Message create = Message.from("create")) {
                 actor = actorNode.spotNode().createActor(
@@ -2097,12 +2146,12 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             (meshName, candidateRid, candidateGeneration) ->
                 CompletableFuture.completedFuture(
                     candidateGeneration > 0
-                        ? java.util.Optional.of(
+                        ? Optional.of(
                             new ZLinkInternalMeshNode.PeerAuthorityFence(
                                 candidateRid,
                                 candidateGeneration,
                                 "test-source-owner",
                                 1))
-                        : java.util.Optional.empty()));
+                        : Optional.empty()));
     }
 }

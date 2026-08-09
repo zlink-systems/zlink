@@ -1,4 +1,5 @@
 package systems.zlink.stream.connector;
+import java.util.concurrent.TimeoutException;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -207,7 +208,7 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
         if (remainingNanos <= 0) {
             synchronized (sequenceLock) {
                 if (!result.isCancelled()
-                    && result.completeExceptionally(new java.util.concurrent.TimeoutException(
+                    && result.completeExceptionally(new TimeoutException(
                         "Timed out waiting for '" + name + "' sequence."))) {
                     closeMessages(messages);
                 }

@@ -1,4 +1,5 @@
-package systems.zlink.e2e.pubsub.subscriber.Configuration;
+package Configuration;
 
+import systems.zlink.e2e.pubsub.subscriber.Configuration;
 public record HandlerDelayOptions(long delayMillis) {
 }

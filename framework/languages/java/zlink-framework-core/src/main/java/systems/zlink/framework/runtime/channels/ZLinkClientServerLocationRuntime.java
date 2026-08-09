@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.concurrent.ThreadLocalRandom;
+import systems.zlink.framework.locations.ZLinkLocationRole;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -97,9 +101,9 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
             running = true;
             if (surfaces.stream().anyMatch(surface ->
                     surface.type()
-                        == systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType.CLIENT_SERVER
+                        == ZLinkAutoConnectType.CLIENT_SERVER
                     && surface.role()
-                        == systems.zlink.framework.locations.ZLinkLocationRole.DEALER)
+                        == ZLinkLocationRole.DEALER)
                 && monitoring == null) {
                 monitoring = backendFactory.createMonitoringAdapter(
                     adapterOptions);
@@ -179,9 +183,9 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
         List<ZLinkChannelRuntime.AutoConnectSurface> surfaces) {
         for (ZLinkChannelRuntime.AutoConnectSurface surface : surfaces) {
             if (surface.type()
-                    != systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType.CLIENT_SERVER
+                    != ZLinkAutoConnectType.CLIENT_SERVER
                 || surface.role()
-                    != systems.zlink.framework.locations.ZLinkLocationRole.ROUTER) {
+                    != ZLinkLocationRole.ROUTER) {
                 continue;
             }
             synchronized (this) {
@@ -515,7 +519,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
     private void completeAdmission(
         Connection connection,
         ZLinkChannelSocketRegistry.AdmissionFence fence,
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived reply) {
+        ZLinkBackendReceived reply) {
         try (reply) {
             ZLinkClientServerServerDescriptor expected;
             synchronized (this) {
@@ -713,9 +717,9 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
         Set<String> result = new HashSet<>();
         for (ZLinkChannelRuntime.AutoConnectSurface surface : surfaces) {
             if (surface.type()
-                    == systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType.CLIENT_SERVER
+                    == ZLinkAutoConnectType.CLIENT_SERVER
                 && surface.role()
-                    == systems.zlink.framework.locations.ZLinkLocationRole.DEALER
+                    == ZLinkLocationRole.DEALER
                 && surface.manualEndpoints().isEmpty()) {
                 result.add(surface.meshName());
             }
@@ -752,7 +756,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
     }
 
     private static long positiveRandomLong() {
-        return java.util.concurrent.ThreadLocalRandom.current()
+        return ThreadLocalRandom.current()
             .nextLong(1, Long.MAX_VALUE);
     }
 

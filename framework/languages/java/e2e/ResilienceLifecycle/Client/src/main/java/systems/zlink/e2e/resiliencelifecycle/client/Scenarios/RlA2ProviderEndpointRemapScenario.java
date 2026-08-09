@@ -1,4 +1,7 @@
-package systems.zlink.e2e.resiliencelifecycle.client.Scenarios;
+package Scenarios;
+import systems.zlink.e2e.resiliencelifecycle.client.Scenarios;
+import systems.zlink.e2e.resiliencelifecycle.client.Support;
+import java.util.concurrent.ExecutionException;
 
 import systems.zlink.e2e.resiliencelifecycle.client.Support.ResilienceScenarioContext;
 import java.time.Duration;
@@ -21,7 +24,7 @@ public final class RlA2ProviderEndpointRemapScenario {
         try {
             inFlight.toCompletableFuture().get(20, TimeUnit.SECONDS);
             throw new IllegalStateException("RL-A2 crashed in-flight request unexpectedly completed");
-        } catch (java.util.concurrent.ExecutionException expected) {
+        } catch (ExecutionException expected) {
             // The crash contract requires a bounded public failure, not a successful reply.
         } catch (Exception error) {
             throw new IllegalStateException("RL-A2 crashed in-flight request did not fail in time", error);

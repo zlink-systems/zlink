@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.concurrent.CompletionException;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -121,7 +122,7 @@ public final class ZLinkSessionRelocationPeerClient {
 
     private static Throwable unwrap(Throwable error) {
         Throwable current = error;
-        while (current instanceof java.util.concurrent.CompletionException
+        while (current instanceof CompletionException
             && current.getCause() != null) {
             current = current.getCause();
         }

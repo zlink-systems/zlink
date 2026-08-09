@@ -1,4 +1,8 @@
-package systems.zlink.e2e.pubsub.subscriber.Handlers;
+package Handlers;
+import systems.zlink.e2e.pubsub.subscriber.Handlers;
+import systems.zlink.e2e.pubsub.subscriber.Infrastructure;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.e2e.pubsub.shared.Contracts;
 import systems.zlink.e2e.pubsub.subscriber.Infrastructure.EvidenceStore;
@@ -16,11 +20,11 @@ public final class EventMsgHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> handle(
+    public CompletionStage<Void> handle(
         Contracts.EventMsg message,
         ZLinkPublishMessageContext context) {
         if (!evidence.accepts(context.topic())) {
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
         evidence.delayIfConfigured(message.scenario());
         evidence.record(
@@ -29,6 +33,6 @@ public final class EventMsgHandler
             message.scenario(),
             message.sequence(),
             message.value());
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 }

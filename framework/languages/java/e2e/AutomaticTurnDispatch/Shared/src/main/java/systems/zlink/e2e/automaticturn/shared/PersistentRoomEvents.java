@@ -1,11 +1,12 @@
 package systems.zlink.e2e.automaticturn.shared;
 
+import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.RedisClient;
 import java.util.List;
 
 public final class PersistentRoomEvents implements AutoCloseable {
     private final RedisClient client;
-    private final io.lettuce.core.api.StatefulRedisConnection<String, String> connection;
+    private final StatefulRedisConnection<String, String> connection;
     private final String prefix;
 
     public PersistentRoomEvents(String endpoint, String prefix) {

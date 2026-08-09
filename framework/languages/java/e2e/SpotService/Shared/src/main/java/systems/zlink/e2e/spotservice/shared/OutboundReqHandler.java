@@ -1,11 +1,12 @@
 package systems.zlink.e2e.spotservice.shared;
+import java.util.concurrent.CompletionStage;
 
 import java.time.Duration;
 import systems.zlink.framework.handlers.ZLinkSpotRequest;
 
 public final class OutboundReqHandler {
     @ZLinkSpotRequest
-    public java.util.concurrent.CompletionStage<Contracts.OutboundRes> handle(
+    public CompletionStage<Contracts.OutboundRes> handle(
         UserSpot spot,
         Contracts.OutboundReq request) {
         return spot.context()

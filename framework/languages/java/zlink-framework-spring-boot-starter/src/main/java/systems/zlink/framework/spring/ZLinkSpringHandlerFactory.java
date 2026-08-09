@@ -1,4 +1,5 @@
 package systems.zlink.framework.spring;
+import java.util.Arrays;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Constructor;
@@ -139,7 +140,7 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
             }
             RuntimeException lastFailure = null;
             Constructor<?>[] constructors = handlerType.getConstructors();
-            java.util.Arrays.sort(
+            Arrays.sort(
                 constructors,
                 Comparator.<Constructor<?>>comparingInt(
                         ZLinkSpringHandlerFactory::autowiredPriority)
@@ -268,7 +269,7 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
         static DependencyKey from(Parameter parameter) {
             return new DependencyKey(
                 parameter.getParameterizedType().getTypeName(),
-                java.util.Arrays.stream(parameter.getDeclaredAnnotations())
+                Arrays.stream(parameter.getDeclaredAnnotations())
                     .map(Object::toString)
                     .sorted()
                     .toList());

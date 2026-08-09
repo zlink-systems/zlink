@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.service;
+import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -249,11 +250,11 @@ final class ZLinkServiceM6AWireCodecTest {
     }
 
     private static byte[] truncated(byte[] value) {
-        return java.util.Arrays.copyOf(value, value.length - 1);
+        return Arrays.copyOf(value, value.length - 1);
     }
 
     private static byte[] withTrailingByte(byte[] value) {
-        return java.util.Arrays.copyOf(value, value.length + 1);
+        return Arrays.copyOf(value, value.length + 1);
     }
 
     private static byte[] hex(String value) {

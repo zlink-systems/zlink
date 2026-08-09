@@ -1,4 +1,9 @@
 package systems.zlink.framework.runtime.internal.locations;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.UnaryOperator;
+import java.util.stream.Collectors;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
@@ -212,7 +217,7 @@ public final class ZLinkAggregateRelocationCoordinator {
         return requireAggregateProgress(
                 fence, targetOwner, digest, cancellation)
             .thenCompose(marker -> {
-                var publication = new java.util.concurrent.atomic.AtomicReference<
+                var publication = new AtomicReference<
                     ZLinkCanonicalRelocationAuthorityStateCodec.Published>();
                 Map<String, Long> ownerGenerations = new LinkedHashMap<>();
                 CompletionStage<Void> reads =
@@ -438,7 +443,7 @@ public final class ZLinkAggregateRelocationCoordinator {
                 "completed aggregate participant fence is invalid");
         }
         List<Participant> steady = new ArrayList<>();
-        var alreadySteady = new java.util.concurrent.atomic.AtomicInteger();
+        var alreadySteady = new AtomicInteger();
         CompletionStage<Void> reads = CompletableFuture.completedFuture(null);
         for (ExpectedParticipant participant : expected) {
             reads = reads.thenCompose(ignored -> authorityStore.read(
@@ -494,8 +499,8 @@ public final class ZLinkAggregateRelocationCoordinator {
                 new ZLinkAuthorityPut(
                     participant.applicationAuthorityPayload(),
                     ZLinkAuthorityGenerationTransition.PRESERVE,
-                    java.util.Optional.empty(),
-                    java.util.Optional.empty()),
+                    Optional.empty(),
+                    Optional.empty()),
                 cancellation)
             .thenCompose(result -> {
                 if (result instanceof ZLinkAuthorityStored) {
@@ -529,7 +534,7 @@ public final class ZLinkAggregateRelocationCoordinator {
 
     private CompletionStage<Void> removeProgressAfterNormalization(
         ZLinkAggregateFence fence,
-        java.util.Optional<ZLinkAggregateProgressSnapshot> marker,
+        Optional<ZLinkAggregateProgressSnapshot> marker,
         ZLinkStoreCancellation cancellation) {
         if (marker.isEmpty()) {
             return CompletableFuture.completedFuture(null);
@@ -571,7 +576,7 @@ public final class ZLinkAggregateRelocationCoordinator {
     public CompletionStage<CanonicalProgress> updateCanonicalReplay(
         List<ExpectedParticipant> participants,
         ZLinkLocationOwnerToken targetOwner,
-        java.util.function.UnaryOperator<
+        UnaryOperator<
             ZLinkServiceRelocationEnvelopeCodec.Envelope> update,
         ZLinkStoreCancellation cancellation) {
         List<ExpectedParticipant> expected = List.copyOf(
@@ -597,7 +602,7 @@ public final class ZLinkAggregateRelocationCoordinator {
         List<ExpectedParticipant> participants,
         ZLinkAggregateFence fence,
         ZLinkLocationOwnerToken targetOwner,
-        java.util.function.UnaryOperator<
+        UnaryOperator<
             ZLinkServiceRelocationEnvelopeCodec.Envelope> update,
         ZLinkStoreCancellation cancellation) {
         List<ExpectedParticipant> expected = List.copyOf(
@@ -614,7 +619,7 @@ public final class ZLinkAggregateRelocationCoordinator {
                 fence, targetOwner, null, cancellation)
             .thenCompose(marker -> {
                 List<ZLinkAuthoritySnapshot> snapshots = new ArrayList<>();
-                var shared = new java.util.concurrent.atomic.AtomicReference<
+                var shared = new AtomicReference<
                     ZLinkCanonicalRelocationAuthorityStateCodec.Published>();
                 CompletionStage<Void> reads =
                     CompletableFuture.completedFuture(null);
@@ -713,7 +718,7 @@ public final class ZLinkAggregateRelocationCoordinator {
                             marker.request()
                                 .targetDescriptorLifecycleGeneration(),
                             new ZLinkPlacementCapacityBundle(
-                                0, 0, java.util.Optional.empty()),
+                                0, 0, Optional.empty()),
                             targetOwner);
                         return stageRoot(
                                 request,
@@ -875,7 +880,7 @@ public final class ZLinkAggregateRelocationCoordinator {
         ZLinkLocationOwnerToken targetOwner,
         ZLinkAuthorityReadResult read,
         List<Participant> steady,
-        java.util.concurrent.atomic.AtomicInteger alreadySteady) {
+        AtomicInteger alreadySteady) {
         if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
             || !matchesSteadyOwner(snapshot, participant, targetOwner)) {
             return failed(new RelocationDataLostException(
@@ -1147,7 +1152,7 @@ public final class ZLinkAggregateRelocationCoordinator {
                             published.request()
                                 .targetDescriptorLifecycleGeneration(),
                             new ZLinkPlacementCapacityBundle(
-                                0, 0, java.util.Optional.empty()),
+                                0, 0, Optional.empty()),
                             published.request().targetOwner());
                         return stageRoot(
                                 completion,
@@ -1594,7 +1599,7 @@ public final class ZLinkAggregateRelocationCoordinator {
             if (!targetOwnerGenerations.keySet().equals(
                 request.participants().stream()
                     .map(Participant::authorityKey)
-                    .collect(java.util.stream.Collectors.toSet()))) {
+                    .collect(Collectors.toSet()))) {
                 throw new IllegalArgumentException(
                     "published owner generations do not match participants");
             }
@@ -1792,7 +1797,7 @@ public final class ZLinkAggregateRelocationCoordinator {
         ZLinkStoreCancellation cancellation) {
         Set<String> expectedKeys = participants.stream()
             .map(ExpectedParticipant::authorityKey)
-            .collect(java.util.stream.Collectors.toSet());
+            .collect(Collectors.toSet());
         return authorityStore.listAggregateProgress(cancellation)
             .thenCompose(markers -> {
                 List<ZLinkAggregateProgressSnapshot> matches = markers.stream()
@@ -1800,7 +1805,7 @@ public final class ZLinkAggregateRelocationCoordinator {
                         targetOwner))
                     .filter(value -> value.request().participants().stream()
                         .map(ZLinkAggregateParticipant::authorityKey)
-                        .collect(java.util.stream.Collectors.toSet())
+                        .collect(Collectors.toSet())
                         .equals(expectedKeys))
                     .toList();
                 return matches.size() == 1

@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.Set;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -25,7 +26,7 @@ final class ZLinkDeferredActorJoinScope {
     private static final Object LEGACY_RUNTIME_SCOPE = new Object();
     private static final ConcurrentMap<ActorScopeKey, State> ACTIVE_ACTOR_SCOPES =
         new ConcurrentHashMap<>();
-    private static final java.util.Set<State> ACTIVE_HANDLER_SCOPES =
+    private static final Set<State> ACTIVE_HANDLER_SCOPES =
         ConcurrentHashMap.newKeySet();
 
     private ZLinkDeferredActorJoinScope() {

@@ -1,4 +1,8 @@
-package systems.zlink.e2e.registrationcodec.main.Endpoints;
+package Endpoints;
+import com.sun.net.httpserver.HttpExchange;
+import systems.zlink.e2e.registrationcodec.main.Endpoints;
+import systems.zlink.e2e.registrationcodec.main.Infrastructure;
+import java.io.IOException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -180,7 +184,7 @@ public final class OperationalEndpoints implements SmartLifecycle {
     }
 
     private void writeJson(
-        com.sun.net.httpserver.HttpExchange exchange,
+        HttpExchange exchange,
         CompletionStage<?> response) {
         response.whenComplete((value, error) -> {
             try {
@@ -192,13 +196,13 @@ public final class OperationalEndpoints implements SmartLifecycle {
                     ? error.getCause()
                     : error;
                 writeError(exchange, cause);
-            } catch (java.io.IOException writeFailure) {
+            } catch (IOException writeFailure) {
                 exchange.close();
             }
         });
     }
 
-    private void writeJson(com.sun.net.httpserver.HttpExchange exchange, Object value) throws java.io.IOException {
+    private void writeJson(HttpExchange exchange, Object value) throws IOException {
         if (!"POST".equals(exchange.getRequestMethod()) && !"/health".equals(exchange.getRequestURI().getPath())) {
             byte[] body = "method not allowed\n".getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(405, body.length);
@@ -219,8 +223,8 @@ public final class OperationalEndpoints implements SmartLifecycle {
     }
 
     private static void writeError(
-        com.sun.net.httpserver.HttpExchange exchange,
-        Throwable error) throws java.io.IOException {
+        HttpExchange exchange,
+        Throwable error) throws IOException {
         byte[] body = error.toString().getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(500, body.length);
         exchange.getResponseBody().write(body);

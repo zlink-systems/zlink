@@ -1,5 +1,6 @@
-package systems.zlink.e2e.registrymessaging.provider.Infrastructure;
+package Infrastructure;
 
+import systems.zlink.e2e.registrymessaging.provider.Infrastructure;
 import java.util.concurrent.CompletableFuture;
 
 /** Publicly controlled barrier for the RM-B3 in-flight request fixture. */

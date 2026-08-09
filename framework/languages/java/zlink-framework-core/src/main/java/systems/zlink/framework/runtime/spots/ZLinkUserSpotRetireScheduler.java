@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Map;
 
 import java.util.List;
 import java.time.Duration;
@@ -179,7 +180,7 @@ final class ZLinkUserSpotRetireScheduler {
             systems.zlink.framework.runtime.internal.metrics
                 .ZLinkRuntimeMetrics.increment(
                     "zlink.drain.actors.handed_off",
-                    java.util.Map.of());
+                    Map.of());
         }
     }
 

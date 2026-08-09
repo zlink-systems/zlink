@@ -1,5 +1,6 @@
-package systems.zlink.e2e.kotlin.registrymessaging.client.Support
+package Support
 
+import systems.zlink.e2e.kotlin.registrymessaging.client.Support
 import java.time.Duration
 import systems.zlink.e2e.kotlin.registrymessaging.shared.ProfileReq
 import systems.zlink.e2e.kotlin.registrymessaging.shared.ProfileRes

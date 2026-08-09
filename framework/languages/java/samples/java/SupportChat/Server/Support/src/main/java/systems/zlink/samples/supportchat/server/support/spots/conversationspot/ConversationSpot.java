@@ -1,4 +1,7 @@
 package systems.zlink.samples.supportchat.server.support.spots.conversationspot;
+import java.util.HashSet;
+import java.util.Objects;
+import java.util.Set;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -30,7 +33,7 @@ public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
     private final SupportActorDirectory directory;
     private final ConversationNotificationPublisher notifications;
     private final Map<String, SupportUserActor> actors = new LinkedHashMap<>();
-    private final java.util.Set<String> pendingJoins = new java.util.HashSet<>();
+    private final Set<String> pendingJoins = new HashSet<>();
     private Conversation conversation;
     private ZLinkTimer idleTimer;
 
@@ -143,7 +146,7 @@ public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
         publish(change);
         Conversation.Message message = change.events().stream()
             .map(Conversation.Event::message)
-            .filter(java.util.Objects::nonNull)
+            .filter(Objects::nonNull)
             .findFirst()
             .orElseThrow();
         return new Messages.SendChatMessageRes(

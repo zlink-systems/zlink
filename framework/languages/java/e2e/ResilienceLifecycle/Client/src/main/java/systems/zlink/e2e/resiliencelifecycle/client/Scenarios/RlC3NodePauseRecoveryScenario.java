@@ -1,5 +1,7 @@
-package systems.zlink.e2e.resiliencelifecycle.client.Scenarios;
+package Scenarios;
 
+import systems.zlink.e2e.resiliencelifecycle.client.Scenarios;
+import systems.zlink.e2e.resiliencelifecycle.client.Support;
 import systems.zlink.e2e.resiliencelifecycle.client.Support.ResilienceScenarioContext;
 
 public final class RlC3NodePauseRecoveryScenario {

@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.internal.locations;
+import java.io.IOException;
+import java.util.concurrent.CompletableFuture;
+import java.util.stream.IntStream;
+import systems.zlink.framework.locationprovider.ZLinkStoreReadFound;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -144,7 +148,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
     @Test
     void stagingMarkerStoresMetadataInsteadOfParticipantPayloads()
         throws ReflectiveOperationException {
-        var participants = java.util.stream.IntStream.range(0, 2050)
+        var participants = IntStream.range(0, 2050)
             .mapToObj(index -> participant("authority-%04d".formatted(index)))
             .toList();
         var request = new ZLinkAggregatePrepareRequest(
@@ -297,7 +301,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
             result.getClass(),
             () -> "unexpected prepare result: " + result);
         var decoded = decodeAuthority(
-            ((systems.zlink.framework.locationprovider.ZLinkStoreReadFound)
+            ((ZLinkStoreReadFound)
                 delegate.read(authorityA, () -> false)
                     .toCompletableFuture()
                     .join()).value().bytes());
@@ -516,7 +520,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
         constructor.setAccessible(true);
         var allocation = new ZLinkPlacementAllocation(
             ZLinkPlacementAllocationState.ACTIVE,
-            systems.zlink.framework.locations.ZLinkPlacementObjectKind.ACTOR,
+            ZLinkPlacementObjectKind.ACTOR,
             "actor",
             new ZLinkMeshNodeDescriptorKey(
                 "game", RoutingId.from("node-a")),
@@ -647,7 +651,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                     if (match.find()) {
                         return HexFormat.of().parseHex(match.group(1));
                     }
-                } catch (java.io.IOException failure) {
+                } catch (IOException failure) {
                     throw new IllegalStateException(failure);
                 }
             }
@@ -707,7 +711,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                     failingWrites++;
                 }
                 failCommitOnce = false;
-                return java.util.concurrent.CompletableFuture.completedFuture(
+                return CompletableFuture.completedFuture(
                     new systems.zlink.framework.locationprovider
                         .ZLinkStoreWriteConflict(Instant.now()));
             }

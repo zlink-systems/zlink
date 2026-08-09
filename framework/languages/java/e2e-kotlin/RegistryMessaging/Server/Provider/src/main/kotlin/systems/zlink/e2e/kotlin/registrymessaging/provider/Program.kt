@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.registrymessaging.provider
 
+
+import java.net.URI
 import java.io.File
 import org.springframework.boot.ApplicationRunner
 import org.springframework.boot.WebApplicationType
@@ -64,7 +66,7 @@ class ProviderApplication {
 
             if (!options.channelEndpoint.isNullOrBlank()) {
                 val channel = framework.addClientServerChannel(Contracts.PROFILE_CHANNEL)
-                val endpoint = java.net.URI.create(options.channelEndpoint)
+                val endpoint = URI.create(options.channelEndpoint)
                 channel.server()
                     .setBindHost(endpoint.host)
                     .setAdvertiseHost(endpoint.host)

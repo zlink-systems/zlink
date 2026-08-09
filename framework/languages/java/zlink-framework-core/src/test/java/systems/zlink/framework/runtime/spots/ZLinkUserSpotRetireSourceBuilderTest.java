@@ -1,4 +1,12 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.messaging.ZLinkMessage;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -61,7 +69,7 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                 LiveSpot.events.add("turn");
                 context.relocationReady().defer();
                 assertThrows(
-                    systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                    ZLinkFrameworkException.class,
                     context::close);
                 return releaseTurn;
             });
@@ -139,10 +147,10 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                 (DefaultSpotContext) LiveSpot.last.get().context();
             CompletionStage<Void> turn = context.enqueueDispatch(() -> {
                 var failure = assertThrows(
-                    systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                    ZLinkFrameworkException.class,
                     () -> context.relocationReady().defer());
                 assertEquals(
-                    systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                    ZLinkFrameworkErrorKind
                         .NOT_CONFIGURED,
                     failure.kind());
                 return CompletableFuture.completedFuture(null);
@@ -253,7 +261,7 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                     .toCompletableFuture().get());
             SnapshotAdapter.captured.set(null);
             assertThrows(
-                java.util.concurrent.CompletionException.class,
+                CompletionException.class,
                 () -> builder.prepare(
                         SPOT_ID,
                         rollingToVersionOne(),
@@ -300,7 +308,7 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                 .toCompletableFuture().get();
 
             List<String> events =
-                new java.util.concurrent.CopyOnWriteArrayList<>();
+                new CopyOnWriteArrayList<>();
             ZLinkAggregateRelocationCoordinator coordinator =
                 new ZLinkAggregateRelocationCoordinator(
                     repository,
@@ -422,16 +430,16 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                 .toCompletableFuture().get();
 
             List<String> events =
-                new java.util.concurrent.CopyOnWriteArrayList<>();
+                new CopyOnWriteArrayList<>();
             List<String> putReferences =
-                new java.util.concurrent.CopyOnWriteArrayList<>();
+                new CopyOnWriteArrayList<>();
             List<String> deleteReferences =
-                new java.util.concurrent.CopyOnWriteArrayList<>();
+                new CopyOnWriteArrayList<>();
             //  The in-memory store ignores cancellation, so a flag raised on
             //  the first staged read-back deterministically fails the first
             //  step after coordinator.stageRoot succeeded.
-            java.util.concurrent.atomic.AtomicBoolean lateCancel =
-                new java.util.concurrent.atomic.AtomicBoolean();
+            AtomicBoolean lateCancel =
+                new AtomicBoolean();
             ZLinkAggregateRelocationCoordinator coordinator =
                 new ZLinkAggregateRelocationCoordinator(
                     repository,
@@ -467,14 +475,14 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
             Throwable failure = assertThrows(
                 Exception.class,
                 () -> prepare.get(
-                    30, java.util.concurrent.TimeUnit.SECONDS));
+                    30, TimeUnit.SECONDS));
             while (failure.getCause() != null
                 && !(failure
-                    instanceof java.util.concurrent.CancellationException)) {
+                    instanceof CancellationException)) {
                 failure = failure.getCause();
             }
             assertInstanceOf(
-                java.util.concurrent.CancellationException.class, failure);
+                CancellationException.class, failure);
 
             assertFalse(putReferences.isEmpty(),
                 "the relocation root must have been staged before failing");
@@ -623,8 +631,8 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
     public static final class LiveSpot implements ZLinkSpot<ZLinkActor> {
         private static final AtomicReference<LiveSpot> last =
             new AtomicReference<>();
-        private static final java.util.List<String> events =
-            new java.util.concurrent.CopyOnWriteArrayList<>();
+        private static final List<String> events =
+            new CopyOnWriteArrayList<>();
         private final ZLinkSpotContext context;
 
         public LiveSpot(ZLinkSpotContext context) {
@@ -639,7 +647,7 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
         @Override
         public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
             String actorId,
-            systems.zlink.framework.messaging.ZLinkMessage request) {
+            ZLinkMessage request) {
             return CompletableFuture.completedFuture(
                 ZLinkSpotActorJoinResult.accept());
         }

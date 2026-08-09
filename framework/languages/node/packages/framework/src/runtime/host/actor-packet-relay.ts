@@ -207,8 +207,8 @@ export class ZLinkActorPacketRelay {
             targetNodeRid: normalizeRoutingId(relay.boundSessionTargetNodeRid),
             spotId: normalizeRoutingId(relay.boundSessionSpotId)
           };
-    const header = RuntimeMessage.from(Buffer.from(relay.header, 'base64'));
-    const body = RuntimeMessage.from(Buffer.from(relay.payload, 'base64'));
+    const header = RuntimeMessage.fromOwned(Buffer.from(relay.header, 'base64'));
+    const body = RuntimeMessage.fromOwned(Buffer.from(relay.payload, 'base64'));
     let closeFrameMessages = true;
     try {
       const frameHeader = decodeStreamHeader(messageToBytes(header));
@@ -502,7 +502,7 @@ export class ZLinkActorPacketRelay {
     // error through the bound-session route after its handler reaches a
     // terminal state; the source stream must not wait for that handler.
     const returnResponse = false;
-    const header = RuntimeMessage.from(Buffer.from(encodeStreamHeader(frameHeader)));
+    const header = RuntimeMessage.fromOwned(Buffer.from(encodeStreamHeader(frameHeader)));
     let request: Record<string, unknown>;
     try {
       const messageFollowContext = resolvedRoute === undefined
@@ -748,8 +748,8 @@ export class ZLinkActorPacketRelay {
       return false;
     }
     const responseTarget = this.options.streamBindingRuntime().captureBoundSessionResponseTarget(actor);
-    const header = RuntimeMessage.from(Buffer.from(encodeStreamHeader(frameHeader)));
-    const body = RuntimeMessage.from(Buffer.from(messageToBytes(payload)));
+    const header = RuntimeMessage.fromOwned(Buffer.from(encodeStreamHeader(frameHeader)));
+    const body = RuntimeMessage.fromOwned(Buffer.from(messageToBytes(payload)));
     const returnResponse = frameHeader.kind === ZLinkStreamMessageKind.Request
       && frameHeader.requestSeq !== undefined;
     try {

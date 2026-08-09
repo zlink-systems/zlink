@@ -1,4 +1,7 @@
 package systems.zlink.e2e.automaticturn.client;
+import java.time.Duration;
+import java.util.Arrays;
+import systems.zlink.stream.connector.ZLinkStreamCompression;
 
 import java.net.URI;
 import systems.zlink.e2e.automaticturn.client.Support.AutomaticTurnDispatchScenarioSupport;
@@ -17,7 +20,7 @@ public final class Program {
         }
         ClientOptions options = ClientOptions.load(args[1]);
         AutomaticTurnDispatchScenarioSupport support = new AutomaticTurnDispatchScenarioSupport(options);
-        String[] operationArgs = java.util.Arrays.copyOfRange(args, 2, args.length);
+        String[] operationArgs = Arrays.copyOfRange(args, 2, args.length);
         boolean replacementScenario = operationArgs.length > 0
             && "JVM-SESSION-001".equals(operationArgs[0]);
         ZLinkStreamConnector connector = ZLinkStreamConnectorFactory.create(
@@ -36,23 +39,23 @@ public final class Program {
                 ZLinkStreamConnector recovery = ZLinkStreamConnectorFactory.create(
                     new ZLinkStreamConnectorOptions(
                         URI.create(options.streamEndpoint()),
-                        systems.zlink.stream.connector.ZLinkStreamDispatchMode.MANUAL,
-                        java.time.Duration.ofSeconds(120),
-                        java.time.Duration.ofSeconds(3),
+                        ZLinkStreamDispatchMode.MANUAL,
+                        Duration.ofSeconds(120),
+                        Duration.ofSeconds(3),
                         2,
-                        java.time.Duration.ofSeconds(5),
+                        Duration.ofSeconds(5),
                         64 * 1024,
                         64 * 1024,
                         1024,
                         true,
-                        java.time.Duration.ofSeconds(1),
-                        java.time.Duration.ofSeconds(5),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(5),
                         false,
-                        java.time.Duration.ofMillis(250),
-                        java.time.Duration.ofSeconds(5),
+                        Duration.ofMillis(250),
+                        Duration.ofSeconds(5),
                         2.0,
                         false,
-                        systems.zlink.stream.connector.ZLinkStreamCompression.LZ4,
+                        ZLinkStreamCompression.LZ4,
                         null,
                         null,
                         null));

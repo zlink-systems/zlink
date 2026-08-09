@@ -1,4 +1,5 @@
 package systems.zlink.e2e.runtimemonitoring.service.handlers;
+import systems.zlink.framework.spots.ZLinkTimerOverrunPolicy;
 
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
@@ -27,7 +28,7 @@ public final class MonitoringSpot implements ZLinkSpot<ZLinkActor> {
     @Override
     public CompletionStage<ZLinkSpotCreateResponse> onCreate(ZLinkMessage request) {
         ZLinkTimerOptions options = new ZLinkTimerOptions(
-            systems.zlink.framework.spots.ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS,
+            ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS,
             1,
             false);
         context.addTimer("failing-monitoring-timer", Duration.ofMillis(500),

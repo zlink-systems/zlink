@@ -1,5 +1,7 @@
-package systems.zlink.e2e.runtimemonitoring.client.Scenarios;
+package Scenarios;
 
+import systems.zlink.e2e.runtimemonitoring.client.Scenarios;
+import systems.zlink.e2e.runtimemonitoring.client.Support;
 import java.util.concurrent.TimeUnit;
 import systems.zlink.e2e.runtimemonitoring.client.Support.MonitoringScenarioContext;
 import systems.zlink.e2e.runtimemonitoring.shared.Contracts;

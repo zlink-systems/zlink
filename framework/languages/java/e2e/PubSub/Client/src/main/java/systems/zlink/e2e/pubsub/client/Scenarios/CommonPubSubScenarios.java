@@ -1,5 +1,7 @@
-package systems.zlink.e2e.pubsub.client.Scenarios;
+package Scenarios;
 
+import systems.zlink.e2e.pubsub.client.Scenarios;
+import systems.zlink.e2e.pubsub.client.Support;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.net.URI;
 import java.net.URLEncoder;

@@ -1,5 +1,6 @@
 package systems.zlink.framework.kotlin
 
+import org.junit.jupiter.api.Assertions
 import java.util.concurrent.CompletableFuture
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
@@ -24,7 +25,7 @@ class KotlinLocationExtensionsTest {
         )
 
         val items = locationPages(ZLinkPageRequest(2, null)) { request ->
-            java.util.concurrent.CompletableFuture.completedFuture(pages[request.continuationToken() ?: ""])
+            CompletableFuture.completedFuture(pages[request.continuationToken() ?: ""])
         }.toList()
 
         assertEquals(listOf("a", "b", "c"), items)

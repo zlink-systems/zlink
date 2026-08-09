@@ -1,4 +1,5 @@
 package systems.zlink.e2e.storefailure.provider;
+import java.nio.file.StandardOpenOption;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -39,8 +40,8 @@ public final class ProviderEvidenceStore {
                     path,
                     line + System.lineSeparator(),
                     StandardCharsets.UTF_8,
-                    java.nio.file.StandardOpenOption.CREATE,
-                    java.nio.file.StandardOpenOption.APPEND);
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.APPEND);
             } catch (IOException error) {
                 throw new IllegalStateException("failed to write evidence", error);
             }

@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.binding;
+import java.util.Map;
 
 import java.util.EnumSet;
 import java.util.List;
@@ -32,7 +33,7 @@ final class ZLinkJavaStreamFraming {
                 EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
                 Optional.ofNullable(requestSeq),
                 payload.packetName(),
-                java.util.Map.of()),
+                Map.of()),
             payload.body()));
         try {
             return operation.message(frame).flags(flags).submit();

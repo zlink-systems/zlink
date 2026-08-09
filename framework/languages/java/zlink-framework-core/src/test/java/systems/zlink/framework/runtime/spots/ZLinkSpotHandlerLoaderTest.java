@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.concurrent.CompletionStage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -41,7 +42,7 @@ final class ZLinkSpotHandlerLoaderTest {
 
     private static final class ConfiguredActorHandler {
         @ZLinkSpotActorRequest(packetName = "configured-request")
-        public java.util.concurrent.CompletionStage<Reply> handle(
+        public CompletionStage<Reply> handle(
             TestActor actor,
             Request request) {
             return CompletableFuture.completedFuture(new Reply());

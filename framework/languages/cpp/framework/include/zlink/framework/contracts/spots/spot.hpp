@@ -43,6 +43,11 @@
 namespace zlink::framework
 {
 
+namespace runtime::protocol
+{
+struct actor_route_fence_t;
+}
+
 namespace detail
 {
 class spot_node_builder_state_t;
@@ -1879,7 +1884,9 @@ class spot_manager_t
                         const zlink::message_t &message,
                         service_provider_t &services,
                         serializer_registry_t &serializers,
-                        spot_inbound_message_t metadata = {});
+                        spot_inbound_message_t metadata = {},
+                        const runtime::protocol::actor_route_fence_t *
+                          admitted_message_follow_target = nullptr);
 
     std::shared_ptr<detail::spot_node_builder_state_t> _state;
     std::weak_ptr<detail::spot_context_state_t> _source;

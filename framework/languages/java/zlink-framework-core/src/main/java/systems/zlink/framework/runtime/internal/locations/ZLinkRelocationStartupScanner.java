@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.internal.locations;
+import java.util.Arrays;
+import java.util.concurrent.atomic.AtomicReference;
+import systems.zlink.contracts.core.RoutingId;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -54,7 +57,7 @@ public final class ZLinkRelocationStartupScanner {
         List<ZLinkAggregateRelocationCoordinator.ExpectedParticipant> expected =
             new ArrayList<>();
         List<ZLinkAuthorityEntry> authorities = new ArrayList<>();
-        var first = new java.util.concurrent.atomic.AtomicReference<
+        var first = new AtomicReference<
             ZLinkCanonicalRelocationAuthorityStateCodec.Published>();
         CompletionStage<Void> reads = CompletableFuture.completedFuture(null);
         for (ZLinkAggregateParticipant participant :
@@ -133,7 +136,7 @@ public final class ZLinkRelocationStartupScanner {
                 .thenCompose(root -> {
                     var envelope = ZLinkServiceRelocationEnvelopeCodec.decode(
                         root.payload());
-                    if (!java.util.Arrays.equals(
+                    if (!Arrays.equals(
                             root.inventoryDigest(),
                             marker.request().inventoryDigest())
                         || envelope.relocationHigh()
@@ -187,10 +190,10 @@ public final class ZLinkRelocationStartupScanner {
         ZLinkAggregateFence fence,
         String sourceOwnerId,
         long sourceOwnerLeaseGeneration,
-        systems.zlink.contracts.core.RoutingId sourceNodeRid,
+        RoutingId sourceNodeRid,
         long sourceNodeGeneration,
         ZLinkLocationOwnerToken targetOwner,
-        systems.zlink.contracts.core.RoutingId targetNodeRid,
+        RoutingId targetNodeRid,
         long targetNodeGeneration,
         boolean sourceCleanupCompleted,
         ZLinkAggregateRelocationCoordinator.PublishedRoot root,

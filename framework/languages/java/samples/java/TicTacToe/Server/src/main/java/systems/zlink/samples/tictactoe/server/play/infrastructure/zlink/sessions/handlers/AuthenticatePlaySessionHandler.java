@@ -1,4 +1,5 @@
 package systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.sessions.handlers;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.actors.ActorRef;
@@ -32,7 +33,7 @@ public final class AuthenticatePlaySessionHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> handle(
+    public CompletionStage<Void> handle(
         ZLinkSessionContext context,
         ZLinkSessionDispatchContext dispatch,
         AuthenticateReq request) {

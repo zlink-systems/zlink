@@ -1,5 +1,7 @@
-package systems.zlink.e2e.registrymessaging.client.Scenarios;
+package Scenarios;
 
+import systems.zlink.e2e.registrymessaging.client.Scenarios;
+import systems.zlink.e2e.registrymessaging.client.Support;
 import java.util.HashMap;
 import java.util.Map;
 import systems.zlink.e2e.registrymessaging.client.Support.ScenarioAssert;

@@ -1,5 +1,7 @@
-package systems.zlink.e2e.kotlin.discoveryregistryha.provider.Handlers
+package Handlers
 
+import systems.zlink.e2e.kotlin.discoveryregistryha.provider.Handlers
+import systems.zlink.e2e.kotlin.discoveryregistryha.provider.Support
 import systems.zlink.e2e.kotlin.discoveryregistryha.Contracts
 import systems.zlink.e2e.kotlin.discoveryregistryha.provider.Support.ProviderEvidenceStore
 import systems.zlink.framework.ZLinkMessageContext

@@ -1,5 +1,7 @@
-package systems.zlink.e2e.kotlin.registrymessaging.client.Scenarios
+package Scenarios
 
+import systems.zlink.e2e.kotlin.registrymessaging.client.Scenarios
+import systems.zlink.e2e.kotlin.registrymessaging.client.Support
 import java.security.MessageDigest
 import java.util.HexFormat
 import java.util.UUID

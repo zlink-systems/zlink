@@ -1,4 +1,13 @@
 package systems.zlink.e2e.runtimemonitoring.service;
+import org.springframework.context.ConfigurableApplicationContext;
+import java.net.URI;
+import java.util.concurrent.Flow;
+import systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringActor;
+import systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringActorFactory;
+import systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringEntrySpot;
+import systems.zlink.framework.channels.ZLinkChannelRuntimeOptions;
+import systems.zlink.framework.channels.ZLinkRouteClient;
+import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
@@ -69,15 +78,15 @@ public final class Program {
     EvidenceHttpServer evidenceHttpServer(
         EvidenceState state,
         ObjectMapper json,
-        systems.zlink.framework.channels.ZLinkChannelRuntimeOptions runtimeOptions,
-        systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions meshRuntimeOptions,
-        systems.zlink.framework.channels.ZLinkRouteClient routeClient,
+        ZLinkChannelRuntimeOptions runtimeOptions,
+        ZLinkRouteMeshRuntimeOptions meshRuntimeOptions,
+        ZLinkRouteClient routeClient,
         ObjectProvider<ZLinkRouteMeshRuntime> meshRuntime,
         ObjectProvider<ZLinkFrameworkRuntime> runtimeQuery,
         ObserverIsolationProbe observerIsolation,
         ObjectProvider<ZLinkSpotManager> spots,
         ObjectProvider<ZLinkSpotPublisherClient> publisher,
-        org.springframework.context.ConfigurableApplicationContext applicationContext,
+        ConfigurableApplicationContext applicationContext,
         ServiceOptions config) {
         return new EvidenceHttpServer(
             state,
@@ -102,7 +111,7 @@ public final class Program {
             options.configureLocations().setPollingInterval(Duration.ofMillis(250));
             options.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
-            java.net.URI apiEndpoint = java.net.URI.create(config.apiEndpoint());
+            URI apiEndpoint = URI.create(config.apiEndpoint());
             options.addClientServerChannel(Contracts.CHANNEL)
                 .server()
                 .setAdvertiseHost(apiEndpoint.getHost())
@@ -112,8 +121,8 @@ public final class Program {
                     Contracts.WorkReq.class,
                     Contracts.WorkRes.class);
             if (config.enableHandshake()) {
-                java.net.URI handshakeEndpoint =
-                    java.net.URI.create(config.handshakeEndpoint());
+                URI handshakeEndpoint =
+                    URI.create(config.handshakeEndpoint());
                 options.addClientServerChannel(Contracts.HANDSHAKE_CHANNEL)
                     .server()
                     .setAdvertiseHost(handshakeEndpoint.getHost())
@@ -142,11 +151,11 @@ public final class Program {
                 if (config.registerPlacementObjects()) {
                     var objects = node.objects().server();
                     objects.addEntrySpot(
-                        systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringEntrySpot.class);
+                        MonitoringEntrySpot.class);
                     objects.addActorFactory(
-                        systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringActor.TYPE,
-                        systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringActor.class,
-                        systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringActorFactory.class,
+                        MonitoringActor.TYPE,
+                        MonitoringActor.class,
+                        MonitoringActorFactory.class,
                         factory -> factory.disableRelocation());
                     objects.addSpotFactory(
                         Contracts.MONITORING_SPOT_TYPE,
@@ -224,9 +233,9 @@ public final class Program {
                 throw new IllegalStateException("RouteMesh runtime is required");
             }
             runtime.observe(Contracts.SPOT_MESH, 32).subscribe(
-                new java.util.concurrent.Flow.Subscriber<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>>() {
+                new Flow.Subscriber<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>>() {
                     @Override
-                    public void onSubscribe(java.util.concurrent.Flow.Subscription subscription) {
+                    public void onSubscribe(Flow.Subscription subscription) {
                         subscription.request(Long.MAX_VALUE);
                     }
 

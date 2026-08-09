@@ -1,4 +1,11 @@
 package systems.zlink.framework;
+import java.lang.reflect.RecordComponent;
+import java.time.Duration;
+import java.util.LinkedHashSet;
+import systems.zlink.framework.locations.ZLinkLocationServiceSummaryFilter;
+import systems.zlink.framework.locations.ZLinkLocationTopologyFilter;
+import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
+import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -101,14 +108,14 @@ final class LocationContractTest {
         Method claimOwnerLease = ZLinkLocationRepository.class.getMethod(
             "claimOwnerLease",
             String.class,
-            java.time.Duration.class);
+            Duration.class);
         Method readOwnerLease = ZLinkLocationRepository.class.getMethod(
             "readOwnerLease",
             String.class);
         Method renewOwnerLease = ZLinkLocationRepository.class.getMethod(
             "renewOwnerLease",
             ZLinkLocationOwnerToken.class,
-            java.time.Duration.class);
+            Duration.class);
         Method releaseOwnerLease = ZLinkLocationRepository.class.getMethod(
             "releaseOwnerLease",
             ZLinkLocationOwnerToken.class);
@@ -118,12 +125,12 @@ final class LocationContractTest {
         Method updateMeshNode =
             ZLinkLocationRepository.class.getMethod(
                     "updateMeshNode",
-                    systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor.class,
+                    ZLinkMeshNodeDescriptor.class,
                     ZLinkLocationWriteIntent.class);
         Method removeMeshNode =
             ZLinkLocationRepository.class.getMethod(
                     "removeMeshNode",
-                    systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey.class,
+                    ZLinkMeshNodeDescriptorKey.class,
                     ZLinkLocationOwnerToken.class);
         Method listMeshNodes =
             ZLinkLocationRepository.class.getMethod(
@@ -171,13 +178,13 @@ final class LocationContractTest {
         assertEquals(CompletionStage.class, ZLinkLocationRuntimeQuery.class
             .getMethod(
                 "listTopology",
-                systems.zlink.framework.locations.ZLinkLocationTopologyFilter.class,
+                ZLinkLocationTopologyFilter.class,
                 ZLinkPageRequest.class)
             .getReturnType());
         assertEquals(CompletionStage.class, ZLinkLocationRuntimeQuery.class
             .getMethod(
                 "listServiceSummaries",
-                systems.zlink.framework.locations.ZLinkLocationServiceSummaryFilter.class,
+                ZLinkLocationServiceSummaryFilter.class,
                 ZLinkPageRequest.class)
             .getReturnType());
         assertEquals(ZLinkLocationPage.class, ZLinkLocationPage.class);
@@ -198,7 +205,7 @@ final class LocationContractTest {
             .getMethod(
                 "ensure",
                 String.class,
-                systems.zlink.framework.messaging.ZLinkMessage.class)
+                ZLinkMessage.class)
             .getReturnType());
         assertMissing("systems.zlink.framework.actors.ZLinkActorPlacement");
         assertRecordComponents(
@@ -238,7 +245,7 @@ final class LocationContractTest {
             .getReturnType());
         assertNoPublicMethod(ZLinkActorSendCall.class, "await");
         assertEquals(ZLinkActorRequestCall.class, ZLinkActorRequestCall.class
-            .getMethod("timeout", java.time.Duration.class)
+            .getMethod("timeout", Duration.class)
             .getReturnType());
         assertEquals(CompletionStage.class, ZLinkActorRequestCall.class
             .getMethod("submit", Class.class)
@@ -300,7 +307,7 @@ final class LocationContractTest {
             .getMethod("defer")
             .getReturnType());
         assertEquals(ZLinkActorJoinCall.class, ZLinkActorJoinCall.class
-            .getMethod("timeout", java.time.Duration.class)
+            .getMethod("timeout", Duration.class)
             .getReturnType());
         assertTrue(ZLinkActorJoinCompletion.class.isSealed());
         assertRecordComponents(
@@ -473,7 +480,7 @@ final class LocationContractTest {
         assertEquals(
             List.of(names),
             Arrays.stream(type.getRecordComponents())
-                .map(java.lang.reflect.RecordComponent::getName)
+                .map(RecordComponent::getName)
                 .toList());
     }
 
@@ -491,7 +498,7 @@ final class LocationContractTest {
             expected.keySet(),
             Arrays.stream(type.getEnumConstants())
                 .map(Enum::name)
-                .collect(Collectors.toCollection(java.util.LinkedHashSet::new)));
+                .collect(Collectors.toCollection(LinkedHashSet::new)));
         Method value = type.getMethod("value");
         for (T constant : type.getEnumConstants()) {
             assertEquals(expected.get(constant.name()), value.invoke(constant), constant.name());

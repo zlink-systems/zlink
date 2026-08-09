@@ -307,7 +307,7 @@ function runtimeStateFromWire(value: number): ZLinkFrameworkRuntimeState {
 }
 
 function concat(...parts: readonly Uint8Array[]): Buffer {
-  return Buffer.concat(parts.map(part => Buffer.from(part)));
+  return Buffer.concat(parts);
 }
 
 function fail(message: string): never {

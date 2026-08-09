@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -107,7 +108,7 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
             "actor-a",
             23,
             "actor.request",
-            java.util.Map.of("trace", "a"),
+            Map.of("trace", "a"),
             new byte[] {1, 2});
         byte[] root = ZLinkCanonicalActorRelocationEnvelope.encode(
             relocationId,

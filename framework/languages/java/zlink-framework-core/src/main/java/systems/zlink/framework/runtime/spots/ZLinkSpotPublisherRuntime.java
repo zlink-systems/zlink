@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Objects;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicBoolean;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
@@ -36,7 +40,7 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
     private final ZLinkSpotRouteMessages messages;
     private final ThreadPoolExecutor multicastExecutor;
     private final ThreadPoolExecutor multicastHandoffExecutor;
-    private final Function<systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject,
+    private final Function<ZLinkBackendObject,
         Duration> admissionTimeout;
     private final Function<Class<?>, String> contentTypeResolver;
     private final Map<String, ZLinkInternalSpotNode> nodesByChannel = new HashMap<>();
@@ -65,7 +69,7 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
         ZLinkMessageSerializer serializer,
         ZLinkSpotRouteMessages messages,
         int parallelism,
-        Function<systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject,
+        Function<ZLinkBackendObject,
             Duration> admissionTimeout) {
         this(
             serializer,
@@ -80,14 +84,14 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
         ZLinkMessageSerializer serializer,
         ZLinkSpotRouteMessages messages,
         int parallelism,
-        Function<systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject,
+        Function<ZLinkBackendObject,
             Duration> admissionTimeout,
         Function<Class<?>, String> contentTypeResolver) {
         this.serializer = serializer;
         this.messages = messages;
-        this.admissionTimeout = java.util.Objects.requireNonNull(
+        this.admissionTimeout = Objects.requireNonNull(
             admissionTimeout, "admissionTimeout");
-        this.contentTypeResolver = java.util.Objects.requireNonNull(
+        this.contentTypeResolver = Objects.requireNonNull(
             contentTypeResolver, "contentTypeResolver");
         this.multicastExecutor = new ThreadPoolExecutor(
             parallelism,
@@ -219,7 +223,7 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
         submitNow(meshName, channelName, topic, payload, packetName, null, metadata);
     }
 
-    java.util.concurrent.CompletionStage<ZLinkOneWayPublishAdmission> submitAsync(
+    CompletionStage<ZLinkOneWayPublishAdmission> submitAsync(
         String meshName,
         String channelName,
         String topic,
@@ -283,7 +287,7 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
         return result;
     }
 
-    java.util.concurrent.CompletionStage<ZLinkOneWayPublishAdmission> submitAsync(
+    CompletionStage<ZLinkOneWayPublishAdmission> submitAsync(
         String meshName,
         String channelName,
         String topic,
@@ -329,12 +333,12 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
         return new ZLinkOneWayPublishAdmission(status);
     }
 
-    private static int normalizedTimeoutMillis(java.time.Duration timeout) {
+    private static int normalizedTimeoutMillis(Duration timeout) {
         if (timeout == null || timeout.isZero() || timeout.isNegative()) {
             throw new IllegalArgumentException("send timeout must be positive");
         }
         long millis = timeout.toMillis();
-        if (timeout.compareTo(java.time.Duration.ofMillis(millis)) > 0) {
+        if (timeout.compareTo(Duration.ofMillis(millis)) > 0) {
             millis++;
         }
         if (millis < 1L || millis > Integer.MAX_VALUE) {
@@ -467,7 +471,7 @@ final class ZLinkDefaultSpotPublisherClient implements ZLinkSpotPublisherClient 
 }
 
 final class ZLinkExternalSpotPublishCall implements ZLinkPublishCall {
-    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
+    private final AtomicBoolean submitGate;
     private final ZLinkSpotPublisherRuntime publishers;
     private final String meshName;
     private final String channelName;
@@ -524,7 +528,7 @@ final class ZLinkExternalSpotPublishCall implements ZLinkPublishCall {
         String contentType,
         ZLinkApplicationMetadata metadata) {
         this(publishers, meshName, channelName, topic, payload, packetName, contentType,
-            metadata, new java.util.concurrent.atomic.AtomicBoolean());
+            metadata, new AtomicBoolean());
     }
 
     private ZLinkExternalSpotPublishCall(
@@ -536,7 +540,7 @@ final class ZLinkExternalSpotPublishCall implements ZLinkPublishCall {
         Optional<String> packetName,
         String contentType,
         ZLinkApplicationMetadata metadata,
-        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        AtomicBoolean submitGate) {
         this.submitGate = submitGate;
         this.publishers = publishers;
         this.meshName = meshName;
@@ -590,8 +594,8 @@ final class ZLinkExternalSpotPublishCall implements ZLinkPublishCall {
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> submit() {
-        java.util.concurrent.CompletionStage<Void> duplicate =
+    public CompletionStage<Void> submit() {
+        CompletionStage<Void> duplicate =
             ZLinkOneWayCalls.beginOneWay(submitGate);
         if (duplicate != null) {
             return duplicate;

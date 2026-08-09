@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
+import systems.zlink.framework.channels.ZLinkRouteRequestHandler;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -49,7 +52,7 @@ final class ZLinkMeshApplicationDispatcherTest {
         ScannedChannelHandler.received = new CompletableFuture<>();
         GatedNodeHandler.started = new CompletableFuture<>();
         GatedNodeHandler.release = new CompletableFuture<>();
-        GatedNodeHandler.completedCount = new java.util.concurrent.atomic.AtomicInteger();
+        GatedNodeHandler.completedCount = new AtomicInteger();
         GatedNodeHandler.completed = new CompletableFuture<>();
         ProtocolRequestHandler.received = new CompletableFuture<>();
     }
@@ -371,7 +374,7 @@ final class ZLinkMeshApplicationDispatcherTest {
         String value,
         Map<String, String> metadata,
         String contentType,
-        java.util.function.Consumer<List<Message>> reply) {
+        Consumer<List<Message>> reply) {
         return record(kind, channelName, value, metadata, contentType, reply, null);
     }
 
@@ -381,7 +384,7 @@ final class ZLinkMeshApplicationDispatcherTest {
         String value,
         Map<String, String> metadata,
         String contentType,
-        java.util.function.Consumer<List<Message>> reply,
+        Consumer<List<Message>> reply,
         ZLinkInboundDispatchBudget.Lease inboundDispatchLease) {
         RoutingId source = RoutingId.from("source-node");
         ReadyRecord owner = new ReadyRecord(OwnerKind.NODE, 1, null, null);
@@ -465,7 +468,7 @@ final class ZLinkMeshApplicationDispatcherTest {
     }
 
     public static final class ProtocolRequestHandler
-        implements systems.zlink.framework.channels.ZLinkRouteRequestHandler<String, String> {
+        implements ZLinkRouteRequestHandler<String, String> {
         private static CompletableFuture<String> received = new CompletableFuture<>();
 
         @Override
@@ -480,7 +483,7 @@ final class ZLinkMeshApplicationDispatcherTest {
     public static final class GatedNodeHandler implements ZLinkRouteSendHandler<String> {
         private static CompletableFuture<String> started;
         private static CompletableFuture<Void> release;
-        private static java.util.concurrent.atomic.AtomicInteger completedCount;
+        private static AtomicInteger completedCount;
         private static CompletableFuture<Integer> completed;
 
         @Override

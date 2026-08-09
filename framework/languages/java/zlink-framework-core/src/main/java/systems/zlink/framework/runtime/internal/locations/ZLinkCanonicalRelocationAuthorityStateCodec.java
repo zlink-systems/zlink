@@ -644,7 +644,7 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         byte[] sized8(){ int n=u8(); if(n==0) throw invalid(); return take(n); }
         Reader reader(int n){ return new Reader(take(n)); }
         void skip(int n){ take(n); }
-        byte[] take(int n){ require(n); byte[] v=java.util.Arrays.copyOfRange(bytes,offset,offset+n); offset+=n; return v; }
+        byte[] take(int n){ require(n); byte[] v=Arrays.copyOfRange(bytes,offset,offset+n); offset+=n; return v; }
         int offset(){ return offset; }
         int remaining(){ return bytes.length - offset; }
         byte[] bytes(){ return bytes; }

@@ -1,4 +1,7 @@
-package systems.zlink.e2e.resiliencelifecycle.client.Scenarios;
+package Scenarios;
+import systems.zlink.e2e.resiliencelifecycle.client.Scenarios;
+import systems.zlink.e2e.resiliencelifecycle.client.Support;
+import java.util.ArrayList;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Duration;
@@ -79,7 +82,7 @@ public final class CommonScenarioGapScenario {
     }
 
     private static List<String> missingCapabilities(String scenario, JsonNode capabilities) {
-        java.util.ArrayList<String> reasons = new java.util.ArrayList<>();
+        ArrayList<String> reasons = new ArrayList<>();
         if (!capabilities.path("routeMeshConfigured").asBoolean(false)) {
             reasons.add("RouteMesh target fixture is not configured");
         }
@@ -102,7 +105,7 @@ public final class CommonScenarioGapScenario {
     }
 
     private static List<String> append(List<String> values, String value) {
-        java.util.ArrayList<String> result = new java.util.ArrayList<>(values);
+        ArrayList<String> result = new ArrayList<>(values);
         result.add(value);
         return result;
     }

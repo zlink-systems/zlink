@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.registrationcodec.handlers
 
+
+import java.util.concurrent.CompletionStage
 import java.util.concurrent.CompletableFuture
 import systems.zlink.e2e.kotlin.registrationcodec.EchoManualReq
 import systems.zlink.e2e.kotlin.registrationcodec.EchoManualRes
@@ -13,7 +15,7 @@ class ManualRequestHandler(
     override fun handle(
         request: EchoManualReq,
         context: ZLinkMessageContext,
-    ): java.util.concurrent.CompletionStage<EchoManualRes> {
+    ): CompletionStage<EchoManualRes> {
         state.record("Request", "DuplicatePacket", request.value)
         return CompletableFuture.completedFuture(EchoManualRes("echo:${request.value}", "manual"))
     }

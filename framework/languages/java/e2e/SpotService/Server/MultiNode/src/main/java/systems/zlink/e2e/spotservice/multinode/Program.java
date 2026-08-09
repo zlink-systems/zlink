@@ -1,4 +1,7 @@
 package systems.zlink.e2e.spotservice.multinode;
+import systems.zlink.framework.channels.ZLinkRouteClient;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
+import systems.zlink.framework.spots.ZLinkSpotManager;
 
 import java.nio.file.Path;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -59,11 +62,11 @@ public final class Program {
     MultiNodeHttpServer multiNodeHttpServer(
         ScenarioState state,
         ObjectMapper json,
-        systems.zlink.framework.spots.ZLinkSpotManager spots,
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        ZLinkSpotManager spots,
+        ZLinkRouteClient routes,
         ZLinkActorManager actors,
         ZLinkActorClient actorClient,
-        systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime meshRuntime,
+        ZLinkRouteMeshRuntime meshRuntime,
         MultiNodeOptions options) {
         return new MultiNodeHttpServer(
             state,

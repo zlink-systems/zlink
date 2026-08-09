@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Optional;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -208,7 +212,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
         return backend.replaySpot(staged.spot, record);
     }
 
-    CompletionStage<java.util.Optional<byte[]>> replayActor(
+    CompletionStage<Optional<byte[]>> replayActor(
         Staged staged,
         ZLinkActorAcceptedJournal.Record record) {
         requireActive(staged);
@@ -234,9 +238,9 @@ final class ZLinkUserSpotAggregateStagingOwner {
             || initial.objectGeneration() != finalRequest.objectGeneration()
             || initial.restoreSpotSnapshot()
                 != finalRequest.restoreSpotSnapshot()
-            || !java.util.Arrays.equals(
+            || !Arrays.equals(
                 initial.spotState(), finalRequest.spotState())
-            || !java.util.Arrays.equals(
+            || !Arrays.equals(
                 initial.timerEnvelope(), finalRequest.timerEnvelope())
             || !sameActors(initial.actors(), finalRequest.actors())
             || !journalIsPrefix(
@@ -261,8 +265,8 @@ final class ZLinkUserSpotAggregateStagingOwner {
                 || left.restoreSnapshot() != right.restoreSnapshot()
                 || !Objects.equals(
                     left.preparedActorRef(), right.preparedActorRef())
-                || !java.util.Arrays.equals(left.state(), right.state())
-                || !java.util.Arrays.equals(
+                || !Arrays.equals(left.state(), right.state())
+                || !Arrays.equals(
                     left.timerEnvelope(), right.timerEnvelope())) {
                 return false;
             }
@@ -295,7 +299,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
         ZLinkAsyncSerialQueue.QueuedRecord left,
         ZLinkAsyncSerialQueue.QueuedRecord right) {
         return left.sequence() == right.sequence()
-            && java.util.Arrays.equals(left.payload(), right.payload());
+            && Arrays.equals(left.payload(), right.payload());
     }
 
     CompletionStage<Void> discard(Staged staged) {
@@ -425,7 +429,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
                 "staged Spot replay is unavailable"));
         }
 
-        default CompletionStage<java.util.Optional<byte[]>> replayActor(
+        default CompletionStage<Optional<byte[]>> replayActor(
             Object preparedSpot,
             Object preparedActor,
             ZLinkActorAcceptedJournal.Record record) {
@@ -501,14 +505,14 @@ final class ZLinkUserSpotAggregateStagingOwner {
                 timerEnvelope,
                 "timerEnvelope").clone();
             actors = List.copyOf(Objects.requireNonNull(actors, "actors"));
-            java.util.LinkedHashMap<String, List<
+            LinkedHashMap<String, List<
                 ZLinkAsyncSerialQueue.QueuedRecord>> journalCopy =
-                    new java.util.LinkedHashMap<>();
+                    new LinkedHashMap<>();
             Objects.requireNonNull(acceptedJournal, "acceptedJournal")
                 .forEach((lane, records) -> journalCopy.put(
                     lane,
                     List.copyOf(records)));
-            acceptedJournal = java.util.Collections.unmodifiableMap(journalCopy);
+            acceptedJournal = Collections.unmodifiableMap(journalCopy);
             validateJournal(acceptedJournal);
         }
 
@@ -678,7 +682,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
         }
 
         @Override
-        public CompletionStage<java.util.Optional<byte[]>> replayActor(
+        public CompletionStage<Optional<byte[]>> replayActor(
             Object preparedSpot,
             Object preparedActor,
             ZLinkActorAcceptedJournal.Record record) {

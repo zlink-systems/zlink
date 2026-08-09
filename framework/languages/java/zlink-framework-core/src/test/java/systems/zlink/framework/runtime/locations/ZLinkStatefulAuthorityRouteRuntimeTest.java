@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.locations;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -43,7 +46,7 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
     @Test
     void pendingInstanceAuthorityRegistersIntentBeforeReadyRoutePublication() {
         var codec = new ZLinkServiceAuthorityPayloadCodec();
-        var entries = new java.util.concurrent.atomic.AtomicReference<>(
+        var entries = new AtomicReference<>(
             List.of(entry(
                 "v1",
                 ZLinkPlacementAllocationState.PENDING,
@@ -127,7 +130,7 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
     }
 
     private static ZLinkLocationRepository authorityStore(
-        java.util.concurrent.atomic.AtomicReference<
+        AtomicReference<
             List<ZLinkAuthorityEntry>> entries) {
         return (ZLinkLocationRepository) Proxy.newProxyInstance(
             ZLinkLocationRepository.class.getClassLoader(),
@@ -158,12 +161,12 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
             fence.leaseGeneration());
     }
 
-    private static void await(java.util.function.BooleanSupplier condition) {
+    private static void await(BooleanSupplier condition) {
         long deadline = System.nanoTime()
             + Duration.ofSeconds(2).toNanos();
         while (!condition.getAsBoolean()
             && System.nanoTime() < deadline) {
-            java.util.concurrent.locks.LockSupport.parkNanos(
+            LockSupport.parkNanos(
                 Duration.ofMillis(5).toNanos());
         }
         assertTrue(condition.getAsBoolean());

@@ -1,5 +1,8 @@
 package systems.zlink.e2e.kotlin.spotservice.play.spots
 
+
+import systems.zlink.framework.spots.ZLinkSpotActorJoinResult
+import systems.zlink.framework.spots.ZLinkSpotClosingContext
 import systems.zlink.e2e.kotlin.spotservice.Contracts
 import systems.zlink.e2e.kotlin.spotservice.ScenarioState
 import systems.zlink.e2e.kotlin.spotservice.play.handlers.*
@@ -19,7 +22,7 @@ class TimerScenarioSpot(
     override val context: ZLinkSpotContext,
     private val evidence: ScenarioState
 ) : ZLinkSuspendingSpot<ZLinkActor>() {
-    override suspend fun onActorJoinSuspending(actorId: String, request: ZLinkMessage) = systems.zlink.framework.spots.ZLinkSpotActorJoinResult.reject("unsupported")
+    override suspend fun onActorJoinSuspending(actorId: String, request: ZLinkMessage) = ZLinkSpotActorJoinResult.reject("unsupported")
     override suspend fun onJoinedActorSuspending(actor: ZLinkActor) {
     }
 
@@ -61,7 +64,7 @@ class TimerScenarioSpot(
     }
 
     override suspend fun onClosingSuspending(
-        closingContext: systems.zlink.framework.spots.ZLinkSpotClosingContext,
+        closingContext: ZLinkSpotClosingContext,
     ) {
         status = "closed"
         evidence.record("IdleClosed", context.spotId(), "closed")

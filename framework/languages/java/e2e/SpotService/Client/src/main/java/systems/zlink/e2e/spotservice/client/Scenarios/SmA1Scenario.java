@@ -1,5 +1,6 @@
-package systems.zlink.e2e.spotservice.client.Scenarios;
+package Scenarios;
 
+import systems.zlink.e2e.spotservice.client.Scenarios;
 import systems.zlink.e2e.spotservice.shared.Contracts;
 
 public final class SmA1Scenario extends SpotServiceScenarioContext {

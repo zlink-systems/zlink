@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -292,9 +295,9 @@ final class ZLinkDeferredActorJoinScopeTest {
     @Test
     void spotHandlerReservesEachActorMailboxBarrierBeforeItsTerminal() {
         List<String> order = new ArrayList<>();
-        java.util.concurrent.atomic.AtomicReference<
-            java.util.function.Supplier<CompletionStage<Void>>> queued =
-            new java.util.concurrent.atomic.AtomicReference<>();
+        AtomicReference<
+            Supplier<CompletionStage<Void>>> queued =
+            new AtomicReference<>();
 
         CompletionStage<Void> handler = ZLinkDeferredActorJoinHandlerScope.run(
             actorId -> actorId.equals("actor-a"),
@@ -446,7 +449,7 @@ final class ZLinkDeferredActorJoinScopeTest {
             });
 
         handler.toCompletableFuture().join();
-        joinStarted.get(2, java.util.concurrent.TimeUnit.SECONDS);
+        joinStarted.get(2, TimeUnit.SECONDS);
         assertFalse(queuedApplication.toCompletableFuture().isDone());
         assertEquals(List.of("handler-terminal", "join"), order);
 

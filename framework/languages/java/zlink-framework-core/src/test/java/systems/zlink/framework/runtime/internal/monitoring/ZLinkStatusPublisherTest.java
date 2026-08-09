@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.internal.monitoring;
+import java.util.List;
+import java.util.function.IntConsumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -59,7 +61,7 @@ final class ZLinkStatusPublisherTest {
         while (received.size() < 3 && System.nanoTime() < terminalDeadline) {
             Thread.sleep(1);
         }
-        assertEquals(java.util.List.of(0, 2, 3), received);
+        assertEquals(List.of(0, 2, 3), received);
         assertTrue(!failed.isDone());
     }
 
@@ -98,7 +100,7 @@ final class ZLinkStatusPublisherTest {
     }
 
     private static Flow.Subscriber<ZLinkObservedStatus<Integer>> subscriber(
-        java.util.function.IntConsumer onNext,
+        IntConsumer onNext,
         CompletableFuture<Void> completed) {
         return new Flow.Subscriber<>() {
             @Override public void onSubscribe(Flow.Subscription subscription) {

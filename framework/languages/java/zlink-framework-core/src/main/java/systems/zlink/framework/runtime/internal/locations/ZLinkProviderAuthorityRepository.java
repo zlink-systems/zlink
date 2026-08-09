@@ -1,4 +1,10 @@
 package systems.zlink.framework.runtime.internal.locations;
+import java.nio.ByteBuffer;
+import java.time.Duration;
+import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -35,21 +41,21 @@ final class ZLinkProviderAuthorityRepository {
     private static final byte AGGREGATE_STAGING = 0;
     private static final byte AGGREGATE_PREPARED = 1;
     private static final byte AGGREGATE_COMMITTED = 2;
-    private static final java.time.Duration AGGREGATE_COMMIT_RETRY_WINDOW =
-        java.time.Duration.ofSeconds(5);
+    private static final Duration AGGREGATE_COMMIT_RETRY_WINDOW =
+        Duration.ofSeconds(5);
     private static final int AGGREGATE_COMMIT_RETRY_LIMIT = 64;
-    private final systems.zlink.framework.locationprovider.ZLinkLocationStore
+    private final ZLinkLocationStore
         provider;
     private final ZLinkProviderDescriptorRepository descriptors;
     private final ZLinkAggregateInventoryStore aggregateInventory;
 
     ZLinkProviderAuthorityRepository(
-        systems.zlink.framework.locationprovider.ZLinkLocationStore provider) {
+        ZLinkLocationStore provider) {
         this(provider, new ZLinkProviderDescriptorRepository(provider));
     }
 
     ZLinkProviderAuthorityRepository(
-        systems.zlink.framework.locationprovider.ZLinkLocationStore provider,
+        ZLinkLocationStore provider,
         ZLinkProviderDescriptorRepository descriptors) {
         this.provider = Objects.requireNonNull(provider, "provider");
         this.descriptors = Objects.requireNonNull(descriptors, "descriptors");
@@ -449,7 +455,7 @@ final class ZLinkProviderAuthorityRepository {
                                     opaqueCancellation)
                                 .thenCompose(counters -> {
                             String reservationVersion =
-                                java.util.UUID.randomUUID().toString();
+                                UUID.randomUUID().toString();
                             AuthorityRecord record = new AuthorityRecord(
                                 request.creatingPayload(),
                                 counters.objectGeneration(),
@@ -1042,7 +1048,7 @@ final class ZLinkProviderAuthorityRepository {
         int retryAttempt,
         Instant retryDeadline,
         ZLinkStoreCancellation cancellation) {
-        long remainingMillis = java.time.Duration.between(
+        long remainingMillis = Duration.between(
                 Instant.now(), retryDeadline).toMillis();
         if (remainingMillis <= 0 || cancellation.isCancellationRequested()) {
             return completed(null);
@@ -1050,7 +1056,7 @@ final class ZLinkProviderAuthorityRepository {
         long exponentialMillis = Math.min(
             100L,
             2L << Math.min(retryAttempt, 5));
-        long jitterMillis = java.util.concurrent.ThreadLocalRandom.current()
+        long jitterMillis = ThreadLocalRandom.current()
             .nextLong(exponentialMillis + 1L);
         long delayMillis = Math.min(
             remainingMillis,
@@ -1059,7 +1065,7 @@ final class ZLinkProviderAuthorityRepository {
             () -> {},
             CompletableFuture.delayedExecutor(
                 delayMillis,
-                java.util.concurrent.TimeUnit.MILLISECONDS));
+                TimeUnit.MILLISECONDS));
     }
 
     CompletionStage<Optional<ZLinkAggregateProgressSnapshot>>
@@ -2323,7 +2329,7 @@ final class ZLinkProviderAuthorityRepository {
             if (version >= 2) {
                 aggregate = in.readBoolean()
                     ? new AggregateParticipantMarker(
-                        new java.util.UUID(in.readLong(), in.readLong()),
+                        new UUID(in.readLong(), in.readLong()),
                         in.readLong(),
                         in.readInt(),
                         in.readUTF(),
@@ -2428,7 +2434,7 @@ final class ZLinkProviderAuthorityRepository {
                 && state != AGGREGATE_COMMITTED) {
                 throw new IOException("aggregate marker state is invalid");
             }
-            var id = new java.util.UUID(in.readLong(), in.readLong());
+            var id = new UUID(in.readLong(), in.readLong());
             long generation = in.readLong();
             var descriptor = new ZLinkMeshNodeDescriptorKey(
                 in.readUTF(), RoutingId.fromHex(in.readUTF()));
@@ -2581,7 +2587,7 @@ final class ZLinkProviderAuthorityRepository {
     }
 
     private static byte[] encodeLong(long value) {
-        return java.nio.ByteBuffer.allocate(Long.BYTES)
+        return ByteBuffer.allocate(Long.BYTES)
             .putLong(value).array();
     }
 
@@ -2590,7 +2596,7 @@ final class ZLinkProviderAuthorityRepository {
             throw new IllegalStateException(
                 "Location Store counter is invalid");
         }
-        return java.nio.ByteBuffer.wrap(bytes).getLong();
+        return ByteBuffer.wrap(bytes).getLong();
     }
 
     private static systems.zlink.framework.locationprovider
@@ -2721,7 +2727,7 @@ final class ZLinkProviderAuthorityRepository {
     }
 
     private record AggregateParticipantMarker(
-        java.util.UUID aggregateId,
+        UUID aggregateId,
         long aggregateGeneration,
         int index,
         String expectedStoreVersion,
@@ -2886,7 +2892,7 @@ final class ZLinkProviderAuthorityRepository {
         ZLinkStoreValue value) {}
     private record PreparedAggregate(
         byte state,
-        java.util.UUID aggregateId,
+        UUID aggregateId,
         long aggregateGeneration,
         ZLinkMeshNodeDescriptorKey targetDescriptor,
         long targetDescriptorLifecycleGeneration,

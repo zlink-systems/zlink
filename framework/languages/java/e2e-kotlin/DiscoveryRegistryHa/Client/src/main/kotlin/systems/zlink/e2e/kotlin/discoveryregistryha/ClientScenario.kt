@@ -1,5 +1,6 @@
 package systems.zlink.e2e.kotlin.discoveryregistryha
 
+import systems.zlink.e2e.kotlin.discoveryregistryha.client.Support
 import com.fasterxml.jackson.databind.ObjectMapper
 import systems.zlink.e2e.kotlin.discoveryregistryha.client.Support.ClientScenarioContext
 

@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.locations;
+import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -20,11 +21,11 @@ final class ZLinkProviderOwnerLeaseRepository {
     private static final String PREFIX = "zlink:v11:";
     private static final ZLinkStoreKey OWNER_COUNTER =
         new ZLinkStoreKey(PREFIX + "owner-counter");
-    private final systems.zlink.framework.locationprovider.ZLinkLocationStore
+    private final ZLinkLocationStore
         provider;
 
     ZLinkProviderOwnerLeaseRepository(
-        systems.zlink.framework.locationprovider.ZLinkLocationStore provider) {
+        ZLinkLocationStore provider) {
         this.provider = Objects.requireNonNull(provider, "provider");
     }
 

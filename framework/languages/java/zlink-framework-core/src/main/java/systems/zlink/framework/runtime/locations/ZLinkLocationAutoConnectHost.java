@@ -1,4 +1,12 @@
 package systems.zlink.framework.runtime.locations;
+import java.time.Duration;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -79,7 +87,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
         if (hasAutomaticClientServer
             && (clientServers == null || clientServers.store() == null)) {
             return CompletableFuture.failedFuture(
-                new systems.zlink.framework.errors.ZLinkConfigurationException(
+                new ZLinkConfigurationException(
                     "automatic ClientServer channels require "
                         + "ZLinkLocationRepository with ClientServer descriptors"));
         }
@@ -96,7 +104,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
         if (hasAutomaticFanoutSubscriber
             && (fanout == null || fanout.store() == null)) {
             return CompletableFuture.failedFuture(
-                new systems.zlink.framework.errors.ZLinkConfigurationException(
+                new ZLinkConfigurationException(
                     "automatic classic fanout requires "
                         + "ZLinkLocationRepository with fanout descriptors"));
         }
@@ -119,8 +127,8 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
             endpoint = mesh.advertisedEndpoint(endpoint);
             Set<String> manual = mesh.peers().stream()
                 .map(MeshNodeRegistration.Peer::endpoint)
-                .collect(java.util.stream.Collectors.toUnmodifiableSet());
-            Map<String, RoutingId> manualExpectedRids = new java.util.HashMap<>();
+                .collect(Collectors.toUnmodifiableSet());
+            Map<String, RoutingId> manualExpectedRids = new HashMap<>();
             mesh.peers().forEach(peer -> manualExpectedRids.put(
                 peer.endpoint(),
                 peer.expectedRoutingId()));
@@ -135,10 +143,10 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                 null,
                 null,
                 mesh.objectServer()
-                    ? systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.SERVER
+                    ? ZLinkMeshNodeObjectRole.SERVER
                     : mesh.objectRoleEnabled()
-                        ? systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.CLIENT
-                        : systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.NONE,
+                        ? ZLinkMeshNodeObjectRole.CLIENT
+                        : ZLinkMeshNodeObjectRole.NONE,
                 !mesh.channelWeights().isEmpty());
         }
         for (SpotNodeRegistration spot : registration.spotNodes()) {
@@ -146,14 +154,14 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
             if (node == null || !spot.routerEnabled()) {
                 continue;
             }
-            Map<String, String> metadata = new java.util.LinkedHashMap<>();
+            Map<String, String> metadata = new LinkedHashMap<>();
             if (spot.pubBind() != null) {
                 metadata.put(SPOT_PUB_ENDPOINT_METADATA_KEY, spot.pubBind());
             }
             List<String> capabilities = actorCapabilities(spot.actorFactories().keySet());
             Set<String> manual = spot.routerManualConnections().stream()
                 .map(SpotNodeRegistration.RouterManualConnection::endpoint)
-                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+                .collect(Collectors.toUnmodifiableSet());
             addLoop(
                 ZLinkAutoConnectType.SPOT_MESH,
                 spot.meshName(),
@@ -164,7 +172,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                 new SpotNodeExecutor(node, manual, spots),
                 metadata.isEmpty() ? null : Map.copyOf(metadata),
                 capabilities.isEmpty() ? null : capabilities,
-                systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.NONE,
+                ZLinkMeshNodeObjectRole.NONE,
                 false);
         }
 
@@ -195,7 +203,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
         });
     }
 
-    static List<String> actorCapabilities(java.util.Collection<String> actorTypes) {
+    static List<String> actorCapabilities(Collection<String> actorTypes) {
         return actorTypes.stream()
             .map(actorType -> "actor:" + actorType)
             .distinct()
@@ -244,7 +252,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
             executor,
             null,
             null,
-            systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.NONE,
+            ZLinkMeshNodeObjectRole.NONE,
             false);
     }
 
@@ -258,7 +266,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
         ZLinkAutoConnectExecutor executor,
         Map<String, String> metadata,
         List<String> capabilities,
-        systems.zlink.framework.locations.ZLinkMeshNodeObjectRole objectRole,
+        ZLinkMeshNodeObjectRole objectRole,
         boolean hasRouteMeshServerChannel) {
         boolean advertisable = shouldAdvertise(type, role, nodeRid, endpoint);
         if (!advertisable && executor == ZLinkAutoConnectExecutor.NONE) {
@@ -421,11 +429,11 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
         private final Map<String, RoutingId> manualExpectedRids;
         private final ZLinkSpotRuntime spots;
         private final Map<String, ConnectionIntent> connectionIntents =
-            new java.util.concurrent.ConcurrentHashMap<>();
+            new ConcurrentHashMap<>();
         private final Map<String, Long> connectionAttemptNanos =
-            new java.util.concurrent.ConcurrentHashMap<>();
+            new ConcurrentHashMap<>();
         private static final long ADMISSION_RETRY_NANOS =
-            java.time.Duration.ofSeconds(1).toNanos();
+            Duration.ofSeconds(1).toNanos();
 
         MeshNodeExecutor(
             ZLinkInternalMeshNode node,

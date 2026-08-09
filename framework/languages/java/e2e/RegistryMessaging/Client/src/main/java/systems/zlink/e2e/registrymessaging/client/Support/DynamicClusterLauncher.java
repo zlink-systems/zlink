@@ -1,4 +1,6 @@
-package systems.zlink.e2e.registrymessaging.client.Support;
+package Support;
+import systems.zlink.e2e.registrymessaging.client.Support;
+import java.util.Arrays;
 
 import java.io.IOException;
 import java.net.ServerSocket;
@@ -252,7 +254,7 @@ public final class DynamicClusterLauncher implements AutoCloseable {
             }
             DynamicProcess.sleep(100);
         }
-        throw new IllegalStateException("timed out waiting for " + description + ": " + java.util.Arrays.toString(latest));
+        throw new IllegalStateException("timed out waiting for " + description + ": " + Arrays.toString(latest));
     }
 
     private static String pickEndpoint() {

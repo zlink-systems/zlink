@@ -1,5 +1,6 @@
-package systems.zlink.e2e.registrymessaging.client.Scenarios;
+package Scenarios;
 
+import systems.zlink.e2e.registrymessaging.client.Scenarios;
 import systems.zlink.httpclient.ZLinkHttpClient;
 
 public final class RmC7WeightedProviderScenario {

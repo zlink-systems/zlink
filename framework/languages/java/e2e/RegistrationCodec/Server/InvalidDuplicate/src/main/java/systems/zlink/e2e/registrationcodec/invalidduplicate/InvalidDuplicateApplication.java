@@ -1,4 +1,5 @@
 package systems.zlink.e2e.registrationcodec.invalidduplicate;
+import java.net.URI;
 
 import java.nio.file.Path;
 import org.springframework.boot.WebApplicationType;
@@ -32,7 +33,7 @@ public final class InvalidDuplicateApplication {
     @Bean
     ZLinkFrameworkConfigurer invalidFramework(ServerOptions options) {
         return framework -> {
-            var endpoint = java.net.URI.create(options.serverEndpoint());
+            var endpoint = URI.create(options.serverEndpoint());
             var channel = framework.addClientServerChannel(Contracts.CHANNEL);
             var server = channel.server()
                 .setBindHost(endpoint.getHost())

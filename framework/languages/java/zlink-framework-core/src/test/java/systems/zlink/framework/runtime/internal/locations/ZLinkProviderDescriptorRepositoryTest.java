@@ -118,7 +118,7 @@ class ZLinkProviderDescriptorRepositoryTest {
     }
 
     private static ZLinkMeshNodeDescriptor descriptor(
-        systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken owner,
+        ZLinkLocationOwnerToken owner,
         long revision) {
         return descriptor(
             owner,

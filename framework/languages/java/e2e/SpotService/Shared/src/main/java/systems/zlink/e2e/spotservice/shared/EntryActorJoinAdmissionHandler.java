@@ -1,4 +1,5 @@
 package systems.zlink.e2e.spotservice.shared;
+import java.util.concurrent.CompletableFuture;
 
 import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
@@ -15,7 +16,7 @@ public final class EntryActorJoinAdmissionHandler {
         actor.context()
             .joinSpot(request.spotRid(), request)
             .defer();
-        return java.util.concurrent.CompletableFuture.completedFuture(
+        return CompletableFuture.completedFuture(
             new Contracts.JoinAdmittedUserSpotActorRes(
                 actor.actorId(),
                 request.spotRid(),

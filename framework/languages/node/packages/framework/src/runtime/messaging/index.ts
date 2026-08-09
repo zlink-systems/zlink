@@ -336,6 +336,10 @@ export class ZLinkAsyncSubmitter {
   }
 
   private removeQueued(pending: ZLinkPendingSubmit<unknown>): void {
+    //  Fast-path completions were never enqueued; without the flag this scan
+    //  walked the whole live queue per completed submit and found nothing.
+    if (!pending.enqueuedInPendingQueue) return;
+    pending.enqueuedInPendingQueue = false;
     for (let index = this.queueHead; index < this.queue.length; index += 1) {
       if (this.queue[index] !== pending) continue;
       this.queue[index] = undefined;
@@ -347,6 +351,8 @@ export class ZLinkAsyncSubmitter {
   }
 
   private removeCapacityWaiter(pending: ZLinkPendingSubmit<unknown>): void {
+    if (!pending.enqueuedInCapacityWaiters) return;
+    pending.enqueuedInCapacityWaiters = false;
     for (let index = this.capacityWaiterHead; index < this.capacityWaiters.length; index += 1) {
       if (this.capacityWaiters[index] !== pending) continue;
       this.capacityWaiters[index] = undefined;
@@ -368,11 +374,15 @@ export class ZLinkAsyncSubmitter {
   }
 
   private enqueuePending(pending: ZLinkPendingSubmit<unknown>): void {
+    pending.enqueuedInPendingQueue = true;
+    pending.armDeadlineTimer();
     this.queue.push(pending);
     this.queueSize += 1;
   }
 
   private enqueueCapacityWaiter(pending: ZLinkPendingSubmit<unknown>): void {
+    pending.enqueuedInCapacityWaiters = true;
+    pending.armDeadlineTimer();
     this.capacityWaiters.push(pending);
     this.capacityWaiterSize += 1;
   }
@@ -389,6 +399,7 @@ export class ZLinkAsyncSubmitter {
     this.capacityWaiters[this.capacityWaiterHead] = undefined;
     this.capacityWaiterHead += 1;
     this.capacityWaiterSize -= 1;
+    pending.enqueuedInCapacityWaiters = false;
     this.compactCapacityWaiters();
     return pending;
   }
@@ -480,11 +491,13 @@ function discardBeforePending(error: unknown, onDiscard: (() => void) | undefine
 
 class ZLinkPendingSubmit<TReply> {
   readonly promise: Promise<TReply>;
+  enqueuedInPendingQueue = false;
+  enqueuedInCapacityWaiters = false;
   private resolvePromise!: (reply: TReply) => void;
   private rejectPromise!: (error: unknown) => void;
   private readonly signal: AbortSignal | undefined;
   private readonly abortHandler: (() => void) | undefined;
-  private readonly timeout: ReturnType<typeof setTimeout> | undefined;
+  private timeout: ReturnType<typeof setTimeout> | undefined;
   private readonly deadlineMs: number | undefined;
   private completed = false;
   private accepted = false;
@@ -506,7 +519,12 @@ class ZLinkPendingSubmit<TReply> {
       this.resolvePromise = resolve;
       this.rejectPromise = reject;
     });
-    if (options.timeoutMs !== undefined) {
+    //  One-way commands accepted on the synchronous fast path complete
+    //  before any timer could fire, so their deadline timer is armed lazily
+    //  when the submit actually parks in a queue. Requests keep the eager
+    //  timer: acceptance does not complete them and the reply deadline must
+    //  run from submission time.
+    if (options.timeoutMs !== undefined && !completeOnAccepted) {
       this.timeout = setTimeout(
         () => this.reject(this.timeoutError()),
         options.timeoutMs
@@ -520,6 +538,14 @@ class ZLinkPendingSubmit<TReply> {
 
   get isRequest(): boolean {
     return !this.completeOnAccepted;
+  }
+
+  armDeadlineTimer(): void {
+    if (this.timeout !== undefined || this.completed || this.deadlineMs === undefined) return;
+    this.timeout = setTimeout(
+      () => this.reject(this.timeoutError()),
+      Math.max(0, this.deadlineMs - Date.now())
+    );
   }
 
   trySubmit(): boolean {

@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.channels;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -92,7 +93,7 @@ final class ZLinkRouteMeshInboundIdentityIntegrationTest {
                 responderSocket.recv(received, RecvFlags.NONE);
                 assertEquals(targetRid, responderSocket.getRoutingId());
                 assertArrayEquals(
-                    ("request:" + marker).getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    ("request:" + marker).getBytes(StandardCharsets.UTF_8),
                     received.singlePartOrThrow().toByteArray());
                 received.reply()
                     .message(Message.from(("reply:" + marker).getBytes()))
@@ -109,7 +110,7 @@ final class ZLinkRouteMeshInboundIdentityIntegrationTest {
         try {
             assertEquals(1, reply.size());
             assertArrayEquals(
-                ("reply:" + marker).getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                ("reply:" + marker).getBytes(StandardCharsets.UTF_8),
                 reply.get(0).toByteArray());
         } finally {
             Message.closeAll(reply);

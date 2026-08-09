@@ -1,4 +1,8 @@
 package systems.zlink.e2e.kotlin.toactormessaging.shared;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.util.function.Supplier;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
@@ -33,7 +37,7 @@ public final class JsonHttp implements AutoCloseable {
         });
     }
 
-    public void get(String path, java.util.function.Supplier<Object> handler) {
+    public void get(String path, Supplier<Object> handler) {
         server.createContext(path, exchange -> sendJson(exchange, handler.get()));
     }
 
@@ -48,13 +52,13 @@ public final class JsonHttp implements AutoCloseable {
 
     public static <T> T postJson(String endpoint, Object body, Class<T> replyType) {
         try {
-            java.net.http.HttpClient client = java.net.http.HttpClient.newHttpClient();
-            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder(URI.create(endpoint))
+            HttpClient client = HttpClient.newHttpClient();
+            HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint))
                 .header("content-type", "application/json")
-                .POST(java.net.http.HttpRequest.BodyPublishers.ofByteArray(JSON.writeValueAsBytes(body)))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(JSON.writeValueAsBytes(body)))
                 .build();
-            java.net.http.HttpResponse<byte[]> response =
-                client.send(request, java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+            HttpResponse<byte[]> response =
+                client.send(request, HttpResponse.BodyHandlers.ofByteArray());
             if (response.statusCode() / 100 != 2) {
                 throw new IllegalStateException("HTTP " + response.statusCode() + " from " + endpoint);
             }
@@ -69,12 +73,12 @@ public final class JsonHttp implements AutoCloseable {
 
     public static <T> T getJson(String endpoint, Class<T> replyType) {
         try {
-            java.net.http.HttpClient client = java.net.http.HttpClient.newHttpClient();
-            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder(URI.create(endpoint))
+            HttpClient client = HttpClient.newHttpClient();
+            HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint))
                 .GET()
                 .build();
-            java.net.http.HttpResponse<byte[]> response =
-                client.send(request, java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+            HttpResponse<byte[]> response =
+                client.send(request, HttpResponse.BodyHandlers.ofByteArray());
             if (response.statusCode() / 100 != 2) {
                 throw new IllegalStateException("HTTP " + response.statusCode() + " from " + endpoint);
             }

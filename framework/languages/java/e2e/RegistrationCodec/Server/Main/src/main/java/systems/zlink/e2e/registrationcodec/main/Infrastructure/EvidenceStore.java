@@ -1,5 +1,6 @@
-package systems.zlink.e2e.registrationcodec.main.Infrastructure;
+package Infrastructure;
 
+import systems.zlink.e2e.registrationcodec.main.Infrastructure;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;

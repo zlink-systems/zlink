@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.binding;
+import systems.zlink.contracts.sockets.RouterSocket;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -114,7 +115,7 @@ final class ZLinkJavaRawServicePortContractTest {
 
     private static void sendMany(
         ZLinkJavaRawServicePort port,
-        systems.zlink.contracts.sockets.RouterSocket router,
+        RouterSocket router,
         RoutingId target,
         byte marker,
         CountDownLatch start) {
@@ -142,7 +143,7 @@ final class ZLinkJavaRawServicePortContractTest {
 
     private static void awaitInbound(
         ZLinkJavaRawServicePort port,
-        systems.zlink.contracts.sockets.RouterSocket router,
+        RouterSocket router,
         int expected,
         long deadline) throws Exception {
         int receivedCount = 0;

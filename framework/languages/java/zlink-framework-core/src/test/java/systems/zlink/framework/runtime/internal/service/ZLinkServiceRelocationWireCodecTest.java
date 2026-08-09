@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.service;
+import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -42,7 +43,7 @@ final class ZLinkServiceRelocationWireCodecTest {
         assertEquals(expected, codec.decodeReplyRelay(encoded));
         assertThrows(IllegalArgumentException.class,
             () -> codec.decodeReplyRelay(
-                java.util.Arrays.copyOf(encoded, encoded.length - 1)));
+                Arrays.copyOf(encoded, encoded.length - 1)));
         assertThrows(IllegalArgumentException.class,
             () -> codec.encodeReplyRelay(
                 new ZLinkServiceRelocationWireCodec.ReplyRelay(

@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.internal.locations;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -13,15 +16,15 @@ import systems.zlink.framework.runtime.internal.locations.*;
  * location records.
  */
 public final class ZLinkProviderLocationRepository
-    implements systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository {
-    private final systems.zlink.framework.locationprovider.ZLinkLocationStore
+    implements ZLinkLocationRepository {
+    private final ZLinkLocationStore
         provider;
     private final ZLinkProviderOwnerLeaseRepository owners;
     private final ZLinkProviderDescriptorRepository descriptors;
     private final ZLinkProviderAuthorityRepository authority;
 
     public ZLinkProviderLocationRepository(
-        systems.zlink.framework.locationprovider.ZLinkLocationStore provider) {
+        ZLinkLocationStore provider) {
         this.provider = Objects.requireNonNull(provider, "provider");
         this.owners = new ZLinkProviderOwnerLeaseRepository(provider);
         this.descriptors = new ZLinkProviderDescriptorRepository(provider);
@@ -256,7 +259,7 @@ public final class ZLinkProviderLocationRepository
     }
 
     @Override
-    public CompletionStage<java.util.List<ZLinkAggregateProgressSnapshot>>
+    public CompletionStage<List<ZLinkAggregateProgressSnapshot>>
         listAggregateProgress(ZLinkStoreCancellation cancellation) {
         return authority.listAggregateProgress(cancellation);
     }
@@ -279,11 +282,11 @@ public final class ZLinkProviderLocationRepository
     @Override
     public CompletionStage<OptionalLong> getMeshNodeChangeStamp(
         String meshName) {
-        return java.util.concurrent.CompletableFuture.completedFuture(
+        return CompletableFuture.completedFuture(
             OptionalLong.empty());
     }
 
-    public systems.zlink.framework.locationprovider.ZLinkLocationStore
+    public ZLinkLocationStore
         provider() {
         return provider;
     }

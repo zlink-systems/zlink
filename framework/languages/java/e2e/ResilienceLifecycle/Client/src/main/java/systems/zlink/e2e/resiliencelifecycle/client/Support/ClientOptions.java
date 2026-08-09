@@ -1,5 +1,6 @@
-package systems.zlink.e2e.resiliencelifecycle.client.Support;
+package Support;
 
+import systems.zlink.e2e.resiliencelifecycle.client.Support;
 import java.io.Reader;
 import java.nio.file.Files;
 import java.nio.file.Path;

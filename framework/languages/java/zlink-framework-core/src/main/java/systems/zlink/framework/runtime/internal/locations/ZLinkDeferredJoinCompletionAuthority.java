@@ -1,4 +1,10 @@
 package systems.zlink.framework.runtime.internal.locations;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.util.zip.CRC32C;
 
 import java.time.Duration;
 import java.util.Arrays;
@@ -1151,8 +1157,8 @@ public final class ZLinkDeferredJoinCompletionAuthority {
             ? new byte[0]
             : sessionRouteCommand44.clone();
         try {
-            var bytes = new java.io.ByteArrayOutputStream();
-            try (var output = new java.io.DataOutputStream(bytes)) {
+            var bytes = new ByteArrayOutputStream();
+            try (var output = new DataOutputStream(bytes)) {
                 output.writeInt(RELOCATION_COMPLETION_MAGIC);
                 output.writeInt(RELOCATION_COMPLETION_VERSION);
                 output.writeInt(reply.length);
@@ -1161,7 +1167,7 @@ public final class ZLinkDeferredJoinCompletionAuthority {
                 output.write(route);
             }
             return bytes.toByteArray();
-        } catch (java.io.IOException impossible) {
+        } catch (IOException impossible) {
             throw new IllegalStateException(impossible);
         }
     }
@@ -1176,8 +1182,8 @@ public final class ZLinkDeferredJoinCompletionAuthority {
                 "direct Join relocation completion payload is invalid");
         }
         byte[] payload = completion.payload().bytes();
-        try (var input = new java.io.DataInputStream(
-                 new java.io.ByteArrayInputStream(payload))) {
+        try (var input = new DataInputStream(
+                 new ByteArrayInputStream(payload))) {
             if (input.readInt() != RELOCATION_COMPLETION_MAGIC
                 || input.readInt() != RELOCATION_COMPLETION_VERSION) {
                 throw new IllegalStateException(
@@ -1202,7 +1208,7 @@ public final class ZLinkDeferredJoinCompletionAuthority {
                     "direct Join relocation completion is truncated");
             }
             return new RelocationCompletion(reply, route);
-        } catch (java.io.IOException error) {
+        } catch (IOException error) {
             throw new IllegalStateException(
                 "direct Join relocation completion is invalid",
                 error);
@@ -1210,7 +1216,7 @@ public final class ZLinkDeferredJoinCompletionAuthority {
     }
 
     private static long crc32c(byte[] payload) {
-        java.util.zip.CRC32C checksum = new java.util.zip.CRC32C();
+        CRC32C checksum = new CRC32C();
         checksum.update(payload, 0, payload.length);
         return checksum.getValue();
     }

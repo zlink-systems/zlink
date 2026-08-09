@@ -1,5 +1,9 @@
 package systems.zlink.e2e.kotlin.channelegress.role
 
+
+import java.util.concurrent.ExecutionException
+import systems.zlink.framework.actors.ZLinkActorJoinCompletion
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.sun.net.httpserver.HttpExchange
@@ -153,7 +157,7 @@ class RoleApplication {
         options.configureLocations().setOwnerLeaseRenewInterval(Duration.ofMillis(500))
         options.configureLocations().setOwnerLeaseTtl(Duration.ofSeconds(2))
         options.configureDispatch().messageFlow(
-            systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL,
+            ZLinkMessageFlowLogMode.NORMAL,
         )
         options.addHandlersFromPackageOf(ChannelProbeRequestHandler::class.java)
         options.addHandlersFromPackageOf(SpotWorkflowHandler::class.java)
@@ -346,7 +350,7 @@ class Config12Actor(
 ) : ZLinkSuspendingActor() {
     val actorId: String get() = context.actorId()
     override suspend fun onJoinCompletedSuspending(
-        completion: systems.zlink.framework.actors.ZLinkActorJoinCompletion,
+        completion: ZLinkActorJoinCompletion,
     ) = Unit
 }
 
@@ -838,7 +842,7 @@ class ChannelEgressHttpServer(
 
         private fun unwrap(failure: Throwable): Throwable {
             var current = failure
-            while ((current is CompletionException || current is java.util.concurrent.ExecutionException) && current.cause != null) {
+            while ((current is CompletionException || current is ExecutionException) && current.cause != null) {
                 current = current.cause!!
             }
             return current

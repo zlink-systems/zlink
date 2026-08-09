@@ -1,4 +1,15 @@
 package systems.zlink.framework.locations.redis;
+import com.fasterxml.jackson.databind.JsonNode;
+import java.math.BigInteger;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.UUID;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ThreadLocalRandom;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityRestore;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -1739,11 +1750,11 @@ final class ZLinkRedisAuthorityClient {
         String version =
             ((ZLinkAuthorityExpectFound) expectation).storeVersion();
         boolean deleting = mutation instanceof ZLinkAuthorityDelete;
-        boolean restoring = mutation instanceof systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityRestore;
+        boolean restoring = mutation instanceof ZLinkAuthorityRestore;
         byte[] mutationPayload = deleting
             ? new byte[0]
             : restoring
-                ? ((systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityRestore)
+                ? ((ZLinkAuthorityRestore)
                     mutation).payload()
                 : ((ZLinkAuthorityPut) mutation).payload();
         String payload = encode(mutationPayload);
@@ -1757,7 +1768,7 @@ final class ZLinkRedisAuthorityClient {
                 case NEW_OWNER -> "new-owner";
             };
         ZLinkLocationOwnerToken targetOwner = restoring
-            ? ((systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityRestore)
+            ? ((ZLinkAuthorityRestore)
                 mutation).expectedOwner()
             : put == null ? null : put.targetOwner().orElse(null);
         String capacityFence = put == null
@@ -1929,7 +1940,7 @@ final class ZLinkRedisAuthorityClient {
     }
 
     private CompletionStage<Cursor> startScan() {
-        java.util.UUID scanId = java.util.UUID.randomUUID();
+        UUID scanId = UUID.randomUUID();
         String scanHex = uuidHex(scanId);
         return connection.commands()
             .thenCompose(redis -> redis.<List<Object>>eval(
@@ -1960,7 +1971,7 @@ final class ZLinkRedisAuthorityClient {
         String key = request.authorityKey();
         String encodedKey = keys.encodedAuthorityKey(key);
         String reservationId = uuidHex(
-            java.util.UUID.randomUUID());
+            UUID.randomUUID());
         return connection.commands()
             .thenCompose(redis -> redis.<List<Object>>eval(
                 RESERVE,
@@ -1986,7 +1997,7 @@ final class ZLinkRedisAuthorityClient {
                     keys.scansWatermarkKey(),
                     keys.scansExpiryKey(),
                     request.objectKind()
-                        == systems.zlink.framework.locations.ZLinkPlacementObjectKind.ACTOR
+                        == ZLinkPlacementObjectKind.ACTOR
                         ? keys.schemaKey()
                         : keys.entrySpotIdentityClaimKeyFromAuthority(key),
                     keys.capacitySpotActiveKey(),
@@ -2436,7 +2447,7 @@ final class ZLinkRedisAuthorityClient {
             100L,
             2L << Math.min(retryAttempt, 5));
         long jitterMillis =
-            java.util.concurrent.ThreadLocalRandom.current()
+            ThreadLocalRandom.current()
                 .nextLong(baseMillis + 1L);
         long delayMillis = Math.min(
             remainingMillis,
@@ -2577,7 +2588,7 @@ final class ZLinkRedisAuthorityClient {
                 .filter(capability ->
                     capability.objectKind()
                         != ZLinkPlacementObjectKind.ACTOR)
-                .sorted(java.util.Comparator
+                .sorted(Comparator
                     .<ZLinkObjectCapability>comparingInt(
                         capability ->
                             capability.objectKind().value())
@@ -2717,12 +2728,12 @@ final class ZLinkRedisAuthorityClient {
         int offset,
         Instant now,
         boolean includesPendingCreation) {
-        java.util.Optional<ZLinkPendingObjectCreation> pending =
-            java.util.Optional.empty();
+        Optional<ZLinkPendingObjectCreation> pending =
+            Optional.empty();
         if (includesPendingCreation && raw.size() >= offset + 16) {
             String reservationId = string(raw.get(offset + 12));
             if (!reservationId.isEmpty()) {
-                pending = java.util.Optional.of(
+                pending = Optional.of(
                     new ZLinkPendingObjectCreation(
                         reservationId,
                         string(raw.get(offset + 13)),
@@ -2747,7 +2758,7 @@ final class ZLinkRedisAuthorityClient {
             return new ZLinkAuthorityScanExpired();
         }
         Instant now = time(raw, 1);
-        java.util.UUID scanId = uuidFromHex(string(raw.get(2)));
+        UUID scanId = uuidFromHex(string(raw.get(2)));
         String watermark = string(raw.get(3));
         int nextOffset = Math.toIntExact(number(raw.get(4)));
         @SuppressWarnings("unchecked")
@@ -2806,13 +2817,13 @@ final class ZLinkRedisAuthorityClient {
     }
 
     private static boolean cancelled(ZLinkStoreCancellation cancellation) {
-        return java.util.Objects.requireNonNull(cancellation, "cancellation")
+        return Objects.requireNonNull(cancellation, "cancellation")
             .isCancellationRequested();
     }
 
     private static <T> CompletionStage<T> cancelledStage() {
         return CompletableFuture.failedFuture(
-            new java.util.concurrent.CancellationException(
+            new CancellationException(
                 "store operation was cancelled before I/O"));
     }
 
@@ -3171,7 +3182,7 @@ final class ZLinkRedisAuthorityClient {
             return operationKeys.toArray(String[]::new);
         }
         try {
-            com.fasterxml.jackson.databind.JsonNode root =
+            JsonNode root =
                 JSON.readTree(record);
             ZLinkMeshNodeDescriptorKey targetDescriptor = descriptor(
                 root.path("TargetDescriptor").asText());
@@ -3181,7 +3192,7 @@ final class ZLinkRedisAuthorityClient {
                 keys.meshNodeDescriptorMetadataKey(targetDescriptor));
             operationKeys.add(keys.capacitySpotActiveKey());
             operationKeys.add(keys.capacitySpotReservedKey());
-            for (com.fasterxml.jackson.databind.JsonNode participant :
+            for (JsonNode participant :
                 root.path("Participants")) {
                 operationKeys.add(keys.authorityRowKey(
                     participant.path("AuthorityKey").asText()));
@@ -3291,7 +3302,7 @@ final class ZLinkRedisAuthorityClient {
         } catch (NoSuchAlgorithmException impossible) {
             throw new IllegalStateException(impossible);
         }
-        if (!java.util.Arrays.equals(
+        if (!Arrays.equals(
                 digest,
                 terminal.terminalSha256())) {
             throw new IllegalArgumentException(
@@ -3355,21 +3366,21 @@ final class ZLinkRedisAuthorityClient {
 
     private static String fixedHex(String decimal) {
         return String.format(
-            java.util.Locale.ROOT,
+            Locale.ROOT,
             "%016x",
-            new java.math.BigInteger(decimal));
+            new BigInteger(decimal));
     }
 
-    private static String uuidHex(java.util.UUID value) {
+    private static String uuidHex(UUID value) {
         return value.toString().replace("-", "")
-            .toLowerCase(java.util.Locale.ROOT);
+            .toLowerCase(Locale.ROOT);
     }
 
-    private static java.util.UUID uuidFromHex(String value) {
+    private static UUID uuidFromHex(String value) {
         if (value.length() != 32) {
             throw new IllegalArgumentException("invalid scan id");
         }
-        return java.util.UUID.fromString(
+        return UUID.fromString(
             value.substring(0, 8)
                 + "-"
                 + value.substring(8, 12)
@@ -3382,7 +3393,7 @@ final class ZLinkRedisAuthorityClient {
     }
 
     private record Cursor(
-        java.util.UUID scanId,
+        UUID scanId,
         String watermark,
         int offset) {
     }

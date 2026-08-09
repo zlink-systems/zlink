@@ -1,5 +1,7 @@
-package systems.zlink.e2e.kotlin.pubsub.client.Support
+package Support
 
+import systems.zlink.e2e.kotlin.pubsub.client.Scenarios
+import systems.zlink.e2e.kotlin.pubsub.client.Support
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue

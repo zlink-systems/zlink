@@ -1,4 +1,5 @@
 package systems.zlink.e2e.kotlin.automaticturn.support;
+import java.util.List;
 
 import java.net.URI;
 import java.time.Duration;
@@ -139,7 +140,7 @@ public final class ClientStreamSupport {
         String spotRid,
         String marker) {
         long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
-        Contracts.EvidenceRes latest = new Contracts.EvidenceRes(requestId, java.util.List.of());
+        Contracts.EvidenceRes latest = new Contracts.EvidenceRes(requestId, List.of());
         while (System.nanoTime() < deadline) {
             latest = evidence(connector, requestId, spotRid);
             if (latest.markers().stream().anyMatch(entry -> entry.startsWith(marker + "|"))) {

@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.concurrent.CompletionStage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -91,7 +92,7 @@ final class ZLinkActorContextStateRelocationTest {
             throw new UnsupportedOperationException();
         }
 
-        @Override public java.util.concurrent.CompletionStage<Void> disconnect() {
+        @Override public CompletionStage<Void> disconnect() {
             return CompletableFuture.completedFuture(null);
         }
     }

@@ -1,4 +1,10 @@
 package systems.zlink.e2e.runtimemonitoring.service.support;
+import com.sun.net.httpserver.HttpExchange;
+import java.io.IOException;
+import java.net.URLDecoder;
+import java.time.Duration;
+import systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringActor;
+import systems.zlink.framework.actors.ZLinkActorCreateResult;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -106,7 +112,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                     Contracts.WorkRes response = routeClient.requestToChannel(
                             Contracts.SPOT_CHANNEL,
                             request)
-                        .timeout(java.time.Duration.ofSeconds(5))
+                        .timeout(Duration.ofSeconds(5))
                         .submit(Contracts.WorkRes.class)
                         .toCompletableFuture()
                         .join();
@@ -242,15 +248,15 @@ public final class EvidenceHttpServer implements SmartLifecycle {
             host.state().name());
     }
 
-    private void createPlacementSpot(com.sun.net.httpserver.HttpExchange exchange)
-        throws java.io.IOException {
+    private void createPlacementSpot(HttpExchange exchange)
+        throws IOException {
         try {
             String id = query(exchange, "id");
             var result = spots.getObject()
                 .getOrCreate(id, Contracts.MONITORING_SPOT_TYPE)
                 .inMesh(Contracts.SPOT_MESH)
                 .request(new Contracts.WorkReq("placement-spot"))
-                .timeout(java.time.Duration.ofSeconds(10))
+                .timeout(Duration.ofSeconds(10))
                 .submit()
                 .toCompletableFuture()
                 .join();
@@ -267,8 +273,8 @@ public final class EvidenceHttpServer implements SmartLifecycle {
         }
     }
 
-    private void closePlacementSpot(com.sun.net.httpserver.HttpExchange exchange)
-        throws java.io.IOException {
+    private void closePlacementSpot(HttpExchange exchange)
+        throws IOException {
         try {
             String id = query(exchange, "id");
             var found = spots.getObject().find(id).toCompletableFuture().join();
@@ -291,21 +297,21 @@ public final class EvidenceHttpServer implements SmartLifecycle {
         }
     }
 
-    private void createPlacementActor(com.sun.net.httpserver.HttpExchange exchange)
-        throws java.io.IOException {
+    private void createPlacementActor(HttpExchange exchange)
+        throws IOException {
         try {
             String id = query(exchange, "id");
             var result = runtimeQuery.getObject().actorManager()
                 .getOrCreate(
                     id,
-                    systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringActor.TYPE)
+                    MonitoringActor.TYPE)
                 .inMesh(Contracts.SPOT_MESH)
                 .request(new Contracts.WorkReq("placement-actor"))
-                .timeout(java.time.Duration.ofSeconds(10))
+                .timeout(Duration.ofSeconds(10))
                 .submit()
                 .toCompletableFuture()
                 .join();
-            if (result instanceof systems.zlink.framework.actors.ZLinkActorCreateResult.Existing existing) {
+            if (result instanceof ZLinkActorCreateResult.Existing existing) {
                 write(exchange, json.writeValueAsString(new PlacementResult(
                     true,
                     id,
@@ -314,7 +320,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                     existing.actor().nodeRid().toHex(),
                     existing.actor().objectGeneration(),
                     "")));
-            } else if (result instanceof systems.zlink.framework.actors.ZLinkActorCreateResult.Created created) {
+            } else if (result instanceof ZLinkActorCreateResult.Created created) {
                 write(exchange, json.writeValueAsString(new PlacementResult(
                     true,
                     id,
@@ -332,8 +338,8 @@ public final class EvidenceHttpServer implements SmartLifecycle {
         }
     }
 
-    private void destroyPlacementActor(com.sun.net.httpserver.HttpExchange exchange)
-        throws java.io.IOException {
+    private void destroyPlacementActor(HttpExchange exchange)
+        throws IOException {
         try {
             String id = query(exchange, "id");
             Contracts.PlacementActorDestroyResponse response = runtimeQuery.getObject()
@@ -341,7 +347,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 .requestToActor(
                     id,
                     new Contracts.PlacementActorDestroyRequest(id))
-                .timeout(java.time.Duration.ofSeconds(5))
+                .timeout(Duration.ofSeconds(5))
                 .submit(Contracts.PlacementActorDestroyResponse.class)
                 .toCompletableFuture()
                 .join();
@@ -352,14 +358,14 @@ public final class EvidenceHttpServer implements SmartLifecycle {
     }
 
     private static String query(
-        com.sun.net.httpserver.HttpExchange exchange,
+        HttpExchange exchange,
         String name) {
         String query = exchange.getRequestURI().getRawQuery();
         if (query != null) {
             for (String part : query.split("&")) {
                 String[] pair = part.split("=", 2);
                 if (pair.length == 2 && name.equals(pair[0])) {
-                    return java.net.URLDecoder.decode(pair[1], StandardCharsets.UTF_8);
+                    return URLDecoder.decode(pair[1], StandardCharsets.UTF_8);
                 }
             }
         }
@@ -388,15 +394,15 @@ public final class EvidenceHttpServer implements SmartLifecycle {
     }
 
     private static void write(
-        com.sun.net.httpserver.HttpExchange exchange,
-        String value) throws java.io.IOException {
+        HttpExchange exchange,
+        String value) throws IOException {
         write(exchange, 200, value);
     }
 
     private static void write(
-        com.sun.net.httpserver.HttpExchange exchange,
+        HttpExchange exchange,
         int status,
-        String value) throws java.io.IOException {
+        String value) throws IOException {
         byte[] body = value.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().add("Content-Type", "application/json");
         exchange.sendResponseHeaders(status, body.length);

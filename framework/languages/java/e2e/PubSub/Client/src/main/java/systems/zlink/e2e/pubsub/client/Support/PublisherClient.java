@@ -1,5 +1,6 @@
-package systems.zlink.e2e.pubsub.client.Support;
+package Support;
 
+import systems.zlink.e2e.pubsub.client.Support;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import systems.zlink.e2e.pubsub.shared.Contracts;

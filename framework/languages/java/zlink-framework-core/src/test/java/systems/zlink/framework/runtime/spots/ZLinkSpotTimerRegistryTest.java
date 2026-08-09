@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -316,7 +317,7 @@ final class ZLinkSpotTimerRegistryTest {
     @Test
     void relocationEnvelopeRejectsTrailingBytes() {
         assertThrows(
-            systems.zlink.framework.errors.ZLinkConfigurationException.class,
+            ZLinkConfigurationException.class,
             () -> ZLinkSpotTimerRelocationEnvelope.decode(
                 new byte[] {0, 1, 2, 3},
                 ignored -> PreviousTimerHandler.class));

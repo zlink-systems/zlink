@@ -416,10 +416,6 @@ export function decodeHeader(frame: Uint8Array): ServiceWireHeader {
   return { command: frame[3]!, flags: frame[4]! };
 }
 
-export function requiredServiceCapability(): string {
-  return M6A_SERVICE_WIRE_REQUIRED_CAPABILITY;
-}
-
 function prefix(command: number): Buffer {
   return Buffer.from([
     M6A_SERVICE_WIRE_MAGIC[0],

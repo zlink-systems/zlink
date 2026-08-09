@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.nio.charset.StandardCharsets;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
@@ -256,7 +257,7 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
         }
 
         void text8(String value) {
-            byte[] encoded = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[] encoded = value.getBytes(StandardCharsets.UTF_8);
             if (encoded.length < 1 || encoded.length > 255
                 || value.indexOf('\0') >= 0) {
                 throw new IllegalArgumentException("text8");

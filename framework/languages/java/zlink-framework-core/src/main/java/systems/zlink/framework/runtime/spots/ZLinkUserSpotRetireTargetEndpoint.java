@@ -1,4 +1,11 @@
 package systems.zlink.framework.runtime.spots;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+import systems.zlink.framework.locations.ZLinkPageRequest;
+import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 import java.time.Duration;
 import java.util.Map;
@@ -246,7 +253,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                         new IllegalArgumentException(
                             "published relocation root does not match the target Spot"));
                 }
-                Map<String, Long> actorOwnerGenerations = new java.util.HashMap<>();
+                Map<String, Long> actorOwnerGenerations = new HashMap<>();
                 for (var participant : request.participants()) {
                     if (participant.objectKind()
                             == ZLinkPlacementObjectKind.ACTOR.value()) {
@@ -305,7 +312,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                         payload = new ZLinkServiceRelocationEnvelopeCodec.Payload(
                             new String(
                                 record.parts().getFirst(),
-                                java.nio.charset.StandardCharsets.UTF_8),
+                                StandardCharsets.UTF_8),
                             "application/zlink-framework-json-v1",
                             reply.getFirst());
                     }
@@ -327,7 +334,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 public CompletionStage<Void> completeActor(
                     ZLinkActorAcceptedJournal.Record record,
                     long acceptedSequence,
-                    java.util.Optional<byte[]> reply) {
+                    Optional<byte[]> reply) {
                     ZLinkServiceRelocationEnvelopeCodec.Payload payload =
                         reply.map(bytes ->
                             new ZLinkServiceRelocationEnvelopeCodec.Payload(
@@ -482,7 +489,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                         () -> null,
                         CompletableFuture.delayedExecutor(
                             25L * attempt,
-                            java.util.concurrent.TimeUnit.MILLISECONDS))
+                            TimeUnit.MILLISECONDS))
                     .thenCompose(ignored -> relayCanonicalWithRetry(
                         request,
                         participant,
@@ -615,7 +622,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
         String cursor) {
         return locations.listMeshNodes(
                 meshName,
-                new systems.zlink.framework.locations.ZLinkPageRequest(
+                new ZLinkPageRequest(
                     1000, cursor))
             .thenCompose(page -> {
                 for (var descriptor : page.items()) {
@@ -766,7 +773,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
     }
 
     private static String actorContentType(
-        systems.zlink.framework.streams.ZLinkStreamCodec codec) {
+        ZLinkStreamCodec codec) {
         return switch (codec) {
             case RAW -> "application/octet-stream";
             case JSON -> "application/json";
@@ -779,7 +786,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
         List<byte[]> left, List<byte[]> right) {
         if (left.size() != right.size()) return false;
         for (int index = 0; index < left.size(); index++) {
-            if (!java.util.Arrays.equals(left.get(index), right.get(index))) {
+            if (!Arrays.equals(left.get(index), right.get(index))) {
                 return false;
             }
         }
@@ -1087,7 +1094,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 public CompletionStage<Void> completeActor(
                     ZLinkActorAcceptedJournal.Record record,
                     long acceptedSequence,
-                    java.util.Optional<byte[]> reply) {
+                    Optional<byte[]> reply) {
                     ZLinkServiceRelocationEnvelopeCodec.Payload payload =
                         reply.map(bytes ->
                             new ZLinkServiceRelocationEnvelopeCodec.Payload(

@@ -91,6 +91,37 @@ int main ()
                  != std::vector<std::uint8_t> ({0, 1, 2, 253, 254, 255})) {
             return 154;
         }
+        const auto actor_node = zlink::routing_id_t::from ("actor-node-b");
+        const auto fenced_packet = packet_serializer.deserialize (
+          packet_serializer.serialize (
+            zlink::framework::detail::spot_actor_packet_route_request_t{
+              .actor_node_rid = actor_node.to_string (),
+              .actor_type = "player",
+              .actor_id = "actor-1",
+              .actor_generation = 7,
+              .actor_node_generation = 11,
+              .actor_authority_owner_generation = 13,
+              .actor_owner_lease_generation = 17,
+              .spot_id = "spot-b",
+              .packet_name_value = "ProbeReq",
+              .message_follow_hop_count = 1,
+              .payload = {1}}));
+        if (fenced_packet.actor_node_generation != 11
+            || fenced_packet.actor_authority_owner_generation != 13
+            || fenced_packet.actor_owner_lease_generation != 17
+            || fenced_packet.message_follow_hop_count != 1) {
+            return 156;
+        }
+        auto incomplete_fence = packet_json;
+        incomplete_fence["messageFollowHopCount"] = 1;
+        try {
+            (void) packet_serializer.deserialize (
+              zlink::framework::encoded_payload_t::from_string (
+                incomplete_fence.dump ()));
+            return 157;
+        }
+        catch (const std::exception &) {
+        }
         for (const auto *invalid_payload : {"AQ=", "A===", "AB==", "AQ=A"}) {
             auto invalid_json = packet_json;
             invalid_json["payload"] = invalid_payload;

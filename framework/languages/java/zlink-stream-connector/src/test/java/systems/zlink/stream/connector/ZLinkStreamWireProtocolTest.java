@@ -1,4 +1,5 @@
 package systems.zlink.stream.connector;
+import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -63,7 +64,7 @@ final class ZLinkStreamWireProtocolTest {
         assertEquals((byte) 4, encoded[encoded.length - 5]);
         assertArrayEquals(
             "a1b2".getBytes(StandardCharsets.UTF_8),
-            java.util.Arrays.copyOfRange(encoded, encoded.length - 4, encoded.length));
+            Arrays.copyOfRange(encoded, encoded.length - 4, encoded.length));
     }
 
     @Test
@@ -73,7 +74,7 @@ final class ZLinkStreamWireProtocolTest {
 
         byte[] frame = ZLinkStreamWireProtocol.encodeFrame(header, payload, 64 * 1024);
 
-        assertArrayEquals(hex("00 09 00 00 00 0b"), java.util.Arrays.copyOf(frame, 6));
+        assertArrayEquals(hex("00 09 00 00 00 0b"), Arrays.copyOf(frame, 6));
         ZLinkStreamWireProtocol.Frame decoded = ZLinkStreamWireProtocol.decodeFrame(frame);
         assertArrayEquals(header, decoded.header());
         assertArrayEquals(payload, decoded.payload());

@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.spotservice.client.support
 
+
+import java.time.Duration
 import com.fasterxml.jackson.databind.ObjectMapper
 import java.net.HttpURLConnection
 import java.net.URI
@@ -58,7 +60,7 @@ internal fun postJsonArray(
 }
 
 internal suspend fun waitForEvidence(endpoint: String, expected: String) {
-    val deadline = System.nanoTime() + java.time.Duration.ofSeconds(30).toNanos()
+    val deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos()
     var lastBody = ""
     while (System.nanoTime() < deadline) {
         lastBody = get(endpoint.trimEnd('/') + "/evidence")

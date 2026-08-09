@@ -1,4 +1,9 @@
 package systems.zlink.framework.runtime.actors;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.stream.Stream;
+import systems.zlink.framework.actors.ActorRef;
+import systems.zlink.framework.spots.ZLinkSpotKind;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -59,7 +64,7 @@ final class ZLinkActorTransferHandoffTest {
         List<ZLinkActorHandoffPacket> trailing = handoff.finish("actor");
 
         assertEquals(List.of("B1", "B2", "D1"),
-            java.util.stream.Stream.concat(committed.stream(), trailing.stream())
+            Stream.concat(committed.stream(), trailing.stream())
                 .map(packet -> packet.header().packetName()).toList());
         committed.forEach(ZLinkActorHandoffPacket::close);
         trailing.forEach(ZLinkActorHandoffPacket::close);
@@ -206,7 +211,7 @@ final class ZLinkActorTransferHandoffTest {
         handoff.retain(
             "actor", ref("source", 7), ref("target", 7),
             Duration.ofMinutes(1), ignored -> { });
-        List<CompletableFuture<Void>> pending = new java.util.ArrayList<>();
+        List<CompletableFuture<Void>> pending = new ArrayList<>();
         for (int index = 0;
              index < ZLinkActorTransferHandoff.MAX_MESSAGE_FOLLOW_MESSAGES;
              index++) {
@@ -359,7 +364,7 @@ final class ZLinkActorTransferHandoffTest {
                 "actor", 7, RoutingId.from("target"), 11, 13, 17);
         SpotTransportAddress targetAddress = new SpotTransportAddress(
             "router", RoutingId.from("target"), "spot", 7, 11, 13, 17,
-            systems.zlink.framework.spots.ZLinkSpotKind.USER);
+            ZLinkSpotKind.USER);
         handoff.retain(
             "actor", ref("source", 7), ref("target", 7), targetAddress,
             targetRoute, Duration.ofMinutes(1), ignored -> { });
@@ -375,7 +380,7 @@ final class ZLinkActorTransferHandoffTest {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
         SpotTransportAddress targetAddress = new SpotTransportAddress(
             "router", RoutingId.from("target"), "spot", 7, 11, 13, 17,
-            systems.zlink.framework.spots.ZLinkSpotKind.USER);
+            ZLinkSpotKind.USER);
 
         assertThrows(IllegalArgumentException.class, () -> handoff.retain(
             "actor", ref("source", 7), ref("target", 7), targetAddress,
@@ -388,9 +393,9 @@ final class ZLinkActorTransferHandoffTest {
         RoutingId targetNode = RoutingId.from("target");
         ZLinkStoreLocationResolvers.ActorRoute route =
             new ZLinkStoreLocationResolvers.ActorRoute(
-                new systems.zlink.framework.actors.ActorRef(
+                new ActorRef(
                     "actor", 7, "mesh", targetNode),
-                systems.zlink.framework.spots.ZLinkSpotKind.USER,
+                ZLinkSpotKind.USER,
                 "spot",
                 "mesh",
                 targetNode,
@@ -401,7 +406,7 @@ final class ZLinkActorTransferHandoffTest {
             new ZLinkBackendActorRef(targetNode, "actor", 7);
         SpotTransportAddress targetAddress = new SpotTransportAddress(
             "router", targetNode, "spot", 7, 11, 13, 17,
-            systems.zlink.framework.spots.ZLinkSpotKind.USER);
+            ZLinkSpotKind.USER);
 
         assertTrue(ZLinkActorRuntime.messageFollowTargetRouteMatches(
             route, targetActor, targetAddress));
@@ -415,7 +420,7 @@ final class ZLinkActorTransferHandoffTest {
         ZLinkActorTransferHandoff handoff,
         String packetName,
         Map<String, String> metadata) {
-        try (Message payload = Message.from(packetName.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+        try (Message payload = Message.from(packetName.getBytes(StandardCharsets.UTF_8))) {
             handoff.capture(
                 "actor",
                 new ZLinkStreamHeader(packetName, metadata, Optional.empty()),

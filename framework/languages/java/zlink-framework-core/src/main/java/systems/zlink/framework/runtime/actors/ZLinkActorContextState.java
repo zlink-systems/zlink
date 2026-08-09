@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.Objects;
 
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
@@ -299,8 +300,8 @@ final class ZLinkActorContextState {
         RoutingId sourceNodeRid,
         RoutingId sourceSessionRid) {
         return boundSession != null
-            && java.util.Objects.equals(boundSessionSourceNodeRid, sourceNodeRid)
-            && java.util.Objects.equals(boundSessionSourceSessionRid, sourceSessionRid);
+            && Objects.equals(boundSessionSourceNodeRid, sourceNodeRid)
+            && Objects.equals(boundSessionSourceSessionRid, sourceSessionRid);
     }
 
     CompletionStage<Boolean> sendBoundSessionFrame(byte[] frameBytes) {

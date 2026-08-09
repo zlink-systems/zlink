@@ -249,6 +249,13 @@ internal sealed partial class ZLinkEntrySpotActivation :
                 ct => DestroyActorCoreAsync(actor, ct)))
             return ValueTask.CompletedTask;
 
+        if (ZLinkSerialTurn.Current is { } turn)
+        {
+            return turn.YieldFrameworkCallAsync(
+                ct => DestroyActorCoreAsync(actor, ct),
+                cancellationToken);
+        }
+
         return DestroyActorCoreAsync(actor, cancellationToken);
     }
 

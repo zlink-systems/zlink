@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.binding;
+import java.util.function.BooleanSupplier;
 
 import java.time.Duration;
 import java.util.List;
@@ -28,7 +29,7 @@ final class ZLinkJavaSocketSupport {
         }
     }
 
-    static boolean recvOrNoData(java.util.function.BooleanSupplier receive) {
+    static boolean recvOrNoData(BooleanSupplier receive) {
         try {
             return receive.getAsBoolean();
         } catch (ZlinkRecvException ex) {

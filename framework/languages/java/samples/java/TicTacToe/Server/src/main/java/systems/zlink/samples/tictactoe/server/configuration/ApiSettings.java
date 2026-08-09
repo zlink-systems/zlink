@@ -1,4 +1,5 @@
 package systems.zlink.samples.tictactoe.server.configuration;
+import java.net.URI;
 
 import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -30,7 +31,7 @@ public record ApiSettings(
     }
 
     public int apiHttpPort() {
-        return java.net.URI.create(apiBindUrl).getPort();
+        return URI.create(apiBindUrl).getPort();
     }
 
     private static void require(String value, String name) {

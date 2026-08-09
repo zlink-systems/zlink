@@ -1,4 +1,8 @@
 package systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.spots.entryspot;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,7 +25,7 @@ public final class PlayEntrySpot implements ZLinkEntrySpot<PlayActor> {
     private static final Logger LOGGER = LoggerFactory.getLogger(PlayEntrySpot.class);
     private final ZLinkEntrySpotContext context;
     private final PlaySettings settings;
-    private final java.util.List<PlayActor> milestoneObservers = new java.util.ArrayList<>();
+    private final List<PlayActor> milestoneObservers = new ArrayList<>();
 
     public PlayEntrySpot(
         ZLinkEntrySpotContext context,
@@ -36,39 +40,39 @@ public final class PlayEntrySpot implements ZLinkEntrySpot<PlayActor> {
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<ZLinkActorCreateResponse> onCreateActor(
+    public CompletionStage<ZLinkActorCreateResponse> onCreateActor(
         PlayActor actor,
         ZLinkMessage createRequest) {
         if (createRequest.isEmpty()) {
-            return java.util.concurrent.CompletableFuture.completedFuture(
+            return CompletableFuture.completedFuture(
                 ZLinkActorCreateResponse.accept());
         }
         actor.applyPlayer(createRequest.decode(PlayerInfo.class));
-        return java.util.concurrent.CompletableFuture.completedFuture(
+        return CompletableFuture.completedFuture(
             ZLinkActorCreateResponse.accept());
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onJoinedActor(PlayActor actor) {
+    public CompletionStage<Void> onJoinedActor(PlayActor actor) {
         if (actor.destroyAfterEntrySpotJoin()) {
             return context.destroyActor(actor)
                 .thenRun(() -> LOGGER.info(
                     "tictactoe actor destroy completed actor={}", actor.actorId()));
         }
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onLeaveActor(PlayActor actor) {
+    public CompletionStage<Void> onLeaveActor(PlayActor actor) {
         milestoneObservers.removeIf(existing -> existing.actorId().equals(actor.actorId()));
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onDisconnectActor(PlayActor actor) {
+    public CompletionStage<Void> onDisconnectActor(PlayActor actor) {
         actor.markDisconnected();
         milestoneObservers.removeIf(existing -> existing.actorId().equals(actor.actorId()));
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     public ObserveMilestoneRes observeMilestone(PlayActor actor) {
@@ -82,7 +86,7 @@ public final class PlayEntrySpot implements ZLinkEntrySpot<PlayActor> {
             event.actorId(),
             event.displayName(),
             event.wins());
-        for (PlayActor observer : java.util.List.copyOf(milestoneObservers)) {
+        for (PlayActor observer : List.copyOf(milestoneObservers)) {
             observer.context().boundSession()
                 .send(payload)
                 .submit();

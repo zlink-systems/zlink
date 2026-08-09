@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.locations;
+import java.util.Objects;
+import java.util.Optional;
 
 import java.util.Map;
 import java.util.Set;
@@ -34,7 +36,7 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
         new ZLinkServiceAuthorityPayloadCodec();
 
     public ZLinkLocationLifecycle(ZLinkLocationRuntime runtime) {
-        this.store = java.util.Objects.requireNonNull(runtime, "runtime")
+        this.store = Objects.requireNonNull(runtime, "runtime")
             .locationStore();
     }
 
@@ -160,8 +162,8 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
                         new ZLinkAuthorityPut(
                             next,
                             ZLinkAuthorityGenerationTransition.PRESERVE,
-                            java.util.Optional.empty(),
-                            java.util.Optional.empty()),
+                            Optional.empty(),
+                            Optional.empty()),
                         NEVER_CANCEL)
                     .thenCompose(result -> result instanceof ZLinkAuthorityStored
                         ? CompletableFuture.completedFuture(null)

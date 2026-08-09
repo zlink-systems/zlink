@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.locations;
+import java.util.Comparator;
 
 import java.time.Instant;
 import java.util.HashSet;
@@ -90,7 +91,7 @@ public record ZLinkMeshNodeDescriptor(
                 objectCapabilities,
                 "objectCapabilities")
             .stream()
-            .sorted(java.util.Comparator
+            .sorted(Comparator
                 .<ZLinkObjectCapability>comparingInt(
                     capability ->
                         capability.objectKind().value())

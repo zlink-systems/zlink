@@ -1,4 +1,17 @@
 package systems.zlink.e2e.channelegress.role;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.ObjectProvider;
+import systems.zlink.framework.actors.ZLinkActorManager;
+import systems.zlink.framework.channels.ZLinkChannelRuntimeOptions;
+import systems.zlink.framework.channels.ZLinkClient;
+import systems.zlink.framework.channels.ZLinkFanoutClient;
+import systems.zlink.framework.channels.ZLinkRouteClient;
+import systems.zlink.framework.monitoring.ZLinkClientServerRuntime;
+import systems.zlink.framework.monitoring.ZLinkFanoutRuntime;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
+import systems.zlink.framework.spots.ZLinkSpotManager;
+import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
 
 import java.net.URI;
 import java.nio.file.Path;
@@ -51,26 +64,26 @@ public final class Program {
     }
 
     @Bean
-    com.fasterxml.jackson.databind.ObjectMapper objectMapper() {
-        return new com.fasterxml.jackson.databind.ObjectMapper();
+    ObjectMapper objectMapper() {
+        return new ObjectMapper();
     }
 
     @Bean
     ChannelEgressHttpServer httpServer(
         RoleOptions options,
         EvidenceState evidence,
-        com.fasterxml.jackson.databind.ObjectMapper json,
-        systems.zlink.framework.channels.ZLinkClient client,
-        systems.zlink.framework.channels.ZLinkFanoutClient fanout,
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
-        systems.zlink.framework.channels.ZLinkChannelRuntimeOptions runtimeOptions,
-        org.springframework.beans.factory.ObjectProvider<systems.zlink.framework.spots.ZLinkSpotManager> spots,
-        org.springframework.beans.factory.ObjectProvider<systems.zlink.framework.actors.ZLinkActorManager> actors,
-        systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime routeRuntime,
-        systems.zlink.framework.monitoring.ZLinkClientServerRuntime clientServerRuntime,
-        systems.zlink.framework.monitoring.ZLinkFanoutRuntime fanoutRuntime,
-        systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle lifecycle,
-        org.springframework.beans.factory.ObjectProvider<systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime> runtime) {
+        ObjectMapper json,
+        ZLinkClient client,
+        ZLinkFanoutClient fanout,
+        ZLinkRouteClient routes,
+        ZLinkChannelRuntimeOptions runtimeOptions,
+        ObjectProvider<ZLinkSpotManager> spots,
+        ObjectProvider<ZLinkActorManager> actors,
+        ZLinkRouteMeshRuntime routeRuntime,
+        ZLinkClientServerRuntime clientServerRuntime,
+        ZLinkFanoutRuntime fanoutRuntime,
+        ZLinkFrameworkLifecycle lifecycle,
+        ObjectProvider<ZLinkFrameworkRuntime> runtime) {
         return new ChannelEgressHttpServer(
             options,
             evidence,

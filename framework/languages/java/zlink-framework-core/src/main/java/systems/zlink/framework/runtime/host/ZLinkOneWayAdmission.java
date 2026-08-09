@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.host;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -14,7 +16,7 @@ final class ZLinkOneWayAdmission {
     }
 
     static <T> CompletionStage<T> begin(
-        java.util.concurrent.atomic.AtomicBoolean submitted) {
+        AtomicBoolean submitted) {
         if (submitted.compareAndSet(false, true)) {
             return null;
         }
@@ -93,7 +95,7 @@ final class ZLinkOneWayAdmission {
     private static Throwable unwrap(Throwable error) {
         Throwable current = error;
         while ((current instanceof CompletionException
-                || current instanceof java.util.concurrent.ExecutionException)
+                || current instanceof ExecutionException)
             && current.getCause() != null) {
             current = current.getCause();
         }

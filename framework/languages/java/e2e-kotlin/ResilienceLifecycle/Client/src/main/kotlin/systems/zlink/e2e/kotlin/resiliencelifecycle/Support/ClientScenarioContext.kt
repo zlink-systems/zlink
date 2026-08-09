@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.resiliencelifecycle
 
+
+import java.util.concurrent.CompletableFuture
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import java.io.IOException
@@ -314,8 +316,8 @@ class ClientScenarioContext(
             "timeoutMillis" to timeout.toMillis().toString(),
         )
 
-    fun submitWork(value: String, timeout: Duration = Duration.ofSeconds(3)): java.util.concurrent.CompletableFuture<Contracts.WorkRes> =
-        java.util.concurrent.CompletableFuture.supplyAsync { requestWork(value, timeout) }
+    fun submitWork(value: String, timeout: Duration = Duration.ofSeconds(3)): CompletableFuture<Contracts.WorkRes> =
+        CompletableFuture.supplyAsync { requestWork(value, timeout) }
 
     fun sendWork(value: String) {
         postJson(

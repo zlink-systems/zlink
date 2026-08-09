@@ -1,4 +1,8 @@
 package systems.zlink.stream.connector;
+import java.security.GeneralSecurityException;
+import java.security.SecureRandom;
+import java.security.cert.X509Certificate;
+import java.util.function.Supplier;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -292,7 +296,7 @@ final class ZLinkStreamConnectionLifecycle {
 
     private CompletionStage<Void> startConnectionAttempt(
         ZLinkStreamConnectionState targetState,
-        java.util.function.Supplier<CompletionStage<Void>> starter) {
+        Supplier<CompletionStage<Void>> starter) {
         CompletableFuture<Void> result = new CompletableFuture<>();
         boolean notifyState;
         synchronized (connectionAttemptLock) {
@@ -516,26 +520,26 @@ final class ZLinkStreamConnectionLifecycle {
                 new X509TrustManager() {
                     @Override
                     public void checkClientTrusted(
-                        java.security.cert.X509Certificate[] chain,
+                        X509Certificate[] chain,
                         String authType) {
                     }
 
                     @Override
                     public void checkServerTrusted(
-                        java.security.cert.X509Certificate[] chain,
+                        X509Certificate[] chain,
                         String authType) {
                     }
 
                     @Override
-                    public java.security.cert.X509Certificate[] getAcceptedIssuers() {
-                        return new java.security.cert.X509Certificate[0];
+                    public X509Certificate[] getAcceptedIssuers() {
+                        return new X509Certificate[0];
                     }
                 }
             };
             SSLContext context = SSLContext.getInstance("TLS");
-            context.init(null, trustAllManagers, new java.security.SecureRandom());
+            context.init(null, trustAllManagers, new SecureRandom());
             return context;
-        } catch (java.security.GeneralSecurityException ex) {
+        } catch (GeneralSecurityException ex) {
             throw new IllegalStateException("failed to create insecure TLS context", ex);
         }
     }

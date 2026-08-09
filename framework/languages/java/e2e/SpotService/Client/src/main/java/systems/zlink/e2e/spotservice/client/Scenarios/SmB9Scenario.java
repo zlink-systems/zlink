@@ -1,5 +1,6 @@
-package systems.zlink.e2e.spotservice.client.Scenarios;
+package Scenarios;
 
+import systems.zlink.e2e.spotservice.client.Scenarios;
 import java.util.UUID;
 
 public final class SmB9Scenario extends SpotServiceScenarioContext {

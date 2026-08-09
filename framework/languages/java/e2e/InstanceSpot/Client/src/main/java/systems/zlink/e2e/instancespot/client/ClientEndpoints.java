@@ -1,4 +1,5 @@
 package systems.zlink.e2e.instancespot.client;
+import java.util.Map;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -47,10 +48,10 @@ public final class ClientEndpoints implements SmartLifecycle {
             server.createContext("/health", exchange -> HttpSupport.writeJson(
                 exchange,
                 json,
-                java.util.Map.of("status", "ready", "rid", options.rid())));
+                Map.of("status", "ready", "rid", options.rid())));
             server.createContext("/lookup", exchange -> {
                 var request = HttpSupport.readJson(
-                    exchange, json, java.util.Map.class);
+                    exchange, json, Map.class);
                 String spotId = String.valueOf(request.get("spotId"));
                 HttpSupport.writeJson(exchange, json, lookup(spotId));
             });
@@ -76,7 +77,7 @@ public final class ClientEndpoints implements SmartLifecycle {
             });
             server.createContext("/shutdown", exchange -> {
                 HttpSupport.writeJson(
-                    exchange, json, java.util.Map.of("status", "stopping"));
+                    exchange, json, Map.of("status", "stopping"));
                 HttpSupport.shutdownAsync();
             });
             server.start();

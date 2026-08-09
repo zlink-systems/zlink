@@ -1,4 +1,11 @@
 package systems.zlink.framework.runtime.streams;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.EnumSet;
+import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorBindOperation;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorUnbindOperation;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -78,8 +85,8 @@ final class ZLinkStreamRuntimeIngressTest {
         FakeStream stream = new FakeStream();
         stream.enqueue(PEER_A, new byte[0]);
         byte[] frame = frame("segmented", "{}");
-        stream.enqueue(PEER_A, java.util.Arrays.copyOfRange(frame, 0, 4));
-        stream.enqueue(PEER_A, java.util.Arrays.copyOfRange(frame, 4, frame.length));
+        stream.enqueue(PEER_A, Arrays.copyOfRange(frame, 0, 4));
+        stream.enqueue(PEER_A, Arrays.copyOfRange(frame, 4, frame.length));
 
         ZLinkStreamRuntime runtime = start(stream, 0);
         runtimes.add(runtime);
@@ -156,7 +163,7 @@ final class ZLinkStreamRuntimeIngressTest {
     void segmentedOversizeRecordsEmsgsizeAndDisconnectsThePeer() throws Exception {
         FakeStream stream = new FakeStream();
         byte[] oversize = frame("oversize", "x".repeat(512));
-        stream.enqueue(PEER_A, java.util.Arrays.copyOf(oversize, 6));
+        stream.enqueue(PEER_A, Arrays.copyOf(oversize, 6));
         stream.enqueue(PEER_B, frame("good", "{}"));
 
         ZLinkStreamRuntime runtime = start(stream, 0, 256);
@@ -566,20 +573,20 @@ final class ZLinkStreamRuntimeIngressTest {
         ZLinkStreamHeader header = new ZLinkStreamHeader(
             ZLinkStreamMessageKind.SEND,
             ZLinkStreamCodec.JSON,
-            java.util.EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
             Optional.empty(),
             packetName,
             Map.of());
         return ZLinkStreamFrameCodec.encode(
             ZLinkStreamHeaderCodec.encode(header),
-            payload.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            payload.getBytes(StandardCharsets.UTF_8));
     }
 
     private static byte[] controlFrame(String packetName) {
         ZLinkStreamHeader header = new ZLinkStreamHeader(
             ZLinkStreamMessageKind.CONTROL,
             ZLinkStreamCodec.RAW,
-            java.util.EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
             Optional.empty(),
             packetName,
             Map.of());
@@ -605,7 +612,7 @@ final class ZLinkStreamRuntimeIngressTest {
         private final CompletableFuture<Void> replacementCompletion =
             new CompletableFuture<>();
         private final List<String> packetNames =
-            java.util.Collections.synchronizedList(new ArrayList<>());
+            Collections.synchronizedList(new ArrayList<>());
 
         public TestSession(ZLinkSessionContext context) {
             if (failNextConstruction) {
@@ -639,7 +646,7 @@ final class ZLinkStreamRuntimeIngressTest {
         }
         @Override public CompletionStage<Void> onDispatch(
             ZLinkSessionDispatchContext dispatch,
-            systems.zlink.framework.messaging.ZLinkMessage payload) {
+            ZLinkMessage payload) {
             int count = dispatchCount.incrementAndGet();
             packetNames.add(dispatch.packetName());
             dispatchLatch.countDown();
@@ -811,12 +818,12 @@ final class ZLinkStreamRuntimeIngressTest {
         @Override public boolean reply(
             RoutingId routingId, ZLinkStreamHeader header,
             List<Message> parts, SendFlags flags) { return true; }
-        @Override public systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorBindOperation
+        @Override public ZLinkBackendActorBindOperation
             bindActor(RoutingId sessionRid,
-                systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef actor) {
+                ZLinkBackendActorRef actor) {
             return timeout -> CompletableFuture.completedFuture(null);
         }
-        @Override public systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorUnbindOperation
+        @Override public ZLinkBackendActorUnbindOperation
             unbindActor(RoutingId sessionRid, String actorId) {
             return timeout -> CompletableFuture.completedFuture(null);
         }

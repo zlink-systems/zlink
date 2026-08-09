@@ -1,4 +1,5 @@
 package systems.zlink.e2e.registrymessaging.shared;
+import systems.zlink.framework.messaging.ZLinkMessage;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -113,7 +114,7 @@ public final class IdentityObjects {
 
         @Override
         public CompletionStage<ZLinkSpotCreateResponse> onCreate(
-            systems.zlink.framework.messaging.ZLinkMessage request) {
+            ZLinkMessage request) {
             return CompletableFuture.completedFuture(ZLinkSpotCreateResponse.accept());
         }
 

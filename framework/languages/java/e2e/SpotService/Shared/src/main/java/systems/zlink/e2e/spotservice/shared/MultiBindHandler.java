@@ -1,4 +1,5 @@
 package systems.zlink.e2e.spotservice.shared;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.actors.ActorRef;
@@ -25,7 +26,7 @@ public final class MultiBindHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> handle(
+    public CompletionStage<Void> handle(
         ZLinkSessionContext context,
         ZLinkSessionDispatchContext dispatch,
         Contracts.MultiBindReq request) {
@@ -35,7 +36,7 @@ public final class MultiBindHandler
                 .reply(new Contracts.MultiBindRes(context.actors().bound().size())).submit());
     }
 
-    private java.util.concurrent.CompletionStage<Void> bind(
+    private CompletionStage<Void> bind(
         ZLinkSessionContext context, String actorId, Contracts.MultiBindReq request) {
         return actors.getOrCreate(actorId, "scenario")
             .request(new Contracts.ActorAuthReq(actorId, request.profile()))

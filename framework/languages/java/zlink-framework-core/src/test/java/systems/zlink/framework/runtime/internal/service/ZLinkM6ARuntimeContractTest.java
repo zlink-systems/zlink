@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.internal.service;
 
+import org.junit.jupiter.api.Assertions;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -207,10 +208,10 @@ final class ZLinkM6ARuntimeContractTest {
             new ZLinkServiceNodeDescriptor.Channel(
                 "maximum",
                 10_000).weight());
-        org.junit.jupiter.api.Assertions.assertThrows(
+        Assertions.assertThrows(
             IllegalArgumentException.class,
             () -> new ZLinkServiceNodeDescriptor.Channel("negative", -1));
-        org.junit.jupiter.api.Assertions.assertThrows(
+        Assertions.assertThrows(
             IllegalArgumentException.class,
             () -> new ZLinkServiceNodeDescriptor.Channel(
                 "too-large",

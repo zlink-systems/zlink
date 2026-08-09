@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.runtimemonitoring.service
 
+
+import java.net.URI
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.boot.ApplicationRunner
 import org.springframework.boot.WebApplicationType
@@ -58,7 +60,7 @@ class ServiceApplication {
 
 
             options.addHandlersFromPackageOf(WorkRequestHandler::class.java)
-            val apiEndpoint = java.net.URI.create(
+            val apiEndpoint = URI.create(
                 Env.get("e2e.api.endpoint"),
             )
             options.addClientServerChannel(Contracts.CHANNEL)
@@ -66,7 +68,7 @@ class ServiceApplication {
                 .setAdvertiseHost(apiEndpoint.host)
                 .listen(apiEndpoint.port)
                 .addHandlerGroup(Contracts.HANDLER_GROUP)
-            val handshakeEndpoint = java.net.URI.create(
+            val handshakeEndpoint = URI.create(
                 Env.get("e2e.handshake.endpoint"),
             )
             options.addClientServerChannel(Contracts.HANDSHAKE_CHANNEL)

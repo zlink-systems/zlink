@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.registrationcodec.main
 
+
+import java.net.URI
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.google.protobuf.StringValue
 import org.springframework.beans.factory.ObjectProvider
@@ -91,7 +93,7 @@ class ServerApplication {
 
 
             options.addHandlersFromPackageOf(AutoRequestHandler::class.java)
-            val endpoint = java.net.URI.create(serverOptions.serverEndpoint)
+            val endpoint = URI.create(serverOptions.serverEndpoint)
             val channel = options.addClientServerChannel(Contracts.CHANNEL)
             val server = channel.server()
                 .setBindHost(endpoint.host)

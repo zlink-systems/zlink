@@ -1,4 +1,5 @@
 package systems.zlink.e2e.spotservice.publisher;
+import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 
 import java.nio.file.Path;
 import org.springframework.boot.WebApplicationType;
@@ -47,7 +48,7 @@ public final class Program {
     }
 
     @Bean
-    systems.zlink.framework.spring.ZLinkFrameworkConfigurer publisherFramework(PublisherOptions publisher) {
+    ZLinkFrameworkConfigurer publisherFramework(PublisherOptions publisher) {
         return options -> {
             String logDir = publisher.logDir();
             options.configureDispatch()

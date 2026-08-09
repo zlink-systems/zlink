@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.service;
+import java.util.Arrays;
 
 import java.io.ByteArrayOutputStream;
 import java.util.List;
@@ -64,7 +65,7 @@ public final class ZLinkServiceWireCodec {
 
         List<byte[]> body = head.length == PREFIX_BYTES
             ? List.of()
-            : List.of(java.util.Arrays.copyOfRange(head, PREFIX_BYTES, head.length));
+            : List.of(Arrays.copyOfRange(head, PREFIX_BYTES, head.length));
         validateLivenessBody(command, body);
         return new ZLinkServiceWireFrame(command, flags, body);
     }

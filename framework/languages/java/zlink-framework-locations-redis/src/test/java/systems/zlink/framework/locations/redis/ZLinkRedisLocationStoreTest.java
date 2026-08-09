@@ -1,4 +1,67 @@
 package systems.zlink.framework.locations.redis;
+import java.security.MessageDigest;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.concurrent.ExecutionException;
+import java.util.stream.IntStream;
+import systems.zlink.framework.locationprovider.ZLinkBlobConflict;
+import systems.zlink.framework.locationprovider.ZLinkBlobFound;
+import systems.zlink.framework.locationprovider.ZLinkBlobStored;
+import systems.zlink.framework.locations.ZLinkActivationConcurrency;
+import systems.zlink.framework.locations.ZLinkCapacityUsage;
+import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
+import systems.zlink.framework.locations.ZLinkObjectCapability;
+import systems.zlink.framework.locations.ZLinkObjectMaintenancePolicyKind;
+import systems.zlink.framework.locations.ZLinkPlacementCapacity;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
+import systems.zlink.framework.locations.ZLinkSpotTypeCapacity;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateAbortResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateAlreadyPrepared;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateCommitResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateConflict;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateParticipant;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareRequest;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepared;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateStale;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityConflict;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDelete;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDeleted;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityEntry;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityGenerationTransition;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPage;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanExpired;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityStored;
+import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
+import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptorKey;
+import systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationIdentity;
+import systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationTerminal;
+import systems.zlink.framework.runtime.internal.locations.ZLinkCreationTerminalFound;
+import systems.zlink.framework.runtime.internal.locations.ZLinkCreationTerminalMissing;
+import systems.zlink.framework.runtime.internal.locations.ZLinkCreationTerminalState;
+import systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptor;
+import systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptorKey;
+import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
+import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectAbortResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectCommitResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectConflict;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservation;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservationRequest;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectReserved;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReleaseResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
+import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
+import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityExhausted;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityAbortResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityAlreadyReserved;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityConflict;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReservationRequest;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReserved;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -53,7 +116,7 @@ class ZLinkRedisLocationStoreTest {
 
         Set<String> publicMethods = Arrays.stream(
                 ZLinkRedisLocationStore.class.getMethods())
-            .map(java.lang.reflect.Method::getName)
+            .map(Method::getName)
             .collect(Collectors.toSet());
         assertFalse(publicMethods.contains("updatePeer"));
         assertFalse(publicMethods.contains("resolveActor"));
@@ -82,7 +145,7 @@ class ZLinkRedisLocationStoreTest {
     void authorityPhysicalEncodingMatchesSharedFixture() throws Exception {
         JsonNode fixture = authorityFixture();
         JsonNode buckets = fixture.path("capacityBuckets");
-        var descriptor = new systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey(
+        var descriptor = new ZLinkMeshNodeDescriptorKey(
                 fixture.path("keyContract").path("meshName").asText(),
                 RoutingId.fromHex("67616d652d61"));
         String descriptorKey =
@@ -144,7 +207,7 @@ class ZLinkRedisLocationStoreTest {
         String canonicalKey = row.path("key").asText();
         var keys = new ZLinkRedisLocationKeys("P");
         var descriptorKey =
-            new systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey(
+            new ZLinkMeshNodeDescriptorKey(
                     row.path("hash").path("mesh").asText(),
                     RoutingId.fromHex("67616d652d61"));
 
@@ -197,7 +260,7 @@ class ZLinkRedisLocationStoreTest {
         JsonNode row = fixture.path("row");
         JsonNode hash = row.path("hash");
         var descriptor =
-            new systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor(
+            new ZLinkClientServerServerDescriptor(
                     "orders",
                     RoutingId.from("orders-a"),
                     7,
@@ -214,7 +277,7 @@ class ZLinkRedisLocationStoreTest {
         assertEquals(
             row.path("key").asText(),
             ZLinkRedisLocationKeyCodec.encodeClientServerKey(
-                new systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptorKey(
+                new ZLinkClientServerServerDescriptorKey(
                         descriptor.channelName(),
                         descriptor.serverRid())));
         assertEquals(
@@ -231,7 +294,7 @@ class ZLinkRedisLocationStoreTest {
         JsonNode row = fixture.path("row");
         JsonNode hash = row.path("hash");
         var descriptor =
-            new systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptor(
+            new ZLinkFanoutPublisherDescriptor(
                     "events",
                     RoutingId.from("events-pub-a"),
                     7,
@@ -246,7 +309,7 @@ class ZLinkRedisLocationStoreTest {
         assertEquals(
             row.path("key").asText(),
             ZLinkRedisLocationKeyCodec.encodeFanoutPublisherKey(
-                new systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptorKey(
+                new ZLinkFanoutPublisherDescriptorKey(
                         descriptor.channelName(),
                         descriptor.publisherRid())));
         assertEquals(
@@ -278,7 +341,7 @@ class ZLinkRedisLocationStoreTest {
                     .toCompletableFuture().get())
                 .token();
             var descriptor =
-                new systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptor(
+                new ZLinkFanoutPublisherDescriptor(
                         "events",
                         RoutingId.from("publisher"),
                         7,
@@ -342,7 +405,7 @@ class ZLinkRedisLocationStoreTest {
         }
         try (var store = new ZLinkRedisLocationRepository(options)) {
             var failure = assertThrows(
-                java.util.concurrent.ExecutionException.class,
+                ExecutionException.class,
                 () -> store.read(
                         "zla1:a:schema-gate",
                         () -> false)
@@ -367,7 +430,7 @@ class ZLinkRedisLocationStoreTest {
             var reference = new systems.zlink.framework.locationprovider
                 .ZLinkBlobReference(UUID.randomUUID().toString());
             var stored = assertInstanceOf(
-                systems.zlink.framework.locationprovider.ZLinkBlobStored.class,
+                ZLinkBlobStored.class,
                 store.put(
                     reference,
                     payload,
@@ -385,14 +448,14 @@ class ZLinkRedisLocationStoreTest {
                     Duration.ofHours(24),
                     () -> false).toCompletableFuture().get());
             assertInstanceOf(
-                systems.zlink.framework.locationprovider.ZLinkBlobConflict.class,
+                ZLinkBlobConflict.class,
                 store.put(
                     reference,
                     new byte[] {4, 3, 2, 1},
                     Duration.ofHours(24),
                     () -> false).toCompletableFuture().get());
             var found = assertInstanceOf(
-                systems.zlink.framework.locationprovider.ZLinkBlobFound.class,
+                ZLinkBlobFound.class,
                 store.read(reference, () -> false)
                     .toCompletableFuture().get());
             assertArrayEquals(new byte[] {1, 2, 3, 4}, found.bytes());
@@ -430,29 +493,29 @@ class ZLinkRedisLocationStoreTest {
                             4),
                         ZLinkLocationWriteIntent.NEW_CLAIM)
                     .toCompletableFuture().get().status());
-            var request = new systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservationRequest(
-                    systems.zlink.framework.locations.ZLinkPlacementObjectKind.ACTOR,
+            var request = new ZLinkObjectReservationRequest(
+                    ZLinkPlacementObjectKind.ACTOR,
                     "zla1:a:4:game:7:actor-1",
                     "player",
                     "creation-root",
                     new byte[32],
                     32,
-                    new systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey(
+                    new ZLinkMeshNodeDescriptorKey(
                         "game",
                         NODE_A),
                     1,
                     owner,
                     new byte[] {9, 8},
-                    systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle.actor(1));
+                    ZLinkPlacementCapacityBundle.actor(1));
             var reserved = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectReserved.class,
+                ZLinkObjectReserved.class,
                 store.reserve(request, () -> false).toCompletableFuture().get());
             assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectConflict.class,
+                ZLinkObjectConflict.class,
                 store.reserve(request, () -> false)
                     .toCompletableFuture().get());
             var creating = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot.class,
+                ZLinkAuthoritySnapshot.class,
                 store.read(request.authorityKey(), () -> false)
                     .toCompletableFuture().get());
             var physicalKeys = new ZLinkRedisLocationKeys(keyPrefix);
@@ -550,7 +613,7 @@ class ZLinkRedisLocationStoreTest {
                     physicalKeys.authorityRowKey(
                         request.authorityKey())) > 0);
                 Set<String> expectedAuthorityFields =
-                    new java.util.HashSet<>(JSON.convertValue(
+                    new HashSet<>(JSON.convertValue(
                         authorityFixture().path(
                             "currentHashFields"),
                         JSON.getTypeFactory()
@@ -618,7 +681,7 @@ class ZLinkRedisLocationStoreTest {
                 owner.leaseGeneration(),
                 creating.ownerLeaseGeneration());
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState.PENDING,
+                ZLinkPlacementAllocationState.PENDING,
                 creating.allocation().state());
             assertEquals(
                 request.targetDescriptor(),
@@ -642,25 +705,25 @@ class ZLinkRedisLocationStoreTest {
             byte[] terminalEnvelope =
                 "creation-operation-terminal-v1:created"
                     .getBytes(StandardCharsets.UTF_8);
-            byte[] terminalSha256 = java.security.MessageDigest
+            byte[] terminalSha256 = MessageDigest
                 .getInstance("SHA-256")
                 .digest(terminalEnvelope);
             var creationOperation =
-                new systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationIdentity(
+                new ZLinkCreationOperationIdentity(
                         NODE_A,
                         1,
                         0x11,
                         0x22);
             var terminal =
-                new systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationTerminal(
+                new ZLinkCreationOperationTerminal(
                         creationOperation,
                         reserved.reservation(),
-                        systems.zlink.framework.runtime.internal.locations.ZLinkCreationTerminalState.CREATED,
+                        ZLinkCreationTerminalState.CREATED,
                         terminalEnvelope,
                         terminalSha256,
                         Instant.now().plus(Duration.ofMinutes(5)));
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectCommitResult.COMMITTED,
+                ZLinkObjectCommitResult.COMMITTED,
                 store.commit(
                         reserved.reservation(),
                         new byte[] {1, 2},
@@ -668,7 +731,7 @@ class ZLinkRedisLocationStoreTest {
                         () -> false)
                     .toCompletableFuture().get());
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectCommitResult.ALREADY_COMMITTED,
+                ZLinkObjectCommitResult.ALREADY_COMMITTED,
                 store.commit(
                         reserved.reservation(),
                         new byte[] {1, 2},
@@ -676,22 +739,22 @@ class ZLinkRedisLocationStoreTest {
                         () -> false)
                     .toCompletableFuture().get());
             var storedTerminal = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkCreationTerminalFound.class,
+                ZLinkCreationTerminalFound.class,
                 store.readCreationTerminal(
                         creationOperation,
                         () -> false)
                     .toCompletableFuture().get())
                 .terminal();
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkCreationTerminalState.CREATED,
+                ZLinkCreationTerminalState.CREATED,
                 storedTerminal.state());
             assertArrayEquals(
                 terminalEnvelope,
                 storedTerminal.terminalEnvelope());
             assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkCreationTerminalMissing.class,
+                ZLinkCreationTerminalMissing.class,
                 store.readCreationTerminal(
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationIdentity(
+                        new ZLinkCreationOperationIdentity(
                                 NODE_A,
                                 1,
                                 0x11,
@@ -720,7 +783,7 @@ class ZLinkRedisLocationStoreTest {
                 postCommitClient.shutdown();
             }
             var staleReservation =
-                new systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservation(
+                new ZLinkObjectReservation(
                         reserved.reservation().authorityKey(),
                         reserved.reservation().storeVersion(),
                         reserved.reservation().objectGeneration(),
@@ -732,29 +795,29 @@ class ZLinkRedisLocationStoreTest {
                             .targetDescriptorLifecycleGeneration() + 1,
                         reserved.reservation().targetOwner());
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectCommitResult.STALE,
+                ZLinkObjectCommitResult.STALE,
                 store.commit(
                         staleReservation,
                         new byte[] {1, 2},
                         () -> false)
                     .toCompletableFuture().get());
             var current = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot.class,
+                ZLinkAuthoritySnapshot.class,
                 store.read(request.authorityKey(), () -> false)
                     .toCompletableFuture().get());
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState.ACTIVE,
+                ZLinkPlacementAllocationState.ACTIVE,
                 current.allocation().state());
             assertTrue(current.pendingCreation().isEmpty());
             var updated = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityStored.class,
+                ZLinkAuthorityStored.class,
                 store.compareExchange(
                         request.authorityKey(),
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound(
+                        new ZLinkAuthorityExpectFound(
                             current.storeVersion()),
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut(
+                        new ZLinkAuthorityPut(
                             new byte[] {3, 4},
-                            systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityGenerationTransition.PRESERVE,
+                            ZLinkAuthorityGenerationTransition.PRESERVE,
                             Optional.empty(),
                             Optional.empty()),
                         () -> false)
@@ -763,7 +826,7 @@ class ZLinkRedisLocationStoreTest {
             assertEquals(current.allocation(), updated.allocation());
             String secondKey = "zla1:a:4:game:7:actor-2";
             var secondReservation = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectReserved.class,
+                ZLinkObjectReserved.class,
                 store.reserve(
                         reservationRequest(
                             secondKey,
@@ -780,51 +843,51 @@ class ZLinkRedisLocationStoreTest {
                         () -> false)
                     .toCompletableFuture().get());
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectCommitResult.COMMITTED,
+                ZLinkObjectCommitResult.COMMITTED,
                 store.commit(
                         secondReservation.reservation(),
                         new byte[] {5},
                         () -> false)
                     .toCompletableFuture().get());
             var page = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPage.class,
+                ZLinkAuthorityPage.class,
                 store.list("zla1:a:", Optional.empty(), 1, () -> false)
                     .toCompletableFuture().get());
             assertEquals(List.of(request.authorityKey()),
                 page.items().stream()
-                    .map(systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityEntry::key)
+                    .map(ZLinkAuthorityEntry::key)
                     .toList());
             var secondCurrent = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot.class,
+                ZLinkAuthoritySnapshot.class,
                 store.read(secondKey, () -> false)
                     .toCompletableFuture().get());
             assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityStored.class,
+                ZLinkAuthorityStored.class,
                 store.compareExchange(
                         secondKey,
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound(
+                        new ZLinkAuthorityExpectFound(
                                 secondCurrent.storeVersion()),
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut(
+                        new ZLinkAuthorityPut(
                                 new byte[] {6},
-                                systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityGenerationTransition
+                                ZLinkAuthorityGenerationTransition
                                     .PRESERVE,
                                 Optional.empty(),
                                 Optional.empty()),
                         () -> false)
                     .toCompletableFuture().get());
             assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDeleted.class,
+                ZLinkAuthorityDeleted.class,
                 store.compareExchange(
                         request.authorityKey(),
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound(
+                        new ZLinkAuthorityExpectFound(
                             updated.storeVersion()),
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDelete(),
+                        new ZLinkAuthorityDelete(),
                         () -> false)
                     .toCompletableFuture().get());
             String postWatermarkKey =
                 "zla1:a:4:game:7:actor-3";
             var postWatermark = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectReserved.class,
+                ZLinkObjectReserved.class,
                 store.reserve(
                         reservationRequest(
                             postWatermarkKey,
@@ -841,14 +904,14 @@ class ZLinkRedisLocationStoreTest {
                         () -> false)
                     .toCompletableFuture().get());
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectCommitResult.COMMITTED,
+                ZLinkObjectCommitResult.COMMITTED,
                 store.commit(
                         postWatermark.reservation(),
                         new byte[] {7},
                         () -> false)
                     .toCompletableFuture().get());
             var secondPage = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPage.class,
+                ZLinkAuthorityPage.class,
                 store.list(
                         "zla1:a:",
                         page.nextCursor(),
@@ -857,14 +920,14 @@ class ZLinkRedisLocationStoreTest {
                     .toCompletableFuture().get());
             assertEquals(List.of(secondKey),
                 secondPage.items().stream()
-                    .map(systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityEntry::key)
+                    .map(ZLinkAuthorityEntry::key)
                     .toList());
             assertArrayEquals(
                 new byte[] {5},
                 secondPage.items().getFirst().snapshot().payload());
             assertTrue(secondPage.nextCursor().isEmpty());
             assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanExpired.class,
+                ZLinkAuthorityScanExpired.class,
                 store.list(
                         "zla1:a:",
                         page.nextCursor(),
@@ -872,7 +935,7 @@ class ZLinkRedisLocationStoreTest {
                         () -> false)
                     .toCompletableFuture().get());
             assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPage.class,
+                ZLinkAuthorityPage.class,
                 store.list(
                         "zla1:a:",
                         Optional.empty(),
@@ -958,16 +1021,16 @@ class ZLinkRedisLocationStoreTest {
                     .toCompletableFuture().get().status());
             String authorityKey = "zla1:a:4:game:7:actor-2";
             var sourceDescriptor =
-                new systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey("game", NODE_A);
+                new ZLinkMeshNodeDescriptorKey("game", NODE_A);
             var targetDescriptor =
-                new systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey(
+                new ZLinkMeshNodeDescriptorKey(
                         "game",
                         targetRid);
             var reservation = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectReserved.class,
+                ZLinkObjectReserved.class,
                 store.reserve(
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservationRequest(
-                                systems.zlink.framework.locations.ZLinkPlacementObjectKind.ACTOR,
+                        new ZLinkObjectReservationRequest(
+                                ZLinkPlacementObjectKind.ACTOR,
                                 authorityKey,
                                 "player",
                                 "creation-root",
@@ -977,24 +1040,24 @@ class ZLinkRedisLocationStoreTest {
                                 7,
                                 source,
                                 new byte[] {1},
-                                systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle.actor(1)),
+                                ZLinkPlacementCapacityBundle.actor(1)),
                         () -> false)
                     .toCompletableFuture().get()).reservation();
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectCommitResult.COMMITTED,
+                ZLinkObjectCommitResult.COMMITTED,
                 store.commit(reservation, new byte[] {2}, () -> false)
                     .toCompletableFuture().get());
             var current = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot.class,
+                ZLinkAuthoritySnapshot.class,
                 store.read(authorityKey, () -> false)
                     .toCompletableFuture().get());
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReleaseResult.RELEASED,
+                ZLinkOwnerLeaseReleaseResult.RELEASED,
                 store.releaseOwnerLease(source)
                     .toCompletableFuture().get());
 
             var request =
-                new systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReservationRequest(
+                new ZLinkRelocationCapacityReservationRequest(
                         UUID.randomUUID(),
                         authorityKey,
                         current.storeVersion(),
@@ -1009,16 +1072,16 @@ class ZLinkRedisLocationStoreTest {
                         target,
                         current.allocation().capacityBundle());
             var capacity = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReserved.class,
+                ZLinkRelocationCapacityReserved.class,
                 store.reserveRelocationCapacity(request, () -> false)
                     .toCompletableFuture().get());
             assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityAlreadyReserved.class,
+                ZLinkRelocationCapacityAlreadyReserved.class,
                 store.reserveRelocationCapacity(request, () -> false)
                     .toCompletableFuture().get());
 
             var mismatched =
-                new systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReservationRequest(
+                new ZLinkRelocationCapacityReservationRequest(
                         UUID.randomUUID(),
                         authorityKey,
                         current.storeVersion(),
@@ -1033,18 +1096,18 @@ class ZLinkRedisLocationStoreTest {
                         target,
                         current.allocation().capacityBundle());
             assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityConflict.class,
+                ZLinkRelocationCapacityConflict.class,
                 store.reserveRelocationCapacity(mismatched, () -> false)
                     .toCompletableFuture().get());
 
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityAbortResult.ABORTED,
+                ZLinkRelocationCapacityAbortResult.ABORTED,
                 store.abortRelocationCapacity(
                         capacity.fence(),
                         () -> false)
                     .toCompletableFuture().get());
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityAbortResult
+                ZLinkRelocationCapacityAbortResult
                     .ALREADY_ABORTED,
                 store.abortRelocationCapacity(
                         capacity.fence(),
@@ -1052,7 +1115,7 @@ class ZLinkRedisLocationStoreTest {
                     .toCompletableFuture().get());
 
             var committedRequest =
-                new systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReservationRequest(
+                new ZLinkRelocationCapacityReservationRequest(
                         UUID.randomUUID(),
                         authorityKey,
                         current.storeVersion(),
@@ -1067,7 +1130,7 @@ class ZLinkRedisLocationStoreTest {
                         target,
                         current.allocation().capacityBundle());
             var committedCapacity = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReserved.class,
+                ZLinkRelocationCapacityReserved.class,
                 store.reserveRelocationCapacity(
                         committedRequest,
                         () -> false)
@@ -1090,14 +1153,14 @@ class ZLinkRedisLocationStoreTest {
                         ZLinkLocationWriteIntent.NEW_CLAIM)
                     .toCompletableFuture().get().status());
             assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityConflict.class,
+                ZLinkAuthorityConflict.class,
                 store.compareExchange(
                         authorityKey,
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound(
+                        new ZLinkAuthorityExpectFound(
                                 current.storeVersion()),
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut(
+                        new ZLinkAuthorityPut(
                                 new byte[] {3},
-                                systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityGenerationTransition
+                                ZLinkAuthorityGenerationTransition
                                     .NEW_OWNER,
                                 Optional.of(target),
                                 Optional.of(
@@ -1105,13 +1168,13 @@ class ZLinkRedisLocationStoreTest {
                         () -> false)
                     .toCompletableFuture().get());
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityAbortResult.ABORTED,
+                ZLinkRelocationCapacityAbortResult.ABORTED,
                 store.abortRelocationCapacity(
                         committedCapacity.fence(),
                         () -> false)
                     .toCompletableFuture().get());
             var finalRequest =
-                new systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReservationRequest(
+                new ZLinkRelocationCapacityReservationRequest(
                         UUID.randomUUID(),
                         authorityKey,
                         current.storeVersion(),
@@ -1126,20 +1189,20 @@ class ZLinkRedisLocationStoreTest {
                         target,
                         current.allocation().capacityBundle());
             var finalCapacity = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReserved.class,
+                ZLinkRelocationCapacityReserved.class,
                 store.reserveRelocationCapacity(
                         finalRequest,
                         () -> false)
                     .toCompletableFuture().get());
             var moved = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityStored.class,
+                ZLinkAuthorityStored.class,
                 store.compareExchange(
                         authorityKey,
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound(
+                        new ZLinkAuthorityExpectFound(
                                 current.storeVersion()),
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut(
+                        new ZLinkAuthorityPut(
                                 new byte[] {3},
-                                systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityGenerationTransition
+                                ZLinkAuthorityGenerationTransition
                                     .NEW_OWNER,
                                 Optional.of(target),
                                 Optional.of(
@@ -1153,7 +1216,7 @@ class ZLinkRedisLocationStoreTest {
                 moved.allocation()
                     .descriptorLifecycleGeneration());
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityAbortResult
+                ZLinkRelocationCapacityAbortResult
                     .ALREADY_COMMITTED,
                 store.abortRelocationCapacity(
                         finalCapacity.fence(),
@@ -1204,14 +1267,14 @@ class ZLinkRedisLocationStoreTest {
                         ZLinkLocationWriteIntent.RENEW)
                     .toCompletableFuture().get().status());
             assertEquals(
-                java.util.Set.of(
+                Set.of(
                     "owner",
                     "gen",
                     "json",
                     "updatedAtMs",
                     "mesh"),
                 store.readMeshNodeHashFields(
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey(
+                        new ZLinkMeshNodeDescriptorKey(
                                 "game",
                                 NODE_A))
                     .toCompletableFuture().get().keySet());
@@ -1224,7 +1287,7 @@ class ZLinkRedisLocationStoreTest {
                 2,
                 1);
             var protocolError = assertThrows(
-                java.util.concurrent.ExecutionException.class,
+                ExecutionException.class,
                 () -> store.updateMeshNode(
                         sameRevisionDifferentBytes,
                         ZLinkLocationWriteIntent.RENEW)
@@ -1275,7 +1338,7 @@ class ZLinkRedisLocationStoreTest {
                     .toCompletableFuture().get().status());
             String firstKey = "zla1:a:descriptor-capacity-1";
             var first = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectReserved.class,
+                ZLinkObjectReserved.class,
                 store.reserve(
                         reservationRequest(
                             firstKey,
@@ -1285,7 +1348,7 @@ class ZLinkRedisLocationStoreTest {
                         () -> false)
                     .toCompletableFuture().get());
             var second = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectReserved.class,
+                ZLinkObjectReserved.class,
                 store.reserve(
                         reservationRequest(
                             "zla1:a:descriptor-capacity-2",
@@ -1295,7 +1358,7 @@ class ZLinkRedisLocationStoreTest {
                         () -> false)
                     .toCompletableFuture().get());
             assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityExhausted.class,
+                ZLinkPlacementCapacityExhausted.class,
                 store.reserve(
                         reservationRequest(
                             "zla1:a:descriptor-capacity-3",
@@ -1305,11 +1368,11 @@ class ZLinkRedisLocationStoreTest {
                         () -> false)
                     .toCompletableFuture().get());
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectAbortResult.ABORTED,
+                ZLinkObjectAbortResult.ABORTED,
                 store.abort(second.reservation(), () -> false)
                     .toCompletableFuture().get());
             assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectConflict.class,
+                ZLinkObjectConflict.class,
                 store.reserve(
                         reservationRequest(
                             "zla1:a:descriptor-unsupported-type",
@@ -1322,7 +1385,7 @@ class ZLinkRedisLocationStoreTest {
             assertEquals(
                 ZLinkLocationWriteStatus.STORED,
                 store.removeMeshNode(
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey(
+                        new ZLinkMeshNodeDescriptorKey(
                                 "game",
                                 NODE_A),
                         owner)
@@ -1342,14 +1405,14 @@ class ZLinkRedisLocationStoreTest {
                         ZLinkLocationWriteIntent.NEW_CLAIM)
                     .toCompletableFuture().get().status());
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectCommitResult.STALE,
+                ZLinkObjectCommitResult.STALE,
                 store.commit(
                         first.reservation(),
                         new byte[] {2},
                         () -> false)
                     .toCompletableFuture().get());
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectAbortResult.ABORTED,
+                ZLinkObjectAbortResult.ABORTED,
                 store.abort(first.reservation(), () -> false)
                     .toCompletableFuture().get());
             assertEquals(
@@ -1432,29 +1495,29 @@ class ZLinkRedisLocationStoreTest {
                 systems.zlink.framework.runtime.locations
                     .ZLinkAuthorityKeyCodec.spot(entrySpotId);
             assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectConflict.class,
+                ZLinkObjectConflict.class,
                 store.reserve(
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservationRequest(
-                                systems.zlink.framework.locations.ZLinkPlacementObjectKind.USER_SPOT,
+                        new ZLinkObjectReservationRequest(
+                                ZLinkPlacementObjectKind.USER_SPOT,
                                 entryAuthorityKey,
                                 "player",
                                 "creation-root",
                                 new byte[32],
                                 32,
-                                new systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey(
+                                new ZLinkMeshNodeDescriptorKey(
                                         first.meshName(),
                                         first.rid()),
                                 first.lifecycleGeneration(),
                                 firstOwner,
                                 new byte[] {1},
-                                systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle.spot(
-                                        systems.zlink.framework.locations.ZLinkPlacementObjectKind.USER_SPOT,
+                                ZLinkPlacementCapacityBundle.spot(
+                                        ZLinkPlacementObjectKind.USER_SPOT,
                                         "player",
                                         1)),
                         () -> false)
                     .toCompletableFuture().get());
             assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing.class,
+                ZLinkAuthorityMissing.class,
                 store.read(entryAuthorityKey, () -> false)
                     .toCompletableFuture().get());
             assertEquals(
@@ -1466,7 +1529,7 @@ class ZLinkRedisLocationStoreTest {
             assertEquals(
                 ZLinkLocationWriteStatus.STORED,
                 store.removeMeshNode(
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey("game", NODE_A),
+                        new ZLinkMeshNodeDescriptorKey("game", NODE_A),
                         firstOwner)
                     .toCompletableFuture().get());
             assertEquals(
@@ -1478,7 +1541,7 @@ class ZLinkRedisLocationStoreTest {
             assertEquals(
                 ZLinkLocationWriteStatus.IGNORED_STALE,
                 store.removeMeshNode(
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey("game", NODE_A),
+                        new ZLinkMeshNodeDescriptorKey("game", NODE_A),
                         firstOwner)
                     .toCompletableFuture().get());
         }
@@ -1507,7 +1570,7 @@ class ZLinkRedisLocationStoreTest {
                     .toCompletableFuture().get()).token();
             RoutingId serverRid = RoutingId.from("orders-a");
             var initial =
-                new systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor(
+                new ZLinkClientServerServerDescriptor(
                         "orders",
                         serverRid,
                         7,
@@ -1527,7 +1590,7 @@ class ZLinkRedisLocationStoreTest {
                         ZLinkLocationWriteIntent.NEW_CLAIM)
                     .toCompletableFuture().get().status());
 
-            var changed = new systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor(
+            var changed = new ZLinkClientServerServerDescriptor(
                     initial.channelName(),
                     initial.serverRid(),
                     initial.lifecycleGeneration(),
@@ -1566,7 +1629,7 @@ class ZLinkRedisLocationStoreTest {
             assertEquals(
                 ZLinkLocationWriteStatus.STORED,
                 store.removeClientServer(
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptorKey(
+                        new ZLinkClientServerServerDescriptorKey(
                                 "orders",
                                 serverRid),
                         owner)
@@ -1619,7 +1682,7 @@ class ZLinkRedisLocationStoreTest {
             String authorityKey =
                 "zla1:a:capacity-projection";
             var reserved = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectReserved.class,
+                ZLinkObjectReserved.class,
                 store.reserve(
                         reservationRequest(
                             authorityKey,
@@ -1637,7 +1700,7 @@ class ZLinkRedisLocationStoreTest {
                     .items().getFirst().capacity());
 
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectCommitResult.COMMITTED,
+                ZLinkObjectCommitResult.COMMITTED,
                 store.commit(
                         reserved,
                         new byte[] {2},
@@ -1652,16 +1715,16 @@ class ZLinkRedisLocationStoreTest {
                     .items().getFirst().capacity());
 
             var active = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot.class,
+                ZLinkAuthoritySnapshot.class,
                 store.read(authorityKey, () -> false)
                     .toCompletableFuture().get());
             assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDeleted.class,
+                ZLinkAuthorityDeleted.class,
                 store.compareExchange(
                         authorityKey,
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound(
+                        new ZLinkAuthorityExpectFound(
                                 active.storeVersion()),
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDelete(),
+                        new ZLinkAuthorityDelete(),
                         () -> false)
                     .toCompletableFuture().get());
             assertEquals(
@@ -1695,7 +1758,7 @@ class ZLinkRedisLocationStoreTest {
                         "spot-capacity-owner",
                         Duration.ofSeconds(30))
                     .toCompletableFuture().get()).token();
-            var meshNode = new systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor(
+            var meshNode = new ZLinkMeshNodeDescriptor(
                     "game",
                     NODE_A,
                     32,
@@ -1703,19 +1766,19 @@ class ZLinkRedisLocationStoreTest {
                     "tcp://127.0.0.1:7000",
                     Map.of(),
                     1,
-                    List.of(new systems.zlink.framework.locations.ZLinkObjectCapability(
-                            systems.zlink.framework.locations.ZLinkPlacementObjectKind.USER_SPOT,
+                    List.of(new ZLinkObjectCapability(
+                            ZLinkPlacementObjectKind.USER_SPOT,
                             "lobby",
-                            systems.zlink.framework.locations.ZLinkObjectMaintenancePolicyKind
+                            ZLinkObjectMaintenancePolicyKind
                                 .SNAPSHOT,
                             true,
                             2)),
-                    systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.SERVER,
+                    ZLinkMeshNodeObjectRole.SERVER,
                     Optional.of(
                         "game-entry-00000000-0000-4000-8000-000000000032"),
                     100,
                     spotCapacity(0, 0, 3, 0, 0, 2),
-                    new systems.zlink.framework.locations.ZLinkActivationConcurrency(0, 128),
+                    new ZLinkActivationConcurrency(0, 128),
                     Optional.empty(),
                     systems.zlink.framework.runtime.host
                         .ZLinkFrameworkRuntimeState.SERVING,
@@ -1731,23 +1794,23 @@ class ZLinkRedisLocationStoreTest {
                     .toCompletableFuture().get().status());
 
             var reserved = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectReserved.class,
+                ZLinkObjectReserved.class,
                 store.reserve(
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservationRequest(
-                                systems.zlink.framework.locations.ZLinkPlacementObjectKind.USER_SPOT,
+                        new ZLinkObjectReservationRequest(
+                                ZLinkPlacementObjectKind.USER_SPOT,
                                 systems.zlink.framework.runtime.locations
                                     .ZLinkAuthorityKeyCodec.spot("lobby-1"),
                                 "lobby",
                                 "creation-root",
                                 new byte[32],
                                 32,
-                                new systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey(
+                                new ZLinkMeshNodeDescriptorKey(
                                         "game", NODE_A),
                                 32,
                                 owner,
                                 new byte[] {1},
-                                systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle.spot(
-                                        systems.zlink.framework.locations.ZLinkPlacementObjectKind.USER_SPOT,
+                                ZLinkPlacementCapacityBundle.spot(
+                                        ZLinkPlacementObjectKind.USER_SPOT,
                                         "lobby",
                                         1)),
                         () -> false)
@@ -1761,7 +1824,7 @@ class ZLinkRedisLocationStoreTest {
                     .items().getFirst().capacity());
 
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkObjectCommitResult.COMMITTED,
+                ZLinkObjectCommitResult.COMMITTED,
                 store.commit(reserved, new byte[] {2}, () -> false)
                     .toCompletableFuture().get());
             assertEquals(
@@ -1832,11 +1895,11 @@ class ZLinkRedisLocationStoreTest {
             List<String> authorityKeys = List.of(
                 "zla1:a:aggregate-a",
                 "zla1:a:aggregate-b");
-            List<systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot> snapshots =
-                new java.util.ArrayList<>();
+            List<ZLinkAuthoritySnapshot> snapshots =
+                new ArrayList<>();
             for (String authorityKey : authorityKeys) {
                 var reservation = assertInstanceOf(
-                    systems.zlink.framework.runtime.internal.locations.ZLinkObjectReserved.class,
+                    ZLinkObjectReserved.class,
                     store.reserve(
                             reservationRequest(
                                 authorityKey,
@@ -1846,64 +1909,64 @@ class ZLinkRedisLocationStoreTest {
                             () -> false)
                         .toCompletableFuture().get());
                 assertEquals(
-                    systems.zlink.framework.runtime.internal.locations.ZLinkObjectCommitResult.COMMITTED,
+                    ZLinkObjectCommitResult.COMMITTED,
                     store.commit(
                             reservation.reservation(),
                             new byte[] {1},
                             () -> false)
                         .toCompletableFuture().get());
                 snapshots.add(assertInstanceOf(
-                    systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot.class,
+                    ZLinkAuthoritySnapshot.class,
                     store.read(authorityKey, () -> false)
                         .toCompletableFuture().get()));
             }
 
             UUID aggregateId = UUID.randomUUID();
             var participants =
-                java.util.stream.IntStream.range(
+                IntStream.range(
                         0,
                         authorityKeys.size())
                     .mapToObj(index ->
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkAggregateParticipant(
+                        new ZLinkAggregateParticipant(
                                 authorityKeys.get(index),
                                 snapshots.get(index).objectGeneration(),
                                 snapshots.get(index)
                                     .authorityOwnerGeneration(),
                                 snapshots.get(index).storeVersion(),
-                                systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityGenerationTransition
+                                ZLinkAuthorityGenerationTransition
                                     .NEW_OWNER,
                                 new byte[] {(byte) (3 + index)},
                                 new byte[] {(byte) (5 + index)}))
                     .toList();
             var prepareRequest =
-                new systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareRequest(
+                new ZLinkAggregatePrepareRequest(
                         aggregateId,
                         1,
                         participants,
                         new byte[32],
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey(
+                        new ZLinkMeshNodeDescriptorKey(
                                 "game",
                                 targetRid),
                         22,
-                        systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle.actor(
+                        ZLinkPlacementCapacityBundle.actor(
                                 authorityKeys.size()),
                         target);
             var prepared = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepared.class,
+                ZLinkAggregatePrepared.class,
                 store.prepareAggregate(
                         prepareRequest,
                         () -> false)
                     .toCompletableFuture().get());
             assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAggregateAlreadyPrepared.class,
+                ZLinkAggregateAlreadyPrepared.class,
                 store.prepareAggregate(
                         prepareRequest,
                         () -> false)
                     .toCompletableFuture().get());
-            var changed = new java.util.ArrayList<>(participants);
+            var changed = new ArrayList<>(participants);
             changed.set(
                 0,
-                new systems.zlink.framework.runtime.internal.locations.ZLinkAggregateParticipant(
+                new ZLinkAggregateParticipant(
                         participants.getFirst().authorityKey(),
                         participants.getFirst().objectGeneration(),
                         participants.getFirst()
@@ -1914,35 +1977,35 @@ class ZLinkRedisLocationStoreTest {
                         participants.getFirst()
                             .membershipMutation()));
             assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAggregateConflict.class,
+                ZLinkAggregateConflict.class,
                 store.prepareAggregate(
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareRequest(
+                        new ZLinkAggregatePrepareRequest(
                                 aggregateId,
                                 1,
                                 changed,
                                 new byte[32],
-                                new systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey(
+                                new ZLinkMeshNodeDescriptorKey(
                                         "game",
                                         targetRid),
                                 22,
-                                systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle.actor(
+                                ZLinkPlacementCapacityBundle.actor(
                                         authorityKeys.size()),
                                 target),
                         () -> false)
                     .toCompletableFuture().get());
             assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAggregateStale.class,
+                ZLinkAggregateStale.class,
                 store.prepareAggregate(
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareRequest(
+                        new ZLinkAggregatePrepareRequest(
                                 aggregateId,
                                 2,
                                 participants,
                                 new byte[32],
-                                new systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey(
+                                new ZLinkMeshNodeDescriptorKey(
                                         "game",
                                         targetRid),
                                 22,
-                                systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle.actor(
+                                ZLinkPlacementCapacityBundle.actor(
                                         authorityKeys.size()),
                                 target),
                         () -> false)
@@ -1975,7 +2038,7 @@ class ZLinkRedisLocationStoreTest {
                         TimeUnit.MILLISECONDS));
                 try {
                     assertEquals(
-                        systems.zlink.framework.runtime.internal.locations.ZLinkAggregateCommitResult.COMMITTED,
+                        ZLinkAggregateCommitResult.COMMITTED,
                         store.commitAggregate(
                                 prepared.fence(),
                                 () -> false)
@@ -1987,16 +2050,16 @@ class ZLinkRedisLocationStoreTest {
                 leaseClient.shutdown();
             }
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAggregateCommitResult.ALREADY_COMMITTED,
+                ZLinkAggregateCommitResult.ALREADY_COMMITTED,
                 store.commitAggregate(
                         prepared.fence(),
                         () -> false)
                     .toCompletableFuture().get());
-            List<systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot> movedSnapshots =
-                new java.util.ArrayList<>();
+            List<ZLinkAuthoritySnapshot> movedSnapshots =
+                new ArrayList<>();
             for (String authorityKey : authorityKeys) {
                 var moved = assertInstanceOf(
-                    systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot.class,
+                    ZLinkAuthoritySnapshot.class,
                     store.read(authorityKey, () -> false)
                         .toCompletableFuture().get());
                 assertEquals(target.ownerId(), moved.ownerId());
@@ -2014,47 +2077,47 @@ class ZLinkRedisLocationStoreTest {
                     .toCompletableFuture().get());
 
             var reverseParticipants =
-                java.util.stream.IntStream.range(
+                IntStream.range(
                         0,
                         authorityKeys.size())
                     .mapToObj(index ->
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkAggregateParticipant(
+                        new ZLinkAggregateParticipant(
                                 authorityKeys.get(index),
                                 movedSnapshots.get(index).objectGeneration(),
                                 movedSnapshots.get(index)
                                     .authorityOwnerGeneration(),
                                 movedSnapshots.get(index)
                                     .storeVersion(),
-                                systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityGenerationTransition
+                                ZLinkAuthorityGenerationTransition
                                     .NEW_OWNER,
                                 new byte[] {(byte) (7 + index)},
                                 new byte[] {(byte) (9 + index)}))
                     .toList();
             var reversePrepared = assertInstanceOf(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepared.class,
+                ZLinkAggregatePrepared.class,
                 store.prepareAggregate(
-                        new systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareRequest(
+                        new ZLinkAggregatePrepareRequest(
                                 UUID.randomUUID(),
                                 1,
                                 reverseParticipants,
                                 new byte[32],
-                                new systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey(
+                                new ZLinkMeshNodeDescriptorKey(
                                         "game",
                                         sourceRid),
                                 21,
-                                systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle.actor(
+                                ZLinkPlacementCapacityBundle.actor(
                                         authorityKeys.size()),
                                 source),
                         () -> false)
                     .toCompletableFuture().get());
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAggregateAbortResult.ABORTED,
+                ZLinkAggregateAbortResult.ABORTED,
                 store.abortAggregate(
                         reversePrepared.fence(),
                         () -> false)
                     .toCompletableFuture().get());
             assertEquals(
-                systems.zlink.framework.runtime.internal.locations.ZLinkAggregateAbortResult.ALREADY_ABORTED,
+                ZLinkAggregateAbortResult.ALREADY_ABORTED,
                 store.abortAggregate(
                         reversePrepared.fence(),
                         () -> false)
@@ -2063,7 +2126,7 @@ class ZLinkRedisLocationStoreTest {
                 assertEquals(
                     target.ownerId(),
                     assertInstanceOf(
-                        systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot.class,
+                        ZLinkAuthoritySnapshot.class,
                         store.read(authorityKey, () -> false)
                             .toCompletableFuture().get())
                         .ownerId());
@@ -2117,29 +2180,29 @@ class ZLinkRedisLocationStoreTest {
             + value;
     }
 
-    private static systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservationRequest reservationRequest(
+    private static ZLinkObjectReservationRequest reservationRequest(
             String authorityKey,
-            systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor
+            ZLinkMeshNodeDescriptor
                 descriptor,
             ZLinkLocationOwnerToken owner,
             String stableType) {
-        return new systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservationRequest(
-                systems.zlink.framework.locations.ZLinkPlacementObjectKind.ACTOR,
+        return new ZLinkObjectReservationRequest(
+                ZLinkPlacementObjectKind.ACTOR,
                 authorityKey,
                 stableType,
                 "creation-root",
                 new byte[32],
                 32,
-                new systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey(
+                new ZLinkMeshNodeDescriptorKey(
                         descriptor.meshName(),
                         descriptor.rid()),
                 descriptor.lifecycleGeneration(),
                 owner,
                 new byte[] {1},
-                systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle.actor(1));
+                ZLinkPlacementCapacityBundle.actor(1));
     }
 
-    private static systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor descriptor(
+    private static ZLinkMeshNodeDescriptor descriptor(
             RoutingId rid,
             long lifecycleGeneration,
             long descriptorRevision,
@@ -2158,7 +2221,7 @@ class ZLinkRedisLocationStoreTest {
             "entry-" + rid);
     }
 
-    private static systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor descriptor(
+    private static ZLinkMeshNodeDescriptor descriptor(
             RoutingId rid,
             long lifecycleGeneration,
             long descriptorRevision,
@@ -2167,7 +2230,7 @@ class ZLinkRedisLocationStoreTest {
             int activeLimit,
             int pendingLimit,
             String entrySpotId) {
-        return new systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor(
+        return new ZLinkMeshNodeDescriptor(
                 "game",
                 rid,
                 lifecycleGeneration,
@@ -2176,18 +2239,18 @@ class ZLinkRedisLocationStoreTest {
                 Map.of("game", 100),
                 1,
                 List.of(
-                    new systems.zlink.framework.locations.ZLinkObjectCapability(
-                            systems.zlink.framework.locations.ZLinkPlacementObjectKind.ACTOR,
+                    new ZLinkObjectCapability(
+                            ZLinkPlacementObjectKind.ACTOR,
                             stableType,
-                            systems.zlink.framework.locations.ZLinkObjectMaintenancePolicyKind
+                            ZLinkObjectMaintenancePolicyKind
                                 .SNAPSHOT,
                             true,
                             0)),
-                systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.SERVER,
+                ZLinkMeshNodeObjectRole.SERVER,
                 Optional.of(entrySpotId),
                 100,
                 actorCapacity(0, 0, activeLimit),
-                new systems.zlink.framework.locations.ZLinkActivationConcurrency(0, 128),
+                new ZLinkActivationConcurrency(0, 128),
                 Optional.empty(),
                 systems.zlink.framework.runtime.host
                     .ZLinkFrameworkRuntimeState.SERVING,
@@ -2197,31 +2260,31 @@ class ZLinkRedisLocationStoreTest {
                 UPDATED_AT);
     }
 
-    private static systems.zlink.framework.locations.ZLinkPlacementCapacity actorCapacity(
+    private static ZLinkPlacementCapacity actorCapacity(
             int active,
             int reserved,
             int limit) {
-        return new systems.zlink.framework.locations.ZLinkPlacementCapacity(
-                new systems.zlink.framework.locations.ZLinkCapacityUsage(active, reserved, limit),
-                new systems.zlink.framework.locations.ZLinkCapacityUsage(0, 0, 0),
+        return new ZLinkPlacementCapacity(
+                new ZLinkCapacityUsage(active, reserved, limit),
+                new ZLinkCapacityUsage(0, 0, 0),
                 List.of());
     }
 
-    private static systems.zlink.framework.locations.ZLinkPlacementCapacity spotCapacity(
+    private static ZLinkPlacementCapacity spotCapacity(
             int active,
             int reserved,
             int populationLimit,
             int typeActive,
             int typeReserved,
             int typeLimit) {
-        return new systems.zlink.framework.locations.ZLinkPlacementCapacity(
-                new systems.zlink.framework.locations.ZLinkCapacityUsage(0, 0, 0),
-                new systems.zlink.framework.locations.ZLinkCapacityUsage(
+        return new ZLinkPlacementCapacity(
+                new ZLinkCapacityUsage(0, 0, 0),
+                new ZLinkCapacityUsage(
                         active, reserved, populationLimit),
-                List.of(new systems.zlink.framework.locations.ZLinkSpotTypeCapacity(
-                        systems.zlink.framework.locations.ZLinkPlacementObjectKind.USER_SPOT,
+                List.of(new ZLinkSpotTypeCapacity(
+                        ZLinkPlacementObjectKind.USER_SPOT,
                         "lobby",
-                        new systems.zlink.framework.locations.ZLinkCapacityUsage(
+                        new ZLinkCapacityUsage(
                                 typeActive,
                                 typeReserved,
                                 typeLimit))));

@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.backend;
+import java.util.function.Consumer;
 
 import java.util.List;
 import systems.zlink.contracts.messaging.Message;
@@ -16,7 +17,7 @@ public record ZLinkMeshDispatchRecord(
     ReadyRecord owner,
     ReceiveRecord receive,
     List<Message> parts,
-    java.util.function.Consumer<List<Message>> frameworkReply,
+    Consumer<List<Message>> frameworkReply,
     ZLinkInboundDispatchBudget.Lease inboundDispatchLease) implements AutoCloseable {
     public ZLinkMeshDispatchRecord {
         parts = List.copyOf(parts);
@@ -33,7 +34,7 @@ public record ZLinkMeshDispatchRecord(
         ReadyRecord owner,
         ReceiveRecord receive,
         List<Message> parts,
-        java.util.function.Consumer<List<Message>> frameworkReply) {
+        Consumer<List<Message>> frameworkReply) {
         this(owner, receive, parts, frameworkReply, null);
     }
 

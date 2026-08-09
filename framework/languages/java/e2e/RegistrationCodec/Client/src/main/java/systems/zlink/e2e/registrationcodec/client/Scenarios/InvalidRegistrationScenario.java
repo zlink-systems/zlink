@@ -1,4 +1,7 @@
-package systems.zlink.e2e.registrationcodec.client.Scenarios;
+package Scenarios;
+import systems.zlink.e2e.registrationcodec.client.Scenarios;
+import systems.zlink.e2e.registrationcodec.client.Support;
+import java.util.Locale;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -32,10 +35,10 @@ public final class InvalidRegistrationScenario {
                 + "\n"
                 + (Files.exists(stderr) ? Files.readString(stderr) : "");
             ScenarioAssert.ensure(
-                outputText.toLowerCase(java.util.Locale.ROOT).contains("duplicate")
+                outputText.toLowerCase(Locale.ROOT).contains("duplicate")
                     || outputText.contains("EchoManual")
-                    || outputText.toLowerCase(java.util.Locale.ROOT).contains("registration")
-                    || outputText.toLowerCase(java.util.Locale.ROOT).contains("packet"),
+                    || outputText.toLowerCase(Locale.ROOT).contains("registration")
+                    || outputText.toLowerCase(Locale.ROOT).contains("packet"),
                 "RC-A6 invalid registration error did not mention duplicate registration");
             System.out.println("scenario RC-A6 passed");
         } catch (Exception error) {

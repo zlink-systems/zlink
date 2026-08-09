@@ -1,4 +1,12 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.UUID;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.function.BooleanSupplier;
+import java.util.logging.Logger;
+import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.spots.ZLinkEntrySpot;
 
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
@@ -40,17 +48,17 @@ final class ZLinkActorSpotAdmission {
 
     private ZLinkActorRuntime actors;
     private ZLinkSessionRelocationPeerClient sessionRoutes;
-    private java.util.function.BooleanSupplier draining = () -> false;
+    private BooleanSupplier draining = () -> false;
     private final ZLinkPendingActorTransfers pendingTransfers =
         new ZLinkPendingActorTransfers();
     private final ZLinkActorTransferCommitRegistry commitRegistry =
         new ZLinkActorTransferCommitRegistry();
-    private final java.util.concurrent.ConcurrentMap<String, CompletableFuture<Void>>
-        pendingEntryJoins = new java.util.concurrent.ConcurrentHashMap<>();
-    private final java.util.concurrent.ConcurrentMap<String, CompletableFuture<Void>>
-        pendingLeaves = new java.util.concurrent.ConcurrentHashMap<>();
-    private final java.util.concurrent.ConcurrentMap<String, LocalJoin> pendingLocalJoins =
-        new java.util.concurrent.ConcurrentHashMap<>();
+    private final ConcurrentMap<String, CompletableFuture<Void>>
+        pendingEntryJoins = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, CompletableFuture<Void>>
+        pendingLeaves = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, LocalJoin> pendingLocalJoins =
+        new ConcurrentHashMap<>();
 
     private record LocalJoin(
         ZLinkBackendActorRef actorRef,
@@ -61,7 +69,7 @@ final class ZLinkActorSpotAdmission {
 
     void attach(
         ZLinkActorRuntime actors,
-        java.util.function.BooleanSupplier draining,
+        BooleanSupplier draining,
         ZLinkSessionRelocationPeerClient sessionRoutes) {
         this.actors = actors;
         this.draining = draining == null ? () -> false : draining;
@@ -133,7 +141,7 @@ final class ZLinkActorSpotAdmission {
                 ? CompletableFuture.completedFuture(null)
                 : joinEntrySpotAfterLeave(runtime, actor, entryNodeRid, timeout)
                     .thenCompose(joined -> entryJoined));
-        return systems.zlink.framework.execution.ZLinkAsyncSerialQueue.manageCurrent(leaving);
+        return ZLinkAsyncSerialQueue.manageCurrent(leaving);
     }
 
     private static CompletionStage<Void> joinEntrySpotAfterLeave(
@@ -480,12 +488,12 @@ final class ZLinkActorSpotAdmission {
                     // not invoke user Join completion before that barrier: the
                     // callback is allowed to send through the bound Session.
                     .thenCompose(ignored ->
-                        systems.zlink.framework.execution.ZLinkAsyncSerialQueue
+                        ZLinkAsyncSerialQueue
                             .yieldCurrent(
                                 CompletableFuture.completedFuture(null)
                                     .thenRun(() -> completeRemoteMove(runtime, prepared))))
                     .thenCompose(ignored -> {
-                        boolean entryTarget = spotSurface instanceof systems.zlink.framework.spots.ZLinkEntrySpot<?>;
+                        boolean entryTarget = spotSurface instanceof ZLinkEntrySpot<?>;
                         if (!entryTarget) {
                             runtime.markJoined(
                                 actor,
@@ -550,7 +558,7 @@ final class ZLinkActorSpotAdmission {
                     if (abortError != null) {
                         error.addSuppressed(abortError);
                     }
-                    throw new java.util.concurrent.CompletionException(error);
+                    throw new CompletionException(error);
                 });
             });
     }
@@ -589,7 +597,7 @@ final class ZLinkActorSpotAdmission {
             "session_route_update_failed",
             request.actorId(),
             request.transferId());
-        java.util.logging.Logger.getLogger(ZLinkActorSpotAdmission.class.getName())
+        Logger.getLogger(ZLinkActorSpotAdmission.class.getName())
             .warning("Bound Session route update failed after Actor relocation commit: "
                 + failure);
     }
@@ -611,8 +619,8 @@ final class ZLinkActorSpotAdmission {
             new systems.zlink.framework.runtime.internal.service
                 .ZLinkServiceM6BWireCodec();
         var intent = codec.decodeSessionRelocationRouteIntent(command44);
-        java.util.UUID relocationId =
-            java.util.UUID.fromString(request.transferId());
+        UUID relocationId =
+            UUID.fromString(request.transferId());
         if (intent.relocation().high()
                 != relocationId.getMostSignificantBits()
             || intent.relocation().low()

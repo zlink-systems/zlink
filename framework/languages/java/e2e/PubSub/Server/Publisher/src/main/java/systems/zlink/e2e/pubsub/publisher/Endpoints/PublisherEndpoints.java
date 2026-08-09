@@ -1,5 +1,8 @@
-package systems.zlink.e2e.pubsub.publisher.Endpoints;
+package Endpoints;
 
+import systems.zlink.e2e.pubsub.publisher.Configuration;
+import systems.zlink.e2e.pubsub.publisher.Endpoints;
+import systems.zlink.e2e.pubsub.publisher.Infrastructure;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;

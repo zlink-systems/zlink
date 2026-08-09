@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.channels;
 
+import org.junit.jupiter.api.Assertions;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
@@ -15,7 +16,7 @@ import systems.zlink.framework.spots.SpotHandles;
 final class ZLinkChannelSpotCallsTest {
     @Test
     void staleRemoteHandleFailsWithTypedRouteNotFound() {
-        CompletionException failure = org.junit.jupiter.api.Assertions.assertThrows(
+        CompletionException failure = Assertions.assertThrows(
             CompletionException.class,
             () -> SpotCallAddresses.resolve(
                     ignored -> CompletableFuture.completedFuture(Optional.empty()),

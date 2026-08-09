@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.concurrent.CompletionStage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -35,26 +36,26 @@ final class ZLinkSpotRetireControlTest {
         ZLinkSpotRetireControl.install(
             node,
             new ZLinkSpotRetireControl.TargetEndpoint() {
-                @Override public java.util.concurrent.CompletionStage<Void>
+                @Override public CompletionStage<Void>
                     stage(ZLinkSpotRetireControl.StageRequest request) {
                     stages.incrementAndGet();
                     decoded.set(request);
                     return CompletableFuture.completedFuture(null);
                 }
 
-                @Override public java.util.concurrent.CompletionStage<Void>
+                @Override public CompletionStage<Void>
                     publish(ZLinkSpotRetireControl.StageRequest request) {
                     publishes.incrementAndGet();
                     return CompletableFuture.completedFuture(null);
                 }
 
-                @Override public java.util.concurrent.CompletionStage<Void>
+                @Override public CompletionStage<Void>
                     abort(ZLinkSpotRetireControl.StageRequest request) {
                     aborts.incrementAndGet();
                     return CompletableFuture.completedFuture(null);
                 }
 
-                @Override public java.util.concurrent.CompletionStage<Void>
+                @Override public CompletionStage<Void>
                     finalizeAfterCompletion(
                         ZLinkSpotRetireControl.StageRequest request) {
                     finalizes.incrementAndGet();
@@ -106,23 +107,23 @@ final class ZLinkSpotRetireControlTest {
         ZLinkSpotRetireControl.install(
             node,
             new ZLinkSpotRetireControl.TargetEndpoint() {
-                @Override public java.util.concurrent.CompletionStage<Void>
+                @Override public CompletionStage<Void>
                     stage(ZLinkSpotRetireControl.StageRequest request) {
                     stages.incrementAndGet();
                     return CompletableFuture.completedFuture(null);
                 }
 
-                @Override public java.util.concurrent.CompletionStage<Void>
+                @Override public CompletionStage<Void>
                     publish(ZLinkSpotRetireControl.StageRequest request) {
                     return CompletableFuture.completedFuture(null);
                 }
 
-                @Override public java.util.concurrent.CompletionStage<Void>
+                @Override public CompletionStage<Void>
                     abort(ZLinkSpotRetireControl.StageRequest request) {
                     return CompletableFuture.completedFuture(null);
                 }
 
-                @Override public java.util.concurrent.CompletionStage<Void>
+                @Override public CompletionStage<Void>
                     finalizeAfterCompletion(
                         ZLinkSpotRetireControl.StageRequest request) {
                     return CompletableFuture.completedFuture(null);
@@ -152,23 +153,23 @@ final class ZLinkSpotRetireControlTest {
         ZLinkSpotRetireControl.install(
             node,
             new ZLinkSpotRetireControl.TargetEndpoint() {
-                @Override public java.util.concurrent.CompletionStage<Void>
+                @Override public CompletionStage<Void>
                     stage(ZLinkSpotRetireControl.StageRequest request) {
                     return CompletableFuture.completedFuture(null);
                 }
 
-                @Override public java.util.concurrent.CompletionStage<Void>
+                @Override public CompletionStage<Void>
                     publish(ZLinkSpotRetireControl.StageRequest request) {
                     return CompletableFuture.completedFuture(null);
                 }
 
-                @Override public java.util.concurrent.CompletionStage<Void>
+                @Override public CompletionStage<Void>
                     abort(ZLinkSpotRetireControl.StageRequest request) {
                     aborts.incrementAndGet();
                     return CompletableFuture.completedFuture(null);
                 }
 
-                @Override public java.util.concurrent.CompletionStage<Void>
+                @Override public CompletionStage<Void>
                     finalizeAfterCompletion(
                         ZLinkSpotRetireControl.StageRequest request) {
                     return CompletableFuture.completedFuture(null);
@@ -203,29 +204,29 @@ final class ZLinkSpotRetireControlTest {
         ZLinkSpotRetireControl.install(
             node,
             new ZLinkSpotRetireControl.TargetEndpoint() {
-                @Override public java.util.concurrent.CompletionStage<Void>
+                @Override public CompletionStage<Void>
                     stage(ZLinkSpotRetireControl.StageRequest request) {
                     return CompletableFuture.completedFuture(null);
                 }
 
-                @Override public java.util.concurrent.CompletionStage<Void>
+                @Override public CompletionStage<Void>
                     publish(ZLinkSpotRetireControl.StageRequest request) {
                     return CompletableFuture.completedFuture(null);
                 }
 
-                @Override public java.util.concurrent.CompletionStage<Void>
+                @Override public CompletionStage<Void>
                     abort(ZLinkSpotRetireControl.StageRequest request) {
                     return CompletableFuture.completedFuture(null);
                 }
 
-                @Override public java.util.concurrent.CompletionStage<Void>
+                @Override public CompletionStage<Void>
                     finalizeAfterCompletion(
                         ZLinkSpotRetireControl.StageRequest request) {
                     return CompletableFuture.completedFuture(null);
                 }
 
                 @Override
-                public java.util.concurrent.CompletionStage<
+                public CompletionStage<
                     ZLinkSpotRelocationReplyRoutes.Ack> relayReply(
                         RoutingId actualSource,
                         ZLinkSpotRelocationReplyRoutes.Relay relay) {

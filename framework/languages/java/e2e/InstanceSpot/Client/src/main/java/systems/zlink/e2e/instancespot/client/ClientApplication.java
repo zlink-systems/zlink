@@ -1,4 +1,5 @@
 package systems.zlink.e2e.instancespot.client;
+import systems.zlink.framework.channels.ZLinkRouteClient;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
@@ -53,7 +54,7 @@ public final class ClientApplication {
     @Bean
     ClientEndpoints clientEndpoints(
         ClientOptions options,
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        ZLinkRouteClient routes,
         ZLinkSpotManager spots,
         ObjectMapper json) {
         return new ClientEndpoints(options, routes, spots, json);

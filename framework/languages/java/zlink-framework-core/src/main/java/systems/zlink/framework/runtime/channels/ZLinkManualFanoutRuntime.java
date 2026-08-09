@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.LinkedHashSet;
+import java.util.Objects;
+import java.util.stream.Collectors;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -52,10 +55,10 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
         ZLinkMonitoringBackendAdapter monitoring,
         ZLinkBackendContext context,
         BiConsumer<String, ZLinkBackendTopicMessage> dispatch) {
-        this.backend = java.util.Objects.requireNonNull(backend, "backend");
+        this.backend = Objects.requireNonNull(backend, "backend");
         this.monitoring = monitoring;
-        this.context = java.util.Objects.requireNonNull(context, "context");
-        this.dispatch = java.util.Objects.requireNonNull(dispatch, "dispatch");
+        this.context = Objects.requireNonNull(context, "context");
+        this.dispatch = Objects.requireNonNull(dispatch, "dispatch");
     }
 
     ZLinkBackendConnectableSocket connections(String channelName) {
@@ -81,11 +84,11 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
             if (running) return;
             running = true;
             initial = desired.entrySet().stream().collect(
-                java.util.stream.Collectors.toMap(
+                Collectors.toMap(
                     Map.Entry::getKey,
                     entry -> List.copyOf(entry.getValue()),
                     (left, right) -> left,
-                    java.util.LinkedHashMap::new));
+                    LinkedHashMap::new));
         }
         initial.forEach((channel, endpoints) ->
             endpoints.forEach(endpoint -> open(channel, endpoint)));
@@ -96,7 +99,7 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
         boolean openNow;
         synchronized (this) {
             desired.computeIfAbsent(
-                channelName, ignored -> new java.util.LinkedHashSet<>())
+                channelName, ignored -> new LinkedHashSet<>())
                 .add(endpoint);
             openNow = running;
         }

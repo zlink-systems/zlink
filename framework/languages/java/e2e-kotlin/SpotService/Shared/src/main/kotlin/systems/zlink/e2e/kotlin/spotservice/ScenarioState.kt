@@ -11,7 +11,7 @@ class ScenarioState(private val nodeRid: String) {
     @Synchronized
     fun record(marker: String, spotRid: String, value: String?) {
         entries.add(Contracts.EvidenceEntry(marker, nodeRid, spotRid, value))
-        (this as java.lang.Object).notifyAll()
+        (this as Object).notifyAll()
     }
 
     @Synchronized
@@ -36,7 +36,7 @@ class ScenarioState(private val nodeRid: String) {
             }
 
             val remainingMillis = (remainingNanos / 1_000_000).coerceAtLeast(1)
-            (this as java.lang.Object).wait(remainingMillis)
+            (this as Object).wait(remainingMillis)
         }
     }
 

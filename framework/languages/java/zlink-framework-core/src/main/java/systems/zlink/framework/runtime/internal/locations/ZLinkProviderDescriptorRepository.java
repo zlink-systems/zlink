@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.internal.locations;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.Arrays;
+import java.util.Optional;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -115,16 +119,16 @@ final class ZLinkProviderDescriptorRepository {
             bytes -> decodeMesh(bytes).descriptor());
     }
 
-    CompletionStage<java.util.Optional<ZLinkMeshNodeDescriptor>> readMeshNode(
+    CompletionStage<Optional<ZLinkMeshNodeDescriptor>> readMeshNode(
         ZLinkMeshNodeDescriptorKey key,
         ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(cancellation, "cancellation");
         return provider.read(meshKey(key.meshName(), key.rid()), cancellation)
             .thenApply(result -> result instanceof ZLinkStoreReadFound found
-                ? java.util.Optional.of(decodeMesh(found.value().bytes())
+                ? Optional.of(decodeMesh(found.value().bytes())
                     .descriptor())
-                : java.util.Optional.empty());
+                : Optional.empty());
     }
 
     CompletionStage<ZLinkLocationWriteResult> updateClientServer(
@@ -405,7 +409,7 @@ final class ZLinkProviderDescriptorRepository {
             .handle((result, failure) -> {
                 if (failure == null
                     && result instanceof ZLinkStoreReadFound found
-                    && java.util.Arrays.equals(
+                    && Arrays.equals(
                         expected,
                         found.value().bytes())) {
                     return ZLinkLocationWriteResult.stored(
@@ -607,11 +611,11 @@ final class ZLinkProviderDescriptorRepository {
 
     private static long extractLifecycle(String json) {
         try {
-            return new com.fasterxml.jackson.databind.ObjectMapper()
+            return new ObjectMapper()
                 .readTree(json)
                 .path("LifecycleGeneration")
                 .asLong();
-        } catch (com.fasterxml.jackson.core.JsonProcessingException error) {
+        } catch (JsonProcessingException error) {
             throw new IllegalStateException(
                 "Location descriptor record is invalid",
                 error);
@@ -621,12 +625,12 @@ final class ZLinkProviderDescriptorRepository {
     private static Instant extractUpdatedAt(String json) {
         try {
             return Instant.parse(
-                new com.fasterxml.jackson.databind.ObjectMapper()
+                new ObjectMapper()
                     .readTree(json)
                     .path("UpdatedAt")
                     .asText());
         } catch (RuntimeException
-            | com.fasterxml.jackson.core.JsonProcessingException error) {
+            | JsonProcessingException error) {
             throw new IllegalStateException(
                 "Location descriptor record is invalid",
                 error);

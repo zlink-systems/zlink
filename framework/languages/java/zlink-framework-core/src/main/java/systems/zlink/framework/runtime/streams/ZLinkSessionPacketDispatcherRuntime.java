@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.streams;
+import java.util.Objects;
+import java.util.function.Supplier;
 
 import java.util.HashMap;
 import java.util.List;
@@ -33,9 +35,9 @@ final class ZLinkSessionPacketDispatcherRuntime<TSessionContext extends ZLinkSes
         Executor handlerExecutor,
         List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers) {
         this.handlers = buildHandlerMap(handlerTypes, handlerFactory);
-        this.serializer = java.util.Objects.requireNonNull(serializer, "serializer");
-        this.handlerExecutor = java.util.Objects.requireNonNull(handlerExecutor, "handlerExecutor");
-        this.suspendHandlerInvokers = java.util.List.copyOf(suspendHandlerInvokers);
+        this.serializer = Objects.requireNonNull(serializer, "serializer");
+        this.handlerExecutor = Objects.requireNonNull(handlerExecutor, "handlerExecutor");
+        this.suspendHandlerInvokers = List.copyOf(suspendHandlerInvokers);
     }
 
     @Override
@@ -82,7 +84,7 @@ final class ZLinkSessionPacketDispatcherRuntime<TSessionContext extends ZLinkSes
     }
 
     private <T> CompletionStage<T> executeHandler(
-        java.util.function.Supplier<CompletionStage<T>> operation) {
+        Supplier<CompletionStage<T>> operation) {
         CompletableFuture<T> result = new CompletableFuture<>();
         try {
             handlerExecutor.execute(() -> {

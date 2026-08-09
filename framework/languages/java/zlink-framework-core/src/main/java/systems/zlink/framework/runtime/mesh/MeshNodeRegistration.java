@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.mesh;
+import java.util.Locale;
+import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Stream;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -110,7 +114,7 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
     public synchronized RoutingId routingId() {
         if (routingId == null) {
             routingId = RoutingId.from(
-                routingIdPrefix() + "-" + java.util.UUID.randomUUID());
+                routingIdPrefix() + "-" + UUID.randomUUID());
         }
         return routingId;
     }
@@ -215,14 +219,14 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
     }
 
     public boolean requiresRelocationStore() {
-        return java.util.stream.Stream.of(
+        return Stream.of(
                 relocatableSpotFactories.values().stream()
                     .map(RelocatableSpotFactory::relocationPolicy),
                 relocatableInstanceSpotFactories.values().stream()
                     .map(RelocatableInstanceSpotFactory::relocationPolicy),
                 relocatableActorFactories.values().stream()
                     .map(RelocatableActorFactory::relocationPolicy))
-            .flatMap(java.util.function.Function.identity())
+            .flatMap(Function.identity())
             .anyMatch(policy -> !(policy instanceof RelocationPolicy.Disabled));
     }
 
@@ -616,8 +620,8 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         if (entrySpotId == null) {
             entrySpotId = routingIdPrefix()
                 + "-entry-"
-                + java.util.UUID.randomUUID().toString()
-                    .toLowerCase(java.util.Locale.ROOT);
+                + UUID.randomUUID().toString()
+                    .toLowerCase(Locale.ROOT);
         }
         return entrySpotId;
     }

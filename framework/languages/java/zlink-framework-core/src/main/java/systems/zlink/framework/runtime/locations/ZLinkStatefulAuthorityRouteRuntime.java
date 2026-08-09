@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.locations;
+import java.util.Objects;
+import java.util.concurrent.CompletionException;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -51,18 +53,18 @@ public final class ZLinkStatefulAuthorityRouteRuntime
         Map<String, ZLinkInternalMeshNode> meshNodes,
         Duration pollingInterval,
         Consumer<Throwable> reportFailure) {
-        this.store = java.util.Objects.requireNonNull(store, "store");
+        this.store = Objects.requireNonNull(store, "store");
         this.meshNodes = Map.copyOf(
-            java.util.Objects.requireNonNull(
+            Objects.requireNonNull(
                 meshNodes, "meshNodes"));
-        this.pollingInterval = java.util.Objects.requireNonNull(
+        this.pollingInterval = Objects.requireNonNull(
             pollingInterval, "pollingInterval");
         if (pollingInterval.isNegative()
             || pollingInterval.isZero()) {
             throw new IllegalArgumentException(
                 "pollingInterval must be positive");
         }
-        this.reportFailure = java.util.Objects.requireNonNull(
+        this.reportFailure = Objects.requireNonNull(
             reportFailure, "reportFailure");
     }
 
@@ -245,7 +247,7 @@ public final class ZLinkStatefulAuthorityRouteRuntime
     }
 
     private static Throwable unwrap(Throwable failure) {
-        return failure instanceof java.util.concurrent.CompletionException
+        return failure instanceof CompletionException
                 && failure.getCause() != null
             ? failure.getCause()
             : failure;

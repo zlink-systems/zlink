@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.backend;
+import java.util.Objects;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
@@ -57,16 +58,16 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
         boolean acceptedJournalRecordAvailable,
         String contentType,
         ZLinkInboundDispatchBudget.Lease inboundDispatchLease) {
-        this.actor = java.util.Objects.requireNonNull(actor, "actor");
-        this.sourceNodeRid = java.util.Objects.requireNonNull(
+        this.actor = Objects.requireNonNull(actor, "actor");
+        this.sourceNodeRid = Objects.requireNonNull(
             sourceNodeRid, "sourceNodeRid");
         this.sourceSessionRid = sourceSessionRid;
         this.requestSeq = requestSeq == null ? Optional.empty() : requestSeq;
         this.requestId = requestId;
         this.flags = flags;
-        this.message = java.util.Objects.requireNonNull(message, "message");
+        this.message = Objects.requireNonNull(message, "message");
         this.hasMore = hasMore;
-        this.acceptedJournalRecordSupplier = java.util.Objects.requireNonNull(
+        this.acceptedJournalRecordSupplier = Objects.requireNonNull(
             acceptedJournalRecordSupplier, "acceptedJournalRecordSupplier");
         this.acceptedJournalRecordAvailable = acceptedJournalRecordAvailable;
         this.contentType = contentType;
@@ -187,7 +188,7 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
         }
         synchronized (this) {
             if (acceptedJournalRecord == null) {
-                acceptedJournalRecord = java.util.Objects.requireNonNull(
+                acceptedJournalRecord = Objects.requireNonNull(
                     acceptedJournalRecordSupplier.get(),
                     "accepted journal supplier returned null");
             }

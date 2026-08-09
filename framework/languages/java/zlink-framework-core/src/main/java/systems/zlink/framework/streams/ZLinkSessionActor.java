@@ -1,4 +1,5 @@
 package systems.zlink.framework.streams;
+import java.util.concurrent.CompletableFuture;
 
 import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.actors.ActorRef;
@@ -15,7 +16,7 @@ public interface ZLinkSessionActor {
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload) {
         if (dispatch == null) {
-            return java.util.concurrent.CompletableFuture.failedFuture(
+            return CompletableFuture.failedFuture(
                 new IllegalArgumentException("dispatch is required"));
         }
         return relay(payload);

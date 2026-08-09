@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.EnumSet;
+import java.util.Optional;
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -40,9 +44,9 @@ final class ZLinkActorAcceptedJournal {
                         : systems.zlink.framework.streams
                             .ZLinkStreamMessageKind.SEND,
                     decoded.contentType().contains("json")
-                        ? systems.zlink.framework.streams.ZLinkStreamCodec.JSON
-                        : systems.zlink.framework.streams.ZLinkStreamCodec.RAW,
-                    java.util.EnumSet.noneOf(
+                        ? ZLinkStreamCodec.JSON
+                        : ZLinkStreamCodec.RAW,
+                    EnumSet.noneOf(
                         systems.zlink.framework.runtime.streams
                             .ZLinkStreamHeaderFlag.class),
                     decoded.replyRouteId(),
@@ -90,16 +94,16 @@ final class ZLinkActorAcceptedJournal {
         String actorId,
         ZLinkStreamHeader header,
         byte[] payload,
-        systems.zlink.contracts.core.RoutingId sourceNodeRid,
+        RoutingId sourceNodeRid,
         long sourceNodeGeneration,
         String sourceOwnerId,
         long sourceOwnerLeaseGeneration,
-        systems.zlink.contracts.core.RoutingId sourceSessionRid,
+        RoutingId sourceSessionRid,
         long sourceBindingGeneration,
         long sourceSessionSequence,
         long operationHigh,
         long operationLow,
-        java.util.Optional<Long> replyRouteId,
+        Optional<Long> replyRouteId,
         long objectGeneration) {
         Record {
             if (sourceNodeRid == null

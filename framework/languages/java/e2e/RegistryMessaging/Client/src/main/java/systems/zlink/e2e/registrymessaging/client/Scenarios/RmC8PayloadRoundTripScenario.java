@@ -1,4 +1,10 @@
-package systems.zlink.e2e.registrymessaging.client.Scenarios;
+package Scenarios;
+import systems.zlink.e2e.registrymessaging.client.Scenarios;
+import systems.zlink.e2e.registrymessaging.client.Support;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.UUID;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -16,10 +22,10 @@ public final class RmC8PayloadRoundTripScenario {
         ZLinkHttpClient singleConsumer,
         ZLinkHttpClient providerA,
         ZLinkHttpClient providerB) {
-        java.util.List<String> markers = new java.util.ArrayList<>();
+        List<String> markers = new ArrayList<>();
         int[] sizes = {1, 4096, 256 * 1024, 1024 * 1024};
         for (int size : sizes) {
-            String marker = "rm-c8-" + size + "-" + java.util.UUID.randomUUID();
+            String marker = "rm-c8-" + size + "-" + UUID.randomUUID();
             markers.add(marker);
             String payload = buildPayload(size);
             System.out.println("RM-C8 sending payload size=" + size);
@@ -38,7 +44,7 @@ public final class RmC8PayloadRoundTripScenario {
         String[] evidence = ScenarioAssert.concat(
             ScenarioAssert.evidence(providerA),
             ScenarioAssert.evidence(providerB));
-        ScenarioAssert.that(markers.stream().allMatch(marker -> java.util.Arrays.stream(evidence)
+        ScenarioAssert.that(markers.stream().allMatch(marker -> Arrays.stream(evidence)
                 .anyMatch(line -> line.contains("payload-request") && line.contains(marker))),
             "RM-C8 payload evidence missing");
         System.out.println("scenario RM-C8 payload-integrity passed");

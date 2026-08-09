@@ -1,4 +1,10 @@
 package systems.zlink.framework.runtime.host;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.stream.Stream;
+import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
+import systems.zlink.framework.runtime.spots.SpotNodeRegistration;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.locations.ZLinkLocationRuntimeQuery;
@@ -27,7 +33,7 @@ final class ZLinkFrameworkLocationSubsystem {
     private final ZLinkLocationAutoConnectHost locationAutoConnectHost;
     private final SpotTransportAddressResolver spotTransportAddressResolver;
     private final ZLinkStoreLocationResolvers storeLocationResolvers;
-    private final java.util.concurrent.CompletionStage<Void> startup;
+    private final CompletionStage<Void> startup;
 
     private ZLinkFrameworkLocationSubsystem(
         ZLinkRegisteredLocationStores locationStores,
@@ -37,7 +43,7 @@ final class ZLinkFrameworkLocationSubsystem {
         ZLinkLocationAutoConnectHost locationAutoConnectHost,
         SpotTransportAddressResolver spotTransportAddressResolver,
         ZLinkStoreLocationResolvers storeLocationResolvers,
-        java.util.concurrent.CompletionStage<Void> startup) {
+        CompletionStage<Void> startup) {
         this.locationStores = locationStores;
         this.locationRuntime = locationRuntime;
         this.locationRuntimeQuery = locationRuntimeQuery;
@@ -63,7 +69,7 @@ final class ZLinkFrameworkLocationSubsystem {
             locationStores,
             registration.locations().options().ownerLeaseTtl(),
             registration.locations().options().ownerLeaseRenewInterval());
-        java.util.concurrent.CompletionStage<Void> startup =
+        CompletionStage<Void> startup =
             locationRuntime.start(RoutingId.from(locationRuntime.ownerId()));
 
         ZLinkLiveLocationRows liveLocationRows = ZLinkLiveLocationRows.create(
@@ -75,7 +81,7 @@ final class ZLinkFrameworkLocationSubsystem {
             registration.locations().options(),
             liveLocationRows,
             registration.meshNodes().stream()
-                .map(systems.zlink.framework.runtime.mesh.MeshNodeRegistration::meshName)
+                .map(MeshNodeRegistration::meshName)
                 .distinct()
                 .toList());
         ZLinkLocationLifecycle locationLifecycle = new ZLinkLocationLifecycle(locationRuntime);
@@ -164,26 +170,26 @@ final class ZLinkFrameworkLocationSubsystem {
         return storeLocationResolvers;
     }
 
-    java.util.concurrent.CompletionStage<Void> startup() {
+    CompletionStage<Void> startup() {
         return startup;
     }
 
     private static ZLinkFrameworkLocationSubsystem disabled() {
         return new ZLinkFrameworkLocationSubsystem(
             null, null, null, null, null, null, null,
-            java.util.concurrent.CompletableFuture.completedFuture(null));
+            CompletableFuture.completedFuture(null));
     }
 
-    private static java.util.List<String> spotMeshNames(ZLinkFrameworkRegistration registration) {
-        return java.util.stream.Stream.concat(
+    private static List<String> spotMeshNames(ZLinkFrameworkRegistration registration) {
+        return Stream.concat(
                 registration.spotNodes().stream()
-                    .map(systems.zlink.framework.runtime.spots.SpotNodeRegistration::meshName),
+                    .map(SpotNodeRegistration::meshName),
                 registration.meshNodes().stream()
                     .filter(node -> !node.spotFactories().isEmpty()
                         || !node.entrySpots().isEmpty()
                         || !node.actorFactories().isEmpty()
                         || !node.channelNames().isEmpty())
-                    .map(systems.zlink.framework.runtime.mesh.MeshNodeRegistration::meshName))
+                    .map(MeshNodeRegistration::meshName))
             .distinct()
             .toList();
     }

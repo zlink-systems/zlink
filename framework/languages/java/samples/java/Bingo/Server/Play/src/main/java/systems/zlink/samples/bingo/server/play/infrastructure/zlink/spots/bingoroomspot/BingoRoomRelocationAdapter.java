@@ -1,4 +1,5 @@
 package systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.bingoroomspot;
+import java.util.concurrent.CancellationException;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -83,7 +84,7 @@ public final class BingoRoomRelocationAdapter
 
     private static void ensureActive(ZLinkRelocationCancellation cancellation) {
         if (cancellation.isCancellationRequested()) {
-            throw new java.util.concurrent.CancellationException(
+            throw new CancellationException(
                 "Bingo room relocation was cancelled");
         }
     }

@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.registrymessaging.workflow
 
+
+import java.net.URI
 import java.io.File
 import org.springframework.boot.ApplicationRunner
 import org.springframework.boot.WebApplicationType
@@ -53,7 +55,7 @@ class WorkflowApplication {
 
             framework.addHandlersFromPackageOf(WorkflowRequestHandler::class.java)
 
-            val endpoint = java.net.URI.create(options.workflowEndpoint)
+            val endpoint = URI.create(options.workflowEndpoint)
             framework.addClientServerChannel(Contracts.WORKFLOW_CHANNEL)
                 .server()
                 .setBindHost(endpoint.host)

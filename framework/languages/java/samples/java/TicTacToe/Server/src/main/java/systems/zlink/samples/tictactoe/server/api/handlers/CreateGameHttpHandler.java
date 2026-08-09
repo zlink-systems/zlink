@@ -1,4 +1,5 @@
 package systems.zlink.samples.tictactoe.server.api.handlers;
+import java.util.concurrent.CompletionStage;
 
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -21,7 +22,7 @@ public final class CreateGameHttpHandler {
     }
 
     @PostMapping("/games")
-    public java.util.concurrent.CompletionStage<CreateGameHttpRes> handle(@RequestBody CreateGameHttpReq request) {
+    public CompletionStage<CreateGameHttpRes> handle(@RequestBody CreateGameHttpReq request) {
         String gameName = gameName(request);
         // --8<-- [start:doc-create]
         return spots.create("tictactoe.game")   // 이 stable type을 등록한 node가 후보가 된다.

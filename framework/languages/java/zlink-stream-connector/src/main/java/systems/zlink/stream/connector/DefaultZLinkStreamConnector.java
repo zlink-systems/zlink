@@ -1,4 +1,7 @@
 package systems.zlink.stream.connector;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.function.Predicate;
 
 import java.time.Duration;
 import java.util.List;
@@ -163,7 +166,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
 
     CompletionStage<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> awaitMessage(
         String name,
-        java.util.function.Predicate<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> predicate) {
+        Predicate<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> predicate) {
         CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> result =
             new CompletableFuture<>();
         dispatchQueue.awaitMessage(name, predicate, result);
@@ -411,7 +414,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         CompletionStage<Void> invoke();
     }
 
-    static int resolvePort(java.net.URI endpoint) {
+    static int resolvePort(URI endpoint) {
         if (endpoint.getPort() > 0) {
             return endpoint.getPort();
         }
@@ -425,7 +428,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         if (packetName.startsWith(RESERVED_PACKET_NAME_PREFIX)) {
             throw new IllegalArgumentException("packetName uses a reserved zlink prefix");
         }
-        if (packetName.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_PACKET_NAME_BYTES) {
+        if (packetName.getBytes(StandardCharsets.UTF_8).length > MAX_PACKET_NAME_BYTES) {
             throw new IllegalArgumentException("packetName must not exceed 255 UTF-8 bytes");
         }
         return packetName;

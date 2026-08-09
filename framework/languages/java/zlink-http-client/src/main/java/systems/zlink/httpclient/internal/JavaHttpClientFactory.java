@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient.internal;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 
 import java.net.InetSocketAddress;
 import java.net.Authenticator;
@@ -53,8 +55,8 @@ final class JavaHttpClientFactory {
             throw new IllegalArgumentException("proxy authorization must use Basic authentication");
         }
         String decoded = new String(
-            java.util.Base64.getDecoder().decode(authorization.substring(prefix.length())),
-            java.nio.charset.StandardCharsets.UTF_8);
+            Base64.getDecoder().decode(authorization.substring(prefix.length())),
+            StandardCharsets.UTF_8);
         int separator = decoded.indexOf(':');
         String user = separator < 0 ? decoded : decoded.substring(0, separator);
         String password = separator < 0 ? "" : decoded.substring(separator + 1);

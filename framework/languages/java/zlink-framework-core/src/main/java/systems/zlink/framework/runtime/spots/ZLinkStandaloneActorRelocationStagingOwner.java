@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Arrays;
+import java.util.Optional;
 
 import java.util.Objects;
 import java.util.UUID;
@@ -150,7 +152,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         return chain.thenRun(() -> staged.replayed = true);
     }
 
-    CompletionStage<java.util.Optional<byte[]>> replayActor(
+    CompletionStage<Optional<byte[]>> replayActor(
         Staged staged,
         ZLinkActorAcceptedJournal.Record record) {
         requireActive(staged);
@@ -171,7 +173,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         if (decoded.objectGeneration() != initial.objectGeneration()
             || decoded.expectedAuthorityOwnerGeneration()
                 != initial.expectedAuthorityOwnerGeneration()
-            || !java.util.Arrays.equals(decoded.state(), initial.state())) {
+            || !Arrays.equals(decoded.state(), initial.state())) {
             throw new IllegalArgumentException(
                 "authority-selected Actor root differs from staged state");
         }
@@ -183,7 +185,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
             var left = initial.journal().get(index);
             var right = decoded.journal().get(index);
             if (left.sequence() != right.sequence()
-                || !java.util.Arrays.equals(left.payload(), right.payload())) {
+                || !Arrays.equals(left.payload(), right.payload())) {
                 throw new IllegalArgumentException(
                     "authority-selected Actor journal changed its prefix");
             }
@@ -306,7 +308,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
             byte[] state,
             ZLinkRelocationCancellation cancellation);
 
-        CompletionStage<java.util.Optional<byte[]>> replay(
+        CompletionStage<Optional<byte[]>> replay(
             Object actor,
             Request request,
             ZLinkActorAcceptedJournal.Record record);
@@ -383,7 +385,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         }
 
         @Override
-        public CompletionStage<java.util.Optional<byte[]>> replay(
+        public CompletionStage<Optional<byte[]>> replay(
             Object actor,
             Request request,
             ZLinkActorAcceptedJournal.Record record) {

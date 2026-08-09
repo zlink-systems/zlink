@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.handlers;
+import java.util.concurrent.CompletionStage;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
@@ -218,7 +219,7 @@ final class ZLinkAnnotationHandlerScanner {
         }
         Type returnType = method.getGenericReturnType();
         if (returnType instanceof ParameterizedType parameterized
-            && parameterized.getRawType() == java.util.concurrent.CompletionStage.class) {
+            && parameterized.getRawType() == CompletionStage.class) {
             return;
         }
         throw new ZLinkConfigurationException(
@@ -288,7 +289,7 @@ final class ZLinkAnnotationHandlerScanner {
         }
         Type returnType = method.getGenericReturnType();
         if (returnType instanceof ParameterizedType parameterized
-            && parameterized.getRawType() == java.util.concurrent.CompletionStage.class) {
+            && parameterized.getRawType() == CompletionStage.class) {
             Type replyType = parameterized.getActualTypeArguments()[0];
             if (replyType instanceof Class<?> replyClass && replyClass != Void.class) {
                 return replyClass;

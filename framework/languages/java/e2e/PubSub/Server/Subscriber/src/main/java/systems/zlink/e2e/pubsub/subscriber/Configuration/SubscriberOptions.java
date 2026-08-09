@@ -1,5 +1,6 @@
-package systems.zlink.e2e.pubsub.subscriber.Configuration;
+package Configuration;
 
+import systems.zlink.e2e.pubsub.subscriber.Configuration;
 import java.util.HashSet;
 import java.util.Set;
 import org.springframework.boot.context.properties.ConfigurationProperties;

@@ -1,4 +1,5 @@
 package systems.zlink.samples.bingo.server.session.sessions.handlers;
+import java.util.concurrent.CompletionStage;
 
 
 import systems.zlink.framework.actors.ActorRef;
@@ -31,7 +32,7 @@ public final class AuthenticateSessionHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> handle(
+    public CompletionStage<Void> handle(
         ZLinkSessionContext context,
         ZLinkSessionDispatchContext dispatch,
         Messages.AuthenticateReq request) {

@@ -1,5 +1,6 @@
-package systems.zlink.e2e.pubsub.publisher.Infrastructure;
+package Infrastructure;
 
+import systems.zlink.e2e.pubsub.publisher.Infrastructure;
 import java.util.ArrayList;
 import java.util.List;
 

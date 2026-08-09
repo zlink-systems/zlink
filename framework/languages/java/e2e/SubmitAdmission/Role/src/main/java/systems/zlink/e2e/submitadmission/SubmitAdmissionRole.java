@@ -1,4 +1,6 @@
 package systems.zlink.e2e.submitadmission;
+import java.net.URLDecoder;
+import java.nio.file.StandardOpenOption;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -260,8 +262,8 @@ public class SubmitAdmissionRole {
                 Files.writeString(
                     Path.of(config.evidenceFile()), line,
                     StandardCharsets.UTF_8,
-                    java.nio.file.StandardOpenOption.CREATE,
-                    java.nio.file.StandardOpenOption.APPEND);
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.APPEND);
             } catch (IOException failure) {
                 throw new IllegalStateException("failed to write evidence", failure);
             }
@@ -441,8 +443,8 @@ public class SubmitAdmissionRole {
             for (String item : raw.split("&")) {
                 String[] pair = item.split("=", 2);
                 values.put(
-                    java.net.URLDecoder.decode(pair[0], StandardCharsets.UTF_8),
-                    pair.length == 1 ? "" : java.net.URLDecoder.decode(pair[1], StandardCharsets.UTF_8));
+                    URLDecoder.decode(pair[0], StandardCharsets.UTF_8),
+                    pair.length == 1 ? "" : URLDecoder.decode(pair[1], StandardCharsets.UTF_8));
             }
             return values;
         }

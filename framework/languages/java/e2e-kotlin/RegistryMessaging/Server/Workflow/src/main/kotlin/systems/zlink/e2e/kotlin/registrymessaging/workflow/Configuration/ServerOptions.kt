@@ -1,5 +1,6 @@
-package systems.zlink.e2e.kotlin.registrymessaging.workflow.Configuration
+package Configuration
 
+import systems.zlink.e2e.kotlin.registrymessaging.workflow.Configuration
 data class ServerOptions(
     val rid: String,
     val httpUrl: String,

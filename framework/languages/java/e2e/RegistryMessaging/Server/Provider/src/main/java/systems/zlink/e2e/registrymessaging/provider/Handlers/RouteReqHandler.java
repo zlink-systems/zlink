@@ -1,4 +1,8 @@
-package systems.zlink.e2e.registrymessaging.provider.Handlers;
+package Handlers;
+import systems.zlink.e2e.registrymessaging.provider.Handlers;
+import systems.zlink.e2e.registrymessaging.provider.Infrastructure;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.e2e.registrymessaging.provider.Infrastructure.ScenarioState;
 import systems.zlink.e2e.registrymessaging.shared.Contracts;
@@ -14,11 +18,11 @@ public final class RouteReqHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Contracts.RouteRes> handle(
+    public CompletionStage<Contracts.RouteRes> handle(
         Contracts.RouteReq request,
         ZLinkRouteMessageContext context) {
         state.record("ScenarioRouteReq", request.value());
-        return java.util.concurrent.CompletableFuture.completedFuture(new Contracts.RouteRes(
+        return CompletableFuture.completedFuture(new Contracts.RouteRes(
             "route:" + request.value(),
             state.providerRid(),
             context.sourceNodeRid().toString()));

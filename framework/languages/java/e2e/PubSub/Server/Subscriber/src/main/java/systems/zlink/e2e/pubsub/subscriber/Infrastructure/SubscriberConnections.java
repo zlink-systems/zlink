@@ -1,5 +1,6 @@
-package systems.zlink.e2e.pubsub.subscriber.Infrastructure;
+package Infrastructure;
 
+import systems.zlink.e2e.pubsub.subscriber.Infrastructure;
 import java.util.List;
 import systems.zlink.framework.configuration.ZLinkEndpointConnections;
 

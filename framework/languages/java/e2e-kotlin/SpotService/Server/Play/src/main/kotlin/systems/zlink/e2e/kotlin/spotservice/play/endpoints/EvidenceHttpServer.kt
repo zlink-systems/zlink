@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.spotservice.play.endpoints
 
+
+import java.util.concurrent.ExecutorService
 import systems.zlink.e2e.kotlin.spotservice.ScenarioState
 import systems.zlink.e2e.kotlin.spotservice.Contracts
 import systems.zlink.e2e.kotlin.spotservice.play.spots.TimerScenarioSpot
@@ -35,7 +37,7 @@ class EvidenceHttpServer(
     private val meshOptions: ZLinkRouteMeshRuntimeOptions,
 ) : SmartLifecycle {
     private var server: HttpServer? = null
-    private var executor: java.util.concurrent.ExecutorService? = null
+    private var executor: ExecutorService? = null
     private var running = false
 
     override fun start() {

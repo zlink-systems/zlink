@@ -1,4 +1,12 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
+import java.util.logging.Logger;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -45,8 +53,8 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
     private final ZLinkAsyncSerialQueue infrastructureQueue;
     private final ZLinkHandlerInstanceOwner handlerInstances;
     private final List<DefaultSpotContext> timerContexts = new ArrayList<>();
-    private final java.util.Map<String, ZLinkSpotTimerRegistry> actorTimers =
-        new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, ZLinkSpotTimerRegistry> actorTimers =
+        new ConcurrentHashMap<>();
     private final ZLinkSpotHandlerCatalog handlerCatalog = new ZLinkSpotHandlerCatalog(
         "EntrySpot handler registration is only allowed while configure is running");
     private ZLinkEntrySpot<?> entrySpot;
@@ -143,10 +151,10 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
         lanes.add(dispatchQueue.awaitQuiescence());
         lanes.add(infrastructureQueue.awaitQuiescence());
         timerContexts.forEach(context -> lanes.add(context.awaitAllLanes()));
-        return java.util.concurrent.CompletableFuture.allOf(
+        return CompletableFuture.allOf(
             lanes.stream()
                 .map(CompletionStage::toCompletableFuture)
-                .toArray(java.util.concurrent.CompletableFuture[]::new));
+                .toArray(CompletableFuture[]::new));
     }
 
     @Override
@@ -224,7 +232,7 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
                     candidate -> host.isActorAtSpot(candidate, spotId()),
                     operation);
         } catch (RuntimeException failure) {
-            return java.util.concurrent.CompletableFuture.failedFuture(failure);
+            return CompletableFuture.failedFuture(failure);
         }
     }
 
@@ -301,7 +309,7 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
         try {
             return Class.forName(name, false, loader);
         } catch (ClassNotFoundException error) {
-            throw new systems.zlink.framework.errors.ZLinkConfigurationException(
+            throw new ZLinkConfigurationException(
                 "timer handler is not available on the relocation target: "
                     + name,
                 error);
@@ -312,8 +320,8 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
 final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     private static final boolean STREAM_TRACE =
         "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
-    private static final java.util.logging.Logger LOGGER =
-        java.util.logging.Logger.getLogger(DefaultSpotContext.class.getName());
+    private static final Logger LOGGER =
+        Logger.getLogger(DefaultSpotContext.class.getName());
     private final ZLinkSpotContextHost host;
     private final ZLinkWorkerPool workerPool;
     private final ZLinkSpotHandlerLoader handlerLoader;
@@ -324,11 +332,11 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     private final ZLinkHandlerInstanceOwner handlerInstances;
     private final ZLinkAsyncSerialQueue dispatchQueue;
     private final ZLinkAsyncSerialQueue infrastructureQueue;
-    private final java.util.concurrent.ConcurrentHashMap<
+    private final ConcurrentHashMap<
         String, ZLinkAsyncSerialQueue> timerQueues =
-            new java.util.concurrent.ConcurrentHashMap<>();
-    private final java.util.Map<String, ZLinkSpotTimerRegistry> actorTimers =
-        new java.util.concurrent.ConcurrentHashMap<>();
+            new ConcurrentHashMap<>();
+    private final Map<String, ZLinkSpotTimerRegistry> actorTimers =
+        new ConcurrentHashMap<>();
     private final ZLinkUserSpotExecutionMode executionMode;
     private final ZLinkSpotRelocationReadinessMode relocationReadiness;
     private final boolean instanceSpot;
@@ -702,14 +710,14 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         Supplier<CompletionStage<Void>> operation) {
         CompletionStage<Void> barrier;
         if (sharedSpotGate() || timerQueues.isEmpty()) {
-            barrier = java.util.concurrent.CompletableFuture.completedFuture(null);
+            barrier = CompletableFuture.completedFuture(null);
         } else {
-            barrier = java.util.concurrent.CompletableFuture.allOf(
+            barrier = CompletableFuture.allOf(
                 timerQueues.values().stream()
                     .map(queue -> queue.enqueue(() ->
-                        java.util.concurrent.CompletableFuture.completedFuture(null))
+                        CompletableFuture.completedFuture(null))
                         .toCompletableFuture())
-                    .toArray(java.util.concurrent.CompletableFuture[]::new));
+                    .toArray(CompletableFuture[]::new));
         }
         CompletionStage<Void> queued = barrier.thenCompose(ignored ->
             dispatchQueue.enqueueLifecycleBarrier(() ->
@@ -735,21 +743,21 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         lanes.add(infrastructureQueue.awaitQuiescence());
         timerQueues.values().forEach(
             queue -> lanes.add(queue.awaitQuiescence()));
-        return java.util.concurrent.CompletableFuture.allOf(
+        return CompletableFuture.allOf(
             lanes.stream()
                 .map(CompletionStage::toCompletableFuture)
-                .toArray(java.util.concurrent.CompletableFuture[]::new));
+                .toArray(CompletableFuture[]::new));
     }
 
-    java.util.Map<String, ZLinkAsyncSerialQueue> relocationLanes() {
-        java.util.LinkedHashMap<String, ZLinkAsyncSerialQueue> lanes =
-            new java.util.LinkedHashMap<>();
+    Map<String, ZLinkAsyncSerialQueue> relocationLanes() {
+        LinkedHashMap<String, ZLinkAsyncSerialQueue> lanes =
+            new LinkedHashMap<>();
         lanes.put("spot", dispatchQueue);
         timerQueues.entrySet().stream()
-            .sorted(java.util.Map.Entry.comparingByKey())
+            .sorted(Map.Entry.comparingByKey())
             .forEach(entry -> lanes.put(
                 "timer:" + entry.getKey(), entry.getValue()));
-        return java.util.Collections.unmodifiableMap(lanes);
+        return Collections.unmodifiableMap(lanes);
     }
 
     synchronized ZLinkUserSpotRelocationBarrier relocationBarrier(
@@ -781,7 +789,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                     + " error=" + (error == null ? "none" : error)));
             return stage;
         } catch (RuntimeException failure) {
-            return java.util.concurrent.CompletableFuture.failedFuture(failure);
+            return CompletableFuture.failedFuture(failure);
         }
     }
 
@@ -823,14 +831,14 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     CompletionStage<Optional<ZLinkUserSpotRelocationBarrier.Seal>>
         awaitRelocationReadySignal(
             Supplier<Optional<ZLinkUserSpotRelocationBarrier.Seal>> claim,
-            java.util.function.BooleanSupplier cancelled) {
+            BooleanSupplier cancelled) {
         Objects.requireNonNull(claim, "claim");
         Objects.requireNonNull(cancelled, "cancelled");
         if (relocationReadiness
                 != ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED
             || executionMode != ZLinkUserSpotExecutionMode.SPOT_WIDE
             || instanceSpot) {
-            return java.util.concurrent.CompletableFuture.failedFuture(
+            return CompletableFuture.failedFuture(
                 invalidRelocationReady(
                     "application-signaled relocation is not configured"));
         }
@@ -838,12 +846,12 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             new RelocationReadyWaiter(claim, cancelled);
         synchronized (relocationReadyLock) {
             if (relocationReadyWaiter != null) {
-                return java.util.concurrent.CompletableFuture.failedFuture(
+                return CompletableFuture.failedFuture(
                     new IllegalStateException(
                         "a relocation readiness waiter is already active"));
             }
             if (cancelled.getAsBoolean()) {
-                return java.util.concurrent.CompletableFuture.completedFuture(
+                return CompletableFuture.completedFuture(
                     Optional.empty());
             }
             relocationReadyWaiter = waiter;
@@ -856,7 +864,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         ZLinkSpotRelocationReadyOutcome outcome) {
         if (relocationReadiness
             != ZLinkSpotRelocationReadinessMode.APPLICATION_SIGNALED) {
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
         return runLifecycleExecution(() ->
             spot.onRelocationReadyCompleted(
@@ -952,7 +960,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                     candidate -> host.isActorMember(spotId(), candidate),
                     operation);
         } catch (RuntimeException failure) {
-            return java.util.concurrent.CompletableFuture.failedFuture(failure);
+            return CompletableFuture.failedFuture(failure);
         }
     }
 
@@ -975,7 +983,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         try {
             return Class.forName(name, false, loader);
         } catch (ClassNotFoundException error) {
-            throw new systems.zlink.framework.errors.ZLinkConfigurationException(
+            throw new ZLinkConfigurationException(
                 "timer handler is not available on the relocation target: "
                     + name,
                 error);
@@ -1024,11 +1032,11 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 waiter.claim.get(), "relocation readiness claim");
         } catch (RuntimeException failure) {
             waiter.result.completeExceptionally(failure);
-            return java.util.concurrent.CompletableFuture.failedFuture(failure);
+            return CompletableFuture.failedFuture(failure);
         }
         waiter.result.complete(claimed);
         CompletionStage<Void> completed = claimed.isPresent()
-            ? java.util.concurrent.CompletableFuture.completedFuture(null)
+            ? CompletableFuture.completedFuture(null)
             : runRelocationReadyCompletion(
                 ZLinkSpotRelocationReadyOutcome.CONTINUED);
         completed.whenComplete((ignored, error) -> streamTrace(
@@ -1046,8 +1054,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
 
     private void pollRelocationReadyCancellation(
         RelocationReadyWaiter waiter) {
-        java.util.concurrent.CompletableFuture.delayedExecutor(
-            25, java.util.concurrent.TimeUnit.MILLISECONDS)
+        CompletableFuture.delayedExecutor(
+            25, TimeUnit.MILLISECONDS)
             .execute(() -> {
                 if (waiter.result.isDone()) {
                     return;
@@ -1081,14 +1089,14 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     private static final class RelocationReadyWaiter {
         private final Supplier<Optional<
             ZLinkUserSpotRelocationBarrier.Seal>> claim;
-        private final java.util.function.BooleanSupplier cancelled;
-        private final java.util.concurrent.CompletableFuture<Optional<
+        private final BooleanSupplier cancelled;
+        private final CompletableFuture<Optional<
             ZLinkUserSpotRelocationBarrier.Seal>> result =
-                new java.util.concurrent.CompletableFuture<>();
+                new CompletableFuture<>();
 
         RelocationReadyWaiter(
             Supplier<Optional<ZLinkUserSpotRelocationBarrier.Seal>> claim,
-            java.util.function.BooleanSupplier cancelled) {
+            BooleanSupplier cancelled) {
             this.claim = claim;
             this.cancelled = cancelled;
         }

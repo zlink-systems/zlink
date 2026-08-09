@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.function.Function;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
 import systems.zlink.framework.runtime.internal.backend.*;
 
@@ -124,14 +126,14 @@ final class ZLinkChannelHandlerInvoker {
     }
 
     <T> CompletionStage<T> executeHandler(
-        java.util.function.Supplier<CompletionStage<T>> operation) {
+        Supplier<CompletionStage<T>> operation) {
         CompletableFuture<T> result = new CompletableFuture<>();
-        var flow = systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext.current();
+        var flow = ZLinkFlowContext.current();
         try {
             handlerExecutor.execute(() -> {
                 try {
                     operation.get().whenComplete((value, error) -> {
-                        systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext.run(flow, () -> {
+                        ZLinkFlowContext.run(flow, () -> {
                             if (error != null) {
                                 result.completeExceptionally(error);
                             } else {
@@ -653,7 +655,7 @@ final class ZLinkChannelHandlerInvoker {
         ZLinkHandlerDispatchKind dispatchKind,
         ZLinkMessageContext context,
         ZLinkHandlerInstanceOwner handlers,
-        java.util.function.Supplier<CompletionStage<T>> terminal) {
+        Supplier<CompletionStage<T>> terminal) {
         if (filterTypes.isEmpty()) {
             return terminal.get().thenApply(
                 value -> new ZLinkFilterPipeline.Result<>(true, value));
@@ -669,7 +671,7 @@ final class ZLinkChannelHandlerInvoker {
         ZLinkHandlerDispatchKind dispatchKind,
         ZLinkMessageContext context,
         ZLinkHandlerInstanceOwner handlers,
-        java.util.function.Supplier<CompletionStage<T>> terminal) {
+        Supplier<CompletionStage<T>> terminal) {
         return invokeWithFilters(
             dispatchKind,
             context,
@@ -688,7 +690,7 @@ final class ZLinkChannelHandlerInvoker {
     }
 
     private <T> CompletionStage<T> withDispatchHandlers(
-        java.util.function.Function<
+        Function<
             ZLinkHandlerInstanceOwner, CompletionStage<T>> operation) {
         ZLinkHandlerInstanceOwner handlers =
             new ZLinkHandlerInstanceOwner(handlerFactory);

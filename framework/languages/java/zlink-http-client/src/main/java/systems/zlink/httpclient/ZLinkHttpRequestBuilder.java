@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient;
+import java.util.Objects;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
@@ -173,7 +174,7 @@ public final class ZLinkHttpRequestBuilder {
     }
 
     public <T> void submit(Class<T> type, ZLinkHttpCallback<T> callback) {
-        java.util.Objects.requireNonNull(callback, "callback");
+        Objects.requireNonNull(callback, "callback");
         submit(type).whenComplete((response, error) ->
             callback.complete(error, error == null ? response : null));
     }

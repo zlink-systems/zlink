@@ -1,4 +1,5 @@
 package systems.zlink.e2e.channelegress.client;
+import java.util.ArrayList;
 
 import java.net.URI;
 import java.time.Duration;
@@ -231,7 +232,7 @@ public final class ScenarioSuite {
     }
 
     private static void ch09(ClientOptions options) {
-        List<Contracts.ListenerStatus> listenerRows = new java.util.ArrayList<>();
+        List<Contracts.ListenerStatus> listenerRows = new ArrayList<>();
         listenerRows.addAll(List.of(ClientHttp.get(
             options.apiAEndpoint(), "/status/listeners", Contracts.ListenerStatus[].class)));
         listenerRows.addAll(List.of(ClientHttp.get(

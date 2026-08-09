@@ -1,5 +1,7 @@
-package systems.zlink.e2e.runtimemonitoring.client.Scenarios;
+package Scenarios;
 
+import systems.zlink.e2e.runtimemonitoring.client.Scenarios;
+import systems.zlink.e2e.runtimemonitoring.client.Support;
 import systems.zlink.e2e.runtimemonitoring.client.Support.MonitoringScenarioContext;
 
 public final class MonD1FailureRecoveryScenario {

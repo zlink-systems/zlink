@@ -1,4 +1,8 @@
 package systems.zlink.framework.locations.redis;
+import java.util.Locale;
+import java.util.concurrent.ExecutionException;
+import systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptor;
+import systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptorKey;
 
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationDescriptorCodec;
 
@@ -212,7 +216,7 @@ final class ZLinkRedisLocationScriptsClient {
             ZLinkRedisLocationKeyCodec.encodeMeshNodeKey(key);
         String json =
             ZLinkLocationDescriptorCodec.serializeMeshNode(descriptor);
-        if (json.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+        if (json.getBytes(StandardCharsets.UTF_8)
             .length > 1024 * 1024) {
             throw new IllegalArgumentException(
                 "encoded MeshNode descriptor exceeds 1 MiB");
@@ -295,7 +299,7 @@ final class ZLinkRedisLocationScriptsClient {
                 rowKey,
                 descriptor.meshName(),
                 descriptor.objectRole().name()
-                    .toLowerCase(java.util.Locale.ROOT),
+                    .toLowerCase(Locale.ROOT),
                 Integer.toString(descriptor.state().wireValue()),
                 Long.toString(descriptor.applicationVersion()),
                 rowKey,
@@ -435,7 +439,7 @@ final class ZLinkRedisLocationScriptsClient {
                         json,
                         descriptor.state().name()
                             .toLowerCase(
-                                java.util.Locale.ROOT),
+                                Locale.ROOT),
                         Integer.toString(descriptor.weight()),
                         descriptor.channelName(),
                         rowKey,
@@ -489,11 +493,11 @@ final class ZLinkRedisLocationScriptsClient {
     }
 
     CompletionStage<ZLinkLocationWriteResult> writeFanoutPublisher(
-        systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptor
+        ZLinkFanoutPublisherDescriptor
             descriptor,
         ZLinkLocationWriteIntent intent) {
         validateFanoutPublisher(descriptor);
-        var key = new systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptorKey(
+        var key = new ZLinkFanoutPublisherDescriptorKey(
                 descriptor.channelName(),
                 descriptor.publisherRid());
         String rowKey =
@@ -569,7 +573,7 @@ final class ZLinkRedisLocationScriptsClient {
                         json,
                         descriptor.state().name()
                             .toLowerCase(
-                                java.util.Locale.ROOT),
+                                Locale.ROOT),
                         "",
                         descriptor.channelName(),
                         rowKey,
@@ -589,7 +593,7 @@ final class ZLinkRedisLocationScriptsClient {
 
     CompletionStage<ZLinkLocationWriteStatus>
         removeFanoutPublisher(
-            systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptorKey key,
+            ZLinkFanoutPublisherDescriptorKey key,
             ZLinkLocationOwnerToken owner) {
         String rowKey =
             ZLinkRedisLocationKeyCodec.encodeFanoutPublisherKey(key);
@@ -957,7 +961,7 @@ final class ZLinkRedisLocationScriptsClient {
 
     private static Throwable unwrap(Throwable failure) {
         Throwable current = failure;
-        while ((current instanceof CompletionException || current instanceof java.util.concurrent.ExecutionException)
+        while ((current instanceof CompletionException || current instanceof ExecutionException)
             && current.getCause() != null) {
             current = current.getCause();
         }
@@ -973,7 +977,7 @@ final class ZLinkRedisLocationScriptsClient {
     }
 
     private static void validateFanoutPublisher(
-        systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptor
+        ZLinkFanoutPublisherDescriptor
             descriptor) {
         if (descriptor.channelName() == null
             || descriptor.channelName().isBlank()

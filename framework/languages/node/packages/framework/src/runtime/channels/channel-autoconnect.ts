@@ -9,8 +9,6 @@ import {
   ZLinkOwnerLeaseTracker,
   ZLinkStoreLocationResolvers
 } from '../locations';
-import type { ZLinkFrameworkRegistration } from '../configuration';
-import { ZLinkChannelSocketRegistry } from './channel-socket-registry';
 
 export interface ZLinkChannelLocationAutoConnectContext {
   readonly runtime: ZLinkLocationRuntime;
@@ -45,11 +43,4 @@ export function createChannelLocationAutoConnectContext(
     events,
     changeStampStore: stores.locationStore
   };
-}
-
-export function buildChannelAutoConnectCapabilities(
-  _registration: ZLinkFrameworkRegistration,
-  _sockets: ZLinkChannelSocketRegistry
-): readonly [] {
-  return [];
 }

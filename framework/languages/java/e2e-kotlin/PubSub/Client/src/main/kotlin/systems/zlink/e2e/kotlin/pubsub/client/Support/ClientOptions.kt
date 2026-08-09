@@ -1,5 +1,6 @@
-package systems.zlink.e2e.kotlin.pubsub.client.Support
+package Support
 
+import systems.zlink.e2e.kotlin.pubsub.client.Support
 data class ClientOptions(
     val mode: String,
     val publisherHttp: String,

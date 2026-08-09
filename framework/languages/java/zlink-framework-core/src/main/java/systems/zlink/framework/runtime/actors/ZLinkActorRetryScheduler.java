@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.Objects;
 
 import java.time.Duration;
 import java.util.Optional;
@@ -87,7 +88,7 @@ final class ZLinkActorRetryScheduler {
                 }
                 CompletionStage<Optional<T>> lookupStage;
                 try {
-                    lookupStage = java.util.Objects.requireNonNull(
+                    lookupStage = Objects.requireNonNull(
                         lookup.get(), "route lookup stage");
                 } catch (RuntimeException failure) {
                     result.completeExceptionally(failure);

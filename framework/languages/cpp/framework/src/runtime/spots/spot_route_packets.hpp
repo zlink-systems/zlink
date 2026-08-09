@@ -5,6 +5,7 @@
 #include <zlink/framework/contracts/actors/actor.hpp>
 
 #include "runtime/actors/actor_ref_access.hpp"
+#include "runtime/protocol/service_wire_codec.hpp"
 #include <zlink/framework/contracts/codecs/serializer.hpp>
 
 #include <cstdint>
@@ -131,6 +132,9 @@ struct spot_actor_packet_route_request_t
     std::string actor_type;
     std::string actor_id;
     std::uint64_t actor_generation = 0;
+    std::uint64_t actor_node_generation = 0;
+    std::uint64_t actor_authority_owner_generation = 0;
+    std::uint64_t actor_owner_lease_generation = 0;
     std::string spot_id;
     std::string packet_name_value;
     std::string content_type = "application/json";
@@ -219,7 +223,10 @@ make_spot_actor_packet_route_request (const actor_ref_t &actor_ref,
                                       spot_id_t spot_id,
                                       std::string_view packet_name,
                                       const zlink::message_t &payload,
-                                      const spot_inbound_message_t &metadata);
+                                      const spot_inbound_message_t &metadata,
+                                      std::optional<runtime::protocol::
+                                        actor_route_fence_t> target_fence =
+                                        std::nullopt);
 
 actor_ref_t actor_ref_from_spot_route (const spot_actor_packet_route_request_t &request);
 

@@ -1,5 +1,8 @@
 package systems.zlink.samples.kotlin.tictactoe.server.api
 
+
+import java.net.InetAddress
+import java.net.URI
 import java.nio.file.Path
 import org.springframework.boot.WebApplicationType
 import org.springframework.boot.autoconfigure.SpringBootApplication
@@ -58,8 +61,8 @@ class ApiServerApplication {
     @Bean
     fun apiHttpServer(settings: SampleSettings): WebServerFactoryCustomizer<ConfigurableServletWebServerFactory> =
         WebServerFactoryCustomizer { server ->
-            val endpoint = java.net.URI.create(settings.apiBindUrl)
-            server.setAddress(java.net.InetAddress.getLoopbackAddress())
+            val endpoint = URI.create(settings.apiBindUrl)
+            server.setAddress(InetAddress.getLoopbackAddress())
             server.setPort(endpoint.port)
         }
 }

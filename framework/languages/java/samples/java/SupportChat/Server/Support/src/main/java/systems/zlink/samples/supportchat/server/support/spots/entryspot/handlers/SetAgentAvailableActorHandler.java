@@ -1,4 +1,6 @@
 package systems.zlink.samples.supportchat.server.support.spots.entryspot.handlers;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
 import systems.zlink.framework.ZLinkMessageContext;
@@ -26,7 +28,7 @@ public final class SetAgentAvailableActorHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Messages.SetAgentAvailableRes> handle(
+    public CompletionStage<Messages.SetAgentAvailableRes> handle(
         SupportEntrySpot spot,
         SupportUserActor actor,
         ZLinkMessageContext context,
@@ -35,7 +37,7 @@ public final class SetAgentAvailableActorHandler
         directory.remember(actor);
         assignment.setAvailable(
             actor.participantId(), actor.displayName(), request.isAvailable());
-        return java.util.concurrent.CompletableFuture.completedFuture(
+        return CompletableFuture.completedFuture(
             new Messages.SetAgentAvailableRes(request.isAvailable()));
     }
 

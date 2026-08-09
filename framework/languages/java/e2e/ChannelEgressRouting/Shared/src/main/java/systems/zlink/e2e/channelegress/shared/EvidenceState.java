@@ -1,4 +1,5 @@
 package systems.zlink.e2e.channelegress.shared;
+import java.util.concurrent.TimeUnit;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -47,7 +48,7 @@ public final class EvidenceState {
     }
 
     public CompletionStage<Void> awaitReleaseAsync() {
-        return release.copy().orTimeout(20, java.util.concurrent.TimeUnit.SECONDS);
+        return release.copy().orTimeout(20, TimeUnit.SECONDS);
     }
 
     public void release() {

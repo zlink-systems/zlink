@@ -133,7 +133,7 @@ grep -q 'gamequest-scale-out=completed' \
   Client/src/main/java/systems/zlink/samples/gamequest/client/GameQuestClientScenario.java
 (
   cd ../../..
-  ./gradlew --no-daemon \
+  ./gradlew --no-daemon --no-parallel --max-workers=1 \
     :zlink-framework-core:jar \
     :zlink-framework-spring-boot-starter:jar \
     :zlink-framework-locations-redis:jar \

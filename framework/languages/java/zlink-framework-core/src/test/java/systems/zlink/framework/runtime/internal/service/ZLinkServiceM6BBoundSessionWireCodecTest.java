@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.service;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -95,7 +96,7 @@ final class ZLinkServiceM6BBoundSessionWireCodecTest {
 
         byte[] encoded = codec.encodeBoundSessionReplaced(replacement);
         assertEquals(
-            systems.zlink.framework.runtime.protocol.ServiceWireConstants
+            ServiceWireConstants
                 .COMMAND_BOUND_SESSION_REPLACED,
             Byte.toUnsignedInt(encoded[3]));
         assertEquals(replacement, codec.decodeBoundSessionReplaced(encoded));
@@ -131,7 +132,7 @@ final class ZLinkServiceM6BBoundSessionWireCodecTest {
     @Test
     void boundActorTailRequiresPairedFlagsAndRejectsMalformedFrames() {
         int flags =
-            systems.zlink.framework.runtime.protocol.ServiceWireConstants
+            ServiceWireConstants
                 .FLAG_BOUND_SESSION
                 | systems.zlink.framework.runtime.protocol
                     .ServiceWireConstants.FLAG_SOURCE_SPOT_ID;

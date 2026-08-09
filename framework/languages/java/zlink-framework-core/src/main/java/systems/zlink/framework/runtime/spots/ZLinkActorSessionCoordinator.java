@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Arrays;
+import systems.zlink.framework.actors.ZLinkRelocationCancellation;
+import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 
 import java.util.List;
 import java.util.Optional;
@@ -64,35 +67,35 @@ final class ZLinkActorSessionCoordinator {
             : actors.actorIdsInSpot(spotId);
     }
 
-    Optional<systems.zlink.framework.execution.ZLinkAsyncSerialQueue.RelocationSeal>
+    Optional<ZLinkAsyncSerialQueue.RelocationSeal>
         trySealActorRelocation(String actorId) {
         return requireActors().trySealActorRelocation(actorId);
     }
 
-    systems.zlink.framework.execution.ZLinkAsyncSerialQueue
+    ZLinkAsyncSerialQueue
         actorRelocationLane(String actorId) {
         return requireActors().actorRelocationLane(actorId);
     }
 
     boolean abortActorRelocation(
         String actorId,
-        systems.zlink.framework.execution.ZLinkAsyncSerialQueue.RelocationSeal
+        ZLinkAsyncSerialQueue.RelocationSeal
             seal) {
         return requireActors().abortActorRelocation(actorId, seal);
     }
 
-    Optional<List<systems.zlink.framework.execution.ZLinkAsyncSerialQueue.QueuedRecord>>
+    Optional<List<ZLinkAsyncSerialQueue.QueuedRecord>>
         commitActorRelocation(
             String actorId,
-            systems.zlink.framework.execution.ZLinkAsyncSerialQueue.RelocationSeal
+            ZLinkAsyncSerialQueue.RelocationSeal
                 seal) {
         return requireActors().commitActorRelocation(actorId, seal);
     }
 
-    Optional<List<systems.zlink.framework.execution.ZLinkAsyncSerialQueue.QueuedRecord>>
+    Optional<List<ZLinkAsyncSerialQueue.QueuedRecord>>
         freezeActorRelocationIngress(
             String actorId,
-            systems.zlink.framework.execution.ZLinkAsyncSerialQueue.RelocationSeal
+            ZLinkAsyncSerialQueue.RelocationSeal
                 seal) {
         return requireActors().freezeActorRelocationIngress(actorId, seal);
     }
@@ -130,7 +133,7 @@ final class ZLinkActorSessionCoordinator {
             boolean restoreSnapshot,
             systems.zlink.framework.runtime.internal.relocation
                 .ZLinkRelocationAdapterRegistry adapters,
-            systems.zlink.framework.actors.ZLinkRelocationCancellation
+            ZLinkRelocationCancellation
                 cancellation,
             ZLinkBackendActorRef actorRef) {
         return requireActors().prepareRelocatedActor(
@@ -247,7 +250,7 @@ final class ZLinkActorSessionCoordinator {
             || accepted.objectGeneration() != actorRef.generation()
             || !accepted.header().packetName().equals(header.packetName())
             || accepted.header().requestSequence().isPresent()
-            || !java.util.Arrays.equals(accepted.payload(), payload.toByteArray())) {
+            || !Arrays.equals(accepted.payload(), payload.toByteArray())) {
             return CompletableFuture.failedFuture(new ZLinkConfigurationException(
                 "Actor handoff record does not match its frozen target and payload"));
         }

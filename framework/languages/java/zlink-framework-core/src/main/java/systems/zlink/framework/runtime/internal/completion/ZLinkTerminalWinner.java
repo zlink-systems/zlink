@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.completion;
+import java.util.Objects;
 
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -16,7 +17,7 @@ public final class ZLinkTerminalWinner {
     private final AtomicReference<Cause> winner = new AtomicReference<>();
 
     public boolean tryWin(Cause cause) {
-        return winner.compareAndSet(null, java.util.Objects.requireNonNull(cause, "cause"));
+        return winner.compareAndSet(null, Objects.requireNonNull(cause, "cause"));
     }
 
     public boolean isTerminal() {

@@ -1,5 +1,6 @@
 package systems.zlink.framework.kotlin
 
+import org.junit.jupiter.api.Assertions
 import java.nio.charset.StandardCharsets
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test

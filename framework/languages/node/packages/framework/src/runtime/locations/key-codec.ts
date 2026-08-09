@@ -38,10 +38,6 @@ export const ZLinkLocationKeyCodec = Object.freeze({
   normalizeActorType
 });
 
-export function encodeZLinkLocationKeySegments(...segments: readonly string[]): string {
-  return encodeSegments(...segments);
-}
-
 function normalizeActorType(actorType: string | undefined): string {
   return actorType ?? '';
 }

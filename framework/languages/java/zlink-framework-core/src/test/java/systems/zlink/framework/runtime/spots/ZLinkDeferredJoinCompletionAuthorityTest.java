@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.spots;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.CompletionException;
 
 import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore;
 import systems.zlink.framework.runtime.internal.locations
@@ -108,7 +110,7 @@ final class ZLinkDeferredJoinCompletionAuthorityTest {
         var actor = new ZLinkBackendActorRef(
             RoutingId.from("node-b"), actorId, 17);
         byte[] reply = "\"accepted\"".getBytes(
-            java.nio.charset.StandardCharsets.UTF_8);
+            StandardCharsets.UTF_8);
 
         journal.awaitTargetCommit(
                 relocationId,
@@ -130,7 +132,7 @@ final class ZLinkDeferredJoinCompletionAuthorityTest {
             journal, locations, roots, authorityKey, operation, actor, 2);
 
         assertThrows(
-            java.util.concurrent.CompletionException.class,
+            CompletionException.class,
             () -> journal.awaitTargetCompletion(
                     relocationId,
                     1,
@@ -369,7 +371,7 @@ final class ZLinkDeferredJoinCompletionAuthorityTest {
             // The canonical pointer is the only text16 value starting with
             // this deterministic in-memory prefix.
             String text = new String(
-                payload, java.nio.charset.StandardCharsets.ISO_8859_1);
+                payload, StandardCharsets.ISO_8859_1);
             int offset = text.indexOf("root-");
             assertTrue(offset >= 2);
             int length = Byte.toUnsignedInt(payload[offset - 1]);
@@ -377,7 +379,7 @@ final class ZLinkDeferredJoinCompletionAuthorityTest {
                 payload,
                 offset,
                 length,
-                java.nio.charset.StandardCharsets.UTF_8);
+                StandardCharsets.UTF_8);
         }
     }
 

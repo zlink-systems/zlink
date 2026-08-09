@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -65,8 +66,8 @@ final class ZLinkSpotRuntimeActorArgumentsTest {
             }
 
             @Override
-            public java.util.Map<String, String> metadata() {
-                return java.util.Map.of();
+            public Map<String, String> metadata() {
+                return Map.of();
             }
 
             @Override

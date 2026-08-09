@@ -1,4 +1,5 @@
 package systems.zlink.e2e.storefailure.client.scenarios;
+import java.util.Set;
 
 import systems.zlink.e2e.storefailure.client.support.ClientContext;
 import systems.zlink.e2e.storefailure.client.support.ClientScenario;
@@ -11,6 +12,6 @@ public final class SfC5ObjectLocationPagingScenario implements ClientScenario {
         context.waitForHealthyStatus();
         context.createObjectLocationFixture("SF-C5", 1_001);
         context.assertObjectLocationPaging("SF-C5", 1_001);
-        return new DiscoveryApiResult(java.util.Set.copyOf(context.options().expectedRids()));
+        return new DiscoveryApiResult(Set.copyOf(context.options().expectedRids()));
     }
 }

@@ -11,7 +11,7 @@ export async function tryRequestRoutedJson(
 ): Promise<boolean> {
   const request = transport.requestRawToSpot;
   if (request === undefined) return false;
-  const message = RuntimeMessage.from(Buffer.from(JSON.stringify(payload)));
+  const message = RuntimeMessage.fromOwned(Buffer.from(JSON.stringify(payload)));
   try {
     const replyParts = await request.call(transport, target, message, options);
     for (const part of replyParts) part.close();
@@ -20,19 +20,6 @@ export async function tryRequestRoutedJson(
     message.close();
   }
 }
-
-export async function requestRoutedJson(
-  transport: ZLinkActorRoutedJoinTransport,
-  target: ZLinkSpotRouteTarget,
-  payload: unknown,
-  options: { readonly timeoutMs?: number; readonly signal?: AbortSignal },
-  unavailableMessage: string
-): Promise<void> {
-  if (!await tryRequestRoutedJson(transport, target, payload, options)) {
-    throw new Error(unavailableMessage);
-  }
-}
-
 export async function requestRoutedJsonReply<T>(
   transport: ZLinkActorRoutedJoinTransport,
   target: ZLinkSpotRouteTarget,
@@ -43,7 +30,7 @@ export async function requestRoutedJsonReply<T>(
 ): Promise<T> {
   const request = transport.requestRawToSpot;
   if (request === undefined) throw new Error(unavailableMessage);
-  const message = RuntimeMessage.from(Buffer.from(JSON.stringify(payload)));
+  const message = RuntimeMessage.fromOwned(Buffer.from(JSON.stringify(payload)));
   try {
     const replyParts = await request.call(transport, target, message, options);
     try {

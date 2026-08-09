@@ -1,4 +1,10 @@
 package systems.zlink.framework.runtime.host;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.messaging.OneWayTestStatus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -43,19 +49,19 @@ final class ZLinkAdmissionRuntimeTest {
             Duration.ofMillis(20)).toCompletableFuture();
 
         assertThrows(
-            java.util.concurrent.ExecutionException.class,
+            ExecutionException.class,
             () -> result.get(500, TimeUnit.MILLISECONDS));
         assertEquals(
             2,
-            systems.zlink.framework.runtime.messaging.OneWayTestStatus.status(result));
+            OneWayTestStatus.status(result));
         assertEquals(1, attempts.get());
         assertEquals(1, cleanups.get());
     }
 
     @Test
     void duplicateGuardIsOwnedByOneCallAndReturnsAnExceptionalStage() {
-        java.util.concurrent.atomic.AtomicBoolean first = new java.util.concurrent.atomic.AtomicBoolean();
-        java.util.concurrent.atomic.AtomicBoolean second = new java.util.concurrent.atomic.AtomicBoolean();
+        AtomicBoolean first = new AtomicBoolean();
+        AtomicBoolean second = new AtomicBoolean();
 
         assertNull(ZLinkOneWayAdmission.begin(first));
         assertNull(ZLinkOneWayAdmission.begin(second));
@@ -88,7 +94,7 @@ final class ZLinkAdmissionRuntimeTest {
         assertEquals(1, attempts.get());
         source.ready(target);
         assertEquals(2, attempts.get());
-        assertEquals(0, systems.zlink.framework.runtime.messaging.OneWayTestStatus.status(result));
+        assertEquals(0, OneWayTestStatus.status(result));
         assertEquals(1, cleanups.get());
     }
 
@@ -112,7 +118,7 @@ final class ZLinkAdmissionRuntimeTest {
             () -> { }).toCompletableFuture();
 
         assertEquals(2, attempts.get());
-        assertEquals(0, systems.zlink.framework.runtime.messaging.OneWayTestStatus.status(result));
+        assertEquals(0, OneWayTestStatus.status(result));
     }
 
     @Test
@@ -161,7 +167,7 @@ final class ZLinkAdmissionRuntimeTest {
         source.ready(key);
         assertEquals(
             0,
-            systems.zlink.framework.runtime.messaging.OneWayTestStatus.status(second));
+            OneWayTestStatus.status(second));
         assertEquals(2, cleanups.get());
     }
 
@@ -233,7 +239,7 @@ final class ZLinkAdmissionRuntimeTest {
 
         assertEquals(
             2,
-            systems.zlink.framework.runtime.messaging.OneWayTestStatus.status(result));
+            OneWayTestStatus.status(result));
         assertEquals(1, cleanups.get());
         assertEquals(1, ZLinkAdmissionRuntime.normalizedTimeoutMillis(Duration.ofNanos(1)));
         assertEquals(1, ZLinkAdmissionRuntime.normalizedTimeoutMillis(Duration.ofNanos(999_999)));
@@ -260,9 +266,9 @@ final class ZLinkAdmissionRuntimeTest {
             () -> true,
             () -> { }).toCompletableFuture();
 
-        assertEquals(0, systems.zlink.framework.runtime.messaging.OneWayTestStatus.status(result));
+        assertEquals(0, OneWayTestStatus.status(result));
         assertFalse(result.cancel(false));
-        assertEquals(0, systems.zlink.framework.runtime.messaging.OneWayTestStatus.status(result));
+        assertEquals(0, OneWayTestStatus.status(result));
     }
 
     @Test
@@ -276,7 +282,7 @@ final class ZLinkAdmissionRuntimeTest {
             () -> { throw new IllegalStateException("cleanup failed"); })
             .toCompletableFuture();
 
-        assertEquals(0, systems.zlink.framework.runtime.messaging.OneWayTestStatus.status(result));
+        assertEquals(0, OneWayTestStatus.status(result));
     }
 
     @Test
@@ -294,7 +300,7 @@ final class ZLinkAdmissionRuntimeTest {
 
         source.close();
 
-        assertEquals(5, systems.zlink.framework.runtime.messaging.OneWayTestStatus.status(result));
+        assertEquals(5, OneWayTestStatus.status(result));
         assertEquals(1, cleanups.get());
     }
 
@@ -324,7 +330,7 @@ final class ZLinkAdmissionRuntimeTest {
             ready.join();
             shutdown.join();
 
-            Integer terminal = systems.zlink.framework.runtime.messaging.OneWayTestStatus.status(result);
+            Integer terminal = OneWayTestStatus.status(result);
             assertTrue(
                 terminal == 0
                     || terminal == 5);
@@ -341,9 +347,9 @@ final class ZLinkAdmissionRuntimeTest {
         FakeSource source = new FakeSource(Duration.ofSeconds(1));
         AtomicInteger attempts = new AtomicInteger();
         ZLinkBackendAdmissionKey generationSeven = ZLinkBackendAdmissionKey.actor(
-            systems.zlink.contracts.core.RoutingId.from("node-a"), "actor-a", 7L);
+            RoutingId.from("node-a"), "actor-a", 7L);
         ZLinkBackendAdmissionKey generationEight = ZLinkBackendAdmissionKey.actor(
-            systems.zlink.contracts.core.RoutingId.from("node-a"), "actor-a", 8L);
+            RoutingId.from("node-a"), "actor-a", 8L);
         var result = submit(
             source,
             generationSeven,
@@ -355,15 +361,15 @@ final class ZLinkAdmissionRuntimeTest {
         assertFalse(result.isDone());
 
         source.ready(generationSeven);
-        assertEquals(0, systems.zlink.framework.runtime.messaging.OneWayTestStatus.status(result));
+        assertEquals(0, OneWayTestStatus.status(result));
         assertEquals(2, attempts.get());
     }
 
     @Test
     void nodeReadySignalRetriesEachPendingRouteForThatNode() {
         FakeSource source = new FakeSource(Duration.ofSeconds(1));
-        var nodeA = systems.zlink.contracts.core.RoutingId.from("node-a");
-        var nodeB = systems.zlink.contracts.core.RoutingId.from("node-b");
+        var nodeA = RoutingId.from("node-a");
+        var nodeB = RoutingId.from("node-b");
         AtomicInteger actorAAttempts = new AtomicInteger();
         AtomicInteger actorBAttempts = new AtomicInteger();
         AtomicInteger actorOtherAttempts = new AtomicInteger();
@@ -401,7 +407,7 @@ final class ZLinkAdmissionRuntimeTest {
     @Test
     void nodeReadyCreditWakesAnActorSubmittedAfterTheReadinessSignal() {
         FakeSource source = new FakeSource(Duration.ofSeconds(1));
-        var node = systems.zlink.contracts.core.RoutingId.from("node-a");
+        var node = RoutingId.from("node-a");
         AtomicInteger attempts = new AtomicInteger();
 
         var result = submit(
@@ -428,7 +434,7 @@ final class ZLinkAdmissionRuntimeTest {
         AtomicInteger oldAttempts = new AtomicInteger();
         AtomicInteger newAttempts = new AtomicInteger();
         ZLinkBackendAdmissionKey key = ZLinkBackendAdmissionKey.node(
-            systems.zlink.contracts.core.RoutingId.from("node-a"));
+            RoutingId.from("node-a"));
         var oldOperation = submit(
             source,
             key,
@@ -439,7 +445,7 @@ final class ZLinkAdmissionRuntimeTest {
             () -> { }).toCompletableFuture();
 
         assertEquals(2,
-            systems.zlink.framework.runtime.messaging.OneWayTestStatus.status(oldOperation));
+            OneWayTestStatus.status(oldOperation));
         source.ready(key);
         var newOperation = submit(
             source,
@@ -450,7 +456,7 @@ final class ZLinkAdmissionRuntimeTest {
             },
             () -> { }).toCompletableFuture();
 
-        assertEquals(0, systems.zlink.framework.runtime.messaging.OneWayTestStatus.status(newOperation));
+        assertEquals(0, OneWayTestStatus.status(newOperation));
         assertEquals(1, oldAttempts.get());
         assertEquals(1, newAttempts.get());
     }
@@ -484,7 +490,7 @@ final class ZLinkAdmissionRuntimeTest {
             shutdown.join();
 
             if (!result.isCancelled()) {
-                Integer status = systems.zlink.framework.runtime.messaging.OneWayTestStatus.status(result);
+                Integer status = OneWayTestStatus.status(result);
                 assertTrue(status == 2
                     || status == 5);
             } else {
@@ -507,10 +513,10 @@ final class ZLinkAdmissionRuntimeTest {
         }
     }
 
-    private static java.util.concurrent.CompletionStage<Void> submit(
+    private static CompletionStage<Void> submit(
         FakeSource source,
         ZLinkBackendAdmissionKey key,
-        java.util.function.Supplier<Boolean> attempt,
+        Supplier<Boolean> attempt,
         Runnable cleanup) {
         return ZLinkAdmissionRuntime.submit(
             source,

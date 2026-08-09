@@ -428,6 +428,11 @@ void to_json (nlohmann::json &json, const spot_actor_packet_route_request_t &val
                           {"actorType", value.actor_type},
                           {"actorId", value.actor_id},
                           {"actorGeneration", value.actor_generation},
+                          {"actorNodeGeneration", value.actor_node_generation},
+                          {"actorAuthorityOwnerGeneration",
+                           value.actor_authority_owner_generation},
+                          {"actorOwnerLeaseGeneration",
+                           value.actor_owner_lease_generation},
                           {"spotId", value.spot_id},
                           {"packetName", value.packet_name_value},
                           {"contentType", value.content_type},
@@ -442,6 +447,12 @@ void from_json (const nlohmann::json &json, spot_actor_packet_route_request_t &v
     value.actor_type = json.at ("actorType").get<std::string> ();
     value.actor_id = json.at ("actorId").get<std::string> ();
     value.actor_generation = json.at ("actorGeneration").get<std::uint64_t> ();
+    value.actor_node_generation =
+      json.value ("actorNodeGeneration", std::uint64_t{0});
+    value.actor_authority_owner_generation =
+      json.value ("actorAuthorityOwnerGeneration", std::uint64_t{0});
+    value.actor_owner_lease_generation =
+      json.value ("actorOwnerLeaseGeneration", std::uint64_t{0});
     value.spot_id = json.at ("spotId").get<std::string> ();
     value.packet_name_value = json.at ("packetName").get<std::string> ();
     value.content_type = json.value ("contentType", "application/json");
@@ -450,6 +461,20 @@ void from_json (const nlohmann::json &json, spot_actor_packet_route_request_t &v
     if (value.message_follow_hop_count > 8)
         throw std::invalid_argument (
           "Actor packet Message Follow hop count exceeds 8");
+    const bool has_any_target_fence =
+      value.actor_node_generation != 0
+      || value.actor_authority_owner_generation != 0
+      || value.actor_owner_lease_generation != 0;
+    const bool has_complete_target_fence =
+      value.actor_node_generation != 0
+      && value.actor_authority_owner_generation != 0
+      && value.actor_owner_lease_generation != 0;
+    if ((value.message_follow_hop_count == 0 && has_any_target_fence)
+        || (value.message_follow_hop_count != 0
+            && !has_complete_target_fence)) {
+        throw std::invalid_argument (
+          "Actor packet Message Follow target fence is incomplete");
+    }
     value.metadata = json.value ("metadata", std::map<std::string, std::string>{});
     value.payload = decode_base64_field (json, "payload");
 }
@@ -624,7 +649,9 @@ make_spot_actor_packet_route_request (const actor_ref_t &actor_ref,
                                       spot_id_t spot_id,
                                       std::string_view packet_name,
                                       const zlink::message_t &payload,
-                                      const spot_inbound_message_t &metadata)
+                                      const spot_inbound_message_t &metadata,
+                                      std::optional<runtime::protocol::
+                                        actor_route_fence_t> target_fence)
 {
     std::uint8_t message_follow_hop_count = 0;
     if (const auto hop = metadata.find (
@@ -636,11 +663,40 @@ make_spot_actor_packet_route_request (const actor_ref_t &actor_ref,
         message_follow_hop_count =
           static_cast<std::uint8_t> (parsed);
     }
+    if (target_fence
+        && (target_fence->actor_id != actor_ref.actor_id ().value ()
+            || target_fence->object_generation
+                 != actor_ref.object_generation ()
+            || target_fence->target_node_routing_id
+                 != zlink::routing_id_t::from (
+                      std::string (actor_ref.node_rid ().value ()))
+                      .to_bytes ()
+            || target_fence->target_node_generation == 0
+            || target_fence->authority_owner_generation == 0
+            || target_fence->owner_lease_generation == 0)) {
+        throw std::invalid_argument (
+          "Actor packet target fence does not match the target Actor");
+    }
     return spot_actor_packet_route_request_t{.actor_node_rid =
                                                std::string (actor_ref.node_rid ().value ()),
                                              .actor_type = std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
                                              .actor_id = std::string (actor_ref.actor_id ().value ()),
                                              .actor_generation = actor_ref.object_generation (),
+                                             .actor_node_generation =
+                                               target_fence
+                                                 ? target_fence
+                                                     ->target_node_generation
+                                                 : 0,
+                                             .actor_authority_owner_generation =
+                                               target_fence
+                                                 ? target_fence
+                                                     ->authority_owner_generation
+                                                 : 0,
+                                             .actor_owner_lease_generation =
+                                               target_fence
+                                                 ? target_fence
+                                                     ->owner_lease_generation
+                                                 : 0,
                                              .spot_id = std::string (spot_id),
                                              .packet_name_value = std::string (packet_name),
                                              .content_type = metadata.content_type,

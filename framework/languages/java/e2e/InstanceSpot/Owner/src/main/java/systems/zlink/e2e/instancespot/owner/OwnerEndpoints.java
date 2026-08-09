@@ -1,4 +1,5 @@
 package systems.zlink.e2e.instancespot.owner;
+import java.util.Map;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -37,7 +38,7 @@ public final class OwnerEndpoints implements SmartLifecycle {
             server.createContext("/health", exchange -> HttpSupport.writeJson(
                 exchange,
                 json,
-                java.util.Map.of(
+                Map.of(
                     "status", "ready",
                     "rid", options.rid(),
                     "lifecycleId", options.lifecycleId())));
@@ -56,7 +57,7 @@ public final class OwnerEndpoints implements SmartLifecycle {
             });
             server.createContext("/shutdown", exchange -> {
                 HttpSupport.writeJson(
-                    exchange, json, java.util.Map.of("status", "stopping"));
+                    exchange, json, Map.of("status", "stopping"));
                 HttpSupport.shutdownAsync();
             });
             server.start();

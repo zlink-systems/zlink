@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.internal.service;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
@@ -515,12 +518,12 @@ public final class ZLinkServiceFrozenRecordCodec {
             try {
                 return StandardCharsets.UTF_8.newDecoder()
                     .onMalformedInput(
-                        java.nio.charset.CodingErrorAction.REPORT)
+                        CodingErrorAction.REPORT)
                     .onUnmappableCharacter(
-                        java.nio.charset.CodingErrorAction.REPORT)
-                    .decode(java.nio.ByteBuffer.wrap(value))
+                        CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(value))
                     .toString();
-            } catch (java.nio.charset.CharacterCodingException failure) {
+            } catch (CharacterCodingException failure) {
                 throw invalid("invalid UTF-8");
             }
         }
@@ -535,7 +538,7 @@ public final class ZLinkServiceFrozenRecordCodec {
 
         private long u64() {
             require(8);
-            long value = java.nio.ByteBuffer.wrap(bytes, offset, 8)
+            long value = ByteBuffer.wrap(bytes, offset, 8)
                 .getLong();
             offset += 8;
             return value;
@@ -544,7 +547,7 @@ public final class ZLinkServiceFrozenRecordCodec {
         private int u32() {
             require(4);
             long value = Integer.toUnsignedLong(
-                java.nio.ByteBuffer.wrap(bytes, offset, 4).getInt());
+                ByteBuffer.wrap(bytes, offset, 4).getInt());
             offset += 4;
             if (value > Integer.MAX_VALUE) {
                 throw invalid("u32 exceeds JVM buffer bound");
@@ -555,7 +558,7 @@ public final class ZLinkServiceFrozenRecordCodec {
         private int u16() {
             require(2);
             int value = Short.toUnsignedInt(
-                java.nio.ByteBuffer.wrap(bytes, offset, 2).getShort());
+                ByteBuffer.wrap(bytes, offset, 2).getShort());
             offset += 2;
             return value;
         }

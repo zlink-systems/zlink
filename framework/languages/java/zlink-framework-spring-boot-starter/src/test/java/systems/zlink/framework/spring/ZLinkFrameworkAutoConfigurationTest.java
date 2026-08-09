@@ -1,4 +1,10 @@
 package systems.zlink.framework.spring;
+import java.util.Map;
+import systems.zlink.framework.monitoring.ZLinkFanoutRuntime;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology;
+import systems.zlink.framework.spring.internal.runtime.ZLinkRouteMeshRuntimeOptionsService;
+import systems.zlink.httpclient.ZLinkFrameworkHttpExecutionTurn;
+import systems.zlink.httpclient.ZLinkHttpExecutionTurn;
 
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
 
@@ -134,12 +140,12 @@ final class ZLinkFrameworkAutoConfigurationTest {
             assertSame(
                 lifecycle.fanoutRuntime(),
                 context.getBean(
-                    systems.zlink.framework.monitoring.ZLinkFanoutRuntime.class));
+                    ZLinkFanoutRuntime.class));
             assertThrows(
                 ZLinkConfigurationException.class,
                 () -> routeMeshRuntime.snapshot("missing"));
             assertInstanceOf(
-                systems.zlink.framework.spring.internal.runtime.ZLinkRouteMeshRuntimeOptionsService.class,
+                ZLinkRouteMeshRuntimeOptionsService.class,
                 routeMeshRuntimeOptions);
         }
     }
@@ -356,8 +362,8 @@ final class ZLinkFrameworkAutoConfigurationTest {
             context.refresh();
 
             assertInstanceOf(
-                systems.zlink.httpclient.ZLinkFrameworkHttpExecutionTurn.class,
-                context.getBean(systems.zlink.httpclient.ZLinkHttpExecutionTurn.class));
+                ZLinkFrameworkHttpExecutionTurn.class,
+                context.getBean(ZLinkHttpExecutionTurn.class));
 
             ZLinkSpotPublisherClient publisher =
                 context.getBean(ZLinkSpotPublisherClient.class);
@@ -625,7 +631,7 @@ final class ZLinkFrameworkAutoConfigurationTest {
                     ZLinkJavaBackendAdapterFactory::new);
                 sourceContext.registerBean(
                     ZLinkFrameworkConfigurer.class,
-                    () -> options -> { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableServer(sourceEndpoint);
+                    () -> options -> { var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableServer(sourceEndpoint);
                         channel.setRoutingId(sourceRid);
                         channel.enableClient(targetEndpoint); });
                 sourceContext.register(
@@ -855,7 +861,7 @@ final class ZLinkFrameworkAutoConfigurationTest {
     static class SpotNodeConfig {
         @Bean
         ZLinkFrameworkConfigurer spotNodeConfigurer() {
-            return options -> { var mesh = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addSpotMesh(options, "game"); { var node = mesh; node.enableRouter("inproc://play-router");
+            return options -> { var mesh = ZLinkLegacyTopology.addSpotMesh(options, "game"); { var node = mesh; node.enableRouter("inproc://play-router");
                     node.objects().server().addSpotFactory("GameSpot", GameSpot.class, factory -> factory.disableRelocation()); }; };
         }
     }
@@ -879,7 +885,7 @@ final class ZLinkFrameworkAutoConfigurationTest {
         @Bean
         ZLinkFrameworkConfigurer spotNodeWithActorConfigurer() {
             return options -> {
-                { var mesh = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addSpotMesh(options, "game"); { var node = mesh; node.enableRouter("inproc://play-router");
+                { var mesh = ZLinkLegacyTopology.addSpotMesh(options, "game"); { var node = mesh; node.enableRouter("inproc://play-router");
                         node.objects().server().addSpotFactory("GameSpot", GameSpot.class, factory -> factory.disableRelocation());
                         node.objects().server().addActorFactory("player", PlayerActor.class, PlayerActorFactory.class, factory -> factory.recreateOnRelocation()); }; };
             };
@@ -897,7 +903,7 @@ final class ZLinkFrameworkAutoConfigurationTest {
         @Bean
         ZLinkFrameworkConfigurer spotNodeWithLocationStoreConfigurer() {
             return options -> {
-                var mesh = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addSpotMesh(options, "game");
+                var mesh = ZLinkLegacyTopology.addSpotMesh(options, "game");
                 mesh.enableRouter("inproc://play-router");
             };
         }
@@ -908,7 +914,7 @@ final class ZLinkFrameworkAutoConfigurationTest {
     static class PrivateConstructorSpotConfig {
         @Bean
         ZLinkFrameworkConfigurer privateConstructorSpotConfigurer() {
-            return options -> { var mesh = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addSpotMesh(options, "game"); { var node = mesh; node.enableRouter("inproc://play-router");
+            return options -> { var mesh = ZLinkLegacyTopology.addSpotMesh(options, "game"); { var node = mesh; node.enableRouter("inproc://play-router");
                     node.objects().server().addSpotFactory("PrivateConstructorSpot", PrivateConstructorSpot.class, factory -> factory.disableRelocation()); }; };
         }
     }
@@ -924,7 +930,7 @@ final class ZLinkFrameworkAutoConfigurationTest {
         @Bean
         ZLinkFrameworkConfigurer injectedSpotAndActorConfigurer() {
             return options -> {
-                { var mesh = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addSpotMesh(options, "game"); { var node = mesh; node.enableRouter("inproc://play-router");
+                { var mesh = ZLinkLegacyTopology.addSpotMesh(options, "game"); { var node = mesh; node.enableRouter("inproc://play-router");
                         node.objects().server().addSpotFactory("InjectedGameSpot", InjectedGameSpot.class, factory -> factory.disableRelocation());
                         node.objects().server().addActorFactory("player", InjectedPlayerActor.class, InjectedPlayerActorFactory.class, factory -> factory.recreateOnRelocation()); }; };
             };
@@ -937,7 +943,7 @@ final class ZLinkFrameworkAutoConfigurationTest {
         @Bean
         ZLinkFrameworkConfigurer spotPublisherConfigurer() {
             return options -> {
-                var mesh = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addSpotMesh(options, "game");
+                var mesh = ZLinkLegacyTopology.addSpotMesh(options, "game");
                 mesh.enableRouter("inproc://spot-router");
                 mesh.enablePubSub("inproc://spot-pub");
                 mesh.objects().server().addSpotFactory("GameSpot", GameSpot.class, factory -> factory.disableRelocation());
@@ -1070,7 +1076,7 @@ final class ZLinkFrameworkAutoConfigurationTest {
         @Bean
         ZLinkFrameworkConfigurer routeMeshHandlerConfigurer(
             RouteMeshEndpoints endpoints) {
-            return options -> { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableServer(endpoints.targetEndpoint());
+            return options -> { var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableServer(endpoints.targetEndpoint());
                 channel.setRoutingId(endpoints.targetRid());
                 channel.enableClient(endpoints.sourceEndpoint());
                 channel.addRequestHandler(
@@ -1650,13 +1656,13 @@ final class ZLinkFrameworkAutoConfigurationTest {
     private static ZLinkMessageContext requestContext() {
         return new ZLinkMessageContext() {
             @Override
-            public java.util.Optional<String> meshName() {
-                return java.util.Optional.empty();
+            public Optional<String> meshName() {
+                return Optional.empty();
             }
 
             @Override
-            public java.util.Optional<String> channelName() {
-                return java.util.Optional.of("profile");
+            public Optional<String> channelName() {
+                return Optional.of("profile");
             }
 
             @Override
@@ -1665,18 +1671,18 @@ final class ZLinkFrameworkAutoConfigurationTest {
             }
 
             @Override
-            public java.util.Optional<String> contentType() {
-                return java.util.Optional.empty();
+            public Optional<String> contentType() {
+                return Optional.empty();
             }
 
             @Override
-            public java.util.Map<String, String> metadata() {
-                return java.util.Map.of();
+            public Map<String, String> metadata() {
+                return Map.of();
             }
 
             @Override
-            public java.util.Optional<String> correlationId() {
-                return java.util.Optional.empty();
+            public Optional<String> correlationId() {
+                return Optional.empty();
             }
         };
     }

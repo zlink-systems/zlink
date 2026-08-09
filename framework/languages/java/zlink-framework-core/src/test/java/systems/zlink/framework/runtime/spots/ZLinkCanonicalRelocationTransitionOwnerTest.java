@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -40,7 +41,7 @@ final class ZLinkCanonicalRelocationTransitionOwnerTest {
         var owner = new ZLinkCanonicalRelocationTransitionOwner(
             (source, command, encoded) -> {
                 calls[0]++;
-                return java.util.concurrent.CompletableFuture
+                return CompletableFuture
                     .completedFuture(null);
             });
 

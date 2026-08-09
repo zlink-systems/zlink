@@ -1,5 +1,6 @@
-package systems.zlink.e2e.kotlin.registrymessaging.consumer.Configuration
+package Configuration
 
+import systems.zlink.e2e.kotlin.registrymessaging.consumer.Configuration
 data class ConsumerOptions(
     val httpUrl: String,
     val logDir: String,

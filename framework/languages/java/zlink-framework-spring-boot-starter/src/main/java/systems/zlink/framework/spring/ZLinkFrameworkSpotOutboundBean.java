@@ -1,4 +1,6 @@
 package systems.zlink.framework.spring;
+import systems.zlink.framework.spots.ZLinkSpotRequestCall;
+import systems.zlink.framework.spots.ZLinkSpotSendCall;
 
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
 
@@ -16,14 +18,14 @@ final class ZLinkFrameworkSpotOutboundBean implements ZLinkSpotOutbound {
     }
 
     @Override
-    public systems.zlink.framework.spots.ZLinkSpotSendCall sendToSpot(
+    public ZLinkSpotSendCall sendToSpot(
         String spotId,
         Object message) {
         return lifecycle.spotOutbound().sendToSpot(spotId, message);
     }
 
     @Override
-    public systems.zlink.framework.spots.ZLinkSpotRequestCall requestToSpot(
+    public ZLinkSpotRequestCall requestToSpot(
         String spotId,
         Object request) {
         return lifecycle.spotOutbound().requestToSpot(spotId, request);

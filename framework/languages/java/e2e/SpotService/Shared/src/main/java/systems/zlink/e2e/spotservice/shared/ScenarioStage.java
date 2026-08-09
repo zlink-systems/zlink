@@ -1,4 +1,6 @@
 package systems.zlink.e2e.spotservice.shared;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
 
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
@@ -29,7 +31,7 @@ public final class ScenarioStage {
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("stage timer start interrupted", error);
-        } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException error) {
+        } catch (ExecutionException | TimeoutException error) {
             throw new IllegalStateException("stage timer start failed", error);
         }
     }

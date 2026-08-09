@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.locations;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 
 public final class ZLinkAuthorityKeyCodec {
     private static final char[] HEX = "0123456789ABCDEF".toCharArray();
@@ -8,7 +10,7 @@ public final class ZLinkAuthorityKeyCodec {
     public static String spot(String spotId) {
         byte[] identity = systems.zlink.framework.runtime.internal.spots
             .ZLinkSpotIdValidator.requireValid(spotId)
-            .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            .getBytes(StandardCharsets.UTF_8);
         return encode("zla1:s:", identity, "Spot");
     }
 
@@ -18,7 +20,7 @@ public final class ZLinkAuthorityKeyCodec {
             throw new IllegalArgumentException("actorId is required");
         }
         byte[] identity = actorId.getBytes(
-            java.nio.charset.StandardCharsets.UTF_8);
+            StandardCharsets.UTF_8);
         return encode("zla1:a:", identity, "Actor");
     }
 
@@ -74,7 +76,7 @@ public final class ZLinkAuthorityKeyCodec {
             throw new IllegalArgumentException("invalid " + kind + " authority key", exception);
         }
         String encoded = key.substring(lengthEnd + 1);
-        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream(length);
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream(length);
         for (int index = 0; index < encoded.length();) {
             char value = encoded.charAt(index++);
             if (value != '%') {
@@ -93,7 +95,7 @@ public final class ZLinkAuthorityKeyCodec {
         }
         if (bytes.size() != length || length == 0 || length > 0xff)
             throw new IllegalArgumentException("invalid " + kind + " authority key");
-        return new String(bytes.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+        return new String(bytes.toByteArray(), StandardCharsets.UTF_8);
     }
 
     private static boolean isUnreserved(int value) {

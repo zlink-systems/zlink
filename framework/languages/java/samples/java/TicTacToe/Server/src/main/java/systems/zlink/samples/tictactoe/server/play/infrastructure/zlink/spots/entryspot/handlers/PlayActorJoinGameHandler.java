@@ -1,4 +1,6 @@
 package systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.spots.entryspot.handlers;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.handlers.ZLinkHandlerGroup;
@@ -13,7 +15,7 @@ import systems.zlink.samples.tictactoe.shared.contracts.TicTacToeGameJoinReq;
 // --8<-- [start:doc-join-defer]
 public final class PlayActorJoinGameHandler {
     @ZLinkSpotActorSend
-    public java.util.concurrent.CompletionStage<Void> joinGame(
+    public CompletionStage<Void> joinGame(
         PlayEntrySpot entrySpot,
         PlayActor actor,
         ZLinkMessageContext context,
@@ -24,7 +26,7 @@ public final class PlayActorJoinGameHandler {
                 new TicTacToeGameJoinReq(request.roomId(), actor.requirePlayer()))
             .timeout(SampleNames.RequestTimeout)
             .defer();
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 }
 // --8<-- [end:doc-join-defer]

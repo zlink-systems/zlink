@@ -1,5 +1,6 @@
-package systems.zlink.e2e.registrationcodec.main.Infrastructure;
+package Infrastructure;
 
+import systems.zlink.e2e.registrationcodec.main.Infrastructure;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public final class DiSingletonDependency {

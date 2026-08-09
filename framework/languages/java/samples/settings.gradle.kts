@@ -67,6 +67,9 @@ include(
     ":java:SupportChat:Server:Session",
     ":java:SupportChat:Server:Support",
     ":java:SupportChat:Shared",
+    ":java:ZoneWorld:Client",
+    ":java:ZoneWorld:Server",
+    ":java:ZoneWorld:Shared",
     ":kotlin:Bingo:Client",
     ":kotlin:Bingo:Server:Api",
     ":kotlin:Bingo:Server:Configuration",
@@ -101,4 +104,7 @@ include(
     ":kotlin:SupportChat:Server:Session",
     ":kotlin:SupportChat:Server:Support",
     ":kotlin:SupportChat:Shared",
+    ":kotlin:ZoneWorld:Client",
+    ":kotlin:ZoneWorld:Server",
+    ":kotlin:ZoneWorld:Shared",
 )

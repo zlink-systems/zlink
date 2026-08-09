@@ -45,18 +45,10 @@ import type {
   ServiceUserSpotCloseRecord,
   ServiceUserSpotCreateRecord
 } from '../../foundation/service-stateful-wire-codec';
-
-export type ZLinkBackendSpotNodeMode = number;
-export const ZLINK_BACKEND_SPOT_NODE_MODE_PUBSUB = 1 as ZLinkBackendSpotNodeMode;
-export const ZLINK_BACKEND_SPOT_NODE_MODE_ROUTED = 2 as ZLinkBackendSpotNodeMode;
-export const ZLINK_BACKEND_SPOT_NODE_MODE_ALL = 3 as ZLinkBackendSpotNodeMode;
-export const ZLINK_BACKEND_SPOT_ROUTE_BRIDGE_ROUTE_ONLY = 0x00000001;
 export const ZLINK_BACKEND_SPOT_ROUTE_BRIDGE_ROUTE_WITH_CHANNEL_INBOUND = 0x00000003;
 
 export type ZLinkBackendMeshNodeStatus = MeshNodeStatus;
 export type ZLinkBackendMeshPeerEntry = MeshPeerEntry;
-export type ZLinkBackendReadyBatch = ReadyBatch;
-export type ZLinkBackendReceiveBatch = ReceiveBatch;
 
 export type ZLinkBackendObjectPlacement =
   | {
@@ -422,16 +414,6 @@ export type ZLinkBackendActorJoinEntrySpotCallback = (
   result: ZLinkBackendActorJoinEntrySpotResult,
   parts: readonly Message[]
 ) => void;
-
-export interface ZLinkBackendActorPart {
-  readonly actor: ZLinkBackendActorRef;
-  readonly sourceNodeRid: RoutingId;
-  readonly sourceSessionRid: RoutingId;
-  readonly requestId: bigint;
-  readonly flags: number;
-  readonly message: Message;
-  readonly more: boolean;
-}
 
 export interface ZLinkBackendActorRecvInfo {
   readonly actor: ZLinkBackendActorRef;

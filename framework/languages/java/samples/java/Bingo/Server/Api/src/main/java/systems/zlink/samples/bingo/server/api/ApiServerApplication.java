@@ -1,4 +1,5 @@
 package systems.zlink.samples.bingo.server.api;
+import java.net.URI;
 
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -41,7 +42,7 @@ public final class ApiServerApplication {
                 .setRoutingIdPrefix("api")
                 .listen(topology.selectedApiMeshEndpoint());
             api.objects().client();
-            java.net.URI apiChannelEndpoint = java.net.URI.create(
+            URI apiChannelEndpoint = URI.create(
                 topology.selectedApiChannelEndpoint());
             options.addClientServerChannel(SampleNames.ApiChannel)
                 .server()

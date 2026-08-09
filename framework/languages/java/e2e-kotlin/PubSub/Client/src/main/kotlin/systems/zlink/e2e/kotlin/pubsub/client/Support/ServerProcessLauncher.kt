@@ -1,5 +1,6 @@
-package systems.zlink.e2e.kotlin.pubsub.client.Support
+package Support
 
+import systems.zlink.e2e.kotlin.pubsub.client.Support
 import java.io.File
 import java.util.concurrent.TimeUnit
 

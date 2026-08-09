@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.host;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 final class ZLinkTeardownExecutor {
     private ZLinkTeardownExecutor() {
@@ -10,9 +12,9 @@ final class ZLinkTeardownExecutor {
             .start(teardown);
     }
 
-    static java.util.concurrent.CompletionStage<Void> submit(Runnable teardown) {
-        java.util.concurrent.CompletableFuture<Void> completion =
-            new java.util.concurrent.CompletableFuture<>();
+    static CompletionStage<Void> submit(Runnable teardown) {
+        CompletableFuture<Void> completion =
+            new CompletableFuture<>();
         execute(() -> {
             try {
                 teardown.run();

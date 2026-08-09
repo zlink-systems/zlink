@@ -1,5 +1,7 @@
 package systems.zlink.samples.kotlin.tictactoe.server.api
 
+
+import java.net.URI
 import kotlinx.coroutines.Dispatchers
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.kotlin.configureDispatch
@@ -22,7 +24,7 @@ object ApiServer {
                 messageFlow(ZLinkMessageFlowLogMode.NORMAL)
             }
             options.configureLocations()
-            val apiEndpoint = java.net.URI.create(settings.apiChannelEndpoint)
+            val apiEndpoint = URI.create(settings.apiChannelEndpoint)
             options.addClientServerChannel(SampleNames.ApiChannel)
                 .server()
                 .setBindHost(apiEndpoint.host)

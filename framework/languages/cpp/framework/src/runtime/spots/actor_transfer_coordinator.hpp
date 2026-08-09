@@ -5,6 +5,7 @@
 #include <zlink/framework/contracts/errors/result.hpp>
 
 #include "runtime/actors/actor_ref_access.hpp"
+#include "runtime/protocol/service_wire_codec.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -81,6 +82,8 @@ struct actor_message_follow_target_t
 {
     actor_ref_t actor;
     spot_route_t route;
+    runtime::protocol::actor_route_fence_t source_fence;
+    runtime::protocol::actor_route_fence_t target_fence;
 };
 
 // One in-flight actor packet preserved while its actor is moving (spot-actor
@@ -190,11 +193,15 @@ class actor_transfer_coordinator_t
     // the target commit, refreshed on re-transfer (at most one entry per actor),
     // and removed after the configured duration so retained state cannot pile up.
     void activate_message_follow (const std::string &actor_key,
-                                  std::uint64_t old_generation,
+                                  runtime::protocol::actor_route_fence_t source_fence,
                                   actor_ref_t target_actor,
                                   spot_route_t target_route,
+                                  runtime::protocol::actor_route_fence_t target_fence,
                                   std::chrono::steady_clock::time_point remove_at,
                                   std::string transfer_id = {});
+    bool matches_message_follow_source (
+      const std::string &actor_key,
+      const runtime::protocol::actor_route_fence_t &source_fence) const;
     bool can_follow_stale_generation (const std::string &actor_key,
                                       std::uint64_t generation) const;
     std::optional<actor_message_follow_target_t>
@@ -203,7 +210,9 @@ class actor_transfer_coordinator_t
     try_acquire_message_follow (const std::string &actor_key,
                                 std::uint64_t generation,
                                 std::size_t payload_bytes,
-                                std::size_t hop_count);
+                                std::size_t hop_count,
+                                const runtime::protocol::actor_route_fence_t *
+                                  source_fence = nullptr);
     void release_message_follow (const std::string &actor_key,
                                  std::uint64_t generation,
                                  std::size_t payload_bytes) noexcept;
@@ -259,9 +268,10 @@ class actor_transfer_coordinator_t
 
     struct message_follow_route_t
     {
-        std::uint64_t old_generation = 0;
+        runtime::protocol::actor_route_fence_t source_fence;
         actor_ref_t target_actor;
         spot_route_t target_route;
+        runtime::protocol::actor_route_fence_t target_fence;
         std::chrono::steady_clock::time_point remove_at;
         std::string transfer_id;
         std::size_t in_flight_messages = 0;

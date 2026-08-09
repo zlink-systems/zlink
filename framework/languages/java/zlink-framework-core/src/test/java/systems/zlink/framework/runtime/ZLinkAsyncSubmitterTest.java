@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.host;
+import org.junit.jupiter.api.Assertions;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.messaging.OneWayTestStatus;
 
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
 
@@ -45,7 +49,7 @@ final class ZLinkAsyncSubmitterTest {
 
             assertEquals(
                 2,
-                systems.zlink.framework.runtime.messaging.OneWayTestStatus.status(result));
+                OneWayTestStatus.status(result));
         }
     }
 
@@ -62,7 +66,7 @@ final class ZLinkAsyncSubmitterTest {
 
             assertEquals(
                 0,
-                systems.zlink.framework.runtime.messaging.OneWayTestStatus.status(submission));
+                OneWayTestStatus.status(submission));
             assertEquals(SendFlags.DONT_WAIT, backend.flags);
         }
     }
@@ -78,16 +82,16 @@ final class ZLinkAsyncSubmitterTest {
 
             assertEquals(
                 0,
-                systems.zlink.framework.runtime.messaging.OneWayTestStatus.status(call.submit()));
+                OneWayTestStatus.status(call.submit()));
             CompletionException duplicate = assertThrows(
                 CompletionException.class,
                 () -> call.submit().toCompletableFuture().join());
 
             var frameworkError = assertInstanceOf(
-                systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                ZLinkFrameworkException.class,
                 duplicate.getCause());
             assertEquals(
-                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                ZLinkFrameworkErrorKind.INVALID_OPERATION,
                 frameworkError.kind());
             assertEquals(1, backend.submissions);
         }
@@ -100,7 +104,7 @@ final class ZLinkAsyncSubmitterTest {
         options.addClientServerChannel("profile").client().connect("inproc://profile");
 
         try (ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntimeTestAccess.start(options, new NoReplyBackend())) {
-            CompletionException error = org.junit.jupiter.api.Assertions.assertThrows(
+            CompletionException error = Assertions.assertThrows(
                 CompletionException.class,
                 () -> runtime.client()
                     .requestToChannel("profile", "hello")
@@ -126,7 +130,7 @@ final class ZLinkAsyncSubmitterTest {
 
         runtime.close();
 
-        CompletionException error = org.junit.jupiter.api.Assertions.assertThrows(
+        CompletionException error = Assertions.assertThrows(
             CompletionException.class,
             pending::join);
         assertInstanceOf(ZLinkConfigurationException.class, error.getCause());

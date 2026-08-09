@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.channels;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
 
 import java.time.Duration;
 import systems.zlink.contracts.core.RoutingId;
@@ -94,7 +95,7 @@ public final class ChannelBuilders {
         @Override
         public ZLinkClientServerChannelServerBuilder listen(int port) {
             if (port < 0 || port > 65_535) {
-                throw new systems.zlink.framework.errors.ZLinkConfigurationException(
+                throw new ZLinkConfigurationException(
                     "ClientServer listen port must be between 0 and 65535.");
             }
             listenPort = port;
@@ -163,7 +164,7 @@ public final class ChannelBuilders {
 
         private static String requireHost(String host, String label) {
             if (host == null || host.isBlank()) {
-                throw new systems.zlink.framework.errors.ZLinkConfigurationException(
+                throw new ZLinkConfigurationException(
                     "ClientServer " + label + " must not be empty.");
             }
             return host;
@@ -203,7 +204,7 @@ public final class ChannelBuilders {
         @Override
         public FanoutChannelBuilder enablePublisher(int port) {
             if (port < 0 || port > 65_535) {
-                throw new systems.zlink.framework.errors.ZLinkConfigurationException(
+                throw new ZLinkConfigurationException(
                     "Fanout listen port must be between 0 and 65535.");
             }
             listenPort = port;

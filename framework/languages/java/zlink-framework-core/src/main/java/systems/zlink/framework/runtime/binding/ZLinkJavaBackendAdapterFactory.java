@@ -1,4 +1,11 @@
 package systems.zlink.framework.runtime.binding;
+import java.time.Duration;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.ToIntFunction;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterOptions;
@@ -10,44 +17,44 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkStreamBackendAdapte
 
 public final class ZLinkJavaBackendAdapterFactory implements ZLinkBackendAdapterProvider {
     private static ZLinkJavaAdmissionBacked admission(
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject backend) {
+        ZLinkBackendObject backend) {
         return (ZLinkJavaAdmissionBacked) backend;
     }
 
     @Override
-    public java.util.function.Function<
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject,
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject> admissionSource() {
+    public Function<
+        ZLinkBackendObject,
+        ZLinkBackendObject> admissionSource() {
         return backend -> admission(backend).admissionSource();
     }
 
     @Override
-    public java.util.function.Function<
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject,
-        java.time.Duration> admissionTimeout() {
+    public Function<
+        ZLinkBackendObject,
+        Duration> admissionTimeout() {
         return backend -> admission(backend).admissionTimeout();
     }
 
     @Override
-    public java.util.function.ToIntFunction<
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject>
+    public ToIntFunction<
+        ZLinkBackendObject>
         admissionPendingCapacity() {
         return backend -> admission(backend).admissionPendingCapacity();
     }
 
     @Override
-    public java.util.function.BiConsumer<
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject,
-        java.util.function.Consumer<
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey>>
+    public BiConsumer<
+        ZLinkBackendObject,
+        Consumer<
+            ZLinkBackendAdmissionKey>>
         admissionReadyRegistrar() {
         return (backend, handler) ->
             admission(backend).setAdmissionReadyHandler(handler);
     }
 
     @Override
-    public java.util.function.BiConsumer<
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject,
+    public BiConsumer<
+        ZLinkBackendObject,
         Runnable> admissionShutdownRegistrar() {
         return (backend, handler) ->
             admission(backend).setAdmissionShutdownHandler(handler);

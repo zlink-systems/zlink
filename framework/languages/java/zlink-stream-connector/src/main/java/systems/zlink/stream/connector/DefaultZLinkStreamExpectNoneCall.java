@@ -1,4 +1,6 @@
 package systems.zlink.stream.connector;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.TimeoutException;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -55,9 +57,9 @@ final class DefaultZLinkStreamExpectNoneCall implements ZLinkStreamExpectNoneCal
                         message.payload().payload().close();
                         result.completeExceptionally(new IllegalStateException(
                             "Expected no '" + name + "' message within " + window + "."));
-                    } else if (error instanceof java.util.concurrent.TimeoutException
-                        || (error instanceof java.util.concurrent.CompletionException
-                            && error.getCause() instanceof java.util.concurrent.TimeoutException)) {
+                    } else if (error instanceof TimeoutException
+                        || (error instanceof CompletionException
+                            && error.getCause() instanceof TimeoutException)) {
                         result.complete(null);
                     } else if (error != null) {
                         result.completeExceptionally(error);

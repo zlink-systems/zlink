@@ -293,6 +293,7 @@ export class RuntimeEventQueue<T>
   private waitersHead = 0;
   private waitersCount = 0;
   private cleanup?: () => void;
+  private abortCleanup?: () => void;
   private coalescedCount = 0n;
   private discardedTerminalCount = 0n;
   private sealed = false;
@@ -301,7 +302,14 @@ export class RuntimeEventQueue<T>
 
   constructor(capacity: number, signal?: AbortSignal) {
     if (!Number.isInteger(capacity) || capacity <= 0) throw new RangeError('Observer capacity must be positive.');
-    signal?.addEventListener('abort', () => this.close(), { once: true });
+    if (signal !== undefined) {
+      //  Removed again on close(): with { once } alone, a queue closed
+      //  normally would stay registered on a long-lived signal and leak one
+      //  listener (retaining the whole queue) per observe() call.
+      const onAbort = () => this.close();
+      signal.addEventListener('abort', onAbort, { once: true });
+      this.abortCleanup = () => signal.removeEventListener('abort', onAbort);
+    }
   }
 
   [Symbol.asyncIterator](): AsyncIterator<ZLinkObservedStatus<T>> { return this; }
@@ -385,6 +393,8 @@ export class RuntimeEventQueue<T>
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.abortCleanup?.();
+    this.abortCleanup = undefined;
     this.pending = undefined;
     this.terminal = undefined;
     this.detachSource();

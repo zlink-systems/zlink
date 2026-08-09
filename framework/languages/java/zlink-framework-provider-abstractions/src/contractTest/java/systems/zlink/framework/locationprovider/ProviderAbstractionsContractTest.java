@@ -1,4 +1,6 @@
 package systems.zlink.framework.locationprovider;
+import org.junit.jupiter.api.Assertions;
+import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -36,7 +38,7 @@ final class ProviderAbstractionsContractTest {
                     "put",
                     ZLinkBlobReference.class,
                     byte[].class,
-                    java.time.Duration.class,
+                    Duration.class,
                     ZLinkStoreCancellation.class)
                 .getParameterTypes()[0]);
     }
@@ -84,7 +86,7 @@ final class ProviderAbstractionsContractTest {
     }
 
     private static void assertThrowsUnsupported(Runnable action) {
-        org.junit.jupiter.api.Assertions.assertThrows(
+        Assertions.assertThrows(
             UnsupportedOperationException.class,
             action::run);
     }

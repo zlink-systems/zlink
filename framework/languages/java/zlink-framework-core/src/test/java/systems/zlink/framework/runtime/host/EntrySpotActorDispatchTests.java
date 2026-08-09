@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.host;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -164,7 +165,7 @@ final class EntrySpotActorDispatchTests {
             ReplyRecord reply = awaitSingle(backend.node.noBindReplies);
             DecodedFrame frame = decodeFrame(reply.parts().get(0));
             assertEquals(ZLinkStreamMessageKind.ERROR, frame.header().kind());
-            assertTrue(new String(frame.body(), java.nio.charset.StandardCharsets.UTF_8).contains("boom"));
+            assertTrue(new String(frame.body(), StandardCharsets.UTF_8).contains("boom"));
             assertTrue(backend.node.boundSessionReplies.isEmpty());
             assertEquals(0, backend.node.remoteSessionBinds.size());
 
@@ -180,7 +181,7 @@ final class EntrySpotActorDispatchTests {
             ReplyRecord reply = awaitSingle(backend.node.noBindReplies);
             DecodedFrame frame = decodeFrame(reply.parts().get(0));
             assertEquals(ZLinkStreamMessageKind.ERROR, frame.header().kind());
-            assertTrue(new String(frame.body(), java.nio.charset.StandardCharsets.UTF_8)
+            assertTrue(new String(frame.body(), StandardCharsets.UTF_8)
                 .contains("not registered locally"));
             assertTrue(backend.node.boundSessionReplies.isEmpty());
             assertEquals(0, backend.node.remoteSessionBinds.size());

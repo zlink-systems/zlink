@@ -67,7 +67,7 @@ reserve_ports() {
 build_framework_jars() {
   (
     cd ../../..
-    ./gradlew --no-daemon --no-parallel \
+    ./gradlew --no-daemon --no-parallel --max-workers=1 \
       :zlink-framework-core:jar \
       :zlink-framework-spring-boot-starter:jar \
       :zlink-framework-locations-redis:jar \

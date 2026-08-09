@@ -1,4 +1,10 @@
 package systems.zlink.framework.runtime.spots;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.Collections;
+import java.util.concurrent.CancellationException;
+import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -54,7 +60,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
     private static final int MAX_DESCRIPTORS = 65_536;
     private static final byte[] SOURCE_CLEANUP_PENDING =
         "zlink.spot.source.pending.v1".getBytes(
-            java.nio.charset.StandardCharsets.UTF_8);
+            StandardCharsets.UTF_8);
 
     private final String meshName;
     private final RoutingId localNodeRid;
@@ -73,7 +79,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
     private final ZLinkServiceAuthorityPayloadCodec spotAuthorities =
         new ZLinkServiceAuthorityPayloadCodec();
     private final List<UnresolvedPreparation> unresolved =
-        java.util.Collections.synchronizedList(new ArrayList<>());
+        Collections.synchronizedList(new ArrayList<>());
 
     ZLinkUserSpotRetireSourceBuilder(
         String meshName,
@@ -576,15 +582,15 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 record.sourceSessionSequence()));
         }
         routes.sort((left, right) -> Arrays.compareUnsigned(
-            left.actorId().getBytes(java.nio.charset.StandardCharsets.UTF_8),
-            right.actorId().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            left.actorId().getBytes(StandardCharsets.UTF_8),
+            right.actorId().getBytes(StandardCharsets.UTF_8)));
         return List.copyOf(routes);
     }
 
     private static CompletionStage<byte[]> captureState(
         String stableType,
         RelocationPolicy policy,
-        java.util.function.Supplier<CompletionStage<byte[]>> capture) {
+        Supplier<CompletionStage<byte[]>> capture) {
         if (policy instanceof RelocationPolicy.Recreate) {
             return CompletableFuture.completedFuture(new byte[0]);
         }
@@ -964,8 +970,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
 
     private static List<ZLinkSpotRetireControl.ParticipantFence>
         participantFences(Captured captured) {
-        return java.util.stream.Stream.concat(
-                    java.util.stream.Stream.of(captured.inventory().spot()),
+        return Stream.concat(
+                    Stream.of(captured.inventory().spot()),
                     captured.inventory().actors().stream())
                 .map(owned -> new ZLinkSpotRetireControl.ParticipantFence(
                     owned.key(),
@@ -978,9 +984,9 @@ final class ZLinkUserSpotRetireSourceBuilder {
                     owned.snapshot().authorityOwnerGeneration()))
                 .sorted((left, right) -> Arrays.compareUnsigned(
                     left.authorityKey().getBytes(
-                        java.nio.charset.StandardCharsets.UTF_8),
+                        StandardCharsets.UTF_8),
                     right.authorityKey().getBytes(
-                        java.nio.charset.StandardCharsets.UTF_8)))
+                        StandardCharsets.UTF_8)))
                 .toList();
     }
 
@@ -1128,7 +1134,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 targetOwnerGenerations,
                 "targetOwnerGenerations");
             Map<String, ZLinkSpotRelocationReplyRoutes.CommittedFence>
-                replyFences = new java.util.LinkedHashMap<>();
+                replyFences = new LinkedHashMap<>();
             for (int index = 0;
                 index < stageRequest.participants().size();
                 index++) {
@@ -1236,7 +1242,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
             return coordinator.discardStagedRoot(stagedRoot);
         }
 
-        CompletionStage<Void> cleanupLocal(java.time.Instant deadline) {
+        CompletionStage<Void> cleanupLocal(Instant deadline) {
             Objects.requireNonNull(deadline, "deadline");
             List<String> actorIds = captured.inventory().actorIds();
             String spotId = captured.inventory().spot().id();
@@ -1352,7 +1358,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
     }
 
     private static <T> CompletionStage<T> cancelled() {
-        return failed(new java.util.concurrent.CancellationException());
+        return failed(new CancellationException());
     }
 
     private static <T> CompletionStage<T> failed(Throwable failure) {

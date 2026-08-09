@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.locations;
+import java.util.Arrays;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
@@ -445,7 +446,7 @@ public final class ZLinkServiceAuthorityPayloadCodec {
             }
             require(length);
             byte[] value =
-                java.util.Arrays.copyOfRange(
+                Arrays.copyOfRange(
                     bytes, offset, offset + length);
             offset += length;
             return RoutingId.from(value);
@@ -488,7 +489,7 @@ public final class ZLinkServiceAuthorityPayloadCodec {
         Reader reader(int length) {
             require(length);
             Reader result = new Reader(
-                java.util.Arrays.copyOfRange(
+                Arrays.copyOfRange(
                     bytes, offset, offset + length));
             offset += length;
             return result;

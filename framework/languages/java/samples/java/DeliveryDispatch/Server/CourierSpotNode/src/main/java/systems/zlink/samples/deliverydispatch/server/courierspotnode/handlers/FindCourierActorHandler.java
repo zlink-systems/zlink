@@ -1,4 +1,5 @@
 package systems.zlink.samples.deliverydispatch.server.courierspotnode.handlers;
+import systems.zlink.framework.actors.ActorRefSnapshot;
 
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
@@ -20,7 +21,7 @@ public final class FindCourierActorHandler
         Messages.FindCourierActorReq request) {
         return actors.find(request.courierId()).thenApply(found -> found
             .map(actor -> new Messages.FindCourierActorRes(
-                request.courierId(), systems.zlink.framework.actors.ActorRefSnapshot.from(actor)))
+                request.courierId(), ActorRefSnapshot.from(actor)))
             .orElseGet(() -> new Messages.FindCourierActorRes(request.courierId(), null)));
     }
 }

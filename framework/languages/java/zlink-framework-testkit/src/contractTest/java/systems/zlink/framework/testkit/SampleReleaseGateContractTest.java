@@ -1,4 +1,8 @@
 package systems.zlink.framework.testkit;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -169,7 +173,7 @@ final class SampleReleaseGateContractTest {
                 Path runnerPath = samplesRoot().resolve(language).resolve(sample).resolve("run_sample.sh");
                 String runner = Files.readString(runnerPath);
                 String expectedScope = "zlink-redis-" + language + "-sample-"
-                    + sample.toLowerCase(java.util.Locale.ROOT);
+                    + sample.toLowerCase(Locale.ROOT);
                 assertTrue(runner.contains("zlink_redis_start_scoped_assign"),
                     language + "/" + sample + " must create its own Redis container");
                 assertTrue(runner.contains(expectedScope),
@@ -364,7 +368,7 @@ final class SampleReleaseGateContractTest {
                 .filter(SampleReleaseGateContractTest::isSampleSource)
                 .map(path -> Map.entry(path, forbiddenLines(path)))
                 .filter(entry -> !entry.getValue().isEmpty())
-                .collect(java.util.stream.Collectors.toMap(
+                .collect(Collectors.toMap(
                     Map.Entry::getKey,
                     Map.Entry::getValue));
 
@@ -374,7 +378,7 @@ final class SampleReleaseGateContractTest {
 
     @Test
     void kotlinSamplesAndE2eUseAddHandlerReifiedRegistrationOnly() throws IOException {
-        Map<Path, List<String>> offenders = new java.util.LinkedHashMap<>();
+        Map<Path, List<String>> offenders = new LinkedHashMap<>();
         for (Path root : List.of(samplesRoot().resolve("kotlin"), frameworkJavaRoot().resolve("e2e-kotlin"))) {
             try (Stream<Path> files = Files.walk(root)) {
                 files
@@ -394,7 +398,7 @@ final class SampleReleaseGateContractTest {
 
     @Test
     void javaSamplesUseAutomaticSpotHandlerRegistration() throws IOException {
-        Map<Path, List<String>> offenders = new java.util.LinkedHashMap<>();
+        Map<Path, List<String>> offenders = new LinkedHashMap<>();
         try (Stream<Path> files = Files.walk(samplesRoot().resolve("java"))) {
             files
                 .filter(Files::isRegularFile)
@@ -412,7 +416,7 @@ final class SampleReleaseGateContractTest {
 
     @Test
     void kotlinSamplesUseAutomaticSpotHandlerRegistration() throws IOException {
-        Map<Path, List<String>> offenders = new java.util.LinkedHashMap<>();
+        Map<Path, List<String>> offenders = new LinkedHashMap<>();
         try (Stream<Path> files = Files.walk(samplesRoot().resolve("kotlin"))) {
             files
                 .filter(Files::isRegularFile)
@@ -479,7 +483,7 @@ final class SampleReleaseGateContractTest {
     @Test
     void officialDocsKeepActorDestroyEntryOwned() throws IOException {
         List<Path> docs = officialActorDestroyDocs();
-        List<String> offenders = new java.util.ArrayList<>();
+        List<String> offenders = new ArrayList<>();
         List<String> forbidden = List.of(
             "DestroyActorAsync",
             "destroyActorAsync",
@@ -529,7 +533,7 @@ final class SampleReleaseGateContractTest {
                         .filter(SampleReleaseGateContractTest::isServerRoleSource)
                         .map(path -> Map.entry(path, forbiddenDirectServerStarts(path)))
                         .filter(entry -> !entry.getValue().isEmpty())
-                        .collect(java.util.stream.Collectors.toMap(
+                        .collect(Collectors.toMap(
                             Map.Entry::getKey,
                             Map.Entry::getValue));
 
@@ -1999,7 +2003,7 @@ final class SampleReleaseGateContractTest {
     }
 
     private static List<Path> officialActorDestroyDocs() throws IOException {
-        List<Path> docs = new java.util.ArrayList<>();
+        List<Path> docs = new ArrayList<>();
         for (String relativeRoot : List.of("../../doc/framework/java/guide", "../../doc/framework/java/spec", "../../doc/framework/java/internals")) {
             Path root = frameworkJavaRoot().resolve(relativeRoot);
             if (!Files.exists(root)) {

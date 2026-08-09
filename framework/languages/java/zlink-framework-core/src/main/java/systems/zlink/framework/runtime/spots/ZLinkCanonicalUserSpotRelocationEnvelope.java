@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.HashMap;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
@@ -34,11 +35,11 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
         List<ZLinkSpotRetireControl.ParticipantFence> inventory =
             List.copyOf(participants);
         Map<String, ZLinkUserSpotAggregateStagingOwner.ActorParticipant> actors =
-            new java.util.HashMap<>();
+            new HashMap<>();
         request.actors().forEach(actor -> actors.put(actor.actorId(), actor));
         List<ParticipantTimer> timers = new ArrayList<>();
         List<Journal> journal = new ArrayList<>();
-        Map<Long, Long> boundaries = new java.util.HashMap<>();
+        Map<Long, Long> boundaries = new HashMap<>();
         for (var lane : request.acceptedJournal().entrySet()) {
             long participantId = participantId(inventory, lane.getKey());
             for (var record : lane.getValue()) {
@@ -179,7 +180,7 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
             throw invalid("canonical participant inventory is incomplete");
         }
         Map<Long, ZLinkServiceRelocationEnvelopeCodec.ApplicationState> states =
-            new java.util.HashMap<>();
+            new HashMap<>();
         root.applicationStates().forEach(value -> states.put(
             value.participantId(), value));
         List<ZLinkUserSpotAggregateStagingOwner.ActorParticipant> actors =
@@ -187,8 +188,8 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
         byte[] spotState = null;
         long spotGeneration = 0;
         long spotParticipant = 0;
-        Map<Long, String> lanes = new java.util.HashMap<>();
-        Map<Long, Integer> actorIndexes = new java.util.HashMap<>();
+        Map<Long, String> lanes = new HashMap<>();
+        Map<Long, Integer> actorIndexes = new HashMap<>();
         for (int index = 0; index < inventory.size(); index++) {
             long id = index + 1L;
             var participant = inventory.get(index);
@@ -234,7 +235,7 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
                     entry.sequence(), entry.frozenRecord()));
         }
         Map<TimerKey, ZLinkServiceRelocationEnvelopeCodec.PendingTimerTick>
-            pendingByName = new java.util.HashMap<>();
+            pendingByName = new HashMap<>();
         for (var pending : root.pendingTimerTicks()) {
             if (!lanes.containsKey(pending.participantId())) {
                 throw invalid("canonical timer participant is unknown");
@@ -246,7 +247,7 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
             }
         }
         Map<Long, List<ZLinkSpotTimerRelocationEnvelope.CanonicalTimer>>
-            timersByParticipant = new java.util.HashMap<>();
+            timersByParticipant = new HashMap<>();
         for (var value : root.timerRegistrations()) {
             if (!lanes.containsKey(value.participantId())) {
                 throw invalid("canonical timer participant is unknown");

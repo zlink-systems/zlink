@@ -1,4 +1,7 @@
 package systems.zlink.e2e.registrationcodec.main;
+import org.springframework.beans.factory.ObjectProvider;
+import java.net.URI;
+import systems.zlink.framework.channels.ZLinkClient;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.protobuf.StringValue;
@@ -71,7 +74,7 @@ public final class RegistrationCodecServerApplication {
     OperationalEndpoints operationalEndpoints(
         EvidenceStore evidence,
         ObjectMapper json,
-        systems.zlink.framework.channels.ZLinkClient client,
+        ZLinkClient client,
         ServerOptions options) {
         return new OperationalEndpoints(evidence, json, client, options.httpEndpoint());
     }
@@ -87,7 +90,7 @@ public final class RegistrationCodecServerApplication {
             framework.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             framework.addHandlersFromPackageOf(AutoRequestHandler.class);
-            var endpoint = java.net.URI.create(options.serverEndpoint());
+            var endpoint = URI.create(options.serverEndpoint());
             var channel = framework.addClientServerChannel(Contracts.CHANNEL);
             var server = channel.server()
                 .setBindHost(endpoint.getHost())
@@ -148,7 +151,7 @@ public final class RegistrationCodecServerApplication {
     @Bean ManualRequestHandler manualRequestHandler(EvidenceStore evidence) { return new ManualRequestHandler(evidence); }
     @Bean ManualSendHandler manualSendHandler(EvidenceStore evidence) { return new ManualSendHandler(evidence); }
     @Bean DiLifecycleReqHandler diLifecycleRequestHandler(
-        org.springframework.beans.factory.ObjectProvider<DiScopedDependency> scoped,
+        ObjectProvider<DiScopedDependency> scoped,
         DiSingletonDependency singleton,
         EvidenceStore evidence) {
         return new DiLifecycleReqHandler(scoped, singleton, evidence);

@@ -1,4 +1,5 @@
 package systems.zlink.framework.testkit;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -28,7 +29,7 @@ final class FakeZLinkBackendAdapterTest {
         factory.createMonitoringAdapter(options).openSocketMonitor(stream);
 
         assertEquals(
-            java.util.List.of(
+            List.of(
                 "factory.channel",
                 "create.context",
                 "create.dealer",

@@ -1,4 +1,5 @@
 package systems.zlink.framework.execution;
+import java.util.concurrent.Executors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -447,7 +448,7 @@ final class ZLinkAsyncSerialQueueTest {
         CompletableFuture<Void> remote = new CompletableFuture<>();
         CompletableFuture<Void> handlerStarted = new CompletableFuture<>();
         CompletableFuture<Void> probeStarted = new CompletableFuture<>();
-        try (var handlerExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+        try (var handlerExecutor = Executors.newSingleThreadExecutor()) {
             CompletableFuture<Void> first = queue.enqueue(() -> {
                 CompletableFuture<Void> result = new CompletableFuture<>();
                 ZLinkAsyncSerialQueue.propagateCurrent(handlerExecutor).execute(() -> {
@@ -560,7 +561,7 @@ final class ZLinkAsyncSerialQueueTest {
         CompletableFuture<ZLinkAsyncSerialQueue.RelocationSeal> sealed =
             new CompletableFuture<>();
         List<String> handled =
-            new java.util.concurrent.CopyOnWriteArrayList<>();
+            new CopyOnWriteArrayList<>();
 
         queue.enqueue(() -> {
             intentStarted.complete(null);

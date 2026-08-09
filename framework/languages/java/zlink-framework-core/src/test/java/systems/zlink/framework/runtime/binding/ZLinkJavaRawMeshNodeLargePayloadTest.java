@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.binding;
+import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -26,7 +27,7 @@ final class ZLinkJavaRawMeshNodeLargePayloadTest {
         RoutingId sourceRid = RoutingId.from("large-payload-source");
         RoutingId targetRid = RoutingId.from("large-payload-target");
         byte[] payloadBytes = new byte[1024 * 1024];
-        java.util.Arrays.fill(payloadBytes, (byte) 'x');
+        Arrays.fill(payloadBytes, (byte) 'x');
 
         try (var context = Zlink.createContext();
              var source = new ZLinkJavaRawMeshNode(context, "mesh");

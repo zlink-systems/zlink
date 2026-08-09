@@ -595,6 +595,18 @@ result_t<zlink::message_t> spot_route_internal_dispatcher_t::dispatch_request (
               detail::encoded_payload_from_raw (body.value ()));
             auto runtime = _runtime;
             auto actor_ref = actor_ref_from_spot_route (request);
+            const auto message_follow_target =
+              request.message_follow_hop_count == 0
+                ? std::optional<zlink::framework::runtime::protocol::
+                    actor_route_fence_t>{}
+                : std::make_optional (
+                    zlink::framework::runtime::protocol::actor_route_fence_t{
+                      request.actor_id,
+                      request.actor_generation,
+                      zlink::routing_id_t::from (request.actor_node_rid).to_bytes (),
+                      request.actor_node_generation,
+                      request.actor_authority_owner_generation,
+                      request.actor_owner_lease_generation});
             spot_inbound_message_t metadata;
             metadata.content_type = request.content_type;
             metadata.values = request.metadata;
@@ -615,7 +627,8 @@ result_t<zlink::message_t> spot_route_internal_dispatcher_t::dispatch_request (
             auto relayed = runtime.manager ().relay_actor_packet (
               actor_ref, actor_gateway.actor_context (actor_ref), message_kind,
               request.packet_name_value, zlink::message_t::from (request.payload), services,
-              *_serializers, std::move (metadata));
+              *_serializers, std::move (metadata),
+              message_follow_target ? &*message_follow_target : nullptr);
             if (!relayed) {
                 return detail::propagate_failure<zlink::message_t> (relayed, "remote actor packet failed");
             }

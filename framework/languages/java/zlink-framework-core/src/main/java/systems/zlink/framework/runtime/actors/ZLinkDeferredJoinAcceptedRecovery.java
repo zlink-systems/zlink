@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.concurrent.CompletionException;
+import java.util.logging.Logger;
+import java.util.zip.CRC32C;
+import systems.zlink.contracts.core.RoutingId;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -39,8 +43,8 @@ import systems.zlink.framework.runtime.internal.locations
 final class ZLinkDeferredJoinAcceptedRecovery {
     private static final boolean STREAM_TRACE =
         "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
-    private static final java.util.logging.Logger LOGGER =
-        java.util.logging.Logger.getLogger(ZLinkDeferredJoinAcceptedRecovery.class.getName());
+    private static final Logger LOGGER =
+        Logger.getLogger(ZLinkDeferredJoinAcceptedRecovery.class.getName());
     private static final int FORMAT_VERSION = 1;
     private static final int CURSOR_COMMITTED = 1;
     private static final Duration RETENTION = Duration.ofHours(24);
@@ -95,7 +99,7 @@ final class ZLinkDeferredJoinAcceptedRecovery {
         ZLinkBackendActorRef actor,
         String actorType,
         String targetSpotId,
-        systems.zlink.contracts.core.RoutingId targetNodeRid,
+        RoutingId targetNodeRid,
         boolean restoreSnapshot,
         byte[] applicationState,
         List<ZLinkAsyncSerialQueue.QueuedRecord> acceptedJournal,
@@ -344,7 +348,7 @@ final class ZLinkDeferredJoinAcceptedRecovery {
 
     private static boolean isCanonicalRootMissing(Throwable error) {
         Throwable current = error;
-        while (current instanceof java.util.concurrent.CompletionException
+        while (current instanceof CompletionException
             && current.getCause() != null) {
             current = current.getCause();
         }
@@ -513,7 +517,7 @@ final class ZLinkDeferredJoinAcceptedRecovery {
     }
 
     private static long crc32c(byte[] payload) {
-        java.util.zip.CRC32C checksum = new java.util.zip.CRC32C();
+        CRC32C checksum = new CRC32C();
         checksum.update(payload, 0, payload.length);
         return checksum.getValue();
     }

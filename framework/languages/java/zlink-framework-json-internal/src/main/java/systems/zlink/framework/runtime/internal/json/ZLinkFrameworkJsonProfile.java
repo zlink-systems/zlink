@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.json;
+import java.lang.annotation.Annotation;
 
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
@@ -158,7 +159,7 @@ public final class ZLinkFrameworkJsonProfile {
         }
 
         private static boolean isKotlinClass(Class<?> type) {
-            for (java.lang.annotation.Annotation annotation
+            for (Annotation annotation
                 : type.getDeclaredAnnotations()) {
                 if (annotation.annotationType().getName().equals("kotlin.Metadata")) {
                     return true;

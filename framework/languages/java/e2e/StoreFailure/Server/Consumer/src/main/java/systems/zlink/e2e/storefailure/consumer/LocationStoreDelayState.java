@@ -1,4 +1,5 @@
 package systems.zlink.e2e.storefailure.consumer;
+import java.io.IOException;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -26,7 +27,7 @@ final class LocationStoreDelayState {
         }
         try {
             Files.writeString(controlFile, Integer.toString(delayMilliseconds));
-        } catch (java.io.IOException error) {
+        } catch (IOException error) {
             throw new IllegalStateException("failed to update store delay control", error);
         }
     }

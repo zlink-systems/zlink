@@ -313,14 +313,14 @@ export class ZLinkBoundSessionService {
   }
 
   relayRemoteBoundSessionBind(stream: ZLinkManagedStream, actorRef: ActorRef): void {
-    const header = ZLinkBindingMessage.from(Buffer.from(encodeStreamHeader({
+    const header = ZLinkBindingMessage.fromOwned(Buffer.from(encodeStreamHeader({
       kind: ZLinkStreamMessageKind.Send,
       codec: ZLinkStreamCodec.Raw,
       flags: ZLinkStreamHeaderFlags.None,
       name: 'zlink.framework.actor.bound_session.bind',
       metadata: new Map()
     })));
-    const body = ZLinkBindingMessage.from(Buffer.alloc(0));
+    const body = ZLinkBindingMessage.fromOwned(Buffer.alloc(0));
     try {
       if (!stream.sendBoundActor(actorRef.actorId, [header, body], 0)) {
         throw createInternalFrameworkException(

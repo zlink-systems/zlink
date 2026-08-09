@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.binding.spot;
+import java.util.Objects;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -51,7 +52,7 @@ final class FrameworkReadyBatch implements ReadyBatch {
         closed = true;
         entries.stream()
             .map(Entry::claim)
-            .filter(java.util.Objects::nonNull)
+            .filter(Objects::nonNull)
             .forEach(Claim::close);
         entries.clear();
     }

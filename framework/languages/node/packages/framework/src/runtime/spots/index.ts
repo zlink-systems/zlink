@@ -306,16 +306,26 @@ export class DefaultZLinkSpotManager {
     string,
     Promise<ZLinkSpotActivation>
   >();
+  //  Parallel index keyed by `${meshName}\0${spotId}` so per-activation
+  //  callbacks (isInstanceMaterializing, sibling-generation lookups) resolve
+  //  in O(1) instead of scanning every pending key.
+  private readonly pendingInstanceMaterializationsByPrefix = new Map<
+    string,
+    Map<string, Promise<ZLinkSpotActivation>>
+  >();
   private readonly instanceActivationGates = new Map<string, {
     readonly meshName: string;
     readonly limit: number;
     active: number;
+    //  Tombstone slots + head cursor keep abort O(1) and admit O(1) amortized
+    //  instead of indexOf/splice + shift scans under a cancellation storm.
     readonly waiters: Array<{
       resolve: (release: () => void) => void;
       reject: (error: unknown) => void;
       signal?: AbortSignal;
       abort?: () => void;
-    }>;
+    } | undefined>;
+    waiterHead: number;
   }>();
   private readonly pendingInstanceCloses = new Map<string, Promise<boolean>>();
   private readonly pendingInstanceTerminals = new Map<string, number>();
@@ -597,8 +607,10 @@ export class DefaultZLinkSpotManager {
 
       let pending = this.pendingInstanceMaterializations.get(materializationKey);
       if (pending === undefined) {
-        const otherPending = [...this.pendingInstanceMaterializations.entries()]
-          .find(([pendingKey]) => pendingKey.startsWith(`${materializationPrefix}\0`))?.[1];
+        const siblings = this.pendingInstanceMaterializationsByPrefix.get(materializationPrefix);
+        const otherPending = siblings === undefined
+          ? undefined
+          : siblings.values().next().value;
         if (otherPending !== undefined) {
           await awaitWithAbort(otherPending, signal);
           continue;
@@ -624,9 +636,22 @@ export class DefaultZLinkSpotManager {
             }
           );
         this.pendingInstanceMaterializations.set(materializationKey, pending);
+        let siblings = this.pendingInstanceMaterializationsByPrefix.get(materializationPrefix);
+        if (siblings === undefined) {
+          siblings = new Map();
+          this.pendingInstanceMaterializationsByPrefix.set(materializationPrefix, siblings);
+        }
+        siblings.set(materializationKey, pending);
         void pending.finally(() => {
           if (this.pendingInstanceMaterializations.get(materializationKey) === pending) {
             this.pendingInstanceMaterializations.delete(materializationKey);
+          }
+          const bucket = this.pendingInstanceMaterializationsByPrefix.get(materializationPrefix);
+          if (bucket !== undefined && bucket.get(materializationKey) === pending) {
+            bucket.delete(materializationKey);
+            if (bucket.size === 0) {
+              this.pendingInstanceMaterializationsByPrefix.delete(materializationPrefix);
+            }
           }
         }).catch(() => undefined);
       }
@@ -645,7 +670,8 @@ export class DefaultZLinkSpotManager {
         meshName,
         limit: this.options.activationConcurrencyLimitProvider?.(meshName) ?? 128,
         active: 0,
-        waiters: []
+        waiters: [],
+        waiterHead: 0
       };
       this.instanceActivationGates.set(meshName, gate);
     }
@@ -657,9 +683,9 @@ export class DefaultZLinkSpotManager {
     }
     return new Promise<() => void>((resolve, reject) => {
       const waiter = { resolve, reject, signal, abort: undefined as (() => void) | undefined };
+      const slot = gate!.waiters.length;
       waiter.abort = () => {
-        const index = gate!.waiters.indexOf(waiter);
-        if (index >= 0) gate!.waiters.splice(index, 1);
+        if (gate!.waiters[slot] === waiter) gate!.waiters[slot] = undefined;
         reject(signal?.reason);
       };
       signal?.addEventListener('abort', waiter.abort, { once: true });
@@ -676,14 +702,24 @@ export class DefaultZLinkSpotManager {
       reject: (error: unknown) => void;
       signal?: AbortSignal;
       abort?: () => void;
-    }>;
+    } | undefined>;
+    waiterHead: number;
   }): void {
-    const waiter = gate.waiters.shift();
-    if (waiter !== undefined) {
+    while (gate.waiterHead < gate.waiters.length) {
+      const waiter = gate.waiters[gate.waiterHead];
+      gate.waiters[gate.waiterHead] = undefined;
+      gate.waiterHead += 1;
+      if (gate.waiterHead >= gate.waiters.length) {
+        gate.waiters.length = 0;
+        gate.waiterHead = 0;
+      }
+      if (waiter === undefined) continue;
       if (waiter.abort !== undefined) waiter.signal?.removeEventListener('abort', waiter.abort);
       waiter.resolve(() => this.releaseInstanceActivation(gate));
       return;
     }
+    gate.waiters.length = 0;
+    gate.waiterHead = 0;
     gate.active -= 1;
     this.options.onInstanceActivationConcurrencyChanged?.(gate.meshName);
   }
@@ -700,8 +736,7 @@ export class DefaultZLinkSpotManager {
 
   isInstanceMaterializing(meshName: string, spotId: RoutingId): boolean {
     const prefix = instanceMaterializationPrefix(meshName, spotId);
-    return [...this.pendingInstanceMaterializations.keys()]
-      .some(key => key.startsWith(`${prefix}\0`));
+    return (this.pendingInstanceMaterializationsByPrefix.get(prefix)?.size ?? 0) > 0;
   }
 
   isInstanceClosing(meshName: string, spotId: RoutingId): boolean {

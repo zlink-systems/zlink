@@ -531,7 +531,12 @@ function channelKindName(kind: ZLinkChannelMessageKind): string {
   }
 }
 
+const EMPTY_APPLICATION_METADATA: Readonly<Record<string, string>> = Object.freeze({});
+
 function applicationMetadataRecord(metadata: ReadonlyMap<string, string>): Readonly<Record<string, string>> {
+  //  The common case carries no metadata; skip the record + JSON.stringify
+  //  byte-limit walk entirely.
+  if (metadata.size === 0) return EMPTY_APPLICATION_METADATA;
   const record: Record<string, string> = {};
   for (const [key, value] of metadata) {
     if (key.length === 0 || key.includes('\0') || value.includes('\0')) {

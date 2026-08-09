@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.locations;
+import java.util.function.BiFunction;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -97,9 +101,9 @@ final class ZLinkStoreLocationResolversTest {
             CompletionException.class,
             () -> resolvers.resolveSpot("room-a").toCompletableFuture().join());
         assertEquals(
-            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+            ZLinkFrameworkErrorKind.UNAVAILABLE,
             assertInstanceOf(
-                systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                ZLinkFrameworkException.class,
                 failure.getCause()).kind());
     }
 
@@ -147,9 +151,9 @@ final class ZLinkStoreLocationResolversTest {
                 () -> query.findSpotLocation("room-a").toCompletableFuture().join());
 
             assertEquals(
-                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
                 assertInstanceOf(
-                    systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                    ZLinkFrameworkException.class,
                     failure.getCause()).kind());
         }
     }
@@ -264,7 +268,7 @@ final class ZLinkStoreLocationResolversTest {
                 List.of()),
             new ZLinkActivationConcurrency(0, 1),
             Optional.empty(),
-            systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState.SERVING,
+            ZLinkFrameworkRuntimeState.SERVING,
             "security",
             ownerId,
             1,
@@ -272,7 +276,7 @@ final class ZLinkStoreLocationResolversTest {
     }
 
     private static ZLinkLocationRepository repository(
-        java.util.function.BiFunction<String, Object[], Object> invocation) {
+        BiFunction<String, Object[], Object> invocation) {
         return (ZLinkLocationRepository) Proxy.newProxyInstance(
             ZLinkStoreLocationResolversTest.class.getClassLoader(),
             new Class<?>[] {ZLinkLocationRepository.class},

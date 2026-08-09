@@ -1,4 +1,5 @@
 package systems.zlink.samples.shoppingmall.server.shared.domain;
+import java.util.List;
 
 import systems.zlink.samples.shoppingmall.shared.contracts.Messages;
 
@@ -72,7 +73,7 @@ public final class OrderProjection {
         };
     }
 
-    public static Messages.OrderState fold(java.util.List<OrderDomain.StoredOrderEvent> events) {
+    public static Messages.OrderState fold(List<OrderDomain.StoredOrderEvent> events) {
         Messages.OrderState state = null;
         for (OrderDomain.StoredOrderEvent event : events) {
             state = fold(state, event.event());

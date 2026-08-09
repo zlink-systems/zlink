@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime;
+import systems.zlink.framework.locationprovider.ZLinkLocationStore;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology;
+import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
@@ -88,7 +91,7 @@ final class DefaultZLinkFrameworkOptionsTest {
     void retireTopologyGateUsesRegistrationRatherThanConnectionState() {
         DefaultZLinkFrameworkOptions options =
             new DefaultZLinkFrameworkOptions();
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "manual-route")
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "manual-route")
             .enableClient("inproc://manual-route");
         options.addClientServerChannel("manual-client")
             .client()
@@ -257,7 +260,7 @@ final class DefaultZLinkFrameworkOptionsTest {
     @Test
     void locationStoreConfigurationMutatesRegistrationModel() {
         DefaultZLinkFrameworkOptions instance = new DefaultZLinkFrameworkOptions();
-        systems.zlink.framework.locationprovider.ZLinkLocationStore store =
+        ZLinkLocationStore store =
             new ZLinkInMemoryLocationStore();
         instance.addLocationStore(store);
         assertEquals(store, instance.registration().locations().storeInstance());
@@ -389,7 +392,7 @@ final class DefaultZLinkFrameworkOptionsTest {
 
         assertThrows(
             ZLinkConfigurationException.class,
-            () -> systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "orders"));
+            () -> ZLinkLegacyTopology.addRouteMeshChannel(options, "orders"));
     }
 
     @Test
@@ -429,7 +432,7 @@ final class DefaultZLinkFrameworkOptionsTest {
     void routeMeshClientWithManualConnectionDoesNotRequireBindEndpoint() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "play"); channel.enableClient("inproc://play-a"); };
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "play"); channel.enableClient("inproc://play-a"); };
 
         options.validate();
     }
@@ -438,7 +441,7 @@ final class DefaultZLinkFrameworkOptionsTest {
     void spotPublisherClientUsesSpotMeshPubSubNode() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var mesh = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addSpotMesh(options, "game"); { var node = mesh; node.enablePubSub("inproc://publisher");}; };
+        { var mesh = ZLinkLegacyTopology.addSpotMesh(options, "game"); { var node = mesh; node.enablePubSub("inproc://publisher");}; };
 
         options.validate();
         assertEquals("game", options.registration().spotNodes().get(0).meshName());
@@ -450,7 +453,7 @@ final class DefaultZLinkFrameworkOptionsTest {
         RoutingId nodeRid =
             RoutingId.from("spot-node-1");
 
-        { var mesh = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addSpotMesh(options, "game"); { var node = mesh;
+        { var mesh = ZLinkLegacyTopology.addSpotMesh(options, "game"); { var node = mesh;
                 node.setRoutingId(nodeRid).enableRouter("inproc://spot-router-bind")
                     .connectRouter("inproc://spot-router-peer");
                 node.enablePubSub("inproc://spot-pub-bind");
@@ -470,18 +473,18 @@ final class DefaultZLinkFrameworkOptionsTest {
     void spotRouterAndPubSubManualConnectionsRejectBlankEndpoint() {
         DefaultZLinkFrameworkOptions router = new DefaultZLinkFrameworkOptions();
         assertThrows(ZLinkConfigurationException.class, () ->
-            { var mesh = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addSpotMesh(router, "game"); { var node = mesh; node.connectRouter(" "); }; });
+            { var mesh = ZLinkLegacyTopology.addSpotMesh(router, "game"); { var node = mesh; node.connectRouter(" "); }; });
 
         DefaultZLinkFrameworkOptions pubSub = new DefaultZLinkFrameworkOptions();
         assertThrows(ZLinkConfigurationException.class, () ->
-            { var mesh = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addSpotMesh(pubSub, "game"); { var node = mesh; node.connectPeerPub(" "); }; });
+            { var mesh = ZLinkLegacyTopology.addSpotMesh(pubSub, "game"); { var node = mesh; node.connectPeerPub(" "); }; });
     }
 
     @Test
     void spotNodeRejectsReplacingRoutingId() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var mesh = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addSpotMesh(options, "game"); { var node = mesh; node.setRoutingId(
+        { var mesh = ZLinkLegacyTopology.addSpotMesh(options, "game"); { var node = mesh; node.setRoutingId(
                         RoutingId.from("node-a"));
                 assertThrows(ZLinkConfigurationException.class, () -> node.setRoutingId(
                         RoutingId.from("node-b"))); }; };
@@ -491,7 +494,7 @@ final class DefaultZLinkFrameworkOptionsTest {
     void entrySpotIdIsFrameworkIssuedAndStableForTheLifecycle() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var mesh = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addSpotMesh(options, "game"); { var node = mesh;
+        { var mesh = ZLinkLegacyTopology.addSpotMesh(options, "game"); { var node = mesh;
                 node.enableRouter("inproc://entry-router"); }; };
 
         options.validate();
@@ -509,8 +512,8 @@ final class DefaultZLinkFrameworkOptionsTest {
     void entrySpotIdDiffersAcrossRegistrations() {
         DefaultZLinkFrameworkOptions first = new DefaultZLinkFrameworkOptions();
         DefaultZLinkFrameworkOptions second = new DefaultZLinkFrameworkOptions();
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addSpotMesh(first, "game");
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addSpotMesh(second, "game");
+        ZLinkLegacyTopology.addSpotMesh(first, "game");
+        ZLinkLegacyTopology.addSpotMesh(second, "game");
 
         assertTrue(!first.registration().spotNodes().get(0).entrySpotId()
             .equals(second.registration().spotNodes().get(0).entrySpotId()));
@@ -519,7 +522,7 @@ final class DefaultZLinkFrameworkOptionsTest {
     @Test
     void objectServerEntrySpotIdUsesConfiguredRoutingIdPrefix() {
         var registration =
-            new systems.zlink.framework.runtime.mesh.MeshNodeRegistration(
+            new MeshNodeRegistration(
                 "game");
         registration.objects().server();
         registration.setRoutingIdPrefix("host-a");
@@ -746,7 +749,7 @@ final class DefaultZLinkFrameworkOptionsTest {
     void routeMeshChannelWithoutBindIsRejected() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); };
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); };
 
         assertThrows(ZLinkConfigurationException.class, options::validate);
     }
@@ -755,7 +758,7 @@ final class DefaultZLinkFrameworkOptionsTest {
     void routeMeshChannelWithoutPeerAcquisitionPathIsRejected() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableClient(); };
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableClient(); };
 
         assertThrows(ZLinkConfigurationException.class, options::validate);
     }
@@ -765,7 +768,7 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.addLocationStore(new ZLinkInMemoryLocationStore());
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableClient(); };
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableClient(); };
 
         assertDoesNotThrow(options::validate);
     }
@@ -774,7 +777,7 @@ final class DefaultZLinkFrameworkOptionsTest {
     void routeMeshChannelManualConnectionsAreAcceptedWithoutLocationAutoConnect() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableServer("inproc://route");
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableServer("inproc://route");
             channel.enableClient("inproc://route-peer"); };
 
         assertDoesNotThrow(options::validate);
@@ -784,7 +787,7 @@ final class DefaultZLinkFrameworkOptionsTest {
     void routeMeshChannelRejectsDuplicateRequestHandlerPacketName() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableServer("inproc://route");
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableServer("inproc://route");
             channel.enableClient("inproc://route-peer");
             channel.addRequestHandler(RouteEchoHandler.class, String.class, String.class, "Echo");
             channel.addRequestHandler(RouteEchoHandler.class, String.class, String.class, "Echo"); };
@@ -797,7 +800,7 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.addHandlersFromPackageOf(DefaultZLinkFrameworkOptionsTest.class);
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableServer("inproc://route");
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableServer("inproc://route");
             channel.enableClient("inproc://route");
             channel.addHandlerGroup("scanned-route");
             channel.addRequestHandler(RouteEchoHandler.class, String.class, String.class); };
@@ -813,7 +816,7 @@ final class DefaultZLinkFrameworkOptionsTest {
     void routeMeshChannelRejectsDuplicateSendHandlerPacketName() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableServer("inproc://route");
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableServer("inproc://route");
             channel.enableClient("inproc://route-peer");
             channel.addSendHandler(RouteSendHandler.class, String.class);
             channel.addSendHandler(RouteSendHandler.class, String.class); };
@@ -825,7 +828,7 @@ final class DefaultZLinkFrameworkOptionsTest {
     void routeMeshChannelRejectsSendAndRequestWithSamePacketName() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableServer("inproc://route");
+        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableServer("inproc://route");
             channel.enableClient("inproc://route-peer");
             channel.addSendHandler(RouteSendHandler.class, String.class, "Notify");
             channel.addRequestHandler(RouteEchoHandler.class, String.class, String.class, "Notify"); };
@@ -935,15 +938,15 @@ final class DefaultZLinkFrameworkOptionsTest {
     @Test
     void spotNodeRequiresAtLeastOneBoundCapability() {
         DefaultZLinkFrameworkOptions empty = new DefaultZLinkFrameworkOptions();
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addSpotMesh(empty, "empty");
+        ZLinkLegacyTopology.addSpotMesh(empty, "empty");
         assertThrows(ZLinkConfigurationException.class, empty::validate);
 
         DefaultZLinkFrameworkOptions routerWithoutBind = new DefaultZLinkFrameworkOptions();
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addSpotMesh(routerWithoutBind, "router").connectRouter("inproc://peer-router");
+        ZLinkLegacyTopology.addSpotMesh(routerWithoutBind, "router").connectRouter("inproc://peer-router");
         assertThrows(ZLinkConfigurationException.class, routerWithoutBind::validate);
 
         DefaultZLinkFrameworkOptions pubSubWithoutBind = new DefaultZLinkFrameworkOptions();
-        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology.addSpotMesh(pubSubWithoutBind, "pubsub").connectPeerPub("inproc://peer-pub");
+        ZLinkLegacyTopology.addSpotMesh(pubSubWithoutBind, "pubsub").connectPeerPub("inproc://peer-pub");
         assertThrows(ZLinkConfigurationException.class, pubSubWithoutBind::validate);
     }
 

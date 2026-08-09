@@ -1,4 +1,5 @@
 package systems.zlink.e2e.instancespot.owner;
+import java.nio.file.StandardOpenOption;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -91,8 +92,8 @@ public final class EvidenceStore {
                     + event.payload() + "|" + event.objectGeneration() + "|"
                     + event.activeHandlers() + System.lineSeparator(),
                 StandardCharsets.UTF_8,
-                java.nio.file.StandardOpenOption.CREATE,
-                java.nio.file.StandardOpenOption.APPEND);
+                StandardOpenOption.CREATE,
+                StandardOpenOption.APPEND);
         } catch (IOException error) {
             throw new IllegalStateException("failed to write Instance Spot evidence", error);
         }

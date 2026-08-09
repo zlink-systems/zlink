@@ -1,5 +1,7 @@
-package systems.zlink.e2e.kotlin.registrymessaging.consumer.Endpoints
+package Endpoints
 
+import systems.zlink.e2e.kotlin.registrymessaging.consumer.Configuration
+import systems.zlink.e2e.kotlin.registrymessaging.consumer.Endpoints
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.sun.net.httpserver.HttpExchange
