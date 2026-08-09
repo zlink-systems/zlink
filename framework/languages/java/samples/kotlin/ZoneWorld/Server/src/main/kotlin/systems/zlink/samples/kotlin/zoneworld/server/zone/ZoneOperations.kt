@@ -29,7 +29,11 @@ class ZoneBootstrap(
     private val store: MaintenanceStore,
 ) : ApplicationRunner {
     override fun run(args: ApplicationArguments) {
-        maintenance.apply(topology.nodeValue(), store.get(topology.nodeValue()))
+        // Maintenance is desired state, not a message: a node that starts reads it back from
+        // the store, so a restart cannot quietly reopen a node the operator closed.
+        val restored = store.get(topology.nodeValue())
+        maintenance.apply(topology.nodeValue(), restored)
+        println("maintenance restored node=${topology.nodeValue()} enabled=$restored")
         ZoneWorldSpec.zonesOf(topology.nodeValue()).forEach { zone ->
             spots.getOrCreate(zone, ZoneWorldNames.ZONE_SPOT_TYPE).inMesh(ZoneWorldNames.MESH).submit()
                 .toCompletableFuture().join()

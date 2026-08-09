@@ -22,6 +22,7 @@ import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
@@ -32,6 +33,7 @@ import systems.zlink.samples.kotlin.zoneworld.server.configuration.NodeMaintenan
 import systems.zlink.samples.kotlin.zoneworld.server.configuration.NodeRegistry
 import systems.zlink.samples.kotlin.zoneworld.server.configuration.SampleTopology
 import systems.zlink.samples.kotlin.zoneworld.server.gateway.GameSession
+import systems.zlink.samples.kotlin.zoneworld.server.ops.NodeLivenessObserver
 import systems.zlink.samples.kotlin.zoneworld.server.ops.OpsSession
 import systems.zlink.samples.kotlin.zoneworld.server.zone.ZoneBootstrap
 import systems.zlink.samples.kotlin.zoneworld.server.zone.ZoneStatusReporter
@@ -77,7 +79,14 @@ class Program {
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
         val mesh: ZLinkMeshNodeBuilder = options.addRouteMesh(ZoneWorldNames.MESH)
             .listen(topology.meshValue())
-            .setRoutingIdPrefix("zoneworld-kotlin-${topology.roleValue()}")
+            // A zone node names its application identity in the routing id prefix; the
+            // framework appends a per-process UUID, so a replacement started for the same
+            // node id still publishes a routing id no earlier process ever held.
+            .setRoutingIdPrefix(
+                ZoneWorldNames.routingIdPrefix(
+                    if (topology.isRole("zone")) topology.nodeValue() else topology.roleValue(),
+                ),
+            )
         when (topology.roleValue()) {
             "gateway" -> {
                 mesh.objects().client()
@@ -121,6 +130,11 @@ class Program {
             println("framework lifecycle role=${topology.roleValue()} state=${runtime?.status()?.state()}")
             println("runtime event mesh=${ZoneWorldNames.MESH} state=SERVING")
         }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "sample", name = ["role"], havingValue = "ops")
+    fun nodeLivenessObserver(runtime: ZLinkRouteMeshRuntime, registry: NodeRegistry) =
+        NodeLivenessObserver(runtime, registry)
 
     @Bean
     @ConditionalOnProperty(prefix = "sample", name = ["role"], havingValue = "zone")

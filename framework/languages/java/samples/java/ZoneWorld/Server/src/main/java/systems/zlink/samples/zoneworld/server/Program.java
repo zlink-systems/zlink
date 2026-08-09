@@ -35,6 +35,7 @@ import systems.zlink.samples.zoneworld.server.configuration.NodeRegistry;
 import systems.zlink.samples.zoneworld.server.configuration.SampleLocationStore;
 import systems.zlink.samples.zoneworld.server.configuration.SampleTopology;
 import systems.zlink.samples.zoneworld.server.gateway.GameSession;
+import systems.zlink.samples.zoneworld.server.ops.NodeLivenessObserver;
 import systems.zlink.samples.zoneworld.server.ops.OpsSession;
 import systems.zlink.samples.zoneworld.server.zone.ZoneBootstrap;
 import systems.zlink.samples.zoneworld.server.zone.ZoneStatusReporter;
@@ -116,9 +117,13 @@ public final class Program {
             options.addHandlersFromPackageOf(Program.class);
             options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
 
+            // A zone node names its application identity in the routing id prefix; the
+            // framework appends a per-process UUID, so a replacement started for the same
+            // node id still publishes a routing id no earlier process ever held.
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh(ZoneWorldNames.MESH)
                 .listen(topology.meshEndpoint())
-                .setRoutingIdPrefix("zoneworld-" + topology.role());
+                .setRoutingIdPrefix(ZoneWorldNames.routingIdPrefix(
+                    topology.is("zone") ? topology.nodeId() : topology.role()));
 
             if (topology.is("gateway")) {
                 mesh.objects().client();
@@ -204,6 +209,14 @@ public final class Program {
                     }
                 });
         };
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "sample", name = "role", havingValue = "ops")
+    NodeLivenessObserver nodeLivenessObserver(
+        ZLinkRouteMeshRuntime runtime,
+        NodeRegistry registry) {
+        return new NodeLivenessObserver(runtime, registry);
     }
 
     @Bean

@@ -32,7 +32,12 @@ public final class ZoneBootstrap implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        maintenance.apply(topology.nodeId(), store.get(topology.nodeId()));
+        // Maintenance is desired state, not a message: a node that starts reads it back from
+        // the store, so a restart cannot quietly reopen a node the operator closed.
+        boolean restored = store.get(topology.nodeId());
+        maintenance.apply(topology.nodeId(), restored);
+        System.out.println("maintenance restored node=" + topology.nodeId()
+            + " enabled=" + restored);
         for (String zone : ZoneWorldSpec.zonesOf(topology.nodeId())) {
             spots.getOrCreate(zone, ZoneWorldNames.ZONE_SPOT_TYPE)
                 .inMesh(ZoneWorldNames.MESH)

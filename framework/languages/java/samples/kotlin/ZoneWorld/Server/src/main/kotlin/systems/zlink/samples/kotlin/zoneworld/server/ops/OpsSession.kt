@@ -43,8 +43,10 @@ class OpsSession(
     private fun setMaintenance(request: Messages.SetMaintenanceReq): CompletionStage<Void> {
         val zones = ZoneWorldSpec.zonesOf(request.nodeId)
         if (zones.isEmpty()) return reply(Messages.SetMaintenanceRes(request.nodeId, false, emptyList(), "UnknownNode"))
+        // The desired state is committed to the store; what the console shows for the node
+        // stays whatever the node itself last reported, so an observed maintenance value is
+        // always the node's own and never the operator's intent echoed back.
         maintenance.set(request.nodeId, request.enabled)
-        registry.setMaintenance(request.nodeId, request.enabled)
         return fanout.publish(ZoneWorldNames.BROADCAST_CHANNEL, ZoneWorldNames.MAINTENANCE_TOPIC,
             Messages.NodeMaintenanceChangedEvent(request.nodeId, request.enabled)).submit()
             .thenCompose { reply(Messages.SetMaintenanceRes(request.nodeId, request.enabled, zones)) }

@@ -19,8 +19,23 @@ import systems.zlink.stream.connector.ZLinkStreamDispatchMode
 
 private val REQUEST_TIMEOUT = Duration.ofSeconds(15)
 
-suspend fun main(args: Array<String>) = coroutineScope {
+// A node lifecycle is a process lifecycle: the observation window has to cover a whole
+// shutdown drain or a whole start, neither of which is a client round trip.
+private val LIFECYCLE_TIMEOUT = Duration.ofSeconds(120)
+private val MAINTENANCE_SETTLE_TIMEOUT = Duration.ofSeconds(5)
+private const val EAST_NODE = "zone-node-2"
+
+suspend fun main(args: Array<String>) {
     val options = ClientOptions.load(args)
+    when (options.scenario) {
+        "full" -> runFull(options)
+        "lifecycle" -> runLifecycle(options)
+        "replacement" -> runReplacement(options)
+        else -> error("unknown ZoneWorld client scenario: ${options.scenario}")
+    }
+}
+
+private suspend fun runFull(options: ClientOptions) = coroutineScope {
     val game = createConnector(options.gatewayEndpoint)
     val secondGame = createConnector(options.gatewayEndpoint)
     val ops = createConnector(options.opsEndpoint)
@@ -73,14 +88,7 @@ suspend fun main(args: Array<String>) = coroutineScope {
         println("scenario ZW-A2 passed")
         println("zoneworld-step=rejected-move")
 
-        for (x in (movedX + 5)..48 step 5) {
-            val target = minOf(x, 48)
-            val position = async(start = CoroutineStart.UNDISPATCHED) {
-                waitForPosition(game, "kotlin-zone-player", target, movedY).await()
-            }
-            game.send(Messages.MoveMsg(target, movedY)).await()
-            position.await()
-        }
+        walkEast(game, "kotlin-zone-player", movedX + 5, movedY)
         val changed = async(start = CoroutineStart.UNDISPATCHED) {
             game.waitFor<Messages.ZoneChangedNotify>()
                 .where { it.payload().zoneId == "zone-ne" }
@@ -144,7 +152,7 @@ suspend fun main(args: Array<String>) = coroutineScope {
 
         val nodes = awaitNodes(ops)
         ensure(nodes.nodes.any { it.nodeId == "zone-node-1" }, "Ops observes zone-node-1")
-        ensure(nodes.nodes.any { it.nodeId == "zone-node-2" }, "Ops observes zone-node-2")
+        ensure(nodes.nodes.any { it.nodeId == EAST_NODE }, "Ops observes zone-node-2")
         println("zoneworld-step=ops-nodes")
 
         val announcement = async(start = CoroutineStart.UNDISPATCHED) {
@@ -156,22 +164,10 @@ suspend fun main(args: Array<String>) = coroutineScope {
         ensure(announcement.await().payload().text.isNotBlank(),
             "fanout announcement reaches the bound actor")
 
-        val maintenanceOn = ops.request(Messages.SetMaintenanceReq("zone-node-2", true))
-            .timeout(REQUEST_TIMEOUT)
-            .awaitReply<Messages.SetMaintenanceRes>()
-        ensure(maintenanceOn.error == null && maintenanceOn.enabled,
-            "Ops enables node maintenance")
-        val duringMaintenance = awaitMaintenance(ops, "zone-node-2", expected = true)
-        ensure(duringMaintenance.error == null && duringMaintenance.maintenance,
-            "Ops diagnostics reflects maintenance=true on zone-node-2")
-        val maintenanceOff = ops.request(Messages.SetMaintenanceReq("zone-node-2", false))
-            .timeout(REQUEST_TIMEOUT)
-            .awaitReply<Messages.SetMaintenanceRes>()
-        ensure(maintenanceOff.error == null && !maintenanceOff.enabled,
-            "Ops disables node maintenance")
-        val afterMaintenance = awaitMaintenance(ops, "zone-node-2", expected = false)
-        ensure(afterMaintenance.error == null && !afterMaintenance.maintenance,
-            "Ops diagnostics reflects maintenance=false on zone-node-2")
+        val duringMaintenance = applyMaintenance(ops, EAST_NODE, enabled = true)
+        ensure(duringMaintenance.maintenance, "Ops observes maintenance=true on zone-node-2")
+        val afterMaintenance = applyMaintenance(ops, EAST_NODE, enabled = false)
+        ensure(!afterMaintenance.maintenance, "Ops observes maintenance=false on zone-node-2")
         println("zoneworld-step=maintenance-diagnostics")
 
         val diagnostics = ops.request(Messages.NodeDiagnosticsReq("zone-node-1"))
@@ -185,6 +181,97 @@ suspend fun main(args: Array<String>) = coroutineScope {
         game.close().await()
         secondGame.close().await()
         ops.close().await()
+    }
+}
+
+/**
+ * ZW-E5 setup, ZW-C2 and ZW-C3. The runner stops the east node while this scenario is
+ * watching: the console has to begin from a node that is registered and connected, or
+ * "not registered" is indistinguishable from a node it has never heard of.
+ */
+private suspend fun runLifecycle(options: ClientOptions) {
+    val ops = createConnector(options.opsEndpoint)
+    try {
+        ops.connect().await()
+
+        // The operator closes the node before it is taken away, so the restart below has
+        // to read the desired state back rather than come up open (ZW-E5).
+        val armed = applyMaintenance(ops, EAST_NODE, enabled = true)
+        ensure(armed.maintenance, "the east node reports itself closed before it stops")
+        println("scenario ZW-E5 armed")
+
+        // Both observations start from an established state, so the flip below is the
+        // node going away and not the console's default for an unknown node.
+        println("scenario ZW-C2 armed")
+        println("scenario ZW-C3 armed")
+
+        val gone = awaitNode(ops, EAST_NODE, LIFECYCLE_TIMEOUT, "unregistered") { !it.registered }
+        ensure(!gone.registered, "a stopped node stops being registered")
+        println("scenario ZW-C2 passed")
+
+        val dropped = awaitNode(ops, EAST_NODE, LIFECYCLE_TIMEOUT, "disconnected") { !it.connected }
+        ensure(!dropped.connected, "a node whose link drops is reported as disconnected")
+        println("scenario ZW-C3 passed")
+    } finally {
+        ops.close().await()
+    }
+}
+
+/**
+ * ZW-E5 and the readiness half of ZW-G3. The runner has replaced the east node with a new
+ * process for the same logical node on a different socket endpoint. Everything the console
+ * knew about the old process was dropped when it left, so a maintenance value observed
+ * here can only have been reported by the replacement.
+ */
+private suspend fun runReplacement(options: ClientOptions) {
+    val ops = createConnector(options.opsEndpoint)
+    try {
+        ops.connect().await()
+
+        val restored = awaitNode(
+            ops, EAST_NODE, LIFECYCLE_TIMEOUT, "back under the maintenance it was closed with",
+        ) { it.registered && it.connected && it.maintenance }
+        ensure(restored.registered && restored.connected,
+            "the replacement is observed as a registered, connected node")
+        ensure(restored.maintenance, "the restarted node came up still under maintenance")
+        println("scenario ZW-E5 passed")
+
+        val reopened = applyMaintenance(ops, EAST_NODE, enabled = false)
+        ensure(!reopened.maintenance, "the replacement reports itself reopened")
+        ensure(reopened.zones == ZoneWorldSpec.zonesOf(EAST_NODE),
+            "the replacement reports the zones the retired node held")
+        println("scenario ZW-G3 ready")
+
+        // A replacement that is merely present proves nothing. One publish with no node
+        // list has to reach the new process and be accepted by the zone spots it built,
+        // which the runner reads out of the replacement's own log.
+        val announced = ops.request(Messages.AnnounceWorldReq("kotlin zoneworld replacement announcement"))
+            .timeout(REQUEST_TIMEOUT)
+            .awaitReply<Messages.AnnounceWorldRes>()
+        ensure(announced.announcementId.isNotBlank(), "Ops publishes to the replaced topology")
+        println("scenario ZW-G3 announced id=${announced.announcementId}")
+    } finally {
+        ops.close().await()
+    }
+}
+
+private suspend fun walkEast(
+    connector: ZLinkKotlinStreamConnector,
+    playerId: String,
+    startX: Int,
+    y: Int,
+) = coroutineScope {
+    // Stops on the western side of the border, so the next step is one legal move across.
+    var x = startX
+    while (true) {
+        val target = minOf(x, 48)
+        val position = async(start = CoroutineStart.UNDISPATCHED) {
+            waitForPosition(connector, playerId, target, y).await()
+        }
+        connector.send(Messages.MoveMsg(target, y)).await()
+        position.await()
+        if (target == 48) return@coroutineScope
+        x += ZoneWorldSpec.MAX_STEP_PER_AXIS
     }
 }
 
@@ -208,22 +295,51 @@ private suspend fun waitForZone(connector: ZLinkKotlinStreamConnector, zoneId: S
         .await()
 }
 
-private suspend fun awaitMaintenance(
+/**
+ * Commits a maintenance decision and waits until the node itself reports it. The decision
+ * is stored, but the notification that carries it is a fanout publish and a subscriber that
+ * is not attached yet never receives one, so the operator's request is re-issued until the
+ * console observes the node in the requested state.
+ */
+private suspend fun applyMaintenance(
     connector: ZLinkKotlinStreamConnector,
     nodeId: String,
-    expected: Boolean,
-): Messages.NodeDiagnosticsRes {
-    val deadline = System.nanoTime() + REQUEST_TIMEOUT.toNanos()
+    enabled: Boolean,
+): Messages.NodeView {
+    val deadline = System.nanoTime() + LIFECYCLE_TIMEOUT.toNanos()
     while (true) {
-        val diagnostics = connector.request(Messages.NodeDiagnosticsReq(nodeId))
+        val applied = connector.request(Messages.SetMaintenanceReq(nodeId, enabled))
             .timeout(REQUEST_TIMEOUT)
-            .awaitReply<Messages.NodeDiagnosticsRes>()
-        if (diagnostics.error == null && diagnostics.maintenance == expected) {
-            return diagnostics
+            .awaitReply<Messages.SetMaintenanceRes>()
+        ensure(applied.error == null && applied.enabled == enabled,
+            "Ops accepts maintenance=$enabled for $nodeId")
+        val settled = runCatching {
+            awaitNode(
+                connector, nodeId, MAINTENANCE_SETTLE_TIMEOUT, "reporting maintenance=$enabled",
+            ) { it.registered && it.connected && it.maintenance == enabled }
         }
+        settled.getOrNull()?.let { return it }
         check(System.nanoTime() < deadline) {
-            "Ops diagnostics did not converge to maintenance=$expected for $nodeId"
+            "Ops never observed $nodeId reporting maintenance=$enabled"
         }
+    }
+}
+
+private suspend fun awaitNode(
+    connector: ZLinkKotlinStreamConnector,
+    nodeId: String,
+    timeout: Duration,
+    description: String,
+    accept: (Messages.NodeView) -> Boolean,
+): Messages.NodeView {
+    val deadline = System.nanoTime() + timeout.toNanos()
+    while (true) {
+        val nodes = connector.request(Messages.WatchNodesReq())
+            .timeout(REQUEST_TIMEOUT)
+            .awaitReply<Messages.WatchNodesRes>()
+        val node = nodes.nodes.firstOrNull { it.nodeId == nodeId }
+        if (node != null && accept(node)) return node
+        check(System.nanoTime() < deadline) { "Ops never observed $nodeId $description" }
         delay(100)
     }
 }
@@ -234,7 +350,7 @@ private suspend fun awaitNodes(connector: ZLinkKotlinStreamConnector): Messages.
         val nodes = connector.request(Messages.WatchNodesReq())
             .timeout(REQUEST_TIMEOUT)
             .awaitReply<Messages.WatchNodesRes>()
-        if (nodes.nodes.map { it.nodeId }.containsAll(listOf("zone-node-1", "zone-node-2"))) {
+        if (nodes.nodes.map { it.nodeId }.containsAll(listOf("zone-node-1", EAST_NODE))) {
             return nodes
         }
         check(System.nanoTime() < deadline) { "Ops node reports did not converge" }

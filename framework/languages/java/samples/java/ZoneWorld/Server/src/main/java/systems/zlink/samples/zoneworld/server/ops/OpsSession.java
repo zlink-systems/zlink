@@ -84,8 +84,10 @@ public final class OpsSession implements ZLinkSession {
             return reply(new Messages.SetMaintenanceRes(
                 request.nodeId(), false, List.of(), "UnknownNode"));
         }
+        // The desired state is committed to the store; what the console shows for the node
+        // stays whatever the node itself last reported, so an observed maintenance value is
+        // always the node's own and never the operator's intent echoed back.
         maintenance.set(request.nodeId(), request.enabled());
-        registry.setMaintenance(request.nodeId(), request.enabled());
         return fanout.publish(
                 ZoneWorldNames.BROADCAST_CHANNEL,
                 ZoneWorldNames.MAINTENANCE_TOPIC,
