@@ -600,9 +600,11 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                         channelName,
                         received.Parts,
                         header,
-                        (replyHeader, reply, replyType) =>
-                            SubmitEnvelopeAsync(received, replyHeader, reply, replyType, completionPermit!, cancellationToken),
-                        errorHeader => SubmitEnvelopeAsync(received, errorHeader, null, null, completionPermit!, cancellationToken),
+                        (Self: this, received, Permit: completionPermit!, cancellationToken),
+                        static (s, replyHeader, reply, replyType) =>
+                            s.Self.SubmitEnvelopeAsync(s.received, replyHeader, reply, replyType, s.Permit, s.cancellationToken),
+                        static (s, errorHeader) =>
+                            s.Self.SubmitEnvelopeAsync(s.received, errorHeader, null, null, s.Permit, s.cancellationToken),
                         cancellationToken,
                         received.Metadata,
                         received.SourceNodeRid)

@@ -67,7 +67,7 @@ internal static class ZLinkEnvelopeCodec
 
             var encoded = message.Encode(codecs ?? new ZLinkCodecRegistryBuilder());
             return ZLinkMessageParts.Create(
-                EncodeHeader(header with { ContentType = encoded.ContentType }),
+                EncodeHeader(header, encoded.ContentType),
                 Message.From(encoded.Payload.Bytes.Span));
         }
 
@@ -80,7 +80,7 @@ internal static class ZLinkEnvelopeCodec
             out var resolutionCompleted);
         if (hasSerializer)
         {
-            var headerMessage = EncodeHeader(header with { ContentType = contentType });
+            var headerMessage = EncodeHeader(header, contentType);
             try
             {
                 return ZLinkMessageParts.Create(
@@ -95,12 +95,9 @@ internal static class ZLinkEnvelopeCodec
         }
 
         return ZLinkMessageParts.Create(
-            EncodeHeader(header with
-            {
-                ContentType = resolutionCompleted
-                    ? contentType
-                    : JsonContentType
-            }),
+            EncodeHeader(
+                header,
+                resolutionCompleted ? contentType : JsonContentType),
             EncodeBody(
                 body,
                 bodyType,
@@ -116,28 +113,60 @@ internal static class ZLinkEnvelopeCodec
         return ZLinkMessageParts.Create(EncodeHeader(header), body);
     }
 
-    public static Message EncodeHeader(ZLinkEnvelopeHeader header)
+    public static Message EncodeHeader(ZLinkEnvelopeHeader header) =>
+        EncodeHeader(header, header.ContentType);
+
+    // contentType overrides header.ContentType so EncodeParts does not need a
+    // record clone just to stamp the resolved serializer's content type.
+    public static Message EncodeHeader(ZLinkEnvelopeHeader header, string contentType)
     {
         var flow = ZLinkFlowContext.Current;
+        var flowId = header.FlowId ?? flow?.FlowId;
+        var flowOrigin = header.FlowOrigin ?? flow?.Origin;
+
+        // Hot path: route/request envelopes usually differ only in the body.
+        // The cached bytes are rebuilt canonically from the key (marker
+        // included), so a simple, valid header needs neither the record clone
+        // nor the full validation walk. Correlated kinds are excluded here so
+        // their missing-correlation failure still surfaces via the slow path.
+        if (flowId is null
+            && flowOrigin is null
+            && header.CorrelationId is null
+            && header.Deadline is null
+            && header.Topic is null
+            && header.ErrorCode is null
+            && header.ErrorMessage is null
+            && header.Source is null
+            && header.Kind is not (ZLinkMessageKind.Request
+                or ZLinkMessageKind.Response
+                or ZLinkMessageKind.Error)
+            && Enum.IsDefined(header.Kind))
+        {
+            var key = new SimpleHeaderKey(
+                header.Kind,
+                header.ChannelName,
+                header.MessageName,
+                contentType);
+            var bytes = GetSimpleHeaderBytes(key);
+            return Message.From(bytes);
+        }
+
         header = header with
         {
             FormatMarker = ZlinkStreamFlowId.FormatMarker,
-            FlowId = header.FlowId ?? flow?.FlowId,
-            FlowOrigin = header.FlowOrigin ?? flow?.Origin
+            FlowId = flowId,
+            FlowOrigin = flowOrigin,
+            ContentType = contentType
         };
         ValidateProtocolHeader(header);
         if (IsSimpleHeader(header))
         {
-            // Hot path: route/request envelopes usually differ only in the body.
-            // Reusing immutable header bytes avoids JSON serialization and UTF-8
-            // allocation for every request.
             var key = new SimpleHeaderKey(
                 header.Kind,
                 header.ChannelName,
                 header.MessageName,
                 header.ContentType);
-            var bytes = GetSimpleHeaderBytes(key);
-            return Message.From(bytes);
+            return Message.From(GetSimpleHeaderBytes(key));
         }
 
         return EncodeProtocolPart(header);

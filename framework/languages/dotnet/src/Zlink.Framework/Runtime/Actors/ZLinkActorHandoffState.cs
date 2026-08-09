@@ -308,6 +308,9 @@ internal sealed class ZLinkActorHandoffState(
         return completion.WaitAsync(cancellationToken);
     }
 
+    public ZLinkActorHandoffCaptureResult TryCapture(ZLinkSpotActorFrame frame) =>
+        TryCapture<object?>(frame, null, null);
+
     // Generic state overload so per-frame call sites can use a cached static
     // lambda instead of allocating a closure over (runtime, frame) per frame.
     public ZLinkActorHandoffCaptureResult TryCapture<TState>(

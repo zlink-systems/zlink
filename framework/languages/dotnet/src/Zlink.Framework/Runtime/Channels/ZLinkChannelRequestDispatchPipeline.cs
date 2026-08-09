@@ -11,12 +11,15 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
     ZLinkDispatchErrorReporter dispatchErrors,
     ILogger logger)
 {
-    public async Task DispatchAsync(
+    // Generic reply state lets callers pass cached static lambdas instead of
+    // allocating two closures per request.
+    public async Task DispatchAsync<TState>(
         string channelName,
         IReadOnlyList<Message> parts,
         ZLinkEnvelopeHeader header,
-        Func<ZLinkEnvelopeHeader, object?, Type?, ValueTask> reply,
-        Func<ZLinkEnvelopeHeader, ValueTask> replyError,
+        TState replyState,
+        Func<TState, ZLinkEnvelopeHeader, object?, Type?, ValueTask> reply,
+        Func<TState, ZLinkEnvelopeHeader, ValueTask> replyError,
         CancellationToken cancellationToken,
         ZLinkMessageMetadata? metadata = null,
         RoutingId? sourceNodeRid = null)
@@ -46,12 +49,11 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                 LogLevel.Error,
                 ZLinkDispatchErrorAction.ReplyError,
                 error);
-            await replyError(ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, error))
+            await replyError(replyState, ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, error))
                 .ConfigureAwait(false);
             return;
         }
 
-        ZLinkFrameworkException? decodeError = null;
         if (!scope.TryDecode(
                 parts,
                 endpoint.MessageType,
@@ -60,13 +62,11 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                 logger,
                 dispatchErrors,
                 ZLinkDispatchErrorAction.ReplyError,
+                "request",
                 out var message,
-                ex => decodeError = new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.ProtocolError,
-                    $"PayloadDecodeFailed: failed to decode request payload for '{channelName}:{header.MessageName}'.",
-                    innerException: ex)))
+                out var decodeError))
         {
-            await replyError(ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, decodeError!))
+            await replyError(replyState, ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, decodeError!))
                 .ConfigureAwait(false);
             return;
         }
@@ -103,6 +103,7 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                     $"A handler filter rejected '{channelName}:{header.MessageName}'.");
 
             await reply(
+                replyState,
                     ZLinkChannelReplyWriter.CreateReplyHeader(ZLinkMessageKind.Response, channelName, header),
                     dispatch.Value,
                     endpoint.ReplyType)
@@ -112,7 +113,7 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
         }
         catch (Exception ex)
         {
-            await replyError(ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, ex))
+            await replyError(replyState, ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, ex))
                 .ConfigureAwait(false);
             scope.HandlerException(
                 logger,

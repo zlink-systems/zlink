@@ -5718,9 +5718,9 @@ public sealed partial class EntrySpotActorDispatchTests
                 ZLinkActorHandoffCaptureResult.Captured,
                 handoff.TryCapture(
                     frame,
-                    () => ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(
-                        runtime,
-                        frame)));
+                    runtime,
+                    static (rt, fr) =>
+                        ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(rt, fr)));
             var captured = Assert.Single(handoff.SnapshotFrames());
             Assert.False(string.IsNullOrWhiteSpace(
                 captured.RouteContext.ReplyCapability));
@@ -5861,9 +5861,9 @@ public sealed partial class EntrySpotActorDispatchTests
                 ZLinkActorHandoffCaptureResult.Full,
                 handoff.TryCapture(
                     frame,
-                    () => ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(
-                        runtime,
-                        frame)));
+                    runtime,
+                    static (rt, fr) =>
+                        ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(rt, fr)));
             Assert.NotNull(frame.DirectReply);
             using var first = Message.From("first");
             Assert.Equal(
