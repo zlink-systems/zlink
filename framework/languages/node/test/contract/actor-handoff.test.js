@@ -601,7 +601,7 @@ test('a sealed Session route refuses a connection-bound send at capture and keep
   coordinator.cancel('actor-1');
 });
 
-test('Message Follow relays before duration expiry and rejects after route removal', async () => {
+test('Message Follow relays before duration expiry and prunes route and stale records after removal', async () => {
   const { coordinator, followed, markers } = harness(10);
   coordinator.begin('actor-1', 1n);
   coordinator.snapshot('actor-1');
@@ -613,14 +613,66 @@ test('Message Follow relays before duration expiry and rejects after route remov
   assert.deepEqual(followed, ['G1']);
 
   await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(markers.some((entry) => entry.marker === 'message_follow_route_removed'), true);
+  assert.equal(coordinator.messageFollowCount('actor-1'), 0);
+
+  // The stale-tenure records live only as long as the follow window: a late
+  // send no longer receives a terminal stale verdict here and returns to the
+  // normal resolution path instead.
   const outside = frame('G2');
-  await assert.rejects(
+  assert.equal(
     coordinator.capture('actor-1', outside, false, undefined, contextRef(outside)),
-    (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+    undefined
   );
   outside.forEach((part) => part.close());
-  assert.equal(markers.some((entry) => entry.marker === 'message_follow_route_removed'), true);
-  assert.equal(markers.some((entry) => entry.marker === 'message_follow_expired'), true);
+  assert.deepEqual(followed, ['G1']);
+  assert.equal(coordinator.isKnownStale(actorRef(1n)), false);
+});
+
+test('a returning tenure with a newer authority fence bypasses the departed stale record', async () => {
+  const { coordinator, followed, markers } = harness();
+  coordinator.begin('actor-1', 1n, 'source');
+  coordinator.snapshot('actor-1');
+  coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
+
+  // A→B→A: the relocation preserved the ObjectGeneration, so the returning
+  // tenure re-uses the departed (nodeRid, objectGeneration) pair — only its
+  // authority fence is strictly newer than the recorded departure.
+  const returnedFence = messageFollow.ownerFence({
+    ownerId: 'returned-owner',
+    ownerLeaseGeneration: 2n,
+    nodeRid: 'source',
+    nodeGeneration: 2n,
+    authorityOwnerGeneration: 3n
+  });
+  const returned = frame('returned-tenure');
+  assert.equal(
+    coordinator.capture('actor-1', returned, false, undefined, contextRef(returned, {
+      sourceOwner: returnedFence,
+      targetOwner: returnedFence
+    })),
+    undefined
+  );
+  returned.forEach((part) => part.close());
+  assert.deepEqual(followed, []);
+  assert.equal(markers.some((entry) => entry.marker === 'message_follow_rejected'), false);
+  assert.equal(markers.some((entry) => entry.marker === 'message_follow_expired'), false);
+
+  // A context that still addresses the departed tenure keeps following.
+  const departedFence = messageFollow.ownerFence({
+    ownerId: 'source-owner',
+    ownerLeaseGeneration: 1n,
+    nodeRid: 'source',
+    nodeGeneration: 1n,
+    authorityOwnerGeneration: 1n
+  });
+  const departed = frame('departed-tenure');
+  await coordinator.capture('actor-1', departed, false, undefined, contextRef(departed, {
+    sourceOwner: departedFence,
+    targetOwner: departedFence
+  }));
+  departed.forEach((part) => part.close());
+  assert.deepEqual(followed, ['departed-tenure']);
 });
 
 test('a Core-routed packet owned by the current actor bypasses an older Message Follow route', async () => {

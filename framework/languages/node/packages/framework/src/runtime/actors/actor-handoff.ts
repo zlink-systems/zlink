@@ -194,8 +194,14 @@ export interface ZLinkActorHandoffCoordinatorOptions {
 export class ZLinkActorHandoffCoordinator {
   private readonly active = new Map<string, ActiveHandoff>();
   private readonly messageFollowRoutes = new Map<string, MessageFollowRoute>();
-  private readonly staleGenerations = new Map<string, Set<bigint>>();
-  private readonly staleActorRefs = new Map<string, Set<string>>();
+  // Relocation preserves ObjectGeneration, so (nodeRid, objectGeneration) alone
+  // also matches a tenure that later RETURNS to a previously-visited node. The
+  // stale-tenure identity therefore keeps the departing tenure's
+  // authorityOwnerGeneration: a ref is stale only while its authority fence is
+  // not strictly newer than the recorded departure. Entries live exactly as
+  // long as their Message Follow route and are pruned with it.
+  private readonly staleGenerations = new Map<string, Map<bigint, bigint>>();
+  private readonly staleActorRefs = new Map<string, Map<string, bigint>>();
   private readonly messageFollowDurationMs: number;
   private nextReplyRouteId = 0n;
   private readonly replyRoutes = new Map<string, ReplyRoute>();
@@ -468,6 +474,28 @@ export class ZLinkActorHandoffCoordinator {
               incomingContext.targetOwner,
               currentFence
             )) {
+          // A relocation round trip (A→B→A) keeps the ObjectGeneration, so a
+          // context resolved against a departed tenure still addresses this
+          // node while the current tenure holds strictly newer authority
+          // fences. The departed fence keeps its exact-fence Message Follow
+          // chain: relay through it instead of a terminal stale verdict.
+          if (followRoute !== undefined) {
+            if (Date.now() >= followRoute.expiresAt) {
+              this.removeMessageFollowRoute(followRoute);
+              this.options.onMarker?.('message_follow_rejected', actorId);
+              return Promise.reject(actorLocationStale(actorId));
+            }
+            const packet = encodePacket(
+              0,
+              parts,
+              returnResponse,
+              remoteBoundSessionTarget,
+              fallbackActorRef,
+              incomingContext,
+              messageFollowOrigin
+            );
+            return this.enqueueMessageFollow(followRoute, actorId, packet);
+          }
           this.options.onMarker?.('message_follow_rejected', actorId);
           return Promise.reject(actorLocationStale(actorId));
         }
@@ -738,19 +766,27 @@ export class ZLinkActorHandoffCoordinator {
     target: ZLinkSpotRouteTarget,
     targetActorRef: ActorRef
   ): MessageFollowRoute {
+    const departedAuthorityOwnerGeneration = BigInt(sourceOwner.authorityOwnerGeneration);
     let stale = this.staleGenerations.get(actorId);
     if (stale === undefined) {
-      stale = new Set();
+      stale = new Map();
       this.staleGenerations.set(actorId, stale);
     }
-    stale.add(oldGeneration);
+    const recordedGeneration = stale.get(oldGeneration);
+    if (recordedGeneration === undefined || recordedGeneration < departedAuthorityOwnerGeneration) {
+      stale.set(oldGeneration, departedAuthorityOwnerGeneration);
+    }
     if (oldNodeRid !== undefined) {
       let refs = this.staleActorRefs.get(actorId);
       if (refs === undefined) {
-        refs = new Set();
+        refs = new Map();
         this.staleActorRefs.set(actorId, refs);
       }
-      refs.add(actorRefKey(oldNodeRid, oldGeneration));
+      const refKey = actorRefKey(oldNodeRid, oldGeneration);
+      const recordedRef = refs.get(refKey);
+      if (recordedRef === undefined || recordedRef < departedAuthorityOwnerGeneration) {
+        refs.set(refKey, departedAuthorityOwnerGeneration);
+      }
     }
     const key = messageFollowRouteKey(actorId, oldGeneration, sourceOwner);
     const previous = this.messageFollowRoutes.get(key);
@@ -785,10 +821,40 @@ export class ZLinkActorHandoffCoordinator {
     if (this.messageFollowRoutes.get(entry.key) !== entry) return;
     clearTimeout(entry.deadline);
     this.messageFollowRoutes.delete(entry.key);
+    this.pruneStaleTenureRecords(entry);
     this.options.onMarker?.(
       'message_follow_route_removed',
       entry.targetActorRef.actorId
     );
+  }
+
+  /**
+   * Stale-tenure records must outlive only the Message Follow window of the
+   * departure that wrote them. A later departure of the same
+   * (nodeRid, objectGeneration) re-records a newer authority generation, so a
+   * record is removed only while it still belongs to this route's departure.
+   */
+  private pruneStaleTenureRecords(entry: MessageFollowRoute): void {
+    const actorId = entry.targetActorRef.actorId;
+    const departedAuthorityOwnerGeneration = BigInt(entry.sourceOwner.authorityOwnerGeneration);
+    const stale = this.staleGenerations.get(actorId);
+    if (stale !== undefined) {
+      const recordedGeneration = stale.get(entry.oldGeneration);
+      if (recordedGeneration !== undefined
+          && recordedGeneration <= departedAuthorityOwnerGeneration) {
+        stale.delete(entry.oldGeneration);
+      }
+      if (stale.size === 0) this.staleGenerations.delete(actorId);
+    }
+    if (entry.oldNodeRid === undefined) return;
+    const refs = this.staleActorRefs.get(actorId);
+    if (refs === undefined) return;
+    const refKey = actorRefKey(entry.oldNodeRid, entry.oldGeneration);
+    const recordedRef = refs.get(refKey);
+    if (recordedRef !== undefined && recordedRef <= departedAuthorityOwnerGeneration) {
+      refs.delete(refKey);
+    }
+    if (refs.size === 0) this.staleActorRefs.delete(actorId);
   }
 
   private findMessageFollowRoute(
@@ -861,10 +927,47 @@ export class ZLinkActorHandoffCoordinator {
   private isKnownStaleRef(actorId: string, actor: ActorRef): boolean {
     const physicalRefs = this.staleActorRefs.get(actorId);
     if (physicalRefs !== undefined) {
-      return physicalRefs.has(actorRefKey(String(actor.nodeRid), actor.objectGeneration));
+      const departedAuthorityOwnerGeneration = physicalRefs.get(
+        actorRefKey(String(actor.nodeRid), actor.objectGeneration)
+      );
+      return departedAuthorityOwnerGeneration !== undefined
+        && !this.isNewerTenureRef(actorId, actor, departedAuthorityOwnerGeneration);
     }
-    return this.staleGenerations.get(actorId)?.has(actor.objectGeneration) === true
+    const departedAuthorityOwnerGeneration =
+      this.staleGenerations.get(actorId)?.get(actor.objectGeneration);
+    return departedAuthorityOwnerGeneration !== undefined
+      && !this.isNewerTenureRef(actorId, actor, departedAuthorityOwnerGeneration)
       && this.options.isStaleActorRef?.(actorId, actor) === true;
+  }
+
+  /**
+   * The stale record captures the departing tenure's full fence. A ref whose
+   * authority fence is strictly newer than the recorded departure addresses a
+   * returning tenure (A→B→A keeps the ObjectGeneration), never the departed
+   * one, so it must not match the stale record.
+   */
+  private isNewerTenureRef(
+    actorId: string,
+    actor: ActorRef,
+    departedAuthorityOwnerGeneration: bigint
+  ): boolean {
+    const tenure = this.tenureAuthorityOwnerGeneration(actorId, actor);
+    return tenure !== undefined && tenure > departedAuthorityOwnerGeneration;
+  }
+
+  private tenureAuthorityOwnerGeneration(
+    actorId: string,
+    actor: ActorRef
+  ): bigint | undefined {
+    const context = actorMessageFollowContext(actor);
+    if (context !== undefined) {
+      return BigInt(context.targetOwner.authorityOwnerGeneration);
+    }
+    const current = this.options.currentOwnerFence?.(actorId);
+    if (current !== undefined && current.nodeRid === String(actor.nodeRid)) {
+      return BigInt(current.authorityOwnerGeneration);
+    }
+    return undefined;
   }
 
   private enqueueMessageFollow(
