@@ -50,7 +50,8 @@ struct relay_server_config_t
         token (NULL),
         socket_type (ZLINK_SOCKET_ROUTER),
         has_server_routing_id (false),
-        server_routing_id (NULL)
+        server_routing_id (NULL),
+        msg_size (0)
     {
     }
 
@@ -59,6 +60,7 @@ struct relay_server_config_t
     zlink_socket_type_t socket_type;
     bool has_server_routing_id;
     const char *server_routing_id;
+    size_t msg_size;
 };
 
 // Owned snapshot of one routed reply that has not been sent yet because the
@@ -191,11 +193,6 @@ inline bool flush_pending_replies (void *server, std::deque<pending_reply_t> *pe
 }
 
 inline bool drain_recv_and_relay (void *server,
-                                  void *ctx,
-                                  zlink_socket_type_t socket_type,
-                                  uint64_t hwm_value,
-                                  const std::string &transport,
-                                  size_t *active_msg_size,
                                   std::deque<pending_reply_t> *pending,
                                   bool *recv_drained)
 {
@@ -240,18 +237,6 @@ inline bool drain_recv_and_relay (void *server,
                       << std::endl;
         }
 
-        const size_t msg_size = part_count > 0 && parts ? zlink_msg_size (&parts[0]) : 0;
-        if (active_msg_size && msg_size > 0 && *active_msg_size != msg_size) {
-            if (!apply_benchmark_context_auto_hwm_msg_unit (ctx, msg_size)) {
-                zlink_multipart_close (parts, part_count);
-                return false;
-            }
-            apply_benchmark_hwm (server, hwm_value);
-            *active_msg_size = msg_size;
-            perf_print_auto_hwm_snapshot (server, false, "server", transport, true, msg_size,
-                                          socket_type);
-        }
-
         // While we still have backlog, push everything onto the queue to keep
         // ordering. Otherwise try to send immediately.
         bool would_block = false;
@@ -281,18 +266,11 @@ inline bool drain_recv_and_relay (void *server,
     }
 }
 
-inline bool run_server_loop (const relay_server_config_t &config,
-                             void *server,
-                             void *ctx,
-                             uint64_t hwm_value,
-                             const std::string &lib_name,
-                             const std::string &transport)
+inline bool run_server_loop (void *server)
 {
-    (void) lib_name;
     if (!server)
         return false;
 
-    size_t active_msg_size = 0;
     std::deque<pending_reply_t> pending;
 
     while (!perf_stop_requested ().load (std::memory_order_acquire)) {
@@ -323,8 +301,7 @@ inline bool run_server_loop (const relay_server_config_t &config,
         }
         if ((item.revents & ZLINK_POLLIN) != 0) {
             bool recv_drained = false;
-            if (!drain_recv_and_relay (server, ctx, config.socket_type, hwm_value, transport,
-                                       &active_msg_size, &pending, &recv_drained))
+            if (!drain_recv_and_relay (server, &pending, &recv_drained))
                 return false;
         }
     }
@@ -358,6 +335,12 @@ inline int run_server_benchmark (const relay_server_config_t &config,
         return 1;
 
     const multi_bench_settings_t settings = resolve_multi_bench_settings ();
+    const std::vector<size_t> sizes = resolve_bench_msg_sizes (64);
+    const size_t msg_size = config.msg_size > 0 ? config.msg_size : sizes.front ();
+    if (msg_size == 0 || !apply_benchmark_context_auto_hwm_msg_unit (ctx.get (), msg_size)) {
+        zlink_close (server);
+        return 1;
+    }
     const int linger_ms = 0;
     set_sockopt_int (server, ZLINK_OPT_LINGER, linger_ms, "ZLINK_OPT_LINGER");
     apply_benchmark_hwm (server, settings.hwm);
@@ -377,6 +360,12 @@ inline int run_server_benchmark (const relay_server_config_t &config,
         zlink_close (server);
         return 1;
     }
+    if (zlink_ctx_auto_hwm_recalculate (ctx.get ()) != ZLINK_CONFIG_OK) {
+        zlink_close (server);
+        return 1;
+    }
+    perf_print_auto_hwm_snapshot (server, false, "server", transport, true, msg_size,
+                                  config.socket_type);
     perf_stop_requested ().store (false, std::memory_order_release);
     install_perf_signal_handlers ();
 
@@ -395,7 +384,7 @@ inline int run_server_benchmark (const relay_server_config_t &config,
     std::cout << "READY," << endpoint << std::endl;
 
     const bool loop_ok =
-      run_server_loop (config, server, ctx.get (), settings.hwm, lib_name, transport);
+      run_server_loop (server);
 
     zlink_close (server);
     return loop_ok ? 0 : 1;

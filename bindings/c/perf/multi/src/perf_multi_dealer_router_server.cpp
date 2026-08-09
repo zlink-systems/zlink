@@ -24,6 +24,9 @@ int main (int argc, char **argv)
     config.socket_type = k_server_socket_type;
     config.has_server_routing_id = k_server_has_routing_id;
     config.server_routing_id = k_server_routing_id;
+    config.msg_size = argc >= 4 ? static_cast<size_t> (std::strtoull (argv[3], NULL, 10)) : 0;
+    if (argc >= 4 && config.msg_size == 0)
+        return 1;
 
     const std::string lib_name = argv[1];
     const std::string transport = argv[2];
