@@ -532,6 +532,49 @@ public final class ZLinkAggregateRelocationCoordinator {
                     snapshot.payload()) == null;
     }
 
+    /**
+     * Removes a marker that no participant publishes any more. Normalization
+     * writes every steady participant payload before it removes the single
+     * aggregate marker, so a process that stops between those two writes leaves
+     * the marker behind; a participant row that was deleted afterwards leaves
+     * the same orphan. In both shapes no authority points at the immutable root
+     * any more, so there is no published relocation left to recover and no
+     * owner or membership to move. Startup recovery reruns only the remaining
+     * removal step; it never invents a new relocation and it never resumes one
+     * across a process restart.
+     *
+     * <p>The root payload is left to relocation-store orphan cleanup and its
+     * retention window, exactly as the steady normalization path leaves it.</p>
+     *
+     * <p>Removal is fenced by the marker's target owner lease. A replacement
+     * process runs under a newer lease, so the store can refuse the removal
+     * even though the marker is unreachable. That answer is reported as
+     * {@code false} rather than raised: an orphan nobody points through must
+     * never keep a runtime from starting.</p>
+     *
+     * @return whether the marker is gone from the store
+     */
+    public CompletionStage<Boolean> discardOrphanedAggregateProgress(
+        ZLinkAggregateProgressSnapshot marker,
+        ZLinkStoreCancellation cancellation) {
+        Objects.requireNonNull(marker, "marker");
+        Objects.requireNonNull(cancellation, "cancellation");
+        return authorityStore.removeAggregateProgress(
+                marker.fence(),
+                marker.storeVersion(),
+                cancellation)
+            .thenCompose(removed -> removed
+                ? CompletableFuture.completedFuture(true)
+                : authorityStore.readAggregateProgress(
+                        marker.fence(), cancellation)
+                    .thenCompose(current -> current.isEmpty()
+                        ? CompletableFuture.completedFuture(true)
+                        : authorityStore.removeAggregateProgress(
+                            marker.fence(),
+                            current.get().storeVersion(),
+                            cancellation)));
+    }
+
     private CompletionStage<Void> removeProgressAfterNormalization(
         ZLinkAggregateFence fence,
         Optional<ZLinkAggregateProgressSnapshot> marker,

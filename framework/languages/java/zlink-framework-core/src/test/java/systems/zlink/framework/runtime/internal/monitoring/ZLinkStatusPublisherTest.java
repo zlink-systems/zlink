@@ -99,6 +99,76 @@ final class ZLinkStatusPublisherTest {
         releaseSlow.countDown();
     }
 
+    @Test
+    void activeSubscriptionRetentionIsRaisedOnceAndReleasedOnce()
+        throws Exception {
+        ZLinkStatusPublisher<Integer> publisher = ZLinkStatusPublisher.create(
+            () -> 1,
+            value -> value,
+            4);
+        CopyOnWriteArrayList<Boolean> retention = new CopyOnWriteArrayList<>();
+        publisher.onActiveSubscriptions(retention::add);
+        assertEquals(List.of(false), retention,
+            "an unsubscribed publisher stays collectable");
+
+        CompletableFuture<Flow.Subscription> first = new CompletableFuture<>();
+        CompletableFuture<Flow.Subscription> second = new CompletableFuture<>();
+        publisher.subscribe(capturing(first));
+        publisher.subscribe(capturing(second));
+        assertEquals(List.of(false, true), retention,
+            "only the first subscription raises retention");
+
+        first.get(1, TimeUnit.SECONDS).cancel();
+        assertEquals(List.of(false, true), retention,
+            "retention survives while another subscription is live");
+        second.get(1, TimeUnit.SECONDS).cancel();
+        assertEquals(List.of(false, true, false), retention);
+
+        first.get(1, TimeUnit.SECONDS).cancel();
+        assertEquals(List.of(false, true, false), retention,
+            "a repeated cancel does not unbalance retention");
+    }
+
+    @Test
+    void cancellingInsideOnSubscribeLeavesRetentionReleased() {
+        ZLinkStatusPublisher<Integer> publisher = ZLinkStatusPublisher.create(
+            () -> 1,
+            value -> value,
+            4);
+        CopyOnWriteArrayList<Boolean> retention = new CopyOnWriteArrayList<>();
+        publisher.onActiveSubscriptions(retention::add);
+
+        publisher.subscribe(new Flow.Subscriber<>() {
+            @Override public void onSubscribe(Flow.Subscription subscription) {
+                subscription.cancel();
+            }
+
+            @Override public void onNext(ZLinkObservedStatus<Integer> item) { }
+
+            @Override public void onError(Throwable failure) { }
+
+            @Override public void onComplete() { }
+        });
+
+        assertEquals(List.of(false), retention,
+            "a subscriber that cancels immediately never retains the publisher");
+    }
+
+    private static Flow.Subscriber<ZLinkObservedStatus<Integer>> capturing(
+        CompletableFuture<Flow.Subscription> subscribed) {
+        return new Flow.Subscriber<>() {
+            @Override public void onSubscribe(Flow.Subscription subscription) {
+                subscribed.complete(subscription);
+            }
+
+            @Override public void onNext(ZLinkObservedStatus<Integer> item) { }
+
+            @Override public void onError(Throwable failure) { }
+
+            @Override public void onComplete() { }
+        };
+    }
+
     private static Flow.Subscriber<ZLinkObservedStatus<Integer>> subscriber(
         IntConsumer onNext,
         CompletableFuture<Void> completed) {

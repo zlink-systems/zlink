@@ -300,6 +300,163 @@ final class ZLinkAggregateRelocationCoordinatorTest {
     }
 
     @Test
+    void startupScannerFinishesANormalizationInterruptedBeforeMarkerRemoval() {
+        FakeAuthorityStore authority = new FakeAuthorityStore();
+        FakeRelocationStore relocation = new FakeRelocationStore();
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            authority, relocation);
+        var source = request();
+        var activated = coordinator.commit(
+                coordinator.prepare(source, NEVER)
+                    .toCompletableFuture().join(),
+                NEVER)
+            .toCompletableFuture().join();
+        coordinator.completeSourceCleanup(activated, goldenRoot(), NEVER)
+            .toCompletableFuture().join();
+        for (var participant : source.participants()) {
+            normalizeRow(authority, participant.authorityKey());
+        }
+
+        var candidates = new ZLinkRelocationStartupScanner(
+            authority, relocation).scan(NEVER).toCompletableFuture().join();
+
+        assertTrue(candidates.isEmpty(),
+            "a fully normalized aggregate has nothing left to recover");
+        assertNull(authority.progress,
+            "startup recovery removes the marker the interrupted "
+                + "normalization left behind");
+    }
+
+    @Test
+    void startupScannerFinishesNormalizationWhenParticipantRowsAreGone() {
+        FakeAuthorityStore authority = new FakeAuthorityStore();
+        FakeRelocationStore relocation = new FakeRelocationStore();
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            authority, relocation);
+        var source = request();
+        var activated = coordinator.commit(
+                coordinator.prepare(source, NEVER)
+                    .toCompletableFuture().join(),
+                NEVER)
+            .toCompletableFuture().join();
+        coordinator.completeSourceCleanup(activated, goldenRoot(), NEVER)
+            .toCompletableFuture().join();
+        for (var participant : source.participants()) {
+            authority.rows.remove(participant.authorityKey());
+        }
+
+        var candidates = new ZLinkRelocationStartupScanner(
+            authority, relocation).scan(NEVER).toCompletableFuture().join();
+
+        assertTrue(candidates.isEmpty(),
+            "a deleted participant publishes no relocation slot");
+        assertNull(authority.progress);
+    }
+
+    @Test
+    void startupScannerStillFailsWhenOnlySomeParticipantsAreNormalized() {
+        FakeAuthorityStore authority = new FakeAuthorityStore();
+        FakeRelocationStore relocation = new FakeRelocationStore();
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            authority, relocation);
+        var source = request();
+        var activated = coordinator.commit(
+                coordinator.prepare(source, NEVER)
+                    .toCompletableFuture().join(),
+                NEVER)
+            .toCompletableFuture().join();
+        coordinator.completeSourceCleanup(activated, goldenRoot(), NEVER)
+            .toCompletableFuture().join();
+        normalizeRow(authority, source.participants().getFirst().authorityKey());
+
+        var failure = assertThrows(
+            CompletionException.class,
+            () -> new ZLinkRelocationStartupScanner(authority, relocation)
+                .scan(NEVER).toCompletableFuture().join());
+
+        var lost = assertInstanceOf(
+            ZLinkAggregateRelocationCoordinator.RelocationDataLostException.class,
+            failure.getCause());
+        assertTrue(lost.getMessage().contains("partially"), lost.getMessage());
+        assertNotNull(authority.progress,
+            "a partially visible publication keeps its marker");
+    }
+
+    @Test
+    void startupScannerDiscardsAMarkerWhoseParticipantsVanishedBeforeCleanup() {
+        // The shape a ZoneWorld replacement start observed: one Actor
+        // participant whose row the retiring node deleted while the marker
+        // still reported source cleanup as incomplete. No authority points at
+        // the root any more, so no later start in the scope may die on it.
+        FakeAuthorityStore authority = new FakeAuthorityStore();
+        FakeRelocationStore relocation = new FakeRelocationStore();
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            authority, relocation);
+        var source = request();
+        coordinator.commit(
+                coordinator.prepare(source, NEVER)
+                    .toCompletableFuture().join(),
+                NEVER)
+            .toCompletableFuture().join();
+        assertFalse(authority.progress.sourceCleanupCompleted());
+        for (var participant : source.participants()) {
+            authority.rows.remove(participant.authorityKey());
+        }
+
+        var candidates = new ZLinkRelocationStartupScanner(
+            authority, relocation).scan(NEVER).toCompletableFuture().join();
+
+        assertTrue(candidates.isEmpty());
+        assertNull(authority.progress,
+            "an orphaned marker is removed even before cleanup was recorded");
+    }
+
+    @Test
+    void startupScannerStartsEvenWhenTheStoreRefusesTheOrphanRemoval() {
+        // A replacement process runs under a newer owner lease, so the store
+        // may fence the removal of a marker the retired lease left behind.
+        // An orphan nobody points through still must not block the start.
+        FakeAuthorityStore authority = new FakeAuthorityStore();
+        FakeRelocationStore relocation = new FakeRelocationStore();
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            authority, relocation);
+        var source = request();
+        coordinator.commit(
+                coordinator.prepare(source, NEVER)
+                    .toCompletableFuture().join(),
+                NEVER)
+            .toCompletableFuture().join();
+        for (var participant : source.participants()) {
+            authority.rows.remove(participant.authorityKey());
+        }
+        authority.refuseProgressRemoval = true;
+
+        var candidates = new ZLinkRelocationStartupScanner(
+            authority, relocation).scan(NEVER).toCompletableFuture().join();
+
+        assertTrue(candidates.isEmpty());
+        assertNotNull(authority.progress,
+            "a fenced removal leaves the marker for whoever can remove it");
+    }
+
+    private static void normalizeRow(
+        FakeAuthorityStore authority,
+        String authorityKey) {
+        ZLinkAuthoritySnapshot row = authority.rows.get(authorityKey);
+        var publication = ZLinkCanonicalRelocationAuthorityStateCodec.decode(
+            row.payload());
+        authority.rows.put(authorityKey, new ZLinkAuthoritySnapshot(
+            "steady-" + authorityKey,
+            publication.applicationPayload(),
+            row.objectGeneration(),
+            row.authorityOwnerGeneration(),
+            row.ownerId(),
+            row.ownerLeaseGeneration(),
+            row.allocation(),
+            row.storeNow()));
+    }
+
+    @Test
     void canonicalReplyEvidenceSurvivesSourceCleanupPublication() {
         FakeAuthorityStore authority = new FakeAuthorityStore();
         FakeRelocationStore relocation = new FakeRelocationStore();
@@ -723,6 +880,7 @@ final class ZLinkAggregateRelocationCoordinatorTest {
         private long ownerGenerationGap = 1;
         private ZLinkAggregateProgress progress;
         private String progressStoreVersion;
+        private boolean refuseProgressRemoval;
         private final Map<String, ZLinkAuthoritySnapshot> rows =
             new ConcurrentHashMap<>();
 
@@ -828,7 +986,8 @@ final class ZLinkAggregateRelocationCoordinatorTest {
             ZLinkAggregateFence fence,
             String expectedStoreVersion,
             ZLinkStoreCancellation cancellation) {
-            if (progress == null
+            if (refuseProgressRemoval
+                || progress == null
                 || !progressStoreVersion.equals(expectedStoreVersion)) {
                 return CompletableFuture.completedFuture(false);
             }

@@ -8,6 +8,7 @@ import java.util.concurrent.Flow;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -35,6 +36,9 @@ public final class ZLinkStatusPublisher<T>
     private final AtomicBoolean workPending = new AtomicBoolean();
     private final AtomicBoolean observationPending = new AtomicBoolean();
     private final AtomicBoolean drainScheduled = new AtomicBoolean();
+    private final Object retentionGate = new Object();
+    private Consumer<Boolean> retention;
+    private int activeSubscriptions;
 
     private ZLinkStatusPublisher(
         Supplier<T> snapshot,
@@ -118,15 +122,69 @@ public final class ZLinkStatusPublisher<T>
         schedule();
     }
 
+    /**
+     * Registers the owner callback that keeps this publisher reachable while a
+     * subscription is live. It is called with {@code true} when the first
+     * subscription is accepted and with {@code false} once the last one is
+     * cancelled or failed.
+     *
+     * <p>A signal source may only hold a publisher weakly, because a publisher
+     * that is never subscribed has to stay collectable. A subscriber that drops
+     * its {@link Flow.Subscription} is the natural call shape, so the
+     * subscription itself cannot be the only strong reference either. This
+     * callback closes that gap without turning an unsubscribed publisher into a
+     * leak.</p>
+     */
+    public void onActiveSubscriptions(Consumer<Boolean> listener) {
+        Objects.requireNonNull(listener, "listener");
+        boolean active;
+        synchronized (retentionGate) {
+            if (retention != null) {
+                throw new IllegalStateException(
+                    "an active subscription listener is already registered");
+            }
+            retention = listener;
+            active = activeSubscriptions > 0;
+        }
+        listener.accept(active);
+    }
+
     @Override
     public void subscribe(
         Flow.Subscriber<? super ZLinkObservedStatus<T>> subscriber) {
         Objects.requireNonNull(subscriber, "subscriber");
         SnapshotSubscription subscription = new SnapshotSubscription(subscriber);
         subscriber.onSubscribe(subscription);
-        if (!subscription.cancelled.get()) {
-            subscriptions.add(subscription);
-            signal();
+        if (subscription.cancelled.get()) {
+            return;
+        }
+        subscriptions.add(subscription);
+        retainForSubscription();
+        if (subscription.cancelled.get()
+            && subscriptions.remove(subscription)) {
+            releaseForSubscription();
+            return;
+        }
+        signal();
+    }
+
+    private void retainForSubscription() {
+        Consumer<Boolean> listener;
+        synchronized (retentionGate) {
+            listener = ++activeSubscriptions == 1 ? retention : null;
+        }
+        if (listener != null) {
+            listener.accept(true);
+        }
+    }
+
+    private void releaseForSubscription() {
+        Consumer<Boolean> listener;
+        synchronized (retentionGate) {
+            listener = --activeSubscriptions == 0 ? retention : null;
+        }
+        if (listener != null) {
+            listener.accept(false);
         }
     }
 
@@ -204,8 +262,9 @@ public final class ZLinkStatusPublisher<T>
 
         @Override
         public void cancel() {
-            if (cancelled.compareAndSet(false, true)) {
-                subscriptions.remove(this);
+            if (cancelled.compareAndSet(false, true)
+                && subscriptions.remove(this)) {
+                releaseForSubscription();
             }
         }
 
@@ -277,7 +336,9 @@ public final class ZLinkStatusPublisher<T>
 
         private void fail(Throwable failure) {
             if (cancelled.compareAndSet(false, true)) {
-                subscriptions.remove(this);
+                if (subscriptions.remove(this)) {
+                    releaseForSubscription();
+                }
                 subscriber.onError(failure);
             }
         }

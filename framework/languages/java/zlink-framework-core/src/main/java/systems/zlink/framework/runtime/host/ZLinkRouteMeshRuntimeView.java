@@ -166,18 +166,18 @@ final class ZLinkRouteMeshRuntimeView
                 status -> status.state() == ZLinkTopologyState.STOPPED
                     || status.state() == ZLinkTopologyState.FAILED,
                 status -> status.state() == ZLinkTopologyState.STOPPING);
-        WeakReference<ZLinkStatusPublisher<ZLinkMeshNodeSnapshot>> publisherRef =
-            new WeakReference<>(publisher);
+        // The hub only holds the publisher weakly so that a publisher nobody
+        // subscribes to stays collectable. A subscriber that drops its
+        // Subscription is the natural call shape, so the retention below is
+        // what keeps a live subscription's publisher reachable. It is released
+        // again when the last subscription is cancelled or fails.
+        PublisherSignal signal = new PublisherSignal(publisher);
+        publisher.onActiveSubscriptions(active ->
+            signal.retain(active ? publisher : null));
         signalHubs.compute(meshName, (ignored, existing) ->
             existing == null || existing.isStopped()
                 ? new SignalHub(requireNode(meshName))
-                : existing).register(() -> {
-                    ZLinkStatusPublisher<ZLinkMeshNodeSnapshot> current =
-                        publisherRef.get();
-                    if (current != null) {
-                        current.signal();
-                    }
-                });
+                : existing).register(signal);
         return publisher;
     }
 
@@ -322,10 +322,42 @@ final class ZLinkRouteMeshRuntimeView
             || placement.activationConcurrency().active() < limit;
     }
 
+    /**
+     * One hub registration. The weak reference lets an unsubscribed publisher
+     * be collected; {@code retained} keeps a subscribed one reachable.
+     */
+    private static final class PublisherSignal {
+        private final WeakReference<ZLinkStatusPublisher<ZLinkMeshNodeSnapshot>>
+            reference;
+        /** Read by nothing on purpose: this field is the reachability root. */
+        @SuppressWarnings("unused")
+        private volatile ZLinkStatusPublisher<ZLinkMeshNodeSnapshot> retained;
+
+        PublisherSignal(ZLinkStatusPublisher<ZLinkMeshNodeSnapshot> publisher) {
+            this.reference = new WeakReference<>(publisher);
+        }
+
+        void retain(ZLinkStatusPublisher<ZLinkMeshNodeSnapshot> publisher) {
+            retained = publisher;
+        }
+
+        boolean isCollected() {
+            return reference.refersTo(null);
+        }
+
+        void signal() {
+            ZLinkStatusPublisher<ZLinkMeshNodeSnapshot> current =
+                reference.get();
+            if (current != null) {
+                current.signal();
+            }
+        }
+    }
+
     private final class SignalHub implements AutoCloseable {
         private final ZLinkInternalMeshNode node;
         private final Object gate = new Object();
-        private final List<Runnable> signals = new ArrayList<>();
+        private final List<PublisherSignal> signals = new ArrayList<>();
         private volatile boolean stopped;
         private Thread pump;
 
@@ -337,14 +369,15 @@ final class ZLinkRouteMeshRuntimeView
             return stopped;
         }
 
-        void register(Runnable signal) {
+        void register(PublisherSignal signal) {
             Objects.requireNonNull(signal, "signal");
             synchronized (gate) {
                 if (stopped) {
                     return;
                 }
+                signals.removeIf(PublisherSignal::isCollected);
                 signals.add(signal);
-                signal.run();
+                signal.signal();
                 if (pump == null) {
                     pump = Thread.ofVirtual()
                         .name("zlink-mesh-status-monitor")
@@ -355,12 +388,13 @@ final class ZLinkRouteMeshRuntimeView
 
         void signal() {
             sequence.incrementAndGet();
-            Runnable[] current;
+            PublisherSignal[] current;
             synchronized (gate) {
-                current = signals.toArray(Runnable[]::new);
+                signals.removeIf(PublisherSignal::isCollected);
+                current = signals.toArray(PublisherSignal[]::new);
             }
-            for (Runnable signal : current) {
-                signal.run();
+            for (PublisherSignal signal : current) {
+                signal.signal();
             }
         }
 
