@@ -58,6 +58,8 @@
 | 2026-08-09 | C++ | boundary 재검증 / DEALER_ROUTER_REQREP / tcp / 65536B | `dealer-router-reqrep-tcp-boundary-65536-c1` | Sol 권고에 따라 source 변경 없이 C → C++ 순서로 65536B를 5회씩 재측정했다. | C median 17,443.8 msg/s, C++ median 16,698.4 msg/s, ratio 95.73%, latency ratio 1.041배. C/C++ throughput 변동 폭 2.35%/5.09%. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_213143_dealer-router-reqrep-tcp-boundary-65536-c1.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_213219_dealer-router-reqrep-tcp-boundary-65536-c1.txt` |
 | 2026-08-09 | 전체 | DEALER_ROUTER_REQREP/tcp 최종 판정 | `dealer-router-reqrep-tcp-policy-final` | full sweep와 1024B·65536B boundary 결과를 합쳐 공식 중앙값을 다시 계산했다. | 공식 ratio는 95.10%, 93.51%, 94.64%, 95.73%, 95.76%, 93.89%, 중앙값 94.87%다. 모든 셀은 85% 이상이고 boundary 변동성은 안정됐지만 transport 목표 95%에 미달한다. binding-only source optimization은 no-go이며 다음 대상은 `DEALER_ROUTER_REQREP / ws`다. | plan 9.1.1 및 11절 |
 
+| 2026-08-09 | 전체 | source·plan checkpoint / DEALER_ROUTER_REQREP / tcp | `dealer-router-reqrep-tcp-policy-final` | 요청/응답 TCP setup parity 수정과 공식 boundary 재계산 결과를 plan 및 log에 반영했다. | `git diff --check`, staged diff check와 C++ `cpp_perf_dealer_router_reqrep` build를 통과한 `f159d1b914`를 `origin/core-0.10.0-bindings-performance`에 push했다. | commit: `f159d1b914` |
+
 ## 이전 라운드 기록
 
 측정 또는 구현 변경을 수행할 때마다 아래 표에 한 행을 추가하고, 상세 설명이 길면
