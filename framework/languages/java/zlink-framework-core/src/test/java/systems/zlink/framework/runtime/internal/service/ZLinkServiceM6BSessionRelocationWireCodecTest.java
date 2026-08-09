@@ -48,11 +48,29 @@ final class ZLinkServiceM6BSessionRelocationWireCodecTest {
         SessionRelocationRouted ack = new SessionRelocationRouted(
             route.relocation(), route.coordinator(), route.actor(),
             route.session(), route.action(),
+            ZLinkServiceM6BWireCodec.SessionRelocationRouteResult.APPLIED,
             route.currentAuthorityOwnerGeneration(),
             route.lastAcceptedSessionSequence());
 
         assertEquals(ack, codec.decodeSessionRelocationRouted(
             codec.encodeSessionRelocationRouted(ack)));
+
+        //  Every result value round-trips, and the byte that carries it is
+        //  validated on decode.
+        for (var result : ZLinkServiceM6BWireCodec
+                .SessionRelocationRouteResult.values()) {
+            SessionRelocationRouted refused = new SessionRelocationRouted(
+                route.relocation(), route.coordinator(), route.actor(),
+                route.session(), route.action(), result,
+                route.currentAuthorityOwnerGeneration(),
+                route.lastAcceptedSessionSequence());
+            byte[] encoded = codec.encodeSessionRelocationRouted(refused);
+            assertEquals(refused, codec.decodeSessionRelocationRouted(encoded));
+        }
+        byte[] frame = codec.encodeSessionRelocationRouted(ack);
+        frame[frame.length - 17] = 9;
+        assertThrows(RuntimeException.class,
+            () -> codec.decodeSessionRelocationRouted(frame));
     }
 
     @Test

@@ -805,7 +805,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             //  consumed on the abort acknowledgement path
             //  (public_host_runtime.cpp:4266).
             consumeSealTerminal(command.relocation());
-            return CompletableFuture.completedFuture(echoRouted(command));
+            return CompletableFuture.completedFuture(routed(command,
+                ZLinkServiceM6BWireCodec.SessionRelocationRouteResult.APPLIED));
         }
         StoredBindingRoute observed = bindingRoutes.get(command.actor().actorId());
         //  Idempotent retransmit (AlreadyApplied): a command 44 whose target
@@ -823,7 +824,9 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 + " actor=" + command.actor().actorId()
                 + " target=" + command.targetNodeRid()
                 + " authority=" + command.currentAuthorityOwnerGeneration());
-            return CompletableFuture.completedFuture(echoRouted(command));
+            return CompletableFuture.completedFuture(routed(command,
+                ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
+                    .ALREADY_APPLIED));
         }
         //  Spec 20 §5 step 7: the Session owner verifies that the request's
         //  high-water **equals** the value recorded on the current binding.
@@ -852,9 +855,16 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             || observed.bindingGeneration()
                 != command.session().bindingGeneration()
             || staleHighWater) {
+            //  Spec 20 §5: a refused command 44 is answered with the result
+            //  that names the refusal so the target stops retransmitting.
             LOGGER.warning(staleFenceDiagnostic(command, observed)
                 + " sealedSeq=" + sealed.map(String::valueOf).orElse("none"));
-            return CompletableFuture.completedFuture(rejectedRouted(command));
+            return CompletableFuture.completedFuture(routed(command,
+                observed == null
+                    ? ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
+                        .SESSION_OR_BINDING_CLOSED
+                    : ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
+                        .STALE));
         }
         RelocationRouteUpdate update;
         try {
@@ -871,7 +881,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         } catch (RuntimeException invalid) {
             LOGGER.warning(staleFenceDiagnostic(command, observed)
                 + " reason=" + invalid.getMessage());
-            return CompletableFuture.completedFuture(rejectedRouted(command));
+            return CompletableFuture.completedFuture(routed(command,
+                ZLinkServiceM6BWireCodec.SessionRelocationRouteResult.STALE));
         }
         return applyRelocationRouteUpdate(update).handle((ignored, failure) -> {
             if (failure == null) {
@@ -881,51 +892,35 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 //  sets the same flag at ACK time
                 //  (public_host_runtime.cpp:4266).
                 consumeSealTerminal(command.relocation());
-                return CompletableFuture.completedFuture(echoRouted(command));
+                return CompletableFuture.completedFuture(routed(command,
+                    ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
+                        .APPLIED));
             }
             Throwable cause = failure;
             while (cause instanceof CompletionException && cause.getCause() != null) {
                 cause = cause.getCause();
             }
             if (cause instanceof ZLinkConfigurationException) {
-                //  Source-fence mismatch is terminal for this command: the
-                //  stored route diverged, so retransmitting the same fence can
-                //  never succeed. Reply the rejection so the target stops.
                 LOGGER.warning(staleFenceDiagnostic(command,
                         bindingRoutes.get(command.actor().actorId()))
                     + " reason=" + cause.getMessage());
-                return CompletableFuture.completedFuture(rejectedRouted(command));
             }
-            //  Transient failures (route-ready timeout, relay submit) stay
-            //  unreplied; the target retries the same fence.
+            //  Every failure stays unreplied; the source retransmits.
             return CompletableFuture.<ZLinkServiceM6BWireCodec
                 .SessionRelocationRouted>failedFuture(failure);
         }).thenCompose(stage -> stage);
     }
 
-    private static ZLinkServiceM6BWireCodec.SessionRelocationRouted echoRouted(
-        ZLinkServiceM6BWireCodec.SessionRelocationRoute command) {
+    private static ZLinkServiceM6BWireCodec.SessionRelocationRouted routed(
+        ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
+        ZLinkServiceM6BWireCodec.SessionRelocationRouteResult result) {
         return new ZLinkServiceM6BWireCodec.SessionRelocationRouted(
             command.relocation(),
             command.coordinator(),
             command.actor(),
             command.session(),
             command.action(),
-            command.currentAuthorityOwnerGeneration(),
-            command.lastAcceptedSessionSequence());
-    }
-
-    //  Rejection ACK: echoes the command identity with the action flipped to
-    //  ABORT. The target treats an action flip as the spec `Stale` result -
-    //  terminal for this relocation's route command.
-    private static ZLinkServiceM6BWireCodec.SessionRelocationRouted rejectedRouted(
-        ZLinkServiceM6BWireCodec.SessionRelocationRoute command) {
-        return new ZLinkServiceM6BWireCodec.SessionRelocationRouted(
-            command.relocation(),
-            command.coordinator(),
-            command.actor(),
-            command.session(),
-            ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.ABORT,
+            result,
             command.currentAuthorityOwnerGeneration(),
             command.lastAcceptedSessionSequence());
     }

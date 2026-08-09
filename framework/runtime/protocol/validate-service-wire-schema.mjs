@@ -5040,6 +5040,7 @@ function validateServiceInvariants(schema, types, fail) {
       { name: "sessionRid", $ref: "rid" },
       { name: "bindingGeneration", $ref: "nonzero-u64" },
       { name: "action", $ref: "session-relocation-route-action" },
+      { name: "result", $ref: "session-relocation-route-result" },
       { name: "currentAuthorityOwnerGeneration", $ref: "nonzero-u64" },
       { name: "lastAcceptedSessionSequence", $ref: "ordinal-or-zero" },
     ],

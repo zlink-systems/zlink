@@ -924,6 +924,7 @@ int main ()
       {0xb1},
       9,
       protocol::session_relocation_route_action_t::commit,
+      protocol::session_relocation_route_result_t::applied,
       11,
       13};
     const auto encoded_session_routed =

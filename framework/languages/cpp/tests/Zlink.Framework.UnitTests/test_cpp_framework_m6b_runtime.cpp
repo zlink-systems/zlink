@@ -1918,7 +1918,18 @@ void verify_remote_session_route_ack_and_atomic_switch ()
     const auto duplicate_result = duplicate_completed.get ();
     assert (duplicate_result.first
             == foundation::operation_terminal_t::completed);
-    assert (duplicate_result.second == result.second);
+    //  Spec 20 SS5: the repeat gets the same outcome, reported as
+    //  AlreadyApplied - every other field echoes the first ACK.
+    assert (duplicate_result.second);
+    assert (duplicate_result.second->result
+            == protocol::session_relocation_route_result_t::
+              already_applied);
+    {
+        auto expected_duplicate = *duplicate_result.second;
+        expected_duplicate.result =
+          protocol::session_relocation_route_result_t::applied;
+        assert (expected_duplicate == *result.second);
+    }
     const auto duplicate_current =
       session_owner->sessions ().current_binding (
         "session-route-actor");

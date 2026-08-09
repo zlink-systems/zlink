@@ -44,3 +44,9 @@ not by this verification.
 The Java/Kotlin fallback gate applies only to requests that already passed the ObjectGeneration,
 AuthorityOwnerGeneration, and binding generation checks that precede it. A late-arriving route
 request from an earlier relocation is rejected by those fences and by the monotonic gate.
+
+Command 45 carries a `session-relocation-route-result` field (applied / alreadyApplied / stale /
+sessionOrBindingClosed). Spec 20 §5 requires the target to stop retransmitting once it receives any
+of the four results, so a refused command 44 is answered with the reason instead of being left
+unanswered. C++ and Java/Kotlin both encode and decode the field and answer `stale` or
+`sessionOrBindingClosed` on their refusal paths.

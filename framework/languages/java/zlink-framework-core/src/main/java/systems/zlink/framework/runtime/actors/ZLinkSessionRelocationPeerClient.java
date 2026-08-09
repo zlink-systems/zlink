@@ -105,7 +105,7 @@ public final class ZLinkSessionRelocationPeerClient {
         Duration window = timeout.compareTo(interval) < 0 ? timeout : interval;
         long sentAt = System.nanoTime();
         switchRoute(command, window).whenComplete((ack, failure) -> {
-            if (failure == null || isRouteSuperseded(failure)) {
+            if (failure == null) {
                 notifyTerminal(onTerminal, ack, failure);
                 settled.complete(null);
                 return;
@@ -235,22 +235,11 @@ public final class ZLinkSessionRelocationPeerClient {
                         command.session().nodeRid(), command44, timeout)
                     .thenApply(codec::decodeSessionRelocationRouted),
                 ZLinkSessionRelocationPeerClient::isRouteNotConnected)
-            .thenCompose(ack -> {
-                if (ack.action() != command.action()) {
-                    //  The session owner replied with the action flipped: the
-                    //  spec `Stale` result. This relocation's route command
-                    //  was superseded - terminal, stop retrying.
-                    return CompletableFuture.failedFuture(
-                        new ZLinkConfigurationException(
-                            "session owner rejected command 44 with a "
-                                + "stale binding fence"));
-                }
-                return validateAck(command, ack)
-                    ? CompletableFuture.completedFuture(ack)
-                    : CompletableFuture.failedFuture(
-                        new ZLinkConfigurationException(
-                            "command 45 ACK differs from command 44 fence"));
-            });
+            .thenCompose(ack -> validateAck(command, ack)
+                ? CompletableFuture.completedFuture(ack)
+                : CompletableFuture.failedFuture(
+                    new ZLinkConfigurationException(
+                        "command 45 ACK differs from command 44 fence")));
     }
 
     private static boolean isRouteNotConnected(Throwable error) {
@@ -260,17 +249,6 @@ public final class ZLinkSessionRelocationPeerClient {
         }
         return current instanceof ZlinkSubmitException submit
             && submit.getResult() == SubmitResult.NOT_CONNECTED;
-    }
-
-    /**
-     * A session-owner stale-binding rejection proves this relocation's
-     * route command was superseded by a newer binding — terminal no-op.
-     */
-    static boolean isRouteSuperseded(Throwable error) {
-        Throwable current = unwrap(error);
-        return current instanceof ZLinkConfigurationException
-            && current.getMessage() != null
-            && current.getMessage().contains("stale binding fence");
     }
 
     private static Throwable unwrap(Throwable error) {
@@ -290,6 +268,9 @@ public final class ZLinkSessionRelocationPeerClient {
             && ack.actor().equals(command.actor())
             && ack.session().equals(command.session())
             && ack.action() == command.action()
+            //  `result` is the owner's answer, not an echo of the request, so
+            //  it is deliberately not compared: spec 20 §5 stops the
+            //  retransmission on any of the four results.
             && ack.currentAuthorityOwnerGeneration()
                 == command.currentAuthorityOwnerGeneration()
             && ack.lastAcceptedSessionSequence()

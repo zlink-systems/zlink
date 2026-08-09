@@ -39,6 +39,8 @@ final class ZLinkSessionRelocationPeerClientTest {
                 new ZLinkServiceM6BWireCodec.SessionRelocationRouted(
                     valid.relocation(), valid.coordinator(), valid.actor(),
                     valid.session(), valid.action(),
+                    ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
+                        .APPLIED,
                     valid.currentAuthorityOwnerGeneration(), 16));
         });
 
@@ -47,6 +49,42 @@ final class ZLinkSessionRelocationPeerClientTest {
                 .switchRoute(command, Duration.ofSeconds(1))
                 .toCompletableFuture().join());
 
+        assertEquals(1, submissions.get());
+    }
+
+    //  Spec 20 §5: the target stops retransmitting on any of the four
+    //  results, so a `Stale` refusal is terminal exactly like `Applied`.
+    @Test
+    void aStaleResultEndsTheRouteSwitchWithoutRetransmitting() {
+        var codec = new ZLinkServiceM6BWireCodec();
+        var command = command();
+        AtomicInteger submissions = new AtomicInteger();
+        ZLinkInternalMeshNode node = node((target, encoded) -> {
+            submissions.incrementAndGet();
+            var echo = ack(command);
+            return codec.encodeSessionRelocationRouted(
+                new ZLinkServiceM6BWireCodec.SessionRelocationRouted(
+                    echo.relocation(), echo.coordinator(), echo.actor(),
+                    echo.session(), echo.action(),
+                    ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
+                        .STALE,
+                    echo.currentAuthorityOwnerGeneration(),
+                    echo.lastAcceptedSessionSequence()));
+        });
+        var terminal = new CompletableFuture<
+            ZLinkServiceM6BWireCodec.SessionRelocationRouted>();
+
+        new ZLinkSessionRelocationPeerClient(node, codec)
+            .switchRouteUntilTerminal(
+                command,
+                Duration.ofSeconds(1),
+                () -> CompletableFuture.completedFuture(false),
+                (routed, failure) -> terminal.complete(routed))
+            .toCompletableFuture().join();
+
+        assertEquals(
+            ZLinkServiceM6BWireCodec.SessionRelocationRouteResult.STALE,
+            terminal.join().result());
         assertEquals(1, submissions.get());
     }
 
@@ -74,7 +112,7 @@ final class ZLinkSessionRelocationPeerClientTest {
     }
 
     @Test
-    void staleBindingRejectionIsATerminalNoOpWithoutRetry()
+    void aRefusedRouteKeepsRetransmittingUntilTheCallerSaysSuperseded()
         throws InterruptedException {
         var codec = new ZLinkServiceM6BWireCodec();
         var command = command();
@@ -86,21 +124,24 @@ final class ZLinkSessionRelocationPeerClientTest {
                 "Session relocation route command has a stale binding fence"));
         });
 
+        //  Command 45 has no result field, so a refused command 44 reaches the
+        //  source as an unanswered request. Spec 20 §5 keeps retransmitting
+        //  until the caller's own superseded check ends it - the refusal text
+        //  is not a terminal signal.
         new ZLinkSessionRelocationPeerClient(node, codec)
             .switchRouteUntilTerminal(
                 command,
                 Duration.ofSeconds(1),
                 () -> {
                     supersededChecks.incrementAndGet();
-                    return CompletableFuture.completedFuture(false);
+                    return CompletableFuture.completedFuture(true);
                 })
             .toCompletableFuture().join();
 
         Thread.sleep(120);
-        assertEquals(1, submissions.get(),
-            "a superseded binding never retries");
-        assertEquals(0, supersededChecks.get(),
-            "the rejection itself is the terminal proof");
+        assertEquals(1, submissions.get());
+        assertEquals(1, supersededChecks.get(),
+            "the caller's superseded check is what ends the retransmission");
     }
 
     @Test
@@ -214,7 +255,7 @@ final class ZLinkSessionRelocationPeerClientTest {
             .switchRouteUntilTerminal(
                 command,
                 Duration.ofSeconds(1),
-                () -> CompletableFuture.completedFuture(false),
+                () -> CompletableFuture.completedFuture(true),
                 (routed, failure) ->
                     terminals.add(routed == null ? "failed" : "switched"))
             .toCompletableFuture().join();
@@ -329,6 +370,7 @@ final class ZLinkSessionRelocationPeerClientTest {
         return new ZLinkServiceM6BWireCodec.SessionRelocationRouted(
             command.relocation(), command.coordinator(), command.actor(),
             command.session(), command.action(),
+            ZLinkServiceM6BWireCodec.SessionRelocationRouteResult.APPLIED,
             command.currentAuthorityOwnerGeneration(),
             command.lastAcceptedSessionSequence());
     }

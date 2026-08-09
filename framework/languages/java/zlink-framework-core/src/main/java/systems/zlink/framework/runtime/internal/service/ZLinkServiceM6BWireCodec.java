@@ -1170,6 +1170,7 @@ public final class ZLinkServiceM6BWireCodec {
         writeActorIdentity(writer, routed.actor());
         writeSessionOwner(writer, routed.session());
         writer.u8(routed.action().wireValue);
+        writer.u8(routed.result().wireValue);
         writer.nonzero(routed.currentAuthorityOwnerGeneration(),
             "currentAuthorityOwnerGeneration");
         writer.u64(routed.lastAcceptedSessionSequence());
@@ -1187,6 +1188,7 @@ public final class ZLinkServiceM6BWireCodec {
             readRelocationIdentity(reader), readCoordinatorFence(reader),
             readActorIdentity(reader), readSessionOwner(reader),
             SessionRelocationRouteAction.fromWire(reader.u8("action")),
+            SessionRelocationRouteResult.fromWire(reader.u8("result")),
             reader.nonzeroU64("currentAuthorityOwnerGeneration"),
             reader.u64("lastAcceptedSessionSequence"));
         reader.end();
@@ -1273,6 +1275,24 @@ public final class ZLinkServiceM6BWireCodec {
                 case 2 -> TARGET;
                 case 3 -> COORDINATOR;
                 default -> throw protocol("unknown relocation role");
+            };
+        }
+    }
+
+    //  Command 45 result, schema `session-relocation-route-result`. Spec 20
+    //  §5 defines the four outcomes the Session owner answers with; the
+    //  target stops retransmitting once it receives any of them.
+    public enum SessionRelocationRouteResult {
+        APPLIED(0), ALREADY_APPLIED(1), STALE(2), SESSION_OR_BINDING_CLOSED(3);
+        private final int wireValue;
+        SessionRelocationRouteResult(int wireValue) { this.wireValue = wireValue; }
+        private static SessionRelocationRouteResult fromWire(int value) {
+            return switch (value) {
+                case 0 -> APPLIED;
+                case 1 -> ALREADY_APPLIED;
+                case 2 -> STALE;
+                case 3 -> SESSION_OR_BINDING_CLOSED;
+                default -> throw protocol("unknown Session relocation route result");
             };
         }
     }
@@ -1459,6 +1479,7 @@ public final class ZLinkServiceM6BWireCodec {
         RelocationIdentity relocation, RelocationCoordinatorFence coordinator,
         ActorIdentity actor, SessionOwnerFence session,
         SessionRelocationRouteAction action,
+        SessionRelocationRouteResult result,
         long currentAuthorityOwnerGeneration,
         long lastAcceptedSessionSequence) {
         public SessionRelocationRouted {
@@ -1467,6 +1488,7 @@ public final class ZLinkServiceM6BWireCodec {
             Objects.requireNonNull(actor, "actor");
             Objects.requireNonNull(session, "session");
             Objects.requireNonNull(action, "action");
+            Objects.requireNonNull(result, "result");
             if (currentAuthorityOwnerGeneration <= 0
                 || lastAcceptedSessionSequence < 0) {
                 throw protocol("route ACK generations are invalid");

@@ -15,6 +15,7 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -208,7 +209,11 @@ final class ZLinkSessionActorBindingContractTest {
 
         var first = runtime.notifyDisconnectedAll();
         var duplicate = runtime.notifyDisconnectedAll();
-        assertEquals(List.of("actor-a", "actor-b"), stream.unbinds);
+        //  The unbind submit is deliberately dispatched off the completing
+        //  thread, so wait for both to arrive instead of assuming they were
+        //  issued inline.
+        awaitUnbinds(stream, "actor-a", "actor-b");
+        assertEquals(Set.of("actor-a", "actor-b"), Set.copyOf(stream.unbinds));
         stream.pendingUnbinds.get("actor-a").completeExceptionally(
             new IllegalStateException("forced unbind failure"));
         stream.pendingUnbinds.get("actor-b").complete(null);
@@ -219,7 +224,7 @@ final class ZLinkSessionActorBindingContractTest {
         assertThrows(
             CompletionException.class,
             () -> duplicate.toCompletableFuture().join());
-        assertEquals(List.of("actor-a", "actor-b"), stream.unbinds);
+        assertEquals(Set.of("actor-a", "actor-b"), Set.copyOf(stream.unbinds));
         assertTrue(runtime.bound().isEmpty());
     }
 
@@ -234,6 +239,7 @@ final class ZLinkSessionActorBindingContractTest {
 
         first.notifyDisconnected().toCompletableFuture().join();
 
+        awaitUnbinds(stream, "actor-a");
         assertEquals(List.of("actor-a"), stream.unbinds);
         assertEquals(List.of(second), runtime.bound());
         assertFalse(stream.closed);
@@ -298,12 +304,22 @@ final class ZLinkSessionActorBindingContractTest {
         assertEquals(7, actor.ref().objectGeneration());
         assertEquals(10, ack.currentAuthorityOwnerGeneration());
         assertEquals(17, ack.lastAcceptedSessionSequence());
+        assertEquals(ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
+            .APPLIED, ack.result());
         //  Spec 20 §5: the session owner must answer a retransmitted command
-        //  44 with the same result instead of failing the source-fence CAS,
-        //  or a lost command 45 leaves the target retrying forever.
+        //  44 instead of failing the source-fence CAS, or a lost command 45
+        //  leaves the target retrying forever. The echoed fence is identical;
+        //  only the result names the repeat.
         var replay = runtime.applyRelocationRouteCommand(command)
             .toCompletableFuture().join();
-        assertEquals(ack, replay);
+        assertEquals(ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
+            .ALREADY_APPLIED, replay.result());
+        assertEquals(ack, new ZLinkServiceM6BWireCodec.SessionRelocationRouted(
+            replay.relocation(), replay.coordinator(), replay.actor(),
+            replay.session(), replay.action(),
+            ZLinkServiceM6BWireCodec.SessionRelocationRouteResult.APPLIED,
+            replay.currentAuthorityOwnerGeneration(),
+            replay.lastAcceptedSessionSequence()));
     }
 
     //  Spec 20 §5 step 1/step 7: the seal fixes where the Session owner's
@@ -370,10 +386,12 @@ final class ZLinkSessionActorBindingContractTest {
 
         //  A high-water above the sealed one no longer passes: the monotonic
         //  gate is replaced by spec 20 §5 step 7 equality once a seal exists.
-        var stale = runtime.applyRelocationRouteCommand(
-                route(relocation, 24)).toCompletableFuture().join();
-        assertEquals(ZLinkServiceM6BWireCodec
-            .SessionRelocationRouteAction.ABORT, stale.action());
+        //  The refusal is answered with `stale` so the target stops
+        //  retransmitting (spec 20 §5).
+        var refused = runtime.applyRelocationRouteCommand(
+            route(relocation, 24)).toCompletableFuture().join();
+        assertEquals(ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
+            .STALE, refused.result());
         assertEquals(NODE_A, actor.ref().nodeRid());
 
         var ack = runtime.applyRelocationRouteCommand(
@@ -381,12 +399,16 @@ final class ZLinkSessionActorBindingContractTest {
         assertEquals(ZLinkServiceM6BWireCodec
             .SessionRelocationRouteAction.COMMIT, ack.action());
         assertEquals(23, ack.lastAcceptedSessionSequence());
+        assertEquals(ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
+            .APPLIED, ack.result());
         assertEquals(NODE_B, actor.ref().nodeRid());
 
         //  The already-applied branch stays ahead of the gate: a retransmit
-        //  after the seal was consumed must re-ACK, never flip to ABORT.
-        assertEquals(ack, runtime.applyRelocationRouteCommand(
-            route(relocation, 23)).toCompletableFuture().join());
+        //  after the seal was consumed must re-ACK (spec 20 §5: the owner
+        //  answers a repeated request instead of dropping it).
+        assertEquals(ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
+            .ALREADY_APPLIED, runtime.applyRelocationRouteCommand(
+                route(relocation, 23)).toCompletableFuture().join().result());
     }
 
     //  Without a completed command 42 handshake the owner has no reference
@@ -522,9 +544,27 @@ final class ZLinkSessionActorBindingContractTest {
         }
     }
 
+    //  The two unbind submits are dispatched as independent pool tasks, so
+    //  they arrive in an arbitrary order and only their set is deterministic.
+    private static void awaitUnbinds(FakeStream stream, String... expected) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (stream.unbinds.size() < expected.length) {
+            if (System.nanoTime() > deadline) {
+                assertEquals(Set.of(expected), Set.copyOf(stream.unbinds),
+                    "unbind submissions did not arrive");
+                return;
+            }
+            Thread.onSpinWait();
+        }
+    }
+
     private static final class FakeStream implements ZLinkBackendStreamSocket {
         private final List<String> binds = new ArrayList<>();
-        private final List<String> unbinds = new ArrayList<>();
+        //  `unbindActor` is submitted from a pool thread (ZLinkBoundActor
+        //  hops off the completing thread on purpose), so the recording list
+        //  is read by the test thread while a pool thread appends to it.
+        private final List<String> unbinds =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
         private final List<String> relays = new ArrayList<>();
         private final Map<String, CompletableFuture<Void>> pendingUnbinds =
             new ConcurrentHashMap<>();
@@ -582,12 +622,16 @@ final class ZLinkSessionActorBindingContractTest {
         @Override public ZLinkBackendActorUnbindOperation unbindActor(
             RoutingId sessionRid, String actorId) {
             return timeout -> {
-                unbinds.add(actorId);
                 if (deferUnbind) {
                     CompletableFuture<Void> pending = new CompletableFuture<>();
+                    //  Publish the deferred future before the recording entry:
+                    //  the test waits on `unbinds` and then resolves the
+                    //  matching pending future.
                     pendingUnbinds.put(actorId, pending);
+                    unbinds.add(actorId);
                     return pending;
                 }
+                unbinds.add(actorId);
                 return CompletableFuture.completedFuture(null);
             };
         }

@@ -615,6 +615,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                         new ZLinkServiceM6BWireCodec.SessionRelocationRouted(
                             command.relocation(), command.coordinator(),
                             command.actor(), command.session(), command.action(),
+                            ZLinkServiceM6BWireCodec
+                                .SessionRelocationRouteResult.APPLIED,
                             command.currentAuthorityOwnerGeneration(),
                             command.lastAcceptedSessionSequence())));
             });

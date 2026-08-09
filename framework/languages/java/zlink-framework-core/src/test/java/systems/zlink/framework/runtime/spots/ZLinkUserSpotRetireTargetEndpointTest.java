@@ -554,6 +554,8 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                 command.actor(),
                                 command.session(),
                                 command.action(),
+                                ZLinkServiceM6BWireCodec
+                                    .SessionRelocationRouteResult.APPLIED,
                                 command.currentAuthorityOwnerGeneration(),
                                 command.lastAcceptedSessionSequence())));
                 }
@@ -605,6 +607,8 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                     command.actor(),
                                     command.session(),
                                     command.action(),
+                                    ZLinkServiceM6BWireCodec
+                                        .SessionRelocationRouteResult.APPLIED,
                                     command
                                         .currentAuthorityOwnerGeneration(),
                                     command

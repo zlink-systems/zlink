@@ -4123,10 +4123,15 @@ std::size_t public_host_runtime_t::dispatch_user_spot_operations ()
                         }
                     }
                     if (cached_ack) {
+                        //  Spec 20 SS5: a repeated request gets the same
+                        //  outcome, reported as AlreadyApplied.
+                        auto replay = *cached_ack;
+                        replay.result = protocol::
+                          session_relocation_route_result_t::already_applied;
                         (void) _transport
                           ->send_session_relocation_routed (
                             mailbox_record.source_routing_id,
-                            *cached_ack);
+                            replay);
                         continue;
                     }
                     std::uint64_t sealed_high_water = 0;
@@ -4230,8 +4235,41 @@ std::size_t public_host_runtime_t::dispatch_user_spot_operations ()
                           != stateful::stateful_error_t::none
                         || !admission.binding
                         || admission.last_accepted_sequence
-                             != sealed_high_water)
+                             != sealed_high_water) {
+                        //  Spec 20 SS5: the owner processed the request and
+                        //  determined it is superseded, so it answers with a
+                        //  result instead of leaving the source to retransmit
+                        //  a request that can never succeed. A binding that is
+                        //  gone reports SessionOrBindingClosed.
+                        protocol::session_relocation_routed_t refused{
+                          route.relocation,
+                          route.coordinator,
+                          route.actor,
+                          route.session_owner_node_routing_id,
+                          route.session_owner_node_generation,
+                          route.session_owner_id,
+                          route.session_owner_lease_generation,
+                          route.session_routing_id,
+                          route.binding_generation,
+                          route.route.action,
+                          admission.binding
+                            ? protocol::session_relocation_route_result_t::stale
+                            : protocol::session_relocation_route_result_t::
+                                session_or_binding_closed,
+                          //  The refusal must echo the request's own fence, or
+                          //  the target's ACK validation rejects it and keeps
+                          //  retransmitting a request that can never succeed.
+                          route.route.action
+                              == protocol::
+                                session_relocation_route_action_t::commit
+                            ? route.route.target_authority_owner_generation
+                            : route.route
+                                .current_authority_owner_generation,
+                          route.route.replayed_high_water};
+                        (void) _transport->send_session_relocation_routed (
+                          mailbox_record.source_routing_id, refused);
                         continue;
+                    }
                     const protocol::session_relocation_routed_t ack{
                       route.relocation,
                       route.coordinator,
@@ -4243,6 +4281,7 @@ std::size_t public_host_runtime_t::dispatch_user_spot_operations ()
                       route.session_routing_id,
                       route.binding_generation,
                       route.route.action,
+                      protocol::session_relocation_route_result_t::applied,
                       admission.binding->actor
                         .authority_owner_generation,
                       admission.last_accepted_sequence};

@@ -1419,7 +1419,8 @@ std::vector<std::uint8_t> encode_session_relocation_routed (
         || record.current_authority_owner_generation == 0
         || (record.action != session_relocation_route_action_t::commit
             && record.action
-                 != session_relocation_route_action_t::abort)) {
+                 != session_relocation_route_action_t::abort)
+        || static_cast<std::uint8_t> (record.result) > 3) {
         throw service_wire_error_t (
           "Session relocation routed ACK contains an invalid exact fence");
     }
@@ -1448,6 +1449,7 @@ std::vector<std::uint8_t> encode_session_relocation_routed (
     append_bytes8 (bytes, record.session_routing_id, "Session RID");
     append_u64 (bytes, record.binding_generation);
     bytes.push_back (static_cast<std::uint8_t> (record.action));
+    bytes.push_back (static_cast<std::uint8_t> (record.result));
     append_u64 (bytes, record.current_authority_owner_generation);
     append_u64 (bytes, record.last_accepted_session_sequence);
     return bytes;
@@ -1491,6 +1493,11 @@ session_relocation_routed_t decode_session_relocation_routed (
           "Session relocation routed action is truncated");
     record.action =
       static_cast<session_relocation_route_action_t> (bytes[offset++]);
+    if (offset >= bytes.size ())
+        throw service_wire_error_t (
+          "Session relocation routed result is truncated");
+    record.result =
+      static_cast<session_relocation_route_result_t> (bytes[offset++]);
     record.current_authority_owner_generation = read_u64 (bytes, offset);
     record.last_accepted_session_sequence = read_u64 (bytes, offset);
     if (offset != bytes.size ())

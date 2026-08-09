@@ -41,3 +41,9 @@ message의 전달은 이 검증이 아니라 Message Follow가 보장한다.
 Java/Kotlin의 대체 gate는 이 항목 앞의 ObjectGeneration·AuthorityOwnerGeneration·binding
 generation 검증을 모두 통과한 요청에만 적용된다. 지연 도착한 이전 relocation의 route 요청은
 그 fence들과 monotonic gate에서 거부된다.
+
+Command 45는 `session-relocation-route-result`(applied / alreadyApplied / stale /
+sessionOrBindingClosed) 필드를 싣는다. Spec 20 §5는 target이 이 네 결과 중 하나를 받으면
+재전송을 멈추도록 요구하므로, 거부된 command 44도 무응답으로 두지 않고 거부 사유를 담아
+답한다. C++와 Java/Kotlin 모두 이 필드를 encode/decode하며 refusal 경로에서 `stale` 또는
+`sessionOrBindingClosed`를 답한다.

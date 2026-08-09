@@ -665,6 +665,19 @@ final class ZLinkActorSpotAdmission {
                     reportBoundSessionRouteUpdateFailure(request, failure);
                     return;
                 }
+                //  Spec 20 §5: `Stale` and `SessionOrBindingClosed` mean the
+                //  owner did not move the route, so they end the
+                //  retransmission without a switch.
+                if (ack.result() != ZLinkServiceM6BWireCodec
+                        .SessionRelocationRouteResult.APPLIED
+                    && ack.result() != ZLinkServiceM6BWireCodec
+                        .SessionRelocationRouteResult.ALREADY_APPLIED) {
+                    reportBoundSessionRouteUpdateFailure(request,
+                        new ZLinkConfigurationException(
+                            "Session owner refused the route switch: "
+                                + ack.result()));
+                    return;
+                }
                 requireActors().traceActorTransferMarker(
                     "session_route_switched",
                     request.actorId(),

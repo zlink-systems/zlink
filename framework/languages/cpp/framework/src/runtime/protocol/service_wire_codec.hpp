@@ -611,6 +611,14 @@ enum class session_relocation_route_action_t : std::uint8_t
     abort = 2
 };
 
+enum class session_relocation_route_result_t : std::uint8_t
+{
+    applied = 0,
+    already_applied = 1,
+    stale = 2,
+    session_or_binding_closed = 3
+};
+
 struct session_relocation_route_update_t
 {
     session_relocation_route_action_t action =
@@ -691,6 +699,8 @@ struct session_relocation_routed_t
     std::uint64_t binding_generation = 0;
     session_relocation_route_action_t action =
       session_relocation_route_action_t::commit;
+    session_relocation_route_result_t result =
+      session_relocation_route_result_t::applied;
     std::uint64_t current_authority_owner_generation = 0;
     std::uint64_t last_accepted_session_sequence = 0;
 
