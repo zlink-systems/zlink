@@ -50,6 +50,62 @@ bind_dealer_endpoint (zlink::dealer_socket_t &socket, const std::string &transpo
              : perf::multi::normalize_endpoint_host (socket.options ().last_endpoint ());
 }
 
+bool drain_phase_until_idle (zlink::dealer_socket_t &server,
+                             zlink::poller_t &poller,
+                             double max_wait_seconds,
+                             int idle_wait_ms)
+{
+    if (max_wait_seconds <= 0.0)
+        return true;
+    if (idle_wait_ms <= 0)
+        idle_wait_ms = 50;
+
+    const auto deadline =
+      std::chrono::steady_clock::now ()
+      + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
+        std::chrono::duration<double> (max_wait_seconds));
+    auto idle_deadline =
+      std::chrono::steady_clock::now () + std::chrono::milliseconds (idle_wait_ms);
+    zlink::message_t part;
+    std::vector<zlink::poll_event_t> events (1);
+
+    while (std::chrono::steady_clock::now () < deadline) {
+        part.init ();
+        const int rc = server.recv (part, zlink::recv_flags_t::dontwait);
+        if (rc == 0) {
+            part.close ();
+            idle_deadline =
+              std::chrono::steady_clock::now () + std::chrono::milliseconds (idle_wait_ms);
+            continue;
+        }
+
+        const int err = errno;
+        part.close ();
+        if (rc == static_cast<int> (zlink::recv_result_t::no_data) || err == EAGAIN
+            || err == EWOULDBLOCK || err == EINTR) {
+            if (err == EINTR)
+                continue;
+            if (std::chrono::steady_clock::now () >= idle_deadline)
+                return true;
+
+            const auto now = std::chrono::steady_clock::now ();
+            const auto remaining_idle =
+              std::chrono::duration_cast<std::chrono::milliseconds> (idle_deadline - now);
+            const auto remaining_total =
+              std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now);
+            const auto wait_ms = std::max (
+              std::chrono::milliseconds (1), std::min (remaining_idle, remaining_total));
+            events[0].revents = zlink::poll_event_flag_t::none;
+            (void) poller.wait (events.data (), events.size (), wait_ms);
+            continue;
+        }
+
+        return false;
+    }
+
+    return std::chrono::steady_clock::now () >= idle_deadline;
+}
+
 } // namespace
 
 bool perf_dealer_dealer_server (const std::string &lib_name,
@@ -179,6 +235,15 @@ bool perf_dealer_dealer_server (const std::string &lib_name,
         }
 
         if (failed || active_count == 0 || latency.count () == 0)
+            return false;
+
+        // Match the C reference: drain the tail outside the measured active
+        // window so queued large payloads and per-socket stop tokens can reach
+        // the server before this process closes its DEALER socket.
+        const double drain_wait_s =
+          msg_size >= 65536 ? std::max (10.0, active_seconds * 2.0)
+                            : std::max (2.0, static_cast<double> (active_seconds));
+        if (!drain_phase_until_idle (server, poller, drain_wait_s, 50))
             return false;
 
         const perf::multi::bench_latency_stats_t latency_stats = latency.snapshot ();

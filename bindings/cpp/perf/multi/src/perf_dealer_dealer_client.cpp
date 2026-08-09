@@ -80,6 +80,13 @@ struct socket_state_t
     }
 };
 
+enum stop_token_status_t
+{
+    stop_token_sent = 0,
+    stop_token_retry = 1,
+    stop_token_fatal = 2
+};
+
 class dealer_dealer_client_bench_t
 {
   public:
@@ -126,10 +133,9 @@ class dealer_dealer_client_bench_t
                         &_result.active_count, NULL))
             return false;
 
-        // Signal active-phase end to the measuring server. A large secure
-        // transport case can leave some sockets backpressured at the end of
-        // the active window; stop token delivery must not block forever on
-        // one saturated socket before trying the rest.
+        // Signal active-phase end to the measuring server. Each socket uses
+        // the C reference's blocking stop-token retry so the receiver's
+        // wire-level phase boundary is not lost under backpressure.
         if (!send_stop_tokens ())
             return false;
 
@@ -278,61 +284,54 @@ class dealer_dealer_client_bench_t
         return false;
     }
 
-    bool try_send_stop_token (socket_state_t &state)
+    stop_token_status_t try_send_stop_token (socket_state_t &state)
     {
         if (!state.sock)
-            return false;
+            return stop_token_fatal;
         const size_t token_size = std::strlen (perf::multi::k_stop_token);
         zlink::message_t part = zlink::message_t::from (
           std::as_bytes (std::span<const char> (perf::multi::k_stop_token, token_size)));
         if (!part.valid ())
-            return false;
+            return stop_token_fatal;
 
         try {
             const bool sent = std::move (state.sock->send ())
                                 .message (part)
-                                .flags (zlink::send_flags_t::dontwait)
+                                // Match the C reference send_stop_token:
+                                // blocking send with the socket send timeout,
+                                // then retry transient backpressure until this
+                                // socket has delivered its stop token.
+                                .flags (zlink::send_flags_t::none)
                                 .submit ();
             if (sent)
-                return true;
+                return stop_token_sent;
         }
-        catch (const zlink::submit_error_t &) {
-            const int err = errno;
+        catch (const zlink::submit_error_t &error_) {
+            const int err = error_.internal_errno ();
+            debug_log ("stop token submit failed errno=" + std::to_string (err));
             if (err != EINTR && err != EAGAIN && err != EWOULDBLOCK && err != ETIMEDOUT)
-                return false;
+                return stop_token_fatal;
+            return stop_token_retry;
         }
 
-        return false;
+        return stop_token_fatal;
     }
 
     bool send_stop_tokens ()
     {
-        const int wait_ms = std::max (1, _settings.sndtimeo_ms);
-        const auto deadline =
-          std::chrono::steady_clock::now () + std::chrono::milliseconds (wait_ms);
-        std::vector<uint8_t> sent (_socket_states.size (), 0);
-        size_t sent_count = 0;
-
-        do {
-            for (size_t i = 0; i < _socket_states.size (); ++i) {
-                if (sent[i])
-                    continue;
-                if (try_send_stop_token (_socket_states[i])) {
-                    sent[i] = 1;
-                    ++sent_count;
-                }
-                const int err = errno;
-                if (err != 0 && err != EINTR && err != EAGAIN && err != EWOULDBLOCK
-                    && err != ETIMEDOUT)
+        for (size_t i = 0; i < _socket_states.size (); ++i) {
+            while (!g_stop_requested.load (std::memory_order_acquire)) {
+                const stop_token_status_t status = try_send_stop_token (_socket_states[i]);
+                if (status == stop_token_sent)
+                    break;
+                if (status == stop_token_fatal)
                     return false;
+                std::this_thread::yield ();
             }
-            if (sent_count == _socket_states.size ()
-                || g_stop_requested.load (std::memory_order_acquire))
+            if (g_stop_requested.load (std::memory_order_acquire))
                 return true;
-            std::this_thread::yield ();
-        } while (std::chrono::steady_clock::now () < deadline);
+        }
 
-        debug_log ("stop token send incomplete; active deadline still bounds server");
         return true;
     }
 
