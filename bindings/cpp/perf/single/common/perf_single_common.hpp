@@ -2,7 +2,7 @@
 #define PERF_SINGLE_COMMON_HPP
 
 #include "perf_single_metric_header.hpp"
-#include "../../common/perf_latency_sampler.hpp"
+#include "perf_single_latency.hpp"
 #include "../../common/perf_monitor_wait.hpp"
 #include "../../common/perf_socket_adapter.hpp"
 #include "../../common/perf_tls.hpp"
@@ -27,10 +27,6 @@ namespace single
 {
 
 typedef ::perf::socket_t perf_socket_t;
-
-typedef ::perf::latency_sampler_stats_t latency_stats_t;
-
-typedef ::perf::latency_sampler_t latency_stats_builder_t;
 
 inline zlink::message_t message_from_payload (const void *data_, size_t size_)
 {
@@ -61,6 +57,7 @@ int resolve_single_duration_seconds ();
 size_t resolve_single_latency_sample_cap ();
 int resolve_single_send_timeout_ms ();
 int resolve_single_recv_timeout_ms ();
+int resolve_single_stop_retry_timeout_ms ();
 int resolve_single_pubsub_recv_timeout_ms ();
 int resolve_single_pubsub_ready_settle_ms ();
 int resolve_single_connect_ready_timeout_ms ();
@@ -467,6 +464,24 @@ inline bool send_payload_blocking (zlink::pair_socket_t &socket_, const void *da
     }
 }
 
+inline bool send_payload_blocking_retry (zlink::pair_socket_t &socket_,
+                                         const void *data_,
+                                         size_t size_)
+{
+    const auto deadline =
+      std::chrono::steady_clock::now ()
+      + std::chrono::milliseconds (resolve_single_stop_retry_timeout_ms ());
+    while (std::chrono::steady_clock::now () < deadline) {
+        if (send_payload_blocking (socket_, data_, size_))
+            return true;
+        if (!is_transient_send_errno (errno))
+            return false;
+        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+    }
+    errno = EAGAIN;
+    return false;
+}
+
 inline bool publish_payload_blocking (zlink::pub_socket_t &publisher_,
                                       const std::string &topic_,
                                       const void *data_,
@@ -501,23 +516,23 @@ inline bool publish_payload_blocking_retry (zlink::pub_socket_t &publisher_,
     return false;
 }
 
-// C-faithful DONTWAIT send (mirrors bindings/c/perf single
+// C-faithful active send (mirrors bindings/c/perf single
 // perf_single_one_way.hpp send_socket_active_message with
-// retry_on_eagain=true). Returns:
+// ZLINK_SEND_FLAGS_NONE and retry_on_eagain=true). Returns:
 //   1  -> sent
 //   0  -> transient backpressure (EAGAIN/EWOULDBLOCK/ETIMEDOUT/EINTR);
 //         caller must re-stamp a fresh timestamp and retry, exactly like
 //         C's send_active_samples loop, so the delivered message never
 //         carries a stale timestamp.
 //  -1  -> fatal error
-inline int send_payload_dontwait (zlink::pair_socket_t &socket_, const void *data_, size_t size_)
+inline int send_payload_active (zlink::pair_socket_t &socket_, const void *data_, size_t size_)
 {
     zlink::message_t msg = message_from_payload (data_, size_);
     if (!msg.valid ())
         return -1;
     try {
         const bool sent = std::move (socket_.send ().message (msg).flags (
-                                       static_cast<int> (zlink::send_flags_t::dontwait)))
+                                       static_cast<int> (zlink::send_flags_t::none)))
                             .submit ();
         return sent ? 1 : 0;
     }
@@ -529,15 +544,16 @@ inline int send_payload_dontwait (zlink::pair_socket_t &socket_, const void *dat
     }
 }
 
-inline int send_payload_dontwait (perf_socket_t &socket_, const void *data_, size_t size_)
+inline int send_payload_active (perf_socket_t &socket_, const void *data_, size_t size_)
 {
     zlink::message_t msg = message_from_payload (data_, size_);
     if (!msg.valid ())
         return -1;
     try {
         // send_socket() returns 0 on success and -1 with errno already
-        // set (EAGAIN on backpressure, internal_errno on error).
-        if (::perf::send_socket (socket_, msg, static_cast<int> (zlink::send_flags_t::dontwait))
+        // set (EAGAIN on backpressure, internal_errno on error). The C
+        // reference uses a blocking active send, so keep flags at none.
+        if (::perf::send_socket (socket_, msg, static_cast<int> (zlink::send_flags_t::none))
             == 0)
             return 1;
         return is_transient_send_errno (errno) ? 0 : -1;
@@ -564,7 +580,7 @@ inline bool send_stop_token_blocking (perf_socket_t &socket_,
 
 inline bool send_stop_token_blocking (zlink::pair_socket_t &socket_)
 {
-    return send_payload_blocking (socket_, k_stop_token, std::strlen (k_stop_token));
+    return send_payload_blocking_retry (socket_, k_stop_token, std::strlen (k_stop_token));
 }
 
 inline bool publish_stop_token_blocking (zlink::pub_socket_t &publisher_, const std::string &topic_)

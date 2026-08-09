@@ -164,12 +164,9 @@ bool run_pattern_pair (const std::string &transport, size_t msg_size, const std:
         uint64_t seq = 0;
         // C-faithful send model (bindings/c/perf single
         // perf_single_one_way.hpp send_active_samples +
-        // send_socket_active_message with static_cast<int>(zlink::send_flags_t::dontwait),
+        // send_socket_active_message with ZLINK_SEND_FLAGS_NONE,
         // retry_on_eagain=true): on transient backpressure, re-stamp a
-        // fresh timestamp and retry immediately. A blocking send instead
-        // stamps once then parks for the full TLS/WS write, so every
-        // delivered message carries a stale timestamp -> latency blows
-        // up 20-1000x on tls/ws/wss at unchanged throughput.
+        // fresh timestamp, wait 1 ms, and retry.
         while (std::chrono::steady_clock::now () < active_deadline) {
             if (!perf_single_metric::stamp_payload (payload.data (), payload.size (), run_id,
                                                     perf_single_metric::phase_active, msg_size, seq,
@@ -178,13 +175,15 @@ bool run_pattern_pair (const std::string &transport, size_t msg_size, const std:
                 break;
             }
             const int send_rc =
-              perf::single::send_payload_dontwait (conn_socket, payload.data (), payload.size ());
+              perf::single::send_payload_active (conn_socket, payload.data (), payload.size ());
             if (send_rc < 0) {
                 sender_ok.store (false, std::memory_order_release);
                 break;
             }
-            if (send_rc == 0)
-                continue; // backpressure: re-stamp + retry (no sleep)
+            if (send_rc == 0) {
+                std::this_thread::sleep_for (std::chrono::milliseconds (1));
+                continue; // backpressure: re-stamp + wait + retry
+            }
             ++seq;
             sent_count.fetch_add (1, std::memory_order_release);
         }

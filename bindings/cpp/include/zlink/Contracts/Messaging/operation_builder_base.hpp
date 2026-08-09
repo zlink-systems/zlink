@@ -59,6 +59,11 @@ template <typename StateT, typename DestroyPolicyT> class operation_builder_base
 
     const StateT &state () const noexcept { return (*_state); }
 
+    void replace_state_ptr (std::unique_ptr<StateT> state_ptr_) noexcept
+    {
+        _state = std::move (state_ptr_);
+    }
+
     std::unique_ptr<StateT> release_state_ptr () noexcept { return std::move (_state); }
 
   private:

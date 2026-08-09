@@ -21,16 +21,6 @@ namespace zlink
 namespace detail
 {
 
-void *socket_access_t::native_handle (socket_t &socket_) noexcept
-{
-    return socket_._socket ? detail::native_handle (*socket_._socket) : nullptr;
-}
-
-const void *socket_access_t::native_handle (const socket_t &socket_) noexcept
-{
-    return socket_._socket ? detail::native_handle (*socket_._socket) : nullptr;
-}
-
 routing_id_t routing_id_from_native_pointer (const void *native_) noexcept
 {
     const zlink_routing_id_t *rid = static_cast<const zlink_routing_id_t *> (native_);

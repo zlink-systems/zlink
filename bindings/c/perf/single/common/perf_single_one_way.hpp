@@ -252,19 +252,37 @@ inline bool run_active_phase (void *sender_,
 
     // PERF_SINGLE_TEST_POLICY § 1.4: receiver no longer checks an atomic
     // sender_done flag; phase end is signaled purely by the stop token
-    // arriving on the wire.  The socket recv_timeout still bounds
-    // individual recv calls (lets recv return EAGAIN on idle so we keep
-    // cycling), but the loop only exits on stop-token receipt or error.
+    // arriving on the wire.  Readiness is waited for through the public
+    // poller with an infinite timeout, then all currently available parts
+    // are drained with ZLINK_DONTWAIT.  This is the canonical C reference
+    // shape that binding-language runners must match.
     (void) recv_timeout_ms_;
 
-    const int recv_flags = 0;
+    poller_guard_t recv_poller;
+    if (!recv_poller.valid () || !recv_poller.add (receiver_, receiver_, ZLINK_POLLIN)) {
+        sender_ok.store (false, std::memory_order_release);
+        return false;
+    }
 
     std::thread receiver_thread ([&] () {
         while (true) {
+            zlink_poller_event_t event;
+            const int poll_rc = recv_poller.wait (&event, -1);
+            if (poll_rc < 0) {
+                const int err = zlink_errno ();
+                if (err == EINTR || err == EAGAIN)
+                    continue;
+                sender_ok.store (false, std::memory_order_release);
+                return;
+            }
+            if (poll_rc == 0)
+                continue;
+
             perf_single_metric::header_t header;
             bool header_ok = false;
             const int recv_rc =
-              recv_header_fn_ (receiver_, state_->payload_size, recv_flags, &header, &header_ok);
+              recv_header_fn_ (receiver_, state_->payload_size, ZLINK_DONTWAIT, &header,
+                               &header_ok);
             if (recv_rc == recv_result_payload) {
                 if (header_ok && single_header_matches_run (*state_, header)
                     && std::chrono::steady_clock::now () < deadline) {

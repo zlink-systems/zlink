@@ -4,35 +4,36 @@
 >
 > 작업 브랜치: `core-0.10.0-bindings-performance`
 >
-> 이 브랜치에서 작업하도록 승인되었으며, 측정과 문서 변경은 Windows 작업영역에서 진행한다.
+> 이 브랜치에서 작업하도록 승인되었으며, 측정과 문서 변경은 WSL Ubuntu-24.04 작업영역에서 진행한다.
 >
-> 이 문서는 core 0.10.0을 기준으로 bindings 라이브러리 성능 개선을 처음부터
+> 이 문서는 core 0.10.1을 기준으로 bindings 라이브러리 성능 개선을 처음부터
 > 진행하기 위한 실행 문서다. 이전 계획 문서의 측정값과 완료 판정은 가져오지 않는다.
 > 새 C 기준 결과와 각 binding의 새 결과만 이 문서에 기록한다.
 
 ## 1. 기준 버전과 시작 상태
 
-이번 작업의 core 기준 버전은 0.10.0이다. 측정 전에 다음 세 파일의 버전이 모두 같은지
+이번 작업의 core 기준 버전은 0.10.1이다. 측정 전에 다음 세 파일의 버전이 모두 같은지
 확인한다.
 
-- `VERSION`: `LIBZLINK_VERSION=0.10.0`
-- `core/CMakeLists.txt`: `project(zlink VERSION 0.10.0 ...)`
-- `core/include/zlink.h`: major 0, minor 10, patch 0
+- `VERSION`: `LIBZLINK_VERSION=0.10.1`
+- `core/CMakeLists.txt`: `project(zlink VERSION 0.10.1 ...)`
+- `core/include/zlink.h`: major 0, minor 10, patch 1
 
-`bindings/tools/local_core_runtime.sh`는 `VERSION`의 값을 이용해 versioned runtime
-경로를 선택한다. 따라서 파일 이름이나 `Perf runtime libzlink: ...` 경로만 보고
-판정하지 않는다. runner 또는 binding의 public version API가 보고한 실제 runtime
-버전도 0.10.0인지 확인한다.
+`bindings/tools/local_core_runtime.sh`는 `VERSION`의 값을 이용해 GitHub의
+`core/v0.10.1` release asset을 기존 release 절차로 가져오고 versioned runtime 경로를
+선택한다. 따라서 파일 이름이나 `Perf runtime libzlink: ...` 경로만 보고 판정하지 않는다.
+runner 또는 binding의 public version API가 보고한 실제 runtime 버전도 0.10.1인지 확인한다.
 
-측정을 시작하기 전에 `core/build`를 현재 소스로 다시 빌드한다. `core/src`,
-`core/include`, `VERSION`이 runtime보다 새로우면 측정을 시작하지 않는다. 다른
-버전의 local package나 오래된 runtime을 사용한 결과도 이 문서의 기준값으로 사용하지
-않는다.
+측정을 시작할 때는 Core source를 다시 build하지 않는다. `ZLINK_CORE_SOURCE=release`
+(기본값) 상태에서 release prefix를 준비하고, `share/zlink/core-package-provenance.json`의
+version이 0.10.1인지 확인한다. `core/build`와 현재 source 변경은 이 측정 runtime을
+구성하지 않는다. 다른 버전의 local package나 오래된 runtime을 사용한 결과도 이 문서의
+기준값으로 사용하지 않는다.
 
 모든 성능 셀은 `미측정`에서 시작한다. 상세 표에는 현재 binding runner에 실제로 등록된
 pattern만 포함한다. 공식 C runner에만 있고 binding runner에 없는 pattern은 이 계획의
 측정 대상에서 제외한다. 이전 문서와 이전 report는 병목 후보를 찾는 참고 자료로만 사용하며,
-core 0.10.0의 통과 비율이나 완료 근거로 사용하지 않는다.
+core 0.10.1의 통과 비율이나 완료 근거로 사용하지 않는다.
 
 언어별 pattern 목록이 다른 것은 Core C API 또는 binding public contract가 언어별로 다르다는
 뜻이 아니다. 모든 binding은 같은 Core C API를 감싸지만, 각 언어의 perf runner가 현재
@@ -53,7 +54,7 @@ core 0.10.0의 통과 비율이나 완료 근거로 사용하지 않는다.
 | 6 | Rust | `bindings/rust/perf` |
 | 7 | Python | `bindings/python/perf` |
 
-비교 기준은 같은 core 0.10.0 runtime으로 실행한 `bindings/c/perf` 결과다. 같은 suite,
+비교 기준은 같은 core 0.10.1 runtime으로 실행한 `bindings/c/perf` 결과다. 같은 suite,
 pattern, transport, message size, duration, client 수, metric을 맞춘 뒤 다음 식으로
 비율을 계산한다.
 
@@ -94,7 +95,7 @@ GC·JIT·callback·event loop 같은 언어 runtime 비용을 나누어 판단�
 
 Python의 과거 full matrix는 이후 공개 계약 복구 전 구현으로 측정한 값이므로 달성 가능성
 판단에서도 제외한다. C++ socket request/reply의 완료 셀은 p10 88.9%, 중앙값
-96.3%였고 routed one-way와 multi routed echo도 비슷했다. 다만 현재 core 0.10.0의
+96.3%였고 routed one-way와 multi routed echo도 비슷했다. 다만 현재 core 0.10.1의
 `MULTI_ROUTER_ROUTER_REQREP / ws`를 공개 callback 계약으로 반복 측정한 결과, 제거 가능한
 vector 경유와 routing id 변환을 없앤 뒤에도 대형 셀은 76.4~78.0%였다. 따라서 C++
 socket request/reply는 중앙값 85%를 유지하고 개별 셀 최소 기준만 75%로 둔다. Rust는
@@ -123,7 +124,7 @@ socket request/reply는 중앙값 85%를 유지하고 개별 셀 최소 기준�
 Node의 과거 size 중앙값은 pattern 그룹에 따라 55.3~91.8%였다. 아직 최적화가 끝난
 결과가 아니므로 가장 낮은 값에 맞춰 목표를 낮추지 않고 모든 pattern 그룹의 중앙값 목표를
 60%로 둔다. Python의 과거 full matrix는 공개 계약 복구 전 결과이므로 목표를 낮추는
-근거로 쓰지 않으며 Node와 같은 60% 중앙값 목표에서 시작한다. 이후 현재 core 0.10.0의
+근거로 쓰지 않으며 Node와 같은 60% 중앙값 목표에서 시작한다. 이후 현재 core 0.10.1의
 paired 측정과 binding 개선으로 달성 가능성을 검증한다.
 
 .NET의 과거 size 중앙값은 multi routed echo 66.1%였고 Java는 69.8%였다. 이 값도
@@ -224,7 +225,7 @@ Single 기본 크기는 기존 구성을 유지한다.
 
 ### 3.2 Multi suite
 
-core 0.10.0의 현재 multi runner 기본값을 따른다. 이전 표의 256 KiB는 제거하고
+core 0.10.1의 현재 multi runner 기본값을 따른다. 이전 표의 256 KiB는 제거하고
 4 KiB를 추가한다.
 
 | 표시 | bytes | 상태 |
@@ -284,9 +285,9 @@ binding report에서 실제 client 수와 STREAM client 수가 같은지, memory
 - allocation, copy, dispatch, callback, poller, ownership, error 처리 비용은 호출자에게
   새 설정이나 실행 순서를 요구하지 않고 binding 내부에서 줄인다.
 - timeout 증가, sleep 추가, retry 반복, client 수 축소로 실패를 숨기지 않는다.
-- core 버그이면 회귀 테스트를 먼저 추가하고 core에서 수정한다. 수정 뒤
-  `scripts/local-package/native/sync-local-core-libs.sh`로 local core library를 다시
-  배포한 다음 binding을 검증한다.
+- core 버그이면 binding에서 우회하지 않고 별도 Core release 작업으로 분리한다. 새 Core
+  수정 결과를 이 계획의 측정에 반영하려면 새로운 GitHub release와 버전을 먼저 확정하고,
+  모든 paired 기준을 해당 release runtime으로 다시 만든다.
 - perf 결과는 report가 `status: complete`일 때만 표에 반영한다. 중단되었거나 일부
   RESULT만 생성된 report는 근거로 사용하지 않는다.
 - `doc/perf/PERF_POLICY.md`, `doc/perf/PERF_SINGLE_TEST_POLICY.md`,
@@ -300,7 +301,7 @@ C와 binding을 paired 측정할 때 같은 session tag를 사용하고 다음 �
 | 항목 | 기록 내용 |
 |------|-----------|
 | source | git commit, dirty 여부, 변경 파일 목록 |
-| core | 버전, runtime 절대 경로, build type, compiler와 linker 버전 |
+| core | release 버전과 tag, runtime 절대 경로, package provenance |
 | binding | package 버전, compiler 또는 runtime 버전 |
 | host | OS, kernel, CPU model, 논리 CPU 수, memory |
 | CPU 상태 | governor, CPU pinning, 측정 중 다른 고부하 작업 유무 |
@@ -309,7 +310,7 @@ C와 binding을 paired 측정할 때 같은 session tag를 사용하고 다음 �
 | 결과 | report 경로, `status`, Effective Options, auto-HWM detail |
 | pair | C와 binding에 공통으로 부여한 session tag |
 
-core source, core build, runtime, host boot, CPU governor, client 수, toolchain 또는
+Core release version/tag, package provenance, runtime, host boot, CPU governor, client 수 또는
 성능 관련 환경 변수가 바뀌면 이전 C 결과와 새 binding 결과를 짝지어 판정하지 않는다.
 binding before와 after 사이에는 검토 중인 변경만 있어야 하며 변경 파일을 manifest에
 기록한다. 그 밖의 조건이 바뀌면 같은 manifest 조건으로 C를 다시 제한 측정한다.
@@ -323,11 +324,87 @@ binding before와 after 사이에는 검토 중인 변경만 있어야 하며 �
 - binding single: `bindings/<lang>/perf/run_benchmarks.sh`
 - binding multi: `bindings/<lang>/perf/run_benchmarks_multi.sh`
 
+### 7.0 측정 단위와 순차 실행
+
+전체 matrix를 먼저 실행해 기준값을 만드는 방식은 사용하지 않는다. 한 번에 하나의
+`binding + suite + pattern + transport` 조합만 비교 대상으로 선택한다. 먼저
+`bindings/c/perf`에서 같은 pattern과 transport를 같은 message size, duration, runs,
+client 수, I/O thread 수, Core release runtime으로 측정하고, C report가
+`status: complete`이면 같은 session tag와 조건으로 해당 binding runner를 바로 측정한다.
+
+선택한 조합의 C와 binding 결과를 비교해 병목과 개선 대상을 정한 뒤, 구현 변경 후에도
+같은 조합을 C와 binding 순서로 다시 paired 측정한다. 다른 pattern이나 transport의
+결과를 미리 측정하거나, 전체 matrix 결과를 현재 조합의 C 기준으로 재사용하지 않는다.
+다른 조합을 확인할 필요가 생기면 기존 측정을 확장하지 않고 새 paired 대상으로 별도로
+선택해 같은 절차를 반복한다.
+
+perf 실행은 항상 직렬화한다. C runner, binding runner, 후보 after 측정 중 어느 것도
+동시에 실행하지 않으며, 한 runner process의 report가 종료되고 `status: complete`인지
+확인한 뒤 다음 하나의 측정을 시작한다. 백그라운드에서 다른 perf process를 함께 실행해
+host CPU·memory·I/O 부하를 섞지 않는다.
+
+### 7.0.1 `PERF_SINGLE_TEST_POLICY` parity gate
+
+비교 기준은 binding runner의 현재 구현이 아니라
+`doc/perf/PERF_SINGLE_TEST_POLICY.md`와 그 문서를 반영한 `bindings/c/perf`
+canonical reference runner다. 선택한 하나의 비교 대상은 다음 의미가 C와 binding에서
+동일해야 유효한 paired 결과로 인정한다.
+
+- `ready -> active(duration)` 순서와 active payload header의 수집 범위
+- active 송신의 blocking 의미, transient 오류 후 새 timestamp·1ms retry, stop token의
+  wire-level 종료와 bounded retry
+- receiver의 `POLLIN` readiness 대기(`-1` timeout)와 `DONTWAIT` drain
+- throughput, 평균 latency, p95/p99의 산출 방식과 runs 중앙값 집계
+- latency sample cap 기본값 1,000,000, `0`일 때 percentile sample 미보관, 전체 count·sum
+  집계, 동일한 bounded reservoir 교체 알고리즘과 percentile 보간
+- Core release runtime, auto-HWM message unit, I/O thread 수, client 수와 timeout
+
+위 항목 중 하나라도 C와 binding에서 다르면 수치는 비교 자료로만 남기고 기준값이나
+통과 판정에 사용하지 않는다. 정책과 reference runner를 수정한 경우에는 같은
+`binding + suite + pattern + transport` 대상의 C와 binding을 다시 순서대로 측정한다.
+poller API의 내부 primitive가 다르더라도 readiness, drain, 종료와 metric 의미가 같으면
+비교할 수 있다. 반대로 retry 대기나 stop-token 종료 조건이 다르면 수치를 공식 비교에
+사용하지 않는다.
+
+이번 `PAIR / inproc / 64B` parity audit에서 C++ active 송신이
+`send_flags_t::dontwait`로 실행되어 C reference의 blocking 송신과 달랐던 문제를
+확인했다. C++ 송신을 `send_flags_t::none`으로 맞추고, C reference의 수신도 정책에
+맞춰 public poller의 `POLLIN` 대기와 `DONTWAIT` drain을 사용하도록 고쳤다. C++의
+runtime binary mapping이 실제 `cpp_perf_*` 산출물과 어긋나던 문제도 수정했다. 이후
+C++ active 송신의 transient 오류 처리에 C와 같은 1ms 대기와 재-stamp를 적용하고,
+PAIR stop token에도 같은 환경 변수(`PERF_SINGLE_STOP_RETRY_TIMEOUT_MS`) 기반의
+bounded retry를 적용했다. 이 수정 전 report는 정책 parity를 충족하지 않으므로 공식
+비교 결과에서 제외한다. 특히 parity 수정 전 C++ active 송신은 `DONTWAIT`였고 C
+reference는 blocking 송신이었으므로, 당시 C++가 C 대비 90% 이상으로 보인 결과는
+같은 의미의 비교가 아니다. C++의 blocking active 송신으로 다시 만든 결과만 공식
+비교에 사용한다.
+
+이전 `zlink_poll()` fast-path A/B는 65536B에서 70.00%로 악화되어 해당 라운드에서는
+제거했다. 이후 C++ `poller_t`의 socket-only wait가 등록된 `zlink_poller_wait()`를
+사용하도록 유지하는 구현을 다시 검증했다. 65536B 반복 median은 약 96~115K에서
+121~124K로 개선되는 신호가 있었지만, 최신 5회 결과의 변동성 gate와 95% 목표를
+충족하지 못했으므로 성능 통과로 기록하지 않는다. 정책에서 요구하는 readiness와
+drain 의미는 유지하되, 구현 primitive가 같다는 이유만으로 성능 후보를 채택하지 않는다.
+
+추가 audit에서 C++ Single latency sampler가 C reference와 달리 모든 sample을 무제한으로
+보관하고 기본 cap을 200,000으로 사용하며, `0`을 허용하지 않고 p95/p99를 mean 이상으로
+보정하는 문제를 확인했다. C와 같은 bounded reservoir sampler, 기본 cap 1,000,000,
+`0` sample 미보관, count·sum 전체 집계와 percentile 계산으로 수정했다. 이 sampler
+parity 수정 전 C++ report는 공식 비교에서 제외하고, 수정 후 같은 선택 대상의 C report와
+binding report를 다시 순서대로 측정한다. 최신 large-message profile에서는 C++ sender
+63.7%, C sender 65.5%, poller와 close 비용도 양쪽에서 비슷한 비중으로 나타났다.
+`message_t::from()`의 payload copy와 Core send/receive는 공통 경로이므로, public
+contract와 ownership을 유지하면서 제거할 수 있는 C++ 전용 hot path는 확인하지 못했다.
+`direct socket.send(message_t&, flags)`는 정식 public contract가 아니고 raw builder
+고유 비용도 약 1.66%에 그쳐 후보로 실행하지 않았다. 추가 allocator, buffer reuse 또는
+receive object reuse는 측정 의미나 소유권을 바꾸므로 보류한다.
+
 ### 7.1 Pattern별 smoke와 제한 사전 점검
 
-C 전체 pattern을 한 번에 실행해 기준값을 만들지 않는다. 현재 언어에서 진행할 pattern 하나를
-선택한 뒤 C와 binding의 같은 pattern만 smoke한다. 이렇게 하면 서로 다른 pattern을 측정하는
-동안 생기는 host 부하와 시간 차이가 현재 비교값에 섞이지 않는다.
+전체 pattern이나 전체 matrix를 한 번에 실행해 기준값을 만들지 않는다. 현재 언어에서
+진행할 pattern과 transport 하나를 선택한 뒤 C와 binding의 같은 조합만 smoke한다. 이렇게
+하면 서로 다른 조합을 측정하는 동안 생기는 host 부하와 시간 차이가 현재 비교값에 섞이지
+않는다.
 
 ```bash
 PERF_FAIL_FAST=1 <c-runner> \
@@ -385,9 +462,10 @@ sleep 증가, 유리한 실행 결과만 선택하는 방식은 사용하지 않
 - C와 binding에 같은 session tag를 사용한다.
 - 같은 pattern, transport, size, duration, runs, client 수, I/O thread 수를 사용한다.
 - C pattern 측정이 끝나면 다른 pattern을 실행하지 않고 바로 같은 binding pattern을 측정한다.
-- binding before와 after는 같은 core source/build/runtime과 host session을 사용하고,
+- binding before와 after는 같은 Core release runtime과 host session을 사용하고,
   검토 중인 binding 변경만 다르게 유지한다.
-- core source, build, runtime, host boot 또는 성능 환경이 달라지면 C를 다시 측정한다.
+- Core release version/tag, package provenance, runtime, host boot 또는 성능 환경이 달라지면
+  C를 다시 측정한다.
 - 개선 작업이 길어졌거나 host 부하가 달라졌으면 후보 최종 판정 직전에 같은 C pattern을 다시
   측정한다.
 - 목표 기준 ±5%p 셀은 이전 측정값 하나만으로 판정하지 않는다.
@@ -396,7 +474,7 @@ sleep 증가, 유리한 실행 결과만 선택하는 방식은 사용하지 않
 ### 7.4 작업 순서
 
 1. inventory gate를 통과시키고 정책, runner, 상세 표의 측정 범위를 일치시킨다.
-2. core 0.10.0을 빌드하고 재현 환경 manifest를 기록한다.
+2. Core 0.10.1 release asset을 확보하고 release provenance와 재현 환경 manifest를 기록한다.
 3. C++, .NET, Java, Node, Go, Rust, Python 순서로 진행한다.
 4. 현재 언어에서 진행할 pattern 하나를 선택한다. C 전체 pattern이나 다음 언어를 미리
    측정하지 않는다.
@@ -497,7 +575,7 @@ transport 세부 정보, perf 전용 option을 노출하지 않는다. 새 helpe
 
 상태 값은 다음과 같이 사용한다.
 
-- `미측정`: 같은 조건의 core 0.10.0 C 결과와 binding 결과를 아직 비교하지 않았다.
+- `미측정`: 같은 조건의 core 0.10.1 C 결과와 binding 결과를 아직 비교하지 않았다.
 - `통과(비율%)`: throughput, latency, 변동성, 회귀, Effective Options, auto-HWM,
   client 수 조건을 모두 만족한다.
 - `미달(비율%)`: 유효한 결과가 있지만 목표에 도달하지 못했고 내부 개선이 필요하다.
@@ -535,15 +613,42 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.1 C++
 
 - perf 경로: `bindings/cpp/perf`
-- Single 상태: `미측정`
+- Single 상태: `진행 중` — `PAIR / inproc`와 `PAIR / tcp`의 6개 size paired 측정을
+  현재 소스 기준으로 완료했지만, 전체 Single transport·pattern 완료 판정은 아직
+  하지 않았다. `socket_access_t::native_handle()` inline과 등록된 `zlink_poller_wait()`
+  사용은 private implementation 최적화로 유지했다. contract source-layout 검증에서
+  `message_t` accessor inline 후보는 제거하고 원래 out-of-line public contract로
+  복구했다. `PAIR / inproc`의 최신 contract-clean size별 ratio는 89.97%, 99.60%,
+  93.02%, 24.77%, 67.02%, 73.84%이고 size 중앙값은 81.91%다. `PAIR / tcp` full
+  sweep의 ratio는 94.82%, 95.78%, 98.91%, 87.80%, 91.09%, 97.02%이고 size
+  중앙값은 95.30%다. tcp의 64B는 세 번의 paired 재검증에서도 C/C++ 변동 폭이
+  11.66%/11.32%로 남아 transport 완료를 보류한다. 이전 C++ 90% 이상 결과는 C의
+  blocking active 송신과 달리 `DONTWAIT`를 사용한 정책 불일치 결과이므로 공식
+  근거에서 제외한다.
 - Multi 상태: `미측정`
-- 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
+- 다음 작업: 현재 대상의 large-message 병목은 Release profiler와 단일 진단에서
+  copy/allocation, Core send/receive, poller 비용을 확인했지만, public contract와
+  ownership을 유지하면서 제거할 수 있는 C++ binding 전용 hot path는 확인하지 못했다.
+  gprof로 확인한 raw send builder 호출 비용 후보는 64B 재측정에서 재현되지 않아
+  제거했고, private constructor inline과 `operation_builder_base_t` 변경은 근거 부족과
+  pooling·rollback 수명 위험 때문에 실행하지 않았다. `socket_access_t` 후보는
+  profile에서 기존 out-of-line wrapper symbol이 사라지고 같은 시점 baseline보다
+  64B ratio가 87.62%에서 94.88~95.05%로 올라갔지만, 변동성 gate 미통과 상태다.
+  persistent poller 구현은 유지했지만 65536B 반복 median 개선은 121~124K에 그쳤고
+  최신 inproc full sweep ratio는 24.77%다. `message.cpp`의 128KiB pool 하한을
+  64KiB로 낮추는 후보도 `sol` 리뷰에서 검토했지만, allocation만 줄여 이론상 ratio가 약
+  29%에 그치고 global mutex·release callback·linear search 비용을 추가하므로 실행하지
+  않고 폐기했다. 추가 allocator, buffer reuse, receive object reuse 또는 정식 public
+  contract가 아닌 direct send 경로는 만들지 않으며, 새 per-message 차이를 분리할 profiler
+  근거가 생길 때까지 추가 source 후보를 보류한다. `PAIR / tcp`는 throughput 목표를
+  충족했지만 64B 변동성만 반복되어, 코드 변경 없이 `ws / PAIR`를 다음 선택 대상으로
+  이동한다.
 
 #### 9.1.1 Single suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `PAIR` | 미달 (94.82%) | 통과 (95.78%) | 통과 (98.91%) | 통과 (87.80%) | 통과 (91.09%) | 통과 (97.02%) | full sweep size 중앙값 95.30%다. 256B·1024B·262144B는 boundary revalidation에서 C/C++ 변동 폭 8.44%/4.38%, 6.04%/3.89%, 1.48%/4.90%로 안정됐고, 64B는 세 번째 재검증에서도 11.66%/11.32%로 gate를 넘었다. |
 | `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -571,7 +676,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tls` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `inproc` | `PAIR` | 미달 (89.97%) | 통과 (99.60%) | 미달 (93.02%) | 미달 (24.77%) | 미달 (67.02%) | 미달 (73.84%) | 최신 contract-clean size 중앙값은 81.91%다. 256B C/C++ throughput 변동 폭은 5.64%/8.60%로 gate를 통과했지만, 64B는 20.14%/12.25%, 1024B는 4.06%/13.23%, 65536B는 9.21%/28.28%로 변동성 gate를 넘었고 128KiB 이상은 최소 기준에 미달했다. 두 report는 라운드 기록 참고 |
 | `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1080,29 +1185,30 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | 구분 | 상태 | 결과 파일 / 메모 |
 |------|------|------------------|
-| 버전 3곳 일치 | 미확인 |  |
-| 실제 runtime 버전 | 미확인 |  |
-| runner inventory | 미확인 |  |
+| 버전 3곳 일치 | 확인 | `VERSION`, `core/CMakeLists.txt`, `core/include/zlink.h`가 모두 0.10.1이다. |
+| 실제 runtime 버전 | 확인 | GitHub `core/v0.10.1` release prefix와 package provenance를 사용했다. |
+| runner inventory | 선택 대상 확인 | `PAIR / inproc`와 `PAIR / tcp`의 C·C++ runner 및 실제 `cpp_perf_pair` binary mapping을 확인했다. 전체 inventory는 미완료다. |
 | Multi size 정책 | 미확인 |  |
-| 무시되는 runner option | 미확인 |  |
-| memory guard | 미확인 |  |
-| 재현 환경 manifest | 미확인 |  |
+| 무시되는 runner option | 선택 대상 확인 | Effective Options에서 pattern, transport, size, duration, runs, I/O thread, HWM, timeout을 C·C++ 모두 확인했다. |
+| memory guard | Single 해당 없음 | 이번 선택 범위는 Single이며 multi memory guard는 실행하지 않았다. |
+| 재현 환경 manifest | 부분 기록 | release provenance, 명령, 조건, report 경로와 session tag를 라운드 기록에 남겼다. |
 
 ### 10.2 Pattern별 paired 기준 측정
 
 | 구분 | 상태 | 결과 파일 / 메모 |
 |------|------|------------------|
-| 현재 언어 | 미정 |  |
-| 현재 pattern | 미측정 |  |
-| paired C | 미측정 |  |
-| 개선 반복 | 미측정 |  |
+| 현재 언어 | C++ |  |
+| 현재 pattern | 진행 중 | `PAIR / tcp`를 최신 선택 대상으로 측정했고, `PAIR / inproc` 결과는 라운드 기록에 보존했다. 전체 pattern·transport 완료는 아니다. |
+| paired C | 완료 | `status: complete`, 최신 6개 size × 5회 paired report를 생성했다. C와 C++은 Core v0.10.1 release, auto-HWM, I/O thread 1, timeout 200ms 조건이 일치한다. `PAIR / tcp` C median은 2,295,656.6 / 1,143,764.0 / 595,416.0 / 38,134.2 / 24,951.6 / 15,003.2 msg/s다. |
+| binding paired 결과 | 유효 결과·부분 통과 | `status: complete`. `PAIR / tcp` C++ median은 2,176,794.2 / 1,095,440.4 / 588,905.4 / 33,480.8 / 22,728.6 / 14,555.6 msg/s다. full sweep ratio는 94.82%, 95.78%, 98.91%, 87.80%, 91.09%, 97.02%이고 size 중앙값은 95.30%다. 256B·1024B·262144B는 boundary revalidation에서 변동성 gate를 통과했지만, 64B는 세 차례 재검증에서도 C/C++ 변동 폭이 11.66%/11.32%로 남았다. |
+| 개선 반복 | 진행 중 | C++ active blocking send와 1ms retry, PAIR stop-token retry, C reference 수신 poller parity, raw single-part send state와 runtime binary mapping을 수정했다. C++ Single latency sampler를 C reference와 동일한 bounded reservoir 방식으로 맞췄다. `message_t` accessor inline 후보는 contract tree의 `<zlink.h>` 금지 규칙을 위반해 원래 out-of-line public contract로 복구했다. 이전 C++ `DONTWAIT` active send 결과는 C의 blocking 의미와 달라 공식 비교에서 제외했다. native poller, large-message native allocation, receiver object reuse, constructor storage 초기화 제거, private raw/slow 경로 분리 후보는 각각 측정 후 제거했다. gprof 근거로 raw builder의 `message`·`flags` fast branch를 header inline하는 후보도 첫 측정 92.35%가 반복 측정 87.31%로 재현되지 않아 제거했다. `socket_access_t::native_handle()` private header inline과 persistent poller 구현은 public API·ownership·ABI를 바꾸지 않아 유지했지만, 최신 결과는 성능 통과가 아니다. Release profile에서 C++ large-message sender/receiver 비용이 C와 공통 Core 경로에 집중되고, 정식 public contract가 아닌 direct send나 buffer/receiver reuse 없이는 제거할 binding 전용 hot path를 확인하지 못해 추가 source 후보를 보류했다. raw mode 분기 복원이 누락된 ASAN multi smoke 문제는 복구했고, Release 재빌드 후 C++ ctest가 통과했다. |
 | 커밋과 푸시 | 미측정 |  |
 
 ### 10.3 언어 진행 상태
 
 | 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
 |------|------|-------------|------------|-----------|
-| 1 | C++ | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
+| 1 | C++ | 진행 중 | 미측정 | `PAIR / inproc` 개선과 변동성 조사를 마친 뒤, 다음 Single 대상 하나를 C → C++ 순서로 선택한다. 전체 pattern·transport를 완료하기 전에는 다음 언어로 이동하지 않는다. |
 | 2 | .NET | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 3 | Java | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
@@ -1117,14 +1223,42 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | 날짜 | 언어 | suite / 범위 | pair tag | 변경 또는 측정 | 결과 | report / 로그 |
 |------|------|---------------|----------|----------------|------|---------------|
-| 2026-08-07 | 전체 | 계획 초기화 | - | core 0.10.0 기준으로 성능 측정표와 진행 상태를 초기화했다. | 계획 작성 | 이 문서 |
+| 2026-08-07 | 전체 | 계획 초기화 | - | core 0.10.1 기준으로 성능 측정표와 진행 상태를 초기화했다. | 계획 작성 | 이 문서 |
+| 2026-08-09 | C++ | Single / PAIR / inproc / 64B | `pair-inproc-64-policy-doc-5x5` | C reference와 C++ runner의 active 송수신 의미를 `PERF_SINGLE_TEST_POLICY` 기준으로 맞추고, raw single-part send state와 `message_t` accessor 비용을 개선한 뒤 C → C++ 순서로 5회 paired 측정했다. Core는 GitHub `core/v0.10.1` release runtime을 사용했다. 정책 확정 전 full-matrix 탐색 report는 공식 판정에서 제외했다. | 두 report 모두 `status: complete`. C median 2,458,383 msg/s, C++ median 2,226,716 msg/s, ratio 90.58%. 평균 latency는 C 0.013 ms, C++ 0.019 ms(1.46배)다. C throughput 변동 폭 10.66%, C++ 18.84%로 7.2절 조사 기준을 넘으므로 전체 완료나 최종 통과로 판정하지 않는다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_095529_pair-inproc-64-policy-doc-5x5.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_095605_pair-inproc-64-policy-doc-5x5.txt`; Core provenance: `/home/hep7hep7/.cache/zlink/core/0.10.1/linux-x64/share/zlink/core-package-provenance.json` |
+| 2026-08-09 | C++ | Single / PAIR / inproc / 64·256·1024·65536·131072·262144B | `pair-inproc-all-sizes-policy-doc-5x5` | 정책 parity 수정과 raw single-part send state 후보를 포함한 선택 transport의 size sweep를 C → C++ 순서로 수행했다. 전체 matrix는 실행하지 않았다. | 두 report 모두 `status: complete`. C++ throughput ratio는 순서대로 83.50%, 94.44%, 90.45%, 67.00%, 65.85%, 73.84%이며 size 중앙값은 78.67%다. 64B와 128KiB 이상 일부 셀은 C++ 단순 one-way 최소 기준 85%보다 낮아 transport 완료로 판정하지 않는다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_100212_pair-inproc-all-sizes-policy-doc-5x5.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_100453_pair-inproc-all-sizes-policy-doc-5x5.txt` |
+| 2026-08-09 | C++ | 후보 검증 / PAIR / inproc / 65536B | `pair-inproc-65536-recv-close-5x5` | C reference와 수신 message 수명을 맞추기 위해 C++ perf에서 수신 전 `message_t::close()`를 호출하는 후보를 검토했다. | C median 415,791.4 msg/s, C++ median 291,685 msg/s(70.14%)로 채택하지 않고 후보를 제거했다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_101323_pair-inproc-65536-recv-close-5x5.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_101354_pair-inproc-65536-recv-close-5x5.txt` |
+| 2026-08-09 | C++ | 후보 검증 / PAIR / inproc / 262144B | `pair-inproc-262144-native-alloc-candidate` | C++ `message_t` large-message pool을 사용하지 않는 native allocation 후보를 검토했다. | C median 79,914.4 msg/s, C++ median 65,443 msg/s(81.89%)로 최소 기준에 미달했고, 다른 pattern 회귀를 확인하지 않았으므로 후보를 제거했다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_101206_pair-inproc-262144-native-alloc-candidate.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_101228_pair-inproc-262144-native-alloc-candidate.txt` |
+| 2026-08-09 | C++ | 기준 재측정 / PAIR / inproc / 65536B | `pair-inproc-65536-policy-retry-baseline` | C와 C++의 active blocking send, transient retry 대기, stop-token bounded retry를 같은 의미로 맞춘 뒤 후보 비교 전 기준을 C → C++ 순서로 재측정했다. | 두 report 모두 `status: complete`. C median 440,432.8 msg/s, C++ median 361,464.2 msg/s, ratio 82.07%다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_103515_pair-inproc-65536-policy-retry-baseline-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_103610_pair-inproc-65536-policy-retry-baseline-cpp.txt` |
+| 2026-08-09 | C++ | 후보 검증 / PAIR / inproc / 65536B | `pair-inproc-65536-policy-retry-native-poller` | C++ `poller_t`의 socket-only `zlink_poll()` fast path를 끄고 C reference와 같은 `zlink_poller_wait()` primitive를 사용하는 후보를 검토했다. | C median 430,427.2 msg/s, C++ median 301,141.6 msg/s, ratio 70.00%로 악화되어 후보를 제거했다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_103703_pair-inproc-65536-policy-retry-poller-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_103735_pair-inproc-65536-policy-retry-native-poller-cpp.txt` |
+| 2026-08-09 | C++ | 후보 검증 / PAIR / inproc / 262144B | `pair-inproc-262144-policy-retry-native-alloc` | C++ large-message pool을 우회하고 Core native allocation을 사용하는 후보를 retry parity 이후 다시 검토했다. | C median 78,391.2 msg/s, C++ median 64,906.6 msg/s, ratio 82.80%로 최소 기준에 미달해 후보를 제거했다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_103848_pair-inproc-262144-policy-retry-pool-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_103919_pair-inproc-262144-policy-retry-native-alloc-cpp.txt` |
+| 2026-08-09 | C++ | 후보 검증 / PAIR / inproc / 65536B | `pair-inproc-65536-policy-retry-reuse` | C++ receiver에서 `message_t` 하나를 drain loop에 재사용하는 후보를 검토했다. C canonical helper의 호출별 message 초기화·정리 의미와 달라 공식 최적화로 채택하지 않았다. | C median 429,563.4 msg/s, C++ median 386,147.6 msg/s, ratio 89.89%였지만 object lifetime 의미가 달라졌고 throughput 변동도 컸으며 95% 목표에 미달했다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_104141_pair-inproc-65536-policy-retry-reuse-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_104211_pair-inproc-65536-policy-retry-reuse-cpp.txt` |
+| 2026-08-09 | C++ | 후보 검증 / PAIR / inproc / 65536B | `pair-inproc-65536-policy-retry-msginit` | `message_t` 생성자의 opaque storage zero-initialization을 제거하는 binding-level 후보를 검토했다. | C median 430,063.0 msg/s, C++ median 309,337.4 msg/s, ratio 71.93%로 악화되어 후보를 제거했다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_104439_pair-inproc-65536-policy-retry-msginit-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_104513_pair-inproc-65536-policy-retry-msginit-cpp.txt` |
+| 2026-08-09 | C++ | 이전 최종 재검증 / Single / PAIR / inproc / 64·256·1024·65536·131072·262144B | `pair-inproc-all-sizes-policy-retry-final` | retry parity와 기존에 유지한 raw single-part send state, `message_t` accessor inline, runtime mapping 수정만 적용한 상태에서 선택한 하나의 `PAIR/inproc` transport를 C → C++ 순서로 5회씩 측정했다. 이후 C++ Single sampler가 C reference와 다른 것을 확인했으므로 이 report는 공식 비교에서 제외한다. | 두 report 모두 `status: complete`. size별 ratio는 86.96%, 98.01%, 93.75%, 77.95%, 67.51%, 77.13%이며 size 중앙값은 82.45%다. sampler parity audit 후 공식 기준에서 제외했다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_104638_pair-inproc-all-sizes-policy-retry-final-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_104916_pair-inproc-all-sizes-policy-retry-final-cpp.txt`; Core provenance: `/home/hep7hep7/.cache/zlink/core/0.10.1/linux-x64/share/zlink/core-package-provenance.json` |
+| 2026-08-09 | C++ | 후보 검증 / PAIR / inproc / 64B | `pair-inproc-64-policy-retry-slowpath` | `sol` 에이전트 리뷰에서 제안한 private raw/slow 경로 분리를 적용해 느린 multipart 경로를 별도 helper로 분리하는 후보를 검토했다. 공개 API와 소유권 의미는 변경하지 않았고, C → C++ 순서로 단일 셀만 측정했다. | 두 report 모두 `status: complete`. C median 2,392,684.2 msg/s, C++ median 2,048,407.2 msg/s, ratio 85.61%다. 기존 최종 64B 기준 86.96%보다 낮고, 후보 채택 기준인 91.96% 이상 및 C++ throughput 변동 폭 10% 이하를 만족하지 못해 후보를 제거하고 source/header를 복구했다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_110852_pair-inproc-64-policy-retry-slowpath-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_110923_pair-inproc-64-policy-retry-slowpath-cpp.txt` |
+| 2026-08-09 | C++ | sampler parity smoke / Single / PAIR / inproc / 64B | `pair-inproc-64-policy-retry-sampler-parity` | `sol` 에이전트가 발견한 C++ Single latency sampler 불일치를 수정했다. 기본 cap 1,000,000, `0` sample 미보관, 전체 count·sum 집계와 C와 같은 bounded reservoir 교체·percentile 보간을 적용한 뒤 C → C++ 순서로 5회 paired 측정했다. | 두 report 모두 `status: complete`. C median 2,619,479.0 msg/s, C++ median 2,106,005.0 msg/s, ratio 80.40%다. 성능 목표는 미달했지만 하네스 의미를 C 기준과 맞추는 필수 parity 수정이므로 sampler 변경은 유지한다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_111733_pair-inproc-64-policy-retry-sampler-parity-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_111809_pair-inproc-64-policy-retry-sampler-parity-cpp.txt` |
+| 2026-08-09 | C++ | 최종 paired / Single / PAIR / inproc / 64·256·1024·65536·131072·262144B | `pair-inproc-all-sizes-policy-retry-sampler-parity-final` | C++ Single sampler parity 수정과 기존 retained parity·binding 변경을 적용한 선택 `PAIR/inproc` transport를 C → C++ 순서로 5회씩 측정했다. 전체 matrix는 실행하지 않았다. | 두 report 모두 `status: complete`. size별 ratio는 87.27%, 96.06%, 87.08%, 25.79%, 68.26%, 71.76%이며 size 중앙값은 79.42%다. 65536B 이상은 95% 목표에 미달하고, 64·1024B도 목표에 미달한다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_111937_pair-inproc-all-sizes-policy-retry-sampler-parity-final-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_112214_pair-inproc-all-sizes-policy-retry-sampler-parity-final-cpp.txt`; Core provenance: `/home/hep7hep7/.cache/zlink/core/0.10.1/linux-x64/share/zlink/core-package-provenance.json` |
+| 2026-08-09 | C++ | 후보 검증 / PAIR / inproc / 64B | `pair-inproc-64-inline-fastpath` | gprof에서 확인한 raw send builder 호출 비용을 줄이기 위해 raw mode의 `message`·`flags`만 header inline하고 기존 multipart slow path를 유지하는 후보를 검토했다. 공개 API와 소유권 의미는 변경하지 않았으며 C → C++ 순서로 5회 paired 측정했다. | 두 report 모두 `status: complete`. 첫 측정은 C median 2,364,778.0 msg/s, C++ median 2,183,949.2 msg/s, ratio 92.35%였지만 C/C++ 변동성이 17.46%/20.44%로 gate를 넘었다. CPU 고정 진단은 공식 결과에서 제외했다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_113936_pair-inproc-64-inline-fastpath-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_114008_pair-inproc-64-inline-fastpath-cpp.txt`; pinned 진단 C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_114217_pair-inproc-64-inline-fastpath-pinned-c.txt`; pinned 진단 C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_114253_pair-inproc-64-inline-fastpath-pinned-cpp.txt` |
+| 2026-08-09 | C++ | 후보 재검증 / PAIR / inproc / 64B | `pair-inproc-64-inline-fastpath-repeat` | 같은 Core release, Effective Options와 C → C++ 실행 순서를 유지한 상태에서 inline 후보를 5회 재측정했다. | 두 report 모두 `status: complete`. C median 2,506,509.6 msg/s, C++ median 2,187,938.6 msg/s, ratio 87.31%다. C/C++ 변동성은 14.15%/12.64%로 다시 10% gate를 넘었고 첫 측정의 개선이 재현되지 않아 inline 후보를 제거했다. 변동성이 안정될 때까지 추가 source 후보는 보류한다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_114610_pair-inproc-64-inline-fastpath-repeat-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_114642_pair-inproc-64-inline-fastpath-repeat-cpp.txt`; sol review submission: `019fe466-0d47-75b1-8119-5bfe018b8a68` |
+| 2026-08-09 | C++ | 회귀 검증 / Multi / DEALER_DEALER / tcp / 64B | `ctest-cpp-multi-dealer-dealer-runtime-smoke` | inline 후보 제거 중 raw mode 분기 복원이 누락되어 임시 ASAN build에서 client `send_operation_t::message()`의 null state write를 확인하고 raw lvalue/rvalue/flags 분기를 복구했다. 공식 Release build를 다시 생성한 뒤 smoke test를 실행했다. | ASAN 원인은 수정되었고 공식 C++ ctest가 1/1 passed, 100% passed로 복구됐다. ASAN binary와 C++ Core release runtime은 공식 결과로 사용하지 않았다. | ASAN stack: `/home/hep7hep7/project/zlink/bindings/cpp/src/Runtime/Messaging/send_operations.cpp:84`; 공식 ctest: `/home/hep7hep7/project/zlink/bindings/cpp/build/Testing/Temporary/LastTest.log` |
+| 2026-08-09 | C++ | 후보 채택 재검증 / Single / PAIR / inproc / 64·256·1024·65536·131072·262144B | `pair-inproc-all-sizes-socket-access-inline-final` | Release profile에서 기존 `socket_access_t::native_handle()` out-of-line wrapper가 2.71% sampled self로 나타난 근거를 확인한 뒤, private header에서 native handle 접근을 inline하는 후보를 적용했다. `sol` 에이전트가 private implementation 최적화이며 public API, object layout, ownership, ABI와 ODR 위험이 없다고 검토했다. 후보 반영 후 C → C++ 순서로 같은 Core v0.10.1 release, auto-HWM, I/O thread 1, timeout 200ms 조건에서 6개 size를 5회씩 다시 측정했다. perf는 한 번에 하나만 실행했다. | 두 report 모두 `status: complete`. C median은 2,472,519.2 / 1,825,118.8 / 1,763,376.2 / 405,734.4 / 167,956.8 / 78,150.0 msg/s이고 C++ median은 2,200,741.0 / 1,826,795.2 / 1,636,738.6 / 109,446.2 / 117,017.6 / 57,890.6 msg/s다. ratio는 89.01%, 100.09%, 92.82%, 26.97%, 69.67%, 74.08%, size 중앙값은 81.54%다. 후보 구현은 유지하지만 95% 목표와 변동성 gate를 모두 충족한 transport는 아니며, C++ 65536B 변동성은 176.28%로 outlier 조사가 필요하다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_121935_pair-inproc-all-sizes-socket-access-inline-final.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_122216_pair-inproc-all-sizes-socket-access-inline-final.txt`; baseline C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_121259_pair-inproc-64-socket-access-baseline-cpp.txt`; sol review submission: `019fe484-37cd-7102-b92a-d4583931bad0`; Core provenance: `/home/hep7hep7/.cache/zlink/core/0.10.1/linux-x64/share/zlink/core-package-provenance.json` |
+
+| 2026-08-09 | C++ | 후보 제거 / PAIR / inproc / 65536B | `pair-inproc-65536-message-construction-candidate` | `message_from_payload()`를 `message_t(size)`와 `memcpy`로 직접 구성하는 후보를 검토했다. C와 C++의 payload allocation/copy 의미는 유지했지만, 현재 C++ `message_t::from()` 경로를 대체할 강한 근거가 있는지 확인하는 단일 셀 A/B였다. | 두 report 모두 `status: complete`. C median 432,191.8 msg/s, C++ median 115,112.4 msg/s, ratio 26.64%였고 C++ 변동성은 203.5%였다. 개선을 재현하지 못해 후보를 제거했다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_123437_pair-inproc-65536-message-construction-candidate.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_123508_pair-inproc-65536-message-construction-candidate.txt`; sol review submission: `019fe497-40bd-7d62-9ad0-d6cb797572f6` |
+| 2026-08-09 | C++ | 후보 재검증 / PAIR / inproc / 65536B | `pair-inproc-65536-poller-revalidate-1-2` | C++ socket-only wait가 임시 `zlink_poll()`을 매번 만들지 않고 등록된 `zlink_poller_wait()`를 사용하도록 한 persistent poller 구현을 C → C++ 순서로 두 번 5회 재검증했다. perf는 각 paired 순서에서 한 번에 하나만 실행했다. | 두 paired round 모두 `status: complete`. Round 1은 C median 424,327.2, C++ median 124,387.8 msg/s, ratio 29.31%; Round 2는 C median 429,636.0, C++ median 121,082.0 msg/s, ratio 28.18%였다. 기존 C++ 약 96~115K 대비 median 개선 신호는 반복됐지만 C++ 변동성은 Round 1 약 199%, Round 2 28.94%로 gate를 넘었고 95% 목표도 미달했다. 구현은 public API·ownership을 바꾸지 않아 유지하되 성능 통과로 기록하지 않는다. | Round 1 C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_123939_pair-inproc-65536-poller-revalidate-1.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_124018_pair-inproc-65536-poller-revalidate-1.txt`; Round 2 C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_124055_pair-inproc-65536-poller-revalidate-2.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_124128_pair-inproc-65536-poller-revalidate-2.txt`; sol review: `019fe4ab-5d82-7fb2-8848-6de8c8860ddd` |
+| 2026-08-09 | C++ | 회귀 검증 / PAIR / inproc / 64B | `pair-inproc-64-poller-regression` | persistent poller 구현을 유지한 상태에서 대상이 아닌 64B 경계를 C → C++ 순서로 5회 재측정했다. | 두 report 모두 `status: complete`. C median 2,504,259.8, C++ median 2,257,869.8 msg/s, ratio 90.15%다. 이전 socket-access 후보의 64B ratio 89.01%보다 낮아지지 않았지만 C++ 변동성 27.89%로 최종 회귀 gate는 보류한다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_124209_pair-inproc-64-poller-regression.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_124240_pair-inproc-64-poller-regression.txt` |
+| 2026-08-09 | C++ | 최종 paired / Single / PAIR / inproc / 64·256·1024·65536·131072·262144B | `pair-inproc-all-sizes-poller-alignment-final` | persistent poller 구현과 retained binding 변경을 적용한 선택 `PAIR / inproc` transport를 C → C++ 순서로 6개 size, 5회씩 측정했다. Core는 GitHub `core/v0.10.1` release runtime이고 auto-HWM, I/O thread 1, timeout 200ms를 맞췄다. 전체 matrix는 실행하지 않았으며 perf process는 직렬 실행했다. | 두 report 모두 `status: complete`. C median은 2,295,412.8 / 1,848,899.6 / 1,738,949.4 / 420,942.0 / 164,456.4 / 76,604.0 msg/s이고 C++ median은 2,122,254.8 / 1,776,893.2 / 1,573,472.8 / 98,009.2 / 112,671.0 / 56,162.6 msg/s다. ratio는 92.46%, 96.11%, 90.48%, 23.28%, 68.51%, 73.32%, size 중앙값은 81.90%다. C++ 변동성은 256B 16.56%, 1024B 14.92%, 65536B 24.59%로 gate를 넘었다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_124353_pair-inproc-all-sizes-poller-alignment-final.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_124918_pair-inproc-all-sizes-poller-alignment-final.txt`; Core provenance: `/home/hep7hep7/.cache/zlink/core/0.10.1/linux-x64/share/zlink/core-package-provenance.json` |
+| 2026-08-09 | C++ | 진단 / PAIR / inproc / 65536B | `pair-inproc-65536-release-profile-diagnostic` | 공식 비교와 분리해 C와 C++을 각각 단독으로 Release `cpu-clock` profile과 `perf stat`으로 확인했다. `perf stat`은 C → C++ 순서로 한 번에 하나씩 실행했으며 공식 ratio에는 사용하지 않았다. | `perf stat`에서 task-clock은 C 11,542.29ms, C++ 11,563.45ms, context-switches와 CPU migrations는 둘 다 0, page faults는 2,973,587 대 2,984,840으로 유사했다. 계측 중 처리량은 C 112,670.8, C++ 110,167.8 msg/s로 계측 오버헤드가 커 공식 판정에서 제외한다. Release profile은 sender의 `message_t::from()`/Core copy, Core send·receive, poller·close 비용이 중심이며 C++ 전용으로 제거할 비용을 분리하지 못했다. | C stat: `/tmp/zlink-perf-tools-0070B1/profile-latest/c-pair-65536.stat`; C++ stat: `/tmp/zlink-perf-tools-0070B1/profile-latest/cpp-pair-65536.stat`; C profile: `/tmp/zlink-perf-tools-0070B1/profile-latest/c-pair-65536.data`; C++ profile: `/tmp/zlink-perf-tools-0070B1/profile-latest/cpp-pair-65536.data`; sol review: `019fe4ab-5d82-7fb2-8848-6de8c8860ddd` |
+| 2026-08-09 | C++ | 계약 회귀 확인 / poller | `cpp-contract-poller-release-0.10.1` | 기존 poller add/modify/remove/close 계약 테스트를 Core v0.10.1 release prefix로 별도 Release test build에서 실행했다. 첫 configure는 release prefix에 Boost headers가 없어 중단됐지만, Core source의 기존 Boost header만 test build dependency로 지정하고 Core runtime은 release prefix로 유지해 재구성했다. | 첫 suite에서 `message.hpp`의 inline accessor가 contract tree의 `<zlink.h>` 금지 규칙을 위반하는 것을 확인했다. accessor를 원래 out-of-line public contract로 복구하고, runtime `socket_handle.hpp`에 필요한 `<zlink.h>`를 명시해 의존성 경계를 고쳤다. 이후 contract suite 11/11 passed, 기본 Release ctest의 C++ runtime smoke도 1/1 passed다. | contract ctest: `/tmp/zlink-cpp-contract-build-0.10.1/Testing/Temporary/LastTest.log`; 기본 ctest: `/home/hep7hep7/project/zlink/bindings/cpp/build/Testing/Temporary/LastTest.log` |
+| 2026-08-09 | C++ | 후보 review / PAIR / inproc / 65536B | `pair-inproc-65536-pool-threshold-review` | C++ `message.cpp`의 large-message pool 하한을 128KiB에서 64KiB로 낮추는 추가 후보를 별도 구현 없이 `sol` 에이전트에 검토 요청했다. 공개 ownership·ABI·contract 보존 여부와 현재 65536B 병목을 설명할 수 있는지를 확인했다. | private allocator 변경 자체는 계약상 안전하지만 allocation 비용만 제거하며, 기존 profile과 pool 사용 중인 128KiB·256KiB 결과를 고려하면 현재 24.77% ratio gap을 해소할 근거가 없다. 64KiB 경로에 global mutex, release callback, linear exact-size search와 8MiB 혼합 allocation을 추가할 회귀 위험이 있어 후보를 실행하지 않고 폐기했다. 추가 allocator·buffer reuse 후보는 profiler가 binding 전용 비용을 분리할 때까지 보류한다. | sol review submission: `019fe4c9-332c-7591-9bda-f499bfdd0e22`; 관련 source: `/home/hep7hep7/project/zlink/bindings/cpp/src/Runtime/Messaging/message.cpp` |
+| 2026-08-09 | C++ | 최신 최종 paired / Single / PAIR / inproc / 64·256·1024·65536·131072·262144B | `pair-inproc-all-sizes-poller-contract-clean-final` | contract source-layout 검증에서 발견한 `message_t` accessor inline 후보를 제거하고 out-of-line public contract로 복구한 현재 소스에서, retained persistent poller와 `socket_access_t::native_handle()` inline을 적용한 선택 transport를 C → C++ 순서로 6개 size, 5회씩 재측정했다. Core는 GitHub `core/v0.10.1` release runtime이고 auto-HWM, I/O thread 1, timeout 200ms를 맞췄다. 전체 matrix는 실행하지 않았으며 perf process는 직렬 실행했다. | 두 report 모두 `status: complete`. C median은 2,368,128.0 / 1,779,729.0 / 1,705,951.4 / 409,183.2 / 166,334.0 / 75,524.6 msg/s이고 C++ median은 2,130,678.2 / 1,772,567.6 / 1,586,870.8 / 101,346.6 / 111,481.0 / 55,770.8 msg/s다. ratio는 89.97%, 99.60%, 93.02%, 24.77%, 67.02%, 73.84%, size 중앙값은 81.91%다. 256B만 ratio와 C/C++ throughput 변동 폭 5.64%/8.60%를 함께 통과했다. 64B·1024B·65536B의 C/C++ 변동 폭은 각각 20.14%/12.25%, 4.06%/13.23%, 9.21%/28.28%이고 128KiB 이상은 최소 기준에 미달했다. 이전 `pair-inproc-all-sizes-poller-alignment-final`은 inline accessor 후보가 포함된 소스의 역사 기록이며, 이 contract-clean report를 현재 공식 기준으로 사용한다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_131550_pair-inproc-all-sizes-poller-contract-clean-final.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_131831_pair-inproc-all-sizes-poller-contract-clean-final.txt`; Core provenance: `/home/hep7hep7/.cache/zlink/core/0.10.1/linux-x64/share/zlink/core-package-provenance.json`; contract ctest: `/tmp/zlink-cpp-contract-build-0.10.1/Testing/Temporary/LastTest.log` |
+| 2026-08-09 | C++ | 최종 paired / Single / PAIR / tcp / 64·256·1024·65536·131072·262144B | `pair-tcp-all-sizes-contract-clean-final` | `PAIR / tcp`를 새 transport 대상으로 선택해 C → C++ 순서로 6개 size, 5회씩 측정했다. Core는 GitHub `core/v0.10.1` release runtime이고 auto-HWM, I/O thread 1, timeout 200ms를 맞췄다. 전체 matrix는 실행하지 않았으며 perf process는 직렬 실행했다. | 두 report 모두 `status: complete`. C median은 2,295,656.6 / 1,143,764.0 / 595,416.0 / 38,134.2 / 24,951.6 / 15,003.2 msg/s이고 C++ median은 2,176,794.2 / 1,095,440.4 / 588,905.4 / 33,480.8 / 22,728.6 / 14,555.6 msg/s다. full sweep ratio는 94.82%, 95.78%, 98.91%, 87.80%, 91.09%, 97.02%, size 중앙값은 95.30%다. 64B·256B·1024B·262144B는 변동성 조사 대상이었고, 64B는 boundary revalidation 세 차례에서도 gate를 넘지 않아 transport를 완료로 판정하지 않는다. | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_133558_pair-tcp-all-sizes-contract-clean-final.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_133838_pair-tcp-all-sizes-contract-clean-final.txt`; Core provenance: `/home/hep7hep7/.cache/zlink/core/0.10.1/linux-x64/share/zlink/core-package-provenance.json` |
+| 2026-08-09 | C++ | 변동성 재검증 / Single / PAIR / tcp / 64·256·1024·262144B | `pair-tcp-boundary-revalidate-1-3` | full sweep에서 10% throughput variation을 넘은 네 셀만 같은 조건으로 C → C++ 순서로 재검증했다. 64B는 세 차례 paired revalidation을 수행했고, 나머지 세 셀은 한 차례 재검증했다. | Round 1의 C/C++ median과 ratio는 2,525,139.6/2,161,442.0 msg/s(85.60%), 1,149,337.8/1,079,913.8(93.96%), 601,622.0/587,371.8(97.63%), 14,901.6/14,481.2(97.18%)다. Round 1 variation은 C/C++ 각각 10.79%/7.78%, 8.44%/4.38%, 6.04%/3.89%, 1.48%/4.90%로 세 셀은 안정됐다. 64B Round 2는 C/C++ 2,523,376.8/2,261,225.6 msg/s(89.61%), variation 10.89%/4.87%; Round 3은 2,418,238.0/2,280,926.2 msg/s(94.32%), variation 11.66%/11.32%로 반복 gate를 넘지 못했다. source 변경은 없었고 `PAIR / tcp`의 다음 transport로 이동한다. | Round 1 C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_134220_pair-tcp-boundary-revalidate.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_134409_pair-tcp-boundary-revalidate.txt`; Round 2 C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_134615_pair-tcp-64-boundary-revalidate-2.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_134646_pair-tcp-64-boundary-revalidate-2.txt`; Round 3 C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_134732_pair-tcp-64-boundary-revalidate-3.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_134804_pair-tcp-64-boundary-revalidate-3.txt` |
 
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
 
 - runner, 정책, 상세 표의 pattern, transport, size inventory가 일치한다.
-- 각 pattern의 최종 판정에 사용한 core 0.10.0 C와 binding paired report가 모두
+- 각 pattern의 최종 판정에 사용한 core 0.10.1 C와 binding paired report가 모두
   `status: complete`다.
 - 모든 binding 상세 표에 `미측정`, `미달`, `보류`가 없다.
 - 모든 통과 셀에 paired C와 binding report, manifest, 반복값, 비율, 옵션 일치 근거가

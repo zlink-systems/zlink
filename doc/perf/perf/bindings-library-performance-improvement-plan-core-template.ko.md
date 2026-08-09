@@ -7,7 +7,7 @@
 >
 > 작업 브랜치: `core-{{CORE_VERSION}}-bindings-performance`
 >
-> 이 브랜치에서 작업하도록 승인되었으며, 측정과 문서 변경은 Windows 작업영역에서 진행한다.
+> 이 브랜치에서 작업하도록 승인되었으며, 측정과 문서 변경은 고정한 WSL/Linux 작업영역에서 진행한다.
 >
 > 이 문서는 core {{CORE_VERSION}}을 기준으로 bindings 라이브러리 성능 개선을 처음부터
 > 진행하기 위한 실행 문서다. 이전 계획 문서의 측정값과 완료 판정은 가져오지 않는다.
@@ -20,17 +20,19 @@
 
 - `VERSION`: `LIBZLINK_VERSION={{CORE_VERSION}}`
 - `core/CMakeLists.txt`: `project(zlink VERSION {{CORE_VERSION}} ...)`
-- `core/include/zlink.h`: major 0, minor 10, patch 0
+- `core/include/zlink.h`: major, minor, patch values matching {{CORE_VERSION}}
 
-`bindings/tools/local_core_runtime.sh`는 `VERSION`의 값을 이용해 versioned runtime
-경로를 선택한다. 따라서 파일 이름이나 `Perf runtime libzlink: ...` 경로만 보고
-판정하지 않는다. runner 또는 binding의 public version API가 보고한 실제 runtime
-버전도 {{CORE_VERSION}}인지 확인한다.
+`bindings/tools/local_core_runtime.sh`는 `VERSION`의 값을 이용해 GitHub의
+`core/v{{CORE_VERSION}}` release asset을 기존 release 절차로 가져오고 versioned
+runtime 경로를 선택한다. 따라서 파일 이름이나 `Perf runtime libzlink: ...` 경로만
+보고 판정하지 않는다. runner 또는 binding의 public version API와
+`share/zlink/core-package-provenance.json`이 보고한 실제 runtime 버전도
+{{CORE_VERSION}}인지 확인한다.
 
-측정을 시작하기 전에 `core/build`를 현재 소스로 다시 빌드한다. `core/src`,
-`core/include`, `VERSION`이 runtime보다 새로우면 측정을 시작하지 않는다. 다른
-버전의 local package나 오래된 runtime을 사용한 결과도 이 문서의 기준값으로 사용하지
-않는다.
+측정을 시작할 때는 Core source를 다시 build하지 않는다.
+`ZLINK_CORE_SOURCE=release`(기본값) 상태에서 release prefix를 준비한다.
+`core/build`와 현재 source 변경은 측정 runtime을 구성하지 않는다. 다른 버전의 local
+package나 오래된 runtime을 사용한 결과도 이 문서의 기준값으로 사용하지 않는다.
 
 모든 성능 셀은 `미측정`에서 시작한다. 상세 표에는 현재 binding runner에 실제로 등록된
 pattern만 포함한다. 공식 C runner에만 있고 binding runner에 없는 pattern은 이 계획의
@@ -287,9 +289,9 @@ binding report에서 실제 client 수와 STREAM client 수가 같은지, memory
 - allocation, copy, dispatch, callback, poller, ownership, error 처리 비용은 호출자에게
   새 설정이나 실행 순서를 요구하지 않고 binding 내부에서 줄인다.
 - timeout 증가, sleep 추가, retry 반복, client 수 축소로 실패를 숨기지 않는다.
-- core 버그이면 회귀 테스트를 먼저 추가하고 core에서 수정한다. 수정 뒤
-  `scripts/local-package/native/sync-local-core-libs.sh`로 local core library를 다시
-  배포한 다음 binding을 검증한다.
+- Core 버그이면 이 작업에서 source를 다시 build해 측정 runtime을 바꾸지 않는다. 별도
+  Core release와 version을 확정하고, 새 release package provenance를 기록한 뒤 C와
+  binding의 paired 기준을 다시 만든다.
 - perf 결과는 report가 `status: complete`일 때만 표에 반영한다. 중단되었거나 일부
   RESULT만 생성된 report는 근거로 사용하지 않는다.
 - `doc/perf/PERF_POLICY.md`, `doc/perf/PERF_SINGLE_TEST_POLICY.md`,
@@ -303,7 +305,7 @@ C와 binding을 paired 측정할 때 같은 session tag를 사용하고 다음 �
 | 항목 | 기록 내용 |
 |------|-----------|
 | source | git commit, dirty 여부, 변경 파일 목록 |
-| core | 버전, runtime 절대 경로, build type, compiler와 linker 버전 |
+| core | release 버전과 tag, runtime 절대 경로, package provenance |
 | binding | package 버전, compiler 또는 runtime 버전 |
 | host | OS, kernel, CPU model, 논리 CPU 수, memory |
 | CPU 상태 | governor, CPU pinning, 측정 중 다른 고부하 작업 유무 |
@@ -312,7 +314,7 @@ C와 binding을 paired 측정할 때 같은 session tag를 사용하고 다음 �
 | 결과 | report 경로, `status`, Effective Options, auto-HWM detail |
 | pair | C와 binding에 공통으로 부여한 session tag |
 
-core source, core build, runtime, host boot, CPU governor, client 수, toolchain 또는
+Core release version/tag, package provenance, runtime, host boot, CPU governor, client 수, toolchain 또는
 성능 관련 환경 변수가 바뀌면 이전 C 결과와 새 binding 결과를 짝지어 판정하지 않는다.
 binding before와 after 사이에는 검토 중인 변경만 있어야 하며 변경 파일을 manifest에
 기록한다. 그 밖의 조건이 바뀌면 같은 manifest 조건으로 C를 다시 제한 측정한다.
@@ -326,11 +328,56 @@ binding before와 after 사이에는 검토 중인 변경만 있어야 하며 �
 - binding single: `bindings/<lang>/perf/run_benchmarks.sh`
 - binding multi: `bindings/<lang>/perf/run_benchmarks_multi.sh`
 
+### 7.0 측정 단위와 순차 실행
+
+전체 matrix를 먼저 실행해 기준값을 만드는 방식은 사용하지 않는다. 한 번에 하나의
+`binding + suite + pattern + transport` 조합만 비교 대상으로 선택한다. 먼저
+`bindings/c/perf`에서 같은 pattern과 transport를 같은 message size, duration, runs,
+client 수, I/O thread 수, 해당 작업에서 고정한 Core runtime으로 측정하고, C report가
+`status: complete`이면 같은 session tag와 조건으로 해당 binding runner를 바로 측정한다.
+
+선택한 조합의 C와 binding 결과를 비교해 병목과 개선 대상을 정한 뒤, 구현 변경 후에도
+같은 조합을 C와 binding 순서로 다시 paired 측정한다. 다른 pattern이나 transport의
+결과를 미리 측정하거나, 전체 matrix 결과를 현재 조합의 C 기준으로 재사용하지 않는다.
+다른 조합을 확인할 필요가 생기면 기존 측정을 확장하지 않고 새 paired 대상으로 별도로
+선택해 같은 절차를 반복한다.
+
+perf 실행은 항상 직렬화한다. C runner, binding runner, 후보 after 측정 중 어느 것도
+동시에 실행하지 않으며, 한 runner process의 report가 종료되고 `status: complete`인지
+확인한 뒤 다음 하나의 측정을 시작한다. 백그라운드에서 다른 perf process를 함께 실행해
+host CPU·memory·I/O 부하를 섞지 않는다.
+
+### 7.0.1 `PERF_SINGLE_TEST_POLICY` parity gate
+
+비교 기준은 binding runner의 현재 구현이 아니라
+`doc/perf/PERF_SINGLE_TEST_POLICY.md`와 그 문서를 반영한 `bindings/c/perf`
+canonical reference runner다. 선택한 하나의 비교 대상은 다음 의미가 C와 binding에서
+동일해야 유효한 paired 결과로 인정한다.
+
+- `ready -> active(duration)` 순서와 active payload header의 수집 범위
+- active 송신의 blocking 의미, transient 오류 후 새 timestamp·1ms retry, stop token의
+  wire-level 종료와 bounded retry
+- receiver의 `POLLIN` readiness 대기(`-1` timeout)와 `DONTWAIT` drain
+- throughput, 평균 latency, p95/p99의 산출 방식과 runs 중앙값 집계
+- latency sample cap 기본값 1,000,000, `0`일 때 percentile sample 미보관, 전체 count·sum
+  집계, C reference와 동일한 bounded reservoir 교체 알고리즘과 percentile 보간
+- 고정한 Core release runtime, auto-HWM message unit, I/O thread 수, client 수와 timeout
+
+위 항목 중 하나라도 C와 binding에서 다르면 수치는 비교 자료로만 남기고 기준값이나
+통과 판정에 사용하지 않는다. 정책과 reference runner를 수정한 경우에는 같은
+`binding + suite + pattern + transport` 대상의 C와 binding을 다시 순서대로 측정한다.
+poller API의 내부 primitive가 다르더라도 readiness, drain, 종료와 metric 의미가 같으면
+비교할 수 있다. 반대로 retry 대기나 stop-token 종료 조건이 다르면 수치를 공식 비교에
+사용하지 않는다. Single latency sampler가 모든 sample을 무제한으로 보관하거나, sample
+cap의 기본값·`0` 처리·percentile 보정이 C reference와 다르면 해당 report도 공식 비교에
+사용하지 않는다.
+
 ### 7.1 Pattern별 smoke와 제한 사전 점검
 
-C 전체 pattern을 한 번에 실행해 기준값을 만들지 않는다. 현재 언어에서 진행할 pattern 하나를
-선택한 뒤 C와 binding의 같은 pattern만 smoke한다. 이렇게 하면 서로 다른 pattern을 측정하는
-동안 생기는 host 부하와 시간 차이가 현재 비교값에 섞이지 않는다.
+전체 pattern이나 전체 matrix를 한 번에 실행해 기준값을 만들지 않는다. 현재 언어에서
+진행할 pattern과 transport 하나를 선택한 뒤 C와 binding의 같은 조합만 smoke한다. 이렇게
+하면 서로 다른 조합을 측정하는 동안 생기는 host 부하와 시간 차이가 현재 비교값에 섞이지
+않는다.
 
 ```bash
 PERF_FAIL_FAST=1 <c-runner> \
@@ -388,9 +435,10 @@ sleep 증가, 유리한 실행 결과만 선택하는 방식은 사용하지 않
 - C와 binding에 같은 session tag를 사용한다.
 - 같은 pattern, transport, size, duration, runs, client 수, I/O thread 수를 사용한다.
 - C pattern 측정이 끝나면 다른 pattern을 실행하지 않고 바로 같은 binding pattern을 측정한다.
-- binding before와 after는 같은 core source/build/runtime과 host session을 사용하고,
+- binding before와 after는 같은 Core release runtime과 host session을 사용하고,
   검토 중인 binding 변경만 다르게 유지한다.
-- core source, build, runtime, host boot 또는 성능 환경이 달라지면 C를 다시 측정한다.
+- Core release version/tag, package provenance, runtime, host boot 또는 성능 환경이 달라지면
+  C를 다시 측정한다.
 - 개선 작업이 길어졌거나 host 부하가 달라졌으면 후보 최종 판정 직전에 같은 C pattern을 다시
   측정한다.
 - 목표 기준 ±5%p 셀은 이전 측정값 하나만으로 판정하지 않는다.

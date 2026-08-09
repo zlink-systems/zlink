@@ -10,6 +10,7 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -143,6 +144,17 @@ class xpub_socket_t;
 namespace detail
 {
 struct operation_state_t;
+
+// A raw single-part send needs only the native socket, one caller-owned
+// message, and the send flags. Multipart use promotes this state to the
+// pooled operation_state_t before the next part is appended.
+struct raw_single_send_state_t
+{
+    void *socket = nullptr;
+    message_t *part_source = nullptr;
+    std::optional<message_t> owned_part;
+    send_flags_t flags = send_flags_t::none;
+};
 } // namespace detail
 
 /// @brief Accepts further parts, flags, and the terminal submit of a send builder.
@@ -166,10 +178,16 @@ class send_submit_operation_t : private detail::operation_builder_base_t<
 
   private:
     using base_t::base_t;
+    using base_t::replace_state_ptr;
     using base_t::release_state_ptr;
     using base_t::state;
 
+    explicit send_submit_operation_t (detail::raw_single_send_state_t raw_) noexcept;
+
     friend class send_operation_t;
+
+    detail::raw_single_send_state_t _raw;
+    bool _raw_mode = false;
 };
 
 /**
@@ -194,8 +212,11 @@ class send_operation_t : private detail::operation_builder_base_t<
 
   private:
     using base_t::base_t;
+    using base_t::replace_state_ptr;
     using base_t::release_state_ptr;
     using base_t::state;
+
+    explicit send_operation_t (void *raw_socket_) noexcept;
 
     friend class zlink::pair_socket_t;
     friend class zlink::dealer_socket_t;
@@ -204,6 +225,9 @@ class send_operation_t : private detail::operation_builder_base_t<
     friend class zlink::pub_socket_t;
     friend class zlink::xpub_socket_t;
     friend class zlink::received_t;
+
+    detail::raw_single_send_state_t _raw;
+    bool _raw_mode = false;
 };
 
 class request_callback_submit_operation_t;

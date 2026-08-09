@@ -85,8 +85,15 @@ int resolve_single_duration_seconds ()
 
 size_t resolve_single_latency_sample_cap ()
 {
-    const int cap = parse_positive_env ("PERF_SINGLE_LATENCY_SAMPLE_CAP", 200000);
-    return cap > 0 ? static_cast<size_t> (cap) : static_cast<size_t> (200000);
+    const char *value = std::getenv ("PERF_SINGLE_LATENCY_SAMPLE_CAP");
+    if (!value || !*value)
+        return 1000000;
+
+    char *end = nullptr;
+    const unsigned long long parsed = std::strtoull (value, &end, 10);
+    if (!end || *end != '\0')
+        return 1000000;
+    return static_cast<size_t> (parsed);
 }
 
 int resolve_single_send_timeout_ms ()
@@ -97,6 +104,11 @@ int resolve_single_send_timeout_ms ()
 int resolve_single_recv_timeout_ms ()
 {
     return parse_positive_env ("PERF_SINGLE_RCVTIMEO_MS", 200);
+}
+
+int resolve_single_stop_retry_timeout_ms ()
+{
+    return parse_positive_env ("PERF_SINGLE_STOP_RETRY_TIMEOUT_MS", 10000);
 }
 
 int resolve_single_pubsub_recv_timeout_ms ()

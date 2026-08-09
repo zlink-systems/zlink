@@ -58,7 +58,10 @@ struct poller_t::impl
 
     ~impl () { destroy_noexcept (); }
 
-    bool can_use_socket_fast_path () const noexcept { return native_poller_item_count == 0; }
+    // Socket-only waits use the registered poller so readiness semantics stay
+    // aligned with the public C poller path and the registration is not
+    // rebuilt for every wait.
+    bool can_use_socket_fast_path () const noexcept { return false; }
 
     void ensure_open () const
     {

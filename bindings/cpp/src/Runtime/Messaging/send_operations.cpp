@@ -9,6 +9,21 @@
 namespace zlink
 {
 
+send_submit_operation_t::send_submit_operation_t (detail::raw_single_send_state_t raw_) noexcept :
+    base_t (),
+    _raw (std::move (raw_)),
+    _raw_mode (true)
+{
+}
+
+send_operation_t::send_operation_t (void *raw_socket_) noexcept :
+    base_t (),
+    _raw (),
+    _raw_mode (true)
+{
+    _raw.socket = raw_socket_;
+}
+
 send_submit_operation_t::~send_submit_operation_t () = default;
 send_submit_operation_t::send_submit_operation_t (send_submit_operation_t &&) noexcept = default;
 send_submit_operation_t &
@@ -16,12 +31,38 @@ send_submit_operation_t::operator= (send_submit_operation_t &&) noexcept = defau
 
 send_submit_operation_t &&send_submit_operation_t::message (message_t &part_) &&
 {
+    if (_raw_mode) {
+        auto state_ptr = detail::acquire_state ();
+        state_ptr->kind = detail::operation_kind_t::raw_send;
+        state_ptr->raw.socket = _raw.socket;
+        state_ptr->flags = _raw.flags;
+        if (_raw.owned_part.has_value ())
+            state_ptr->message.single_part.emplace (std::move (*_raw.owned_part));
+        else
+            state_ptr->message.single_part_source = _raw.part_source;
+        _raw = detail::raw_single_send_state_t{};
+        _raw_mode = false;
+        replace_state_ptr (std::move (state_ptr));
+    }
     detail::append_send_part (state (), part_);
     return std::move (*this);
 }
 
 send_submit_operation_t &&send_submit_operation_t::message (message_t &&part_) &&
 {
+    if (_raw_mode) {
+        auto state_ptr = detail::acquire_state ();
+        state_ptr->kind = detail::operation_kind_t::raw_send;
+        state_ptr->raw.socket = _raw.socket;
+        state_ptr->flags = _raw.flags;
+        if (_raw.owned_part.has_value ())
+            state_ptr->message.single_part.emplace (std::move (*_raw.owned_part));
+        else
+            state_ptr->message.single_part_source = _raw.part_source;
+        _raw = detail::raw_single_send_state_t{};
+        _raw_mode = false;
+        replace_state_ptr (std::move (state_ptr));
+    }
     state ().message.single_part.emplace (std::move (part_));
     state ().message.single_part_source = nullptr;
     state ().message.discard_single_part_on_backpressure = true;
@@ -30,6 +71,10 @@ send_submit_operation_t &&send_submit_operation_t::message (message_t &&part_) &
 
 send_submit_operation_t &&send_submit_operation_t::flags (int flags_) &&
 {
+    if (_raw_mode) {
+        _raw.flags = send_flags_t (flags_);
+        return std::move (*this);
+    }
     state ().flags = send_flags_t (flags_);
     return std::move (*this);
 }
@@ -40,6 +85,10 @@ send_operation_t &send_operation_t::operator= (send_operation_t &&) noexcept = d
 
 send_submit_operation_t send_operation_t::message (message_t &part_) &&
 {
+    if (_raw_mode) {
+        _raw.part_source = &part_;
+        return send_submit_operation_t (std::move (_raw));
+    }
     state ().message.single_part_source = &part_;
     if (!detail::can_borrow_single_send_part (state ().kind))
         state ().message.single_part.emplace (std::move (part_));
@@ -48,6 +97,10 @@ send_submit_operation_t send_operation_t::message (message_t &part_) &&
 
 send_submit_operation_t send_operation_t::message (message_t &&part_) &&
 {
+    if (_raw_mode) {
+        _raw.owned_part.emplace (std::move (part_));
+        return send_submit_operation_t (std::move (_raw));
+    }
     state ().message.single_part.emplace (std::move (part_));
     state ().message.single_part_source = nullptr;
     state ().message.discard_single_part_on_backpressure = true;
@@ -56,6 +109,9 @@ send_submit_operation_t send_operation_t::message (message_t &&part_) &&
 
 bool send_submit_operation_t::submit () &&
 {
+    if (_raw_mode)
+        return detail::submit_raw_single_send_state (_raw);
+
     auto &state = this->state ();
     if (!detail::has_send_parts (state))
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);

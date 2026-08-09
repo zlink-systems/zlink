@@ -16,10 +16,7 @@ pair_socket_t::pair_socket_t (context_t &ctx_) : message_socket_t (ctx_, socket_
 
 send_operation_t pair_socket_t::send ()
 {
-    auto state_ptr = detail::acquire_state ();
-    state_ptr->kind = detail::operation_kind_t::raw_send;
-    state_ptr->raw.socket = detail::native_handle (*this);
-    return send_operation_t (std::move (state_ptr));
+    return send_operation_t (detail::native_handle (*this));
 }
 
 int pair_socket_t::recv (received_t &out_, recv_flags_t flags_)

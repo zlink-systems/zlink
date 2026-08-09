@@ -11,6 +11,24 @@ namespace zlink
 namespace detail
 {
 
+inline bool submit_raw_single_send_state (raw_single_send_state_t &state_)
+{
+    message_t *part = state_.owned_part.has_value () ? &*state_.owned_part : state_.part_source;
+    if (!state_.socket || !part || !part->valid ())
+        throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+
+    const submit_result_t rc = static_cast<submit_result_t> (zlink_send_part (
+      state_.socket, zlink::detail::native_handle (*part),
+      static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)), ZLINK_PART_FINAL));
+    if (rc == submit_result_t::ok) {
+        zlink::detail::mark_sent (*part);
+        return true;
+    }
+    if (state_.flags == send_flags_t::dontwait && rc == submit_result_t::backpressured)
+        return false;
+    throw submit_error_t (rc, zlink_errno ());
+}
+
 inline std::vector<message_t> take_send_parts (operation_state_t &state_)
 {
     std::vector<message_t> parts;

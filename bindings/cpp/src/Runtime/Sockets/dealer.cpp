@@ -19,10 +19,7 @@ dealer_socket_t::dealer_socket_t (context_t &ctx_) :
 
 send_operation_t dealer_socket_t::send ()
 {
-    auto state_ptr = detail::acquire_state ();
-    state_ptr->kind = detail::operation_kind_t::raw_send;
-    state_ptr->raw.socket = detail::native_handle (*this);
-    return send_operation_t (std::move (state_ptr));
+    return send_operation_t (detail::native_handle (*this));
 }
 
 request_operation_t dealer_socket_t::request ()

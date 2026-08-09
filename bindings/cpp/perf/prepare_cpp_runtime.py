@@ -10,13 +10,13 @@ RUNTIME_ROOT = CPP_PERF_DIR / ".runtime"
 C_STREAM_CLIENT = ROOT / "bindings" / "c" / "build" / "perf" / "perf_stream_client"
 
 SINGLE_MAP = {
-    "perf_pair": CPP_PERF_DIR / "single" / "build" / "cpp_perf_pair",
-    "perf_pubsub": CPP_PERF_DIR / "single" / "build" / "cpp_perf_pubsub",
-    "perf_dealer_dealer": CPP_PERF_DIR / "single" / "build" / "cpp_perf_dealer_dealer",
-    "perf_dealer_router": CPP_PERF_DIR / "single" / "build" / "cpp_perf_dealer_router",
-    "perf_dealer_router_reqrep": CPP_PERF_DIR / "single" / "build" / "cpp_perf_dealer_router_reqrep",
-    "perf_router_router": CPP_PERF_DIR / "single" / "build" / "cpp_perf_router_router",
-    "perf_router_router_reqrep": CPP_PERF_DIR / "single" / "build" / "cpp_perf_router_router_reqrep",
+    "cpp_perf_pair": CPP_PERF_DIR / "single" / "build" / "cpp_perf_pair",
+    "cpp_perf_pubsub": CPP_PERF_DIR / "single" / "build" / "cpp_perf_pubsub",
+    "cpp_perf_dealer_dealer": CPP_PERF_DIR / "single" / "build" / "cpp_perf_dealer_dealer",
+    "cpp_perf_dealer_router": CPP_PERF_DIR / "single" / "build" / "cpp_perf_dealer_router",
+    "cpp_perf_dealer_router_reqrep": CPP_PERF_DIR / "single" / "build" / "cpp_perf_dealer_router_reqrep",
+    "cpp_perf_router_router": CPP_PERF_DIR / "single" / "build" / "cpp_perf_router_router",
+    "cpp_perf_router_router_reqrep": CPP_PERF_DIR / "single" / "build" / "cpp_perf_router_router_reqrep",
 }
 
 MULTI_SERVER_MAP = {
