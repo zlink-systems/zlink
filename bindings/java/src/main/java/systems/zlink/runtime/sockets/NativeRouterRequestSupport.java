@@ -19,6 +19,7 @@ import systems.zlink.runtime.nativeapi.NativeRoutingIds;
 import systems.zlink.runtime.nativeapi.NativeSubmitErrors;
 import systems.zlink.runtime.nativeapi.RequestReplySupport;
 import systems.zlink.runtime.nativeapi.RoutedRequestSupport;
+import systems.zlink.runtime.nativeapi.SendScratch;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -28,6 +29,8 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
 final class NativeRouterRequestSupport {
+    private static final ThreadLocal<SendScratch> REQUEST_SCRATCH =
+        ThreadLocal.withInitial(SendScratch::new);
 
     private NativeRouterRequestSupport() {
     }
@@ -154,20 +157,23 @@ final class NativeRouterRequestSupport {
                                              int timeoutMs,
                                              MemorySegment handler,
                                              MemorySegment userData) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment nativeRid = nativeRoutingId(arena, routingId);
-            MemorySegment nativeMsg = arena.allocate(NativeLayouts.MESSAGE_LAYOUT);
-            InternalAccess.messageCopyTo(part, nativeMsg);
-            if (transportPairId != 0 && transportPairGeneration != 0) {
-                return Native.routerRequestTransportPairPart(
-                    InternalAccess.socketHandle(socket), nativeRid,
-                    transportPairId, transportPairGeneration, nativeMsg,
-                    flags, partFlag, timeoutMs, handler, userData);
-            }
-            return Native.routerRequestPart(
-                InternalAccess.socketHandle(socket), nativeRid, nativeMsg,
+        SendScratch scratch = REQUEST_SCRATCH.get();
+        MemorySegment nativeRid = scratch.nativeRoutingId;
+        if (scratch.lastRoutingId != routingId) {
+            NativeRoutingIds.write(nativeRid, routingId);
+            scratch.lastRoutingId = routingId;
+        }
+        MemorySegment nativeMsg = scratch.nativeMsg;
+        InternalAccess.messageCopyTo(part, nativeMsg);
+        if (transportPairId != 0 && transportPairGeneration != 0) {
+            return Native.routerRequestTransportPairPart(
+                InternalAccess.socketHandle(socket), nativeRid,
+                transportPairId, transportPairGeneration, nativeMsg,
                 flags, partFlag, timeoutMs, handler, userData);
         }
+        return Native.routerRequestPart(
+            InternalAccess.socketHandle(socket), nativeRid, nativeMsg,
+            flags, partFlag, timeoutMs, handler, userData);
     }
 
     private static int routerReplyPartOnce(RouterSocket socket,
