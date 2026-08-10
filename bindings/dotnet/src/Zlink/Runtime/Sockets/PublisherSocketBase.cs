@@ -43,7 +43,7 @@ internal abstract class PublisherSocketBase : ConnectableSocketBase, IPublisherS
             return SocketKernel.TrySendOrThrow(Kernel.PublishNoWaitResult(topic,
                 message));
 
-        Kernel.Publish(topic, message, flags);
+        Kernel.PublishMessageUnchecked(topic, message, flags);
         return true;
     }
 

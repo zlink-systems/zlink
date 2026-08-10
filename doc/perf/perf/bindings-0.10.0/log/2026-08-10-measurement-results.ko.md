@@ -117,3 +117,21 @@ throughput ratio는 `61.81% / 63.07% / 58.03% / 96.05% / 98.61% / 98.70%`, 산�
 throughput ratio는 `78.19% / 73.99% / 97.32% / 94.92% / 94.07% / 97.43%`, 산술평균은
 `89.32%`다. latency ratio는 `1.131x / 1.586x / 0.899x / 1.102x / 1.056x / 1.021x`,
 산술평균은 `1.133x`다. .NET 단순 one-way 기준을 충족해 통과로 기록한다.
+
+### .NET Single PUBSUB/ws
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 1160780 / 855560 / 438672 / 25388 / 16169 / 11457 | 59.594 / 33.044 / 20.319 / 12.343 / 16.621 / 17.610 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_150225_dotnet-pubsub-ws-c-paired.txt` |
+| .NET baseline | 739341 / 588520 / 406582 / 24060 / 12222 / 9947 | 61.966 / 32.397 / 15.508 / 13.002 / 21.786 / 20.095 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_150246_dotnet-pubsub-ws-paired-final.txt` |
+| .NET 자체 1차 after | 792687 / 454521 / 414700 / 23063 / 15380 / 11274 | 64.776 / 49.475 / 16.822 / 13.588 / 16.896 / 17.838 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_150638_dotnet-pubsub-ws-own-after-unchecked-publish.txt` |
+| .NET Sol 2차 후보 after | 722346 / 427185 / 399433 / 22182 / 14749 / 10148 | 68.158 / 49.183 / 22.252 / 15.035 / 18.170 / 19.748 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_151007_dotnet-pubsub-ws-sol-after-lock-coalesce.txt` |
+
+baseline throughput ratio는 `63.69% / 68.79% / 92.68% / 94.77% / 75.59% / 86.82%`,
+산술평균 `80.39%`다. 자체 1차 `PublishMessageUnchecked` 후보 후 ratio는
+`68.29% / 53.13% / 94.54% / 90.84% / 95.12% / 98.40%`, 산술평균 `83.39%`다.
+평균 latency ratio는 `1.087x / 1.497x / 0.828x / 1.101x / 1.017x / 1.013x`,
+산술평균 `1.090x`다. Sol 2차 lock coalesce 후보는 throughput ratio
+`62.23% / 49.93% / 91.06% / 87.37% / 91.22% / 88.57%`, 산술평균 `78.40%`,
+latency 산술평균 `1.193x`로 1차 후보보다 악화되어 제거했다. 최종은 자체 1차 후보를
+유지하며 aggregate throughput 목표 미달과 추가 후보 no-go로 보류한다.
