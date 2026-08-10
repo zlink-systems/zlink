@@ -151,6 +151,65 @@ public behavior; align internal structure to the following documents.
 | Observer merging and loss | [Runtime Status And Operational Diagnostics](../spec/24-runtime-monitoring.en.md) |
 | Where `ObjectGeneration` is used and where it isn't | [Spot · Actor Routing 「2.5」](../spec/18-object-routing.en.md#25-where-objectgeneration-is-used-and-where-its-not) |
 
+## Debugging Principles
+
+When chasing an intermittent failure, **turn on the message tracking and file logs
+that already exist and read them first.** Adding fresh temporary logging and
+re-running the reproduction is not allowed. That approach spends a whole
+reproduction cycle to see a single exception, and it misses causes that were
+already printed in the existing logs.
+
+### 1. What To Turn On First
+
+| Target | How |
+|---|---|
+| Message flow (full-path tracing with `flow` and `corr`) | runtime diagnostics message flow mode |
+| C++ / .NET spot discovery trace | `ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY` |
+| Java / Kotlin stream trace | `ZLINK_JAVA_STREAM_TRACE=1` |
+| Sample server log retention | .NET `ZLINK_SAMPLE_EVIDENCE_DIR`, JVM `ZLINK_SAMPLE_KEEP_RUN_DIR=1`, Node keeps them on failure automatically |
+
+When a sample fails intermittently, retain server logs **from the first
+reproduction**. A run without logs records only that it failed, not why, so that
+cycle is wasted.
+
+### 2. How To Read Them
+
+Put a passing case and a failing case side by side under `flow` and find **which
+transition stopped**. `flow` is the only value that ties one message across
+process boundaries. Filtering a whole trace category out as noise walks straight
+past the line that names the cause.
+
+### 3. Every Failure Belongs On The Flow
+
+Never build a terminal that hands the application an error kind and drops the
+cause. A failure with no recorded cause can only be traced by reproducing it, and
+the reproduction cycle becomes the cost of the investigation. Failures,
+refusals, and aborts are recorded as `message_flow_outcome` `error`, carrying the
+originating exception in `errorType` / `errorMessage`, **under the same `flow` as
+the message that produced them**.
+
+### 4. Cost Rule For Adding Traces
+
+**Decision**: when message flow tracing is off, building the log message must cost
+nothing. All four runtimes honor this.
+
+| Path | Method |
+|---|---|
+| Hot path traced per message | Wrap in `if (enabled(outcome))` so neither the event nor a lambda is built |
+| Rare transitions such as failure or abort | Use the lazy form (`trace(outcome, build)` / `traceLazy`) so the event is built only after the gate |
+
+The lazy form removes the `if` at the call site but allocates one lambda (C++
+inlines it, so nothing is allocated). Hot paths therefore wrap even the lazy form
+in an `if`, so no lambda is created either. Never write a call site that
+concatenates strings before the gate.
+
+**Language discretion**: how the gate is expressed. C++ uses a template lambda,
+.NET an interpolated string handler and `Func<>`, Java a `Supplier<>`, Node a
+thunk. What must match is the observable result — no cost at all when off.
+
+**Result to verify**: after adding a trace, confirm from the call-site code that
+with tracing off the path builds no string, no event, and no lambda.
+
 ## How To Read
 
 Each document states the following for every decision.

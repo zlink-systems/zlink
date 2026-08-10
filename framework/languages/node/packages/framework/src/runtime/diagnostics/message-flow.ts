@@ -124,6 +124,26 @@ export class ZLinkMessageFlowTracer {
     return effectiveMessageFlow(this.ctx) !== 'off';
   }
 
+  /**
+   * Traces an event built only when the outcome is enabled.
+   *
+   * Use this on failure and other rare transitions: the thunk keeps the call
+   * site free of an explicit gate and never runs when tracing is off, at the
+   * cost of one closure per call. Hot paths that trace every message must keep
+   * the `if (enabled(outcome))` guard so no closure is allocated there either.
+   */
+  traceLazy(
+    outcome: ZLinkMessageFlowOutcome,
+    build: () => Omit<ZLinkRuntimeMessageFlowEvent, 'effectiveMode' | 'flowId' | 'flowOrigin'> & {
+      readonly effectiveMode?: ZLinkMessageFlowLogMode;
+      readonly flowId?: string;
+      readonly flowOrigin?: import('../../contracts').ZLinkFlowOrigin;
+    }
+  ): void {
+    if (!this.enabled(outcome)) return;
+    this.trace(build());
+  }
+
   trace(flowInput: Omit<ZLinkRuntimeMessageFlowEvent, 'effectiveMode' | 'flowId' | 'flowOrigin'> & {
     readonly effectiveMode?: ZLinkMessageFlowLogMode;
     readonly flowId?: string;

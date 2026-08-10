@@ -30,6 +30,8 @@ import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorJoinCall;
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
@@ -296,14 +298,11 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                         ZLinkFrameworkErrorKind kind = cause instanceof ZLinkFrameworkException framework
                             ? framework.kind()
                             : ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
-                        //  A deferred Join that ends in `Failed` is reported to
-                        //  the application as a bare error kind. Without the
-                        //  cause the runtime leaves no record of why the
-                        //  relocation could not proceed.
-                        LOGGER.warning(
-                            "[zlink-java-stream-trace] join completion failed"
-                                + " kind=" + kind
-                                + " cause=" + cause);
+                        //  A deferred Join that ends in `Failed` reports only
+                        //  an error kind to the application. Trace the cause on
+                        //  the message flow so the failure carries the same
+                        //  flow identity as the Join that produced it.
+                        traceJoinFailed(kind, cause);
                         return (ZLinkActorJoinCompletion) new ZLinkActorJoinCompletion.Failed(
                             operationId,
                             kind);
@@ -441,6 +440,25 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                 "JoinSpot", null, null, null, null,
                 spotId.toString(), context.actorRef().actorId(), null));
         }
+    }
+
+    private void traceJoinFailed(ZLinkFrameworkErrorKind kind, Throwable cause) {
+        if (services.flow() == null) {
+            return;
+        }
+        services.flow().traceLazy(
+            ZLinkMessageFlowOutcome.ERROR,
+            () -> new ZLinkMessageFlowEvent(
+                ZLinkMessageFlowOutcome.ERROR,
+                ZLinkDispatchErrorSurface.SPOT_ACTOR,
+                ZLinkDispatchMessageKind.ACTOR_REQUEST,
+                "JoinSpot", null, null, null, null,
+                spotId == null ? null : spotId.toString(),
+                context.actorRef().actorId(), null,
+                ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
+                ZLinkDispatchErrorAction.REPLY_ERROR,
+                kind.name(),
+                cause == null ? null : cause.toString()));
     }
 
     private void traceJoinReplyReceived(Throwable error) {

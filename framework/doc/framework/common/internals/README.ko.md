@@ -132,6 +132,58 @@ process가 각각 조회하고 기록한다. 한 묶음 안에 넣으면 그 pro
 | 관찰자 합치기와 유실 | [Runtime 상태와 운영 진단](../spec/24-runtime-monitoring.ko.md) |
 | `ObjectGeneration`을 쓰는 자리와 쓰지 않는 자리 | [Spot·Actor routing 「2.5」](../spec/18-object-routing.ko.md#25-objectgeneration을-어디에-쓰고-어디에-쓰지-않는가) |
 
+## 디버깅 원칙
+
+간헐 실패를 쫓을 때는 **이미 있는 message tracking과 파일 log를 먼저 켜고 읽는다.**
+임시 log를 새로 넣고 재현을 반복하는 방식은 금지한다. 그 방식은 예외 하나를 보려고
+재현 주기를 통째로 다시 돌리게 만들고, 정작 원인이 기존 log에 이미 찍혀 있어도 놓친다.
+
+### 1. 무엇을 먼저 켜는가
+
+| 대상 | 켜는 방법 |
+|---|---|
+| Message flow(`flow`, `corr` 포함 전 구간 추적) | runtime diagnostics의 message flow mode |
+| C++ / .NET spot discovery trace | `ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY` |
+| Java / Kotlin stream trace | `ZLINK_JAVA_STREAM_TRACE=1` |
+| Sample 서버 log 보존 | .NET `ZLINK_SAMPLE_EVIDENCE_DIR`, JVM `ZLINK_SAMPLE_KEEP_RUN_DIR=1`, Node는 실패 시 자동 |
+
+Sample이 간헐 실패하면 **첫 재현부터** 서버 log를 보존한다. log 없이 돌린 재현은
+실패 사실만 남기고 원인은 남기지 않으므로 그 주기는 버려진다.
+
+### 2. 어떻게 읽는가
+
+먼저 `flow`로 정상 건과 실패 건을 나란히 놓고 **어느 전이에서 끊겼는지** 찾는다.
+`flow`는 message 하나를 process 경계 너머까지 잇는 유일한 값이다. Trace 종류를
+noise로 보고 grep에서 걸러내면 원인 줄을 그대로 지나친다.
+
+### 3. 실패는 반드시 flow에 남긴다
+
+Application에 error kind만 돌려주고 원인을 버리는 종결은 만들지 않는다. 원인을 남기지
+않은 실패는 재현으로만 추적할 수 있고, 재현 주기가 곧 조사 비용이 된다. 실패·거부·
+abort 같은 종결은 `message_flow_outcome`의 `error`로, 원인 exception을 `errorType`·
+`errorMessage`에 실어 **그 실패를 만든 message와 같은 `flow` 아래** 기록한다.
+
+### 4. Trace를 추가할 때의 비용 규칙
+
+**결정**: Message flow tracing이 꺼져 있으면 log message를 만드는 비용 자체가 없어야
+한다. 네 runtime 모두 지킨다.
+
+| 경로 | 방식 |
+|---|---|
+| Message마다 찍는 hot path | `if (enabled(outcome))`로 감싸 event도 lambda도 만들지 않는다 |
+| 실패·abort 등 드문 전이 | lazy 형태(`trace(outcome, build)` / `traceLazy`)로 gate 통과 후에만 event를 만든다 |
+
+Lazy 형태는 호출부에서 `if`를 없애 주지만 lambda 하나를 할당한다(C++는 인라인되어
+할당이 없다). 그래서 hot path에서는 lazy 형태라도 `if`로 한 번 더 감싸 lambda 생성까지
+막는다. 문자열 연결을 gate 앞에서 실행하는 호출부는 만들지 않는다.
+
+**언어별 재량**: gate를 표현하는 방법. C++는 template lambda, .NET은 보간 문자열
+handler와 `Func<>`, Java는 `Supplier<>`, Node는 thunk를 쓴다. 관찰되는 결과 — 꺼졌을
+때 아무 비용도 발생하지 않는 것 — 이 같으면 된다.
+
+**확인할 결과**: 새 trace를 넣은 뒤, tracing을 끈 상태에서 그 경로가 문자열·event·
+lambda 중 어느 것도 만들지 않는지 호출부 코드로 확인한다.
+
 ## 읽는 방법
 
 각 문서는 결정마다 다음을 밝힌다.
