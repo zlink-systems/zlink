@@ -261,12 +261,12 @@ internal static class PerfMultiSocketReqRep
                         .Message(message)
                         .Timeout(ResolveReqRepTimeout())
                         .Flags(SendFlags.DontWait)
-                        .Submit(MakeCallback(slot))
+                        .Submit(slot.Callback!)
                     : ((IDealerSocket)slot.Socket).Request()
                         .Message(message)
                         .Timeout(ResolveReqRepTimeout())
                         .Flags(SendFlags.DontWait)
-                        .Submit(MakeCallback(slot));
+                        .Submit(slot.Callback!);
             }
             catch (ZlinkException ex)
                 when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
@@ -331,6 +331,11 @@ internal static class PerfMultiSocketReqRep
                 }
             };
         }
+
+        // Match the C callback/userdata path: the callback captures stable
+        // run state and is reused for sequential requests on each slot.
+        for (int i = 0; i < slots.Count; i++)
+            slots[i].Callback = MakeCallback(slots[i]);
 
         while (Stopwatch.GetTimestamp() < deadlineTicks && !HasCallbackError())
         {
@@ -488,6 +493,7 @@ internal static class PerfMultiSocketReqRep
 
         internal IZlinkSocket Socket { get; }
         internal ulong NextSeq { get; set; } = 1;
+        internal RequestCallback? Callback { get; set; }
         internal volatile bool InFlight;
     }
 

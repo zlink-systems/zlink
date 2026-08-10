@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Systems.Zlink.Runtime.Native;
 
@@ -201,17 +202,26 @@ internal sealed class DealerSocket : MessageSocketBase, IDealerSocket
 
             lock (SubmitGate)
             {
-                RequestReplySupport.NativePartSubmitter submit =
-                    (ref ZlinkMsg nativePart,
-                        NativeMethods.ZlinkPartFlag partFlag) =>
-                    NativeMethods.zlink_dealer_request_part(Handle,
-                        ref nativePart, (int)flags, partFlag, timeoutMs,
-                        DirectRequestReplyHandlerPtr, userData);
                 if (singlePart != null)
-                    RequestReplySupport.SubmitOwnedSinglePart(singlePart,
-                        submit);
+                {
+                    var submitter = new DealerRequestSinglePartSubmitter(
+                        Handle, (int)flags, timeoutMs, userData);
+                    var rc = SinglePartSubmit.Submit(singlePart,
+                        ref submitter);
+                    if (rc != 0)
+                        throw ZlinkException.CreateSubmitException(
+                            NativeMethods.zlink_errno());
+                }
                 else
-                    RequestReplySupport.SubmitOwnedParts(parts!, submit);
+                {
+                    RequestReplySupport.SubmitOwnedParts(parts!,
+                        (ref ZlinkMsg nativePart,
+                                NativeMethods.ZlinkPartFlag partFlag) =>
+                            NativeMethods.zlink_dealer_request_part(Handle,
+                                ref nativePart, (int)flags, partFlag,
+                                timeoutMs, DirectRequestReplyHandlerPtr,
+                                userData));
+                }
             }
 
             state.AttachProgress(RequestProgressPump.AttachSocketCallback(Handle));
@@ -306,6 +316,35 @@ internal sealed class DealerSocket : MessageSocketBase, IDealerSocket
             {
                 RequestReplySupport.DisposeParts(cloned);
             }
+        }
+    }
+
+    private readonly struct DealerRequestSinglePartSubmitter
+        : INativeSinglePartSubmitter<DealerRequestSinglePartSubmitter>
+    {
+        private readonly IntPtr _dealer;
+        private readonly int _flags;
+        private readonly uint _timeoutMs;
+        private readonly IntPtr _userData;
+
+        internal DealerRequestSinglePartSubmitter(IntPtr dealer, int flags,
+            uint timeoutMs, IntPtr userData)
+        {
+            _dealer = dealer;
+            _flags = flags;
+            _timeoutMs = timeoutMs;
+            _userData = userData;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int Submit(
+            ref DealerRequestSinglePartSubmitter submitter,
+            ref ZlinkMsg nativePart)
+        {
+            return NativeMethods.zlink_dealer_request_part(
+                submitter._dealer, ref nativePart, submitter._flags,
+                NativeMethods.ZlinkPartFlag.Final, submitter._timeoutMs,
+                DirectRequestReplyHandlerPtr, submitter._userData);
         }
     }
 
