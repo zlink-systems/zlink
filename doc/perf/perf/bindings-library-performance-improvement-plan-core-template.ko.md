@@ -284,7 +284,7 @@ binding report에서 실제 client 수와 STREAM client 수가 같은지, memory
 - perf는 측정 의미가 C와 다르거나, 실제 버그가 있거나, `doc/perf` 정책을 위반한
   경우에만 수정한다.
 - binding에 C와 같은 pattern이 없으면 같은 측정 의미로 binding perf만 추가한다. 성능
-  수치나 변동성을 유리하게 만들기 위해 확정된 C perf, sampler, HWM, timeout, sleep,
+  수치를 유리하게 만들기 위해 확정된 C perf, sampler, HWM, timeout, sleep,
   측정 흐름을 바꾸지 않는다.
 - 새 helper나 공개 API를 만들기 전에 기존 public API와 내부 구현으로 해결할 수 있는지
   먼저 확인한다.
@@ -416,12 +416,12 @@ C와 binding의 pattern별 smoke가 모두 `status: complete`여야 본 측정�
 | smoke | 1초, 1회 | 실행 경로와 종료 상태 확인 |
 | 탐색 | 기본 duration, 1회 | 병목 후보 선별 |
 | 후보 판정 | 기본 duration, 3회 | before/after와 C 대비 비율 판정 |
-| 최종·경계 판정 | 기본 duration, 5회, CPU pin 없음 | 필요할 때 반복값을 추가 기록하는 진단용 근거 |
+| 최종·경계 판정 | 기본 duration, 5회, CPU pin 없음 | 필요할 때 반복값을 추가 기록하는 측정 근거 |
 
 반복 횟수는 perf 정책의 실행 조건을 따른다. `runs=1`이면 해당 측정값을 사용하고,
-`runs>1`이면 metric별 median을 대표값으로 사용한다. 원시 반복값과 변동 폭은 측정 기록에
-함께 남길 수 있지만 판정 입력은 throughput ratio와 평균 latency ratio다. 노트북 부하와
-측정 오차가 있더라도 측정값이 생성된 셀은 즉시 기준과 비교하고 다음 셀로 진행한다.
+`runs>1`이면 metric별 median을 대표값으로 사용한다. 원시 반복값은 측정 기록에 남기며
+판정 입력은 throughput ratio와 평균 latency ratio다. 노트북 부하와 측정 오차가 있더라도
+측정값이 생성된 셀은 즉시 기준과 비교하고 다음 셀로 진행한다.
 유리한 실행 결과만 선택하지 않으며, CPU pin·timeout·sleep 증가로 수치를 조정하지 않는다.
 
 ### 7.3 Paired C 규칙
@@ -494,7 +494,7 @@ pattern 완료는 수치를 한 번 얻었다는 뜻이 아니다. 다음 조건
 - 해당 pattern의 모든 공식 transport와 message size에서 C와 binding report가
   `status: complete`다.
 - 모든 셀이 throughput, 평균 latency, client 수, auto-HWM 기준을 만족하는지 측정값으로
-  판정하고, 반복값과 변동 폭은 결과 근거로 기록한다. 변동 폭만으로 완료를 보류하지 않는다.
+  판정하고, 원시 반복값은 결과 근거로 기록한다.
 - 개선 전후 기능 테스트와 같은 pattern의 대표 회귀 셀이 통과한다.
 - 최종 판정에 사용한 C와 binding이 가까운 시점의 같은 manifest와 session tag로 측정됐다.
 - 상세 표에 C report, binding report, 반복값, 비율과 판정 근거를 기록했다.
@@ -559,24 +559,24 @@ transport 세부 정보, perf 전용 option을 노출하지 않는다. 새 helpe
 
 - `미측정`: 같은 조건의 core {{CORE_VERSION}} C 결과와 binding 결과를 아직 비교하지 않았다.
 - `통과(비율%)`: 측정된 throughput과 latency, 회귀, Effective Options, auto-HWM,
-  client 수 조건을 만족한다. 반복값의 변동 폭은 참고 정보로 기록한다.
+  client 수 조건을 만족한다. 원시 반복값은 측정 기록으로 남긴다.
 - `미달(비율%)`: 유효한 결과가 있지만 목표에 도달하지 못했고 내부 개선이 필요하다.
 - `보류(비율%)`: throughput과 latency 결과는 기록했지만 public contract 또는 설계
-  결정이 먼저 필요한 상태다. 반복값의 크기나 변동 폭을 이유로 사용하지 않으며, 다음
+  결정이 먼저 필요한 상태다. 측정값의 크기나 반복값을 이유로 사용하지 않으며, 다음
   대상 진행을 막지 않는다.
-- `측정값 기준 평가`: 반복 측정 차이를 이유로 결과를 보류하지 않고, 같은 행의 throughput
-  ratio와 latency를 현재 기준으로 평가하는 정정 상태다. 최소 기준과 중앙값 목표를
-  충족하면 통과로, 충족하지 않으면 미달로 해석하며 다음 대상 진행을 막지 않는다.
+- `측정값 기준 평가`: 같은 행의 throughput ratio와 latency를 현재 기준으로 평가하는
+  상태다. 최소 기준과 중앙값 목표를 충족하면 통과로, 충족하지 않으면 미달로 해석하며
+  다음 대상 진행을 막지 않는다.
 - `해당 없음`: 공식 C runner와 binding 정책 모두 측정하지 않는 조합이다.
 
-반복값의 변동이나 하향 drift는 필요할 때 참고 기록으로만 남긴다. 이것만으로 `보류`,
+원시 반복값이나 하향 drift는 필요한 경우 측정 기록으로만 남긴다. 이것만으로 `보류`,
 `미측정` 또는 별도 판정 상태를 만들지 않는다. 측정값이 있으면 throughput ratio와
 latency ratio로 즉시 평가하고 다음 대상으로 진행한다. `보류`는 측정값만으로 public
 contract나 설계 결정을 확정할 수 없는 경우에만 사용한다.
 
 과거 문서나 로그의 분류는 이력으로 보존하되, C와 binding report가 모두 `status: complete`이고
 ratio가 기록되어 있으면 그 ratio와 평균 latency를 모두 측정값으로 사용해 `통과` 또는 `미달`로
-평가한다. 반복값의 변동 폭은 함께 기록하지만 판정, 추가 측정, 다음 대상 이동을 막는 조건으로
+평가한다. 원시 반복값은 함께 기록하지만 판정, 추가 측정, 다음 대상 이동을 막는 조건으로
 사용하지 않는다. `미측정`은 paired report 자체가 없을 때만 사용한다.
 
 timeout, no result, runtime mismatch, message size 불일치, client 수 불일치는 성능 보류가
@@ -589,7 +589,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 - 두 report의 runtime 경로와 실제 core 버전
 - throughput 비율과 개별 반복값
 - 평균 latency 비율과 개별 반복값. p95와 p99는 진단 자료로만 기록한다.
-- throughput과 평균 latency 변동 폭
+- throughput과 평균 latency의 원시 반복값
 - Effective Options 일치 여부
 - auto-HWM의 `MsgUnit(B)` 일치 여부
 - 실제 client 수, STREAM client 수, memory guard cap 발생 여부
@@ -1200,7 +1200,7 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
 - 모든 통과 셀에 paired C와 binding report, manifest, 반복값, 비율, 옵션 일치 근거가
   기록되어 있다.
 - throughput, 평균 latency, client 수, auto-HWM, 대상 외 대표 셀 회귀 gate를 측정값으로
-  판정하고, 반복값과 변동 폭을 기록했다.
+  판정하고 원시 반복값을 기록했다.
 - 변경한 binding의 단위 테스트와 통합 테스트가 통과한다.
 - 한 언어의 모든 pattern이 각각 완료되기 전에는 다음 언어로 이동하지 않는다.
 - 채택한 성능 개선은 검증된 범위만 커밋하고 원격에 푸시했으며 commit id를 기록했다.
