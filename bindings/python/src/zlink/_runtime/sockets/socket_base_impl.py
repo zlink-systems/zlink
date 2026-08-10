@@ -120,11 +120,7 @@ def _native_routed_send_op(socket, routing_id):
 def _native_publisher_send_op(socket, topic):
     if _native_publisher_send_op_func is None or _in_callback():
         return None
-    handle = int(socket._socket_handle.handle)
-    return _NativeBuilderSendOp(
-        lambda: _native_publisher_send_op_func(handle, topic),
-        lambda: _PublisherSendOp(socket, topic),
-    )
+    return _NativePublisherSendOp(socket, topic)
 
 
 class _SocketSendOp:
@@ -320,6 +316,44 @@ class _NativeBuilderSendOp(_SocketSendOp):
             native.messages(*self._parts)
         else:
             native.message(self._payload)
+        native.flags(self._flags)
+        return native.submit()
+
+
+class _NativePublisherSendOp(_SocketSendOp):
+    """Use the native publisher builder without per-send factory closures."""
+
+    __slots__ = ("_handle", "_topic")
+
+    def __init__(self, socket, topic):
+        super().__init__(socket)
+        self._handle = int(socket._socket_handle.handle)
+        self._topic = topic
+
+    def submit(self):
+        if self._submitted:
+            raise SubmitError(SubmitResult.INVALID_STATE, 0)
+        payload = self._payload_or_raise()
+        self._submitted = True
+        has_native_message = (
+            isinstance(payload, Message)
+            if self._parts is None
+            else any(isinstance(part, Message) for part in self._parts)
+        )
+        if has_native_message:
+            fallback = _PublisherSendOp(self._socket, self._topic)
+            if self._parts is not None:
+                fallback.messages(*self._parts)
+            else:
+                fallback.message(payload)
+            fallback.flags(self._flags)
+            return fallback.submit()
+
+        native = _native_publisher_send_op_func(self._handle, self._topic)
+        if self._parts is not None:
+            native.messages(*self._parts)
+        else:
+            native.message(payload)
         native.flags(self._flags)
         return native.submit()
 
