@@ -490,3 +490,12 @@ baseline throughput ratio는 `43.892% / 75.722% / 82.661% / 89.780% / 91.173% / 
 | .NET Sol A/B `ReceiveRouterParts` `Unsafe.SkipInit` off | 1483380 / 961427 / 673312 / 39577 / 24348 / 14621 | 0.449 / 0.279 / 0.320 / 5.179 / 8.463 / 14.229 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_181717_dotnet-dealer-router-ipc-sol-skipinit-off.txt` |
 
 baseline throughput ratio는 `59.439% / 74.358% / 76.068% / 86.025% / 86.635% / 94.496%`, 산술평균은 `79.503%`다. baseline 평균 latency ratio는 `1.230x / 1.260x / 1.224x / 1.159x / 1.148x / 1.057x`, 산술평균은 `1.180x`다. 자체 routed inlining after throughput ratio는 `60.863% / 74.941% / 76.114% / 89.097% / 88.914% / 92.107%`, 산술평균은 `80.339%`이며 평균 latency ratio는 `2.090x / 1.059x / 1.253x / 1.120x / 1.128x / 1.078x`, 산술평균은 `1.288x`다. Sol `ReceiveRouterParts` `Unsafe.SkipInit` off A/B throughput ratio는 `57.679% / 71.046% / 76.219% / 94.612% / 88.962% / 90.516%`, 산술평균 `79.839%`, 평균 latency ratio `1.367x`다. SkipInit을 유지한 최종 after보다 throughput·latency가 모두 악화되어 후보를 유지한다. 최종 throughput aggregate 85% 미달로 `보류`하며 public contract·ownership·error semantics는 변경하지 않았다. build는 성공, contract test는 `149 passed / 0 failed / 0 skipped`다.
+
+### .NET Single DEALER_ROUTER_REQREP/ipc
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 257368 / 220382 / 231910 / 21106 / 14277 / 8640 | 0.149 / 0.182 / 0.194 / 0.563 / 0.416 / 0.343 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_182021_dotnet-dealer-router-reqrep-ipc-paired-c1.txt` |
+| .NET | 135557 / 139417 / 136828 / 20547 / 14019 / 8669 | 0.273 / 0.249 / 0.239 / 0.571 / 0.418 / 0.337 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_182036_dotnet-dealer-router-reqrep-ipc-paired-before.txt` |
+
+throughput ratio는 `52.670% / 63.262% / 59.000% / 97.351% / 98.193% / 100.336%`, 산술평균은 `78.469%`다. latency ratio는 `1.832x / 1.368x / 1.232x / 1.014x / 1.005x / 0.983x`, 산술평균은 `1.239x`다. 6개 size와 30개 result line이 모두 complete이며 .NET request/reply aggregate 기준을 충족해 최종 상태는 `통과`다. 추가 hotpath·POSDDD 구조 변경은 채택하지 않았고 public contract·ownership·error semantics는 변경하지 않았다.
