@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 using System.Collections;
+using System.Runtime.CompilerServices;
 
 namespace Systems.Zlink;
 
@@ -13,14 +14,26 @@ internal struct OperationMessageBuffer
     private Message? _secondPart;
     private List<Message>? _parts;
 
-    internal int Count =>
-        _parts?.Count ?? (_singlePart == null ? 0 : _secondPart == null ? 1 : 2);
+    internal int Count
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _parts?.Count
+            ?? (_singlePart == null ? 0 : _secondPart == null ? 1 : 2);
+    }
 
-    internal bool IsSingle => _singlePart != null && _secondPart == null;
+    internal bool IsSingle
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _singlePart != null && _secondPart == null;
+    }
 
-    internal Message Single => _singlePart
-                               ?? throw new ZlinkConfigException(
-                                   ZlinkConfigException.ErrorCode.InvalidState);
+    internal Message Single
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _singlePart
+            ?? throw new ZlinkConfigException(
+                ZlinkConfigException.ErrorCode.InvalidState);
+    }
 
     internal IReadOnlyList<Message> Parts
     {
@@ -40,6 +53,7 @@ internal struct OperationMessageBuffer
     internal IReadOnlyList<Message> PartsOrEmpty =>
         Count == 0 ? Array.Empty<Message>() : Parts;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Add(Message message)
     {
         if (message == null)
@@ -67,6 +81,7 @@ internal struct OperationMessageBuffer
         _secondPart = null;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void EnsureNotEmpty()
     {
         if (Count == 0)

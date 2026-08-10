@@ -69,6 +69,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         data.CopyTo(new Span<byte>((void*)dest, data.Length));
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Message AllocateCoreValidated(int size)
     {
         var message = RentFromPool();
@@ -140,6 +141,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         return true;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void DisposeCore()
     {
         if (!IsValid)

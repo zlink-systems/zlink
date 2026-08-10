@@ -499,3 +499,18 @@ baseline throughput ratio는 `59.439% / 74.358% / 76.068% / 86.025% / 86.635% / 
 | .NET | 135557 / 139417 / 136828 / 20547 / 14019 / 8669 | 0.273 / 0.249 / 0.239 / 0.571 / 0.418 / 0.337 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_182036_dotnet-dealer-router-reqrep-ipc-paired-before.txt` |
 
 throughput ratio는 `52.670% / 63.262% / 59.000% / 97.351% / 98.193% / 100.336%`, 산술평균은 `78.469%`다. latency ratio는 `1.832x / 1.368x / 1.232x / 1.014x / 1.005x / 0.983x`, 산술평균은 `1.239x`다. 6개 size와 30개 result line이 모두 complete이며 .NET request/reply aggregate 기준을 충족해 최종 상태는 `통과`다. 추가 hotpath·POSDDD 구조 변경은 채택하지 않았고 public contract·ownership·error semantics는 변경하지 않았다.
+
+### .NET Multi MULTI_DEALER_DEALER/tcp
+
+조건: Core `v0.10.1` release package, Release, `tcp`, clients `100`, duration `1s`, runs `1`, server/client I/O threads `4/4`, auto-HWM, connect-ready timeout `10000ms`, monitor-HWM `4096000`. C와 .NET의 stop-token cleanup 경계가 동일한 상태에서 6개 size와 30개 result line을 모두 complete로 측정했다.
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 2759596 / 1510617 / 726799 / 371826 / 95081 / 52851 | 0.181 / 0.531 / 404.765 / 297.811 / 204.628 / 290.186 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_182810_dotnet-multi-dealer-dealer-tcp-paired-c1.txt` |
+| .NET baseline | 1142885 / 1013355 / 900652 / 285299 / 78073 / 41642 | 3.919 / 0.337 / 3.524 / 378.780 / 190.741 / 321.269 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_184232_dotnet-multi-dealer-dealer-tcp-paired-parity-final.txt` |
+| .NET own after `Message`·단일 part buffer 경계 inlining | 1144046 / 1062310 / 871859 / 281899 / 87539 / 45522 | 1.590 / 0.714 / 3.893 / 369.523 / 195.066 / 289.593 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_184721_dotnet-multi-dealer-dealer-tcp-own-after-inline.txt` |
+| .NET Sol guard inlining A/B | 1163151 / 1081574 / 876890 / 271899 / 89598 / 44627 | 1.944 / 0.386 / 3.680 / 391.555 / 182.160 / 312.482 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_184914_dotnet-multi-dealer-dealer-tcp-sol-after-guard-inline.txt` |
+
+baseline throughput ratio는 `41.415% / 67.082% / 123.920% / 76.729% / 82.112% / 78.791%`, 산술평균은 `78.342%`이며 평균 latency ratio는 `21.652x / 0.635x / 0.009x / 1.272x / 0.932x / 1.107x`, 산술평균은 `4.268x`다. 자체 after ratio는 `41.457% / 70.323% / 119.959% / 75.815% / 92.068% / 86.133%`, 산술평균은 `80.959%`이며 평균 latency ratio는 `8.785x / 1.345x / 0.010x / 1.241x / 0.953x / 0.998x`, 산술평균은 `2.222x`다. Sol guard inlining A/B는 throughput 산술평균 `81.033%`로 자체 after 대비 `+0.074%p`에 그쳤고 latency 산술평균은 `2.460x`로 악화되어 제거했다. throughput aggregate 기준 `85%`에 미달하므로 최종 상태는 `보류`다.
+
+POSDDD 평가: 단일/2-part와 multipart 표현의 변경 지식을 내부 `OperationMessageBuffer`가 소유하고 호출부와 public contract에는 노출하지 않는다. 기존 ownership·error semantics·public interface를 유지하면서 throughput과 latency aggregate가 모두 개선된 자체 후보를 채택했다. 별도 구조 변경 후보는 추가 복잡성 대비 분명한 이득이 없어 만들지 않았다. build는 0 warning/error, contract test는 `149 passed / 0 failed / 0 skipped`다.
