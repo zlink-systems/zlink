@@ -1269,7 +1269,7 @@ transport 상태를 판정한다.
 ### 9.7 Python
 
 - perf 경로: `bindings/python/perf`
-- Single 상태: `진행 (PAIR·PUBSUB·DEALER_DEALER·DEALER_ROUTER/tcp 통과)`
+- Single 상태: `진행 (5개 tcp pattern 통과)`
 - Multi 상태: `미측정`
 - 다음 작업: 다음 transport·pattern을 C와 순차 paired 측정한다.
 
@@ -1281,7 +1281,7 @@ transport 상태를 판정한다.
 | `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_DEALER` | 5.141% | 10.641% | 19.637% | 87.558% | 83.146% | 55.828% | 산술평균 43.658%, latency 산술평균 0.851x, 단순 one-way 최소 기준 35% 통과. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_010946_python-dealer-dealer-tcp-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_011003_python-dealer-dealer-tcp-baseline.txt` |
 | `tcp` | `DEALER_ROUTER` | 5.016% | 9.437% | 15.975% | 81.605% | 79.304% | 54.424% | 산술평균 40.960%, latency 산술평균 0.805x, routed one-way 최소 기준 33% 통과. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_011554_python-dealer-router-tcp-router-owner-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_011614_python-dealer-router-tcp-router-owner-after.txt` |
-| `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `ROUTER_ROUTER` | 5.252% | 9.423% | 16.473% | 99.287% | 76.013% | 54.678% | 산술평균 43.521%, latency 산술평균 0.896x, routed one-way 최소 기준 33% 통과. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_011732_python-router-router-tcp-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_011749_python-router-router-tcp-baseline.txt` |
 | `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1568,7 +1568,7 @@ transport 상태를 판정한다.
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 5 | Go | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 6 | Rust | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
-| 7 | Python | 진행·PAIR·PUBSUB·DEALER_DEALER·DEALER_ROUTER/tcp 통과 | 미측정 | 다음 transport·pattern의 paired 측정을 진행한다. |
+| 7 | Python | 진행·5개 tcp pattern 통과 | 미측정 | 다음 transport·pattern의 paired 측정을 진행한다. |
 
 ## 11. 측정 기록과 결과
 
@@ -1576,6 +1576,7 @@ transport 상태를 판정한다.
 
 | 날짜 | 언어 | 대상 | pair tag | size별 throughput ratio | size 중앙값 | 판정 | report |
 |------|------|------|----------|-------------------------|------------|------|--------|
+| 2026-08-11 | Python | Single / ROUTER_ROUTER / tcp / 64·256·1024·65536·131072·262144B | `python-router-router-tcp-baseline` | 5.252%, 9.423%, 16.473%, 99.287%, 76.013%, 54.678% | 43.521% (산술평균), latency 0.896x | 통과·native routed receive owner bridge 적용 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_011732_python-router-router-tcp-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_011749_python-router-router-tcp-baseline.txt` |
 | 2026-08-11 | Python | Single / DEALER_ROUTER / tcp / 64·256·1024·65536·131072·262144B | `python-dealer-router-tcp-router-owner-after` | 5.016%, 9.437%, 15.975%, 81.605%, 79.304%, 54.424% | 40.960% (산술평균), latency 0.805x | 통과·native router receive owner bridge 유지 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_011554_python-dealer-router-tcp-router-owner-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_011614_python-dealer-router-tcp-router-owner-after.txt` |
 | 2026-08-11 | Python | Single / DEALER_DEALER / tcp / 64·256·1024·65536·131072·262144B | `python-dealer-dealer-tcp-baseline` | 5.141%, 10.641%, 19.637%, 87.558%, 83.146%, 55.828% | 43.658% (산술평균), latency 0.851x | 통과·shared simple socket 경로의 추가 후보 NO-GO | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_010946_python-dealer-dealer-tcp-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_011003_python-dealer-dealer-tcp-baseline.txt` |
 | 2026-08-11 | Python | Single / PUBSUB / tcp / 64·256·1024·65536·131072·262144B | `python-pubsub-tcp-publisher-op-after` | 7.895%, 13.547%, 20.143%, 96.214%, 85.896%, 100.402% | 54.016% (산술평균), latency 0.575x | 통과·native publisher factory dispatch 최적화 유지 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_011037_python-pubsub-tcp-publisher-op-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_011110_python-pubsub-tcp-publisher-op-after.txt` |
