@@ -941,3 +941,12 @@ final throughput ratio는 `5.541% / 10.433% / 18.816% / 91.453% / 93.034% / 87.2
 | Python final | 121.183 / 131.444 / 118.667 / 36.950 / 21.791 / 13.484 | 0.164 / 0.166 / 0.188 / 1.364 / 7.148 / 16.532 | `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_011110_python-pubsub-tcp-publisher-op-after.txt` |
 
 final throughput ratio는 `7.895% / 13.547% / 20.143% / 96.214% / 85.896% / 100.402%`, 산술평균 `54.016%`이며 평균 latency ratio 산술평균은 `0.575x`다. 단순 one-way 최소 기준 `35%`를 통과한다. baseline throughput ratio 산술평균은 `49.055%`였고, final은 이를 초과한다.
+
+### Python Single DEALER_DEALER/tcp
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 2519.274 / 1245.609 / 647.889 / 38.928 / 23.716 / 14.679 | 2.453 / 0.230 / 0.624 / 5.223 / 8.613 / 14.031 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_010946_python-dealer-dealer-tcp-paired-c.txt` |
+| Python final | 129.526 / 132.554 / 127.227 / 34.084 / 19.719 / 8.195 | 0.126 / 0.142 / 0.148 / 5.358 / 10.561 / 27.318 | `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_011003_python-dealer-dealer-tcp-baseline.txt` |
+
+throughput ratio는 `5.141% / 10.641% / 19.637% / 87.558% / 83.146% / 55.828%`, 산술평균 `43.658%`이며 평균 latency ratio 산술평균은 `0.851x`다. 단순 one-way 최소 기준 `35%`를 통과한다.
