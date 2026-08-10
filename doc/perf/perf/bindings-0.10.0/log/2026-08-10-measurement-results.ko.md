@@ -384,3 +384,12 @@ throughput ratio는 `89.870% / 71.609% / 65.889% / 68.071% / 79.430% / 75.978%`,
 | .NET | 1401362 / 1064182 / 1034631 / 148685 / 178865 / 68888 | 0.125 / 0.282 / 0.323 / 0.020 / 0.013 / 0.025 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_165237_dotnet-dealer-dealer-inproc-paired-before.txt` |
 
 throughput ratio는 `59.456% / 59.274% / 54.638% / 30.368% / 95.998% / 81.637%`, 산술평균은 `63.562%`다. latency ratio는 `1.667x / 1.720x / 1.794x / 2.222x / 1.083x / 1.250x`, 산술평균은 `1.623x`다. .NET inproc 단순 one-way aggregate 기준을 충족해 통과로 판정한다. 추가 hotpath 변경 없이 다음 대상은 `.NET Single DEALER_ROUTER/inproc`다.
+
+### .NET Single DEALER_ROUTER/inproc
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 2221583 / 1699994 / 1966884 / 501256 / 196334 / 85813 | 0.085 / 0.183 / 0.180 / 0.006 / 0.012 / 0.020 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_165429_dotnet-dealer-router-inproc-paired-c1.txt` |
+| .NET | 1342474 / 1102788 / 1097378 / 309148 / 130588 / 66330 | 0.144 / 0.280 / 0.324 / 0.017 / 0.024 / 0.029 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_165440_dotnet-dealer-router-inproc-paired-before.txt` |
+
+throughput ratio는 `60.429% / 64.870% / 55.793% / 61.675% / 66.513% / 77.296%`, 산술평균은 `64.429%`다. latency ratio는 `1.694x / 1.530x / 1.800x / 2.833x / 2.000x / 1.450x`, 산술평균은 `1.885x`다. .NET inproc routed one-way aggregate 기준을 충족해 통과로 판정한다. 추가 hotpath 변경 없이 다음 대상은 `.NET Single DEALER_ROUTER_REQREP/inproc`다.
