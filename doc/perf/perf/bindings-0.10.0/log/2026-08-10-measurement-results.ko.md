@@ -728,3 +728,15 @@ baseline throughput ratio는 `70.109% / 61.554% / 70.641% / 99.843%`, 산술평�
 | .NET 자체 StreamSendOperation 후보(원복) | 81096 / 96343 / 76268 / 7000 | 85.822 / 73.094 / 94.565 / 2431.833 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_221651_dotnet-multi-stream-wss-own-stream-submit-inline-7000.txt` |
 
 baseline throughput ratio는 `68.478% / 92.845% / 87.305% / 100.000%`, 산술평균은 `87.157%`이며 평균 latency ratio는 `1.487x / 1.106x / 1.173x / 0.808x`, 산술평균은 `1.143x`다. 자체 StreamSendOperation nullable routing-id 제거·AggressiveInlining 후보 ratio는 `59.701% / 107.426% / 72.021% / 100.000%`, 산술평균 `84.787%`, 평균 latency ratio `1.671x / 0.959x / 1.450x / 0.953x`, 산술평균 `1.258x`로 baseline보다 악화되어 원복했다. Sol review는 native routing-id direct 변환·기존 Message pool·lazy pending을 유지하고, packet framing copy는 C wire 의미상 필요하며 public builder 제거는 ownership·stale-reference 경계를 위반하므로 추가 후보 no-go로 판정했다. 최종 aggregate가 simple one-way 목표 `85%`를 충족해 `통과`다. public contract·ownership·error semantics는 변경하지 않았다. build `0 warning / 0 error`, contract test `149 passed / 0 failed / 0 skipped`다.
+
+### .NET Multi MULTI_STREAM/tls
+
+조건: Core `v0.10.1` release package, Release, `tls`, clients `7000`, duration `1s`, runs `1`, msg sizes `64/256/1024/65536B`, connect concurrency `1024`, connect-ready timeout `10000ms`, monitor-HWM `4096000`, auto-HWM `balanced`, server/client I/O threads `4/4`. C와 .NET report 모두 4개 size와 20개 result line이 complete다.
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 170040 / 124963 / 121079 / 7859 | 41.507 / 55.063 / 57.531 / 1051.875 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_222055_dotnet-multi-stream-tls-paired-c-7000.txt` |
+| .NET baseline | 133840 / 123314 / 127770 / 7009 | 53.206 / 57.214 / 55.580 / 1347.747 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_222326_dotnet-multi-stream-tls-paired-baseline-7000.txt` |
+| .NET own dead `StreamSendOperation` 제거 | 117052 / 108696 / 97635 / 8323 | 60.661 / 64.693 / 71.649 / 987.388 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_222621_dotnet-multi-stream-tls-own-dead-stream-op-7000.txt` |
+
+baseline throughput ratio는 `78.711% / 98.680% / 105.526% / 89.184%`, 산술평균은 `93.025%`이며 평균 latency ratio는 `1.282x / 1.039x / 0.966x / 1.281x`, 산술평균은 `1.142x`다. dead `StreamSendOperation` 제거 후 own ratio는 `68.838% / 86.983% / 80.637% / 105.904%`, 산술평균 `85.590%`, 평균 latency ratio `1.461x / 1.175x / 1.245x / 0.939x`, 산술평균 `1.205x`다. 실제 STREAM send 경로가 `RoutedSendOperation` 하나를 사용하고 삭제 대상에 생성·참조가 없으므로, 이 변경은 성능 후보가 아닌 POSDDD 구조 정리로 채택했다. Sol review는 public contract·builder lifetime·ownership·error semantics 영향이 없음을 확인하고 TLS 암호화·framing 비용 외 추가 contract-safe hotpath 후보를 no-go로 판정했다. 최종 aggregate는 simple one-way 목표 `85%`를 충족해 `통과`다. public contract·ownership·error semantics는 변경하지 않았다. build `0 warning / 0 error`, contract test `149 passed / 0 failed / 0 skipped`다.

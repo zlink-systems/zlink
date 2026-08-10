@@ -160,55 +160,6 @@ internal sealed class RoutedSendOperation : SendOperation, SendSubmitOperation
     }
 }
 
-internal sealed class StreamSendOperation : SendOperation, SendSubmitOperation
-{
-    private readonly RoutingId? _routingId;
-    private readonly StreamSocket _socket;
-    private SendFlags _flags;
-    private OperationMessageBuffer _parts;
-    private OperationSubmissionGuard _submission;
-
-    internal StreamSendOperation(StreamSocket socket, RoutingId routingId)
-    {
-        _socket = socket;
-        _routingId = routingId;
-    }
-
-    public SendSubmitOperation Message(Message message)
-    {
-        EnsureNotSubmitted();
-        _parts.Add(message);
-        return this;
-    }
-
-    public SendSubmitOperation Flags(SendFlags flags)
-    {
-        EnsureNotSubmitted();
-        _flags = flags;
-        return this;
-    }
-
-    public bool Submit()
-    {
-        EnsureReady();
-        _submission.MarkSubmittedAfterValidation();
-        return _parts.IsSingle
-            ? _socket.SendRoutedCore(_routingId!.Value, _parts.Single, _flags)
-            : _socket.SendRoutedCore(_routingId!.Value, _parts.Parts, _flags);
-    }
-
-    private void EnsureReady()
-    {
-        EnsureNotSubmitted();
-        _parts.EnsureNotEmpty();
-    }
-
-    private void EnsureNotSubmitted()
-    {
-        _submission.EnsureNotSubmitted();
-    }
-}
-
 internal sealed class ReceivedSendOperationImpl : SendOperation,
     SendSubmitOperation
 {
