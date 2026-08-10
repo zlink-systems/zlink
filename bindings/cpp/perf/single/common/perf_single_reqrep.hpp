@@ -94,7 +94,8 @@ inline bool run_reqrep_pattern (const reqrep_config_t &config_,
         || !setup_connected_pair (server.sock (), client.sock (), transport_,
                                   lib_name_ + "_" + config_.pattern))
         return false;
-    if (!complete_router_router_handshake (server.sock (), client.sock (), server_rid))
+    if (config_.routed_request
+        && !complete_router_router_handshake (server.sock (), client.sock (), server_rid))
         return false;
 
     const size_t payload_size = std::max<size_t> (msg_size_, perf_single_metric::header_size ());
