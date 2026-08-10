@@ -366,3 +366,12 @@ throughput ratio는 `59.889% / 68.648% / 80.263% / 99.051% / 94.444% / 97.042%`,
 | .NET own after | 1942561 / 1005103 / 924283 / 110082 / 81021 / 66643 | 0.023 / 0.050 / 0.052 / 0.024 / 0.026 / 0.026 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_164513_dotnet-pair-inproc-own-after-epoch.txt` |
 
 before throughput ratio는 `62.037% / 63.274% / 60.016% / 22.223% / 84.666% / 74.587%`, 산술평균은 `61.134%`다. before latency ratio는 `7.923x / 1.265x / 1.349x / 4.333x / 1.333x / 1.421x`, 산술평균은 `2.937x`다. 자체 Epoch nanosecond fast path after throughput ratio는 `70.962% / 54.024% / 46.666% / 23.155% / 44.671% / 77.750%`, 산술평균은 `52.871%`이고 latency ratio는 `1.769x / 0.301x / 0.302x / 4.000x / 2.167x / 1.368x`, 산술평균은 `1.651x`다. throughput aggregate가 악화되어 후보를 제거하고 before 측정값을 최종값으로 채택한다. .NET inproc 단순 one-way aggregate 기준으로 통과한다. 추가 contract-safe hotpath 후보는 no-go다. 다음 대상은 `.NET Single PUBSUB/inproc`다.
+
+### .NET Single PUBSUB/inproc
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 1346308 / 1198314 / 1201421 / 433968 / 183320 / 83774 | 0.018 / 0.047 / 0.107 / 0.007 / 0.012 / 0.021 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_164932_dotnet-pubsub-inproc-paired-c1.txt` |
+| .NET | 1209927 / 858100 / 791610 / 295406 / 145611 / 63650 | 0.034 / 0.176 / 0.133 / 0.011 / 0.016 / 0.027 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_164952_dotnet-pubsub-inproc-paired-before.txt` |
+
+throughput ratio는 `89.870% / 71.609% / 65.889% / 68.071% / 79.430% / 75.978%`, 산술평균은 `75.141%`다. latency ratio는 `1.889x / 3.745x / 1.243x / 1.571x / 1.333x / 1.286x`, 산술평균은 `1.845x`다. .NET inproc 단순 one-way aggregate 기준을 충족해 통과로 판정한다. 추가 hotpath 변경 없이 다음 대상은 `.NET Single DEALER_DEALER/inproc`다.
