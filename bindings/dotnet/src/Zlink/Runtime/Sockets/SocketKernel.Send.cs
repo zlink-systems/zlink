@@ -13,6 +13,7 @@ internal sealed partial class SocketKernel : IDisposable
         SendMessageUnchecked(message, flags);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void SendMessageUnchecked(Message message,
         SendFlags flags = SendFlags.None)
     {
