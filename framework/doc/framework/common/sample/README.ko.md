@@ -213,9 +213,8 @@ owner 변경 직후 이전 node에 도착한 Actor·Spot message를 current owne
   조회하지 않는다.
 - `MessageFollowDuration` 기본값은 30초이고 0이면 relay를 사용하지 않는다. Sample이 더 짧은
   값을 설정하면 실제 설정값과 만료 시각을 evidence에 남긴다.
-- Relay는 최대 8번, 이동 하나당 message 1,024개 이내에서만 동작하며 저장 크기 상한은 없다.
-  Route missing·기간 만료·loop·hop 초과는 `Unavailable`, generation mismatch는
-  `InvalidOperation`, message 한도 초과는 `CapacityExceeded`인지 각각 확인한다.
+- Relay는 최대 8번까지 동작하며 보관량에는 상한이 없다. Route missing·기간 만료·loop·hop
+  초과는 `Unavailable`, generation mismatch는 `InvalidOperation`인지 각각 확인한다.
 - Relay 실패나 target admission 뒤 실행 여부가 불명확한 failure를 fresh owner에게 자동
   재제출하지 않는다. 실패한 operation은 terminal로 끝나며 다음 call만 fresh resolve한다.
 - Message Follow 기간이 끝난 뒤 시작한 새 call은 Location Store에서 current owner를 찾으며

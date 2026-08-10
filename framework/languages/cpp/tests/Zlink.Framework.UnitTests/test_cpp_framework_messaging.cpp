@@ -177,41 +177,22 @@ int main ()
                  != 0x12345678) {
             return 151;
         }
-        auto oversized_count =
+        //  The handoff backlog has no record-count or stored-size bound, so a
+        //  large backlog round-trips instead of being rejected.
+        auto large_backlog =
           zlink::framework::detail::spot_actor_commit_route_request_t{};
-        oversized_count.handoff_backlog.resize (
-          zlink::framework::runtime::protocol::messageFollowMessages + 1);
-        for (auto &packet : oversized_count.handoff_backlog)
+        large_backlog.handoff_backlog.resize (2048);
+        for (auto &packet : large_backlog.handoff_backlog)
             packet.packet_name_value = "handoff";
-        try {
-            (void) serializers
-              .get<zlink::framework::detail::spot_actor_commit_route_request_t> ()
-              .deserialize (
-                serializers
-                  .get<zlink::framework::detail::spot_actor_commit_route_request_t> ()
-                  .serialize (oversized_count));
+        const auto round_tripped =
+          serializers
+            .get<zlink::framework::detail::spot_actor_commit_route_request_t> ()
+            .deserialize (
+              serializers
+                .get<zlink::framework::detail::spot_actor_commit_route_request_t> ()
+                .serialize (large_backlog));
+        if (round_tripped.handoff_backlog.size () != 2048) {
             return 152;
-        }
-        catch (const std::exception &) {
-        }
-
-        auto oversized_bytes =
-          zlink::framework::detail::spot_actor_commit_route_request_t{};
-        oversized_bytes.handoff_backlog.push_back (
-          zlink::framework::detail::spot_actor_handoff_packet_t{
-            .packet_name_value = "handoff",
-            .payload = std::vector<std::uint8_t> (
-              zlink::framework::runtime::protocol::messageFollowBytes + 1)});
-        try {
-            (void) serializers
-              .get<zlink::framework::detail::spot_actor_commit_route_request_t> ()
-              .deserialize (
-                serializers
-                  .get<zlink::framework::detail::spot_actor_commit_route_request_t> ()
-                  .serialize (oversized_bytes));
-            return 153;
-        }
-        catch (const std::exception &) {
         }
     }
     {

@@ -34,7 +34,6 @@ import {
 
 export const DEFAULT_MESSAGE_FOLLOW_DURATION_MS = 30_000;
 const MAX_MESSAGE_FOLLOW_HOPS = 8;
-const MAX_MESSAGE_FOLLOW_MESSAGES = 1024;
 const RELOCATION_REPLY_RETENTION_MS = 24 * 60 * 60 * 1_000;
 
 export interface ZLinkActorHandoffPacket {
@@ -421,7 +420,6 @@ export class ZLinkActorHandoffCoordinator {
         context,
         messageFollowOrigin
       );
-      this.admitBounded(handoff.pending.length);
       handoff.pendingBytes += packetBytes(packet);
       this.options.onMarker?.('handoff_backlog', actorId, packet.index);
       if (returnResponse) {
@@ -986,15 +984,6 @@ export class ZLinkActorHandoffCoordinator {
       return duplicate.result;
     }
     const bytes = packetBytes(packet);
-    try {
-      this.admitBounded(entry.queuedMessages);
-      if (entry.operations.size >= MAX_MESSAGE_FOLLOW_MESSAGES) {
-        throw messageFollowCapacityExceeded(actorId);
-      }
-    } catch (error) {
-      this.options.onMarker?.('message_follow_rejected', actorId);
-      throw error;
-    }
     if (context.hopCount >= MAX_MESSAGE_FOLLOW_HOPS) {
       this.options.onMarker?.('message_follow_rejected', actorId);
       return Promise.reject(actorLocationStale(actorId));
@@ -1025,12 +1014,6 @@ export class ZLinkActorHandoffCoordinator {
       }
     });
     return result;
-  }
-
-  private admitBounded(messageCount: number): void {
-    if (messageCount >= MAX_MESSAGE_FOLLOW_MESSAGES) {
-      throw messageFollowCapacityExceeded('message-follow-bound');
-    }
   }
 
   private async relayMessageFollow(
@@ -1332,13 +1315,6 @@ function actorGenerationStale(actorId: string): ZLinkFrameworkException {
   return createInternalFrameworkException(
     ZLinkFrameworkInternalErrorKind.ActorGenerationStale,
     `Actor route '${actorId}' carries a different object generation.`
-  );
-}
-
-function messageFollowCapacityExceeded(actorId: string): ZLinkFrameworkException {
-  return createInternalFrameworkException(
-    ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
-    `Actor route '${actorId}' exhausted the Message Follow capacity.`
   );
 }
 

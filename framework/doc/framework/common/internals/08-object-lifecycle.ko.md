@@ -247,7 +247,7 @@ lane별 작업 건수와 byte를 함께 제한한다. 한쪽의 숫자를 다른
 두고 각 lane에 count·byte reservation을 둔다. application 기본값은 4,096건·64 MiB,
 lifecycle 기본값은 256건·4 MiB이며, accepted application work는 payload와 작업당
 고정 비용을 함께 예약한다. reservation은 handler terminal completion에서 반납한다.
-relocation hold는 별도로 1,024건 상한을 사용하며 byte 상한은 없다.
+relocation hold에는 건수·byte 상한을 두지 않는다.
 
 따라서 process HWM이 남아 있어도 Spot queue가 먼저 포화될 수 있고, 반대로 Spot queue에
 여유가 있어도 process inbound admission이 먼저 멈출 수 있다. 두 결과를 같은
@@ -293,7 +293,7 @@ process 단위 회계가 이미 byte로 되어 있다(§6 첫 문단). 같은 �
 대기열이 아닌 두 자리는 그 표에 없으며 각각 `CapacityExceeded`다 — **worker scheduler
 대기열**과 **배치 수용량**이다. 뒤의 것은 대기열 포화가 아니라 admission 판정이다.
 
-이동 중 보류 한도는 건수만 쓴다(1,024건). 정식 spec이 정한 값이므로 그대로 따른다
+이동 중 보류에는 건수·byte 상한이 없다. 정식 spec이 정한 규칙이므로 그대로 따른다
 ([Host Relocate와 Shutdown 「9. 대기 중인 message, timer와 session을 옮긴다」](../spec/28-graceful-drain-handoff.ko.md#9-대기-중인-message-timer와-session을-옮긴다)).
 
 ## 7. 확인할 결과

@@ -101,22 +101,13 @@ std::vector<std::uint8_t> decode_base64_field (const nlohmann::json &json,
 
 void validate_handoff_backlog_json (const nlohmann::json &backlog)
 {
-    using runtime::protocol::messageFollowBytes;
-    using runtime::protocol::messageFollowMessages;
-    if (!backlog.is_array () || backlog.size () > messageFollowMessages) {
+    if (!backlog.is_array ()) {
         throw std::invalid_argument (
-          "Actor handoff backlog exceeds the message limit");
+          "Actor handoff backlog must be an array");
     }
 
-    std::size_t bytes = 0;
-    const auto add_bytes = [&bytes] (std::size_t value) {
-        if (value > messageFollowBytes
-            || bytes > messageFollowBytes - value) {
-            throw std::invalid_argument (
-              "Actor handoff backlog exceeds the byte limit");
-        }
-        bytes += value;
-    };
+    //  The handoff backlog has no stored-size bound.
+    const auto add_bytes = [] (std::size_t) { };
     for (const auto &item : backlog) {
         if (!item.is_object ()) {
             throw std::invalid_argument (

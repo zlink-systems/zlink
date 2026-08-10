@@ -231,9 +231,9 @@ change to the current owner. The sample's verification confirms each of the foll
   Location Store during Message Follow.
 - The `MessageFollowDuration` default is 30 seconds, and 0 means relay isn't used. If a sample sets
   a shorter value, it leaves the actual configured value and expiry time as evidence.
-- Relay works only up to 8 hops, and within 1,024 messages per move, with no stored-size cap.
-  Confirm each of: route-missing/period-expired/loop/hop-exceeded is `Unavailable`, generation
-  mismatch is `InvalidOperation`, and the message limit exceeded is `CapacityExceeded`.
+- Relay works only up to 8 hops, with no bound on the retained amount. Confirm each of:
+  route-missing/period-expired/loop/hop-exceeded is `Unavailable` and generation mismatch is
+  `InvalidOperation`.
 - A failure whose execution status is ambiguous after a relay failure or target admission isn't
   automatically resubmitted to a fresh owner. A failed operation ends in a terminal, and only the
   next call resolves fresh.

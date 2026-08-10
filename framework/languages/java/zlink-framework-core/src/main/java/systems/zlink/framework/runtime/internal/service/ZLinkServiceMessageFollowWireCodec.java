@@ -21,7 +21,6 @@ import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
  */
 public final class ZLinkServiceMessageFollowWireCodec {
     public static final int MAX_HOP_COUNT = 8;
-    public static final long MAX_QUEUED_MESSAGES = 1024;
     //  Frame guard, not a queue bound: the Message Follow queue has no stored
     //  size cap, but a single encoded record still must not be unbounded.
     public static final long MAX_ENCODED_BYTES = 16L * 1024L * 1024L;
@@ -299,7 +298,6 @@ public final class ZLinkServiceMessageFollowWireCodec {
                 || hopCount < 1
                 || hopCount > MAX_HOP_COUNT
                 || queuedMessages < 0
-                || queuedMessages > MAX_QUEUED_MESSAGES
                 || queuedBytes < 0
                 || (originalOperationHigh == 0 && originalOperationLow == 0)) {
                 throw protocol("Message Follow notice contains an invalid fence or bound");

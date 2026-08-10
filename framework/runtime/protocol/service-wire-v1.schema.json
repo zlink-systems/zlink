@@ -138,10 +138,6 @@
       "value": 8
     },
     {
-      "name": "messageFollowMessages",
-      "value": 1024
-    },
-    {
       "name": "messageFollowBytes",
       "value": 16777216
     },
@@ -1204,9 +1200,6 @@
       "aggregateId": "nonzero-128-bit",
       "messageFollowHopCountMaximum": {
         "$bound": "messageFollowHopCount"
-      },
-      "messageFollowQueuedMessagesMaximum": {
-        "$bound": "messageFollowMessages"
       },
       "routingIdEntropyBits": 128,
       "routingIdCollisionAttemptsMaximum": {
@@ -4254,10 +4247,7 @@
         {
           "name": "queuedMessages",
           "$ref": "u32",
-          "minimum": 0,
-          "maximum": {
-            "$bound": "messageFollowMessages"
-          }
+          "minimum": 0
         },
         {
           "name": "queuedBytes",

@@ -133,8 +133,6 @@ struct actor_move_completion_t
     bool completed = false;
 };
 
-inline constexpr std::size_t actor_handoff_backlog_max_messages = 1024;
-inline constexpr std::size_t actor_handoff_backlog_max_bytes = 16u * 1024u * 1024u;
 
 // Deferred-commit completion-loss convergence: the pace of the durable-state
 // re-poll, and how long a converged commit stays visible so a late

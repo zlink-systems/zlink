@@ -30,7 +30,6 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 /** Owns the transfer-only backlog and bounded source-retirement state. */
 final class ZLinkActorTransferHandoff implements AutoCloseable {
-    static final int MAX_MESSAGE_FOLLOW_MESSAGES = 1024;
     private final ScheduledExecutorService retirementsExecutor =
         Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "zlink-actor-transfer-retirement");
@@ -72,13 +71,6 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
                 return null;
             }
             long bytes = packet.retainedBytes();
-            if (backlog.packets.size() >= MAX_MESSAGE_FOLLOW_MESSAGES) {
-                packet.fail(new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.UNAVAILABLE,
-                    "Actor relocation backlog exceeds 1024 messages"));
-                packet.close();
-                return packet;
-            }
             backlog.packets.add(packet);
             backlog.bytes += bytes;
         }
@@ -418,7 +410,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         }
 
         private synchronized boolean tryAcquire(long bytes) {
-            if (bytes < 0 || pendingMessages >= MAX_MESSAGE_FOLLOW_MESSAGES) {
+            if (bytes < 0) {
                 return false;
             }
             pendingMessages++;

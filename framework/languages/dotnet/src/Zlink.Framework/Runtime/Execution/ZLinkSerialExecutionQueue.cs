@@ -11,8 +11,6 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     internal const long WorkItemFixedCostBytes = 256;
     internal const int OwnerTimeSliceMilliseconds = 10;
     internal const int LifecycleTurnLimit = 32;
-    internal const int RelocationHoldMessageLimit = 1_024;
-    internal const long RelocationHoldByteLimit = 16L * 1024 * 1024;
     private const int RelocationJournalRecordHeaderBytes =
         sizeof(ulong) + sizeof(int);
     private readonly int _applicationCapacity;
@@ -376,11 +374,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             if (_relocated
                 || _relocation?.IngressFrozen == true
                 || (_relocation is { } relocation
-                    && (relocation.Held.Count
-                            >= RelocationHoldMessageLimit
-                        || EncodedRelocationRecordBytes(payloadLength)
-                            > RelocationHoldByteLimit
-                              - relocation.HeldBytes)))
+                    ))
             {
                 item = null!;
                 return ZLinkAcceptedWorkAdmission.RelocationMoving;

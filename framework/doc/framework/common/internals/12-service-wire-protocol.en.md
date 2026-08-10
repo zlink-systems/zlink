@@ -219,7 +219,7 @@ reply route ID.
 
 - The source and target routes must share the same object kind and object identity.
 - Each route carries the object generation, the target node RID and generation, the authority owner generation, and the owner lease generation; the receiver first confirms the source route's target node is a currently admitted peer.
-- Only a hop count of 1..8 and a queue count of 1,024 or fewer are allowed. The queue byte size has no cap.
+- Only a hop count of 1..8 is allowed. The queue count and queue byte size have no cap.
 - A record that points at a different object, or whose route fence doesn't match, ends as a protocol error before application dispatch.
 
 #### Suppressing duplicate notifications

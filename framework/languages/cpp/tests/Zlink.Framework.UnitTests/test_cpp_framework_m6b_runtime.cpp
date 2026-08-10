@@ -1340,30 +1340,20 @@ void verify_bounded_message_follow ()
     assert (!hop_bound
             && hop_bound.error_kind ()
                  == framework_error_kind_t::unavailable);
-    const auto byte_bound = coordinator.try_acquire_message_follow (
+    //  The Message Follow queue has no message-count or stored-size bound, so
+    //  an oversized payload and a large backlog are both acquired.
+    const auto oversized = coordinator.try_acquire_message_follow (
       "player:actor-message-follow", 7, 16u * 1024u * 1024u + 1u, 0,
       source_fence);
-    assert (!byte_bound
-            && byte_bound.error_kind ()
-                 == framework_error_kind_t::capacity_exceeded);
-    for (std::size_t index = 0; index != 1024; ++index) {
+    assert (oversized && oversized.value ());
+    coordinator.release_message_follow (
+      "player:actor-message-follow", source_fence, 16u * 1024u * 1024u + 1u);
+    for (std::size_t index = 0; index != 2048; ++index) {
         const auto acquired = coordinator.try_acquire_message_follow (
           "player:actor-message-follow", 7, 1, 0, source_fence);
         assert (acquired && acquired.value ());
     }
-    const auto message_bound = coordinator.try_acquire_message_follow (
-      "player:actor-message-follow", 7, 1, 0, source_fence);
-    assert (!message_bound
-            && message_bound.error_kind ()
-                 == framework_error_kind_t::capacity_exceeded);
-    coordinator.release_message_follow (
-      "player:actor-message-follow", source_fence, 1);
-    const auto after_release = coordinator.try_acquire_message_follow (
-      "player:actor-message-follow", 7, 1, 0, source_fence);
-    assert (after_release && after_release.value ());
-    coordinator.release_message_follow (
-      "player:actor-message-follow", source_fence, 1);
-    for (std::size_t index = 1; index != 1024; ++index)
+    for (std::size_t index = 0; index != 2048; ++index)
         coordinator.release_message_follow (
           "player:actor-message-follow", source_fence, 1);
 
@@ -1431,8 +1421,6 @@ void verify_actor_commit_terminal_is_replayable_until_deadline ()
 void verify_bounded_actor_handoff_backlog ()
 {
     using namespace zlink::framework;
-    using detail::actor_handoff_backlog_max_bytes;
-    using detail::actor_handoff_backlog_max_messages;
     using detail::handoff_append_result_t;
     using detail::handoff_packet_t;
 
@@ -1445,26 +1433,19 @@ void verify_bounded_actor_handoff_backlog ()
         packet.payload.resize (bytes);
         return packet;
     };
-    for (std::size_t index = 0; index != actor_handoff_backlog_max_messages; ++index) {
+    //  The backlog has no record-count or stored-size bound.
+    for (std::size_t index = 0; index != 2048; ++index) {
         assert (coordinator.try_append_backlog (actor_key, packet_with_payload (1))
                 == handoff_append_result_t::appended);
     }
-    assert (coordinator.try_append_backlog (actor_key, packet_with_payload (1))
-            == handoff_append_result_t::capacity_exceeded);
-    assert (coordinator.take_backlog (actor_key).size ()
-            == actor_handoff_backlog_max_messages);
+    assert (coordinator.take_backlog (actor_key).size () == 2048);
 
     assert (coordinator.try_append_backlog (
-              actor_key, packet_with_payload (actor_handoff_backlog_max_bytes + 1))
-            == handoff_append_result_t::capacity_exceeded);
-    assert (coordinator.try_append_backlog (
-              actor_key, packet_with_payload (actor_handoff_backlog_max_bytes / 2))
+              actor_key, packet_with_payload (64u * 1024u * 1024u))
             == handoff_append_result_t::appended);
     assert (coordinator.try_append_backlog (
-              actor_key, packet_with_payload (actor_handoff_backlog_max_bytes / 2))
+              actor_key, packet_with_payload (64u * 1024u * 1024u))
             == handoff_append_result_t::appended);
-    assert (coordinator.try_append_backlog (actor_key, packet_with_payload (1))
-            == handoff_append_result_t::capacity_exceeded);
     assert (coordinator.take_backlog (actor_key).size () == 2);
     assert (coordinator.complete_move (actor_key).has_value ());
 

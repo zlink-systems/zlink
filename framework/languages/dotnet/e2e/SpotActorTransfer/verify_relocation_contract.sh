@@ -49,7 +49,6 @@ known_gap_selectors=(
   MF-GEN
   MF-LOOP
   MF-HOP
-  MF-BOUND
 )
 
 for selector in "${implemented_selectors[@]}"; do

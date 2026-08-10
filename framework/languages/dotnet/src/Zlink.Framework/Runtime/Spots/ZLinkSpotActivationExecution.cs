@@ -1671,12 +1671,7 @@ internal abstract partial class ZLinkSpotActivation
         {
             if (Volatile.Read(ref _messageFollow) is null)
             {
-                if (!_holdIngressForMessageFollow
-                    || _messageFollowPending.Count
-                    >= ZLinkSerialExecutionQueue.RelocationHoldMessageLimit
-                    || encodedBytes
-                       > ZLinkSerialExecutionQueue.RelocationHoldByteLimit
-                                      - _messageFollowPendingBytes)
+                if (!_holdIngressForMessageFollow)
                     return false;
                 _messageFollowPending.Enqueue(
                     new PendingMessageFollowRoute(received, encodedBytes));

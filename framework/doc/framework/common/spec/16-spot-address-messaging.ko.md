@@ -383,10 +383,10 @@ physical route로 도착한 message를 current owner에 전달한다. Message Fo
 target AuthorityOwnerGeneration과 owner fence를 exact 검증한다. Target owner generation은 hop마다 증가하며
 최대 8 hops다.
 
-Message Follow route 하나의 대기열은 1024 messages 이하이며 저장 크기 상한은 없고
-negotiated message bound는 지킨다. Message Follow는 original operation ID, generation, payload와 reply route를
-보존한다. Route 없음·만료와 loop는 `Unavailable`, generation mismatch는 `InvalidOperation`, bound 초과는
-`CapacityExceeded`로 끝난다. Failed application operation을 Store에서 찾은 owner에게 다시
+Message Follow route 하나의 대기열에는 message 수와 저장 크기 어느 쪽에도 상한을 두지 않으며
+negotiated message bound는 지킨다. Message Follow는 original operation ID, generation, payload와
+reply route를 보존한다. Route 없음·만료와 loop는 `Unavailable`, generation mismatch는
+`InvalidOperation`으로 끝난다. Failed application operation을 Store에서 찾은 owner에게 다시
 제출하지 않으며 다음 call만 fresh resolve를 수행한다.
 
 이 generation 검사는 relocation route가 같은 incarnation에 속하는지 확인한다. Spot direct

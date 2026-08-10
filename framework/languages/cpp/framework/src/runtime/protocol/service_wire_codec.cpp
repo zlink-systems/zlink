@@ -975,8 +975,6 @@ encode_message_follow (const message_follow_notice_t &notice)
 {
     if (notice.hop_count == 0
         || notice.hop_count > messageFollowHopCount
-        || notice.queued_messages > messageFollowMessages
-        || notice.queued_bytes > messageFollowBytes
         || (notice.original_operation.high == 0
             && notice.original_operation.low == 0)
         || notice.source.index () != notice.target.index ()) {

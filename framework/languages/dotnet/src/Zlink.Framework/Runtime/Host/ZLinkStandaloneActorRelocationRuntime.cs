@@ -237,14 +237,11 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         initialPrepared.Relocation,
                         sealedSession,
                         registration.ApplicationVersion,
-                        checked((ulong)semanticSealRecords.Count
-                            + ZLinkBoundedIngressAdmission
-                                .SourceIngressHoldRecordCapacity),
+                        checked((ulong)semanticSealRecords.Count),
                         checked(initialEnvelope.Participants[0].AcceptedJobs
                                 .Aggregate(0UL, static (sum, job) =>
                                     checked(sum + (ulong)job.Payload.Length))
-                            + (ulong)ZLinkBoundedIngressAdmission
-                                .SourceIngressHoldByteCapacity),
+                            ),
                         checked((ulong)sourcePermit.ReservedPayloadBytes));
                 _ = await canonical.ReserveCanonicalRelocationAsync(
                         target.Rid,

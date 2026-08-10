@@ -51,9 +51,7 @@ been stopped for no reason at all.
 ## 2. Span ② — Holding And Order
 
 A message arriving after the block is held in a bounded slot. The
-bound is **1,024 items per move**, with no stored-size cap, and exceeding it ends a
-call waiting for a response in `Unavailable`, and one not waiting in a
-drop
+queue has no bound on item count or stored size
 ([Host Relocate And Shutdown 「9. Moving Pending Messages, Timers, And Sessions」](../spec/28-graceful-drain-handoff.en.md#9-moving-pending-messages-timers-and-sessions)).
 
 There's one rule for order — **restored prior work runs before the
@@ -90,7 +88,7 @@ its default active period is **30 seconds**
 |---|---|
 | Active period | 30 seconds by default. Per move |
 | Forwarding hops | Up to 8 chained forwards |
-| Forwarding volume | 1,024 items per move, no stored-size cap |
+| Forwarding volume | Unbounded |
 
 | Situation | Result the caller observes |
 |---|---|

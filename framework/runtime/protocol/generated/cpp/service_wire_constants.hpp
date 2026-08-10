@@ -190,7 +190,6 @@ inline constexpr std::uint64_t maintenanceAggregateParticipants = 1024ULL;
 inline constexpr std::uint64_t relocationResourceParticipants = 2048ULL;
 inline constexpr std::uint64_t maintenanceAggregateBytes = 1048576ULL;
 inline constexpr std::uint64_t messageFollowHopCount = 8ULL;
-inline constexpr std::uint64_t messageFollowMessages = 1024ULL;
 inline constexpr std::uint64_t messageFollowBytes = 16777216ULL;
 inline constexpr std::uint64_t routingIdCollisionAttempts = 8ULL;
 inline constexpr std::uint64_t nodeActiveCapacityDefault = 10000ULL;

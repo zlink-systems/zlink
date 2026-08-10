@@ -308,8 +308,8 @@ lifecycle as separate FIFO lanes, each with a count/byte reservation.
 The application default is 4,096 items/64 MiB, the lifecycle default
 is 256 items/4 MiB, and accepted application work reserves the payload
 plus a fixed per-work cost together. The reservation is returned at
-handler terminal completion. The relocation hold uses a separate
-1,024-item ceiling with no byte cap.
+handler terminal completion. The relocation hold has no item or byte
+ceiling.
 
 So the Spot queue can saturate first even when the process HWM has
 room left, and conversely, process inbound admission can stop first
@@ -369,8 +369,8 @@ Two non-queue spots aren't in that table and are each
 `CapacityExceeded` — the **worker scheduler queue** and **batch
 capacity.** The latter is an admission judgment, not queue saturation.
 
-The pending-during-a-move bound uses count only (1,024 items). This is
-a value the formal spec fixed, so it's
+The pending-during-a-move hold has no count or byte bound. This is
+a rule the formal spec fixed, so it's
 followed as-is
 ([Host Relocate And Shutdown 「9. Moving Pending Messages, Timers, And Sessions」](../spec/28-graceful-drain-handoff.en.md#9-moving-pending-messages-timers-and-sessions)).
 

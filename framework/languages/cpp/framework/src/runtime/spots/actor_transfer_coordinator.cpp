@@ -32,14 +32,12 @@ namespace
 
 std::size_t handoff_packet_bytes (const handoff_packet_t &packet) noexcept
 {
+    //  The backlog has no stored-size bound; the accounting only reports how
+    //  much a packet holds, saturating instead of overflowing.
     std::size_t bytes = 0;
     const auto add = [&bytes] (std::size_t value) {
-        if (bytes >= actor_handoff_backlog_max_bytes
-            || value > actor_handoff_backlog_max_bytes - bytes) {
-            bytes = actor_handoff_backlog_max_bytes + 1;
-        } else {
-            bytes += value;
-        }
+        constexpr auto ceiling = std::numeric_limits<std::size_t>::max ();
+        bytes = value > ceiling - bytes ? ceiling : bytes + value;
     };
     add (packet.packet_name.size ());
     add (packet.payload.size ());
@@ -217,11 +215,6 @@ handoff_append_result_t actor_transfer_coordinator_t::try_append_backlog (
     const auto current_bytes = _backlog_bytes.contains (actor_key)
                                   ? _backlog_bytes.at (actor_key)
                                   : std::size_t{0};
-    if (backlog_size >= actor_handoff_backlog_max_messages
-        || packet_bytes > actor_handoff_backlog_max_bytes
-        || current_bytes > actor_handoff_backlog_max_bytes - packet_bytes) {
-        return handoff_append_result_t::capacity_exceeded;
-    }
     auto &backlog = _backlogs[actor_key];
     backlog.push_back (std::move (packet));
     _backlog_bytes[actor_key] = current_bytes + packet_bytes;
@@ -328,10 +321,6 @@ actor_transfer_coordinator_t::try_acquire_message_follow (
   std::size_t hop_count,
   const runtime::protocol::actor_route_fence_t &source_fence)
 {
-    constexpr std::size_t max_messages =
-      zlink::framework::runtime::protocol::messageFollowMessages;
-    constexpr std::size_t max_bytes =
-      zlink::framework::runtime::protocol::messageFollowBytes;
     constexpr std::size_t max_hops =
       zlink::framework::runtime::protocol::messageFollowHopCount;
     std::lock_guard lock (_mutex);
@@ -363,13 +352,6 @@ actor_transfer_coordinator_t::try_acquire_message_follow (
         return result_t<std::optional<actor_message_follow_target_t>>::failure (
           framework_error_kind_t::unavailable,
           "Actor Message Follow hop bound was exceeded");
-    }
-    if (payload_bytes > max_bytes
-        || route->in_flight_messages >= max_messages
-        || route->in_flight_bytes > max_bytes - payload_bytes) {
-        return result_t<std::optional<actor_message_follow_target_t>>::failure (
-          framework_error_kind_t::capacity_exceeded,
-          "Actor Message Follow volume bound was exceeded");
     }
     ++route->in_flight_messages;
     route->in_flight_bytes += payload_bytes;

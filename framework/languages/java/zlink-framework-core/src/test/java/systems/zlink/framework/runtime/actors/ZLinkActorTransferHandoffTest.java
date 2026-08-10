@@ -205,36 +205,21 @@ final class ZLinkActorTransferHandoffTest {
         packet.close();
     }
 
+    //  The committed Message Follow route has no message-count or stored-size
+    //  bound, so a large backlog of oversized records is accepted.
     @Test
-    void committedMessageFollowRouteBoundsMessagesAndBytes() {
+    void committedMessageFollowRouteHasNoVolumeBound() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
         handoff.retain(
             "actor", ref("source", 7), ref("target", 7),
             Duration.ofMinutes(1), ignored -> { });
         List<CompletableFuture<Void>> pending = new ArrayList<>();
-        for (int index = 0;
-             index < ZLinkActorTransferHandoff.MAX_MESSAGE_FOLLOW_MESSAGES;
-             index++) {
+        for (int index = 0; index < 2048; index++) {
             CompletableFuture<Void> operation = new CompletableFuture<>();
             pending.add(operation);
-            handoff.follow("actor", 7, 1, () -> operation);
+            handoff.follow("actor", 7, 64L * 1024 * 1024, () -> operation);
         }
-
-        CompletionException messageLimit = assertThrows(CompletionException.class, () ->
-            handoff.follow(
-                    "actor", 7, 1,
-                    () -> CompletableFuture.completedFuture(null))
-                .toCompletableFuture().join());
-        assertEquals(
-            ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
-            ((ZLinkFrameworkException) messageLimit.getCause()).kind());
         pending.forEach(value -> value.complete(null));
-
-        //  The Message Follow queue has no stored-size bound, so a single
-        //  oversized record is admitted on its own.
-        CompletableFuture<Void> bytes = new CompletableFuture<>();
-        handoff.follow("actor", 7, 64L * 1024 * 1024, () -> bytes);
-        bytes.complete(null);
         handoff.close();
     }
 
@@ -273,33 +258,13 @@ final class ZLinkActorTransferHandoffTest {
     }
 
     @Test
-    void precommitBacklogRejectsTheMessageAfterItsPerTransferLimit() {
+    void precommitBacklogHasNoPerTransferLimit() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
         handoff.begin("actor");
-        for (int index = 0;
-             index < ZLinkActorTransferHandoff.MAX_MESSAGE_FOLLOW_MESSAGES;
-             index++) {
+        for (int index = 0; index < 2048; index++) {
             capture(handoff, "P" + index, Map.of());
         }
-        ZLinkActorHandoffPacket overflow;
-        try (Message payload = Message.from("overflow")) {
-            overflow = handoff.capture(
-                "actor",
-                new ZLinkStreamHeader("overflow", Map.of(), Optional.empty()),
-                payload,
-                null,
-                new byte[] {1});
-        }
-
-        CompletionException failure = assertThrows(
-            CompletionException.class,
-            () -> overflow.reply().toCompletableFuture().join());
-        assertEquals(
-            ZLinkFrameworkErrorKind.UNAVAILABLE,
-            ((ZLinkFrameworkException) failure.getCause()).kind());
-        assertEquals(
-            ZLinkActorTransferHandoff.MAX_MESSAGE_FOLLOW_MESSAGES,
-            handoff.pendingCount("actor"));
+        assertEquals(2048, handoff.pendingCount("actor"));
         handoff.close();
     }
 

@@ -58,7 +58,6 @@ export interface ServiceMailboxLimits {
   readonly infrastructureBytes: number;
 }
 
-const RELOCATION_HOLD_MESSAGE_LIMIT = 1024;
 
 /** Bounded level-triggered queues with one active application claim per owner. */
 export class ServiceMailbox {
@@ -101,9 +100,6 @@ export class ServiceMailbox {
       if (this.relocatedOwners.has(record.owner)) return false;
       const relocation = this.relocationSeals.get(record.owner);
       if (relocation !== undefined) {
-        if (relocation.held.length >= RELOCATION_HOLD_MESSAGE_LIMIT) {
-          return false;
-        }
         relocation.held.push(retainRecord(record));
         relocation.heldBytes += bytes;
         target.messages++;

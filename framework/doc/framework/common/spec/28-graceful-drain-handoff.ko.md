@@ -497,10 +497,8 @@ Dispatch 전환은 atomic해야 한다. 전환 전에 들어온 message는 tempo
 뒤 들어온 message는 실제 object queue로 바로 들어간다. 전환 중인 message가 두 queue에
 중복으로 들어가거나 어느 queue에도 들어가지 않는 상태는 허용하지 않는다.
 
-Relocation unit 하나의 temporary queue는 최대 1,024 record다. 저장 크기에는 상한을 두지
-않는다. 이 한도를 넘는
-request는 `Unavailable`, one-way operation은 moving drop으로 끝낸다. Framework는 한도를
-늘리기 위해 같은 object에 temporary queue를 추가로 만들지 않는다.
+Relocation unit 하나의 temporary queue에는 record 수와 저장 크기 어느 쪽에도 상한을 두지
+않는다. Framework는 같은 object에 temporary queue를 추가로 만들지 않는다.
 
 ```mermaid
 sequenceDiagram
@@ -809,8 +807,7 @@ request를 중복 처리하지 않도록 operation 하나를 구분하는 값은
 
 | Resource | 이동 규칙 |
 |---|---|
-| 새 작업 차단 뒤 도착한 message | Source는 최대 1,024 record까지 임시 보관하며 저장 크기에는 상한을 두지 않는다. Owner 변경이 성공하면 operation identity와 ObjectGeneration을 유지해 target에 전달한다. 변경을 취소하면 도착 순서대로 source queue에 되돌린다. |
-| 임시 보관 한도 초과 | Request는 `Unavailable`, one-way operation은 moving drop으로 끝난다. Framework는 새 operation identity를 만들어 자동 재제출하지 않는다. |
+| 새 작업 차단 뒤 도착한 message | Source는 record 수와 저장 크기 어느 쪽에도 상한 없이 임시 보관한다. Owner 변경이 성공하면 operation identity와 ObjectGeneration을 유지해 target에 전달한다. 변경을 취소하면 도착 순서대로 source queue에 되돌린다. |
 | `SpotWide`·Instance Spot timer | Runtime handle과 continuation은 이전하지 않는다. Logical registration, 다음 실행 시각과 pending tick을 이전하며 target이 queue 순서에 맞춰 자동 복원한다. Application은 timer를 중복 capture하거나 restore에서 다시 등록하지 않는다. |
 | Entry·`PerActor` Actor timer | Actor queue와 함께 Actor owner로 이전한다. Spot-level application timer는 이전하지 않으며 유지해야 하는 schedule은 application의 외부 state에서 관리한다. |
 | Actor에 연결된 session | Request·reply와 push를 같은 연결에서 교환하는 [STREAM session](01-glossary.ko.md#stream-session)의 physical connection은 유지한다. 같은 ObjectGeneration에서 target runtime이 `sessionActorLocationUpdateReqMsg`를 send하여 해당 Actor의 [binding route](01-glossary.ko.md#binding-route)와 bound-session current Actor location snapshot을 target MeshName·NodeRid로 바꾼다. 응답은 별도의 `sessionActorLocationUpdateResMsg`로 받으며, 응답을 기다리는 동안에도 Target Actor는 message를 처리한다. ActorId·ObjectGeneration은 유지하며, relocation 대상에 포함되지 않은 다른 Actor의 route와 location snapshot은 바꾸지 않는다. |
@@ -977,7 +974,7 @@ node RID, endpoint, session ID와 relocation ID를
 | Lifecycle | Preflight가 막히면 `Serving`을 유지하고, 성공하면 infrastructure를 유지한 `Relocated`가 되는지 검증한다. `Shutdown`은 별도로 호출하며 기본 deadline은 30초다. Caller cancellation은 waiter만 끝내고 잘못된 runtime state에서는 admission을 바꾸지 않아야 한다. |
 | Concurrency | 같은 option의 relocation과 concurrent shutdown은 각각 하나의 operation을 공유하는지 검증한다. 다른 relocation option은 `OperationInProgress`, relocation 중 shutdown은 `ShutdownRequested`로 끝나며 terminal result를 반복 호출해도 같은 값을 반환해야 한다. |
 | Unit gate | Outbound 64, inbound 64, payload 256 MiB, `Capture`와 `Restore` 각각 8, participant별 64 MiB를 검증한다. Permit은 한 번에 모두 얻어야 하며 oversized aggregate는 다른 payload가 없을 때 하나만 실행해야 한다. |
-| Handoff | `SpotWide` User Spot aggregate를 한 번에 commit하고 queue, journal, timer와 pending tick을 함께 이전하는지 검증한다. Hold와 temporary queue는 각각 1,024 record를 넘지 않아야 한다. Target dispatcher는 Spot과 모든 member Actor를 같은 relocation temporary queue group에 등록하되 record의 실제 target을 보존해야 한다. 모든 Restore, aggregate commit과 `OnRelocationReadyCompleted`가 끝난 뒤 저장된 기존 작업을 먼저 넣고 temporary 작업을 target별 실제 queue로 옮겨야 한다. 전환 전에는 어느 participant의 application 작업도 실행하면 안 된다. Message Follow route는 위치 갱신 응답을 받지 못해도 `MessageFollowDuration` 뒤 제거해야 한다. Instance Spot을 숨겨서 새로 만들면 안 된다. |
+| Handoff | `SpotWide` User Spot aggregate를 한 번에 commit하고 queue, journal, timer와 pending tick을 함께 이전하는지 검증한다. Target dispatcher는 Spot과 모든 member Actor를 같은 relocation temporary queue group에 등록하되 record의 실제 target을 보존해야 한다. 모든 Restore, aggregate commit과 `OnRelocationReadyCompleted`가 끝난 뒤 저장된 기존 작업을 먼저 넣고 temporary 작업을 target별 실제 queue로 옮겨야 한다. 전환 전에는 어느 participant의 application 작업도 실행하면 안 된다. Message Follow route는 위치 갱신 응답을 받지 못해도 `MessageFollowDuration` 뒤 제거해야 한다. Instance Spot을 숨겨서 새로 만들면 안 된다. |
 | PerActor handoff | Entry Spot과 `PerActor` User Spot이 Actor만 독립적으로 이전하고 Spot adapter나 membership callback을 호출하지 않는지 검증한다. Spot authority 전환 뒤 `ToSpot`·Create·Join은 target, `ToActor`는 Actor별 current owner를 사용해야 한다. Spot과 Actor relocation temporary queue는 독립적으로 등록해야 한다. 저장된 기존 작업, temporary 작업과 전환 뒤 direct 작업 순서를 보존하고 같은 relocation request를 재전송해도 temporary queue와 Restore를 두 번 만들면 안 된다. |
 | Interruption 목표 | Actor, Instance Spot, `SpotWide` User Spot과 `PerActor` Spot direct message 각각에 대해 source가 새 작업을 막은 시점부터 target이 message 처리를 시작할 수 있다고 알릴 때까지 1초를 측정한다. 초과를 failure, rollback 또는 retry 조건으로 사용하지 않는다. Host deadline 뒤에는 새 unit을 시작하지 않고 이미 시작한 unit을 안전한 terminal 상태까지 처리한다. |
 | Failure | Commit 전 abort에서는 target temporary queue를 실행하지 않고 폐기하며 source 원본만 queue에 되돌려야 한다. Request terminal 결과를 두 runtime에서 중복으로 만들면 안 된다. Commit 뒤 같은 target runtime이 실패하면 source로 rollback하거나 다른 target을 자동 선택하지 않는다. 정확한 `Blocked` reason을 반환하고 terminal result를 한 번만 완료하며 descriptor rollback을 확인할 수 없으면 bounded teardown을 수행해야 한다. Process 종료 뒤 relocation 자동 재개는 검증 대상이 아니다. |

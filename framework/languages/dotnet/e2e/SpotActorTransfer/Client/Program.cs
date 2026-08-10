@@ -153,9 +153,7 @@ var knownContractGaps = new Dictionary<string, string>(
     ["MF-LOOP"] =
         "Message Follow loop rejection is not implemented.",
     ["MF-HOP"] =
-        "Eight-hop acceptance and ninth-hop rejection are not implemented.",
-    ["MF-BOUND"] =
-        "The 1,024-record and 16 MiB Message Follow bounds are not implemented."
+        "Eight-hop acceptance and ninth-hop rejection are not implemented."
 };
 
 var excludedFromAll = new HashSet<string>(
