@@ -10,9 +10,14 @@ import java.util.List;
 import java.util.concurrent.atomic.LongAdder;
 
 final class PerfMetricsCollector {
+    private final boolean singleThreaded;
     private final LongAdder count = new LongAdder();
     private final LongAdder sampleCount = new LongAdder();
     private final LongAdder sum = new LongAdder();
+    private long singleCount;
+    private long singleSampleCount;
+    private long singleSum;
+    private ThreadReservoir singleReservoir;
     // Per-thread latency sample arrays. C perf stores all samples and computes
     // interpolated percentiles; Java keeps the same metric meaning while still
     // avoiding one global synchronized hot path.
@@ -22,6 +27,7 @@ final class PerfMetricsCollector {
     private final Object registryLock = new Object();
 
     PerfMetricsCollector(String suite) {
+        singleThreaded = "single".equals(suite);
         threadReservoir = ThreadLocal.withInitial(() -> {
             ThreadReservoir reservoir = new ThreadReservoir(
                 resolveInitialLatencyCapacity(suite));
@@ -33,6 +39,13 @@ final class PerfMetricsCollector {
     }
 
     void recordNanos(long value) {
+        if (singleThreaded) {
+            singleCount++;
+            singleSampleCount++;
+            singleSum += value;
+            singleReservoir().add(value);
+            return;
+        }
         count.increment();
         sampleCount.increment();
         sum.add(value);
@@ -41,10 +54,20 @@ final class PerfMetricsCollector {
     }
 
     void recordEvent() {
+        if (singleThreaded) {
+            singleCount++;
+            return;
+        }
         count.increment();
     }
 
     void recordLatencySampleNanos(long value) {
+        if (singleThreaded) {
+            singleSampleCount++;
+            singleSum += value;
+            singleReservoir().add(value);
+            return;
+        }
         sampleCount.increment();
         sum.add(value);
         ThreadReservoir reservoir = threadReservoir.get();
@@ -60,7 +83,7 @@ final class PerfMetricsCollector {
     }
 
     private PerfUtil.Result finish(PerfUtil.Config config, double latencyDivisor) {
-        long totalCount = count.sum();
+        long totalCount = singleThreaded ? singleCount : count.sum();
         if (totalCount == 0) {
             return new PerfUtil.Result("fail", "no_active_samples", config.pattern(),
                 config.transport(), config.size(), 0.0d, 0.0d, 0.0d,
@@ -68,8 +91,14 @@ final class PerfMetricsCollector {
         }
         // Merge per-thread reservoirs.
         List<ThreadReservoir> snapshot;
-        synchronized (registryLock) {
-            snapshot = new ArrayList<>(registry);
+        if (singleThreaded) {
+            snapshot = singleReservoir == null
+                ? List.of()
+                : List.of(singleReservoir);
+        } else {
+            synchronized (registryLock) {
+                snapshot = new ArrayList<>(registry);
+            }
         }
         List<long[]> samples = new ArrayList<>(snapshot.size());
         int totalLen = 0;
@@ -90,14 +119,25 @@ final class PerfMetricsCollector {
         double bandwidth = throughput * config.size()
             * (PerfMeasurement.isEchoPattern(config.pattern()) ? 2.0d : 1.0d)
             / 1_000_000.0d;
-        long totalSampleCount = sampleCount.sum();
+        long totalSampleCount = singleThreaded
+            ? singleSampleCount
+            : sampleCount.sum();
+        long totalSum = singleThreaded ? singleSum : sum.sum();
         double mean = totalSampleCount == 0
             ? 0.0d
-            : (sum.sum() / (double) totalSampleCount) / latencyDivisor;
+            : (totalSum / (double) totalSampleCount) / latencyDivisor;
         double p95 = percentile(merged, 0.95d) / latencyDivisor;
         double p99 = percentile(merged, 0.99d) / latencyDivisor;
         return new PerfUtil.Result("ok", "-", config.pattern(), config.transport(),
             config.size(), throughput, bandwidth, mean, p95, p99);
+    }
+
+    private ThreadReservoir singleReservoir() {
+        if (singleReservoir == null) {
+            singleReservoir = new ThreadReservoir(
+                resolveInitialLatencyCapacity("single"));
+        }
+        return singleReservoir;
     }
 
     // Per-thread sample storage; no synchronization required because each

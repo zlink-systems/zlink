@@ -10,7 +10,11 @@ import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SocketType;
 import systems.zlink.contracts.sockets.SubSocket;
+import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.contracts.messaging.TopicMessage;
+import systems.zlink.contracts.errors.ZlinkException;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.perf.PerfErrno;
 import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
 import java.time.Duration;
@@ -65,12 +69,12 @@ final class PerfPubSub {
             sub.setSubscription("");
             sub.connect(PerfUtil.connectedEndpoint(pub, endpoint,
                 config.transport()));
-            PerfUtil.waitForMonitorEvent(pubMonitor, READY_EVENT, 1,
-                Duration.ofMillis(config.connectReadyTimeoutMs()),
-                "pubsub publisher ready");
             PerfUtil.waitForMonitorEvent(subMonitor, READY_EVENT, 1,
                 Duration.ofMillis(config.connectReadyTimeoutMs()),
                 "pubsub subscriber ready");
+            PerfUtil.waitForMonitorEvent(pubMonitor, READY_EVENT, 1,
+                Duration.ofMillis(config.connectReadyTimeoutMs()),
+                "pubsub publisher ready");
             PerfUtil.printSingleMonitorAutoHwm(config, pubMonitor, "publisher",
                 SocketType.PUB);
             PerfUtil.printSingleMonitorAutoHwm(config, subMonitor, "subscriber",
@@ -107,11 +111,13 @@ final class PerfPubSub {
                                 received.firstPart())) {
                             return;
                         }
+                        long receivedNanoTime = System.nanoTime();
                         PerfUtil.Header header = PerfUtil.decodeHeader(
-                            received.firstPart(), config.size());
+                            received.firstPart(), config.size(),
+                            receivedNanoTime);
                         if (header != null
                             && header.phase() == PerfUtil.PHASE_ACTIVE
-                            && System.nanoTime() < activeEnd) {
+                            && receivedNanoTime < activeEnd) {
                             metrics.recordNanos(header.latencyNanos());
                         }
                         // Inner DONT_WAIT burst drain (C lines ~289-315).
@@ -125,11 +131,13 @@ final class PerfPubSub {
                                 stop = true;
                                 break;
                             }
+                            long burstReceivedNanoTime = System.nanoTime();
                             PerfUtil.Header burst = PerfUtil.decodeHeader(
-                                received.firstPart(), config.size());
+                                received.firstPart(), config.size(),
+                                burstReceivedNanoTime);
                             if (burst != null
                                 && burst.phase() == PerfUtil.PHASE_ACTIVE
-                                && System.nanoTime() < activeEnd) {
+                                && burstReceivedNanoTime < activeEnd) {
                                 metrics.recordNanos(burst.latencyNanos());
                             }
                         }
@@ -144,8 +152,8 @@ final class PerfPubSub {
                 while (System.nanoTime() < activeEnd) {
                     active = PerfUtil.resetAndWritePayload(active, config.size(),
                         (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
-                    if (!publishWithRetry(pub, active, activeEnd)) {
-                        break;
+                    if (!tryPublishBlocking(pub, active)) {
+                        PerfUtil.pauseOneWaySendRetry("pubsub");
                     }
                 }
             } finally {
@@ -154,8 +162,8 @@ final class PerfPubSub {
             // PERF_SINGLE_TEST_POLICY § 1.4: signal phase end with stop token
             // published on the same topic so the subscriber's filter delivers it.
             try (Message stop = PerfStopToken.newMessage()) {
-                long stopDeadline = System.nanoTime() + 2_000_000_000L;
-                publishWithRetry(pub, stop, stopDeadline);
+                PerfStopToken.sendWithRetry(
+                    () -> tryPublishBlocking(pub, stop), "pubsub");
             }
             PerfUtil.join(recvThread, "pubsub receiver",
                 Duration.ofSeconds(config.durationSeconds() + 10L));
@@ -190,20 +198,22 @@ final class PerfPubSub {
         }
     }
 
-    private static boolean publishWithRetry(PubSocket pub, Message message,
-                                            long deadlineNs) {
-        // C parity (perf_pubsub.cpp send step + perf_single_one_way.hpp
-        // send_active_samples): nonblocking publish; on transient backpressure
-        // retry immediately (send_step_retry -> continue) until the deadline,
-        // with no POLLOUT wait or sleep.
-        while (System.nanoTime() < deadlineNs) {
-            if (pub.publish(TOPIC)
-                    .message(message)
-                    .flags(SendFlags.DONT_WAIT)
-                    .submit()) {
-                return true;
+    private static boolean tryPublishBlocking(PubSocket pub, Message message) {
+        try {
+            return pub.publish(TOPIC)
+                .message(message)
+                .flags(SendFlags.NONE)
+                .submit();
+        } catch (ZlinkSubmitException ex) {
+            if (ex.getResult() == SubmitResult.BACKPRESSURED) {
+                return false;
             }
+            throw ex;
+        } catch (ZlinkException ex) {
+            if (PerfErrno.isRetryableSend(ex.getNativeErrno())) {
+                return false;
+            }
+            throw ex;
         }
-        return false;
     }
 }

@@ -17,7 +17,7 @@ final class PerfMeasurement {
     private static final int RUN_ID = 1;
     private static final AtomicLong SEQ = new AtomicLong();
     private static final boolean USE_NETTY_BYTEBUF_POOL =
-        !"0".equals(System.getenv("PERF_JAVA_NETTY_BYTEBUF_POOL"));
+        "1".equals(System.getenv("PERF_JAVA_NETTY_BYTEBUF_POOL"));
 
     private PerfMeasurement() {
     }

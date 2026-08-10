@@ -61,30 +61,33 @@ final class PerfDealerDealer {
                 + config.durationSeconds() * 1_000_000_000L;
             Thread receiverThread = new Thread(() -> {
                 try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
-                    List.of(receiver), PollEventFlags.POLLIN)) {
+                         List.of(receiver), PollEventFlags.POLLIN);
+                     Received received = new Received()) {
                     while (true) {
                         pollSet.poll(-1);
                         boolean stop = false;
                         while (true) {
-                            systems.zlink.contracts.messaging.Received received =
-                                PerfUtil.recvNoWait(receiver);
-                            if (received == null) {
+                            if (!PerfUtil.recvNoWait(receiver, received)) {
                                 break;
                             }
-                            try (received) {
+                            try {
                                 if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
                                     stop = true;
                                     break;
                                 }
+                                long receivedNanoTime = System.nanoTime();
                                 PerfUtil.Header header = PerfUtil.decodeHeader(
-                                    received.firstPart(), config.size());
+                                    received.firstPart(), config.size(),
+                                    receivedNanoTime);
                                 if (header == null) {
                                     continue;
                                 }
                                 if (header.phase() == PerfUtil.PHASE_ACTIVE
-                                    && System.nanoTime() < activeEnd) {
+                                    && receivedNanoTime < activeEnd) {
                                     metrics.recordNanos(header.latencyNanos());
                                 }
+                            } finally {
+                                received.close();
                             }
                         }
                         if (stop) {
@@ -103,23 +106,14 @@ final class PerfDealerDealer {
                 try {
                     Message active = PerfUtil.payloadTemplate(config.size());
                     try {
-                        // C parity: perf_dealer_dealer.cpp send step uses
-                        // send_socket_active_message(sender, &part,
-                        // ZLINK_DONTWAIT, true) and perf_single_one_way.hpp
-                        // send_active_samples (~169-196) retries the same
-                        // sample (continue, no advance) on transient
-                        // backpressure. A blocking submit() can wedge the
-                        // sender on a full HWM so the active loop never
-                        // reaches activeEnd and the wire stop token below is
-                        // never emitted, hanging the receiver's poll(-1) until
-                        // the harness timeout. Mirror C: nonblocking send,
-                        // retry on transient backpressure until the deadline.
+                        // C parity: raw one-way uses blocking FLAGS_NONE. A
+                        // transient failure waits 1ms, then the next loop
+                        // writes a fresh timestamp before retrying the sample.
                         while (System.nanoTime() < activeEnd) {
                             active = PerfUtil.resetAndWritePayload(active, config.size(),
                                 (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
-                            while (System.nanoTime() < activeEnd
-                                && !trySendActive(sender, active)) {
-                                // send_step_retry: re-attempt same sample.
+                            if (!trySendBlocking(sender, active)) {
+                                PerfUtil.pauseOneWaySendRetry("dealer/dealer");
                             }
                         }
                     } finally {
@@ -162,16 +156,11 @@ final class PerfDealerDealer {
         }
     }
 
-    // C parity: perf_single_one_way.hpp send_socket_active_message
-    // (~145-166). Nonblocking send; true == send_step_sent. Transient
-    // backpressure (BACKPRESSURED / EAGAIN / EINTR) -> false so the caller
-    // re-attempts the same sample (send_step_retry); a non-transient error
-    // is fatal and propagates (send_step_fatal).
-    private static boolean trySendActive(DealerSocket sender, Message active) {
+    private static boolean trySendBlocking(DealerSocket sender, Message active) {
         try {
             return sender.send()
                 .message(active)
-                .flags(SendFlags.DONT_WAIT)
+                .flags(SendFlags.NONE)
                 .submit();
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {
             if (ex.getResult()

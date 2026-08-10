@@ -165,6 +165,12 @@ public final class PerfUtil {
         return PerfMetricHeader.decode(message, expectedSize);
     }
 
+    public static Header decodeHeader(Message message, int expectedSize,
+                                      long receivedNanoTime) {
+        return PerfMetricHeader.decode(message, expectedSize,
+            receivedNanoTime);
+    }
+
     public static boolean recordActiveLatency(Metrics metrics, Message message,
                                               int expectedSize,
                                               boolean halfRoundTrip) {
@@ -250,6 +256,16 @@ public final class PerfUtil {
         PerfTransport.join(thread, label, timeout);
     }
 
+    public static void pauseOneWaySendRetry(String label) {
+        try {
+            Thread.sleep(1L);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(
+                label + " active send retry interrupted", ex);
+        }
+    }
+
     public static void waitForMonitorEvent(SocketMonitor monitor,
                                            systems.zlink.contracts.eventing.MonitorEventType expectedEvent,
                                            int expectedCount, Duration timeout,
@@ -266,37 +282,47 @@ public final class PerfUtil {
             expectedEvent, expectedCount, timeout, label);
     }
 
-    public static systems.zlink.contracts.messaging.Received recvNoWait(PairSocket socket) {
+    public static boolean recvNoWait(
+        PairSocket socket,
+        systems.zlink.contracts.messaging.Received received) {
         try {
-            systems.zlink.contracts.messaging.Received received = new systems.zlink.contracts.messaging.Received();
-            return socket.recv(received, RecvFlags.DONT_WAIT) ? received : null;
+            return socket.recv(received, RecvFlags.DONT_WAIT);
         } catch (ZlinkRecvException ex) {
-            return recvExceptionToNull(ex);
+            return recvExceptionToFalse(ex);
         }
     }
 
-    public static systems.zlink.contracts.messaging.Received recvNoWait(DealerSocket socket) {
+    public static boolean recvNoWait(
+        DealerSocket socket,
+        systems.zlink.contracts.messaging.Received received) {
         try {
-            systems.zlink.contracts.messaging.Received received = new systems.zlink.contracts.messaging.Received();
-            return socket.recv(received, RecvFlags.DONT_WAIT) ? received : null;
+            return socket.recv(received, RecvFlags.DONT_WAIT);
         } catch (ZlinkRecvException ex) {
-            return recvExceptionToNull(ex);
+            return recvExceptionToFalse(ex);
         }
     }
 
-    public static systems.zlink.contracts.messaging.Received recvNoWait(RouterSocket socket) {
+    public static systems.zlink.contracts.messaging.Received recvNoWait(
+        DealerSocket socket) {
+        systems.zlink.contracts.messaging.Received received =
+            new systems.zlink.contracts.messaging.Received();
+        return recvNoWait(socket, received) ? received : null;
+    }
+
+    public static boolean recvNoWait(
+        RouterSocket socket,
+        systems.zlink.contracts.messaging.Received received) {
         try {
-            systems.zlink.contracts.messaging.Received received = new systems.zlink.contracts.messaging.Received();
-            return socket.recv(received, RecvFlags.DONT_WAIT) ? received : null;
+            return socket.recv(received, RecvFlags.DONT_WAIT);
         } catch (ZlinkRecvException ex) {
-            return recvExceptionToNull(ex);
+            return recvExceptionToFalse(ex);
         }
     }
 
-    private static systems.zlink.contracts.messaging.Received recvExceptionToNull(ZlinkRecvException ex) {
+    private static boolean recvExceptionToFalse(ZlinkRecvException ex) {
         if (ex.getResult() == RecvResult.NO_DATA
             || ex.getResult() == RecvResult.BUSY) {
-            return null;
+            return false;
         }
         throw ex;
     }

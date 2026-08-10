@@ -86,23 +86,24 @@ final class PerfRouterRouter {
                 + config.durationSeconds() * 1_000_000_000L;
             Thread receiverThread = new Thread(() -> {
                 try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
-                    List.of(receiver), PollEventFlags.POLLIN)) {
+                         List.of(receiver), PollEventFlags.POLLIN);
+                     Received received = new Received()) {
                     while (true) {
                         pollSet.poll(-1);
                         boolean stop = false;
                         while (true) {
-                            systems.zlink.contracts.messaging.Received received =
-                                PerfUtil.recvNoWait(receiver);
-                            if (received == null) {
+                            if (!PerfUtil.recvNoWait(receiver, received)) {
                                 break;
                             }
-                            try (received) {
+                            try {
                                 if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
                                     stop = true;
                                     break;
                                 }
+                                long receivedNanoTime = System.nanoTime();
                                 PerfUtil.Header header = PerfUtil.decodeHeader(
-                                    received.firstPart(), config.size());
+                                    received.firstPart(), config.size(),
+                                    receivedNanoTime);
                                 if (header == null) {
                                     continue;
                                 }
@@ -112,9 +113,11 @@ final class PerfRouterRouter {
                                     continue;
                                 }
                                 if (header.phase() == PerfUtil.PHASE_ACTIVE
-                                    && System.nanoTime() < activeEnd) {
+                                    && receivedNanoTime < activeEnd) {
                                     metrics.recordNanos(header.latencyNanos());
                                 }
+                            } finally {
+                                received.close();
                             }
                         }
                         if (stop) {
@@ -156,9 +159,8 @@ final class PerfRouterRouter {
                         while (System.nanoTime() < activeEnd) {
                             active = PerfUtil.resetAndWritePayload(active, config.size(),
                                 (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
-                            while (System.nanoTime() < activeEnd
-                                && !trySendBlocking(sender, targetRoute, active)) {
-                                Thread.onSpinWait();
+                            if (!trySendBlocking(sender, targetRoute, active)) {
+                                PerfUtil.pauseOneWaySendRetry("router/router");
                             }
                         }
                     } finally {

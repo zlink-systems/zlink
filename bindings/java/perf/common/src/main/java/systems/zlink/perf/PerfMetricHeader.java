@@ -10,6 +10,11 @@ final class PerfMetricHeader {
     }
 
     static PerfUtil.Header decode(Message message, int expectedSize) {
+        return decode(message, expectedSize, PerfUtil.nowNs());
+    }
+
+    static PerfUtil.Header decode(Message message, int expectedSize,
+                                  long receivedNanoTime) {
         if (message == null || message.size() < PerfUtil.HEADER_SIZE) {
             return null;
         }
@@ -29,7 +34,7 @@ final class PerfMetricHeader {
             return null;
         }
         long sentTsNs = message.readLongLe(21);
-        long latencyNanos = Math.max(0L, PerfUtil.nowNs() - sentTsNs);
+        long latencyNanos = Math.max(0L, receivedNanoTime - sentTsNs);
         return new PerfUtil.Header((byte) phase, latencyNanos, sentTsNs);
     }
 
