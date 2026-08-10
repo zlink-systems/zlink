@@ -3,7 +3,7 @@
 namespace Systems.Zlink;
 
 internal delegate void StreamFramedPacketHandler(
-    string routingId,
+    RoutingId routingId,
     Message header,
     Message body);
 

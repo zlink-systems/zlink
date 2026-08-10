@@ -132,7 +132,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         if (message == IntPtr.Zero)
             throw new ArgumentNullException(nameof(message));
 
-        var result = new Message(false);
+        var result = RentFromPool();
         result.Init();
         try
         {

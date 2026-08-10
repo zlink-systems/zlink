@@ -41,8 +41,8 @@ internal sealed partial class SocketKernel : IDisposable
     {
         if (handler == null)
             throw new ArgumentNullException(nameof(handler));
-        AttachStreamPacket((routingId, header, body) =>
-            handler(ParsePublicRoutingId(routingId), header, body));
+        AttachStreamPacket((StreamFramedPacketHandler)((routingId, header, body) =>
+            handler(routingId, header, body)));
     }
 
     public void AttachStreamPacket(StreamUInt32FramedPacketHandler handler)
@@ -151,16 +151,22 @@ internal sealed partial class SocketKernel : IDisposable
         var delivered = false;
         try
         {
-            var routingIdText = RoutingIdCodec.ToPublicString(
-                NativeHelpers.ReadRoutingId(ref *(ZlinkRoutingId*)routingId));
+            ref ZlinkRoutingId nativeRoutingId = ref *(ZlinkRoutingId*)routingId;
+            var publicRoutingId = RoutingId.FromNative(ref nativeRoutingId);
+            if (!publicRoutingId.HasValue)
+            {
+                CloseStreamPacket(header);
+                CloseStreamPacket(body);
+                return;
+            }
             headerMsg = Message.MoveFromNativeSingle(header);
             bodyMsg = Message.MoveFromNativeSingle(body);
             if (context == null)
-                packetHandler(routingIdText, headerMsg, bodyMsg);
+                packetHandler(publicRoutingId.Value, headerMsg, bodyMsg);
             else
                 CallbackDelivery.Post(
                     context,
-                    () => packetHandler(routingIdText, headerMsg, bodyMsg));
+                    () => packetHandler(publicRoutingId.Value, headerMsg, bodyMsg));
             delivered = true;
         }
         catch (Exception ex)
