@@ -27,8 +27,8 @@ class PlayerActor {
 }
 
 class PlayerFactory {
-  create(actorId, context) {
-    return new PlayerActor(actorId, context);
+  async create(context) {
+    return new PlayerActor(context.actorId, context);
   }
 }
 
@@ -50,7 +50,8 @@ class AdmissionPacketHandler {
 
 async function createFixture() {
   const manager = new framework.DefaultZLinkActorManager({
-    actorFactories: new Map([['player', PlayerFactory]])
+    actorFactories: new Map([['player', PlayerFactory]]),
+    actorMeshNameProvider: () => 'perf.mesh'
   });
   const actors = [];
   for (let index = 0; index < ACTOR_COUNT; index += 1) {
