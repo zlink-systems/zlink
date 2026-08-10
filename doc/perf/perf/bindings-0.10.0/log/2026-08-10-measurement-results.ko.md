@@ -789,6 +789,18 @@ baseline throughput ratio는 `53.500% / 66.802% / 65.793% / 69.372% / 83.306% / 
 
 baseline throughput ratio는 `81.580% / 91.618% / 82.252% / 86.304% / 110.096% / 91.849%`, 산술평균은 `90.617%`이며 평균 latency ratio는 `1.167x / 1.044x / 1.159x / 1.107x / 0.906x / 1.087x`, 산술평균은 `1.078x`다. 자체 개선은 private `RouterRequestOperation.AddMessage`/`EnsureReady`/`EnsureNotSubmitted`에 AggressiveInlining을 적용했다. own throughput ratio는 `79.269% / 90.322% / 83.550% / 89.358% / 106.648% / 94.354%`, 산술평균은 `90.584%`이며 평균 latency ratio는 `1.199x / 1.054x / 1.142x / 1.069x / 0.936x / 1.057x`, 산술평균은 `1.076x`다. own throughput이 baseline보다 소폭 낮아 후보는 원복했다. Sol review는 추가 builder/callback/native submit 경계 후보를 no-go로 판정했다. public contract·builder state·Message ownership·exception/error semantics는 변경하지 않았으며 baseline 기준 최종 상태는 `통과`다. build `0 warning / 0 error`, contract test `149 passed / 0 failed / 0 skipped`다.
 
+### .NET Multi MULTI_DEALER_DEALER/tls
+
+조건: Core `v0.10.1` release package, Release, `tls`, clients `100`, duration `1s`, runs `1`, msg sizes `64/256/1024/4096/65536/131072B`, connect concurrency `128`, connect-ready timeout `10000ms`, monitor-HWM `4096000`, auto-HWM `balanced`, server/client I/O threads `4/4`다. C와 .NET report는 6개 size와 30개 result line이 complete다.
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 1934452 / 1256523 / 840810 / 354615 / 33719 / 17955 | 84.092 / 0.688 / 19.943 / 49.293 / 380.722 / 462.950 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_232836_dotnet-dealer-dealer-tls-paired-c-100.txt` |
+| .NET baseline | 992653 / 770942 / 731305 / 310912 / 34695 / 14603 | 79.952 / 0.555 / 8.116 / 52.685 / 330.201 / 411.720 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_232858_dotnet-dealer-dealer-tls-paired-baseline-100.txt` |
+| .NET own Message.MoveTo inlining | 1167865 / 859366 / 745359 / 313796 / 35142 / 18941 | 43.650 / 0.413 / 1.303 / 48.534 / 307.825 / 380.782 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_233108_dotnet-dealer-dealer-tls-own-moveto-inline-100.txt` |
+
+baseline throughput ratio는 `51.314% / 61.355% / 86.976% / 87.676% / 102.895% / 81.331%`, 산술평균 `78.591%`이며 평균 latency ratio는 `0.951x / 0.807x / 0.407x / 1.069x / 0.867x / 0.889x`, 산술평균 `0.832x`다. `Message.MoveTo` AggressiveInlining 후 own throughput ratio는 `60.372% / 68.392% / 88.648% / 88.489% / 104.220% / 105.492%`, 산술평균 `85.935%`, 평균 latency ratio는 `0.519x / 0.600x / 0.065x / 0.985x / 0.809x / 0.823x`, 산술평균 `0.633x`다. Sol review는 `EnsureValid → destination 초기화 → native move → source 무효화`와 실패 시 `RestoreFrom` 동작이 동일함을 확인하고 변경을 GO했다. `SinglePartSubmit`·native submitter는 이미 inline이며 `RestoreFrom` 및 추가 pool/ownership 전이 후보는 no-go다. public contract·ownership·error semantics는 변경하지 않았다. 최종 상태는 `통과`다. build `0 warning / 0 error`, contract test `149 passed / 0 failed / 0 skipped`다.
+
 ### .NET Multi MULTI_PUBSUB/wss
 
 조건: Core `v0.10.1` release package, Release, `wss`, clients `100`, duration `1s`, runs `1`, msg sizes `64/256/1024/4096/65536/131072B`, connect concurrency `128`, connect-ready timeout `10000ms`, monitor-HWM `4096000`, auto-HWM `balanced`, server/client I/O threads `4/4`다. C full sweep는 64·256·1024·4096·65536B result line이 완료됐고, 131072B는 같은 옵션의 별도 retry report가 완료됐다.

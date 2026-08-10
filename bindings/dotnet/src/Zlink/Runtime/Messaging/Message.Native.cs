@@ -197,6 +197,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         return copy;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal unsafe void MoveTo(ref ZlinkMsg dest)
     {
         EnsureValid();
