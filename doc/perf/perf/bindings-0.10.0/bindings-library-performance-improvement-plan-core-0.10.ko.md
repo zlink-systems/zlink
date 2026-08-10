@@ -505,23 +505,21 @@ CPU pin·timeout·sleep 증가로 수치를 조정하지 않는다.
 8. C 대비 throughput과 평균 latency를 비교하고 현재 transport의 목표 미달 셀을 확인한다.
 9. 미달 셀은 profiler, allocation 자료, copy 수, callback/dispatch 및 native 경계
    자료로 비용 위치를 확인한다.
-10. 의미를 보존하는 개선안을 두 가지 이상 설계하고, 예상 영향 셀과 폐기 기준을 적은 뒤
-   public interface가 더 단순하고 책임 경계가 분명한 방안을 선택한다. 두 방안이 모두
-   계약과 POSD gate를 만족하면 예상 성능 효과가 큰 방안을 우선한다.
-11. 제한 사전 점검을 통과한 뒤 현재 transport의 후보 after를 측정한다. 비교 환경이
-    달라졌으면 같은 C pattern과 transport를 먼저 다시 측정한다.
-12. before/after 근거가 더 필요할 때만 같은 pattern과 transport를 추가 측정한다. 추가
-    반복값은 원시 측정 기록으로 남기며 기존 측정값을 무효화하거나 다음 대상 진행을 막지
-    않는다.
+10. aggregate 평균이 미달한 대상은 먼저 자체 hot-path 개선 pass를 수행한다. 후보는
+    public interface, ownership, error contract와 측정 의미를 유지해야 하며, 후보 after를
+    한 번 측정해 자체 pass의 효과를 기록한다.
+11. 자체 pass 뒤에도 대상의 최종 판단을 닫지 않는다. Sol에 read-only review를 요청하고,
+    리뷰에서 선택한 계약 보존 후보로 두 번째 개선 pass를 수행해 after를 한 번 측정한다.
+    Sol이 안전한 후보를 제시하지 않으면 그 no-go 판단을 두 번째 pass의 결과로 기록한다.
+12. 두 개선 pass의 before/after와 aggregate 결과를 비교한다. 추가 반복은 원인 진단이나
+    before/after 확인에 꼭 필요할 때만 수행하며, 변동값을 이유로 반복하지 않는다.
 13. 기능 테스트와 같은 pattern 안의 대상이 아닌 대표 셀에 대한 회귀 gate를 통과시킨다.
 14. 현재 transport의 모든 message size report가 complete이고 throughput·latency aggregate
     평균이 목표를 만족하면 transport 완료를 기록한다. 개별 size 미달은 결과에 기록한다.
     성능 개선 코드를 채택했다면 검증된 변경과 측정 근거만 커밋하고 원격에 푸시한 뒤 다음
     transport로 이동한다.
-15. aggregate 평균이 미달하면 hot path 병목을 확인하고 후보를 한 번 A/B 비교한다. 후보가
-    없거나 A/B가 개선되지 않으면 구조 변경 가능성이 있는 경우에만 Sol에 한 번 리뷰를
-    요청한다. 리뷰 후에도 공개 contract를 유지하는 효과 있는 후보가 없으면 즉시 `보류`로
-    기록하고 다음 transport로 이동한다. 변동값을 이유로 반복 측정하지 않는다.
+15. aggregate 평균이 미달한 대상은 자체 pass와 Sol pass가 모두 끝난 뒤에도 공개 contract를
+    유지한 효과 있는 후보가 없을 때만 `보류`로 기록하고 다음 transport로 이동한다.
 16. 선택한 pattern의 모든 공식 transport report가 complete이고 각 transport의
     throughput·latency aggregate 평균이 통과 또는 보류로 확정되면 pattern 완료를 기록하고
     관련 문서를 커밋해 원격에 푸시한다.
@@ -551,10 +549,11 @@ pattern 완료는 수치를 한 번 얻었다는 뜻이 아니다. 다음 조건
 - 상세 표에 C report, binding report, 반복값, 비율과 판정 근거를 기록했다.
 - POSD 위험 신호를 변경 전후로 다시 확인했고 새 복잡성을 만들지 않았다.
 
-목표에 미달하면 hot path 원인 분석과 후보 A/B를 한 번 수행한다. 개선되지 않으면 필요한
-경우 Sol 리뷰를 한 번 거친 뒤, 공개 contract를 유지하는 효과 있는 후보가 없으면 즉시
-`보류`로 확정한다. 변동값과 안정성을 이유로 같은 셀을 반복하지 않는다. public contract
-변경이 필요하면 우회 구현으로 통과시키지 않고 `보류`로 기록한다.
+목표에 미달하면 자체 개선 pass와 Sol 리뷰 기반 개선 pass를 각각 한 번씩 수행한다. 각
+pass는 before/after 또는 후보 no-go 결과를 남긴다. 두 pass가 끝난 뒤에도 공개 contract를
+유지한 효과 있는 후보가 없으면 `보류`로 확정한다. 변동값과 안정성을 이유로 같은 셀을
+반복하지 않는다. public contract 변경이 필요하면 우회 구현으로 통과시키지 않고 `보류`로
+기록한다.
 
 ### 7.6 개선 코드 커밋과 푸시
 
@@ -572,9 +571,12 @@ pattern 완료는 수치를 한 번 얻었다는 뜻이 아니다. 다음 조건
 - perf 전용 우회나 public contract 위반이 남은 후보
 - 기능 테스트를 통과하지 못한 후보
 
-large-message buffer pool은 이 계획에서 사용하지 않는 것으로 확정한다. pool 재도입이나
-pool A/B는 후보로 취급하지 않는다. 후보를 기각했으면 코드를 최종 변경에서 제거하고
-측정 결과와 기각 이유만 로그에 남긴다.
+C++ binding 경로에서는 large-message buffer pool을 사용하지 않는 것으로 확정한다. C++의
+pool 재도입이나 pool A/B는 후보로 취급하지 않는다. 반면 .NET과 같이 VM 또는 managed
+runtime 위에서 동작하는 binding에 이미 존재하는 `Message`·byte storage pool은 기존 내부
+구현으로 유지할 수 있다. managed binding에서 pool을 새로 도입하거나 정책을 바꿀 때도
+public ownership과 재사용 경계를 바꾸지 않고, 별도 후보로 before/after 측정을 남긴다.
+후보를 기각했으면 코드를 최종 변경에서 제거하고 측정 결과와 기각 이유만 로그에 남긴다.
 
 ### 7.7 성능 개선의 POSD gate
 
@@ -610,9 +612,9 @@ transport 세부 정보, perf 전용 option을 노출하지 않는다. 새 helpe
   개별 size의 최소 기준·latency 상한 미달은 outlier로 함께 기록할 수 있다.
 - `미달(비율%)`: 최종 판정 전의 임시 상태다. 유효한 paired 결과가 있지만 throughput 또는
   latency의 aggregate 평균 목표에 도달하지 않았고 hot path 검토 또는 후보 비교가 남아 있다.
-- `보류`: paired 측정과 실제 개선 후보 검토·측정을 완료했지만 public contract를 유지한
-  추가 개선 요소가 없어 현재 aggregate 목표를 달성하지 못한 채 다음 대상으로 이동한다.
-  변동 폭이나 안정성을 이유로 `보류`하지 않는다.
+- `보류`: paired 측정, 자체 개선 pass, Sol 리뷰 기반 두 번째 개선 pass를 완료했지만
+  public contract를 유지한 추가 개선 요소가 없어 현재 aggregate 목표를 달성하지 못한 채
+  다음 대상으로 이동한다. 변동 폭이나 안정성을 이유로 `보류`하지 않는다.
 - 상세 표의 최종 상태는 `통과(비율%)`, `보류(비율%)`, `미측정`을 사용한다. C와 binding의
   paired report가 있고 ratio와 latency가 기록된 pattern·transport이면 size ratio와 평균
   latency ratio의 aggregate 평균으로 상태를 판정한다. paired report가 없는 셀만
@@ -832,18 +834,21 @@ transport 상태를 판정한다.
 ### 9.2 .NET
 
 - perf 경로: `bindings/dotnet/perf`
-- Single 상태: `PAIR/tcp` 완료·통과, `PUBSUB/tcp` 완료·보류, 나머지 대상 측정 중
+- Single 상태: `DEALER_ROUTER/tcp` 완료·통과, `PAIR/tcp`·`PUBSUB/tcp`·`DEALER_DEALER/tcp` 완료·보류, 나머지 대상 측정 중
 - Multi 상태: `미측정`
+- `미측정` 행은 완료나 다음 언어 전환을 의미하지 않는다. 특히 9.2.2의 `tls` `MULTI_*`
+  행은 .NET에서 아직 측정하지 않은 대상이며, C++ 9.1의 같은 이름 행이 완료되어도 .NET
+  측정 완료로 간주하지 않는다.
 - 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
 
 #### 9.2.1 Single suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 77.14% | 72.75% | 85.99% | 93.55% | 94.56% | 94.23% | 통과·throughput 산술평균 86.37%, 평균 latency ratio 0.920x. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_133934_dotnet-pair-tcp-c-full.txt`; .NET baseline: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_133947_dotnet-pair-tcp-dotnet-full.txt`; 최종: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_134835_dotnet-pair-tcp-dotnet-flags-none-ab.txt` |
-| `tcp` | `PUBSUB` | 65.36% | 72.10% | 87.86% | 96.08% | 92.87% | 90.75% | 보류·baseline throughput 산술평균 82.22%, `flags == None` 분기 A/B 84.17%, 평균 latency ratio 0.963x. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_135104_dotnet-pubsub-tcp-c1.txt`; .NET baseline: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_135121_dotnet-pubsub-tcp-dotnet1.txt`; A/B: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_135204_dotnet-pubsub-tcp-dotnet-flags-none-ab.txt` |
-| `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `PAIR` | 77.79% | 71.57% | 83.88% | 87.47% | 94.92% | 89.86% | 보류·자체 pass `82.03% → 84.25%`, 평균 latency ratio `0.977x`. 자체 후보는 `flags == None` 분기이며 Sol pass는 추가 후보 no-go. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_133934_dotnet-pair-tcp-c-full.txt`; 자체 before: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_143203_dotnet-pair-tcp-own-before-pool.txt`; after: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_142021_dotnet-pair-tcp-parity-baseline.txt`; Sol no-go: 추가 builder/direct-send/ownership 변경 필요 |
+| `tcp` | `PUBSUB` | 62.30% | 70.72% | 89.93% | 98.19% | 86.46% | 91.91% | 보류·자체 pass `80.35% → 83.25%`, 평균 latency ratio `1.130x`. 자체 후보는 `Publish(flags == None)` 분기이며 Sol pass는 추가 message/builder 재사용·private direct 경로 no-go. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_135104_dotnet-pubsub-tcp-c1.txt`; 자체 before: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_142030_dotnet-pubsub-tcp-parity-baseline.txt`; after: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_142943_dotnet-pubsub-tcp-own-after-pool.txt` |
+| `tcp` | `DEALER_DEALER` | 46.71% | 68.90% | 87.55% | 82.23% | 91.14% | 92.12% | 보류·자체 pass `76.69% → 78.11%`, 평균 latency ratio `8.142x`. 자체 후보는 `flags == None` 분기이며 Sol pass는 추가 builder pool/private direct/ownership 변경 no-go. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_135400_dotnet-dealer-dealer-tcp-c1.txt`; 자체 before: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_143235_dotnet-dealer-dealer-tcp-own-before-pool.txt`; after: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_142040_dotnet-dealer-dealer-tcp-parity-baseline.txt` |
+| `tcp` | `DEALER_ROUTER` | 49.87% | 87.08% | 94.87% | 90.23% | 92.32% | 89.17% | 통과·throughput 산술평균 83.92%, 평균 latency ratio 1.059x. 64B 개별 ratio는 기록값이며 aggregate gate를 바꾸지 않는다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_135529_dotnet-dealer-router-tcp-c1.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_141217_dotnet-dealer-router-tcp-baseline.txt` |
 | `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |

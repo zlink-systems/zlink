@@ -97,117 +97,116 @@ internal static class PerfPubSub
         long sampleSeen = 0;
         uint rng = 0xA341316Cu;
 
-        // PERF_SINGLE_TEST_POLICY § 1.4 / C parity: blocking first subscribe
-        // per cycle (zlink_recv flags=0), then DontWait burst-drain, exit on
-        // the wire-level stop token. Mirrors C perf_pubsub.cpp (no IPoller /
-        // no DontWait spin loop).
-        var recvThread = new Thread(() =>
-        {
-            // Reuse one TopicMessage envelope for the whole phase (parity
-            // with C which reuses a single stack header buffer).
-            using var maybe = new TopicMessage();
+        // PERF_SINGLE_TEST_POLICY § 1.4 / C parity: the receiver waits on a
+        // public poller, performs a DontWait subscribe, drains the available
+        // burst, and exits only on the wire-level stop token.
+        using var poller = Zlink.CreatePoller();
+        var events = new PollEvent[1];
+        poller.Add(receiver, PollEventFlags.PollIn, 0);
+        using var maybe = new TopicMessage();
+        bool stopReceived = false;
+        Exception? sendError = null;
 
+        var senderThread = new Thread(() =>
+        {
             try
             {
-                while (true)
+                long senderDeadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
+                ulong seq = 1;
+                while (Stopwatch.GetTimestamp() < senderDeadlineTicks)
                 {
-                    try
-                    {
-                        if (!receiver.Subscribe(maybe, RecvFlags.None))
-                            continue;
-                    }
-                    catch (ZlinkException ex)
-                        when (IsInterrupted(ex.NativeErrno)
-                              || IsWouldBlock(ex.NativeErrno))
-                    {
+                    StampMetricHeader(payload.AsSpan(), RunId, ActivePhase,
+                        msgSize, seq, EpochNs());
+                    seq++;
+                    if (!PublishActiveMessageBlocking(sender, Topic, payload,
+                            "[single-pubsub]"))
                         continue;
-                    }
-
-                    bool drain = true;
-                    while (drain)
-                    {
-                        if (string.Equals(maybe.Topic, Topic,
-                                StringComparison.Ordinal))
-                        {
-                            Message body = maybe.FirstPart();
-                            ReadOnlySpan<byte> payloadSpan =
-                                body.AsReadOnlySpan();
-                            if (StopToken.IsStopToken(payloadSpan))
-                                return;
-
-                            long recvTicks = Stopwatch.GetTimestamp();
-                            if (TryDecodeExpectedSingleHeader(payloadSpan,
-                                    msgSize, ActivePhase, out var header, RunId)
-                                && recvTicks <= deadlineTicks)
-                            {
-                                Interlocked.Increment(ref received);
-                                ulong nowNs = EpochNs();
-                                if (nowNs >= header.SentTsNs)
-                                {
-                                    double latencyNs = nowNs - header.SentTsNs;
-                                    ReservoirSample(samples, latencyNs,
-                                        ref sampleSeen, latencyCap, ref rng);
-                                }
-                            }
-                        }
-
-                        try
-                        {
-                            drain = receiver.Subscribe(maybe,
-                                RecvFlags.DontWait);
-                        }
-                        catch (ZlinkException ex)
-                            when (IsInterrupted(ex.NativeErrno)
-                                  || IsWouldBlock(ex.NativeErrno))
-                        {
-                            drain = false;
-                        }
-                    }
                 }
             }
             catch (Exception ex)
             {
-                recvError = ex;
+                sendError = ex;
+            }
+            finally
+            {
+                PublishStopTokenBlocking(sender, Topic, "[single-pubsub]");
             }
         });
-        recvThread.IsBackground = true;
-        recvThread.Start();
+        senderThread.IsBackground = true;
+        senderThread.Start();
 
-        bool sendFailed = false;
-        ulong seq = 1;
-        while (Stopwatch.GetTimestamp() < deadlineTicks)
+        try
         {
-            StampMetricHeader(payload.AsSpan(), RunId, ActivePhase, msgSize, seq,
-                EpochNs());
-            seq++;
-            try
+            while (!stopReceived)
             {
-                if (!PublishActiveMessageBlocking(sender, Topic, payload,
-                        "[single-pubsub]"))
+                if (!WaitForInputSignalDriven(poller, events))
                     continue;
-            }
-            catch (ZlinkException ex)
-                when (PerfShared.IsTransientBackpressure(ex.NativeErrno))
-            {
-                continue;
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[single-pubsub] send failed: {ex.Message}");
-                sendFailed = true;
-                break;
+
+                while (TrySubscribeNonBlocking(receiver, maybe))
+                {
+                    if (string.Equals(maybe.Topic, Topic,
+                            StringComparison.Ordinal))
+                    {
+                        Message body = maybe.FirstPart();
+                        ReadOnlySpan<byte> payloadSpan = body.AsReadOnlySpan();
+                        if (StopToken.IsStopToken(payloadSpan))
+                        {
+                            stopReceived = true;
+                            break;
+                        }
+
+                        long recvTicks = Stopwatch.GetTimestamp();
+                        if (TryDecodeExpectedSingleHeader(payloadSpan,
+                                msgSize, ActivePhase, out var header, RunId)
+                            && recvTicks <= deadlineTicks)
+                        {
+                            received++;
+                            ulong nowNs = EpochNs();
+                            if (nowNs >= header.SentTsNs)
+                            {
+                                double latencyNs = nowNs - header.SentTsNs;
+                                ReservoirSample(samples, latencyNs,
+                                    ref sampleSeen, latencyCap, ref rng);
+                            }
+                        }
+                    }
+                }
             }
         }
+        catch (Exception ex)
+        {
+            recvError = ex;
+        }
 
-        PublishStopTokenBlocking(sender, Topic, "[single-pubsub]");
-        recvThread.Join();
+        senderThread.Join();
 
         latencySamples = samples;
         receivedOut = received;
-        if (sendFailed || recvError != null)
+        if (sendError != null || recvError != null)
             return false;
 
         return received > 0 && latencySamples.Count > 0;
+    }
+
+    private static bool TrySubscribeNonBlocking(ISubSocket receiver,
+        TopicMessage result)
+    {
+        try
+        {
+            return receiver.Subscribe(result, RecvFlags.DontWait);
+        }
+        catch (ZlinkRecvException ex)
+            when (ex.Result == ZlinkRecvException.ErrorCode.NoData
+                  || IsInterrupted(ex.NativeErrno)
+                  || IsWouldBlock(ex.NativeErrno))
+        {
+            return false;
+        }
+        catch (ZlinkException ex)
+            when (IsInterrupted(ex.NativeErrno) || IsWouldBlock(ex.NativeErrno))
+        {
+            return false;
+        }
     }
 
     private static bool IsInterrupted(int errno)

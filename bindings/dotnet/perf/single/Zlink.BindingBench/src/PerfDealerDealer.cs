@@ -128,104 +128,90 @@ internal static class PerfDealerDealer
         long sampleSeen = 0;
         uint rng = 0xA341316Cu;
 
-        // PERF_SINGLE_TEST_POLICY § 1.4 / C parity: blocking first recv per
-        // cycle (zlink_recv_part flags=0), then DontWait burst-drain, exit
-        // on the wire-level stop token. Mirrors
-        // bindings/c/perf/single/common/perf_single_one_way.hpp exactly (no
-        // IPoller / no DontWait spin loop).
-        var recvThread = new Thread(() =>
-        {
-            // Reuse one Received envelope for the whole phase (parity with C
-            // which reuses a single stack header buffer).
-            using var maybe = Received.Create();
+        // PERF_SINGLE_TEST_POLICY § 1.4 / C parity: wait on the receiver
+        // poller, receive with DontWait, drain the available burst, and end
+        // only on the wire-level stop token. The sender owns the active
+        // deadline and uses the blocking flags-none send path from C.
+        using var poller = Zlink.CreatePoller();
+        var events = new PollEvent[1];
+        poller.Add(receiver, PollEventFlags.PollIn, 0);
+        using var maybe = Received.Create();
+        bool stopReceived = false;
+        Exception? sendError = null;
 
+        var senderThread = new Thread(() =>
+        {
             try
             {
-                while (true)
+                long senderDeadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
+                ulong seq = 1;
+                while (Stopwatch.GetTimestamp() < senderDeadlineTicks)
                 {
-                    try
-                    {
-                        if (!receiver.Recv(maybe, RecvFlags.None))
-                            continue;
-                    }
-                    catch (ZlinkException ex)
-                        when (IsInterrupted(ex.NativeErrno)
-                              || IsWouldBlock(ex.NativeErrno))
-                    {
+                    StampMetricHeader(payload.AsSpan(), RunId, ActivePhase,
+                        msgSize, seq, EpochNs());
+                    seq++;
+                    if (SendBlocking(sender, payload) <= 0)
                         continue;
-                    }
-
-                    bool drain = true;
-                    while (drain)
-                    {
-                        {
-                            ReadOnlySpan<byte> body = maybe.FirstPart()
-                                .AsReadOnlySpan();
-                            if (StopToken.IsStopToken(body))
-                                return;
-
-                            long recvTicks = Stopwatch.GetTimestamp();
-                            if (TryDecodeExpectedSingleHeader(body, msgSize,
-                                    ActivePhase, out var header, RunId)
-                                && recvTicks <= deadlineTicks)
-                            {
-                                Interlocked.Increment(ref received);
-                                ulong nowNs = EpochNs();
-                                if (nowNs >= header.SentTsNs)
-                                {
-                                    double latencyNs = nowNs - header.SentTsNs;
-                                    ReservoirSample(samples, latencyNs,
-                                        ref sampleSeen, latencyCap, ref rng);
-                                }
-                            }
-                        }
-
-                        drain = receiver.Recv(maybe, RecvFlags.DontWait);
-                    }
                 }
             }
             catch (Exception ex)
             {
-                recvError = ex;
+                sendError = ex;
+            }
+            finally
+            {
+                if (!SendStopTokenBlocking(sender, "[single-dealer-dealer]"))
+                    sendError ??= new InvalidOperationException(
+                        "dealer-dealer stop token was not sent");
             }
         });
-        recvThread.IsBackground = true;
-        recvThread.Start();
+        senderThread.IsBackground = true;
+        senderThread.Start();
 
-        bool sendFailed = false;
-        ulong seq = 1;
-        while (Stopwatch.GetTimestamp() < deadlineTicks)
+        try
         {
-            StampMetricHeader(payload.AsSpan(), RunId, ActivePhase, msgSize, seq,
-                EpochNs());
-            seq++;
-            try
+            while (!stopReceived)
             {
-                if (!TrySendActiveMessage(sender, payload,
-                        "[single-dealer-dealer]"))
+                if (!WaitForInputSignalDriven(poller, events))
                     continue;
-            }
-            catch (ZlinkException ex)
-                when (PerfShared.IsTransientBackpressure(ex.NativeErrno))
-            {
-                continue;
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[single-dealer-dealer] send failed: {ex.Message}");
-                sendFailed = true;
-                break;
+
+                while (TryReceiveNonBlocking(receiver, maybe))
+                {
+                    ReadOnlySpan<byte> body = maybe.FirstPart()
+                        .AsReadOnlySpan();
+                    if (StopToken.IsStopToken(body))
+                    {
+                        stopReceived = true;
+                        break;
+                    }
+
+                    long recvTicks = Stopwatch.GetTimestamp();
+                    if (TryDecodeExpectedSingleHeader(body, msgSize,
+                            ActivePhase, out var header, RunId)
+                        && recvTicks <= deadlineTicks)
+                    {
+                        received++;
+                        ulong nowNs = EpochNs();
+                        if (nowNs >= header.SentTsNs)
+                        {
+                            double latencyNs = nowNs - header.SentTsNs;
+                            ReservoirSample(samples, latencyNs,
+                                ref sampleSeen, latencyCap, ref rng);
+                        }
+                    }
+                }
             }
         }
+        catch (Exception ex)
+        {
+            recvError = ex;
+        }
 
-        // PERF_SINGLE_TEST_POLICY § 1.4: signal phase end via wire-level
-        // stop token. Bounded retry through transient backpressure.
-        SendStopTokenBlocking(sender, "[single-dealer-dealer]");
-        recvThread.Join();
+        senderThread.Join();
 
         latencySamples = samples;
         receivedOut = received;
-        if (sendFailed || recvError != null)
+        if (sendError != null || recvError != null)
             return false;
 
         return received > 0 && latencySamples.Count > 0;

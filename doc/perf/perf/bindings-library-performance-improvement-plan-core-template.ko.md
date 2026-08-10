@@ -472,22 +472,21 @@ C와 binding의 pattern별 smoke가 모두 `status: complete`여야 본 측정�
 8. C 대비 throughput과 평균 latency를 비교하고 현재 transport의 목표 미달 셀을 확인한다.
 9. 미달 셀은 profiler, allocation 자료, copy 수, callback/dispatch 및 native 경계
    자료로 비용 위치를 확인한다.
-10. 의미를 보존하는 개선안을 두 가지 이상 설계하고, 예상 영향 셀과 폐기 기준을 적은 뒤
-   public interface가 더 단순하고 책임 경계가 분명한 방안을 선택한다. 두 방안이 모두
-   계약과 POSD gate를 만족하면 예상 성능 효과가 큰 방안을 우선한다.
-11. 제한 사전 점검을 통과한 뒤 현재 transport의 후보 after를 측정한다. 비교 환경이
-    달라졌으면 같은 C pattern과 transport를 먼저 다시 측정한다.
-12. 추가 반복은 before/after 확인이나 원인 진단이 필요할 때만 수행한다. 추가 반복값은
-    원시 측정 기록으로 남기며 기존 측정값을 무효화하거나 다음 대상 진행을 막지 않는다.
+10. aggregate 평균이 미달한 대상은 먼저 자체 hot-path 개선 pass를 수행한다. 후보는
+    public interface, ownership, error contract와 측정 의미를 유지해야 하며, 후보 after를
+    한 번 측정해 자체 pass의 효과를 기록한다.
+11. 자체 pass 뒤에도 대상의 최종 판단을 닫지 않는다. Sol에 read-only review를 요청하고,
+    리뷰에서 선택한 계약 보존 후보로 두 번째 개선 pass를 수행해 after를 한 번 측정한다.
+    Sol이 안전한 후보를 제시하지 않으면 그 no-go 판단을 두 번째 pass의 결과로 기록한다.
+12. 두 개선 pass의 before/after와 aggregate 결과를 비교한다. 추가 반복은 원인 진단이나
+    before/after 확인에 꼭 필요할 때만 수행하며, 변동값을 이유로 반복하지 않는다.
 13. 기능 테스트와 같은 pattern 안의 대상이 아닌 대표 셀에 대한 회귀 gate를 통과시킨다.
 14. 현재 transport의 모든 message size report가 complete이고 throughput·latency aggregate
     평균이 목표를 만족하면 transport 완료를 기록한다. 개별 size 미달은 결과에 기록한다.
     성능 개선 코드를 채택했다면 검증된 변경과 측정 근거만 커밋하고 원격에 푸시한 뒤 다음
     transport로 이동한다.
-15. aggregate 평균이 미달하면 hot path 병목을 확인하고 후보를 한 번 A/B 비교한다. 후보가
-    없거나 A/B가 개선되지 않으면 구조 변경 가능성이 있는 경우에만 Sol에 한 번 리뷰를
-    요청한다. 리뷰 후에도 공개 contract를 유지하는 효과 있는 후보가 없으면 즉시 `보류`로
-    기록하고 다음 transport로 이동한다. 변동값을 이유로 반복 측정하지 않는다.
+15. aggregate 평균이 미달한 대상은 자체 pass와 Sol pass가 모두 끝난 뒤에도 공개 contract를
+    유지한 효과 있는 후보가 없을 때만 `보류`로 기록하고 다음 transport로 이동한다.
 16. 선택한 pattern의 모든 공식 transport report가 complete이고 각 transport의
     throughput·latency aggregate 평균이 통과 또는 보류로 확정되면 pattern 완료를 기록하고
     관련 문서를 커밋해 원격에 푸시한다.
@@ -517,10 +516,11 @@ pattern 완료는 수치를 한 번 얻었다는 뜻이 아니다. 다음 조건
 - 상세 표에 C report, binding report, 반복값, 비율과 판정 근거를 기록했다.
 - POSD 위험 신호를 변경 전후로 다시 확인했고 새 복잡성을 만들지 않았다.
 
-목표에 미달하면 hot path 원인 분석과 후보 A/B를 한 번 수행한다. 개선되지 않으면 필요한
-경우 Sol 리뷰를 한 번 거친 뒤, 공개 contract를 유지하는 효과 있는 후보가 없으면 즉시
-`보류`로 확정한다. 변동값과 안정성을 이유로 같은 셀을 반복하지 않는다. public contract
-변경이 필요하면 우회 구현으로 통과시키지 않고 `보류`로 기록한다.
+목표에 미달하면 자체 개선 pass와 Sol 리뷰 기반 개선 pass를 각각 한 번씩 수행한다. 각
+pass는 before/after 또는 후보 no-go 결과를 남긴다. 두 pass가 끝난 뒤에도 공개 contract를
+유지한 효과 있는 후보가 없으면 `보류`로 확정한다. 변동값과 안정성을 이유로 같은 셀을
+반복하지 않는다. public contract 변경이 필요하면 우회 구현으로 통과시키지 않고 `보류`로
+기록한다.
 
 ### 7.6 개선 코드 커밋과 푸시
 
@@ -544,9 +544,12 @@ before/after 측정으로 이득이 분리되지 않거나 cleanup·thread 이�
 - perf 전용 우회나 public contract 위반이 남은 후보
 - 기능 테스트를 통과하지 못한 후보
 
-large-message buffer pool은 이 계획에서 사용하지 않는 것으로 확정한다. pool 재도입이나
-pool A/B는 후보로 취급하지 않는다. 후보를 기각했으면 코드를 최종 변경에서 제거하고
-측정 결과와 기각 이유만 로그에 남긴다.
+C++ binding 경로에서는 large-message buffer pool을 사용하지 않는 것으로 확정한다. C++의
+pool 재도입이나 pool A/B는 후보로 취급하지 않는다. 반면 .NET과 같이 VM 또는 managed
+runtime 위에서 동작하는 binding에 이미 존재하는 `Message`·byte storage pool은 기존 내부
+구현으로 유지할 수 있다. managed binding에서 pool을 새로 도입하거나 정책을 바꿀 때도
+public ownership과 재사용 경계를 바꾸지 않고, 별도 후보로 before/after 측정을 남긴다.
+후보를 기각했으면 코드를 최종 변경에서 제거하고 측정 결과와 기각 이유만 로그에 남긴다.
 
 ### 7.7 성능 개선의 POSD gate
 
@@ -582,9 +585,9 @@ transport 세부 정보, perf 전용 option을 노출하지 않는다. 새 helpe
   개별 size의 최소 기준·latency 상한 미달은 outlier로 함께 기록할 수 있다.
 - `미달(비율%)`: 최종 판정 전의 임시 상태다. 유효한 paired 결과가 있지만 throughput 또는
   latency의 aggregate 평균 목표에 도달하지 않았고 hot path 검토 또는 후보 비교가 남아 있다.
-- `보류`: paired 측정과 실제 개선 후보 검토·측정을 완료했지만 public contract를 유지한
-  추가 개선 요소가 없어 현재 aggregate 목표를 달성하지 못한 채 다음 대상으로 이동한다.
-  변동 폭이나 안정성을 이유로 `보류`하지 않는다.
+- `보류`: paired 측정, 자체 개선 pass, Sol 리뷰 기반 두 번째 개선 pass를 완료했지만
+  public contract를 유지한 추가 개선 요소가 없어 현재 aggregate 목표를 달성하지 못한 채
+  다음 대상으로 이동한다. 변동 폭이나 안정성을 이유로 `보류`하지 않는다.
 - 상세 표의 최종 상태는 `통과(비율%)`, `보류(비율%)`, `미측정`을 사용한다. C와 binding의
   paired report가 있고 ratio와 latency가 기록된 pattern·transport이면 size ratio와 평균
   latency ratio의 aggregate 평균으로 상태를 판정한다. paired report가 없는 셀만

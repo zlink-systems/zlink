@@ -53,6 +53,55 @@ internal static partial class PerfRunner
         }
     }
 
+    // C's routed setup polls the Router socket together with its monitor so
+    // the connection-ready event is delivered before the active phase.
+    // Keep that setup-only activity in the perf harness; it is not part of
+    // the measured send/receive loop.
+    internal static bool WaitForConnectionReadyWithActivity(
+        MonitorSocket monitor, IZlinkSocket activitySocket, int timeoutMs)
+    {
+        using var activityPoller = Zlink.CreatePoller();
+        var events = new PollEvent[1];
+        activityPoller.Add(activitySocket, PollEventFlags.PollIn, 0);
+        long deadlineTicks = DeadlineTicksFromMilliseconds(timeoutMs);
+        while (true)
+        {
+            long nowTicks = Stopwatch.GetTimestamp();
+            if (nowTicks >= deadlineTicks)
+                return false;
+
+            try
+            {
+                while (true)
+                {
+                    MonitorEvent? evt = monitor.Recv(RecvFlags.DontWait);
+                    if (evt == null)
+                        break;
+                    if (evt.Event == MonitorEventType.ConnectionReady
+                        || evt.Event == MonitorEventType.Accepted)
+                        return true;
+                }
+            }
+            catch (ZlinkException ex) when (IsInterrupted(ex.NativeErrno)
+                                            || IsWouldBlock(ex.NativeErrno))
+            {
+            }
+
+            long remainingTicks = deadlineTicks - Stopwatch.GetTimestamp();
+            if (remainingTicks <= 0)
+                return false;
+            long remainingMs = (remainingTicks * 1000L
+                + Stopwatch.Frequency - 1) / Stopwatch.Frequency;
+            int waitMs = remainingMs > int.MaxValue
+                ? int.MaxValue
+                : (int)remainingMs;
+            int ready = activityPoller.Wait(events,
+                TimeSpan.FromMilliseconds(Math.Min(waitMs, 1)));
+            if (ready < 0)
+                return false;
+        }
+    }
+
     internal static bool IsExpectedSingleHeader(PerfMetricHeader header,
         int msgSize, uint phase, uint runId = 1)
     {
@@ -218,6 +267,27 @@ internal static partial class PerfRunner
         }
     }
 
+    internal static bool TryReceiveNonBlocking(IMessageSocket receiver,
+        Received result)
+    {
+        try
+        {
+            return receiver.Recv(result, RecvFlags.DontWait);
+        }
+        catch (ZlinkRecvException ex)
+            when (ex.Result == ZlinkRecvException.ErrorCode.NoData
+                  || IsInterrupted(ex.NativeErrno)
+                  || IsWouldBlock(ex.NativeErrno))
+        {
+            return false;
+        }
+        catch (ZlinkException ex)
+            when (IsInterrupted(ex.NativeErrno) || IsWouldBlock(ex.NativeErrno))
+        {
+            return false;
+        }
+    }
+
     // PERF_SINGLE_TEST_POLICY § 1.4: send the wire-level stop token through
     // the socket's writable signal. The stop path must not turn a full queue
     // into an unbounded blocking native call after the active window ends.
@@ -321,7 +391,7 @@ internal static partial class PerfRunner
         return PerfEnv.ReadPositive("PERF_SINGLE_STOP_TIMEOUT_MS", 10000);
     }
 
-    private static int RemainingMilliseconds(long deadlineTicks)
+    internal static int RemainingMilliseconds(long deadlineTicks)
     {
         long remainingTicks = deadlineTicks - Stopwatch.GetTimestamp();
         if (remainingTicks <= 0)

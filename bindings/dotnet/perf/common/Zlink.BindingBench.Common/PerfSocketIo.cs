@@ -70,7 +70,11 @@ public static class PerfSocketIo
         Message message = CreatePooledMessage(payload);
         try
         {
-            if (socket.Publish(topic).Message(message).Flags(flags).Submit())
+            var submit = socket.Publish(topic).Message(message);
+            bool sent = flags == SendFlags.None
+                ? submit.Submit()
+                : submit.Flags(flags).Submit();
+            if (sent)
                 return payload.Length;
             return 0;
         }
@@ -83,8 +87,8 @@ public static class PerfSocketIo
     private static Message CreatePooledMessage(ReadOnlySpan<byte> payload)
     {
         // HOT PATH: a successful submit consumes the payload, but the caller
-        // must still dispose the wrapper. The pool-backed public path prevents
-        // one managed wrapper per message from being left for GC.
+        // must still dispose the wrapper. Managed bindings may use the
+        // existing per-thread Message pool to avoid wrapper GC churn.
         Message message = Message.Allocate(payload.Length);
         payload.CopyTo(message.AsSpan());
         return message;

@@ -52,20 +52,24 @@ internal static class PerfDealerRouter
         RecalculateSingleAutoHwm(ctx);
         ConfigureTlsServerIfNeeded(receiver, transport);
         ConfigureTlsClientIfNeeded(sender, transport);
+        sender.SetRoutingId(RoutingId.From("CLIENT"u8));
         MonitorSocket? receiverMonitor = null;
         MonitorSocket? senderMonitor = null;
         string endpoint = EndpointFor(transport, "dealer-router");
 
         try
         {
-            receiver.Bind(endpoint);
-            endpoint = receiver.Options.LastEndpoint;
-            receiverMonitor = receiver.MonitorOpen(SocketEvent.ConnectionReady);
-            senderMonitor = sender.MonitorOpen(SocketEvent.ConnectionReady);
-            sender.Connect(endpoint);
             ApplySingleSocketOptions(receiver);
             ApplySingleSocketOptions(sender);
-            if (!(WaitForConnectionReady(receiverMonitor, readyTimeoutMs)
+            receiverMonitor = receiver.MonitorOpen(
+                SocketEvent.ConnectionReady | SocketEvent.Accepted);
+            senderMonitor = sender.MonitorOpen(
+                SocketEvent.ConnectionReady | SocketEvent.Accepted);
+            receiver.Bind(endpoint);
+            endpoint = receiver.Options.LastEndpoint;
+            sender.Connect(endpoint);
+            if (!(WaitForConnectionReadyWithActivity(receiverMonitor, receiver,
+                    readyTimeoutMs)
                 && WaitForConnectionReady(senderMonitor, readyTimeoutMs)))
             {
                 DebugLog("single_dealer_router_error:connection_not_ready");

@@ -37,17 +37,36 @@ PAIR/inproc C report: `/home/hep7hep7/project/zlink/bindings/c/perf/results/sing
 | 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
 |------|-----------------------------|---------------------------|--------|
 | C 기준 | 2452.925 / 1264.220 / 702.028 / 41.942 / 26.358 / 15.910 | 1.051 / 0.229 / 0.292 / 4.841 / 7.766 / 12.915 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_133934_dotnet-pair-tcp-c-full.txt` |
-| .NET baseline | 1821.704 / 932.936 / 551.677 / 36.991 / 24.980 / 15.081 | 0.085 / 0.241 / 4.369 / 5.470 / 8.184 / 13.617 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_133947_dotnet-pair-tcp-dotnet-full.txt` |
-| .NET final | 1892.295 / 919.669 / 603.699 / 39.236 / 24.924 / 14.992 | 0.171 / 0.240 / 0.326 / 5.189 / 8.229 / 13.713 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_134835_dotnet-pair-tcp-dotnet-flags-none-ab.txt` |
+| .NET 자체 pass before | 1800.074 / 915.362 / 590.222 / 34.316 / 23.467 / 14.556 | 0.096 / 0.278 / 0.394 / 5.904 / 8.651 / 14.057 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_143203_dotnet-pair-tcp-own-before-pool.txt` |
+| .NET 자체 pass after | 1908.233 / 904.756 / 588.862 / 36.686 / 25.019 / 14.296 | 0.137 / 0.264 / 0.374 / 5.531 / 8.168 / 14.237 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_142021_dotnet-pair-tcp-parity-baseline.txt` |
 
-Final throughput ratio is `77.14% / 72.75% / 85.99% / 93.55% / 94.56% / 94.23%`, arithmetic mean `86.37%`. Final average latency ratio is `0.163x / 1.048x / 1.116x / 1.072x / 1.060x / 1.062x`, arithmetic mean `0.920x`; the target passes.
+After throughput ratio is `77.79% / 71.57% / 83.88% / 87.47% / 94.92% / 89.86%`, arithmetic mean `84.25%`; before was `82.03%`. After average latency ratio is `0.130x / 1.153x / 1.281x / 1.143x / 1.052x / 1.102x`, arithmetic mean `0.977x`. The throughput target remains unmet. Sol second pass found no contract-safe candidate beyond the existing pool and reusable receive path, so the target is held.
 
 ### .NET Single PUBSUB/tcp
 
 | 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
 |------|-----------------------------|---------------------------|--------|
 | C 기준 | 1601.681 / 1052.561 / 598.716 / 40.742 / 26.514 / 16.116 | 0.129 / 0.275 / 0.344 / 4.990 / 7.719 / 12.789 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_135104_dotnet-pubsub-tcp-c1.txt` |
-| .NET baseline | 1000.362 / 714.788 / 526.673 / 38.179 / 24.805 / 14.135 | 0.098 / 0.218 / 0.361 / 5.341 / 8.269 / 14.535 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_135121_dotnet-pubsub-tcp-dotnet1.txt` |
-| .NET A/B | 1046.824 / 758.847 / 526.019 / 39.146 / 24.623 / 14.626 | 0.093 / 0.202 / 0.378 / 5.214 / 8.329 / 14.064 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_135204_dotnet-pubsub-tcp-dotnet-flags-none-ab.txt` |
+| .NET 자체 pass before | 1011.038 / 701.552 / 535.344 / 38.566 / 23.859 / 12.613 | 0.104 / 0.229 / 0.447 / 5.305 / 8.593 / 15.936 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_142030_dotnet-pubsub-tcp-parity-baseline.txt` |
+| .NET 자체 pass after | 997.907 / 744.385 / 538.418 / 40.003 / 22.923 / 14.812 | 0.093 / 0.208 / 0.708 / 5.110 / 8.850 / 13.772 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_142943_dotnet-pubsub-tcp-own-after-pool.txt` |
 
-Baseline throughput ratio is `62.46% / 67.91% / 87.97% / 93.71% / 93.55% / 87.71%`, arithmetic mean `82.22%`. The one A/B reached `65.36% / 72.10% / 87.86% / 96.08% / 92.87% / 90.75%`, arithmetic mean `84.17%`; average latency ratio was `0.963x`. The throughput target remained unmet, so the target is held.
+After throughput ratio is `62.30% / 70.72% / 89.93% / 98.19% / 86.46% / 91.91%`, arithmetic mean `83.25%`; before was `80.35%`. After average latency ratio is `0.721x / 0.756x / 2.058x / 1.024x / 1.147x / 1.077x`, arithmetic mean `1.130x`. The throughput target remains unmet. Sol second pass found no contract-safe message/builder reuse or direct path, so the target is held.
+
+### .NET Single DEALER_DEALER/tcp
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 2564.108 / 1322.261 / 711.897 / 41.628 / 26.101 / 15.477 | 1.100 / 0.259 / 0.351 / 4.886 / 7.846 / 13.294 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_135400_dotnet-dealer-dealer-tcp-c1.txt` |
+| .NET 자체 pass before | 1437.752 / 933.404 / 637.397 / 33.244 / 21.741 / 12.501 | 49.561 / 0.218 / 0.488 / 6.082 / 9.357 / 16.244 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_143235_dotnet-dealer-dealer-tcp-own-before-pool.txt` |
+| .NET 자체 pass after | 1197.629 / 911.056 / 623.238 / 34.232 / 23.788 / 14.258 | 47.569 / 0.218 / 0.491 / 5.876 / 8.564 / 14.283 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_142040_dotnet-dealer-dealer-tcp-parity-baseline.txt` |
+
+After throughput ratio is `46.71% / 68.90% / 87.55% / 82.23% / 91.14% / 92.12%`, arithmetic mean `78.11%`; before was `76.69%`. After average latency ratio is `43.245x / 0.842x / 1.399x / 1.203x / 1.092x / 1.074x`, arithmetic mean `8.142x`. The throughput target remains unmet. Sol second pass found no contract-safe candidate; builder pool, private direct send and ownership changes are excluded, so the target is held.
+
+### .NET Single DEALER_ROUTER/tcp
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 2385.893 / 1154.776 / 713.551 / 40.904 / 25.679 / 16.368 | 20.331 / 0.751 / 9.451 / 4.976 / 8.038 / 12.730 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_135529_dotnet-dealer-router-tcp-c1.txt` |
+| .NET baseline | 1189.906 / 1005.534 / 676.978 / 36.908 / 23.706 / 14.595 | 53.346 / 0.274 / 0.516 / 5.517 / 8.690 / 14.259 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_141217_dotnet-dealer-router-tcp-baseline.txt` |
+
+Throughput ratio is `49.87% / 87.08% / 94.87% / 90.23% / 92.32% / 89.17%`, arithmetic mean `83.92%`. Average latency ratio is `2.624x / 0.365x / 0.055x / 1.109x / 1.081x / 1.120x`, arithmetic mean `1.059x`. The aggregate throughput and latency targets pass; the 64B throughput ratio is recorded as an individual result and does not change the aggregate decision.
