@@ -279,6 +279,10 @@ binding report에서 실제 client 수와 STREAM client 수가 같은지, memory
 - 성능 목표 달성이 작업의 우선 목적이지만, 개선 설계와 구현은
   `doc/principal/dev/posddd.md`의 POSDDD 원칙을 계속 만족해야 한다.
 - 성능 개선은 각 binding의 public API를 사용하는 일반 경로에서 이루어져야 한다.
+- contract의 public interface(공개 함수·메서드 signature, 공개 type·enum 값,
+  ownership·error 동작)는 변경하지 않는다. 기존 public interface의 변경도 허용하지
+  않으며, 성능 개선은 현재 interface를 호출하는 binding 내부 구현과 perf harness의
+  의미 정렬 범위에서만 수행한다.
 - perf 전용 public API, private API 접근, C API 직접 호출, 특정 입력만 겨냥한 우회는
   개선으로 인정하지 않는다.
 - perf는 측정 의미가 C와 다르거나, 실제 버그가 있거나, `doc/perf` 정책을 위반한
@@ -561,25 +565,26 @@ transport 세부 정보, perf 전용 option을 노출하지 않는다. 새 helpe
 - `통과(비율%)`: 측정된 throughput과 latency, 회귀, Effective Options, auto-HWM,
   client 수 조건을 만족한다. 원시 반복값은 측정 기록으로 남긴다.
 - `미달(비율%)`: 유효한 결과가 있지만 목표에 도달하지 못했고 내부 개선이 필요하다.
-- `보류(비율%)`: throughput과 latency 결과는 기록했지만 public contract 또는 설계
-  결정이 먼저 필요한 상태다. 측정값의 크기나 반복값을 이유로 사용하지 않으며, 다음
-  대상 진행을 막지 않는다.
-- `측정값 기준 평가`: 같은 행의 throughput ratio와 latency를 현재 기준으로 평가하는
-  상태다. 최소 기준과 중앙값 목표를 충족하면 통과로, 충족하지 않으면 미달로 해석하며
-  다음 대상 진행을 막지 않는다.
+- 상세 표의 최종 셀 상태는 `통과(비율%)`, `미달(비율%)`, `미측정`만 사용한다.
+  C와 binding의 paired report가 있고 ratio와 latency가 기록된 셀은 반복값의 크기와
+  관계없이 해당 측정값으로 바로 `통과` 또는 `미달`을 판정한다. paired report가 없는
+  셀만 `미측정`으로 남긴다.
+- 측정 여부는 두 report 경로가 있고 두 report가 모두 `status: complete`이며 ratio가
+  기록되어 있는지로 확인한다. 이 조건이면 `측정 완료`이고, 셀 값이 `미측정`이면
+  아직 측정하지 않은 것이다. `측정값으로 판정` 같은 문구는 상태 값으로 사용하지 않는다.
 - `해당 없음`: 공식 C runner와 binding 정책 모두 측정하지 않는 조합이다.
 
-원시 반복값이나 하향 drift는 필요한 경우 측정 기록으로만 남긴다. 이것만으로 `보류`,
-`미측정` 또는 별도 판정 상태를 만들지 않는다. 측정값이 있으면 throughput ratio와
-latency ratio로 즉시 평가하고 다음 대상으로 진행한다. `보류`는 측정값만으로 public
-contract나 설계 결정을 확정할 수 없는 경우에만 사용한다.
+원시 반복값이나 하향 drift는 필요한 경우 측정 기록으로만 남긴다. 이것만으로 `미측정`
+또는 별도 판정 상태를 만들지 않는다. 측정값이 있으면 throughput ratio와 latency ratio로
+즉시 판정하고 다음 대상으로 진행한다. public contract 변경이 필요한 후보는 채택하지
+않고 현재 interface를 유지한다.
 
 과거 문서나 로그의 분류는 이력으로 보존하되, C와 binding report가 모두 `status: complete`이고
 ratio가 기록되어 있으면 그 ratio와 평균 latency를 모두 측정값으로 사용해 `통과` 또는 `미달`로
 평가한다. 원시 반복값은 함께 기록하지만 판정, 추가 측정, 다음 대상 이동을 막는 조건으로
 사용하지 않는다. `미측정`은 paired report 자체가 없을 때만 사용한다.
 
-timeout, no result, runtime mismatch, message size 불일치, client 수 불일치는 성능 보류가
+timeout, no result, runtime mismatch, message size 불일치, client 수 불일치는 성능 판정이
 아니다. 원인을 수정해 수치가 생성될 때까지 `미측정`으로 유지한다.
 
 계획서의 결과 표에는 다음 측정 기록과 결과만 남긴다. 나머지 과정은 `log/`에 남긴다.
@@ -599,7 +604,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ## 9. 언어별 성능 확인 표
 
 모든 언어는 같은 열과 같은 상태 규칙을 사용한다. 상세 표의 상태가 진행 상태 요약보다
-우선한다. 상세 표에 `미측정`, `미달`, `보류`가 하나라도 남아 있으면
+우선한다. 상세 표에 `미측정` 또는 `미달`이 하나라도 남아 있으면
 해당 언어는 완료가 아니다.
 
 ### 9.1 C++
@@ -1196,7 +1201,7 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
 - runner, 정책, 상세 표의 pattern, transport, size inventory가 일치한다.
 - 각 pattern의 최종 판정에 사용한 core {{CORE_VERSION}} C와 binding paired report가 모두
   `status: complete`다.
-- 모든 binding 상세 표에 `미측정`, `미달`, `보류`가 없다.
+- 모든 binding 상세 표에 `미측정` 또는 `미달`이 없다.
 - 모든 통과 셀에 paired C와 binding report, manifest, 반복값, 비율, 옵션 일치 근거가
   기록되어 있다.
 - throughput, 평균 latency, client 수, auto-HWM, 대상 외 대표 셀 회귀 gate를 측정값으로
