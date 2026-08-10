@@ -116,16 +116,15 @@ internal static class PerfMultiPubSubServer
                && Stopwatch.GetTimestamp() < deadlineTicks)
         {
             using Message message = Message.Allocate(payloadSize);
-            StampMetricHeader(message.AsSpan(), runId, phase, size, seq,
+            StampMetricHeader(message.AsSpan(), runId, phase, size, seq++,
                 EpochNs());
-            if (PublishNoWait(server, message))
+            while (!controlState.StopRequested)
             {
-                seq++;
-                continue;
+                if (PublishNoWait(server, message))
+                    break;
+                if (!WaitForWritable(sendPoller, sendEvents, controlState))
+                    return false;
             }
-
-            if (!WaitForWritable(sendPoller, sendEvents, controlState))
-                return false;
         }
 
         return true;
