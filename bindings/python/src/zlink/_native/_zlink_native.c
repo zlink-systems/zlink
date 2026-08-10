@@ -528,6 +528,67 @@ static int raise_submit_error (int result, int err)
     return -1;
 }
 
+static PyObject *submit_single_part (void *handle,
+                                     const zlink_routing_id_t *routing_id,
+                                     PyObject *payload,
+                                     int flags)
+{
+    Py_buffer view = {0};
+    const char *payload_data = NULL;
+    Py_ssize_t payload_size = 0;
+    int has_view = 0;
+    int rc = ZLINK_SUBMIT_OK;
+    int err = 0;
+    zlink_msg_t part;
+
+    if (PyByteArray_Check (payload)) {
+        payload_data = PyByteArray_AS_STRING (payload);
+        payload_size = PyByteArray_GET_SIZE (payload);
+    } else if (PyBytes_Check (payload)) {
+        payload_data = PyBytes_AS_STRING (payload);
+        payload_size = PyBytes_GET_SIZE (payload);
+    } else {
+        if (PyObject_GetBuffer (payload, &view, PyBUF_CONTIG_RO) != 0)
+            return NULL;
+        payload_data = (const char *) view.buf;
+        payload_size = view.len;
+        has_view = 1;
+    }
+
+    /* HOT PATH: copy into a native message so a failed simple or routed send
+     * leaves the caller buffer unchanged. Do not replace this with a
+     * move/borrow shortcut for perf-only loops. */
+    if (zlink_msg_init_size (&part, (size_t) payload_size) != ZLINK_CONFIG_OK) {
+        err = zlink_errno ();
+        if (has_view)
+            PyBuffer_Release (&view);
+        if (err != 0)
+            errno = err;
+        PyErr_SetFromErrnoWithFilename (PyExc_OSError, NULL);
+        return NULL;
+    }
+    if (payload_size > 0)
+        memcpy (zlink_msg_data (&part), payload_data, (size_t) payload_size);
+
+    Py_BEGIN_ALLOW_THREADS if (routing_id) rc = zlink_send_part_rid (
+      handle, routing_id, &part, (zlink_send_flags_t) flags, ZLINK_PART_FINAL);
+    else rc = zlink_send_part (
+      handle, &part, (zlink_send_flags_t) flags, ZLINK_PART_FINAL);
+    if (rc != ZLINK_SUBMIT_OK) {
+        err = zlink_errno ();
+        zlink_msg_close (&part);
+    }
+    Py_END_ALLOW_THREADS
+
+      if (has_view) PyBuffer_Release (&view);
+    if (rc == ZLINK_SUBMIT_OK)
+        Py_RETURN_TRUE;
+    if ((flags & ZLINK_DONTWAIT) && rc == ZLINK_SUBMIT_BACKPRESSURED)
+        Py_RETURN_FALSE;
+    raise_submit_error (rc, err);
+    return NULL;
+}
+
 static int socket_send_op_add_message (socket_send_op_t *op, PyObject *payload)
 {
     if (op->parts) {
@@ -608,57 +669,8 @@ static PyObject *socket_send_op_submit (socket_send_op_t *op, PyObject *Py_UNUSE
         return raise_submit_error (ZLINK_SUBMIT_INVALID_ARGUMENT, 0), NULL;
 
     op->submitted = 1;
-    if (!op->parts) {
-        Py_buffer view = {0};
-        const char *payload_data = NULL;
-        Py_ssize_t payload_size = 0;
-        int has_view = 0;
-        zlink_msg_t part;
-
-        if (PyByteArray_Check (payload)) {
-            payload_data = PyByteArray_AS_STRING (payload);
-            payload_size = PyByteArray_GET_SIZE (payload);
-        } else if (PyBytes_Check (payload)) {
-            payload_data = PyBytes_AS_STRING (payload);
-            payload_size = PyBytes_GET_SIZE (payload);
-        } else {
-            if (PyObject_GetBuffer (payload, &view, PyBUF_CONTIG_RO) != 0)
-                return NULL;
-            payload_data = (const char *) view.buf;
-            payload_size = view.len;
-            has_view = 1;
-        }
-        /* HOT PATH: copy the caller buffer into a native message so a failed
-         * send leaves the Python payload unchanged. Do not replace this with
-         * a move/borrow shortcut for perf-only loops. */
-        if (zlink_msg_init_size (&part, (size_t) payload_size) != ZLINK_CONFIG_OK) {
-            err = zlink_errno ();
-            if (has_view)
-                PyBuffer_Release (&view);
-            if (err != 0)
-                errno = err;
-            PyErr_SetFromErrnoWithFilename (PyExc_OSError, NULL);
-            return NULL;
-        }
-        if (payload_size > 0)
-            memcpy (zlink_msg_data (&part), payload_data, (size_t) payload_size);
-
-        Py_BEGIN_ALLOW_THREADS rc =
-          zlink_send_part (op->handle, &part, (zlink_send_flags_t) op->flags, ZLINK_PART_FINAL);
-        if (rc != ZLINK_SUBMIT_OK) {
-            err = zlink_errno ();
-            zlink_msg_close (&part);
-        }
-        Py_END_ALLOW_THREADS
-
-          if (has_view) PyBuffer_Release (&view);
-        if (rc == ZLINK_SUBMIT_OK)
-            Py_RETURN_TRUE;
-        if ((op->flags & ZLINK_DONTWAIT) && rc == ZLINK_SUBMIT_BACKPRESSURED)
-            Py_RETURN_FALSE;
-        raise_submit_error (rc, err);
-        return NULL;
-    }
+    if (!op->parts)
+        return submit_single_part (op->handle, NULL, payload, op->flags);
 
     if (prepare_parts (payload, &prepared) != 0)
         return NULL;
@@ -801,57 +813,8 @@ static PyObject *routed_send_op_submit (routed_send_op_t *op, PyObject *Py_UNUSE
         return raise_submit_error (ZLINK_SUBMIT_INVALID_ARGUMENT, 0), NULL;
 
     op->submitted = 1;
-    if (!op->parts) {
-        Py_buffer view = {0};
-        const char *payload_data = NULL;
-        Py_ssize_t payload_size = 0;
-        int has_view = 0;
-        zlink_msg_t part;
-
-        if (PyByteArray_Check (payload)) {
-            payload_data = PyByteArray_AS_STRING (payload);
-            payload_size = PyByteArray_GET_SIZE (payload);
-        } else if (PyBytes_Check (payload)) {
-            payload_data = PyBytes_AS_STRING (payload);
-            payload_size = PyBytes_GET_SIZE (payload);
-        } else {
-            if (PyObject_GetBuffer (payload, &view, PyBUF_CONTIG_RO) != 0)
-                return NULL;
-            payload_data = (const char *) view.buf;
-            payload_size = view.len;
-            has_view = 1;
-        }
-        /* HOT PATH: copy the caller buffer into a native message so a failed
-         * routed send leaves the Python payload unchanged. Do not replace
-         * this with a move/borrow shortcut for perf-only loops. */
-        if (zlink_msg_init_size (&part, (size_t) payload_size) != ZLINK_CONFIG_OK) {
-            err = zlink_errno ();
-            if (has_view)
-                PyBuffer_Release (&view);
-            if (err != 0)
-                errno = err;
-            PyErr_SetFromErrnoWithFilename (PyExc_OSError, NULL);
-            return NULL;
-        }
-        if (payload_size > 0)
-            memcpy (zlink_msg_data (&part), payload_data, (size_t) payload_size);
-
-        Py_BEGIN_ALLOW_THREADS rc = zlink_send_part_rid (
-          op->handle, &op->routing_id, &part, (zlink_send_flags_t) op->flags, ZLINK_PART_FINAL);
-        if (rc != ZLINK_SUBMIT_OK) {
-            err = zlink_errno ();
-            zlink_msg_close (&part);
-        }
-        Py_END_ALLOW_THREADS
-
-          if (has_view) PyBuffer_Release (&view);
-        if (rc == ZLINK_SUBMIT_OK)
-            Py_RETURN_TRUE;
-        if ((op->flags & ZLINK_DONTWAIT) && rc == ZLINK_SUBMIT_BACKPRESSURED)
-            Py_RETURN_FALSE;
-        raise_submit_error (rc, err);
-        return NULL;
-    }
+    if (!op->parts)
+        return submit_single_part (op->handle, &op->routing_id, payload, op->flags);
 
     if (prepare_parts (payload, &prepared) != 0)
         return NULL;

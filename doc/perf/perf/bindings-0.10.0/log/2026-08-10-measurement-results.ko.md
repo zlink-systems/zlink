@@ -1035,6 +1035,26 @@ throughput ratio는 `10.922% / 14.666% / 32.528% / 97.852% / 77.047% / 99.709%`,
 
 다섯 대상 모두 shared native send, publisher 또는 routed receive owner 개선과 Sol review 범위에 포함되며 public interface·ownership·error 의미는 변경하지 않았다.
 
+### 완료 행 개선 검토 감사
+
+C++·.NET·Python 완료 행을 transport가 아니라 shared implementation path 기준으로 다시 확인했다. C++의 generic send/message/poller, PUBSUB, routed send/receive, request/reply, Multi routed echo와 STREAM은 각각 자체 A/B 또는 profile 검토와 Sol review가 기록되어 있다. .NET의 과거 누락 행은 Message, PUBSUB, routed, request/reply 공통 경로 재검토로 보완됐다. Python의 tcp·ws·wss·tls 20개 완료 행도 generic send, publisher, router receive-owner 공통 경로의 자체 A/B와 Sol review가 적용되어 있다. 따라서 완료 행 중 개선 검토를 생략한 shared hot path는 남아 있지 않으며, 같은 구현에 대한 transport별 중복 검토는 추가하지 않는다.
+
+### Python Single inproc 측정 및 개선 검토
+
+조건: Core `v0.10.1` release package, duration `1s`, runs `1`, msg sizes `64/256/1024/65536/131072/262144B`, auto-HWM `balanced`다. 각 대상은 C 종료 후 Python을 단독 실행했다.
+
+| 대상 | size별 throughput ratio | 산술평균 | latency 산술평균 | 판정 | report |
+|------|---------------------------|----------|----------------------|------|--------|
+| `PAIR/inproc` | 4.409% / 6.968% / 6.031% / 7.482% / 13.874% / 15.861% | 9.104% | 390.586x | 보류 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_014313_python-pair-inproc-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_014326_python-pair-inproc-current.txt` |
+| `PUBSUB/inproc` | 5.118% / 6.031% / 5.043% / 8.787% / 14.786% / 17.079% | 9.474% | 324.252x | 보류 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_014326_python-pubsub-inproc-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_014351_python-pubsub-inproc-current.txt` |
+| `DEALER_DEALER/inproc` | 4.796% / 6.642% / 5.291% / 7.398% / 14.566% / 14.810% | 8.917% | 440.584x | 보류 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_014351_python-dealer-dealer-inproc-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_014405_python-dealer-dealer-inproc-current.txt` |
+| `DEALER_ROUTER/inproc` | 4.159% / 5.369% / 6.013% / 8.526% / 14.102% / 18.277% | 9.408% | 338.747x | 보류 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_014405_python-dealer-router-inproc-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_014418_python-dealer-router-inproc-current.txt` |
+| `ROUTER_ROUTER/inproc` | 4.110% / 5.415% / 4.081% / 7.189% / 15.384% / 15.819% | 8.666% | 397.971x | 보류 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_014418_python-router-router-inproc-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_014431_python-router-router-inproc-current.txt` |
+
+자체 A/B로 `_NativeBuilderSendOp`가 기존 module-level `send_parts` bridge를 먼저 호출하도록 변경했으나 `PAIR/inproc`의 64/256/1024B Python 처리량이 117332/136120/113572 msg/s에서 61073/63741/64259 msg/s로 낮아져 제거했다. Sol은 기존 private native `SocketSendOp`와 `RoutedSendOp`에 single-part payload와 flags를 한 번에 제출하는 후보를 제안했다. `PAIR/inproc` A/B는 64/256/1024B 처리량이 107091/125111/106423 msg/s로 기존보다 낮았다. `DEALER_ROUTER/inproc` A/B도 paired aggregate가 9.074%로 기존 9.408%보다 낮아 후보를 제거했다.
+
+성능 후보와 별개로 simple/routed native operation에 중복되어 있던 single-part payload copy, caller-buffer 보존, backpressure와 error 변환을 `submit_single_part` private helper로 통합했다. 이 변경은 공개 interface·builder state·payload ownership·error 의미를 바꾸지 않으며, 두 operation의 같은 정책을 한 구현에서 유지하는 POSDDD refactor로 채택했다. extension build와 51개 unittest를 통과했다.
+
 ### Python Single tls 완료 대상
 
 조건: Core `v0.10.1` release package, duration `1s`, runs `1`, msg sizes `64/256/1024/65536/131072/262144B`, auto-HWM `balanced`다. 각 대상은 C 종료 후 Python을 단독 실행했다.
