@@ -88,6 +88,7 @@ final class PerfMultiSocketReqRep {
                 if (client instanceof RouterSocket router) {
                     byte[] rid = ("CLIENT-" + i).getBytes(StandardCharsets.UTF_8);
                     router.setRoutingId(RoutingId.from(rid));
+                    router.options().setConnectRoutingId(SERVER_RID);
                     router.options().mandatory(true);
                 } else {
                     byte[] rid = ("CLIENT-" + i).getBytes(StandardCharsets.UTF_8);
