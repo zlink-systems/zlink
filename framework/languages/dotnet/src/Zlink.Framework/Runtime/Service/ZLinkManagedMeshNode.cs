@@ -83,6 +83,20 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         PendingRelocationReservation> _pendingRelocationReservations = new();
     private readonly ConcurrentDictionary<PendingRelocationAttemptKey,
         PendingRelocationAttempt> _pendingRelocationAttempts = new();
+    private readonly ConcurrentDictionary<PendingSessionRelocationKey,
+        PendingSessionRelocationSeal> _pendingSessionRelocationSeals = new();
+    private readonly ConcurrentDictionary<PendingSessionRelocationKey,
+        PendingSessionRelocationRoute> _pendingSessionRelocationRoutes = new();
+    private readonly ConcurrentDictionary<PendingSessionRelocationKey,
+        ZLinkServiceWireCodec.SessionRelocationSealedRecord>
+        _sessionRelocationSealReplyTerminals = new();
+    private readonly ConcurrentDictionary<PendingSessionRelocationKey,
+        ZLinkServiceWireCodec.SessionRelocationRoutedRecord>
+        _sessionRelocationRouteReplyTerminals = new();
+    private readonly ConcurrentQueue<PendingSessionRelocationKey>
+        _sessionRelocationSealReplyTerminalOrder = new();
+    private readonly ConcurrentQueue<PendingSessionRelocationKey>
+        _sessionRelocationRouteReplyTerminalOrder = new();
     private readonly ConcurrentDictionary<ObservedSpotAuthorityKey, ObservedAuthority>
         _observedSpotAuthorities = new();
     private readonly ConcurrentDictionary<ObservedActorAuthorityKey, ObservedAuthority>
@@ -113,6 +127,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private IRelocationReplyRelayTarget? _relocationReplyRelayTarget;
     private ICanonicalRelocationReservationTarget?
         _canonicalRelocationReservationTarget;
+    private ISessionRelocationBarrierTarget? _sessionRelocationBarrierTarget;
     private RoutingId _routingId;
     private ZLinkManagedSpot? _entrySpot;
     private ZLinkMeshNodeObjectRole _objectRole;
@@ -670,6 +685,20 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
+    public void SetSessionRelocationBarrierTarget(
+        ISessionRelocationBarrierTarget target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        lock (_gate)
+        {
+            if (_sessionRelocationBarrierTarget is not null
+                && !ReferenceEquals(_sessionRelocationBarrierTarget, target))
+                throw new InvalidOperationException(
+                    "A session relocation barrier target is already registered.");
+            _sessionRelocationBarrierTarget = target;
+        }
+    }
+
     public async ValueTask<ZLinkServiceWireCodec.ReplyRelayAckRecord>
         RelayRelocationReplyAsync(
             RoutingId targetNodeRid,
@@ -931,6 +960,182 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             targetAttemptGeneration, coordinator);
         if (_pendingRelocationAttempts.TryRemove(key, out var pending))
             pending.StopSealResponseRetries();
+    }
+
+    public ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord>
+        SealSessionRelocationAsync(
+            RoutingId sessionOwnerNodeRid,
+            ZLinkServiceWireCodec.SessionRelocationSealRecord seal,
+            TimeSpan timeout,
+            CancellationToken cancellationToken) =>
+        RunSessionRelocationSealAsync(
+            sessionOwnerNodeRid,
+            seal,
+            timeout,
+            cancellationToken);
+
+    private async ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord>
+        RunSessionRelocationSealAsync(
+            RoutingId sessionOwnerNodeRid,
+            ZLinkServiceWireCodec.SessionRelocationSealRecord seal,
+            TimeSpan timeout,
+            CancellationToken cancellationToken)
+    {
+        Peer peer = RequireSessionRelocationPeer(sessionOwnerNodeRid);
+        var encoded = ZLinkServiceWireCodec.EncodeSessionRelocationSeal(seal);
+        var key = PendingSessionRelocationKey.Create(sessionOwnerNodeRid, seal);
+        var fingerprint = SHA256.HashData(encoded);
+        var pending = new PendingSessionRelocationSeal(fingerprint, seal);
+        if (!_pendingSessionRelocationSeals.TryAdd(key, pending))
+        {
+            if (!_pendingSessionRelocationSeals.TryGetValue(key, out pending!)
+                || !CryptographicOperations.FixedTimeEquals(
+                    pending.Fingerprint,
+                    fingerprint))
+                throw new InvalidDataException(
+                    "A command 42 retry changed fields.");
+        }
+        try
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                _stop?.Token ?? CancellationToken.None);
+            deadline.CancelAfter(timeout > TimeSpan.Zero
+                ? timeout
+                : TimeSpan.FromSeconds(30));
+            while (true)
+            {
+                await SendCanonicalRelocationRecordAsync(
+                        peer,
+                        encoded,
+                        deadline.Token)
+                    .ConfigureAwait(false);
+                var completed = await Task.WhenAny(
+                        pending.Completion.Task,
+                        Task.Delay(RelocationAckRetryInterval, deadline.Token))
+                    .ConfigureAwait(false);
+                if (ReferenceEquals(completed, pending.Completion.Task))
+                {
+                    var response = await pending.Completion.Task
+                        .ConfigureAwait(false);
+                    RememberSessionRelocationSealReply(key, response);
+                    return response;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+            when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DeadlineExceeded,
+                "The session relocation seal was not acknowledged.",
+                ZLinkRetryAdvice.RetryAfterBackoff);
+        }
+        finally
+        {
+            _pendingSessionRelocationSeals.TryRemove(
+                new KeyValuePair<PendingSessionRelocationKey,
+                    PendingSessionRelocationSeal>(key, pending));
+        }
+    }
+
+    public ValueTask<ZLinkServiceWireCodec.SessionRelocationRoutedRecord>
+        RouteSessionRelocationAsync(
+            RoutingId sessionOwnerNodeRid,
+            ZLinkServiceWireCodec.SessionRelocationRouteRecord route,
+            ulong expectedSealedHighWater,
+            TimeSpan timeout,
+            CancellationToken cancellationToken) =>
+        RunSessionRelocationRouteAsync(
+            sessionOwnerNodeRid,
+            route,
+            expectedSealedHighWater,
+            timeout,
+            cancellationToken);
+
+    private async ValueTask<ZLinkServiceWireCodec.SessionRelocationRoutedRecord>
+        RunSessionRelocationRouteAsync(
+            RoutingId sessionOwnerNodeRid,
+            ZLinkServiceWireCodec.SessionRelocationRouteRecord route,
+            ulong expectedSealedHighWater,
+            TimeSpan timeout,
+            CancellationToken cancellationToken)
+    {
+        Peer peer = RequireSessionRelocationPeer(sessionOwnerNodeRid);
+        var encoded = ZLinkServiceWireCodec.EncodeSessionRelocationRoute(route);
+        var key = PendingSessionRelocationKey.Create(sessionOwnerNodeRid, route);
+        var fingerprint = SHA256.HashData(encoded);
+        var pending = new PendingSessionRelocationRoute(
+            fingerprint,
+            route,
+            expectedSealedHighWater);
+        if (!_pendingSessionRelocationRoutes.TryAdd(key, pending))
+        {
+            if (!_pendingSessionRelocationRoutes.TryGetValue(key, out pending!)
+                || !CryptographicOperations.FixedTimeEquals(
+                    pending.Fingerprint,
+                    fingerprint)
+                || pending.ExpectedSealedHighWater != expectedSealedHighWater)
+                throw new InvalidDataException(
+                    "A command 44 retry changed fields.");
+        }
+        try
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                _stop?.Token ?? CancellationToken.None);
+            deadline.CancelAfter(timeout > TimeSpan.Zero
+                ? timeout
+                : TimeSpan.FromSeconds(30));
+            while (true)
+            {
+                await SendCanonicalRelocationRecordAsync(
+                        peer,
+                        encoded,
+                        deadline.Token)
+                    .ConfigureAwait(false);
+                var completed = await Task.WhenAny(
+                        pending.Completion.Task,
+                        Task.Delay(RelocationAckRetryInterval, deadline.Token))
+                    .ConfigureAwait(false);
+                if (ReferenceEquals(completed, pending.Completion.Task))
+                {
+                    var response = await pending.Completion.Task
+                        .ConfigureAwait(false);
+                    RememberSessionRelocationRouteReply(key, response);
+                    return response;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+            when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DeadlineExceeded,
+                "The session relocation route update was not acknowledged.",
+                ZLinkRetryAdvice.RetryAfterBackoff);
+        }
+        finally
+        {
+            _pendingSessionRelocationRoutes.TryRemove(
+                new KeyValuePair<PendingSessionRelocationKey,
+                    PendingSessionRelocationRoute>(key, pending));
+        }
+    }
+
+    private Peer RequireSessionRelocationPeer(RoutingId targetNodeRid)
+    {
+        Peer? peer;
+        lock (_gate)
+            _peersByRid.TryGetValue(targetNodeRid, out peer);
+        // Admission succeeds only after framework-service-v12 is decoded, so
+        // this is also the capability preflight for commands 42-45.
+        if (peer is null || !peer.Admitted || peer.Admission is null)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InvalidOperation,
+                "The session relocation owner lacks framework-service-v12 capability evidence.",
+                ZLinkRetryAdvice.DoNotRetry);
+        return peer;
     }
 
     private async ValueTask SendCanonicalRelocationRecordAsync(
@@ -4331,7 +4536,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             or ServiceWireConstants.Command.RelocationReserved
             or ServiceWireConstants.Command.ReplyRelayAck
             or ServiceWireConstants.Command.MessageFollow
-            or ServiceWireConstants.Command.BoundSessionReplaced;
+            or ServiceWireConstants.Command.BoundSessionReplaced
+            or ServiceWireConstants.Command.SessionRelocationSeal
+            or ServiceWireConstants.Command.SessionRelocationSealed
+            or ServiceWireConstants.Command.SessionRelocationRoute
+            or ServiceWireConstants.Command.SessionRelocationRouted;
 
     private static bool ShouldUseCompletionControl(
         IReadOnlyList<ReadOnlyMemory<byte>> parts)
@@ -4576,6 +4785,30 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 head, out var relocationComplete, out _))
         {
             ProcessRelocationComplete(sourceRid, relocationComplete);
+            return true;
+        }
+        if (ZLinkServiceWireCodec.TryDecodeSessionRelocationSeal(
+                head, out var sessionRelocationSeal, out _))
+        {
+            ProcessSessionRelocationSeal(sourceRid, sessionRelocationSeal);
+            return true;
+        }
+        if (ZLinkServiceWireCodec.TryDecodeSessionRelocationSealed(
+                head, out var sessionRelocationSealed, out _))
+        {
+            ProcessSessionRelocationSealed(sourceRid, sessionRelocationSealed);
+            return true;
+        }
+        if (ZLinkServiceWireCodec.TryDecodeSessionRelocationRoute(
+                head, out var sessionRelocationRoute, out _))
+        {
+            ProcessSessionRelocationRoute(sourceRid, sessionRelocationRoute);
+            return true;
+        }
+        if (ZLinkServiceWireCodec.TryDecodeSessionRelocationRouted(
+                head, out var sessionRelocationRouted, out _))
+        {
+            ProcessSessionRelocationRouted(sourceRid, sessionRelocationRouted);
             return true;
         }
         return false;
@@ -5234,6 +5467,175 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 exception);
             Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
         }
+    }
+
+    private void ProcessSessionRelocationSeal(
+        RoutingId sourceNodeRid,
+        ZLinkServiceWireCodec.SessionRelocationSealRecord seal)
+    {
+        ISessionRelocationBarrierTarget? target;
+        Peer? peer;
+        lock (_gate)
+        {
+            target = _sessionRelocationBarrierTarget;
+            _peersByRid.TryGetValue(sourceNodeRid, out peer);
+        }
+        if (target is null
+            || peer is null
+            || !peer.Admitted
+            || seal.SenderRole != 1
+            || seal.Coordinator.NodeRid != sourceNodeRid
+            || seal.Coordinator.NodeGeneration != peer.LifecycleGeneration
+            || seal.Session.SessionOwnerNodeRid != _routingId
+            || seal.Session.SessionOwnerNodeGeneration != _lifecycleGeneration)
+        {
+            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
+            return;
+        }
+        RunInboundOperation(async () =>
+        {
+            try
+            {
+                var response = await target.SealAsync(
+                        seal,
+                        sourceNodeRid,
+                        _stop?.Token ?? CancellationToken.None)
+                    .ConfigureAwait(false);
+                await SendCanonicalRelocationRecordAsync(
+                        peer,
+                        ZLinkServiceWireCodec.EncodeSessionRelocationSealed(
+                            response),
+                        _stop?.Token ?? CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                ZLinkFrameworkDebugLog.TaskFailure(
+                    "session-relocation-seal",
+                    exception);
+                Publish(MeshMonitorEventKind.ProtocolError,
+                    peerRid: sourceNodeRid);
+            }
+        });
+    }
+
+    private void ProcessSessionRelocationSealed(
+        RoutingId sourceNodeRid,
+        ZLinkServiceWireCodec.SessionRelocationSealedRecord sealedRecord)
+    {
+        var key = PendingSessionRelocationKey.Create(
+            sourceNodeRid,
+            sealedRecord);
+        if (_pendingSessionRelocationSeals.TryGetValue(key, out var pending)
+            && pending.TryComplete(sealedRecord))
+            return;
+        if (_sessionRelocationSealReplyTerminals.TryGetValue(
+                key,
+                out var terminal)
+            && terminal == sealedRecord)
+            return;
+        Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
+    }
+
+    private void ProcessSessionRelocationRoute(
+        RoutingId sourceNodeRid,
+        ZLinkServiceWireCodec.SessionRelocationRouteRecord route)
+    {
+        ISessionRelocationBarrierTarget? target;
+        Peer? peer;
+        lock (_gate)
+        {
+            target = _sessionRelocationBarrierTarget;
+            _peersByRid.TryGetValue(sourceNodeRid, out peer);
+        }
+        var expectedNodeGeneration = route.Route.Action
+            == ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit
+                ? route.Route.TargetNodeGeneration
+                : route.Coordinator.NodeGeneration;
+        var expectedAuthorityOwnerGeneration = route.Route.Action
+            == ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit
+                ? route.Route.TargetAuthorityOwnerGeneration
+                : route.Route.CurrentAuthorityOwnerGeneration;
+        var hasAuthenticatedAuthority =
+            _observedActorAuthorities.TryGetValue(
+                new ObservedActorAuthorityKey(
+                    sourceNodeRid,
+                    route.Actor.ActorId,
+                    route.Actor.ObjectGeneration),
+                out var authenticatedAuthority);
+        var authenticated = target is not null
+                            && peer is not null
+                            && peer.Admitted
+                            && hasAuthenticatedAuthority
+                            && authenticatedAuthority.TargetNodeGeneration
+                            == expectedNodeGeneration
+                            && authenticatedAuthority.AuthorityOwnerGeneration
+                            == expectedAuthorityOwnerGeneration
+                            && route.Session.SessionOwnerNodeRid == _routingId
+                            && route.Session.SessionOwnerNodeGeneration
+                            == _lifecycleGeneration
+                            && (route.Route.Action
+                                    == ZLinkServiceWireCodec
+                                        .SessionRelocationRouteAction.Commit
+                                ? route.SenderRole == 2
+                                  && route.Route.TargetNodeRid == sourceNodeRid
+                                  && route.Route.TargetNodeGeneration
+                                  == peer.LifecycleGeneration
+                                : route.SenderRole == 1
+                                  && route.Coordinator.NodeRid == sourceNodeRid
+                                  && route.Coordinator.NodeGeneration
+                                  == peer.LifecycleGeneration);
+        if (!authenticated)
+        {
+            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
+            return;
+        }
+        RunInboundOperation(async () =>
+        {
+            try
+            {
+                var response = await target!.RouteAsync(
+                        route,
+                        new ZLinkSessionRelocationAuthenticatedRoute(
+                            sourceNodeRid,
+                            expectedNodeGeneration,
+                            _meshName,
+                            expectedAuthorityOwnerGeneration,
+                            authenticatedAuthority.OwnerLeaseGeneration),
+                        _stop?.Token ?? CancellationToken.None)
+                    .ConfigureAwait(false);
+                await SendCanonicalRelocationRecordAsync(
+                        peer!,
+                        ZLinkServiceWireCodec.EncodeSessionRelocationRouted(
+                            response),
+                        _stop?.Token ?? CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                ZLinkFrameworkDebugLog.TaskFailure(
+                    "session-relocation-route",
+                    exception);
+                Publish(MeshMonitorEventKind.ProtocolError,
+                    peerRid: sourceNodeRid);
+            }
+        });
+    }
+
+    private void ProcessSessionRelocationRouted(
+        RoutingId sourceNodeRid,
+        ZLinkServiceWireCodec.SessionRelocationRoutedRecord routed)
+    {
+        var key = PendingSessionRelocationKey.Create(sourceNodeRid, routed);
+        if (_pendingSessionRelocationRoutes.TryGetValue(key, out var pending)
+            && pending.TryComplete(routed))
+            return;
+        if (_sessionRelocationRouteReplyTerminals.TryGetValue(
+                key,
+                out var terminal)
+            && terminal == routed)
+            return;
+        Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
     }
 
     private void ProcessInstanceSpotActivation(
@@ -9102,6 +9504,180 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ZLinkServiceWireCodec.RelocationWireId RelocationId,
         ulong TargetAttemptGeneration,
         ZLinkServiceWireCodec.RelocationCoordinatorFence Coordinator);
+
+    private void RememberSessionRelocationSealReply(
+        PendingSessionRelocationKey key,
+        ZLinkServiceWireCodec.SessionRelocationSealedRecord response) =>
+        RememberSessionRelocationReply(
+            _sessionRelocationSealReplyTerminals,
+            _sessionRelocationSealReplyTerminalOrder,
+            key,
+            response);
+
+    private void RememberSessionRelocationRouteReply(
+        PendingSessionRelocationKey key,
+        ZLinkServiceWireCodec.SessionRelocationRoutedRecord response) =>
+        RememberSessionRelocationReply(
+            _sessionRelocationRouteReplyTerminals,
+            _sessionRelocationRouteReplyTerminalOrder,
+            key,
+            response);
+
+    private static void RememberSessionRelocationReply<T>(
+        ConcurrentDictionary<PendingSessionRelocationKey, T> terminals,
+        ConcurrentQueue<PendingSessionRelocationKey> order,
+        PendingSessionRelocationKey key,
+        T response)
+        where T : struct, IEquatable<T>
+    {
+        if (!terminals.TryAdd(key, response))
+        {
+            if (!terminals.TryGetValue(key, out var existing)
+                || !existing.Equals(response))
+                throw new InvalidDataException(
+                    "A session relocation reply changed after completion.");
+            return;
+        }
+        order.Enqueue(key);
+        while (terminals.Count > MaxRelocationReplyTerminals
+               && order.TryDequeue(out var oldest))
+            terminals.TryRemove(oldest, out _);
+    }
+
+    private readonly record struct PendingSessionRelocationKey(
+        RoutingId SessionOwnerNodeRid,
+        ZLinkServiceWireCodec.RelocationWireId RelocationId,
+        ZLinkServiceWireCodec.RelocationCoordinatorFence Coordinator,
+        string ActorId,
+        RoutingId SessionRid,
+        ulong BindingGeneration,
+        byte Action)
+    {
+        internal static PendingSessionRelocationKey Create(
+            RoutingId owner,
+            ZLinkServiceWireCodec.SessionRelocationSealRecord record) =>
+            new(
+                owner,
+                record.RelocationId,
+                record.Coordinator,
+                record.Actor.Actor.ActorId,
+                record.Session.SessionRid,
+                record.Session.BindingGeneration,
+                0);
+
+        internal static PendingSessionRelocationKey Create(
+            RoutingId owner,
+            ZLinkServiceWireCodec.SessionRelocationSealedRecord record) =>
+            new(
+                owner,
+                record.RelocationId,
+                record.Coordinator,
+                record.Actor.Actor.ActorId,
+                record.Session.SessionRid,
+                record.Session.BindingGeneration,
+                0);
+
+        internal static PendingSessionRelocationKey Create(
+            RoutingId owner,
+            ZLinkServiceWireCodec.SessionRelocationRouteRecord record) =>
+            new(
+                owner,
+                record.RelocationId,
+                record.Coordinator,
+                record.Actor.ActorId,
+                record.Session.SessionRid,
+                record.Session.BindingGeneration,
+                (byte)record.Route.Action);
+
+        internal static PendingSessionRelocationKey Create(
+            RoutingId owner,
+            ZLinkServiceWireCodec.SessionRelocationRoutedRecord record) =>
+            new(
+                owner,
+                record.RelocationId,
+                record.Coordinator,
+                record.Actor.ActorId,
+                record.Session.SessionRid,
+                record.Session.BindingGeneration,
+                (byte)record.Action);
+    }
+
+    private sealed class PendingSessionRelocationSeal(
+        byte[] fingerprint,
+        ZLinkServiceWireCodec.SessionRelocationSealRecord request)
+    {
+        internal byte[] Fingerprint { get; } = fingerprint;
+        internal TaskCompletionSource<
+            ZLinkServiceWireCodec.SessionRelocationSealedRecord> Completion
+            { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal bool TryComplete(
+            ZLinkServiceWireCodec.SessionRelocationSealedRecord response)
+        {
+            if (response.RelocationId != request.RelocationId
+                || response.Coordinator != request.Coordinator
+                || response.Actor != request.Actor
+                || response.Session != request.Session)
+                return false;
+            return Completion.TrySetResult(response)
+                   || Completion.Task.IsCompletedSuccessfully
+                      && Completion.Task.Result == response;
+        }
+    }
+
+    private sealed class PendingSessionRelocationRoute(
+        byte[] fingerprint,
+        ZLinkServiceWireCodec.SessionRelocationRouteRecord request,
+        ulong expectedSealedHighWater)
+    {
+        internal byte[] Fingerprint { get; } = fingerprint;
+        internal ulong ExpectedSealedHighWater { get; } =
+            expectedSealedHighWater;
+        internal TaskCompletionSource<
+            ZLinkServiceWireCodec.SessionRelocationRoutedRecord> Completion
+            { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal bool TryComplete(
+            ZLinkServiceWireCodec.SessionRelocationRoutedRecord response)
+        {
+            if (!IsExactSessionRelocationRouteResponse(
+                    request,
+                    ExpectedSealedHighWater,
+                    response))
+                return false;
+            return Completion.TrySetResult(response)
+                   || Completion.Task.IsCompletedSuccessfully
+                      && Completion.Task.Result == response;
+        }
+    }
+
+    internal static bool IsExactSessionRelocationRouteResponse(
+        ZLinkServiceWireCodec.SessionRelocationRouteRecord request,
+        ulong expectedSealedHighWater,
+        ZLinkServiceWireCodec.SessionRelocationRoutedRecord response)
+    {
+        if (response.RelocationId != request.RelocationId
+            || response.Coordinator != request.Coordinator
+            || response.Actor != request.Actor
+            || response.Session != request.Session
+            || response.Action != request.Route.Action)
+            return false;
+        if (response.Result is not (
+                ZLinkServiceWireCodec.SessionRelocationRouteResult.Applied
+                or ZLinkServiceWireCodec.SessionRelocationRouteResult
+                    .AlreadyApplied))
+            return true;
+        var expectedAuthority = request.Route.Action
+            == ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit
+                ? request.Route.TargetAuthorityOwnerGeneration
+                : request.Route.CurrentAuthorityOwnerGeneration;
+        var expectedHighWater = request.Route.Action
+            == ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit
+                ? request.Route.ReplayedHighWater
+                : expectedSealedHighWater;
+        return response.CurrentAuthorityOwnerGeneration == expectedAuthority
+               && response.LastAcceptedSessionSequence == expectedHighWater;
+    }
 
     private sealed class PendingRelocationAttempt(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,

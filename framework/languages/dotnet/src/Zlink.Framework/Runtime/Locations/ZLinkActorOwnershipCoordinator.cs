@@ -660,7 +660,11 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                     relocationReference.Reference,
                     relocationReference.ChecksumCrc32c,
                     0,
-                    0),
+                    0)
+                {
+                    CoordinatorExpectedAuthorityStoreVersion =
+                        snapshot.StoreVersion
+                },
                 relocationRoot);
 
         var committed = false;

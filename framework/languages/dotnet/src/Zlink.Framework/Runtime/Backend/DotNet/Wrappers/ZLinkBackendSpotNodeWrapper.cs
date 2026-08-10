@@ -14,6 +14,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
     IZLinkBackendSpotNode,
     IZLinkBackendRelocationReplyRelay,
     IZLinkBackendCanonicalRelocationReservation,
+    IZLinkBackendSessionRelocationBarrier,
     IZLinkBackendAuthorityObserver,
     IZLinkBackendRequestSourceFenceObserver,
     IZLinkBackendLocalActorAuthorityReader,
@@ -349,6 +350,44 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         EnsureStarted();
         RequireManagedNode().CancelCanonicalRelocation(targetNodeRid,
             relocationId, targetAttemptGeneration, coordinator);
+    }
+
+    public void SetSessionRelocationBarrierTarget(
+        ISessionRelocationBarrierTarget target)
+    {
+        _node.SetSessionRelocationBarrierTarget(target);
+    }
+
+    public ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord>
+        SealSessionRelocationAsync(
+            RoutingId sessionOwnerNodeRid,
+            ZLinkServiceWireCodec.SessionRelocationSealRecord seal,
+            TimeSpan timeout,
+            CancellationToken cancellationToken)
+    {
+        EnsureStarted();
+        return RequireManagedNode().SealSessionRelocationAsync(
+            sessionOwnerNodeRid,
+            seal,
+            timeout,
+            cancellationToken);
+    }
+
+    public ValueTask<ZLinkServiceWireCodec.SessionRelocationRoutedRecord>
+        RouteSessionRelocationAsync(
+            RoutingId sessionOwnerNodeRid,
+            ZLinkServiceWireCodec.SessionRelocationRouteRecord route,
+            ulong expectedSealedHighWater,
+            TimeSpan timeout,
+            CancellationToken cancellationToken)
+    {
+        EnsureStarted();
+        return RequireManagedNode().RouteSessionRelocationAsync(
+            sessionOwnerNodeRid,
+            route,
+            expectedSealedHighWater,
+            timeout,
+            cancellationToken);
     }
 
     public ValueTask<ZLinkServiceWireCodec.ReplyRelayAckRecord>

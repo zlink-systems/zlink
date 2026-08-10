@@ -137,38 +137,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                         typeof(IZLinkRouteSendHandler<ZLinkRemoteActorReplyRelay>),
                         ZLinkMessageKind.Command,
                         ZLinkRemoteActorReplyProtocol.PacketName)))
-                .Append(ToRouteDescriptor(
-                    ZLinkHandlerScanner.CreateExplicitRouteInterfaceDescriptor(
-                        typeof(ZLinkSessionRouteSealHandler),
-                        typeof(IZLinkRouteRequestHandler<
-                            ZLinkSessionRouteSealRequest,
-                            ZLinkSessionRouteSealReply>),
-                        ZLinkMessageKind.Request,
-                        ZLinkSessionRouteCommitProtocol.SealPacketName)))
-                .Append(ToRouteDescriptor(
-                    ZLinkHandlerScanner.CreateExplicitRouteInterfaceDescriptor(
-                        typeof(ZLinkSessionRouteAbortHandler),
-                        typeof(IZLinkRouteRequestHandler<
-                            ZLinkSessionRouteAbortRequest,
-                            ZLinkSessionRouteSealReply>),
-                        ZLinkMessageKind.Request,
-                        ZLinkSessionRouteCommitProtocol.AbortPacketName)))
-                .Append(ToRouteDescriptor(
-                    ZLinkHandlerScanner.CreateExplicitRouteInterfaceDescriptor(
-                        typeof(ZLinkSessionRouteCommitHandler),
-                        typeof(IZLinkRouteRequestHandler<
-                            ZLinkSessionRouteCommitRequest,
-                            ZLinkSessionRouteCommitReply>),
-                        ZLinkMessageKind.Request,
-                        ZLinkSessionRouteCommitProtocol.PacketName)))
-                .Append(ToRouteDescriptor(
-                    ZLinkHandlerScanner.CreateExplicitRouteInterfaceDescriptor(
-                        typeof(ZLinkSessionRouteUnsealHandler),
-                        typeof(IZLinkRouteRequestHandler<
-                            ZLinkSessionRouteUnsealRequest,
-                            ZLinkSessionRouteCommitReply>),
-                        ZLinkMessageKind.Request,
-                        ZLinkSessionRouteCommitProtocol.UnsealPacketName)))
                 ;
         var routeDescriptors = descriptors.ToArray();
         var channelEndpoints = BuildChannelEndpoints(registration, spotNode).ToArray();
@@ -450,15 +418,10 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader header) =>
         received.ChannelName is null
-        && ((header.Kind == ZLinkMessageKind.Command
-             && header.MessageName is ZLinkRemoteSessionPushProtocol.PacketName
-                 or ZLinkRemoteActorFrameProtocol.PacketName
-                 or ZLinkRemoteActorReplyProtocol.PacketName)
-            || (header.Kind == ZLinkMessageKind.Request
-                && header.MessageName is ZLinkSessionRouteCommitProtocol.PacketName
-                    or ZLinkSessionRouteCommitProtocol.SealPacketName
-                    or ZLinkSessionRouteCommitProtocol.AbortPacketName
-                    or ZLinkSessionRouteCommitProtocol.UnsealPacketName));
+        && header.Kind == ZLinkMessageKind.Command
+        && header.MessageName is ZLinkRemoteSessionPushProtocol.PacketName
+            or ZLinkRemoteActorFrameProtocol.PacketName
+            or ZLinkRemoteActorReplyProtocol.PacketName;
 
     private async ValueTask DispatchNodeRouteAsync(
         ZLinkBackendRouteReceived received,

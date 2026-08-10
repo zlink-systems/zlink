@@ -13,7 +13,7 @@ namespace Zlink.Framework.UnitTests;
 public sealed class NodesAndServicesTests : RegistrationValidationSupport
 {
     [Fact]
-    public void AddZLinkFramework_Registers_Internal_RemoteSessionRouteHandlers()
+    public void AddZLinkFramework_Uses_ServiceWire_ForSessionRelocationBarriers()
     {
         var services = new ServiceCollection();
 
@@ -25,18 +25,11 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
         Assert.Contains(
             services,
             descriptor => descriptor.ServiceType == typeof(ZLinkRemoteSessionUnbindRouteHandler));
-        Assert.Contains(
+        Assert.DoesNotContain(
             services,
-            descriptor => descriptor.ServiceType == typeof(ZLinkSessionRouteSealHandler));
-        Assert.Contains(
-            services,
-            descriptor => descriptor.ServiceType == typeof(ZLinkSessionRouteAbortHandler));
-        Assert.Contains(
-            services,
-            descriptor => descriptor.ServiceType == typeof(ZLinkSessionRouteCommitHandler));
-        Assert.Contains(
-            services,
-            descriptor => descriptor.ServiceType == typeof(ZLinkSessionRouteUnsealHandler));
+            descriptor => descriptor.ServiceType.Name.StartsWith(
+                "ZLinkSessionRoute",
+                StringComparison.Ordinal));
     }
 
     [Fact]

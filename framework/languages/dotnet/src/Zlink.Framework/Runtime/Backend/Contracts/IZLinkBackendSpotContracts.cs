@@ -364,6 +364,27 @@ internal interface IZLinkBackendCanonicalRelocationReservation
         ZLinkServiceWireCodec.RelocationCoordinatorFence coordinator);
 }
 
+internal interface IZLinkBackendSessionRelocationBarrier
+{
+    void SetSessionRelocationBarrierTarget(
+        ISessionRelocationBarrierTarget target);
+
+    ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord>
+        SealSessionRelocationAsync(
+            RoutingId sessionOwnerNodeRid,
+            ZLinkServiceWireCodec.SessionRelocationSealRecord seal,
+            TimeSpan timeout,
+            CancellationToken cancellationToken);
+
+    ValueTask<ZLinkServiceWireCodec.SessionRelocationRoutedRecord>
+        RouteSessionRelocationAsync(
+            RoutingId sessionOwnerNodeRid,
+            ZLinkServiceWireCodec.SessionRelocationRouteRecord route,
+            ulong expectedSealedHighWater,
+            TimeSpan timeout,
+            CancellationToken cancellationToken);
+}
+
 internal interface IZLinkBackendSpot : IAsyncDisposable
 {
     RoutingId RoutingId { get; }

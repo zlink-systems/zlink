@@ -45,7 +45,10 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             RelocationReference: string.Empty,
             RelocationChecksumCrc32c: 0,
             applicationVersion,
-            SourceCleanupState: 0);
+            SourceCleanupState: 0)
+        {
+            CoordinatorExpectedAuthorityStoreVersion = source.StoreVersion
+        };
         var payload = ZLinkCanonicalRelocationAuthorityStateCodec
             .ReplaceRelocationState(source.Payload.Span, state, root: null);
         return await StoreAsync(

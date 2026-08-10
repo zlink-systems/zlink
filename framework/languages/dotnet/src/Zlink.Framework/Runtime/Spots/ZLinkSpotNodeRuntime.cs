@@ -34,6 +34,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     private IRelocationReplyRelayTarget? _relocationReplyRelayTarget;
     private ZLinkCanonicalRelocationReservationOwner?
         _canonicalRelocationReservationOwner;
+    private ZLinkSessionRelocationBarrierOwner?
+        _sessionRelocationBarrierOwner;
     private readonly ZLinkServiceWireCodec.RequestSourceFence?
         _localRequestSource;
     private IZLinkBackendSpot? _entrySpot;
@@ -152,6 +154,13 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             _timerScheduler,
             _activationAdmission);
         _spots.StartIdleEviction();
+        if (node is IZLinkBackendSessionRelocationBarrier sessionBarrier)
+        {
+            _sessionRelocationBarrierOwner =
+                new ZLinkSessionRelocationBarrierOwner(runtime);
+            sessionBarrier.SetSessionRelocationBarrierTarget(
+                _sessionRelocationBarrierOwner);
+        }
         if (frameworkRegistration.Locations.ResolveStore() is not null
             && node is IZLinkBackendRelocationReplyRelay relayBackend)
         {

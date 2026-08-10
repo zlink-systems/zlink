@@ -179,8 +179,6 @@ internal sealed class ZLinkSpotRetireScheduler(
 {
     private const int MaxConcurrentParticipantIo = 8;
     private const long SnapshotReservationBytes = 64L * 1024 * 1024;
-    private const long SourceIngressHoldReservationBytes =
-        16L * 1024 * 1024;
     private const long EnvelopeHeaderBytes =
         sizeof(uint) + sizeof(ushort) + 16 + sizeof(ulong)
         + sizeof(int) + 32 + sizeof(int);
@@ -466,6 +464,8 @@ internal sealed class ZLinkSpotRetireScheduler(
             ZLinkSpotRetireInventory activeInventory = inventory;
             var sealedSessionRoutes =
                 new Dictionary<ZLinkActorId, ZLinkRemoteActorBoundSessionRoute>();
+            var sessionRelocationContext =
+                default(ZLinkSessionRelocationContext);
             try
             {
                 var sealedActorIds = activation.SnapshotActorIds();
@@ -475,6 +475,18 @@ internal sealed class ZLinkSpotRetireScheduler(
                     throw new InvalidOperationException(
                         $"SPOT '{activation.SpotId}' participant inventory changed before the relocation seal.");
                 var handoffId = aggregateId.ToString("N");
+                var coordinatorAuthority = await ReadOwnedAsync(
+                        ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(
+                            activation.SpotId),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                sessionRelocationContext = ZLinkSessionRelocationContext.Create(
+                        aggregateId,
+                        inventory.SourceOwner.OwnerId,
+                        checked((ulong)inventory.SourceOwner.LeaseGeneration),
+                        inventory.SourceNodeRid,
+                        inventory.SourceNodeLifecycleGeneration,
+                        coordinatorAuthority.StoreVersion);
                 var sourceActorStates = actorIds
                     .Select(runtime.GetOrCreateActorState)
                     .ToArray();
@@ -529,7 +541,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                                     sealedRoutes[index] = await activation
                                         .SealActorBoundSessionRouteForRetireAsync(
                                             actorIds[index],
-                                            handoffId,
+                                            sessionRelocationContext,
                                             cancellationToken)
                                         .ConfigureAwait(false);
                                 }))
@@ -618,12 +630,10 @@ internal sealed class ZLinkSpotRetireScheduler(
                 var actualPayloadBytes =
                     ZLinkRelocationEnvelopeCodec.MeasureEncodedLength(
                         staging.Envelope);
-                if (!permit.TryShrinkPayload(checked(
-                        actualPayloadBytes
-                        + SourceIngressHoldReservationBytes)))
+                if (!permit.TryShrinkPayload(actualPayloadBytes))
                     throw new InvalidOperationException(
                         $"SPOT '{activation.SpotId}' relocation payload exceeded its sealed reservation"
-                        + $" (actual={actualPayloadBytes + SourceIngressHoldReservationBytes},"
+                        + $" (actual={actualPayloadBytes},"
                         + $" reserved={permit.ReservedPayloadBytes}).");
 
                 ZLinkFrameworkDebugLog.SpotDiscovery(
@@ -690,7 +700,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                                         .AbortActorBoundSessionRouteSealForRetireAsync(
                                             actorId.Value,
                                             route,
-                                            handoffId,
+                                            sessionRelocationContext,
                                             cleanupDeadline.Token)
                                         .ConfigureAwait(false);
                             })
@@ -776,7 +786,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                                             .AbortActorBoundSessionRouteSealForRetireAsync(
                                                 actorId.Value,
                                                 route,
-                                                handoffId,
+                                                sessionRelocationContext,
                                                 cleanupDeadline.Token)
                                             .ConfigureAwait(false);
                                 })
@@ -878,7 +888,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                                     .AbortActorBoundSessionRouteSealForRetireAsync(
                                         actorId.Value,
                                         route,
-                                        handoffId,
+                                        sessionRelocationContext,
                                         cleanupDeadline.Token)
                                     .ConfigureAwait(false);
                         })
@@ -1248,7 +1258,6 @@ internal sealed class ZLinkSpotRetireScheduler(
         return checked(
             frameworkBytes
             + ZLinkSpotRetireCompletionMarker.CreatePending().LongLength
-            + SourceIngressHoldReservationBytes
             + (long)ZLinkCanonicalParticipantRecoveryCodec
                 .MaximumEncodedBytesWithEmptyMembership
               * participantKeys.Count

@@ -73,7 +73,8 @@ internal static class ZLinkRemoteActorJoinPackets
         ZLinkMessage request,
         ZLinkCodecRegistryBuilder codecs,
         ZLinkActorBoundSession? boundSessionIdentity = null,
-        ZLinkActorRelocationReservation? reservation = null)
+        ZLinkActorRelocationReservation? reservation = null,
+        ZLinkSessionRelocationContext sessionRelocationContext = default)
     {
         var payload = CreateJoinRequest(
             actorId,
@@ -90,7 +91,8 @@ internal static class ZLinkRemoteActorJoinPackets
             request,
             codecs,
             boundSessionIdentity,
-            reservation);
+            reservation,
+            sessionRelocationContext);
         return EncodeJoinRequest(header, payload);
     }
 
@@ -109,7 +111,8 @@ internal static class ZLinkRemoteActorJoinPackets
         ZLinkMessage request,
         ZLinkCodecRegistryBuilder codecs,
         ZLinkActorBoundSession? boundSessionIdentity = null,
-        ZLinkActorRelocationReservation? reservation = null)
+        ZLinkActorRelocationReservation? reservation = null,
+        ZLinkSessionRelocationContext sessionRelocationContext = default)
     {
         var encodedRequest = request.Encode(codecs);
         return new ZLinkRemoteActorJoinRequest(
@@ -149,7 +152,14 @@ internal static class ZLinkRemoteActorJoinPackets
             reservation?.TargetNodeGeneration ?? 0,
             reservation?.TargetSpotGeneration ?? 0,
             reservation?.TargetAuthorityOwnerGeneration ?? 0,
-            reservation?.TargetSpotAuthorityOwnerGeneration ?? 0);
+            reservation?.TargetSpotAuthorityOwnerGeneration ?? 0,
+            sessionRelocationContext.Coordinator.OwnerId,
+            sessionRelocationContext.Coordinator.LeaseGeneration,
+            sessionRelocationContext.Coordinator.NodeRid.IsEmpty
+                ? null
+                : sessionRelocationContext.Coordinator.NodeRid.ToBytes().ToArray(),
+            sessionRelocationContext.Coordinator.NodeGeneration,
+            sessionRelocationContext.Coordinator.ExpectedAuthorityStoreVersion);
     }
 
     internal static IReadOnlyList<Message> EncodeJoinRequest(
@@ -211,12 +221,12 @@ internal static class ZLinkRemoteActorJoinPackets
     internal static long MeasureStandaloneMaintenancePayloadUpperBound(
         bool snapshot)
     {
-        // Standalone Actor maintenance has no logical-timer payload. Reserve
-        // both the queue captured before the semantic seal and the separate
-        // ingress hold that remains open until the commit boundary.
+        // Standalone Actor maintenance has no logical-timer payload. The
+        // accepted journal already accounts for the captured application data;
+        // admission held after the seal is flow-controlled rather than capped
+        // by a second relocation reservation.
         return checked(
             FrameworkMetadataUpperBound
-            + AcceptedJournalUpperBound
             + AcceptedJournalUpperBound
             + (snapshot
                 ? SnapshotApplicationStateReservationBytes
@@ -241,7 +251,8 @@ internal static class ZLinkRemoteActorJoinPackets
         ZLinkActorJoinOperationId? operationId,
         ZLinkRemoteActorAdmissionReply admissionReply,
         ZLinkActorBoundSession? boundSession,
-        IReadOnlyList<ZLinkActorHandoffFrame> frames)
+        IReadOnlyList<ZLinkActorHandoffFrame> frames,
+        ZLinkSessionRelocationContext sessionRelocationContext = default)
     {
         return ZLinkEnvelopeCodec.EncodeParts(
             header,
@@ -268,7 +279,15 @@ internal static class ZLinkRemoteActorJoinPackets
                 boundSession?.SessionOwnerNodeGeneration ?? 0,
                 boundSession?.AcceptedHighWater ?? 0,
                 boundSession?.SessionOwnerId,
-                boundSession?.SessionOwnerLeaseGeneration ?? 0),
+                boundSession?.SessionOwnerLeaseGeneration ?? 0,
+                sessionRelocationContext.Coordinator.OwnerId,
+                sessionRelocationContext.Coordinator.LeaseGeneration,
+                sessionRelocationContext.Coordinator.NodeRid.IsEmpty
+                    ? null
+                    : sessionRelocationContext.Coordinator.NodeRid.ToBytes().ToArray(),
+                sessionRelocationContext.Coordinator.NodeGeneration,
+                sessionRelocationContext.Coordinator
+                    .ExpectedAuthorityStoreVersion),
             typeof(ZLinkRemoteActorHandoffCompletionRequest),
             null);
     }
@@ -332,6 +351,49 @@ internal static class ZLinkRemoteActorJoinPackets
             request.BoundSessionAcceptedHighWater,
             request.BoundSessionSessionOwnerId,
             request.BoundSessionSessionOwnerLeaseGeneration);
+    }
+
+    internal static ZLinkSessionRelocationContext
+        DecodeSessionRelocationContext(ZLinkRemoteActorJoinRequest request)
+    {
+        if (!request.RelocationAggregateId.Equals(Guid.Empty)
+            && !string.IsNullOrWhiteSpace(
+                request.RelocationCoordinatorOwnerId)
+            && request.RelocationCoordinatorLeaseGeneration != 0
+            && request.RelocationCoordinatorNodeRid is { Length: > 0 }
+            && request.RelocationCoordinatorNodeGeneration != 0
+            && !string.IsNullOrWhiteSpace(
+                request.RelocationCoordinatorExpectedAuthorityStoreVersion))
+            return ZLinkSessionRelocationContext.Create(
+                request.RelocationAggregateId,
+                request.RelocationCoordinatorOwnerId,
+                request.RelocationCoordinatorLeaseGeneration,
+                RoutingId.From(request.RelocationCoordinatorNodeRid),
+                request.RelocationCoordinatorNodeGeneration,
+                request.RelocationCoordinatorExpectedAuthorityStoreVersion);
+        return default;
+    }
+
+    internal static ZLinkSessionRelocationContext
+        DecodeSessionRelocationContext(
+            ZLinkRemoteActorHandoffCompletionRequest request)
+    {
+        if (Guid.TryParseExact(request.HandoffId, "N", out var relocationId)
+            && !string.IsNullOrWhiteSpace(
+                request.RelocationCoordinatorOwnerId)
+            && request.RelocationCoordinatorLeaseGeneration != 0
+            && request.RelocationCoordinatorNodeRid is { Length: > 0 }
+            && request.RelocationCoordinatorNodeGeneration != 0
+            && !string.IsNullOrWhiteSpace(
+                request.RelocationCoordinatorExpectedAuthorityStoreVersion))
+            return ZLinkSessionRelocationContext.Create(
+                relocationId,
+                request.RelocationCoordinatorOwnerId,
+                request.RelocationCoordinatorLeaseGeneration,
+                RoutingId.From(request.RelocationCoordinatorNodeRid),
+                request.RelocationCoordinatorNodeGeneration,
+                request.RelocationCoordinatorExpectedAuthorityStoreVersion);
+        return default;
     }
 
     public static ZLinkRemoteActorBoundSessionRoute DecodeBoundSessionRoute(
@@ -591,7 +653,12 @@ byte[]? TargetNodeRid = null,
 ulong TargetNodeGeneration = 0,
 ulong TargetSpotGeneration = 0,
 ulong TargetAuthorityOwnerGeneration = 0,
-ulong TargetSpotAuthorityOwnerGeneration = 0);
+ulong TargetSpotAuthorityOwnerGeneration = 0,
+string RelocationCoordinatorOwnerId = "",
+ulong RelocationCoordinatorLeaseGeneration = 0,
+byte[]? RelocationCoordinatorNodeRid = null,
+ulong RelocationCoordinatorNodeGeneration = 0,
+string RelocationCoordinatorExpectedAuthorityStoreVersion = "");
 
 internal readonly record struct ZLinkActorRelocationReservation(
     string Token,
@@ -631,4 +698,9 @@ internal sealed record ZLinkRemoteActorHandoffCompletionRequest(
     ulong BoundSessionOwnerNodeGeneration = 0,
     ulong BoundSessionAcceptedHighWater = 0,
     string? BoundSessionSessionOwnerId = null,
-    ulong BoundSessionSessionOwnerLeaseGeneration = 0);
+    ulong BoundSessionSessionOwnerLeaseGeneration = 0,
+    string RelocationCoordinatorOwnerId = "",
+    ulong RelocationCoordinatorLeaseGeneration = 0,
+    byte[]? RelocationCoordinatorNodeRid = null,
+    ulong RelocationCoordinatorNodeGeneration = 0,
+    string RelocationCoordinatorExpectedAuthorityStoreVersion = "");

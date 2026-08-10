@@ -219,11 +219,55 @@ internal sealed partial class ZLinkFrameworkRuntime
                         stagedActorStates.TryAdd(
                             actorKey,
                             actorState);
+                        var boundRoute = hasRelocation
+                            ? relocationAuthority.BoundSessionRoute
+                            : default;
+                        var wireContext = default(
+                            ZLinkSessionRelocationContext);
+                        if (boundRoute.IsBound)
+                        {
+                            if (preparedAggregate is not null)
+                            {
+                                var coordinatorParticipant =
+                                    preparedAggregate.Participants.Single(
+                                        candidate => candidate.Envelope.ObjectKind
+                                            is ZLinkPlacementObjectKind.UserSpot
+                                            or ZLinkPlacementObjectKind.InstanceSpot);
+                                wireContext = ZLinkSessionRelocationContext.Create(
+                                    envelope.AggregateId,
+                                    request.SourceOwnerId,
+                                    request.SourceOwnerLeaseGeneration,
+                                    RoutingId.FromHex(request.SourceNodeRid),
+                                    request.SourceNodeLifecycleGeneration,
+                                    coordinatorParticipant.ExpectedStoreVersion);
+                            }
+                            else if (ZLinkCanonicalRelocationAuthorityStateCodec
+                                         .TryRead(
+                                             descriptor.AuthorityPayload,
+                                             out var canonical))
+                            {
+                                wireContext = new ZLinkSessionRelocationContext(
+                                    new ZLinkServiceWireCodec.RelocationWireId(
+                                        canonical.RelocationHigh,
+                                        canonical.RelocationLow),
+                                    new ZLinkServiceWireCodec
+                                        .RelocationCoordinatorFence(
+                                            canonical.State.CoordinatorOwnerId,
+                                            canonical.State
+                                                .CoordinatorLeaseGeneration,
+                                            RoutingId.FromHex(
+                                                canonical.State
+                                                    .CoordinatorNodeRid),
+                                            canonical.State
+                                                .CoordinatorNodeGeneration,
+                                            canonical.State
+                                                .CoordinatorExpectedAuthorityStoreVersion));
+                            }
+                        }
                         actorState.StageRelocationSessionRoute(
                             envelope.AggregateId.ToString("N"),
-                            hasRelocation
-                                ? relocationAuthority.BoundSessionRoute
-                                : default);
+                            boundRoute,
+                            wireContext);
                         var acceptedFrames =
                             ZLinkStandaloneActorRelocationRuntime
                                 .DecodeAcceptedRecords(
@@ -559,8 +603,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         string handoffId,
         CancellationToken cancellationToken)
     {
-        (ZLinkSessionRouteCommitRequest Request,
-            RoutingId SessionOwnerNode)? commit;
+        bool commit;
         try
         {
             commit = await CommitCompletedSessionRouteAsync(
@@ -580,13 +623,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                 + $"handoff={handoffId}");
             return;
         }
-        if (commit is not { } completedRoute)
+        if (!commit)
             return;
-        await UnsealCompletedSessionRouteAsync(
-                completedRoute.Request,
-                completedRoute.SessionOwnerNode,
-                cancellationToken)
-            .ConfigureAwait(false);
         actorState.CompleteRelocationSessionRoute(handoffId);
     }
 

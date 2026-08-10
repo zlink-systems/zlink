@@ -1215,7 +1215,11 @@ internal sealed class ZLinkCanonicalRelocationReservationOwner
                     root.Reference,
                     root.ChecksumCrc32c,
                     envelope.CanonicalApplicationVersion,
-                    SourceCleanupState: 0),
+                    SourceCleanupState: 0)
+                {
+                    CoordinatorExpectedAuthorityStoreVersion =
+                        slot.Prepare.Coordinator.ExpectedAuthorityStoreVersion
+                },
                 envelope);
         var coordinator = new ZLinkRelocationPublicationCoordinator(
             _store, relocationStore);

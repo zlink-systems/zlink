@@ -95,11 +95,6 @@ internal static class ZLinkFrameworkServiceRegistrar
         services.TryAddScoped<ZLinkRemoteSessionPushRelayHandler>();
         services.TryAddScoped<ZLinkRemoteActorFrameRelayHandler>();
         services.TryAddScoped<ZLinkRemoteActorReplyRelayHandler>();
-        services.TryAddScoped<ZLinkSessionRouteSealHandler>();
-        services.TryAddScoped<ZLinkSessionRouteAbortHandler>();
-        services.TryAddScoped<ZLinkSessionRouteCommitHandler>();
-        services.TryAddScoped<ZLinkSessionRouteUnsealHandler>();
-
         registration.DispatchOptions.Diagnostics.LiveLevel ??=
             new ZLinkDiagnosticsLevelCell(
                 registration.DispatchOptions.Diagnostics.ConfiguredLevel);

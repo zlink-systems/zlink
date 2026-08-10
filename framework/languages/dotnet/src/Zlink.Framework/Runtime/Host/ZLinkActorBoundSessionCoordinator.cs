@@ -360,6 +360,19 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         CancellationToken cancellationToken)
         => _sessionBindings.SealRouteAsync(request, cancellationToken);
 
+    internal ValueTask<
+        ZLinkServiceWireCodec.SessionRelocationSealedRecord>
+        SealCanonicalSessionRouteAsync(
+            ZLinkServiceWireCodec.SessionRelocationSealRecord request,
+            CancellationToken cancellationToken) =>
+        _sessionBindings.SealCanonicalRouteAsync(request, cancellationToken);
+
+    internal ZLinkServiceWireCodec.SessionRelocationRoutedRecord
+        RouteCanonicalSession(
+            ZLinkServiceWireCodec.SessionRelocationRouteRecord request,
+            ZLinkSessionRelocationAuthenticatedRoute authenticatedRoute) =>
+        _sessionBindings.RouteCanonical(request, authenticatedRoute);
+
     public void CompleteAcceptedSessionFrame(
         string actorId,
         string bindingToken)

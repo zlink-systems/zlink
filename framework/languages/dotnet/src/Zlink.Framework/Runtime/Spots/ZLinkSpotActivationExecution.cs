@@ -1269,114 +1269,54 @@ internal abstract partial class ZLinkSpotActivation
     internal async ValueTask<ZLinkRemoteActorBoundSessionRoute>
         SealActorBoundSessionRouteForRetireAsync(
             string actorId,
-            string handoffId,
+            ZLinkSessionRelocationContext wireContext,
             CancellationToken cancellationToken)
     {
         var route = CaptureActorBoundSessionRouteForRetire(actorId);
         if (!route.IsBound)
             return route;
-        var seal = new ZLinkSessionRouteSeal(
-            actorId,
-            route.BindingToken!,
-            route.BindingGeneration,
-            route.ObjectGeneration,
-            route.AuthorityOwnerGeneration,
-            route.MeshName!,
-            route.TargetNodeGeneration,
-            route.OwnerLeaseGeneration,
-            route.SessionOwnerNodeGeneration,
-            handoffId);
-        ZLinkSessionRouteSealResult result;
         var routeNodeRid = route.NodeRid
                            ?? throw new InvalidOperationException(
                                "A bound Session route requires a target NodeRid.");
-        if (routeNodeRid
-            == _runtime.GetMeshNodeRuntime(route.MeshName!).Node.RoutingId)
+        var result = await _runtime.SealSessionRelocationAsync(
+                route.MeshName!,
+                routeNodeRid,
+                ZLinkSessionRelocationWire.CreateSeal(
+                    actorId,
+                    route,
+                    wireContext),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return route with
         {
-            result = await _runtime.SealSessionActorRouteAsync(
-                    seal,
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
-        else
-        {
-            var reply = await _runtime
-                .RequestSessionRouteSealAsync(
-                    route.MeshName!,
-                    routeNodeRid,
-                    new ZLinkSessionRouteSealRequest(
-                        actorId,
-                        route.BindingToken!,
-                        route.BindingGeneration,
-                        route.ObjectGeneration,
-                        route.AuthorityOwnerGeneration,
-                        route.MeshName!,
-                        route.TargetNodeGeneration,
-                        route.OwnerLeaseGeneration,
-                        route.SessionOwnerNodeGeneration,
-                        handoffId),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            result = new ZLinkSessionRouteSealResult(
-                reply.Acknowledged,
-                reply.AcceptedHighWater);
-        }
-        if (!result.Acknowledged)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.InvalidOperation,
-                $"Actor '{actorId}' session ingress seal was fenced.");
-        return route with { AcceptedHighWater = result.AcceptedHighWater };
+            AcceptedHighWater = result.LastAcceptedSessionSequence
+        };
     }
 
     internal async ValueTask AbortActorBoundSessionRouteSealForRetireAsync(
         string actorId,
         ZLinkRemoteActorBoundSessionRoute route,
-        string handoffId,
+        ZLinkSessionRelocationContext wireContext,
         CancellationToken cancellationToken)
     {
         if (!route.IsBound)
             return;
-        var seal = new ZLinkSessionRouteSeal(
-            actorId,
-            route.BindingToken!,
-            route.BindingGeneration,
-            route.ObjectGeneration,
-            route.AuthorityOwnerGeneration,
-            route.MeshName!,
-            route.TargetNodeGeneration,
-            route.OwnerLeaseGeneration,
-            route.SessionOwnerNodeGeneration,
-            handoffId);
-        bool acknowledged;
         var routeNodeRid = route.NodeRid
                            ?? throw new InvalidOperationException(
                                "A bound Session route requires a target NodeRid.");
-        if (routeNodeRid
-            == _runtime.GetMeshNodeRuntime(route.MeshName!).Node.RoutingId)
-        {
-            acknowledged = _runtime.AbortSessionActorRouteSeal(seal);
-        }
-        else
-        {
-            var reply = await _runtime
-                .RequestSessionRouteAbortAsync(
-                    route.MeshName!,
-                    routeNodeRid,
-                    new ZLinkSessionRouteAbortRequest(
-                        actorId,
-                        route.BindingToken!,
-                        route.BindingGeneration,
-                        route.ObjectGeneration,
-                        route.AuthorityOwnerGeneration,
-                        route.MeshName!,
-                        route.TargetNodeGeneration,
-                        route.OwnerLeaseGeneration,
-                        route.SessionOwnerNodeGeneration,
-                        handoffId),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            acknowledged = reply.Acknowledged;
-        }
+        var reply = await _runtime.RouteSessionRelocationAsync(
+                route.MeshName!,
+                routeNodeRid,
+                ZLinkSessionRelocationWire.CreateAbort(
+                    actorId,
+                    route,
+                    wireContext),
+                route.AcceptedHighWater,
+                cancellationToken)
+            .ConfigureAwait(false);
+        var acknowledged = reply.Result is
+            ZLinkServiceWireCodec.SessionRelocationRouteResult.Applied
+            or ZLinkServiceWireCodec.SessionRelocationRouteResult.AlreadyApplied;
         // Best-effort: source admission restore no longer waits on the session
         // owner (wire contract, Ready boundary). A missing or negative ack
         // means the seal is already gone or fenced by a newer binding
@@ -1384,7 +1324,8 @@ internal abstract partial class ZLinkSpotActivation
         if (!acknowledged)
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"session_route_abort_unacknowledged actor={actorId}"
-                + $" handoff={handoffId}");
+                + $" relocation={wireContext.RelocationId.High:x16}"
+                + $"{wireContext.RelocationId.Low:x16}");
     }
 
     internal void BeginMessageFollow(

@@ -1209,7 +1209,7 @@ public sealed class RelocationRuntimeTests
     }
 
     [Fact]
-    public void StandaloneActorPermitReservesBothJournalsBeforeExactShrink()
+    public void StandaloneActorPermitReservesOneAcceptedJournalBeforeExactShrink()
     {
         var recreate = ZLinkRemoteActorJoinPackets
             .MeasureStandaloneMaintenancePayloadUpperBound(snapshot: false);
@@ -1233,10 +1233,10 @@ public sealed class RelocationRuntimeTests
             out var lease));
 
         // A valid Recreate root can exceed the old fixed 64 KiB guess while
-        // remaining below the deterministic queue plus hold reservation.
-        Assert.True(lease.TryShrinkPayload(
-            17L * 1024 * 1024));
-        Assert.Equal(17L * 1024 * 1024, lease.ReservedPayloadBytes);
+        // remaining below the deterministic accepted-journal reservation.
+        var exactPayloadBytes = recreate - 1;
+        Assert.True(lease.TryShrinkPayload(exactPayloadBytes));
+        Assert.Equal(exactPayloadBytes, lease.ReservedPayloadBytes);
         lease.Dispose();
         Assert.Equal(default, permits.Snapshot());
     }
@@ -1313,7 +1313,7 @@ public sealed class RelocationRuntimeTests
                 participants));
 
         Assert.Equal(
-            encoded.LongLength + 16L * 1024 * 1024
+            encoded.LongLength
             + keys.LongLength * ZLinkCanonicalParticipantRecoveryCodec
                 .MaximumEncodedBytesWithEmptyMembership,
             ZLinkSpotRetireScheduler.CalculatePayloadReservation(

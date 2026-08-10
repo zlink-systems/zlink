@@ -40,6 +40,7 @@ internal sealed class ZLinkActorRuntimeState(
     private ZLinkActorBoundSession? _boundSession;
     private SessionBindingReplacement? _sessionReplacement;
     private ZLinkPendingActorSessionRoute? _pendingSessionRoute;
+    private ZLinkSourceSessionRelocation? _sourceSessionRelocation;
     private TaskCompletionSource<Exception?>? _teardownAttempt;
     private readonly IServiceProvider _services = services ?? EmptyServices;
     private ZLinkActorHandlerActivation? _handlerActivation;
@@ -823,7 +824,8 @@ internal sealed class ZLinkActorRuntimeState(
 
     public void StageRelocationSessionRoute(
         string handoffId,
-        ZLinkRemoteActorBoundSessionRoute route)
+        ZLinkRemoteActorBoundSessionRoute route,
+        ZLinkSessionRelocationContext wireContext = default)
     {
         lock (_sessionGate)
         {
@@ -844,7 +846,61 @@ internal sealed class ZLinkActorRuntimeState(
                 handoffId,
                 route,
                 TargetActor: null,
-                TargetAuthorityOwnerGeneration: 0);
+                TargetAuthorityOwnerGeneration: 0,
+                WireContext: wireContext);
+        }
+    }
+
+    internal void RememberSourceSessionRelocation(
+        string handoffId,
+        ZLinkSessionRelocationContext context)
+    {
+        lock (_sessionGate)
+        {
+            if (_sourceSessionRelocation is { } current
+                && (!string.Equals(
+                        current.HandoffId,
+                        handoffId,
+                        StringComparison.Ordinal)
+                    || current.Context != context))
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.InvalidOperation,
+                    $"Actor '{ActorId}' already has another source session relocation.",
+                    ZLinkRetryAdvice.DoNotRetry);
+            _sourceSessionRelocation = new(handoffId, context);
+        }
+    }
+
+    internal bool TryGetSourceSessionRelocation(
+        string handoffId,
+        out ZLinkSessionRelocationContext context)
+    {
+        lock (_sessionGate)
+        {
+            if (_sourceSessionRelocation is { } current
+                && string.Equals(
+                    current.HandoffId,
+                    handoffId,
+                    StringComparison.Ordinal))
+            {
+                context = current.Context;
+                return true;
+            }
+        }
+        context = default;
+        return false;
+    }
+
+    internal void ForgetSourceSessionRelocation(string handoffId)
+    {
+        lock (_sessionGate)
+        {
+            if (_sourceSessionRelocation is { } current
+                && string.Equals(
+                    current.HandoffId,
+                    handoffId,
+                    StringComparison.Ordinal))
+                _sourceSessionRelocation = null;
         }
     }
 
@@ -1909,7 +1965,12 @@ internal readonly record struct ZLinkPendingActorSessionRoute(
     ulong TargetAuthorityOwnerGeneration,
     ZLinkMeshName? TargetMeshName = null,
     ulong TargetNodeGeneration = 0,
-    ulong TargetOwnerLeaseGeneration = 0);
+    ulong TargetOwnerLeaseGeneration = 0,
+    ZLinkSessionRelocationContext WireContext = default);
+
+internal readonly record struct ZLinkSourceSessionRelocation(
+    string HandoffId,
+    ZLinkSessionRelocationContext Context);
 
 internal readonly record struct ZLinkActorCreationOperation(
     Task<IZLinkActor> Task,

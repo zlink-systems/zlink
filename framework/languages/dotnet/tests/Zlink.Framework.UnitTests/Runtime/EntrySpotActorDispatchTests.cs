@@ -1871,6 +1871,260 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task SessionRelocationHoldPreservesSendAndRequestFramesAcrossConsecutiveRouteSwitches()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            node,
+            includeActorFactory: false);
+        try
+        {
+            var sessionRid = RoutingId.From("session-relocation-hold");
+            var context = new ZLinkSessionContext(
+                runtime,
+                new ZLinkManagedStream(
+                    new RelayStreamSocket(),
+                    sessionRid,
+                    runtime.Registration.Codecs,
+                    "test"),
+                new RelaySessionHandlerRegistry(),
+                static () => ValueTask.CompletedTask,
+                static _ => ValueTask.CompletedTask);
+            const string actorId = "actor-relocation-hold";
+            const string bindingToken = "binding-relocation-hold";
+            var sourceNode = RoutingId.From("source-actor-node");
+            var bound = new ZLinkSessionActor(
+                context,
+                actorId,
+                sessionRid,
+                bindingToken);
+            _ = runtime.BindSessionActor(
+                actorId,
+                context,
+                bindingToken,
+                bound,
+                bindingGeneration: 6,
+                route: ZLinkSessionBindingRoute.Create(
+                    new ActorRef(actorId, 5, "entry", sourceNode),
+                    "entry",
+                    targetNodeGeneration: 2,
+                    authorityOwnerGeneration: 11,
+                    ownerLeaseGeneration: 17),
+                sessionOwnerNodeGeneration: 1,
+                sessionOwnerNodeRid: node.RoutingId,
+                sessionOwnerId: "session-owner",
+                sessionOwnerLeaseGeneration: 8);
+
+            Assert.True(runtime.TryGetSessionActorBinding(
+                actorId,
+                bindingToken,
+                out var sourceBinding));
+            var firstSeal = SessionSeal(
+                sourceBinding,
+                new ZLinkServiceWireCodec.RelocationWireId(8, 1),
+                sourceNode,
+                sourceNodeGeneration: 2,
+                coordinatorLease: 17);
+            var firstSealed = await runtime.SealCanonicalSessionActorRouteAsync(
+                firstSeal,
+                CancellationToken.None);
+            Assert.Equal(0UL, firstSealed.LastAcceptedSessionSequence);
+
+            var sendHeader = new ZlinkStreamHeader(
+                ZlinkStreamMessageKind.Send,
+                ZlinkStreamCodec.Raw,
+                ZlinkStreamHeaderFlags.None,
+                null,
+                "held-send",
+                ZlinkStreamMetadata.Empty);
+            var sendBody = Encoding.UTF8.GetBytes("send-body");
+            using var sendPayload = Message.From(sendBody);
+            var heldSend = context.ActorCoordinator.RelayToActorAsync(
+                    bound,
+                    sendHeader,
+                    sendPayload,
+                    static (_, _, _) => ValueTask.CompletedTask,
+                    CancellationToken.None)
+                .AsTask();
+            await Task.Delay(20);
+            Assert.False(heldSend.IsCompleted);
+            Assert.Empty(node.NodeSendAttempts);
+
+            var targetOne = RoutingId.From("target-actor-one");
+            var firstCommit = SessionCommit(
+                firstSeal,
+                targetOne,
+                targetNodeGeneration: 3,
+                targetAuthority: 12,
+                firstSealed.LastAcceptedSessionSequence);
+            Assert.Equal(
+                ZLinkServiceWireCodec.SessionRelocationRouteResult.Applied,
+                runtime.RouteCanonicalSessionActor(
+                    firstCommit,
+                    new ZLinkSessionRelocationAuthenticatedRoute(
+                        targetOne,
+                        3,
+                        "entry",
+                        12,
+                        101)).Result);
+            await heldSend;
+
+            var sentRelay = ZLinkFrameworkJsonPayloadCodec
+                .Deserialize<ZLinkRemoteActorFrameRelay>(
+                    Assert.Single(node.NodeSendAttempts)[1]);
+            Assert.NotNull(sentRelay);
+            Assert.Equal(sendBody, sentRelay.Body);
+            Assert.Equal(
+                ZLinkStreamProtocolDefaults.EncodeHeader(sendHeader).ToArray(),
+                sentRelay.Header);
+            Assert.Equal(0UL, sentRelay.ReplyRequestId);
+            Assert.Null(sentRelay.ReplyCapability);
+            node.NodeSendAttempts.Clear();
+
+            Assert.True(runtime.TryGetSessionActorBinding(
+                actorId,
+                bindingToken,
+                out var targetOneBinding));
+            Assert.Equal(101UL, targetOneBinding.OwnerLeaseGeneration);
+            var secondSeal = SessionSeal(
+                targetOneBinding,
+                new ZLinkServiceWireCodec.RelocationWireId(8, 2),
+                targetOne,
+                sourceNodeGeneration: 3,
+                coordinatorLease: 101);
+            Assert.Equal(101UL, secondSeal.Actor.OwnerLeaseGeneration);
+            var secondSealed = await runtime.SealCanonicalSessionActorRouteAsync(
+                secondSeal,
+                CancellationToken.None);
+            Assert.Equal(1UL, secondSealed.LastAcceptedSessionSequence);
+
+            var requestHeader = new ZlinkStreamHeader(
+                ZlinkStreamMessageKind.Request,
+                ZlinkStreamCodec.Raw,
+                ZlinkStreamHeaderFlags.HasRequestSeq,
+                new ZlinkStreamRequestSeq(77),
+                "held-request",
+                ZlinkStreamMetadata.Empty);
+            var requestBody = Encoding.UTF8.GetBytes("request-body");
+            using var requestPayload = Message.From(requestBody);
+            var rawReplyCalls = 0;
+            var heldRequest = context.ActorCoordinator.RelayToActorAsync(
+                    bound,
+                    requestHeader,
+                    requestPayload,
+                    (_, _, _) =>
+                    {
+                        Interlocked.Increment(ref rawReplyCalls);
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None)
+                .AsTask();
+            await Task.Delay(20);
+            Assert.False(heldRequest.IsCompleted);
+            Assert.Empty(node.NodeSendAttempts);
+
+            var targetTwo = RoutingId.From("target-actor-two");
+            var secondCommit = SessionCommit(
+                secondSeal,
+                targetTwo,
+                targetNodeGeneration: 4,
+                targetAuthority: 13,
+                secondSealed.LastAcceptedSessionSequence);
+            Assert.Equal(
+                ZLinkServiceWireCodec.SessionRelocationRouteResult.Applied,
+                runtime.RouteCanonicalSessionActor(
+                    secondCommit,
+                    new ZLinkSessionRelocationAuthenticatedRoute(
+                        targetTwo,
+                        4,
+                        "entry",
+                        13,
+                        202)).Result);
+            await heldRequest;
+
+            var requestRelay = ZLinkFrameworkJsonPayloadCodec
+                .Deserialize<ZLinkRemoteActorFrameRelay>(
+                    Assert.Single(node.NodeSendAttempts)[1]);
+            Assert.NotNull(requestRelay);
+            Assert.Equal(requestBody, requestRelay.Body);
+            Assert.Equal(
+                ZLinkStreamProtocolDefaults.EncodeHeader(requestHeader).ToArray(),
+                requestRelay.Header);
+            Assert.Equal(77UL, requestRelay.ReplyRequestId);
+            Assert.Equal(
+                ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind,
+                requestRelay.ReplyFlags);
+            Assert.False(string.IsNullOrWhiteSpace(
+                requestRelay.ReplyCapability));
+            Assert.Equal(0, rawReplyCalls);
+            Assert.True(ZLinkActorBoundSessionHandoffMetadata.TryDecode(
+                requestRelay.ApplicationMetadata,
+                out var requestFence));
+            Assert.Equal(2UL, requestFence.SessionSequence);
+            Assert.True(runtime.TryGetSessionActorBinding(
+                actorId,
+                bindingToken,
+                out var targetTwoBinding));
+            Assert.Equal(targetTwo, targetTwoBinding.Route.Ref.NodeRid);
+            Assert.Equal(202UL, targetTwoBinding.OwnerLeaseGeneration);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+
+        static ZLinkServiceWireCodec.SessionRelocationSealRecord SessionSeal(
+            ZLinkSessionBindingEntry binding,
+            ZLinkServiceWireCodec.RelocationWireId relocationId,
+            RoutingId sourceNode,
+            ulong sourceNodeGeneration,
+            ulong coordinatorLease) =>
+            new(
+                relocationId,
+                new ZLinkServiceWireCodec.RelocationCoordinatorFence(
+                    "coordinator",
+                    coordinatorLease,
+                    sourceNode,
+                    sourceNodeGeneration,
+                    $"store-{relocationId.High}-{relocationId.Low}"),
+                1,
+                new ZLinkServiceWireCodec.SessionActorRouteFenceRecord(
+                    new ZLinkServiceWireCodec.SessionActorIdentityRecord(
+                        binding.ActorRef.ActorId,
+                        binding.ObjectGeneration),
+                    binding.Route.Ref.NodeRid,
+                    binding.TargetNodeGeneration,
+                    binding.AuthorityOwnerGeneration,
+                    binding.OwnerLeaseGeneration),
+                new ZLinkServiceWireCodec.SessionOwnerFenceRecord(
+                    binding.SessionOwnerNodeRid,
+                    binding.SessionOwnerNodeGeneration,
+                    binding.SessionOwnerId,
+                    binding.SessionOwnerLeaseGeneration,
+                    binding.ActorRef.SessionRid,
+                    binding.BindingGeneration));
+
+        static ZLinkServiceWireCodec.SessionRelocationRouteRecord SessionCommit(
+            ZLinkServiceWireCodec.SessionRelocationSealRecord seal,
+            RoutingId targetNode,
+            ulong targetNodeGeneration,
+            ulong targetAuthority,
+            ulong replayedHighWater) =>
+            new(
+                seal.RelocationId,
+                seal.Coordinator,
+                2,
+                seal.Actor.Actor,
+                seal.Session,
+                ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord.Commit(
+                    seal.Actor.AuthorityOwnerGeneration,
+                    targetAuthority,
+                    targetNode,
+                    targetNodeGeneration,
+                    replayedHighWater));
+    }
+
+    [Fact]
     public async Task RetriedRemoteReplyAfterAckLossDeliversExactlyOnceToTheSession()
     {
         var node = new CapturingSpotNode();

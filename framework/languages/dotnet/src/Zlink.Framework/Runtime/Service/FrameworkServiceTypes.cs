@@ -336,6 +336,26 @@ internal interface ICanonicalRelocationReservationTarget
         CancellationToken cancellationToken);
 }
 
+internal interface ISessionRelocationBarrierTarget
+{
+    ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord> SealAsync(
+        ZLinkServiceWireCodec.SessionRelocationSealRecord seal,
+        RoutingId authenticatedSourceNodeRid,
+        CancellationToken cancellationToken);
+
+    ValueTask<ZLinkServiceWireCodec.SessionRelocationRoutedRecord> RouteAsync(
+        ZLinkServiceWireCodec.SessionRelocationRouteRecord route,
+        ZLinkSessionRelocationAuthenticatedRoute authenticatedRoute,
+        CancellationToken cancellationToken);
+}
+
+internal readonly record struct ZLinkSessionRelocationAuthenticatedRoute(
+    RoutingId NodeRid,
+    ulong NodeGeneration,
+    string MeshName,
+    ulong AuthorityOwnerGeneration,
+    ulong OwnerLeaseGeneration);
+
 [Flags]
 internal enum MeshMonitorEventMask : ulong
 {
@@ -693,6 +713,8 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
     void SetRelocationReplyRelayTarget(IRelocationReplyRelayTarget target);
     void SetCanonicalRelocationReservationTarget(
         ICanonicalRelocationReservationTarget target);
+    void SetSessionRelocationBarrierTarget(
+        ISessionRelocationBarrierTarget target);
     ValueTask<ZLinkServiceWireCodec.ReplyRelayAckRecord> RelayRelocationReplyAsync(
         RoutingId targetNodeRid,
         ZLinkServiceWireCodec.ReplyRelayRecord relay,
@@ -716,6 +738,19 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
         RoutingId targetNodeRid,
         ZLinkServiceWireCodec.RelocationCompleteRecord complete,
         CancellationToken cancellationToken);
+    ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord>
+        SealSessionRelocationAsync(
+            RoutingId sessionOwnerNodeRid,
+            ZLinkServiceWireCodec.SessionRelocationSealRecord seal,
+            TimeSpan timeout,
+            CancellationToken cancellationToken);
+    ValueTask<ZLinkServiceWireCodec.SessionRelocationRoutedRecord>
+        RouteSessionRelocationAsync(
+            RoutingId sessionOwnerNodeRid,
+            ZLinkServiceWireCodec.SessionRelocationRouteRecord route,
+            ulong expectedSealedHighWater,
+            TimeSpan timeout,
+            CancellationToken cancellationToken);
     SubmitResult ActivateInstanceSpot(
         InstanceSpotActivationTarget target,
         string sourceSpotId,
