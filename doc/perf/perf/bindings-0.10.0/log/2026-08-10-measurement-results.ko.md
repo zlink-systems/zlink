@@ -41,3 +41,13 @@ PAIR/inproc C report: `/home/hep7hep7/project/zlink/bindings/c/perf/results/sing
 | .NET final | 1892.295 / 919.669 / 603.699 / 39.236 / 24.924 / 14.992 | 0.171 / 0.240 / 0.326 / 5.189 / 8.229 / 13.713 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_134835_dotnet-pair-tcp-dotnet-flags-none-ab.txt` |
 
 Final throughput ratio is `77.14% / 72.75% / 85.99% / 93.55% / 94.56% / 94.23%`, arithmetic mean `86.37%`. Final average latency ratio is `0.163x / 1.048x / 1.116x / 1.072x / 1.060x / 1.062x`, arithmetic mean `0.920x`; the target passes.
+
+### .NET Single PUBSUB/tcp
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 1601.681 / 1052.561 / 598.716 / 40.742 / 26.514 / 16.116 | 0.129 / 0.275 / 0.344 / 4.990 / 7.719 / 12.789 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_135104_dotnet-pubsub-tcp-c1.txt` |
+| .NET baseline | 1000.362 / 714.788 / 526.673 / 38.179 / 24.805 / 14.135 | 0.098 / 0.218 / 0.361 / 5.341 / 8.269 / 14.535 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_135121_dotnet-pubsub-tcp-dotnet1.txt` |
+| .NET A/B | 1046.824 / 758.847 / 526.019 / 39.146 / 24.623 / 14.626 | 0.093 / 0.202 / 0.378 / 5.214 / 8.329 / 14.064 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_135204_dotnet-pubsub-tcp-dotnet-flags-none-ab.txt` |
+
+Baseline throughput ratio is `62.46% / 67.91% / 87.97% / 93.71% / 93.55% / 87.71%`, arithmetic mean `82.22%`. The one A/B reached `65.36% / 72.10% / 87.86% / 96.08% / 92.87% / 90.75%`, arithmetic mean `84.17%`; average latency ratio was `0.963x`. The throughput target remained unmet, so the target is held.

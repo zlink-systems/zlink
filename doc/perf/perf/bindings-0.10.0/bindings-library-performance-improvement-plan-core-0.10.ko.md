@@ -832,7 +832,7 @@ transport 상태를 판정한다.
 ### 9.2 .NET
 
 - perf 경로: `bindings/dotnet/perf`
-- Single 상태: `PAIR/tcp` 완료·통과, 나머지 대상 측정 중
+- Single 상태: `PAIR/tcp` 완료·통과, `PUBSUB/tcp` 완료·보류, 나머지 대상 측정 중
 - Multi 상태: `미측정`
 - 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
 
@@ -841,7 +841,7 @@ transport 상태를 판정한다.
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
 | `tcp` | `PAIR` | 77.14% | 72.75% | 85.99% | 93.55% | 94.56% | 94.23% | 통과·throughput 산술평균 86.37%, 평균 latency ratio 0.920x. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_133934_dotnet-pair-tcp-c-full.txt`; .NET baseline: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_133947_dotnet-pair-tcp-dotnet-full.txt`; 최종: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_134835_dotnet-pair-tcp-dotnet-flags-none-ab.txt` |
-| `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `PUBSUB` | 65.36% | 72.10% | 87.86% | 96.08% | 92.87% | 90.75% | 보류·baseline throughput 산술평균 82.22%, `flags == None` 분기 A/B 84.17%, 평균 latency ratio 0.963x. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_135104_dotnet-pubsub-tcp-c1.txt`; .NET baseline: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_135121_dotnet-pubsub-tcp-dotnet1.txt`; A/B: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_135204_dotnet-pubsub-tcp-dotnet-flags-none-ab.txt` |
 | `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
