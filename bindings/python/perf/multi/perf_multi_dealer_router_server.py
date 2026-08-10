@@ -41,18 +41,14 @@ def main(argv=None):
             apply_multi_auto_hwm_msg_unit(ctx, args.msg_size)
             print(f"READY,{endpoint}", flush=True)
             with zlink.create_poller() as poller:
-                poller.add_socket(
-                    router,
-                    zlink.PollEventFlag.POLLIN | zlink.PollEventFlag.POLLOUT,
-                    0,
-                )
+                poller.add_socket(router, zlink.PollEventFlag.POLLIN, 0)
                 poll_events = zlink.create_poll_events(1)
                 recv_storage = zlink.create_received()
-                # PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven wait. The
-                # echo server has no in-band phase end of its own; the
-                # runner shuts it down via stdin STOP/EOF and SIGTERM.
-                # We wake immediately on POLLIN/POLLOUT so we never sit on
-                # a short timer cadence for I/O readiness.
+                poll_interest = zlink.PollEventFlag.POLLIN
+                # Match the C relay server: POLLOUT is observed only while a
+                # backpressured reply is queued. The bounded wait also lets
+                # the stdin stop event terminate an otherwise idle server.
+                aux_wait_ms = 100
                 while not stop.is_set():
                     while pending:
                         routing_id, payload = pending[0]
@@ -65,7 +61,7 @@ def main(argv=None):
                             break
                         with received:
                             payload = received.parts[0].data
-                            routing_id = bytes(received.routing_id)
+                            routing_id = None
                             sent = False
                             if not pending:
                                 sent = (
@@ -75,10 +71,17 @@ def main(argv=None):
                                     .submit()
                                 )
                             if not sent:
+                                routing_id = bytes(received.routing_id)
                                 payload = bytes(payload)
                         if not sent:
                             pending.append((routing_id, payload))
-                    safe_poll(poller, poll_events, -1)
+                    next_interest = zlink.PollEventFlag.POLLIN
+                    if pending:
+                        next_interest |= zlink.PollEventFlag.POLLOUT
+                    if next_interest != poll_interest:
+                        poller.modify_socket(router, next_interest)
+                        poll_interest = next_interest
+                    safe_poll(poller, poll_events, aux_wait_ms)
 
 
 if __name__ == "__main__":
