@@ -172,8 +172,7 @@ internal static class PerfMultiDealerRouterClient
             if (slot.WaitingForReply || slot.WaitingForWritable)
                 continue;
 
-            PreparePayload(slot, msgSize, runId, phase, ref seq);
-            if (TrySend(slot))
+            if (TrySend(slot, msgSize, runId, phase, ref seq))
             {
                 slot.WaitingForReply = true;
                 slot.WaitingForWritable = false;
@@ -204,7 +203,7 @@ internal static class PerfMultiDealerRouterClient
             && slot.WaitingForWritable
             && !slot.WaitingForReply)
         {
-            if (TrySend(slot))
+            if (TrySend(slot, msgSize, runId, phase, ref seq))
             {
                 slot.WaitingForReply = true;
                 slot.WaitingForWritable = false;
@@ -293,19 +292,20 @@ internal static class PerfMultiDealerRouterClient
         eventMasks[index] = events;
     }
 
-    private static void PreparePayload(DealerRouterClientSlot slot, int msgSize,
+    private static bool TrySend(DealerRouterClientSlot slot, int msgSize,
         uint runId, PerfPhase phase, ref ulong seq)
     {
+        // Match C: stamp immediately before every send attempt. A blocked
+        // attempt keeps the current sequence; only a successful send advances it.
         StampMetricHeader(slot.Payload.AsSpan(), runId, phase, msgSize,
-            seq++, EpochNs());
-    }
-
-    private static bool TrySend(DealerRouterClientSlot slot)
-    {
+            seq, EpochNs());
         using Message message = Message.Allocate(slot.Payload.Length);
         slot.Payload.AsSpan(0, PerfMetricHeaderSize).CopyTo(message.AsSpan());
-        return ((IDealerSocket)slot.Socket).Send().Message(message)
+        bool sent = ((IDealerSocket)slot.Socket).Send().Message(message)
             .Flags(SendFlags.DontWait).Submit();
+        if (sent)
+            seq++;
+        return sent;
     }
 
     private static int RemainingMilliseconds(long deadlineTicks)
