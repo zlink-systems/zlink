@@ -468,6 +468,10 @@ export class ZLinkStreamBindingRuntime {
     return this.sessionActors.authorityFence(actorId);
   }
 
+  sessionRouteFence(actorId: string) {
+    return this.sessionActors.sessionRouteFence(actorId);
+  }
+
   sealActorRoute(input: {
     readonly actorId: string;
     readonly actorGeneration: bigint;

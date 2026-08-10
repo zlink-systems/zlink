@@ -44,6 +44,7 @@ import type {
   ZLinkMeshCompletionTable
 } from '../backend';
 import type { ReceiveRecord } from '../foundation/service-runtime-contracts';
+import { ServiceWireProtocolError } from '../foundation/service-wire-m6a-codec';
 import type { ServiceSpotMessageFollowSeal } from '../foundation/service-stateful-runtime';
 import {
   ServiceDurableRelocationRuntime,
@@ -119,8 +120,16 @@ import {
 import {
   decodeMaintenanceReplyRelay,
   decodeMaintenanceReplyRelayAck,
+  decodeSessionRelocationRoute,
+  decodeSessionRelocationRouted,
+  decodeSessionRelocationSeal,
+  decodeSessionRelocationSealed,
   encodeMaintenanceReplyRelay,
   encodeMaintenanceReplyRelayAck,
+  encodeSessionRelocationRoute,
+  encodeSessionRelocationRouted,
+  encodeSessionRelocationSeal,
+  encodeSessionRelocationSealed,
   encodeServiceWireFrozenActorApplicationRecord,
   M6bServiceWireCommand,
   type ServiceMaintenanceReplyRelay,
@@ -130,6 +139,11 @@ import {
   type ServiceMaintenanceRelocationReady,
   type ServiceMaintenanceRelocationControlData,
   type ServiceMaintenanceRelocationPrepare,
+  type ServiceSessionRelocationRoute,
+  type ServiceSessionRelocationRouted,
+  type ServiceSessionRelocationSeal,
+  type ServiceSessionRelocationSealed,
+  type ServiceWireOperationId,
   type ServiceWireRequestSourceFence,
   type ServiceWireRelocationCandidate,
   type ServiceWireRelocationCoordinatorFence,
@@ -156,6 +170,7 @@ const RELOCATION_TARGET_LIVE_LIMIT = 1024;
 const RELOCATION_TARGET_TOMBSTONE_LIMIT = 1024;
 const RELOCATION_TARGET_TOMBSTONE_TTL_MS = 5 * 60_000;
 const RELOCATION_OPERATION_RETENTION_MS = 5 * 60_000;
+const SERVICE_CONTROL_TERMINAL_CAPACITY = 4096;
 
 class TargetReservationRejectedError extends Error {}
 
@@ -176,6 +191,13 @@ interface ZLinkHostRelocationOptions {
   readonly spotNodeRuntime: () => ZLinkSpotNodeRuntimeManager | undefined;
   readonly actorManager: () => DefaultZLinkActorManager | undefined;
   readonly actorTransfer: ZLinkActorTransferRuntime;
+  readonly boundSessionRelocation?: {
+    receiveSeal(value: ServiceSessionRelocationSeal): Promise<ServiceSessionRelocationSealed>;
+    receiveRoute(
+      value: ServiceSessionRelocationRoute,
+      targetOwnerLeaseGeneration?: bigint
+    ): Promise<ServiceSessionRelocationRouted>;
+  };
   readonly trackInstanceSpot?: (input: ZLinkTrackedInstanceAuthority) => void;
   readonly reconcileStatefulAuthorityRoutes?: (signal?: AbortSignal) => Promise<void>;
   readonly runtimeEventPublisher?: ZLinkRuntimeEventPublisher;
@@ -295,6 +317,25 @@ interface PendingRelocationReplyRelay {
   timer?: ReturnType<typeof setTimeout>;
 }
 
+interface PendingSessionRelocation {
+  readonly targetNodeRid: string;
+  readonly request: ServiceSessionRelocationSeal | ServiceSessionRelocationRoute;
+  readonly requestFingerprint: string;
+  readonly promise: Promise<ServiceSessionRelocationSealed | ServiceSessionRelocationRouted>;
+  readonly resolve: (
+    response: ServiceSessionRelocationSealed | ServiceSessionRelocationRouted
+  ) => void;
+  readonly reject: (error: unknown) => void;
+  readonly timer: ReturnType<typeof setInterval>;
+}
+
+interface TerminalSessionRelocationControl {
+  readonly targetNodeRid: string;
+  readonly request: ServiceSessionRelocationSeal | ServiceSessionRelocationRoute;
+  readonly requestFingerprint: string;
+  readonly responseFingerprint: string;
+}
+
 /** Production host bridge from Retire inventory to remote RouteMesh owners. */
 export class ZLinkHostServiceRelocationRuntime {
   private readonly targetOffers = new Map<string, TargetRelocationOffer>();
@@ -320,6 +361,8 @@ export class ZLinkHostServiceRelocationRuntime {
     Promise<ZLinkServiceRelocationControlResponse>
   >();
   private readonly pendingReplyRelays = new Map<string, PendingRelocationReplyRelay>();
+  private readonly pendingSessionRelocations = new Map<string, PendingSessionRelocation>();
+  private readonly terminalSessionRelocations = new Map<string, TerminalSessionRelocationControl>();
   private readonly sourceRelocationIds = new Set<string>();
   private readonly codec = new ServiceRelocationAuthorityPayloadCodec();
   private readonly recoveredPublications = new Set<string>();
@@ -363,6 +406,12 @@ export class ZLinkHostServiceRelocationRuntime {
       pending.reject(stopped);
     }
     this.pendingReplyRelays.clear();
+    for (const pending of this.pendingSessionRelocations.values()) {
+      clearInterval(pending.timer);
+      pending.reject(stopped);
+    }
+    this.pendingSessionRelocations.clear();
+    this.terminalSessionRelocations.clear();
     this.relocationAuthorityKeys.clear();
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, 'Relocation runtime stop failed.');
@@ -639,6 +688,50 @@ export class ZLinkHostServiceRelocationRuntime {
   ): Promise<boolean> {
     if (record.parts.length !== 1) return false;
     const payload = record.parts[0]!.data();
+    if (isServiceWireCommand(payload, M6bServiceWireCommand.sessionRelocationSealed)) {
+      this.acceptSessionRelocationResponse(
+        decodeSessionRelocationSealed(payload),
+        record.sourceNodeRid
+      );
+      return true;
+    }
+    if (isServiceWireCommand(payload, M6bServiceWireCommand.sessionRelocationRouted)) {
+      this.acceptSessionRelocationResponse(
+        decodeSessionRelocationRouted(payload),
+        record.sourceNodeRid
+      );
+      return true;
+    }
+    if (isServiceWireCommand(payload, M6bServiceWireCommand.sessionRelocationSeal)) {
+      const request = decodeSessionRelocationSeal(payload);
+      const response = await this.handleSessionRelocationSeal(
+        meshName,
+        request,
+        record.sourceNodeRid,
+        signal
+      );
+      this.sendSessionRelocationResponse(
+        meshName,
+        record.sourceNodeRid,
+        encodeSessionRelocationSealed(response)
+      );
+      return true;
+    }
+    if (isServiceWireCommand(payload, M6bServiceWireCommand.sessionRelocationRoute)) {
+      const request = decodeSessionRelocationRoute(payload);
+      const response = await this.handleSessionRelocationRoute(
+        meshName,
+        request,
+        record.sourceNodeRid,
+        signal
+      );
+      this.sendSessionRelocationResponse(
+        meshName,
+        record.sourceNodeRid,
+        encodeSessionRelocationRouted(response)
+      );
+      return true;
+    }
     if (isServiceWireCommand(payload, M6bServiceWireCommand.replyRelay)) {
       await this.handleReplyRelay(
         meshName,
@@ -687,6 +780,325 @@ export class ZLinkHostServiceRelocationRuntime {
       throw new Error('Relocation control reply was not accepted by RouteMesh.');
     }
     return true;
+  }
+
+  requestSessionRelocationSeal(
+    meshName: string,
+    targetNodeRid: RoutingId,
+    request: ServiceSessionRelocationSeal,
+    signal?: AbortSignal
+  ): Promise<ServiceSessionRelocationSealed> {
+    return this.requestSessionRelocation(
+      meshName,
+      targetNodeRid,
+      request,
+      signal
+    ) as Promise<ServiceSessionRelocationSealed>;
+  }
+
+  requestSessionRelocationRoute(
+    meshName: string,
+    targetNodeRid: RoutingId,
+    request: ServiceSessionRelocationRoute,
+    signal?: AbortSignal
+  ): Promise<ServiceSessionRelocationRouted> {
+    return this.requestSessionRelocation(
+      meshName,
+      targetNodeRid,
+      request,
+      signal
+    ) as Promise<ServiceSessionRelocationRouted>;
+  }
+
+  private requestSessionRelocation(
+    meshName: string,
+    targetNodeRid: RoutingId,
+    request: ServiceSessionRelocationSeal | ServiceSessionRelocationRoute,
+    signal?: AbortSignal
+  ): Promise<ServiceSessionRelocationSealed | ServiceSessionRelocationRouted> {
+    const key = sessionRelocationPendingKey(request);
+    const bytes = isSessionRelocationSeal(request)
+      ? encodeSessionRelocationSeal(request)
+      : encodeSessionRelocationRoute(request);
+    const requestFingerprint = Buffer.from(bytes).toString('base64');
+    const expectedTarget = String(targetNodeRid);
+    const terminal = this.terminalSessionRelocations.get(key);
+    if (terminal !== undefined) {
+      if (
+        terminal.targetNodeRid !== expectedTarget
+        || terminal.requestFingerprint !== requestFingerprint
+      ) {
+        return Promise.reject(new ServiceWireProtocolError(
+          `Session relocation control '${key}' repeated with different bytes or target.`
+        ));
+      }
+      this.touchSessionRelocationTerminal(key, terminal);
+    }
+    const existing = this.pendingSessionRelocations.get(key);
+    if (existing !== undefined) {
+      if (
+        existing.targetNodeRid !== expectedTarget
+        || existing.requestFingerprint !== requestFingerprint
+      ) {
+        return Promise.reject(new ServiceWireProtocolError(
+          `Session relocation control '${key}' repeated with different bytes or target.`
+        ));
+      }
+      return existing.promise;
+    }
+
+    let resolvePromise!: (
+      response: ServiceSessionRelocationSealed | ServiceSessionRelocationRouted
+    ) => void;
+    let rejectPromise!: (error: unknown) => void;
+    const promise = new Promise<ServiceSessionRelocationSealed | ServiceSessionRelocationRouted>(
+      (resolve, reject) => {
+        resolvePromise = resolve;
+        rejectPromise = reject;
+      }
+    );
+    const finish = (action: () => void) => {
+      const pending = this.pendingSessionRelocations.get(key);
+      if (pending !== undefined) clearInterval(pending.timer);
+      this.pendingSessionRelocations.delete(key);
+      action();
+    };
+    const send = () => {
+      if (signal?.aborted === true) {
+        finish(() => rejectPromise(signal.reason));
+        return;
+      }
+      const submitted = this.requireMeshNode(meshName).sendToNode(targetNodeRid, bytes);
+      if (submitted !== SubmitResult.Ok) return;
+    };
+    const timer = setInterval(send, 250);
+    const pending: PendingSessionRelocation = {
+      targetNodeRid: expectedTarget,
+      request,
+      requestFingerprint,
+      promise,
+      resolve: response => finish(() => {
+        this.rememberSessionRelocationTerminal(key, {
+          targetNodeRid: expectedTarget,
+          request,
+          requestFingerprint,
+          responseFingerprint: sessionRelocationResponseFingerprint(response)
+        });
+        resolvePromise(response);
+      }),
+      reject: error => finish(() => rejectPromise(error)),
+      timer
+    };
+    this.pendingSessionRelocations.set(key, pending);
+    send();
+    return promise;
+  }
+
+  private acceptSessionRelocationResponse(
+    response: ServiceSessionRelocationSealed | ServiceSessionRelocationRouted,
+    sourceNodeRid: RoutingId | null
+  ): void {
+    const key = sessionRelocationResponseKey(response);
+    const pending = this.pendingSessionRelocations.get(key);
+    if (pending === undefined) {
+      const terminal = this.terminalSessionRelocations.get(key);
+      if (terminal === undefined) return;
+      if (sourceNodeRid === null || String(sourceNodeRid) !== terminal.targetNodeRid) {
+        throw new ServiceWireProtocolError(
+          `Session relocation ACK '${key}' source node changed.`
+        );
+      }
+      validateSessionRelocationResponse(terminal.request, response);
+      if (sessionRelocationResponseFingerprint(response) !== terminal.responseFingerprint) {
+        throw new ServiceWireProtocolError(
+          `Session relocation ACK '${key}' repeated with different bytes.`
+        );
+      }
+      this.touchSessionRelocationTerminal(key, terminal);
+      return;
+    }
+    if (sourceNodeRid === null || String(sourceNodeRid) !== pending.targetNodeRid) {
+      pending.reject(new ServiceWireProtocolError(
+        `Session relocation ACK '${key}' source node changed.`
+      ));
+      return;
+    }
+    try {
+      validateSessionRelocationResponse(pending.request, response);
+      pending.resolve(response);
+    } catch (error) {
+      pending.reject(error);
+    }
+  }
+
+  private rememberSessionRelocationTerminal(
+    key: string,
+    terminal: TerminalSessionRelocationControl
+  ): void {
+    this.terminalSessionRelocations.delete(key);
+    this.terminalSessionRelocations.set(key, terminal);
+    while (this.terminalSessionRelocations.size > SERVICE_CONTROL_TERMINAL_CAPACITY) {
+      const oldest = this.terminalSessionRelocations.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.terminalSessionRelocations.delete(oldest);
+    }
+  }
+
+  private touchSessionRelocationTerminal(
+    key: string,
+    terminal: TerminalSessionRelocationControl
+  ): void {
+    this.terminalSessionRelocations.delete(key);
+    this.terminalSessionRelocations.set(key, terminal);
+  }
+
+  private async handleSessionRelocationSeal(
+    meshName: string,
+    request: ServiceSessionRelocationSeal,
+    sourceNodeRid: RoutingId | null,
+    signal?: AbortSignal
+  ): Promise<ServiceSessionRelocationSealed> {
+    if (
+      sourceNodeRid === null
+      || String(sourceNodeRid) !== request.coordinator.nodeRid
+      || String(sourceNodeRid) !== request.actor.actor.nodeRid
+    ) {
+      throw new ServiceWireProtocolError(
+        'Session relocation seal source does not match its coordinator and Actor fence.'
+      );
+    }
+    this.validateSessionOwnerFence(meshName, request.session);
+    const sourcePeer = this.requireMeshNode(meshName).peers().find(
+      peer => peer.routingId !== null && String(peer.routingId) === String(sourceNodeRid)
+    );
+    if (sourcePeer?.lifecycleGeneration !== request.actor.targetNodeGeneration
+      || sourcePeer.lifecycleGeneration !== request.coordinator.nodeGeneration) {
+      throw new ServiceWireProtocolError(
+        'Session relocation seal source lifecycle generation is stale.'
+      );
+    }
+    const authority = await requireAuthority(
+      this.requireLocationStore(),
+      encodeAuthorityKey('actor', request.actor.actor.actorId),
+      signal
+    );
+    if (
+      authority.objectGeneration !== request.actor.actor.generation
+      || authority.authorityOwnerGeneration !== request.actor.authorityOwnerGeneration
+      || authority.ownerId !== request.coordinator.ownerId
+      || authority.ownerLeaseGeneration !== request.coordinator.leaseGeneration
+      || authority.ownerLeaseGeneration !== request.actor.ownerLeaseGeneration
+      || String(authority.allocation.descriptor.rid) !== request.actor.actor.nodeRid
+      || authority.allocation.descriptorLifecycleGeneration
+        !== request.actor.targetNodeGeneration
+      || authority.storeVersion.value !== request.coordinator.expectedAuthorityStoreVersion
+    ) {
+      throw new ServiceWireProtocolError(
+        'Session relocation seal does not match the current Actor authority.'
+      );
+    }
+    const handler = this.options.boundSessionRelocation?.receiveSeal;
+    if (handler === undefined) {
+      throw new Error('Session relocation seal ingress is not configured.');
+    }
+    return await handler(request);
+  }
+
+  private async handleSessionRelocationRoute(
+    meshName: string,
+    request: ServiceSessionRelocationRoute,
+    sourceNodeRid: RoutingId | null,
+    signal?: AbortSignal
+  ): Promise<ServiceSessionRelocationRouted> {
+    this.validateSessionOwnerFence(meshName, request.session);
+    const expectedSource = request.route.action === 'commit'
+      ? request.route.targetNodeRid
+      : request.coordinator.nodeRid;
+    if (sourceNodeRid === null || String(sourceNodeRid) !== expectedSource) {
+      throw new ServiceWireProtocolError(
+        'Session relocation route source does not match its action fence.'
+      );
+    }
+    const sourcePeer = this.requireMeshNode(meshName).peers().find(
+      peer => peer.routingId !== null && String(peer.routingId) === String(sourceNodeRid)
+    );
+    const expectedSourceGeneration = request.route.action === 'commit'
+      ? request.route.targetNodeGeneration
+      : request.coordinator.nodeGeneration;
+    if (sourcePeer?.lifecycleGeneration !== expectedSourceGeneration) {
+      throw new ServiceWireProtocolError(
+        'Session relocation route source lifecycle generation is stale.'
+      );
+    }
+    let targetOwnerLeaseGeneration: bigint | undefined;
+    if (request.route.action === 'commit') {
+      const commit = request.route;
+      const [authority, liveDescriptors] = await Promise.all([
+        requireAuthority(
+          this.requireLocationStore(),
+          encodeAuthorityKey('actor', request.actor.actorId),
+          signal
+        ),
+        this.options.liveDescriptors(meshName, signal)
+      ]);
+      const targetDescriptor = liveDescriptors.find(descriptor =>
+        String(descriptor.rid) === String(sourceNodeRid)
+        && descriptor.lifecycleGeneration === commit.targetNodeGeneration
+      );
+      if (
+        targetDescriptor === undefined
+        || authority.objectGeneration !== request.actor.generation
+        || authority.authorityOwnerGeneration
+          !== commit.targetAuthorityOwnerGeneration
+        || String(authority.allocation.descriptor.rid) !== commit.targetNodeRid
+        || authority.allocation.descriptorLifecycleGeneration
+          !== commit.targetNodeGeneration
+        || authority.ownerId !== targetDescriptor.ownerId
+        || authority.ownerLeaseGeneration !== targetDescriptor.leaseGeneration
+      ) {
+        throw new ServiceWireProtocolError(
+          'Session relocation commit does not match the current target authority.'
+        );
+      }
+      targetOwnerLeaseGeneration = authority.ownerLeaseGeneration;
+    }
+    const handler = this.options.boundSessionRelocation?.receiveRoute;
+    if (handler === undefined) {
+      throw new Error('Session relocation route ingress is not configured.');
+    }
+    return await handler(request, targetOwnerLeaseGeneration);
+  }
+
+  private validateSessionOwnerFence(
+    meshName: string,
+    session: import('../foundation/service-stateful-wire-codec').ServiceSessionRelocationOwnerFence
+  ): void {
+    const status = this.requireMeshNode(meshName).status();
+    const owner = this.options.currentOwner();
+    if (
+      String(status.routingId) !== session.sessionOwnerNodeRid
+      || status.lifecycleGeneration !== session.sessionOwnerNodeGeneration
+      || owner?.ownerId !== session.sessionOwnerId
+      || owner.leaseGeneration !== session.sessionOwnerLeaseGeneration
+    ) {
+      throw new ServiceWireProtocolError(
+        'Session relocation command does not match the local Session owner fence.'
+      );
+    }
+  }
+
+  private sendSessionRelocationResponse(
+    meshName: string,
+    targetNodeRid: RoutingId | null,
+    bytes: Uint8Array
+  ): void {
+    if (targetNodeRid === null) {
+      throw new ServiceWireProtocolError('Session relocation command has no authenticated source.');
+    }
+    const submitted = this.requireMeshNode(meshName).sendToNode(targetNodeRid, bytes);
+    if (submitted !== SubmitResult.Ok) {
+      throw new Error('Session relocation ACK was not accepted by RouteMesh.');
+    }
   }
 
   private async relocateSpotAggregate(
@@ -741,6 +1153,7 @@ export class ZLinkHostServiceRelocationRuntime {
       ]),
       signal
     );
+    const aggregateId = this.reserveRelocationId();
     const spotUnit: ServiceRelocationCaptureUnit = {
       authorityKey: spotKey.value,
       objectKind: kind,
@@ -762,7 +1175,7 @@ export class ZLinkHostServiceRelocationRuntime {
             state,
             actor: state.actor!,
             prepared: await this.options.actorTransfer.prepareMaintenanceSession(
-              state.actor!, state, captureSignal, false)
+              state.actor!, state, captureSignal, false, relocationWireId(aggregateId))
           })));
         const preparedSessionsOutcome = preparedSessions.then(
           value => ({ value }),
@@ -863,7 +1276,6 @@ export class ZLinkHostServiceRelocationRuntime {
       spotObjectGeneration: spotAuthority.objectGeneration,
       membershipEpoch: state.spotMembershipEpoch > 0n ? state.spotMembershipEpoch : 1n
     }));
-    const aggregateId = this.reserveRelocationId();
     const units = [spotUnit, ...actorUnits];
     const preReservation = await this.preReserveRemote(
       meshName,
@@ -967,6 +1379,7 @@ export class ZLinkHostServiceRelocationRuntime {
     const sessions: SourceActorSession[] = [];
     const membershipSpotId = targetMembership?.spotId
       ?? ((target.entrySpotId ?? String(target.rid)) as RoutingId);
+    const aggregateId = this.reserveRelocationId();
     const unit = this.actorCaptureUnit(
       state,
       authority,
@@ -977,7 +1390,8 @@ export class ZLinkHostServiceRelocationRuntime {
       {
         spotId: membershipSpotId,
         spotKind: targetMembership?.spotKind ?? ZLinkSpotKind.Entry
-      }
+      },
+      relocationWireId(aggregateId)
     );
     const membership: ServiceRelocationMembership = {
       actorKey: encodeAuthorityKey('actor', state.actorId).value,
@@ -986,7 +1400,6 @@ export class ZLinkHostServiceRelocationRuntime {
         targetMembership?.spotObjectGeneration ?? target.lifecycleGeneration,
       membershipEpoch: state.spotMembershipEpoch > 0n ? state.spotMembershipEpoch : 1n
     };
-    const aggregateId = this.reserveRelocationId();
     let interruptionStartedAt: number | undefined;
     const measuredUnit: ServiceRelocationCaptureUnit = {
       ...unit,
@@ -1189,7 +1602,8 @@ export class ZLinkHostServiceRelocationRuntime {
     targetMembership?: {
       readonly spotId: RoutingId;
       readonly spotKind: ZLinkSpotKind.Entry | ZLinkSpotKind.User;
-    }
+    },
+    sessionRelocation?: ServiceWireOperationId
   ): ServiceRelocationCaptureUnit {
     const registration = this.actorRegistration(state.meshName ?? meshName ?? '', state.actorType ?? authority.allocation.stableType);
     let ownSession: SourceActorSession | undefined;
@@ -1205,7 +1619,7 @@ export class ZLinkHostServiceRelocationRuntime {
             state,
             actor: state.actor!,
             prepared: await this.options.actorTransfer.prepareMaintenanceSession(
-              state.actor!, state, signal)
+              state.actor!, state, signal, true, sessionRelocation)
           };
           sessions.push(ownSession);
         }
@@ -4904,6 +5318,134 @@ function controlResponseKey(packet: ZLinkServiceRelocationControlRequest): strin
   return undefined;
 }
 
+function sessionRelocationPendingKey(
+  request: ServiceSessionRelocationSeal | ServiceSessionRelocationRoute
+): string {
+  const kind = isSessionRelocationSeal(request) ? 'sealed' : 'routed';
+  const actor = isSessionRelocationSeal(request) ? request.actor.actor : request.actor;
+  return sessionRelocationIdentityKey(request, actor, kind);
+}
+
+function sessionRelocationResponseKey(
+  response: ServiceSessionRelocationSealed | ServiceSessionRelocationRouted
+): string {
+  const sealed = isSessionRelocationSealed(response);
+  const actor = sealed ? response.actor.actor : response.actor;
+  return sessionRelocationIdentityKey(response, actor, sealed ? 'sealed' : 'routed');
+}
+
+function sessionRelocationResponseFingerprint(
+  response: ServiceSessionRelocationSealed | ServiceSessionRelocationRouted
+): string {
+  if (isSessionRelocationSealed(response)) {
+    return encodeSessionRelocationSealed(response).toString('base64');
+  }
+  // An exact command 44 retransmission is acknowledged as alreadyApplied.
+  // Treat that terminal code as the idempotent form of the original applied
+  // result while preserving every fence and accepted-boundary byte.
+  const normalized = response.result === 'alreadyApplied'
+    ? { ...response, result: 'applied' as const }
+    : response;
+  return encodeSessionRelocationRouted(normalized).toString('base64');
+}
+
+function sessionRelocationIdentityKey(
+  value: {
+    readonly relocation: ServiceWireOperationId;
+    readonly session: { readonly sessionRid: string; readonly bindingGeneration: bigint };
+  },
+  actor: { readonly actorId: string; readonly generation: bigint },
+  terminal: 'sealed' | 'routed'
+): string {
+  return [
+    'session-relocation',
+    value.relocation.high.toString(),
+    value.relocation.low.toString(),
+    actor.actorId,
+    actor.generation.toString(),
+    value.session.sessionRid,
+    value.session.bindingGeneration.toString(),
+    terminal
+  ].join(':');
+}
+
+function validateSessionRelocationResponse(
+  request: ServiceSessionRelocationSeal | ServiceSessionRelocationRoute,
+  response: ServiceSessionRelocationSealed | ServiceSessionRelocationRouted
+): void {
+  const sameCoordinator =
+    request.coordinator.ownerId === response.coordinator.ownerId
+    && request.coordinator.leaseGeneration === response.coordinator.leaseGeneration
+    && request.coordinator.nodeRid === response.coordinator.nodeRid
+    && request.coordinator.nodeGeneration === response.coordinator.nodeGeneration
+    && request.coordinator.expectedAuthorityStoreVersion
+      === response.coordinator.expectedAuthorityStoreVersion;
+  const sameSession =
+    request.session.sessionOwnerNodeRid === response.session.sessionOwnerNodeRid
+    && request.session.sessionOwnerNodeGeneration
+      === response.session.sessionOwnerNodeGeneration
+    && request.session.sessionOwnerId === response.session.sessionOwnerId
+    && request.session.sessionOwnerLeaseGeneration
+      === response.session.sessionOwnerLeaseGeneration
+    && request.session.sessionRid === response.session.sessionRid
+    && request.session.bindingGeneration === response.session.bindingGeneration;
+  if (
+    request.relocation.high !== response.relocation.high
+    || request.relocation.low !== response.relocation.low
+    || !sameCoordinator
+    || !sameSession
+  ) {
+    throw new ServiceWireProtocolError('Session relocation ACK changed its exact fence.');
+  }
+  if (isSessionRelocationSeal(request)) {
+    if (!isSessionRelocationSealed(response)) {
+      throw new ServiceWireProtocolError('Command 43 ACK does not echo command 42.');
+    }
+    if (
+      request.actor.actor.actorId !== response.actor.actor.actorId
+      || request.actor.actor.generation !== response.actor.actor.generation
+      || request.actor.actor.nodeRid !== response.actor.actor.nodeRid
+      || request.actor.targetNodeGeneration
+        !== response.actor.targetNodeGeneration
+      || request.actor.authorityOwnerGeneration
+        !== response.actor.authorityOwnerGeneration
+      || request.actor.ownerLeaseGeneration
+        !== response.actor.ownerLeaseGeneration
+    ) {
+      throw new ServiceWireProtocolError('Command 43 ACK does not echo command 42.');
+    }
+    return;
+  }
+  if (isSessionRelocationSealed(response)
+    || request.actor.actorId !== response.actor.actorId
+    || request.actor.generation !== response.actor.generation
+    || request.route.action !== response.action) {
+    throw new ServiceWireProtocolError('Command 45 ACK does not echo command 44.');
+  }
+  const expectedGeneration = request.route.action === 'commit'
+    ? request.route.targetAuthorityOwnerGeneration
+    : request.route.currentAuthorityOwnerGeneration;
+  if (response.currentAuthorityOwnerGeneration !== expectedGeneration) {
+    throw new ServiceWireProtocolError('Command 45 ACK changed the authority generation.');
+  }
+  if (request.route.action === 'commit'
+    && response.lastAcceptedSessionSequence !== request.route.replayedHighWater) {
+    throw new ServiceWireProtocolError('Command 45 ACK changed the replayed high-water.');
+  }
+}
+
+function isSessionRelocationSeal(
+  value: ServiceSessionRelocationSeal | ServiceSessionRelocationRoute
+): value is ServiceSessionRelocationSeal {
+  return 'targetNodeGeneration' in value.actor;
+}
+
+function isSessionRelocationSealed(
+  value: ServiceSessionRelocationSealed | ServiceSessionRelocationRouted
+): value is ServiceSessionRelocationSealed {
+  return 'targetNodeGeneration' in value.actor;
+}
+
 function replyRelayIdentityKey(value: {
   readonly relocation: { readonly high: bigint; readonly low: bigint };
   readonly coordinator: ServiceWireRelocationCoordinatorFence;
@@ -4987,7 +5529,30 @@ function encodeActorSession(target: ZLinkRemoteBoundSessionTarget | undefined): 
     acceptedHighWater: target.acceptedHighWater?.toString(),
     relocationSealId: target.relocationSealId,
     acceptedJournalReference: target.acceptedJournalReference,
-    acceptedJournalChecksumCrc32c: target.acceptedJournalChecksumCrc32c
+    acceptedJournalChecksumCrc32c: target.acceptedJournalChecksumCrc32c,
+    serviceWireRelocation: target.serviceWireRelocation === undefined
+      ? undefined
+      : {
+          relocationHigh: target.serviceWireRelocation.relocation.high.toString(),
+          relocationLow: target.serviceWireRelocation.relocation.low.toString(),
+          coordinatorOwnerId: target.serviceWireRelocation.coordinator.ownerId,
+          coordinatorLeaseGeneration:
+            target.serviceWireRelocation.coordinator.leaseGeneration.toString(),
+          coordinatorNodeRid: target.serviceWireRelocation.coordinator.nodeRid,
+          coordinatorNodeGeneration:
+            target.serviceWireRelocation.coordinator.nodeGeneration.toString(),
+          expectedAuthorityStoreVersion:
+            target.serviceWireRelocation.coordinator.expectedAuthorityStoreVersion,
+          sessionOwnerNodeRid: target.serviceWireRelocation.session.sessionOwnerNodeRid,
+          sessionOwnerNodeGeneration:
+            target.serviceWireRelocation.session.sessionOwnerNodeGeneration.toString(),
+          sessionOwnerId: target.serviceWireRelocation.session.sessionOwnerId,
+          sessionOwnerLeaseGeneration:
+            target.serviceWireRelocation.session.sessionOwnerLeaseGeneration.toString(),
+          sessionRid: target.serviceWireRelocation.session.sessionRid,
+          bindingGeneration:
+            target.serviceWireRelocation.session.bindingGeneration.toString()
+        }
   }), 'utf8');
 }
 
@@ -5000,6 +5565,7 @@ function decodeActorSession(payload: Uint8Array): ZLinkRemoteBoundSessionTarget 
     || typeof value.targetNodeRid !== 'string' || typeof value.spotId !== 'string') {
     throw new TypeError('Actor relocation Session journal is invalid.');
   }
+  const serviceWire = decodeActorSessionServiceWireFence(value.serviceWireRelocation);
   return {
     routerChannelId: value.routerChannelId,
     targetNodeRid: value.targetNodeRid as RoutingId,
@@ -5014,7 +5580,63 @@ function decodeActorSession(payload: Uint8Array): ZLinkRemoteBoundSessionTarget 
     ...(typeof value.acceptedJournalReference === 'string' ? { acceptedJournalReference: value.acceptedJournalReference } : {}),
     ...(typeof value.acceptedJournalChecksumCrc32c === 'number'
       ? { acceptedJournalChecksumCrc32c: value.acceptedJournalChecksumCrc32c }
-      : {})
+      : {}),
+    ...(serviceWire === undefined ? {} : { serviceWireRelocation: serviceWire })
+  };
+}
+
+function decodeActorSessionServiceWireFence(
+  input: unknown
+): NonNullable<ZLinkRemoteBoundSessionTarget['serviceWireRelocation']> | undefined {
+  if (input === undefined) return undefined;
+  if (typeof input !== 'object' || input === null) {
+    throw new TypeError('Actor relocation Session service-wire fence is invalid.');
+  }
+  const value = input as Record<string, unknown>;
+  const text = (field: string) => {
+    if (typeof value[field] !== 'string' || (value[field] as string).length === 0) {
+      throw new TypeError(`Actor relocation Session service-wire '${field}' is invalid.`);
+    }
+    return value[field] as string;
+  };
+  const positive = (field: string) => {
+    const parsed = BigInt(text(field));
+    if (parsed <= 0n) {
+      throw new TypeError(`Actor relocation Session service-wire '${field}' is invalid.`);
+    }
+    return parsed;
+  };
+  const ordinal = (field: string) => {
+    const parsed = BigInt(text(field));
+    if (parsed < 0n) {
+      throw new TypeError(`Actor relocation Session service-wire '${field}' is invalid.`);
+    }
+    return parsed;
+  };
+  const relocation = {
+    high: ordinal('relocationHigh'),
+    low: ordinal('relocationLow')
+  };
+  if (relocation.high === 0n && relocation.low === 0n) {
+    throw new TypeError('Actor relocation Session service-wire identity is zero.');
+  }
+  return {
+    relocation,
+    coordinator: {
+      ownerId: text('coordinatorOwnerId'),
+      leaseGeneration: positive('coordinatorLeaseGeneration'),
+      nodeRid: text('coordinatorNodeRid'),
+      nodeGeneration: positive('coordinatorNodeGeneration'),
+      expectedAuthorityStoreVersion: text('expectedAuthorityStoreVersion')
+    },
+    session: {
+      sessionOwnerNodeRid: text('sessionOwnerNodeRid'),
+      sessionOwnerNodeGeneration: positive('sessionOwnerNodeGeneration'),
+      sessionOwnerId: text('sessionOwnerId'),
+      sessionOwnerLeaseGeneration: positive('sessionOwnerLeaseGeneration'),
+      sessionRid: text('sessionRid'),
+      bindingGeneration: positive('bindingGeneration')
+    }
   };
 }
 

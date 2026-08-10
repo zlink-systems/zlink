@@ -74,6 +74,28 @@ import {
   ownerFence,
   type ZLinkActorMessageFollowOwnerFence
 } from '../actors/actor-message-follow-context';
+import type {
+  ServiceSessionRelocationRoute,
+  ServiceSessionRelocationRouted,
+  ServiceSessionRelocationSeal,
+  ServiceSessionRelocationSealed,
+  ServiceWireOperationId
+} from '../foundation/service-stateful-wire-codec';
+
+interface ZLinkSessionRelocationWirePort {
+  requestSessionRelocationSeal(
+    meshName: string,
+    targetNodeRid: RoutingId,
+    request: ServiceSessionRelocationSeal,
+    signal?: AbortSignal
+  ): Promise<ServiceSessionRelocationSealed>;
+  requestSessionRelocationRoute(
+    meshName: string,
+    targetNodeRid: RoutingId,
+    request: ServiceSessionRelocationRoute,
+    signal?: AbortSignal
+  ): Promise<ServiceSessionRelocationRouted>;
+}
 
 export interface ZLinkActorTransferRuntimeActorManager {
   getState(actorId: string): ZLinkActorRuntimeState | undefined;
@@ -134,6 +156,8 @@ export interface ZLinkActorTransferRuntimeOptions {
     meshName: string,
     signal?: AbortSignal
   ) => Promise<readonly import('../../contracts').ZLinkMeshNodeDescriptor[]>;
+  /** Service-wire command 42-45 bridge, installed after the host runtime is assembled. */
+  readonly sessionRelocationWire?: () => ZLinkSessionRelocationWirePort | undefined;
   readonly clearRemoteActorPacketTarget: (actorId: string) => void;
   readonly reportPostCommitError?: (error: unknown) => void;
   readonly onSourceDepartureCompleted?: (actorId: string) => void;
@@ -955,7 +979,8 @@ export class ZLinkActorTransferRuntime {
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,
     signal?: AbortSignal,
-    manageMembership = true
+    manageMembership = true,
+    relocation?: ServiceWireOperationId
   ): Promise<{
     readonly target?: ZLinkRemoteBoundSessionTarget;
     readonly handoffBacklog: readonly import('../actors').ZLinkActorHandoffPacket[];
@@ -981,7 +1006,7 @@ export class ZLinkActorTransferRuntime {
       if (state.remoteBoundSessionTarget !== undefined) {
         sealId = randomUUID();
         state.setRemoteBoundSessionTarget(
-          await this.sealBoundSessionRoute(actor, state, sealId, signal)
+          await this.sealBoundSessionRoute(actor, state, sealId, signal, relocation)
         );
         this.options.actorHandoff.sealConnectionBoundIngress(actor.context.actorId);
       }
@@ -1113,7 +1138,8 @@ export class ZLinkActorTransferRuntime {
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,
     sealId: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    relocation?: ServiceWireOperationId
   ): Promise<ZLinkRemoteBoundSessionTarget> {
     const target = state.remoteBoundSessionTarget;
     const actorRef = state.nativeActorRef;
@@ -1124,6 +1150,94 @@ export class ZLinkActorTransferRuntime {
       state.ownerLeaseGeneration === undefined || state.ownerLeaseGeneration <= 0n
     ) {
       throw new Error(`Actor '${actor.context.actorId}' Session route cannot be sealed without its exact source fence.`);
+    }
+    const serviceWire = relocation === undefined
+      ? undefined
+      : this.options.sessionRelocationWire?.();
+    if (serviceWire !== undefined && relocation !== undefined) {
+      const authorityStore = this.options.authorityStore();
+      const descriptors = this.options.liveDescriptors;
+      if (
+        authorityStore === undefined
+        || descriptors === undefined
+        || target.sessionRid === undefined
+      ) {
+        throw new Error(
+          `Actor '${actor.context.actorId}' Session route has no service-wire authority or owner fence.`
+        );
+      }
+      const [authority, live] = await Promise.all([
+        authorityStore.readAuthority(
+          encodeAuthorityKey('actor', actor.context.actorId),
+          signal
+        ),
+        descriptors(target.routerChannelId, signal)
+      ]);
+      const local = this.options.primaryMeshNode().status();
+      const sessionOwner = live.find(value =>
+        String(value.rid) === String(target.targetNodeRid)
+      );
+      if (
+        authority.kind !== 'snapshot'
+        || sessionOwner === undefined
+        || String(local.routingId) !== String(actorRef.nodeRid)
+        || authority.objectGeneration !== actorRef.generation
+        || authority.authorityOwnerGeneration !== state.locationGeneration
+        || authority.ownerLeaseGeneration !== state.ownerLeaseGeneration
+        || String(authority.allocation.descriptor.rid) !== String(actorRef.nodeRid)
+        || authority.allocation.descriptorLifecycleGeneration !== local.lifecycleGeneration
+        || (target.sessionNodeRid !== undefined
+          && String(target.sessionNodeRid) !== String(target.targetNodeRid))
+      ) {
+        throw new Error(
+          `Actor '${actor.context.actorId}' Session route service-wire source fence is stale.`
+        );
+      }
+      const coordinator = {
+        ownerId: authority.ownerId,
+        leaseGeneration: authority.ownerLeaseGeneration,
+        nodeRid: String(local.routingId),
+        nodeGeneration: local.lifecycleGeneration,
+        expectedAuthorityStoreVersion: authority.storeVersion.value
+      };
+      const session = {
+        sessionOwnerNodeRid: String(target.targetNodeRid),
+        sessionOwnerNodeGeneration: sessionOwner.lifecycleGeneration,
+        sessionOwnerId: sessionOwner.ownerId,
+        sessionOwnerLeaseGeneration: sessionOwner.leaseGeneration,
+        sessionRid: String(target.sessionRid),
+        bindingGeneration: target.bindingGeneration
+      };
+      const request: ServiceSessionRelocationSeal = {
+        relocation,
+        coordinator,
+        senderRole: 'source',
+        actor: {
+          actor: {
+            actorId: actor.context.actorId,
+            generation: actorRef.generation,
+            nodeRid: String(actorRef.nodeRid)
+          },
+          targetNodeGeneration: local.lifecycleGeneration,
+          authorityOwnerGeneration: authority.authorityOwnerGeneration,
+          ownerLeaseGeneration: authority.ownerLeaseGeneration
+        },
+        session
+      };
+      const ack = await serviceWire.requestSessionRelocationSeal(
+        target.routerChannelId,
+        target.targetNodeRid,
+        request,
+        signal
+      );
+      return {
+        ...target,
+        previousAuthorityOwnerGeneration: authority.authorityOwnerGeneration,
+        previousOwnerLeaseGeneration: authority.ownerLeaseGeneration,
+        acceptedHighWater: ack.lastAcceptedSessionSequence,
+        relocationSealId: sealId,
+        serviceWireRelocation: { relocation, coordinator, session }
+      };
     }
     const request = {
       actorId: actor.context.actorId,
@@ -1199,6 +1313,53 @@ export class ZLinkActorTransferRuntime {
     if (target === undefined || actorRef === undefined || target.bindingGeneration === undefined ||
       target.previousAuthorityOwnerGeneration === undefined || target.previousOwnerLeaseGeneration === undefined) {
       throw new Error(`Actor '${actor.context.actorId}' Session route seal cannot be released without its exact fence.`);
+    }
+    const serviceFence = target.serviceWireRelocation;
+    const serviceWire = serviceFence === undefined
+      ? undefined
+      : this.options.sessionRelocationWire?.();
+    if (serviceFence !== undefined) {
+      if (serviceWire === undefined) {
+        throw new Error(
+          `Actor '${actor.context.actorId}' Session route service-wire release is unavailable.`
+        );
+      }
+      if (target.relocationSealId !== sealId) {
+        throw new Error(
+          `Actor '${actor.context.actorId}' Session route seal release changed its seal identity.`
+        );
+      }
+      const ack = await serviceWire.requestSessionRelocationRoute(
+        target.routerChannelId,
+        target.targetNodeRid,
+        {
+          relocation: serviceFence.relocation,
+          coordinator: serviceFence.coordinator,
+          senderRole: 'source',
+          actor: {
+            actorId: actor.context.actorId,
+            generation: actorRef.generation,
+            nodeRid: String(actorRef.nodeRid)
+          },
+          session: serviceFence.session,
+          route: {
+            action: 'abort',
+            currentAuthorityOwnerGeneration: target.previousAuthorityOwnerGeneration
+          }
+        },
+        this.options.shutdownSignal?.()
+      );
+      if (ack.result !== 'applied' && ack.result !== 'alreadyApplied') {
+        throw new Error(
+          `Actor '${actor.context.actorId}' Session route abort was refused (${ack.result}).`
+        );
+      }
+      if (ack.lastAcceptedSessionSequence !== target.acceptedHighWater) {
+        throw new Error(
+          `Actor '${actor.context.actorId}' Session route abort ACK changed its accepted boundary.`
+        );
+      }
+      return;
     }
     const ack = decodeRemoteBoundSessionSealAck(await this.options.routeTransport.requestToSpot(
       {
@@ -1685,6 +1846,13 @@ export class ZLinkActorTransferRuntime {
         );
     const sealId = target?.relocationSealId;
     if (state === undefined || target === undefined || sealId === undefined) return;
+    if (target.serviceWireRelocation !== undefined) {
+      // Command 44 atomically switched the route and released this exact seal
+      // before command 45 was emitted. This phase only retires the durable
+      // accepted-journal root after that ACK.
+      await this.deleteBoundSessionAcceptedJournal(actor, state, target);
+      return;
+    }
     const retry = new ZLinkActorRetryDelay();
     let lastError: unknown;
     let immediateRetry = true;
@@ -1902,6 +2070,58 @@ export class ZLinkActorTransferRuntime {
       target.acceptedHighWater < 0n
     ) {
       throw new Error(`Actor '${actorId}' bound-session ownership fence is incomplete.`);
+    }
+    const serviceFence = target.serviceWireRelocation;
+    const serviceWire = serviceFence === undefined
+      ? undefined
+      : this.options.sessionRelocationWire?.();
+    if (serviceFence !== undefined) {
+      if (serviceWire === undefined) {
+        throw new Error(`Actor '${actorId}' command 44 service-wire bridge is unavailable.`);
+      }
+      const authority = await this.options.authorityStore()?.readAuthority(
+        encodeAuthorityKey('actor', actorId),
+        this.options.shutdownSignal?.()
+      );
+      if (
+        authority?.kind !== 'snapshot'
+        || authority.objectGeneration !== actorRef.generation
+        || authority.authorityOwnerGeneration !== ownershipGeneration
+        || authority.ownerLeaseGeneration !== targetOwnerLeaseGeneration
+        || String(authority.allocation.descriptor.rid) !== String(actorRef.nodeRid)
+      ) {
+        throw new Error(`Actor '${actorId}' command 44 target authority fence is stale.`);
+      }
+      const ack = await serviceWire.requestSessionRelocationRoute(
+        target.routerChannelId,
+        target.targetNodeRid,
+        {
+          relocation: serviceFence.relocation,
+          coordinator: serviceFence.coordinator,
+          senderRole: 'target',
+          actor: {
+            actorId,
+            generation: actorRef.generation,
+            nodeRid: String(actorRef.nodeRid)
+          },
+          session: serviceFence.session,
+          route: {
+            action: 'commit',
+            previousAuthorityOwnerGeneration: target.previousAuthorityOwnerGeneration,
+            targetAuthorityOwnerGeneration: ownershipGeneration,
+            targetNodeRid: String(actorRef.nodeRid),
+            targetNodeGeneration: authority.allocation.descriptorLifecycleGeneration,
+            replayedHighWater: target.acceptedHighWater
+          }
+        },
+        this.options.shutdownSignal?.()
+      );
+      if (ack.result !== 'applied' && ack.result !== 'alreadyApplied') {
+        throw new Error(
+          `Actor '${actorId}' bound-session ownership update was refused (${ack.result}).`
+        );
+      }
+      return;
     }
     const actorGeneration = actorRef.generation.toString();
     const actorOwnershipGeneration = ownershipGeneration.toString();

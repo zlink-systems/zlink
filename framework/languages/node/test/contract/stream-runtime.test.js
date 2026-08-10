@@ -27,6 +27,9 @@ const {
 const actorPacketWire = require('../../packages/framework/dist/runtime/actors/actor-packet-relay-wire');
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const actorJoinPayloadCodec = require('../../packages/framework/dist/runtime/messaging/actor-join-payload-codec');
+const {
+  ServiceWireProtocolError
+} = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const zlink = require('@zlink-systems/zlink');
 
 test('stream runtime is exported from framework root surface', () => {
@@ -2033,6 +2036,293 @@ test('command 42 seal is exact and idempotent while command 43 fixes one high-wa
   assert.deepEqual(releaseRetry, released);
   const next = await sealSessionRoute(host, 'actor-seal', 7n, 10n, 17n, 20n, 'seal-2');
   assert.equal(next.acceptedHighWater, '29');
+});
+
+test('service-wire command 42 holds post-seal ingress and matching abort releases only its waiter', async () => {
+  const socket = new FakeStreamSocket();
+  const host = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration()
+  });
+  const context = host.streamBindingRuntime.createSessionContext(
+    new framework.ZLinkManagedStream(socket, 'session', 'public-session')
+  );
+  const actor = await context.actors.bind({
+    nodeRid: 'source', actorId: 'actor-service-abort', generation: 5n,
+    ownershipGeneration: 11n, ownerLeaseGeneration: 13n,
+    bindingGeneration: 6n, acceptedHighWater: 41n
+  });
+  const seal = serviceSessionRelocationSeal('actor-service-abort');
+  const first = await host.boundSessionRelay.boundSessions
+    .receiveServiceWireSessionRelocationSeal(seal);
+  const retry = await host.boundSessionRelay.boundSessions
+    .receiveServiceWireSessionRelocationSeal(seal);
+  assert.deepEqual(retry, first);
+  assert.equal(first.lastAcceptedSessionSequence, 41n);
+  await assert.rejects(
+    host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal({
+      ...seal,
+      actor: { ...seal.actor, authorityOwnerGeneration: 12n }
+    }),
+    error => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
+  );
+
+  context.enterDispatch(serviceRelayDispatchHeader('HeldAfterSeal'));
+  try {
+    const relaying = actor.relay(serviceRelayMessage('{"held":true}'));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(socket.boundActorSends.length, 0);
+
+    const different = await host.boundSessionRelay.boundSessions
+      .receiveServiceWireSessionRelocationRoute({
+        relocation: { ...seal.relocation, low: 10n },
+        coordinator: seal.coordinator,
+        senderRole: 'source',
+        actor: seal.actor.actor,
+        session: seal.session,
+        route: { action: 'abort', currentAuthorityOwnerGeneration: 11n }
+      });
+    assert.equal(different.result, 'stale');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(socket.boundActorSends.length, 0);
+
+    const abort = {
+      relocation: seal.relocation,
+      coordinator: seal.coordinator,
+      senderRole: 'source',
+      actor: seal.actor.actor,
+      session: seal.session,
+      route: { action: 'abort', currentAuthorityOwnerGeneration: 11n }
+    };
+    const applied = await host.boundSessionRelay.boundSessions
+      .receiveServiceWireSessionRelocationRoute(abort);
+    assert.equal(applied.result, 'applied');
+    assert.equal(applied.lastAcceptedSessionSequence, 41n);
+    await relaying;
+    assert.equal(socket.boundActorSends.length, 1);
+    const duplicate = await host.boundSessionRelay.boundSessions
+      .receiveServiceWireSessionRelocationRoute(abort);
+    assert.equal(duplicate.result, 'alreadyApplied');
+  } finally {
+    context.exitDispatch();
+  }
+});
+
+test('service-wire command 44 atomically switches the route before command 45 and releases held ingress', async () => {
+  const socket = new FakeStreamSocket();
+  const host = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration()
+  });
+  const context = host.streamBindingRuntime.createSessionContext(
+    new framework.ZLinkManagedStream(socket, 'session', 'public-session')
+  );
+  const actor = await context.actors.bind({
+    nodeRid: 'source', actorId: 'actor-service-commit', generation: 5n,
+    ownershipGeneration: 11n, ownerLeaseGeneration: 13n,
+    bindingGeneration: 6n, acceptedHighWater: 41n
+  });
+  const seal = serviceSessionRelocationSeal('actor-service-commit');
+  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
+  const commit = {
+    relocation: seal.relocation,
+    coordinator: seal.coordinator,
+    senderRole: 'target',
+    actor: { ...seal.actor.actor, nodeRid: 'target' },
+    session: seal.session,
+    route: {
+      action: 'commit',
+      previousAuthorityOwnerGeneration: 11n,
+      targetAuthorityOwnerGeneration: 12n,
+      targetNodeRid: 'target',
+      targetNodeGeneration: 4n,
+      replayedHighWater: 41n
+    }
+  };
+
+  context.enterDispatch(serviceRelayDispatchHeader('HeldUntilCommit'));
+  try {
+    const relaying = actor.relay(serviceRelayMessage('{"commit":true}'));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(socket.boundActorSends.length, 0);
+    const applied = await host.boundSessionRelay.boundSessions
+      .receiveServiceWireSessionRelocationRoute(commit, 14n);
+    assert.equal(applied.result, 'applied');
+    assert.equal(applied.currentAuthorityOwnerGeneration, 12n);
+    assert.equal(applied.lastAcceptedSessionSequence, 41n);
+    assert.equal(String(host.streamBindingRuntime.find(actor.actorId).ref.nodeRid), 'target');
+    assert.deepEqual(host.streamBindingRuntime.authorityFence(actor.actorId), {
+      authorityOwnerGeneration: 12n,
+      ownerLeaseGeneration: 14n
+    });
+    await relaying;
+    assert.equal(socket.boundActorSends.length, 1);
+
+    const duplicate = await host.boundSessionRelay.boundSessions
+      .receiveServiceWireSessionRelocationRoute(commit, 14n);
+    assert.equal(duplicate.result, 'alreadyApplied');
+    await assert.rejects(
+      host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute({
+        ...commit,
+        route: { ...commit.route, replayedHighWater: 42n }
+      }, 14n),
+      error => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
+    );
+  } finally {
+    context.exitDispatch();
+  }
+});
+
+test('service-wire relocation single-flights concurrent commands and rejects conflicting bytes before mutation', async () => {
+  const socket = new FakeStreamSocket();
+  const host = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration()
+  });
+  const context = host.streamBindingRuntime.createSessionContext(
+    new framework.ZLinkManagedStream(socket, 'session', 'public-session')
+  );
+  await context.actors.bind({
+    nodeRid: 'source', actorId: 'actor-service-single-flight', generation: 5n,
+    ownershipGeneration: 11n, ownerLeaseGeneration: 13n,
+    bindingGeneration: 6n, acceptedHighWater: 41n
+  });
+  const seal = serviceSessionRelocationSeal('actor-service-single-flight');
+  const firstSeal = host.boundSessionRelay.boundSessions
+    .receiveServiceWireSessionRelocationSeal(seal);
+  const identicalSeal = host.boundSessionRelay.boundSessions
+    .receiveServiceWireSessionRelocationSeal(seal);
+  const conflictingSeal = host.boundSessionRelay.boundSessions
+    .receiveServiceWireSessionRelocationSeal({
+      ...seal,
+      coordinator: { ...seal.coordinator, expectedAuthorityStoreVersion: 'different' }
+    });
+  await assert.rejects(
+    conflictingSeal,
+    error => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
+  );
+  assert.deepEqual(await identicalSeal, await firstSeal);
+
+  const commit = {
+    relocation: seal.relocation,
+    coordinator: seal.coordinator,
+    senderRole: 'target',
+    actor: { ...seal.actor.actor, nodeRid: 'target' },
+    session: seal.session,
+    route: {
+      action: 'commit',
+      previousAuthorityOwnerGeneration: 11n,
+      targetAuthorityOwnerGeneration: 12n,
+      targetNodeRid: 'target',
+      targetNodeGeneration: 4n,
+      replayedHighWater: 41n
+    }
+  };
+  const applying = host.boundSessionRelay.boundSessions
+    .receiveServiceWireSessionRelocationRoute(commit, 14n);
+  await assert.rejects(
+    host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute({
+      relocation: seal.relocation,
+      coordinator: seal.coordinator,
+      senderRole: 'source',
+      actor: seal.actor.actor,
+      session: seal.session,
+      route: { action: 'abort', currentAuthorityOwnerGeneration: 11n }
+    }),
+    error => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
+  );
+  assert.equal((await applying).result, 'applied');
+});
+
+test('failed command 44 native rebind preserves the source route, exact seal, and held payload', async () => {
+  const socket = new FakeStreamSocket();
+  const host = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration()
+  });
+  const context = host.streamBindingRuntime.createSessionContext(
+    new framework.ZLinkManagedStream(socket, 'session', 'public-session')
+  );
+  const actor = await context.actors.bind({
+    nodeRid: 'source', actorId: 'actor-service-rebind-failure', generation: 5n,
+    ownershipGeneration: 11n, ownerLeaseGeneration: 13n,
+    bindingGeneration: 6n, acceptedHighWater: 41n
+  });
+  const seal = serviceSessionRelocationSeal('actor-service-rebind-failure');
+  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
+  const commit = {
+    relocation: seal.relocation,
+    coordinator: seal.coordinator,
+    senderRole: 'target',
+    actor: { ...seal.actor.actor, nodeRid: 'target' },
+    session: seal.session,
+    route: {
+      action: 'commit',
+      previousAuthorityOwnerGeneration: 11n,
+      targetAuthorityOwnerGeneration: 12n,
+      targetNodeRid: 'target',
+      targetNodeGeneration: 4n,
+      replayedHighWater: 41n
+    }
+  };
+  context.enterDispatch(serviceRelayDispatchHeader('HeldAcrossFailedRebind'));
+  try {
+    const relaying = actor.relay(serviceRelayMessage('{"held":true}'));
+    await new Promise(resolve => setImmediate(resolve));
+    socket.bindError = new Error('injected native rebind failure');
+    await assert.rejects(
+      host.boundSessionRelay.boundSessions
+        .receiveServiceWireSessionRelocationRoute(commit, 14n),
+      /injected native rebind failure/
+    );
+    assert.equal(String(host.streamBindingRuntime.find(actor.actorId).ref.nodeRid), 'source');
+    assert.equal(host.streamBindingRuntime.validateActorRouteSeal(
+      actor.actorId,
+      '7:9:actor-service-rebind-failure:5:session:6',
+      41n
+    ), true);
+    assert.equal(socket.boundActorSends.length, 0);
+
+    socket.bindError = undefined;
+    assert.equal((await host.boundSessionRelay.boundSessions
+      .receiveServiceWireSessionRelocationRoute(commit, 14n)).result, 'applied');
+    await relaying;
+    assert.equal(String(host.streamBindingRuntime.find(actor.actorId).ref.nodeRid), 'target');
+    assert.equal(socket.boundActorSends.length, 1);
+  } finally {
+    context.exitDispatch();
+  }
+});
+
+test('command 44 without command 42 returns only the actual owner high-water', async () => {
+  const socket = new FakeStreamSocket();
+  const host = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration()
+  });
+  const context = host.streamBindingRuntime.createSessionContext(
+    new framework.ZLinkManagedStream(socket, 'session', 'public-session')
+  );
+  await context.actors.bind({
+    nodeRid: 'source', actorId: 'actor-service-no-seal', generation: 5n,
+    ownershipGeneration: 11n, ownerLeaseGeneration: 13n,
+    bindingGeneration: 6n, acceptedHighWater: 41n
+  });
+  const seal = serviceSessionRelocationSeal('actor-service-no-seal');
+  const result = await host.boundSessionRelay.boundSessions
+    .receiveServiceWireSessionRelocationRoute({
+      relocation: seal.relocation,
+      coordinator: seal.coordinator,
+      senderRole: 'target',
+      actor: { ...seal.actor.actor, nodeRid: 'target' },
+      session: seal.session,
+      route: {
+        action: 'commit',
+        previousAuthorityOwnerGeneration: 11n,
+        targetAuthorityOwnerGeneration: 12n,
+        targetNodeRid: 'target',
+        targetNodeGeneration: 4n,
+        replayedHighWater: 999n
+      }
+    }, 14n);
+  assert.equal(result.result, 'stale');
+  assert.equal(result.currentAuthorityOwnerGeneration, 11n);
+  assert.equal(result.lastAcceptedSessionSequence, 41n);
 });
 
 test('command 44 exact fences reject stale bindings and make an exact retry idempotent', async () => {
@@ -4608,6 +4898,50 @@ function toTestMessagePart(part) {
     },
     close() {}
   };
+}
+
+function serviceSessionRelocationSeal(actorId) {
+  return {
+    relocation: { high: 7n, low: 9n },
+    coordinator: {
+      ownerId: 'coordinator',
+      leaseGeneration: 3n,
+      nodeRid: 'source',
+      nodeGeneration: 2n,
+      expectedAuthorityStoreVersion: 'store-v17'
+    },
+    senderRole: 'source',
+    actor: {
+      actor: { actorId, generation: 5n, nodeRid: 'source' },
+      targetNodeGeneration: 2n,
+      authorityOwnerGeneration: 11n,
+      ownerLeaseGeneration: 13n
+    },
+    session: {
+      sessionOwnerNodeRid: 'session-owner',
+      sessionOwnerNodeGeneration: 4n,
+      sessionOwnerId: 'session-owner-id',
+      sessionOwnerLeaseGeneration: 8n,
+      sessionRid: 'session',
+      bindingGeneration: 6n
+    }
+  };
+}
+
+function serviceRelayDispatchHeader(packetName) {
+  return {
+    kind: connector.ZlinkStreamMessageKind.Send,
+    codec: connector.ZlinkStreamCodec.Json,
+    flags: connector.ZlinkStreamHeaderFlags.None,
+    name: packetName,
+    metadata: connector.ZlinkStreamMetadataMap.empty
+  };
+}
+
+function serviceRelayMessage(json) {
+  return framework.ZLinkMessage.fromEncoded(
+    framework.ZLinkEncodedPayload.from(new TextEncoder().encode(json))
+  );
 }
 
 async function sealSessionRoute(

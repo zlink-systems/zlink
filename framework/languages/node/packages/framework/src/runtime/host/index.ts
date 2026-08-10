@@ -648,6 +648,7 @@ export class ZLinkFrameworkRuntimeHost implements
         }
         return runtime.listLiveMeshNodes(meshName, signal);
       },
+      sessionRelocationWire: () => this.serviceRelocation,
       clearRemoteActorPacketTarget: (actorId) =>
         this.boundSessionRelay.clearRemoteActorPacketTarget(actorId),
       reportPostCommitError: (error) =>
@@ -674,6 +675,15 @@ export class ZLinkFrameworkRuntimeHost implements
       spotNodeRuntime: () => this.spotNodeRuntime,
       actorManager: () => this.actorManager,
       actorTransfer: this.actorTransferRuntime,
+      boundSessionRelocation: {
+        receiveSeal: value =>
+          this.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(value),
+        receiveRoute: (value, targetOwnerLeaseGeneration) =>
+          this.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(
+            value,
+            targetOwnerLeaseGeneration
+          )
+      },
       trackInstanceSpot: (input) =>
         this.locationOwner.currentLifecycle?.trackInstanceSpot(input),
       reconcileStatefulAuthorityRoutes: (signal) =>

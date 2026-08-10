@@ -282,6 +282,76 @@ export interface ServiceBoundSessionActorAuthority {
   readonly ownerLeaseGeneration: bigint;
 }
 
+export interface ServiceSessionRelocationOwnerFence {
+  readonly sessionOwnerNodeRid: string;
+  readonly sessionOwnerNodeGeneration: bigint;
+  readonly sessionOwnerId: string;
+  readonly sessionOwnerLeaseGeneration: bigint;
+  readonly sessionRid: string;
+  readonly bindingGeneration: bigint;
+}
+
+export interface ServiceSessionRelocationSeal {
+  readonly relocation: ServiceWireOperationId;
+  readonly coordinator: ServiceWireRelocationCoordinatorFence;
+  readonly senderRole: 'source';
+  readonly actor: ServiceBoundSessionActorAuthority;
+  readonly session: ServiceSessionRelocationOwnerFence;
+}
+
+export interface ServiceSessionRelocationSealed {
+  readonly relocation: ServiceWireOperationId;
+  readonly coordinator: ServiceWireRelocationCoordinatorFence;
+  readonly actor: ServiceBoundSessionActorAuthority;
+  readonly session: ServiceSessionRelocationOwnerFence;
+  readonly lastAcceptedSessionSequence: bigint;
+}
+
+export type ServiceSessionRelocationRoute =
+  | {
+      readonly relocation: ServiceWireOperationId;
+      readonly coordinator: ServiceWireRelocationCoordinatorFence;
+      readonly senderRole: 'target';
+      readonly actor: ServiceActorRef;
+      readonly session: ServiceSessionRelocationOwnerFence;
+      readonly route: {
+        readonly action: 'commit';
+        readonly previousAuthorityOwnerGeneration: bigint;
+        readonly targetAuthorityOwnerGeneration: bigint;
+        readonly targetNodeRid: string;
+        readonly targetNodeGeneration: bigint;
+        readonly replayedHighWater: bigint;
+      };
+    }
+  | {
+      readonly relocation: ServiceWireOperationId;
+      readonly coordinator: ServiceWireRelocationCoordinatorFence;
+      readonly senderRole: 'source';
+      readonly actor: ServiceActorRef;
+      readonly session: ServiceSessionRelocationOwnerFence;
+      readonly route: {
+        readonly action: 'abort';
+        readonly currentAuthorityOwnerGeneration: bigint;
+      };
+    };
+
+export type ServiceSessionRelocationRouteResult =
+  | 'applied'
+  | 'alreadyApplied'
+  | 'stale'
+  | 'sessionOrBindingClosed';
+
+export interface ServiceSessionRelocationRouted {
+  readonly relocation: ServiceWireOperationId;
+  readonly coordinator: ServiceWireRelocationCoordinatorFence;
+  readonly actor: ServiceActorRef;
+  readonly session: ServiceSessionRelocationOwnerFence;
+  readonly action: 'commit' | 'abort';
+  readonly result: ServiceSessionRelocationRouteResult;
+  readonly currentAuthorityOwnerGeneration: bigint;
+  readonly lastAcceptedSessionSequence: bigint;
+}
+
 export interface ServiceRetiredBoundSessionRouteFence {
   readonly sessionOwnerNodeRid: string;
   readonly sessionOwnerNodeGeneration: bigint;
@@ -660,6 +730,231 @@ export function encodeBoundSessionReplacedHeader(
     rid(retiredSession.sessionRid, 'sessionRid'),
     u64(retiredSession.retiredBindingGeneration)
   );
+}
+
+/** Encodes canonical service-wire command 42. */
+export function encodeSessionRelocationSeal(value: ServiceSessionRelocationSeal): Buffer {
+  return concat(
+    prefix(M6bServiceWireCommand.sessionRelocationSeal),
+    wireId(value.relocation, 'relocation'),
+    coordinatorFence(value.coordinator),
+    Buffer.of(relocationRole(value.senderRole)),
+    actorAuthorityFence(value.actor),
+    sessionRelocationOwnerFence(value.session)
+  );
+}
+
+/** Decodes canonical service-wire command 42. */
+export function decodeSessionRelocationSeal(frame: Uint8Array): ServiceSessionRelocationSeal {
+  const reader = new Reader(frame);
+  const command = reader.prefix();
+  if (command.command !== M6bServiceWireCommand.sessionRelocationSeal || command.flags !== 0) {
+    fail('Command is not sessionRelocationSeal.');
+  }
+  const relocation = reader.operationId('relocation');
+  const coordinator = reader.coordinatorFence();
+  const senderRole = reader.relocationRole();
+  if (senderRole !== 'source') {
+    fail('Session relocation seal sender role is invalid.');
+  }
+  const actor = reader.actorAuthorityFence();
+  const session = reader.sessionRelocationOwnerFence();
+  reader.end();
+  return { relocation, coordinator, senderRole, actor, session };
+}
+
+/** Encodes canonical service-wire command 43. */
+export function encodeSessionRelocationSealed(value: ServiceSessionRelocationSealed): Buffer {
+  return concat(
+    prefix(M6bServiceWireCommand.sessionRelocationSealed),
+    wireId(value.relocation, 'relocation'),
+    coordinatorFence(value.coordinator),
+    actorAuthorityFence(value.actor),
+    sessionRelocationOwnerFence(value.session),
+    ordinalU64(value.lastAcceptedSessionSequence, 'lastAcceptedSessionSequence')
+  );
+}
+
+/** Decodes canonical service-wire command 43. */
+export function decodeSessionRelocationSealed(frame: Uint8Array): ServiceSessionRelocationSealed {
+  const reader = new Reader(frame);
+  const command = reader.prefix();
+  if (command.command !== M6bServiceWireCommand.sessionRelocationSealed || command.flags !== 0) {
+    fail('Command is not sessionRelocationSealed.');
+  }
+  const relocation = reader.operationId('relocation');
+  const coordinator = reader.coordinatorFence();
+  const actor = reader.actorAuthorityFence();
+  const session = reader.sessionRelocationOwnerFence();
+  const lastAcceptedSessionSequence = reader.ordinal('lastAcceptedSessionSequence');
+  reader.end();
+  return { relocation, coordinator, actor, session, lastAcceptedSessionSequence };
+}
+
+/** Encodes canonical service-wire command 44. */
+export function encodeSessionRelocationRoute(value: ServiceSessionRelocationRoute): Buffer {
+  const route = value.route.action === 'commit'
+    ? (() => {
+        if (value.senderRole !== 'target') {
+          fail('Session relocation commit sender role is invalid.');
+        }
+        if (
+          value.route.targetAuthorityOwnerGeneration
+            <= value.route.previousAuthorityOwnerGeneration
+        ) {
+          fail('Session relocation commit must advance the authority owner generation.');
+        }
+        return concat(
+          u64(value.route.previousAuthorityOwnerGeneration),
+          u64(value.route.targetAuthorityOwnerGeneration),
+          rid(value.route.targetNodeRid, 'targetNodeRid'),
+          u64(value.route.targetNodeGeneration),
+          ordinalU64(value.route.replayedHighWater, 'replayedHighWater')
+        );
+      })()
+    : (() => {
+        if (value.senderRole !== 'source') {
+          fail('Session relocation abort sender role is invalid.');
+        }
+        return u64(value.route.currentAuthorityOwnerGeneration);
+      })();
+  return concat(
+    prefix(M6bServiceWireCommand.sessionRelocationRoute),
+    wireId(value.relocation, 'relocation'),
+    coordinatorFence(value.coordinator),
+    Buffer.of(relocationRole(value.senderRole)),
+    actorRef(value.actor),
+    sessionRelocationOwnerFence(value.session),
+    Buffer.of(value.route.action === 'commit' ? 1 : 2),
+    u16(route.byteLength),
+    route
+  );
+}
+
+/** Decodes canonical service-wire command 44. */
+export function decodeSessionRelocationRoute(frame: Uint8Array): ServiceSessionRelocationRoute {
+  const reader = new Reader(frame);
+  const command = reader.prefix();
+  if (command.command !== M6bServiceWireCommand.sessionRelocationRoute || command.flags !== 0) {
+    fail('Command is not sessionRelocationRoute.');
+  }
+  const relocation = reader.operationId('relocation');
+  const coordinator = reader.coordinatorFence();
+  const senderRole = reader.relocationRole();
+  const actor = reader.actorRef('actor');
+  const session = reader.sessionRelocationOwnerFence();
+  const action = reader.u8('route.action');
+  const routeLength = reader.u16('route.length');
+  const routeEnd = reader.offset + routeLength;
+  if (routeEnd > reader.bytes.byteLength) fail('Truncated Session relocation route body.');
+  if (action === 1) {
+    if (senderRole !== 'target') {
+      fail('Session relocation commit sender role is invalid.');
+    }
+    const previousAuthorityOwnerGeneration = reader.nonZeroU64(
+      'previousAuthorityOwnerGeneration'
+    );
+    const targetAuthorityOwnerGeneration = reader.nonZeroU64(
+      'targetAuthorityOwnerGeneration'
+    );
+    const targetNodeRid = reader.rid('targetNodeRid');
+    const targetNodeGeneration = reader.nonZeroU64('targetNodeGeneration');
+    const replayedHighWater = reader.ordinal('replayedHighWater');
+    if (reader.offset !== routeEnd) fail('Invalid Session relocation commit route length.');
+    if (targetAuthorityOwnerGeneration <= previousAuthorityOwnerGeneration) {
+      fail('Session relocation commit must advance the authority owner generation.');
+    }
+    reader.end();
+    return {
+      relocation,
+      coordinator,
+      senderRole,
+      actor,
+      session,
+      route: {
+        action: 'commit',
+        previousAuthorityOwnerGeneration,
+        targetAuthorityOwnerGeneration,
+        targetNodeRid,
+        targetNodeGeneration,
+        replayedHighWater
+      }
+    };
+  }
+  if (action === 2) {
+    if (senderRole !== 'source') {
+      fail('Session relocation abort sender role is invalid.');
+    }
+    const currentAuthorityOwnerGeneration = reader.nonZeroU64(
+      'currentAuthorityOwnerGeneration'
+    );
+    if (reader.offset !== routeEnd) fail('Invalid Session relocation abort route length.');
+    reader.end();
+    return {
+      relocation,
+      coordinator,
+      senderRole,
+      actor,
+      session,
+      route: { action: 'abort', currentAuthorityOwnerGeneration }
+    };
+  }
+  fail('Session relocation route action is invalid.');
+}
+
+/** Encodes canonical service-wire command 45. */
+export function encodeSessionRelocationRouted(value: ServiceSessionRelocationRouted): Buffer {
+  const result = value.result === 'applied' ? 0
+    : value.result === 'alreadyApplied' ? 1
+      : value.result === 'stale' ? 2 : 3;
+  return concat(
+    prefix(M6bServiceWireCommand.sessionRelocationRouted),
+    wireId(value.relocation, 'relocation'),
+    coordinatorFence(value.coordinator),
+    actorRef(value.actor),
+    sessionRelocationOwnerFence(value.session),
+    Buffer.of(value.action === 'commit' ? 1 : 2, result),
+    u64(value.currentAuthorityOwnerGeneration),
+    ordinalU64(value.lastAcceptedSessionSequence, 'lastAcceptedSessionSequence')
+  );
+}
+
+/** Decodes canonical service-wire command 45. */
+export function decodeSessionRelocationRouted(frame: Uint8Array): ServiceSessionRelocationRouted {
+  const reader = new Reader(frame);
+  const command = reader.prefix();
+  if (command.command !== M6bServiceWireCommand.sessionRelocationRouted || command.flags !== 0) {
+    fail('Command is not sessionRelocationRouted.');
+  }
+  const relocation = reader.operationId('relocation');
+  const coordinator = reader.coordinatorFence();
+  const actor = reader.actorRef('actor');
+  const session = reader.sessionRelocationOwnerFence();
+  const actionValue = reader.u8('action');
+  if (actionValue !== 1 && actionValue !== 2) fail('Session relocation routed action is invalid.');
+  const resultValue = reader.u8('result');
+  if (resultValue > 3) fail('Session relocation routed result is invalid.');
+  const currentAuthorityOwnerGeneration = reader.nonZeroU64(
+    'currentAuthorityOwnerGeneration'
+  );
+  const lastAcceptedSessionSequence = reader.ordinal('lastAcceptedSessionSequence');
+  reader.end();
+  const results: readonly ServiceSessionRelocationRouteResult[] = [
+    'applied',
+    'alreadyApplied',
+    'stale',
+    'sessionOrBindingClosed'
+  ];
+  return {
+    relocation,
+    coordinator,
+    actor,
+    session,
+    action: actionValue === 1 ? 'commit' : 'abort',
+    result: results[resultValue]!,
+    currentAuthorityOwnerGeneration,
+    lastAcceptedSessionSequence
+  };
 }
 
 export function encodeInstanceSpotHeader(
@@ -2003,6 +2298,17 @@ function actorAuthorityFence(value: ServiceBoundSessionActorAuthority): Buffer {
   );
 }
 
+function sessionRelocationOwnerFence(value: ServiceSessionRelocationOwnerFence): Buffer {
+  return concat(
+    rid(value.sessionOwnerNodeRid, 'sessionOwnerNodeRid'),
+    u64(value.sessionOwnerNodeGeneration),
+    text8(value.sessionOwnerId, 'sessionOwnerId'),
+    u64(value.sessionOwnerLeaseGeneration),
+    rid(value.sessionRid, 'sessionRid'),
+    u64(value.bindingGeneration)
+  );
+}
+
 function spotFence(value: ServiceSpotRouteFence): Buffer {
   return concat(
     spotRef(value.spot),
@@ -2148,6 +2454,13 @@ function u64Any(value: bigint): Buffer {
   const result = Buffer.alloc(8);
   result.writeBigUInt64BE(value);
   return result;
+}
+
+function ordinalU64(value: bigint, name: string): Buffer {
+  if (value < 0n || value > 0x7fff_ffff_ffff_ffffn) {
+    throw new RangeError(`${name} exceeds the signed ordinal range.`);
+  }
+  return u64Any(value);
 }
 
 function requirePositive(value: bigint | undefined, name: string): bigint {
@@ -2617,6 +2930,28 @@ class Reader {
       actor: { ...actor, nodeRid: targetNodeRid },
       targetNodeGeneration: this.nonZeroU64('targetNodeGeneration'),
       authorityOwnerGeneration: this.nonZeroU64('authorityOwnerGeneration')
+    };
+  }
+
+  actorAuthorityFence(): ServiceBoundSessionActorAuthority {
+    const actor = this.actorRef('actor');
+    const targetNodeRid = this.rid('targetNodeRid');
+    return {
+      actor: { ...actor, nodeRid: targetNodeRid },
+      targetNodeGeneration: this.nonZeroU64('targetNodeGeneration'),
+      authorityOwnerGeneration: this.nonZeroU64('authorityOwnerGeneration'),
+      ownerLeaseGeneration: this.nonZeroU64('ownerLeaseGeneration')
+    };
+  }
+
+  sessionRelocationOwnerFence(): ServiceSessionRelocationOwnerFence {
+    return {
+      sessionOwnerNodeRid: this.rid('sessionOwnerNodeRid'),
+      sessionOwnerNodeGeneration: this.nonZeroU64('sessionOwnerNodeGeneration'),
+      sessionOwnerId: this.text8('sessionOwnerId'),
+      sessionOwnerLeaseGeneration: this.nonZeroU64('sessionOwnerLeaseGeneration'),
+      sessionRid: this.rid('sessionRid'),
+      bindingGeneration: this.nonZeroU64('bindingGeneration')
     };
   }
 

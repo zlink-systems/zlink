@@ -79,14 +79,114 @@ import {
   decodeMaintenanceReplyRelay,
   decodeMaintenanceReplyRelayAck,
   decodeMaintenanceRelocationControl,
+  decodeSessionRelocationRoute,
+  decodeSessionRelocationRouted,
+  decodeSessionRelocationSeal,
+  decodeSessionRelocationSealed,
   decodeServiceWireFrozenRecord,
   encodeMaintenanceRelocationControl,
   encodeMaintenanceReplyRelay,
   encodeMaintenanceReplyRelayAck,
+  encodeSessionRelocationRoute,
+  encodeSessionRelocationRouted,
+  encodeSessionRelocationSeal,
+  encodeSessionRelocationSealed,
   encodeServiceWireFrozenRecord,
   type ServiceMaintenanceRelocationControl,
   type ServiceMaintenanceRelocationControlData
 } from '../../packages/framework/src/runtime/foundation/service-stateful-wire-codec';
+
+test('commands 42-45 match the shared Session relocation barrier golden bytes', () => {
+  const fixture = JSON.parse(readFileSync(
+    '../../runtime/protocol/golden/session-relocation-barrier-v1.json',
+    'utf8'
+  )) as {
+    readonly identity: Readonly<Record<string, string>>;
+    readonly canonical: readonly {
+      readonly name: string;
+      readonly command: number;
+      readonly decoded: Readonly<Record<string, string>>;
+      readonly hex: string;
+    }[];
+  };
+  const identity = fixture.identity;
+  for (const entry of fixture.canonical) {
+    const bytes = Buffer.from(entry.hex, 'hex');
+    assert.equal(bytes[3], entry.command, entry.name);
+    let value: ReturnType<typeof decodeSessionRelocationSeal>
+      | ReturnType<typeof decodeSessionRelocationSealed>
+      | ReturnType<typeof decodeSessionRelocationRoute>
+      | ReturnType<typeof decodeSessionRelocationRouted>;
+    let reencoded: Buffer;
+    switch (entry.name) {
+      case 'sessionRelocationSeal':
+        value = decodeSessionRelocationSeal(bytes);
+        reencoded = encodeSessionRelocationSeal(value);
+        assert.equal(value.senderRole, entry.decoded.senderRole);
+        assert.equal(value.actor.authorityOwnerGeneration.toString(),
+          entry.decoded.authorityOwnerGeneration);
+        assert.equal(value.actor.ownerLeaseGeneration.toString(),
+          entry.decoded.ownerLeaseGeneration);
+        break;
+      case 'sessionRelocationSealed':
+        value = decodeSessionRelocationSealed(bytes);
+        reencoded = encodeSessionRelocationSealed(value);
+        assert.equal(value.lastAcceptedSessionSequence.toString(),
+          entry.decoded.lastAcceptedSessionSequence);
+        break;
+      case 'sessionRelocationRouteCommit':
+      case 'sessionRelocationRouteAbort':
+        value = decodeSessionRelocationRoute(bytes);
+        reencoded = encodeSessionRelocationRoute(value);
+        assert.equal(value.senderRole, entry.decoded.senderRole);
+        assert.equal(value.route.action, entry.decoded.action);
+        if (value.route.action === 'commit') {
+          assert.equal(value.route.previousAuthorityOwnerGeneration.toString(),
+            entry.decoded.previousAuthorityOwnerGeneration);
+          assert.equal(value.route.targetAuthorityOwnerGeneration.toString(),
+            entry.decoded.targetAuthorityOwnerGeneration);
+          assert.equal(value.route.replayedHighWater.toString(),
+            entry.decoded.replayedHighWater);
+        } else {
+          assert.equal(value.route.currentAuthorityOwnerGeneration.toString(),
+            entry.decoded.currentAuthorityOwnerGeneration);
+        }
+        break;
+      case 'sessionRelocationRoutedCommit':
+      case 'sessionRelocationRoutedAbort':
+        value = decodeSessionRelocationRouted(bytes);
+        reencoded = encodeSessionRelocationRouted(value);
+        assert.equal(value.action, entry.decoded.action);
+        assert.equal(value.result, entry.decoded.result);
+        assert.equal(value.currentAuthorityOwnerGeneration.toString(),
+          entry.decoded.currentAuthorityOwnerGeneration);
+        assert.equal(value.lastAcceptedSessionSequence.toString(),
+          entry.decoded.lastAcceptedSessionSequence);
+        break;
+      default:
+        assert.fail(`Unknown Session relocation fixture '${entry.name}'.`);
+    }
+    assert.equal(reencoded.toString('hex'), entry.hex, entry.name);
+    assert.equal(value.relocation.high.toString(), identity.relocationHigh, entry.name);
+    assert.equal(value.relocation.low.toString(), identity.relocationLow, entry.name);
+    assert.equal(value.coordinator.ownerId, identity.coordinatorOwnerId, entry.name);
+    assert.equal(value.coordinator.leaseGeneration.toString(),
+      identity.coordinatorLeaseGeneration, entry.name);
+    const actor = 'targetNodeGeneration' in value.actor ? value.actor.actor : value.actor;
+    assert.equal(actor.actorId, identity.actorId, entry.name);
+    assert.equal(actor.generation.toString(), identity.objectGeneration, entry.name);
+    assert.equal(value.session.sessionRid, identity.sessionRid, entry.name);
+    assert.equal(value.session.bindingGeneration.toString(), identity.bindingGeneration, entry.name);
+    assert.throws(() => {
+      switch (entry.command) {
+        case 42: decodeSessionRelocationSeal(bytes.subarray(0, bytes.length - 1)); break;
+        case 43: decodeSessionRelocationSealed(bytes.subarray(0, bytes.length - 1)); break;
+        case 44: decodeSessionRelocationRoute(bytes.subarray(0, bytes.length - 1)); break;
+        case 45: decodeSessionRelocationRouted(bytes.subarray(0, bytes.length - 1)); break;
+      }
+    }, `${entry.name} truncated`);
+  }
+});
 
 const relocationControlFixtureValues = (): readonly ServiceMaintenanceRelocationControl[] => {
   const base = {
@@ -1435,7 +1535,7 @@ test('mailbox seal captures queued work, holds new ingress, and restores or rela
   mailbox.close();
 });
 
-test('relocation ingress hold applies the per-owner 1024 message and 16 MiB bounds', () => {
+test('relocation ingress hold adds no relocation-specific message or byte cap', () => {
   const byCount = new ServiceMailbox({
     applicationMessages: 2048,
     applicationBytes: 32 * 1024 * 1024,
@@ -1452,11 +1552,11 @@ test('relocation ingress hold applies the per-owner 1024 message and 16 MiB boun
   }
   assert.equal(
     byCount.tryEnqueue(mailboxRecord('spot:count', 'application', 'overflow')),
-    false
+    true
   );
   assert.equal(byCount.abortRelocation(countSeal), true);
   const restored = byCount.tryClaim('application', 2048, 32 * 1024 * 1024);
-  assert.equal(restored?.records.length, 1024);
+  assert.equal(restored?.records.length, 1025);
   assert.ok(restored);
   assert.equal(byCount.release(restored), true);
   byCount.close();
@@ -1478,8 +1578,8 @@ test('relocation ingress hold applies the per-owner 1024 message and 16 MiB boun
     owner: 'spot:bytes',
     domain: 'application',
     parts: [Buffer.alloc(1)]
-  }), false);
-  assert.equal(byBytes.commitRelocation(byteSeal)?.length, 1);
+  }), true);
+  assert.equal(byBytes.commitRelocation(byteSeal)?.length, 2);
   byBytes.close();
 });
 

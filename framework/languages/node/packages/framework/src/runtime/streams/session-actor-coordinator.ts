@@ -62,13 +62,15 @@ export class ZLinkSessionActorCoordinator {
     context: DefaultZLinkSessionContext,
     actorRef: ActorRef,
     signal?: AbortSignal,
-    confirmRemoteSessionBinding: boolean | 'send' = true
+    confirmRemoteSessionBinding: boolean | 'send' = true,
+    releaseSeal?: { readonly sealId: string; readonly acceptedHighWater: bigint }
   ): Promise<DefaultZLinkSessionActor> {
     return await this.replaceBindingCore(
       context,
       actorRef,
       signal,
-      confirmRemoteSessionBinding
+      confirmRemoteSessionBinding,
+      releaseSeal
     );
   }
 
@@ -76,7 +78,8 @@ export class ZLinkSessionActorCoordinator {
     context: DefaultZLinkSessionContext,
     actorRef: ActorRef,
     signal?: AbortSignal,
-    confirmRemoteSessionBinding: boolean | 'send' = true
+    confirmRemoteSessionBinding: boolean | 'send' = true,
+    releaseSeal?: { readonly sealId: string; readonly acceptedHighWater: bigint }
   ): Promise<DefaultZLinkSessionActor> {
     throwIfAborted(signal);
     if (actorRef.actorId.trim().length === 0) {
@@ -124,7 +127,24 @@ export class ZLinkSessionActorCoordinator {
       ?? new DefaultZLinkSessionActor(this.sessionActorRuntime, boundActorRef, bindingToken);
     sessionActor.updateRef(boundActorRef);
     if (previous === undefined) {
+      if (releaseSeal !== undefined) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.ActorSessionNotBound,
+          `Actor '${actorRef.actorId}' route switch has no Session binding to release.`,
+          true
+        );
+      }
       this.routes.bind(context, sessionActor, bindingToken, authorityFence);
+    } else if (releaseSeal !== undefined) {
+      this.routes.replaceAndReleaseSeal(
+        previous,
+        context,
+        sessionActor,
+        bindingToken,
+        releaseSeal.sealId,
+        releaseSeal.acceptedHighWater,
+        authorityFence
+      );
     } else {
       this.routes.replace(previous, context, sessionActor, bindingToken, authorityFence);
     }
@@ -227,7 +247,13 @@ export class ZLinkSessionActorCoordinator {
   async commitActorRoute(
     actorRef: ActorRef,
     signal?: AbortSignal,
-    options: { readonly confirmRemoteSessionBinding?: boolean | 'send' } = {}
+    options: {
+      readonly confirmRemoteSessionBinding?: boolean | 'send';
+      readonly releaseSeal?: {
+        readonly sealId: string;
+        readonly acceptedHighWater: bigint;
+      };
+    } = {}
   ): Promise<void> {
     const normalizedActorRef = normalizeActorRef(
       actorRef as ActorRef & { readonly generation?: bigint | number },
@@ -239,10 +265,33 @@ export class ZLinkSessionActorCoordinator {
       if (route === undefined) return;
       requireSameIncarnation(route.actor.ref, normalizedActorRef);
       if (routingIdsEqual(route.actor.ref.nodeRid, normalizedActorRef.nodeRid)) {
-        route.actor.updateRef(normalizedActorRef);
         const authorityFence = await this.resolveAuthorityFence(normalizedActorRef, signal);
+        if (options.releaseSeal !== undefined
+          && !this.routes.validateSeal(
+            normalizedActorRef.actorId,
+            options.releaseSeal.sealId,
+            options.releaseSeal.acceptedHighWater
+          )) {
+          throw createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+            `Actor '${normalizedActorRef.actorId}' route switch did not match its relocation seal.`,
+            true
+          );
+        }
+        route.actor.updateRef(normalizedActorRef);
         if (authorityFence !== undefined) {
           this.routes.updateAuthorityFence(normalizedActorRef.actorId, authorityFence);
+        }
+        if (options.releaseSeal !== undefined
+          && !this.routes.abortSeal(
+            normalizedActorRef.actorId,
+            options.releaseSeal.sealId
+          )) {
+          throw createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+            `Actor '${normalizedActorRef.actorId}' route switch lost its relocation seal.`,
+            true
+          );
         }
         return;
       }
@@ -250,7 +299,8 @@ export class ZLinkSessionActorCoordinator {
         route.context,
         normalizedActorRef,
         signal,
-        options.confirmRemoteSessionBinding
+        options.confirmRemoteSessionBinding,
+        options.releaseSeal
       );
     });
   }
@@ -285,6 +335,36 @@ export class ZLinkSessionActorCoordinator {
     readonly ownerLeaseGeneration: bigint;
   } | undefined {
     return this.routes.route(actorId)?.authorityFence;
+  }
+
+  sessionRouteFence(actorId: string): {
+    readonly actor: ActorRef;
+    readonly sessionRid: ActorRef['nodeRid'];
+    readonly bindingGeneration: bigint;
+    readonly authorityOwnerGeneration: bigint;
+    readonly ownerLeaseGeneration: bigint;
+    readonly acceptedHighWater: bigint;
+  } | undefined {
+    const route = this.routes.route(actorId);
+    const sessionRid = route?.context.routingId;
+    const authority = route?.authorityFence;
+    const actor = route?.actor.ref as (ActorRef & { readonly bindingGeneration?: bigint }) | undefined;
+    if (
+      route === undefined
+      || sessionRid === undefined
+      || authority === undefined
+      || actor?.bindingGeneration === undefined
+    ) {
+      return undefined;
+    }
+    return {
+      actor,
+      sessionRid,
+      bindingGeneration: actor.bindingGeneration,
+      authorityOwnerGeneration: authority.authorityOwnerGeneration,
+      ownerLeaseGeneration: authority.ownerLeaseGeneration,
+      acceptedHighWater: route.acceptedHighWater
+    };
   }
 
   private resolveActorRef(actor: ZLinkActor): ActorRef {

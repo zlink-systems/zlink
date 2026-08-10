@@ -91,6 +91,38 @@ export class ZLinkActorSessionBindingRegistry<
     });
   }
 
+  replaceAndReleaseSeal(
+    previous: ZLinkActorSessionRoute<TContext, TActor>,
+    context: TContext,
+    actor: TActor,
+    bindingToken: string,
+    sealId: string,
+    acceptedHighWater: bigint,
+    authorityFence?: ZLinkActorSessionAuthorityFence
+  ): void {
+    if (
+      previous.sealId !== sealId
+      || previous.acceptedHighWater !== acceptedHighWater
+    ) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+        `Actor '${actor.actorId}' route switch did not match its relocation seal.`,
+        true
+      );
+    }
+    // JavaScript cannot interleave another ingress turn between these two
+    // synchronous mutations. The replacement preserves the seal, then the
+    // exact release publishes the route to held ingress as one owner turn.
+    this.replace(previous, context, actor, bindingToken, authorityFence);
+    if (!this.abortSeal(actor.actorId, sealId)) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+        `Actor '${actor.actorId}' route switch lost its relocation seal.`,
+        true
+      );
+    }
+  }
+
   find(actorId: string): TActor | undefined {
     return this.routes.get(actorId)?.actor;
   }
@@ -253,13 +285,27 @@ export class ZLinkActorSessionBindingRegistry<
     if (route.sealId === undefined) return;
     await new Promise<void>((resolve, reject) => {
       const waiters = this.sealWaiters.get(actorId) ?? new Set();
-      const waiter = { bindingToken, resolve, reject };
+      let settled = false;
+      const cleanup = () => signal?.removeEventListener('abort', onAbort);
+      const resolveWaiter = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      const rejectWaiter = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+      const waiter = { bindingToken, resolve: resolveWaiter, reject: rejectWaiter };
       waiters.add(waiter);
       this.sealWaiters.set(actorId, waiters);
       const onAbort = () => {
         waiters.delete(waiter);
         if (waiters.size === 0) this.sealWaiters.delete(actorId);
-        reject(createAbortError());
+        rejectWaiter(createAbortError());
       };
       if (signal === undefined) return;
       if (signal.aborted) {

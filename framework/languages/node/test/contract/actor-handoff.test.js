@@ -424,7 +424,7 @@ test('accepted handoff rejects an expired request before replay queue admission'
   coordinator.cancel('actor-1');
 });
 
-test('Message Follow route rejects a queue above 1024 messages and emits its rejection marker', async () => {
+test('Message Follow route has no relocation-specific 1024-message admission cap', async () => {
   const markers = [];
   const coordinator = new framework.ZLinkActorHandoffCoordinator({
     routedTransport: { sendToSpot: async () => new Promise(() => {}) },
@@ -453,21 +453,19 @@ test('Message Follow route rejects a queue above 1024 messages and emits its rej
     );
     parts.forEach((part) => part.close());
   }
-  const overflow = frame('overflow');
-  assert.throws(
-    () => coordinator.capture(
-      'actor-1',
-      overflow,
-      false,
-      undefined,
-      contextRef(overflow, { operationId: 'ffffffffffffffffffffffffffffffff' })
-    ),
-    (error) => error.kind === framework.ZLinkFrameworkErrorKind.CapacityExceeded
+  const beyondFormerCap = frame('beyond-former-cap');
+  const accepted = coordinator.capture(
+    'actor-1',
+    beyondFormerCap,
+    false,
+    undefined,
+    contextRef(beyondFormerCap, { operationId: 'ffffffffffffffffffffffffffffffff' })
   );
-  overflow.forEach((part) => part.close());
+  beyondFormerCap.forEach((part) => part.close());
+  assert.equal(accepted instanceof Promise, true);
   assert.equal(
     markers.some((entry) => entry.marker === 'message_follow_rejected'),
-    true
+    false
   );
 });
 
