@@ -90,8 +90,6 @@ const SPOT_MOVING = 34;
 const USER_SPOT_OPERATION_CAPACITY = 65_536;
 const USER_SPOT_OPERATION_REPLAY_RETENTION_MS = 5 * 60_000;
 const ACTOR_ROUTE_NOT_FOUND = 1;
-const MESSAGE_FOLLOW_MESSAGE_LIMIT = 1024;
-const MESSAGE_FOLLOW_BYTE_LIMIT = 16 * 1024 * 1024;
 const SESSION_BINDING_REPLACEMENT_RETRY_DEADLINE_MS = 30_000;
 const SESSION_BINDING_REPLACEMENT_RETRY_INITIAL_DELAY_MS = 25;
 const SESSION_BINDING_REPLACEMENT_RETRY_MAX_DELAY_MS = 1_000;
@@ -4404,19 +4402,6 @@ export class ServiceStatefulRuntime {
       return undefined;
     }
     const bytes = ingress.parts.reduce((sum, part) => sum + part.byteLength, 0);
-    if (
-      state.queuedCount >= MESSAGE_FOLLOW_MESSAGE_LIMIT
-      || bytes > MESSAGE_FOLLOW_BYTE_LIMIT - state.queuedBytes
-    ) {
-      if (wire.kind === 'spotRequest') {
-        const result = failure(createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
-          `Spot '${wire.target.spot.spotId}' exhausted the Message Follow capacity.`
-        ));
-        this.replyWire(ingress, wire.correlation!, result.terminalResult, result.failureCode);
-      }
-      return 'infrastructure';
-    }
     state.queued.push({
       ingress: retainIngress(ingress),
       wire,
@@ -4508,8 +4493,8 @@ export class ServiceStatefulRuntime {
       source: messageFollowSpotRoute(state.source),
       target: messageFollowSpotRoute(target),
       hopCount: 1,
-      queuedMessages: state.queuedCount,
-      queuedBytes: state.queuedBytes,
+      queuedMessages: Math.min(state.queuedCount, 0xffff_ffff),
+      queuedBytes: Math.min(state.queuedBytes, 0xffff_ffff),
       originalOperation: {
         high: this.nodeGeneration,
         low: operationLow

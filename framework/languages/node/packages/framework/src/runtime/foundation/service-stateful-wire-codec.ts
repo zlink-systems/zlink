@@ -2365,13 +2365,13 @@ function validateMessageFollowRecord(
   }
   if (!Number.isInteger(value.queuedMessages)
       || value.queuedMessages < 0
-      || value.queuedMessages > 1024) {
-    invalid('Message Follow queuedMessages must be in 0..1024.');
+      || value.queuedMessages > 0xffff_ffff) {
+    invalid('Message Follow queuedMessages must be a u32.');
   }
   if (!Number.isInteger(value.queuedBytes)
       || value.queuedBytes < 0
-      || value.queuedBytes > 16 * 1024 * 1024) {
-    invalid('Message Follow queuedBytes must be in 0..16 MiB.');
+      || value.queuedBytes > 0xffff_ffff) {
+    invalid('Message Follow queuedBytes must be a u32.');
   }
   if (value.originalOperation.high === 0n && value.originalOperation.low === 0n) {
     invalid('Message Follow originalOperation must not be zero.');

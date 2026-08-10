@@ -79,3 +79,34 @@ test('rejected and cancelled fixture paths do not deserialize payloads', () => {
     );
   }
 });
+
+test('a failed typed decode is the single terminal decode outcome', () => {
+  const bytes = Buffer.from('malformed-fixture-payload');
+  const decodeFailure = new Error('fixture decode failed');
+  let deserializations = 0;
+  const serializer = {
+    serialize: () => assert.fail('receive ownership test must not serialize'),
+    deserialize() {
+      deserializations += 1;
+      throw decodeFailure;
+    }
+  };
+  const source = {
+    data: () => bytes,
+    close: () => undefined,
+    copy: () => assert.fail('ownership handoff must not copy'),
+    size: () => bytes.length,
+    isEmpty: () => false,
+    getString: () => bytes.toString('utf8'),
+    toBytes: () => assert.fail('ownership handoff must not copy')
+  };
+  const message = payloadCodec.wrapFrameworkPayloadMessage(
+    source,
+    new Map([['application/x-zlink-fixture', serializer]]),
+    'application/x-zlink-fixture'
+  );
+
+  assert.throws(() => message.decode(Object), error => error === decodeFailure);
+  assert.throws(() => message.decode(class DifferentTarget {}), error => error === decodeFailure);
+  assert.equal(deserializations, fixture.copyBudget.maximumDeserializationsAfterAdmission);
+});

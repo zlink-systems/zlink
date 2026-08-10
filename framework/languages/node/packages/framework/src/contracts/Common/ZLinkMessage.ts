@@ -4,6 +4,7 @@ import { ZLinkEncodedPayload } from './ZLinkEncodedPayload';
 type ZLinkMessageDecoder = <T>(type?: Type<T>) => T;
 const runtimeDecoders = new WeakMap<ZLinkMessage, ZLinkMessageDecoder>();
 const runtimeDecodedValues = new WeakMap<ZLinkMessage, unknown>();
+const runtimeDecodeFailures = new WeakMap<ZLinkMessage, unknown>();
 const runtimeDecoded = new WeakSet<ZLinkMessage>();
 const declaredMessageTypes = new WeakMap<ZLinkMessage, Type>();
 
@@ -30,6 +31,9 @@ export class ZLinkMessage<TValue = unknown> {
       return this.value as T;
     }
     if (runtimeDecoded.has(this)) {
+      if (runtimeDecodeFailures.has(this)) {
+        throw runtimeDecodeFailures.get(this);
+      }
       return runtimeDecodedValues.get(this) as T;
     }
     if (this.encoded.isEmpty()) {
@@ -39,10 +43,16 @@ export class ZLinkMessage<TValue = unknown> {
     }
     const decoder = runtimeDecoders.get(this);
     if (decoder !== undefined) {
-      const value = decoder(type);
-      runtimeDecoded.add(this);
-      runtimeDecodedValues.set(this, value);
-      return value;
+      try {
+        const value = decoder(type);
+        runtimeDecoded.add(this);
+        runtimeDecodedValues.set(this, value);
+        return value;
+      } catch (error) {
+        runtimeDecoded.add(this);
+        runtimeDecodeFailures.set(this, error);
+        throw error;
+      }
     }
     const text = this.encoded.getString('utf8');
     try {

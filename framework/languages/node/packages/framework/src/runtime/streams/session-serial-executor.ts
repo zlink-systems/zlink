@@ -9,6 +9,10 @@ import {
   createInternalFrameworkException
 } from '../framework-errors-internal';
 
+interface ZLinkStreamSerialWorkContext {
+  releaseIngressReservation(): void;
+}
+
 export class ZLinkStreamSessionSerialExecutor {
   private readonly scheduler = new ZLinkBoundedSerialScheduler(
     async (record) => this.execute(record),
@@ -26,10 +30,26 @@ export class ZLinkStreamSessionSerialExecutor {
     work: () => Promise<void>,
     lane: ZLinkSerialWorkLane,
     options: Omit<ZLinkSerialWorkOptions, 'lane'> = {},
-    onRejected?: () => void
+    onRejected?: () => void,
+    onReservationReleased?: () => void
   ): boolean {
     if (this.closed) return false;
-    void this.scheduler.submit(work, { ...options, lane }).catch(() => onRejected?.());
+    let ingressReservationReleased = false;
+    const releaseIngressReservation = (): void => {
+      if (ingressReservationReleased) return;
+      ingressReservationReleased = true;
+      onReservationReleased?.();
+    };
+    void this.scheduler.submit(work, { ...options, lane }, {
+      releaseIngressReservation
+    } satisfies ZLinkStreamSerialWorkContext).catch(() => {
+      try {
+        onRejected?.();
+      } finally {
+        // Admission failures do not produce a record for execute() to release.
+        releaseIngressReservation();
+      }
+    });
     return true;
   }
 
@@ -54,7 +74,12 @@ export class ZLinkStreamSessionSerialExecutor {
     } catch (error) {
       record.reject(error);
     } finally {
-      record.release();
+      try {
+        record.release();
+      } finally {
+        (record.context as ZLinkStreamSerialWorkContext | undefined)
+          ?.releaseIngressReservation();
+      }
     }
   }
 }

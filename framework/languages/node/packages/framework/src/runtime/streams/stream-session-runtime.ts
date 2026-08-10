@@ -803,12 +803,14 @@ export class ZLinkStreamSessionRuntime {
         await work();
       } finally {
         claim?.close();
-        dispatchClaim?.close();
       }
     }, 'application', { payloadBytes }, () => {
       claim?.close();
-      dispatchClaim?.close();
       onRejected?.();
+    }, () => {
+      // Keep ingress paused until the serial lane releases the reservation for
+      // this frame. Waking receive earlier can race the lane's message limit.
+      dispatchClaim?.close();
     })) {
       claim?.close();
       dispatchClaim?.close();

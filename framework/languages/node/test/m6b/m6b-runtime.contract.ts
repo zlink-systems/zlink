@@ -130,7 +130,6 @@ import {
 } from '../../packages/framework/src/contracts';
 import {
   createInternalFrameworkException,
-  internalFrameworkErrorCode,
   ZLinkFrameworkInternalErrorKind,
   internalFrameworkErrorKind
 } from '../../packages/framework/src/runtime/framework-errors-internal';
@@ -2122,17 +2121,13 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
   runtime.close();
 });
 
-test('Spot Message Follow reports bounded admission exhaustion as CapacityExceeded', () => {
+test('Spot Message Follow does not impose a record-count or stored-byte admission bound', () => {
   let ingress:
     ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
       .RawServiceIngressRecord) => unknown) | undefined;
-  const replies: Buffer[][] = [];
   const raw = {
     setServiceIngress(handler: typeof ingress) {
       ingress = handler;
-    },
-    replyService(_record: unknown, parts: readonly Buffer[]) {
-      replies.push([...parts]);
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'node-a', 3n);
@@ -2147,35 +2142,24 @@ test('Spot Message Follow reports bounded admission exhaustion as CapacityExceed
   };
   runtime.rememberSpotRoute(source);
   assert.ok(runtime.sealSpotMessageFollowIngress(source));
-  const internals = runtime as unknown as {
-    spotMessageFollow: Map<string, { queuedCount: number }>;
-  };
-  const state = [...internals.spotMessageFollow.values()][0];
-  assert.ok(state);
-  state.queuedCount = 1_024;
-  const payload = encodeApplicationPayload({
-    packetName: 'Overflow',
+  const smallPayload = encodeApplicationPayload({
+    packetName: 'Held',
     contentType: 'application/octet-stream',
-    payload: Buffer.from('payload')
+    payload: Buffer.alloc(17 * 1024)
   });
-
-  assert.equal(ingress?.({
-    command: M6bServiceWireCommand.spotRequest,
-    flags: 0,
-    sourceRoutingId: 'caller',
-    sourceRoute: Buffer.from('reply-route'),
-    requestSequence: 17n,
-    parts: [encodeSpotHeader('spotRequest', 'source-spot', source, 91n), payload]
-  }), 'infrastructure');
-  assert.equal(replies.length, 1);
-  assert.deepEqual(decodeStatefulReply(replies[0]![0]!, 91n, 'spotRequest'), {
-    correlation: 91n,
-    terminalResult: RequestResult.Rejected,
-    failureCode: internalFrameworkErrorCode(createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
-      'expected'
-    )) + 1
-  });
+  for (let index = 0; index < 1_025; index += 1) {
+    assert.equal(ingress?.({
+      command: M6bServiceWireCommand.spotSend,
+      flags: 0,
+      sourceRoutingId: 'caller',
+      parts: [encodeSpotHeader('spotSend', 'source-spot', source), smallPayload]
+    }), 'application');
+  }
+  const state = [...(runtime as unknown as {
+    spotMessageFollow: Map<string, { queuedCount: number; queuedBytes: number }>;
+  }).spotMessageFollow.values()][0];
+  assert.equal(state?.queuedCount, 1_025);
+  assert.ok((state?.queuedBytes ?? 0) > 16 * 1024 * 1024);
   runtime.close();
 });
 
