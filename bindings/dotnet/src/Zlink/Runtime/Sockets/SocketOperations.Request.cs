@@ -94,18 +94,21 @@ internal sealed class DealerRequestOperation : RequestOperation,
                 _timeout);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void AddMessage(Message message)
     {
         EnsureNotSubmitted();
         _parts.Add(message);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureReady()
     {
         EnsureNotSubmitted();
         _parts.EnsureNotEmpty();
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureNotSubmitted()
     {
         _submission.EnsureNotSubmitted();
