@@ -569,6 +569,30 @@ throughput ratio는 `60.123% / 56.588% / 64.781% / 61.228% / 125.799% / 102.361%
 
 POSDDD 평가: routed peer identity를 connection readiness의 암묵적인 전제에 두지 않고 Router client의 연결 설정 책임으로 명시했다. public contract·ownership·error semantics는 변경하지 않았고, aggregate가 목표를 충족하므로 추가 binding hotpath pass와 Sol review 기반 두 번째 개선 pass는 수행하지 않았다. build는 `0 warning / 0 error`, contract test는 `149 passed / 0 failed / 0 skipped`다.
 
+### .NET Multi MULTI_ROUTER_ROUTER_SENDSEND/tcp 재검토
+
+조건: Core `v0.10.1` release package, Release, `tcp`, clients `100`, duration `1s`, runs `1`, server/client I/O threads `4/4`, auto-HWM, connect-ready timeout `10000ms`, monitor-HWM `4096000`. C report는 기존 동일 조건 paired report를 사용하고, .NET after만 routed send builder 내부 AggressiveInlining 후보 적용 후 측정했다.
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|----------------------------|--------------------------|--------|
+| C 기준 | 182672 / 179557 / 160163 / 164776 / 34962 / 21293 | 0.255 / 0.258 / 0.287 / 0.280 / 1.008 / 1.632 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_193520_dotnet-multi-router-router-sendsend-tcp-paired-c1.txt` |
+| .NET 기존 paired 결과 | 108609 / 74146 / 134991 / 115370 / 45849 / 26149 | 0.393 / 0.562 / 0.322 / 0.377 / 1.010 / 1.856 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_193856_dotnet-multi-router-router-sendsend-tcp-paired-before-connect-rid.txt` |
+| .NET routed builder inlining after | 145283 / 148474 / 141657 / 139041 / 46964 / 28993 | 0.303 / 0.295 / 0.310 / 0.318 / 0.993 / 1.674 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_201438_dotnet-multi-router-router-sendsend-tcp-revisit-routed-inline.txt` |
+
+기존 .NET throughput ratio는 `59.456% / 41.294% / 84.284% / 70.016% / 131.140% / 122.806%`, 산술평균 `84.832%`, 평균 latency ratio `1.388x`다. routed builder `Message`·`Flags`·`Submit` 내부 AggressiveInlining after ratio는 `79.532% / 82.689% / 88.446% / 84.382% / 134.329% / 136.162%`, 산술평균 `100.923%`, 평균 latency ratio `1.188x / 1.143x / 1.080x / 1.136x / 0.985x / 1.026x`, 산술평균 `1.093x`다. throughput·latency aggregate가 모두 개선되어 후보를 채택했다. public contract·ownership·error semantics는 변경하지 않았으며 build `0 warning / 0 error`, contract test `149 passed / 0 failed / 0 skipped`다.
+
+### .NET Multi MULTI_ROUTER_ROUTER_REQREP/tcp 재검토
+
+조건: Core `v0.10.1` release package, Release, `tcp`, clients `100`, duration `1s`, runs `1`, server/client I/O threads `4/4`, auto-HWM, connect-ready timeout `10000ms`, monitor-HWM `4096000`. C report는 기존 동일 조건 paired report를 사용하고, .NET after만 sealed `RouterPeerRequestOperation` override 내부 AggressiveInlining 후보 적용 후 측정했다.
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|----------------------------|--------------------------|--------|
+| C 기준 | 90448 / 92255 / 84528 / 81417 / 20501 / 15162 | 0.365 / 0.371 / 0.386 / 0.408 / 1.255 / 1.631 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_194652_dotnet-multi-router-router-reqrep-tcp-paired-c1.txt` |
+| .NET 기존 paired 결과 | 54380 / 52205 / 54758 / 49850 / 25790 / 15520 | 0.518 / 0.547 / 0.490 / 0.559 / 1.419 / 2.915 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_194708_dotnet-multi-router-router-reqrep-tcp-paired-before-connect-rid.txt` |
+| .NET request override inlining after | 61284 / 57966 / 57475 / 54904 / 25191 / 17045 | 0.458 / 0.499 / 0.486 / 0.529 / 1.502 / 2.587 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_201638_dotnet-multi-router-router-reqrep-tcp-revisit-request-inline.txt` |
+
+기존 .NET throughput ratio는 `60.123% / 56.588% / 64.781% / 61.228% / 125.799% / 102.361%`, 산술평균 `78.480%`, 평균 latency ratio `1.409x`다. request override inlining after ratio는 `67.756% / 62.832% / 67.995% / 67.436% / 122.877% / 112.419%`, 산술평균 `83.553%`, 평균 latency ratio `1.255x / 1.345x / 1.259x / 1.297x / 1.197x / 1.586x`, 산술평균 `1.323x`다. throughput·latency aggregate가 모두 개선되어 후보를 채택했다. public contract·ownership·error semantics는 변경하지 않았으며 build `0 warning / 0 error`, contract test `149 passed / 0 failed / 0 skipped`다.
+
 ### .NET Multi MULTI_PUBSUB/tcp
 
 조건: Core `v0.10.1` release package, Release, `tcp`, clients `100`, duration `1s`, runs `1`, server/client I/O threads `4/4`, auto-HWM, connect-ready timeout `10000ms`, monitor-HWM `4096000`. C와 .NET 모두 6개 size와 30개 result line이 complete다.

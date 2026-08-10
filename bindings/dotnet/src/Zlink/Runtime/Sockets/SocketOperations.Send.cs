@@ -122,6 +122,7 @@ internal sealed class RoutedSendOperation : SendOperation, SendSubmitOperation
         _routingId = routingId;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public SendSubmitOperation Message(Message message)
     {
         EnsureNotSubmitted();
@@ -129,6 +130,7 @@ internal sealed class RoutedSendOperation : SendOperation, SendSubmitOperation
         return this;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public SendSubmitOperation Flags(SendFlags flags)
     {
         EnsureNotSubmitted();
@@ -136,6 +138,7 @@ internal sealed class RoutedSendOperation : SendOperation, SendSubmitOperation
         return this;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Submit()
     {
         EnsureReady();

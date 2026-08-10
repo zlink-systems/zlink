@@ -242,6 +242,7 @@ internal sealed class RouterPeerRequestOperation : RouterRequestOperation
         _peerRid = peerRid;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected override Task<IReadOnlyList<Message>> AsyncCore(
         IReadOnlyList<Message> parts,
         TimeSpan timeout,
@@ -250,6 +251,7 @@ internal sealed class RouterPeerRequestOperation : RouterRequestOperation
         return _socket.RequestCore(_peerRid, parts, timeout, ct);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected override bool SubmitCore(
         IReadOnlyList<Message> parts,
         RequestCallback callback,
@@ -260,6 +262,7 @@ internal sealed class RouterPeerRequestOperation : RouterRequestOperation
             timeout);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected override bool SubmitSingleCore(
         Message part,
         RequestCallback callback,
