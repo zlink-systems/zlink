@@ -823,11 +823,21 @@ test('two host owners exchange canonical relocation reservation publish replay a
   assert.deepEqual(events.slice(abortStart), ['abort-actor', 'abort-spot', 'abort-capacity']);
 });
 
-test('target opens admission at command 35 pending and converges session routes without command 35 completed', async () => {
+test('target opens admission before cleanup but starts session-route convergence only after Completed', async () => {
   const events: string[] = [];
   const envelope = relocationEnvelope();
   const encodedEnvelope = encodeServiceRelocationEnvelope(envelope);
   const root = { reference: 'shared-root-open', checksumCrc32c: crc32c(encodedEnvelope) };
+  const completedEnvelope = {
+    ...envelope,
+    aggregateGeneration: envelope.aggregateGeneration + 1n,
+    sourceCleanup: 'completed' as const
+  };
+  const encodedCompletedEnvelope = encodeServiceRelocationEnvelope(completedEnvelope);
+  const completedRoot = {
+    reference: 'shared-root-open-completed',
+    checksumCrc32c: crc32c(encodedCompletedEnvelope)
+  };
   const publication = {
     phase: 'sourceCleanupPending' as const,
     reference: root.reference,
@@ -843,6 +853,15 @@ test('target opens admission at command 35 pending and converges session routes 
     [actorKey, relocationAuthority('actor', 'ActorType')]
   ]);
   const publishAuthorities = (phase: 'sourceCleanupPending' | 'sourceCleanupCompleted') => {
+    const durable = phase === 'sourceCleanupPending'
+      ? publication
+      : {
+          ...publication,
+          phase,
+          reference: completedRoot.reference,
+          checksumCrc32c: completedRoot.checksumCrc32c,
+          aggregateGeneration: completedEnvelope.aggregateGeneration
+        };
     for (const [key, current] of authorities) {
       authorities.set(key, {
         ...current,
@@ -852,7 +871,7 @@ test('target opens admission at command 35 pending and converges session routes 
         ownerLeaseGeneration: 8n,
         payload: new ServiceRelocationAuthorityPayloadCodec().publish(
           Buffer.from('authority-state'),
-          { ...publication, phase }
+          durable
         )
       });
     }
@@ -904,6 +923,8 @@ test('target opens admission at command 35 pending and converges session routes 
       read: async (reference: { readonly value: string }) =>
         reference.value === root.reference
           ? foundBlob(encodedEnvelope)
+          : reference.value === completedRoot.reference
+            ? foundBlob(encodedCompletedEnvelope)
           : { kind: 'missing' as const, storeNow: new Date() }
     }),
     currentOwner: () => ({ ownerId: 'owner-target', leaseGeneration: 8n }),
@@ -1017,12 +1038,9 @@ test('target opens admission at command 35 pending and converges session routes 
   assert.equal(stage.phase, 'open');
   assert.ok(events.includes('publish-spot'));
   assert.ok(events.includes('publish-actor'));
-
-  // The command 44 -> 42 session-route chain converges in the background and
-  // the command 42 seal release never precedes the command 44 publication.
-  await waitUntil(() => events.includes('cmd42:actor-a'));
-  assert.ok(events.indexOf('cmd44:actor-a') < events.indexOf('cmd42:actor-a'));
-  assert.equal(stage.converged, true);
+  assert.equal(events.includes('cmd44:actor-a'), false);
+  assert.equal(events.includes('cmd42:actor-a'), false);
+  assert.equal(stage.converged, false);
 
   // The stage stays resident until command 35 'completed', so the recovery
   // poller short-circuits instead of restoring the same publication twice.
@@ -1030,8 +1048,10 @@ test('target opens admission at command 35 pending and converges session routes 
   await target.recoverPublishedAuthority(authorities.get(spotKey)!);
   assert.equal(events.length, eventCount);
   assert.equal(internals.targetStages.size, 1);
+  assert.equal(events.includes('cmd44:actor-a'), false);
 
-  // Command 35 'completed' only performs relay and durable bookkeeping.
+  // Command 35 'completed' proves durable source cleanup and only then starts
+  // command 44 -> 42 convergence. Admission was already open above.
   publishAuthorities('sourceCleanupCompleted');
   const complete = { kind: 'complete' as const, relocation: prepare.relocation,
     targetAttemptGeneration: prepare.targetAttemptGeneration, coordinator: prepare.coordinator,
@@ -1039,13 +1059,17 @@ test('target opens admission at command 35 pending and converges session routes 
     sourceCleanupState: 'completed' as const };
   const completed = await roundTrip(complete);
   assert.equal(completed.kind, 'complete');
+  assert.ok(events.includes('cmd44:actor-a'));
+  await waitUntil(() => events.includes('cmd42:actor-a'));
+  assert.ok(events.indexOf('cmd44:actor-a') < events.indexOf('cmd42:actor-a'));
+  assert.equal(stage.converged, true);
   assert.equal(internals.targetStages.size, 0);
-  assert.deepEqual(events.slice(eventCount), []);
+  assert.deepEqual(events.slice(eventCount), ['cmd44:actor-a', 'cmd42:actor-a']);
   // An exact command 35 retry after completion is answered idempotently.
   assert.deepEqual(await roundTrip(complete), completed);
   // The completed publication is remembered, so recovery stays a no-op.
   await target.recoverPublishedAuthority(authorities.get(spotKey)!);
-  assert.deepEqual(events.slice(eventCount), []);
+  assert.deepEqual(events.slice(eventCount), ['cmd44:actor-a', 'cmd42:actor-a']);
 });
 
 test('production source and target runtimes complete standalone Actor relocation end to end', async () => {

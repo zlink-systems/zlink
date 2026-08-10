@@ -2375,6 +2375,8 @@ export class ZLinkHostServiceRelocationRuntime {
    * Command 35, the sourceCleanupCompleted CAS, command 44/45 session-route
    * ACKs, the command 42 seal release, steady normalization, and
    * retained-root cleanup converge asynchronously and never gate admission.
+   * Session-route convergence starts only after the completed durable root is
+   * visible; target admission must not expose a route before source cleanup.
    */
   private async openTargetAdmission(stage: LocalStage, signal?: AbortSignal): Promise<void> {
     if (stage.phase !== 'open') {
@@ -2391,7 +2393,6 @@ export class ZLinkHostServiceRelocationRuntime {
       await stage.owner.normalize(stage.staging, authority, signal);
       stage.phase = 'open';
     }
-    this.kickSessionRouteConvergence(stage).catch(() => undefined);
   }
 
   /**
@@ -2475,8 +2476,13 @@ export class ZLinkHostServiceRelocationRuntime {
         await durable.deleteRetainedRoot(previous.reference, signal);
       }
     }
+    const completions = await this.readDurableTerminalCompletions(stage, authority, signal);
+    // Command 44 publishes ownership only after both the durable cleanup root
+    // and its Completed authority publication have been observed. Awaiting
+    // this chain cannot delay Ready because application admission is already
+    // open, but it keeps the stage recoverable until commands 44 and 42 ACK.
+    await this.kickSessionRouteConvergence(stage);
     if (!stage.terminalRelayed) {
-      const completions = await this.readDurableTerminalCompletions(stage, authority, signal);
       await this.relayTerminalReplies(
         meshName,
         stage,
@@ -2794,6 +2800,9 @@ export class ZLinkHostServiceRelocationRuntime {
       'Relocation terminal completion durable root is missing or corrupt.',
       signal
     );
+    if (envelope.sourceCleanup !== 'completed') {
+      throw new Error('Relocation terminal completion requires completed durable source cleanup.');
+    }
     if (envelope.aggregateId !== stage.staging.envelope.aggregateId) {
       throw new Error('Relocation terminal completion durable identity changed.');
     }
