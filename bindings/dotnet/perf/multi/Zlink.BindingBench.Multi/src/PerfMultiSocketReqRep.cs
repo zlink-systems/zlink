@@ -228,6 +228,7 @@ internal static class PerfMultiSocketReqRep
         ulong activeDeadlineNs = EpochNs()
             + (ulong)Math.Max(1, durationSeconds) * 1_000_000_000UL;
         var events = new PollEvent[Math.Max(1, slots.Count)];
+        TimeSpan requestTimeout = ResolveReqRepTimeout();
         bool HasCallbackError() => Volatile.Read(ref hasCallbackError) != 0;
 
         void RecordCallbackError(Exception ex)
@@ -259,12 +260,12 @@ internal static class PerfMultiSocketReqRep
                 submitted = routerRouter
                     ? ((IRouterSocket)slot.Socket).Request(ServerRoutingId)
                         .Message(message)
-                        .Timeout(ResolveReqRepTimeout())
+                        .Timeout(requestTimeout)
                         .Flags(SendFlags.DontWait)
                         .Submit(slot.Callback!)
                     : ((IDealerSocket)slot.Socket).Request()
                         .Message(message)
-                        .Timeout(ResolveReqRepTimeout())
+                        .Timeout(requestTimeout)
                         .Flags(SendFlags.DontWait)
                         .Submit(slot.Callback!);
             }
