@@ -327,6 +327,18 @@ final before throughput ratio는 `55.423% / 81.704% / 102.542% / 92.304% / 93.55
 
 `SendRoutedMessageUnchecked` AggressiveInlining 후보는 throughput aggregate를 0.46%p 높였지만 latency aggregate를 악화시켜 revert했다. Sol 2차 리뷰는 latency 회귀를 확인하고 routed builder pooling·private direct·추가 inlining을 no-go 판정했다. 최종은 before 측정값 기준으로 `자체 후보 제거 후 no-go·보류`한다. 다음 대상은 `.NET Single DEALER_ROUTER_REQREP/tls`다.
 
+### .NET Single ROUTER_ROUTER/tls
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 2118574 / 948552 / 319706 / 13192 / 7944 / 4105 | 56.231 / 0.461 / 0.636 / 15.091 / 25.070 / 49.120 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_163028_dotnet-router-router-tls-paired-c1.txt` |
+| .NET final before | 727166 / 809610 / 358973 / 12563 / 7355 / 3888 | 101.286 / 36.500 / 10.955 / 15.539 / 26.373 / 48.895 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_163041_dotnet-router-router-tls-paired-before.txt` |
+| .NET removed after | 706401 / 794696 / 340576 / 12084 / 7078 / 3612 | 123.369 / 39.316 / 8.349 / 16.145 / 27.309 / 52.566 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_163135_dotnet-router-router-tls-own-after-inline.txt` |
+
+final before throughput ratio는 `34.323% / 85.352% / 112.282% / 95.232% / 92.586% / 94.714%`, 산술평균은 `85.748%`다. 제거한 after throughput ratio는 `33.343% / 83.780% / 106.528% / 91.601% / 89.099% / 87.990%`, 산술평균은 `82.057%`다. final before latency ratio는 `1.801x / 79.176x / 17.225x / 1.030x / 1.052x / 0.995x`, 산술평균은 `16.880x`다. 제거한 after latency ratio는 `2.194x / 85.284x / 13.127x / 1.070x / 1.089x / 1.070x`, 산술평균은 `17.306x`다.
+
+`SendRoutedMessageUnchecked` AggressiveInlining 후보는 throughput과 latency aggregate를 모두 악화시켜 revert했다. Sol 2차 리뷰는 JIT 회귀를 확인하고 routed builder pooling·private direct·추가 inlining을 no-go 판정했다. 최종은 before 측정값 기준으로 `자체 후보 제거 후 no-go·보류`한다. 다음 대상은 `.NET Single ROUTER_ROUTER_REQREP/tls`다.
+
 ### .NET Single DEALER_ROUTER_REQREP/tls
 
 | 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
