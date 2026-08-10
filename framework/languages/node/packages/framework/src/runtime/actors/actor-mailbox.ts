@@ -8,6 +8,7 @@ import {
   type ZLinkSerialWorkOptions,
   type ZLinkSerialWorkRecord
 } from '../execution/serial-scheduler';
+import { runZLinkActorExecution } from './actor-execution-context';
 
 export class ZLinkActorDispatchMailbox {
   private readonly scheduler: ZLinkBoundedSerialScheduler;
@@ -47,7 +48,10 @@ export class ZLinkActorDispatchMailbox {
 export class ZLinkActorDispatchMailboxSet {
   private readonly mailboxes = new Map<string, ZLinkActorDispatchMailbox>();
 
-  constructor(private readonly options?: ZLinkSerialSchedulerOptions) {}
+  constructor(
+    private readonly sourceSpotId: unknown,
+    private readonly options?: ZLinkSerialSchedulerOptions
+  ) {}
 
   submit<T>(
     actorId: string,
@@ -59,6 +63,9 @@ export class ZLinkActorDispatchMailboxSet {
       mailbox = new ZLinkActorDispatchMailbox(this.options);
       this.mailboxes.set(actorId, mailbox);
     }
-    return mailbox.submit(operation, workOptions);
+    return mailbox.submit(
+      () => runZLinkActorExecution(actorId, this.sourceSpotId, operation),
+      workOptions
+    );
   }
 }

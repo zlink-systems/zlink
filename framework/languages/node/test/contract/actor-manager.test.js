@@ -1222,7 +1222,7 @@ test('ZLinkActorManager validates factory returned actor id and context', async 
 
 test('ZLinkActorDispatchMailboxSet serializes same actor and allows different actors to proceed', async () => {
   const events = [];
-  const mailboxes = new framework.ZLinkActorDispatchMailboxSet();
+  const mailboxes = new framework.ZLinkActorDispatchMailboxSet('entry-test');
   let releaseAlice;
   let aliceStarted;
   const aliceStartedPromise = new Promise((resolve) => {

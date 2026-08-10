@@ -24,6 +24,7 @@ export class ZLinkSpotSerialExecutor {
   private depth = 0;
   private turnSequence = 0;
   private executionBarrier: ZLinkExecutionBarrier | undefined;
+  private resumedOwnerTurn: ZLinkSpotSerialTurn | undefined;
   private lastActivityAtMs = Date.now();
   activeTurnId = 0;
 
@@ -63,6 +64,15 @@ export class ZLinkSpotSerialExecutor {
 
   get currentTurn(): ZLinkSpotSerialTurn | undefined {
     return captureZLinkSpotSerialTurn(this);
+  }
+
+  /** Distinguishes a gate-owning turn from a suspended AsyncLocalStorage tail. */
+  isActiveTurn(turn: ZLinkSpotSerialTurn, turnId: number): boolean {
+    return this.depth > 0
+      && (
+        this.resumedOwnerTurn === turn
+        || (turnId === this.activeTurnId && !turn.isSuspended)
+      );
   }
 
   setExecutionBarrier(barrier: ZLinkExecutionBarrier): void {
@@ -272,9 +282,14 @@ export class ZLinkSpotSerialExecutor {
     }
     turn.bindExecutionClaim(resumeClaim);
     void this.enqueue(async () => {
-      turn.resetSuspension();
-      resume();
-      await turn.resumeOwnerUntilNextYield();
+      this.resumedOwnerTurn = turn;
+      try {
+        turn.resetSuspension();
+        resume();
+        await turn.resumeOwnerUntilNextYield();
+      } finally {
+        if (this.resumedOwnerTurn === turn) this.resumedOwnerTurn = undefined;
+      }
     }, true).catch((error) => {
       turn.releaseBoundExecutionClaim();
       reject(error);

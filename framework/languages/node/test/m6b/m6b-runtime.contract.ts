@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import './m6b-execution-policy.contract';
+import './m6b-serial-execution-conformance.contract';
 import './m6b-user-spot-terminal-replay.contract';
 
 import { Message, RequestResult, SubmitResult } from '@zlink-systems/zlink';

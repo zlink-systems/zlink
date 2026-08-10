@@ -130,7 +130,9 @@ export class ZLinkEntrySpotActivation {
 
   constructor(private readonly options: ZLinkEntrySpotActivationOptions) {
     this.serial = new ZLinkSpotSerialExecutor(false, options.nativeSpot.routingId);
-    this.actorPacketMailboxes = new ZLinkActorDispatchMailboxSet();
+    this.actorPacketMailboxes = new ZLinkActorDispatchMailboxSet(
+      options.nativeSpot.routingId
+    );
     // Entry Spot lifecycle, timers and detached continuations use this serial
     // executor. Actor packets use the target actor mailbox.
     this.outbound = new DefaultZLinkSpotOutbound(

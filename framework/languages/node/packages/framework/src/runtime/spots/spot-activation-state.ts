@@ -118,7 +118,7 @@ export class ZLinkSpotActivation {
     if (typeof options.timers.setExecutionBarrier === 'function') {
       options.timers.setExecutionBarrier(this.executionBarrier);
     }
-    this.actorClaims = new ZLinkActorDispatchMailboxSet();
+    this.actorClaims = new ZLinkActorDispatchMailboxSet(options.spotId);
     this.timers = options.timers;
     this.actorHandlers = options.actorHandlers;
     this.handlers = options.handlers;

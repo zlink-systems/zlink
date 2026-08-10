@@ -184,6 +184,110 @@ test('deferred Actor Join barrier keeps the next Actor mailbox turn behind compl
   ]);
 });
 
+test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait policy', async () => {
+  const events = [];
+  const { actor, context } = actorHarness(events);
+  const serial = new ZLinkSpotSerialExecutor(true, 'spot-a');
+  const mailboxes = new framework.ZLinkActorDispatchMailboxSet('spot-a');
+  let routeResolutions = 0;
+  let transportAdmissions = 0;
+  let handoffCaptures = 0;
+  class SelfRequest {}
+  class TargetRequest {}
+  const invalidOperation = (error) =>
+    error instanceof framework.ZLinkFrameworkException
+    && error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation;
+  const client = new framework.DefaultZLinkActorClient({
+    nodeProvider: () => undefined,
+    completionTableProvider: () => undefined,
+    locationResolver: () => ({
+      async resolveDirectActorRoute(actorId) {
+        routeResolutions += 1;
+        return {
+          meshName: 'game',
+          actorId,
+          actorType: 'PlayerActor',
+          actorRef: {
+            actorId,
+            objectGeneration: 1n,
+            meshName: 'game',
+            nodeRid: 'node-a'
+          },
+          ownerNodeRid: 'node-a',
+          ownerNodeGeneration: 1n,
+          spotKind: 1,
+          spotId: 'spot-a',
+          spotGeneration: 1n,
+          membershipEpoch: 1n,
+          ownerId: 'owner-a',
+          ownerLeaseGeneration: 1n,
+          authorityOwnerGeneration: 1n,
+          authorityStoreVersion: 'version-a',
+          updatedAt: new Date()
+        };
+      },
+      invalidateActorRoute() {}
+    }),
+    transportDeliveryGate: () => ({
+      async waitBeforeSubmit() {
+        transportAdmissions += 1;
+      }
+    }),
+    handoffCapture: (_meshName, actorId) => {
+      handoffCaptures += 1;
+      return actorId === 'bob'
+        ? mailboxes.submit('bob', () => serial.execute(() => {
+            events.push('target:bob');
+            return 'pong';
+          }))
+        : undefined;
+    }
+  });
+
+  actor.onJoinCompleted = async (completion) => {
+    events.push(`completion:${completion.status}:start`);
+    assert.throws(
+      () => client.requestToActor('alice', new SelfRequest()).submit(),
+      invalidOperation
+    );
+    assert.throws(
+      () => client.requestToActor('alice', new SelfRequest()).yield(),
+      invalidOperation
+    );
+    await assert.rejects(
+      client.requestToActor('bob', new TargetRequest()).submit(),
+      invalidOperation
+    );
+    assert.equal(routeResolutions, 1);
+    assert.equal(transportAdmissions, 0);
+    assert.equal(handoffCaptures, 0);
+    events.push('same-spot:async-rejected');
+    const reply = await client.requestToActor('bob', new TargetRequest()).yield();
+    events.push(`completion:resume:${reply}`);
+  };
+
+  const first = mailboxes.submit('alice', () => serial.execute(() =>
+    runActorHandlerWithDeferredJoins(() => {
+      events.push('handler');
+      context.joinSpot('room-a').defer();
+    })));
+  const next = mailboxes.submit('alice', () => {
+    events.push('alice:next');
+  });
+
+  await Promise.all([first, next]);
+  assert.equal(routeResolutions, 2);
+  assert.equal(transportAdmissions, 1);
+  assert.equal(handoffCaptures, 1);
+  assert.deepEqual(events.slice(-5), [
+    'completion:accepted:start',
+    'same-spot:async-rejected',
+    'target:bob',
+    'completion:resume:pong',
+    'alice:next'
+  ]);
+});
+
 test('SpotWide deferred Actor Join yields the shared Spot gate while waiting for the target', async () => {
   const events = [];
   let signalJoinStarted;

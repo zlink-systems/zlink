@@ -57,11 +57,13 @@ import {
 } from './actor-message-follow-context';
 import {
   captureZLinkSpotSerialTurn,
+  currentZLinkSpotSerialSourceId,
   requireZLinkYieldTurn,
   type ZLinkSpotSerialTurn
 } from '../execution';
 import { ZLinkConfigurationException } from '../configuration';
 import { ZLinkMeshSubmitterRegistry } from '../messaging';
+import { currentZLinkActorExecution } from './actor-execution-context';
 
 const LEGACY_ACTOR_SEND_TIMEOUT_MS = 1000;
 const LEGACY_ACTOR_SEND_CAPACITY = 4096;
@@ -119,7 +121,10 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     requireActorId(actorId);
     return new DefaultZLinkActorRequestCall(
       (packetName, timeoutMs, metadata, signal) =>
-        this.request(actorId, packetName, request, timeoutMs, metadata, signal),
+        this.request(actorId, packetName, request, timeoutMs, metadata, signal, 'async'),
+      (packetName, timeoutMs, metadata, signal) =>
+        this.request(actorId, packetName, request, timeoutMs, metadata, signal, 'yield'),
+      actorId,
       request,
       this.options.defaultRequestTimeoutMs
     );
@@ -214,14 +219,27 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     request: unknown,
     timeoutMs: number | undefined,
     metadata: ReadonlyMap<string, string>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    waitPolicy: 'async' | 'yield' = 'async'
   ): Promise<TReply> {
     throwIfAborted(signal);
+    const sourceSpotId = currentZLinkActorExecution()?.spotId
+      ?? currentZLinkSpotSerialSourceId();
     const effectiveTimeoutMs = timeoutMs ?? this.options.defaultRequestTimeoutMs;
     const deadlineUnixMs = effectiveTimeoutMs === undefined
       ? undefined
       : Date.now() + effectiveTimeoutMs;
     const route = await this.resolveActorRoute(actorId, signal);
+    if (
+      waitPolicy === 'async'
+      && sourceSpotId !== undefined
+      && sameSpotRoute(sourceSpotId, route)
+    ) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.InvalidOperation,
+        `An Actor request cannot await Actor '${actorId}' on the current Spot while holding its execution claim.`
+      );
+    }
     const { meshName, actorRef: actor } = route;
     this.throwIfKnownStale(meshName, actor);
     const operationId = createMessageFollowId();
@@ -675,12 +693,19 @@ class DefaultZLinkActorRequestCall implements ZLinkActorRequestCall {
   private readonly turn: ZLinkSpotSerialTurn | undefined = captureZLinkSpotSerialTurn();
 
   constructor(
-    private readonly submitter: <TReply>(
+    private readonly asyncSubmitter: <TReply>(
       packetName: string | undefined,
       timeoutMs: number | undefined,
       metadata: ReadonlyMap<string, string>,
       signal?: AbortSignal
     ) => Promise<TReply>,
+    private readonly yieldSubmitter: <TReply>(
+      packetName: string | undefined,
+      timeoutMs: number | undefined,
+      metadata: ReadonlyMap<string, string>,
+      signal?: AbortSignal
+    ) => Promise<TReply>,
+    private readonly targetActorId: string,
     private readonly request: unknown,
     private readonly defaultRequestTimeoutMs?: number
   ) {}
@@ -701,26 +726,52 @@ class DefaultZLinkActorRequestCall implements ZLinkActorRequestCall {
   }
 
   submit<TReply>(signal?: AbortSignal): Promise<TReply> {
-    return this.execute<TReply>(signal);
+    return this.execute<TReply>('async', signal);
   }
 
   yield<TReply>(signal?: AbortSignal): Promise<TReply> {
+    this.rejectSelfActorRequest();
     const turn = requireZLinkYieldTurn(this.turn);
-    const pending = this.execute<TReply>(signal);
+    const pending = this.execute<TReply>('yield', signal);
     return turn.yieldPromise(pending);
   }
 
-  private execute<TReply>(signal?: AbortSignal): Promise<TReply> {
+  private execute<TReply>(
+    waitPolicy: 'async' | 'yield',
+    signal?: AbortSignal
+  ): Promise<TReply> {
     ensureSingleSubmit(this.executed);
+    this.rejectSelfActorRequest();
     this.executed = true;
     throwIfAborted(signal);
-    return this.submitter<TReply>(
+    const submitter = waitPolicy === 'async'
+      ? this.asyncSubmitter
+      : this.yieldSubmitter;
+    return submitter<TReply>(
       this.packet ?? resolveFrameworkPacketName(this.request, undefined, 'Actor'),
       this.timeoutMs ?? this.defaultRequestTimeoutMs,
       this.selectedMetadata,
       signal
     );
   }
+
+  private rejectSelfActorRequest(): void {
+    const current = currentZLinkActorExecution();
+    if (current?.actorId !== this.targetActorId) return;
+    throw createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.InvalidOperation,
+      `Actor '${this.targetActorId}' cannot request itself while retaining its Actor FIFO claim.`
+    );
+  }
+}
+
+function sameSpotRoute(
+  sourceSpotId: unknown,
+  route: ZLinkResolvedActorRoute
+): boolean {
+  const targetSpotId = route.enclosingSpotRoute?.spotId ?? route.spotId;
+  return targetSpotId !== undefined
+    && String(sourceSpotId) === String(targetSpotId);
 }
 
 function decodeActorReply<TReply>(

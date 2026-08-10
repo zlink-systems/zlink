@@ -1583,6 +1583,12 @@ test('ZLinkSpotManager does not bind formal Mesh actor packets as remote session
   class ProbeActor {
     constructor() {
       this.actorId = 'actor-1';
+      this.context = {
+        actorId: this.actorId,
+        objectGeneration: 1n,
+        meshName: 'test.mesh',
+        spotId: 'stage-no-bind'
+      };
     }
   }
   class StageSpot {}
@@ -1734,6 +1740,12 @@ test('ZLinkSpotManager replies formal Mesh actor handler exceptions as HandlerEx
   class ProbeActor {
     constructor() {
       this.actorId = 'actor-1';
+      this.context = {
+        actorId: this.actorId,
+        objectGeneration: 1n,
+        meshName: 'test.mesh',
+        spotId: 'stage-no-bind-error'
+      };
     }
   }
   class StageSpot {}

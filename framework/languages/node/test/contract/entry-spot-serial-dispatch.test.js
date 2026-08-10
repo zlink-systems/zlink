@@ -43,7 +43,7 @@ async function createEntryFixture(entrySpotType, packetHandlers = [], options = 
     registry,
     spot: activation.entrySpot
   });
-  const mailboxes = new framework.ZLinkActorDispatchMailboxSet();
+  const mailboxes = new framework.ZLinkActorDispatchMailboxSet(activation.spotId);
   const router = {
     submit(actorId, operation) {
       return mailboxes.submit(actorId, () => {
@@ -361,8 +361,9 @@ test('request submit keeps the entry turn until its reply completes', async () =
   assert.deepEqual(events, ['handler:start', 'request:ping', 'handler:reply:ping', 'next']);
 });
 
-test('same-Spot awaited requests fail before transport while self-send remains FIFO-admitted', async () => {
+test('same-Spot Async rejects while Yield resumes on a new FIFO turn', async () => {
   const submissions = [];
+  const events = [];
   const addressTransport = {
     async sendToSpotAddress(spotId, message) {
       submissions.push({ kind: 'send', spotId, message });
@@ -389,19 +390,28 @@ test('same-Spot awaited requests fail before transport while self-send remains F
   const isInvalidOperation = (error) => error instanceof framework.ZLinkFrameworkException
     && error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation;
 
-  assert.throws(
-    () => outbound.requestToSpot('same-spot', { requestId: 'async' }).submit(),
-    isInvalidOperation
-  );
+  let initialTurn;
+  let resumedTurn;
+  let earlier;
   await serial.execute(async () => {
+    initialTurn = serial.activeTurnId;
     assert.throws(
-      () => outbound.requestToSpot('same-spot', { requestId: 'yield' }).yield(),
+      () => outbound.requestToSpot('same-spot', { requestId: 'async' }).submit(),
       isInvalidOperation
     );
+    earlier = serial.post(() => events.push('queued:earlier'));
+    const reply = await outbound
+      .requestToSpot('same-spot', { requestId: 'yield' })
+      .yield();
+    resumedTurn = serial.activeTurnId;
+    events.push(`resumed:${reply.marker}`);
   });
+  await earlier;
 
   await outbound.sendToSpot('same-spot', { requestId: 'send', marker: 'self-send' }).submit();
-  assert.deepEqual(submissions.map(({ kind }) => kind), ['send']);
+  assert.notEqual(resumedTurn, initialTurn);
+  assert.deepEqual(events, ['queued:earlier', 'resumed:unexpected-reply']);
+  assert.deepEqual(submissions.map(({ kind }) => kind), ['request', 'send']);
 });
 
 test('routed local self-send queues behind the current turn while self-request fails before dispatch', async () => {

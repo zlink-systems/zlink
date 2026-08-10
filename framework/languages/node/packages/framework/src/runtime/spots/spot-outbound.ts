@@ -286,9 +286,9 @@ function createAddressedSpotRequestCall(
   sourceSpotProvider?: () => ZLinkBackendSpot | undefined
 ): ZLinkSpotRequestCall {
   const options = newAddressCallOptions();
-  const begin = <TReply>(signal?: AbortSignal) => {
+  const begin = <TReply>(waitPolicy: 'async' | 'yield', signal?: AbortSignal) => {
     markSubmitted(options);
-    rejectSameSpotRequest(serial, spotId);
+    rejectSameSpotAsyncRequest(serial, spotId, waitPolicy);
     return startRequestOnSerial<TReply>(serial, () => ({
       pending: transport.requestToSpotAddress<TReply>(
         spotId,
@@ -328,12 +328,12 @@ function createAddressedSpotRequestCall(
       return this;
     },
     submit<TReply>(signal?: AbortSignal) {
-      const pending = begin<TReply>(signal);
+      const pending = begin<TReply>('async', signal);
       return serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending);
     },
     yield<TReply>(signal?: AbortSignal) {
       const turn = requireZLinkYieldTurn();
-      const pending = begin<TReply>(signal);
+      const pending = begin<TReply>('yield', signal);
       return turn.yieldPromise(pending);
     }
   };
@@ -426,7 +426,7 @@ function wrapSendCall(serial: ZLinkSpotSerialExecutor, inner: ZLinkSendCall): ZL
       return this;
     },
     async submit(signal?: AbortSignal) {
-      const result = await serial.execute(() => inner.submit(signal));
+      const result = await runInternalTransportStart(serial, () => inner.submit(signal));
       return result;
     }
   };
@@ -440,7 +440,7 @@ function wrapPublishCall(serial: ZLinkSpotSerialExecutor, inner: ZLinkPublishCal
       return this;
     },
     submit(signal?: AbortSignal) {
-      return serial.execute(() => inner.submit(signal));
+      return runInternalTransportStart(serial, () => inner.submit(signal));
     }
   };
 }
@@ -483,7 +483,21 @@ function startRequestOnSerial<TReply>(
   serial: ZLinkSpotSerialExecutor,
   begin: () => Promise<{ pending: Promise<TReply> }> | { pending: Promise<TReply> }
 ): Promise<TReply> {
-  return serial.execute(begin).then((startedRequest) => startedRequest.pending);
+  return runInternalTransportStart(serial, begin)
+    .then((startedRequest) => startedRequest.pending);
+}
+
+/**
+ * Synthesizes only the transport start in the current turn. This is not a
+ * nested public operation: public same-owner waits are rejected or use Yield.
+ */
+function runInternalTransportStart<T>(
+  serial: ZLinkSpotSerialExecutor,
+  begin: () => Promise<T> | T
+): Promise<T> {
+  return serial.isCurrentTurn
+    ? Promise.resolve().then(begin)
+    : serial.post(begin);
 }
 
 function wrapRoutedSpotSendCall(
@@ -540,11 +554,11 @@ function wrapRoutedSpotRequestCall(
 ): ZLinkRequestCall & Pick<ZLinkChannelRequestCall, 'yield'> {
   let selectedTimeoutMs: number | undefined;
   const metadata = new Map<string, string>();
-  const begin = <TReply>(signal?: AbortSignal) => {
+  const begin = <TReply>(waitPolicy: 'async' | 'yield', signal?: AbortSignal) => {
     // A request to the current Spot would wait behind the handler that owns
     // the same Spot claim. Reject it before resolving a route or submitting
     // transport work; one-way self-send remains a valid FIFO admission.
-    rejectSameSpotRequest(serial, spot.spotId);
+    rejectSameSpotAsyncRequest(serial, spot.spotId, waitPolicy);
     return startRequestOnSerial<TReply>(serial, () => ({
       pending: requestToSpotHandle<TReply>(transport, spot, request, {
         timeoutMs: selectedTimeoutMs,
@@ -571,18 +585,23 @@ function wrapRoutedSpotRequestCall(
       return this;
     },
     submit<TReply>(signal?: AbortSignal) {
-      const pending = begin<TReply>(signal);
+      const pending = begin<TReply>('async', signal);
       return serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending);
     },
     yield<TReply>(signal?: AbortSignal) {
       const turn = requireZLinkYieldTurn();
-      const pending = begin<TReply>(signal);
+      const pending = begin<TReply>('yield', signal);
       return turn.yieldPromise(pending);
     }
   };
 }
 
-function rejectSameSpotRequest(serial: ZLinkSpotSerialExecutor, targetSpotId: RoutingId): void {
+function rejectSameSpotAsyncRequest(
+  serial: ZLinkSpotSerialExecutor,
+  targetSpotId: RoutingId,
+  waitPolicy: 'async' | 'yield'
+): void {
+  if (waitPolicy === 'yield' || !serial.isCurrentTurn) return;
   const sourceSpotId = serial.sourceSpotId;
   if (sourceSpotId === undefined || String(sourceSpotId) !== String(targetSpotId)) return;
   throw createInternalFrameworkException(
