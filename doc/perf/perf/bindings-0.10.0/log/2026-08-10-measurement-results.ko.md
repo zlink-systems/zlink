@@ -419,3 +419,12 @@ Sol single-part specialization은 단일 part 요청에서 임시 `IReadOnlyList
 before throughput ratio는 `48.346% / 45.404% / 47.076% / 59.498% / 102.851% / 100.205%`, 산술평균은 `67.230%`다. before latency ratio는 `2.036x / 2.112x / 2.067x / 1.615x / 0.889x / 1.022x`, 산술평균은 `1.624x`다. 자체 single-part specialization after throughput ratio는 `50.408% / 51.727% / 47.226% / 58.765% / 98.026% / 97.485%`, 산술평균은 `67.273%`다. 자체 after latency ratio는 `1.884x / 1.850x / 2.048x / 1.615x / 0.933x / 1.022x`, 산술평균은 `1.559x`다. Sol submitter after throughput ratio는 `45.865% / 48.649% / 45.093% / 75.320% / 86.406% / 100.631%`, 산술평균은 `66.994%`다. Sol after latency ratio는 `2.214x / 2.037x / 2.200x / 1.231x / 1.089x / 1.022x`, 산술평균은 `1.632x`다.
 
 자체 single-part specialization은 단일 part 요청에서 임시 목록 경로를 제거하고 Router의 요청 제출 책임을 private 공통 경로로 정리했다. throughput aggregate가 `67.230%`에서 `67.273%`로 개선되고 latency aggregate가 `1.624x`에서 `1.559x`로 개선되어 POSDDD 기준의 책임 경계 개선과 함께 최종 코드에 유지한다. Sol의 private direct submitter 후보는 throughput `66.994%`, latency `1.632x`로 자체 after보다 악화되어 제거했다. aggregate throughput 70%에는 미달하고 추가 contract-safe 후보가 없어 최종 상태는 `보류`다. .NET build와 contract test 결과는 build 성공, `149 passed / 0 failed / 0 skipped`다.
+
+### .NET Single ROUTER_ROUTER_REQREP/ipc
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 256353 / 226815 / 231747 / 21861 / 14709 / 9040 | 0.150 / 0.173 / 0.192 / 0.544 / 0.404 / 0.328 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_172657_dotnet-router-router-reqrep-ipc-paired-c1.txt` |
+| .NET | 130843 / 130885 / 125631 / 21052 / 14751 / 8780 | 0.260 / 0.258 / 0.264 / 0.557 / 0.398 / 0.333 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_172710_dotnet-router-router-reqrep-ipc-paired-before.txt` |
+
+throughput ratio는 `51.040% / 57.706% / 54.210% / 96.299% / 100.286% / 97.124%`, 산술평균은 `76.111%`다. latency ratio는 `1.733x / 1.491x / 1.375x / 1.024x / 0.985x / 1.015x`, 산술평균은 `1.271x`다. 6개 size와 30개 result line이 모두 complete이며 .NET request/reply aggregate 기준을 충족해 최종 상태는 `통과`다. 현재 적용된 single-part 내부 경로와 public contract를 유지하고, 추가 hotpath 또는 POSDDD 구조 변경은 채택하지 않는다. 다음 대상은 아직 미측정인 `ROUTER_ROUTER / inproc`이다.
