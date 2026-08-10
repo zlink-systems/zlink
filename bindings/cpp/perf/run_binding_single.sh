@@ -88,7 +88,7 @@ Options:
   -h, --help                  Show this help.
   --pattern NAME              Pattern list (comma-separated) or ALL.
   --build-dir PATH            Official build directory (must be bindings/cpp/build).
-  --reuse-build               Reuse existing build directory as-is (skip configure/build).
+  --reuse-build               Reuse configuration and incrementally rebuild selected targets.
   --clean-build               Remove build directory and do a clean build.
   --output PATH               Tee console logs to a file.
   --results-dir PATH          Override result root directory.
@@ -486,6 +486,12 @@ fi
 
 echo "Using CMake source directory: ${CMAKE_SOURCE_DIR}"
 
+mapfile -t CPP_SINGLE_TARGETS < <(resolve_single_build_targets)
+if [[ "${#CPP_SINGLE_TARGETS[@]}" -eq 0 ]]; then
+  echo "Error: failed to resolve single benchmark build targets." >&2
+  exit 1
+fi
+
 if [[ "${BUILD_MODE}" != "reuse" ]]; then
   if [[ "${IS_WINDOWS}" -eq 1 ]]; then
     CMAKE_GENERATOR="${CMAKE_GENERATOR:-Visual Studio 17 2022}"
@@ -510,12 +516,17 @@ if [[ "${BUILD_MODE}" != "reuse" ]]; then
       -DZLINK_CPP_BUILD_BENCHMARKS=ON
   fi
 
-  mapfile -t CPP_SINGLE_TARGETS < <(resolve_single_build_targets)
-  if [[ "${#CPP_SINGLE_TARGETS[@]}" -eq 0 ]]; then
-    echo "Error: failed to resolve single benchmark build targets." >&2
-    exit 1
+  if [[ "${IS_WINDOWS}" -eq 1 ]]; then
+    cmake --build "${BUILD_DIR}" --config Release --target "${CPP_SINGLE_TARGETS[@]}"
+  else
+    bash "${NORMALIZE_TIMESTAMPS_SH}" "${BUILD_DIR}"
+    cmake --build "${BUILD_DIR}" --target "${CPP_SINGLE_TARGETS[@]}"
   fi
+fi
 
+# Reuse keeps the configured build tree but still incrementally rebuilds the
+# selected binding/perf targets. The released Core runtime is never rebuilt.
+if [[ "${BUILD_MODE}" == "reuse" ]]; then
   if [[ "${IS_WINDOWS}" -eq 1 ]]; then
     cmake --build "${BUILD_DIR}" --config Release --target "${CPP_SINGLE_TARGETS[@]}"
   else

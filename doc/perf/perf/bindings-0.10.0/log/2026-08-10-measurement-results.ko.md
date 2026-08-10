@@ -1109,3 +1109,47 @@ C++·.NET·Python 완료 행을 transport가 아니라 shared implementation pat
 - `MULTI_PUBSUB`: 93.151% / 93.596% / 100.300% / 94.422% / 96.241% / 99.536%, 산술평균 96.208%, latency ratio 산술평균 1.515x, 통과.
 - C reports: `perf_c_multi_linux_20260811_022801_cpp-re-review-dealer-router-reqrep-tcp-c.txt`, `perf_c_multi_linux_20260811_022834_cpp-re-review-router-router-reqrep-tcp-c.txt`, `perf_c_multi_linux_20260811_022900_cpp-re-review-pubsub-tcp-c.txt`.
 - C++ reports: `perf_cpp_multi_linux_20260811_023204_cpp-re-review-dealer-router-reqrep-tcp-rebuilt.txt`, `perf_cpp_multi_linux_20260811_023217_cpp-re-review-router-router-reqrep-tcp-rebuilt.txt`, `perf_cpp_multi_linux_20260811_023231_cpp-re-review-pubsub-tcp-rebuilt.txt`.
+
+## 2026-08-11 C++ Single 누락 개선 검토 재측정
+
+- 조건: Core v0.10.1 release, duration 1초, runs 1, I/O thread 1, auto-HWM balanced, C → C++ 직렬 실행.
+- report root: C `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/`, C++ `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/`.
+
+### Request/reply
+
+| Transport | Pattern | size별 throughput ratio | 산술평균 | latency 산술평균 | 판정 | C / C++ report |
+|-----------|---------|--------------------------|----------|----------------------|------|----------------|
+| tcp | DEALER_ROUTER_REQREP | 107.983% / 96.719% / 92.613% / 96.685% / 95.970% / 91.412% | 96.897% | 1.001x | 통과 | `perf_c_single_linux_20260811_023755_cpp-re-review-single-dealer-router-reqrep-tcp-c.txt` / `perf_cpp_single_linux_20260811_023801_cpp-re-review-single-dealer-router-reqrep-tcp-cpp.txt` |
+| ws | DEALER_ROUTER_REQREP | 100.168% / 96.412% / 94.031% / 97.262% / 96.126% / 96.485% | 96.747% | 1.022x | 통과 | `perf_c_single_linux_20260811_023808_cpp-re-review-single-dealer-router-reqrep-ws-c.txt` / `perf_cpp_single_linux_20260811_023815_cpp-re-review-single-dealer-router-reqrep-ws-cpp.txt` |
+| wss | DEALER_ROUTER_REQREP | 91.914% / 93.944% / 96.538% / 97.121% / 96.188% / 96.267% | 95.329% | 1.044x | 통과 | `perf_c_single_linux_20260811_023822_cpp-re-review-single-dealer-router-reqrep-wss-c.txt` / `perf_cpp_single_linux_20260811_023828_cpp-re-review-single-dealer-router-reqrep-wss-cpp.txt` |
+| tls | DEALER_ROUTER_REQREP | 106.286% / 96.107% / 103.090% / 96.261% / 97.970% / 96.436% | 99.358% | 0.999x | 통과 | `perf_c_single_linux_20260811_023840_cpp-re-review-single-dealer-router-reqrep-tls-c.txt` / `perf_cpp_single_linux_20260811_023846_cpp-re-review-single-dealer-router-reqrep-tls-cpp.txt` |
+| inproc | DEALER_ROUTER_REQREP | 97.123% / 92.943% / 96.930% / 30.999% / 101.579% / 96.229% | 85.967% | 1.481x | 통과 | `perf_c_single_linux_20260811_023853_cpp-re-review-single-dealer-router-reqrep-inproc-c.txt` / `perf_cpp_single_linux_20260811_024552_cpp-re-review-single-dealer-router-reqrep-inproc-reuse-received.txt` |
+| ipc | DEALER_ROUTER_REQREP | 100.208% / 91.608% / 101.317% / 95.853% / 97.544% / 93.092% | 96.604% | 1.017x | 통과 | `perf_c_single_linux_20260811_023906_cpp-re-review-single-dealer-router-reqrep-ipc-c.txt` / `perf_cpp_single_linux_20260811_023913_cpp-re-review-single-dealer-router-reqrep-ipc-cpp.txt` |
+| tcp | ROUTER_ROUTER_REQREP | 99.122% / 90.816% / 89.765% / 97.512% / 97.352% / 93.395% | 94.660% | 1.032x | 통과 | `perf_c_single_linux_20260811_023542_cpp-re-review-single-router-router-reqrep-tcp-c.txt` / `perf_cpp_single_linux_20260811_023553_cpp-re-review-single-router-router-reqrep-tcp-current.txt` |
+| ws | ROUTER_ROUTER_REQREP | 98.952% / 88.951% / 97.217% / 95.707% / 98.696% / 94.739% | 95.710% | 1.036x | 통과 | `perf_c_single_linux_20260811_023612_cpp-re-review-single-router-router-reqrep-ws-c.txt` / `perf_cpp_single_linux_20260811_023619_cpp-re-review-single-router-router-reqrep-ws-cpp.txt` |
+| wss | ROUTER_ROUTER_REQREP | 95.920% / 94.247% / 95.085% / 104.216% / 100.576% / 97.092% | 97.856% | 1.017x | 통과 | `perf_c_single_linux_20260811_023625_cpp-re-review-single-router-router-reqrep-wss-c.txt` / `perf_cpp_single_linux_20260811_023632_cpp-re-review-single-router-router-reqrep-wss-cpp.txt` |
+| tls | ROUTER_ROUTER_REQREP | 94.633% / 103.992% / 101.372% / 96.679% / 95.603% / 97.525% | 98.301% | 1.007x | 통과 | `perf_c_single_linux_20260811_023648_cpp-re-review-single-router-router-reqrep-tls-c.txt` / `perf_cpp_single_linux_20260811_023655_cpp-re-review-single-router-router-reqrep-tls-cpp.txt` |
+| inproc | ROUTER_ROUTER_REQREP | 91.302% / 91.194% / 96.050% / 34.246% / 96.334% / 99.363% | 84.748% | 1.434x | 보류 | `perf_c_single_linux_20260811_023701_cpp-re-review-single-router-router-reqrep-inproc-c.txt` / `perf_cpp_single_linux_20260811_024601_cpp-re-review-single-router-router-reqrep-inproc-reuse-received.txt` |
+| ipc | ROUTER_ROUTER_REQREP | 86.032% / 81.763% / 84.333% / 84.115% / 88.926% / 88.167% | 85.556% | 1.135x | 통과 | `perf_c_single_linux_20260811_023715_cpp-re-review-single-router-router-reqrep-ipc-c.txt` / `perf_cpp_single_linux_20260811_023721_cpp-re-review-single-router-router-reqrep-ipc-cpp.txt` |
+
+### Routed one-way
+
+| Transport | Pattern | size별 throughput ratio | 산술평균 | latency 산술평균 | 판정 | C / C++ report |
+|-----------|---------|--------------------------|----------|----------------------|------|----------------|
+| tcp | DEALER_ROUTER | 99.487% / 96.004% / 102.116% / 88.208% / 93.046% / 99.044% | 96.317% | 1.018x | 통과 | `perf_c_single_linux_20260811_023946_cpp-re-review-single-dealer-router-tcp-c.txt` / `perf_cpp_single_linux_20260811_023952_cpp-re-review-single-dealer-router-tcp-cpp.txt` |
+| ws | DEALER_ROUTER | 106.648% / 93.963% / 106.160% / 87.122% / 95.717% / 97.097% | 97.785% | 1.030x | 통과 | `perf_c_single_linux_20260811_024000_cpp-re-review-single-dealer-router-ws-c.txt` / `perf_cpp_single_linux_20260811_024006_cpp-re-review-single-dealer-router-ws-cpp.txt` |
+| wss | DEALER_ROUTER | 89.201% / 94.898% / 96.704% / 98.612% / 100.018% / 99.965% | 96.566% | 1.058x | 통과 | `perf_c_single_linux_20260811_024013_cpp-re-review-single-dealer-router-wss-c.txt` / `perf_cpp_single_linux_20260811_024020_cpp-re-review-single-dealer-router-wss-cpp.txt` |
+| tls | DEALER_ROUTER | 81.547% / 92.332% / 99.603% / 91.293% / 98.087% / 90.294% | 92.193% | 1.164x | 통과 | `perf_c_single_linux_20260811_024032_cpp-re-review-single-dealer-router-tls-c.txt` / `perf_cpp_single_linux_20260811_024039_cpp-re-review-single-dealer-router-tls-cpp.txt` |
+| inproc | DEALER_ROUTER | 75.897% / 107.155% / 114.363% / 20.627% / 77.272% / 79.779% | 79.182% | 1.387x | 보류 | `perf_c_single_linux_20260811_024132_cpp-re-review-single-dealer-router-inproc-c.txt` / `perf_cpp_single_linux_20260811_024138_cpp-re-review-single-dealer-router-inproc-cpp.txt` |
+| ipc | DEALER_ROUTER | 88.417% / 97.459% / 97.941% / 89.391% / 92.821% / 95.017% | 93.507% | 0.992x | 통과 | `perf_c_single_linux_20260811_024145_cpp-re-review-single-dealer-router-ipc-c.txt` / `perf_cpp_single_linux_20260811_024152_cpp-re-review-single-dealer-router-ipc-cpp.txt` |
+| tcp | ROUTER_ROUTER | 105.127% / 92.470% / 103.134% / 89.529% / 92.133% / 91.250% | 95.607% | 1.037x | 통과 | `perf_c_single_linux_20260811_024400_cpp-re-review-single-router-router-tcp-c.txt` / `perf_cpp_single_linux_20260811_024406_cpp-re-review-single-router-router-tcp-cpp.txt` |
+| ws | ROUTER_ROUTER | 91.653% / 96.194% / 102.974% / 96.589% / 95.956% / 95.633% | 96.500% | 1.026x | 통과 | `perf_c_single_linux_20260811_024417_cpp-re-review-single-router-router-ws-c.txt` / `perf_cpp_single_linux_20260811_024424_cpp-re-review-single-router-router-ws-cpp.txt` |
+| wss | ROUTER_ROUTER | 95.545% / 103.197% / 104.323% / 98.685% / 97.828% / 88.456% | 98.006% | 1.080x | 통과 | `perf_c_single_linux_20260811_024431_cpp-re-review-single-router-router-wss-c.txt` / `perf_cpp_single_linux_20260811_024437_cpp-re-review-single-router-router-wss-cpp.txt` |
+| tls | ROUTER_ROUTER | 96.859% / 106.484% / 99.687% / 97.931% / 93.110% / 84.833% | 96.484% | 1.094x | 통과 | `perf_c_single_linux_20260811_024444_cpp-re-review-single-router-router-tls-c.txt` / `perf_cpp_single_linux_20260811_024451_cpp-re-review-single-router-router-tls-cpp.txt` |
+| inproc | ROUTER_ROUTER | 106.244% / 99.945% / 97.538% / 21.618% / 65.517% / 78.716% | 78.263% | 1.395x | 보류 | `perf_c_single_linux_20260811_024457_cpp-re-review-single-router-router-inproc-c.txt` / `perf_cpp_single_linux_20260811_024504_cpp-re-review-single-router-router-inproc-cpp.txt` |
+| ipc | ROUTER_ROUTER | 108.499% / 91.971% / 98.876% / 85.308% / 90.044% / 105.408% | 96.684% | 1.036x | 통과 | `perf_c_single_linux_20260811_024510_cpp-re-review-single-router-router-ipc-c.txt` / `perf_cpp_single_linux_20260811_024517_cpp-re-review-single-router-router-ipc-cpp.txt` |
+
+`received_t` 재사용 후보는 request/reply inproc 두 대상에서 유지했다. routing ID tail
+zero-fill 제거 후보는 DR request/reply 85.967%→76.294%, RR request/reply
+84.748%→77.916%, DR one-way 79.182%→83.496%, RR one-way 78.263%→75.321%로
+네 대상 합산이 하락해 제거했다.

@@ -196,7 +196,7 @@ Options:
   --pattern NAME         Benchmark pattern (default: all patterns above).
                          Alias: streams => STREAM
   --help                 Show this help.
-  --reuse-build          Reuse existing build directory as-is (skip configure/build).
+  --reuse-build          Reuse configuration and incrementally rebuild selected targets.
   --clean-build          Remove build directory and do a clean build.
   --results-dir PATH     Override results root directory.
   --results-tag NAME     Optional tag appended to the results filename.

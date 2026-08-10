@@ -107,8 +107,8 @@ inline bool run_reqrep_pattern (const reqrep_config_t &config_,
     std::atomic<bool> server_ok (true);
 
     std::thread server_thread ([&] () {
+        zlink::received_t received;
         while (true) {
-            zlink::received_t received;
             const int rc = server.sock ().receive (received, 0);
             if (rc != 0) {
                 if (errno == EAGAIN || errno == EINTR)

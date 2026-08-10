@@ -853,6 +853,48 @@ TCP 행에 기록된 이전 결과를 대체한다. Core는 `v0.10.1` release ru
 | `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 통과 (94.782%) | 통과 (98.699%) | 통과 (95.375%) | 통과 (93.002%) | 통과 (97.810%) | 통과 (100.994%) | throughput 산술평균 96.777%, 평균 latency ratio 산술평균 1.020x로 통과. size/copy constructor의 불필요한 opaque storage zero-init 제거를 유지하고 Sol 재검토에서 GO를 확인했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_022834_cpp-re-review-router-router-reqrep-tcp-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260811_023217_cpp-re-review-router-router-reqrep-tcp-rebuilt.txt` |
 | `tcp` | `MULTI_PUBSUB` | 통과 (93.151%) | 통과 (93.596%) | 통과 (100.300%) | 통과 (94.422%) | 통과 (96.241%) | 통과 (99.536%) | throughput 산술평균 96.208%, 평균 latency ratio 산술평균 1.515x로 통과. default constructor zero-init 제거와 caller-owned empty message 직접 수신을 유지하고 Sol 재검토에서 GO를 확인했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_022900_cpp-re-review-pubsub-tcp-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260811_023231_cpp-re-review-pubsub-tcp-rebuilt.txt` |
 
+### 9.1.10 Single 개선 검토 누락 행 재측정
+
+Core `v0.10.1` release runtime, duration `1s`, runs `1`, I/O thread `1`, auto-HWM
+`balanced` 조건에서 각 transport·pattern을 C와 C++ 순서로 단독 측정했다. 아래 aggregate는
+6개 size throughput ratio의 산술평균이며, latency도 6개 ratio의 산술평균이다. 이 결과는
+9.1.1의 같은 행에 기록된 이전 결과를 대체한다.
+
+| Transport | Pattern | Throughput aggregate | Latency aggregate | 판정 |
+|-----------|---------|----------------------|-------------------|------|
+| `tcp` | `DEALER_ROUTER_REQREP` | 96.897% | 1.001x | 통과 |
+| `ws` | `DEALER_ROUTER_REQREP` | 96.747% | 1.022x | 통과 |
+| `wss` | `DEALER_ROUTER_REQREP` | 95.329% | 1.044x | 통과 |
+| `tls` | `DEALER_ROUTER_REQREP` | 99.358% | 0.999x | 통과 |
+| `inproc` | `DEALER_ROUTER_REQREP` | 85.967% | 1.481x | 통과 |
+| `ipc` | `DEALER_ROUTER_REQREP` | 96.604% | 1.017x | 통과 |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 94.660% | 1.032x | 통과 |
+| `ws` | `ROUTER_ROUTER_REQREP` | 95.710% | 1.036x | 통과 |
+| `wss` | `ROUTER_ROUTER_REQREP` | 97.856% | 1.017x | 통과 |
+| `tls` | `ROUTER_ROUTER_REQREP` | 98.301% | 1.007x | 통과 |
+| `inproc` | `ROUTER_ROUTER_REQREP` | 84.748% | 1.434x | 보류 |
+| `ipc` | `ROUTER_ROUTER_REQREP` | 85.556% | 1.135x | 통과 |
+| `tcp` | `DEALER_ROUTER` | 96.317% | 1.018x | 통과 |
+| `ws` | `DEALER_ROUTER` | 97.785% | 1.030x | 통과 |
+| `wss` | `DEALER_ROUTER` | 96.566% | 1.058x | 통과 |
+| `tls` | `DEALER_ROUTER` | 92.193% | 1.164x | 통과 |
+| `inproc` | `DEALER_ROUTER` | 79.182% | 1.387x | 보류 |
+| `ipc` | `DEALER_ROUTER` | 93.507% | 0.992x | 통과 |
+| `tcp` | `ROUTER_ROUTER` | 95.607% | 1.037x | 통과 |
+| `ws` | `ROUTER_ROUTER` | 96.500% | 1.026x | 통과 |
+| `wss` | `ROUTER_ROUTER` | 98.006% | 1.080x | 통과 |
+| `tls` | `ROUTER_ROUTER` | 96.484% | 1.094x | 통과 |
+| `inproc` | `ROUTER_ROUTER` | 78.263% | 1.395x | 보류 |
+| `ipc` | `ROUTER_ROUTER` | 96.684% | 1.036x | 통과 |
+
+`received_t`를 request/reply server loop에서 재사용한 결과
+`DEALER_ROUTER_REQREP/inproc`은 79.613%에서 85.967%로,
+`ROUTER_ROUTER_REQREP/inproc`은 72.458%에서 84.748%로 개선됐다. routing ID tail
+zero-fill 제거 후보는 네 대상 합산 throughput이 하락해 제거했다. Sol 최종 판정에 따라
+`ROUTER_ROUTER_REQREP/inproc`, `DEALER_ROUTER/inproc`, `ROUTER_ROUTER/inproc`은 추가
+contract-safe 후보가 없어 측정값으로 보류했다. size별 ratio와 report 경로는
+`log/2026-08-10-measurement-results.ko.md`에 기록했다.
+
 ### 9.2 .NET
 
 - perf 경로: `bindings/dotnet/perf`
