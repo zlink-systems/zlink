@@ -95,3 +95,14 @@ Throughput ratio is `67.99% / 68.49% / 73.79% / 111.35% / 108.83% / 109.94%`, ar
 throughput `99.17% → 100.26%`, latency `43.945x → 40.405x`를 기록했지만, Sol pass에서
 추가 builder/message pool·private direct·queue 조정 외의 contract-safe 후보를 찾지 못했다.
 throughput과 latency aggregate가 모두 목표를 충족하지 않아 측정값으로 보류한다.
+
+### .NET Single ROUTER_ROUTER_REQREP/tcp
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 224539 / 230228 / 216393 / 20018 / 13572 / 8164 | 0.178 / 0.171 / 0.237 / 0.594 / 0.438 / 0.364 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_145246_router-router-reqrep-tcp-paired-c1.txt` |
+| .NET | 138790 / 145207 / 125575 / 19227 / 13384 / 8058 | 0.243 / 0.225 / 0.257 / 0.596 / 0.427 / 0.354 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_145502_dotnet-router-router-reqrep-tcp-paired-final.txt` |
+
+throughput ratio는 `61.81% / 63.07% / 58.03% / 96.05% / 98.61% / 98.70%`, 산술평균은
+`79.38%`다. latency ratio는 `1.365x / 1.316x / 1.084x / 1.003x / 0.975x / 0.973x`,
+산술평균은 `1.119x`다. .NET socket request/reply 기준을 충족해 통과로 기록한다.

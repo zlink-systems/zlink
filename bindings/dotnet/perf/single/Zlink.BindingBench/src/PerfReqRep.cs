@@ -121,8 +121,10 @@ internal static class PerfReqRep
             server.Bind(endpoint);
             endpoint = server.Options.LastEndpoint;
             client.Connect(endpoint);
-            if (!(WaitForConnectionReady(serverMonitor, readyTimeoutMs)
-                && WaitForConnectionReady(clientMonitor, readyTimeoutMs)))
+            if (!(WaitForConnectionReadyWithActivity(serverMonitor, server,
+                    readyTimeoutMs, acceptAccepted: false)
+                && WaitForConnectionReadyWithActivity(clientMonitor, client,
+                    readyTimeoutMs, acceptAccepted: false)))
             {
                 DebugLog("single_router_router_reqrep_error:connection_not_ready");
                 TryCleanup(client, server, endpoint, "[single-router-router-reqrep]");
