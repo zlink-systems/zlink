@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
+using System.Runtime.CompilerServices;
+
 namespace Systems.Zlink;
 
 internal abstract class RouterReplyOperation : ReplyOperation,
@@ -8,6 +10,7 @@ internal abstract class RouterReplyOperation : ReplyOperation,
     private OperationMessageBuffer _parts;
     private OperationSubmissionGuard _submission;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReplySubmitOperation Message(Message message)
     {
         EnsureNotSubmitted();
@@ -15,6 +18,7 @@ internal abstract class RouterReplyOperation : ReplyOperation,
         return this;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Submit()
     {
         EnsureReady();
@@ -70,6 +74,7 @@ internal sealed class ReceivedReplyOperationImpl : ReplyOperation,
         _replyHandler = replyHandler;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReplySubmitOperation Message(Message message)
     {
         EnsureNotSubmitted();
@@ -77,6 +82,7 @@ internal sealed class ReceivedReplyOperationImpl : ReplyOperation,
         return this;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Submit()
     {
         EnsureReady();

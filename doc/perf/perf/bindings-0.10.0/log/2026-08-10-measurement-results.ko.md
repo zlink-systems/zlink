@@ -528,3 +528,17 @@ POSDDD 평가: 단일/2-part와 multipart 표현의 변경 지식을 내부 `Ope
 baseline throughput ratio는 `81.625% / 83.768% / 84.022% / 85.710% / 128.561% / 129.268%`, 산술평균은 `98.826%`이며 평균 latency ratio는 `1.171x / 1.139x / 1.131x / 1.122x / 1.011x / 1.053x`, 산술평균은 `1.105x`다. 자체 A/B throughput ratio는 `82.123% / 83.059% / 82.984% / 84.518% / 114.916% / 131.268%`, 산술평균은 `96.478%`이며 평균 latency ratio는 `1.167x / 1.143x / 1.150x / 1.133x / 1.125x / 1.038x`, 산술평균은 `1.126x`다. 자체 후보는 throughput·latency aggregate가 모두 악화되어 제거했다. Sol 2차 review는 baseline이 이미 기준을 충족하고 추가 contract-safe hotpath 후보가 없어 no-go로 판정했다.
 
 POSDDD 평가: C relay와 .NET relay의 시작 책임을 동일하게 정렬하고, Router server가 connection-ready 개수를 직접 관리하던 잘못된 lifecycle 지식을 제거했다. 이 변경은 throughput 개선과 무관하게 cross-language 변경 증폭과 timeout 경계를 줄이며, public interface·ownership·error semantics를 변경하지 않으므로 채택했다. 최종 상태는 `통과`이며 build는 `0 warning / 0 error`, contract test는 `149 passed / 0 failed / 0 skipped`다.
+
+### .NET Multi MULTI_DEALER_ROUTER_REQREP/tcp
+
+조건: Core `v0.10.1` release package, Release, `tcp`, clients `100`, duration `1s`, runs `1`, server/client I/O threads `4/4`, auto-HWM, connect-ready timeout `10000ms`, monitor-HWM `4096000`. C와 .NET의 server lifecycle을 activity-driven setup으로 맞추고, HWM을 READY 전에 확정했다. reply backpressure는 C와 동일하게 explicit EAGAIN 후 50ms POLLOUT slice로 재시도했으며, retry template과 server 수명 polling 목록을 사용했다. C와 .NET 모두 6개 size와 30개 result line이 complete다.
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 99335 / 100320 / 101207 / 92840 / 24335 / 16056 | 0.347 / 0.350 / 0.343 / 0.372 / 1.015 / 1.553 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_191447_dotnet-multi-dealer-router-reqrep-tcp-paired-c1.txt` |
+| .NET parity baseline | 61775 / 64372 / 54351 / 61490 / 24763 / 17635 | 0.482 / 0.457 / 0.540 / 0.492 / 1.570 / 2.571 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_192735_dotnet-multi-dealer-router-reqrep-tcp-paired-parity-template-baseline.txt` |
+| .NET own after request/reply builder `AggressiveInlining` | 61614 / 66480 / 62384 / 60992 / 25204 / 18258 | 0.470 / 0.448 / 0.477 / 0.483 / 1.613 / 2.481 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_192922_dotnet-multi-dealer-router-reqrep-tcp-own-after-request-reply-inline.txt` |
+
+parity baseline throughput ratio는 `62.189% / 64.167% / 53.703% / 66.232% / 101.759% / 109.834%`, 산술평균은 `76.314%`다. 평균 latency ratio는 `1.389x / 1.306x / 1.574x / 1.323x / 1.547x / 1.656x`, 산술평균은 `1.466x`다. 자체 builder inlining after throughput ratio는 `62.026% / 66.268% / 61.640% / 65.696% / 103.571% / 113.714%`, 산술평균은 `78.819%`이며 평균 latency ratio는 `1.354x / 1.280x / 1.391x / 1.298x / 1.589x / 1.598x`, 산술평균은 `1.418x`다. .NET socket request/reply aggregate 목표 `70%`를 충족하므로 최종 상태는 `통과`다. 개별 size ratio는 측정값으로 기록한다.
+
+POSDDD 평가: C와 .NET의 setup·retry 책임을 같은 계층에서 처리하도록 정렬하고, retry 시도별 message 수명과 server 수명 polling을 harness 내부에 숨겼다. public interface·ownership·error semantics는 변경하지 않았다. 자체 builder inlining은 두 aggregate를 개선해 채택했고, Sol 2차 review는 추가 binding/harness 구조 변경을 no-go 판정했다. build는 `0 warning / 0 error`, contract test는 `149 passed / 0 failed / 0 skipped`다.

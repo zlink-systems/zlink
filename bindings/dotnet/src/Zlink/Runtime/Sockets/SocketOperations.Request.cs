@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
+using System.Runtime.CompilerServices;
+
 namespace Systems.Zlink;
 
 internal sealed class DealerRequestOperation : RequestOperation,
@@ -40,12 +42,14 @@ internal sealed class DealerRequestOperation : RequestOperation,
         return this;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public RequestSubmitOperation Message(Message message)
     {
         AddMessage(message);
         return this;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public RequestSubmitOperation Timeout(TimeSpan timeout)
     {
         EnsureNotSubmitted();
@@ -53,6 +57,7 @@ internal sealed class DealerRequestOperation : RequestOperation,
         return this;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public RequestCallbackSubmitOperation Flags(SendFlags flags)
     {
         EnsureNotSubmitted();
@@ -72,6 +77,7 @@ internal sealed class DealerRequestOperation : RequestOperation,
         return _socket.RequestCore(_parts.Parts, _timeout, ct);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Submit(RequestCallback callback)
     {
         if (callback == null)
@@ -138,12 +144,14 @@ internal abstract class RouterRequestOperation : RequestOperation,
         return this;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public RequestSubmitOperation Message(Message message)
     {
         AddMessage(message);
         return this;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public RequestSubmitOperation Timeout(TimeSpan timeout)
     {
         EnsureNotSubmitted();
@@ -151,6 +159,7 @@ internal abstract class RouterRequestOperation : RequestOperation,
         return this;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public RequestCallbackSubmitOperation Flags(SendFlags flags)
     {
         EnsureNotSubmitted();
@@ -170,6 +179,7 @@ internal abstract class RouterRequestOperation : RequestOperation,
         return AsyncCore(_parts.Parts, _timeout, ct);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Submit(RequestCallback callback)
     {
         if (callback == null)

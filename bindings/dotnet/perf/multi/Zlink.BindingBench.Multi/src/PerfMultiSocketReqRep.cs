@@ -10,6 +10,7 @@ internal static class PerfMultiSocketReqRep
     private static readonly RoutingId ServerRoutingId = RoutingId.From("SERVER"u8);
     private const uint RunId = 1;
     private const uint ActivePhase = 1;
+    private const int ReplyRetryPollTimeoutMs = 50;
     private static int s_debugServerRecvLogs;
     private static int s_debugServerReplyLogs;
     private static int s_debugClientSubmitLogs;
@@ -42,30 +43,29 @@ internal static class PerfMultiSocketReqRep
     {
         int size = Math.Max(1, options.Size);
         int rcvTimeoutMs = ResolveMultiRcvTimeoutMs(options);
-        int readyTimeoutMs = ResolveMultiConnectReadyTimeoutMs(options);
-        int clientCount = ResolveMultiClients(options);
         string endpoint = MultiEndpointFor(options.Transport, endpointName, options);
 
         using var ctx = Zlink.CreateContext();
+        using var pollManager = new PollManager();
         ApplyMultiServerContextOptions(ctx, options);
         using var server = ctx.CreateRouterSocket();
         ApplyMultiSocketOptions(server, options);
         ConfigureTlsServerIfNeeded(server, options.Transport);
         if (routerRouter)
             server.SetRoutingId(ServerRoutingId);
-        using var monitor = server.MonitorOpen(SocketEvent.ConnectionReady);
 
         server.Options.ReceiveTimeout = TimeSpan.FromMilliseconds(rcvTimeoutMs);
+        // Match the C request/reply server: configure the message unit before
+        // bind, then recalculate the socket policy before advertising READY.
+        // The server receives as soon as clients connect and does not gate on
+        // a connection-ready event count.
+        ApplyAutoHwmMsgUnit(ctx, size);
         server.Bind(endpoint);
         endpoint = server.Options.LastEndpoint;
-        WriteStdoutLine($"READY,{endpoint}");
-
-        if (!WaitConnectReadyCount(monitor, clientCount, readyTimeoutMs))
-            return 2;
-
-        ApplyAutoHwmMsgUnit(ctx, size);
         RecalculateAutoHwm(ctx);
         PrintAutoHwmSnapshot(server, "server", options.Transport, size);
+        WriteStdoutLine($"READY,{endpoint}");
+        var pollSockets = new[] { (ISocket)server };
 
         using var stop = new CancellationTokenSource();
         Thread stdinThread = new(() =>
@@ -91,11 +91,13 @@ internal static class PerfMultiSocketReqRep
         {
             if (!TryReceiveBlocking(server, received))
                 continue;
-            ReplyReceived(received);
+            if (!ReplyReceived(pollSockets, pollManager, received, stop.Token))
+                return 2;
             while (!stop.IsCancellationRequested
                    && TryReceiveNoWait(server, received))
             {
-                ReplyReceived(received);
+                if (!ReplyReceived(pollSockets, pollManager, received, stop.Token))
+                    return 2;
             }
         }
 
@@ -365,12 +367,13 @@ internal static class PerfMultiSocketReqRep
         return false;
     }
 
-    private static void ReplyReceived(Received received)
+    private static bool ReplyReceived(IReadOnlyList<ISocket> pollSockets,
+        PollManager pollManager, Received received, CancellationToken stopToken)
     {
         if (!TryGetPayloadPart(received, out Message payloadPart))
-            return;
+            return true;
         if (!received.RequestSeq.HasValue)
-            return;
+            return true;
 
         int payloadSize = payloadPart.Size;
         ulong requestSeq = received.RequestSeq.Value;
@@ -379,14 +382,32 @@ internal static class PerfMultiSocketReqRep
             DebugLogLimited(ref s_debugServerRecvLogs,
                 $"socket_reqrep_server: recv size={payloadSize} seq={requestSeq}");
         }
-        using Message reply = Message.Allocate(payloadSize);
-        payloadPart.AsReadOnlySpan().CopyTo(reply.AsSpan());
-        received.Reply().Message(reply).Submit();
+        using Message replyTemplate = Message.Allocate(payloadSize);
+        payloadPart.AsReadOnlySpan().CopyTo(replyTemplate.AsSpan());
+        while (!stopToken.IsCancellationRequested)
+        {
+            using Message reply = replyTemplate.Copy();
+            try
+            {
+                // Keep a template and submit a fresh copy on every attempt,
+                // matching the C retry contract when backpressure consumes a
+                // native message part.
+                received.Reply().Message(reply).Submit();
+                break;
+            }
+            catch (ZlinkSubmitException ex)
+                when (PerfShared.IsTransientBackpressure(ex.NativeErrno))
+            {
+                _ = pollManager.PollSockets(pollSockets, SocketPollOut,
+                    ReplyRetryPollTimeoutMs);
+            }
+        }
         if (s_debugEnabled)
         {
             DebugLogLimited(ref s_debugServerReplyLogs,
                 $"socket_reqrep_server: replied size={payloadSize} seq={requestSeq}");
         }
+        return !stopToken.IsCancellationRequested;
     }
 
     private static bool TryReceiveBlocking(IRouterSocket receiver, Received result)
