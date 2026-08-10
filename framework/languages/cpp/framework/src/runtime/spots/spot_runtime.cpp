@@ -4884,6 +4884,33 @@ spot_node_runtime_t::deliver_actor_join_completion (const actor_ref_t &actor_ref
             _state->delivered_join_completions.insert (operation);
     };
 
+    //  The completion hands the application only an error kind, so record the
+    //  refusal on the message flow under the same flow as the Join that made it.
+    if (std::holds_alternative<actor_join_failed_t> (completion) && _state) {
+        const auto failed_kind =
+          std::get<actor_join_failed_t> (completion).error_kind;
+        detail::message_flow_tracer_t (_state->dispatch)
+          .trace (message_flow_outcome_t::error, [&] {
+              return message_flow_event_t{
+                message_flow_outcome_t::error,
+                dispatch_error_surface_t::spot_actor,
+                dispatch_message_kind_t::actor_request,
+                std::string ("JoinSpot"),
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                std::string (actor_ref.actor_id ().value ()),
+                std::nullopt,
+                dispatch_error_reason_t::handler_exception,
+                dispatch_error_action_t::reply_error,
+                std::make_exception_ptr (
+                  framework_exception_t (failed_kind,
+                                         "deferred Actor Join failed"))};
+          });
+    }
+
     try {
         // The deferred Actor join barrier owns the same Actor serial queue
         // until this callback returns, so a second per-Actor mutex is not needed.

@@ -25,6 +25,8 @@ import { routingIdsEqual } from '../routing-id';
 import { operationIdentityKey } from '../foundation/operation-identity';
 
 export interface ZLinkActorNativeJoinCoordinatorOptions {
+  readonly messageFlow?: () =>
+    import('../diagnostics/message-flow').ZLinkMessageFlowTracer | undefined;
   readonly node: ZLinkBackendMeshNode | (() => ZLinkBackendMeshNode);
   readonly completionTableProvider: () => ZLinkMeshCompletionTable | undefined;
   readonly spotRouteResolver?: ZLinkSpotRouteResolver;
@@ -43,6 +45,10 @@ export interface ZLinkActorNativeJoinCoordinatorOptions {
 /** Selects local native join or remote two-phase transfer for each destination. */
 export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinator {
   private readonly localJoin: ZLinkLocalNativeActorJoin;
+
+  messageFlow(): import('../diagnostics/message-flow').ZLinkMessageFlowTracer | undefined {
+    return this.options.messageFlow?.();
+  }
 
   constructor(private readonly options: ZLinkActorNativeJoinCoordinatorOptions) {
     const postCommitLocation = options.locationLifecycle === undefined

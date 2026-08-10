@@ -85,6 +85,12 @@ export type ZLinkActorBoundSessionFactory = (actorId: string) => ZLinkBoundSessi
 
 export interface ZLinkActorJoinCoordinator {
   /**
+   * The message flow tracer, when the host wired one. A deferred Join that ends
+   * in `failed` reports its cause here so the failure carries the same flow
+   * identity as the Join that produced it.
+   */
+  messageFlow?(): import('../diagnostics/message-flow').ZLinkMessageFlowTracer | undefined;
+  /**
    * Starts the internal packet handoff before a Deferred Join performs target
    * lookup. This is an internal ordering fence; it is not part of the public
    * actor context contract.

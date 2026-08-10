@@ -2601,6 +2601,8 @@ export class ZLinkFrameworkRuntimeHost implements
   private actorRuntimeOptionsFactory(): ZLinkActorRuntimeOptionsFactory {
     return new ZLinkActorRuntimeOptionsFactory({
       registration: this.options.registration,
+      messageFlow: () =>
+        this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow,
       routeTransport: this.routeTransport,
       streamBindingRuntime: this.streamBindingRuntime,
       providerResolver: this.options.providerResolver,
