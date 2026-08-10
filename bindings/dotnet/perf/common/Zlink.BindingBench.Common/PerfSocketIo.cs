@@ -9,7 +9,11 @@ public static class PerfSocketIo
         Message message = CreatePooledMessage(payload);
         try
         {
-            if (socket.Send().Message(message).Flags(flags).Submit())
+            var submit = socket.Send().Message(message);
+            bool sent = flags == SendFlags.None
+                ? submit.Submit()
+                : submit.Flags(flags).Submit();
+            if (sent)
                 return payload.Length;
             return 0;
         }
