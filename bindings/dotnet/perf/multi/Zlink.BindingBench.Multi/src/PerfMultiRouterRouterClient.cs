@@ -190,8 +190,7 @@ internal static class PerfMultiRouterRouterClient
             if (slot.WaitingForReply || slot.WaitingForWritable)
                 continue;
 
-            PreparePayload(slot, msgSize, runId, phase, ref seq);
-            if (TrySend(slot))
+            if (TrySend(slot, msgSize, runId, phase, ref seq))
             {
                 slot.WaitingForReply = true;
                 slot.WaitingForWritable = false;
@@ -221,7 +220,7 @@ internal static class PerfMultiRouterRouterClient
             && slot.WaitingForWritable
             && !slot.WaitingForReply)
         {
-            if (TrySend(slot))
+            if (TrySend(slot, msgSize, runId, phase, ref seq))
             {
                 slot.WaitingForReply = true;
                 slot.WaitingForWritable = false;
@@ -232,7 +231,7 @@ internal static class PerfMultiRouterRouterClient
         if ((readyMask & PollEventFlags.PollIn) == 0)
             return;
 
-        IRouterSocket routerSock = (IRouterSocket)slot.Socket;
+        IRouterSocket routerSock = slot.Socket;
         Received received = slot.ReusableReceived;
         while (true)
         {
@@ -311,22 +310,23 @@ internal static class PerfMultiRouterRouterClient
         eventMasks[index] = events;
     }
 
-    private static void PreparePayload(RouterRouterClientSlot slot, int msgSize,
+    private static bool TrySend(RouterRouterClientSlot slot, int msgSize,
         uint runId, PerfPhase phase, ref ulong seq)
     {
+        // Match C: stamp immediately before every send attempt, including a
+        // POLLOUT retry. A blocked attempt keeps the current sequence; only a
+        // successful send advances it.
         StampMetricHeader(slot.Payload.AsSpan(), runId, phase, msgSize,
-            seq++, EpochNs());
-        slot.WaitingForWritable = false;
-    }
-
-    private static bool TrySend(RouterRouterClientSlot slot)
-    {
+            seq, EpochNs());
         using Message message = Message.Allocate(slot.Payload.Length);
         slot.Payload.AsSpan(0, PerfMetricHeaderSize).CopyTo(message.AsSpan());
-        return ((IRouterSocket)slot.Socket).Send(slot.ServerRoutingId)
+        bool sent = slot.Socket.Send(slot.ServerRoutingId)
             .Message(message)
             .Flags(SendFlags.DontWait)
             .Submit();
+        if (sent)
+            seq++;
+        return sent;
     }
 
     private static int RemainingMilliseconds(long deadlineTicks)
@@ -347,13 +347,13 @@ internal static class PerfMultiRouterRouterClient
         internal RouterRouterClientSlot(ISocket socket, RoutingId serverRoutingId,
             byte[] payload)
         {
-            Socket = socket;
+            Socket = (IRouterSocket)socket;
             ServerRoutingId = serverRoutingId;
             Payload = payload;
             ReusableReceived = Received.Create();
         }
 
-        internal ISocket Socket { get; }
+        internal IRouterSocket Socket { get; }
         internal RoutingId ServerRoutingId { get; }
         internal byte[] Payload { get; }
         // Caller-provided storage reused across every recv on this slot.
