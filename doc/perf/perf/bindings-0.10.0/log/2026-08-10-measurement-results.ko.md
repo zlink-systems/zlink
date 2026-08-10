@@ -347,3 +347,12 @@ final before throughput ratio는 `34.323% / 85.352% / 112.282% / 95.232% / 92.58
 | .NET | 134330 / 127068 / 124054 / 6227 / 3683 / 2003 | 0.272 / 0.294 / 0.362 / 1.906 / 1.610 / 1.481 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_162850_dotnet-dealer-router-reqrep-tls-paired-before.txt` |
 
 throughput ratio는 `62.784% / 70.333% / 88.879% / 95.771% / 98.004% / 98.234%`, 산술평균은 `85.668%`다. latency ratio는 `1.340x / 1.157x / 0.838x / 1.034x / 1.010x / 1.009x`, 산술평균은 `1.065x`다. .NET socket request/reply aggregate 기준을 충족해 통과로 판정한다. 추가 hotpath 변경 없이 다음 대상은 `.NET Single ROUTER_ROUTER/tls`다.
+
+### .NET Single ROUTER_ROUTER_REQREP/tls
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 217251 / 181029 / 143541 / 6325 / 3852 / 2096 | 0.197 / 0.246 / 0.420 / 1.896 / 1.556 / 1.429 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_163419_dotnet-router-router-reqrep-tls-paired-c1.txt` |
+| .NET | 130110 / 124273 / 115210 / 6265 / 3638 / 2034 | 0.276 / 0.294 / 0.367 / 1.895 / 1.634 / 1.461 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_163432_dotnet-router-router-reqrep-tls-paired-before.txt` |
+
+throughput ratio는 `59.889% / 68.648% / 80.263% / 99.051% / 94.444% / 97.042%`, 산술평균은 `83.223%`다. latency ratio는 `1.401x / 1.195x / 0.874x / 0.999x / 1.050x / 1.022x`, 산술평균은 `1.090x`다. .NET socket request/reply aggregate 기준을 충족해 통과로 판정한다. 추가 hotpath 변경 없이 다음 대상은 `.NET Single PAIR/inproc`다.

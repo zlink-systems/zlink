@@ -834,12 +834,12 @@ transport 상태를 판정한다.
 ### 9.2 .NET
 
 - perf 경로: `bindings/dotnet/perf`
-- Single 상태: `DEALER_ROUTER/tcp`·`DEALER_ROUTER_REQREP/tcp`·`ROUTER_ROUTER_REQREP/tcp`·`PAIR/ws`·`DEALER_DEALER/ws`·`DEALER_ROUTER/ws`·`ROUTER_ROUTER/ws`·`DEALER_ROUTER_REQREP/ws`·`ROUTER_ROUTER_REQREP/ws`·`PAIR/wss`·`PUBSUB/wss`·`DEALER_DEALER/wss`·`DEALER_ROUTER/wss`·`DEALER_ROUTER_REQREP/wss`·`ROUTER_ROUTER/wss`·`ROUTER_ROUTER_REQREP/wss`·`DEALER_ROUTER_REQREP/tls` 완료·통과, `PAIR/tcp`·`PUBSUB/tcp`·`DEALER_DEALER/tcp`·`ROUTER_ROUTER/tcp`·`PUBSUB/ws`·`PAIR/tls`·`PUBSUB/tls`·`DEALER_DEALER/tls`·`DEALER_ROUTER/tls`·`ROUTER_ROUTER/tls` 완료·보류, 나머지 대상 측정 중
+- Single 상태: `DEALER_ROUTER/tcp`·`DEALER_ROUTER_REQREP/tcp`·`ROUTER_ROUTER_REQREP/tcp`·`PAIR/ws`·`DEALER_DEALER/ws`·`DEALER_ROUTER/ws`·`ROUTER_ROUTER/ws`·`DEALER_ROUTER_REQREP/ws`·`ROUTER_ROUTER_REQREP/ws`·`PAIR/wss`·`PUBSUB/wss`·`DEALER_DEALER/wss`·`DEALER_ROUTER/wss`·`DEALER_ROUTER_REQREP/wss`·`ROUTER_ROUTER/wss`·`ROUTER_ROUTER_REQREP/wss`·`DEALER_ROUTER_REQREP/tls`·`ROUTER_ROUTER_REQREP/tls` 완료·통과, `PAIR/tcp`·`PUBSUB/tcp`·`DEALER_DEALER/tcp`·`ROUTER_ROUTER/tcp`·`PUBSUB/ws`·`PAIR/tls`·`PUBSUB/tls`·`DEALER_DEALER/tls`·`DEALER_ROUTER/tls`·`ROUTER_ROUTER/tls` 완료·보류, 나머지 대상 측정 중
 - Multi 상태: `미측정`
 - `미측정` 행은 완료나 다음 언어 전환을 의미하지 않는다. 특히 9.2.2의 `tls` `MULTI_*`
   행은 .NET에서 아직 측정하지 않은 대상이며, C++ 9.1의 같은 이름 행이 완료되어도 .NET
   측정 완료로 간주하지 않는다.
-- 다음 작업: `Single ROUTER_ROUTER_REQREP / tls`를 C → .NET 순서로 한 대상씩 측정한다.
+- 다음 작업: `Single PAIR / inproc`을 C → .NET 순서로 한 대상씩 측정한다.
 
 #### 9.2.1 Single suite
 
@@ -872,7 +872,7 @@ transport 상태를 판정한다.
 | `tls` | `DEALER_ROUTER` | 55.42% | 81.70% | 102.54% | 92.30% | 93.56% | 85.78% | 보류·자체 `SendRoutedMessageUnchecked` AggressiveInlining 후보는 throughput 산술평균 85.22%→85.68%로 +0.46%p였지만 latency 15.893x→21.662x로 악화되어 제거했다. 최종 before throughput 산술평균 85.22%, latency ratio 1.294x/69.377x/21.401x/1.078x/1.056x/1.153x, 산술평균 15.893x. Sol 2차 리뷰는 latency 회귀를 근거로 revert하고 추가 routed builder pool/private direct/inlining 후보를 no-go 판정했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_162440_dotnet-dealer-router-tls-paired-c1.txt`; .NET final before: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_162451_dotnet-dealer-router-tls-paired-before.txt`; 제거한 after: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_162542_dotnet-dealer-router-tls-own-after-inline.txt` |
 | `tls` | `DEALER_ROUTER_REQREP` | 62.78% | 70.33% | 88.88% | 95.77% | 98.00% | 98.23% | 통과·throughput 산술평균 85.67%, 평균 latency ratio 1.065x. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_162838_dotnet-dealer-router-reqrep-tls-paired-c1.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_162850_dotnet-dealer-router-reqrep-tls-paired-before.txt` |
 | `tls` | `ROUTER_ROUTER` | 34.32% | 85.35% | 112.28% | 95.23% | 92.59% | 94.71% | 보류·자체 routed `SendRoutedMessageUnchecked` AggressiveInlining 후보 후 throughput 산술평균 85.75%→82.06%, latency 16.880x→17.306x로 악화되어 제거했다. 최종 before throughput 산술평균 85.75%, latency ratio 1.801x/79.176x/17.225x/1.030x/1.052x/0.995x, 산술평균 16.880x. Sol 2차 리뷰는 JIT 회귀를 확인하고 추가 builder pool/private direct/inlining 후보를 no-go 판정했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_163028_dotnet-router-router-tls-paired-c1.txt`; .NET final before: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_163041_dotnet-router-router-tls-paired-before.txt`; 제거한 after: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_163135_dotnet-router-router-tls-own-after-inline.txt` |
-| `tls` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `ROUTER_ROUTER_REQREP` | 59.89% | 68.65% | 80.26% | 99.05% | 94.44% | 97.04% | 통과·throughput 산술평균 83.223%, 평균 latency ratio 1.090x. .NET socket request/reply aggregate 기준을 충족해 추가 hotpath 변경 없이 통과. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_163419_dotnet-router-router-reqrep-tls-paired-c1.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_163432_dotnet-router-router-reqrep-tls-paired-before.txt` |
 | `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1308,10 +1308,10 @@ transport 상태를 판정한다.
 | 구분 | 상태 | 결과 파일 / 메모 |
 |------|------|------------------|
 | 현재 언어 | .NET |  |
-| 현재 pattern | 완료·보류 | `ROUTER_ROUTER / tls` 최종 throughput 산술평균은 85.75%로 기준을 충족했지만 평균 latency ratio가 16.880x로 미달했다. 자체 routed inlining 후보는 throughput·latency 회귀로 제거했고 다음 대상은 `.NET Single ROUTER_ROUTER_REQREP / tls`다. |
-| paired C | 완료 | C throughput은 2118574/948552/319706/13192/7944/4105 Kmsg/s, 평균 latency는 56.231/0.461/0.636/15.091/25.070/49.120 ms다. report는 `perf_c_single_linux_20260810_163028_dotnet-router-router-tls-paired-c1.txt`다. |
-| binding paired 결과 | 완료·미달 | .NET final before throughput은 727166/809610/358973/12563/7355/3888 Kmsg/s, 평균 latency는 101.286/36.500/10.955/15.539/26.373/48.895 ms다. 제거한 after throughput은 706401/794696/340576/12084/7078/3612 Kmsg/s, 평균 latency는 123.369/39.316/8.349/16.145/27.309/52.566 ms다. |
-| 개선 결과 | 보류·자체 후보 제거 후 Sol no-go | `SendRoutedMessageUnchecked` AggressiveInlining 후 throughput aggregate는 85.75%에서 82.06%, latency aggregate는 16.880x에서 17.306x로 악화되어 attribute를 revert했다. 최종은 before 측정값이며, routed builder pooling/private direct/추가 inlining 후보는 no-go다. |
+| 현재 pattern | 완료·통과 | `ROUTER_ROUTER_REQREP / tls`의 throughput ratio는 59.889%/68.648%/80.263%/99.051%/94.444%/97.042%, 산술평균 83.223%이며 평균 latency ratio는 1.090x다. .NET socket request/reply aggregate 기준을 충족해 통과하고 다음 대상은 `Single PAIR / inproc`이다. |
+| paired C | 완료 | C throughput은 217251/181029/143541/6325/3852/2096 Kops/s, 평균 latency는 0.197/0.246/0.420/1.896/1.556/1.429 ms다. report는 `perf_c_single_linux_20260810_163419_dotnet-router-router-reqrep-tls-paired-c1.txt`다. |
+| binding paired 결과 | 완료·통과 | .NET throughput은 130110/124273/115210/6265/3638/2034 Kops/s, 평균 latency는 0.276/0.294/0.367/1.895/1.634/1.461 ms다. throughput ratio 산술평균은 83.223%, latency ratio 산술평균은 1.090x다. |
+| 개선 결과 | 통과·추가 변경 없음 | 측정값이 .NET socket request/reply aggregate 기준을 충족했다. public interface·ownership·error contract를 변경하지 않고 추가 hotpath 후보 없이 통과 처리한다. |
 
 | request/reply paired C | 완료 | `DEALER_ROUTER_REQREP / tcp` C report median: 212,245.6 / 192,437.8 / 176,009.8 / 17,174.8 / 11,981.0 / 7,339.6 msg/s. C++ 구형 실행은 공식 비교에서 제외했으며, parity 보정 후 C++을 다시 측정했다. |
 | request/reply binding paired 결과 | 완료·미달 | C++ full sweep ratio: 95.10%, 93.51%, 96.72%, 94.99%, 95.76%, 93.89%, 중앙값 95.05%. 1024B·65536B boundary 재검증 ratio: 94.64%, 95.73%. 공식 재계산 중앙값 94.87%, latency ratio 모두 1.057배 이내. |
@@ -1442,7 +1442,7 @@ transport 상태를 판정한다.
 | 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
 |------|------|-------------|------------|-----------|
 | 1 | C++ | 완료·통과 35 / 보류 7 | 완료·통과 25 / 보류 3 | C++ perf는 추가 실행하지 않고 .NET으로 전환 |
-| 2 | .NET | 완료·통과 17 / 보류 10 | 미측정 | 다음 대상은 `Single ROUTER_ROUTER_REQREP / tls`; C → .NET 순서로 한 대상씩 측정 |
+| 2 | .NET | 완료·통과 18 / 보류 10 | 미측정 | 다음 대상은 `Single PAIR / inproc`; C → .NET 순서로 한 대상씩 측정 |
 | 3 | Java | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 5 | Go | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
