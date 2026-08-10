@@ -26,7 +26,7 @@ import java.util.Collections;
 import java.util.List;
 
 final class PerfMultiPubSub {
-    private static final String TOPIC = "perf.topic";
+    private static final String TOPIC = "bench";
     private static final MonitorEventType READY_EVENT =
         MonitorEventType.CONNECTION_READY;
     private static final long STOP_DRAIN_GRACE_NANOS =
@@ -54,19 +54,13 @@ final class PerfMultiPubSub {
                 "server", SocketType.PUB);
             long activeEnd = System.nanoTime() + config.durationSeconds() * 1_000_000_000L;
             Message active = PerfUtil.payloadTemplate(config.size());
-            try {
+            try (PerfSocketPollSet writable = PerfSocketPollSet.fromSockets(
+                    List.of(pub), PollEventFlags.POLLOUT)) {
+                writable.setEvents(0);
                 while (System.nanoTime() < activeEnd) {
                     active = PerfUtil.resetAndWritePayload(active, config.size(),
                         (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
-                    // C parity: perf_multi_pubsub_server.cpp publish_once
-                    // (~78-110) publishes ZLINK_DONTWAIT and, on EAGAIN
-                    // backpressure, simply DROPS the message and continues to
-                    // the next one at full speed (no retry, no POLLOUT wait).
-                    // The prior retry-until-writable model serialized the
-                    // publisher to the slowest of the 100 fan-out tcp
-                    // connections, collapsing MULTI_PUBSUB/tcp ~17x while
-                    // tls/ws/wss buffering hid it.
-                    publishDropOnBackpressure(pub, active);
+                    publishWithBackpressureWait(pub, writable, active);
                 }
             } finally {
                 active.close();
@@ -192,23 +186,25 @@ final class PerfMultiPubSub {
         }
     }
 
-    // C parity: perf_multi_pubsub_server.cpp publish_once. One ZLINK_DONTWAIT
-    // publish attempt; transient backpressure (EAGAIN / NOT_CONNECTED) drops
-    // the message and returns so the caller advances to the next one. No
-    // retry, no POLLOUT wait.
-    private static void publishDropOnBackpressure(PubSocket pub,
-                                                  Message message) {
-        try (Message outbound = Message.from(message)) {
-            pub.publish(TOPIC)
-                .message(outbound)
-                .flags(SendFlags.DONT_WAIT)
-                .submit();
-        } catch (ZlinkSubmitException ex) {
-            if (!isTransientSubmit(ex)) {
-                throw ex;
+    private static void publishWithBackpressureWait(PubSocket pub,
+                                                    PerfSocketPollSet writable,
+                                                    Message message) {
+        while (true) {
+            try (Message outbound = Message.from(message)) {
+                if (pub.publish(TOPIC)
+                        .message(outbound)
+                        .flags(SendFlags.DONT_WAIT)
+                        .submit()) {
+                    return;
+                }
+            } catch (ZlinkSubmitException ex) {
+                if (!isTransientSubmit(ex)) {
+                    throw ex;
+                }
             }
-            // Dropped under backpressure (C: ++publish_blocked_count;
-            // return true) — continue to the next message.
+            writable.setEvents(0, PollEventFlags.POLLOUT);
+            writable.poll(-1);
+            writable.setEvents(0);
         }
     }
 
