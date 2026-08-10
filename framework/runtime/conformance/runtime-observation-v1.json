@@ -1,0 +1,68 @@
+{
+  "fixture": "zlink.framework.runtime-observation",
+  "version": 1,
+  "limits": {
+    "defaultTerminalCapacity": 64,
+    "signedLossCounterMaximum": "9223372036854775807"
+  },
+  "retentionInvariants": {
+    "intermediateRetention": "latestPerSource",
+    "terminalRetention": "fifo",
+    "terminalOverflow": "discardOldest",
+    "terminalOverflowClosesSubscriber": false,
+    "terminalReplacesSameSourceIntermediate": true,
+    "differentSourceIntermediateIsPreserved": true,
+    "sourceKeyRemoval": "afterTerminalDeliveredOrDiscarded",
+    "producerInvokesSubscriber": false,
+    "dispatcherOwnership": "processShared"
+  },
+  "lossInvariants": {
+    "coalescedIntermediateCounter": "perSubscriberSigned64Saturating",
+    "discardedTerminalCounter": "perSubscriberSigned64Saturating",
+    "newSubscriberStartsAtZero": true,
+    "countersAreIndependent": true
+  },
+  "scenarios": [
+    {
+      "name": "multi-source-retention-and-terminal-overflow",
+      "terminalCapacity": 2,
+      "operations": [
+        { "kind": "intermediate", "source": "A", "sequence": 1, "value": "A1" },
+        { "kind": "intermediate", "source": "B", "sequence": 1, "value": "B1" },
+        { "kind": "intermediate", "source": "A", "sequence": 2, "value": "A2" },
+        { "kind": "terminal", "source": "A", "sequence": 3, "value": "A3" },
+        { "kind": "intermediate", "source": "B", "sequence": 2, "value": "B2" },
+        { "kind": "terminal", "source": "C", "sequence": 1, "value": "C1" },
+        { "kind": "terminal", "source": "D", "sequence": 1, "value": "D1" }
+      ],
+      "expectedRetainedIntermediateBySource": {
+        "B": { "sequence": 2, "value": "B2" }
+      },
+      "expectedTerminalFifo": [
+        { "source": "C", "sequence": 1, "value": "C1" },
+        { "source": "D", "sequence": 1, "value": "D1" }
+      ],
+      "expectedLoss": {
+        "coalescedIntermediateCount": "3",
+        "discardedTerminalCount": "1"
+      },
+      "expectedRemovedSourceKeys": ["A"],
+      "expectedRetainedSourceKeys": ["B", "C", "D"]
+    },
+    {
+      "name": "loss-counters-saturate-independently",
+      "initialLoss": {
+        "coalescedIntermediateCount": "9223372036854775806",
+        "discardedTerminalCount": "9223372036854775806"
+      },
+      "increments": {
+        "coalescedIntermediateCount": 2,
+        "discardedTerminalCount": 2
+      },
+      "expectedLoss": {
+        "coalescedIntermediateCount": "9223372036854775807",
+        "discardedTerminalCount": "9223372036854775807"
+      }
+    }
+  ]
+}
