@@ -1320,7 +1320,7 @@ transport 상태를 판정한다.
 | 구분 | 상태 | 결과 파일 / 메모 |
 |------|------|------------------|
 | 현재 언어 | .NET |  |
-| 현재 pattern | 완료·통과 | `MULTI_ROUTER_ROUTER_REQREP / wss`의 C semantic pattern과 .NET runner `MULTI_ROUTER_ROUTER_REQREP`를 같은 socket request/reply 의미로 paired 측정했다. C와 .NET은 clients 100, duration 1s, runs 1, 64/256/1024/4096/65536/131072B, connect concurrency 128, connect-ready timeout 10000ms, monitor HWM 4096000, auto-HWM balanced 조건이다. .NET baseline throughput 산술평균 76.160%/latency 1.230x에서 `RouterRequestOperation` private `AddMessage`/`EnsureReady`/`EnsureNotSubmitted` inlining 후 81.028%/1.177x로 개선됐다. Sol review는 변경 유지를 GO하고 추가 builder/callback/native submit 경계 후보를 no-go로 판정했다. 다음 대상은 `MULTI_PUBSUB / wss`다. |
+| 현재 pattern | 완료·보류 | `MULTI_PUBSUB / wss`를 C semantic pattern과 .NET runner의 같은 one-way publish 의미로 paired 측정했다. C 64·256·1024·4096·65536B는 full sweep에서 완료했고, 131072B는 sweep 프로세스 종료 후 같은 옵션으로 별도 재측정해 완료했다. .NET baseline throughput 산술평균은 83.823%/latency 1.237x다. 자체 `PublisherSendOperation` validation inlining은 throughput 72.220%로 악화되어 원복했고, Sol review에서 남은 topic cache·Message pool·builder/submit 경계 후보를 no-go로 판정했다. 다음 대상은 `MULTI_DEALER_DEALER / tls`다. |
 | paired C | 완료 | C throughput은 296575/296562/275822/30296 Kops/s, 평균 latency는 23.562/23.553/25.284/216.987 ms다. report는 `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_202308_dotnet-multi-stream-tcp-paired-c-7000.txt`다. |
 | binding paired 결과 | 완료·보류 | .NET baseline throughput은 203676/235307/204704/23541 Kops/s, 평균 latency는 34.595/29.733/34.364/305.146 ms다. Message.Allocate 직접 작성 after는 195329/207115/204690/28915 Kops/s, Sol lazy pending after는 194507/222908/201877/30446 Kops/s다. 최종 throughput ratio는 65.584%/75.164%/73.191%/100.495%, 산술평균 78.609%이며 평균 latency ratio는 1.328x다. |
 | 개선 결과 | 보류·두 차례 개선 검토 완료 | `BuildStreamPacket`의 managed byte[] 이중 복사를 제거하고, 정상 전송에서 `PendingStreamMessage` 생성을 지연했다. 두 후보 모두 public contract·ownership·error semantics를 유지했다. Sol 2차 후보 적용 후에도 최소 기준 85%에 미달하고 추가 효과 후보가 없어 보류한다. build `0 warning / 0 error`, contract test `149 passed / 0 failed / 0 skipped`다. |
@@ -1374,6 +1374,10 @@ transport 상태를 판정한다.
 | Multi socket request/reply paired C (`MULTI_ROUTER_ROUTER_REQREP/wss`) | 완료 | C throughput은 82119 / 66736 / 83959 / 66375 / 11297 / 6967 Kops/s, 평균 latency는 0.478 / 0.576 / 0.470 / 0.617 / 4.190 / 6.964 ms다. clients 100, duration 1s, runs 1, 64/256/1024/4096/65536/131072B, connect concurrency 128, connect-ready timeout 10000ms, monitor HWM 4096000, auto-HWM balanced 조건이며 report는 `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_230625_dotnet-router-router-reqrep-wss-paired-c-100.txt`다. |
 | Multi socket request/reply binding 결과 (`MULTI_ROUTER_ROUTER_REQREP/wss`) | 완료·통과 | .NET baseline throughput은 51374 / 55216 / 44441 / 47554 / 11823 / 5743 Kops/s, 평균 latency는 0.711 / 0.632 / 0.627 / 0.798 / 4.026 / 8.415 ms다. C 대비 throughput ratio는 62.560% / 82.738% / 52.932% / 71.644% / 104.656% / 82.432%, 산술평균 76.160%, 평균 latency ratio는 1.230x다. report는 `/home/hep7hep7/project/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_230645_dotnet-router-router-reqrep-wss-paired-baseline-100.txt`다. |
 | Multi socket request/reply 개선 결과 (`MULTI_ROUTER_ROUTER_REQREP/wss`) | 통과·자체 및 Sol 개선 검토 완료 | `RouterRequestOperation` private `AddMessage`/`EnsureReady`/`EnsureNotSubmitted`에 AggressiveInlining을 적용했다. own throughput은 57803 / 55918 / 56454 / 47068 / 11961 / 6128 Kops/s, C 대비 70.389% / 83.790% / 67.240% / 70.912% / 105.878% / 87.958%, 산술평균 81.028%, 평균 latency ratio 1.177x다. baseline 76.160%/1.230x 대비 개선됐고 Sol review는 변경 유지를 GO했다. 추가 builder/callback/native submit 경계 후보는 no-go다. public contract·builder state·Message ownership·exception/error semantics는 변경하지 않았다. build `0 warning / 0 error`, contract test `149 passed / 0 failed / 0 skipped`다. 다음 대상은 `MULTI_PUBSUB / wss`다. |
+
+| Multi one-way paired C (`MULTI_PUBSUB/wss`) | 완료 | C throughput은 1120257 / 1362746 / 869358 / 227519 / 22509 / 13514 Kmsg/s, 평균 latency는 406.557 / 373.086 / 215.317 / 139.114 / 136.275 / 198.317 ms다. clients 100, duration 1s, runs 1, 64/256/1024/4096/65536/131072B, connect concurrency 128, connect-ready timeout 10000ms, monitor HWM 4096000, auto-HWM balanced 조건이다. 64·256·1024·4096·65536B report는 `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_231111_dotnet-pubsub-wss-paired-c-100.txt`, 131072B 별도 재측정 report는 `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_231146_dotnet-pubsub-wss-paired-c-131072-retry-100.txt`다. |
+| Multi one-way binding 결과 (`MULTI_PUBSUB/wss`) | 완료·보류 | .NET baseline throughput은 687083 / 796389 / 522902 / 247372 / 26889 / 12816 Kmsg/s, 평균 latency는 472.199 / 474.273 / 280.965 / 193.136 / 178.720 / 195.703 ms다. C 대비 throughput ratio는 61.333% / 58.440% / 60.148% / 108.726% / 119.459% / 94.835%, 산술평균 83.823%, 평균 latency ratio는 1.237x다. report는 `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_231157_dotnet-pubsub-wss-paired-baseline-100.txt`다. |
+| Multi one-way 개선 결과 (`MULTI_PUBSUB/wss`) | 보류·자체 및 Sol 개선 검토 완료 | `PublisherSendOperation`의 private `EnsureReady`/`EnsureNotSubmitted` AggressiveInlining own throughput은 675719 / 847922 / 584235 / 210325 / 17722 / 9784 Kmsg/s, C 대비 60.318% / 62.222% / 67.203% / 92.443% / 78.733% / 72.399%, 산술평균 72.220%, 평균 latency ratio 1.181x다. baseline 83.823% 대비 throughput이 악화되어 후보는 원복했다. Sol review는 topic cache·기존 Message pool 유지와 builder allocation 제거·submit 경계 후보 no-go를 확인했다. 추가 contract-safe 후보가 없어 throughput aggregate 목표 85% 미달 상태를 `보류`한다. public contract·ownership·error semantics는 변경하지 않았고 build `0 warning / 0 error`, contract test `149 passed / 0 failed / 0 skipped`다. |
 
 | request/reply paired C | 완료 | `DEALER_ROUTER_REQREP / tcp` C report median: 212,245.6 / 192,437.8 / 176,009.8 / 17,174.8 / 11,981.0 / 7,339.6 msg/s. C++ 구형 실행은 공식 비교에서 제외했으며, parity 보정 후 C++을 다시 측정했다. |
 | request/reply binding paired 결과 | 완료·미달 | C++ full sweep ratio: 95.10%, 93.51%, 96.72%, 94.99%, 95.76%, 93.89%, 중앙값 95.05%. 1024B·65536B boundary 재검증 ratio: 94.64%, 95.73%. 공식 재계산 중앙값 94.87%, latency ratio 모두 1.057배 이내. |
@@ -1504,7 +1508,7 @@ transport 상태를 판정한다.
 | 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
 |------|------|-------------|------------|-----------|
 | 1 | C++ | 완료·통과 35 / 보류 7 | 완료·통과 25 / 보류 3 | C++ perf는 추가 실행하지 않고 .NET으로 전환 |
-| 2 | .NET | 완료·통과 26 / 보류 16 | 완료·통과 17 / 보류 6, 나머지 미측정 | 다음 대상은 아직 미측정인 `MULTI_PUBSUB / wss`; C → .NET 순서로 한 대상씩 측정 |
+| 2 | .NET | 완료·통과 26 / 보류 16 | 완료·통과 17 / 보류 7, 나머지 미측정 | 다음 대상은 아직 미측정인 `MULTI_DEALER_DEALER / tls`; C → .NET 순서로 한 대상씩 측정 |
 | 3 | Java | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 5 | Go | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
@@ -1670,6 +1674,8 @@ transport 상태를 판정한다.
 | 2026-08-10 | .NET | Multi / MULTI_ROUTER_ROUTER_SENDSEND (runner `MULTI_ROUTER_ROUTER`) / wss / 64·256·1024·4096·65536·131072B | `dotnet-router-router-sendsend-wss-paired-baseline-100` | 81.580%, 91.618%, 82.252%, 86.304%, 110.096%, 91.849% | 90.617% (산술평균) | 통과·own `RouterRequestOperation` private helper inlining은 90.584%/1.076x로 baseline 90.617%/1.078x 대비 throughput이 낮아 원복·Sol 추가 후보 no-go·public contract 변경 없음 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_230056_dotnet-router-router-sendsend-wss-paired-c-100.txt`; .NET baseline: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_230117_dotnet-router-router-sendsend-wss-paired-baseline-100.txt`; own rejected: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_230235_dotnet-router-router-sendsend-wss-own-router-operation-inline-100.txt` |
 | 2026-08-10 | .NET | Multi / MULTI_ROUTER_ROUTER_REQREP (runner `MULTI_ROUTER_ROUTER_REQREP`) / wss / 64·256·1024·4096·65536·131072B | `dotnet-router-router-reqrep-wss-own-router-operation-inline-100` | 70.389%, 83.790%, 67.240%, 70.912%, 105.878%, 87.958% | 81.028% (산술평균) | 통과·baseline 76.160%/1.230x에서 `RouterRequestOperation` private helper inlining 후 81.028%/1.177x로 개선·Sol GO·추가 builder/callback/native submit 경계 후보 no-go·public contract 변경 없음 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_230625_dotnet-router-router-reqrep-wss-paired-c-100.txt`; .NET baseline: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_230645_dotnet-router-router-reqrep-wss-paired-baseline-100.txt`; own: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_230807_dotnet-router-router-reqrep-wss-own-router-operation-inline-100.txt` |
 
+| 2026-08-10 | .NET | Multi / MULTI_PUBSUB / wss / 64·256·1024·4096·65536·131072B | `dotnet-multi-pubsub-wss-paired-baseline-100` | 61.333%, 58.440%, 60.148%, 108.726%, 119.459%, 94.835% | 83.823% (산술평균) | 보류·baseline 평균 latency ratio 1.237x. 자체 PublisherSendOperation validation inlining 72.220%/1.181x는 throughput 악화로 원복·Sol 추가 후보 no-go·public contract 변경 없음 | C full sweep: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_231111_dotnet-pubsub-wss-paired-c-100.txt`; C 131072B retry: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_231146_dotnet-pubsub-wss-paired-c-131072-retry-100.txt`; .NET baseline: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_231157_dotnet-pubsub-wss-paired-baseline-100.txt`; own rejected: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_231301_dotnet-pubsub-wss-own-publisher-validation-inline-100.txt` |
+
 ### 11.1 이전 측정값 판정 이력
 
 아래 표는 이전 기준으로 남아 있는 분류의 이력이다. `runs=1` 또는 `runs>1`의 대표값과
@@ -1739,13 +1745,15 @@ Single은 35개 행이 `통과`, 다음 7개 `inproc` 행이 `보류`다. 각 �
 | `ROUTER_ROUTER / inproc` | 67.75% | 보류 |
 | `ROUTER_ROUTER_REQREP / inproc` | 78.46% | 보류 |
 
-Multi의 throughput ratio 산술평균은 대부분 선택된 행에서 해당 pattern 목표를 충족한다.
-`MULTI_PUBSUB / tcp`는 lifecycle parity와 PollOut 개선 후에도 throughput 평균이 82.930%로
-.NET simple one-way 목표 85%에 미달해 `보류`한다. 또한 `MULTI_PUBSUB`의 평균 latency ratio는
-`ws 6.576x`, `wss 2.076x`, `tls 2.017x`로 2.0x를 넘어 해당 세 행은 `보류`한다. 그 외
-Multi 행은 throughput과 평균 latency aggregate를 통과한다. `MULTI_DEALER_ROUTER_REQREP / wss`의
-throughput 평균은 85.02%로 중앙값 85% 목표를 충족하므로 이전의 중앙값 82.02% 기반 보류 표기를
-`통과`로 정정한다.
+Multi의 throughput ratio 산술평균은 선택된 행의 pattern 목표에 따라 판정한다.
+`.NET MULTI_PUBSUB / tcp`는 lifecycle parity와 PollOut 개선 후에도 throughput 평균이 82.930%로
+simple one-way aggregate 목표 85%에 미달해 `보류`한다. 현재 paired 측정에서
+`.NET MULTI_PUBSUB / ws`와 `wss`의 평균 latency ratio는 각각 1.200x와 1.237x이며, wss
+throughput 평균은 83.823%다. 따라서 ws는 `통과`, wss는 throughput 미달로 `보류`한다.
+이전 실행의 latency outlier 표기는 현재 paired 측정의 최종 판정을 덮어쓰지 않는다. 그 외
+Multi 행은 throughput과 평균 latency aggregate를 측정값으로 판정한다. `MULTI_DEALER_ROUTER_REQREP / wss`의
+현재 throughput 평균은 75.578%이지만 개별 socket request/reply 최소 기준과 latency 조건을 충족해
+기존 중앙값 기반 문구와 별도로 기록하며, 추가 개선 결과와 최종 상태는 각 최신 결과 행을 따른다.
 
 ## 12. 완료 기준
 
