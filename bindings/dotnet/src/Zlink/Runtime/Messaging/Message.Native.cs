@@ -72,7 +72,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Message AllocateCoreValidated(int size)
     {
-        var message = RentFromPool();
+        var message = new Message(false);
         message.InitSizeOnInvalidMessage(size);
         return message;
     }
