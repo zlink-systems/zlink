@@ -146,7 +146,7 @@ message_t::~message_t ()
     close_noexcept ();
 }
 
-message_t::message_t (const message_t &other_) : _storage (), _valid (false)
+message_t::message_t (const message_t &other_) : _valid (false)
 {
     if (!other_._valid)
         return;
