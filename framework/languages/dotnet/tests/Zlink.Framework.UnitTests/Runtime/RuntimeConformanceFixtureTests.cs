@@ -1,0 +1,522 @@
+using System.Collections.Concurrent;
+using System.Reflection;
+using System.Text.Json;
+
+namespace Zlink.Framework.UnitTests;
+
+public sealed class RuntimeConformanceFixtureTests
+{
+    [ThreadStatic]
+    private static bool _insideAdmissionCall;
+
+    [Fact]
+    public void Serial_execution_limits_match_the_shared_fixture()
+    {
+        using var document = Load("serial-execution-v1.json");
+        var limits = document.RootElement.GetProperty("limits");
+
+        Assert.Equal(
+            ZLinkSerialExecutionQueue.DefaultApplicationCapacity,
+            limits.GetProperty("application").GetProperty("messageCapacity").GetInt32());
+        Assert.Equal(
+            ZLinkSerialExecutionQueue.DefaultApplicationByteCapacity,
+            limits.GetProperty("application").GetProperty("byteCapacity").GetInt64());
+        Assert.Equal(
+            ZLinkSerialExecutionQueue.DefaultLifecycleCapacity,
+            limits.GetProperty("lifecycle").GetProperty("messageCapacity").GetInt32());
+        Assert.Equal(
+            ZLinkSerialExecutionQueue.DefaultLifecycleByteCapacity,
+            limits.GetProperty("lifecycle").GetProperty("byteCapacity").GetInt64());
+        Assert.Equal(
+            ZLinkSerialExecutionQueue.OwnerTimeSliceMilliseconds,
+            limits.GetProperty("ownerTimeBudgetMilliseconds").GetInt32());
+        Assert.Equal(
+            ZLinkSerialExecutionQueue.LifecycleTurnLimit,
+            limits.GetProperty("lifecycleBurstLimit").GetInt32());
+        Assert.Equal(
+            ZLinkSerialExecutionQueue.WorkItemFixedCostBytes,
+            limits.GetProperty("fixedWorkByteCost").GetInt64());
+    }
+
+    [Fact]
+    public async Task Serial_count_admission_is_independent_per_physical_lane()
+    {
+        using var document = Load("serial-execution-v1.json");
+        var scenarios = document.RootElement.GetProperty("accountingScenarios");
+        var applicationCount = Scenario(scenarios, "application-count-boundary")
+            .GetProperty("acceptedWorkCount").GetInt32();
+        var lifecycleCount = Scenario(scenarios, "lifecycle-count-boundary")
+            .GetProperty("acceptedWorkCount").GetInt32();
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        await using var queue = CreateQueue(errorSink);
+        var firstStarted = Signal();
+        var releaseFirst = Signal();
+
+        Assert.Equal(
+            ZLinkSerialPostAdmission.Accepted,
+            queue.TryPostApplicationWithAdmission(
+                async _ =>
+                {
+                    firstStarted.TrySetResult();
+                    await releaseFirst.Task.ConfigureAwait(false);
+                },
+                out _));
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        for (var index = 1; index < applicationCount; index++)
+            Assert.Equal(
+                ZLinkSerialPostAdmission.Accepted,
+                queue.TryPostApplicationWithAdmission(
+                    static _ => ValueTask.CompletedTask,
+                    out _));
+        Assert.Equal(applicationCount, queue.ApplicationPendingCount);
+        Assert.Equal(
+            ZLinkSerialPostAdmission.QueueFull,
+            queue.TryPostApplicationWithAdmission(
+                static _ => ValueTask.CompletedTask,
+                out _));
+
+        ZLinkSerialWorkItem? lastLifecycle = null;
+        for (var index = 0; index < lifecycleCount; index++)
+        {
+            Assert.Equal(
+                ZLinkSerialPostAdmission.Accepted,
+                queue.TryPostNextWithAdmission(
+                    static _ => ValueTask.CompletedTask,
+                    out var accepted));
+            lastLifecycle = accepted;
+        }
+        Assert.Equal(lifecycleCount, queue.LifecyclePendingCount);
+        Assert.Equal(
+            ZLinkSerialPostAdmission.QueueFull,
+            queue.TryPostNextWithAdmission(
+                static _ => ValueTask.CompletedTask,
+                out _));
+
+        releaseFirst.TrySetResult();
+        await queue.ApplicationDrained.WaitAsync(TimeSpan.FromSeconds(10));
+        await lastLifecycle!.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    public async Task Serial_byte_admission_counts_fixed_and_retained_bytes_per_lane()
+    {
+        using var document = Load("serial-execution-v1.json");
+        var scenarios = document.RootElement.GetProperty("accountingScenarios");
+        var applicationBytes = Scenario(scenarios, "application-byte-boundary")
+            .GetProperty("retainedPayloadBytesPerWork").GetInt64();
+        var lifecycleBytes = Scenario(scenarios, "lifecycle-byte-boundary")
+            .GetProperty("retainedPayloadBytesPerWork").GetInt64();
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        await using var queue = CreateQueue(errorSink);
+        var release = Signal();
+
+        Assert.Equal(
+            ZLinkSerialPostAdmission.Accepted,
+            queue.TryPostApplicationWithAdmission(
+                applicationBytes,
+                async _ => await release.Task.ConfigureAwait(false),
+                out var application));
+        Assert.Equal(applicationBytes, queue.ApplicationPendingRetainedBytes);
+        Assert.Equal(
+            ZLinkSerialPostAdmission.QueueFull,
+            queue.TryPostApplicationWithAdmission(
+                static _ => ValueTask.CompletedTask,
+                out _));
+
+        Assert.Equal(
+            ZLinkSerialPostAdmission.Accepted,
+            queue.TryPostNextWithAdmission(
+                lifecycleBytes,
+                static _ => ValueTask.CompletedTask,
+                out var lifecycle));
+        Assert.Equal(lifecycleBytes, queue.LifecyclePendingRetainedBytes);
+        Assert.Equal(
+            ZLinkSerialPostAdmission.QueueFull,
+            queue.TryPostNextWithAdmission(
+                static _ => ValueTask.CompletedTask,
+                out _));
+
+        release.TrySetResult();
+        await Task.WhenAll(application.Completion, lifecycle.Completion)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task Rejected_or_failed_preparation_does_not_advance_admission_authority()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errorSink, CancellationToken.None),
+            errorSink,
+            CancellationToken.None,
+            capacity: 1);
+        var release = Signal();
+
+        Assert.Equal(
+            ZLinkAcceptedWorkAdmission.Accepted,
+            queue.TryPostAccepted(
+                ReadOnlyMemory<byte>.Empty,
+                async _ => await release.Task.ConfigureAwait(false),
+                static () => { },
+                out var first));
+        Assert.Equal(1UL, first.AcceptedSequence);
+        Assert.Equal(
+            ZLinkAcceptedWorkAdmission.QueueFull,
+            queue.TryPostAccepted(
+                ReadOnlyMemory<byte>.Empty,
+                static _ => ValueTask.CompletedTask,
+                static () => { },
+                out _));
+        Assert.Throws<OverflowException>(() =>
+            queue.TryPostApplicationWithAdmission(
+                long.MaxValue,
+                static _ => ValueTask.CompletedTask,
+                out _));
+        Assert.Equal(1, queue.ApplicationPendingCount);
+
+        release.TrySetResult();
+        await first.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        await queue.ApplicationDrained.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(
+            ZLinkAcceptedWorkAdmission.Accepted,
+            queue.TryPostAccepted(
+                ReadOnlyMemory<byte>.Empty,
+                static _ => ValueTask.CompletedTask,
+                static () => { },
+                out var second));
+        Assert.Equal(2UL, second.AcceptedSequence);
+        await second.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task Failed_fifo_append_does_not_reserve_or_advance_sequence()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        await using var queue = CreateQueue(errorSink);
+        var applicationQueue = Assert.IsType<Queue<ZLinkSerialWorkItem>>(
+            RequireField(
+                    typeof(ZLinkSerialExecutionQueue),
+                    "_applicationQueue")
+                .GetValue(queue));
+        applicationQueue.EnsureCapacity(4);
+        var tail = RequireField(
+            typeof(Queue<ZLinkSerialWorkItem>),
+            "_tail");
+        var array = RequireField(
+            typeof(Queue<ZLinkSerialWorkItem>),
+            "_array");
+        var originalTail = Assert.IsType<int>(tail.GetValue(applicationQueue));
+        var storage = Assert.IsType<ZLinkSerialWorkItem[]>(
+            array.GetValue(applicationQueue));
+
+        Exception? appendFailure;
+        try
+        {
+            // The invalid tail makes Queue<T>.Enqueue fail at its append step,
+            // after the serial aggregate has completed admission validation.
+            tail.SetValue(applicationQueue, storage.Length);
+            appendFailure = Record.Exception(() =>
+                queue.TryPostAccepted(
+                    ReadOnlyMemory<byte>.Empty,
+                    static _ => ValueTask.CompletedTask,
+                    static () => { },
+                    out _));
+        }
+        finally
+        {
+            tail.SetValue(applicationQueue, originalTail);
+        }
+
+        Assert.NotNull(appendFailure);
+        Assert.Equal(0, queue.ApplicationPendingCount);
+        Assert.Equal(0L, queue.ApplicationPendingRetainedBytes);
+        Assert.Equal(
+            ZLinkAcceptedWorkAdmission.Accepted,
+            queue.TryPostAccepted(
+                ReadOnlyMemory<byte>.Empty,
+                static _ => ValueTask.CompletedTask,
+                static () => { },
+                out var accepted));
+        Assert.Equal(1UL, accepted.AcceptedSequence);
+        await accepted.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task Lifecycle_debt_selection_matches_the_shared_fixture()
+    {
+        using var document = Load("serial-execution-v1.json");
+        var scenario = document.RootElement.GetProperty("arbitrationScenarios")[0];
+        var expected = scenario.GetProperty("expectedSelection")
+            .EnumerateArray().Select(static item => item.GetString()!).ToArray();
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        await using var queue = CreateQueue(errorSink);
+        var blockerStarted = Signal();
+        var releaseBlocker = Signal();
+        var selected = new ConcurrentQueue<string>();
+
+        Assert.True(queue.TryPost(
+            async _ =>
+            {
+                blockerStarted.TrySetResult();
+                await releaseBlocker.Task.ConfigureAwait(false);
+            },
+            out _));
+        await blockerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var completions = new List<Task>();
+        foreach (var name in scenario.GetProperty("lifecycleInput")
+                     .EnumerateArray().Select(static item => item.GetString()!))
+        {
+            Assert.True(queue.TryPostNext(
+                _ =>
+                {
+                    selected.Enqueue(name);
+                    return ValueTask.CompletedTask;
+                },
+                out var item));
+            completions.Add(item.Completion);
+        }
+        foreach (var name in scenario.GetProperty("applicationInput")
+                     .EnumerateArray().Select(static item => item.GetString()!))
+        {
+            Assert.True(queue.TryPostApplication(
+                _ =>
+                {
+                    selected.Enqueue(name);
+                    return ValueTask.CompletedTask;
+                },
+                out var item));
+            completions.Add(item.Completion);
+        }
+
+        releaseBlocker.TrySetResult();
+        await Task.WhenAll(completions).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(expected, selected.ToArray());
+    }
+
+    [Fact]
+    public async Task Rejected_task_runner_uses_shared_dispatch_without_inline_execution()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        var runner = new ZLinkRuntimeTaskRunner(errorSink, CancellationToken.None);
+        await runner.StopAsync();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            runner,
+            errorSink,
+            CancellationToken.None);
+        var completed = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        _insideAdmissionCall = true;
+        Assert.True(queue.TryPost(
+            _ =>
+            {
+                completed.TrySetResult(_insideAdmissionCall);
+                return ValueTask.CompletedTask;
+            },
+            out _));
+        _insideAdmissionCall = false;
+
+        Assert.False(await completed.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
+    public void Same_owner_call_results_match_the_shared_fixture()
+    {
+        using var document = Load("serial-execution-v1.json");
+        using var scope = ZLinkApplicationExecutionContext.Push(
+            new ZLinkApplicationExecutionScope(
+                "spot-A",
+                ZLinkUserSpotExecutionMode.SpotWide,
+                "actor-A",
+                YieldAllowed: true,
+                IsMemberActor: static candidate => candidate == "actor-B"));
+
+        foreach (var scenario in document.RootElement
+                     .GetProperty("sameOwnerCalls").EnumerateArray())
+        {
+            var target = scenario.GetProperty("target").GetString()!;
+            Assert.Equal(
+                scenario.GetProperty("async").GetString(),
+                ObserveNestedResult(target, ZLinkNestedRequestTerminator.Async));
+            Assert.Equal(
+                scenario.GetProperty("yield").GetString(),
+                ObserveNestedResult(target, ZLinkNestedRequestTerminator.Yield));
+        }
+    }
+
+    [Fact]
+    public async Task Runtime_observation_retention_and_loss_match_the_shared_fixture()
+    {
+        using var document = Load("runtime-observation-v1.json");
+        var root = document.RootElement;
+        var limits = root.GetProperty("limits");
+        Assert.Equal(
+            ZLinkObservationQueue<FixtureStatus>.DefaultTerminalCapacity,
+            limits.GetProperty("defaultTerminalCapacity").GetInt32());
+        Assert.Equal(
+            ulong.Parse(limits.GetProperty("signedLossCounterMaximum").GetString()!),
+            ZLinkObservationQueue<FixtureStatus>.IncrementLossCounter(ulong.MaxValue));
+
+        var scenario = root.GetProperty("scenarios")[0];
+        var queue = new ZLinkObservationQueue<FixtureStatus>(
+            static status => status.Source,
+            scenario.GetProperty("terminalCapacity").GetInt32());
+        foreach (var operation in scenario.GetProperty("operations").EnumerateArray())
+        {
+            queue.Publish(
+                new FixtureStatus(
+                    operation.GetProperty("source").GetString()!,
+                    operation.GetProperty("sequence").GetUInt64(),
+                    operation.GetProperty("value").GetString()!),
+                operation.GetProperty("kind").GetString() == "terminal");
+        }
+        queue.Complete();
+
+        var observed = new List<ZLinkObservedStatus<FixtureStatus>>();
+        await foreach (var status in queue.ReadAllAsync())
+            observed.Add(status);
+
+        var expectedIntermediate = scenario
+            .GetProperty("expectedRetainedIntermediateBySource")
+            .EnumerateObject()
+            .ToDictionary(
+                static item => item.Name,
+                static item => item.Value.GetProperty("value").GetString()!,
+                StringComparer.Ordinal);
+        var expectedTerminal = scenario.GetProperty("expectedTerminalFifo")
+            .EnumerateArray().Select(static item => item.GetProperty("value").GetString()!)
+            .ToArray();
+        Assert.Equal(
+            expectedIntermediate,
+            observed
+                .Where(item => expectedIntermediate.ContainsKey(item.Status.Source))
+                .ToDictionary(
+                    static item => item.Status.Source,
+                    static item => item.Status.Value,
+                    StringComparer.Ordinal));
+        Assert.Equal(
+            expectedTerminal,
+            observed
+                .Where(item => !expectedIntermediate.ContainsKey(item.Status.Source))
+                .Select(static item => item.Status.Value)
+                .ToArray());
+        Assert.Equal(
+            scenario.GetProperty("expectedRetainedSourceKeys")
+                .EnumerateArray().Select(static item => item.GetString()!)
+                .Order(StringComparer.Ordinal),
+            observed.Select(static item => item.Status.Source)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal));
+        foreach (var removed in scenario.GetProperty("expectedRemovedSourceKeys")
+                     .EnumerateArray().Select(static item => item.GetString()!))
+            Assert.DoesNotContain(observed, item => item.Status.Source == removed);
+
+        var expectedLoss = scenario.GetProperty("expectedLoss");
+        Assert.All(observed, item =>
+        {
+            Assert.Equal(
+                ulong.Parse(expectedLoss.GetProperty("coalescedIntermediateCount").GetString()!),
+                item.Loss.CoalescedCount);
+            Assert.Equal(
+                ulong.Parse(expectedLoss.GetProperty("discardedTerminalCount").GetString()!),
+                item.Loss.DiscardedTerminalCount);
+        });
+    }
+
+    [Fact]
+    public void Runtime_observation_loss_counters_saturate_independently()
+    {
+        using var document = Load("runtime-observation-v1.json");
+        var scenario = document.RootElement.GetProperty("scenarios")[1];
+        var initial = scenario.GetProperty("initialLoss");
+        var increments = scenario.GetProperty("increments");
+        var expected = scenario.GetProperty("expectedLoss");
+        var coalesced = ulong.Parse(
+            initial.GetProperty("coalescedIntermediateCount").GetString()!);
+        var discarded = ulong.Parse(
+            initial.GetProperty("discardedTerminalCount").GetString()!);
+
+        for (var index = 0;
+             index < increments.GetProperty("coalescedIntermediateCount").GetInt32();
+             index++)
+            coalesced = ZLinkObservationQueue<FixtureStatus>
+                .IncrementLossCounter(coalesced);
+        for (var index = 0;
+             index < increments.GetProperty("discardedTerminalCount").GetInt32();
+             index++)
+            discarded = ZLinkObservationQueue<FixtureStatus>
+                .IncrementLossCounter(discarded);
+
+        Assert.Equal(
+            ulong.Parse(expected.GetProperty("coalescedIntermediateCount").GetString()!),
+            coalesced);
+        Assert.Equal(
+            ulong.Parse(expected.GetProperty("discardedTerminalCount").GetString()!),
+            discarded);
+    }
+
+    private static string ObserveNestedResult(
+        string target,
+        ZLinkNestedRequestTerminator terminator)
+    {
+        var failure = Record.Exception(() =>
+        {
+            if (target == "sameSpot")
+                ZLinkApplicationExecutionContext.ValidateSpotRequest(
+                    "spot-A",
+                    terminator);
+            else
+                ZLinkApplicationExecutionContext.ValidateActorRequest(
+                    target switch
+                    {
+                        "selfActor" => "actor-A",
+                        "differentMemberActorOnSameSpot" => "actor-B",
+                        _ => "actor-C"
+                    },
+                    terminator);
+        });
+        if (failure is ZLinkFrameworkException
+            { Kind: ZLinkFrameworkErrorKind.InvalidOperation })
+            return "invalidOperation";
+        Assert.Null(failure);
+        return terminator == ZLinkNestedRequestTerminator.Yield
+            ? "resumeOnNewTurn"
+            : "awaitWithoutGateRelease";
+    }
+
+    private static JsonElement Scenario(JsonElement scenarios, string name) =>
+        scenarios.EnumerateArray().Single(item =>
+            item.GetProperty("name").GetString() == name);
+
+    private static FieldInfo RequireField(Type owner, string name) =>
+        owner.GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException(
+            $"Required white-box field '{owner.FullName}.{name}' is missing.");
+
+    private static ZLinkSerialExecutionQueue CreateQueue(
+        ZLinkRuntimeErrorSink errorSink) =>
+        new(
+            new ZLinkRuntimeTaskRunner(errorSink, CancellationToken.None),
+            errorSink,
+            CancellationToken.None);
+
+    private static TaskCompletionSource Signal() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private static JsonDocument Load(string name)
+    {
+        var path = Path.Combine(
+            Common.FrameworkTestEnvironment.GetRepoRoot(),
+            "framework",
+            "runtime",
+            "conformance",
+            name);
+        return JsonDocument.Parse(File.ReadAllText(path));
+    }
+
+    private sealed record FixtureStatus(
+        string Source,
+        ulong Sequence,
+        string Value);
+}

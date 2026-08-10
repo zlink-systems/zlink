@@ -567,16 +567,30 @@ public sealed class ClientServerChannelRuntimeTests
                     "work",
                     timeout.Token)
                 .GetAsyncEnumerator(timeout.Token);
+            await using var secondEvents = monitoring.ObserveAsync(
+                    "work",
+                    timeout.Token)
+                .GetAsyncEnumerator(timeout.Token);
+            var firstChange = WaitForTargetStateAsync(
+                events,
+                ZLinkPeerState.Draining);
+            var secondChange = WaitForTargetStateAsync(
+                secondEvents,
+                ZLinkPeerState.Draining);
             var state = await runtime.EnsureStartedStateAsync(
                 CancellationToken.None);
             GetServerBundle(state, "work")
                 .ClientServerServer!
                 .MarkDraining();
 
-            Assert.True(await events.MoveNextAsync());
+            Assert.True(await firstChange);
+            Assert.True(await secondChange);
             Assert.Equal(
                 ZLinkPeerState.Draining,
                 Assert.Single(events.Current.Status.Targets).State);
+            Assert.Equal(
+                ZLinkPeerState.Draining,
+                Assert.Single(secondEvents.Current.Status.Targets).State);
             Assert.False(events.Current.Status.IsReady);
             Assert.False(monitoring.GetStatus("work").IsReady);
         }
@@ -584,6 +598,17 @@ public sealed class ClientServerChannelRuntimeTests
         {
             await runtime.StopAsync(CancellationToken.None);
         }
+    }
+
+    private static async Task<bool> WaitForTargetStateAsync(
+        IAsyncEnumerator<ZLinkObservedStatus<ZLinkClientServerStatus>> observer,
+        ZLinkPeerState expected)
+    {
+        while (await observer.MoveNextAsync())
+            if (observer.Current.Status.Targets.Any(target =>
+                    target.State == expected))
+                return true;
+        return false;
     }
 
     [Fact]

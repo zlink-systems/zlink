@@ -12,13 +12,17 @@ internal sealed class ZLinkClientServerRuntimeService(
     ZLinkLocationStoreHealth? storeHealth) : IZLinkClientServerRuntime
 {
     private readonly object _gate = new();
+    private readonly ZLinkFrameworkRuntime _runtime = runtime;
+    private readonly ZLinkFrameworkHostLifecycleState _hostLifecycle = hostLifecycle;
+    private readonly ZLinkLocationStoreHealth? _storeHealth = storeHealth;
     private readonly Dictionary<ZLinkChannelName, SequenceState> _sequences = [];
+    private readonly Dictionary<ZLinkChannelName, MonitorHub> _monitorHubs = [];
 
     private ZLinkClientServerChannelSnapshot SnapshotInternal(string channelName)
     {
         ArgumentException.ThrowIfNullOrEmpty(channelName);
         var channel = ZLinkChannelName.FromBoundary(channelName, nameof(channelName));
-        var state = runtime.ClientServerMonitoringState(channelName);
+        var state = _runtime.ClientServerMonitoringState(channelName);
         var servers = state.Client?.SnapshotConnections()
             .Where(static entry => entry.ServerRid is not null)
             .Select(static entry => new ZLinkClientServerServerSnapshot(
@@ -75,7 +79,7 @@ internal sealed class ZLinkClientServerRuntimeService(
                     .Server;
         var readyCount = servers.Count(static entry => entry.Ready);
         var fingerprint = new Fingerprint(
-            hostLifecycle.State,
+            _hostLifecycle.State,
             role,
             state.Client?.ConnectionIntentCount ?? 0,
             state.Client?.PendingRequestCount ?? 0,
@@ -92,7 +96,7 @@ internal sealed class ZLinkClientServerRuntimeService(
             channelName,
             role,
             Selectable: state.HasClient
-                        && runtime.IsStarted
+                        && _runtime.IsStarted
                         && readyCount > 0,
             readyCount,
             fingerprint.ConnectionIntentCount,
@@ -106,6 +110,17 @@ internal sealed class ZLinkClientServerRuntimeService(
     public ZLinkClientServerStatus GetStatus(string channelName)
     {
         var snapshot = SnapshotInternal(channelName);
+        return Project(
+            snapshot,
+            _hostLifecycle.State,
+            _runtime.IsStarted);
+    }
+
+    private static ZLinkClientServerStatus Project(
+        ZLinkClientServerChannelSnapshot snapshot,
+        ZLinkFrameworkRuntimeState hostState,
+        bool runtimeStarted)
+    {
         var targets = snapshot.Servers
             .Select(static server => new ZLinkClientServerTargetStatus(
                 server.ServerRid,
@@ -113,13 +128,12 @@ internal sealed class ZLinkClientServerRuntimeService(
                 MapPeerState(server.State),
                 MapUnavailableReason(server.State)))
             .ToArray();
-        var hostState = hostLifecycle.State;
         var isReady = hostState == ZLinkFrameworkRuntimeState.Serving
-                      && runtime.IsStarted
+                      && runtimeStarted
                       && snapshot.Selectable;
         var topologyState = isReady
             ? ZLinkTopologyState.Ready
-            : HostTopologyState(hostState, runtime.IsStarted);
+            : HostTopologyState(hostState, runtimeStarted);
         return new ZLinkClientServerStatus(
             snapshot.ChannelName,
             snapshot.LocalRole,
@@ -137,74 +151,177 @@ internal sealed class ZLinkClientServerRuntimeService(
         string channelName,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        const int capacity = 1024;
-        _ = SnapshotInternal(channelName);
-        var observer = new ZLinkObservationQueue<ZLinkClientServerRuntimeEvent>(
-            capacity,
-            static item => item.Sequence,
-            "client_server");
-        using var stop =
-            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        using var signal = new StateChangeSignal();
-        var client = runtime.ClientServerMonitoringState(channelName).Client;
-        Action signalClient = signal.Signal;
-        Action<ZLinkFrameworkRuntimeState> signalHost = _ => signal.Signal();
-        if (client is not null)
-            client.StateChanged += signalClient;
-        hostLifecycle.Changed += signalHost;
-        if (storeHealth is not null)
-            storeHealth.Changed += signalClient;
-        var producer = ProduceAsync(channelName, observer, signal, stop.Token);
+        var channel = ZLinkChannelName.FromBoundary(
+            channelName,
+            nameof(channelName));
+        var observer = new ZLinkObservationQueue<RetainedObservation>(
+            static item => item.SourceKey,
+            eventName: "client_server");
+        MonitorHub hub;
+        lock (_gate)
+        {
+            _ = SnapshotInternal(channelName);
+            if (!_monitorHubs.TryGetValue(channel, out hub!))
+            {
+                hub = new MonitorHub(this, channel);
+                _monitorHubs.Add(channel, hub);
+                hub.Add(observer);
+                hub.Start();
+            }
+            else
+            {
+                hub.Add(observer);
+            }
+        }
         try
         {
             await foreach (var item in observer.ReadAllAsync(cancellationToken)
                                .ConfigureAwait(false))
                 yield return new ZLinkObservedStatus<ZLinkClientServerStatus>(
-                    GetStatus(channelName),
+                    item.Status.Status,
                     item.Loss);
         }
         finally
         {
-            stop.Cancel();
-            if (client is not null)
-                client.StateChanged -= signalClient;
-            hostLifecycle.Changed -= signalHost;
-            if (storeHealth is not null)
-                storeHealth.Changed -= signalClient;
-            signal.Complete();
-            try
-            {
-                await producer.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-                when (stop.IsCancellationRequested)
-            {
-            }
             observer.Complete();
+            MonitorHub? stopped = null;
+            lock (_gate)
+            {
+                hub.Remove(observer);
+                if (hub.IsEmpty
+                    && _monitorHubs.TryGetValue(channel, out var current)
+                    && ReferenceEquals(current, hub))
+                {
+                    _monitorHubs.Remove(channel);
+                    stopped = hub;
+                }
+            }
+            if (stopped is not null)
+                await stopped.StopAsync().ConfigureAwait(false);
         }
     }
 
-    private async Task ProduceAsync(
-        string channelName,
-        ZLinkObservationQueue<ZLinkClientServerRuntimeEvent> observer,
-        StateChangeSignal signal,
-        CancellationToken cancellationToken)
+    private sealed class MonitorHub
     {
-        var previous = SnapshotInternal(channelName);
-        while (await signal.WaitToReadAsync(cancellationToken)
-                   .ConfigureAwait(false))
+        private readonly object _gate = new();
+        private readonly ZLinkClientServerRuntimeService _owner;
+        private readonly ZLinkChannelName _channel;
+        private readonly StateChangeSignal _signal = new();
+        private readonly CancellationTokenSource _stop = new();
+        private readonly List<ZLinkObservationQueue<RetainedObservation>>
+            _observers = [];
+        private readonly Action _signalClient;
+        private readonly Action<ZLinkFrameworkRuntimeState> _signalHost;
+        private ZLinkClientServerChannelSnapshot _previous;
+        private ZLinkClientServerClientRuntime? _client;
+        private Task _producer = Task.CompletedTask;
+
+        internal MonitorHub(
+            ZLinkClientServerRuntimeService owner,
+            ZLinkChannelName channel)
         {
-            while (signal.TryRead())
+            _owner = owner;
+            _channel = channel;
+            _previous = owner.SnapshotInternal(channel.Value);
+            _signalClient = _signal.Signal;
+            _signalHost = _ => _signal.Signal();
+        }
+
+        internal bool IsEmpty
+        {
+            get
+            {
+                lock (_gate) return _observers.Count == 0;
+            }
+        }
+
+        internal void Add(ZLinkObservationQueue<RetainedObservation> observer)
+        {
+            lock (_gate) _observers.Add(observer);
+        }
+
+        internal void Remove(ZLinkObservationQueue<RetainedObservation> observer)
+        {
+            lock (_gate) _observers.Remove(observer);
+        }
+
+        internal void Start()
+        {
+            RefreshClientSubscription();
+            _owner._hostLifecycle.Changed += _signalHost;
+            if (_owner._storeHealth is not null)
+                _owner._storeHealth.Changed += _signalClient;
+            _signal.Signal();
+            _producer = Task.Run(ProduceAsync);
+        }
+
+        internal async ValueTask StopAsync()
+        {
+            _owner._hostLifecycle.Changed -= _signalHost;
+            if (_owner._storeHealth is not null)
+                _owner._storeHealth.Changed -= _signalClient;
+            _stop.Cancel();
+            _signal.Complete();
+            try
+            {
+                await _producer.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+                when (_stop.IsCancellationRequested)
             {
             }
-            var current = SnapshotInternal(channelName);
-            if (current.Sequence == previous.Sequence) continue;
-            foreach (var change in Changes(previous, current))
-                observer.Publish(
-                    change,
-                    hostLifecycle.State is ZLinkFrameworkRuntimeState.Stopped
-                        or ZLinkFrameworkRuntimeState.Error);
-            previous = current;
+            finally
+            {
+                if (_client is not null)
+                    _client.StateChanged -= _signalClient;
+                _stop.Dispose();
+                _signal.Dispose();
+            }
+        }
+
+        private async Task ProduceAsync()
+        {
+            while (await _signal.WaitToReadAsync(_stop.Token)
+                       .ConfigureAwait(false))
+            {
+                while (_signal.TryRead())
+                {
+                }
+                RefreshClientSubscription();
+                var current = _owner.SnapshotInternal(_channel.Value);
+                if (current.Sequence == _previous.Sequence) continue;
+                var changes = Changes(_previous, current).ToArray();
+                _previous = current;
+                var hostState = _owner._hostLifecycle.State;
+                var status = Project(
+                    current,
+                    hostState,
+                    _owner._runtime.IsStarted);
+                var hostTerminal = hostState is
+                    ZLinkFrameworkRuntimeState.Stopped
+                    or ZLinkFrameworkRuntimeState.Error;
+                lock (_gate)
+                    foreach (var change in changes)
+                        foreach (var observer in _observers)
+                            observer.Publish(
+                                new RetainedObservation(
+                                    change.SourceKey,
+                                    status),
+                                change.IsTerminal || hostTerminal);
+            }
+        }
+
+        private void RefreshClientSubscription()
+        {
+            var client = _owner._runtime
+                .ClientServerMonitoringState(_channel.Value)
+                .Client;
+            if (ReferenceEquals(client, _client)) return;
+            if (_client is not null)
+                _client.StateChanged -= _signalClient;
+            _client = client;
+            if (_client is not null)
+                _client.StateChanged += _signalClient;
         }
     }
 
@@ -215,6 +332,7 @@ internal sealed class ZLinkClientServerRuntimeService(
             {
                 SingleReader = true,
                 SingleWriter = false,
+                AllowSynchronousContinuations = false,
                 FullMode = BoundedChannelFullMode.DropWrite
             });
 
@@ -233,7 +351,7 @@ internal sealed class ZLinkClientServerRuntimeService(
         }
     }
 
-    private static IEnumerable<ZLinkClientServerRuntimeEvent> Changes(
+    internal static IEnumerable<ZLinkClientServerRuntimeEvent> Changes(
         ZLinkClientServerChannelSnapshot previous,
         ZLinkClientServerChannelSnapshot current)
     {
@@ -260,7 +378,8 @@ internal sealed class ZLinkClientServerRuntimeService(
                     Ready = false,
                     State = ZLinkClientServerServerState.Disconnected
                 },
-                "removed");
+                "removed",
+                terminal: true);
         }
         if (!changed)
             yield return new ZLinkClientServerRuntimeEvent(
@@ -280,7 +399,8 @@ internal sealed class ZLinkClientServerRuntimeService(
     private static ZLinkClientServerRuntimeEvent Event(
         ZLinkClientServerChannelSnapshot current,
         ZLinkClientServerServerSnapshot server,
-        string? reason) =>
+        string? reason,
+        bool terminal = false) =>
         new(
             "zlink.runtime.client_server.server_changed",
             current.Sequence,
@@ -292,7 +412,12 @@ internal sealed class ZLinkClientServerRuntimeService(
             server.Weight,
             server.Ready,
             server.State,
-            reason);
+            reason,
+            terminal);
+
+    private sealed record RetainedObservation(
+        string SourceKey,
+        ZLinkClientServerStatus Status);
 
     private ulong Sequence(ZLinkChannelName channelName, Fingerprint fingerprint)
     {
@@ -312,12 +437,12 @@ internal sealed class ZLinkClientServerRuntimeService(
 
     private ZLinkLocationRuntimeSnapshot LocationSnapshot()
     {
-        if (storeHealth is null)
+        if (_storeHealth is null)
             return new ZLinkLocationRuntimeSnapshot(
                 "not_configured",
                 null,
                 null);
-        var snapshot = storeHealth.GetSnapshot();
+        var snapshot = _storeHealth.GetSnapshot();
         return new ZLinkLocationRuntimeSnapshot(
             snapshot.Healthy ? "ready" : "degraded",
             snapshot.LastSuccessAt,

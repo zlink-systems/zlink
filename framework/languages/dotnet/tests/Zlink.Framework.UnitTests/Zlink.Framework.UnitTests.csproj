@@ -109,6 +109,7 @@
         <Compile Include="Runtime/MessageFlowTracerTests.cs"/>
         <Compile Include="Runtime/MeshNodeRouteDispatcherTests.cs"/>
         <Compile Include="Runtime/PublicContractSnapshotTests.cs"/>
+        <Compile Include="Runtime/SerialExecutionQueueBenchmarkTests.cs"/>
         <Compile Include="Runtime/SerialExecutorTests.cs"/>
         <Compile Include="Runtime/ServiceRuntimeFoundationTests.cs"/>
         <Compile Include="Runtime/ZLinkObservationQueueTests.cs"/>
@@ -145,6 +146,7 @@
         <Compile Include="Runtime/RelocationStartupRecoveryTests.cs"/>
         <Compile Include="Runtime/RouteCodecTests.cs"/>
         <Compile Include="Runtime/RouteMeshRuntimeServiceTests.cs"/>
+        <Compile Include="Runtime/RuntimeConformanceFixtureTests.cs"/>
         <Compile Include="Runtime/RuntimeConcurrencyBoundaryTests.cs"/>
         <Compile Include="Runtime/RuntimeMetricsTests.cs"/>
         <Compile Include="Runtime/UnhandledDispatchPolicyTests.cs"/>

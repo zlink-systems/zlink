@@ -23,8 +23,10 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
         ZLinkRuntimeTaskRunner taskRunner,
         int actorIngressCapacity = 4096,
         long actorIngressByteCapacity = 64L * 1024 * 1024,
-        int actorLaneCapacity = 4096,
-        long actorLaneByteCapacity = 64L * 1024 * 1024)
+        int actorLaneCapacity =
+            ZLinkSerialExecutionQueue.DefaultApplicationCapacity,
+        long actorLaneByteCapacity =
+            ZLinkSerialExecutionQueue.DefaultApplicationByteCapacity)
     {
         _runtime = runtime;
         _activation = activation;

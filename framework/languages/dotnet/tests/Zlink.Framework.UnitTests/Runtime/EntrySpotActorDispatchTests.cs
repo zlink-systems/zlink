@@ -2894,7 +2894,20 @@ public sealed partial class EntrySpotActorDispatchTests
             ZLinkBackendSpotDispatchEvent.ActorReadable,
             ActorParts: actorParts));
 
-        Assert.Throws<ObjectDisposedException>(() => actorBody.AsReadOnlySpan());
+        Assert.True(SpinWait.SpinUntil(
+            () =>
+            {
+                try
+                {
+                    _ = actorBody.AsReadOnlySpan();
+                    return false;
+                }
+                catch (ObjectDisposedException)
+                {
+                    return true;
+                }
+            },
+            TimeSpan.FromSeconds(5)));
         await runtime.StopAsync(CancellationToken.None);
     }
 

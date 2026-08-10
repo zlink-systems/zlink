@@ -148,6 +148,8 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
     TRequest request) : IZLinkRequestCall, IZLinkSpotRequestCall
 {
     private readonly ZLinkCallMetadata _metadata = new();
+    private readonly ZLinkApplicationExecutionScope? _executionScope =
+        ZLinkApplicationExecutionContext.Current;
     private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
     private TimeSpan? _timeout;
     private bool _instanceIntent = true;
@@ -227,15 +229,28 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
     }
 
     public ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default) =>
-        ExecuteAsync<TReply>(cancellationToken);
+        ExecuteAsync<TReply>(
+            ZLinkNestedRequestTerminator.Async,
+            cancellationToken);
 
     public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default) =>
         ZLinkApplicationExecutionContext
             .RequireYieldTurn(_turn, "Instance Spot request")
-            .YieldFrameworkCallAsync(ExecuteAsync<TReply>, cancellationToken);
+            .YieldFrameworkCallAsync(
+                token => ExecuteAsync<TReply>(
+                    ZLinkNestedRequestTerminator.Yield,
+                    token),
+                cancellationToken);
 
-    private async ValueTask<TReply> ExecuteAsync<TReply>(CancellationToken cancellationToken)
+    private async ValueTask<TReply> ExecuteAsync<TReply>(
+        ZLinkNestedRequestTerminator terminator,
+        CancellationToken cancellationToken)
     {
+        if (_exactSpotIdCall)
+            ZLinkApplicationExecutionContext.ValidateSpotRequest(
+                target.SpotId,
+                terminator,
+                _executionScope);
         if (_meshSelected && !_instanceIntent)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
@@ -253,6 +268,7 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
             {
                 return await RequestExistingAsync<TReply>(
                         handle,
+                        terminator,
                         Remaining(deadline),
                         cancellationToken)
                     .ConfigureAwait(false);
@@ -334,13 +350,21 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
 
     private async ValueTask<TReply> RequestExistingAsync<TReply>(
         ZLinkResolvedSpotHandle handle,
+        ZLinkNestedRequestTerminator terminator,
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
+        ZLinkApplicationExecutionContext.ValidateSpotRequest(
+            handle.Snapshot.SpotId,
+            terminator,
+            _executionScope);
         var call = new ZLinkRouteSpotRequestCall<TRequest>(runtime, handle, request);
         call.Timeout(timeout);
         call.Metadata(new ZLinkMessageMetadata(_metadata.Snapshot()));
-        return await call.Async<TReply>(cancellationToken).ConfigureAwait(false);
+        return await call.ExecuteAfterTerminatorAsync<TReply>(
+                terminator,
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private static bool IsAuthorityTransitionConflict(

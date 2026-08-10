@@ -47,4 +47,12 @@ internal sealed record ZLinkClientServerRuntimeEvent(
     int? Weight,
     bool? Ready,
     ZLinkClientServerServerState? State,
-    string? Reason);
+    string? Reason,
+    bool IsTerminal = false)
+{
+    internal string SourceKey =>
+        ServerRid is { } serverRid
+        && LifecycleGeneration is { } lifecycleGeneration
+            ? $"{Identifier}:{serverRid.ToHex()}:{lifecycleGeneration}"
+            : Identifier;
+}

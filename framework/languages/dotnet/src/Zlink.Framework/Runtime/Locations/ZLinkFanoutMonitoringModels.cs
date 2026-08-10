@@ -50,6 +50,8 @@ internal abstract record ZLinkFanoutRuntimeEvent
     internal ulong Sequence { get; }
     internal DateTimeOffset Timestamp { get; }
     internal string ChannelName { get; }
+    internal virtual string SourceKey => Identifier;
+    internal virtual bool IsTerminal => false;
 
     internal sealed record PublisherChanged(
         ulong Sequence,
@@ -60,7 +62,16 @@ internal abstract record ZLinkFanoutRuntimeEvent
             "zlink.runtime.fanout.publisher_changed",
             Sequence,
             Timestamp,
-            ChannelName);
+            ChannelName)
+    {
+        internal override string SourceKey =>
+            $"{Identifier}:{Entry.PublisherRid.ToHex()}:"
+            + Entry.LifecycleGeneration;
+
+        internal override bool IsTerminal =>
+            !Entry.ConnectionIntent
+            && Entry.State == ZLinkFanoutPublisherConnectionState.Disconnected;
+    }
 
     internal sealed record LocationChanged(
         ulong Sequence,

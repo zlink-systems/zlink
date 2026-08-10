@@ -11,67 +11,88 @@ namespace Zlink.Framework.Runtime.Diagnostics;
 internal sealed class ZLinkObservationQueue<TStatus>
     where TStatus : class
 {
+    internal const int DefaultTerminalCapacity = 64;
     private const ulong LossMaximum = 9_223_372_036_854_775_807UL;
 
     private readonly object _gate = new();
-    private readonly Queue<TStatus> _terminalStatuses = [];
+    private readonly Dictionary<string, RetainedStatus> _latestBySource =
+        new(StringComparer.Ordinal);
+    private readonly Queue<RetainedStatus> _terminalStatuses = [];
+    private readonly Dictionary<string, int> _terminalCountBySource =
+        new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _available = new(0, 1);
     private readonly int _terminalCapacity;
-    private readonly Func<TStatus, ulong> _sequenceSelector;
+    private readonly Func<TStatus, string> _sourceSelector;
     private readonly string _eventName;
-    private TStatus? _latestStatus;
-    private bool _hasLatestStatus;
     private bool _completed;
     private ulong _coalescedCount;
     private ulong _discardedTerminalCount;
+    private ulong _nextPublishOrdinal = 1;
 
     internal ZLinkObservationQueue(
-        int terminalCapacity,
-        Func<TStatus, ulong> sequenceSelector,
+        Func<TStatus, string> sourceSelector,
+        int terminalCapacity = DefaultTerminalCapacity,
         string eventName = "unknown")
     {
         if (terminalCapacity <= 0)
             throw new ArgumentOutOfRangeException(nameof(terminalCapacity));
-        ArgumentNullException.ThrowIfNull(sequenceSelector);
+        ArgumentNullException.ThrowIfNull(sourceSelector);
         if (string.IsNullOrWhiteSpace(eventName))
             throw new ArgumentException("An event name is required.", nameof(eventName));
         _terminalCapacity = terminalCapacity;
-        _sequenceSelector = sequenceSelector;
+        _sourceSelector = sourceSelector;
         _eventName = eventName;
     }
 
     internal void Publish(TStatus status, bool terminal)
     {
         ArgumentNullException.ThrowIfNull(status);
+        var source = _sourceSelector(status);
+        if (string.IsNullOrWhiteSpace(source))
+            throw new InvalidOperationException(
+                "An observation source key cannot be empty.");
         lock (_gate)
         {
             if (_completed)
                 return;
+            if (_nextPublishOrdinal == ulong.MaxValue)
+                throw new InvalidOperationException(
+                    "The observation publish ordinal is exhausted.");
+            var retained = new RetainedStatus(
+                source,
+                status,
+                _nextPublishOrdinal++);
 
             if (terminal)
             {
-                if (_hasLatestStatus)
+                if (_latestBySource.Remove(source))
                 {
-                    _latestStatus = null;
-                    _hasLatestStatus = false;
-                    _coalescedCount = Increment(_coalescedCount);
+                    _coalescedCount = IncrementLossCounter(_coalescedCount);
                 }
 
                 if (_terminalStatuses.Count == _terminalCapacity)
                 {
-                    _terminalStatuses.Dequeue();
+                    var discarded = _terminalStatuses.Dequeue();
+                    ReleaseTerminalSourceUnderLock(discarded.Source);
                     _discardedTerminalCount =
-                        Increment(_discardedTerminalCount);
+                        IncrementLossCounter(_discardedTerminalCount);
                     ZLinkRuntimeMetrics.RecordObserverOverflow(_eventName);
                 }
-                _terminalStatuses.Enqueue(status);
+                _terminalStatuses.Enqueue(retained);
+                _terminalCountBySource[source] =
+                    _terminalCountBySource.GetValueOrDefault(source) + 1;
             }
             else
             {
-                if (_hasLatestStatus)
-                    _coalescedCount = Increment(_coalescedCount);
-                _latestStatus = status;
-                _hasLatestStatus = true;
+                if (_terminalCountBySource.ContainsKey(source))
+                {
+                    _coalescedCount = IncrementLossCounter(_coalescedCount);
+                    SignalIfNeededUnderLock();
+                    return;
+                }
+                if (_latestBySource.ContainsKey(source))
+                    _coalescedCount = IncrementLossCounter(_coalescedCount);
+                _latestBySource[source] = retained;
             }
 
             SignalIfNeededUnderLock();
@@ -114,29 +135,30 @@ internal sealed class ZLinkObservationQueue<TStatus>
 
     private ZLinkObservedStatus<TStatus>? TakeNextUnderLock()
     {
-        TStatus? status = null;
+        RetainedStatus? next = null;
+        var intermediate = OldestIntermediateUnderLock();
         if (_terminalStatuses.Count != 0
-            && (!_hasLatestStatus
-                || _sequenceSelector(_terminalStatuses.Peek())
-                    <= _sequenceSelector(_latestStatus!)))
+            && (intermediate is null
+                || _terminalStatuses.Peek().PublishOrdinal
+                <= intermediate.PublishOrdinal))
         {
-            status = _terminalStatuses.Dequeue();
+            next = _terminalStatuses.Dequeue();
+            ReleaseTerminalSourceUnderLock(next.Source);
         }
-        else if (_hasLatestStatus)
+        else if (intermediate is not null)
         {
-            status = _latestStatus;
-            _latestStatus = null;
-            _hasLatestStatus = false;
+            next = intermediate;
+            _latestBySource.Remove(intermediate.Source);
         }
 
-        if (status is null)
+        if (next is null)
         {
             SignalIfNeededUnderLock();
             return null;
         }
 
         var observed = new ZLinkObservedStatus<TStatus>(
-            status,
+            next.Status,
             new ZLinkObservationLoss(
                 _coalescedCount,
                 _discardedTerminalCount));
@@ -146,11 +168,37 @@ internal sealed class ZLinkObservationQueue<TStatus>
 
     private void SignalIfNeededUnderLock()
     {
-        if ((_terminalStatuses.Count != 0 || _hasLatestStatus || _completed)
+        if ((_terminalStatuses.Count != 0
+             || _latestBySource.Count != 0
+             || _completed)
             && _available.CurrentCount == 0)
             _available.Release();
     }
 
-    private static ulong Increment(ulong value) =>
-        value == LossMaximum ? LossMaximum : value + 1;
+    private RetainedStatus? OldestIntermediateUnderLock()
+    {
+        RetainedStatus? oldest = null;
+        foreach (var candidate in _latestBySource.Values)
+            if (oldest is null
+                || candidate.PublishOrdinal < oldest.PublishOrdinal)
+                oldest = candidate;
+        return oldest;
+    }
+
+    private void ReleaseTerminalSourceUnderLock(string source)
+    {
+        var count = _terminalCountBySource[source];
+        if (count == 1)
+            _terminalCountBySource.Remove(source);
+        else
+            _terminalCountBySource[source] = count - 1;
+    }
+
+    internal static ulong IncrementLossCounter(ulong value) =>
+        value >= LossMaximum ? LossMaximum : value + 1;
+
+    private sealed record RetainedStatus(
+        string Source,
+        TStatus Status,
+        ulong PublishOrdinal);
 }

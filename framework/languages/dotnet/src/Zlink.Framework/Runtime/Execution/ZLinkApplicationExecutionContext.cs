@@ -5,24 +5,44 @@ internal readonly record struct ZLinkApplicationExecutionScope(
     ZLinkUserSpotExecutionMode ExecutionMode,
     string? ActorId,
     bool YieldAllowed,
-    Func<string, bool>? IsMemberActor = null);
+    Func<string, bool>? IsMemberActor = null,
+    ZLinkApplicationExecutionClaim? Claim = null);
+
+internal sealed class ZLinkApplicationExecutionClaim
+{
+    private int _active = 1;
+
+    public bool IsActive => Volatile.Read(ref _active) != 0;
+
+    public void Deactivate() => Interlocked.Exchange(ref _active, 0);
+}
+
+internal enum ZLinkNestedRequestTerminator
+{
+    Async = 0,
+    Yield = 1
+}
 
 internal static class ZLinkApplicationExecutionContext
 {
     private static readonly AsyncLocal<ZLinkApplicationExecutionScope?> CurrentScope = new();
 
-    public static ZLinkApplicationExecutionScope? Current => CurrentScope.Value;
+    public static ZLinkApplicationExecutionScope? Current =>
+        CurrentScope.Value is { Claim.IsActive: true } current
+            ? current
+            : null;
 
     public static IDisposable Push(ZLinkApplicationExecutionScope scope)
     {
         var previous = CurrentScope.Value;
-        CurrentScope.Value = scope;
-        return new Revert(previous);
+        var claim = new ZLinkApplicationExecutionClaim();
+        CurrentScope.Value = scope with { Claim = claim };
+        return new Revert(previous, claim);
     }
 
     public static ZLinkSerialTurn RequireYieldTurn(string operation)
     {
-        if (CurrentScope.Value is not { YieldAllowed: true }
+        if (Current is not { YieldAllowed: true }
             || ZLinkSerialTurn.Current is not { } turn)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
@@ -43,24 +63,29 @@ internal static class ZLinkApplicationExecutionContext
         return current;
     }
 
-    public static void RejectActorRequestWhenSameClaim(
+    public static void ValidateActorRequest(
         string targetActorId,
+        ZLinkNestedRequestTerminator terminator,
         ZLinkApplicationExecutionScope? capturedScope = null)
     {
-        if ((CurrentScope.Value ?? capturedScope) is not { } current) return;
+        if (!TryResolveActive(capturedScope, out var current)) return;
         if (current.ActorId is { } actorId
             && string.Equals(actorId, targetActorId, StringComparison.Ordinal))
             throw SameGate("An awaited request to the current Actor");
-        if (current.ExecutionMode == ZLinkUserSpotExecutionMode.SpotWide
+        if (terminator == ZLinkNestedRequestTerminator.Async
+            && current.ExecutionMode == ZLinkUserSpotExecutionMode.SpotWide
             && current.IsMemberActor?.Invoke(targetActorId) == true)
             throw SameGate("An awaited request to a member Actor of the current User Spot");
     }
 
-    public static void RejectSpotRequestWhenSameGate(
+    public static void ValidateSpotRequest(
         string targetSpotId,
+        ZLinkNestedRequestTerminator terminator,
         ZLinkApplicationExecutionScope? capturedScope = null)
     {
-        if ((CurrentScope.Value ?? capturedScope) is
+        if (terminator == ZLinkNestedRequestTerminator.Async
+            && TryResolveActive(capturedScope, out var current)
+            && current is
             {
                 ExecutionMode: ZLinkUserSpotExecutionMode.SpotWide,
                 SpotId: var spotId
@@ -73,7 +98,8 @@ internal static class ZLinkApplicationExecutionContext
         string? targetSpotId,
         ZLinkApplicationExecutionScope? capturedScope = null)
     {
-        if ((CurrentScope.Value ?? capturedScope) is not
+        if (!TryResolveActive(capturedScope, out var current)
+            || current is not
             {
                 ExecutionMode: ZLinkUserSpotExecutionMode.SpotWide,
                 ActorId: not null,
@@ -86,6 +112,25 @@ internal static class ZLinkApplicationExecutionContext
             throw SameGate("Actor join from a SpotWide User Spot callback");
     }
 
+    private static bool TryResolveActive(
+        ZLinkApplicationExecutionScope? capturedScope,
+        out ZLinkApplicationExecutionScope scope)
+    {
+        if (CurrentScope.Value is { Claim.IsActive: true } current)
+        {
+            scope = current;
+            return true;
+        }
+        if (capturedScope is { Claim.IsActive: true } captured)
+        {
+            scope = captured;
+            return true;
+        }
+
+        scope = default;
+        return false;
+    }
+
     private static ZLinkFrameworkException SameGate(string operation)
     {
         return new ZLinkFrameworkException(
@@ -93,10 +138,13 @@ internal static class ZLinkApplicationExecutionContext
             $"{operation} would wait for the execution gate held by the current callback.");
     }
 
-    private sealed class Revert(ZLinkApplicationExecutionScope? previous) : IDisposable
+    private sealed class Revert(
+        ZLinkApplicationExecutionScope? previous,
+        ZLinkApplicationExecutionClaim claim) : IDisposable
     {
         public void Dispose()
         {
+            claim.Deactivate();
             CurrentScope.Value = previous;
         }
     }
