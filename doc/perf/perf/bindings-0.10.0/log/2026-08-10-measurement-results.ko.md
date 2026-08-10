@@ -459,3 +459,13 @@ throughput ratio는 `60.032% / 71.008% / 78.735% / 91.036% / 90.126% / 90.287%`,
 | .NET | 1702707 / 1010821 / 702584 / 39199 / 25074 / 15460 | 0.115 / 0.197 / 0.271 / 5.191 / 8.134 / 13.171 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_175814_dotnet-pair-ipc-paired-before.txt` |
 
 throughput ratio는 `60.254% / 78.516% / 88.827% / 94.210% / 93.188% / 100.756%`, 산술평균은 `85.958%`다. 평균 latency ratio는 `1.438x / 0.947x / 1.027x / 1.065x / 1.067x / 0.981x`, 산술평균은 `1.087x`다. 64B throughput 개별 기준 미달은 측정 결과로 기록하고 aggregate 기준으로 통과한다. 추가 hotpath 또는 POSDDD 구조 변경은 채택하지 않았으며 public contract·ownership·error semantics는 변경하지 않았다.
+
+### .NET Single PUBSUB/ipc
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 1491433 / 1052025 / 717917 / 40986 / 26200 / 15742 | 0.107 / 0.328 / 0.284 / 4.953 / 7.841 / 13.041 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_180020_dotnet-pubsub-ipc-paired-c1.txt` |
+| .NET baseline | 980723 / 760483 / 578662 / 39775 / 25997 / 14668 | 0.095 / 0.154 / 0.300 / 5.136 / 7.913 / 13.928 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_180040_dotnet-pubsub-ipc-paired-before.txt` |
+| .NET own after `AggressiveInlining` | 979569 / 761385 / 547533 / 37817 / 23619 / 14793 | 0.091 / 0.168 / 0.322 / 5.386 / 8.622 / 13.816 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_180327_dotnet-pubsub-ipc-own-after-inline.txt` |
+
+baseline throughput ratio는 `65.757% / 72.288% / 80.603% / 97.045% / 99.225% / 93.177%`, 산술평균은 `84.683%`다. baseline 평균 latency ratio는 `0.888x / 0.470x / 1.056x / 1.037x / 1.009x / 1.068x`, 산술평균은 `0.921x`다. 자체 `PublishSingleCoreUnlocked` `AggressiveInlining` after throughput ratio는 `65.680% / 72.373% / 76.267% / 92.268% / 90.149% / 93.972%`, 산술평균은 `81.785%`이며 평균 latency ratio는 `0.850x / 0.512x / 1.134x / 1.087x / 1.100x / 1.059x`, 산술평균은 `0.957x`다. 자체 후보는 throughput·latency aggregate가 모두 악화되어 제거했다. Sol은 topic cache hit·단일 `SubmitGate`·allocation 없는 native submitter가 이미 적용되어 추가 inlining·builder pooling/reuse를 no-go 판정했다. throughput aggregate 85%에 미달해 최종 상태는 `보류`이며 public contract·ownership·error semantics는 변경하지 않았다.
