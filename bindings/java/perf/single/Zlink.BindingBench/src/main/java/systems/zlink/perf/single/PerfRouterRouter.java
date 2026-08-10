@@ -314,9 +314,9 @@ final class PerfRouterRouter {
 
     private static boolean trySendActive(RouterSocket sender, RoutingId route,
                                          Message active) {
-        try (Message outbound = Message.from(active)) {
+        try {
             return sender.send(route)
-                .message(outbound)
+                .message(active)
                 .flags(SendFlags.DONT_WAIT)
                 .submit();
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {
@@ -336,9 +336,9 @@ final class PerfRouterRouter {
 
     private static boolean trySendBlocking(RouterSocket sender, RoutingId route,
                                            Message active) {
-        try (Message outbound = Message.from(active)) {
+        try {
             return sender.send(route)
-                .message(outbound)
+                .message(active)
                 .flags(SendFlags.NONE)
                 .submit();
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {

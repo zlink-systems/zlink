@@ -446,13 +446,17 @@ final class SocketSendPlane {
     private static MemorySegment nativeRoutingId(SendScratch scratch,
                                                  RoutingId routingId) {
         MemorySegment nativeRid = scratch.nativeRoutingId;
-        NativeRoutingIds.write(nativeRid, routingId);
+        if (scratch.lastRoutingId != routingId) {
+            NativeRoutingIds.write(nativeRid, routingId);
+            scratch.lastRoutingId = routingId;
+        }
         return nativeRid;
     }
 
     private static MemorySegment nativeRoutingId(SendScratch scratch,
                                                  byte[] value) {
         MemorySegment nativeRid = scratch.nativeRoutingId;
+        scratch.lastRoutingId = null;
         NativeRoutingIds.writeBytes(nativeRid, value);
         return nativeRid;
     }
