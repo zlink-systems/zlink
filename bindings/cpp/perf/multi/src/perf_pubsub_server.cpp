@@ -103,30 +103,35 @@ bool run_phase (::perf::socket_t &publisher,
     try {
         const size_t send_size =
           std::min (payload.size (), std::max<size_t> (static_cast<size_t> (1), msg_size));
-        if (!perf_metric::stamp_payload (payload.data (), send_size, run_id, phase, msg_size,
-                                         seq++, perf_metric::now_ns ()))
-            return false;
-
         const auto deadline = std::chrono::steady_clock::now () + duration;
         while (std::chrono::steady_clock::now () < deadline) {
-            zlink::message_t payload_part (send_size);
-            if (!payload_part.valid ())
+            // Stamp every published message, matching the C reference's
+            // publish_once() call. A single stamp for the whole active phase
+            // measures queue age from phase start instead of message latency.
+            if (!perf_metric::stamp_payload (payload.data (), send_size, run_id, phase, msg_size,
+                                             seq++, perf_metric::now_ns ()))
                 return false;
-            if (send_size > 0) {
-                std::memcpy (payload_part.data (), payload.data (), send_size);
-            }
 
-            const int sent = publisher.publish (k_topic, payload_part,
-                                                static_cast<int> (zlink::send_flags_t::dontwait));
-            if (sent == 0)
-                continue;
-
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                if (!wait_for_publish_ready (publisher_poller))
+            for (;;) {
+                zlink::message_t payload_part (send_size);
+                if (!payload_part.valid ())
                     return false;
-                continue;
+
+                if (send_size > 0)
+                    std::memcpy (payload_part.data (), payload.data (), send_size);
+
+                const int sent = publisher.publish (
+                  k_topic, payload_part, static_cast<int> (zlink::send_flags_t::dontwait));
+                if (sent == 0)
+                    break;
+
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    if (!wait_for_publish_ready (publisher_poller))
+                        return false;
+                    continue;
+                }
+                return false;
             }
-            return false;
         }
 
         return true;
