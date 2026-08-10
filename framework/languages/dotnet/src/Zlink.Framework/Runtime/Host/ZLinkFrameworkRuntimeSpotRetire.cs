@@ -503,10 +503,9 @@ internal sealed partial class ZLinkFrameworkRuntime
 
             // Published means queue publication is complete: restore, replay,
             // catalog, and the ready callback. Admission opens from the
-            // publish path; session route commit ACKs, source cleanup
-            // (command 35), and steady normalization converge asynchronously
-            // and never gate admission.
-            ScheduleRelocationSessionRouteConvergence(stage);
+            // publish path. Session route convergence remains asynchronous,
+            // but command 44 cannot begin until command 35 has durably moved
+            // the relocation authority to Completed.
         }
         finally
         {
@@ -539,6 +538,7 @@ internal sealed partial class ZLinkFrameworkRuntime
     internal void ScheduleRelocationSessionRouteConvergence(TargetStage stage)
     {
         if (Volatile.Read(ref stage.Published) == 0
+            || Volatile.Read(ref stage.SourceCleanupCompleted) == 0
             || Volatile.Read(ref stage.SessionRoutesConverged) != 0)
             return;
         if (stage.ActorStates.Count == 0)

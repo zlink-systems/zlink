@@ -226,6 +226,67 @@ public sealed class SessionRelocationBarrierTests
     }
 
     [Fact]
+    public void Applied_And_AlreadyApplied_Are_The_Same_Idempotent_Route_Terminal()
+    {
+        var fixture = CreateFixture();
+        var seal = CreateSeal(
+            fixture,
+            new ZLinkServiceWireCodec.RelocationWireId(2, 4),
+            fixture.SourceNode,
+            fixture.SourceNodeGeneration,
+            fixture.SourceAuthority,
+            fixture.SourceOwnerLease);
+        var commit = CreateCommit(
+            seal,
+            RoutingId.From("terminal-target"),
+            targetNodeGeneration: 9,
+            targetAuthority: 21,
+            replayedHighWater: 41);
+        var applied = new ZLinkServiceWireCodec.SessionRelocationRoutedRecord(
+            commit.RelocationId,
+            commit.Coordinator,
+            commit.Actor,
+            commit.Session,
+            commit.Route.Action,
+            ZLinkServiceWireCodec.SessionRelocationRouteResult.Applied,
+            commit.Route.TargetAuthorityOwnerGeneration,
+            commit.Route.ReplayedHighWater);
+        var alreadyApplied = applied with
+        {
+            Result = ZLinkServiceWireCodec.SessionRelocationRouteResult
+                .AlreadyApplied
+        };
+
+        Assert.True(
+            ZLinkManagedMeshNode.IsEquivalentSessionRelocationRouteTerminal(
+                applied,
+                alreadyApplied));
+        Assert.True(
+            ZLinkManagedMeshNode.IsEquivalentSessionRelocationRouteTerminal(
+                alreadyApplied,
+                applied));
+        Assert.False(
+            ZLinkManagedMeshNode.IsEquivalentSessionRelocationRouteTerminal(
+                applied,
+                alreadyApplied with
+                {
+                    LastAcceptedSessionSequence = 40
+                }));
+        Assert.False(
+            ZLinkManagedMeshNode.IsEquivalentSessionRelocationRouteTerminal(
+                applied with
+                {
+                    Result = ZLinkServiceWireCodec
+                        .SessionRelocationRouteResult.Stale
+                },
+                applied with
+                {
+                    Result = ZLinkServiceWireCodec
+                        .SessionRelocationRouteResult.SessionOrBindingClosed
+                }));
+    }
+
+    [Fact]
     public void Source_Rollback_Paths_Retain_The_Original_Coordinator_Context()
     {
         var state = new ZLinkActorRuntimeState("actor-rollback");

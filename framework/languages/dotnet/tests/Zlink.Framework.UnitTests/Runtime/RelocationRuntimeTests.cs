@@ -2002,8 +2002,10 @@ public sealed class RelocationRuntimeTests
 
         // Source cleanup (command 35), the Completed CAS, session route
         // ACKs, and steady normalization have not happened; none of them
-        // gate admission.
+        // gate admission. Command 44 is nevertheless forbidden until the
+        // Completed CAS succeeds.
         Assert.Equal(0, Volatile.Read(ref stage.AuthorityPublished));
+        Assert.Equal(0, Volatile.Read(ref stage.SourceCleanupCompleted));
         Assert.Equal(0, Volatile.Read(ref stage.SessionRoutesConverged));
         ZLinkFrameworkRuntime.OpenTargetAdmissionOnce(
             stage,
@@ -2057,6 +2059,7 @@ public sealed class RelocationRuntimeTests
 
         // Once the session routes converged, expiry reconciliation completes
         // the published stage as a Completed tombstone.
+        Volatile.Write(ref stage.SourceCleanupCompleted, 1);
         Volatile.Write(ref stage.SessionRoutesConverged, 1);
         Assert.False(await target.PublishInboundAsync(
             unknownFence,
@@ -2083,9 +2086,15 @@ public sealed class RelocationRuntimeTests
         runtime.ScheduleRelocationSessionRouteConvergence(stage);
         Assert.Equal(0, Volatile.Read(ref stage.SessionRoutesConverged));
 
-        // A published stage without bound-session actors has nothing to
-        // converge; admission bookkeeping must not wait on a route ACK.
+        // Publication opens admission but cannot start command 44 before
+        // durable source cleanup reaches Completed.
         Volatile.Write(ref stage.Published, 1);
+        runtime.ScheduleRelocationSessionRouteConvergence(stage);
+        Assert.Equal(0, Volatile.Read(ref stage.SessionRoutesConverged));
+
+        // A Completed stage without bound-session actors has nothing to
+        // converge; admission bookkeeping must not wait on a route ACK.
+        Volatile.Write(ref stage.SourceCleanupCompleted, 1);
         runtime.ScheduleRelocationSessionRouteConvergence(stage);
         Assert.Equal(1, Volatile.Read(ref stage.SessionRoutesConverged));
     }

@@ -1302,6 +1302,8 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 stage,
                 cancellationToken)
             .ConfigureAwait(false);
+        Volatile.Write(ref stage.SourceCleanupCompleted, 1);
+        runtime.ScheduleRelocationSessionRouteConvergence(stage);
         await NormalizeAuthorityAsync(
                 stage,
                 cancellationToken,
@@ -1718,6 +1720,11 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     : null,
                 cancellationToken)
             .ConfigureAwait(false);
+        if (normalizeAuthority)
+        {
+            Volatile.Write(ref stage.SourceCleanupCompleted, 1);
+            runtime.ScheduleRelocationSessionRouteConvergence(stage);
+        }
         if (stage.Envelope.CanonicalLogicalStream.IsEmpty)
             return;
         // Admission opens from the publish path once the queue merge is
@@ -2883,6 +2890,11 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         TargetStage stage,
         TargetStageTerminalOutcome outcome)
     {
+        if (outcome == TargetStageTerminalOutcome.Completed
+            && Volatile.Read(ref stage.Published) != 0
+            && (Volatile.Read(ref stage.SourceCleanupCompleted) == 0
+                || Volatile.Read(ref stage.SessionRoutesConverged) == 0))
+            return;
         var fence = new ZLinkAggregateFence(
             stage.Envelope.AggregateId,
             stage.Envelope.AggregateGeneration);
@@ -3049,6 +3061,7 @@ internal sealed record TargetStage(
     public int AuthorityPublished;
     public int Published;
     public int AdmissionOpened;
+    public int SourceCleanupCompleted;
     public int SessionRoutesConverged;
     public Task? AdmissionDrainTask;
     public int ReplayedJobCount;

@@ -5633,7 +5633,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (_sessionRelocationRouteReplyTerminals.TryGetValue(
                 key,
                 out var terminal)
-            && terminal == routed)
+            && IsEquivalentSessionRelocationRouteTerminal(
+                terminal,
+                routed))
             return;
         Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
     }
@@ -9647,7 +9649,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 return false;
             return Completion.TrySetResult(response)
                    || Completion.Task.IsCompletedSuccessfully
-                      && Completion.Task.Result == response;
+                      && IsEquivalentSessionRelocationRouteTerminal(
+                          Completion.Task.Result,
+                          response);
         }
     }
 
@@ -9678,6 +9682,33 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return response.CurrentAuthorityOwnerGeneration == expectedAuthority
                && response.LastAcceptedSessionSequence == expectedHighWater;
     }
+
+    internal static bool IsEquivalentSessionRelocationRouteTerminal(
+        ZLinkServiceWireCodec.SessionRelocationRoutedRecord left,
+        ZLinkServiceWireCodec.SessionRelocationRoutedRecord right)
+    {
+        if (left == right)
+            return true;
+        if (!IsAppliedSessionRelocationRouteResult(left.Result)
+            || !IsAppliedSessionRelocationRouteResult(right.Result))
+            return false;
+        return left with
+               {
+                   Result = ZLinkServiceWireCodec
+                       .SessionRelocationRouteResult.Applied
+               }
+               == right with
+               {
+                   Result = ZLinkServiceWireCodec
+                       .SessionRelocationRouteResult.Applied
+               };
+    }
+
+    private static bool IsAppliedSessionRelocationRouteResult(
+        ZLinkServiceWireCodec.SessionRelocationRouteResult result) =>
+        result is ZLinkServiceWireCodec.SessionRelocationRouteResult.Applied
+            or ZLinkServiceWireCodec.SessionRelocationRouteResult
+                .AlreadyApplied;
 
     private sealed class PendingRelocationAttempt(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
