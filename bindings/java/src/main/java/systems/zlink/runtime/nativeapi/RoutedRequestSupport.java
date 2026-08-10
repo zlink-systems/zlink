@@ -20,7 +20,6 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiConsumer;
 
@@ -67,23 +66,15 @@ public final class RoutedRequestSupport {
 
     public static CompletableFuture<Void> registerDirectPending(
                                             long requestId,
-                                            long timeoutMs,
                                             BiConsumer<RequestResult, List<Message>> callback) {
         DirectReplyState state = new DirectReplyState(callback);
         DIRECT_PENDING.put(requestId, state);
-        state.timeout = RequestReplySupport.scheduleRequestTimeout(() -> {
-            DirectReplyState removed = DIRECT_PENDING.remove(requestId);
-            if (removed != null) {
-                removed.complete(RequestResult.TIMED_OUT, List.of());
-            }
-        }, timeoutMs);
         return state.progress;
     }
 
     public static void removeDirectPending(long requestId) {
         DirectReplyState state = DIRECT_PENDING.remove(requestId);
         if (state != null) {
-            state.cancelTimeout();
             state.progress.cancel(false);
         }
     }
@@ -100,7 +91,6 @@ public final class RoutedRequestSupport {
                                              RequestResult result) {
         DirectReplyState state = DIRECT_PENDING.remove(requestId);
         if (state != null) {
-            state.cancelTimeout();
             state.complete(result, List.of());
         }
     }
@@ -157,7 +147,6 @@ public final class RoutedRequestSupport {
                                        int result,
                                        MemorySegment parts,
                                        long partCount) {
-        state.cancelTimeout();
         try {
             if (result != RequestResult.OK.value()) {
                 state.complete(RequestResult.fromValue(result), List.of());
@@ -214,17 +203,9 @@ public final class RoutedRequestSupport {
     private static final class DirectReplyState {
         private final BiConsumer<RequestResult, List<Message>> callback;
         private final CompletableFuture<Void> progress = new CompletableFuture<>();
-        private volatile ScheduledFuture<?> timeout;
 
         private DirectReplyState(BiConsumer<RequestResult, List<Message>> callback) {
             this.callback = callback;
-        }
-
-        private void cancelTimeout() {
-            ScheduledFuture<?> scheduled = timeout;
-            if (scheduled != null) {
-                scheduled.cancel(false);
-            }
         }
 
         private void complete(RequestResult result, List<Message> parts) {

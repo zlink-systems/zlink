@@ -68,8 +68,7 @@ final class RequestSubmitLoop {
                                   RequestSubmission submission) {
         long requestId = RoutedRequestSupport.nextRequestId();
         CompletableFuture<Void> progress =
-            RoutedRequestSupport.registerDirectPending(requestId, timeoutMs,
-                callback);
+            RoutedRequestSupport.registerDirectPending(requestId, callback);
         try {
             submission.submit(RoutedRequestSupport.replyCallback(),
                 RoutedRequestSupport.userData(requestId));
