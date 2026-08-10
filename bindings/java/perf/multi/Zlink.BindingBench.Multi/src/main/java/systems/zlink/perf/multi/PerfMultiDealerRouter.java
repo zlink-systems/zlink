@@ -128,9 +128,12 @@ final class PerfMultiDealerRouter {
                 clients.add(client);
                 monitors.add(monitor);
             }
-            // The server receives traffic through the same poller that
-            // admits connections, so a separate per-client monitor event
-            // barrier is unnecessary for this routed phase.
+            Duration readyTimeout = Duration.ofMillis(
+                config.connectReadyTimeoutMs());
+            for (SocketMonitor monitor : monitors) {
+                PerfUtil.waitForMonitorEvent(monitor, READY_EVENT, 1,
+                    readyTimeout, "dealer/router client ready");
+            }
             PerfUtil.recalculateAutoHwm(ctx);
             // C parity: the C dealer/router perf client emits its client-side
             // AUTO_HWM_DETAIL (component=client, dealer socket) so the report's

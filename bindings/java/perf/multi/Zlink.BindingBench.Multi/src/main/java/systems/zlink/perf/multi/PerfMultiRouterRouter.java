@@ -166,8 +166,12 @@ final class PerfMultiRouterRouter {
                     clients.add(client);
                     monitors.add(monitor);
                 }
-                // The server-side routed loop is the readiness barrier for
-                // this phase; client monitor events are telemetry only.
+                Duration readyTimeout = Duration.ofMillis(
+                    config.connectReadyTimeoutMs());
+                for (SocketMonitor monitor : monitors) {
+                    PerfUtil.waitForMonitorEvent(monitor, READY_EVENT, 1,
+                        readyTimeout, "router/router client ready");
+                }
                 PerfUtil.recalculateAutoHwm(ctx);
                 for (int i = 0; i < clientCount; i++) {
                     PerfUtil.printMultiMonitorAutoHwm(config, monitors.get(i),
