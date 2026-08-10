@@ -1061,8 +1061,8 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 
 - perf 경로: `bindings/java/perf`
 - Single 상태: `완료 (통과 36, 보류 6, 미측정 0)`
-- Multi 상태: `진행 (통과 0, 보류 2, 미측정 26)`
-- 다음 작업: `MULTI_DEALER_ROUTER_REQREP / tcp`를 C와 순차 paired 측정하고 개선 검토한다.
+- Multi 상태: `진행 (통과 1, 보류 2, 미측정 25)`
+- 다음 작업: `MULTI_ROUTER_ROUTER_SENDSEND / tcp`를 C와 순차 paired 측정하고 개선 검토한다.
 
 #### 9.3.1 Single suite
 
@@ -1117,7 +1117,7 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
 | `tcp` | `MULTI_DEALER_DEALER` | 미달 (23.738%) | 미달 (20.106%) | 미달 (13.926%) | 미달 (33.411%) | 미달 (7.349%) | 미달 (7.344%) | 보류·Java client의 누적 source `Message`와 추가 full copy를 제거한 자체 개선 뒤 throughput 산술평균 17.646%, latency 중앙값 0.084x. Sol의 private non-routed submit lambda 제거 후보는 17.247%로 낮아 원복했고 추가 contract-safe 후보가 없어 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_065653_java-multi-dealer-dealer-tcp-c.txt`; Java baseline: `/home/hep7hep7/project/zlink/bindings/java/perf/results/multi/report/perf_java_multi_linux_20260811_065702_java-multi-dealer-dealer-tcp.txt`; final: `/home/hep7hep7/project/zlink/bindings/java/perf/results/multi/report/perf_java_multi_linux_20260811_065836_java-multi-dealer-dealer-tcp-own-direct-message.txt` |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미달 (44.404%) | 미달 (49.960%) | 미달 (47.043%) | 미달 (39.318%) | 미달 (27.941%) | 미달 (33.155%) | 보류·C와 같은 DEALER send→ROUTER echo→DEALER recv 의미로 paired 측정한 throughput 산술평균은 40.303%, latency 중앙값은 2.050x다. 자체 single-producer metrics 후보는 처리량 평균이 낮아 제거했고, Sol의 중복 poll mask 호출 제거 후보도 37.688%로 낮아 원복했다. 최소 50%에 미달하고 두 개선 후보가 모두 회귀해 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_070604_java-multi-dealer-router-sendsend-tcp-c.txt`; Java final: `/home/hep7hep7/project/zlink/bindings/java/perf/results/multi/report/perf_java_multi_linux_20260811_070613_java-multi-dealer-router-sendsend-tcp.txt`; rejected metrics: `/home/hep7hep7/project/zlink/bindings/java/perf/results/multi/report/perf_java_multi_linux_20260811_070707_java-multi-dealer-router-sendsend-tcp-own-single-metrics.txt`; rejected Sol: `/home/hep7hep7/project/zlink/bindings/java/perf/results/multi/report/perf_java_multi_linux_20260811_071300_java-multi-dealer-router-sendsend-tcp-sol-pollmask.txt` |
-| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미달 (32.791%) | 미달 (35.904%) | 미달 (37.682%) | 미달 (34.432%) | 통과 (80.518%) | 통과 (80.186%) | 통과·C에는 없는 server-side `CONNECTION_READY` 100-count barrier를 제거하고 client request socket을 `POLLCOMPLETION` poller에 등록해 C와 같은 callback 진행 의미를 복구했다. 최종 throughput 산술평균은 50.252%, latency 중앙값은 2.302x로 최소 기준을 통과한다. Sol의 `AtomicBoolean[]` 제거 후보는 callback이 별도 `zlink-request-complete` executor에서 실행되므로 visibility를 깨뜨려 적용하지 않았고, 추가 contract-safe 후보는 NO-GO로 확정했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_071420_java-multi-dealer-router-reqrep-tcp-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/multi/report/perf_java_multi_linux_20260811_071940_java-multi-dealer-router-reqrep-tcp-own-completion-final.txt` |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |

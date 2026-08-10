@@ -28,7 +28,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -41,18 +40,13 @@ final class PerfMultiSocketReqRep {
 
     static PerfUtil.Result runServer(PerfUtil.Config config) {
         try (Context ctx = PerfUtil.newContext(config);
-             RouterSocket server = ctx.createRouterSocket();
-             var monitor = server.monitorOpen(MonitorEventType.CONNECTION_READY)) {
+             RouterSocket server = ctx.createRouterSocket()) {
             server.setRoutingId(SERVER_RID);
             server.options().mandatory(true);
-            PerfUtil.applyMonitorOptions(monitor, config);
             PerfUtil.applySocketOptions(server, config);
             PerfUtil.configureServerTls(server, config.transport());
             server.bind(config.endpoint());
             PerfControl.emitReady(config.endpoint());
-            PerfUtil.waitForMonitorEvent(monitor, MonitorEventType.CONNECTION_READY,
-                config.clients(), Duration.ofMillis(config.connectReadyTimeoutMs()),
-                "socket reqrep server ready");
             PerfUtil.recalculateAutoHwm(ctx);
 
             int stops = 0;
@@ -121,7 +115,10 @@ final class PerfMultiSocketReqRep {
             }
             monitors.clear();
             PerfUtil.recalculateAutoHwm(ctx);
-            runClients(clients, config, routedClients, metrics);
+            try (PerfSocketPollSet completions = PerfSocketPollSet.fromSockets(
+                    clients, PollEventFlags.POLLCOMPLETION)) {
+                runClients(clients, config, routedClients, metrics, completions);
+            }
             return metrics.finishMulti(config);
         } finally {
             for (SocketMonitor monitor : monitors) {
@@ -143,12 +140,12 @@ final class PerfMultiSocketReqRep {
     private static void runClients(List<Socket> clients,
                                    PerfUtil.Config config,
                                    boolean routedClients,
-                                   PerfUtil.Metrics metrics) {
+                                   PerfUtil.Metrics metrics,
+                                   PerfSocketPollSet completions) {
         int count = clients.size();
         Message[] payloads = new Message[count];
         AtomicBoolean[] waiting = new AtomicBoolean[count];
         AtomicReference<Throwable> failure = new AtomicReference<>();
-        Semaphore completionSignal = new Semaphore(0);
         long activeEnd = System.nanoTime()
             + config.durationSeconds() * 1_000_000_000L;
         Duration timeout = Duration.ofMillis(Math.max(1, config.recvTimeoutMs()));
@@ -179,7 +176,6 @@ final class PerfMultiSocketReqRep {
                         Message.closeAll(parts);
                     }
                     slotWaiting.set(false);
-                    completionSignal.release();
                 }
             };
         }
@@ -214,17 +210,12 @@ final class PerfMultiSocketReqRep {
                     }
                 }
                 if (!progress && hasWaiting) {
-                    completionSignal.acquireUninterruptibly();
+                    completions.poll(50);
                 }
             }
             long drainEnd = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
             while (anyWaiting(waiting) && System.nanoTime() < drainEnd) {
-                try {
-                    completionSignal.tryAcquire(50, TimeUnit.MILLISECONDS);
-                } catch (InterruptedException ex) {
-                    Thread.currentThread().interrupt();
-                    throw new IllegalStateException("request drain interrupted", ex);
-                }
+                completions.poll(50);
             }
             if (anyWaiting(waiting) || failure.get() != null) {
                 throw new IllegalStateException("multi socket reqrep failed",
