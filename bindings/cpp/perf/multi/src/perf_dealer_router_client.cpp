@@ -44,7 +44,7 @@ struct socket_state_t
     zlink::message_t request;
     zlink::message_t reply;
     size_t payload_size;
-    bool borrow_payload;
+    bool use_per_socket_buffer;
     bool awaiting_reply;
     bool send_pending;
     bool pollout_enabled;
@@ -55,7 +55,7 @@ struct socket_state_t
         request (),
         reply (),
         payload_size (0),
-        borrow_payload (false),
+        use_per_socket_buffer (false),
         awaiting_reply (false),
         send_pending (false),
         pollout_enabled (false)
@@ -150,9 +150,10 @@ class dealer_router_client_bench_t
                 socket_state_t &slot = _socket_states.back ();
                 slot.request_buffer.assign (_transport == "tcp" ? payload_size : 0, k_payload_fill);
                 slot.payload_size = payload_size;
-                // Match the C reference: TCP sends can borrow the per-socket
-                // stable payload buffer; framed transports keep the owning copy.
-                slot.borrow_payload = (_transport == "tcp");
+                // TCP keeps independent mutable stamp storage per socket.
+                // Framed transports use the shared source buffer; message_t::from
+                // takes the same owning copy in both cases.
+                slot.use_per_socket_buffer = (_transport == "tcp");
                 _poller.add (sock, zlink::poll_event_flag_t::pollin, _socket_states.size () - 1);
             }
 
@@ -203,7 +204,7 @@ class dealer_router_client_bench_t
     bool try_send_request (socket_state_t &state, perf_metric::phase_t phase)
     {
         std::vector<char> &request_buffer =
-          state.borrow_payload ? state.request_buffer : _shared_request_buffer;
+          state.use_per_socket_buffer ? state.request_buffer : _shared_request_buffer;
         if (!state.sock || request_buffer.empty ())
             return false;
 
@@ -213,12 +214,8 @@ class dealer_router_client_bench_t
             return false;
         }
 
-        state.request =
-          state.borrow_payload
-            ? zlink::message_t::from (
-                std::as_bytes (std::span<const char> (request_buffer.data (), state.payload_size)))
-            : zlink::message_t::from (
-                std::as_bytes (std::span<const char> (request_buffer.data (), state.payload_size)));
+        state.request = zlink::message_t::from (
+          std::as_bytes (std::span<const char> (request_buffer.data (), state.payload_size)));
         if (!state.request.valid ()) {
             return false;
         }

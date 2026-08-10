@@ -1153,3 +1153,33 @@ C++·.NET·Python 완료 행을 transport가 아니라 shared implementation pat
 zero-fill 제거 후보는 DR request/reply 85.967%→76.294%, RR request/reply
 84.748%→77.916%, DR one-way 79.182%→83.496%, RR one-way 78.263%→75.321%로
 네 대상 합산이 하락해 제거했다.
+
+## 2026-08-11 C++ Multi 누락 개선 검토 재측정
+
+- 공통 조건: Core v0.10.1 release, duration 1초, runs 1, I/O threads 4/4, auto-HWM balanced, C → C++ 직렬 실행.
+- report root: C `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/`, C++ `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/`.
+
+| Transport | Pattern | size별 throughput ratio | 산술평균 | latency 산술평균 | C / 최종 C++ report |
+|-----------|---------|--------------------------|----------|----------------------|----------------------|
+| tcp | MULTI_DEALER_ROUTER_SENDSEND | 101.591% / 98.002% / 100.492% / 103.994% / 95.584% / 101.222% | 100.148% | 0.993x | `perf_c_multi_linux_20260811_025512_cpp-re-review-multi-dealer-router-sendsend-tcp-c.txt` / `perf_cpp_multi_linux_20260811_030155_cpp-re-review-multi-dealer-router-sendsend-tcp-posddd-buffer.txt` |
+| ws | MULTI_DEALER_ROUTER_SENDSEND | 80.402% / 92.210% / 130.745% / 116.973% / 104.254% / 100.694% | 104.213% | 0.982x | `perf_c_multi_linux_20260811_025606_cpp-re-review-multi-dealer-router-sendsend-ws-c.txt` / `perf_cpp_multi_linux_20260811_025616_cpp-re-review-multi-dealer-router-sendsend-ws-cpp.txt` |
+| wss | MULTI_DEALER_ROUTER_SENDSEND | 98.728% / 106.072% / 101.980% / 98.034% / 94.196% / 101.899% | 100.151% | 1.000x | `perf_c_multi_linux_20260811_025626_cpp-re-review-multi-dealer-router-sendsend-wss-c.txt` / `perf_cpp_multi_linux_20260811_025641_cpp-re-review-multi-dealer-router-sendsend-wss-cpp.txt` |
+| tls | MULTI_DEALER_ROUTER_SENDSEND | 99.183% / 100.644% / 101.974% / 104.774% / 105.948% / 102.042% | 102.428% | 0.975x | `perf_c_multi_linux_20260811_025655_cpp-re-review-multi-dealer-router-sendsend-tls-c.txt` / `perf_cpp_multi_linux_20260811_025710_cpp-re-review-multi-dealer-router-sendsend-tls-cpp.txt` |
+| tcp | MULTI_ROUTER_ROUTER_SENDSEND | 124.855% / 106.205% / 113.994% / 130.309% / 121.341% / 122.600% | 119.884% | 0.834x | `perf_c_multi_linux_20260811_025725_cpp-re-review-multi-router-router-sendsend-tcp-c.txt` / `perf_cpp_multi_linux_20260811_030207_cpp-re-review-multi-router-router-sendsend-tcp-posddd-buffer.txt` |
+| ws | MULTI_ROUTER_ROUTER_SENDSEND | 98.197% / 101.548% / 99.592% / 100.534% / 95.109% / 96.943% | 98.654% | 1.014x | `perf_c_multi_linux_20260811_025812_cpp-re-review-multi-router-router-sendsend-ws-c.txt` / `perf_cpp_multi_linux_20260811_025820_cpp-re-review-multi-router-router-sendsend-ws-cpp.txt` |
+| wss | MULTI_ROUTER_ROUTER_SENDSEND | 101.929% / 99.143% / 101.147% / 101.713% / 98.836% / 93.073% | 99.307% | 1.005x | `perf_c_multi_linux_20260811_025900_cpp-re-review-multi-router-router-sendsend-wss-c.txt` / `perf_cpp_multi_linux_20260811_025915_cpp-re-review-multi-router-router-sendsend-wss-cpp.txt` |
+| tls | MULTI_ROUTER_ROUTER_SENDSEND | 97.326% / 101.031% / 99.480% / 95.260% / 100.267% / 100.994% | 99.060% | 1.007x | `perf_c_multi_linux_20260811_025958_cpp-re-review-multi-router-router-sendsend-tls-c.txt` / `perf_cpp_multi_linux_20260811_030013_cpp-re-review-multi-router-router-sendsend-tls-cpp.txt` |
+| ws | MULTI_PUBSUB | 113.151% / 98.221% / 93.793% / 114.889% / 114.672% / 140.050% | 112.463% | 1.385x | `perf_c_multi_linux_20260811_030428_cpp-re-review-multi-pubsub-ws-c.txt` / `perf_cpp_multi_linux_20260811_031829_cpp-re-review-multi-pubsub-ws-typed-sub.txt` |
+| wss | MULTI_PUBSUB | 105.318% / 110.951% / 98.555% / 108.013% / 121.701% / 128.726% | 112.211% | 1.846x | `perf_c_multi_linux_20260811_030443_cpp-re-review-multi-pubsub-wss-c.txt` / `perf_cpp_multi_linux_20260811_030603_cpp-re-review-multi-pubsub-wss-typed-sub.txt` |
+| tls | MULTI_PUBSUB | 120.476% / 133.946% / 133.968% / 125.484% / 119.575% / 116.457% | 124.984% | 1.508x | `perf_c_multi_linux_20260811_030500_cpp-re-review-multi-pubsub-tls-c.txt` / `perf_cpp_multi_linux_20260811_031837_cpp-re-review-multi-pubsub-tls-typed-sub.txt` |
+| tcp | MULTI_STREAM | 98.151% / 109.084% / 100.939% / 74.351% | 95.631% | 1.070x | `perf_c_multi_linux_20260811_030648_cpp-re-review-multi-stream-tcp-c-7000.txt` / `perf_cpp_multi_linux_20260811_030659_cpp-re-review-multi-stream-tcp-cpp-7000.txt` |
+| ws | MULTI_STREAM | 134.318% / 94.068% / 96.223% / 100.043% | 106.163% | 0.955x | `perf_c_multi_linux_20260811_030709_cpp-re-review-multi-stream-ws-c-7000.txt` / `perf_cpp_multi_linux_20260811_030722_cpp-re-review-multi-stream-ws-cpp-7000.txt` |
+| wss | MULTI_STREAM | 97.990% / 104.104% / 98.881% / 100.000% | 100.244% | 0.971x | `perf_c_multi_linux_20260811_030733_cpp-re-review-multi-stream-wss-c-7000.txt` / `perf_cpp_multi_linux_20260811_030827_cpp-re-review-multi-stream-wss-cpp-7000.txt` |
+| tls | MULTI_STREAM | 79.045% / 98.137% / 97.411% / 118.317% | 98.227% | 1.064x | `perf_c_multi_linux_20260811_030920_cpp-re-review-multi-stream-tls-c-7000.txt` / `perf_cpp_multi_linux_20260811_031012_cpp-re-review-multi-stream-tls-cpp-7000.txt` |
+| tcp | MULTI_DEALER_DEALER | 99.131% / 94.699% / 95.792% / 107.011% / 102.310% / 96.368% | 99.219% | 0.939x | `perf_c_multi_linux_20260811_031151_cpp-re-review-multi-dealer-dealer-tcp-c.txt` / `perf_cpp_multi_linux_20260811_031609_cpp-re-review-multi-dealer-dealer-tcp-stop-count.txt` |
+| wss | MULTI_DEALER_DEALER | 92.473% / 100.024% / 107.813% / 119.886% / 108.097% / 86.013% | 102.384% | 0.969x | `perf_c_multi_linux_20260811_031636_cpp-re-review-multi-dealer-dealer-wss-c.txt` / `perf_cpp_multi_linux_20260811_031652_cpp-re-review-multi-dealer-dealer-wss-cpp-stop-count.txt` |
+| tls | MULTI_DEALER_DEALER | 90.648% / 97.258% / 98.584% / 95.272% / 103.504% / 100.268% | 97.589% | 1.320x | `perf_c_multi_linux_20260811_031708_cpp-re-review-multi-dealer-dealer-tls-c.txt` / `perf_cpp_multi_linux_20260811_031724_cpp-re-review-multi-dealer-dealer-tls-cpp-stop-count.txt` |
+
+STREAM은 10,000-client 시도가 `max_clients=7361` memory guard로 skip되어 C와 C++ 모두
+7,000 clients로 측정했다. Routed echo POSDDD 대표 A/B, PUBSUB typed subscriber before/after,
+RR direct receive 제거 결과와 DEALER_DEALER의 incomplete 최초 report는 process log에 기록했다.

@@ -162,6 +162,7 @@ bool perf_dealer_dealer_server (const std::string &lib_name,
         zlink::message_t part;
         std::vector<zlink::poll_event_t> events (1);
         size_t stop_count = 0;
+        bool phase_complete = false;
         // PERF_MULTI_TEST_POLICY § 1.3.1: the receive window is bounded purely by
         // an application clock (steady_clock deadline) plus a -1 (signal-driven)
         // poll wait; no poller timer object is used. The client's wire-level stop
@@ -204,8 +205,10 @@ bool perf_dealer_dealer_server (const std::string &lib_name,
                 if (perf::multi::is_stop_token (part.data (), part.size ())) {
                     part.close ();
                     ++stop_count;
-                    if (std::chrono::steady_clock::now () >= deadline)
+                    if (stop_count >= settings.clients) {
+                        phase_complete = true;
                         break;
+                    }
                     continue;
                 }
 
@@ -225,6 +228,8 @@ bool perf_dealer_dealer_server (const std::string &lib_name,
                 part.close ();
             }
             if (failed)
+                break;
+            if (phase_complete)
                 break;
             if (std::chrono::steady_clock::now () >= deadline)
                 break;

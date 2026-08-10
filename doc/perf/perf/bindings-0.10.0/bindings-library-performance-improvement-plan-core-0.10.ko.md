@@ -676,7 +676,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.1 C++
 
 - perf 경로: `bindings/cpp/perf`
-- Single 상태: `완료(통과 35, 보류 7)` — 42개 transport·pattern 행의 paired report가 모두 complete다. 최종 aggregate 평균 판정은 11.2절에 기록한다.
+- Single 상태: `완료(통과 36, 보류 6)` — 42개 transport·pattern 행의 paired report가 모두 complete다. 9.1.10의 최신 재측정 결과가 9.1.1의 같은 행을 대체한다.
   `PAIR`: inproc 81.91%, tcp 95.30%, ws 97.10%, wss 98.23%, tls 93.25%, ipc 92.91%.
   `PUBSUB`: tcp 94.56%, ws 94.71%, wss 98.43%, tls 93.89%, inproc 81.64%, ipc 95.93%.
   `DEALER_DEALER`: tcp 90.65%, ws 92.08%, wss 88.07%, tls 93.89%, inproc 78.97%, ipc 92.45%.
@@ -894,6 +894,44 @@ zero-fill 제거 후보는 네 대상 합산 throughput이 하락해 제거했�
 `ROUTER_ROUTER_REQREP/inproc`, `DEALER_ROUTER/inproc`, `ROUTER_ROUTER/inproc`은 추가
 contract-safe 후보가 없어 측정값으로 보류했다. size별 ratio와 report 경로는
 `log/2026-08-10-measurement-results.ko.md`에 기록했다.
+
+### 9.1.11 Multi 개선 검토 누락 행 재측정
+
+Core `v0.10.1` release runtime, duration `1s`, runs `1`, server/client I/O thread `4/4`,
+auto-HWM `balanced` 조건에서 각 transport·pattern을 C와 C++ 순서로 단독 측정했다.
+STREAM은 laptop memory guard가 10,000 clients를 거부해 C와 C++ 모두 7,000 clients로
+맞췄으며, 나머지는 100 clients를 사용했다.
+
+| Transport | Pattern | Throughput aggregate | Latency aggregate | 판정 |
+|-----------|---------|----------------------|-------------------|------|
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 100.148% | 0.993x | 통과 |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 104.213% | 0.982x | 통과 |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 100.151% | 1.000x | 통과 |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 102.428% | 0.975x | 통과 |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 119.884% | 0.834x | 통과 |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 98.654% | 1.014x | 통과 |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 99.307% | 1.005x | 통과 |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 99.060% | 1.007x | 통과 |
+| `ws` | `MULTI_PUBSUB` | 112.463% | 1.385x | 통과 |
+| `wss` | `MULTI_PUBSUB` | 112.211% | 1.846x | 통과 |
+| `tls` | `MULTI_PUBSUB` | 124.984% | 1.508x | 통과 |
+| `tcp` | `MULTI_STREAM` | 95.631% | 1.070x | 통과 |
+| `ws` | `MULTI_STREAM` | 106.163% | 0.955x | 통과 |
+| `wss` | `MULTI_STREAM` | 100.244% | 0.971x | 통과 |
+| `tls` | `MULTI_STREAM` | 98.227% | 1.064x | 통과 |
+| `tcp` | `MULTI_DEALER_DEALER` | 99.219% | 0.939x | 통과 |
+| `wss` | `MULTI_DEALER_DEALER` | 102.384% | 0.969x | 통과 |
+| `tls` | `MULTI_DEALER_DEALER` | 97.589% | 1.320x | 통과 |
+
+Routed echo client의 동일한 owning-copy 분기를 한 경로로 합치고 실제 역할이 드러나는 buffer
+이름으로 바꾼 POSDDD refactor는 대표 tcp에서 DR 98.130%→100.148%, RR
+115.142%→119.884%로 측정돼 유지했다. Sol의 RR direct routed receive 후보는 직전 결과 대비
+98.434%로 낮아져 제거했다. PUBSUB client가 perf variant adapter 대신 public
+`sub_socket_t`를 직접 사용하도록 바꾸자 wss가 80.034%→112.211%로 개선됐고 ws·tls도
+최종 목표를 통과해 유지했다. DEALER_DEALER server는 모든 client의 stop token을 받은 뒤
+무한 poll에 다시 들어가지 않도록 lifecycle 종료 조건을 보완했으며 세 transport가 모두
+complete다. STREAM은 자체·Sol 검토에서 추가 contract-safe 후보가 없어 측정 결과를 유지했다.
+size별 ratio와 report 경로는 measurement log에 기록했다.
 
 ### 9.2 .NET
 

@@ -44,7 +44,7 @@ enum pubsub_recv_result_t
     pubsub_recv_stop = 2
 };
 
-pubsub_recv_result_t recv_one_pubsub_message (::perf::socket_t &sock,
+pubsub_recv_result_t recv_one_pubsub_message (zlink::sub_socket_t &sock,
                                               size_t expected_msg_size,
                                               perf_metric::header_t *header_out)
 {
@@ -154,8 +154,8 @@ class pubsub_client_bench_t
     bool setup_sockets ()
     {
         for (size_t i = 0; i < _settings.clients; ++i) {
-            _holders.emplace_back (new perf::multi::socket_guard_t (_ctx, zlink::socket_type::sub));
-            ::perf::socket_t &sock = _holders.back ()->sock ();
+            _holders.emplace_back (new zlink::sub_socket_t (_ctx.ctx ()));
+            zlink::sub_socket_t &sock = *_holders.back ();
 
             (void) sock.set_subscription (std::string (k_topic));
             perf::multi::apply_benchmark_socket_options (sock, _settings, _transport);
@@ -177,7 +177,7 @@ class pubsub_client_bench_t
             }
 
             _sockets.push_back (&sock);
-            sock.poller_add (_poller, zlink::poll_event_flag_t::pollin, _sockets.size () - 1);
+            _poller.add (sock, zlink::poll_event_flag_t::pollin, _sockets.size () - 1);
         }
         if (!perf::multi::recalculate_auto_hwm (_ctx))
             return false;
@@ -189,8 +189,8 @@ class pubsub_client_bench_t
             return false;
         }
         if (!_holders.empty () && _holders[0].get () && _holders[0]->valid ()) {
-            perf::multi::emit_auto_hwm_detail (_holders[0]->sock (), "client", "endpoint",
-                                               _transport, _msg_size, "sub");
+            perf::multi::emit_auto_hwm_detail (*_holders[0], "client", "endpoint", _transport,
+                                               _msg_size, "sub");
         }
         return !_sockets.empty ();
     }
@@ -242,7 +242,7 @@ class pubsub_client_bench_t
                 const size_t slot_index = _poll_events[i].slot;
                 if (slot_index >= _sockets.size ())
                     continue;
-                ::perf::socket_t *sock = _sockets[slot_index];
+                zlink::sub_socket_t *sock = _sockets[slot_index];
                 if (!sock)
                     continue;
 
@@ -295,9 +295,9 @@ class pubsub_client_bench_t
     const perf::multi::multi_bench_settings_t _settings;
 
     perf::multi::ctx_guard_t _ctx;
-    std::vector<std::unique_ptr<perf::multi::socket_guard_t>> _holders;
+    std::vector<std::unique_ptr<zlink::sub_socket_t>> _holders;
     std::vector<perf::multi::connect_monitor_t> _monitors;
-    std::vector<::perf::socket_t *> _sockets;
+    std::vector<zlink::sub_socket_t *> _sockets;
     zlink::poller_t _poller;
     std::vector<zlink::poll_event_t> _poll_events;
 
