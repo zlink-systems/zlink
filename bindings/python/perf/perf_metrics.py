@@ -380,7 +380,7 @@ def resolve_single_connect_ready_timeout_ms():
 def resolve_multi_connect_ready_timeout_ms():
     return _env_int(
         "PERF_MULTI_CONNECT_READY_TIMEOUT_MS",
-        _env_int("PERF_CONNECT_READY_TIMEOUT_MS", DEFAULT_READY_TIMEOUT_MS),
+        _env_int("PERF_CONNECT_READY_TIMEOUT_MS", 10000),
     )
 
 

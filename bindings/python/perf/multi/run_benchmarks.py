@@ -982,8 +982,9 @@ def _build_options(args, patterns, transports, requested_msg_sizes, clients, env
         "connect_ready_timeout_ms": args.connect_ready_timeout_ms
         or env.get("PERF_MULTI_CONNECT_READY_TIMEOUT_MS")
         or env.get("PERF_CONNECT_READY_TIMEOUT_MS")
-        or "1000",
-        "monitor_hwm": args.monitor_hwm or os.environ.get("PERF_MULTI_MONITOR_HWM", "1000"),
+        or "10000",
+        "monitor_hwm": args.monitor_hwm
+        or os.environ.get("PERF_MULTI_MONITOR_HWM", "4096000"),
         "server_ready_timeout_ms": args.server_ready_timeout_ms
         or env.get("PERF_MULTI_SERVER_READY_TIMEOUT_MS")
         or env.get("PERF_SERVER_READY_TIMEOUT_MS")

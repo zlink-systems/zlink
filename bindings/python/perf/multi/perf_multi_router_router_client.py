@@ -5,18 +5,16 @@ from contextlib import ExitStack
 import zlink
 
 from perf_multi_common import (
+    active_message_latency_ns,
     apply_multi_auto_hwm_msg_unit,
     apply_multi_socket_options,
     benchmark_run_id,
     configure_multi_tls_client,
-    is_active_message,
     LatencySampler,
-    latency_ns_from_message,
     new_payload,
     parse_client_args,
     perf_client_context,
     print_result_lines,
-    received_metric_payload,
     recv_nonblocking,
     resolve_multi_connect_ready_timeout_ms,
     result_metrics,
@@ -140,22 +138,20 @@ def main(argv=None):
                                 if msg is None:
                                     break
                                 with msg:
-                                    data = received_metric_payload(msg)
-                                    lat = (
-                                        latency_ns_from_message(data)
-                                        if data
-                                        else None
-                                    )
+                                    active = False
+                                    latency = None
+                                    if msg.parts:
+                                        active, latency = active_message_latency_ns(
+                                            msg.parts[-1].data,
+                                            expected_msg_size=args.msg_size,
+                                            run_id=run_id,
+                                        )
                                     # C: every matched header counts; latency
                                     # excludes clock-skew, halved for round trip.
-                                    if data and is_active_message(
-                                        data,
-                                        expected_msg_size=args.msg_size,
-                                        run_id=run_id,
-                                    ):
+                                    if active:
                                         received += 1
-                                        if lat is not None:
-                                            latency_sampler.add(lat / 2.0)
+                                        if latency is not None:
+                                            latency_sampler.add(latency / 2.0)
                                 waiting_reply[index] = False
                                 if time.perf_counter() < active_deadline:
                                     send_pending[index] = True
