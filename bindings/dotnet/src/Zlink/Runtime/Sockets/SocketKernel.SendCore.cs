@@ -7,6 +7,7 @@ namespace Systems.Zlink.Runtime.Sockets.Internal;
 
 internal sealed partial class SocketKernel
 {
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void SendSingleCore(Message message, int flags)
     {
         lock (SubmitGate)
