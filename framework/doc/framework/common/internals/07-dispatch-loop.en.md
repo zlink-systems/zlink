@@ -178,9 +178,10 @@ the execution resource.
 ## 5. Pick Only One Wake-Up Method
 
 **Decision — don't mix wake-up methods during execution within one
-runtime.** Which of the three below to use is per-language discretion,
-but if the chosen method changes mid-execution, latency
-characteristics differ per span and the cause can't be traced.
+runtime.** If the chosen method changes mid-execution, latency
+characteristics differ per span and the cause can't be traced. Which of
+the three below to use is not discretion but a **constrained choice**,
+fixed by the paragraph that follows.
 
 | Method | Latency characteristic | Idle cost |
 |---|---|---|

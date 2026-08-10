@@ -220,6 +220,17 @@ Each document states the following for every decision.
 | **Per-Language Discretion** | What's fine to implement differently as long as the observed result is the same. Forcing them to match becomes unnatural in that language |
 | **Result To Confirm** | The condition the implementation must satisfy. The confirmation method differs per item |
 
+**Writing something as discretion requires two things together**: why the observable
+result is the same, and the standard that confirms it. Missing either one means it is
+not discretion but something not yet decided. A choice that produces an observable
+difference such as a latency floor is written as a **constrained choice**, not
+discretion (see [7. Dispatch Loop 「5. Pick One Wake-Up Method」](07-dispatch-loop.en.md#5-pick-one-wake-up-method)).
+
+**Runtimes actually diverge where nothing is written, not where discretion is.** A
+refusal condition, retry, or record that exists in only one runtime is a gap, not
+discretion. When such a difference is found, judge whether the observable result
+differs and, if it does, add it to this document set as a decision.
+
 Only the wire protocol document doesn't apply this distinction. It's
 paired with
 `framework/runtime/protocol/service-wire-v1.schema.json`, and explains

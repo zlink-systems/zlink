@@ -243,9 +243,15 @@ label makes the time-series count grow with object count, and the
 collector side collapses first.
 
 **Per-language discretion.** Whether subscription is push-based or
-pull-based is free. The observation standard is whether message
-processing speed is maintained when a subscriber is artificially made
-slow.
+pull-based is free, because either observes the same result once
+"subscriber callbacks run outside the lock that builds the state" above
+is honored. The observation standard is whether message processing speed
+is maintained when a subscriber is artificially made slow.
+
+Choosing the pull form takes on the same constraint as
+[7. Dispatch Loop 「5. Pick One Wake-Up Method」](07-dispatch-loop.en.md#5-pick-one-wake-up-method):
+the poll interval is the notification latency floor, so that interval is
+recorded in that language's documentation.
 
 ## 5. No Cost When Instrumentation Is Off
 
