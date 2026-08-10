@@ -1361,8 +1361,8 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 
 - perf 경로: `bindings/python/perf`
 - Single 상태: `완료 (통과 25, 보류 5)`
-- Multi 상태: `진행 (통과 5, 보류 3, 미측정 12)`
-- 다음 작업: `MULTI_PUBSUB / ws`를 C와 순차 paired 측정한다.
+- Multi 상태: `진행 (통과 6, 보류 4, 미측정 10)`
+- 다음 작업: `MULTI_DEALER_DEALER / wss`를 C와 순차 paired 측정한다.
 
 #### 9.7.1 Single suite
 
@@ -1411,8 +1411,8 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 | `ws` | `MULTI_DEALER_DEALER` | 미달 (9.126%) | 미달 (17.879%) | 미달 (29.191%) | 통과 (42.264%) | 통과 (101.159%) | 통과 (98.965%) | public `recv_into`와 `DONT_WAIT`을 receive loop 밖에서 한 번 결합한 최종 결과다. throughput 산술평균은 baseline 45.401%에서 49.764%로 개선되어 단순 one-way 최소 기준 35%를 통과했지만 latency 산술평균이 62.799x로 5.0x 상한에 미달해 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_035428_python-multi-dealer-dealer-ws-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/multi/report/perf_python_multi_linux_20260811_035612_python-multi-dealer-dealer-ws-own-direct-recv.txt` |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 통과 (36.211%) | 통과 (35.911%) | 통과 (32.485%) | 통과 (38.224%) | 통과 (76.212%) | 통과 (72.009%) | throughput 산술평균 48.509%, latency 산술평균 2.467x로 multi routed echo 최소 기준을 통과한다. tcp에서 채택한 header decode 1회와 pending 기반 `POLLOUT` 개선이 적용된 결과다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_035850_python-multi-dealer-router-sendsend-ws-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/multi/report/perf_python_multi_linux_20260811_035911_python-multi-dealer-router-sendsend-ws-current.txt` |
 | `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미달 (26.763%) | 미달 (28.161%) | 미달 (25.724%) | 통과 (31.879%) | 통과 (71.974%) | 통과 (78.305%) | throughput 산술평균 43.801%, latency 산술평균 2.977x로 multi routed echo 최소 기준을 통과한다. 동일 server hot path의 직전 A/B와 Sol 검토에서 추가 후보가 없어 현재 결과를 유지한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_040050_python-multi-router-router-sendsend-ws-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/multi/report/perf_python_multi_linux_20260811_040112_python-multi-router-router-sendsend-ws-current.txt` |
-| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `ws` | `MULTI_PUBSUB` | 미달 (14.512%) | 미달 (14.276%) | 미달 (18.372%) | 미달 (33.062%) | 통과 (74.050%) | 통과 (86.415%) | throughput 산술평균 40.115%, latency 산술평균 0.934x로 단순 one-way 최소 기준을 통과한다. tcp와 동일한 publish/subscribe hot path의 자체 A/B와 Sol 검토 결과를 적용해 현재 결과를 유지한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_040212_python-multi-pubsub-ws-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/multi/report/perf_python_multi_linux_20260811_040301_python-multi-pubsub-ws-current.txt` |
+| `ws` | `MULTI_STREAM` | 보류 (3.553%) | 보류 (3.428%) | 보류 (3.789%) | 해당 없음 | 통과 (87.863%) | 해당 없음 | throughput 산술평균 24.658%, latency 산술평균 37.831x로 multi routed echo 최소 기준에 미달해 보류한다. tcp에서 채택한 body snapshot 재사용과 자체·Sol 검토가 적용된 결과다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_040453_python-multi-stream-ws-7000-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/multi/report/perf_python_multi_linux_20260811_040527_python-multi-stream-ws-7000-current.txt` |
 | `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1659,7 +1659,7 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 5 | Go | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 6 | Rust | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
-| 7 | Python | 완료·통과 25 / 보류 5 | 진행·통과 5 / 보류 3 / 미측정 12 | `MULTI_PUBSUB / ws` paired 측정과 개선 검토를 진행한다. |
+| 7 | Python | 완료·통과 25 / 보류 5 | 진행·통과 6 / 보류 4 / 미측정 10 | `MULTI_DEALER_DEALER / wss` paired 측정과 개선 검토를 진행한다. |
 
 ## 11. 측정 기록과 결과
 
@@ -1667,6 +1667,8 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 
 | 날짜 | 언어 | 대상 | pair tag | size별 throughput ratio | size 중앙값 | 판정 | report |
 |------|------|------|----------|-------------------------|------------|------|--------|
+| 2026-08-11 | Python | Multi / MULTI_STREAM / ws / 64·256·1024·65536B | `python-multi-stream-ws-7000-current` | 3.553%, 3.428%, 3.789%, 87.863% | 24.658% (산술평균), latency 37.831x (산술평균) | 보류·tcp body snapshot 개선 적용·자체 및 Sol 추가 후보 no-go | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_040453_python-multi-stream-ws-7000-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/multi/report/perf_python_multi_linux_20260811_040527_python-multi-stream-ws-7000-current.txt` |
+| 2026-08-11 | Python | Multi / MULTI_PUBSUB / ws / 64·256·1024·4096·65536·131072B | `python-multi-pubsub-ws-current` | 14.512%, 14.276%, 18.372%, 33.062%, 74.050%, 86.415% | 40.115% (산술평균), latency 0.934x (산술평균) | 통과·동일 hot path의 tcp 자체 A/B 반영·Sol ws 추가 후보 no-go | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_040212_python-multi-pubsub-ws-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/multi/report/perf_python_multi_linux_20260811_040301_python-multi-pubsub-ws-current.txt` |
 | 2026-08-11 | Python | Multi / MULTI_ROUTER_ROUTER_SENDSEND / ws / 64·256·1024·4096·65536·131072B | `python-multi-router-router-sendsend-ws-current` | 26.763%, 28.161%, 25.724%, 31.879%, 71.974%, 78.305% | 43.801% (산술평균), latency 2.977x (산술평균) | 통과·동일 relay hot path의 자체 A/B 반영·Sol 추가 후보와 공통 helper no-go | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_040050_python-multi-router-router-sendsend-ws-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/multi/report/perf_python_multi_linux_20260811_040112_python-multi-router-router-sendsend-ws-current.txt` |
 | 2026-08-11 | Python | Multi / MULTI_DEALER_ROUTER_SENDSEND / ws / 64·256·1024·4096·65536·131072B | `python-multi-dealer-router-sendsend-ws-current` | 36.211%, 35.911%, 32.485%, 38.224%, 76.212%, 72.009% | 48.509% (산술평균), latency 2.467x (산술평균) | 통과·자체 direct-receive 후보 악화로 제거·Sol 추가 후보 no-go | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_035850_python-multi-dealer-router-sendsend-ws-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/multi/report/perf_python_multi_linux_20260811_035911_python-multi-dealer-router-sendsend-ws-current.txt` |
 | 2026-08-11 | Python | Multi / MULTI_DEALER_DEALER / ws / 64·256·1024·4096·65536·131072B | `python-multi-dealer-dealer-ws-own-direct-recv` | 9.126%, 17.879%, 29.191%, 42.264%, 101.159%, 98.965% | 49.764% (산술평균), latency 62.799x (산술평균) | 보류·throughput은 baseline 45.401%에서 개선·latency 상한 미달·자체 및 Sol 검토 완료 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_035428_python-multi-dealer-dealer-ws-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/multi/report/perf_python_multi_linux_20260811_035612_python-multi-dealer-dealer-ws-own-direct-recv.txt` |
