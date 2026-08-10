@@ -987,3 +987,24 @@ throughput ratio는 `9.583% / 13.021% / 32.896% / 104.062% / 104.900% / 93.162%`
 | Python final | 127.529 / 124.142 / 133.239 / 25.054 / 12.930 / 11.320 | 0.116 / 0.138 / 0.140 / 14.678 / 22.480 / 20.200 | `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_012101_python-pubsub-ws-current.txt` |
 
 throughput ratio는 `10.922% / 14.666% / 32.528% / 97.852% / 77.047% / 99.709%`, 산술평균 `55.454%`이며 평균 latency ratio 산술평균은 `0.633x`다. 단순 one-way 최소 기준 `35%`를 통과한다.
+
+### Python Single native send builder factory closure 제거
+
+조건: Core `v0.10.1` release package, duration `1s`, runs `1`, msg sizes `64/256/1024/65536/131072/262144B`, auto-HWM `balanced`다. 각 대상은 C 종료 후 Python을 단독 실행했다.
+
+| 대상 | size별 throughput ratio | 산술평균 | latency 산술평균 | 이전 Python 결과 대비 64/256/1024B 절대 throughput 변화 | report |
+|------|---------------------------|----------|----------------------|---------------------------------------------------------|--------|
+| `PAIR/tcp` | 5.544% / 12.325% / 22.646% / 110.749% / 79.856% / 62.292% | 48.902% | 0.908x | +13.6% / +17.2% / +20.1% | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_012330_python-pair-tcp-no-factory-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_012347_python-pair-tcp-no-factory-after.txt` |
+| `DEALER_DEALER/tcp` | 5.847% / 11.668% / 19.421% / 88.298% / 70.731% / 55.573% | 41.923% | 1.039x | +19.4% / +11.8% / +12.9% | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_012517_python-dealer-dealer-tcp-no-factory-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_012533_python-dealer-dealer-tcp-no-factory-after.txt` |
+| `DEALER_ROUTER/tcp` | 5.946% / 11.440% / 17.847% / 90.581% / 74.029% / 64.112% | 43.992% | 0.861x | +9.6% / +21.7% / +9.9% | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_012404_python-dealer-router-tcp-no-factory-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_012421_python-dealer-router-tcp-no-factory-after.txt` |
+| `ROUTER_ROUTER/tcp` | 6.493% / 10.303% / 18.687% / 97.009% / 78.447% / 60.432% | 45.228% | 1.028x | +14.4% / +6.5% / +15.0% | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_012540_python-router-router-tcp-no-factory-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_012557_python-router-router-tcp-no-factory-after.txt` |
+
+네 대상 모두 해당 aggregate 최소 기준을 통과했다. Sol review `SOL-PYTHON-NATIVE-SEND-BUILDER-20260811`은 변경 유지를 GO로 판정했다. unittest discovery는 `52 passed`이며 `test_lifecycle_contract` 1개 module은 환경에 `pytest`가 없어 import되지 않았다. 별도로 Core alignment test `12 passed`, source/native contract 함수 `12 passed`를 확인했다. public interface, builder state, `Message` ownership, caller-provided `Received`, request/reply routing metadata와 error 의미는 변경하지 않았다.
+
+### Python Single PUBSUB/tcp `submit_single` 후보
+
+| 구분 | size별 throughput ratio | 산술평균 | latency 산술평균 | report |
+|------|---------------------------|----------|----------------------|--------|
+| `submit_single` A/B | 7.918% / 12.174% / 20.297% / 99.430% / 81.702% / 66.987% | 48.085% | 0.570x | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_013057_python-pubsub-tcp-submit-single-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_013127_python-pubsub-tcp-submit-single-after.txt` |
+
+기존 publisher closure 제거 결과 대비 Python 절대 throughput 변화는 `-0.3% / -7.0% / -2.7% / +4.7% / -4.6% / -22.9%`다. 개선되지 않아 `submit_single` 후보는 원복했고, Sol review가 GO한 기존 publisher closure 제거만 유지한다.

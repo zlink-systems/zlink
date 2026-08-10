@@ -102,11 +102,7 @@ _native_router_recv_owner_func = (
 def _native_socket_send_op(socket):
     if _native_socket_send_op_func is None or _in_callback():
         return None
-    handle = int(socket._socket_handle.handle)
-    return _NativeBuilderSendOp(
-        lambda: _native_socket_send_op_func(handle),
-        lambda: _SocketSendOp(socket),
-    )
+    return _NativeBuilderSendOp(socket)
 
 
 def _native_routed_send_op(socket, routing_id):
@@ -116,11 +112,7 @@ def _native_routed_send_op(socket, routing_id):
         routing_id_bytes = routing_id
     else:
         routing_id_bytes = _validated_routing_id_bytes(routing_id)
-    handle = int(socket._socket_handle.handle)
-    return _NativeBuilderSendOp(
-        lambda: _native_routed_send_op_func(handle, routing_id_bytes),
-        lambda: _RoutedSocketSendOp(socket, routing_id_bytes),
-    )
+    return _NativeBuilderSendOp(socket, routing_id_bytes)
 
 
 def _native_publisher_send_op(socket, topic):
@@ -289,14 +281,14 @@ class _NativeBuilderSendOp(_SocketSendOp):
     """
 
     __slots__ = (
-        "_native_factory",
-        "_fallback_factory",
+        "_handle",
+        "_routing_id",
     )
 
-    def __init__(self, native_factory, fallback_factory):
-        super().__init__(None)
-        self._native_factory = native_factory
-        self._fallback_factory = fallback_factory
+    def __init__(self, socket, routing_id=None):
+        super().__init__(socket)
+        self._handle = int(socket._socket_handle.handle)
+        self._routing_id = routing_id
 
     def submit(self):
         if self._submitted:
@@ -309,7 +301,10 @@ class _NativeBuilderSendOp(_SocketSendOp):
             else any(isinstance(part, Message) for part in self._parts)
         )
         if has_native_message:
-            fallback = self._fallback_factory()
+            if self._routing_id is None:
+                fallback = _SocketSendOp(self._socket)
+            else:
+                fallback = _RoutedSocketSendOp(self._socket, self._routing_id)
             if self._parts is not None:
                 fallback.messages(*self._parts)
             else:
@@ -317,7 +312,10 @@ class _NativeBuilderSendOp(_SocketSendOp):
             fallback.flags(self._flags)
             return fallback.submit()
 
-        native = self._native_factory()
+        if self._routing_id is None:
+            native = _native_socket_send_op_func(self._handle)
+        else:
+            native = _native_routed_send_op_func(self._handle, self._routing_id)
         if self._parts is not None:
             native.messages(*self._parts)
         else:

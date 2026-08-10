@@ -55,6 +55,14 @@ def test_raw_hot_path_keeps_gil_release_and_part_failure_cleanup():
     assert "for (Py_ssize_t j = i; j < prepared.count; ++j)" in native_text
 
 
+def test_native_send_builders_do_not_allocate_factory_closures():
+    socket_text = (
+        SRC / "_runtime" / "sockets" / "socket_base_impl.py"
+    ).read_text(encoding="utf-8")
+    assert "lambda: _native_socket_send_op_func" not in socket_text
+    assert "lambda: _native_routed_send_op_func" not in socket_text
+
+
 def test_public_operations_remain_builder_only():
     assert hasattr(zlink.PairSocket, "send")
     assert hasattr(zlink.DealerSocket, "request")
