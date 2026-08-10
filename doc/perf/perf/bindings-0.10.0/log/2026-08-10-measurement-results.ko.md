@@ -356,3 +356,13 @@ throughput ratio는 `62.784% / 70.333% / 88.879% / 95.771% / 98.004% / 98.234%`,
 | .NET | 130110 / 124273 / 115210 / 6265 / 3638 / 2034 | 0.276 / 0.294 / 0.367 / 1.895 / 1.634 / 1.461 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_163432_dotnet-router-router-reqrep-tls-paired-before.txt` |
 
 throughput ratio는 `59.889% / 68.648% / 80.263% / 99.051% / 94.444% / 97.042%`, 산술평균은 `83.223%`다. latency ratio는 `1.401x / 1.195x / 0.874x / 0.999x / 1.050x / 1.022x`, 산술평균은 `1.090x`다. .NET socket request/reply aggregate 기준을 충족해 통과로 판정한다. 추가 hotpath 변경 없이 다음 대상은 `.NET Single PAIR/inproc`다.
+
+### .NET Single PAIR/inproc
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 2737466 / 1860478 / 1980629 / 475404 / 181373 / 85715 | 0.013 / 0.166 / 0.172 / 0.006 / 0.012 / 0.019 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_164153_dotnet-pair-inproc-paired-c1.txt` |
+| .NET before | 1698244 / 1177207 / 1188690 / 105648 / 153561 / 63932 | 0.103 / 0.210 / 0.232 / 0.026 / 0.016 / 0.027 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_164205_dotnet-pair-inproc-paired-before.txt` |
+| .NET own after | 1942561 / 1005103 / 924283 / 110082 / 81021 / 66643 | 0.023 / 0.050 / 0.052 / 0.024 / 0.026 / 0.026 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_164513_dotnet-pair-inproc-own-after-epoch.txt` |
+
+before throughput ratio는 `62.037% / 63.274% / 60.016% / 22.223% / 84.666% / 74.587%`, 산술평균은 `61.134%`다. before latency ratio는 `7.923x / 1.265x / 1.349x / 4.333x / 1.333x / 1.421x`, 산술평균은 `2.937x`다. 자체 Epoch nanosecond fast path after throughput ratio는 `70.962% / 54.024% / 46.666% / 23.155% / 44.671% / 77.750%`, 산술평균은 `52.871%`이고 latency ratio는 `1.769x / 0.301x / 0.302x / 4.000x / 2.167x / 1.368x`, 산술평균은 `1.651x`다. throughput aggregate가 악화되어 후보를 제거하고 before 측정값을 최종값으로 채택한다. .NET inproc 단순 one-way aggregate 기준으로 통과한다. 추가 contract-safe hotpath 후보는 no-go다. 다음 대상은 `.NET Single PUBSUB/inproc`다.
