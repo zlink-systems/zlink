@@ -90,12 +90,14 @@ internal sealed class ReceivedReplyOperationImpl : ReplyOperation,
         _submission.MarkSubmittedAfterValidation();
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureReady()
     {
         EnsureNotSubmitted();
         _parts.EnsureNotEmpty();
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureNotSubmitted()
     {
         _submission.EnsureNotSubmitted();

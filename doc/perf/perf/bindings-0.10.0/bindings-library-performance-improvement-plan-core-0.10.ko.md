@@ -899,6 +899,39 @@ transport 상태를 판정한다.
 | `ipc` | `ROUTER_ROUTER` | 60.03% | 71.01% | 78.73% | 91.04% | 90.13% | 90.29% | 통과·throughput 산술평균 80.204%, 평균 latency ratio 1.078x. 64B·256B·1024B 개별 ratio는 최소 기준 미달이지만 aggregate 기준으로 판정한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_175017_dotnet-router-router-ipc-paired-c1.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_175032_dotnet-router-router-ipc-paired-before.txt` |
 | `ipc` | `ROUTER_ROUTER_REQREP` | 51.04% | 57.71% | 54.21% | 96.30% | 100.29% | 97.12% | 통과·throughput 산술평균 76.111%, 평균 latency ratio 1.271x로 .NET request/reply aggregate 기준을 충족한다. 추가 hotpath·POSDDD 구조 변경 없이 다음 미측정 대상으로 이동한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_172657_dotnet-router-router-reqrep-ipc-paired-c1.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_172710_dotnet-router-router-reqrep-ipc-paired-before.txt` |
 
+#### 9.2.1 재검토: 기존 개선 검토 누락 행
+
+2026-08-11에 기존 표에서 자체 개선 또는 Sol 검토가 명시되지 않았던 행을 다시 확인했다. Core는 `v0.10.1` release package를 사용했고, C 기준 report와 같은 size 순서로 transport/pattern 하나씩 `duration=1s`, `runs=1`을 측정했다. perf process는 병렬 실행하지 않았다. `RoutedSendOperation` private validation inlining은 `ws/DEALER_ROUTER` A/B에서 `85.020%/1.150x → 80.271%/1.187x`로 악화되어 원복했다. Sol review는 기존 전역 inlining을 baseline으로 보고, Message one-way·PUBSUB·routed one-way에는 추가 후보가 없다고 판정했다. request/reply에는 `ReceivedReplyOperationImpl.EnsureReady`/`EnsureNotSubmitted` inlining을 적용했고 Sol review 결과를 반영해 유지했다. 상세 raw report와 C 기준 경로는 `log/2026-08-10-measurement-results.ko.md`의 재검토 섹션에 기록했다.
+
+| Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 재검토 결과 |
+|-----------|---------|----|-----|------|-------|--------|--------|------------|
+| `tcp` | `DEALER_ROUTER` | 60.627% | 78.990% | 81.023% | 82.980% | 89.303% | 84.702% | 통과·aggregate 79.604%, latency 0.834x·routed one-way 추가 후보 NO-GO·`.NET`: `004138_re-review-current-tcp-dealer-router.txt` |
+| `tcp` | `DEALER_ROUTER_REQREP` | 공식 67.990% | 공식 68.490% | 공식 73.790% | 공식 111.350% | 공식 108.830% | 공식 109.940% | 통과·기존 공식 aggregate 90.060%/latency 1.012x 유지·이번 후보 raw `.NET`: `004934_re-review-sol-reply-inline-tcp-dealer-router-reqrep.txt`·C report는 기존 계획 경로를 참조하나 현재 results 디렉터리에는 없음 |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 51.595% | 54.617% | 52.272% | 89.814% | 91.298% | 90.336% | 통과·aggregate 71.655%, latency 1.318x·reply helper inlining 유지·`.NET`: `004941_re-review-sol-reply-inline-tcp-router-router-reqrep.txt` |
+| `ws` | `PAIR` | 51.764% | 62.300% | 88.308% | 84.687% | 86.602% | 84.177% | 통과·aggregate 76.306%, latency 1.262x·Message one-way 추가 후보 NO-GO·`.NET`: `004200_re-review-current-ws-pair.txt` |
+| `ws` | `DEALER_DEALER` | 56.648% | 58.111% | 92.701% | 85.595% | 90.457% | 92.108% | 통과·aggregate 79.270%, latency 1.168x·Message one-way 추가 후보 NO-GO·`.NET`: `004207_re-review-current-ws-dealer-dealer.txt` |
+| `ws` | `DEALER_ROUTER` | 57.911% | 65.688% | 80.399% | 78.931% | 85.853% | 90.541% | 통과·aggregate 76.554%, latency 1.135x·routed one-way 추가 후보 NO-GO·`.NET`: `004214_re-review-current-ws-dealer-router.txt` |
+| `ws` | `ROUTER_ROUTER` | 31.532% | 57.644% | 82.269% | 81.447% | 87.462% | 89.942% | 통과·aggregate 71.716%, latency 1.489x·routed one-way 추가 후보 NO-GO·`.NET`: `004222_re-review-current-ws-router-router.txt` |
+| `ws` | `ROUTER_ROUTER_REQREP` | 54.860% | 62.189% | 83.325% | 89.742% | 93.523% | 93.013% | 통과·aggregate 79.442%, latency 1.130x·reply helper inlining 유지·`.NET`: `004948_re-review-sol-reply-inline-ws-router-router-reqrep.txt` |
+| `wss` | `PAIR` | 63.726% | 76.040% | 86.112% | 82.282% | 86.624% | 87.515% | 통과·aggregate 80.383%, latency 1.173x·Message one-way 추가 후보 NO-GO·`.NET`: `004251_re-review-current-wss-pair.txt` |
+| `wss` | `PUBSUB` | 67.800% | 76.430% | 89.546% | 89.132% | 88.794% | 84.881% | 통과·aggregate 82.764%, latency 1.126x·PUBSUB 추가 후보 NO-GO·`.NET`: `004258_re-review-current-wss-pubsub.txt` |
+| `wss` | `DEALER_DEALER` | 65.341% | 82.034% | 96.684% | 92.572% | 90.722% | 81.965% | 통과·aggregate 84.886%, latency 1.209x·Message one-way 추가 후보 NO-GO·`.NET`: `004336_re-review-current-wss-dealer-dealer.txt` |
+| `wss` | `DEALER_ROUTER` | 70.576% | 80.426% | 93.474% | 89.888% | 89.624% | 88.456% | 통과·aggregate 85.407%, latency 1.138x·routed one-way 추가 후보 NO-GO·`.NET`: `004343_re-review-current-wss-dealer-router.txt` |
+| `wss` | `DEALER_ROUTER_REQREP` | 51.118% | 68.329% | 82.023% | 86.321% | 90.773% | 90.205% | 통과·aggregate 78.128%, latency 1.211x·reply helper inlining 유지·`.NET`: `004955_re-review-sol-reply-inline-wss-dealer-router-reqrep.txt` |
+| `wss` | `ROUTER_ROUTER` | 59.075% | 79.615% | 95.796% | 91.563% | 89.244% | 80.595% | 통과·aggregate 82.648%, latency 1.075x·routed one-way 추가 후보 NO-GO·`.NET`: `004358_re-review-current-wss-router-router.txt` |
+| `wss` | `ROUTER_ROUTER_REQREP` | 54.911% | 63.598% | 75.747% | 87.890% | 88.949% | 84.690% | 통과·aggregate 75.964%, latency 1.228x·reply helper inlining 유지·`.NET`: `005002_re-review-sol-reply-inline-wss-router-router-reqrep.txt` |
+| `tls` | `DEALER_ROUTER_REQREP` | 47.128% | 54.181% | 73.020% | 84.313% | 80.867% | 91.712% | 통과·aggregate 71.870%, latency 1.331x·reply helper inlining 유지·`.NET`: `005009_re-review-sol-reply-inline-tls-dealer-router-reqrep.txt` |
+| `tls` | `ROUTER_ROUTER_REQREP` | 46.319% | 54.054% | 57.232% | 84.000% | 87.747% | 88.979% | 통과·aggregate 69.722%, latency 1.361x·reply helper inlining 유지·`.NET`: `005017_re-review-sol-reply-inline-tls-router-router-reqrep.txt` |
+| `inproc` | `PUBSUB` | 77.209% | 64.472% | 60.314% | 22.868% | 64.066% | 71.015% | 통과·aggregate 59.991%, latency 2.233x·PUBSUB 추가 후보 NO-GO·`.NET`: `004427_re-review-current-inproc-pubsub.txt` |
+| `inproc` | `DEALER_DEALER` | 52.191% | 57.963% | 54.223% | 21.799% | 53.170% | 72.979% | 통과·aggregate 52.054%, latency 2.011x·Message one-way 추가 후보 NO-GO·`.NET`: `004440_re-review-current-inproc-dealer-dealer.txt` |
+| `inproc` | `DEALER_ROUTER` | 71.144% | 58.374% | 54.689% | 54.104% | 43.740% | 65.840% | 통과·aggregate 57.982%, latency 1.871x·routed one-way 추가 후보 NO-GO·`.NET`: `004447_re-review-current-inproc-dealer-router.txt` |
+| `inproc` | `DEALER_ROUTER_REQREP` | 41.608% | 48.275% | 42.730% | 75.327% | 92.268% | 88.987% | 보류·aggregate 64.866%, latency 1.698x·reply helper inlining 유지·`.NET`: `005039_re-review-sol-reply-inline-inproc-dealer-router-reqrep.txt` |
+| `inproc` | `ROUTER_ROUTER_REQREP` | 46.194% | 45.348% | 43.092% | 75.376% | 89.927% | 91.203% | 보류·aggregate 65.190%, latency 1.672x·reply helper inlining 유지·`.NET`: `005046_re-review-sol-reply-inline-inproc-router-router-reqrep.txt` |
+| `ipc` | `PAIR` | 43.584% | 58.984% | 67.081% | 79.946% | 81.291% | 86.646% | 통과·aggregate 69.589%, latency 1.656x·Message one-way 추가 후보 NO-GO·`.NET`: `004455_re-review-current-ipc-pair.txt` |
+| `ipc` | `DEALER_ROUTER_REQREP` | 53.134% | 61.358% | 57.179% | 97.854% | 94.137% | 99.132% | 통과·aggregate 77.132%, latency 1.254x·reply helper inlining 유지·`.NET`: `004856_re-review-sol-reply-inline-ipc.txt` |
+| `ipc` | `ROUTER_ROUTER` | 44.286% | 62.191% | 69.691% | 78.376% | 82.782% | 84.452% | 통과·aggregate 70.296%, latency 1.493x·routed one-way 추가 후보 NO-GO·`.NET`: `004509_re-review-current-ipc-router-router.txt` |
+| `ipc` | `ROUTER_ROUTER_REQREP` | 38.069% | 49.941% | 46.453% | 79.557% | 78.156% | 88.285% | 통과·aggregate 63.410%, latency 1.568x·reply helper inlining 유지·`.NET`: `005024_re-review-sol-reply-inline-ipc-router-router-reqrep.txt` |
+
 #### 9.2.2 Multi suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
