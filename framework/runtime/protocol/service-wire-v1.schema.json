@@ -138,8 +138,9 @@
       "value": 8
     },
     {
-      "name": "messageFollowBytes",
-      "value": 16777216
+      "name": "messageFollowControlEnvelopeBytes",
+      "value": 16777216,
+      "description": "Maximum encoded bytes for one Message Follow control envelope. This is not a retained payload or queue-storage bound."
     },
     {
       "name": "routingIdCollisionAttempts",
@@ -4220,6 +4221,7 @@
     {
       "name": "message-follow-route-v1",
       "kind": "versioned-length-delimited",
+      "description": "Infrastructure-only route notice. Queue counters are saturating diagnostics and never gate Message Follow payload admission.",
       "version": {
         "$ref": "u8",
         "constant": 1
@@ -4229,7 +4231,7 @@
         "covers": "body"
       },
       "maximumEncodedBytes": {
-        "$bound": "messageFollowBytes"
+        "$bound": "messageFollowControlEnvelopeBytes"
       },
       "body": [
         {
@@ -4251,12 +4253,14 @@
         {
           "name": "queuedMessages",
           "$ref": "u32",
-          "minimum": 0
+          "minimum": 0,
+          "description": "Saturating diagnostic snapshot; UINT32_MAX means the actual count is at least that value."
         },
         {
           "name": "queuedBytes",
           "$ref": "u32",
-          "minimum": 0
+          "minimum": 0,
+          "description": "Saturating diagnostic snapshot; UINT32_MAX means the actual retained byte count is at least that value."
         },
         {
           "name": "originalOperation",

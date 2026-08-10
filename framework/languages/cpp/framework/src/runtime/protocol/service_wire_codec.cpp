@@ -996,7 +996,7 @@ encode_message_follow (const message_follow_notice_t &notice)
     append_u64 (body, notice.original_operation.high);
     append_u64 (body, notice.original_operation.low);
     append_u64 (body, notice.original_reply_route_id);
-    if (body.size () > messageFollowBytes) {
+    if (body.size () > messageFollowControlEnvelopeBytes) {
         throw service_wire_error_t (
           "Message Follow notice exceeds its encoded byte bound");
     }
@@ -1020,7 +1020,7 @@ decode_message_follow (std::span<const std::uint8_t> bytes)
         throw service_wire_error_t (
           "Message Follow notice version must be one");
     const auto body_length = read_u32 (bytes, offset);
-    if (body_length > messageFollowBytes
+    if (body_length > messageFollowControlEnvelopeBytes
         || bytes.size () - offset != body_length)
         throw service_wire_error_t (
           "Message Follow notice has an invalid body length");

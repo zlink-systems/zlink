@@ -2569,8 +2569,11 @@ void verify_raw_spot_and_actor_routing ()
     const protocol::spot_route_fence_t follow_target{
       "follow-spot", 1, target_descriptor.node_routing_id,
       target_descriptor.lifecycle_generation, 3, 3};
+    // The diagnostic is allowed to exceed 16 MiB because that value limits
+    // one encoded control envelope, not the relayed payload or queue storage.
     const protocol::message_follow_notice_t follow_notice{
-      follow_source, follow_target, 1, 1, 16, {1, 1}, 0};
+      follow_source, follow_target, 1, 1,
+      16u * 1024u * 1024u + 1u, {1, 1}, 0};
     assert (source.send_message_follow (
       target_descriptor.node_routing_id, follow_notice));
     bool follow_received = false;

@@ -2870,7 +2870,9 @@ result_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application
                     follow_target.source_fence, follow_target.target_fence,
                     static_cast<std::uint8_t> (incoming_hop_count + 1), 1,
                     static_cast<std::uint32_t> (
-                      std::min<std::size_t> (payload_bytes, runtime::protocol::messageFollowBytes)),
+                      std::min<std::size_t> (
+                        payload_bytes,
+                        std::numeric_limits<std::uint32_t>::max ())),
                     original_operation, original_reply_route_id});
                 (void) spot_runtime.complete_actor_message_follow_notification (
                   actor, follow_target.source_fence,

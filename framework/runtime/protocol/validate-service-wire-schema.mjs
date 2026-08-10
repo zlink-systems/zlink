@@ -104,7 +104,7 @@ function validateSchema(schema) {
     ["relocationResourceParticipants", 2048n],
     ["maintenanceAggregateBytes", 1048576n],
     ["messageFollowHopCount", 8n],
-    ["messageFollowBytes", 16777216n],
+    ["messageFollowControlEnvelopeBytes", 16777216n],
     ["routingIdCollisionAttempts", 8n],
     ["nodeActiveCapacityDefault", 10000n],
     ["nodePendingCapacityDefault", 128n],
@@ -4782,9 +4782,10 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "queuedBytes", $ref: "u32" },
     { name: "originalOperation", $ref: "operation-id" },
     { name: "originalReplyRouteId", $ref: "u64" },
-  ], "$.types", "Message Follow route must preserve exact route, queue accounting and reply identity");
-  if (messageFollowRoute?.maximumEncodedBytes?.$bound !== "messageFollowBytes") {
-    fail("$.types", "Message Follow route must use the bounded queue byte limit");
+  ], "$.types", "Message Follow route must preserve exact route, saturating queue diagnostics and reply identity");
+  if (messageFollowRoute?.maximumEncodedBytes?.$bound
+      !== "messageFollowControlEnvelopeBytes") {
+    fail("$.types", "Message Follow route must use the control-envelope byte limit");
   }
 
   requireFields(types.get("actor-route-fence")?.fields, [
