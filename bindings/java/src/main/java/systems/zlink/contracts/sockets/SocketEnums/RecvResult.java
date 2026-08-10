@@ -11,9 +11,7 @@ public enum RecvResult {
     TERMINATED(203),
     INVALID_HANDLE(204),
     NOT_SUPPORTED(205),
-    INTERNAL_ERROR(206),
-    BUFFER_TOO_SMALL(207),
-    INVALID_STATE(208);
+    INTERNAL_ERROR(206);
 
     private final int value;
 
@@ -34,8 +32,6 @@ public enum RecvResult {
             case 204 -> INVALID_HANDLE;
             case 205 -> NOT_SUPPORTED;
             case 206 -> INTERNAL_ERROR;
-            case 207 -> BUFFER_TOO_SMALL;
-            case 208 -> INVALID_STATE;
             default -> throw new IllegalArgumentException(
                 "invalid RecvResult value: " + value);
         };

@@ -4,8 +4,6 @@
 
 #include <zlink/Contracts/Core/routing_id.hpp>
 
-#include <zlink.h>
-
 namespace zlink
 {
 
