@@ -1035,6 +1035,20 @@ throughput ratio는 `10.922% / 14.666% / 32.528% / 97.852% / 77.047% / 99.709%`,
 
 다섯 대상 모두 shared native send, publisher 또는 routed receive owner 개선과 Sol review 범위에 포함되며 public interface·ownership·error 의미는 변경하지 않았다.
 
+### Python Single ipc 완료 대상
+
+조건: Core `v0.10.1` release package, duration `1s`, runs `1`, msg sizes `64/256/1024/65536/131072/262144B`, auto-HWM `balanced`다. 각 대상은 C 종료 후 Python을 단독 실행했다.
+
+| 대상 | size별 throughput ratio | 산술평균 | latency 산술평균 | 판정 | report |
+|------|---------------------------|----------|----------------------|------|--------|
+| `PAIR/ipc` | 5.570% / 11.399% / 16.766% / 85.856% / 88.403% / 75.110% | 47.184% | 0.985x | 통과 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_015330_python-pair-ipc-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_015343_python-pair-ipc-current.txt` |
+| `PUBSUB/ipc` | 7.558% / 11.390% / 16.252% / 93.490% / 88.836% / 76.102% | 48.938% | 0.715x | 통과 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_015415_python-pubsub-ipc-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_015440_python-pubsub-ipc-current.txt` |
+| `DEALER_DEALER/ipc` | 5.680% / 9.812% / 14.808% / 83.577% / 65.921% / 66.701% | 41.083% | 1.058x | 통과 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_015448_python-dealer-dealer-ipc-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_015501_python-dealer-dealer-ipc-current.txt` |
+| `DEALER_ROUTER/ipc` | 5.693% / 9.227% / 13.013% / 82.914% / 76.283% / 62.317% | 41.575% | 0.987x | 통과 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_015510_python-dealer-router-ipc-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_015523_python-dealer-router-ipc-current.txt` |
+| `ROUTER_ROUTER/ipc` | 7.501% / 8.865% / 14.764% / 87.290% / 76.140% / 59.500% | 42.344% | 0.975x | 통과 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_015531_python-router-router-ipc-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_015544_python-router-router-ipc-current.txt` |
+
+다섯 대상은 모두 aggregate 최소 기준과 latency 상한을 통과했다. small-message 손실은 transport와 무관한 Python/native 경계에 집중되고 binding에는 IPC 전용 send/receive 분기가 없다. generic send, publisher와 routed receive 공통 개선 및 Sol review가 이미 적용되어 추가 IPC 전용 후보는 no-go다. public interface·ownership·error 의미는 변경하지 않았다.
+
 ### 완료 행 개선 검토 감사
 
 C++·.NET·Python 완료 행을 transport가 아니라 shared implementation path 기준으로 다시 확인했다. C++의 generic send/message/poller, PUBSUB, routed send/receive, request/reply, Multi routed echo와 STREAM은 각각 자체 A/B 또는 profile 검토와 Sol review가 기록되어 있다. .NET의 과거 누락 행은 Message, PUBSUB, routed, request/reply 공통 경로 재검토로 보완됐다. Python의 tcp·ws·wss·tls 20개 완료 행도 generic send, publisher, router receive-owner 공통 경로의 자체 A/B와 Sol review가 적용되어 있다. 따라서 완료 행 중 개선 검토를 생략한 shared hot path는 남아 있지 않으며, 같은 구현에 대한 transport별 중복 검토는 추가하지 않는다.

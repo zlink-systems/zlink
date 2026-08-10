@@ -1269,9 +1269,9 @@ transport 상태를 판정한다.
 ### 9.7 Python
 
 - perf 경로: `bindings/python/perf`
-- Single 상태: `진행 (tcp·ws·wss·tls 20개 pattern 통과, inproc 5개 pattern 보류)`
+- Single 상태: `완료 (통과 25, 보류 5)`
 - Multi 상태: `미측정`
-- 다음 작업: 다음 transport·pattern을 C와 순차 paired 측정한다.
+- 다음 작업: Multi transport·pattern을 C와 순차 paired 측정한다.
 
 #### 9.7.1 Single suite
 
@@ -1302,11 +1302,11 @@ transport 상태를 판정한다.
 | `inproc` | `DEALER_DEALER` | 보류 (4.796%) | 보류 (6.642%) | 보류 (5.291%) | 보류 (7.398%) | 보류 (14.566%) | 보류 (14.810%) | throughput 산술평균 8.917%, latency 산술평균 440.584x다. `PAIR`와 같은 native send path의 자체 A/B와 Sol A/B 결과를 적용해 추가 후보 no-go로 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_014351_python-dealer-dealer-inproc-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_014405_python-dealer-dealer-inproc-current.txt` |
 | `inproc` | `DEALER_ROUTER` | 보류 (4.159%) | 보류 (5.369%) | 보류 (6.013%) | 보류 (8.526%) | 보류 (14.102%) | 보류 (18.277%) | throughput 산술평균 9.408%, latency 산술평균 338.747x다. router receive-owner 개선은 적용되어 있다. Sol의 routed `submit_single` A/B aggregate는 9.074%로 낮아 제거했고 추가 후보 no-go로 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_014405_python-dealer-router-inproc-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_014418_python-dealer-router-inproc-current.txt` |
 | `inproc` | `ROUTER_ROUTER` | 보류 (4.110%) | 보류 (5.415%) | 보류 (4.081%) | 보류 (7.189%) | 보류 (15.384%) | 보류 (15.819%) | throughput 산술평균 8.666%, latency 산술평균 397.971x다. shared routed send와 router receive-owner 개선 및 routed `submit_single` no-go가 동일하게 적용되어 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_014418_python-router-router-inproc-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_014431_python-router-router-inproc-current.txt` |
-| `ipc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ipc` | `PAIR` | 통과 (5.570%) | 통과 (11.399%) | 통과 (16.766%) | 통과 (85.856%) | 통과 (88.403%) | 통과 (75.110%) | throughput 산술평균 47.184%, latency 산술평균 0.985x다. generic native send 개선·Sol review와 single-part 공통 POSDDD refactor가 적용되어 있다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_015330_python-pair-ipc-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_015343_python-pair-ipc-current.txt` |
+| `ipc` | `PUBSUB` | 통과 (7.558%) | 통과 (11.390%) | 통과 (16.252%) | 통과 (93.490%) | 통과 (88.836%) | 통과 (76.102%) | throughput 산술평균 48.938%, latency 산술평균 0.715x다. publisher closure 제거와 `submit_single` no-go 검토가 적용되어 있다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_015415_python-pubsub-ipc-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_015440_python-pubsub-ipc-current.txt` |
+| `ipc` | `DEALER_DEALER` | 통과 (5.680%) | 통과 (9.812%) | 통과 (14.808%) | 통과 (83.577%) | 통과 (65.921%) | 통과 (66.701%) | throughput 산술평균 41.083%, latency 산술평균 1.058x다. generic send/receive 공통 개선과 Sol review가 적용되어 있다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_015448_python-dealer-dealer-ipc-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_015501_python-dealer-dealer-ipc-current.txt` |
+| `ipc` | `DEALER_ROUTER` | 통과 (5.693%) | 통과 (9.227%) | 통과 (13.013%) | 통과 (82.914%) | 통과 (76.283%) | 통과 (62.317%) | throughput 산술평균 41.575%, latency 산술평균 0.987x다. routed send와 router receive-owner 개선 및 Sol 추가 후보 no-go가 적용되어 있다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_015510_python-dealer-router-ipc-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_015523_python-dealer-router-ipc-current.txt` |
+| `ipc` | `ROUTER_ROUTER` | 통과 (7.501%) | 통과 (8.865%) | 통과 (14.764%) | 통과 (87.290%) | 통과 (76.140%) | 통과 (59.500%) | throughput 산술평균 42.344%, latency 산술평균 0.975x다. shared routed send와 router receive-owner 개선 및 Sol 추가 후보 no-go가 적용되어 있다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_015531_python-router-router-ipc-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_015544_python-router-router-ipc-current.txt` |
 
 #### 9.7.2 Multi suite
 
