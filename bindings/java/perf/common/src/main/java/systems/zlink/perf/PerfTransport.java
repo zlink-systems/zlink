@@ -11,6 +11,7 @@ import systems.zlink.contracts.sockets.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -160,6 +161,16 @@ final class PerfTransport {
                                     MonitorEventType expectedEvent,
                                     int expectedCount, Duration timeout,
                                     String label) {
+        waitForMonitorEventWithActivity(monitor, null, expectedEvent,
+            expectedCount, timeout, label);
+    }
+
+    static void waitForMonitorEventWithActivity(SocketMonitor monitor,
+                                                Socket activitySocket,
+                                                MonitorEventType expectedEvent,
+                                                int expectedCount,
+                                                Duration timeout,
+                                                String label) {
         CountDownLatch done = new CountDownLatch(1);
         AtomicReference<Throwable> failure = new AtomicReference<>();
         Thread waiter = new Thread(() -> {
@@ -180,7 +191,23 @@ final class PerfTransport {
         }, "perf-monitor-wait");
         waiter.setDaemon(true);
         waiter.start();
-        await(done, label, timeout);
+        if (activitySocket == null) {
+            await(done, label, timeout);
+        } else {
+            long deadline = System.nanoTime() + Math.max(1L, timeout.toNanos());
+            try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
+                     List.of(activitySocket),
+                     systems.zlink.contracts.eventing.PollEventFlags.POLLIN)) {
+                while (done.getCount() != 0 && System.nanoTime() < deadline) {
+                    long remainingMillis = Math.max(1L,
+                        (deadline - System.nanoTime()) / 1_000_000L);
+                    pollSet.poll((int) Math.min(10L, remainingMillis));
+                }
+            }
+            if (done.getCount() != 0) {
+                throw new IllegalStateException(label + " timed out");
+            }
+        }
         Throwable error = failure.get();
         if (error != null) {
             throw new IllegalStateException(label + " failed", error);

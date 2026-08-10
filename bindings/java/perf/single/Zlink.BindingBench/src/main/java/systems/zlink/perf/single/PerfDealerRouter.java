@@ -52,10 +52,10 @@ final class PerfDealerRouter {
             receiver.bind(PerfUtil.bindEndpoint(endpoint, config.transport()));
             sender.connect(PerfUtil.connectedEndpoint(receiver, endpoint,
                 config.transport()));
+            PerfUtil.waitForMonitorEventWithActivity(receiverMonitor, receiver,
+                READY_EVENT, 1, readyTimeout, "dealer/router receiver ready");
             PerfUtil.waitForMonitorEvent(senderMonitor, READY_EVENT, 1,
                 readyTimeout, "dealer/router sender ready");
-            PerfUtil.waitForMonitorEvent(receiverMonitor, READY_EVENT, 1,
-                readyTimeout, "dealer/router receiver ready");
             PerfUtil.recalculateAutoHwm(ctx);
 
             // PERF_SINGLE_TEST_POLICY § 1.4: receiver waits with -1 and exits
@@ -183,9 +183,9 @@ final class PerfDealerRouter {
     }
 
     private static boolean trySendActive(DealerSocket sender, Message active) {
-        try (Message outbound = Message.from(active)) {
+        try {
             return sender.send()
-                .message(outbound)
+                .message(active)
                 .flags(SendFlags.DONT_WAIT)
                 .submit();
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {
@@ -204,9 +204,9 @@ final class PerfDealerRouter {
     }
 
     private static boolean trySendBlocking(DealerSocket sender, Message active) {
-        try (Message outbound = Message.from(active)) {
+        try {
             return sender.send()
-                .message(outbound)
+                .message(active)
                 .flags(SendFlags.NONE)
                 .submit();
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {

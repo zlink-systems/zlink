@@ -71,10 +71,10 @@ final class PerfRouterRouter {
             receiver.bind(PerfUtil.bindEndpoint(endpoint, config.transport()));
             sender.connect(PerfUtil.connectedEndpoint(receiver, endpoint,
                 config.transport()));
-            PerfUtil.waitForMonitorEvent(senderMonitor, READY_EVENT, 1,
-                readyTimeout, "router/router sender ready");
-            PerfUtil.waitForMonitorEvent(receiverMonitor, READY_EVENT, 1,
-                readyTimeout, "router/router receiver ready");
+            PerfUtil.waitForMonitorEventWithActivity(receiverMonitor, receiver,
+                READY_EVENT, 1, readyTimeout, "router/router receiver ready");
+            PerfUtil.waitForMonitorEventWithActivity(senderMonitor, sender,
+                READY_EVENT, 1, readyTimeout, "router/router sender ready");
             RoutingId targetRoute = performRouterRouterHandshake(receiver, sender,
                 Duration.ofMillis(config.connectReadyTimeoutMs()));
             drainRouterSocket(receiver);

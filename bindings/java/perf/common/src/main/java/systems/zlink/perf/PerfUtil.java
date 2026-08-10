@@ -258,6 +258,14 @@ public final class PerfUtil {
             timeout, label);
     }
 
+    public static void waitForMonitorEventWithActivity(
+        SocketMonitor monitor, Socket activitySocket,
+        systems.zlink.contracts.eventing.MonitorEventType expectedEvent,
+        int expectedCount, Duration timeout, String label) {
+        PerfTransport.waitForMonitorEventWithActivity(monitor, activitySocket,
+            expectedEvent, expectedCount, timeout, label);
+    }
+
     public static systems.zlink.contracts.messaging.Received recvNoWait(PairSocket socket) {
         try {
             systems.zlink.contracts.messaging.Received received = new systems.zlink.contracts.messaging.Received();

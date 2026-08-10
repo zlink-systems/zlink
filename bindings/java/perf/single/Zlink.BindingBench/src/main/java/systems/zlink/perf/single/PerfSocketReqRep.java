@@ -78,12 +78,18 @@ final class PerfSocketReqRep {
                 ((DealerSocket) client).connect(connectedEndpoint);
             }
             Duration readyTimeout = Duration.ofMillis(config.connectReadyTimeoutMs());
-            PerfUtil.waitForMonitorEvent(serverMonitor,
+            PerfUtil.waitForMonitorEventWithActivity(serverMonitor, server,
                 systems.zlink.contracts.eventing.MonitorEventType.CONNECTION_READY,
                 1, readyTimeout, "reqrep server ready");
-            PerfUtil.waitForMonitorEvent(clientMonitor,
-                systems.zlink.contracts.eventing.MonitorEventType.CONNECTION_READY,
-                1, readyTimeout, "reqrep client ready");
+            if (client instanceof RouterSocket) {
+                PerfUtil.waitForMonitorEventWithActivity(clientMonitor, client,
+                    systems.zlink.contracts.eventing.MonitorEventType.CONNECTION_READY,
+                    1, readyTimeout, "reqrep client ready");
+            } else {
+                PerfUtil.waitForMonitorEvent(clientMonitor,
+                    systems.zlink.contracts.eventing.MonitorEventType.CONNECTION_READY,
+                    1, readyTimeout, "reqrep client ready");
+            }
             PerfUtil.recalculateAutoHwm(ctx);
 
             Thread serverThread = new Thread(() -> runServer(server, serverStopped,

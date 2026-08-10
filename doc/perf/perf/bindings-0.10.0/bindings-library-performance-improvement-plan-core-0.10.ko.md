@@ -1060,9 +1060,9 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 ### 9.3 Java
 
 - perf 경로: `bindings/java/perf`
-- Single 상태: `진행 (보류 3, 미측정 39)`
+- Single 상태: `진행 (보류 4, 미측정 38)`
 - Multi 상태: `미측정`
-- 다음 작업: `DEALER_ROUTER / tcp`를 C와 순차 paired 측정하고 개선 검토한다.
+- 다음 작업: `DEALER_ROUTER_REQREP / tcp`를 C와 순차 paired 측정하고 개선 검토한다.
 
 #### 9.3.1 Single suite
 
@@ -1071,7 +1071,7 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 | `tcp` | `PAIR` | 보류 (34.052%) | 보류 (56.059%) | 보류 (79.054%) | 보류 (42.674%) | 보류 (39.996%) | 보류 (33.606%) | 직접 소유한 active `Message`를 public send builder에 submit하고 backpressure 때 같은 sample을 retry하도록 C ownership 의미와 맞췄다. binding throughput 총합은 baseline보다 16.413% 증가했고 C 대비 산술평균은 47.573%, latency 산술평균은 1.300x다. Sol invoker cache 후보는 자체 결과보다 총합 4.977% 낮아 제거했다. 최소 기준 70%에 미달해 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_042842_java-pair-tcp-c.txt`; baseline: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_042853_java-pair-tcp-baseline.txt`; final: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_043012_java-pair-tcp-own-direct-submit.txt` |
 | `tcp` | `PUBSUB` | 보류 (31.576%) | 보류 (37.699%) | 보류 (43.094%) | 보류 (44.043%) | 보류 (37.218%) | 보류 (34.499%) | publish retry에서 중복 `Message.from` deep copy와 사용하지 않던 pollset을 제거했다. binding throughput 총합은 baseline보다 21.140% 증가했고 C 대비 산술평균은 38.021%, latency 산술평균은 0.520x다. Sol의 topic invoker 결합 후보는 자체 결과보다 총합 1.154% 낮아 제거했다. 최소 기준 70%에 미달해 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_043045_java-pubsub-tcp-c.txt`; baseline: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_043104_java-pubsub-tcp-baseline.txt`; final: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_043155_java-pubsub-tcp-own-direct-submit.txt` |
 | `tcp` | `DEALER_DEALER` | 보류 (37.582%) | 보류 (52.361%) | 보류 (63.063%) | 보류 (41.441%) | 보류 (37.299%) | 보류 (33.117%) | owned active `Message`를 직접 public send builder에 submit/retry해 중복 deep copy를 제거했다. binding throughput 총합은 baseline보다 10.353% 증가했고 C 대비 산술평균 44.144%, latency 산술평균 0.443x다. 자체·Sol 검토 뒤 최소 기준 70%에 미달해 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_043740_java-dealer-dealer-tcp-c.txt`; baseline: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_043754_java-dealer-dealer-tcp-baseline.txt`; final: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_043835_java-dealer-dealer-tcp-own-direct-submit.txt` |
-| `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `DEALER_ROUTER` | 보류 (37.244%) | 보류 (51.138%) | 보류 (68.093%) | 보류 (41.616%) | 보류 (34.507%) | 보류 (31.058%) | C와 같은 ROUTER activity poll로 ready barrier를 맞춘 뒤, owned active `Message`를 직접 submit/retry해 중복 deep copy를 제거했다. binding throughput 총합은 parity baseline보다 7.440% 증가했고 C 대비 산술평균 43.943%, latency 산술평균 1.535x다. Sol review에서 변경을 유지하고 추가 후보는 NO-GO로 판정했다. 최소 기준 75%에 미달해 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_044049_java-dealer-router-tcp-c.txt`; parity baseline: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_044326_java-dealer-router-tcp-parity-baseline.txt`; final: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_044401_java-dealer-router-tcp-own-direct-submit.txt` |
 | `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
