@@ -55,7 +55,7 @@ internal static class PerfMultiDealerDealerServer
         }
 
         var result = RunReceivePhase(server, size, latencySampleCap,
-            durationSeconds);
+            durationSeconds, controlState);
         if (result.measureCount <= 0)
             return 2;
 
@@ -67,7 +67,7 @@ internal static class PerfMultiDealerDealerServer
     private static (double throughput, double latencyNs, double latencyP95Ns,
         double latencyP99Ns, long measureCount)
         RunReceivePhase(IDealerSocket server, int msgSize, int latencySampleCap,
-            int durationSeconds)
+            int durationSeconds, RunnerControlState controlState)
     {
         const uint expectedRunId = 1;
         var latSamples = new LatencySampleBuffer(
@@ -75,19 +75,15 @@ internal static class PerfMultiDealerDealerServer
         long measureCount = 0;
         using var received = Received.Create();
 
-        // PERF_MULTI_TEST_POLICY: the active window ends purely on the
-        // configured duration (signal-driven -1 poll, duration timer), like C
-        // perf_multi_dealer_dealer_server.cpp run_receive_window. C's
-        // subsequent drain_phase_until_idle exists ONLY because the C multi
-        // server process is reused across every size case; the .NET multi
-        // runner (multi/run_benchmarks.sh) spawns and tears down a fresh
-        // server process per size (for size loop, server start + STOP/wait
-        // each iteration), so there is no cross-size backlog to drain. The
-        // process exits after this size, discarding any tail like C discards
-        // it across runs. No idle-drain phase is performed.
+        // PERF_MULTI_TEST_POLICY: throughput and latency are collected only
+        // during the configured active duration, matching C. After that
+        // window, C drains queued payloads and stop tokens until idle before
+        // the size process closes. The .NET runner has one process per size,
+        // but keeps the same cleanup boundary so later client stop-token sends
+        // do not race an early server close.
         if (!ReceiveActiveWindow(server, received, msgSize, expectedRunId,
                 PerfPhase.Active, latSamples, ref measureCount,
-                durationSeconds))
+                durationSeconds, controlState))
         {
             return (0.0, 0.0, 0.0, 0.0, 0);
         }
@@ -119,7 +115,8 @@ internal static class PerfMultiDealerDealerServer
     private static bool ReceiveActiveWindow(IDealerSocket server,
         Received received, int msgSize, uint expectedRunId,
         PerfPhase expectedPhase, LatencySampleBuffer latSamples,
-        ref long messageCount, int durationSeconds)
+        ref long messageCount, int durationSeconds,
+        RunnerControlState controlState)
     {
         using var poller = Zlink.CreatePoller();
         var events = new PollEvent[1];
@@ -127,10 +124,17 @@ internal static class PerfMultiDealerDealerServer
             + (long)Math.Max(1, durationSeconds) * Stopwatch.Frequency;
         poller.Add(server, PollEventFlags.PollIn, ServerSocketTag);
 
-        while (true)
+        int stopTokenCount = 0;
+        while (!controlState.StopRequested)
         {
             int written = poller.Wait(events,
-                TimeSpan.FromMilliseconds(-1));
+                TimeSpan.FromMilliseconds(50));
+            if (written == 0)
+            {
+                if (Stopwatch.GetTimestamp() >= activeDeadlineTicks)
+                    break;
+                continue;
+            }
 
             for (int i = 0; i < written; i++)
             {
@@ -140,29 +144,36 @@ internal static class PerfMultiDealerDealerServer
 
                 ReceiveStatus receiveStatus = ReceiveOneAvailable(server,
                     received, msgSize, expectedRunId, expectedPhase,
-                    latSamples, ref messageCount, collectMetrics: true);
+                    latSamples, ref messageCount,
+                    collectMetrics: true);
                 if (receiveStatus == ReceiveStatus.NoData)
                     continue;
 
-                // The sender's stop token is the wire-level phase boundary.
-                // Treating it as an ordinary payload can leave a signal-driven
-                // poll blocked forever when the token arrives just before the
-                // local deadline.
                 if (receiveStatus == ReceiveStatus.StopToken)
-                    return true;
+                    stopTokenCount++;
+
+                DrainAvailable(server, received, msgSize, expectedRunId,
+                    expectedPhase, latSamples, ref messageCount,
+                    ref stopTokenCount, collectMetrics: true);
 
                 if (Stopwatch.GetTimestamp() >= activeDeadlineTicks)
-                    return true;
-
-                if (DrainAvailable(server, received, msgSize, expectedRunId,
-                        expectedPhase, latSamples, ref messageCount,
-                        collectMetrics: true))
-                    return true;
-
-                if (Stopwatch.GetTimestamp() >= activeDeadlineTicks)
-                    return true;
+                    goto active_window_complete;
             }
         }
+
+    active_window_complete:
+        if (controlState.StopRequested)
+            return true;
+
+        double drainWaitSeconds = msgSize >= 65536
+            ? Math.Max(10.0, Math.Max(1, durationSeconds) * 2.0)
+            : Math.Max(2.0, Math.Max(1, durationSeconds));
+        bool drainComplete = DrainPhaseUntilIdle(poller, events, server,
+            received, msgSize, expectedRunId, expectedPhase, latSamples,
+            ref messageCount,
+            ref stopTokenCount, controlState, drainWaitSeconds, 50);
+        _ = stopTokenCount;
+        return drainComplete;
     }
 
     private static ReceiveStatus ReceiveOneAvailable(IDealerSocket server,
@@ -179,10 +190,10 @@ internal static class PerfMultiDealerDealerServer
         return stopToken ? ReceiveStatus.StopToken : ReceiveStatus.Message;
     }
 
-    private static bool DrainAvailable(IDealerSocket server, Received received,
+    private static void DrainAvailable(IDealerSocket server, Received received,
         int msgSize, uint expectedRunId, PerfPhase expectedPhase,
         LatencySampleBuffer latSamples, ref long messageCount,
-        bool collectMetrics)
+        ref int stopTokenCount, bool collectMetrics)
     {
         while (true)
         {
@@ -191,10 +202,55 @@ internal static class PerfMultiDealerDealerServer
                 latSamples, ref messageCount,
                 collectMetrics);
             if (receiveStatus == ReceiveStatus.NoData)
-                return false;
+                return;
             if (receiveStatus == ReceiveStatus.StopToken)
-                return true;
+                stopTokenCount++;
         }
+    }
+
+    private static bool DrainPhaseUntilIdle(IPoller poller, PollEvent[] events,
+        IDealerSocket server, Received received, int msgSize,
+        uint expectedRunId, PerfPhase expectedPhase,
+        LatencySampleBuffer latSamples, ref long messageCount,
+        ref int stopTokenCount, RunnerControlState controlState,
+        double maxWaitSeconds, int idleWaitMs)
+    {
+        long drainDeadlineTicks = Stopwatch.GetTimestamp()
+            + (long)Math.Max(1.0, maxWaitSeconds) * Stopwatch.Frequency;
+        long idleDeadlineTicks = Stopwatch.GetTimestamp()
+            + (long)Math.Max(1, idleWaitMs) * Stopwatch.Frequency / 1000;
+
+        while (!controlState.StopRequested
+               && Stopwatch.GetTimestamp() < drainDeadlineTicks)
+        {
+            ReceiveStatus receiveStatus = ReceiveOneAvailable(server,
+                received, msgSize, expectedRunId, expectedPhase,
+                latSamples,
+                ref messageCount, collectMetrics: false);
+            if (receiveStatus == ReceiveStatus.NoData)
+            {
+                long nowTicks = Stopwatch.GetTimestamp();
+                if (nowTicks >= idleDeadlineTicks)
+                    return true;
+
+                long remainingTicks = Math.Min(
+                    idleDeadlineTicks - nowTicks,
+                    drainDeadlineTicks - nowTicks);
+                int waitMs = (int)Math.Max(1,
+                    Math.Min(idleWaitMs,
+                        (remainingTicks * 1000L + Stopwatch.Frequency - 1)
+                            / Stopwatch.Frequency));
+                _ = poller.Wait(events, TimeSpan.FromMilliseconds(waitMs));
+                continue;
+            }
+
+            if (receiveStatus == ReceiveStatus.StopToken)
+                stopTokenCount++;
+            idleDeadlineTicks = Stopwatch.GetTimestamp()
+                + (long)Math.Max(1, idleWaitMs) * Stopwatch.Frequency / 1000;
+        }
+
+        return controlState.StopRequested;
     }
 
     private static bool ProcessReceived(IDealerSocket server,

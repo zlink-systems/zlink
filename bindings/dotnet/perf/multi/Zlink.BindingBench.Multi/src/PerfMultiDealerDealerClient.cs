@@ -143,10 +143,9 @@ internal static class PerfMultiDealerDealerClient
         }
 
         // PERF_MULTI_TEST_POLICY § 1.3.1 / C
-        // perf_multi_dealer_dealer_client.cpp run_send_phase (~290-293): the
-        // one-way sender blocking-sends a wire-level stop token on EVERY
-        // client socket after the send window so the dealer-dealer server's
-        // signal-driven receiver loop terminates. Send failure is fatal.
+        // perf_multi_dealer_dealer_client.cpp sends one blocking wire-level
+        // stop token on every client socket after the active window. The
+        // server drains these tokens before the size process closes.
         for (int i = 0; i < activeClients.Count; i++)
         {
             if (!SendStopTokenBlocking((IDealerSocket)activeClients[i],
