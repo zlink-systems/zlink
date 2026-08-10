@@ -56,7 +56,7 @@ internal static class PerfMultiStreamServer
 
         server.OnPacket((routingId, header, payload) =>
         {
-            PendingStreamMessage request = new();
+            Message packet;
             using (header)
             using (payload)
             {
@@ -67,22 +67,25 @@ internal static class PerfMultiStreamServer
                     return;
                 }
 
-                request.Assign(routingId, BuildStreamPacket(header, payload));
+                packet = BuildStreamPacket(header, payload);
             }
-            SendStatus sendStatus = TrySendPendingMessage(server, request);
+
+            SendStatus sendStatus = TrySendMessageNow(server, routingId, packet);
             if (sendStatus == SendStatus.Done)
             {
-                request.Clear();
+                packet.Dispose();
                 return;
             }
 
             if (sendStatus == SendStatus.Fatal)
             {
-                request.Clear();
+                packet.Dispose();
                 Interlocked.Exchange(ref control.StopRequested, 1);
                 return;
             }
 
+            var request = new PendingStreamMessage();
+            request.Assign(routingId, packet);
             lock (pendingLock)
             {
                 if (pending.Count >= pendingCapacity)
@@ -246,21 +249,42 @@ internal static class PerfMultiStreamServer
             throw new InvalidOperationException("stream packet is too large");
         }
 
-        byte[] packet = new byte[6 + headerBytes.Length + payloadBytes.Length];
-        packet[0] = (byte)((headerBytes.Length >> 8) & 0xFF);
-        packet[1] = (byte)(headerBytes.Length & 0xFF);
-        packet[2] = (byte)((payloadBytes.Length >> 24) & 0xFF);
-        packet[3] = (byte)((payloadBytes.Length >> 16) & 0xFF);
-        packet[4] = (byte)((payloadBytes.Length >> 8) & 0xFF);
-        packet[5] = (byte)(payloadBytes.Length & 0xFF);
-        headerBytes.CopyTo(packet.AsSpan(6));
-        payloadBytes.CopyTo(packet.AsSpan(6 + headerBytes.Length));
-        return new Message(packet.AsSpan());
+        Message packet = Message.Allocate(
+            6 + headerBytes.Length + payloadBytes.Length);
+        Span<byte> packetBytes = packet.AsSpan();
+        packetBytes[0] = (byte)((headerBytes.Length >> 8) & 0xFF);
+        packetBytes[1] = (byte)(headerBytes.Length & 0xFF);
+        packetBytes[2] = (byte)((payloadBytes.Length >> 24) & 0xFF);
+        packetBytes[3] = (byte)((payloadBytes.Length >> 16) & 0xFF);
+        packetBytes[4] = (byte)((payloadBytes.Length >> 8) & 0xFF);
+        packetBytes[5] = (byte)(payloadBytes.Length & 0xFF);
+        headerBytes.CopyTo(packetBytes.Slice(6));
+        payloadBytes.CopyTo(packetBytes.Slice(6 + headerBytes.Length));
+        return packet;
     }
 
     private static bool IsStopTokenPayload(ReadOnlySpan<byte> payload)
     {
         return payload.SequenceEqual(MultiStopToken);
+    }
+
+    private static SendStatus TrySendMessageNow(ISocket server,
+        RoutingId routingId, Message payload)
+    {
+        while (true)
+        {
+            try
+            {
+                if (((IStreamSocket)server).Send(routingId).Message(payload)
+                        .Flags(SendFlags.DontWait).Submit())
+                    return SendStatus.Done;
+            }
+            catch (ZlinkException ex) when (IsWouldBlock(ex.NativeErrno)
+                                            || IsInterrupted(ex.NativeErrno))
+            {
+                return SendStatus.Blocked;
+            }
+        }
     }
 
     private static SendStatus TrySendPendingMessage(ISocket server,

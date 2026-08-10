@@ -608,3 +608,16 @@ POSDDD 평가: routed peer identity를 connection readiness의 암묵적인 전�
 initial baseline throughput ratio는 `56.162% / 61.957% / 68.214% / 78.094% / 83.014% / 86.144%`, 산술평균은 `72.264%`이며 평균 latency ratio는 `1.222x / 1.061x / 1.275x / 1.240x / 1.013x / 1.105x`, 산술평균은 `1.168x`다. 자체 PollOut after throughput ratio는 `56.793% / 59.028% / 79.092% / 78.361% / 86.824% / 83.680%`, 산술평균은 `73.963%`이며 평균 latency ratio는 `1.231x / 1.080x / 1.330x / 1.280x / 1.046x / 1.126x`, 산술평균은 `1.182x`다.
 
 lifecycle parity rebaseline throughput ratio는 `60.588% / 60.647% / 77.217% / 85.441% / 106.666% / 107.023%`, 산술평균은 `82.930%`이며 평균 latency ratio는 `1.216x / 1.082x / 1.261x / 1.225x / 0.932x / 0.892x`, 산술평균은 `1.101x`다. C와 .NET의 active deadline·단일 stop token 전송 책임을 맞춘 lifecycle 변경은 public contract·ownership·error semantics와 측정 의미를 유지하므로 채택했다. Sol `Unsafe.SkipInit` A/B throughput ratio는 `59.458% / 67.305% / 84.506% / 85.638% / 93.663% / 82.800%`, 산술평균은 `78.895%`이며 평균 latency ratio 산술평균은 `1.121x`로 lifecycle rebaseline보다 악화되어 제거했다. 최종 aggregate throughput `82.930%`가 .NET simple one-way 목표 `85%`에 미달하므로 `보류`다. build는 `0 warning / 0 error`, contract test는 `149 passed / 0 failed / 0 skipped`다.
+
+### .NET Multi MULTI_STREAM/tcp
+
+조건: Core `v0.10.1` release package, Release, `tcp`, clients `7000`, duration `1s`, runs `1`, msg sizes `64/256/1024/65536B`, connect concurrency `1024`, connect-ready timeout `10000ms`, monitor-HWM `4096000`, auto-HWM `balanced`, server/client I/O threads `4/4`. C와 .NET report 모두 4개 size와 20개 result line이 complete다.
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 296575 / 296562 / 275822 / 30296 | 23.562 / 23.553 / 25.284 / 216.987 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_202308_dotnet-multi-stream-tcp-paired-c-7000.txt` |
+| .NET baseline | 203676 / 235307 / 204704 / 23541 | 34.595 / 29.733 / 34.364 / 305.146 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_202329_dotnet-multi-stream-tcp-paired-dotnet-7000.txt` |
+| .NET own after `Message.Allocate` 직접 작성 | 195329 / 207115 / 204690 / 28915 | 36.209 / 34.102 / 34.544 / 239.599 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_202735_dotnet-multi-stream-tcp-own-after-message-allocate.txt` |
+| .NET Sol after EAGAIN 시점 pending wrapper 생성 | 194507 / 222908 / 201877 / 30446 | 36.638 / 31.571 / 35.098 / 223.131 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_203035_dotnet-multi-stream-tcp-sol-after-lazy-pending.txt` |
+
+baseline throughput ratio는 `68.676% / 79.345% / 74.216% / 77.703%`, 산술평균은 `74.985%`이며 평균 latency ratio는 `1.468x / 1.262x / 1.359x / 1.406x`, 산술평균은 `1.374x`다. 자체 `Message.Allocate` 직접 작성 after ratio는 `65.862% / 69.839% / 74.211% / 95.442%`, 산술평균은 `76.338%`, 평균 latency ratio는 `1.537x / 1.448x / 1.366x / 1.104x`, 산술평균은 `1.364x`다. Sol pending wrapper 지연 after ratio는 `65.584% / 75.164% / 73.191% / 100.495%`, 산술평균은 `78.609%`, 평균 latency ratio는 `1.555x / 1.340x / 1.388x / 1.028x`, 산술평균은 `1.328x`다. 두 개선을 적용해도 .NET simple one-way 최소 기준 `85%`에 미달하므로 최종 상태는 `보류`다. public contract·ownership·error semantics는 변경하지 않았다. build는 `0 warning / 0 error`다.
