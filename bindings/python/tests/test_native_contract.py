@@ -47,6 +47,7 @@ def test_native_extension_exposes_only_raw_bridge_operations():
         "publish_parts",
         "recv_parts",
         "recv_owner",
+        "router_recv_owner",
         "subscribe_parts",
         "subscribe_owner",
     }

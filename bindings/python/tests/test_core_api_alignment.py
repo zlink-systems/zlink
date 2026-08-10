@@ -198,6 +198,47 @@ class CoreApiAlignmentTests(unittest.TestCase):
                     self.assertEqual(result, zlink.RequestResult.OK)
                     self.assertEqual(parts, [b"pong"])
 
+    def test_router_recv_into_keeps_storage_and_snapshot_contract(self):
+        with zlink.create_context() as ctx:
+            with zlink.create_dealer_socket(ctx) as dealer:
+                with zlink.create_router_socket(ctx) as router:
+                    router.bind("inproc://python-router-recv-owner-contract")
+                    dealer.connect("inproc://python-router-recv-owner-contract")
+                    received = zlink.create_received()
+
+                    self.assertFalse(
+                        router.recv_into(
+                            received, flags=zlink.RecvFlags.DONT_WAIT
+                        )
+                    )
+                    self.assertEqual(len(received), 0)
+
+                    self.assertTrue(
+                        dealer.send().messages(b"first", b"second").submit()
+                    )
+                    self.assertTrue(router.recv_into(received))
+                    self.assertIsNotNone(received.routing_id)
+                    self.assertIsNone(received.request_seq)
+                    self.assertEqual(
+                        received.to_bytes_list(), [b"first", b"second"]
+                    )
+                    snapshot = received.first_part().data
+
+                    self.assertFalse(
+                        router.recv_into(
+                            received, flags=zlink.RecvFlags.DONT_WAIT
+                        )
+                    )
+                    self.assertEqual(
+                        received.to_bytes_list(), [b"first", b"second"]
+                    )
+
+                    self.assertTrue(dealer.send().message(b"replacement").submit())
+                    self.assertTrue(router.recv_into(received))
+                    self.assertEqual(snapshot.tobytes(), b"first")
+                    received.close()
+                    received.close()
+
     def test_monitor_and_poller_layouts_match_core_11(self):
         self.assertEqual((ctypes.sizeof(ZlinkMsg), ctypes.alignment(ZlinkMsg)), (64, 8))
         self.assertEqual(

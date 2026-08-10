@@ -49,7 +49,7 @@ def test_raw_hot_path_keeps_gil_release_and_part_failure_cleanup():
     assert "Py_BEGIN_ALLOW_THREADS" in native_text
     assert "zlink_send_part" in native_text
     assert "zlink_recv_part" in native_text
-    assert "zlink_router_recv_part" not in native_text
+    assert "zlink_router_recv_part" in native_text
     assert "_send_payload_via_native_bridge" in socket_text
     assert "_recv_owner_via_native_bridge" in socket_text
     assert "for (Py_ssize_t j = i; j < prepared.count; ++j)" in native_text

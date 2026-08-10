@@ -4,6 +4,7 @@ import ctypes
 import threading
 
 from ...contracts.sockets.codes import SocketType
+from ...contracts.core.routing_id import RoutingId
 from ..options.option_mapping import (
     create_pub_socket_options,
     create_router_socket_options,
@@ -88,6 +89,11 @@ _native_routed_send_op_func = (
 )
 _native_publisher_send_op_func = (
     getattr(_native_extension, "publisher_send_op", None)
+    if _native_extension is not None
+    else None
+)
+_native_router_recv_owner_func = (
+    getattr(_native_extension, "router_recv_owner", None)
     if _native_extension is not None
     else None
 )
@@ -707,6 +713,20 @@ class RouterSocket(
         """
         if received is None:
             raise TypeError("received must be a Received")
+        if _native_router_recv_owner_func is not None and not _in_callback():
+            result = _native_router_recv_owner_func(
+                int(self._socket_handle.handle), int(flags)
+            )
+            if result is False:
+                return False
+            rc, err, routing, request_seq, owner = result
+            if int(rc) != 0:
+                _raise_result_error(RecvError, RecvResult, rc, err)
+            routing_id = RoutingId.from_(routing) if routing is not None else None
+            self._replace_router_received(
+                received, owner, routing_id, int(request_seq)
+            )
+            return True
         try:
             source_rid = ctypes.POINTER(ZlinkRoutingId)()
             request_seq = ctypes.c_uint64()

@@ -1506,6 +1506,99 @@ static PyObject *py_recv_owner (PyObject *self, PyObject *args)
     return Py_BuildValue ("iiNN", rc, err, routing_obj, owner_obj);
 }
 
+static PyObject *py_router_recv_owner (PyObject *self, PyObject *args)
+{
+    unsigned long long handle_value = 0;
+    int flags = 0;
+    int rc = ZLINK_RECV_OK;
+    int err = 0;
+    zlink_routing_id_t routing_copy;
+    uint64_t request_seq = 0;
+    int has_routing = 0;
+    received_parts_t received = {0};
+
+    (void) self;
+    memset (&routing_copy, 0, sizeof (routing_copy));
+    if (!PyArg_ParseTuple (args, "Ki", &handle_value, &flags))
+        return NULL;
+
+    void *handle = (void *) (uintptr_t) handle_value;
+    const int release_gil = (flags & ZLINK_DONTWAIT) == 0;
+    PyThreadState *_save = NULL;
+    if (release_gil)
+        _save = PyEval_SaveThread ();
+    while (1) {
+        const zlink_routing_id_t *source_rid = NULL;
+        zlink_msg_t part;
+        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+        zlink_recv_flags_t recv_flags =
+          received.count == 0 ? (zlink_recv_flags_t) flags : ZLINK_DONTWAIT;
+
+        if (zlink_msg_init (&part) != ZLINK_CONFIG_OK) {
+            err = zlink_errno ();
+            if (err == 0)
+                err = ENOMEM;
+            rc = ZLINK_RECV_INTERNAL_ERROR;
+            break;
+        }
+        rc = zlink_router_recv_part (
+          handle, &source_rid, &request_seq, &part, &has_more, recv_flags);
+        if (rc != ZLINK_RECV_OK) {
+            err = zlink_errno ();
+            zlink_msg_close (&part);
+            break;
+        }
+        if (received.count == 0 && source_rid && source_rid->size > 0) {
+            routing_copy = *source_rid;
+            has_routing = 1;
+        }
+        if (append_received_part (&received, &part) != 0) {
+            zlink_msg_close (&part);
+            rc = ZLINK_RECV_INTERNAL_ERROR;
+            err = ENOMEM;
+            break;
+        }
+        if (has_more == ZLINK_PART_FINAL)
+            break;
+    }
+    if (release_gil)
+        PyEval_RestoreThread (_save);
+
+    if (rc != ZLINK_RECV_OK) {
+        close_received_parts (&received);
+        if ((flags & ZLINK_DONTWAIT) && is_recv_no_data_result (rc))
+            Py_RETURN_FALSE;
+        Py_INCREF (Py_None);
+        Py_INCREF (Py_None);
+        Py_INCREF (Py_None);
+        return Py_BuildValue ("iiNNN", rc, err, Py_None, Py_None, Py_None);
+    }
+
+    PyObject *owner_obj = build_native_parts_owner (&received);
+    if (!owner_obj) {
+        close_received_parts (&received);
+        return NULL;
+    }
+    PyObject *routing_obj = Py_None;
+    if (has_routing) {
+        routing_obj = PyBytes_FromStringAndSize ((const char *) routing_copy.data,
+                                                 (Py_ssize_t) routing_copy.size);
+        if (!routing_obj) {
+            Py_DECREF (owner_obj);
+            return NULL;
+        }
+    } else {
+        Py_INCREF (Py_None);
+    }
+    PyObject *request_seq_obj = PyLong_FromUnsignedLongLong (request_seq);
+    if (!request_seq_obj) {
+        Py_DECREF (routing_obj);
+        Py_DECREF (owner_obj);
+        return NULL;
+    }
+    return Py_BuildValue ("iiNNN", rc, err, routing_obj, request_seq_obj, owner_obj);
+}
+
 static PyObject *py_subscribe_parts (PyObject *self, PyObject *args)
 {
     unsigned long long handle_value = 0;
@@ -1738,6 +1831,8 @@ static PyMethodDef zlink_native_methods[] = {
    "Receive multipart payload parts through zlink_recv_part."},
   {"recv_owner", py_recv_owner, METH_VARARGS,
    "Receive multipart payload parts as a native bytes owner."},
+  {"router_recv_owner", py_router_recv_owner, METH_VARARGS,
+   "Receive routed multipart payload parts as a native owner."},
   {"subscribe_parts", py_subscribe_parts, METH_VARARGS,
    "Receive topic multipart payload parts through zlink_subscribe_part."},
   {"subscribe_owner", py_subscribe_owner, METH_VARARGS,
