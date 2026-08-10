@@ -978,3 +978,12 @@ throughput ratio는 `5.252% / 9.423% / 16.473% / 99.287% / 76.013% / 54.678%`, �
 | Python final | 134.864 / 131.846 / 135.625 / 23.441 / 15.715 / 8.842 | 0.121 / 0.117 / 0.164 / 15.197 / 16.616 / 28.067 | `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_011949_python-pair-ws-current.txt` |
 
 throughput ratio는 `9.583% / 13.021% / 32.896% / 104.062% / 104.900% / 93.162%`, 산술평균 `59.604%`이며 평균 latency ratio 산술평균은 `0.620x`다. 단순 one-way 최소 기준 `35%`를 통과한다.
+
+### Python Single PUBSUB/ws
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 1167.614 / 846.436 / 409.612 / 25.604 / 16.782 / 11.353 | 48.285 / 35.844 / 21.743 / 12.281 / 15.457 / 17.758 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_012029_python-pubsub-ws-paired-c.txt` |
+| Python final | 127.529 / 124.142 / 133.239 / 25.054 / 12.930 / 11.320 | 0.116 / 0.138 / 0.140 / 14.678 / 22.480 / 20.200 | `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_012101_python-pubsub-ws-current.txt` |
+
+throughput ratio는 `10.922% / 14.666% / 32.528% / 97.852% / 77.047% / 99.709%`, 산술평균 `55.454%`이며 평균 latency ratio 산술평균은 `0.633x`다. 단순 one-way 최소 기준 `35%`를 통과한다.
