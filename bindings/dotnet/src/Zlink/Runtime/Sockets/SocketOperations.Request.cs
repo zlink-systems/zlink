@@ -197,18 +197,21 @@ internal abstract class RouterRequestOperation : RequestOperation,
             : SubmitCore(_parts.Parts, callback, _flags, _timeout);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void AddMessage(Message message)
     {
         EnsureNotSubmitted();
         _parts.Add(message);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureReady()
     {
         EnsureNotSubmitted();
         _parts.EnsureNotEmpty();
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureNotSubmitted()
     {
         _submission.EnsureNotSubmitted();
