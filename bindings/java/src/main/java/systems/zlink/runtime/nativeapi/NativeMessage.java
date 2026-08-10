@@ -9,6 +9,10 @@ import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
 
 public final class NativeMessage {
+    private static final Arena REFCNT_ARENA = Arena.ofShared();
+    private static final ThreadLocal<MemorySegment> REFCNT_ERROR =
+        ThreadLocal.withInitial(() ->
+            REFCNT_ARENA.allocate(ValueLayout.JAVA_INT));
     private static final MethodHandle MH_MSG_INIT = NativeSymbols.downcallCritical("zlink_msg_init",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
     private static final MethodHandle MH_MSG_INIT_SIZE = NativeSymbols.downcallCritical("zlink_msg_init_size",
@@ -100,8 +104,9 @@ public final class NativeMessage {
     }
 
     public static int messageRefCount(MemorySegment msg) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment errorOut = arena.allocate(ValueLayout.JAVA_INT);
+        try {
+            MemorySegment errorOut = REFCNT_ERROR.get();
+            errorOut.set(ValueLayout.JAVA_INT, 0, 0);
             int refCount = (int) MH_MSG_REFCNT.invokeExact(msg, errorOut);
             int configResult = errorOut.get(ValueLayout.JAVA_INT, 0);
             if (refCount < 0 || configResult != 0) {

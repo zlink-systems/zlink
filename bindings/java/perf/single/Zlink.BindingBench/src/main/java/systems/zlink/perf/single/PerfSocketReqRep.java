@@ -22,6 +22,7 @@ import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfErrno;
 import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfUtil;
+import systems.zlink.perf.PerfMessageTemplatePool;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -141,15 +142,20 @@ final class PerfSocketReqRep {
 
             PerfSocketPollSet completions = PerfSocketPollSet.fromSockets(
                 List.of(client), PollEventFlags.POLLCOMPLETION);
-            try {
+            try (PerfMessageTemplatePool requestPool =
+                     new PerfMessageTemplatePool(config.size(), maxInFlight)) {
                 while (System.nanoTime() < activeEnd && failure.get() == null) {
                     boolean submittedAny = false;
                     int submittedSinceProgress = 0;
                     while (outstanding.get() < maxInFlight
                         && System.nanoTime() < activeEnd
                         && failure.get() == null) {
-                        try (Message request = PerfUtil.payload(config.size(),
-                                 (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime())) {
+                        Message request = requestPool.acquire(config.size(),
+                            (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime(), activeEnd);
+                        if (request == null) {
+                            break;
+                        }
+                        try (request) {
                             outstanding.incrementAndGet();
                             boolean accepted = submit(client, routedClient, request,
                                 requestTimeout, callback);

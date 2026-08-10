@@ -19,6 +19,7 @@ import systems.zlink.perf.PerfControl;
 import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
+import systems.zlink.perf.PerfMessageTemplatePool;
 import java.util.ArrayList;
 import java.time.Duration;
 import java.util.List;
@@ -183,6 +184,8 @@ final class PerfMultiDealerDealer {
             pollSockets.addAll(clients);
             try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
                      pollSockets, PollEventFlags.POLLOUT)) {
+                try (PerfMessageTemplatePool payloadPool =
+                         new PerfMessageTemplatePool(config.size(), 256)) {
                 for (int i = 0; i < clients.size(); i++) {
                     pollSet.setEvents(i);
                 }
@@ -208,7 +211,8 @@ final class PerfMultiDealerDealer {
                         // message) keeps stamp-to-wire tight like C.
                         DealerSocket socket = clients.get(index);
                         while (System.nanoTime() < activeEnd) {
-                            if (sendOneActive(socket, config.size())) {
+                            if (sendOneActive(socket, payloadPool, config.size(),
+                                    activeEnd)) {
                                 progressed = true;
                                 continue;
                             }
@@ -224,6 +228,7 @@ final class PerfMultiDealerDealer {
                     // PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven wait for
                     // POLLOUT readiness; no timer-based fallback.
                     pollWritable(pollSet, pending, -1);
+                }
                 }
             }
             // C parity: send one wire-level stop token on every client socket
@@ -265,9 +270,15 @@ final class PerfMultiDealerDealer {
     // fresh payload immediately before the non-blocking send. Returns true on
     // send_status_ok, false on transient backpressure (send_status_blocked);
     // a non-transient error is fatal.
-    private static boolean sendOneActive(DealerSocket socket, int size) {
-        try (Message payload = PerfUtil.payload(size,
-                 (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime())) {
+    private static boolean sendOneActive(DealerSocket socket,
+                                         PerfMessageTemplatePool payloadPool,
+                                         int size, long activeEnd) {
+        Message payload = payloadPool.acquire(size,
+            (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime(), activeEnd);
+        if (payload == null) {
+            return false;
+        }
+        try (payload) {
             return socket.send().message(payload)
                 .flags(SendFlags.DONT_WAIT).submit();
         } catch (ZlinkSubmitException ex) {

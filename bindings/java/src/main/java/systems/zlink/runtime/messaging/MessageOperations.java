@@ -141,7 +141,9 @@ public final class MessageOperations {
       implements RequestOperation, RequestSubmitOperation {
         private final RequestAsyncInvoker asyncInvoker;
         private final RequestCallbackInvoker callbackInvoker;
-        private final MessagePartsBuffer parts = new MessagePartsBuffer();
+        private Message singlePart;
+        private MessagePartsBuffer parts;
+        private int partCount;
         private Duration timeout = Duration.ofMillis(DEFAULT_TIMEOUT_MS);
         private SendFlags flags = SendFlags.NONE;
         private boolean submitted;
@@ -177,26 +179,41 @@ public final class MessageOperations {
         @Override
         public CompletableFuture<List<Message>> submit() {
             markSubmitted();
-            return asyncInvoker.submit(parts.asList(), flags, timeout);
+            return asyncInvoker.submit(requestParts(), flags, timeout);
         }
 
         @Override
         public boolean submit(RequestCallback callback) {
             markSubmitted();
-            return callbackInvoker.submit(parts.asList(),
+            return callbackInvoker.submit(requestParts(),
                 Objects.requireNonNull(callback, "callback"), flags, timeout);
         }
 
         private void addMessage(Message part) {
             ensureNotSubmitted();
-            parts.add(Objects.requireNonNull(part, "part"));
+            Objects.requireNonNull(part, "part");
+            if (partCount == 0) {
+                singlePart = part;
+            } else {
+                if (parts == null) {
+                    parts = new MessagePartsBuffer();
+                    parts.add(singlePart);
+                    singlePart = null;
+                }
+                parts.add(part);
+            }
+            partCount++;
         }
 
         private void markSubmitted() {
             ensureNotSubmitted();
-            if (parts.isEmpty())
+            if (partCount == 0)
                 throw new IllegalArgumentException("at least one message required");
             submitted = true;
+        }
+
+        private List<Message> requestParts() {
+            return partCount == 1 ? List.of(singlePart) : parts.asList();
         }
 
         private void ensureNotSubmitted() {
@@ -237,7 +254,7 @@ public final class MessageOperations {
         @Override
         public boolean submit(RequestCallback callback) {
             source.markSubmitted();
-            return source.callbackInvoker.submit(source.parts.asList(),
+            return source.callbackInvoker.submit(source.requestParts(),
                 Objects.requireNonNull(callback, "callback"), flags,
                 source.timeout);
         }

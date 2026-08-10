@@ -156,6 +156,11 @@ public final class PerfUtil {
             sentNanoTime);
     }
 
+    public static void writePayloadHeader(Message payload, int size,
+                                          byte phase, long sentNanoTime) {
+        PerfMeasurement.writePayload(payload, size, phase, sentNanoTime);
+    }
+
     public static void writePayload(Message payload, int size, byte phase,
                                     long sentNanoTime) {
         PerfMeasurement.writePayload(payload, size, phase, sentNanoTime);

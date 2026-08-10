@@ -22,6 +22,7 @@ import systems.zlink.perf.PerfControl;
 import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
+import systems.zlink.perf.PerfMessageTemplatePool;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -65,8 +66,7 @@ final class PerfMultiSocketReqRep {
                             received.close();
                             continue;
                         }
-                        Message reply = Message.from(received.firstPart());
-                        received.reply().message(reply).submit();
+                        received.reply().message(received.firstPart()).submit();
                         received.close();
                     }
                 }
@@ -144,7 +144,6 @@ final class PerfMultiSocketReqRep {
                                    PerfUtil.Metrics metrics,
                                    PerfSocketPollSet completions) {
         int count = clients.size();
-        Message[] payloads = new Message[count];
         AtomicBoolean[] waiting = new AtomicBoolean[count];
         AtomicReference<Throwable> failure = new AtomicReference<>();
         long activeEnd = System.nanoTime()
@@ -152,7 +151,6 @@ final class PerfMultiSocketReqRep {
         Duration timeout = Duration.ofMillis(Math.max(1, config.recvTimeoutMs()));
         RequestCallback[] callbacks = new RequestCallback[count];
         for (int i = 0; i < count; i++) {
-            payloads[i] = PerfUtil.payloadTemplate(config.size());
             waiting[i] = new AtomicBoolean();
             AtomicBoolean slotWaiting = waiting[i];
             callbacks[i] = (result, parts) -> {
@@ -181,7 +179,8 @@ final class PerfMultiSocketReqRep {
             };
         }
 
-        try {
+        try (PerfMessageTemplatePool payloadPool =
+                 new PerfMessageTemplatePool(config.size(), count)) {
             while (System.nanoTime() < activeEnd && failure.get() == null) {
                 boolean progress = false;
                 boolean hasWaiting = false;
@@ -190,13 +189,15 @@ final class PerfMultiSocketReqRep {
                         hasWaiting = true;
                         continue;
                     }
-                    payloads[i] = PerfUtil.resetAndWritePayload(payloads[i],
-                        config.size(), (byte) PerfUtil.PHASE_ACTIVE,
-                        System.nanoTime());
+                    Message payload = payloadPool.acquire(config.size(),
+                        (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime(), activeEnd);
+                    if (payload == null) {
+                        break;
+                    }
                     waiting[i].set(true);
-                    try {
+                    try (payload) {
                         boolean accepted = submit(clients.get(i), routedClients,
-                            payloads[i], timeout, callbacks[i]);
+                            payload, timeout, callbacks[i]);
                         if (!accepted) {
                             waiting[i].set(false);
                         } else {
@@ -222,8 +223,6 @@ final class PerfMultiSocketReqRep {
                 throw new IllegalStateException("multi socket reqrep failed",
                     failure.get());
             }
-        } finally {
-            Message.closeAll(List.of(payloads));
         }
 
         for (Socket client : clients) {
