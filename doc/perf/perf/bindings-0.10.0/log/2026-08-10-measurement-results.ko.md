@@ -186,3 +186,15 @@ throughput ratio는 `55.04% / 63.47% / 99.73% / 92.43% / 94.11% / 95.69%`, 산�
 latency ratio는 `1.160x / 1.035x / 0.951x / 1.030x / 1.017x / 0.958x`,
 산술평균 `1.025x`다. Sol 2차 후보는 no-go로 기록하고, socket request/reply aggregate
 기준을 충족해 통과로 판정한다. 다음 대상은 `ROUTER_ROUTER_REQREP/ws`다.
+
+### .NET Single ROUTER_ROUTER_REQREP/ws
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 209462 / 180411 / 102852 / 12195 / 8260 / 5267 | 0.235 / 0.296 / 0.593 / 0.980 / 0.724 / 0.567 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_153631_router-router-reqrep-ws-paired-c1.txt` |
+| .NET | 136405 / 117800 / 92203 / 11609 / 8149 / 5207 | 0.253 / 0.343 / 0.525 / 1.008 / 0.718 / 0.557 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_153727_dotnet-router-router-reqrep-ws-own-after-c-parity.txt` |
+
+throughput ratio는 `65.12% / 65.30% / 89.65% / 95.19% / 98.66% / 98.86%`, 산술평균은
+`85.46%`다. latency ratio는 `1.077x / 1.159x / 0.885x / 1.029x / 0.992x / 0.982x`,
+산술평균은 `1.021x`다. 64B·256B 개별 ratio는 결과로 기록하고 .NET socket request/reply
+aggregate 기준을 충족해 통과로 판정한다. 다음 대상은 `PAIR/wss`다.
