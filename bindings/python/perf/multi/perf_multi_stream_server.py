@@ -52,7 +52,7 @@ def main(argv=None):
                 if len(body_view) == len(STOP_TOKEN) and body_view == STOP_TOKEN:
                     stop.set()
                     return
-                frame = build_packet_frame(header, body)
+                frame = build_packet_frame(header.data, body_view)
                 with pending_lock:
                     pending.append((bytes(routing_id), frame))
                 pending_ready.set()
@@ -114,9 +114,7 @@ def main(argv=None):
                                 drain_pending()
 
 
-def build_packet_frame(header, body):
-    header_view = header.data
-    body_view = body.data
+def build_packet_frame(header_view, body_view):
     header_size = len(header_view)
     body_size = len(body_view)
     frame = bytearray(6 + header_size + body_size)
