@@ -1060,9 +1060,9 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 ### 9.3 Java
 
 - perf 경로: `bindings/java/perf`
-- Single 상태: `진행 (보류 9, 미측정 33)`
+- Single 상태: `진행 (보류 10, 미측정 32)`
 - Multi 상태: `미측정`
-- 다음 작업: `DEALER_DEALER / ws`를 C와 순차 paired 측정하고 개선 검토한다.
+- 다음 작업: `DEALER_ROUTER / ws`를 C와 순차 paired 측정하고 개선 검토한다.
 
 #### 9.3.1 Single suite
 
@@ -1077,7 +1077,7 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 | `tcp` | `ROUTER_ROUTER_REQREP` | 보류 (21.286%) | 보류 (25.330%) | 보류 (20.552%) | 보류 (46.428%) | 보류 (45.116%) | 보류 (41.407%) | C 대비 throughput 산술평균 33.353%, latency ratio 중앙값 2.326x다. 동일 `runServer` direct reply 후보는 인접한 `DEALER_ROUTER_REQREP / tcp` A/B에서 총 throughput -9.004%로 회귀했고, Sol review에서 routed request 전용 builder/cache는 contract-safe한 작은 후보가 아니므로 NO-GO로 판정했다. socket request/reply 최소 기준 50%에 미달해 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_045448_java-router-router-reqrep-tcp-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_045454_java-router-router-reqrep-tcp-baseline.txt`; shared rejected own: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_044750_java-dealer-router-reqrep-tcp-own-direct-reply.txt` |
 | `ws` | `PAIR` | 보류 (48.647%) | 보류 (65.625%) | 통과 (98.753%) | 통과 (85.967%) | 보류 (64.066%) | 보류 (51.188%) | TCP에서 유지한 owned `Message` direct submit이 적용된 현재 결과다. C 대비 throughput 산술평균 69.041%, latency ratio 중앙값 0.028x이며 최소 기준 70%에 0.959%p 미달해 보류한다. 동일 PAIR invoker cache는 TCP A/B에서 회귀했고 Sol review에서 WS 고유 binding 후보는 NO-GO로 판정했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_045631_java-pair-ws-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_045638_java-pair-ws-current.txt` |
 | `ws` | `PUBSUB` | 보류 (42.878%) | 보류 (46.983%) | 보류 (59.515%) | 보류 (67.245%) | 보류 (62.287%) | 보류 (48.113%) | TCP에서 유지한 publish deep-copy와 dead pollset 제거가 적용된 현재 결과다. C 대비 throughput 산술평균 54.504%, latency ratio 중앙값 0.031x로 최소 기준 70%에 미달해 보류한다. TCP에서 topic invoker 결합은 회귀했고 Sol review에서 WS 고유 후보는 NO-GO로 판정했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_045737_java-pubsub-ws-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_045749_java-pubsub-ws-current.txt` |
-| `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `DEALER_DEALER` | 보류 (48.417%) | 보류 (66.948%) | 보류 (69.005%) | 통과 (80.504%) | 보류 (58.049%) | 보류 (54.925%) | TCP에서 유지한 owned active `Message` direct submit이 적용된 현재 결과다. C 대비 throughput 산술평균 62.975%, latency ratio 중앙값 0.037x로 최소 기준 70%에 미달해 보류한다. 동일 send invoker cache는 TCP A/B에서 회귀했고 Sol review에서 WS 고유 후보는 NO-GO로 판정했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_045858_java-dealer-dealer-ws-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_045904_java-dealer-dealer-ws-current.txt` |
 | `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
