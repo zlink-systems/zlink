@@ -1020,3 +1020,17 @@ throughput ratio는 `10.922% / 14.666% / 32.528% / 97.852% / 77.047% / 99.709%`,
 | `ROUTER_ROUTER/ws` | 7.706% / 12.925% / 31.079% / 88.123% / 81.651% / 62.900% | 47.398% | 0.749x | 통과 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_013501_python-router-router-ws-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_013519_python-router-router-ws-current.txt` |
 
 세 대상 모두 shared native send 또는 routed receive owner 개선과 Sol review 범위에 포함되며 public interface·ownership·error 의미는 변경하지 않았다.
+
+### Python Single wss 완료 대상
+
+조건: Core `v0.10.1` release package, duration `1s`, runs `1`, msg sizes `64/256/1024/65536/131072/262144B`, auto-HWM `balanced`다. 각 대상은 C 종료 후 Python을 단독 실행했다.
+
+| 대상 | size별 throughput ratio | 산술평균 | latency 산술평균 | 판정 | report |
+|------|---------------------------|----------|----------------------|------|--------|
+| `PAIR/wss` | 10.150% / 23.635% / 67.171% / 99.193% / 93.009% / 80.433% | 62.265% | 0.608x | 통과 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_013615_python-pair-wss-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_013635_python-pair-wss-current.txt` |
+| `PUBSUB/wss` | 13.027% / 22.708% / 60.810% / 93.419% / 83.032% / 84.186% | 59.530% | 0.588x | 통과 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_013642_python-pubsub-wss-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_013711_python-pubsub-wss-current.txt` |
+| `DEALER_DEALER/wss` | 9.458% / 22.180% / 74.055% / 95.528% / 85.007% / 79.577% | 60.968% | 0.603x | 통과 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_013717_python-dealer-dealer-wss-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_013736_python-dealer-dealer-wss-current.txt` |
+| `DEALER_ROUTER/wss` | 9.344% / 21.590% / 66.300% / 95.843% / 84.235% / 72.811% | 58.354% | 0.622x | 통과 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_013739_python-dealer-router-wss-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_013757_python-dealer-router-wss-current.txt` |
+| `ROUTER_ROUTER/wss` | 8.831% / 21.268% / 67.498% / 91.861% / 84.527% / 74.011% | 57.999% | 0.606x | 통과 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_013803_python-router-router-wss-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_013821_python-router-router-wss-current.txt` |
+
+다섯 대상 모두 shared native send, publisher 또는 routed receive owner 개선과 Sol review 범위에 포함되며 public interface·ownership·error 의미는 변경하지 않았다.
