@@ -168,9 +168,9 @@ final class PerfDealerDealer {
     // re-attempts the same sample (send_step_retry); a non-transient error
     // is fatal and propagates (send_step_fatal).
     private static boolean trySendActive(DealerSocket sender, Message active) {
-        try (Message outbound = Message.from(active)) {
+        try {
             return sender.send()
-                .message(outbound)
+                .message(active)
                 .flags(SendFlags.DONT_WAIT)
                 .submit();
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {

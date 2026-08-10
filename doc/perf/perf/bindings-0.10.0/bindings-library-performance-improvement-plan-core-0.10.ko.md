@@ -1060,9 +1060,9 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 ### 9.3 Java
 
 - perf 경로: `bindings/java/perf`
-- Single 상태: `진행 (보류 2, 미측정 40)`
+- Single 상태: `진행 (보류 3, 미측정 39)`
 - Multi 상태: `미측정`
-- 다음 작업: `DEALER_DEALER / tcp`를 C와 순차 paired 측정하고 개선 검토한다.
+- 다음 작업: `DEALER_ROUTER / tcp`를 C와 순차 paired 측정하고 개선 검토한다.
 
 #### 9.3.1 Single suite
 
@@ -1070,7 +1070,7 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
 | `tcp` | `PAIR` | 보류 (34.052%) | 보류 (56.059%) | 보류 (79.054%) | 보류 (42.674%) | 보류 (39.996%) | 보류 (33.606%) | 직접 소유한 active `Message`를 public send builder에 submit하고 backpressure 때 같은 sample을 retry하도록 C ownership 의미와 맞췄다. binding throughput 총합은 baseline보다 16.413% 증가했고 C 대비 산술평균은 47.573%, latency 산술평균은 1.300x다. Sol invoker cache 후보는 자체 결과보다 총합 4.977% 낮아 제거했다. 최소 기준 70%에 미달해 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_042842_java-pair-tcp-c.txt`; baseline: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_042853_java-pair-tcp-baseline.txt`; final: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_043012_java-pair-tcp-own-direct-submit.txt` |
 | `tcp` | `PUBSUB` | 보류 (31.576%) | 보류 (37.699%) | 보류 (43.094%) | 보류 (44.043%) | 보류 (37.218%) | 보류 (34.499%) | publish retry에서 중복 `Message.from` deep copy와 사용하지 않던 pollset을 제거했다. binding throughput 총합은 baseline보다 21.140% 증가했고 C 대비 산술평균은 38.021%, latency 산술평균은 0.520x다. Sol의 topic invoker 결합 후보는 자체 결과보다 총합 1.154% 낮아 제거했다. 최소 기준 70%에 미달해 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_043045_java-pubsub-tcp-c.txt`; baseline: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_043104_java-pubsub-tcp-baseline.txt`; final: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_043155_java-pubsub-tcp-own-direct-submit.txt` |
-| `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `DEALER_DEALER` | 보류 (37.582%) | 보류 (52.361%) | 보류 (63.063%) | 보류 (41.441%) | 보류 (37.299%) | 보류 (33.117%) | owned active `Message`를 직접 public send builder에 submit/retry해 중복 deep copy를 제거했다. binding throughput 총합은 baseline보다 10.353% 증가했고 C 대비 산술평균 44.144%, latency 산술평균 0.443x다. 자체·Sol 검토 뒤 최소 기준 70%에 미달해 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_043740_java-dealer-dealer-tcp-c.txt`; baseline: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_043754_java-dealer-dealer-tcp-baseline.txt`; final: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_043835_java-dealer-dealer-tcp-own-direct-submit.txt` |
 | `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1655,7 +1655,7 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 |------|------|-------------|------------|-----------|
 | 1 | C++ | 완료·통과 35 / 보류 7 | 완료·통과 25 / 보류 3 | C++ perf는 추가 실행하지 않고 .NET으로 전환 |
 | 2 | .NET | 완료·통과 26 / 보류 16 | 완료·통과 23 / 보류 7 | .NET Multi 24개 대상 완료; 다음은 Java inventory gate와 paired 기준 측정 |
-| 3 | Java | 진행·보류 2 / 미측정 40 | 미측정 | `DEALER_DEALER / tcp` paired 측정과 개선 검토를 진행한다. |
+| 3 | Java | 진행·보류 3 / 미측정 39 | 미측정 | `DEALER_ROUTER / tcp` paired 측정과 개선 검토를 진행한다. |
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 5 | Go | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 6 | Rust | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
@@ -1667,6 +1667,7 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 
 | 날짜 | 언어 | 대상 | pair tag | size별 throughput ratio | size 중앙값 | 판정 | report |
 |------|------|------|----------|-------------------------|------------|------|--------|
+| 2026-08-11 | Java | Single / DEALER_DEALER / tcp / 64·256·1024·65536·131072·262144B | `java-dealer-dealer-tcp-own-direct-submit` | 37.582%, 52.361%, 63.063%, 41.441%, 37.299%, 33.117% | 44.144% (산술평균), latency 0.443x (산술평균) | 보류·직접 submit/retry로 baseline 총합 대비 10.353% 개선·Sol 2차 검토 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_043740_java-dealer-dealer-tcp-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_043835_java-dealer-dealer-tcp-own-direct-submit.txt` |
 | 2026-08-11 | Java | Single / PUBSUB / tcp / 64·256·1024·65536·131072·262144B | `java-pubsub-tcp-own-direct-submit` | 31.576%, 37.699%, 43.094%, 44.043%, 37.218%, 34.499% | 38.021% (산술평균), latency 0.520x (산술평균) | 보류·직접 submit/retry로 baseline 총합 대비 21.140% 개선·Sol topic invoker A/B 악화로 제거 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_043045_java-pubsub-tcp-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_043155_java-pubsub-tcp-own-direct-submit.txt` |
 | 2026-08-11 | Java | Single / PAIR / tcp / 64·256·1024·65536·131072·262144B | `java-pair-tcp-own-direct-submit` | 34.052%, 56.059%, 79.054%, 42.674%, 39.996%, 33.606% | 47.573% (산술평균), latency 1.300x (산술평균) | 보류·직접 submit/retry로 baseline 총합 대비 16.413% 개선·Sol invoker cache A/B 악화로 제거 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_042842_java-pair-tcp-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_043012_java-pair-tcp-own-direct-submit.txt` |
 | 2026-08-11 | Python | Multi / MULTI_STREAM / tls / 64·256·1024·65536B | `python-multi-stream-tls-7000-current` | 4.534%, 4.773%, 7.054%, 83.189% | 24.888% (산술평균), latency 28.361x (산술평균) | 보류·tcp body snapshot 개선 적용·자체 및 Sol 추가 후보 no-go | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_042117_python-multi-stream-tls-7000-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/multi/report/perf_python_multi_linux_20260811_042303_python-multi-stream-tls-7000-current.txt` |
