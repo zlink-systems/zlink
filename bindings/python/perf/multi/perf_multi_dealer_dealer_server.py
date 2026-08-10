@@ -14,7 +14,6 @@ from perf_multi_common import (
     configure_multi_tls_server,
     LatencySampler,
     print_result_lines,
-    recv_nonblocking,
     parse_server_args,
     perf_server_context,
     result_metrics,
@@ -60,6 +59,8 @@ def main(argv=None):
                     latency_sampler = LatencySampler()
                     count = 0
                     recv_storage = zlink.create_received()
+                    recv_into = dealer.recv_into
+                    recv_flags = zlink.RecvFlags.DONT_WAIT
 
                     def drain_ready():
                         # C receive_one_message + drain_non_blocking_messages:
@@ -67,13 +68,12 @@ def main(argv=None):
                         # clock-skew (latency_ns_from_message returns None).
                         nonlocal count
                         while True:
-                            msg = recv_nonblocking(dealer, storage=recv_storage)
-                            if msg is None:
+                            if not recv_into(recv_storage, flags=recv_flags):
                                 return
-                            with msg:
-                                if not msg.parts:
+                            with recv_storage:
+                                if not recv_storage.parts:
                                     continue
-                                data = msg.parts[-1].data
+                                data = recv_storage.parts[-1].data
                                 if len(data) == len(STOP_TOKEN) and data == STOP_TOKEN:
                                     continue
                                 active, latency = active_message_latency_ns(
@@ -111,9 +111,8 @@ def main(argv=None):
                         not stop_event.is_set()
                         and time.perf_counter() < tail_deadline
                     ):
-                        msg = recv_nonblocking(dealer)
-                        if msg is not None:
-                            with msg:
+                        if recv_into(recv_storage, flags=recv_flags):
+                            with recv_storage:
                                 pass
                             idle_deadline = time.perf_counter() + 0.05
                             continue
