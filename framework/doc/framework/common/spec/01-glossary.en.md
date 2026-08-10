@@ -682,17 +682,18 @@ relocation commit and, once it passes, the previous owner no longer forwards.
 <a id="relocation-ingress-hold"></a>
 ### Relocation Ingress Hold
 
-A size-bounded queue temporarily holding messages that arrive on the previous source
-route even after the source Actor's message acceptance is sealed, so they aren't
-lost. A message arriving after `Defer()` but before the seal goes not into this hold
-but into the Actor queue behind the deferred Join barrier.
+A queue that prevents message loss after the source Actor seals message acceptance.
+It temporarily keeps messages that still arrive on the previous source route. The
+queue has no record-count or byte bound defined specifically for relocation. A message
+that arrives after `Defer()` but before the seal goes into the Actor queue behind the
+deferred Join barrier instead.
 
 | Item | Content |
 |---|---|
-| Shape | A framework-managed, bounded message hold |
+| Shape | A framework-managed message hold with no relocation-specific record-count or byte bound |
 | .NET notation | No public type |
 | Public composition | Keeps the message payload, original operation identity, `ObjectGeneration`, and the framework metadata needed for queue ordering. Internal storage format isn't disclosed. |
-| Creation/management | The source runtime holds messages arriving after the relocation seal. Regular messaging backpressure and timeout apply once capacity fills. |
+| Creation/management | The source runtime holds messages arriving after the relocation seal. It does not reuse the ordinary application lane's count and byte reservations as a relocation-specific ceiling. Separate limits set by transport, deadline, and cancellation still apply. |
 | Lifetime | On an abort before commit, restored to the source queue in original order; after a successful commit, relayed to the target queue and then removed. |
 
 <a id="reply-correlation"></a>
@@ -1163,7 +1164,7 @@ existing dispatch path.
 
 | Item | Content |
 |---|---|
-| Shape | A bounded framework queue tied to a `RelocationId`, target attempt, object kind/ID, and `ObjectGeneration` |
+| Shape | A framework queue tied to a `RelocationId`, target attempt, object kind/ID, and `ObjectGeneration`, with no relocation-specific item-count or byte bound |
 | .NET notation | No public queue type |
 | Public composition | Preserves target identity, original operation identity, deadline, payload, and reply route. For `SpotWide`, the Spot and member Actors go in the same relocation group, but each record preserves its actual target. |
 | Lifetime | Registered when the target accepts a Restore request. Work is moved to the real object queue and this queue removed after commit and any needed callbacks. Discarded without running on an abort before commit. |
@@ -2116,12 +2117,16 @@ binding route.
 <a id="binding-route-ack"></a>
 ### Session Actor Location Update Acknowledgement
 
-The `sessionActorLocationUpdateResMsg` by which a session owner stores the new
-binding route and the current Actor location snapshot after relocation, and confirms
-it has verified that late packets and pushes from a previous owner generation aren't
-applied to the current binding. The snapshot has the same ActorId/ObjectGeneration
-and target MeshName/NodeRid. This response is used to stop location-update resends —
-it isn't a signal allowing the target Actor to process messages or complete a Join.
+Command 45 `sessionRelocationRouted` tells the target runtime that the session owner
+stored the new binding route and changed the saved location to the target. The location
+snapshot contains the existing ActorId/ObjectGeneration and the target MeshName/NodeRid.
+Before replying, the session owner verifies that late packets and pushes from a previous
+owner generation cannot be applied to the current binding.
+
+The target runtime stops resending the location update after this response.
+The response is not a signal that lets the target Actor start message processing or
+complete a Join. `sessionActorLocationUpdateResMsg` in other public documents refers to
+the location-update acknowledgement provided by this command.
 
 The response result is `Applied`, `AlreadyApplied`, `Stale`, or
 `SessionOrBindingClosed`. The first two mean the requested location was applied. The

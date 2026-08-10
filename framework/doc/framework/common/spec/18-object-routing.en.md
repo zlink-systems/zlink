@@ -154,8 +154,8 @@ application handler.
 The Message Follow route verifies the global object ID, `ObjectGeneration`,
 source/target `AuthorityOwnerGeneration`, and owner fence. Owner generation
 must increase per hop, and the chain is at most 8 hops. One route's queue
-can't exceed 1,024 messages and 16 MiB, and must also respect the negotiated
-message bound.
+has no bound on message count or stored size, and each message must respect
+the negotiated message bound.
 
 `MessageFollowDuration` defaults to 30 seconds; `0` means Message Follow
 isn't used. If both `RouteCacheMaxAge` and Message Follow duration are
@@ -165,8 +165,7 @@ from new relocations.
 
 Relay preserves the original operation ID, `ObjectGeneration`, payload, and
 reply route. If there's no Message Follow route, it expired, or a loop
-occurs, it's `Unavailable`; a generation mismatch is `InvalidOperation`;
-exceeding the bound is `CapacityExceeded`.
+occurs, it's `Unavailable`; a generation mismatch is `InvalidOperation`.
 
 This generation check confirms that a Message Follow route relocation
 installed belongs to a move of the same incarnation — it isn't a check

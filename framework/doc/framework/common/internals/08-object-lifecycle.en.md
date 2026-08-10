@@ -16,8 +16,8 @@ title: "8. Object Kind And Activation"
 > [Spot · Actor Routing](../spec/18-object-routing.en.md). The result
 > after owner failure is owned by
 > [Failure And Failover Policy](../spec/31-failure-failover-policy.en.md). This
-> chapter covers the **structure** that satisfies that contract, and
-> the mismatches actually observed across the four implementations.
+> chapter covers the **structure** that satisfies that contract and
+> the failures that become visible when a lifecycle boundary is violated.
 
 Covers how, in code, the three kinds of
 [Spot](../spec/01-glossary.en.md#spot) — the execution unit holding
@@ -40,9 +40,8 @@ behave differently.
 **Decision — represent the three kinds as separate types.** Attaching
 a marker like `entry_spot` or `instance_spot` to one type means the
 type can't stop a combination where two are true at once, and rules
-that differ per kind scatter into conditionals. One implementation
-actually uses this marker approach, with return-wait permission
-folded into a conditional checking that marker.
+that differ per kind scatter into conditionals. Rules such as whether
+return-wait is allowed are decided at each kind's type boundary.
 
 Putting three sibling types over a common base collects per-kind
 differences at the type boundary.
@@ -75,8 +74,9 @@ already-ready object
 
 The public behavior is defined by
 [Failure Handling And Failover Scope §4.4](../spec/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
-The activation state machine receives the resolver result as one of the
-following internal states and passes it once to the responsible component.
+The resolver converts its result into one of the closed internal states below. The
+activation state machine passes that state to exactly one responsible component, so a
+later stage does not infer the Store result again.
 
 | Internal State | Fence Preserved | Next Component |
 |---|---|---|
@@ -85,10 +85,10 @@ following internal states and passes it once to the responsible component.
 | `Ready` | Route and authority/owner-lease fences | Route admission |
 | `Unavailable` | Authority and invalid-owner evidence | Terminal completion adapter |
 
-There is no activation transition from `Unavailable` to `Missing`. An
-explicit `Close`, `IdleEvicted` cleanup, or another formal lifecycle
-operation can complete authority release, after which the resolver can
-produce a new `Missing` input.
+`Unavailable` means authority remains but the current owner cannot be used. It is not the
+same state as `Missing`, which means no authority exists. Only after an explicit `Close`,
+`IdleEvicted` cleanup, or another formal lifecycle operation completes authority release
+can the resolver produce a new `Missing` input.
 
 Stored creation intent resumes only an incomplete first cold-activation
 operation on the same target node and lifecycle. It isn't used for
@@ -132,12 +132,11 @@ sequenceDiagram
 
 ### The Publication Order Of The Ready Record And The Target Route
 
-For an Instance Spot, `Ready` being recorded in the Location Store
-alone doesn't finish the target node's receive readiness. The target
-runtime must also reflect the same route into its internal
-`instance intent` projection immediately. This projection isn't an
-authoritative record replacing the Store — it's a local view that uses
-the already-validated `Ready` route for application message admission.
+An Instance Spot requires one more step after `Ready` is recorded in the Location Store.
+The target runtime must immediately copy the same route into the local view used for
+application-message admission. This local view is the `instance intent` projection. It
+does not replace Store authority; it lets the process look up an already-validated
+`Ready` route.
 
 So the order is as follows.
 
@@ -147,23 +146,20 @@ So the order is as follows.
 3. After that, the activation continuation enqueues the first
    application message.
 
-If step 2 is pushed back, `Ready` exists in the Store but the target
-runtime has no route, and the first application message can end in
-`NotFound` or a stale-route error. Re-registering the same route in a
-following continuation is a safety net that recovers the omission, and
-it must run before the first admission. Re-registering the same route
-is handled idempotently so it doesn't create duplicate execution.
+If step 2 is delayed, `Ready` exists in the Store while the target runtime has no route.
+The first application message can then end in `NotFound` or a stale-route error. A later
+continuation may register the same route again to recover an omission, but that
+registration must also finish before the first admission. Registration is idempotent, so
+repeating it does not create duplicate execution.
 
 If the losing side **caches "being created,"** the last two lines of
 this diagram get delayed by the cache lifetime.
 
 ### If Creation Fails Midway
 
-If creation fails midway, the leftover record must be cleaned up. One
-implementation leaves the creation-progress state in the store and
-sweeps incomplete records at startup. Without deciding who's
-responsible for cleanup, a failed creation permanently occupies that
-ID.
+If creation fails midway, the activation state machine must define who
+cleans up the leftover record and when. Without that responsibility, a
+failed creation permanently occupies that ID.
 
 ## 4. Filtering Out A Message Sent To A Stale Owner
 
@@ -212,8 +208,8 @@ execution is judged by the application.
 
 ### Idle Cleanup Targets Only Instance Spots
 
-This chapter's idle-cleanup standard is owned by
-`ZLinkSpotNodeCatalog` on the .NET runtime. When the configured
+Idle-cleanup state is owned by the runtime's internal object catalog.
+The .NET mapping names this owner `ZLinkSpotNodeCatalog`. When the configured
 `InstanceSpotIdleTimeout` is positive, the catalog periodically checks
 candidates. Each check examines at most 64, and the last check
 position carries over to the next cycle, so maintenance work doesn't
@@ -247,10 +243,10 @@ tag, while the latter is wired to the terminal completion adapter. The rule
 against resubmitting an accepted request is defined by
 [Failure Handling And Failover Scope §2](../spec/31-failure-failover-policy.en.md#2-common-judgment-criteria).
 
-The idle-cleanup state of other Framework languages, and the common
-process-verification result, aren't treated as complete just from this
-.NET structural explanation. Each language must separately confirm the
-same shutdown condition and process evidence.
+Language mappings may name the catalog differently, but each implements
+the same shutdown conditions and verifies them with independent process
+evidence. A structural explanation for one mapping does not substitute
+for evidence from another.
 
 ### The Ceiling Exists, But Is Used Only At The Placement Stage — Not Enough
 
@@ -277,9 +273,9 @@ the ceiling.
 **Decision — the cleanup target is Instance Spot only.** The formal
 spec added the `IdleEvicted` shutdown reason limited to Instance Spot
 ([Spot Model](../spec/11-spot-model.en.md)). The reason User Spot
-isn't cleaned up is that **a cleaned-up User Spot doesn't come back to
-life from an ordinary message** — only a call explicitly declaring
-Instance intent can build a missing object (§3). Entry Spot belongs to
+isn't cleaned up is that **an ordinary message does not recreate a cleaned-up User
+Spot**. Only a call explicitly declaring Instance intent can build a missing object (§3).
+Entry Spot belongs to
 that Object Server's lifecycle, so it's never a target to begin with
 (§2).
 
@@ -303,19 +299,18 @@ pending-receive payload in bytes, and Spot-unit byte accounting bounds
 per-lane work count and bytes together. One side's number isn't
 reused as the other side's ceiling.
 
-The current .NET `ZLinkSerialExecutionQueue` keeps application and
-lifecycle as separate FIFO lanes, each with a count/byte reservation.
-The application default is 4,096 items/64 MiB, the lifecycle default
-is 256 items/4 MiB, and accepted application work reserves the payload
-plus a fixed per-work cost together. The reservation is returned at
-handler terminal completion. The relocation hold has no item or byte
-ceiling.
+Execution queues keep application and lifecycle work in separate FIFO lanes, each with
+count and byte reservations. The application-lane defaults
+are 1,024 items and 64 MiB; the lifecycle-lane defaults are 128 items and 4 MiB. Accepted
+application work reserves its payload size plus a fixed retained cost of 256 bytes per
+work item. The reservation is returned at handler terminal completion. The relocation
+hold has no relocation-specific item-count or byte bound.
 
-So the Spot queue can saturate first even when the process HWM has
-room left, and conversely, process inbound admission can stop first
-even when the Spot queue has room. The two results aren't lumped into
-the same `CapacityExceeded` situation — they're distinguished by the
-owning queue's admission result.
+So the Spot queue can saturate first even when the process HWM isn't
+exhausted, and conversely, process inbound admission can stop first
+even when the Spot queue isn't full. The two results are not merged into one
+`CapacityExceeded` situation. They are distinguished by the queue whose admission
+actually failed.
 
 ### The Queue Bound Is Set By Accumulated Payload Size
 
@@ -338,7 +333,7 @@ The queue bound exists for two reasons — deciding how much memory
 stays tied up, and judging how much work is backed up. **Count alone
 tells you neither.**
 
-The same 4,096 items is 400 KB at 100 bytes each, and 4 GiB at 1 MiB
+The same 1,024 items is about 100 KB at 100 bytes each, and 1 GiB at 1 MiB
 each. Memory differs by 10,000x while the bound triggers the same. The
 time to drain is the same story — throughput moves closer to bytes per
 second than items per second, so measuring the backlog requires
@@ -356,8 +351,7 @@ Bringing the same standard down to the Spot unit works, and since both
 layers use the same unit, which layer triggered is also distinguishable.
 
 **Decision — don't have an unbounded execution queue.** Each lane must
-have both count and byte reservations, and the relocation hold must
-also have a separate ceiling
+have both count and byte reservations
 ([Framework API](../spec/06-framework-api.en.md)).
 
 The result on exceeding it **isn't one thing.** It splits by
@@ -369,7 +363,9 @@ Two non-queue spots aren't in that table and are each
 `CapacityExceeded` — the **worker scheduler queue** and **batch
 capacity.** The latter is an admission judgment, not queue saturation.
 
-The pending-during-a-move hold has no count or byte bound. This is
+The pending-during-a-move hold has no relocation-specific count or byte bound.
+An execution-lane reservation for already owned work and limits owned by transport,
+deadline, and cancellation are not reused as a separate relocation-hold ceiling. This is
 a rule the formal spec fixed, so it's
 followed as-is
 ([Host Relocate And Shutdown 「9. Moving Pending Messages, Timers, And Sessions」](../spec/28-graceful-drain-handoff.en.md#9-moving-pending-messages-timers-and-sessions)).

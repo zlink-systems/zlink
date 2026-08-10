@@ -518,7 +518,7 @@ The definition of the delivery unit is owned by
 ```ts
 export declare class ZLinkMessage<TValue = unknown> {
   private constructor();
-  static from<T>(value: T): ZLinkMessage<T>;
+  static from<T>(value: T, declaredType?: Type<T>): ZLinkMessage<T>;
   static fromEncoded(payload: ZLinkEncodedPayload): ZLinkMessage;
   decode<T>(type?: Type<T>): T;
   toEncodedPayload(): ZLinkEncodedPayload;
@@ -526,6 +526,20 @@ export declare class ZLinkMessage<TValue = unknown> {
 }
 
 ```
+
+TypeScript doesn't retain a call site's static type at runtime. For an ordinary class
+instance, its constructor is used as the declared type. When a runtime subtype instance is
+passed through a base-class declaration, the second `declaredType` argument specifies that
+base-class constructor. A TypeScript interface has no runtime constructor, so representing
+an interface contract requires a constructor token for an application-defined class
+compatible with that interface. The codec selector receives this token instead of the
+instance's runtime subtype.
+
+The first `decode(...)` on a received message fixes either a value or a failure. Another
+call with the same or a different type returns that first outcome and does not run the
+decoder again. If the first call failed, the same failure is delivered again. Because a
+TypeScript generic type is not retained at runtime, the caller is responsible for whether
+the already-fixed value can be interpreted as another type.
 
 Serializer registry selection and the default-serializer decision
 helper are kept internal to the runtime. The application registers a

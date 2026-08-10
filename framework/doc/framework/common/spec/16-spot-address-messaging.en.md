@@ -492,13 +492,15 @@ Join go to the target. An Actor still on the source has its `ToActor`
 route keep pointing at that Actor's current owner. A per-Actor
 source→target Message Follow route is installed each time an Actor moves.
 
-After sealing a relocation unit, ingress arriving on the source route is
-put in a bounded hold and the application handler isn't run. On an abort
-before the owner commit, it's restored to the source queue in arrival
-order; after commit, it's relayed to the target keeping the same operation
-ID/generation/reply route as the Message Follow route. A `Relocating` unit
-waiting for a permit isn't sealed, so it keeps accepting application
-messages and timers on the existing [owner route](01-glossary.en.md#owner-route).
+After a relocation unit is sealed, ingress arriving on the source route is kept in the
+relocation hold, and no application handler runs for it. If the operation aborts before
+the owner commit, the ingress returns to the source queue in arrival order. After the
+commit, it is relayed to the target through the Message Follow route while preserving
+the operation ID, generation, and reply route.
+
+A `Relocating` unit that is waiting for a permit has not been sealed. Its existing
+[owner route](01-glossary.en.md#owner-route) therefore continues accepting application
+messages and timers.
 
 ## 7. Close And Generation Boundary
 
@@ -586,9 +588,10 @@ seal is relayed via the committed Message Follow route.
 - Without Ready authority, `NotFound`; if the exact generation differs,
   `InvalidOperation`; if the
   [owner fence](01-glossary.en.md#owner-fence) differs, `Unavailable`.
-- A `Closing`, post-relocation-seal, or `Draining` owner rejects new
-  admission. A `Relocating` unit not yet sealed keeps existing owner
-  admission.
+- A `Closing` or `Draining` owner rejects new admission. Ingress arriving
+  on the source route after a relocation seal is retained in the relocation
+  hold instead of being rejected. A `Relocating` unit not yet sealed keeps
+  existing owner admission.
 - A request failure isn't bypassed by a different Spot ID, MeshName, or
   owner.
 - An expired owner can't perform new message/timer admission or a
@@ -639,8 +642,8 @@ used as a metric label.
   Store's current authority. A target that didn't obtain creation
   authority doesn't create a separate instance.
 - `Missing`, `Creating`, and Store failure aren't negative-cached.
-- Message Follow only uses a committed route and bounded queue, and
-  preserves operation identity.
+- Message Follow only uses a committed route. Its relay queue has no
+  relocation-specific item-count or byte bound, and it preserves operation identity.
 - Close checks the exact generation and doesn't retarget to a new
   incarnation.
 - User Spot Close doesn't secretly clean up active membership.

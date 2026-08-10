@@ -54,8 +54,8 @@ No other binding type appears in a framework public signature.
 The recommended public header layout is below. The header under
 `contracts/*` is the actual public contract owner corresponding to
 `.NET`'s `Contracts/*`, and `zlink/framework.hpp` is a facade that lets
-a user include the whole framework surface at once. A one-line
-`zlink/framework/*.hpp` compatibility wrapper isn't kept.
+a user include the whole framework surface at once. The public header
+layout doesn't include one-line wrappers under `zlink/framework/*.hpp`.
 
 ```text
 zlink/framework.hpp
@@ -119,7 +119,7 @@ following public error meaning.
 | `not_connected`, `route_not_connected` | `unavailable` |
 | `not_found`, `request_target_not_found`, `handler_not_found` | `not_found` |
 | Admission or filter rejection with no typed result | `rejected` |
-| Local queue capacity shortage, Message Follow relay queue bound exceeded | `capacity_exceeded` |
+| Local queue capacity shortage | `capacity_exceeded` |
 | Target queue capacity shortage a remote error envelope reported | `unavailable` |
 | `busy` | One of the two lines above depending on owner location. If the underlying error alone can't tell the location, `unavailable` |
 | `protocol_error`, `request_protocol_error` | `protocol_error` |
@@ -250,6 +250,12 @@ public:
 } // namespace zlink::framework
 ```
 
+The first `decode<T>()` on a received `message_t` fixes either a value or a
+failure. Later calls do not run the serializer again. The retained value is
+returned when the same `T` is copy-constructible. Another `T`, or a type whose
+retained value cannot be returned again, ends with `protocol_error`. If the
+first call failed, its stored exception is delivered again.
+
 ## 5. Serialization
 
 The Framework uses a typed JSON serializer as its default path. The
@@ -261,6 +267,17 @@ extension package's registry wiring and payload conversion are a
 runtime-internal contract and aren't exposed in the application public
 header. Even when the Framework, connector, and HTTP client change
 codec, the handler's and client's typed API doesn't change.
+
+A codec extension passes a parameter-free ASCII `type/subtype` as its `contentType`.
+At startup, the registry removes leading and trailing SP and TAB and converts ASCII
+uppercase letters to lowercase. The result is the canonical content type used as the
+registry key. A parameter, whitespace inside the value, or a non-ASCII token is rejected
+with `framework_error_kind_t::protocol_error`. If the same canonical content type is
+registered more than once, the last registration replaces the earlier one.
+
+A value received from the framework service wire must already be canonical. The receive
+path does not transform another representation and instead completes it with
+`protocol_error`.
 
 ```cmake
 target_link_libraries(app PRIVATE zlink::cpp)
@@ -288,6 +305,12 @@ SPOT and STREAM backpressure is only observed through the public
   one-way/send is `deadline_exceeded`, a request's local queue
   saturation is `capacity_exceeded`, and a remote queue saturation is
   `unavailable`.
+
+This rule applies to ordinary SPOT and STREAM execution queues. Payloads
+temporarily retained by Message Follow relay do not have a separate
+message-count or byte bound. The per-wire-message size limit and the
+ordinary execution-queue, transport, and deadline limits after relay still
+apply.
 
 ### 6.2 Handler Filter
 

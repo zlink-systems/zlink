@@ -185,6 +185,13 @@ needs to keep after the callback ends. The framework cleans up the lifecycle of 
 payload storage, reply correlation, and the route envelope together with callback
 completion.
 
+The framework deserializes a typed payload at most once for each accepted message. The
+message retains the value or failure produced by the first typed access, and another access
+with either the same or a different type does not invoke the codec again. If the retained
+value cannot be used as the newly requested type, the access ends with the language's type
+mismatch result. If the first access failed, that failure is delivered again. Obtaining a
+read-only raw view or explicitly asking for a byte copy does not create this typed outcome.
+
 The same ownership rule applies while an object creation is pending. So that Location
 Store I/O and the [factory](01-glossary.en.md#factory) don't depend on the caller's payload
 object or native buffer lifetime, the framework's service runtime pins the immutable

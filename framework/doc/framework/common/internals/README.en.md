@@ -6,22 +6,21 @@ title: "Internal Structure Overview"
 
 [Framework common document](../README.en.md) · [Formal spec](../spec/README.en.md)
 
-Holds **the design decision that must stay the same for the C++/.NET/
-JVM/Node.js service runtime to produce the same result even though each
-is implemented in a different language.**
+The C++, .NET, JVM, and Node.js service runtimes are implemented in different
+languages. This document set explains the **internal design decisions they must share
+to give an application the same result.**
 
 ## What This Document Set Answers
 
 The formal spec decides "what must be built." This document set
 answers what can't be known just by reading the spec.
 
-- **What structure emerges when two spec requirements are entangled
-  together.** For example, only one structure satisfies both "an
-  Actor queue is always per-Actor" and "SpotWide is fully serial" at
-  once.
-- **What was chosen, and why, where the spec left it undecided.**
-- **Where it's easy to get wrong.** Each document cites a mismatch
-  actually observed across the four implementations as evidence.
+- **What structure is needed to satisfy several spec requirements together.** For
+  example, it explains the structure that preserves per-Actor queues while also
+  serializing all `SpotWide` execution.
+- **Which criteria select an internal implementation where the spec does not.**
+- **Which boundaries tend to diverge across implementations, and what must be
+  verified there.**
 
 Content the spec already decided isn't repeated — only a link is put.
 
@@ -34,13 +33,13 @@ the spec, or, if the public contract itself must change, the
 [public-contract procedure](../spec/00-public-contract-governance.en.md#4-public-contract-procedure)
 is followed first.
 
-Current implementation deviations and unverified progress are not recorded in this public
+Deviations from these decisions and verification progress are not recorded in this public
 internals document. This document describes only implementation structure and decisions.
 
 ## Component And Responsible Chapter
 
-Each chapter digs deep into one spot in the diagram below. Look here
-when unsure which chapter to read.
+Each chapter explains one component marked in the diagram below. Start at the component
+you need and follow its chapter number.
 
 **This diagram is a chapter-finding map, not a layer diagram.** The
 left bundle and the right bundle are **different processes**, and even
@@ -127,7 +126,7 @@ connection easy to miss when reading a chapter separately.
 | [7. Receive And Dispatch Loop](07-dispatch-loop.en.md) | Whether to wake per message or batch-process. What wakes it |
 | [8. Object Kind And Activation](08-object-lifecycle.en.md) | How the three Spot kinds are distinguished. When a missing object is built and how Ready owner failure is handled |
 | [9. Session And Actor Binding](09-session-binding.en.md) | How to keep two places from pointing at the same Actor while a connection is swapped |
-| [10. Liveness And Status Publication](10-liveness-and-state.en.md) | How to judge whether the peer is alive without letting that judgment change authority |
+| [10. Liveness And Status Publication](10-liveness-and-state.en.md) | How to determine whether the peer is still reachable without letting that judgment change authority |
 | [11. Payload Ownership And Copy](11-message-ownership.en.md) | How many times a byte is copied from socket to handler. When deserialization happens |
 | [12. Service Wire Protocol](12-service-wire-protocol.en.md) | The byte format and command exchanged between nodes |
 
@@ -191,7 +190,7 @@ the message that produced them**.
 ### 4. Cost Rule For Adding Traces
 
 **Decision**: when message flow tracing is off, building the log message must cost
-nothing. All four runtimes honor this.
+nothing.
 
 | Path | Method |
 |---|---|
@@ -216,7 +215,7 @@ Each document states the following for every decision.
 
 | Mark | Meaning |
 |---|---|
-| **Decision** | The structure the four runtimes must share. Violating it makes the result the application sees differ per language |
+| **Decision** | The structure every service runtime must follow. Violating it changes the result the application sees |
 | **Per-Language Discretion** | What's fine to implement differently as long as the observed result is the same. Forcing them to match becomes unnatural in that language |
 | **Result To Confirm** | The condition the implementation must satisfy. The confirmation method differs per item |
 
@@ -224,12 +223,12 @@ Each document states the following for every decision.
 result is the same, and the standard that confirms it. Missing either one means it is
 not discretion but something not yet decided. A choice that produces an observable
 difference such as a latency floor is written as a **constrained choice**, not
-discretion (see [7. Dispatch Loop 「5. Pick One Wake-Up Method」](07-dispatch-loop.en.md#5-pick-one-wake-up-method)).
+discretion (see [7. Receive And Dispatch Loop 「5. Pick One Wake-Up
+Method」](07-dispatch-loop.en.md#5-pick-one-wake-up-method)).
 
-**Runtimes actually diverge where nothing is written, not where discretion is.** A
-refusal condition, retry, or record that exists in only one runtime is a gap, not
-discretion. When such a difference is found, judge whether the observable result
-differs and, if it does, add it to this document set as a decision.
+**A runtime must not invent a refusal condition, retry, or record that
+isn't documented.** If such behavior changes the application's observable
+result, add a common decision first and require every runtime to follow it.
 
 Only the wire protocol document doesn't apply this distinction. It's
 paired with
@@ -281,8 +280,8 @@ chaining or with a lock and queue is discretion.
 | The meaning and completion condition of public behavior | [Formal Spec](../spec/README.en.md) |
 | The raw socket/transport internal Core provides | [Core Raw Runtime Internal Boundary](https://zlink-systems.github.io/zlink/internals/runtime-boundary/) |
 
-The four runtimes implement this document's meaning, but don't share
-source or a common native binary.
+Each runtime implements this document's meaning in independent source;
+sharing a common native binary isn't required.
 
 ---
 

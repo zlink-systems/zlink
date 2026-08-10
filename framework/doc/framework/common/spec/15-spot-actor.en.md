@@ -482,10 +482,10 @@ order after the handler ends normally.
    The target creates the Actor and reads application state and the saved existing
    queue, but doesn't run application work yet.
 5. A message arriving after the source seal is held in the source runtime's
-   size-bounded `ingress hold`. After sending the Restore request, the source
-   runtime relays the hold's messages and later messages arriving on the previous
-   route to the target. The target dispatcher also puts these messages in the same
-   temporary queue.
+   `ingress hold`. The hold has no record-count or byte bound defined specifically
+   for relocation. After sending the Restore request, the source runtime relays the
+   hold's messages and later messages arriving on the previous route to the target.
+   The target dispatcher also puts these messages in the same temporary queue.
 6. Once the target finishes Actor Restore, it updates target membership, owner,
    capacity, and generation in `LocationStore`, all at once. Once this commit
    succeeds, the target becomes the new owner. The source keeps the hold's original
@@ -590,13 +590,15 @@ executing any further operations.
 
 A message arriving after `Defer()` but before the source seal is stored in
 `RelocationStore` together with the current Actor queue. A message arriving after the
-source seal is temporarily held in a size-bounded ingress hold. The source runtime
-keeps relaying the hold's records and later records arriving on the previous route to
-the target temporary queue. If interrupted before commit, the hold's records are
-restored to the source queue in arrival order, and the target temporary queue is
-discarded. If commit succeeds, the temporary queue's records move in behind the saved
-existing work. The source removes the hold original after receiving the target's
-dispatch-switchover completion.
+source seal is temporarily held in a relocation ingress hold. This hold has no
+relocation-specific record-count or byte bound.
+
+The source runtime keeps relaying the hold's records and later records arriving on the
+previous route to the target temporary queue. If interrupted before commit, the hold's
+records are restored to the source queue in arrival order, and the target temporary
+queue is discarded. If commit succeeds, the temporary queue's records move in behind
+the saved existing work. The source removes the hold original after receiving the
+target's dispatch-switchover completion.
 
 In an application-requested User Spot join, the target User Spot's `OnActorJoin`
 first decides admission. In a cross-node Join, after the restore request and source
@@ -838,7 +840,7 @@ can be retried within the deadline, with target admission closed. If the source 
 target process terminates, a different runtime doesn't take over the relocation. If
 the target terminates after commit, authority keeps the target, but the object
 becomes unavailable. Automatic target replacement and relocation resumption after a
-process restart are defined separately in a future version.
+process restart are outside this contract.
 
 Because of retries within the same process, factory, `Restore`, and lifecycle
 callback can be called more than once. A callback must converge even when it
@@ -976,7 +978,7 @@ by
   aggregate commit ID aren't reused.
 - A message after `Defer()` but before the source seal goes in the Actor queue
   behind the barrier; only a post-seal message is held in the
-  [bounded ingress hold](01-glossary.en.md#relocation-ingress-hold).
+  [relocation ingress hold](01-glossary.en.md#relocation-ingress-hold).
 - A cross-node Join's target dispatcher registers the relocation temporary queue
   before the Actor instance. A message in this queue during Restore doesn't run an
   application handler.
@@ -997,7 +999,8 @@ by
 - A User Spot and member Actors transition together under one generation of the
   [bounded aggregate commit](01-glossary.en.md#bounded-aggregate-commit).
 - A post-commit failure doesn't roll back just some participants to the source.
-- Message Follow only uses a bounded committed route and preserves
+- Message Follow only uses a committed route. Its relay queue has no
+  relocation-specific item-count or byte bound, and it preserves
   [operation identity](01-glossary.en.md#operation-identity).
 - A bound STREAM connection doesn't move — only that Actor's binding route and
   bound-session current location snapshot change to the target, via authority

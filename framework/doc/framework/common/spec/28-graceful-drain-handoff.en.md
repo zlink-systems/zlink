@@ -40,10 +40,10 @@ chosen target runtime, the Location Store, and the Relocation Store finish the
 operation. A transient Store or transport error within the same process can be retried
 within the deadline. But once the source or target process terminates, a different
 runtime doesn't take over the relocation, and there's no automatic recovery by picking a
-different target. This capability is defined in a future version's object failover
+different target. Recovery after the source or target process terminates is outside this
 contract.
 
-Even in this version, the rule against ever creating two owners at once must be kept. If
+The rule against creating two owners at once still applies. If
 a Location Store change's result isn't received, success or failure isn't guessed — the
 same record is re-read. Source admission isn't reopened, and target application message
 processing isn't started, before confirming the actual owner.
@@ -478,8 +478,9 @@ a [relocation unit](01-glossary.en.md#relocation-unit).
    source isn't blocked before this check finishes.
 2. Once ready, it finishes only currently running handlers and timer callbacks up to
    that point. Messages arriving afterward, and timers not yet started, are held in the
-   source runtime's size-bounded ingress hold. This hold is temporary storage kept only
-   on the source, for relocation.
+   source runtime's ingress hold. The hold is temporary relocation storage that exists
+   only on the source. Relocation does not add its own record-count or byte bound to this
+   storage.
 3. The source runtime stores not-yet-executed messages, timer information, and
    application state in the Relocation Store. If `PreserveStateWith` was chosen, the
    state the application adapter's `Capture` returned is also stored.
@@ -846,7 +847,6 @@ called [relocation ingress hold](01-glossary.en.md#relocation-ingress-hold).
 | Resource | Move rule |
 |---|---|
 | A message arriving after new work is blocked | The source holds arriving messages with no bound on record count or stored size. If the owner change succeeds, operation identity and ObjectGeneration are kept and delivered to the target. If the change is canceled, it's restored to the source queue in arrival order. |
-| Exceeding the hold limit | A request ends with `Unavailable`; a one-way operation ends with a moving drop. The framework doesn't create a new operation identity and automatically resubmit. |
 | `SpotWide`/Instance Spot timer | The runtime handle and continuation aren't moved. Logical registration, next fire time, and pending tick are moved, and the target automatically restores them in queue order. The application doesn't duplicate-capture a timer or re-register it in restore. |
 | Entry/`PerActor` Actor timer | Moves with the Actor queue to the Actor owner. Spot-level application timers aren't moved — a schedule that must be kept is managed in the application's external state. |
 | A session connected to an Actor | The physical connection of a [STREAM session](01-glossary.en.md#stream-session), which exchanges request/reply and push on the same connection, is kept. Within the same ObjectGeneration, the target runtime sends `sessionActorLocationUpdateReqMsg` to change that Actor's [binding route](01-glossary.en.md#binding-route) and the bound-session's current Actor location snapshot to the target MeshName/NodeRid. The response comes as a separate `sessionActorLocationUpdateResMsg`, and the target Actor keeps processing messages while waiting for it. ActorId/ObjectGeneration are kept, and the route and location snapshot of other Actors on the same Session not included in the relocation don't change. |

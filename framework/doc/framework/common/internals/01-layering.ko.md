@@ -10,22 +10,23 @@ title: "1. 계층 경계와 식별자"
 >
 > **계약 소유** — 종료 절차와 순서는 [Host Relocate와 Shutdown](../spec/28-graceful-drain-handoff.ko.md)이,
 > 식별자의 형식과 수명은 [용어집](../spec/01-glossary.ko.md)이 소유한다.
-> 이 장은 그 계약을 만족시키는 **구조**와, 네 구현에서 관찰된 어긋남을 다룬다.
+> 이 장은 그 계약을 만족시키는 **구조**와, 경계를 어겼을 때 나타나는 실패를 다룬다.
 
-runtime을 어떤 덩어리로 나눌지, 그리고 어떤 값을 하나로 합치면 안 되는지를 다룬다.
-이 두 결정은 나중에 바꾸기가 가장 어렵다 — 경계를 잘못 그으면 코드 전체에 퍼지고,
-식별자를 합쳐 두면 "이 값이 언제까지 유효한가"를 되물을 수 없게 된다.
+이 장은 runtime의 책임을 나누는 경계와, 수명이 다른 식별자를 분리하는 기준을 설명한다.
+이 경계가 코드 전체의 의존 방향을 정하므로 나중에 바꾸기 어렵다. 수명이 다른 식별자를
+하나로 합치면 어떤 범위와 기간에서 값이 유효한지 판단할 수 없게 된다.
 
 ## 1. binding 경계를 의미 기준으로 잡는다
 
 **결정.** 모든 언어 구현은 같은 책임 그래프를 따른다. 이 그래프는 binding의 type 이름,
 package 배치 또는 문법이 아니라 의미의 소유와 runtime 비용으로 정의한다.
 
-Framework에는 public contract와 두 개의 내부 runtime 영역이 있다. public contract와 의미
-runtime core는 binding과 독립적이어야 한다. binding과 만나는 runtime integration은 binding
-동작의 의미·소유권·수명·준비 상태·오류 의미가 Framework 계약과 이미 같을 때 binding
-public API를 직접 사용할 수 있다. 이 의미가 다르거나 여러 binding object를 하나의 Framework
-동작으로 결합해야 할 때만 의미 adapter 또는 port를 둔다.
+Framework는 public contract, 의미를 구현하는 runtime core, binding과 연결하는 integration
+영역으로 나뉜다. Public contract와 runtime core에는 binding type을 노출하지 않는다.
+
+Integration 영역은 binding 동작의 의미, 소유권, 수명, 준비 상태와 오류가 Framework 계약과
+이미 같으면 binding public API를 직접 호출한다. 둘 사이에 차이가 있거나, 여러 binding
+object를 하나의 Framework 동작으로 결합해야 할 때만 의미 adapter 또는 port를 둔다.
 
 `SpotNode`와 `Stream`은 이런 결합의 공통 예다. 특별히 면제된 영역이 아니며, 다른 adapter도
 아래 POSDDD와 성능 검토를 같은 기준으로 통과해야 한다.
@@ -41,17 +42,14 @@ flowchart TB
     BINDING --> CORE["Core"]
 ```
 
-public contract와 의미 runtime core는 binding type을 노출하지 않는다. binding과 만나는
-runtime integration만 binding public type을 참조할 수 있다. 인위적인 추상화 경계를
-유지하려고 binding type을 Framework domain contract에 복사하지 않는다. Adapter는 runtime
-구현의 일부이며 binding package 안으로 Framework 결정을 옮기지 않는다.
+Binding public type은 integration 영역에서만 참조한다. 추상화 계층의 모양을 맞추려고 같은
+type을 Framework domain contract에 복사하지 않는다. Adapter도 runtime 구현에 속하므로,
+Framework가 정할 동작을 binding package로 옮기지 않는다.
 
-이 경계가 보호하는 것은 class 개수가 아니라 의미와 소유권이다. 모든 언어가 같은 그래프를
-가져야 한다. 의미 runtime core, 하나의 binding-facing runtime integration 가장자리,
-의미가 같으면 직접 사용하고 차이가 남을 때만 의미 adapter를 두는 구조를 유지한다.
-binding type은 public contract나 domain contract 전체로 퍼뜨리지 않는다. 다음의 「type을
-추가하기 전에 동작을 분류한다」와 「POSDDD 검토 관문」 및 「성능 관문」이 이 판단을
-구체화한다.
+이 경계가 보호하는 대상은 class 개수가 아니라 의미와 소유권이다. 모든 언어 구현은 같은
+책임 그래프를 유지한다. 의미가 같으면 binding API를 직접 사용하고, 확인된 차이가 있을
+때만 adapter가 그 차이를 한 곳에서 처리한다. 아래의 동작 분류, POSDDD 검토 관문과 성능
+관문은 이 선택을 판단하는 기준이다.
 
 **왜.** binding은 Framework와 별개 주기로 바뀐다. binding type과 소유권 규칙이 public
 contract에 흩어지면 binding 변경이 API 전체 수정이 된다. 반대로 binding 메서드마다
@@ -118,7 +116,7 @@ ownership이나 protocol 정확성 때문에 필요한 adapter는 비용이 있�
 다음 구조는 모든 언어에서 설계 오류다.
 
 - binding object와 인자·결과가 같은 `*Wrapper` class
-- test나 가상의 backend만을 이유로 만든 구현 하나짜리 `IBackend*` interface
+- test나 가상의 backend만을 이유로 실제 대상 하나를 감싸는 `IBackend*` interface
 - binding method 이름만 바꾸거나 binding option을 두 번째로 노출하는 facade
 - binding public API를 우회하는 reflection, internal member 접근, visibility hack, raw-frame 우회
 - 다른 언어에 있는 구현 세부 사항만을 근거로 추가한 언어별 public API
@@ -155,28 +153,26 @@ close`)를 정해진 순서로 부르고, 각 topology는 그 부름에 자기 r
 불러도 결과가 같아야 한다.
 
 **왜.** topology가 각자 닫으면 닫는 순서가 실행할 때마다 달라진다. STREAM session이 아직
-Actor를 붙들고 있는데 Actor가 속한 실행 단위인 [Spot](../spec/01-glossary.ko.md#spot) 쪽이
+Actor reference를 유지하는데 Actor가 속한 실행 단위인 [Spot](../spec/01-glossary.ko.md#spot) 쪽이
 먼저 닫히면, 그 상황을 재현할 수도 없고 어느 쪽이
 잘못인지 판정할 수도 없다.
 
-한 구현에서는 종료 순서를 맞추려고 **구체 타입을 검사해 분기하는** 코드가 종료 경로에
-들어가 있다. 이것은 "topology를 추상으로 다룬다"는 설계가 이미 깨졌다는 신호다 —
-추상 타입으로 순서를 표현할 수 없으니 구체 타입을 되물은 것이다.
+종료 경로가 순서를 맞추려고 **구체 타입을 검사해 분기하면**, topology를 추상으로 다루는
+경계가 깨진다. 추상 타입만으로 순서를 표현할 수 없으므로 topology를 추가할 때마다 종료
+분기가 늘고, 같은 resource도 실행 경로에 따라 다른 순서로 닫힐 수 있다.
 
 ### 종료 로직을 host 통합 계층에 두지 않는다
 
-한 구현은 종료 조율의 상당 부분이 웹 프레임워크 통합 package에 있다. runtime 자체만으로는
-스스로를 끝까지 정리하지 못한다는 뜻이다.
-
-이렇게 되면 그 통합을 쓰지 않는 자리 — 콘솔 host, 테스트, 다른 프레임워크 — 에서
+종료 조율을 웹 프레임워크 통합 package에 두면 runtime 자체만으로는 정리를 끝낼 수 없다.
+그 통합을 쓰지 않는 자리 — 콘솔 host, 테스트, 다른 프레임워크 — 에서는
 종료가 다르게 동작하거나 아예 없다. 통합 계층은 **runtime의 시작·종료를 host 생명주기에
 연결만** 하고, 무엇을 어떤 순서로 정리할지는 runtime이 소유한다.
 
 ### 같은 프로토콜을 두 번 구현하지 않는다
 
-한 구현은 client 접속 라이브러리가 framework와 **별개로 같은 프로토콜 스택을** 갖고
-있다. 대기 중 요청 관리, 연결 유지, 종료 처리가 양쪽에 따로 있다. 한쪽만 고쳐지는
-상황이 반드시 생기고, 어느 쪽이 정본인지 코드에 남지 않는다.
+client 접속 라이브러리와 framework가 **같은 프로토콜 스택을 따로 구현하면**, 대기 중 요청
+관리, 연결 유지와 종료 처리의 정본이 둘이 된다. 한쪽의 수정이 다른 쪽에 반영되지 않으면
+같은 wire 입력을 서로 다르게 처리한다.
 
 프로토콜 처리는 한 곳에서 구현하고 양쪽이 그것을 쓴다.
 
@@ -211,18 +207,22 @@ relocation을 기다리던 쪽이 `Blocked/ShutdownRequested`로 끝난다
 된다([5. 이동 중 message 연속성 「1. 네 개의 경계」](05-relocation-continuity.ko.md#1-네-개의-경계)).
 
 받을 node가 당장 없다고 바로 거절하지는 않는다. **정해진 시간까지 대상 정보가 퍼지기를
-기다린 뒤** `Blocked/TargetUnavailable`로 끝낸다(`28:288`). 거절 결과는 저장하지 않으므로
-다시 요청하면 처음부터 다시 검사한다(`28:326`).
+기다린 뒤** `Blocked/TargetUnavailable`로 끝낸다
+([Host Relocate와 Shutdown 「5.1 Target이 아직 없을 때」](../spec/28-graceful-drain-handoff.ko.md#51-target이-아직-없을-때)).
+거절 결과는 저장하지 않으므로 다시 요청하면 처음부터 다시 검사한다
+([Host Relocate와 Shutdown 「6. Concurrent 호출과 cancellation」](../spec/28-graceful-drain-handoff.ko.md#6-concurrent-호출과-cancellation)).
 
 옮길 대상이 **하나도 없으면** 받을 node 없이도 성공으로 끝난다. 이때도 host 상태 전이와
-새 작업 차단은 다른 이전과 같다(`28:281-285`).
+새 작업 차단은 다른 이전과 같다
+([Host Relocate와 Shutdown 「5.1 Target이 아직 없을 때」](../spec/28-graceful-drain-handoff.ko.md#51-target이-아직-없을-때)).
 
 **결정 — 확정 전후로 실패 처리가 다르지만, 어느 쪽도 host를 종료시키지 않는다.** 첫
 이전이 확정되기 전의 실패는 원래 상태로 복귀한다. 확정된 뒤의 실패는 **이미 옮긴 것은
 받은 node에 남기고**, 아직 옮기지 못한 작업만 다시 처리한 뒤 **`Serving`으로 돌아간다**
-(`28:152`, `28:274`). 종료는 caller가 별도로 요청해야 일어난다.
+([Host Relocate와 Shutdown 「10. Relocate 완료와 실패」](../spec/28-graceful-drain-handoff.ko.md#10-relocate-완료와-실패)).
+종료는 caller가 별도로 요청해야 일어난다.
 
-**결정 — 관측 구독자는 종료 절차의 진행을 붙잡지 못한다.** 구독자가 응답하지 않아도
+**결정 — 관측 구독자는 종료 절차의 진행을 막지 못한다.** 구독자가 응답하지 않아도
 종료는 진행한다.
 
 ```mermaid
@@ -306,7 +306,7 @@ session을 먼저 멈추면 callback이 쓸 것이 이미 사라진 뒤다.
 **결정 — 등록 선언은 시작 시점에 검증하고, 검증을 통과한 뒤에는 바뀌지 않는다.**
 
 실행 중에 바뀔 수 있으면 모든 조회 지점이 "지금 값이 유효한가"를 되물어야 한다. 그
-비용이 message마다 붙고, 어느 시점의 설정으로 처리된 message인지도 알 수 없게 된다.
+비용이 message마다 발생하고, 어느 시점의 설정으로 처리된 message인지도 알 수 없게 된다.
 
 검증에서 잡아야 하는 것은 **시작 전에 알 수 있는 모순**이다 — 같은 이름을 두 번 등록,
 handler가 없는 channel, 서로 배타적인 옵션 조합. 이런 것을 시작 후에 발견하면 이미 일부
@@ -339,21 +339,19 @@ message를 처리한 뒤다.
 유일성은 `(보낸 node의 RID, 그 node의 lifecycle generation, 호출 식별자)` 조합으로
 확보한다. 값의 길이와 내부 형식은 공개 계약이 아니므로 언어마다 달라도 된다.
 
-한 구현에는 진행 중 호출 식별자 형식이 **세 가지** 공존한다. 서로 변환하는 자리가
-생기고, 어느 경로가 어느 형식을 쓰는지 알려면 호출 그래프를 따라가야 한다. 형식은
-하나로 둔다.
+진행 중 호출 식별자 형식을 여러 개 두면 서로 변환하는 코드가 생기고, 어느 경로가 어느
+형식을 쓰는지 알려면 호출 그래프를 따라가야 한다. runtime 내부 형식은 하나로 둔다.
 
 ### 일부만 타입을 만들면 나머지가 문자열로 남는다
 
-한 구현은 node RID만 전용 타입이고 mesh 이름·객체 ID·channel 이름은 전부 일반
-문자열이다. 다른 구현은 넷 다 문자열이다. 이렇게 두면 두 가지가 생긴다.
+node RID만 전용 타입으로 두거나 모든 식별자를 일반 문자열로 두면 다음 문제가 생긴다.
 
 첫째, **서로 다른 식별자를 바꿔 넣어도 컴파일이 통과한다.** 객체 ID 자리에 channel
 이름을 넘기는 실수를 타입이 잡지 못한다.
 
-둘째, **같은 값의 표기가 여러 개 생긴다.** 한 구현은 routing id를 비교할 때 대소문자와
-16진 표기가 다른 후보 여러 개를 만들어 하나씩 대조한다. 경계를 넘나들며 표기가
-갈렸다는 신호이고, 비교 비용이 값 하나마다 붙는다.
+둘째, **같은 값의 표기가 여러 개 생긴다.** routing id를 비교할 때 대소문자와 16진 표기가
+다른 후보를 여러 개 만들어 하나씩 대조해야 한다면, 경계를 넘을 때 표기가 달라졌다는
+뜻이다. 값 하나마다 후보를 만드는 비용도 발생한다.
 
 **결정 — 식별자는 각각 전용 타입으로 두고, 표기를 하나로 정한다.** 문자열로 다뤄야
 하는 자리가 있으면 그 경계에서 한 번만 변환한다.
@@ -375,7 +373,7 @@ message를 처리한 뒤다.
 
 - Framework public contract와 domain contract에 binding type이 없고, binding과 만나는
   코드는 binding public API만 사용한다.
-- 구현이 하나뿐이면서 호출을 그대로 넘기기만 하는 계약 층이 없다.
+- 실제 대상 하나에 호출을 그대로 넘기기만 하는 계약 층이 없다.
 - binding과 만나는 type은 의미와 소유권이 이미 같을 때 직접 사용하거나, 의미 변환을
   소유하는 adapter로 둔다.
 - binding surface를 복제하는 호출 전달 wrapper가 없다.

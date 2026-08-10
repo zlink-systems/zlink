@@ -482,6 +482,24 @@ completion과 liveness·admission·relocation·reply recovery service control은
 JSON은 typed message의 기본 codec이다. JSON만 사용하는 application은 메시지 타입마다 codec을 등록하지
 않는다. Protobuf, MessagePack과 사용자 codec은 선택 extension package로 root codec registry에 등록한다.
 
+Codec extension은 content-type을 parameter가 없는 ASCII media type인 `type/subtype`으로
+등록한다. `type`과 `subtype`에는 RFC가 정한 media type token 문자만 사용할 수 있다.
+
+Registry는 host를 시작할 때 등록 값을 다음과 같이 검사하고 한 가지 표기로 맞춘다. 먼저 값
+앞뒤의 SP와 TAB을 제거하고, `type`과 `subtype`에 있는 ASCII 대문자를 소문자로 바꾼다. 이
+결과를 canonical form이라고 한다. Parameter, 값 내부의 공백, non-ASCII 문자 또는 비어 있는
+token이 있으면 configuration error다. 여러 등록이 같은 canonical form이 되면 마지막 등록이
+앞의 등록을 교체한다.
+
+Framework는 service wire에 canonical form만 기록한다. 수신 경로는 wire의 content-type을 다시
+변환하지 않고 registry의 key와 그대로 비교한다. 따라서 대소문자, 공백 또는 parameter 때문에
+canonical form과 다르거나 registry에 없는 값은 JSON으로 처리하지 않고 `ProtocolError`로
+완료한다. 이 규칙을 적용하면 startup 이후 바뀌지 않는 receive table에서 정확한 문자열로
+codec을 찾을 수 있다(immutable exact lookup).
+
+HTTP response의 media type parameter는 HTTP client가 먼저 처리한다. HTTP client는 parameter를
+parse한 뒤 parameter가 없는 media type만 같은 정규화 절차에 전달한다.
+
 송신할 업무 타입과 일치하는 extension이 없으면 JSON codec을 선택한다. 반면 수신 envelope가 명시한
 non-JSON content-type과 일치하는 codec이 registry에 없으면 payload를 JSON으로 다시 해석하지 않고
 `ProtocolError`로 완료한다.
@@ -493,6 +511,19 @@ content-type을 쓰지 않는다.
 
 여러 조건이 동시에 맞으면 **등록 순서가 늦은 것을 우선한다.** 어느 것도 맞지 않으면 JSON
 codec을 쓴다.
+
+Framework는 선언 type별 송신 선택 결과를 최대 1,024개까지 저장한다. 저장 공간이 차면 기존
+결과를 제거하지 않는다. 그 뒤 처음 보는 type은 송신할 때마다 등록 목록을 다시 평가하며, 그
+결과는 저장하지 않는다.
+
+Node.js는 TypeScript의 static type이 runtime에 남지 않는 점을 보완한다. 일반 class instance는
+constructor를 선언 type으로 사용한다. 호출 지점의 base class와 instance의 runtime subtype이
+다르면 `ZLinkMessage.from(value, declaredType)`의 두 번째 인자로 base class constructor를
+전달한다. TypeScript interface에는 runtime constructor가 없으므로, interface 계약을 나타내려면
+그 interface와 호환되는 application-defined class의 constructor token을 명시한다.
+
+C++는 `codec_registration_context_t::add_serializer<TPayload>(...)`의 compile-time `TPayload`를
+declared payload descriptor로 사용한다. 실제 instance의 runtime type으로 다시 고르지 않는다.
 
 송신 타입 선택의 기본값과 수신 wire content-type 검증은 서로 다른
 경계이므로 같은 fallback 규칙을 적용하지 않는다.
@@ -510,7 +541,7 @@ Codec은 업무 객체와 payload bytes 사이의 변환만 담당한다. Packet
 | Java | `codecs().use(extension)` | connector의 `typedCodec` option | [server](server/languages/java/interfaces/README.ko.md), [connector](stream-connector/languages/java/03-stream-connector.ko.md) |
 | Kotlin | `codecs().use(extension)` | connector의 `typedCodec` option | [server](server/languages/kotlin/interfaces/README.ko.md), [Java/Kotlin connector](stream-connector/languages/java/03-stream-connector.ko.md) |
 | Node.js | `codecs().use(extension)` | connector의 `codec` option | [server](server/languages/node/interfaces/README.ko.md), [connector](stream-connector/languages/typescript/03-stream-connector.ko.md) |
-| C++ | `codecs().use(extension)` | `connector_options_t::typed_codec` | [server](server/languages/cpp/interfaces/01-common-runtime.ko.md), [connector](stream-connector/languages/cpp/03-stream-connector.ko.md) |
+| C++ | `codecs().use(extension)` | `connector_options_t::typed_codec` | [server](server/languages/cpp/interfaces/02-configuration-host.ko.md), [connector](stream-connector/languages/cpp/03-stream-connector.ko.md) |
 
 두 등록 표면은 같은 typed payload 계약을 투영하지만 server extension 객체와 connector option의 구체적인
 타입까지 같아야 한다는 뜻은 아니다. JSON 기본 codec은 별도 등록 없이 사용하며, 다른 codec도 메시지마다

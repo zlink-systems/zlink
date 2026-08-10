@@ -298,6 +298,7 @@ public interface systems.zlink.framework.ZLinkHandlerFilter {
 }
 public interface systems.zlink.framework.ZLinkMessageSerializer {
   public abstract <T> systems.zlink.framework.ZLinkEncodedPayload serialize(T);
+  public default <T> systems.zlink.framework.ZLinkEncodedPayload serialize(T, java.lang.Class<?>);
   public abstract <T> T deserialize(systems.zlink.framework.ZLinkEncodedPayload, java.lang.Class<T>);
   public default void prepare(java.lang.Class<?>);
 }
@@ -336,6 +337,11 @@ Public exception은 재시도 여부를 제공하지 않는다.
 
 ## Serializer와 오류 public signature
 
+받은 `ZLinkMessage`에서 첫 `decode(Class<T>)`가 값 또는 실패를 확정한다. 같은 type으로 다시
+호출하면 같은 값을 반환하고 serializer를 다시 호출하지 않는다. 다른 type으로 호출해도 다시
+역직렬화하지 않으며, 첫 값이 그 type과 다르면 `TYPE_MISMATCH`로 끝난다. 첫 호출이 실패했다면
+그 실패를 다시 전달한다.
+
 ```java
 public final class systems.zlink.framework.ZLinkEncodedPayload {
   public static systems.zlink.framework.ZLinkEncodedPayload from(byte[]);
@@ -348,8 +354,10 @@ public final class systems.zlink.framework.errors.ZLinkConfigurationException ex
 public final class systems.zlink.framework.messaging.ZLinkMessage {
   public static systems.zlink.framework.messaging.ZLinkMessage empty();
   public static systems.zlink.framework.messaging.ZLinkMessage of(java.lang.Object);
+  public static systems.zlink.framework.messaging.ZLinkMessage of(java.lang.Object, java.lang.Class<?>);
   public static systems.zlink.framework.messaging.ZLinkMessage fromEncoded(systems.zlink.framework.ZLinkEncodedPayload, systems.zlink.framework.ZLinkMessageSerializer);
   public boolean isEmpty();
+  public java.lang.Class<?> declaredType();
   public <T> T decode(java.lang.Class<T>);
   public systems.zlink.framework.ZLinkEncodedPayload toEncodedPayload(systems.zlink.framework.ZLinkMessageSerializer);
 }

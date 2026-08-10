@@ -12,8 +12,8 @@ title: "7. Receive And Dispatch Loop"
 > **Contract ownership** — receive fairness is owned by
 > [Transport Liveness](../spec/29-transport-liveness.en.md), and the
 > queue bound by [the Framework API](../spec/06-framework-api.en.md).
-> This chapter covers the **structure** that satisfies that contract,
-> and the mismatches actually observed across the four implementations.
+> This chapter covers the **structure** that satisfies that contract and
+> the failures that become visible at the receive/dispatch boundary.
 
 The span that carries a received message to the execution gate.
 Whether to wake per message or batch-process decides throughput, and
@@ -175,6 +175,8 @@ authority a late-arriving completion belongs to after cycling through
 this arrow, an owner where short work keeps arriving never releases
 the execution resource.
 
+<a id="5-pick-one-wake-up-method"></a>
+
 ## 5. Pick Only One Wake-Up Method
 
 **Decision — don't mix wake-up methods during execution within one
@@ -280,23 +282,23 @@ connections get delayed even with a ceiling in place.
 
 ## 7. Don't Make Timer Resources Proportional To Registration Count
 
-If each Spot has several timers, timers quickly outnumber Spots. With
-10,000 rooms and two timers each, that's 20,000.
+Because each Spot can register several timers, timer count grows faster than Spot count.
+Ten thousand Spots with two timers each produce 20,000 timers.
 
 **Decision — one shared scheduler manages timers. Don't create a
 dedicated resource per registration.**
 
-The approaches observed across the four implementations split two
-ways.
+Creating a resource for every registered timer and managing all timers with one scheduler
+require very different resource counts.
 
 | Approach | 10,000 Spots × 2 timers |
 |---|---|
 | A dedicated resource per registration (OS timer, wait loop, deferred call) | That resource is **20,000** |
 | **A shared scheduler + a deadline-priority queue** | One thread and 20,000 queue entries |
 
-The second is the standard. The entry count is the same, but the
-resource is one. One implementation actually takes this approach, with
-one shared scheduler and one core thread handling every Spot's timers.
+The shared-scheduler approach is the common standard. It has the same number of queue
+entries, but needs only one scheduler and one core thread. The scheduler manages every
+Spot's timer in a deadline-priority queue.
 
 ### The Application Chooses How A Late Tick Is Handled
 
@@ -305,7 +307,7 @@ is a **public option** — skip and run only the current one, catch up
 up to a fixed count, or recompute the next scheduled time from the
 completion moment
 ([Stage Wrapper On Spot 「5. Timer」](../spec/17-stage-wrapper-on-spot.en.md#5-timer)).
-All four implementations implement these three, with the same names.
+This option fixes the three behaviors and their names as public contract.
 
 internals doesn't pick and fix one of these. In particular, **"the
 next schedule happens after processing completes" is just one of the
@@ -318,10 +320,9 @@ pending record"
 But if the application chose catch-up, **the ceiling is the count that
 option defines**, and internals doesn't reduce it to one.
 
-**Decision — don't accumulate tick statistics indefinitely.** One
-implementation keeps accumulating delivered-tick and failure records
-for the timer's whole lifetime, so a long-running timer keeps eating
-memory.
+**Decision — don't accumulate tick statistics indefinitely.** If delivered-tick and
+failure records remain for a timer's entire lifetime, memory usage continues to grow for
+a long-running timer.
 
 ### The Path By Which A Tick Enters Execution Authority
 

@@ -213,13 +213,17 @@ response. It allows neither flags nor an application payload — a single
 service record carries a body closed by version `1` and its length. The
 body carries the source route, the target route, the hop count, the queue
 count/bytes at relay time, the original operation ID, and the original
-reply route ID.
+reply route ID. The two queue values are saturating `u32` diagnostic
+snapshots. `UINT32_MAX` means the actual count or retained byte size is at
+least that value; the snapshot never controls payload admission.
 
 #### Route validation
 
 - The source and target routes must share the same object kind and object identity.
 - Each route carries the object generation, the target node RID and generation, the authority owner generation, and the owner lease generation; the receiver first confirms the source route's target node is a currently admitted peer.
-- Only a hop count of 1..8 is allowed. The queue count and queue byte size have no cap.
+- Only a hop count of 1..8 is allowed. One control envelope is at most 16 MiB. This
+  envelope bound and the saturating diagnostic fields do not impose a message-count or
+  stored-byte bound on the retained payload queue.
 - A record that points at a different object, or whose route fence doesn't match, ends as a protocol error before application dispatch.
 
 #### Suppressing duplicate notifications
@@ -407,7 +411,7 @@ length.
 
 | Kind | Purpose | Contents |
 |---|---|---|
-| `1` | Delivers to an existing [Ready](../spec/01-glossary.en.md#ready) authority | The object/owner/lease generation and StoreVersion of a state that can accept new work — byte-compatible with the earlier wire |
+| `1` | Delivers to an existing [Ready](../spec/01-glossary.en.md#ready) authority | The object/owner/lease generation and StoreVersion of a state that can accept new work |
 | `2` | Missing cold activation only | The target Mesh/node RID/lifecycle, Spot RID, stable type, descriptor version, and deadline — an authority fence is forbidden |
 
 If a kind `2` route's operation identity or metadata presence/bytes differ
@@ -447,7 +451,7 @@ rejected as a protocol error before reservation.
 
 #### Reply envelope
 
-Both operations reuse the existing command 20 reply envelope as-is.
+Both operations return their results in the command 20 reply envelope.
 
 - The success tail for Create is the `Existing`/`Created`/`Rejected` discriminator plus the `SpotRef` that identifies the target; the success tail for Close is a single `closed` bool.
 - Create's application reply is forbidden on `Existing`, and only optionally allowed on `Created` or `Rejected`.
@@ -471,6 +475,24 @@ Both operations reuse the existing command 20 reply envelope as-is.
 - Accepted send/request with `connectionBound` source lifetime drain to a terminal state before `Captured`. This work is not recorded in the frozen journal.
 - A bound-session request follows the same rule as any other Actor request. A request accepted before the seal is stored in the frozen journal preserving its source fence, operation identity, and reply route; a request arriving after the seal is relayed from the ingress hold to the target.
 - The moment by which a call must finish is called the [Deadline](../spec/01-glossary.en.md#deadline). If it doesn't finish in time, relocation is aborted pre-Captured, ends as `Blocked`/`DeadlineExceeded`, and source admission is restored.
+
+### Session Seal, Source Hold, And Target Temporary Queue
+
+- The session owner verifies command 42's exact binding fence,
+  authority fence, and seal identity as one set. Installing the seal and
+  fixing accepted high-water occur at the same atomic state-transition point.
+- Session ingress that arrives after the seal neither advances the
+  previous binding's accepted high-water nor enters application
+  dispatch. Instead of failing it immediately, the session owner
+  retains its payload and reply context until a matching route switch
+  or abort.
+- The source-object ingress hold, target temporary queue, and session
+  owner's seal wait are separate boundaries. None of these three
+  boundaries has a relocation-specific record-count or stored-byte
+  limit.
+- Work reservations already owned by an ordinary application execution
+  lane still apply. Transport, deadline, and cancellation limits also
+  remain in force, but are not treated as relocation-specific limits.
 
 ### Durable frozen record
 
@@ -536,7 +558,10 @@ stateDiagram-v2
 - `Prepared` preserves the source owner together with the exact target attempt/reservation.
 - From `Committed` through `Completed`, the main owner is the current target.
 - Each transition is an expected-`StoreVersion` CAS.
-- A retry on the same target changes only the target attempt number and the preparation information — it never changes the stable identity or the relocation root. This version has no transition that swaps in a different target process.
+- A retry on the same target changes only the target attempt number and
+  the preparation information — it never changes the stable identity or
+  the relocation root. A transition that swaps in a different target
+  process is not permitted.
 
 ### Aggregate relocation commit
 
@@ -555,23 +580,34 @@ stateDiagram-v2
 
 ### The moment of Ready
 
-`Committed` and `Activating` are not Ready. Target application admission
-opens once the owner
-and membership change, the lifecycle callbacks together with the restore of
-unfinished work and timers, placing the stored existing work and the
-temporary queue work into the execution queue in order, and removing the
-temporary queue registration to switch atomically to the existing dispatch
-path have all finished. Removing the source ingress hold original, changing
-the location record to `Completed`, the Session Actor location update
-acknowledgement, and normalizing the maintenance authority to its steady
-state do not block this admission — the running source and target runtimes
-each continue them as follow-up work. An abort before the owner
-change sent no Session route update, so it waits for no cancellation
-message and no acknowledgement. Source admission is restored after
-recording `Aborted`, discarding the temporary queue work and returning the
-stored work to the source queue in its original order, cleaning up the
-reserved target space and any payload no location record points to, and
-removing the relocation progress information.
+`Committed` and `Activating` are not Ready. The target opens application
+admission only after completing all of the following work.
+
+1. Change the owner and membership.
+2. Run lifecycle callbacks and restore unfinished work and timers.
+3. Put stored existing work and temporary-queue work into the execution
+   queue in their original order.
+4. Remove the temporary-queue registration while atomically switching
+   to the existing dispatch path.
+
+The following cleanup doesn't block Ready admission. The running source
+and target runtimes continue it as follow-up work.
+
+- Remove the original source ingress hold.
+- Change the location record to `Completed`.
+- Send the Session Actor location-update acknowledgement.
+- Normalize the maintenance authority to its steady state.
+
+An abort before the owner change sent no Session route update, so it
+waits for neither a route-cancellation message nor its acknowledgement.
+Source admission is restored only after all of this cleanup finishes.
+
+- Record `Aborted`.
+- Discard temporary-queue work and return stored work to the source queue
+  in its original order.
+- Clean up reserved target space and any payload not referenced by a
+  location record.
+- Remove the relocation progress information.
 
 ### Session route
 
@@ -579,7 +615,20 @@ removing the relocation progress information.
 - Relay/request relay and disconnect do not query the Location Store per message.
 - A physical disconnect is announced only once the entire current binding snapshot is settled, and each binding's callback runs at most once.
 - A route update applies only within the same ObjectGeneration.
-- Commands 44/45 are used only for a route switch/ACK after `Completed`, and no new command is added for this contract.
+- Command 42 installs the seal. Command 43 returns the last session
+  sequence the owner actually accepted; a locally estimated source
+  counter cannot substitute for it.
+- Commands 44 and 45 are used only for a route switch and ACK after
+  `Completed`.
+- A route switch applies only when the exact binding fence, authority
+  fence, seal identity, and replayed high-water all match.
+- Byte-identical duplicates of commands 42–45 return the same result
+  without advancing state twice. Different values for the same identity
+  are a `ProtocolError`.
+- Only a matching abort releases the seal. Without durable evidence that
+  can restore the seal and high-water, relocation ends as
+  `RelocationFailed`. There is no fallback that omits the seal or uses an
+  estimated high-water.
 
 ## 11. Request terminal identity
 
@@ -623,7 +672,7 @@ retention period.
 - If the digest of the participant list the store knows about differs from the list relocation recorded, it ends as `RelocationDataLost`.
 - Actor relocation commit changes the owner and the target Entry Spot membership atomically.
 - Ready is never published before the owner commit, the restore/replay and timer restoration, the queue merge, and the dispatch switch have finished.
-- The `framework-json-v1` golden fixture for typed application messages produces the same value and failure across all four runtimes.
+- Every runtime must produce the same value and failure from the `framework-json-v1` golden fixture for typed application messages.
 - Relocation adapter bytes are never interpreted as JSON or as a typed state contract.
 - Pending relay is never completed by a physical disconnect alone, without a `replyRelayAck`.
 

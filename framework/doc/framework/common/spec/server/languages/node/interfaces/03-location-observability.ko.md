@@ -474,7 +474,7 @@ Framework는 관찰자 queue가 가득 찼다는 이유로 iteration을 끝내�
 ```ts
 export declare class ZLinkMessage<TValue = unknown> {
   private constructor();
-  static from<T>(value: T): ZLinkMessage<T>;
+  static from<T>(value: T, declaredType?: Type<T>): ZLinkMessage<T>;
   static fromEncoded(payload: ZLinkEncodedPayload): ZLinkMessage;
   decode<T>(type?: Type<T>): T;
   toEncodedPayload(): ZLinkEncodedPayload;
@@ -482,5 +482,17 @@ export declare class ZLinkMessage<TValue = unknown> {
 }
 
 ```
+
+TypeScript는 호출 지점의 static type을 runtime에 남기지 않는다. 일반 class instance는
+constructor를 declared type으로 사용한다. Base class로 선언한 자리에 runtime subtype instance를
+넘길 때는 두 번째 `declaredType` 인자로 base class constructor를 명시한다. TypeScript interface는
+runtime constructor가 없으므로, interface 계약을 나타내려면 그 interface와 호환되는
+application-defined class의 constructor token을 전달한다. Codec selector에는 runtime subtype이
+아니라 이 token이 전달된다.
+
+받은 message에서 첫 `decode(...)`가 값 또는 실패를 확정한다. 같은 type이나 다른 type으로 다시
+호출해도 decoder를 다시 실행하지 않고 첫 결과를 반환한다. 첫 호출이 실패했다면 같은 실패를
+다시 전달한다. TypeScript의 generic type은 runtime에 남지 않으므로, 이미 확정된 값을 다른 type으로
+해석할 수 있는지는 호출자가 책임진다.
 
 Serializer registry 선택과 default serializer 결정 helper는 runtime 내부에 둔다. Application은 codec을 Framework 구성에 등록하고 message별 selector나 registry를 전달하지 않는다.

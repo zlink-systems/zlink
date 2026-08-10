@@ -39,11 +39,12 @@ not by this verification.
 | C++ | None. Frames commands 42/43 on the service wire. | Closed |
 | Node.js | None. Implements the seal semantics in its in-process binding registry and correlates a route publish with its seal. | Closed |
 | .NET | None. Implements the seal semantics over an internal relay and separates an exact-fence commit from an idempotent retransmit. | Closed |
-| Java/Kotlin | Commands 42/43 are framed on the service wire and the equality is closed for every relocation that completes the handshake. The session owner answers command 42 with the accepted bound-session high-water it recorded at the seal, the source journals that ACK value in place of its own captured sequence, the target replays it in command 44, and the owner compares it for exact equality against the recorded seal. Two deliberate differences from C++: the owner compares the round-tripped seal token stored per relocation id instead of a live counter, and it installs no ingress barrier, so post-seal messages keep flowing on the previous route and reach the target Actor queue by Message Follow (spec 20 §5 step 5). A relocation that reaches the owner without a seal — a route rebuilt from a durable journal after a restart, or a source whose seal did not complete inside its deadline — keeps the monotonic gate. | Closed for sealed relocations; the restart-recovered route path still falls back to the monotonic gate |
+| Java/Kotlin | None. Command 42 installs the ingress barrier at the same Session-owner transition that freezes the accepted high-water. Command 43 returns that value to the source. Post-seal ingress does not execute on the previous route; it remains in order until command 44 or 45 reaches a terminal result. Command 44 applies only when its high-water exactly equals the seal associated with the relocation id. Restart recovery uses the exact seal and route stored in the durable root and does not substitute a monotonic comparison. | Closed |
 
-The Java/Kotlin fallback gate applies only to requests that already passed the ObjectGeneration,
-AuthorityOwnerGeneration, and binding generation checks that precede it. A late-arriving route
-request from an earlier relocation is rejected by those fences and by the monotonic gate.
+Java/Kotlin validates ObjectGeneration, AuthorityOwnerGeneration, binding generation, and the exact
+high-water together. Command 44 without a matching seal does not change the route; it returns
+`stale` or `sessionOrBindingClosed` with high-water zero. Restart recovery fails the relocation
+explicitly when it cannot restore the exact seal instead of estimating another high-water value.
 
 Command 45 carries a `session-relocation-route-result` field (applied / alreadyApplied / stale /
 sessionOrBindingClosed). Spec 20 §5 requires the target to stop retransmitting once it receives any

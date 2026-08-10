@@ -436,10 +436,10 @@ Actor handler가 `JoinSpot(...)` 또는 `JoinEntrySpot(...)`을 호출한 뒤 �
    Actor로 들어오는 message는 application instance를 찾지 않고 temporary queue에 넣는다.
    Target은 Actor를 만들고 application state와 저장된 기존 queue를 읽지만 아직 application
    작업을 실행하지 않는다.
-5. Source seal 뒤에 도착한 message는 source runtime의 크기가 제한된 `ingress hold`에
-   보관한다. Source runtime은 Restore 요청을 보낸 뒤 hold의 message와 이후 이전 route로
-   들어오는 message를 target으로 relay한다. Target dispatcher는 이 message도 같은 temporary
-   queue에 넣는다.
+5. Source seal 뒤에 도착한 message는 source runtime의 `ingress hold`에 보관한다. 이
+   hold에는 relocation 자체가 정하는 record 수나 byte 상한이 없다. Source runtime은 Restore
+   요청을 보낸 뒤 hold의 message와 이후 이전 route로 들어오는 message를 target으로
+   relay한다. Target dispatcher는 이 message도 같은 temporary queue에 넣는다.
 6. Target이 Actor Restore를 마치면 target membership, owner, capacity와 generation을
    `LocationStore`에서 한 번에 갱신한다. 이 commit이 성공하면 target이 새 owner가 된다.
    Source는 target의 dispatch 전환 완료를 받을 때까지 hold의 원본을 유지한다.
@@ -532,12 +532,14 @@ owner가 바뀌므로 `AuthorityOwnerGeneration`만 증가한다. Target Context
 Source Context가 더 이상 operation을 실행하지 못하도록 차단한다.
 
 `Defer()` 뒤 source seal 전에 도착한 message는 현재 Actor queue와 함께
-`RelocationStore`에 저장한다. Source seal 뒤 도착한 message는 크기가 제한된 ingress hold에
-임시로 보관한다. Source runtime은 hold의 record와 이후 이전 route로 들어오는 record를 target
-temporary queue로 계속 relay한다. Commit 전에 중단하면 hold의 record를 도착 순서대로
-source queue에 되돌리고 target temporary queue를 폐기한다. Commit이 성공하면 저장된 기존
-작업 뒤에 temporary queue의 record를 옮긴다. Source는 target의 dispatch 전환 완료를 받은 뒤
-hold 원본을 제거한다.
+`RelocationStore`에 저장한다. Source seal 뒤 도착한 message는 ingress hold에 임시로
+보관한다. 이 hold에는 relocation 전용 record 수나 byte 상한이 없다.
+
+Source runtime은 hold의 record와 이후 이전 route로 들어오는 record를 target temporary
+queue로 계속 relay한다. Commit 전에 중단하면 hold의 record를 도착 순서대로 source queue에
+되돌리고 target temporary queue를 폐기한다. Commit이 성공하면 저장된 기존 작업 뒤에
+temporary queue의 record를 옮긴다. Source는 target의 dispatch 전환 완료를 받은 뒤 hold
+원본을 제거한다.
 
 Application이 요청한 User Spot join에서는 target User Spot의 `OnActorJoin`으로 먼저
 admission을 결정한다. Cross-node Join에서는 restore 요청과 source relay 뒤 target restore와
@@ -743,8 +745,8 @@ Owner와 membership commit 뒤 failure는 source rollback 조건이 아니다. �
 실행 중이면 target admission을 닫은 상태로 lifecycle callback이나 dispatch 전환을 deadline
 안에서 다시 시도할 수 있다. Source나 target process가 종료되면 다른 runtime이 relocation을
 이어받지 않는다. Commit 뒤 target이 종료되면 authority는 target을 유지하지만 object는
-unavailable 상태가 된다. 자동 target replacement와 process 재시작 뒤 relocation 재개는 차기
-version에서 별도로 정의한다.
+unavailable 상태가 된다. 자동 target replacement와 process 재시작 뒤 relocation 재개는 이
+계약의 범위 밖이다.
 
 같은 process 안의 재시도 때문에 factory, `Restore`와 lifecycle callback은 두 번 이상 호출될
 수 있다. Callback은 같은 object generation과 입력을 다시 받아도 수렴해야 하며 exactly-once
@@ -854,7 +856,7 @@ binding에 적용하지 않는다. Route update는 bound ObjectGeneration이 같
   completion idempotency에만 사용하고 `RelocationId`,
   reservation ID와 aggregate commit ID를 재사용하지 않는다.
 - `Defer()` 뒤 source seal 전 message는 barrier 뒤 Actor queue에 두고, seal 뒤
-  message만 [bounded ingress hold](01-glossary.ko.md#relocation-ingress-hold)에 보관한다.
+  message만 [relocation ingress hold](01-glossary.ko.md#relocation-ingress-hold)에 보관한다.
 - Cross-node Join의 Target dispatcher가 Actor instance보다 먼저 relocation temporary queue를
   등록한다. Restore 중 message는 이 queue에서 application handler를 실행하지 않는다.
 - 저장한 기존 Actor 작업을 실제 Actor queue에 먼저 넣고 temporary queue의 작업을 그 뒤에
@@ -871,7 +873,9 @@ binding에 적용하지 않는다. Route update는 bound ObjectGeneration이 같
   [bounded aggregate commit](01-glossary.ko.md#bounded-aggregate-commit)의
   generation 하나로 함께 전환된다.
 - Commit 뒤 failure가 participant 일부를 source로 rollback하지 않는다.
-- Message Follow가 bounded committed route만 사용하고 [operation identity](01-glossary.ko.md#operation-identity)를 보존한다.
+- Message Follow는 commit된 route만 사용한다. Relay queue에는 relocation 전용 record 수나
+  byte 상한을 두지 않으며, [operation identity](01-glossary.ko.md#operation-identity)를
+  그대로 보존한다.
 - Bound STREAM connection은 이동하지 않으며 authority generation과 sequence barrier로 해당 Actor의
   binding route와 bound-session current location snapshot만 target으로 바뀐다. ActorId·ObjectGeneration은
   유지한다.

@@ -13,8 +13,8 @@ title: "5. Message Continuity During A Move"
 > contract are owned by
 > [Host Relocate And Shutdown](../spec/28-graceful-drain-handoff.en.md)
 > and [Location Runtime](../spec/21-location-runtime.en.md). This
-> chapter covers the **structure** that satisfies that contract, and
-> the mismatches actually observed across the four implementations.
+> chapter covers the **structure** that satisfies that contract and
+> the failures that become visible when a move boundary is violated.
 
 While a running object moves to another node, where does a message
 addressed to it go? This document covers **how a message is handled at
@@ -25,8 +25,8 @@ of the procedure and the store contract are owned by the formal spec
 
 ## 1. Four Boundaries
 
-From a message's point of view, a move splits into four spans. The
-fate of an arriving message differs in each span.
+From a message's point of view, a move splits into four spans. Each span handles an
+arriving message differently.
 
 ```mermaid
 flowchart LR
@@ -50,9 +50,10 @@ been stopped for no reason at all.
 
 ## 2. Span ② — Holding And Order
 
-A message arriving after the block is held in a bounded slot. The
-queue has no bound on item count or stored size
+A message arriving after the block is held in a relocation slot. The
+queue has no relocation-specific bound on item count or stored size
 ([Host Relocate And Shutdown 「9. Moving Pending Messages, Timers, And Sessions」](../spec/28-graceful-drain-handoff.en.md#9-moving-pending-messages-timers-and-sessions)).
+Limits on an individual message, transport, deadline, and cancellation remain in force.
 
 There's one rule for order — **restored prior work runs before the
 messages held during the move**
@@ -88,27 +89,25 @@ its default active period is **30 seconds**
 |---|---|
 | Active period | 30 seconds by default. Per move |
 | Forwarding hops | Up to 8 chained forwards |
-| Forwarding volume | Unbounded |
+| Forwarding volume | No relocation-specific bound |
 
 | Situation | Result the caller observes |
 |---|---|
-| Forwarding loops back to where it started | `Unavailable` |
+| The forwarding path forms a loop and returns to the first node | `Unavailable` |
 | Object generation doesn't match | `InvalidOperation` |
-| Forwarding volume bound exceeded | `CapacityExceeded` |
 
 When forwarding, the call identifier, object generation, payload, and
 response path are kept exactly as-is. Not keeping them means
 [4. Operation Completion Confirmation](04-completion.en.md)'s
-completion slot can't be found, and the caller hangs until timeout.
+completion slot can't be found, and the call remains incomplete until timeout.
 
 ### This Isn't An Optional Feature
 
 **Session connection and relay depend on this forwarding path**
 ([Session Actor Dispatch 「4. How A Session Holds An Actor Route」](../spec/20-session-actor-dispatch.en.md#4-how-a-session-holds-an-actor-route)).
-Without implementing it, a session connected to a moved Actor won't
-work correctly. Reading it as a "nice-to-have optimization" and
-deferring it shows up later as an unexplainable failure on the session
-side.
+Without it, a session connected to a moved Actor does not work correctly. Message Follow
+is therefore a path required for session behavior, not an optional performance
+optimization.
 
 ## 4. Span ③ — The Asymmetry Before And After Owner Switch
 
@@ -156,11 +155,10 @@ not the component decomposition. But splitting into branches means
 failure happens in the middle, **which branch owns cleanup
 responsibility** can't be read off.
 
-One implementation has the move path split into three branches using
-two unrelated sets of stage values. Another implementation has it
-owned by a single transition rule. The latter is taken as the
-standard. This is a part the formal spec left undecided that internals
-decides.
+Splitting a move path into several branches with unrelated stage-value
+sets duplicates the same transitions. One transition rule owns the
+move of one object or group. This internals decision fixes the component
+boundary that the formal spec leaves undecided.
 
 ## 6. Result To Confirm
 
@@ -169,12 +167,11 @@ decides.
 - A message arriving after the block isn't lost and is delivered to
   the new owner.
 - Restored prior work runs before messages held during the move.
-- A call exceeding the holding bound ends in `Unavailable`.
+- A call is not rejected because of a relocation-specific record-count or byte bound.
 - A message sent to the old address right after a move is delivered to
   the new owner within 30 seconds, with the call identifier and
   response path preserved.
-- Exceeding 8 forwards or the forwarding-volume bound ends in the
-  defined error.
+- Exceeding 8 forwards ends in `Unavailable`.
 - If the owner switch ends in `Conflict`, no value in the store
   changes.
 - If it fails after the owner switch, the source doesn't become owner

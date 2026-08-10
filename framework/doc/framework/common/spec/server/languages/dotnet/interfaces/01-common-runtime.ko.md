@@ -6,6 +6,12 @@
 
 Handler metadata는 변경할 수 없는 snapshot이다.
 
+받은 `ZLinkMessage`에서 처음 호출한 typed `Decode<T>()`가 값 또는 실패를 확정한다. 이후
+`Decode<T>()`는 같은 결과를 사용하며 serializer를 다시 호출하지 않는다. 다른 `T`가 첫 값을
+받을 수 없으면 type cast가 실패한다. `Decode<ReadOnlyMemory<byte>>()`는 Framework가 소유한
+읽기 전용 view를 반환하고, `Decode<byte[]>()`는 호출자가 소유하는 새 복사본을 반환한다. 이 두
+raw 접근은 typed 결과를 확정하지 않는다.
+
 ```csharp
 public sealed class ZLinkMessage
 {

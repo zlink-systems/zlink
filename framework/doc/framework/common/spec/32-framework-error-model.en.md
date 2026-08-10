@@ -106,18 +106,15 @@ following `ErrorKind`s.
   a queue, so `CapacityExceeded` is correct
   ([Spot Actor](15-spot-actor.en.md),
   [Spot address messaging](16-spot-address-messaging.en.md)).
-- **The Message Follow relay queue is an exception, and is
-  `CapacityExceeded`.** This queue is physically on the previous owner
-  node, but the runtime responsible for the relay owns it as its own
-  resource, and its bound is a fixed value the contract sets (1024
-  messages, 16 MiB). To the caller, this means not "the other node
-  can't receive" but "the fixed capacity of the relocation path was
-  exceeded," so the retry judgment differs
+- The Message Follow relay queue and relocation ingress hold have no record-count or byte
+  bound defined by relocation itself. Therefore, the amount retained in this queue or hold
+  does not by itself produce `CapacityExceeded`. The negotiated limit for one message and
+  the limits set by transport, the deadline, and cancellation still apply. Once retained
+  work is admitted to an ordinary application execution lane, that lane's reservation
+  applies, but it is not used as a storage bound for the relay queue or hold. If one of
+  those limits causes a failure, the error follows the resource-owner rules above
   ([Spot Actor](15-spot-actor.en.md),
-  [Location runtime](21-location-runtime.en.md)). This kind **applies
-  only to `Request`** — the result of an already-completed one-way call
-  never changes because of a relay failure (§4), and exceeding the relay
-  bound is recorded only in metrics/logs/traces.
+  [Location runtime](21-location-runtime.en.md)).
 - `ShuttingDown` if the runtime is shutting down.
 - `InternalFailure` for a Framework execution failure that can't be
   expressed by the kinds above.

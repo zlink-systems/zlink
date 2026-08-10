@@ -10,7 +10,7 @@ title: "5. 이동 중 message 연속성"
 >
 > **계약 소유** — 이동 절차의 단계와 저장소 계약은 [Host Relocate와 Shutdown](../spec/28-graceful-drain-handoff.ko.md)과
 > [Location runtime](../spec/21-location-runtime.ko.md)이 소유한다.
-> 이 장은 그 계약을 만족시키는 **구조**와, 네 구현에서 관찰된 어긋남을 다룬다.
+> 이 장은 그 계약을 만족시키는 **구조**와, 이동 경계를 어겼을 때 나타나는 실패를 다룬다.
 
 실행 중인 객체를 다른 node로 옮기는 동안, 그 객체로 향하던 message는 어디로 가는가.
 이 문서는 이동 절차 자체보다 **경계마다 message가 어떻게 처리되는지**를 다룬다. 절차의
@@ -20,7 +20,8 @@ title: "5. 이동 중 message 연속성"
 
 ## 1. 네 개의 경계
 
-이동은 message 관점에서 네 구간으로 나뉜다. 각 구간에서 도착한 message의 운명이 다르다.
+이동은 message 관점에서 네 구간으로 나뉜다. 도착한 message를 처리하는 방법은 구간마다
+다르다.
 
 ```mermaid
 flowchart LR
@@ -43,8 +44,9 @@ flowchart LR
 
 ## 2. ② 구간 — 보관과 순서
 
-차단 뒤 도착한 message는 순서를 지켜 보관한다. 건수와 저장 크기 어느 쪽에도 상한을 두지
-않는다([Host Relocate와 Shutdown 「9. 대기 중인 message, timer와 session을 옮긴다」](../spec/28-graceful-drain-handoff.ko.md#9-대기-중인-message-timer와-session을-옮긴다)).
+차단 뒤 도착한 message는 순서를 지켜 보관한다. 건수와 저장 크기에 relocation 전용 상한을
+두지 않는다([Host Relocate와 Shutdown 「9. 대기 중인 message, timer와 session을 옮긴다」](../spec/28-graceful-drain-handoff.ko.md#9-대기-중인-message-timer와-session을-옮긴다)).
+개별 message 크기, transport, deadline과 cancellation 제한은 그대로 적용한다.
 
 순서에 규칙이 하나 있다 — **복원된 이전 작업이 보관해 둔 message보다 먼저 실행된다**
 ([Spot 모델 「3.1 Relocation 중에는 temporary queue를 먼저 확인한다」](../spec/11-spot-model.ko.md#31-relocation-중에는-temporary-queue를-먼저-확인한다)). 반대로 하면 이동 전에 이미 큐에
@@ -71,24 +73,23 @@ Actor의 남은 작업만 골라내야 하기 때문이다. `SpotWide`라는 이
 |---|---|
 | 동작 기간 | 기본 30초. 이동 한 건 기준 |
 | 전달 횟수 | 최대 8번까지 이어서 전달 |
-| 전달량 | 상한 없음 |
+| 전달량 | relocation 전용 상한 없음 |
 
 | 상황 | caller가 관찰하는 결과 |
 |---|---|
-| 전달이 돌고 돌아 제자리로 온다 | `Unavailable` |
+| 전달 경로가 loop를 이루어 처음 node로 돌아온다 | `Unavailable` |
 | 객체 세대가 맞지 않는다 | `InvalidOperation` |
-| 전달량 한도를 넘겼다 | `CapacityExceeded` |
 
 전달할 때 호출 식별자, 객체 세대, payload와 응답 경로를 그대로 유지한다. 유지하지
-않으면 [4. operation 완료 확정](04-completion.ko.md)의 완료 자리를 찾지 못해 caller가 timeout까지
-매달린다.
+않으면 [4. operation 완료 확정](04-completion.ko.md)의 완료 자리를 찾지 못해 caller가
+timeout까지 완료되지 않는다.
 
 ### 이것은 선택 기능이 아니다
 
 **session 연결과 중계가 이 전달 경로에 의존한다**
 ([Session Actor dispatch 「4. Session이 Actor route를 보관하는 방법」](../spec/20-session-actor-dispatch.ko.md#4-session이-actor-route를-보관하는-방법)).
-구현하지 않으면 이동한 Actor에 연결된 session이 정상 동작하지 않는다. "있으면 좋은
-최적화"로 읽고 뒤로 미루면, 나중에 session 쪽에서 원인을 알 수 없는 실패로 나타난다.
+구현하지 않으면 이동한 Actor에 연결된 session이 정상 동작하지 않는다. 따라서 Message
+Follow는 선택적인 성능 최적화가 아니라 session의 동작에 필요한 경로다.
 
 ## 4. ③ 구간 — owner 교체 전후의 비대칭
 
@@ -127,19 +128,19 @@ owner 교체는 저장소에 대한 **조건부 변경 한 번**으로 한다. �
 갈래를 나누면 §4의 비대칭 처리를 갈래마다 다시 구현하게 되고, 중간에서 실패했을 때
 **어느 갈래가 정리 책임을 지는지** 읽어낼 수 없다.
 
-한 구현은 이동 경로가 세 갈래로 나뉘어 있고 서로 무관한 단계 값 두 벌을 쓴다. 다른
-구현은 하나의 전이 규칙이 소유한다. 후자를 기준으로 삼는다. 이것은 정식 spec이 정하지
-않은 부분을 internals가 정한 것이다.
+이동 경로를 여러 갈래로 나누고 서로 무관한 단계 값 집합을 두면 같은 전이를 반복해서
+구현하게 된다. 객체나 묶음 하나의 이동은 하나의 전이 규칙이 소유한다. 이것은 정식 spec이
+정하지 않은 component 경계를 internals에서 고정한 것이다.
 
 ## 6. 확인할 결과
 
 - 받을 자리 확인이 끝나기 전에는 source의 새 작업이 막히지 않는다.
 - 차단 뒤 도착한 message가 유실되지 않고 새 owner에게 전달된다.
 - 복원된 이전 작업이 이동 중 보관한 message보다 먼저 실행된다.
-- 보관 한도를 넘긴 호출이 `Unavailable`로 끝난다.
+- relocation 전용 record 수·byte 상한 때문에 호출을 거부하지 않는다.
 - 이동 직후 옛 주소로 보낸 message가 30초 안에는 새 owner에게 전달되고, 호출 식별자와
   응답 경로가 유지된다.
-- 전달이 8번을 넘거나 전달량 한도를 넘으면 정해진 오류로 끝난다.
+- 전달이 8번을 넘으면 `Unavailable`로 끝난다.
 - owner 교체가 `Conflict`로 끝나면 저장소의 어떤 값도 바뀌지 않는다.
 - owner 교체 뒤 실패해도 source가 다시 owner가 되지 않는다.
 - 같은 복원 요청을 두 번 받아도 결과가 한 번 받은 것과 같다.

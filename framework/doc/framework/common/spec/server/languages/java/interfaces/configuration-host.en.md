@@ -8,6 +8,28 @@ application declares configuration with the builders below, and the
 framework checks whether that configuration satisfies the contract when
 starting the host.
 
+`ZLinkCodecRegistrar` accepts a parameter-free ASCII `type/subtype` as a content type.
+At startup, the registry removes leading and trailing SP and TAB and converts ASCII
+uppercase letters to lowercase. The result is the canonical content type used as the
+registry key. A parameter, whitespace inside the value, or a non-ASCII token is rejected
+with `ZLinkConfigurationException`. If the same canonical content type is registered
+again, the last registration replaces the earlier one.
+
+A value received from the framework service wire must already be canonical. Another
+representation completes with `ZLinkFrameworkErrorKind.PROTOCOL_ERROR`.
+
+The two-argument `addSerializer(contentType, serializer)` registers a serializer that
+matches every declared message type. The three-argument overload passes the `Class<?>`
+declared at the send call site to its `Predicate<Class<?>>`. If several registrations
+match, the serializer registered later is used; if none matches, the Framework JSON
+serializer is used. The runtime instance's concrete subclass doesn't replace the declared
+type.
+
+The registry doesn't change after startup. Send-selection results are stored for up to
+1,024 declared types, and reaching that limit doesn't evict existing entries. Each type
+first seen afterward is evaluated against the registration list on every send, and its
+result isn't stored.
+
 ```java
 public interface ZLinkFrameworkOptions {
     Duration defaultRequestTimeout();

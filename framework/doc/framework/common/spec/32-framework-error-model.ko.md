@@ -87,13 +87,14 @@ message를 다른 target에 자동으로 제출하지 않는다.
 - 이 구분은 **대기열에만** 적용한다. Target node의 배치 수용량이 부족한 경우는 대기열이
   아니라 admission 판정이므로 `CapacityExceeded`가 맞다
   ([Spot Actor](15-spot-actor.ko.md), [Spot 주소 메시징](16-spot-address-messaging.ko.md)).
-- **Message Follow relay queue는 예외로 `CapacityExceeded`다.** 이 queue는 물리적으로 이전
-  owner node에 있지만, relay 책임을 맡은 runtime이 자기 자원으로 소유하고 bound도 계약이
-  정한 고정값(1024 messages, 16 MiB)이다. 호출자에게는 "상대 node가 못 받는 상태"가 아니라
-  "이동 경로의 정해진 용량을 넘겼다"는 뜻이므로 재시도 판단이 다르다
+- Message Follow relay queue와 relocation ingress hold에는 relocation 자체가 정하는 record
+  수나 byte 상한이 없다. 따라서 이 queue나 hold에 보관한 양이 늘었다는 이유만으로
+  `CapacityExceeded`를 반환하지 않는다. 단일 message에 협상된 크기 상한, transport,
+  deadline과 cancellation이 정하는 제한은 그대로 적용한다. 보관한 work를 일반 application
+  execution lane이 수락한 뒤에는 그 lane의 reservation을 적용하지만, 이 reservation을 relay
+  queue나 hold의 보관 상한으로 사용하지 않는다. 이 제한 때문에 실패하면, 실패한 자원을 어느
+  runtime이 소유하는지에 따라 위 규칙으로 오류를 정한다
   ([Spot Actor](15-spot-actor.ko.md), [위치 runtime](21-location-runtime.ko.md)).
-  이 kind는 **`Request`에만 적용한다** — 이미 완료된 one-way의 결과는 어떤 relay 실패로도
-  바뀌지 않으며(§4), relay bound 초과는 metric·log·trace로만 남는다.
 - Runtime이 종료 중이면 `ShuttingDown`이다.
 - 위 종류로 표현할 수 없는 Framework 실행 실패는 `InternalFailure`다.
 

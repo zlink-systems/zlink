@@ -13,12 +13,12 @@ title: "6. Target Selection And Route Cache"
 > by [Channel Messaging](../spec/08-channel-messaging.en.md), and the
 > cache lifetime and invalidation condition by
 > [Spot · Actor Routing](../spec/18-object-routing.en.md). This
-> chapter covers the **structure** that satisfies that contract, and
-> the mismatches actually observed across the four implementations.
+> chapter covers the **structure** that satisfies that contract and
+> the failures that become visible when selection authority is split.
 
-Covers the structure that picks a target from a single name, and how
-often that lookup happens. **The performance of location-transparent
-messaging is effectively decided by this one cache.**
+This chapter explains how a target is selected from one name and how often its location is
+looked up. The Location Store is usually in another process, so route-cache use directly
+affects the latency and throughput of location-based messaging.
 
 ## 1. Don't Look Up Location Per Message
 
@@ -27,7 +27,7 @@ messaging is effectively decided by this one cache.**
 To send a message by object ID, you need to know which node currently
 owns that object. This information is in the Location Store, and the
 Store is usually a different process (Redis, etc.). Looking it up per
-message means **every call gets a store round trip attached.**
+message means **every call makes one round trip to the store.**
 
 ### The Decision
 
@@ -75,25 +75,27 @@ The cache lifetime never exceeds the shortest of three values.
 |---|---|
 | `RouteCacheMaxAge` | The cache's own maximum retention time |
 | The owner's acceptance deadline | After this time, that owner no longer accepts |
-| **At least 5 seconds shorter** than the [Message Follow duration](../spec/01-glossary.en.md#message-follow-duration) | The cache must expire before the detour path closes ([`18:143-145`](../spec/18-object-routing.en.md), [`21:693-695`](../spec/21-location-runtime.en.md)) |
+| **At least 5 seconds shorter** than the [Message Follow duration](../spec/01-glossary.en.md#message-follow-duration) | The cache must expire before the detour path closes ([Spot/Actor Routing 「2.4 A Message Arriving At A Previous Owner Route」](../spec/18-object-routing.en.md#24-a-message-arriving-at-a-previous-owner-route), [Location Runtime 「6.3 Delivering A Message Arriving At A Previous Owner To The New Owner」](../spec/21-location-runtime.en.md#63-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner)) |
 
 ## 1.1 Preserve The Admission Fence For Manual Object Peers
 
-A Location Store object-peer descriptor carries the endpoint, RID, lifecycle generation, and
-security identity together. A manual endpoint supplies only connection intent, but when the runtime
-matches that endpoint to a descriptor to complete an object peer, it must pass all handshake values
-provided by the descriptor to the transport. The formal contract is owned by the peer handshake in
-[RouteMesh topology](../spec/07-channel-topology.en.md).
+A Location Store object-peer descriptor contains an endpoint, RID, lifecycle generation, and
+security identity. A manually configured endpoint supplies only an intent to connect. When the
+runtime associates that endpoint with a descriptor and uses it as an object peer, it also passes all
+descriptor values needed by the handshake to transport. The peer handshake in
+[RouteMesh topology](../spec/07-channel-topology.en.md) owns the formal contract.
 
-In the current JVM path, MeshNode startup registers the manual endpoint-only intent regardless of the
-Object role. When `ZLinkFrameworkRuntime.connectManualObjectPeers`,
-`ZLinkLocationAutoConnectHost.MeshNodeExecutor`, or `ZLinkSpotRuntime.ensureManualObjectPeer` finds
-a descriptor, it calls `replacePeerConnection(endpoint, rid, lifecycleGeneration,
-securityIdentity)`. The replacement path does not install a new intent until transport liveness has
-closed the previous intent. `ZLinkJavaRawMeshNode` records each intent, the observed peer routing ID,
-and its close state while processing the admission fence and liveness events. An endpoint-only intent
-without a descriptor makes no placement claim. The caller is not allowed to set the generation or
-security identity as a workaround.
+The JVM path passes these values in the following order. MeshNode startup first registers a manual
+endpoint-only intent. When `ZLinkFrameworkRuntime.connectManualObjectPeers`,
+`ZLinkLocationAutoConnectHost.MeshNodeExecutor`, or `ZLinkSpotRuntime.ensureManualObjectPeer` later
+finds a descriptor, it calls `replacePeerConnection(endpoint, rid, lifecycleGeneration,
+securityIdentity)`.
+
+The replacement path installs the new intent only after transport liveness confirms that the previous
+intent is closed. `ZLinkJavaRawMeshNode` retains the intent, observed peer routing ID, and close state
+together while processing the admission fence and liveness events. An endpoint-only intent without a
+descriptor is not placement evidence. A caller cannot bypass this sequence by setting the generation
+or security identity directly.
 
 ## 2. Where A Move Meets The Cache — A Performance Cliff
 
@@ -133,20 +135,19 @@ The detour is **a device that bridges the transition until the cache
 refreshes**, not the normal path. Without the notification, the detour
 continues until the cache lifetime ends.
 
-**The notification record's common wire is fixed in the schema.**
-Command 50 `messageFollow` in `service-wire-v1.schema.json` defines
-the source/target route fence, hop count, queue accounting at the
-relay moment, and the original operation/reply route. Flags and
-application payload aren't allowed. But the schema existing alone
-doesn't complete each language's relay, receipt, and cache
-invalidation. Each runtime must check the source route's
-object/authority generation and target node, down to the condition
-that a newer cache entry isn't cleared.
+**The schema defines the common wire form of the notification record.** Command 50
+`messageFollow` in `service-wire-v1.schema.json` carries the source and target route fences,
+hop count, queue accounting at relay time, original operation ID, and reply route. Flags and
+application payload are not allowed.
+
+The schema fixes only the record form. After relaying and receiving it, each runtime verifies
+the source route's object generation, authority generation, and target node. It invalidates the
+current cache entry only when those values match, so it cannot clear a newer route already stored.
 
 **Duplicate-suppression implementation examples — not a common completion condition.**
 
 - Send only once per `(sending runtime, object, owner generation)`
-  combination. Attaching a notification to every message on an object
+  combination. Sending a notification for every message on an object
   with traffic piling up right after a move would grow the
   notification record count as much as the business message count.
 - If the same notification is already in flight, merge additional
@@ -176,8 +177,8 @@ preparing to shut down
 have calls only read it.** When peer state changes, build a new list
 and swap it in; don't filter or sort on the call path.
 
-Scanning all peers and checking conditions per call attaches a cost
-proportional to peer count to every call. Peer state changes far less
+Scanning all peers and checking conditions per call incurs a cost
+proportional to peer count on every call. Peer state changes far less
 often than message frequency.
 
 ## 4. Which Layer Does The Selection
@@ -197,17 +198,16 @@ address or dedicated connection, so Core has no room to pick. §5's
 procedure is for these two paths.
 
 The third is a **fallback** used only on a channel where no
-ClientServer transport is registered. Since multiple connections
-attach to one socket and submission has no target, Core's load
+ClientServer transport is registered. Since one socket contains
+multiple connections and submission has no target, Core's load
 balancer picks. On this path, framework has no part in the selection.
 
 ### Connection Management Belongs To Core
 
-**Decision — framework doesn't manage, in its place, the set of
-connections one socket manages.** What framework tells Core is only
-**which endpoints are candidates** and **each candidate's weight**.
-When to connect to that endpoint, when to reconnect if it drops, and
-which of the connections this message goes out on, is decided by Core.
+**Decision — framework does not manage the set of connections on one socket in place of
+Core.** Framework gives Core only the candidate endpoints and each candidate's weight. Core
+decides when to connect to an endpoint, when to reconnect after a disconnect, and which current
+connection carries a message.
 
 Crossing this boundary duplicates three things together.
 
@@ -218,20 +218,18 @@ Crossing this boundary duplicates three things together.
 | Inducing selection via connection order | Core promises nothing about connection order |
 
 **Pitfall — don't try to induce Core's selection via connection
-order.** One implementation actually does this. It rotates the
-candidate list so the winner computed comes first and passes it along,
-but the receiving side puts it into a set and erases the order, and
-Core doesn't promise order either, so **it has no effect.** Code whose
-computed result reaches nowhere is left sitting there.
+order.** Rotating the candidate list so the computed winner comes first
+has no effect if the receiving side puts it into a set and erases the
+order. Core doesn't promise connection order either, so **the computed
+selection is not applied.**
 
 **A structure with one socket per candidate where framework picks is a
 mixed verdict.** On the surface "framework picks" holds, but at the
 cost of framework taking on connection lifetime and reconnection.
 
-**The standard isn't "is it substitutable."** Even if it's
-substitutable from the application's point of view, it can't be handed
-down if the lower layer doesn't know the conditions needed for
-selection. The standard is this.
+Candidate substitutability from the application's point of view is not enough to move
+selection into the lower layer. If the lower layer does not know the selection conditions,
+it cannot choose an eligible candidate. The criterion is the following.
 
 > **Can the lower layer know and enforce all the eligibility
 > conditions, weight, and stable identifier at selection time?**
@@ -252,11 +250,11 @@ into one socket could **select a connection that isn't yet admitted or
 is draining.** So per-server connection and framework selection are
 correct for now.
 
-**Merging requires a projection API first.** Either a path for the
-lower layer to update per-RID admission/weight/active state, or a send
-path where framework specifies the target by the RID it picked, is
-needed. Until then, per-server connection and the selector aren't
-removed.
+Merging connections onto one socket first requires an API that transfers the framework's
+selection information to the lower layer. This is a projection API. It must either update
+Core with per-RID admission, weight, and active state, or let framework specify the selected
+RID on the send path. Without such a path, per-server connections and the framework selector
+remain.
 
 ### What To Confirm
 
@@ -333,16 +331,16 @@ comparison deterministic.
 | RouteMesh | node RID |
 | ClientServer | Server RID |
 
-Using a different value that points at the same target (connection
-path, registration source, connection map key) as the identifier makes
-the order diverge per implementation. One implementation actually uses
-a connection map key.
+Using a connection path, registration source, or connection map key as
+the candidate identifier makes the tiebreak result depend on the order
+in which connections were created, even when those values point at the
+same target.
 
 ### How To Lower The Per-Call Cost While Keeping The Procedure
 
-Running the procedure above literally on every call attaches a cost
-proportional to candidate count N to **every send**. As candidates
-grow, one channel's send throughput bottlenecks at the selector alone.
+Running the procedure above literally on every call incurs a cost
+proportional to candidate count N on **every send**. As candidates
+grow, the selector limits that channel's send throughput.
 
 **Decision — precompute the order when the candidate list changes, and
 have each call only move the cursor.** However, there's a condition

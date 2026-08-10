@@ -10,7 +10,7 @@ title: "3. application과 infrastructure 실행 분리"
 >
 > **계약 소유** — 수신 한도와 backpressure 계약은 [Framework API](../spec/06-framework-api.ko.md)가,
 > 비동기 완료 의미는 [비동기 실행 정책](../spec/05-async-execution-policy.ko.md)이 소유한다.
-> 이 장은 그 계약을 만족시키는 **구조**와, 네 구현에서 관찰된 어긋남을 다룬다.
+> 이 장은 그 계약을 만족시키는 **구조**와, 실행 영역이 섞일 때 나타나는 실패를 다룬다.
 
 Application handler가 원격 응답을 기다리는 동안, 그 호출의 timeout은 누가 재는가?
 handler가 멈춰 있는데 timeout도 handler와 같은 줄에서 기다린다면 그 호출은 영원히
@@ -47,8 +47,8 @@ flowchart LR
 
 ## 2. 왜 예약 구획이 아니라 분리인가
 
-같은 대기열 안에 "infrastructure 전용 자리 N개"를 예약해 두는 방법도 있다. 실제로 한
-구현이 그렇게 한다. 이 방식도 굶주림은 막지만 **두 가지를 잃는다.**
+같은 대기열 안에 "infrastructure 전용 자리 N개"를 예약할 수도 있다. 이 방식도
+굶주림은 막지만 다음 성질을 잃는다.
 
 첫째, 한도가 두 축으로 겹친다. 제출이 거절됐을 때 "전체 한도에 걸렸는가, 내 몫의
 한도에 걸렸는가"를 caller도 운영자도 구분할 수 없다.
@@ -65,9 +65,11 @@ application 작업이 실행 중에 대기하면 그 실행 자원은 여전히 
 막는다. 이것은 정식 spec이 정하지 않은 부분을 internals가 정한 것이다.
 
 이것이 "한도는 하나뿐"이라는 뜻은 아니다. spec은 목적이 다른 세 한도의 공존을 요구한다 —
-process 단위 처리 대기 byte 상한(`06:100-113`), 응답 처리용 내부 예산(`06:115-119`),
-그리고 보낼 공간을 기다리는 자리의 한도(`05:69-73`). 각각 막는 대상이 다르므로 하나로
-합치지 않는다. 없애는 것은 **같은 대기열 안을 몫으로 쪼개는 방식**뿐이다.
+[Framework API 「2.1 수신 payload가 memory를 계속 늘리지 않게 한다」](../spec/06-framework-api.ko.md#21-수신-payload가-memory를-계속-늘리지-않게-한다)가
+정한 process 단위 처리 대기 byte 상한과 응답 처리용 내부 예산, 그리고
+[비동기 실행 정책 「1.3 One-way submit」](../spec/05-async-execution-policy.ko.md#13-one-way-submit)이
+정한 보낼 공간을 기다리는 자리의 한도다. 각각 막는 대상이 다르므로 하나로 합치지 않는다.
+없애는 것은 **같은 대기열 안을 몫으로 쪼개는 방식**뿐이다.
 
 ## 3. 관측이 진행을 막지 않는다
 
@@ -122,8 +124,8 @@ Node는 event loop가 하나이므로 물리적으로 전용 자원을 만들 �
 
 ## 5. Backpressure를 어디까지 올려 보내는가
 
-송신이 막혔을 때 그 사실이 어디까지 전달되는지를 정하지 않으면, 같은 상황에서 어떤
-구현은 기다리고 어떤 구현은 즉시 실패한다.
+송신이 막혔다는 결과를 어디까지 전달할지 정하지 않으면, caller는 같은 상황에서 대기할지
+즉시 실패할지 예측할 수 없다.
 
 **결정 — 이 세 단계는 send·publish·one-way 계열에만 적용한다.**
 
@@ -146,34 +148,42 @@ Node는 event loop가 하나이므로 물리적으로 전용 자원을 만들 �
 다른 요청이 송신 공간을 기다리는 시간만큼 막힌다.
 
 **결정 — 기다리는 자리도 한도가 있다.** 대기 자리가 가득 차면 기다리지 않고 바로
-`DeadlineExceeded`로 끝낸다(`05:72-73`). 밀렸다는 사실 자체는 caller가 받는 값이 아니다 —
-`Backpressured`는 public terminal result가 아니다(`05:70`). 한도가 없으면 상대가 느릴 때 이쪽 메모리가 상대의 처리 속도에 따라
-무한정 늘어난다.
+`DeadlineExceeded`로 끝낸다
+([비동기 실행 정책 「1.3 One-way submit」](../spec/05-async-execution-policy.ko.md#13-one-way-submit)).
+밀렸다는 사실 자체는 caller가 받는 값이 아니다. `Backpressured`는 public terminal result가
+아니다. 한도가 없으면 상대가 느릴 때 이쪽 메모리가 상대의 처리 속도에 따라 무한정 늘어난다.
 
 수신 쪽 한도는 방향이 다르다. 처리 대기 byte가 상한에 도달하면 **새 application 수신만
 멈추고**, 응답 수신과 runtime 제어 처리, 송신 준비 알림은 계속 처리한다
 ([Framework API 「2.1 수신 payload가 memory를 계속 늘리지 않게 한다」](../spec/06-framework-api.ko.md#21-수신-payload가-memory를-계속-늘리지-않게-한다)). 수신을 통째로 멈추면 그
 안에 섞여 있던 응답까지 막혀 교착이 된다.
 
-다만 binding이 complete message 길이를 `Recv` 전에 알려 주지 않는 multiplexed receive path는
-raw `Recv` 직전에 application인지 control인지 판별할 수 없다. 이 경로는 `MaxMessageSize`를 `M`,
-동시 raw receive reservation 수를 `R`로 두고 `HWM + R * M` 범위에서만 분류를 위한 raw receive를
-허용한다. control은 application pending byte에 넣지 않고 즉시 reservation을 반환하며,
-application은 payload byte를 기록한 뒤 terminal 상태까지 reservation을 유지한다. 따라서 HWM 정책의
-의미는 **새 application 작업의 무제한 admission을 막는 것**이고, control progress를 위해 필요한
-raw 분류 구간만 유한하게 남는다. 길이를 미리 확인할 수 있는 binding은 이 분류 구간 없이 HWM에서
-새 application `Recv`를 바로 멈출 수 있다.
+Multiplexed receive path 중에는 binding이 `Recv` 전에 complete message 길이를 알려 주지 않는
+경로가 있다. 이 경로에서는 raw `Recv`를 실행하기 전까지 application message와 control
+message를 구분할 수 없다. Control message 처리까지 멈추지 않으려면, 분류에 필요한 raw
+receive를 제한된 수만큼 허용해야 한다.
+
+`MaxMessageSize`를 `M`, 동시에 예약할 수 있는 raw receive 수를 `R`이라고 하면, 분류를 위해
+받을 수 있는 범위는 `HWM + R * M`을 넘지 않는다. 분류 결과가 control이면 application pending
+byte에 더하지 않고 reservation을 즉시 반환한다. Application message이면 payload byte를
+기록하고 terminal 상태가 될 때까지 reservation을 유지한다.
+
+따라서 HWM은 새 application 작업이 제한 없이 수락되는 것을 막는다. HWM을 넘을 수 있는
+부분은 control 처리를 계속하기 위한 유한한 분류 구간뿐이다. Binding이 message 길이를 미리
+확인할 수 있으면 이 구간이 필요 없으며, HWM에 도달했을 때 새 application `Recv`를 바로
+멈춘다.
 
 StreamNode는 이 multiplexed receive reservation과 별도로 Core STREAM inbound에서 complete
 client→server message의 크기를 검사한다. 이 크기는 6-byte prefix를 제외한 header와 payload의
 합이며, StreamNode 기본값은 `64 KiB`다. 이 상한은 server→client outbound message에 적용하지 않는다.
 
-**결정 — `R`은 부하에 따라 늘리지 않는다.** HWM은 정확한 차단선이 아니라 **압력이 올라왔다는
-신호**이고, 받기를 멈추는 것이 그 압력을 보내는 쪽까지 되돌리는 유일한 수단이다
+**결정 — `R`은 부하에 따라 늘리지 않는다.** HWM은 정확한 차단선이 아니라 **수신 쪽
+처리량이 한계에 가까워졌다는 신호**다. 수신을 멈춰야 이 상태가 보내는 쪽의 backpressure로
+전달된다
 ([Framework API 「2.1 수신 payload가 memory를 계속 늘리지 않게 한다」](../spec/06-framework-api.ko.md#21-수신-payload가-memory를-계속-늘리지-않게-한다)). `R`을 connection 수나 대기 message
-수에 비례시키면 **세게 밀릴수록 더 많이 삼켜서, 정작 압력이 필요한 순간에 신호가 약해진다.**
-`R`은 configuration으로 정해지는 고정 여유여야 하며, 이 조항이 요구하는 것은 정확한 회계가
-아니라 초과분이 부하와 무관하게 남는 것이다.
+수에 비례시키면 부하가 커질수록 추가로 수락하는 raw receive도 늘어난다. 이러면 가장 강한
+backpressure가 필요한 시점에 신호가 약해진다. `R`은 configuration으로 정하는 고정 여유다.
+여기서 보장할 것은 정확한 cutoff가 아니라, HWM 초과분이 부하에 따라 늘지 않는다는 점이다.
 
 `R`은 [7. 수신과 dispatch 루프 「6. 소켓에서 한 번에 여러 건을 읽는다」](07-dispatch-loop.ko.md#6-소켓에서-한-번에-여러-건을-읽는다)의 건수·byte·경과 시간 한도와 다른
 축이다. 그 셋은 **한 번 깨어났을 때 한 연결에서 얼마나 읽을지**를 정하고, `R`은 **분류를 마치지
@@ -181,13 +191,14 @@ client→server message의 크기를 검사한다. 이 크기는 6-byte prefix�
 
 ## 6. 한도를 넘었을 때 조용히 버리지 않는다
 
-**결정 — 처리하지 못하는 작업은 caller가 관찰할 수 있는 결과로 끝낸다.** 무한정 쌓아
-두지도, 조용히 버리지도, 나중에 몰래 다시 제출하지도 않는다
+**결정 — 일반 실행·processing처럼 한도를 둔 자원이 작업을 수락하지 못하면 caller가
+관찰할 수 있는 결과로 끝낸다.** 한도 있는 자원의 뒤에 별도 backlog를 무한정 만들지도,
+조용히 버리지도, 나중에 몰래 다시 제출하지도 않는다
 ([비동기 실행 정책 「1.3 One-way submit」](../spec/05-async-execution-policy.ko.md#13-one-way-submit)).
 
-한 구현에서 실제로 관찰된 반례가 있다. 응답을 잠시 보관하는 자리가 가득 차면 **응답을
-버리고 정리해 버린다.** 기다리던 caller는 아무 통보도 받지 못하고 timeout이 날 때까지
-매달린다. 원인이 "보관 자리 부족"인데 caller가 보는 것은 "응답 없음"이라, 진단이 거의
+응답을 잠시 보관하는 자리가 가득 찼을 때 **응답을 버리고 정리하면**, 기다리던 caller는
+아무 통보도 받지 못하고 timeout이 날 때까지
+완료되지 않는다. 원인이 "보관 자리 부족"인데 caller가 보는 것은 "응답 없음"이라, 진단이 거의
 불가능하다.
 
 한도는 적용 범위를 함께 적는다. 같은 단위라도 목적이 다르면 다른 값이다.
@@ -196,22 +207,22 @@ client→server message의 크기를 검사한다. 이 크기는 6-byte prefix�
 |---|---|---|
 | 실행 대기열 | 건수와 byte 두 축(작업당 고정 비용 포함, 실행 중 작업도 셈) | 실행 권한 하나 |
 | 처리 대기 | payload byte 합계 | process 하나의 application 수신 |
-| 이동 중 보류 | 상한 없음 | — |
+| 이동 중 보류 | relocation 전용 상한 없음 | Seal 전에 수락한 작업의 reservation은 유지하되, seal 뒤 ingress에는 일반 execution lane 한도를 다시 적용하지 않는다. Transport·deadline·cancellation 제한은 유지한다 |
 
 한도를 건수가 아니라 byte로 재는 이유는
 [8. 객체 종류와 활성화 「6. 메모리 회계를 어느 단위로 하는가」](08-object-lifecycle.ko.md#6-메모리-회계를-어느-단위로-하는가)이 다룬다.
 
-이동 중 보류 한도의 근거는
+이동 중 보류에 별도 상한을 두지 않는 근거는
 [Host Relocate와 Shutdown 「9. 대기 중인 message, timer와 session을 옮긴다」](../spec/28-graceful-drain-handoff.ko.md#9-대기-중인-message-timer와-session을-옮긴다)이며,
-넘겼을 때의 결과는 [5. 이동 중 연속성](05-relocation-continuity.ko.md)이 다룬다.
+보관·복원·relay 순서는 [5. 이동 중 연속성](05-relocation-continuity.ko.md)이 다룬다.
 
 ## 7. 이 결정이 만드는 구현 제약
 
 두 영역을 나누면 **어느 영역에서 실행 중인지 알 수 있어야** 한다. application 문맥에서
 infrastructure 전용 작업을 부르거나 그 반대가 되면, 나눈 의미가 사라진다.
 
-한 구현은 이것을 실행 중 문맥 표시로 확인하고, 잘못된 조합이면 **기다리지 않고 실패로
-끝낸다.** 대기로 처리하면 교착이 되고, 통과시키면 분리가 무너지므로 실패가 맞다.
+실행 중인 영역은 문맥 표시로 확인하고, 잘못된 조합이면 **기다리지 않고 실패로 끝낸다.**
+대기로 처리하면 교착이 되고, 통과시키면 분리가 무너지므로 실패가 맞다.
 
 **언어별 재량.** 영역을 대기열 두 개로 만들지 우선순위 하나로 만들지, 문맥을 어떻게
 표시할지는 자유다. 관찰 기준은 하나다 — application handler를 인위적으로 대기시킨

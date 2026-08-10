@@ -10,7 +10,7 @@ title: "7. 수신과 dispatch 루프"
 >
 > **계약 소유** — 수신 공정성은 [Transport liveness](../spec/29-transport-liveness.ko.md)가,
 > 대기열 한도는 [Framework API](../spec/06-framework-api.ko.md)가 소유한다.
-> 이 장은 그 계약을 만족시키는 **구조**와, 네 구현에서 관찰된 어긋남을 다룬다.
+> 이 장은 그 계약을 만족시키는 **구조**와, 수신·dispatch 경계에서 나타나는 실패를 다룬다.
 
 수신한 message를 실행 gate까지 나르는 구간이다. message 하나마다 깨우느냐 모아서
 처리하느냐가 처리량을 결정하고, 무엇으로 깨우느냐가 지연 하한을 결정한다.
@@ -225,27 +225,28 @@ flowchart LR
 
 ## 7. Timer 자원을 등록 수에 비례시키지 않는다
 
-Spot마다 timer가 몇 개씩 있으면 timer는 금세 Spot보다 많아진다. 방 1만 개에 timer가
-둘씩이면 2만 개다.
+Spot마다 timer를 여러 개 등록할 수 있으므로 timer 수는 Spot 수보다 빠르게 늘어난다.
+Spot 10,000개에 timer를 두 개씩 등록하면 timer가 20,000개다.
 
 **결정 — timer는 공유 scheduler 하나가 관리한다. 등록마다 전용 자원을 만들지 않는다.**
 
-네 구현에서 관찰된 방식은 둘로 갈린다.
+등록한 timer마다 자원을 만드는 방식과 하나의 scheduler가 모두 관리하는 방식은 필요한
+자원 수가 다르다.
 
 | 방식 | 1만 Spot × timer 2개 |
 |---|---|
 | 등록마다 전용 자원(OS timer, 대기 루프, 지연 호출) | 그 자원이 **2만 개** |
 | **공유 scheduler + 마감 시각 우선순위 대기열** | 스레드 하나와 대기열 항목 2만 개 |
 
-두 번째가 기준이다. 항목 수는 같지만 자원은 하나다. 한 구현이 실제로 이 방식이며,
-공유 scheduler 하나에 코어 스레드 하나로 모든 Spot의 timer를 처리한다.
+공유 scheduler 방식이 공통 기준이다. Queue 항목 수는 같지만 scheduler와 core thread는
+하나만 필요하다. Scheduler는 모든 Spot의 timer를 마감 시각 우선순위 queue에서 관리한다.
 
 ### 늦은 tick 처리는 application이 고른다
 
 주기를 넘겨 늦게 실행될 때 지나간 tick을 어떻게 할지는 **공개 option**이다 — 건너뛰고
 현재 것만, 정해진 개수까지 따라잡기, 다음 예정을 완료 시점 기준으로 다시 계산하기
-([Stage wrapper on Spot 「5. Timer」](../spec/17-stage-wrapper-on-spot.ko.md#5-timer)). 네 구현이 모두 이
-셋을 구현했고 이름도 같다.
+([Stage wrapper on Spot 「5. Timer」](../spec/17-stage-wrapper-on-spot.ko.md#5-timer)). 이 option은 세
+동작과 각 이름을 공개 계약으로 고정한다.
 
 internals가 이 중 하나를 골라 고정하지 않는다. 특히 **"다음 예약을 처리 완료 뒤에 한다"는
 셋 중 하나(고정 지연)일 뿐이며, 고정 주기를 없애는 규칙이 아니다.**
@@ -256,8 +257,8 @@ pending record로 합칠 수 있다"고 허용한다
 따라잡기를 골랐다면 **그 option이 정한 개수까지가 상한**이며, internals가 하나로 줄이지
 않는다.
 
-**결정 — tick 통계를 무한정 쌓지 않는다.** 한 구현은 전달한 tick 기록과 실패 기록을
-timer 수명 동안 계속 누적해서, 오래 도는 timer가 메모리를 계속 먹는다.
+**결정 — tick 통계를 무한정 쌓지 않는다.** 전달한 tick과 실패 기록을 timer 수명 동안
+계속 누적하면 오래 실행되는 timer가 사용하는 메모리도 계속 증가한다.
 
 ### tick이 실행 권한으로 들어가는 경로
 

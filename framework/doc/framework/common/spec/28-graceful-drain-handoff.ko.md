@@ -38,10 +38,10 @@ Stateful workload의 연속성을 보장하지 않고 host를 종료하려면 `R
 Relocation Store가 operation을 끝낼 때까지 실행되는 graceful handoff만 지원한다.
 같은 process 안에서 일시적인 Store 또는 transport 오류를 deadline 안에 다시 시도할
 수는 있다. 그러나 source나 target process가 종료된 뒤 다른 runtime이 relocation을
-이어받거나, 다른 target을 선택하여 자동으로 복구하지 않는다. 이 기능은 차기 version의
-object failover 계약에서 정의한다.
+이어받거나, 다른 target을 선택하여 자동으로 복구하지 않는다. Source나 target process가
+종료된 뒤의 복구는 이 계약의 범위 밖이다.
 
-이번 version에서도 owner를 동시에 둘로 만들지 않는 규칙은 반드시 지킨다. Location Store
+Owner를 동시에 둘로 만들지 않는 규칙은 이 경우에도 적용한다. Location Store
 변경 결과를 받지 못하면 성공이나 실패를 추측하지 않고 같은 record를 다시 읽는다. 실제
 owner를 확인하기 전에는 source admission을 다시 열거나 target application message 처리를
 시작하지 않는다.
@@ -461,8 +461,9 @@ Framework가 한 번에 옮기는 Actor 하나 또는 Spot 묶음을
    실행할 수 있는 수가 남아 있는지 먼저 확인한다. 이 확인이 끝나기 전에는 source의
    새 작업을 막지 않는다.
 2. 준비가 끝나면 현재 실행 중인 handler와 timer callback까지만 완료한다. 그 뒤 도착한
-   message와 아직 시작하지 않은 timer는 source runtime의 크기가 제한된 ingress hold에
-   보관한다. 이 hold는 source에만 두는 relocation용 임시 저장 공간이다.
+   message와 아직 시작하지 않은 timer는 source runtime의 ingress hold에 보관한다. 이
+   hold는 source에만 두는 relocation용 임시 저장 공간이다. Relocation 자체는 이 공간에
+   record 수나 byte 상한을 추가하지 않는다.
 3. Source runtime은 아직 실행하지 않은 message, timer 정보와 application state를
    Relocation Store에 저장한다. `PreserveStateWith`를 선택했다면 application adapter의
    `Capture`가 반환한 state도 함께 저장한다.

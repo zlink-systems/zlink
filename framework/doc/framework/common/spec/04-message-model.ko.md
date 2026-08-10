@@ -161,6 +161,12 @@ Handler에 전달된 message context, metadata와 payload view는 callback 동�
 dispose하지 않으며 callback이 끝난 뒤 보관하려면 필요한 값을 복사한다. Framework가 callback completion과 함께
 수신 payload storage, reply correlation과 route envelope의 lifecycle을 정리한다.
 
+Framework가 수락한 message 하나는 typed payload를 최대 한 번만 역직렬화한다. 첫 typed 접근이 만든
+값 또는 실패를 message가 보관하며, 같은 type이나 다른 type으로 다시 접근해도 codec을 다시 호출하지
+않는다. 저장된 값이 새로 요청한 type과 맞지 않으면 언어별 type mismatch로 끝나고, 첫 접근이 실패했다면
+그 실패를 다시 전달한다. 읽기 전용 raw view를 얻거나 호출자가 명시적으로 byte 복사본을 만드는 동작은
+이 typed 결과를 만들지 않는다.
+
 Object creation이 pending인 동안에도 같은 ownership 규칙이 적용된다. Location Store I/O와 [factory](01-glossary.ko.md#factory)가 caller의
 payload object나 native buffer 수명에 의존하지 않도록 Framework service runtime이 immutable encoded payload를
 content store에 고정한다. Ready 또는 fenced failure 뒤에는 해당 attempt가 소유한 payload storage를 한 번

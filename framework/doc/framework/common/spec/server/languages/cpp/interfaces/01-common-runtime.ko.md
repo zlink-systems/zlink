@@ -43,8 +43,8 @@ typed payload, timeout과 lifecycle처럼 framework 계약에 정의된 값만 �
 
 권장 public header layout은 아래와 같다. `contracts/*` 아래 header가 `.NET`
 `Contracts/*`에 대응하는 실제 public contract owner이고, `zlink/framework.hpp`는
-사용자가 전체 framework 표면을 한 번에 include할 수 있는 facade다. 한 줄짜리
-`zlink/framework/*.hpp` compatibility wrapper는 유지하지 않는다.
+사용자가 전체 framework 표면을 한 번에 include할 수 있는 facade다. Public header
+layout에는 `zlink/framework/*.hpp` 아래의 한 줄짜리 wrapper를 포함하지 않는다.
 
 ```text
 zlink/framework.hpp
@@ -98,7 +98,7 @@ serializer 선택은 framework가 처리한다.
 | `not_connected`, `route_not_connected` | `unavailable` |
 | `not_found`, `request_target_not_found`, `handler_not_found` | `not_found` |
 | typed 결과가 없는 admission 또는 filter 거부 | `rejected` |
-| local queue capacity 부족, Message Follow relay queue bound 초과 | `capacity_exceeded` |
+| local queue capacity 부족 | `capacity_exceeded` |
 | remote error envelope가 알린 target queue capacity 부족 | `unavailable` |
 | `busy` | 소유 위치에 따라 위 두 줄 중 하나. 하위 오류만으로 위치를 알 수 없으면 `unavailable` |
 | `protocol_error`, `request_protocol_error` | `protocol_error` |
@@ -224,6 +224,11 @@ public:
 } // namespace zlink::framework
 ```
 
+받은 `message_t`에서 첫 `decode<T>()`가 값 또는 실패를 확정한다. 이후 호출은 serializer를
+다시 실행하지 않는다. 같은 `T`가 copy-constructible이면 저장한 값을 반환하고, 다른 `T`이거나
+저장한 값을 다시 반환할 수 없는 type이면 `protocol_error`로 끝난다. 첫 호출이 실패했다면 저장한
+exception을 다시 전달한다.
+
 ## 5. Serialization
 
 Framework는 typed JSON serializer를 기본 경로로 사용한다. Handler와 messaging API는 payload type을
@@ -231,6 +236,15 @@ Framework는 typed JSON serializer를 기본 경로로 사용한다. Handler와 
 JSON으로 표현할 수 없는 payload는 codec extension package를 `options.codecs().use(...)`로 선택한다. Extension
 package의 registry 연결과 payload 변환은 runtime 내부 계약이며 application public header에 노출하지 않는다.
 Framework, connector와 HTTP client가 codec을 바꿔도 handler와 client의 typed API는 바뀌지 않는다.
+
+Codec extension은 `contentType`에 parameter가 없는 ASCII `type/subtype`을 전달한다. Registry는
+startup에 값 앞뒤의 SP와 TAB을 제거하고 ASCII 대문자를 소문자로 바꾼다. 이 결과가 registry에서
+사용하는 canonical content-type이다. Parameter, 값 내부의 공백 또는 non-ASCII token이 있으면
+`framework_error_kind_t::protocol_error`로 거부한다. 같은 canonical content-type을 여러 번
+등록하면 마지막 등록이 앞의 등록을 교체한다.
+
+Framework service wire에서 받은 값은 이미 canonical content-type이어야 한다. 다른 표기의 값은
+수신 경로에서 다시 변환하지 않고 `protocol_error`로 완료한다.
 
 ```cmake
 target_link_libraries(app PRIVATE zlink::cpp)
@@ -252,6 +266,10 @@ SPOT과 STREAM의 backpressure는 public **call object, timeout, result error ki
   [Spot 메시징 §5.3](../../../../12-spot-messaging.ko.md)을 따른다 — 일괄 `capacity_exceeded`가
   아니다. one-way·send의 source-local 포화는 `deadline_exceeded`, request의 local queue
   포화는 `capacity_exceeded`, remote queue 포화는 `unavailable`이다.
+
+이 규칙은 일반 SPOT·STREAM 실행 queue에 적용된다. Message Follow relay가 잠시 보관하는
+payload에는 별도의 message-count·byte 상한을 두지 않는다. 다만 개별 wire message 크기와
+relay 이후의 일반 실행 queue, transport, deadline 제한은 그대로 적용한다.
 
 ### 6.2 Handler filter
 

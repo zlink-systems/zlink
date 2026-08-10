@@ -17,9 +17,17 @@ JSON 전용 client가 아니라 일반 HTTP client이며 zlink fluent builder �
 의존하지만 `Zlink.Framework` server runtime에는 의존하지 않는다. 따라서 standalone client가
 server runtime assembly를 함께 배포하지 않아도 같은 오류·codec 계약을 사용한다.
 
-HTTP codec registry는 serializer 등록만 처리한다. 같은 extension이
-`IZlinkStreamCodecRegistration`도 구현하더라도 STREAM descriptor는 무시한다. HTTP client package는
-Stream Connector runtime이나 compression package에 의존하지 않는다.
+HTTP codec registry는 serializer 등록만 처리한다. 등록할 `contentType`에는 parameter가 없는
+ASCII `type/subtype`을 사용한다. Registry는 앞뒤 SP와 TAB을 제거하고 ASCII 대문자를 소문자로
+바꾼 canonical media type을 key로 사용한다.
+
+HTTP response의 `Content-Type`은 registration 입력과 경계가 다르다. HTTP 규칙에 따라 `charset`
+같은 parameter를 먼저 분리한 뒤, parameter가 없는 media type을 소문자로 바꾸어 canonical key를
+찾는다. 따라서 `application/json; charset=utf-8`처럼 정상적인 parameter가 있는 response도
+`application/json` serializer를 사용한다.
+
+같은 extension이 `IZlinkStreamCodecRegistration`도 구현하더라도 STREAM descriptor는 무시한다.
+HTTP client package는 Stream Connector runtime이나 compression package에 의존하지 않는다.
 
 ## 2. 산출물 경계
 

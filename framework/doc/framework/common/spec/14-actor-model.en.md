@@ -160,13 +160,14 @@ memory. If the process terminates before the Join runs or the Location Store
 commits, this registration and completion aren't replayed — source authority and
 membership are kept unchanged.
 
-Payload arriving after registration but before the source seal is accepted into the
-Actor queue behind the barrier, and in a cross-node relocation is handed off
-together with the accepted journal/not-yet-executed queue. Only payload after the
-source seal but before CAS, and payload in the Message Follow window, are handled
-differently. Payload before CAS is held in the bounded ingress hold. Payload
-arriving at the previous owner after CAS finishes is delivered to the new owner via
-[Message Follow](01-glossary.en.md#message-follow).
+The Actor queue accepts payload that arrives after registration but before the source
+seal and places it behind the barrier. During cross-node relocation, this payload moves
+to the target with the accepted journal and work that has not yet run.
+
+After the source seal, handling differs before and after the owner-change commit.
+Payload that arrives before the commit is kept in the relocation ingress hold. After
+the commit finishes, [Message Follow](01-glossary.en.md#message-follow) delivers payload
+that reaches the previous owner to the new owner.
 
 If the same handler that registered a barrier sends a request to that Actor and
 waits for its reply, the request waits behind the barrier while the handler also

@@ -191,13 +191,16 @@ Command별 body, metadata·payload 허용 여부와 direction은 schema의 close
 
 `messageFollow`는 응답을 기다리지 않는 infrastructure record다. flags와 application payload를 허용하지 않으며,
 service record 하나에 version `1`과 길이로 닫힌 body를 담는다. body에는 source route, target route, hop count,
-relay 시점의 queue count·byte, 원래 operation ID와 원래 reply route ID가 들어간다.
+relay 시점의 queue count·byte, 원래 operation ID와 원래 reply route ID가 들어간다. 두 queue 값은
+포화 방식으로 기록하는 `u32` 진단 snapshot이다. `UINT32_MAX`는 실제 건수 또는 보관 byte가 이 값
+이상이라는 뜻이며, 이 snapshot을 payload admission 판단에 사용하지 않는다.
 
 #### Route 검증
 
 - source와 target route는 같은 object kind와 object identity를 가져야 한다.
 - 각 route에는 object generation, target node RID와 generation, authority owner generation, owner lease generation이 들어가며, 수신자는 source route의 target node가 현재 admitted peer인지 먼저 확인한다.
-- hop count는 1..8만 허용한다. queue count와 queue byte에는 상한을 두지 않는다.
+- hop count는 1..8만 허용한다. Control envelope 하나는 최대 16 MiB다. 이 envelope 상한과 포화
+  진단값은 보관한 payload queue의 message 수 또는 저장 byte 상한으로 사용하지 않는다.
 - 다른 object를 가리키거나 route fence가 맞지 않는 record는 application dispatch 전에 protocol error로 끝낸다.
 
 #### 통지 중복 억제
@@ -368,7 +371,7 @@ Command 39 route는 첫 byte와 `u16` body length로 닫힌 union을 이룬다.
 
 | Kind | 용도 | 내용 |
 |---|---|---|
-| `1` | 기존 [Ready](../spec/01-glossary.ko.md#ready) authority로 전달 | 새 작업을 받을 수 있는 상태인 object·owner·lease generation과 StoreVersion — 이전 wire와 byte-compatible |
+| `1` | 기존 [Ready](../spec/01-glossary.ko.md#ready) authority로 전달 | 새 작업을 받을 수 있는 상태인 object·owner·lease generation과 StoreVersion |
 | `2` | Missing cold activation 전용 | target Mesh·node RID·lifecycle, Spot RID, stable type, descriptor version, deadline — authority fence는 금지 |
 
 Kind `2` route와 ZLIA의 target Mesh·stable type·descriptor version·deadline, operation identity와
@@ -407,7 +410,7 @@ metadata presence·bytes가 다르면 reservation 전에 protocol error로 거�
 
 #### Reply envelope
 
-두 operation은 기존 command 20 reply envelope를 그대로 사용한다.
+두 operation의 결과는 command 20 reply envelope로 전달한다.
 
 - Create 성공 tail은 `Existing`·`Created`·`Rejected` discriminator와 그 대상을 가리키는 `SpotRef`이고, Close 성공 tail은 `closed` bool 하나다.
 - Create의 application reply는 `Existing`에서 금지하고 `Created` 또는 `Rejected`에서만 선택적으로 허용한다.
@@ -431,6 +434,19 @@ metadata presence·bytes가 다르면 reservation 전에 protocol error로 거�
 - Source lifetime이 `connectionBound`인 accepted send·request는 `Captured` 전에 terminal state까지 drain한다. 이 work는 frozen journal에 기록하지 않는다.
 - Bound-session request는 다른 Actor request와 같은 규칙을 따른다. Seal 전에 수락한 요청은 source fence, operation identity와 reply route를 보존해 frozen journal에 포함하고, seal 뒤에 들어온 요청은 ingress hold에서 target으로 relay한다.
 - 호출이 끝나야 하는 시각을 [Deadline](../spec/01-glossary.ko.md#deadline)이라고 한다. 그 안에 끝나지 않으면 relocation을 pre-Captured에서 abort하고 `Blocked/DeadlineExceeded`로 끝낸 뒤 source admission을 복원한다.
+
+### Session seal, source hold와 target temporary queue
+
+- Session owner는 command 42에 담긴 exact binding fence, authority fence와 seal identity를 한
+  묶음으로 검증한다. Seal 설치와 accepted high-water 고정은 같은 원자적 처리 시점에서
+  일어난다.
+- Seal 뒤에 도착한 Session ingress는 이전 binding의 accepted high-water를 전진시키지 않으며
+  application dispatch에도 들어가지 않는다. Session owner는 이 ingress의 payload와 reply
+  context를 즉시 실패시키지 않고 matching route switch 또는 abort까지 보관한다.
+- Source object ingress hold, target temporary queue와 Session owner의 seal 대기는 서로 다른
+  경계다. 세 경계 모두 relocation 전용 record 수 또는 저장 byte 상한을 두지 않는다.
+- 일반 application execution lane이 이미 소유한 work reservation은 그대로 적용한다. Transport,
+  deadline과 cancellation 제한도 유지하지만 relocation 전용 한도로 취급하지 않는다.
 
 ### Durable frozen record
 
@@ -490,7 +506,8 @@ stateDiagram-v2
 - `Prepared`는 source owner와 exact target attempt·reservation을 함께 보존한다.
 - `Committed`부터 `Completed`까지 main owner는 current target이다.
 - 각 transition은 expected `StoreVersion` CAS다.
-- 같은 target의 재시도는 target 시도 번호와 준비 정보만 바꾸며 stable identity와 relocation root를 바꾸지 않는다. 현재 version에는 다른 target process로 교체하는 전이가 없다.
+- 같은 target의 재시도는 target 시도 번호와 준비 정보만 바꾸며 stable identity와 relocation
+  root를 바꾸지 않는다. 다른 target process로 교체하는 전이는 허용하지 않는다.
 
 ### Aggregate relocation commit
 
@@ -509,14 +526,29 @@ stateDiagram-v2
 
 ### Ready 시점
 
-`Committed`와 `Activating`은 Ready가 아니다. Target application admission은 owner와 membership 변경, lifecycle callback과 미완료
-작업·timer 복원, 저장된 기존 작업과 temporary queue 작업을 execution queue에 순서대로 넣는 작업, temporary queue
-등록 제거와 기존 dispatch 경로로의 atomic 전환을 모두 마치면 연다. Source ingress hold 원본 제거, 위치 record의
-`Completed` 변경, Session Actor 위치 갱신 응답과 maintenance authority를 steady 상태로 정규화하는 작업은 이
-admission을 막지 않으며, 실행 중인 source와 target runtime이 후속 작업으로 각자 계속한다. Owner를 바꾸기 전 abort에서는 Session route를 바꾸지 않았으므로 route 취소
-message나 그 응답을 기다리지 않는다. Source admission은 `Aborted` 기록, temporary queue 작업 폐기와 원래
-순서의 source queue 복원, 확보한 target 공간과 어떤 위치 record도 가리키지 않는 payload 정리, 이동 진행
-정보 제거를 마친 뒤 복원한다.
+`Committed`와 `Activating`은 Ready가 아니다. Target은 다음 작업을 모두 마친 뒤 application
+admission을 연다.
+
+1. owner와 membership을 변경한다.
+2. lifecycle callback을 실행하고 미완료 작업과 timer를 복원한다.
+3. 저장된 기존 작업과 temporary queue의 작업을 원래 순서대로 execution queue에 넣는다.
+4. temporary queue 등록을 제거하면서 기존 dispatch 경로로 원자적으로 전환한다.
+
+다음 정리 작업은 Ready admission을 막지 않는다. 실행 중인 source와 target runtime이 각각
+후속 작업으로 계속한다.
+
+- source ingress hold의 원본 제거
+- 위치 record를 `Completed`로 변경
+- Session Actor 위치 갱신 응답
+- maintenance authority를 steady 상태로 정규화
+
+Owner를 바꾸기 전에 abort하면 Session route를 바꾸지 않았으므로 route 취소 message나 그
+응답을 기다리지 않는다. Source admission은 다음 정리를 모두 마친 뒤 복원한다.
+
+- `Aborted`를 기록한다.
+- temporary queue 작업을 폐기하고 저장된 작업을 원래 순서대로 source queue에 복원한다.
+- 확보한 target 공간과 어떤 위치 record도 가리키지 않는 payload를 정리한다.
+- relocation 진행 정보를 제거한다.
 
 ### Session route
 
@@ -524,7 +556,15 @@ message나 그 응답을 기다리지 않는다. Source admission은 `Aborted` �
 - Relay·request relay와 disconnect는 message마다 Location Store를 조회하지 않는다.
 - Physical disconnect는 current binding snapshot 전체에 모두 확정된 뒤에 통지하며, binding 하나마다 callback을 최대 한 번 실행한다.
 - Route update는 같은 ObjectGeneration에만 적용한다.
-- Command 44·45는 `Completed` 이후 route switch·ACK에만 사용하며 이 계약을 위해 새 command를 추가하지 않는다.
+- Command 42는 seal을 설치한다. Command 43은 owner가 실제로 수락한 마지막 session sequence를
+  반환하며 source가 추정한 local counter로 대신할 수 없다.
+- Command 44와 45는 `Completed` 이후 route switch와 ACK에만 사용한다.
+- Route switch는 exact binding fence, authority fence, seal identity와 replayed high-water가
+  모두 일치할 때만 적용한다.
+- Command 42~45가 이전과 같은 bytes로 다시 도착하면 같은 결과를 반환하며 상태를 두 번
+  전진시키지 않는다. 같은 identity에 다른 값이 오면 `ProtocolError`다.
+- Matching abort만 seal을 해제한다. Seal과 high-water를 복원할 durable evidence가 없으면
+  `RelocationFailed`로 끝낸다. Seal이 없는 상태나 추정 high-water로 대신하지 않는다.
 
 ## 11. Request terminal identity
 
@@ -566,7 +606,7 @@ lease가 유효한 동안 ACK를 확인하지 못하면 Retire는 relocation roo
 - 저장소가 아는 참여 대상 목록과 relocation이 기록한 목록의 digest가 다르면 `RelocationDataLost`로 끝난다.
 - Actor relocation commit이 owner와 target Entry Spot membership을 atomic하게 바꾼다.
 - Owner commit, restore·replay와 timer 복원, queue 병합과 dispatch 전환을 마치기 전에는 Ready를 publish하지 않는다.
-- Typed application message의 `framework-json-v1` golden fixture가 네 runtime에서 같은 value와 failure를 만든다.
+- 모든 runtime은 typed application message의 `framework-json-v1` golden fixture에서 같은 value와 failure를 만들어야 한다.
 - Relocation adapter bytes를 JSON이나 typed state contract로 해석하지 않는다.
 - `replyRelayAck` 없이 physical disconnect만으로 pending relay를 완료하지 않는다.
 

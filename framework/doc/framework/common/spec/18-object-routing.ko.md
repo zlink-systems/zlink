@@ -140,8 +140,8 @@ handler를 실행하지 않는다.
 
 Message Follow route는 global object ID, `ObjectGeneration`, source·target
 `AuthorityOwnerGeneration`과 owner fence를 검증한다. Owner generation은 hop마다
-증가해야 하며 chain은 최대 8 hops다. Route 하나의 queue는 1,024 messages와
-16 MiB를 넘을 수 없고 negotiated message bound도 함께 지킨다.
+증가해야 하며 chain은 최대 8 hops다. Route 하나의 queue에는 message 수와 저장 크기
+어느 쪽에도 상한을 두지 않으며, 각 message의 negotiated message bound는 지킨다.
 
 `MessageFollowDuration` 기본값은 30초이며 0이면 Message Follow를 사용하지 않는다.
 `RouteCacheMaxAge`와 Message Follow duration이 모두 양수이면 cache max age가 Message Follow
@@ -150,7 +150,7 @@ relocation부터 적용한다.
 
 Relay는 original operation ID, `ObjectGeneration`, payload와 reply route를
 보존한다. Message Follow route가 없거나 만료됐거나 loop가 발생하면 `Unavailable`, generation mismatch는
-`InvalidOperation`, bound 초과는 `CapacityExceeded`로 끝난다.
+`InvalidOperation`으로 끝난다.
 
 이 generation 검사는 relocation이 설치한 Message Follow route가 같은 incarnation의 이동에
 속하는지 확인하는 것이며, 일반 message의 target을 제한하는 검사가 아니다
