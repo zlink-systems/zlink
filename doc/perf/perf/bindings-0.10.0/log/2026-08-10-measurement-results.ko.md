@@ -514,3 +514,17 @@ throughput ratio는 `52.670% / 63.262% / 59.000% / 97.351% / 98.193% / 100.336%`
 baseline throughput ratio는 `41.415% / 67.082% / 123.920% / 76.729% / 82.112% / 78.791%`, 산술평균은 `78.342%`이며 평균 latency ratio는 `21.652x / 0.635x / 0.009x / 1.272x / 0.932x / 1.107x`, 산술평균은 `4.268x`다. 자체 after ratio는 `41.457% / 70.323% / 119.959% / 75.815% / 92.068% / 86.133%`, 산술평균은 `80.959%`이며 평균 latency ratio는 `8.785x / 1.345x / 0.010x / 1.241x / 0.953x / 0.998x`, 산술평균은 `2.222x`다. Sol guard inlining A/B는 throughput 산술평균 `81.033%`로 자체 after 대비 `+0.074%p`에 그쳤고 latency 산술평균은 `2.460x`로 악화되어 제거했다. throughput aggregate 기준 `85%`에 미달하므로 최종 상태는 `보류`다.
 
 POSDDD 평가: 단일/2-part와 multipart 표현의 변경 지식을 내부 `OperationMessageBuffer`가 소유하고 호출부와 public contract에는 노출하지 않는다. 기존 ownership·error semantics·public interface를 유지하면서 throughput과 latency aggregate가 모두 개선된 자체 후보를 채택했다. 별도 구조 변경 후보는 추가 복잡성 대비 분명한 이득이 없어 만들지 않았다. build는 0 warning/error, contract test는 `149 passed / 0 failed / 0 skipped`다.
+
+### .NET Multi MULTI_DEALER_ROUTER_SENDSEND/tcp
+
+조건: Core `v0.10.1` release package, Release, `tcp`, clients `100`, duration `1s`, runs `1`, server/client I/O threads `4/4`, auto-HWM, connect-ready timeout `10000ms`, monitor-HWM `4096000`. C relay의 connection-ready count gate를 사용하지 않고 HWM 정책을 READY 전에 확정하는 parity correction 후 C/.NET 모두 30/30 complete로 측정했다.
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 182915 / 183683 / 171372 / 165034 / 37001 / 22304 | 0.251 / 0.251 / 0.267 / 0.279 / 0.979 / 1.600 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_185640_dotnet-multi-dealer-router-sendsend-tcp-paired-c1.txt` |
+| .NET baseline | 149304 / 153868 / 143990 / 141450 / 47569 / 28832 | 0.294 / 0.286 / 0.302 / 0.313 / 0.990 / 1.685 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_190615_dotnet-multi-dealer-router-sendsend-tcp-paired-parity-baseline.txt` |
+| .NET own after `Received.Send` 단일-part 경계 inlining A/B | 150215 / 152566 / 142212 / 139483 / 42520 / 29278 | 0.293 / 0.287 / 0.307 / 0.316 / 1.101 / 1.661 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_190902_dotnet-multi-dealer-router-sendsend-tcp-own-after-received-inline.txt` |
+
+baseline throughput ratio는 `81.625% / 83.768% / 84.022% / 85.710% / 128.561% / 129.268%`, 산술평균은 `98.826%`이며 평균 latency ratio는 `1.171x / 1.139x / 1.131x / 1.122x / 1.011x / 1.053x`, 산술평균은 `1.105x`다. 자체 A/B throughput ratio는 `82.123% / 83.059% / 82.984% / 84.518% / 114.916% / 131.268%`, 산술평균은 `96.478%`이며 평균 latency ratio는 `1.167x / 1.143x / 1.150x / 1.133x / 1.125x / 1.038x`, 산술평균은 `1.126x`다. 자체 후보는 throughput·latency aggregate가 모두 악화되어 제거했다. Sol 2차 review는 baseline이 이미 기준을 충족하고 추가 contract-safe hotpath 후보가 없어 no-go로 판정했다.
+
+POSDDD 평가: C relay와 .NET relay의 시작 책임을 동일하게 정렬하고, Router server가 connection-ready 개수를 직접 관리하던 잘못된 lifecycle 지식을 제거했다. 이 변경은 throughput 개선과 무관하게 cross-language 변경 증폭과 timeout 경계를 줄이며, public interface·ownership·error semantics를 변경하지 않으므로 채택했다. 최종 상태는 `통과`이며 build는 `0 warning / 0 error`, contract test는 `149 passed / 0 failed / 0 skipped`다.

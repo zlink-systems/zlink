@@ -10,8 +10,6 @@ internal static class PerfMultiDealerRouterServer
     {
         int size = Math.Max(1, options.Size);
         int rcvTimeoutMs = ResolveMultiRcvTimeoutMs(options);
-        int readyTimeoutMs = ResolveMultiConnectReadyTimeoutMs(options);
-        int clientCount = ResolveMultiClients(options);
         int pollTimeoutMs = ResolveMultiClientPollTimeoutMs(options);
         string endpoint = MultiEndpointFor(options.Transport,
             "multi-dealer-router", options);
@@ -22,19 +20,18 @@ internal static class PerfMultiDealerRouterServer
         using var server = ctx.CreateRouterSocket();
         ApplyMultiSocketOptions(server, options);
         ConfigureTlsServerIfNeeded(server, options.Transport);
-        using var monitor = server.MonitorOpen(SocketEvent.ConnectionReady);
 
         server.Options.ReceiveTimeout = TimeSpan.FromMilliseconds(rcvTimeoutMs);
+        // Match the C relay server: configure the message unit before bind,
+        // then recalculate the socket policy before advertising READY. The
+        // relay loop must not wait for a connection-ready event count because
+        // C begins receiving as soon as clients connect.
+        ApplyAutoHwmMsgUnit(ctx, size);
         server.Bind(endpoint);
         endpoint = server.Options.LastEndpoint;
-        WriteStdoutLine($"READY,{endpoint}");
-
-        if (!WaitConnectReadyCount(monitor, clientCount, readyTimeoutMs))
-            return 2;
-
-        ApplyAutoHwmMsgUnit(ctx, size);
         RecalculateAutoHwm(ctx);
         PrintAutoHwmSnapshot(server, "server", options.Transport, size);
+        WriteStdoutLine($"READY,{endpoint}");
 
         var sockets = new[] { (ISocket)server };
         var eventMasks = new[] { SocketPollIn };
