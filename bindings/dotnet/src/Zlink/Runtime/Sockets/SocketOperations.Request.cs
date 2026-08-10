@@ -78,8 +78,14 @@ internal sealed class DealerRequestOperation : RequestOperation,
             throw new ArgumentNullException(nameof(callback));
         EnsureReady();
         _submission.MarkSubmittedAfterValidation();
-        return _socket.RequestCallbackCore(_parts.Parts, callback, _flags,
-            _timeout);
+        // Keep single-part submission on the same ownership and callback path
+        // without creating the temporary one-item list used by multi-part
+        // submission.
+        return _parts.IsSingle
+            ? _socket.RequestCallbackCore(_parts.Single, callback, _flags,
+                _timeout)
+            : _socket.RequestCallbackCore(_parts.Parts, callback, _flags,
+                _timeout);
     }
 
     private void AddMessage(Message message)

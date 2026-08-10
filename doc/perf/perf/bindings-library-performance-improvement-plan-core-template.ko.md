@@ -285,7 +285,11 @@ binding report에서 실제 client 수와 STREAM client 수가 같은지, memory
 ## 5. 고정 원칙
 
 - 성능 목표 달성이 작업의 우선 목적이지만, 개선 설계와 구현은
-  `doc/principal/dev/posddd.md`의 POSDDD 원칙을 계속 만족해야 한다.
+  `doc/principal/dev/posddd.ko.md`의 POSDDD 원칙을 계속 만족해야 한다.
+- 각 후보는 성능 변화와 별도로 POSDDD 설계 이득을 평가한다. 성능 개선이 없거나
+  작더라도 처리량·평균 latency·기능 회귀가 없고 정보 은닉, 책임 경계, 중복 제거 또는
+  hot path의 불필요한 특수 경우를 명확히 개선하면 최종 코드로 채택할 수 있다. 이 경우
+  성능 목표를 통과한 것으로 바꾸지 않고, 측정 결과와 POSDDD 채택 근거를 함께 기록한다.
 - 성능 개선은 각 binding의 public API를 사용하는 일반 경로에서 이루어져야 한다.
 - contract의 public interface(공개 함수·메서드 signature, 공개 type·enum 값,
   ownership·error 동작)는 변경하지 않는다. 기존 public interface의 변경도 허용하지
@@ -486,7 +490,8 @@ C와 binding의 pattern별 smoke가 모두 `status: complete`여야 본 측정�
     성능 개선 코드를 채택했다면 검증된 변경과 측정 근거만 커밋하고 원격에 푸시한 뒤 다음
     transport로 이동한다.
 15. aggregate 평균이 미달한 대상은 자체 pass와 Sol pass가 모두 끝난 뒤에도 공개 contract를
-    유지한 효과 있는 후보가 없을 때만 `보류`로 기록하고 다음 transport로 이동한다.
+    유지한 성능 또는 POSDDD 이득 후보가 없을 때만 `보류`로 기록하고 다음 transport로
+    이동한다. POSDDD 이득만으로 채택한 후보는 성능 aggregate 미달을 통과로 바꾸지 않는다.
 16. 선택한 pattern의 모든 공식 transport report가 complete이고 각 transport의
     throughput·latency aggregate 평균이 통과 또는 보류로 확정되면 pattern 완료를 기록하고
     관련 문서를 커밋해 원격에 푸시한다.
@@ -514,7 +519,7 @@ pattern 완료는 수치를 한 번 얻었다는 뜻이 아니다. 다음 조건
 - 개선 전후 기능 테스트와 같은 pattern의 대표 회귀 셀이 통과한다.
 - 최종 판정에 사용한 C와 binding이 가까운 시점의 같은 manifest와 session tag로 측정됐다.
 - 상세 표에 C report, binding report, 반복값, 비율과 판정 근거를 기록했다.
-- POSD 위험 신호를 변경 전후로 다시 확인했고 새 복잡성을 만들지 않았다.
+- POSDDD 위험 신호를 변경 전후로 다시 확인했고 새 복잡성을 만들지 않았다.
 
 목표에 미달하면 자체 개선 pass와 Sol 리뷰 기반 개선 pass를 각각 한 번씩 수행한다. 각
 pass는 before/after 또는 후보 no-go 결과를 남긴다. 두 pass가 끝난 뒤에도 공개 contract를
@@ -551,7 +556,7 @@ runtime 위에서 동작하는 binding에 이미 존재하는 `Message`·byte st
 public ownership과 재사용 경계를 바꾸지 않고, 별도 후보로 before/after 측정을 남긴다.
 후보를 기각했으면 코드를 최종 변경에서 제거하고 측정 결과와 기각 이유만 로그에 남긴다.
 
-### 7.7 성능 개선의 POSD gate
+### 7.7 성능 개선의 POSDDD gate
 
 성능 병목을 찾으면 구현 전에 현재 코드의 위험 신호를 먼저 적는다. 최소한 얕은 모듈,
 정보 누출, 패스스루 메서드, 실행 순서에 따른 책임 분리, 특수 코드와 범용 코드의 혼합,
@@ -567,9 +572,9 @@ transport 세부 정보, perf 전용 option을 노출하지 않는다. 새 helpe
 
 1. 측정 가능한 성능 향상이 있으면 성능·기능 회귀와 복잡성 증가 여부를 함께 확인한다.
 2. 성능 향상이 없더라도 기존 위험 신호를 없애고 정보 은닉이나 책임 경계를 분명하게
-   개선하며, 처리량·평균 latency·기능 회귀가 없으면 POSD 개선으로 채택할 수 있다.
-3. 성능과 POSD 어느 쪽에서도 분명한 이득이 없거나 성능 회귀가 생기면 복잡성을 남기지
-   않고 되돌린다. POSD 개선만으로 throughput 미달 셀을 통과로 바꾸지는 않는다.
+   개선하며, 처리량·평균 latency·기능 회귀가 없으면 POSDDD 개선으로 채택할 수 있다.
+3. 성능과 POSDDD 어느 쪽에서도 분명한 이득이 없거나 성능 회귀가 생기면 복잡성을 남기지
+   않고 되돌린다. POSDDD 개선만으로 throughput 미달 셀을 통과로 바꾸지는 않는다.
 4. 성능 목표를 만족해도 public interface와 호출자 부담이 커졌으면 채택하지 않는다.
 5. 채택 가능한 후보 중 정보 은닉과 책임 경계가 더 분명한 설계를 선택한다.
 6. 변경 뒤 같은 위험 신호 목록을 다시 확인해 해소 여부와 새 위험 신호를 기록한다.

@@ -167,6 +167,24 @@ internal sealed class DealerSocket : MessageSocketBase, IDealerSocket
         if (callback == null)
             throw new ArgumentNullException(nameof(callback));
         RequestReplySupport.EnsureParts(parts, nameof(parts));
+        return RequestCallbackCore(parts, null, callback, flags, timeout);
+    }
+
+    internal bool RequestCallbackCore(Message part,
+        RequestCallback callback, SendFlags flags = SendFlags.None,
+        TimeSpan? timeout = null)
+    {
+        if (callback == null)
+            throw new ArgumentNullException(nameof(callback));
+        if (part == null)
+            throw new ArgumentNullException(nameof(part));
+        return RequestCallbackCore(null, part, callback, flags, timeout);
+    }
+
+    private bool RequestCallbackCore(IReadOnlyList<Message>? parts,
+        Message? singlePart, RequestCallback callback, SendFlags flags,
+        TimeSpan? timeout)
+    {
         var timeoutMs = RequestReplySupport.NormalizeRequestTimeout(
             timeout ?? TimeSpan.Zero, DefaultRequestTimeout);
         GCHandle handle = default;
@@ -183,12 +201,17 @@ internal sealed class DealerSocket : MessageSocketBase, IDealerSocket
 
             lock (SubmitGate)
             {
-                RequestReplySupport.SubmitOwnedParts(parts,
+                RequestReplySupport.NativePartSubmitter submit =
                     (ref ZlinkMsg nativePart,
-                            NativeMethods.ZlinkPartFlag partFlag) =>
-                        NativeMethods.zlink_dealer_request_part(Handle,
-                            ref nativePart, (int)flags, partFlag, timeoutMs,
-                            DirectRequestReplyHandlerPtr, userData));
+                        NativeMethods.ZlinkPartFlag partFlag) =>
+                    NativeMethods.zlink_dealer_request_part(Handle,
+                        ref nativePart, (int)flags, partFlag, timeoutMs,
+                        DirectRequestReplyHandlerPtr, userData);
+                if (singlePart != null)
+                    RequestReplySupport.SubmitOwnedSinglePart(singlePart,
+                        submit);
+                else
+                    RequestReplySupport.SubmitOwnedParts(parts!, submit);
             }
 
             state.AttachProgress(RequestProgressPump.AttachSocketCallback(Handle));

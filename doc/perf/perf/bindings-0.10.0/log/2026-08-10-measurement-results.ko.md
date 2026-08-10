@@ -393,3 +393,16 @@ throughput ratio는 `59.456% / 59.274% / 54.638% / 30.368% / 95.998% / 81.637%`,
 | .NET | 1342474 / 1102788 / 1097378 / 309148 / 130588 / 66330 | 0.144 / 0.280 / 0.324 / 0.017 / 0.024 / 0.029 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_165440_dotnet-dealer-router-inproc-paired-before.txt` |
 
 throughput ratio는 `60.429% / 64.870% / 55.793% / 61.675% / 66.513% / 77.296%`, 산술평균은 `64.429%`다. latency ratio는 `1.694x / 1.530x / 1.800x / 2.833x / 2.000x / 1.450x`, 산술평균은 `1.885x`다. .NET inproc routed one-way aggregate 기준을 충족해 통과로 판정한다. 추가 hotpath 변경 없이 다음 대상은 `.NET Single DEALER_ROUTER_REQREP/inproc`다.
+
+### .NET Single DEALER_ROUTER_REQREP/inproc
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 348493 / 317541 / 333373 / 140787 / 84081 / 47572 | 0.095 / 0.104 / 0.097 / 0.047 / 0.043 / 0.045 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_165648_dotnet-dealer-router-reqrep-inproc-paired-c1.txt` |
+| .NET before | 159941 / 157648 / 153670 / 108073 / 77826 / 45356 | 0.206 / 0.204 / 0.205 / 0.058 / 0.044 / 0.048 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_165700_dotnet-dealer-router-reqrep-inproc-paired-before.txt` |
+| .NET own after inline | 167232 / 157741 / 151818 / 109419 / 77463 / 44346 | 0.191 / 0.204 / 0.212 / 0.057 / 0.045 / 0.049 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_165825_dotnet-dealer-router-reqrep-inproc-own-after-inline.txt` |
+| .NET Sol after single-part | 160287 / 152125 / 159746 / 116343 / 80689 / 46382 | 0.203 / 0.212 / 0.202 / 0.054 / 0.043 / 0.048 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_170138_dotnet-dealer-router-reqrep-inproc-sol-after-single.txt` |
+
+before throughput ratio는 `45.895% / 49.647% / 46.096% / 76.763% / 92.561% / 95.342%`, 산술평균은 `67.717%`다. before latency ratio는 `2.168x / 1.962x / 2.113x / 1.234x / 1.023x / 1.067x`, 산술평균은 `1.595x`다. 자체 inlining after throughput ratio는 `47.987% / 49.676% / 45.540% / 77.720% / 92.129% / 93.219%`, 산술평균은 `67.712%`다. 자체 inlining after latency ratio는 `2.011x / 1.962x / 2.186x / 1.213x / 1.047x / 1.089x`, 산술평균은 `1.584x`다. Sol single-part specialization after throughput ratio는 `45.994% / 47.907% / 47.918% / 82.638% / 95.966% / 97.499%`, 산술평균은 `69.654%`다. Sol after latency ratio는 `2.137x / 2.038x / 2.082x / 1.149x / 1.000x / 1.067x`, 산술평균은 `1.579x`다.
+
+Sol single-part specialization은 단일 part 요청에서 임시 `IReadOnlyList` 생성을 제거하고 기존 ownership·timeout·callback·error 처리를 private 공통 경로로 유지했다. throughput과 latency가 before보다 개선됐지만 throughput aggregate 70%에는 0.346%p 미달해 최종 상태는 `보류`다. POSDDD 기준의 내부 책임 경계 개선이 있어 후보는 최종 코드에 유지하며, 추가 contract-safe 후보는 no-go다. .NET build와 contract test 결과는 build 성공, `149 passed / 0 failed / 0 skipped`다.
