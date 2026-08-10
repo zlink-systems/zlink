@@ -33,8 +33,13 @@ internal static class PerfMultiRouterRouterClient
                 ConfigureTlsClientIfNeeded(client, options.Transport);
                 client.Options.SendTimeout = TimeSpan.FromMilliseconds(sndTimeoutMs);
                 client.Options.ReceiveTimeout = TimeSpan.FromMilliseconds(rcvTimeoutMs);
+                // Match the C router client: set both the client identity and
+                // the peer routing id before Connect so ConnectionReady means
+                // the same routed peer setup in both harnesses.
                 client.SetRoutingId(RoutingId.From(
-                    System.Text.Encoding.ASCII.GetBytes($"CLIENT-{i}")));
+                    System.Text.Encoding.ASCII.GetBytes($"client_{i}")));
+                client.Options.SetConnectRoutingId(
+                    RoutingId.From(serverRoutingId));
                 var monitor = client.MonitorOpen(SocketEvent.ConnectionReady);
                 client.Connect(endpoint);
                 clients.Add(client);

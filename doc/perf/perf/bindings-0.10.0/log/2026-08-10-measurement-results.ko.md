@@ -515,9 +515,9 @@ baseline throughput ratio는 `41.415% / 67.082% / 123.920% / 76.729% / 82.112% /
 
 POSDDD 평가: 단일/2-part와 multipart 표현의 변경 지식을 내부 `OperationMessageBuffer`가 소유하고 호출부와 public contract에는 노출하지 않는다. 기존 ownership·error semantics·public interface를 유지하면서 throughput과 latency aggregate가 모두 개선된 자체 후보를 채택했다. 별도 구조 변경 후보는 추가 복잡성 대비 분명한 이득이 없어 만들지 않았다. build는 0 warning/error, contract test는 `149 passed / 0 failed / 0 skipped`다.
 
-### .NET Multi MULTI_DEALER_ROUTER_SENDSEND/tcp
+### .NET Multi MULTI_DEALER_ROUTER_SENDSEND/tcp (runner MULTI_DEALER_ROUTER)
 
-조건: Core `v0.10.1` release package, Release, `tcp`, clients `100`, duration `1s`, runs `1`, server/client I/O threads `4/4`, auto-HWM, connect-ready timeout `10000ms`, monitor-HWM `4096000`. C relay의 connection-ready count gate를 사용하지 않고 HWM 정책을 READY 전에 확정하는 parity correction 후 C/.NET 모두 30/30 complete로 측정했다.
+조건: Core `v0.10.1` release package, Release, `tcp`, clients `100`, duration `1s`, runs `1`, server/client I/O threads `4/4`, auto-HWM, connect-ready timeout `10000ms`, monitor-HWM `4096000`. C semantic pattern은 `MULTI_DEALER_ROUTER_SENDSEND`이고 .NET runner pattern은 `MULTI_DEALER_ROUTER`다. C relay의 connection-ready count gate를 사용하지 않고 HWM 정책을 READY 전에 확정하는 parity correction 후 C/.NET 모두 30/30 complete로 측정했다.
 
 | 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
 |------|-----------------------------|---------------------------|--------|
@@ -542,3 +542,16 @@ POSDDD 평가: C relay와 .NET relay의 시작 책임을 동일하게 정렬하�
 parity baseline throughput ratio는 `62.189% / 64.167% / 53.703% / 66.232% / 101.759% / 109.834%`, 산술평균은 `76.314%`다. 평균 latency ratio는 `1.389x / 1.306x / 1.574x / 1.323x / 1.547x / 1.656x`, 산술평균은 `1.466x`다. 자체 builder inlining after throughput ratio는 `62.026% / 66.268% / 61.640% / 65.696% / 103.571% / 113.714%`, 산술평균은 `78.819%`이며 평균 latency ratio는 `1.354x / 1.280x / 1.391x / 1.298x / 1.589x / 1.598x`, 산술평균은 `1.418x`다. .NET socket request/reply aggregate 목표 `70%`를 충족하므로 최종 상태는 `통과`다. 개별 size ratio는 측정값으로 기록한다.
 
 POSDDD 평가: C와 .NET의 setup·retry 책임을 같은 계층에서 처리하도록 정렬하고, retry 시도별 message 수명과 server 수명 polling을 harness 내부에 숨겼다. public interface·ownership·error semantics는 변경하지 않았다. 자체 builder inlining은 두 aggregate를 개선해 채택했고, Sol 2차 review는 추가 binding/harness 구조 변경을 no-go 판정했다. build는 `0 warning / 0 error`, contract test는 `149 passed / 0 failed / 0 skipped`다.
+
+### .NET Multi MULTI_ROUTER_ROUTER_SENDSEND/tcp
+
+조건: Core `v0.10.1` release package, Release, `tcp`, clients `100`, duration `1s`, runs `1`, server/client I/O threads `4/4`, auto-HWM, connect-ready timeout `10000ms`, monitor-HWM `4096000`. C semantic pattern은 `MULTI_ROUTER_ROUTER_SENDSEND`이고 .NET runner에 등록된 대응 pattern은 `MULTI_ROUTER_ROUTER`다. C와 .NET의 routed echo 의미를 맞추기 위해 .NET Router client에 C와 같은 `CONNECT_ROUTING_ID=SERVER`와 `client_<index>` routing id를 설정했다. 두 report 모두 6개 size와 30개 result line이 complete다.
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 182672 / 179557 / 160163 / 164776 / 34962 / 21293 | 0.255 / 0.258 / 0.287 / 0.280 / 1.008 / 1.632 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_193520_dotnet-multi-router-router-sendsend-tcp-paired-c1.txt` |
+| .NET runner `MULTI_ROUTER_ROUTER` | 108609 / 74146 / 134991 / 115370 / 45849 / 26149 | 0.393 / 0.562 / 0.322 / 0.377 / 1.010 / 1.856 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_193856_dotnet-multi-router-router-sendsend-tcp-paired-before-connect-rid.txt` |
+
+throughput ratio는 `59.456% / 41.294% / 84.284% / 70.016% / 131.140% / 122.806%`, 산술평균은 `84.832%`다. 평균 latency ratio는 `1.541x / 2.178x / 1.122x / 1.346x / 1.002x / 1.137x`, 산술평균은 `1.388x`다. .NET multi routed echo aggregate 목표 `70%`와 latency 기준을 충족해 최종 상태는 `통과`다. 개별 size ratio는 측정값으로 기록한다.
+
+POSDDD 평가: routed peer identity를 암묵적인 connection 상태에 맡기지 않고 client connection setup 책임으로 명시했다. 이 parity correction은 public contract·ownership·error semantics를 변경하지 않으며 aggregate가 이미 목표를 충족하므로 추가 binding hotpath pass와 Sol review 기반 두 번째 개선 pass는 수행하지 않았다. build는 `0 warning / 0 error`, contract test는 `149 passed / 0 failed / 0 skipped`다.
