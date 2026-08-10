@@ -10,10 +10,11 @@ interface RequestProgressState {
 
 const requestProgressByHandle = new Map<unknown, RequestProgressState>();
 const externalProgressByHandle = new Map<unknown, number>();
+const NOOP_RELEASE_REQUEST_PROGRESS = (): void => {};
 
 export function startRequestProgress(handle: unknown): () => void {
   if ((externalProgressByHandle.get(handle) ?? 0) > 0) {
-    return () => {};
+    return NOOP_RELEASE_REQUEST_PROGRESS;
   }
   const existing = requestProgressByHandle.get(handle);
   if (existing) {
@@ -44,7 +45,7 @@ export function startRequestProgress(handle: unknown): () => void {
       requireNative().pollerDestroy(state.poller);
     } catch {
     }
-    return () => {};
+    return NOOP_RELEASE_REQUEST_PROGRESS;
   }
   state.interval.unref();
   requestProgressByHandle.set(handle, state);

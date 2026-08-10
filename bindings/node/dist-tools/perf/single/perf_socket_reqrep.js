@@ -3,9 +3,10 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createPayload, createRunId, currentEpochNs, sleepImmediate, stampPayload, } = require('../common/perf_metrics');
-const { applyAutoHwmMsgUnit, applyContextPolicy, applySocketPolicy, benchmarkEndpoint, configureTlsClient, configureTlsServer, waitForMonitorConnectionReady, } = require('./perf_single_common');
+const { applyAutoHwmMsgUnit, applyContextPolicy, applySocketPolicy, benchmarkEndpoint, configureTlsClient, configureTlsServer, } = require('./perf_single_common');
 const { STOP_TOKEN_BYTES, isStopToken } = require('../perf_stop_token');
 const SERVER_RID = zlink.RoutingId.from(Buffer.from('SERVER', 'ascii'));
+const REQUEST_WINDOW_BYTES = 768 * 1024;
 const trace = (message) => {
     if (process.env.PERF_DEBUG === '1')
         console.error(`[socket-reqrep] ${message}`);
@@ -19,6 +20,42 @@ function transientSubmit(error) {
         && (error.result === zlink.SubmitResult.Backpressured
             || error.result === zlink.SubmitResult.NotConnected
             || error.result === zlink.SubmitResult.NotFound);
+}
+function monitorReady(monitor) {
+    try {
+        return monitor.recv(zlink.RecvFlags.DontWait)?.event
+            === zlink.MonitorEventType.ConnectionReady;
+    }
+    catch (error) {
+        if (error instanceof zlink.RecvError
+            && error.result === zlink.RecvResult.NoData) {
+            return false;
+        }
+        throw error;
+    }
+}
+async function waitForRequestSocketsReady(server, serverMonitor, clientMonitor) {
+    const timeoutMs = Math.max(1, Number(process.env.PERF_CONNECT_READY_TIMEOUT_MS ?? 1000));
+    const deadline = Date.now() + timeoutMs;
+    const activity = new zlink.Received();
+    let serverReady = false;
+    let clientReady = false;
+    try {
+        while (Date.now() < deadline) {
+            server.recv(activity, zlink.RecvFlags.DontWait);
+            activity.close();
+            serverReady = serverReady || monitorReady(serverMonitor);
+            clientReady = clientReady || monitorReady(clientMonitor);
+            if (serverReady && clientReady) {
+                return;
+            }
+            await sleepImmediate();
+        }
+    }
+    finally {
+        activity.close();
+    }
+    throw new Error(`connection ready timeout after ${timeoutMs}ms server=${serverReady} client=${clientReady}`);
 }
 function drainServer(server) {
     let stop = false;
@@ -44,6 +81,26 @@ function drainServer(server) {
     }
     return stop;
 }
+function handshakeRouters(client, server) {
+    client.send(SERVER_RID).message(Buffer.from('PING')).submit();
+    const ping = new zlink.Received();
+    const pong = new zlink.Received();
+    try {
+        server.recv(ping);
+        if (!ping.routingId || ping.singlePartOrThrow().data().toString() !== 'PING') {
+            throw new Error('router request/reply handshake receive failed');
+        }
+        server.send(ping.routingId).message(Buffer.from('PONG')).submit();
+        client.recv(pong);
+        if (pong.singlePartOrThrow().data().toString() !== 'PONG') {
+            throw new Error('router request/reply handshake reply failed');
+        }
+    }
+    finally {
+        pong.close();
+        ping.close();
+    }
+}
 async function runSocketReqRep(msgSize, options, routedClient) {
     const ctx = zlink.createContext();
     applyContextPolicy(ctx);
@@ -63,6 +120,7 @@ async function runSocketReqRep(msgSize, options, routedClient) {
         server.options.mandatory = true;
         if (routedClient) {
             client.setRoutingId(zlink.RoutingId.from(Buffer.from('CLIENT', 'ascii')));
+            client.options.setConnectRoutingId(SERVER_RID);
             client.options.mandatory = true;
         }
         configureTlsServer(server, options.transport);
@@ -70,12 +128,13 @@ async function runSocketReqRep(msgSize, options, routedClient) {
         server.bind(endpoint);
         client.connect(endpoint);
         trace('connected-called');
-        await Promise.all([
-            waitForMonitorConnectionReady(serverMonitor),
-            waitForMonitorConnectionReady(clientMonitor),
-        ]);
+        await waitForRequestSocketsReady(server, serverMonitor, clientMonitor);
         ctx.recalculateAutoHwm();
         trace('ready');
+        if (routedClient) {
+            handshakeRouters(client, server);
+            trace('handshake-done');
+        }
         poller.add(client, [zlink.PollEventFlag.PollCompletion], 0);
         const runId = createRunId(options.runId ?? 1);
         const activeStartNs = currentEpochNs();
@@ -90,6 +149,7 @@ async function runSocketReqRep(msgSize, options, routedClient) {
         });
         let seq = 1n;
         let outstanding = 0;
+        const maxInFlight = Math.max(1, Math.min(64, Math.floor(REQUEST_WINDOW_BYTES / Math.max(1, msgSize))));
         let failure = null;
         const callback = (result, parts) => {
             try {
@@ -109,23 +169,27 @@ async function runSocketReqRep(msgSize, options, routedClient) {
             }
         };
         while (currentEpochNs() < activeStopNs && !failure) {
-            if (outstanding === 0) {
+            while (outstanding < maxInFlight && currentEpochNs() < activeStopNs) {
                 const payload = createPayload(msgSize);
                 stampPayload(payload, { phase: 1, runId, msgSize, seq });
                 try {
                     const operation = routedClient ? client.request(SERVER_RID) : client.request();
                     const accepted = operation.message(payload)
                         .timeout(options.recvTimeoutMs ?? 200)
-                        .flags(zlink.SendFlags.DontWait)
+                        .flags(zlink.SendFlags.None)
                         .submit(callback);
                     if (accepted) {
-                        outstanding = 1;
+                        outstanding += 1;
                         seq += 1n;
+                    }
+                    else {
+                        break;
                     }
                 }
                 catch (error) {
                     if (!transientSubmit(error))
                         throw error;
+                    break;
                 }
             }
             drainServer(server);

@@ -9,4 +9,8 @@ const root = path.resolve(__dirname, '..');
 const distTools = path.join(root, 'dist-tools');
 const link = path.join(distTools, 'dist');
 fs.rmSync(link, { recursive: true, force: true });
-fs.symlinkSync('..\\dist', link, 'junction');
+fs.symlinkSync(
+  path.relative(distTools, path.join(root, 'dist')),
+  link,
+  process.platform === 'win32' ? 'junction' : 'dir'
+);

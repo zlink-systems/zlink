@@ -479,6 +479,19 @@ napi_value create_recv_message_value (napi_env env,
     // Hot path: this is an internal raw shape consumed by the TypeScript
     // materializer, not a public Received object. Do not add unused per-
     // message fields here; each property set is paid on every recv().
+    if (part_count == 1 && routing_id.size > 0) {
+        // Routed single-part receives already expose routingId separately.
+        // Transfer the payload directly and let the TypeScript materializer
+        // derive the same synthetic Message properties from that id.
+        napi_value data = create_message_data_buffer (env, &parts[0]);
+        if (!data)
+            return NULL;
+        napi_set_named_property (env, obj, "data", data);
+        napi_value rid = create_routing_id_value (env, routing_id);
+        napi_set_named_property (env, obj, "routingId", rid);
+        return obj;
+    }
+
     napi_value parts_array;
     napi_create_array_with_length (env, part_count, &parts_array);
     for (size_t i = 0; i < part_count; ++i) {

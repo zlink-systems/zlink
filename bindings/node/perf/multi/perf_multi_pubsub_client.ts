@@ -25,8 +25,6 @@ const {
   waitForConnectionReady
 } = require('./perf_multi_runtime');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
-const TOPIC = 'bench';
-
 function isStopTokenPayload(buffer, size) {
   if (size !== STOP_TOKEN_BYTES.length) {
     return false;
@@ -53,7 +51,7 @@ async function main() {
       const sub = zlink.createSubSocket(ctx);
       applySocketPolicy(sub);
       configureTlsClient(sub, options.transport);
-      sub.setSubscription(TOPIC);
+      sub.setSubscription('');
       await waitForConnectionReady(sub, () => sub.connect(options.endpoint));
       applyAutoHwmMsgUnit(ctx, options.msgSize);
       subs.push(sub);

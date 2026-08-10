@@ -6,7 +6,7 @@ const { createMetricCollector, createPayload, createRunId, HEADER_SIZE, currentE
 const { configureTlsClient } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
 const { POLLIN, POLLOUT, applyAutoHwmMsgUnit, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, recvNoWaitInto, sendStopTokenOnce, trySocketSend, waitForConnectionReady } = require('./perf_multi_runtime');
-const SERVER_ID = Buffer.from('multi-router-router-server', 'ascii');
+const SERVER_ID = Buffer.from('SERVER', 'ascii');
 const SERVER_ROUTING_ID = zlink.RoutingId.from(SERVER_ID);
 async function main() {
     const options = parseMultiArgs(process.argv.slice(2));
@@ -25,6 +25,7 @@ async function main() {
             applySocketPolicy(router);
             configureTlsClient(router, options.transport);
             router.setRoutingId(zlink.RoutingId.from(Buffer.from(`multi-router-client-${i}`, 'ascii')));
+            router.options.setConnectRoutingId(SERVER_ROUTING_ID);
             routers.push(router);
             payloads.push(createPayload(options.msgSize));
             replyMessages.push(new zlink.Received());

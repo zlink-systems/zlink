@@ -39,6 +39,17 @@ export function messageFromOwnedBuffer(data: Buffer): Message {
   return message;
 }
 
+export function messageFromOwnedRoutedBuffer(data: Buffer, routingId: Buffer): Message {
+  const identity = routingId.toString();
+  return messageFromSnapshot({
+    data,
+    properties: {
+      'Routing-Id': identity,
+      Identity: identity
+    }
+  });
+}
+
 export function messageToSnapshot(message: Message): MessageSnapshot {
   const state = message as unknown as {
     _buffer: Buffer;

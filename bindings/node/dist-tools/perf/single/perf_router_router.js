@@ -3,10 +3,10 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createRunId, currentEpochNs, integerEnv, summarizeMetrics, } = require('../common/perf_metrics');
-const { applyContextPolicy, applyAutoHwmMsgUnit, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRouterRecvInto, emitSingleSocketHwmDetail, parseSingleBinaryArgs, routedLargeMessageSocketPolicy, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerError, waitForMonitorConnectionReady, waitForWorkerMessage, } = require('./perf_single_common');
+const { applyContextPolicy, applyAutoHwmMsgUnit, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRouterRecvInto, emitSingleSocketHwmDetail, parseSingleBinaryArgs, routedLargeMessageSocketPolicy, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerError, waitForWorkerMessage, } = require('./perf_single_common');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
-const RECEIVER_ID = Buffer.from('router-perf-receiver', 'ascii');
-const SENDER_ID = Buffer.from('router-perf-sender', 'ascii');
+const RECEIVER_ID = Buffer.from('ROUTER1', 'ascii');
+const SENDER_ID = Buffer.from('ROUTER2', 'ascii');
 const RECEIVER_ROUTING_ID = zlink.RoutingId.from(RECEIVER_ID);
 function trace(message) {
     if (process.env.PERF_NODE_TRACE === '1') {
@@ -92,7 +92,6 @@ async function runRouterRouterBenchmark(msgSize, options) {
     const ctx = zlink.createContext();
     applyContextPolicy(ctx);
     const receiver = zlink.createRouterSocket(ctx);
-    const receiverMonitor = receiver.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
     const endpoint = await benchmarkEndpoint(options.transport, `router-router-${msgSize}`);
     let worker = null;
     try {
@@ -118,7 +117,6 @@ async function runRouterRouterBenchmark(msgSize, options) {
             waitForWorkerMessage(worker, 'connected'),
             workerError.then((message) => Promise.reject(new Error(message.message)))
         ]);
-        await waitForMonitorConnectionReady(receiverMonitor);
         worker.postMessage({ type: 'handshake' });
         handshakeRouterReceiver(receiver);
         await Promise.race([
@@ -153,7 +151,6 @@ async function runRouterRouterBenchmark(msgSize, options) {
     finally {
         trace('closing');
         await closeSenderWorker(worker);
-        receiverMonitor.close();
         receiver.close();
         trace('receiver closed');
         ctx.close();

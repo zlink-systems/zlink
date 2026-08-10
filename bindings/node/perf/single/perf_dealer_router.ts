@@ -24,7 +24,6 @@ const {
   runLocalSocketOneWayBenchmark,
   spawnSenderWorker,
   waitForWorkerError,
-  waitForMonitorConnectionReady,
   waitForWorkerMessage,
 } = require('./perf_single_common');
 
@@ -44,7 +43,6 @@ async function runDealerRouterBenchmark(msgSize, options) {
   const ctx = zlink.createContext();
   applyContextPolicy(ctx);
   const router = zlink.createRouterSocket(ctx);
-  const routerMonitor = router.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
   const endpoint = await benchmarkEndpoint(options.transport, `dealer-router-${msgSize}`);
   let worker = null;
 
@@ -68,7 +66,9 @@ async function runDealerRouterBenchmark(msgSize, options) {
       waitForWorkerMessage(worker, 'ready'),
       workerError.then((message) => Promise.reject(new Error(message.message)))
     ]);
-    await waitForMonitorConnectionReady(routerMonitor);
+    // The worker reports ready only after its CONNECTION_READY monitor has
+    // completed. A second ROUTER-side monitor wait requires recv activity to
+    // progress and would deadlock before the active receive loop starts.
 
     const activeStartNs = currentEpochNs();
     const activeStopNs = activeStartNs
@@ -83,7 +83,7 @@ async function runDealerRouterBenchmark(msgSize, options) {
     });
 
     // PERF_SINGLE_TEST_POLICY § 1.4 / § 2.0.1: no start/stop control
-    // channel. The connection-ready gate above is the only cross-thread
+    // channel. The worker connection-ready gate above is the only cross-thread
     // sync; the receiver uses blocking recv + drain and exits on the wire
     // stop token (C perf_dealer_router.cpp recv-until-stop-token model).
     const recvTask = drainRouterRecvInto(
@@ -101,7 +101,6 @@ async function runDealerRouterBenchmark(msgSize, options) {
     return result;
   } finally {
     await closeSenderWorker(worker);
-    routerMonitor.close();
     router.close();
     ctx.close();
   }

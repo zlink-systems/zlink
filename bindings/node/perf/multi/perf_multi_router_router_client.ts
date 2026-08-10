@@ -29,7 +29,7 @@ const {
   waitForConnectionReady
 } = require('./perf_multi_runtime');
 
-const SERVER_ID = Buffer.from('multi-router-router-server', 'ascii');
+const SERVER_ID = Buffer.from('SERVER', 'ascii');
 const SERVER_ROUTING_ID = zlink.RoutingId.from(SERVER_ID);
 
 async function main() {
@@ -52,6 +52,7 @@ async function main() {
       router.setRoutingId(
         zlink.RoutingId.from(Buffer.from(`multi-router-client-${i}`, 'ascii'))
       );
+      router.options.setConnectRoutingId(SERVER_ROUTING_ID);
       routers.push(router);
       payloads.push(createPayload(options.msgSize));
       replyMessages.push(new zlink.Received());

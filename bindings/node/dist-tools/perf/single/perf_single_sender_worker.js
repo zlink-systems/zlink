@@ -209,7 +209,12 @@ async function main() {
                 applyAutoHwmMsgUnit(ctx, msgSize);
                 socket.setRoutingId(zlink.RoutingId.from(Buffer.from(senderRoutingIdBytes)));
                 ctx.recalculateAutoHwm();
-                await connectSender(kind, socket, endpoint, transport);
+                // C progresses ROUTER readiness through its PING/PONG handshake.
+                // Waiting on the sender monitor first deadlocks because neither
+                // ROUTER is receiving yet, so connect and let the handshake below
+                // drive both peers.
+                configureTlsClient(socket, transport);
+                socket.connect(endpoint);
                 activeReceiverRoutingId = await handshakeRouterSender(port, socket, activeReceiverRoutingId);
                 break;
             }

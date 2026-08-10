@@ -31,8 +31,7 @@ function tryStreamSend(stream, routingId, frame) {
         if (isTransientSendError(error)) {
             return false;
         }
-        console.error(`[multi-stream-server] echo send failed: ${error}`);
-        return true;
+        throw error;
     }
 }
 function pendingLength(pending) {

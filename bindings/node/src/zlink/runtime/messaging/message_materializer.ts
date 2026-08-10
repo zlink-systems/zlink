@@ -10,6 +10,7 @@ import {
 import { routingIdFromOwnedBuffer } from '../core/routing_id';
 import {
   messageFromOwnedBuffer,
+  messageFromOwnedRoutedBuffer,
   messageFromSnapshot,
   type MessageSnapshot
 } from './message_snapshot';
@@ -27,7 +28,8 @@ import {
 } from './topic_message_state';
 
 export interface NativeReceivedRaw {
-  parts: MessageSnapshot[];
+  parts?: MessageSnapshot[];
+  data?: Buffer;
   routingId?: Buffer | null;
   requestSeq?: bigint | null;
   transportPairId?: bigint;
@@ -59,6 +61,13 @@ function materializeParts(parts: MessageSnapshot[]): Message[] {
   return messages;
 }
 
+function materializeReceivedParts(raw: NativeReceivedRaw): Message[] {
+  if (raw.data && raw.routingId && raw.routingId.length > 0) {
+    return [messageFromOwnedRoutedBuffer(raw.data, raw.routingId)];
+  }
+  return materializeParts(raw.parts ?? []);
+}
+
 function materializeTopicParts(raw: NativeTopicMessageRaw): Message[] {
   if (raw.data) {
     // Hot path: core SUB messages are normally single-part. The native layer
@@ -80,7 +89,7 @@ export function materializeReceived(
 ): Received {
   const requestSeq = raw.requestSeq ?? null;
   return createReceived(
-    materializeParts(raw.parts),
+    materializeReceivedParts(raw),
     wrapNativeRoutingId(raw.routingId ?? null),
     requestSeq,
     hasReplyableRequestSeq(requestSeq) && reply
@@ -116,7 +125,7 @@ export function materializeReceivedInto(
   const requestSeq = raw.requestSeq ?? null;
   replaceReceived(
     target,
-    materializeParts(raw.parts),
+    materializeReceivedParts(raw),
     wrapNativeRoutingId(raw.routingId ?? null),
     requestSeq,
     hasReplyableRequestSeq(requestSeq) && reply

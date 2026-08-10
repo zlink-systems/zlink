@@ -6,6 +6,7 @@ const readline = require('node:readline');
 const zlink = require('@zlink-systems/zlink');
 const { configureTlsServer } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
+const { isStopToken } = require('../perf_stop_token');
 const {
   POLLIN,
   POLLOUT,
@@ -16,8 +17,7 @@ const {
   pollEvents,
   pollEventHas,
   trySocketSend,
-  waitPollerOne,
-  waitForConnectionReadyCount
+  waitPollerOne
 } = require('./perf_multi_runtime');
 
 function drainPending(router, pending) {
@@ -30,21 +30,27 @@ function drainPending(router, pending) {
   }
 }
 
-function receiveAndQueueReplies(router, pending) {
+function receiveAndQueueReplies(router, pending, received) {
   while (true) {
-    const received = new zlink.Received();
     if (!router.recv(received, zlink.RecvFlags.DontWait)) {
-      break;
+      return false;
     }
-    if (!received.routingId || received.requestSeq) {
-      continue;
+    try {
+      if (!received.routingId || received.requestSeq) {
+        continue;
+      }
+      const routingId = received.routingId;
+      const payload = received.singlePartOrThrow();
+      if (isStopToken(payload.data())) {
+        return true;
+      }
+      if (pending.length === 0 && trySocketSend(router, routingId, payload)) {
+        continue;
+      }
+      pending.push({ routingId, payload: Buffer.from(payload.data()) });
+    } finally {
+      received.close();
     }
-    const routingId = received.routingId;
-    const payload = received.singlePartOrThrow();
-    if (pending.length === 0 && trySocketSend(router, routingId, payload)) {
-      continue;
-    }
-    pending.push({ routingId, payload: Buffer.from(payload.data()) });
   }
 }
 
@@ -55,6 +61,7 @@ async function main() {
   const router = zlink.createRouterSocket(ctx);
   const poller = zlink.createPoller();
   const pending = [];
+  const received = new zlink.Received();
   let pollBuffer = null;
   let rl = null;
   let stop = false;
@@ -68,7 +75,6 @@ async function main() {
     emitMultiSocketHwmDetail(router, 'endpoint', options.transport, options.msgSize);
     poller.add(router, pollEvents(POLLIN), 0);
     pollBuffer = zlink.createPollEvents(1);
-    const readyBarrier = waitForConnectionReadyCount(router, options.clients);
     console.log(`READY,${options.endpoint}`);
 
     rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -81,8 +87,6 @@ async function main() {
       }
     })();
 
-    await readyBarrier;
-
     while (!stop) {
       poller.modify(router, pollEvents(POLLIN | POLLOUT));
       const ready = waitPollerOne(poller, pollBuffer, process.platform === 'win32' ? 50 : -1);
@@ -93,12 +97,13 @@ async function main() {
         drainPending(router, pending);
       }
       if (pollEventHas(ready, POLLIN)) {
-        receiveAndQueueReplies(router, pending);
+        stop = receiveAndQueueReplies(router, pending, received);
         drainPending(router, pending);
       }
     }
   } finally {
     rl?.close();
+    received.close();
     pollBuffer?.close();
     poller.close();
     router.close();
