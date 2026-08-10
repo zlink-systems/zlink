@@ -21,7 +21,9 @@ REQUIRED_METRICS = ("throughput", "bandwidth", "latency", "latency_p95", "latenc
 RESULT_METRICS = ("bandwidth", "latency", "latency_p95", "latency_p99", "throughput")
 ECHO_MULTI_PATTERNS = {
     "MULTI_DEALER_ROUTER",
+    "MULTI_DEALER_ROUTER_SENDSEND",
     "MULTI_ROUTER_ROUTER",
+    "MULTI_ROUTER_ROUTER_SENDSEND",
     "MULTI_STREAM",
 }
 

@@ -1035,6 +1035,25 @@ throughput ratio는 `10.922% / 14.666% / 32.528% / 97.852% / 77.047% / 99.709%`,
 
 다섯 대상 모두 shared native send, publisher 또는 routed receive owner 개선과 Sol review 범위에 포함되며 public interface·ownership·error 의미는 변경하지 않았다.
 
+### Python Multi DEALER_DEALER/tcp
+
+조건: Core `v0.10.1` Git release runtime, Release, `tcp`, clients `100`, duration `1s`,
+runs `1`, msg sizes `64/256/1024/4096/65536/131072B`, server/client I/O threads `4/4`,
+auto-HWM `balanced`, connect concurrency `128`, connect-ready timeout `10000ms`, monitor HWM
+`4096000`이다. C runner가 완료된 뒤 Python runner를 단독 실행했다.
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 2631.180 / 1444.636 / 1012.234 / 308.151 / 94.924 / 46.004 | 0.314 / 0.485 / 5.084 / 309.816 / 204.594 / 316.306 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_021025_python-multi-dealer-dealer-tcp-paired-c.txt` |
+| Python baseline | 197.721 / 200.404 / 181.641 / 94.438 / 52.230 / 24.506 | 181.294 / 129.830 / 147.745 / 624.044 / 190.429 / 136.750 | `/home/hep7hep7/project/zlink/bindings/python/perf/results/multi/report/perf_python_multi_linux_20260811_021049_python-multi-dealer-dealer-tcp-current.txt` |
+| 자체 개선 | 316.000 / 320.500 / 302.001 / 130.399 / 47.177 / 30.187 | 71.361 / 36.435 / 23.754 / 551.856 / 159.931 / 124.778 | `/home/hep7hep7/project/zlink/bindings/python/perf/results/multi/report/perf_python_multi_linux_20260811_021215_python-multi-dealer-dealer-tcp-own-decode-once.txt` |
+| Sol 개선 | 314.700 / 326.700 / 300.300 / 155.699 / 64.742 / 34.224 | 46.881 / 25.774 / 26.547 / 486.715 / 161.357 / 121.959 | `/home/hep7hep7/project/zlink/bindings/python/perf/results/multi/report/perf_python_multi_linux_20260811_021645_python-multi-dealer-dealer-tcp-sol-inline-owner.txt` |
+
+최종 throughput ratio는 `11.960% / 22.615% / 29.667% / 50.527% / 68.204% / 74.394%`,
+산술평균은 `42.894%`다. 평균 latency ratio는 `149.303x / 53.142x / 5.222x / 1.571x /
+0.789x / 0.386x`, 중앙값은 `3.396x`다. throughput aggregate 최소 기준 `35%`와 Python
+latency 상한 `5.0x`를 통과한다. 개별 size 미달은 측정값으로 기록한다.
+
 ### Python Single ipc 완료 대상
 
 조건: Core `v0.10.1` release package, duration `1s`, runs `1`, msg sizes `64/256/1024/65536/131072/262144B`, auto-HWM `balanced`다. 각 대상은 C 종료 후 Python을 단독 실행했다.

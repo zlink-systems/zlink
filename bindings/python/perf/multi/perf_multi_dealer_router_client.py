@@ -10,6 +10,7 @@ from perf_multi_common import (
     benchmark_run_id,
     configure_multi_tls_client,
     is_active_message,
+    LatencySampler,
     latency_ns_from_message,
     new_payload,
     parse_client_args,
@@ -36,11 +37,10 @@ def main(argv=None):
     waiting_reply = [False] * args.clients
     send_pending = [True] * args.clients
     received = 0
-    latencies = []
+    latency_sampler = LatencySampler()
     seq = 0
 
     with perf_client_context() as ctx:
-        apply_multi_auto_hwm_msg_unit(ctx, args.msg_size)
         sockets = [zlink.create_dealer_socket(ctx) for _ in range(args.clients)]
         try:
             with ExitStack() as stack:
@@ -60,49 +60,39 @@ def main(argv=None):
                         zlink.MonitorEventMask.CONNECTION_READY,
                         timeout_ms=resolve_multi_connect_ready_timeout_ms(),
                     )
+                apply_multi_auto_hwm_msg_unit(ctx, args.msg_size)
 
                 active_deadline = time.perf_counter() + args.duration
                 recv_storage = [zlink.create_received() for _ in sockets]
                 with zlink.create_poller() as poller:
                     poll_events = zlink.create_poll_events(max(1, len(sockets)))
                     for index, sock in enumerate(sockets):
-                        poller.add_socket(
-                            sock,
-                            zlink.PollEventFlag.POLLIN | zlink.PollEventFlag.POLLOUT,
-                            index,
+                        poller.add_socket(sock, zlink.PollEventFlag.POLLIN, index)
+
+                    # Attempt one initial request per socket. A blocked send
+                    # changes only that socket's interest to POLLOUT; a
+                    # successful send waits only for its reply on POLLIN.
+                    for index, current_sock in enumerate(sockets):
+                        next_seq = seq + 1
+                        payload = stamp_payload(
+                            payloads[index],
+                            phase=1,
+                            run_id=run_id,
+                            seq=next_seq,
                         )
-                    # C run_echo_window_round_robin: loop until the steady
-                    # deadline (no stop token). Each iteration sends pending
-                    # sockets, then polls (-1, signal-driven) only the
-                    # sockets with interest and dispatches only ready ones.
-                    while time.perf_counter() < active_deadline:
-                        for index, current_sock in enumerate(sockets):
-                            if waiting_reply[index] or not send_pending[index]:
-                                continue
-                            seq += 1
-                            payload = stamp_payload(
-                                payloads[index],
-                                phase=1,
-                                run_id=run_id,
-                                seq=seq,
+                        if send_nonblocking(current_sock, payload):
+                            seq = next_seq
+                            waiting_reply[index] = True
+                            send_pending[index] = False
+                        else:
+                            poller.modify_socket(
+                                current_sock, zlink.PollEventFlag.POLLOUT
                             )
-                            if send_nonblocking(current_sock, payload):
-                                waiting_reply[index] = True
-                                send_pending[index] = False
 
-                        # Build poll interest per C: POLLIN when awaiting a
-                        # reply, else POLLOUT when a send is pending.
-                        interest = [
-                            i
-                            for i in range(len(sockets))
-                            if waiting_reply[i] or send_pending[i]
-                        ]
-                        if not interest:
-                            for i in range(len(sockets)):
-                                if not waiting_reply[i]:
-                                    send_pending[i] = True
-                            continue
-
+                    # Dispatch only ready sockets. State transitions change
+                    # poll interest, so reply wait does not receive writable
+                    # wakeups and blocked sends resume only on POLLOUT.
+                    while time.perf_counter() < active_deadline:
                         remaining_ms = int((active_deadline - time.perf_counter()) * 1000)
                         if remaining_ms <= 0:
                             break
@@ -120,17 +110,24 @@ def main(argv=None):
                                 and not waiting_reply[index]
                                 and send_pending[index]
                             ):
-                                seq += 1
+                                next_seq = seq + 1
                                 payload = stamp_payload(
                                     payloads[index],
                                     phase=1,
                                     run_id=run_id,
-                                    seq=seq,
+                                    seq=next_seq,
                                 )
                                 if send_nonblocking(current_sock, payload):
+                                    seq = next_seq
                                     waiting_reply[index] = True
                                     send_pending[index] = False
-                            if not (ev & int(zlink.PollEventFlag.POLLIN)):
+                                    poller.modify_socket(
+                                        current_sock, zlink.PollEventFlag.POLLIN
+                                    )
+                            if not (
+                                ev & int(zlink.PollEventFlag.POLLIN)
+                                and waiting_reply[index]
+                            ):
                                 continue
                             while True:
                                 msg = recv_nonblocking(
@@ -153,10 +150,28 @@ def main(argv=None):
                                     ):
                                         received += 1
                                         if header is not None:
-                                            latencies.append(header / 2.0)
+                                            latency_sampler.add(header / 2.0)
                                 waiting_reply[index] = False
                                 if time.perf_counter() < active_deadline:
                                     send_pending[index] = True
+                                    next_seq = seq + 1
+                                    payload = stamp_payload(
+                                        payloads[index],
+                                        phase=1,
+                                        run_id=run_id,
+                                        seq=next_seq,
+                                    )
+                                    if send_nonblocking(current_sock, payload):
+                                        seq = next_seq
+                                        waiting_reply[index] = True
+                                        send_pending[index] = False
+                                    else:
+                                        poller.modify_socket(
+                                            current_sock,
+                                            zlink.PollEventFlag.POLLOUT,
+                                        )
+                                if waiting_reply[index]:
+                                    break
                 if received == 0:
                     raise RuntimeError(
                         "multi dealer-router benchmark did not receive any active reply"
@@ -165,11 +180,14 @@ def main(argv=None):
                     count=received,
                     msg_size=args.msg_size,
                     elapsed_s=args.duration,
-                    latencies_ns=latencies,
+                    latency_sampler=latency_sampler,
                     bandwidth_multiplier=2.0,
                 )
                 print_result_lines(
-                    "MULTI_DEALER_ROUTER", args.transport, args.msg_size, metrics
+                    "MULTI_DEALER_ROUTER_SENDSEND",
+                    args.transport,
+                    args.msg_size,
+                    metrics,
                 )
         finally:
             for sock in sockets:

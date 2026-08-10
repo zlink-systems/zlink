@@ -185,10 +185,8 @@ bool run_recv_duration (const std::vector<void *> &sockets,
 
             void *socket = events[i].socket;
             while (socket) {
-                // Do not drain an unbounded backlog after the active window.
-                // The stop token can be queued behind millions of large
-                // PUB/SUB messages, so the active deadline is the lifecycle
-                // boundary for this phase.
+                // PUB/SUB does not guarantee delivery of a token accepted by
+                // the publisher, so the active deadline also bounds shutdown.
                 if (std::chrono::steady_clock::now () >= active_deadline) {
                     phase_done = true;
                     break;

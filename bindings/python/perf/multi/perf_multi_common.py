@@ -16,8 +16,10 @@ from perf_stop_token import (
 )
 
 from perf_metrics import (
+    active_message_latency_ns,
     HEADER_MAGIC,
     HEADER_SIZE,
+    LatencySampler,
     benchmark_run_id,
     build_report_path,
     configure_tls_client,
@@ -225,6 +227,7 @@ def apply_multi_auto_hwm_msg_unit(ctx, msg_size):
     if msg_size <= 0:
         return
     ctx.options.auto_hwm_msg_unit_bytes = msg_size
+    ctx.recalculate_auto_hwm()
 
 
 

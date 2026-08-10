@@ -5,19 +5,18 @@ import time
 import zlink
 
 from perf_multi_common import (
+    STOP_TOKEN,
+    active_message_latency_ns,
     apply_multi_auto_hwm_msg_unit,
     apply_multi_socket_options,
     benchmark_endpoint,
     benchmark_run_id,
     configure_multi_tls_server,
-    is_active_message,
-    latency_ns_from_message,
+    LatencySampler,
     print_result_lines,
     recv_nonblocking,
     parse_server_args,
     perf_server_context,
-    received_has_stop_token,
-    received_metric_payload,
     result_metrics,
     safe_poll,
 )
@@ -44,12 +43,12 @@ def main(argv=None):
     threading.Thread(target=read_commands, daemon=True).start()
 
     with perf_server_context() as ctx:
-        apply_multi_auto_hwm_msg_unit(ctx, args.msg_size)
         with zlink.create_dealer_socket(ctx) as dealer:
             configure_multi_tls_server(dealer, args.transport)
             apply_multi_socket_options(dealer)
             with dealer.monitor_open(zlink.MonitorEventMask.CONNECTION_READY) as monitor:
                 dealer.bind(endpoint)
+                apply_multi_auto_hwm_msg_unit(ctx, args.msg_size)
                 print(f"READY,{endpoint}", flush=True)
                 with zlink.create_poller() as poller:
                     poller.add_socket(dealer, zlink.PollEventFlag.POLLIN, 0)
@@ -58,7 +57,7 @@ def main(argv=None):
                     if stop_event.is_set():
                         return
                     active_deadline = time.perf_counter() + active_duration_s
-                    latencies = []
+                    latency_sampler = LatencySampler()
                     count = 0
                     recv_storage = zlink.create_received()
 
@@ -72,19 +71,21 @@ def main(argv=None):
                             if msg is None:
                                 return
                             with msg:
-                                if received_has_stop_token(msg):
+                                if not msg.parts:
                                     continue
-                                data = received_metric_payload(msg)
-                                if not is_active_message(
+                                data = msg.parts[-1].data
+                                if len(data) == len(STOP_TOKEN) and data == STOP_TOKEN:
+                                    continue
+                                active, latency = active_message_latency_ns(
                                     data,
                                     expected_msg_size=args.msg_size,
                                     run_id=run_id,
-                                ):
+                                )
+                                if not active:
                                     continue
                                 count += 1
-                                latency = latency_ns_from_message(data)
                                 if latency is not None:
-                                    latencies.append(latency)
+                                    latency_sampler.add(latency)
 
                     while not stop_event.is_set():
                         remaining_ms = int(
@@ -128,7 +129,7 @@ def main(argv=None):
                         count=count,
                         msg_size=args.msg_size,
                         elapsed_s=args.duration,
-                        latencies_ns=latencies,
+                        latency_sampler=latency_sampler,
                     )
                     print_result_lines(
                         "MULTI_DEALER_DEALER",

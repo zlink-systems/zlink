@@ -82,8 +82,8 @@ the current C multi baseline resource profile.
 Patterns:
 
 - `MULTI_DEALER_DEALER`
-- `MULTI_DEALER_ROUTER`
-- `MULTI_ROUTER_ROUTER`
+- `MULTI_DEALER_ROUTER_SENDSEND` (`MULTI_DEALER_ROUTER` input alias)
+- `MULTI_ROUTER_ROUTER_SENDSEND` (`MULTI_ROUTER_ROUTER` input alias)
 - `MULTI_PUBSUB`
 - `MULTI_STREAM`
 

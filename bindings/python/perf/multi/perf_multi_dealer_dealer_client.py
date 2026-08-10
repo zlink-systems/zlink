@@ -38,7 +38,6 @@ def main(argv=None):
     seq = 0
 
     with perf_client_context() as ctx:
-        apply_multi_auto_hwm_msg_unit(ctx, args.msg_size)
         sockets = [zlink.create_dealer_socket(ctx) for _ in range(args.clients)]
         try:
             with ExitStack() as stack:
@@ -57,6 +56,7 @@ def main(argv=None):
                         zlink.MonitorEventMask.CONNECTION_READY,
                         timeout_ms=resolve_multi_connect_ready_timeout_ms(),
                     )
+                apply_multi_auto_hwm_msg_unit(ctx, args.msg_size)
                 print(f"CLIENT_READY,{args.msg_size}", flush=True)
                 command = sys.stdin.readline().strip()
                 if command != f"START,{args.msg_size}":

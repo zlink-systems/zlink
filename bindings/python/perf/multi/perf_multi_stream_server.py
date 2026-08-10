@@ -35,12 +35,12 @@ def main(argv=None):
     threading.Thread(target=wait_stop, daemon=True).start()
 
     with perf_server_context() as ctx:
-        apply_multi_auto_hwm_msg_unit(ctx, args.msg_size)
         with zlink.create_stream_socket(ctx) as server:
             configure_multi_tls_server(server, args.transport)
             apply_multi_socket_options(server)
             server.options.tcp_no_delay = True
             server.bind(endpoint)
+            apply_multi_auto_hwm_msg_unit(ctx, args.msg_size)
             print(f"READY,{endpoint}", flush=True)
 
             def packet_handler(routing_id, header, body):
@@ -48,6 +48,10 @@ def main(argv=None):
                 # callback: the installed packet handler is the measured
                 # POLLIN drain surface; queue the framed echo for POLLOUT
                 # backpressure draining.
+                body_view = body.data
+                if len(body_view) == len(STOP_TOKEN) and body_view == STOP_TOKEN:
+                    stop.set()
+                    return
                 frame = build_packet_frame(header, body)
                 with pending_lock:
                     pending.append((bytes(routing_id), frame))

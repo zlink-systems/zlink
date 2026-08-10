@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from perf_multi_common import (
     HEADER_SIZE,
+    LatencySampler,
     benchmark_run_id,
     is_active_message,
     latency_ns_from_message,
@@ -260,7 +261,7 @@ def main(argv=None):
     recv_timeout_s = resolve_multi_recv_timeout_ms() / 1000.0
     selector = selectors.DefaultSelector()
     states = []
-    latencies = []
+    latency_sampler = LatencySampler()
     seq = 0
 
     try:
@@ -320,7 +321,7 @@ def main(argv=None):
                         continue
                     latency = latency_ns_from_message(body)
                     if latency is not None:
-                        latencies.append(latency / 2.0)
+                        latency_sampler.add(latency / 2.0)
 
     for key in list(selector.get_map().values()):
         selector.unregister(key.fileobj)
@@ -328,13 +329,13 @@ def main(argv=None):
     for state in states:
         state.sock.close()
 
-    if not latencies:
+    if latency_sampler.count == 0:
         raise RuntimeError("multi stream benchmark did not receive any active reply")
     metrics = result_metrics(
-        count=len(latencies),
+        count=latency_sampler.count,
         msg_size=args.msg_size,
         elapsed_s=args.duration,
-        latencies_ns=latencies,
+        latency_sampler=latency_sampler,
         bandwidth_multiplier=2.0,
     )
     print_result_lines("MULTI_STREAM", args.transport, args.msg_size, metrics)

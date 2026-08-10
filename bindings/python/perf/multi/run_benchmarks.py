@@ -150,7 +150,19 @@ def _normalize_pattern(value):
         pattern = pattern[6:]
     if pattern == "STREAMS":
         pattern = "STREAM"
+    if pattern == "DEALER_ROUTER_SENDSEND":
+        pattern = "DEALER_ROUTER"
+    if pattern == "ROUTER_ROUTER_SENDSEND":
+        pattern = "ROUTER_ROUTER"
     return pattern
+
+
+def _result_pattern(pattern):
+    if pattern == "DEALER_ROUTER":
+        return "MULTI_DEALER_ROUTER_SENDSEND"
+    if pattern == "ROUTER_ROUTER":
+        return "MULTI_ROUTER_ROUTER_SENDSEND"
+    return f"MULTI_{pattern}"
 
 
 def _parse_patterns(value):
@@ -377,16 +389,6 @@ def _memory_max_clients():
     return max(1, (usable_kb - base_kb) // per_client_kb)
 
 
-def _cap_default_clients_for_memory(clients, explicit_clients):
-    if explicit_clients:
-        return clients
-    parsed = _uint(clients)
-    max_clients = _memory_max_clients()
-    if parsed is None or max_clients is None:
-        return clients
-    return str(min(parsed, max_clients))
-
-
 def _resource_guard_skip(pattern, transport, msg_size, clients):
     parsed = _uint(clients)
     if parsed is None:
@@ -406,13 +408,13 @@ def _resource_guard_skip(pattern, transport, msg_size, clients):
                     except (OSError, ValueError):
                         pass
             if soft != resource.RLIM_INFINITY and soft < required:
-                return f"SKIP,current,MULTI_{pattern},{transport},nofile_guard:clients={clients},required={required},soft={soft},hard={hard}"
+                return f"SKIP,current,{_result_pattern(pattern)},{transport},nofile_guard:clients={clients},required={required},soft={soft},hard={hard}"
         except (ImportError, OSError, ValueError):
             pass
     if os.environ.get("PERF_SKIP_MEMORY_CHECK") != "1":
         max_clients = _memory_max_clients()
         if max_clients is not None and parsed > max_clients:
-            return f"SKIP,current,MULTI_{pattern},{transport},memory_guard:clients={clients},max_clients={max_clients}"
+            return f"SKIP,current,{_result_pattern(pattern)},{transport},memory_guard:clients={clients},max_clients={max_clients}"
     return None
 
 
@@ -493,11 +495,11 @@ def _failure_reason(output):
 
 def _result_metrics_for_case(output, pattern, transport, msg_size):
     grouped = rows_by_case(parse_result_lines(output, warn=_warn_runner), warn=_warn_runner)
-    return grouped.get((f"MULTI_{pattern}", transport, str(msg_size)), {})
+    return grouped.get((_result_pattern(pattern), transport, str(msg_size)), {})
 
 
 def _metric_row(pattern, msg_size, metrics, *, indent="      "):
-    unit = throughput_unit(f"MULTI_{pattern}")
+    unit = throughput_unit(_result_pattern(pattern))
     throughput = f"{float(metrics.get('throughput', 0.0)) / 1000.0:8.3f} {unit}"
     return (
         f"{indent}| {str(msg_size) + 'B':<8} | "
@@ -512,7 +514,9 @@ def _metric_row(pattern, msg_size, metrics, *, indent="      "):
 def pattern_direction(pattern):
     return "echo" if pattern in {
         "MULTI_DEALER_ROUTER",
+        "MULTI_DEALER_ROUTER_SENDSEND",
         "MULTI_ROUTER_ROUTER",
+        "MULTI_ROUTER_ROUTER_SENDSEND",
         "MULTI_STREAM",
     } else "one-way"
 
@@ -666,9 +670,9 @@ def _terminate_process(proc, *, grace_seconds):
 
 def _run_pattern(args, env, pattern, transport, msg_size, clients):
     if transport == "ipc" and sys.platform.startswith("win"):
-        return f"SKIP,current,MULTI_{pattern},{transport},windows_ipc_unsupported"
+        return f"SKIP,current,{_result_pattern(pattern)},{transport},windows_ipc_unsupported"
     if transport not in RUNNABLE_TRANSPORTS.get(pattern, ()):
-        return f"UNSUPPORTED,current,MULTI_{pattern},{transport}"
+        return f"UNSUPPORTED,current,{_result_pattern(pattern)},{transport}"
     server_path = ROOT / f"perf_multi_{pattern.lower()}_server.py"
     client_path = ROOT / f"perf_multi_{pattern.lower()}_client.py"
     if not server_path.exists() or not client_path.exists():
@@ -740,7 +744,7 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
             server_stderr = server.stderr.read().strip() if server.stderr else ""
             combined = "\n".join(chunk for chunk in [server_stderr, ready] if chunk)
             if _is_unsupported_output(combined):
-                return f"UNSUPPORTED,current,MULTI_{pattern},{transport}"
+                return f"UNSUPPORTED,current,{_result_pattern(pattern)},{transport}"
             raise SystemExit(f"server did not become ready: {combined}")
         endpoint = ready.split(",", 1)[1]
         if pattern == "STREAM":
@@ -899,7 +903,7 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
             stderr_chunks.append(_coerce_text(exc.stderr).strip())
         output = "\n".join(chunk for chunk in stderr_chunks + stdout_chunks if chunk)
         if _is_unsupported_output(output):
-            return f"UNSUPPORTED,current,MULTI_{pattern},{transport}"
+            return f"UNSUPPORTED,current,{_result_pattern(pattern)},{transport}"
         raise SystemExit(output)
     except subprocess.TimeoutExpired as exc:
         if exc.stdout:
@@ -912,7 +916,7 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
             if chunk
         )
         if _is_unsupported_output(output):
-            return f"UNSUPPORTED,current,MULTI_{pattern},{transport}"
+            return f"UNSUPPORTED,current,{_result_pattern(pattern)},{transport}"
         raise SystemExit(output)
     finally:
         if client is not None and hasattr(client, "poll") and client.poll() is None:
@@ -925,7 +929,7 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
     if stderr_chunks:
         stderr_text = "\n".join(chunk for chunk in stderr_chunks if chunk)
         if _is_unsupported_output(stderr_text):
-            return f"UNSUPPORTED,current,MULTI_{pattern},{transport}"
+            return f"UNSUPPORTED,current,{_result_pattern(pattern)},{transport}"
     return "\n".join(chunk for chunk in stdout_chunks if chunk)
 
 
@@ -945,7 +949,7 @@ def _build_options(args, patterns, transports, requested_msg_sizes, clients, env
         "lang": "python",
         "suite": "multi",
         "runs": args.runs,
-        "patterns": ",".join(f"MULTI_{pattern}" for pattern in patterns),
+        "patterns": ",".join(_result_pattern(pattern) for pattern in patterns),
         "transports": _grouped_option_text(
             patterns,
             lambda pattern: _transports_for_pattern(pattern, transports),
@@ -1118,20 +1122,16 @@ def main(argv=None):
         _append_line(sections, line)
     _append_line(sections)
     _append_line(sections, render_effective_options(options))
-    explicit_clients = args.clients is not None or bool(
-        os.environ.get("PERF_MULTI_CLIENTS") or os.environ.get("PERF_CLIENTS")
-    )
     for pattern_index, pattern in enumerate(patterns):
         if stop_early:
             break
-        pattern_clients = _cap_default_clients_for_memory(
-            _clients_for_pattern(pattern, args.clients), explicit_clients
-        )
+        pattern_clients = _clients_for_pattern(pattern, args.clients)
         if pattern_index > 0:
             _append_line(sections, "===============================================================================")
             _append_line(sections)
-        _append_line(sections, f"## PATTERN: MULTI_{pattern} ({pattern_direction('MULTI_' + pattern)})")
-        _append_line(sections, f"  > Benchmarking current for MULTI_{pattern}...")
+        result_pattern = _result_pattern(pattern)
+        _append_line(sections, f"## PATTERN: {result_pattern} ({pattern_direction(result_pattern)})")
+        _append_line(sections, f"  > Benchmarking current for {result_pattern}...")
         pattern_transports = _transports_for_pattern(pattern, transports)
         pattern_msg_sizes = _msg_sizes_for_pattern(pattern, requested_msg_sizes)
         for transport_index, transport in enumerate(pattern_transports):
@@ -1197,7 +1197,7 @@ def main(argv=None):
                         transport_all_unsupported = False
                         if status_kind == "fail":
                             failures.append(
-                                f"- MULTI_{pattern} current {transport} {msg_size}B: {_failure_reason(output)}"
+                                f"- {result_pattern} current {transport} {msg_size}B: {_failure_reason(output)}"
                             )
                         _append_line(sections, _status_row(msg_size, "FAIL"))
                     if stop_early:
@@ -1266,7 +1266,7 @@ def main(argv=None):
                             transport_all_unsupported = False
                             if status_kind == "fail":
                                 failures.append(
-                                    f"- MULTI_{pattern} current {transport} {msg_size}B: {_failure_reason(output)}"
+                                    f"- {result_pattern} current {transport} {msg_size}B: {_failure_reason(output)}"
                                 )
                             _append_line(
                                 sections,

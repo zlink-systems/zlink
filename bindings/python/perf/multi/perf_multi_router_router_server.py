@@ -33,12 +33,12 @@ def main(argv=None):
     threading.Thread(target=wait_stop, daemon=True).start()
 
     with perf_server_context() as ctx:
-        apply_multi_auto_hwm_msg_unit(ctx, args.msg_size)
         with zlink.create_router_socket(ctx) as router:
             router.set_routing_id(b"SERVER")
             configure_multi_tls_server(router, args.transport)
             apply_multi_socket_options(router)
             router.bind(endpoint)
+            apply_multi_auto_hwm_msg_unit(ctx, args.msg_size)
             print(f"READY,{endpoint}", flush=True)
             with zlink.create_poller() as poller:
                 poller.add_socket(

@@ -131,6 +131,7 @@ active deadline을 다시 확인하기 위한 상한이다.
 |------|------|
 | wire stop token으로 종료되는 recv/readiness loop | **`-1`** (signal-driven wait) |
 | active duration/request timeout을 직접 닫는 sender/requester loop | C 기준 bounded wait. MeshNode Spot 계열은 nonblocking ready/claim drain 뒤 deadline을 다시 확인 |
+| `MULTI_PUBSUB` receiver | `min(100ms, remaining)` bounded wait. PUB submit 성공은 subscriber 전달을 보장하지 않으므로 active deadline이 필수 종료 조건이다 |
 | 짧은 timer tick 기반 fallback (1–25 ms) | 금지. 과거 wakeup 누락 우회용으로 사용됐으나 core fix 이후 사용 금지. 단, C 기준 코드가 같은 위치에서 `perf_socket_poll(NULL, 0, N)`을 쓰는 idle wait는 `PERF_POLICY.md`의 empty-poll 예외를 따른다 |
 | 종료 / cooldown 용 별도 deadline 검사 | 별도 application clock 으로 처리하고 poller timeout 으로 대체하지 않음 |
 
@@ -167,16 +168,18 @@ receiver 는 `-1` poller wait 으로 대기하다가 메시지를 받으면 먼�
 token인지 검사한다. active 집계 구간은 pattern별 application clock 으로
 닫으며, stop token은 `-1` wait 을 깨우고 phase 종료를 알리는 wire-level
 신호다.
-`MULTI_PUBSUB`도 같은 규칙을 따른다. active payload와 같은 topic 위로
-stop token을 blocking publish 하며, client는 payload header를 해석하기 전에
-stop token을 먼저 검사한다. PUBSUB의 active 집계는 여전히 configured
-duration 안의 `phase_active` payload만 포함한다.
+`MULTI_PUBSUB` sender도 active payload와 같은 topic 위로 stop token을 blocking
+publish하고, client는 payload header를 해석하기 전에 stop token을 먼저 검사한다.
+다만 PUB submit 성공은 각 subscriber의 token 수신을 보장하지 않는다. 따라서
+PUBSUB client는 stop token을 종료 필수조건으로 사용하지 않고 monotonic active
+deadline에서 종료한다. poller wait는 남은 시간과 100ms 중 작은 값으로 제한한다.
+active 집계는 configured duration 안의 `phase_active` payload만 포함한다.
 
 | 항목 | 규칙 |
 |------|------|
 | stop token literal | `__zlink_perf_stop__` (multi/single 공통, `k_stop_token`) |
 | sender 측 | active phase 종료 후 stop token blocking send/publish (deadline 무시). raw one-way는 필요한 socket마다 송신한다 |
-| receiver 측 | `-1` poller wait → recv → `is_stop_token(...)` 먼저 검사 → pattern별 phase 종료 처리 |
+| receiver 측 | 원칙은 `-1` poller wait → recv → `is_stop_token(...)` 먼저 검사 → pattern별 phase 종료 처리. `MULTI_PUBSUB`은 위 bounded-wait 예외를 적용한다 |
 | atomic flag + 짧은 polling 패턴 | **금지**. 동일 process 내 thread 간 종료 동기화도 wire stop token 으로 통일 |
 
 이 패턴의 장점:

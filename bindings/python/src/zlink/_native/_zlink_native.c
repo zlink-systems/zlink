@@ -28,6 +28,7 @@ typedef struct prepared_parts_t
 typedef struct received_parts_t
 {
     zlink_msg_t *parts;
+    zlink_msg_t inline_part;
     Py_ssize_t count;
     Py_ssize_t capacity;
 } received_parts_t;
@@ -73,6 +74,7 @@ typedef struct bytes_parts_owner_t
 typedef struct native_parts_owner_t
 {
     PyObject_HEAD zlink_msg_t *parts;
+    zlink_msg_t inline_part;
     char *open_parts;
     char inline_open_part;
     Py_ssize_t part_count;
@@ -329,7 +331,8 @@ static void native_parts_owner_close_all (native_parts_owner_t *owner)
                 owner->open_parts[i] = 0;
             }
         }
-        free (owner->parts);
+        if (owner->parts != &owner->inline_part)
+            free (owner->parts);
         owner->parts = NULL;
     }
 }
@@ -439,7 +442,8 @@ static PyObject *native_parts_owner_close_part (native_parts_owner_t *owner, PyO
         }
     }
     if (!any_open) {
-        free (owner->parts);
+        if (owner->parts != &owner->inline_part)
+            free (owner->parts);
         owner->parts = NULL;
         owner->closed = 1;
     }
@@ -483,15 +487,17 @@ static PyObject *build_native_parts_owner (received_parts_t *received)
     owner = PyObject_New (native_parts_owner_t, &native_parts_owner_type);
     if (!owner)
         return NULL;
-    owner->parts = received->parts;
     owner->part_count = received->count;
     owner->closed = 0;
     owner->open_parts = NULL;
     owner->inline_open_part = 0;
     if (received->count == 1) {
+        owner->inline_part = received->parts[0];
+        owner->parts = &owner->inline_part;
         owner->inline_open_part = 1;
         owner->open_parts = &owner->inline_open_part;
     } else {
+        owner->parts = received->parts;
         owner->open_parts = PyMem_Calloc ((size_t) received->count, sizeof (char));
         if (!owner->open_parts) {
             owner->parts = NULL;
@@ -1128,7 +1134,8 @@ static void close_received_parts (received_parts_t *received)
         return;
     for (Py_ssize_t i = 0; i < received->count; ++i)
         zlink_msg_close (&received->parts[i]);
-    free (received->parts);
+    if (received->parts != &received->inline_part)
+        free (received->parts);
     received->parts = NULL;
     received->count = 0;
     received->capacity = 0;
@@ -1136,10 +1143,21 @@ static void close_received_parts (received_parts_t *received)
 
 static int append_received_part (received_parts_t *received, zlink_msg_t *part)
 {
+    if (received->capacity == 0) {
+        received->parts = &received->inline_part;
+        received->capacity = 1;
+    }
     if (received->count == received->capacity) {
-        Py_ssize_t next_capacity = received->capacity == 0 ? 4 : received->capacity * 2;
-        zlink_msg_t *next =
-          realloc (received->parts, (size_t) next_capacity * sizeof (zlink_msg_t));
+        Py_ssize_t next_capacity = received->capacity < 4 ? 4 : received->capacity * 2;
+        zlink_msg_t *next = NULL;
+        if (received->parts == &received->inline_part) {
+            next = malloc ((size_t) next_capacity * sizeof (zlink_msg_t));
+            if (next)
+                next[0] = received->inline_part;
+        } else {
+            next = realloc (received->parts,
+                            (size_t) next_capacity * sizeof (zlink_msg_t));
+        }
         if (!next)
             return -1;
         received->parts = next;

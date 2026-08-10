@@ -1270,8 +1270,8 @@ transport 상태를 판정한다.
 
 - perf 경로: `bindings/python/perf`
 - Single 상태: `완료 (통과 25, 보류 5)`
-- Multi 상태: `미측정`
-- 다음 작업: Multi transport·pattern을 C와 순차 paired 측정한다.
+- Multi 상태: `진행 (통과 1, 미측정 19)`
+- 다음 작업: `MULTI_DEALER_ROUTER_SENDSEND / tcp`를 C와 순차 paired 측정한다.
 
 #### 9.7.1 Single suite
 
@@ -1312,7 +1312,7 @@ transport 상태를 판정한다.
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 미달 (11.960%) | 미달 (22.615%) | 미달 (29.667%) | 통과 (50.527%) | 통과 (68.204%) | 통과 (74.394%) | throughput 산술평균 42.894%로 단순 one-way 최소 기준 35%를 통과하고 평균 latency ratio 중앙값은 3.396x로 5.0x 상한을 통과한다. server의 payload snapshot·header decode를 한 번으로 합친 자체 개선 후 36.944%, Sol이 제안한 single-part receive owner inline storage 적용 후 42.894%로 개선했다. public interface·caller-owned `Received`·snapshot lifetime·multipart ownership·error 의미는 변경하지 않았다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_021025_python-multi-dealer-dealer-tcp-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/multi/report/perf_python_multi_linux_20260811_021645_python-multi-dealer-dealer-tcp-sol-inline-owner.txt` |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1568,7 +1568,7 @@ transport 상태를 판정한다.
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 5 | Go | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 6 | Rust | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
-| 7 | Python | 진행·5개 tcp·5개 ws·5개 wss·5개 tls pattern 통과 | 미측정 | 다음 transport·pattern의 paired 측정을 진행한다. |
+| 7 | Python | 완료·통과 25 / 보류 5 | 진행·통과 1 / 미측정 19 | `MULTI_DEALER_ROUTER_SENDSEND / tcp` paired 측정과 개선 검토를 진행한다. |
 
 ## 11. 측정 기록과 결과
 
@@ -1576,6 +1576,7 @@ transport 상태를 판정한다.
 
 | 날짜 | 언어 | 대상 | pair tag | size별 throughput ratio | size 중앙값 | 판정 | report |
 |------|------|------|----------|-------------------------|------------|------|--------|
+| 2026-08-11 | Python | Multi / MULTI_DEALER_DEALER / tcp / 64·256·1024·4096·65536·131072B | `python-multi-dealer-dealer-tcp-sol-inline-owner` | 11.960%, 22.615%, 29.667%, 50.527%, 68.204%, 74.394% | 42.894% (산술평균), latency 3.396x (중앙값) | 통과·자체 decode-once 개선과 Sol single-part receive owner inline storage 적용 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_021025_python-multi-dealer-dealer-tcp-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/multi/report/perf_python_multi_linux_20260811_021645_python-multi-dealer-dealer-tcp-sol-inline-owner.txt` |
 | 2026-08-11 | Python | Single / ROUTER_ROUTER / tls / 64·256·1024·65536·131072·262144B | `python-router-router-tls-current` | 6.798%, 14.518%, 45.411%, 89.530%, 77.828%, 71.894% | 50.996% (산술평균), latency 0.790x | 통과·shared routed send와 router receive owner 개선 유지·Sol GO | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_014128_python-router-router-tls-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_014145_python-router-router-tls-current.txt` |
 | 2026-08-11 | Python | Single / DEALER_ROUTER / tls / 64·256·1024·65536·131072·262144B | `python-dealer-router-tls-current` | 7.407%, 14.933%, 47.113%, 86.694%, 77.591%, 73.245% | 51.164% (산술평균), latency 0.738x | 통과·shared native send와 router receive owner 개선 유지·Sol GO | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_014105_python-dealer-router-tls-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_014122_python-dealer-router-tls-current.txt` |
 | 2026-08-11 | Python | Single / DEALER_DEALER / tls / 64·256·1024·65536·131072·262144B | `python-dealer-dealer-tls-current` | 8.666%, 16.343%, 49.406%, 93.973%, 81.678%, 76.292% | 54.393% (산술평균), latency 0.707x | 통과·shared native send builder 개선 유지·Sol GO | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_014042_python-dealer-dealer-tls-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_014100_python-dealer-dealer-tls-current.txt` |

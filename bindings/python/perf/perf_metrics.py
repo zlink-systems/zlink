@@ -111,6 +111,25 @@ def is_active_message(data, *, expected_msg_size=None, run_id=None):
     return True
 
 
+def active_message_latency_ns(data, *, expected_msg_size=None, run_id=None):
+    """Validate one active metric header and compute its one-way latency once."""
+    if len(data) < HEADER_SIZE:
+        return False, None
+    magic, header_run_id, phase, msg_size, _seq, sent_ts_ns = struct.unpack_from(
+        HEADER_FORMAT, data, 0
+    )
+    if magic != HEADER_MAGIC or phase != 1:
+        return False, None
+    if expected_msg_size is not None and msg_size != expected_msg_size:
+        return False, None
+    if run_id is not None and header_run_id != run_id:
+        return False, None
+    now_ns = time.time_ns()
+    if sent_ts_ns <= 0 or now_ns < sent_ts_ns:
+        return True, None
+    return True, float(now_ns - sent_ts_ns)
+
+
 def payload_phase(data):
     header = decode_header(data)
     if header is None:
@@ -147,12 +166,62 @@ def percentile(values, ratio):
     return float(ordered[index])
 
 
+def interpolated_percentile(values, ratio):
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if ratio <= 0.0:
+        return float(ordered[0])
+    if ratio >= 1.0:
+        return float(ordered[-1])
+    position = (len(ordered) - 1) * ratio
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    fraction = position - lower
+    return float(ordered[lower] + (ordered[upper] - ordered[lower]) * fraction)
+
+
+class LatencySampler:
+    """Keep an exact mean and a bounded reservoir for percentiles."""
+
+    __slots__ = ("count", "sum_ns", "samples", "_sample_cap", "_seen", "_rng")
+
+    def __init__(self, sample_cap=None):
+        self.count = 0
+        self.sum_ns = 0.0
+        self.samples = []
+        self._sample_cap = max(
+            0,
+            _env_int("PERF_MULTI_LATENCY_SAMPLE_CAP", 65536)
+            if sample_cap is None
+            else int(sample_cap),
+        )
+        self._seen = 0
+        self._rng = 0xA341316C
+
+    def add(self, latency_ns):
+        sample = max(0.0, float(latency_ns))
+        self.count += 1
+        self.sum_ns += sample
+        self._seen += 1
+        if self._sample_cap == 0:
+            return
+        if len(self.samples) < self._sample_cap:
+            self.samples.append(sample)
+            return
+        self._rng = (self._rng * 1664525 + 1013904223) & 0xFFFFFFFF
+        slot = self._rng % self._seen
+        if slot < self._sample_cap:
+            self.samples[slot] = sample
+
+
 def result_metrics(
     *,
     count,
     msg_size,
     elapsed_s,
-    latencies_ns,
+    latencies_ns=None,
+    latency_sampler=None,
     bandwidth_multiplier=1.0,
 ):
     throughput = (count / elapsed_s) if elapsed_s > 0 else 0.0
@@ -161,13 +230,34 @@ def result_metrics(
         if elapsed_s > 0
         else 0.0
     )
-    mean = (sum(latencies_ns) / len(latencies_ns)) if latencies_ns else 0.0
+    if latency_sampler is not None:
+        latency_values = latency_sampler.samples
+        mean = (
+            latency_sampler.sum_ns / latency_sampler.count
+            if latency_sampler.count
+            else 0.0
+        )
+        p95 = (
+            interpolated_percentile(latency_values, 0.95)
+            if latency_values
+            else mean
+        )
+        p99 = (
+            interpolated_percentile(latency_values, 0.99)
+            if latency_values
+            else mean
+        )
+    else:
+        latency_values = latencies_ns or ()
+        mean = (sum(latency_values) / len(latency_values)) if latency_values else 0.0
+        p95 = percentile(latency_values, 0.95)
+        p99 = percentile(latency_values, 0.99)
     return {
         "throughput": throughput,
         "bandwidth": bandwidth,
         "latency": float(mean) / 1_000_000.0,
-        "latency_p95": percentile(latencies_ns, 0.95) / 1_000_000.0,
-        "latency_p99": percentile(latencies_ns, 0.99) / 1_000_000.0,
+        "latency_p95": p95 / 1_000_000.0,
+        "latency_p99": p99 / 1_000_000.0,
     }
 
 
@@ -422,7 +512,9 @@ def rows_by_case(rows, *, warn=None):
 def pattern_direction_label(pattern):
     if pattern in {
         "MULTI_DEALER_ROUTER",
+        "MULTI_DEALER_ROUTER_SENDSEND",
         "MULTI_ROUTER_ROUTER",
+        "MULTI_ROUTER_ROUTER_SENDSEND",
         "MULTI_STREAM",
     }:
         return "echo"

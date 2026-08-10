@@ -46,11 +46,11 @@ def main(argv=None):
     threading.Thread(target=read_commands, daemon=True).start()
 
     with perf_server_context() as ctx:
-        apply_multi_auto_hwm_msg_unit(ctx, args.msg_size)
         with zlink.create_pub_socket(ctx) as publisher:
             configure_multi_tls_server(publisher, args.transport)
             apply_multi_socket_options(publisher)
             publisher.bind(endpoint)
+            apply_multi_auto_hwm_msg_unit(ctx, args.msg_size)
             print(f"READY,{endpoint}", flush=True)
             # Start gate (single blocking wait, not a polling cadence).
             start_event.wait()

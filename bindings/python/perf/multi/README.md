@@ -23,16 +23,16 @@ server and client processes without introducing a second benchmark contract.
 Canonical multi patterns are:
 
 - `DEALER_DEALER`
-- `DEALER_ROUTER`
-- `ROUTER_ROUTER`
+- `DEALER_ROUTER_SENDSEND` (`DEALER_ROUTER` compatibility alias)
+- `ROUTER_ROUTER_SENDSEND` (`ROUTER_ROUTER` compatibility alias)
 - `PUBSUB`
 - `STREAM`
 
 Result line names emitted by the suite are:
 
 - `MULTI_DEALER_DEALER`
-- `MULTI_DEALER_ROUTER`
-- `MULTI_ROUTER_ROUTER`
+- `MULTI_DEALER_ROUTER_SENDSEND`
+- `MULTI_ROUTER_ROUTER_SENDSEND`
 - `MULTI_PUBSUB`
 - `MULTI_STREAM`
 
