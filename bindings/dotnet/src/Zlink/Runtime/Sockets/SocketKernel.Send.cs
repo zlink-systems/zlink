@@ -97,6 +97,7 @@ internal sealed partial class SocketKernel : IDisposable
         SendRoutedMessageUnchecked(routingId, message, flags);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void SendRoutedMessageUnchecked(RoutingId routingId,
         Message message, SendFlags flags = SendFlags.None)
     {
