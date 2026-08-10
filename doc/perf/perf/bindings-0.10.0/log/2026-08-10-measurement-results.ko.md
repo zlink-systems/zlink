@@ -245,3 +245,14 @@ throughput ratio는 `69.59% / 83.52% / 97.04% / 93.95% / 95.11% / 91.45%`, 산�
 throughput ratio는 `70.60% / 84.93% / 97.86% / 93.69% / 95.87% / 92.32%`, 산술평균은
 `89.21%`다. latency ratio는 `1.024x / 0.907x / 1.227x / 1.070x / 0.783x / 1.097x`,
 산술평균은 `1.018x`다. .NET routed one-way aggregate 기준을 충족해 통과로 판정한다.
+
+### .NET Single DEALER_ROUTER_REQREP/wss
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 206395 / 156387 / 78725 / 4613 / 2796 / 1562 | 0.249 / 0.364 / 0.795 / 2.600 / 2.144 / 1.918 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_155235_dealer-router-reqrep-wss-paired-c1.txt` |
+| .NET | 127036 / 115325 / 65381 / 4313 / 2487 / 1517 | 0.312 / 0.388 / 0.892 / 2.747 / 2.377 / 1.950 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_155250_dealer-router-reqrep-wss-paired-final.txt` |
+
+throughput ratio는 `61.55% / 73.74% / 83.05% / 93.50% / 88.95% / 97.12%`, 산술평균은
+`82.98%`다. latency ratio는 `1.253x / 1.066x / 1.122x / 1.057x / 1.109x / 1.017x`,
+산술평균은 `1.104x`다. .NET socket request/reply aggregate 기준을 충족해 통과로 판정한다.
