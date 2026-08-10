@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
@@ -45,7 +46,9 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageContext;
+import systems.zlink.framework.ZLinkMessageSerializer;
 
 import systems.zlink.framework.configuration.ZLinkEndpointConnections;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
@@ -54,9 +57,11 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
@@ -143,6 +148,46 @@ final class ZLinkChannelRuntimeTest {
                 () -> runtime.requestToChannel("missing", new TestRequest("missing")));
 
             assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, failure.kind());
+        }
+    }
+
+    @Test
+    void channelSendUsesExplicitDeclaredTypeForCodecAndPacketName() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addClientServerChannel("typed")
+            .client()
+            .connect("inproc://typed");
+        ZLinkCodecRegistration codecs = options.registration().codecs();
+        codecs.addSerializer(
+            "application/x-broad",
+            new OutboundMarkerSerializer("BROAD"),
+            type -> type == BaseOutbound.class || type == DerivedOutbound.class);
+        codecs.addSerializer(
+            "application/x-base",
+            new OutboundMarkerSerializer("BASE"),
+            BaseOutbound.class::equals);
+        ZLinkMessageSerializer serializer = codecs.serializerWithFallback(
+            new ZLinkJsonMessageSerializer());
+        FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
+
+        try (ZLinkChannelRuntime runtime = new ZLinkChannelRuntime(
+            backend,
+            options.registration(),
+            serializer,
+            handlers(),
+            ZLinkTestAdmissionFactory.create())) {
+            runtime.sendToChannel(
+                    "typed",
+                    ZLinkMessage.of(new DerivedOutbound(), BaseOutbound.class))
+                .submit()
+                .toCompletableFuture()
+                .join();
+
+            assertEquals("BaseOutbound", backend.dealer.lastSendParts.get(0).toUtf8String());
+            assertEquals("BASE", backend.dealer.lastSendParts.get(1).toUtf8String());
+            assertEquals(
+                "application/x-base",
+                ZLinkChannelContentTypeFrame.decode(backend.dealer.lastSendParts));
         }
     }
 
@@ -1803,9 +1848,11 @@ final class ZLinkChannelRuntimeTest {
         }
     }
 
-    private static final class FakeDealerSocket implements ZLinkBackendDealerSocket {
+    private static final class FakeDealerSocket implements ZLinkBackendDealerSocket,
+        ZLinkTestAdmissionFactory.Backend {
         final List<String> connected = new ArrayList<>();
         final List<String> disconnected = new ArrayList<>();
+        List<Message> lastSendParts = List.of();
         ZLinkBackendRequestResult requestResult = ZLinkBackendRequestResult.OK;
         int requestAttempts;
         int requestFailuresRemaining;
@@ -1815,7 +1862,11 @@ final class ZLinkChannelRuntimeTest {
         @Override public void bind(String endpoint) { }
         @Override public void connect(String endpoint) { connected.add(endpoint); }
         @Override public void disconnect(String endpoint) { disconnected.add(endpoint); }
-        @Override public boolean send(List<Message> parts, SendFlags flags) { return true; }
+        @Override public boolean send(List<Message> parts, SendFlags flags) {
+            lastSendParts.forEach(Message::close);
+            lastSendParts = parts.stream().map(Message::from).toList();
+            return true;
+        }
         @Override public boolean request(List<Message> parts, ZLinkBackendRequestCallback callback, SendFlags flags, Duration timeout) {
             requestAttempts++;
             if (requestFailuresRemaining > 0) {
@@ -1835,7 +1886,7 @@ final class ZLinkChannelRuntimeTest {
         @Override public ZLinkBackendReceived recv(ZLinkBackendRecvMode mode) { return null; }
         @Override public boolean waitForReadable(Duration timeout) { return false; }
         @Override public String name() { return "fake-dealer"; }
-        @Override public void close() { }
+        @Override public void close() { lastSendParts.forEach(Message::close); }
     }
 
     private static final class FakeContext implements ZLinkBackendContext {
@@ -1983,6 +2034,25 @@ final class ZLinkChannelRuntimeTest {
     }
 
     private record TestReply(String value) {
+    }
+
+    private static class BaseOutbound {
+    }
+
+    private static final class DerivedOutbound extends BaseOutbound {
+    }
+
+    private record OutboundMarkerSerializer(String marker)
+        implements ZLinkMessageSerializer {
+        @Override
+        public <T> ZLinkEncodedPayload serialize(T value) {
+            return ZLinkEncodedPayload.from(marker.getBytes(StandardCharsets.UTF_8));
+        }
+
+        @Override
+        public <T> T deserialize(ZLinkEncodedPayload payload, Class<T> type) {
+            throw new UnsupportedOperationException();
+        }
     }
 
     private static final class FakeSpotNode implements ZLinkInternalSpotNode,

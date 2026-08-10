@@ -14,6 +14,8 @@ import java.util.concurrent.Executor;
 import java.util.function.Supplier;
 import java.util.function.Function;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.runtime.internal.relocation
+    .ZLinkRetainedSerialQueueCommit;
 
 final class ZLinkActorDispatchSerials {
     private static final boolean STREAM_TRACE =
@@ -325,6 +327,18 @@ final class ZLinkActorDispatchSerials {
         return queue == null
             ? Optional.empty()
             : queue.commitRelocation(seal);
+    }
+
+    Optional<ZLinkRetainedSerialQueueCommit.Commit> retainCommit(
+        String actorId,
+        ZLinkAsyncSerialQueue.RelocationSeal seal) {
+        ZLinkAsyncSerialQueue queue;
+        synchronized (this) {
+            queue = queues.get(actorId);
+        }
+        return queue == null
+            ? Optional.empty()
+            : ZLinkRetainedSerialQueueCommit.retain(queue, seal);
     }
 
     Optional<List<ZLinkAsyncSerialQueue.QueuedRecord>>

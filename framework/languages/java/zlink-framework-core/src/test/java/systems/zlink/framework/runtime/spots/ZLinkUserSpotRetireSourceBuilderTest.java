@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -285,6 +286,153 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                 "target admission must finish before sealing and Capture");
             assertEquals(0, permits.snapshot().outboundUnits());
             assertSame(LiveSpot.last.get(), runtime.spotFor(SPOT_ID));
+        }
+    }
+
+    @Test
+    void postFreezeIngressBeyondNormalCapacityIsDurableBeforeAckAndReleasedAfterAck()
+        throws Exception {
+        ZLinkInMemoryLocationStore locations = new ZLinkInMemoryLocationStore();
+        ZLinkLocationRepository repository =
+            new ZLinkProviderLocationRepository(locations);
+        InMemoryRelocationStore relocations = new InMemoryRelocationStore();
+        DefaultZLinkFrameworkOptions options = options(locations, relocations);
+        var registration = options.registration();
+        var nodeRegistration = registration.meshNodes().getFirst();
+        try (ZLinkFrameworkRuntime host =
+                ZLinkFrameworkRuntimeTestAccess.start(options)) {
+            ZLinkSpotRuntime runtime = (ZLinkSpotRuntime) host.spotManager();
+            host.spotManager().getOrCreate(SPOT_ID, STABLE_TYPE)
+                .submit().toCompletableFuture().get();
+            ZLinkMeshNodeDescriptor source = repository.listMeshNodes(
+                    MESH, ZLinkPageRequest.firstPage())
+                .toCompletableFuture().get().items().stream()
+                .filter(value -> value.rid().equals(
+                    nodeRegistration.routingId()))
+                .findFirst().orElseThrow();
+            ZLinkLocationOwnerToken targetOwner = assertInstanceOf(
+                ZLinkOwnerLeaseClaimed.class,
+                repository.claimOwnerLease(
+                        "post-freeze-target", Duration.ofSeconds(30))
+                    .toCompletableFuture().get()).token();
+            repository.updateMeshNode(
+                    descriptor(
+                        TARGET_RID,
+                        9,
+                        targetOwner,
+                        "inproc://retire-post-freeze-target"),
+                    ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get();
+
+            var coordinator = new ZLinkAggregateRelocationCoordinator(
+                repository, relocations);
+            var permits = new ZLinkRelocationPermitPool(
+                new ZLinkLocationOptions());
+            var builder = new ZLinkUserSpotRetireSourceBuilder(
+                MESH,
+                nodeRegistration.routingId(),
+                source.lifecycleGeneration(),
+                repository,
+                coordinator,
+                permits,
+                runtime.spotLifecycle(),
+                runtime.actorSessions(),
+                new ZLinkRelocationAdapterRegistry(
+                    registration,
+                    ZLinkHandlerActivator.reflection()),
+                nodeRegistration.relocatableSpotFactories(),
+                nodeRegistration.relocatableActorFactories(),
+                runtime);
+            var prepared = builder.prepare(
+                    SPOT_ID, rollingToVersionOne(), NEVER)
+                .toCompletableFuture().get();
+            var finalPrepared = prepared.freezeAndPrepareFinal(NEVER)
+                .toCompletableFuture().get();
+
+            DefaultSpotContext context =
+                (DefaultSpotContext) LiveSpot.last.get().context();
+            List<CompletableFuture<Void>> accepted = new ArrayList<>();
+            AtomicInteger released = new AtomicInteger();
+            for (int index = 0; index < 1025; index++) {
+                byte[] record = ZLinkAcceptedJournalTestRecords.spot(
+                    SPOT_ID,
+                    SPOT_ID,
+                    0,
+                    "post-freeze-" + index,
+                    Map.of(),
+                    new byte[] {(byte) index});
+                accepted.add(context.enqueueAcceptedDispatch(
+                        record,
+                        () -> fail(
+                            "source must not execute transferred ingress"),
+                        released::incrementAndGet)
+                    .toCompletableFuture());
+            }
+            var published = prepared.commitAuthority(NEVER)
+                .toCompletableFuture().get();
+            CompletableFuture<Void> cutEntered = new CompletableFuture<>();
+            CompletableFuture<Void> releaseCut = new CompletableFuture<>();
+            relocations.gateNextInternalPut(cutEntered, releaseCut);
+            var sourceCommit = prepared.commitSourceBarrier(published, NEVER)
+                .toCompletableFuture();
+            cutEntered.get(3, TimeUnit.SECONDS);
+            byte[] lateRecord = ZLinkAcceptedJournalTestRecords.spot(
+                SPOT_ID,
+                SPOT_ID,
+                0,
+                "post-freeze-late",
+                Map.of(),
+                new byte[] {9});
+            accepted.add(context.enqueueAcceptedDispatch(
+                    lateRecord,
+                    () -> fail("late source ingress must remain held"),
+                    released::incrementAndGet)
+                .toCompletableFuture());
+            releaseCut.complete(null);
+            var activated = sourceCommit.get(3, TimeUnit.SECONDS);
+            assertTrue(accepted.stream().noneMatch(CompletableFuture::isDone));
+            assertEquals(0, released.get());
+
+            var restartedCoordinator =
+                new ZLinkAggregateRelocationCoordinator(
+                    repository, relocations);
+            var durable = restartedCoordinator.readPublishedAggregate(
+                    finalPrepared.request().participants().stream()
+                        .map(value -> new ZLinkAggregateRelocationCoordinator
+                            .ExpectedParticipant(
+                                value.authorityKey(),
+                                value.objectGeneration(),
+                                value.authorityOwnerGeneration()))
+                        .toList(),
+                    finalPrepared.fence(),
+                    finalPrepared.request().targetOwner(),
+                    finalPrepared.inventoryDigest(),
+                    NEVER)
+                .toCompletableFuture().get();
+            var decoded = ZLinkCanonicalUserSpotRelocationEnvelope.decode(
+                durable.payload(),
+                TARGET_RID,
+                ignored -> LiveSpot.class,
+                prepared.stageRequest());
+            assertEquals(1026, decoded.acceptedJournal().get("spot").size());
+
+            // The publish ACK is the terminal ownership boundary for the
+            // retained source resources.
+            prepared.completeSourceBarrierCommit();
+            CompletableFuture.allOf(
+                    accepted.toArray(CompletableFuture[]::new))
+                .get(3, TimeUnit.SECONDS);
+            assertEquals(1026, released.get());
+            prepared.cleanupLocal(Instant.now().plusSeconds(5))
+                .toCompletableFuture().get();
+            prepared.completeSourceCleanup(
+                    activated,
+                    prepared.stagedRoot().request().root(),
+                    NEVER)
+                .toCompletableFuture().get();
+            prepared.discardInitialAfterCommit().toCompletableFuture().get();
+            prepared.releasePermitAfterCompletion();
+            assertEquals(0, permits.snapshot().outboundUnits());
         }
     }
 

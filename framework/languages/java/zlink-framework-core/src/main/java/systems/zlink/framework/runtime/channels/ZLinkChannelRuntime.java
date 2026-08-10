@@ -1016,7 +1016,7 @@ public final class ZLinkChannelRuntime
     }
 
     private ZLinkPayloadEncoding.EncodedPayload encodePayload(Object message) {
-        Class<?> payloadType = message == null ? null : message.getClass();
+        Class<?> payloadType = ZLinkPayloadEncoding.declaredType(message);
         return ZLinkPayloadEncoding.encode(
             serializer,
             message,

@@ -271,7 +271,7 @@ public final class ZLinkStoreLocationResolvers
             authority.nodeGeneration(),
             snapshot.authorityOwnerGeneration(),
             snapshot.ownerLeaseGeneration(),
-            authority.kind() == ZLinkServiceAuthorityPayloadCodec.Kind.USER
+            authority.user().isPresent()
                 ? ZLinkSpotKind.USER
                 : ZLinkSpotKind.INSTANCE);
         return admitPositiveRoute(

@@ -337,6 +337,12 @@ final class ZLinkUserSpotRelocationBarrier {
     }
 
     Optional<Committed> commit(Seal seal) {
+        Optional<RelocationCommit> retained = retainCommit(seal);
+        retained.ifPresent(RelocationCommit::complete);
+        return retained.map(RelocationCommit::committed);
+    }
+
+    Optional<RelocationCommit> retainCommit(Seal seal) {
         synchronized (this) {
             if (committing || seal == null || seal != active
                 || seal.aborting()) {
@@ -344,8 +350,8 @@ final class ZLinkUserSpotRelocationBarrier {
             }
             committing = true;
         }
-        Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> committed =
-            barrier.commit(seal.composite)
+        ZLinkCompositeRelocationBarrier.RelocationCommit committed =
+            barrier.retainCommit(seal.composite)
                 .orElseThrow(() -> new IllegalStateException(
                     "User Spot barrier commit lost a lane"));
         synchronized (this) {
@@ -357,12 +363,14 @@ final class ZLinkUserSpotRelocationBarrier {
             committing = false;
         }
         LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
-            heldIngress = new LinkedHashMap<>(committed);
-        return Optional.of(new Committed(
-            seal.generation(),
-            seal.timerEnvelope(),
-            seal.participantActorIds(),
-            heldIngress));
+            heldIngress = new LinkedHashMap<>(committed.records());
+        return Optional.of(new RelocationCommit(
+            new Committed(
+                seal.generation(),
+                seal.timerEnvelope(),
+                seal.participantActorIds(),
+                heldIngress),
+            committed));
     }
 
     synchronized Optional<Map<String, List<
@@ -522,6 +530,65 @@ final class ZLinkUserSpotRelocationBarrier {
         @Override
         public byte[] timerEnvelope() {
             return timerEnvelope.clone();
+        }
+    }
+
+    static final class RelocationCommit {
+        private final Committed committed;
+        private final ZLinkCompositeRelocationBarrier.RelocationCommit retained;
+
+        private RelocationCommit(
+            Committed committed,
+            ZLinkCompositeRelocationBarrier.RelocationCommit retained) {
+            this.committed = committed;
+            this.retained = retained;
+        }
+
+        Committed committed() {
+            return committed;
+        }
+
+        Cut cut() {
+            ZLinkCompositeRelocationBarrier.RelocationCommit.Cut cut =
+                retained.cut();
+            return new Cut(
+                new Committed(
+                    committed.generation(),
+                    committed.timerEnvelope(),
+                    committed.participantActorIds(),
+                    cut.records()),
+                cut);
+        }
+
+        boolean tryFinishCapture(Cut cut) {
+            Objects.requireNonNull(cut, "cut");
+            return retained.tryFinishCapture(cut.retained);
+        }
+
+        boolean tryEstablishDurableCut(Cut cut) {
+            Objects.requireNonNull(cut, "cut");
+            return retained.tryEstablishDurableCut(cut.retained);
+        }
+
+        void complete() {
+            retained.complete();
+        }
+
+        static final class Cut {
+            private final Committed committed;
+            private final ZLinkCompositeRelocationBarrier.RelocationCommit.Cut
+                retained;
+
+            private Cut(
+                Committed committed,
+                ZLinkCompositeRelocationBarrier.RelocationCommit.Cut retained) {
+                this.committed = committed;
+                this.retained = retained;
+            }
+
+            Committed committed() {
+                return committed;
+            }
         }
     }
 }

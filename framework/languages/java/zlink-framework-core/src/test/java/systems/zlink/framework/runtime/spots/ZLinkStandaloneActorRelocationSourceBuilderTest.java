@@ -10,11 +10,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.*;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.internal.locations.*;
@@ -25,6 +29,7 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkAggregateRelocationCoordinator;
 import systems.zlink.framework.runtime.internal.locations
@@ -134,7 +139,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
     }
 
     @Test
-    void productionTargetKeepsGenerationAndOpensAfterCompletedAuthority()
+    void productionTargetStagesPostCutRequestUntilPhase4AndReplaysOnceBeforeAdmission()
         throws Exception {
         SnapshotAdapter.captured.set(null);
         var locations = new ZLinkInMemoryLocationStore();
@@ -195,6 +200,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             long sourceOwnerGeneration =
                 prepared.targetRequest().sourceAuthorityOwnerGeneration();
             ActorTargetBackend targetBackend = new ActorTargetBackend();
+            AtomicInteger targetReplayed = new AtomicInteger();
             var actorStaging =
                 new ZLinkStandaloneActorRelocationStagingOwner(targetBackend);
             var endpoint = new ZLinkUserSpotRetireTargetEndpoint(
@@ -203,7 +209,14 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                 coordinator,
                 unusedSpotStaging(),
                 ignored -> null,
-                (lane, record) -> CompletableFuture.completedFuture(null),
+                (lane, record) -> {
+                    assertEquals("actor:actor-b", lane);
+                    assertTrue(
+                        ZLinkActorAcceptedJournal.decode(record.payload())
+                            .header().packetName().startsWith("post-freeze"));
+                    targetReplayed.incrementAndGet();
+                    return CompletableFuture.completedFuture(null);
+                },
                 null,
                 Duration.ZERO,
                 request -> coordinator.normalizeCompletedAggregate(
@@ -252,13 +265,137 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                 repository,
                 coordinator,
                 endpoint));
-            new ZLinkStandaloneActorRelocationScheduler()
-                .executeRemote(
-                    prepared,
-                    sourceMachine.get(),
-                    Duration.ofSeconds(5),
-                    NEVER)
+            Duration timeout = Duration.ofSeconds(5);
+            sourceMachine.get().stage(
+                    TARGET_RID, prepared.stageRequest(), timeout)
                 .toCompletableFuture().get();
+            prepared.freezeAndPrepare(NEVER).toCompletableFuture().get();
+            List<CompletableFuture<Void>> accepted = new java.util.ArrayList<>();
+            AtomicInteger released = new AtomicInteger();
+            for (int index = 0; index < 1025; index++) {
+                byte[] suffixRecord = ZLinkAcceptedJournalTestRecords.actor(
+                    "actor-b",
+                    0,
+                    "post-freeze-" + index,
+                    Map.of(),
+                    new byte[] {(byte) index});
+                accepted.add(runtime.actorSessions()
+                    .actorRelocationLane("actor-b")
+                    .enqueueRelocatable(
+                        suffixRecord,
+                        () -> fail(
+                            "source must not execute transferred ingress"),
+                        released::incrementAndGet)
+                    .toCompletableFuture());
+            }
+            var published = prepared.commitAuthority(NEVER)
+                .toCompletableFuture().get();
+            CompletableFuture<Void> cutEntered = new CompletableFuture<>();
+            CompletableFuture<Void> releaseCut = new CompletableFuture<>();
+            AtomicBoolean cancelCut = new AtomicBoolean();
+            relocations.gateNextInternalPut(cutEntered, releaseCut);
+            var sourceCommit = prepared.commitSourceQueue(
+                    published, cancelCut::get)
+                .toCompletableFuture();
+            cutEntered.get(3, TimeUnit.SECONDS);
+            byte[] lateRecord = ZLinkAcceptedJournalTestRecords.actor(
+                "actor-b", 0, "post-freeze-late", Map.of(), new byte[] {10});
+            AtomicBoolean lateReleased = new AtomicBoolean();
+            CompletableFuture<Void> lateAccepted = runtime.actorSessions()
+                .actorRelocationLane("actor-b")
+                .enqueueRelocatable(
+                    lateRecord,
+                    () -> fail("late source ingress must remain held"),
+                    () -> lateReleased.set(true))
+                .toCompletableFuture();
+            cancelCut.set(true);
+            releaseCut.complete(null);
+            assertThrows(
+                java.util.concurrent.CancellationException.class,
+                () -> sourceCommit.get(3, TimeUnit.SECONDS));
+            assertTrue(accepted.stream().noneMatch(CompletableFuture::isDone));
+            assertFalse(lateAccepted.isDone());
+            assertEquals(0, released.get());
+            assertFalse(lateReleased.get());
+            var pendingRestart = assertThrows(
+                CompletionException.class,
+                () -> new ZLinkRelocationStartupScanner(
+                        repository, relocations)
+                    .scan(NEVER)
+                    .toCompletableFuture()
+                    .join());
+            assertTrue(pendingRestart.getCause().getMessage()
+                .contains("remained pending"),
+                "a crash before the final forward/cut must fail explicitly");
+            cancelCut.set(false);
+            var activated = prepared.commitSourceQueue(
+                    published, cancelCut::get)
+                .toCompletableFuture().get(3, TimeUnit.SECONDS);
+
+            byte[] stagedTargetRecord = ZLinkAcceptedJournalTestRecords.actor(
+                "actor-b", 41, "target-staged", Map.of(), new byte[] {11});
+            AtomicInteger targetIngressFailures = new AtomicInteger();
+            List<String> targetIngressReplies =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
+            assertTrue(endpoint.handleActor(
+                new ZLinkInternalMeshNode.PeerAuthorityFence(
+                    nodeRegistration.routingId(),
+                    source.lifecycleGeneration(),
+                    source.ownerId(),
+                    source.leaseGeneration()),
+                new ZLinkServiceM6BWireCodec.ActorMessage(
+                    true,
+                    0,
+                    41L,
+                    211,
+                    223,
+                    1,
+                    null,
+                    new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                        new systems.zlink.framework.runtime.internal.backend
+                            .ZLinkBackendActorRef(
+                                TARGET_RID, "actor-b", objectGeneration),
+                        9,
+                        published.targetOwnerGeneration(
+                            ZLinkAuthorityKeyCodec.actor("actor-b")),
+                        targetOwner.leaseGeneration())),
+                () -> stagedTargetRecord,
+                List.of(Message.from("target-staged-payload")),
+                null,
+                null,
+                reply -> {
+                    targetIngressReplies.add(
+                        reply.getFirst().toUtf8String());
+                    reply.forEach(Message::close);
+                },
+                ignored -> targetIngressFailures.incrementAndGet()));
+            assertEquals(0, targetIngressFailures.get());
+            assertTrue(targetIngressReplies.isEmpty(),
+                "the request must stay staged before target publish");
+
+            sourceMachine.get().publish(
+                    TARGET_RID, prepared.stageRequest().fence(), timeout)
+                .toCompletableFuture().get();
+            assertEquals(1026, targetReplayed.get());
+            assertEquals(List.of("target-staged"),
+                targetBackend.replayedPackets);
+            assertEquals(List.of("target-staged-reply"),
+                targetIngressReplies);
+            prepared.completeSourceQueueCommit();
+            CompletableFuture.allOf(
+                    accepted.toArray(CompletableFuture[]::new))
+                .get(3, TimeUnit.SECONDS);
+            lateAccepted.get();
+            assertEquals(1025, released.get());
+            assertTrue(lateReleased.get());
+            prepared.cleanupLocal().toCompletableFuture().get();
+            prepared.completeSourceCleanup(activated, NEVER)
+                .toCompletableFuture().get();
+            sourceMachine.get().finalizeAfterCompletion(
+                    TARGET_RID, prepared.stageRequest().fence(), timeout)
+                .toCompletableFuture().get();
+            prepared.discardInitialAfterCommit().toCompletableFuture().get();
+            prepared.releasePermitAfterCompletion();
 
             assertTrue(targetBackend.published.get());
             assertTrue(targetBackend.admitted.get());
@@ -464,6 +601,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
         implements ZLinkStandaloneActorRelocationStagingOwner.Backend {
         private final AtomicBoolean published = new AtomicBoolean();
         private final AtomicBoolean admitted = new AtomicBoolean();
+        private final List<String> replayedPackets =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
 
         @Override public CompletionStage<Object> prepare(
             ZLinkStandaloneActorRelocationStagingOwner.Request request,
@@ -477,7 +616,11 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             Object actor,
             ZLinkStandaloneActorRelocationStagingOwner.Request request,
             ZLinkActorAcceptedJournal.Record record) {
-            return CompletableFuture.completedFuture(Optional.empty());
+            replayedPackets.add(record.header().packetName());
+            return CompletableFuture.completedFuture(
+                record.header().packetName().equals("target-staged")
+                    ? Optional.of("target-staged-reply".getBytes())
+                    : Optional.empty());
         }
 
         @Override public void publish(
@@ -488,6 +631,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
 
         @Override public void openAdmission(Object actor) {
             assertTrue(published.get());
+            assertEquals(List.of("target-staged"), replayedPackets,
+                "target admission must open after the staged suffix replays");
             assertTrue(admitted.compareAndSet(false, true));
         }
 

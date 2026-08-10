@@ -34,10 +34,12 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers.ActorRoute;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
+import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.runtime.messaging.ZLinkPacketNames;
 
@@ -308,7 +310,8 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         Map<String, String> metadata) {
         ZLinkStreamHeader header = new ZLinkStreamHeader(
             kind,
-            ZLinkStreamCodec.JSON,
+            ZLinkPayloadEncoding.streamCodec(
+                serializer, message, ZLinkStreamCodec.JSON),
             EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
             requestSeq,
             packetName,
@@ -366,7 +369,11 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                     invalidPayload);
             }
         }
-        return ZLinkMessagePayloads.deserialize(serializer, payload, replyType);
+        return ZLinkMessagePayloads.deserialize(
+            ZLinkCodecRegistration.serializerForReceivedStreamCodec(
+                serializer, header.codec()),
+            payload,
+            replyType);
     }
 
     private RuntimeException mapBackendException(Throwable error, String operationName) {

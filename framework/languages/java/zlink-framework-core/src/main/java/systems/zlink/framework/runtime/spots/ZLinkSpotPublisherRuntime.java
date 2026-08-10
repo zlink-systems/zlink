@@ -158,7 +158,7 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
             ZLinkPayloadEncoding.encode(
                 serializer,
                 message,
-                contentTypeResolver.apply(message == null ? null : message.getClass()));
+                contentTypeResolver.apply(ZLinkPayloadEncoding.declaredType(message)));
         return call(
             meshName,
             channelName,

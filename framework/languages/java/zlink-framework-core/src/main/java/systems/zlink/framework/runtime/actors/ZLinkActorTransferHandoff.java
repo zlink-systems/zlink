@@ -18,7 +18,6 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
@@ -44,6 +43,8 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         new ConcurrentHashMap<>();
     private final Set<Retention> retirements = ConcurrentHashMap.newKeySet();
     private final AtomicLong messageFollowToken = new AtomicLong();
+    private final ZLinkMessageFollowSuppressionRegistry messageFollowSuppression =
+        new ZLinkMessageFollowSuppressionRegistry();
     private boolean closed;
 
     synchronized void begin(String actorId) {
@@ -199,8 +200,11 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         }
         MessageFollowSource source = new MessageFollowSource(
             sourceActorRef, targetActorRef, targetAddress, targetRoute,
-            messageFollowToken.incrementAndGet());
-        messageFollowSources.put(actorId, source);
+            messageFollowToken.incrementAndGet(), messageFollowSuppression);
+        MessageFollowSource replaced = messageFollowSources.put(actorId, source);
+        if (replaced != null) {
+            replaced.expireMessageFollowNotices();
+        }
         Retention retained = new Retention(actorId, source, removal);
         retirements.add(retained);
         ScheduledFuture<?> future = retirementsExecutor.schedule(
@@ -219,6 +223,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         if (source == null) {
             return Optional.empty();
         }
+        source.expireMessageFollowNotices();
         Retention retained = retirements.stream()
             .filter(candidate -> candidate.actorId().equals(actorId)
                 && candidate.source().equals(source))
@@ -235,6 +240,10 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
 
     int messageFollowSourceCount() {
         return messageFollowSources.size();
+    }
+
+    int messageFollowSuppressionCount() {
+        return messageFollowSuppression.size();
     }
 
     <T> CompletionStage<T> follow(
@@ -313,6 +322,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
             return;
         }
         messageFollowSources.remove(retained.actorId(), retained.source());
+        retained.source().expireMessageFollowNotices();
         retained.removal().accept(retained.source());
     }
 
@@ -369,8 +379,10 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         private final SpotTransportAddress targetAddress;
         private final ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute;
         private final long token;
-        private final AtomicBoolean messageFollowNoticeClaimed =
-            new AtomicBoolean();
+        private final ZLinkMessageFollowSuppressionRegistry suppression;
+        private final Set<ZLinkMessageFollowSuppressionRegistry.Key> suppressionKeys =
+            ConcurrentHashMap.newKeySet();
+        private boolean suppressionExpired;
         private int pendingMessages;
         private long pendingBytes;
 
@@ -379,7 +391,8 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
             ZLinkBackendActorRef targetActorRef,
             SpotTransportAddress targetAddress,
             ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute,
-            long token) {
+            long token,
+            ZLinkMessageFollowSuppressionRegistry suppression) {
             this.sourceActorRef = Objects.requireNonNull(
                 sourceActorRef, "sourceActorRef");
             this.targetActorRef = Objects.requireNonNull(
@@ -387,6 +400,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
             this.targetAddress = targetAddress;
             this.targetRoute = targetRoute;
             this.token = token;
+            this.suppression = Objects.requireNonNull(suppression, "suppression");
         }
 
         ZLinkBackendActorRef sourceActorRef() { return sourceActorRef; }
@@ -397,16 +411,32 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         }
         long token() { return token; }
 
-        boolean tryClaimMessageFollowNotice() {
-            return messageFollowNoticeClaimed.compareAndSet(false, true);
+        synchronized Optional<ZLinkMessageFollowSuppressionRegistry.Claim>
+            beginMessageFollowNotice(
+                ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute) {
+            if (targetRoute == null || suppressionExpired) {
+                return Optional.empty();
+            }
+            ZLinkMessageFollowSuppressionRegistry.Key key =
+                ZLinkMessageFollowSuppressionRegistry.Key.actor(sourceRoute, targetRoute);
+            suppressionKeys.add(key);
+            return suppression.begin(key);
         }
 
-        boolean messageFollowNoticeClaimed() {
-            return messageFollowNoticeClaimed.get();
+        void markMessageFollowNoticeSent(
+            ZLinkMessageFollowSuppressionRegistry.Claim claim) {
+            suppression.markSent(claim);
         }
 
-        void releaseMessageFollowNoticeClaim() {
-            messageFollowNoticeClaimed.set(false);
+        void abortMessageFollowNotice(
+            ZLinkMessageFollowSuppressionRegistry.Claim claim) {
+            suppression.abort(claim);
+        }
+
+        synchronized void expireMessageFollowNotices() {
+            suppressionExpired = true;
+            suppressionKeys.forEach(suppression::expire);
+            suppressionKeys.clear();
         }
 
         private synchronized boolean tryAcquire(long bytes) {
@@ -431,7 +461,13 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         }
     }
 
-    record MessageFollowQueueSnapshot(int messages, long bytes) {
+    record MessageFollowQueueSnapshot(long messages, long bytes) {
+        MessageFollowQueueSnapshot {
+            if (messages < 0 || bytes < 0) {
+                throw new IllegalArgumentException(
+                    "Message Follow queue diagnostics must be non-negative");
+            }
+        }
     }
 
     record FollowResult<T>(T value, MessageFollowQueueSnapshot queue) {

@@ -1,4 +1,7 @@
 package systems.zlink.framework.execution;
+import java.math.BigInteger;
+import java.util.IdentityHashMap;
+import java.util.Map;
 import java.util.Objects;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -12,9 +15,12 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.time.Duration;
 import java.util.function.Supplier;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.relocation
+    .ZLinkRetainedSerialQueueCommit;
 
 public final class ZLinkAsyncSerialQueue {
     public static final int DEFAULT_APPLICATION_MESSAGE_CAPACITY = 1024;
@@ -47,8 +53,12 @@ public final class ZLinkAsyncSerialQueue {
     private int lifecycleMessages;
     private long applicationBytes;
     private long lifecycleBytes;
+    private long relocationApplicationBacklog;
+    private BigInteger relocationApplicationBytes = BigInteger.ZERO;
+    private final Map<Entry, BigInteger> relocationEntryCosts =
+        new IdentityHashMap<>();
     private int lifecycleStreak;
-    private int outstanding;
+    private long outstanding;
     private long nextSequence = 1L;
     private long nextRelocationSerial = 1L;
     private Entry active;
@@ -228,7 +238,7 @@ public final class ZLinkAsyncSerialQueue {
             fixedWorkByteCost,
             false);
         if (relocation != null) {
-            relocation.held.addLast(entry);
+            holdRelocationEntry(entry);
         } else {
             lifecyclePending.addLast(entry);
             startNext();
@@ -304,12 +314,19 @@ public final class ZLinkAsyncSerialQueue {
         Objects.requireNonNull(operation, "operation");
         Objects.requireNonNull(relocationRelease, "relocationRelease");
         validatePayloadBytes(recordSizeHint);
-        if (relocated || relocation != null && relocation.frozen) {
+        if (relocated) {
             return CompletableFuture.failedFuture(
-                new IllegalStateException("queue relocation ingress is closed"));
+                new IllegalStateException("queue owner has relocated"));
         }
         if (nextSequence == Long.MAX_VALUE) {
             throw new IllegalStateException("queue sequence exhausted");
+        }
+        if (relocation != null) {
+            return holdRelocationIngress(
+                record,
+                recordSizeHint,
+                operation,
+                relocationRelease);
         }
         if (!canRepresentWorkByteCost(recordSizeHint)) {
             return capacityFailure("application payload exceeds queue byte capacity");
@@ -323,18 +340,17 @@ public final class ZLinkAsyncSerialQueue {
             nextSequence++, record, operation, relocationRelease,
             new CompletableFuture<>(), ZLinkFlowContext.current(), null,
             Lane.APPLICATION, byteCost, false);
-        if (relocation != null) {
-            relocation.held.addLast(entry);
-        } else {
-            applicationPending.addLast(entry);
-            startNext();
-        }
+        applicationPending.addLast(entry);
+        startNext();
         return entry.result;
     }
 
     public synchronized boolean tryEnqueue(Supplier<CompletionStage<Void>> operation) {
-        if (relocated || relocation != null && relocation.frozen
-            || !canReserve(Lane.APPLICATION, fixedWorkByteCost)) {
+        if (relocated) {
+            return false;
+        }
+        if (relocation == null
+            && !canReserve(Lane.APPLICATION, fixedWorkByteCost)) {
             return false;
         }
         enqueueAccepted(null, 0, operation);
@@ -350,9 +366,12 @@ public final class ZLinkAsyncSerialQueue {
         long payloadBytes,
         Supplier<CompletionStage<Void>> operation) {
         validatePayloadBytes(payloadBytes);
-        if (relocated || relocation != null && relocation.frozen
-            || !canRepresentWorkByteCost(payloadBytes)
-            || !canReserve(Lane.APPLICATION, workByteCost(payloadBytes))) {
+        if (relocated) {
+            return false;
+        }
+        if (relocation == null
+            && (!canRepresentWorkByteCost(payloadBytes)
+                || !canReserve(Lane.APPLICATION, workByteCost(payloadBytes)))) {
             return false;
         }
         enqueueAccepted(null, payloadBytes, operation);
@@ -363,9 +382,12 @@ public final class ZLinkAsyncSerialQueue {
         byte[] record,
         Supplier<CompletionStage<Void>> operation) {
         Objects.requireNonNull(record, "record");
-        if (relocated || relocation != null && relocation.frozen
-            || !canRepresentWorkByteCost(record.length)
-            || !canReserve(Lane.APPLICATION, workByteCost(record.length))) {
+        if (relocated) {
+            return false;
+        }
+        if (relocation == null
+            && (!canRepresentWorkByteCost(record.length)
+                || !canReserve(Lane.APPLICATION, workByteCost(record.length)))) {
             return false;
         }
         enqueueAccepted(record.clone(), record.length, operation);
@@ -400,13 +422,15 @@ public final class ZLinkAsyncSerialQueue {
             return CompletableFuture.failedFuture(
                 new IllegalStateException("queue owner has relocated"));
         }
-        if (relocation != null && relocation.frozen) {
-            return CompletableFuture.failedFuture(
-                new IllegalStateException(
-                    "queue relocation ingress is frozen"));
-        }
         if (nextSequence == Long.MAX_VALUE) {
             throw new IllegalStateException("queue sequence exhausted");
+        }
+        if (relocation != null) {
+            return holdRelocationIngress(
+                record,
+                payloadBytes,
+                operation,
+                relocationRelease);
         }
         if (!canRepresentWorkByteCost(payloadBytes)) {
             return capacityFailure("application payload exceeds queue byte capacity");
@@ -427,13 +451,72 @@ public final class ZLinkAsyncSerialQueue {
             Lane.APPLICATION,
             byteCost,
             false);
-        if (relocation != null) {
-            relocation.held.addLast(entry);
-        } else {
-            applicationPending.addLast(entry);
-            startNext();
-        }
+        applicationPending.addLast(entry);
+        startNext();
         return entry.result;
+    }
+
+    private CompletionStage<Void> holdRelocationIngress(
+        byte[] record,
+        long payloadBytes,
+        Supplier<CompletionStage<Void>> operation,
+        Runnable relocationRelease) {
+        Entry entry = new Entry(
+            nextSequence++,
+            record,
+            operation,
+            relocationRelease,
+            new CompletableFuture<>(),
+            ZLinkFlowContext.current(),
+            null,
+            Lane.APPLICATION,
+            0L,
+            false);
+        outstanding++;
+        relocationApplicationBacklog++;
+        BigInteger cost = relocationWorkByteCost(payloadBytes);
+        relocationApplicationBytes = relocationApplicationBytes.add(cost);
+        relocationEntryCosts.put(entry, cost);
+        holdRelocationEntry(entry);
+        return entry.result;
+    }
+
+    private CompletionStage<Void> holdRelocationIngress(
+        Supplier<byte[]> record,
+        long payloadBytes,
+        Supplier<CompletionStage<Void>> operation,
+        Runnable relocationRelease) {
+        Entry entry = new Entry(
+            nextSequence++,
+            record,
+            operation,
+            relocationRelease,
+            new CompletableFuture<>(),
+            ZLinkFlowContext.current(),
+            null,
+            Lane.APPLICATION,
+            0L,
+            false);
+        outstanding++;
+        relocationApplicationBacklog++;
+        BigInteger cost = relocationWorkByteCost(payloadBytes);
+        relocationApplicationBytes = relocationApplicationBytes.add(cost);
+        relocationEntryCosts.put(entry, cost);
+        holdRelocationEntry(entry);
+        return entry.result;
+    }
+
+    private void holdRelocationEntry(Entry entry) {
+        if (relocation == null) {
+            throw new IllegalStateException(
+                "relocation ingress requires an active seal");
+        }
+        if (relocation.acceptanceEpoch == Long.MAX_VALUE) {
+            throw new IllegalStateException(
+                "relocation ingress epoch exhausted");
+        }
+        relocation.held.addLast(entry);
+        relocation.acceptanceEpoch++;
     }
 
     private boolean canReserve(Lane lane, long byteCost) {
@@ -441,8 +524,13 @@ public final class ZLinkAsyncSerialQueue {
             return false;
         }
         if (lane == Lane.APPLICATION) {
-            return applicationMessages < applicationMessageCapacity
-                && byteCost <= applicationByteCapacity - applicationBytes;
+            return applicationMessages + relocationApplicationBacklog
+                    < applicationMessageCapacity
+                && BigInteger.valueOf(applicationBytes)
+                    .add(relocationApplicationBytes)
+                    .add(BigInteger.valueOf(byteCost))
+                    .compareTo(BigInteger.valueOf(applicationByteCapacity))
+                    <= 0;
         }
         return lifecycleMessages < lifecycleMessageCapacity
             && byteCost <= lifecycleByteCapacity - lifecycleBytes;
@@ -463,12 +551,23 @@ public final class ZLinkAsyncSerialQueue {
     }
 
     private void release(Entry entry) {
-        if (entry.lane == Lane.APPLICATION) {
-            applicationMessages--;
-            applicationBytes -= entry.byteCost;
-        } else {
-            lifecycleMessages--;
-            lifecycleBytes -= entry.byteCost;
+        if (entry.capacityReserved) {
+            if (entry.lane == Lane.APPLICATION) {
+                applicationMessages--;
+                applicationBytes -= entry.byteCost;
+            } else {
+                lifecycleMessages--;
+                lifecycleBytes -= entry.byteCost;
+            }
+        } else if (entry.lane == Lane.APPLICATION) {
+            relocationApplicationBacklog--;
+            BigInteger cost = relocationEntryCosts.remove(entry);
+            if (cost == null) {
+                throw new IllegalStateException(
+                    "relocation backlog entry has no byte cost");
+            }
+            relocationApplicationBytes = relocationApplicationBytes
+                .subtract(cost);
         }
         outstanding--;
     }
@@ -480,6 +579,12 @@ public final class ZLinkAsyncSerialQueue {
     private long workByteCost(long payloadBytes) {
         validatePayloadBytes(payloadBytes);
         return Math.addExact(fixedWorkByteCost, payloadBytes);
+    }
+
+    private BigInteger relocationWorkByteCost(long payloadBytes) {
+        validatePayloadBytes(payloadBytes);
+        return BigInteger.valueOf(payloadBytes)
+            .add(BigInteger.valueOf(fixedWorkByteCost));
     }
 
     private boolean canRepresentWorkByteCost(long payloadBytes) {
@@ -708,7 +813,7 @@ public final class ZLinkAsyncSerialQueue {
     }
 
     public synchronized boolean abortRelocation(RelocationSeal seal) {
-        if (!matches(seal)) {
+        if (!matches(seal) || relocation.retained != null) {
             return false;
         }
         ArrayDeque<Entry> restored = new ArrayDeque<>(relocation.captured);
@@ -729,7 +834,7 @@ public final class ZLinkAsyncSerialQueue {
         return true;
     }
 
-    /** Freezes the bounded ingress high-water before authority prepare. */
+    /** Captures the current ingress high-water before authority prepare. */
     public synchronized Optional<List<QueuedRecord>>
         freezeRelocationIngress(RelocationSeal seal) {
         if (!matches(seal) || relocation.frozen) {
@@ -744,24 +849,54 @@ public final class ZLinkAsyncSerialQueue {
 
     public Optional<List<QueuedRecord>> commitRelocation(
         RelocationSeal seal) {
-        List<QueuedRecord> held;
-        List<Entry> released;
-        synchronized (this) {
-            if (!matches(seal)) {
-                return Optional.empty();
-            }
-            held = relocation.held.stream()
-                .filter(Entry::hasRelocationRecord)
-                .map(Entry::queuedRecord)
-                .toList();
-            released = new ArrayList<>(
-                relocation.captured.size() + relocation.held.size());
-            released.addAll(relocation.captured);
-            released.addAll(relocation.held);
-            relocation = null;
-            relocated = true;
+        Optional<RetainedCommit> retained = retainRelocationCommit(seal);
+        if (retained.isEmpty()) {
+            return Optional.empty();
         }
-        for (Entry entry : released) {
+        RetainedCommit commit = retained.orElseThrow();
+        if (!ZLinkRetainedSerialQueueCommit.capture(
+            commit.records(), commit)) {
+            ZLinkRetainedSerialQueueCommit.Cut cut = commit.cut();
+            synchronized (this) {
+                if (!commit.matches(cut)) {
+                    throw new IllegalStateException(
+                        "serial queue relocation cut changed during commit");
+                }
+                commit.establish(cut);
+                commit.finish(cut);
+            }
+            commit.complete();
+        }
+        return Optional.of(commit.records());
+    }
+
+    /**
+     * Detaches a committed relocation while retaining source resources until
+     * the target has durably replayed the returned ingress records.
+     */
+    private synchronized Optional<RetainedCommit> retainRelocationCommit(
+        RelocationSeal seal) {
+        if (!matches(seal) || relocation.retained != null) {
+            return Optional.empty();
+        }
+        List<QueuedRecord> held = relocation.held.stream()
+            .filter(Entry::hasRelocationRecord)
+            .map(Entry::queuedRecord)
+            .toList();
+        RetainedCommit retained = new RetainedCommit(this, held);
+        relocation.retained = retained;
+        return Optional.of(retained);
+    }
+
+    private void completeRelocationCommit(RetainedCommit commit) {
+        if (!commit.completed.compareAndSet(false, true)) {
+            return;
+        }
+        if (commit.entries == null) {
+            throw new IllegalStateException(
+                "serial queue relocation capture is not terminal");
+        }
+        for (Entry entry : commit.entries) {
             RuntimeException failure = null;
             Runnable capacityNotification = null;
             try {
@@ -791,7 +926,6 @@ public final class ZLinkAsyncSerialQueue {
             quiescent = takeQuiescenceWaitersIfReady();
         }
         quiescent.forEach(waiter -> waiter.complete(null));
-        return Optional.of(held);
     }
 
     private void executeAdvisory(Runnable action) {
@@ -1086,7 +1220,7 @@ public final class ZLinkAsyncSerialQueue {
             fixedWorkByteCost,
             true);
         if (relocation != null) {
-            relocation.held.addLast(continuation);
+            holdRelocationEntry(continuation);
         } else {
             continuationPending.addLast(continuation);
             startNext();
@@ -1229,6 +1363,100 @@ public final class ZLinkAsyncSerialQueue {
         }
     }
 
+    private static final class RetainedCommit
+        implements ZLinkRetainedSerialQueueCommit.Owner {
+        private final ZLinkAsyncSerialQueue owner;
+        private final List<QueuedRecord> records;
+        private List<Entry> entries;
+        private final AtomicBoolean completed = new AtomicBoolean();
+
+        private RetainedCommit(
+            ZLinkAsyncSerialQueue owner,
+            List<QueuedRecord> records) {
+            this.owner = owner;
+            this.records = List.copyOf(records);
+        }
+
+        private List<QueuedRecord> records() {
+            return records;
+        }
+
+        @Override
+        public Object monitor() {
+            return owner;
+        }
+
+        @Override
+        public ZLinkRetainedSerialQueueCommit.Cut cut() {
+            synchronized (owner) {
+                if (owner.relocation == null
+                    || owner.relocation.retained != this) {
+                    throw new IllegalStateException(
+                        "serial queue retained relocation is not active");
+                }
+                List<QueuedRecord> current = owner.relocation.held.stream()
+                    .filter(Entry::hasRelocationRecord)
+                    .map(Entry::queuedRecord)
+                    .toList();
+                return ZLinkRetainedSerialQueueCommit.cut(
+                    this,
+                    owner.relocation.acceptanceEpoch,
+                    current);
+            }
+        }
+
+        @Override
+        public boolean matches(ZLinkRetainedSerialQueueCommit.Cut cut) {
+            synchronized (owner) {
+                return cut != null
+                    && cut.belongsTo(this)
+                    && owner.relocation != null
+                    && owner.relocation.retained == this
+                    && owner.relocation.acceptanceEpoch == cut.epoch();
+            }
+        }
+
+        @Override
+        public void establish(ZLinkRetainedSerialQueueCommit.Cut cut) {
+            synchronized (owner) {
+                if (!matches(cut)) {
+                    throw new IllegalStateException(
+                        "serial queue durable cut is no longer current");
+                }
+                durableCut = true;
+            }
+        }
+
+        @Override
+        public void finish(ZLinkRetainedSerialQueueCommit.Cut cut) {
+            synchronized (owner) {
+                if (!matches(cut)) {
+                    throw new IllegalStateException(
+                        "serial queue relocation cut is no longer current");
+                }
+                if (!durableCut) {
+                    throw new IllegalStateException(
+                        "serial queue durable cut is not established");
+                }
+                List<Entry> released = new ArrayList<>(
+                    owner.relocation.captured.size()
+                        + owner.relocation.held.size());
+                released.addAll(owner.relocation.captured);
+                released.addAll(owner.relocation.held);
+                entries = List.copyOf(released);
+                owner.relocation = null;
+                owner.relocated = true;
+            }
+        }
+
+        @Override
+        public void complete() {
+            owner.completeRelocationCommit(this);
+        }
+
+        private boolean durableCut;
+    }
+
     public record QueuedRecord(long sequence, byte[] payload) {
         public QueuedRecord {
             if (sequence <= 0) {
@@ -1301,6 +1529,7 @@ public final class ZLinkAsyncSerialQueue {
         private final RelocationBoundary relocationBoundary;
         private final Lane lane;
         private final long byteCost;
+        private final boolean capacityReserved;
         private final boolean continuation;
 
         private Entry(
@@ -1324,6 +1553,7 @@ public final class ZLinkAsyncSerialQueue {
             this.relocationBoundary = relocationBoundary;
             this.lane = lane;
             this.byteCost = byteCost;
+            this.capacityReserved = byteCost > 0L;
             this.continuation = continuation;
         }
 
@@ -1349,6 +1579,7 @@ public final class ZLinkAsyncSerialQueue {
             this.relocationBoundary = relocationBoundary;
             this.lane = lane;
             this.byteCost = byteCost;
+            this.capacityReserved = byteCost > 0L;
             this.continuation = continuation;
         }
 
@@ -1371,6 +1602,8 @@ public final class ZLinkAsyncSerialQueue {
         private final ArrayDeque<Entry> captured;
         private final ArrayDeque<Entry> held = new ArrayDeque<>();
         private boolean frozen;
+        private long acceptanceEpoch;
+        private RetainedCommit retained;
 
         private RelocationState(
             long serial,

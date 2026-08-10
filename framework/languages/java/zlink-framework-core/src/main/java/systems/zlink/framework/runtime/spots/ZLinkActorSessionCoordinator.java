@@ -14,6 +14,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
+import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.actors.ZLinkActorReplyRoute;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
@@ -90,6 +91,14 @@ final class ZLinkActorSessionCoordinator {
             ZLinkAsyncSerialQueue.RelocationSeal
                 seal) {
         return requireActors().commitActorRelocation(actorId, seal);
+    }
+
+    Optional<systems.zlink.framework.runtime.internal.relocation
+        .ZLinkRetainedSerialQueueCommit.Commit>
+        retainActorRelocationCommit(
+            String actorId,
+            ZLinkAsyncSerialQueue.RelocationSeal seal) {
+        return requireActors().retainActorRelocationCommit(actorId, seal);
     }
 
     Optional<List<ZLinkAsyncSerialQueue.QueuedRecord>>
@@ -227,23 +236,23 @@ final class ZLinkActorSessionCoordinator {
         return requireActors().awaitMoveCompletion(actor);
     }
 
-    CompletionStage<Optional<Message>> dispatchLocalSession(
+    CompletionStage<Optional<LocalActorReply>> dispatchLocalSession(
         ZLinkBackendActorRef actorRef,
         ZLinkStreamHeader header,
         Message payload,
         Predicate<String> isLocalSpot,
-        Function<LocalDispatch, CompletionStage<Optional<Message>>> localDispatch) {
+        Function<LocalDispatch, CompletionStage<Optional<LocalActorReply>>> localDispatch) {
         return dispatchLocalSession(
             actorRef, 0, header, payload, isLocalSpot, localDispatch, true);
     }
 
-    CompletionStage<Optional<Message>> dispatchLocalSession(
+    CompletionStage<Optional<LocalActorReply>> dispatchLocalSession(
         ZLinkBackendActorRef actorRef,
         long acceptedSessionSequence,
         ZLinkStreamHeader header,
         Message payload,
         Predicate<String> isLocalSpot,
-        Function<LocalDispatch, CompletionStage<Optional<Message>>> localDispatch) {
+        Function<LocalDispatch, CompletionStage<Optional<LocalActorReply>>> localDispatch) {
         return dispatchLocalSession(
             actorRef,
             acceptedSessionSequence,
@@ -296,13 +305,13 @@ final class ZLinkActorSessionCoordinator {
             .thenCompose(ignored -> result);
     }
 
-    private CompletionStage<Optional<Message>> dispatchLocalSession(
+    private CompletionStage<Optional<LocalActorReply>> dispatchLocalSession(
         ZLinkBackendActorRef actorRef,
         long acceptedSessionSequence,
         ZLinkStreamHeader header,
         Message payload,
         Predicate<String> isLocalSpot,
-        Function<LocalDispatch, CompletionStage<Optional<Message>>> localDispatch,
+        Function<LocalDispatch, CompletionStage<Optional<LocalActorReply>>> localDispatch,
         boolean captureMovingPacket) {
         ZLinkActorRuntime runtime = requireActors();
         Optional<ZLinkActor> localActor = runtime.localActor(actorRef.actorId());
@@ -320,7 +329,9 @@ final class ZLinkActorSessionCoordinator {
                     null,
                     acceptedSessionSequence);
             if (captured != null) {
-                return captured;
+                return captured.thenApply(reply -> reply.map(message ->
+                    new LocalActorReply(
+                        message, header.codec())));
             }
             return runtime.awaitMoveCompletion(actor)
                 .thenCompose(ignored -> dispatchLocalSession(
@@ -342,7 +353,7 @@ final class ZLinkActorSessionCoordinator {
                 messageFollowTarget.orElseThrow(),
                 null,
                 header,
-                payload);
+                payload).thenApply(reply -> decodeRoutedReply(header, reply));
         }
         if (joinedSpotId.isPresent()
             && currentSpotSurface(actor) == null
@@ -352,7 +363,7 @@ final class ZLinkActorSessionCoordinator {
                 runtime.currentRef(actor),
                 joinedSpotId.get(),
                 header,
-                payload);
+                payload).thenApply(reply -> decodeRoutedReply(header, reply));
         }
         if (!captureMovingPacket) {
             // Transfer commit already owns the actor's serialized turn. Queuing
@@ -360,7 +371,8 @@ final class ZLinkActorSessionCoordinator {
             // for this replay to finish.
             return localDispatch.apply(new LocalDispatch(actor, joinedSpotId));
         }
-        CompletableFuture<Optional<Message>> result = new CompletableFuture<>();
+        CompletableFuture<Optional<LocalActorReply>> result =
+            new CompletableFuture<>();
         byte[] acceptedRecord = runtime.encodeLocalSessionActorAccepted(
             actor,
             header,
@@ -383,6 +395,18 @@ final class ZLinkActorSessionCoordinator {
                     new LocalDispatch(actor, joinedSpotId),
                     result))
             .thenCompose(ignored -> result);
+    }
+
+    private static Optional<LocalActorReply> decodeRoutedReply(
+        ZLinkStreamHeader requestHeader,
+        Optional<Message> reply) {
+        if (reply.isEmpty()) {
+            return Optional.empty();
+        }
+        try (Message frame = reply.orElseThrow()) {
+            return Optional.of(ActorPacketFrames.decodeRoutedReply(
+                requestHeader, frame));
+        }
     }
 
     CompletionStage<Optional<Message>> runPacketTurn(
@@ -517,10 +541,10 @@ final class ZLinkActorSessionCoordinator {
             .orElseGet(fallback);
     }
 
-    private static CompletionStage<Void> invokeLocalDispatch(
-        Function<LocalDispatch, CompletionStage<Optional<Message>>> dispatch,
+    private static <T> CompletionStage<Void> invokeLocalDispatch(
+        Function<LocalDispatch, CompletionStage<Optional<T>>> dispatch,
         LocalDispatch local,
-        CompletableFuture<Optional<Message>> result) {
+        CompletableFuture<Optional<T>> result) {
         try {
             return dispatch.apply(local)
                 .whenComplete((reply, error) -> {

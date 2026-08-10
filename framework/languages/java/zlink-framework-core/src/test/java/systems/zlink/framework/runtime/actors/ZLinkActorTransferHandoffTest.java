@@ -287,21 +287,55 @@ final class ZLinkActorTransferHandoffTest {
     }
 
     @Test
-    void messageFollowNoticeClaimIsSingleUseUntilExplicitlyReleased() {
+    void messageFollowNoticeSaturatesLogicalQueueDiagnosticsAtUint32() {
+        var source = new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+            "actor", 7, RoutingId.from("source"), 2, 3, 4);
+        var target = new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+            "actor", 7, RoutingId.from("target"), 5, 6, 7);
+        long overUint32 = 0x1_0000_0000L + 19L;
+
+        var notice = ZLinkActorRuntime.messageFollowNotice(
+            source,
+            target,
+            1,
+            new ZLinkActorTransferHandoff.MessageFollowQueueSnapshot(
+                overUint32, overUint32 + 1),
+            11,
+            13,
+            17);
+
+        assertEquals(0xffff_ffffL, notice.queuedMessages());
+        assertEquals(0xffff_ffffL, notice.queuedBytes());
+        assertEquals(
+            notice,
+            new ZLinkServiceMessageFollowWireCodec().decode(
+                new ZLinkServiceMessageFollowWireCodec().encode(notice)));
+    }
+
+    @Test
+    void messageFollowNoticeClaimIsSingleUseUntilMatchingClaimIsAborted() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
+        ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute =
+            new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+                "actor", 7, RoutingId.from("source"), 2, 3, 4);
+        ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute =
+            new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+                "actor", 7, RoutingId.from("target"), 5, 6, 7);
+        SpotTransportAddress targetAddress = new SpotTransportAddress(
+            "router", RoutingId.from("target"), "spot", 7, 5, 6, 7,
+            ZLinkSpotKind.USER);
         handoff.retain(
             "actor", ref("source", 7), ref("target", 7),
-            Duration.ofMinutes(1), ignored -> { });
+            targetAddress, targetRoute, Duration.ofMinutes(1), ignored -> { });
 
         ZLinkActorTransferHandoff.MessageFollowSource source =
             handoff.messageFollowSource("actor").orElseThrow();
-        assertTrue(source.tryClaimMessageFollowNotice());
-        assertTrue(source.messageFollowNoticeClaimed());
-        assertFalse(source.tryClaimMessageFollowNotice());
+        ZLinkMessageFollowSuppressionRegistry.Claim first =
+            source.beginMessageFollowNotice(sourceRoute).orElseThrow();
+        assertTrue(source.beginMessageFollowNotice(sourceRoute).isEmpty());
 
-        source.releaseMessageFollowNoticeClaim();
-        assertFalse(source.messageFollowNoticeClaimed());
-        assertTrue(source.tryClaimMessageFollowNotice());
+        source.abortMessageFollowNotice(first);
+        assertTrue(source.beginMessageFollowNotice(sourceRoute).isPresent());
         handoff.close();
     }
 

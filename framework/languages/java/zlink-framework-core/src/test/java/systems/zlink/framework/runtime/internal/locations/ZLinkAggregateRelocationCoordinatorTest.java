@@ -300,6 +300,94 @@ final class ZLinkAggregateRelocationCoordinatorTest {
     }
 
     @Test
+    void replayPendingCommitCannotPublishOrRestartUntilExactActivation() {
+        FakeAuthorityStore authority = new FakeAuthorityStore();
+        FakeRelocationStore relocation = new FakeRelocationStore();
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            authority, relocation);
+        var prepared = coordinator.prepareReplayPending(request(), NEVER)
+            .toCompletableFuture().join();
+        coordinator.commit(prepared, NEVER).toCompletableFuture().join();
+
+        assertEquals(3, authority.progress.phase());
+        var expected = prepared.request().participants().stream()
+            .map(value -> new ZLinkAggregateRelocationCoordinator
+                .ExpectedParticipant(
+                    value.authorityKey(),
+                    value.objectGeneration(),
+                    value.authorityOwnerGeneration()))
+            .toList();
+        var completion = ZLinkServiceRelocationEnvelopeCodec
+            .decode(goldenRoot()).terminalCompletions().getFirst();
+        var finalCut = coordinator.updateCanonicalReplay(
+                expected,
+                prepared.fence(),
+                prepared.request().targetOwner(),
+                current -> ZLinkServiceRelocationEnvelopeCodec
+                    .completeDelivery(
+                        current,
+                        completion.operationHigh(),
+                        completion.operationLow(),
+                        completion.sourceOwnerId(),
+                        completion.sourceOwnerLeaseGeneration(),
+                        RoutingId.from(completion.sourceNodeRid()),
+                        completion.sourceNodeGeneration(),
+                        2),
+                NEVER)
+            .toCompletableFuture().join();
+        int rootsAtFinalCut = relocation.valueCount();
+        var targetFailure = assertThrows(
+            CompletionException.class,
+            () -> coordinator.readPublishedAggregate(
+                    expected,
+                    prepared.fence(),
+                    prepared.request().targetOwner(),
+                    prepared.inventoryDigest(),
+                    NEVER)
+                .toCompletableFuture().join());
+        assertInstanceOf(
+            ZLinkAggregateRelocationCoordinator.RelocationDataLostException.class,
+            targetFailure.getCause());
+        var restartFailure = assertThrows(
+            CompletionException.class,
+            () -> new ZLinkRelocationStartupScanner(authority, relocation)
+                .scan(NEVER).toCompletableFuture().join());
+        assertTrue(restartFailure.getCause().getMessage()
+            .contains("remained pending"));
+
+        var activated = coordinator.activateCanonicalReplay(prepared, NEVER)
+            .toCompletableFuture().join();
+
+        assertEquals(4, authority.progress.phase());
+        var publishedRoot = coordinator.readPublishedAggregate(
+                expected,
+                prepared.fence(),
+                prepared.request().targetOwner(),
+                prepared.inventoryDigest(),
+                NEVER)
+            .toCompletableFuture().join();
+        assertArrayEquals(
+            finalCut.root().canonicalBytes(),
+            publishedRoot.payload(),
+            "phase 4 must atomically publish the already-final root");
+        coordinator.activateCanonicalReplay(prepared, NEVER)
+            .toCompletableFuture().join();
+        assertEquals(rootsAtFinalCut, relocation.valueCount(),
+            "phase 4 retry must not mutate or append the durable root");
+        var activatedRestart = assertThrows(
+            CompletionException.class,
+            () -> new ZLinkRelocationStartupScanner(authority, relocation)
+                .scan(NEVER).toCompletableFuture().join());
+        assertTrue(activatedRestart.getCause().getMessage()
+            .contains("fail explicitly"));
+        coordinator.completeSourceCleanup(activated, goldenRoot(), NEVER)
+            .toCompletableFuture().join();
+        assertEquals(1, new ZLinkRelocationStartupScanner(
+            authority, relocation).scan(NEVER)
+            .toCompletableFuture().join().size());
+    }
+
+    @Test
     void startupScannerFinishesANormalizationInterruptedBeforeMarkerRemoval() {
         FakeAuthorityStore authority = new FakeAuthorityStore();
         FakeRelocationStore relocation = new FakeRelocationStore();

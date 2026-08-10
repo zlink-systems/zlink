@@ -53,6 +53,7 @@ import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.configuration.ZLinkMetadataPolicyRegistration;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
@@ -1144,7 +1145,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             compressionCodec));
         ZLinkMessage sessionPayload = ZLinkMessage.fromEncoded(
             ZLinkMessagePayloads.encoded(payloadCopy),
-            serializer);
+            ZLinkCodecRegistration.serializerForReceivedStreamCodec(
+                serializer, dispatchHeader.codec()));
         long payloadBytes = payloadCopy.size();
         payloadCopy.close();
         trace("stream-node dispatch-enqueue node=" + streamNode.name()

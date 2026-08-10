@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -40,6 +41,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchEvent;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.channels.ZLinkChannelContentTypeFrame;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
@@ -445,6 +447,243 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 staleActor,
                 List.of(),
                 ignored -> { }));
+        }
+    }
+
+    @Test
+    void exactRelocationForwardKeepsRawActorRequestContextUntilTargetReplay()
+        throws Exception {
+        String endpoint = "inproc://jvm-relocation-forward-"
+            + System.nanoTime();
+        String sourceEndpoint = "inproc://jvm-relocation-source-"
+            + System.nanoTime();
+        RoutingId sourceRid = RoutingId.from("jvm-relocation-source");
+        RoutingId targetRid = RoutingId.from("jvm-relocation-target");
+        RoutingId callerRid = RoutingId.from("jvm-relocation-caller");
+        try (var context = Zlink.createContext();
+             var source = new ZLinkJavaRawMeshNode(context, "mesh");
+             var target = new ZLinkJavaRawMeshNode(context, "mesh");
+             var caller = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            source.setRoutingId(sourceRid);
+            source.setBind(sourceEndpoint);
+            target.setRoutingId(targetRid);
+            target.setBind(endpoint);
+            caller.setRoutingId(callerRid);
+            caller.setBind("inproc://jvm-relocation-caller-"
+                + System.nanoTime());
+            source.start();
+            target.start();
+            caller.start();
+            acceptExactSource(
+                target, sourceRid, source.lifecycleGeneration());
+            acceptExactSource(
+                source, callerRid, caller.lifecycleGeneration());
+            source.connectPeer(endpoint, targetRid);
+            caller.connectPeer(sourceEndpoint, sourceRid);
+            awaitAdmitted(source);
+            awaitAdmitted(caller);
+
+            var sourceRoute = new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                new ZLinkBackendActorRef(sourceRid, "moving-actor", 7),
+                source.lifecycleGeneration(),
+                11,
+                3);
+            var targetRoute = new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                new ZLinkBackendActorRef(targetRid, "moving-actor", 7),
+                target.lifecycleGeneration(),
+                12,
+                5);
+            source.spotNode().installRelocationActorForward(
+                sourceRoute, targetRoute, Duration.ofMinutes(1));
+            var sourceSpotRoute = new ZLinkServiceM6BWireCodec.SpotRouteFence(
+                "moving-spot",
+                17,
+                sourceRid,
+                source.lifecycleGeneration(),
+                21,
+                3);
+            var targetSpotRoute = new ZLinkServiceM6BWireCodec.SpotRouteFence(
+                "moving-spot",
+                17,
+                targetRid,
+                target.lifecycleGeneration(),
+                22,
+                5);
+            source.spotNode().installRelocationSpotForward(
+                sourceSpotRoute, targetSpotRoute, Duration.ofMinutes(1));
+
+            List<String> targetFifo = new CopyOnWriteArrayList<>();
+            List<String> targetSpotFifo = new CopyOnWriteArrayList<>();
+            AtomicReference<Throwable> targetFailure = new AtomicReference<>();
+            AtomicReference<java.util.function.Consumer<List<Message>>>
+                targetRequestReply = new AtomicReference<>();
+            CompletableFuture<Void> receivedAll = new CompletableFuture<>();
+            CompletableFuture<Void> receivedSpots = new CompletableFuture<>();
+            target.spotNode().setRelocationStagingIngressHandler(
+                new ZLinkInternalSpotNode.RelocationStagingIngressHandler() {
+                    @Override
+                    public boolean handleSpot(
+                        ZLinkInternalMeshNode.PeerAuthorityFence peer,
+                        ZLinkServiceM6BWireCodec.SpotMessage header,
+                        byte[] metadata,
+                        java.util.function.Supplier<byte[]> acceptedRecord,
+                        int acceptedRecordSizeHint,
+                        List<Message> parts,
+                        String contentType,
+                        ZLinkInboundDispatchBudget.Lease lease,
+                        java.util.function.Consumer<List<Message>> reply,
+                        java.util.function.Consumer<Throwable> failure) {
+                        try {
+                            assertEquals(sourceRid, peer.sourceNodeRid());
+                            assertEquals(targetSpotRoute, header.target());
+                            assertTrue(acceptedRecord.get().length > 0);
+                            targetSpotFifo.add(parts.getLast().toUtf8String());
+                            if (targetSpotFifo.size() == 2) {
+                                receivedSpots.complete(null);
+                            }
+                        } catch (Throwable error) {
+                            targetFailure.compareAndSet(null, error);
+                            receivedSpots.completeExceptionally(error);
+                        } finally {
+                            parts.forEach(Message::close);
+                            if (lease != null) {
+                                lease.close();
+                            }
+                        }
+                        return true;
+                    }
+
+                    @Override
+                    public boolean handleActor(
+                        ZLinkInternalMeshNode.PeerAuthorityFence peer,
+                        ZLinkServiceM6BWireCodec.ActorMessage header,
+                        java.util.function.Supplier<byte[]> acceptedRecord,
+                        List<Message> parts,
+                        String contentType,
+                        ZLinkInboundDispatchBudget.Lease lease,
+                        java.util.function.Consumer<List<Message>> reply,
+                        java.util.function.Consumer<Throwable> failure) {
+                        try {
+                            assertEquals(sourceRid, peer.sourceNodeRid());
+                            assertEquals(source.lifecycleGeneration(),
+                                peer.sourceNodeGeneration());
+                            assertEquals(targetRoute, header.target());
+                            assertTrue(acceptedRecord.get().length > 0);
+                            targetFifo.add(parts.getLast().toUtf8String());
+                            if (header.request()) {
+                                assertTrue(targetRequestReply.compareAndSet(
+                                    null, reply));
+                            }
+                            if (targetFifo.size() == 4) {
+                                receivedAll.complete(null);
+                            }
+                        } catch (Throwable error) {
+                            targetFailure.compareAndSet(null, error);
+                            receivedAll.completeExceptionally(error);
+                        } finally {
+                            parts.forEach(Message::close);
+                            if (lease != null) {
+                                lease.close();
+                            }
+                        }
+                        return true;
+                    }
+                });
+
+            AtomicInteger callerFailures = new AtomicInteger();
+            ZLinkJavaRawSpotNode sourceSpots =
+                (ZLinkJavaRawSpotNode) source.spotNode();
+            caller.spotNode().rememberActorAuthority(
+                sourceRoute.actor(),
+                sourceRoute.authorityOwnerGeneration(),
+                sourceRoute.ownerLeaseGeneration());
+            for (int index = 0; index < 3; index++) {
+                List<Message> parts = List.of(
+                    Message.from(ZLinkStreamHeaderCodec.encode(
+                        new ZLinkStreamHeader(
+                            "RelocatedPacket",
+                            Map.of(),
+                            Optional.empty()))),
+                    Message.from("suffix-" + index));
+                boolean accepted = caller.spotNode().sendToActor(
+                    sourceRoute.actor(), parts, SendFlags.DONT_WAIT);
+                if (!accepted) {
+                    parts.forEach(Message::close);
+                }
+                assertTrue(accepted,
+                    "the exact old route must reroute instead of rejecting");
+            }
+
+            CompletionStage<List<Message>> pendingReply;
+            List<Message> requestParts = List.of(
+                Message.from(ZLinkStreamHeaderCodec.encode(
+                    new ZLinkStreamHeader(
+                        "RelocatedRequest",
+                        Map.of(),
+                        Optional.empty()))),
+                Message.from("request-suffix"));
+            pendingReply = caller.spotNode().requestToActor(
+                sourceRoute.actor(),
+                requestParts,
+                SendFlags.DONT_WAIT,
+                Duration.ofSeconds(3));
+            requestParts.forEach(Message::close);
+            receivedAll.get(3, TimeUnit.SECONDS);
+            assertFalse(pendingReply.toCompletableFuture().isDone(),
+                "the source must retain the reply route while target ingress is staged");
+            targetRequestReply.get().accept(
+                List.of(Message.from("target-staged-reply")));
+            List<Message> forwardedReply = pendingReply.toCompletableFuture()
+                .get(3, TimeUnit.SECONDS);
+            try {
+                assertEquals("target-staged-reply",
+                    forwardedReply.getFirst().toUtf8String());
+            } finally {
+                forwardedReply.forEach(Message::close);
+            }
+            for (int index = 0; index < 2; index++) {
+                var header = new ZLinkServiceM6BWireCodec.SpotMessage(
+                    false,
+                    0,
+                    null,
+                    201,
+                    index + 1,
+                    0,
+                    "caller-spot",
+                    sourceSpotRoute);
+                List<Message> parts = List.of(
+                    Message.from(ZLinkStreamHeaderCodec.encode(
+                        new ZLinkStreamHeader(
+                            "RelocatedSpotPacket",
+                            Map.of(),
+                            Optional.empty()))),
+                    Message.from("spot-suffix-" + index));
+                boolean accepted = sourceSpots.enqueueRemoteSpotLazy(
+                    new ZLinkInternalMeshNode.PeerAuthorityFence(
+                        callerRid, 9, "caller-owner", 7),
+                    header,
+                    new byte[0],
+                    () -> new byte[0],
+                    0,
+                    parts,
+                    null,
+                    null,
+                    null,
+                    ignored -> callerFailures.incrementAndGet());
+                if (!accepted) {
+                    parts.forEach(Message::close);
+                }
+                assertTrue(accepted,
+                    "the exact old Spot route must reroute without rejection");
+            }
+            receivedSpots.get(3, TimeUnit.SECONDS);
+            assertEquals(List.of(
+                    "suffix-0", "suffix-1", "suffix-2", "request-suffix"),
+                targetFifo);
+            assertEquals(List.of("spot-suffix-0", "spot-suffix-1"),
+                targetSpotFifo);
+            assertEquals(0, callerFailures.get());
+            assertNull(targetFailure.get());
         }
     }
 

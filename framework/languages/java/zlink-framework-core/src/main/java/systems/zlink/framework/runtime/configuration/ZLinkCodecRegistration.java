@@ -8,7 +8,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.configuration.ZLinkCodecRegistryBuilder;
@@ -23,14 +22,18 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
     private static final String LEGACY_JSON_CONTENT_TYPE =
         "application/zlink-framework-json-v1";
     private static final int MAX_TYPE_CACHE_ENTRIES = 1024;
-    private final Map<String, RegisteredSerializer> serializers = new LinkedHashMap<>();
-    private final Map<Class<?>, String> contentTypeCache = new ConcurrentHashMap<>();
-    private final AtomicInteger contentTypeCacheSize = new AtomicInteger();
-    private final Map<String, ZLinkStreamCodec> streamCodecsByContentType = new LinkedHashMap<>();
-    private final Map<ZLinkStreamCodec, String> contentTypesByStreamCodec = new LinkedHashMap<>();
+    private volatile Map<String, RegisteredSerializer> serializers = new LinkedHashMap<>();
+    private volatile Map<String, ZLinkStreamCodec> streamCodecsByContentType =
+        new LinkedHashMap<>();
+    private volatile Map<ZLinkStreamCodec, String> contentTypesByStreamCodec =
+        new LinkedHashMap<>();
+    private final Map<Class<?>, SendSelection> sendTypeCache = new ConcurrentHashMap<>();
+    private final Object sendTypeCacheGate = new Object();
+    private volatile boolean frozen;
 
     @Override
-    public void use(ZLinkCodecExtension extension) {
+    public synchronized void use(ZLinkCodecExtension extension) {
+        requireMutable();
         Objects.requireNonNull(extension, "extension").register(this);
     }
 
@@ -47,33 +50,49 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
         addSerializer(contentType, serializer, canSerialize, false);
     }
 
-    private void addSerializer(
+    private synchronized void addSerializer(
         String contentType,
         ZLinkMessageSerializer serializer,
         Predicate<Class<?>> canSerialize,
         boolean fallbackSerializer) {
+        requireMutable();
         Objects.requireNonNull(contentType, "contentType");
         Objects.requireNonNull(serializer, "serializer");
         Objects.requireNonNull(canSerialize, "canSerialize");
-        String normalized = contentType.trim();
-        if (normalized.isEmpty()) {
-            throw new ZLinkConfigurationException("custom serializer content type must not be blank");
-        }
+        String normalized = normalizeRegistrationContentType(
+            contentType, "custom serializer");
+        serializers.remove(normalized);
         serializers.put(normalized, new RegisteredSerializer(serializer, canSerialize, fallbackSerializer));
-        contentTypeCache.clear();
-        contentTypeCacheSize.set(0);
+        clearSendTypeCache();
     }
 
     @Override
-    public void addStreamCodec(String contentType, ZLinkStreamCodec codec) {
+    public synchronized void addStreamCodec(String contentType, ZLinkStreamCodec codec) {
+        requireMutable();
         Objects.requireNonNull(contentType, "contentType");
         Objects.requireNonNull(codec, "codec");
-        String normalized = contentType.trim();
-        if (normalized.isEmpty()) {
-            throw new ZLinkConfigurationException("stream codec content type must not be blank");
+        String normalized = normalizeRegistrationContentType(contentType, "stream codec");
+        ZLinkStreamCodec previousCodec = streamCodecsByContentType.remove(normalized);
+        if (previousCodec != null) {
+            contentTypesByStreamCodec.remove(previousCodec, normalized);
+        }
+        String previousContentType = contentTypesByStreamCodec.remove(codec);
+        if (previousContentType != null && !previousContentType.equals(normalized)) {
+            streamCodecsByContentType.remove(previousContentType, codec);
         }
         streamCodecsByContentType.put(normalized, codec);
         contentTypesByStreamCodec.put(codec, normalized);
+    }
+
+    /** Makes the startup registry immutable and safely publishes its receive tables. */
+    public synchronized void freeze() {
+        if (frozen) {
+            return;
+        }
+        serializers = immutableOrderedCopy(serializers);
+        streamCodecsByContentType = immutableOrderedCopy(streamCodecsByContentType);
+        contentTypesByStreamCodec = immutableOrderedCopy(contentTypesByStreamCodec);
+        frozen = true;
     }
 
     public Map<String, ZLinkMessageSerializer> serializers() {
@@ -87,7 +106,8 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
             return Optional.empty();
         }
         return Optional.ofNullable(
-            streamCodecsByContentType.get(contentType.trim()));
+            streamCodecsByContentType.get(
+                normalizeRegistrationContentType(contentType, "stream codec")));
     }
 
     /**
@@ -100,21 +120,37 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
         if (contentType == null) {
             return Optional.empty();
         }
-        String normalized = contentType.trim();
-        if (DEFAULT_JSON_CONTENT_TYPE.equalsIgnoreCase(normalized)
-            || LEGACY_JSON_CONTENT_TYPE.equalsIgnoreCase(normalized)) {
+        if (!isCanonicalWireContentType(contentType)) {
+            return Optional.empty();
+        }
+        if (DEFAULT_JSON_CONTENT_TYPE.equals(contentType)
+            || LEGACY_JSON_CONTENT_TYPE.equals(contentType)) {
             return Optional.of(ZLinkStreamCodec.JSON);
         }
-        return streamCodec(normalized);
+        return Optional.ofNullable(streamCodecsByContentType.get(contentType));
     }
 
     public Optional<String> streamContentType(ZLinkStreamCodec codec) {
-        return Optional.ofNullable(contentTypesByStreamCodec.get(codec));
+        String registered = contentTypesByStreamCodec.get(codec);
+        if (registered != null) {
+            return Optional.of(registered);
+        }
+        return codec == ZLinkStreamCodec.JSON
+            ? Optional.of(DEFAULT_JSON_CONTENT_TYPE)
+            : Optional.empty();
+    }
+
+    /** Resolves the content type represented by an incoming STREAM codec marker. */
+    public String contentTypeForReceivedStreamCodec(ZLinkStreamCodec codec) {
+        Objects.requireNonNull(codec, "codec");
+        return streamContentType(codec).orElseThrow(() -> protocolError(
+            "No payload content type is registered for received STREAM codec '"
+                + codec + "'"));
     }
 
     public Optional<ZLinkStreamCodec> streamCodecForCustomSerializer() {
         Optional<Map.Entry<String, RegisteredSerializer>> fallbackSerializer =
-            singleFallbackSerializer();
+            lastFallbackSerializer();
         if (fallbackSerializer.isEmpty()) {
             if (serializers.size() == 1) {
                 return streamCodec(serializers.keySet().iterator().next());
@@ -124,33 +160,20 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
         return streamCodec(fallbackSerializer.get().getKey());
     }
 
-    /**
-     * Returns the single registered custom serializer, if any. Throws when more
-     * than one custom serializer is registered because the payload serializer is
-     * then ambiguous.
-     */
+    /** Returns the last registered serializer that applies to every declared type. */
     public Optional<ZLinkMessageSerializer> customSerializer() {
-        return singleFallbackSerializer()
+        return lastFallbackSerializer()
             .map(entry -> entry.getValue().serializer());
     }
 
-    private Optional<Map.Entry<String, RegisteredSerializer>> singleFallbackSerializer() {
-        Map<String, RegisteredSerializer> fallbackSerializers = new LinkedHashMap<>();
-        serializers.forEach((contentType, serializer) -> {
-            if (serializer.fallbackSerializer()) {
-                fallbackSerializers.put(contentType, serializer);
+    private Optional<Map.Entry<String, RegisteredSerializer>> lastFallbackSerializer() {
+        Map.Entry<String, RegisteredSerializer> match = null;
+        for (Map.Entry<String, RegisteredSerializer> entry : serializers.entrySet()) {
+            if (entry.getValue().fallbackSerializer()) {
+                match = entry;
             }
-        });
-
-        if (fallbackSerializers.isEmpty()) {
-            return Optional.empty();
         }
-        if (fallbackSerializers.size() > 1) {
-            throw new ZLinkConfigurationException(
-                "payload serializer is ambiguous because more than one custom serializer is registered: "
-                    + fallbackSerializers.keySet());
-        }
-        return Optional.of(fallbackSerializers.entrySet().iterator().next());
+        return Optional.ofNullable(match);
     }
 
     public ZLinkMessageSerializer serializerWithFallback(ZLinkMessageSerializer fallback) {
@@ -158,22 +181,19 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
         if (serializers.isEmpty()) {
             return fallback;
         }
-        return new CompositeSerializer(serializers, fallback);
+        return new CompositeSerializer(this, fallback);
     }
 
     public String contentTypeFor(Class<?> type) {
-        if (type == null) {
-            return DEFAULT_JSON_CONTENT_TYPE;
-        }
-        String cached = contentTypeCache.get(type);
-        if (cached != null) {
-            return cached;
-        }
-        String contentType = singleSerializerFor(serializers, type)
-            .map(Map.Entry::getKey)
-            .orElse(DEFAULT_JSON_CONTENT_TYPE);
-        cacheContentType(type, contentType);
-        return contentType;
+        return sendSelectionFor(type).contentType();
+    }
+
+    public ZLinkMessageSerializer serializerForSending(
+        Class<?> declaredType,
+        ZLinkMessageSerializer jsonFallback) {
+        Objects.requireNonNull(jsonFallback, "jsonFallback");
+        RegisteredSerializer selected = sendSelectionFor(declaredType).serializer();
+        return selected == null ? jsonFallback : selected.serializer();
     }
 
     /**
@@ -184,70 +204,268 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
     public ZLinkMessageSerializer serializerForReceivedContentType(
         String contentType,
         ZLinkMessageSerializer jsonFallback) {
-        Objects.requireNonNull(contentType, "contentType");
         Objects.requireNonNull(jsonFallback, "jsonFallback");
-        String normalized = contentType.trim();
-        if (normalized.isEmpty()) {
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                "received payload content type must not be blank");
+        if (!isCanonicalWireContentType(contentType)) {
+            throw protocolError(
+                "received payload content type is not a canonical bare media type");
         }
-        if (DEFAULT_JSON_CONTENT_TYPE.equalsIgnoreCase(normalized)
-            || LEGACY_JSON_CONTENT_TYPE.equalsIgnoreCase(normalized)) {
+        if (DEFAULT_JSON_CONTENT_TYPE.equals(contentType)
+            || LEGACY_JSON_CONTENT_TYPE.equals(contentType)) {
             return jsonFallback;
         }
-        RegisteredSerializer registered = serializers.get(normalized);
+        RegisteredSerializer registered = serializers.get(contentType);
         if (registered == null) {
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+            throw protocolError(
                 "No payload serializer is registered for received content type '"
-                    + normalized + "'");
+                    + contentType + "'");
         }
         return registered.serializer();
     }
 
-    private static Optional<Map.Entry<String, RegisteredSerializer>> singleSerializerFor(
+    public static <T> ZLinkEncodedPayload serializeForContentType(
+        ZLinkMessageSerializer serializer,
+        T value,
+        String contentType) {
+        if (serializer instanceof CompositeSerializer composite) {
+            return composite.serializeForContentType(value, contentType);
+        }
+        return serializer.serialize(value);
+    }
+
+    public static <T> ZLinkEncodedPayload serializeForDeclaredType(
+        ZLinkMessageSerializer serializer,
+        T value,
+        Class<?> declaredType) {
+        if (serializer instanceof CompositeSerializer composite) {
+            return composite.serializeForDeclaredType(value, declaredType);
+        }
+        return serializer.serialize(value, declaredType);
+    }
+
+    public static ZLinkMessageSerializer serializerForReceivedContentType(
+        ZLinkMessageSerializer serializer,
+        String contentType) {
+        Objects.requireNonNull(serializer, "serializer");
+        if (serializer instanceof CompositeSerializer composite) {
+            return composite.serializerForReceivedContentType(contentType);
+        }
+        if (!isCanonicalWireContentType(contentType)) {
+            throw protocolError(
+                "received payload content type is not a canonical bare media type");
+        }
+        if (DEFAULT_JSON_CONTENT_TYPE.equals(contentType)
+            || LEGACY_JSON_CONTENT_TYPE.equals(contentType)) {
+            return serializer;
+        }
+        throw protocolError(
+            "No payload serializer is registered for received content type '"
+                + contentType + "'");
+    }
+
+    public static ZLinkMessageSerializer serializerForReceivedStreamCodec(
+        ZLinkMessageSerializer serializer,
+        ZLinkStreamCodec codec) {
+        Objects.requireNonNull(serializer, "serializer");
+        Objects.requireNonNull(codec, "codec");
+        if (serializer instanceof CompositeSerializer composite) {
+            return composite.serializerForReceivedStreamCodec(codec);
+        }
+        if (codec == ZLinkStreamCodec.JSON
+            || codec == ZLinkStreamCodec.RAW) {
+            return serializer;
+        }
+        throw protocolError(
+            "No payload serializer is registered for received STREAM codec '"
+                + codec + "'");
+    }
+
+    public static ZLinkStreamCodec streamCodecForDeclaredType(
+        ZLinkMessageSerializer serializer,
+        Class<?> declaredType,
+        ZLinkStreamCodec fallback) {
+        Objects.requireNonNull(serializer, "serializer");
+        Objects.requireNonNull(fallback, "fallback");
+        if (serializer instanceof CompositeSerializer composite) {
+            return composite.streamCodecForDeclaredType(declaredType);
+        }
+        return fallback;
+    }
+
+    public static String contentTypeForDeclaredType(
+        ZLinkMessageSerializer serializer,
+        Class<?> declaredType,
+        String fallback) {
+        Objects.requireNonNull(serializer, "serializer");
+        Objects.requireNonNull(fallback, "fallback");
+        if (serializer instanceof CompositeSerializer composite) {
+            return composite.registration.contentTypeFor(declaredType);
+        }
+        return fallback;
+    }
+
+    private static Optional<Map.Entry<String, RegisteredSerializer>> lastSerializerFor(
         Map<String, RegisteredSerializer> serializers,
         Class<?> type) {
         Map.Entry<String, RegisteredSerializer> match = null;
-        StringBuilder ambiguousTypes = null;
         for (Map.Entry<String, RegisteredSerializer> entry : serializers.entrySet()) {
-            if (!entry.getValue().canSerialize().test(type)) {
-                continue;
-            }
-            if (match == null) {
+            if (entry.getValue().canSerialize().test(type)) {
                 match = entry;
-                continue;
             }
-            if (ambiguousTypes == null) {
-                ambiguousTypes = new StringBuilder(match.getKey());
-            }
-            ambiguousTypes.append(", ").append(entry.getKey());
         }
-        if (match == null) {
-            return Optional.empty();
-        }
-        if (ambiguousTypes != null) {
-            throw new ZLinkConfigurationException(
-                "payload serializer is ambiguous for type " + type.getName() + ": "
-                    + "[" + ambiguousTypes + "]");
-        }
-        return Optional.of(match);
+        return Optional.ofNullable(match);
     }
 
-    private void cacheContentType(Class<?> type, String contentType) {
-        int reserved = contentTypeCacheSize.get();
-        while (reserved < MAX_TYPE_CACHE_ENTRIES
-            && !contentTypeCacheSize.compareAndSet(reserved, reserved + 1)) {
-            reserved = contentTypeCacheSize.get();
+    private SendSelection sendSelectionFor(Class<?> type) {
+        if (type == null) {
+            return SendSelection.JSON;
         }
-        if (reserved >= MAX_TYPE_CACHE_ENTRIES) {
-            return;
+        SendSelection cached = sendTypeCache.get(type);
+        if (cached != null) {
+            return cached;
         }
-        String previous = contentTypeCache.putIfAbsent(type, contentType);
-        if (previous != null) {
-            contentTypeCacheSize.decrementAndGet();
+        synchronized (sendTypeCacheGate) {
+            cached = sendTypeCache.get(type);
+            if (cached != null) {
+                return cached;
+            }
+            SendSelection selected = lastSerializerFor(serializers, type)
+                .map(entry -> new SendSelection(entry.getKey(), entry.getValue()))
+                .orElse(SendSelection.JSON);
+            if (sendTypeCache.size() < MAX_TYPE_CACHE_ENTRIES) {
+                sendTypeCache.put(type, selected);
+            }
+            return selected;
         }
+    }
+
+    private ZLinkMessageSerializer serializerForContentType(
+        String contentType,
+        ZLinkMessageSerializer jsonFallback) {
+        if (DEFAULT_JSON_CONTENT_TYPE.equals(contentType)
+            || LEGACY_JSON_CONTENT_TYPE.equals(contentType)) {
+            return jsonFallback;
+        }
+        RegisteredSerializer selected = serializers.get(contentType);
+        if (selected == null) {
+            throw new ZLinkConfigurationException(
+                "no payload serializer is registered for selected content type '"
+                    + contentType + "'");
+        }
+        return selected.serializer();
+    }
+
+    private ZLinkStreamCodec streamCodecForSending(Class<?> declaredType) {
+        SendSelection selected = sendSelectionFor(declaredType);
+        if (DEFAULT_JSON_CONTENT_TYPE.equals(selected.contentType())
+            || LEGACY_JSON_CONTENT_TYPE.equals(selected.contentType())) {
+            return ZLinkStreamCodec.JSON;
+        }
+        ZLinkStreamCodec streamCodec =
+            streamCodecsByContentType.get(selected.contentType());
+        if (streamCodec == null) {
+            throw new ZLinkConfigurationException(
+                "selected payload content type '" + selected.contentType()
+                    + "' does not have a STREAM codec mapping");
+        }
+        return streamCodec;
+    }
+
+    private void clearSendTypeCache() {
+        synchronized (sendTypeCacheGate) {
+            sendTypeCache.clear();
+        }
+    }
+
+    private void requireMutable() {
+        if (frozen) {
+            throw new ZLinkConfigurationException(
+                "codec registry is immutable after framework startup");
+        }
+    }
+
+    private static String normalizeRegistrationContentType(String contentType, String label) {
+        int start = 0;
+        int end = contentType.length();
+        while (start < end && isAsciiOuterWhitespace(contentType.charAt(start))) {
+            start++;
+        }
+        while (end > start && isAsciiOuterWhitespace(contentType.charAt(end - 1))) {
+            end--;
+        }
+        int slash = -1;
+        char[] normalized = new char[end - start];
+        for (int source = start, target = 0; source < end; source++, target++) {
+            char value = contentType.charAt(source);
+            if (value == '/') {
+                if (slash >= 0) {
+                    throw invalidContentType(label, contentType);
+                }
+                slash = target;
+                normalized[target] = value;
+                continue;
+            }
+            if (!isTokenCharacter(value)) {
+                throw invalidContentType(label, contentType);
+            }
+            normalized[target] = value >= 'A' && value <= 'Z'
+                ? (char) (value + ('a' - 'A'))
+                : value;
+        }
+        if (slash <= 0 || slash >= normalized.length - 1) {
+            throw invalidContentType(label, contentType);
+        }
+        return new String(normalized);
+    }
+
+    private static boolean isCanonicalWireContentType(String contentType) {
+        if (contentType == null || contentType.isEmpty()) {
+            return false;
+        }
+        int slash = -1;
+        for (int index = 0; index < contentType.length(); index++) {
+            char value = contentType.charAt(index);
+            if (value == '/') {
+                if (slash >= 0) {
+                    return false;
+                }
+                slash = index;
+                continue;
+            }
+            if (!isTokenCharacter(value) || (value >= 'A' && value <= 'Z')) {
+                return false;
+            }
+        }
+        return slash > 0 && slash < contentType.length() - 1;
+    }
+
+    private static boolean isAsciiOuterWhitespace(char value) {
+        return value == ' ' || value == '\t';
+    }
+
+    private static boolean isTokenCharacter(char value) {
+        return value >= 'a' && value <= 'z'
+            || value >= 'A' && value <= 'Z'
+            || value >= '0' && value <= '9'
+            || switch (value) {
+                case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~' -> true;
+                default -> false;
+            };
+    }
+
+    private static ZLinkConfigurationException invalidContentType(
+        String label,
+        String contentType) {
+        return new ZLinkConfigurationException(
+            label + " content type must be a bare type/subtype media type: '"
+                + contentType + "'");
+    }
+
+    private static ZLinkFrameworkException protocolError(String message) {
+        return new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, message);
+    }
+
+    private static <K, V> Map<K, V> immutableOrderedCopy(Map<K, V> source) {
+        return Collections.unmodifiableMap(new LinkedHashMap<>(source));
     }
 
     private record RegisteredSerializer(
@@ -256,59 +474,79 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
         boolean fallbackSerializer) {
     }
 
+    private record SendSelection(
+        String contentType,
+        RegisteredSerializer serializer) {
+        private static final SendSelection JSON =
+            new SendSelection(DEFAULT_JSON_CONTENT_TYPE, null);
+    }
+
     private static final class CompositeSerializer implements ZLinkMessageSerializer {
-        private final Map<String, RegisteredSerializer> serializers;
+        private final ZLinkCodecRegistration registration;
         private final ZLinkMessageSerializer fallback;
-        private final Map<Class<?>, ZLinkMessageSerializer> serializerCache =
-            new ConcurrentHashMap<>();
-        private final AtomicInteger serializerCacheSize = new AtomicInteger();
 
         CompositeSerializer(
-            Map<String, RegisteredSerializer> serializers,
+            ZLinkCodecRegistration registration,
             ZLinkMessageSerializer fallback) {
-            this.serializers = Map.copyOf(serializers);
+            this.registration = registration;
             this.fallback = fallback;
         }
 
         @Override
         public <T> ZLinkEncodedPayload serialize(T value) {
             if (value != null) {
-                return serializerFor(value.getClass()).serialize(value);
+                return serialize(value, value.getClass());
             }
             return fallback.serialize(value);
         }
 
         @Override
+        public <T> ZLinkEncodedPayload serialize(T value, Class<?> declaredType) {
+            Objects.requireNonNull(declaredType, "declaredType");
+            return registration.serializerForSending(declaredType, fallback)
+                .serialize(value, declaredType);
+        }
+
+        @Override
         public <T> T deserialize(ZLinkEncodedPayload payload, Class<T> type) {
-            return serializerFor(type).deserialize(payload, type);
+            return registration.serializerForSending(type, fallback)
+                .deserialize(payload, type);
         }
 
         @Override
         public void prepare(Class<?> type) {
-            serializerFor(type).prepare(type);
+            registration.serializerForSending(type, fallback).prepare(type);
         }
 
-        private ZLinkMessageSerializer serializerFor(Class<?> type) {
-            ZLinkMessageSerializer cached = serializerCache.get(type);
-            if (cached != null) {
-                return cached;
+        private <T> ZLinkEncodedPayload serializeForContentType(
+            T value,
+            String contentType) {
+            return registration.serializerForContentType(contentType, fallback)
+                .serialize(value);
+        }
+
+        private <T> ZLinkEncodedPayload serializeForDeclaredType(
+            T value,
+            Class<?> declaredType) {
+            return serialize(value, declaredType);
+        }
+
+        private ZLinkStreamCodec streamCodecForDeclaredType(Class<?> declaredType) {
+            return registration.streamCodecForSending(declaredType);
+        }
+
+        private ZLinkMessageSerializer serializerForReceivedContentType(
+            String contentType) {
+            return registration.serializerForReceivedContentType(contentType, fallback);
+        }
+
+        private ZLinkMessageSerializer serializerForReceivedStreamCodec(
+            ZLinkStreamCodec codec) {
+            if (codec == ZLinkStreamCodec.RAW) {
+                return fallback;
             }
-            ZLinkMessageSerializer selected = singleSerializerFor(serializers, type)
-                .map(entry -> entry.getValue().serializer())
-                .orElse(fallback);
-            int reserved = serializerCacheSize.get();
-            while (reserved < MAX_TYPE_CACHE_ENTRIES
-                && !serializerCacheSize.compareAndSet(reserved, reserved + 1)) {
-                reserved = serializerCacheSize.get();
-            }
-            if (reserved < MAX_TYPE_CACHE_ENTRIES) {
-                ZLinkMessageSerializer previous = serializerCache.putIfAbsent(type, selected);
-                if (previous != null) {
-                    serializerCacheSize.decrementAndGet();
-                    return previous;
-                }
-            }
-            return selected;
+            return serializerForReceivedContentType(
+                registration.contentTypeForReceivedStreamCodec(codec));
         }
     }
 }

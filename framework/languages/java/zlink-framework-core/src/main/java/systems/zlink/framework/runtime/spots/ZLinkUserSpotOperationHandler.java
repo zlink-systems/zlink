@@ -134,7 +134,7 @@ final class ZLinkUserSpotOperationHandler
                 var authority = authorities.decode(snapshot.payload())
                     .orElseThrow(() -> stale("invalid User Spot authority"));
                 require(
-                    authority.kind() == ZLinkServiceAuthorityPayloadCodec.Kind.USER
+                    authority.user().isPresent()
                         && authority.state() == ZLinkServiceAuthorityPayloadCodec.State.READY
                         && authority.spotId().equals(fence.spotId())
                         && authority.meshName().equals(meshName)
@@ -297,7 +297,7 @@ final class ZLinkUserSpotOperationHandler
         var factory = factories.get(request.intent().stableType());
         require(
             factory != null
-                && authority.kind() == ZLinkServiceAuthorityPayloadCodec.Kind.USER
+                && authority.user().isPresent()
                 && authority.state() == ZLinkServiceAuthorityPayloadCodec.State.CREATING
                 && authority.spotId().equals(request.intent().spotId())
                 && authority.stableType().equals(request.intent().stableType())

@@ -14,6 +14,7 @@ import java.util.List;
 import java.time.Duration;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.binding.spot.ActorTransferId;
@@ -59,6 +60,39 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
     default void setMessageFollowRelayHandler(
         MessageFollowRelayHandler handler) {
         // Alternate backends may not support the raw service Actor relay.
+    }
+
+    /**
+     * Installs the target-side owner for raw application ingress that reaches
+     * an object while a relocation stage is still hidden. The handler takes
+     * ownership only when it returns {@code true}; otherwise normal live-route
+     * admission continues.
+     */
+    default void setRelocationStagingIngressHandler(
+        RelocationStagingIngressHandler handler) {
+        // Alternate backends may not expose raw relocation staging.
+    }
+
+    /**
+     * Redirects an exact stale Spot route to the staged target through the
+     * existing application wire. The redirect expires with Message Follow and
+     * never changes a different generation or authority fence.
+     */
+    default void installRelocationSpotForward(
+        ZLinkServiceM6BWireCodec.SpotRouteFence source,
+        ZLinkServiceM6BWireCodec.SpotRouteFence target,
+        Duration retention) {
+        throw new UnsupportedOperationException(
+            "raw Spot relocation forwarding is unavailable");
+    }
+
+    /** Redirects one exact stale Actor route through the existing wire. */
+    default void installRelocationActorForward(
+        ZLinkServiceM6BWireCodec.ActorRouteFence source,
+        ZLinkServiceM6BWireCodec.ActorRouteFence target,
+        Duration retention) {
+        throw new UnsupportedOperationException(
+            "raw Actor relocation forwarding is unavailable");
     }
 
     default Optional<Integer> submitLocalNodeSend(
@@ -390,6 +424,30 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             long sourceNodeGeneration,
             ZLinkServiceM6BWireCodec.ActorMessage header,
             byte[] acceptedJournalRecord,
+            List<Message> parts,
+            String contentType,
+            ZLinkInboundDispatchBudget.Lease inboundDispatchLease,
+            Consumer<List<Message>> reply,
+            Consumer<Throwable> failure);
+    }
+
+    interface RelocationStagingIngressHandler {
+        boolean handleSpot(
+            ZLinkInternalMeshNode.PeerAuthorityFence source,
+            ZLinkServiceM6BWireCodec.SpotMessage header,
+            byte[] metadata,
+            Supplier<byte[]> acceptedJournalRecord,
+            int acceptedJournalRecordSizeHint,
+            List<Message> parts,
+            String contentType,
+            ZLinkInboundDispatchBudget.Lease inboundDispatchLease,
+            Consumer<List<Message>> reply,
+            Consumer<Throwable> failure);
+
+        boolean handleActor(
+            ZLinkInternalMeshNode.PeerAuthorityFence source,
+            ZLinkServiceM6BWireCodec.ActorMessage header,
+            Supplier<byte[]> acceptedJournalRecord,
             List<Message> parts,
             String contentType,
             ZLinkInboundDispatchBudget.Lease inboundDispatchLease,

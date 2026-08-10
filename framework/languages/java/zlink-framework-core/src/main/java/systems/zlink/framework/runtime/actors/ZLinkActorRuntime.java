@@ -3554,15 +3554,12 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             }
             return true;
         }
-        boolean resolveTargetFence = followSource.targetRoute() != null
-            && !followSource.messageFollowNoticeClaimed();
-        if (resolveTargetFence
-            && !followSource.tryClaimMessageFollowNotice()) {
-            resolveTargetFence = false;
-        }
+        ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute =
+            messageFollowSourceRoute(header);
+        Optional<ZLinkMessageFollowSuppressionRegistry.Claim> noticeClaim =
+            followSource.beginMessageFollowNotice(sourceRoute);
         CompletionStage<ZLinkServiceMessageFollowWireCodec.ActorRoute> targetRoute =
             CompletableFuture.completedFuture(followSource.targetRoute());
-        final boolean noticeRequired = resolveTargetFence;
         targetRoute.thenCompose(route -> {
             ZLinkActorTransferHandoff.MessageFollowSource current =
                 handoff.messageFollowSource(staleActor.actorId()).orElse(null);
@@ -3588,9 +3585,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         }).whenComplete((result, relayFailure) -> {
             try {
                 if (relayFailure != null) {
-                    if (noticeRequired) {
-                        followSource.releaseMessageFollowNoticeClaim();
-                    }
+                    noticeClaim.ifPresent(followSource::abortMessageFollowNotice);
                     onFailure.accept(unwrapCompletionFailure(relayFailure));
                     return;
                 }
@@ -3607,14 +3602,16 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         onFailure.accept(replyFailure);
                     }
                 }
-                if (noticeRequired) {
+                if (noticeClaim.isPresent()) {
                     sendMessageFollowNotice(
                         sourceNodeRid,
                         header,
                         followSource,
+                        sourceRoute,
                         result.route(),
                         result.queue(),
-                        sourceNodeGeneration);
+                        sourceNodeGeneration,
+                        noticeClaim.orElseThrow());
                 }
             } finally {
                 payload.close();
@@ -3630,9 +3627,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         RoutingId sourceNodeRid,
         ZLinkServiceM6BWireCodec.ActorMessage staleHeader,
         ZLinkActorTransferHandoff.MessageFollowSource followSource,
+        ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute,
         ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute,
         ZLinkActorTransferHandoff.MessageFollowQueueSnapshot queue,
-        long sourceNodeGeneration) {
+        long sourceNodeGeneration,
+        ZLinkMessageFollowSuppressionRegistry.Claim noticeClaim) {
         if (targetRoute == null
             || !targetRoute.actorId().equals(
                 staleHeader.target().actor().actorId())
@@ -3644,29 +3643,20 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 != followSource.targetAddress().targetNodeGeneration()) {
             LOGGER.warning("Message Follow target route fence changed before notice "
                 + "for actor " + staleHeader.target().actor().actorId());
-            followSource.releaseMessageFollowNoticeClaim();
+            followSource.abortMessageFollowNotice(noticeClaim);
             return;
         }
         int hopCount = staleHeader.messageFollowHopCount() + 1;
         if (hopCount > ZLinkServiceMessageFollowWireCodec.MAX_HOP_COUNT) {
-            followSource.releaseMessageFollowNoticeClaim();
+            followSource.abortMessageFollowNotice(noticeClaim);
             return;
         }
-        ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute =
-            new ZLinkServiceMessageFollowWireCodec.ActorRoute(
-                staleHeader.target().actor().actorId(),
-                staleHeader.target().actor().generation(),
-                staleHeader.target().actor().nodeRid(),
-                staleHeader.target().targetNodeGeneration(),
-                staleHeader.target().authorityOwnerGeneration(),
-                staleHeader.target().ownerLeaseGeneration());
         ZLinkServiceMessageFollowWireCodec.Notice notice =
-            new ZLinkServiceMessageFollowWireCodec.Notice(
+            messageFollowNotice(
                 sourceRoute,
                 targetRoute,
                 hopCount,
-                queue.messages(),
-                queue.bytes(),
+                queue,
                 staleHeader.operationHigh(),
                 staleHeader.operationLow(),
                 staleHeader.request() ? staleHeader.correlation() : 0L);
@@ -3675,6 +3665,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 messageFollowNoticeSender.send(sourceNodeRid, notice),
                 "Message Follow notice sender returned null");
             sent.whenComplete((ignored, failure) -> {
+                completeMessageFollowNotice(followSource, noticeClaim, failure);
                 if (failure != null) {
                     LOGGER.warning("Message Follow notice failed for actor "
                         + staleHeader.target().actor().actorId()
@@ -3684,11 +3675,54 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 }
             });
         } catch (RuntimeException failure) {
+            followSource.abortMessageFollowNotice(noticeClaim);
             LOGGER.warning("Message Follow notice submission failed for actor "
                 + staleHeader.target().actor().actorId()
                 + " from " + sourceNodeRid
                 + ": " + failure);
         }
+    }
+
+    static ZLinkServiceMessageFollowWireCodec.Notice messageFollowNotice(
+        ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute,
+        ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute,
+        int hopCount,
+        ZLinkActorTransferHandoff.MessageFollowQueueSnapshot queue,
+        long operationHigh,
+        long operationLow,
+        long correlation) {
+        final long uint32Max = 0xffff_ffffL;
+        return new ZLinkServiceMessageFollowWireCodec.Notice(
+            sourceRoute,
+            targetRoute,
+            hopCount,
+            Math.min(queue.messages(), uint32Max),
+            Math.min(queue.bytes(), uint32Max),
+            operationHigh,
+            operationLow,
+            correlation);
+    }
+
+    static void completeMessageFollowNotice(
+        ZLinkActorTransferHandoff.MessageFollowSource followSource,
+        ZLinkMessageFollowSuppressionRegistry.Claim noticeClaim,
+        Throwable failure) {
+        if (failure == null) {
+            followSource.markMessageFollowNoticeSent(noticeClaim);
+        } else {
+            followSource.abortMessageFollowNotice(noticeClaim);
+        }
+    }
+
+    private static ZLinkServiceMessageFollowWireCodec.ActorRoute
+        messageFollowSourceRoute(ZLinkServiceM6BWireCodec.ActorMessage staleHeader) {
+        return new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+            staleHeader.target().actor().actorId(),
+            staleHeader.target().actor().generation(),
+            staleHeader.target().actor().nodeRid(),
+            staleHeader.target().targetNodeGeneration(),
+            staleHeader.target().authorityOwnerGeneration(),
+            staleHeader.target().ownerLeaseGeneration());
     }
 
     private static Throwable unwrapCompletionFailure(Throwable failure) {
@@ -3969,6 +4003,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         String actorId,
         ZLinkAsyncSerialQueue.RelocationSeal seal) {
         return dispatches.commit(actorId, seal);
+    }
+
+    public Optional<systems.zlink.framework.runtime.internal.relocation
+        .ZLinkRetainedSerialQueueCommit.Commit>
+        retainActorRelocationCommit(
+            String actorId,
+            ZLinkAsyncSerialQueue.RelocationSeal seal) {
+        return dispatches.retainCommit(actorId, seal);
     }
 
     public Optional<List<ZLinkAsyncSerialQueue.QueuedRecord>>

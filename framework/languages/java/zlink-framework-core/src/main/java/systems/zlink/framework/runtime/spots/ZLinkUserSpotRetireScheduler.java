@@ -65,16 +65,16 @@ final class ZLinkUserSpotRetireScheduler {
                 .thenApply(ignored -> prepared))
             .thenCompose(prepared -> request.source()
                 .commitAuthority(cancellation))
-            .thenCompose(activated -> {
+            .thenCompose(pending -> {
                 sourceCommitted.set(true);
-                request.source().commitSourceBarrier(
-                    activated.targetOwnerGenerations());
-                return CompletableFuture.completedFuture(activated);
+                return request.source().commitSourceBarrier(
+                    pending, cancellation);
             })
             .thenCompose(activated -> request.client().publish(
                     stage.targetNodeRid(),
                     stage.fence(),
                     request.timeout())
+                .thenRun(request.source()::completeSourceBarrierCommit)
                 .thenCompose(ignored -> request.sourceCleanup().cleanup())
                 .thenCompose(ignored -> request.source().completeSourceCleanup(
                     activated,

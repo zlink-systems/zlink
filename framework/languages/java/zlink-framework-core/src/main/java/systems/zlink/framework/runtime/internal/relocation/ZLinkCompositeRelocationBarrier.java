@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
@@ -189,6 +190,20 @@ public final class ZLinkCompositeRelocationBarrier {
 
     public Optional<Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>>
         commit(Seal seal) {
+        Optional<RelocationCommit> retained = retainCommit(seal);
+        if (retained.isEmpty()) {
+            return Optional.empty();
+        }
+        RelocationCommit commit = retained.orElseThrow();
+        RelocationCommit.Cut cut;
+        do {
+            cut = commit.cut();
+        } while (!commit.tryEstablishAndFinish(cut));
+        commit.complete();
+        return Optional.of(cut.records());
+    }
+
+    public Optional<RelocationCommit> retainCommit(Seal seal) {
         LinkedHashMap<String, ZLinkAsyncSerialQueue> lanes;
         synchronized (this) {
             if (committing || seal == null || seal != active) {
@@ -199,15 +214,18 @@ public final class ZLinkCompositeRelocationBarrier {
         }
         LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
             held = new LinkedHashMap<>();
+        List<ZLinkRetainedSerialQueueCommit.Commit> retained =
+            new ArrayList<>();
         try {
             for (Map.Entry<String, ZLinkAsyncSerialQueue> lane
                 : lanes.entrySet()) {
-                List<ZLinkAsyncSerialQueue.QueuedRecord> records =
-                    lane.getValue().commitRelocation(
-                        seal.seals.get(lane.getKey()))
+                ZLinkRetainedSerialQueueCommit.Commit committed =
+                    ZLinkRetainedSerialQueueCommit.retain(
+                        lane.getValue(), seal.seals.get(lane.getKey()))
                         .orElseThrow(() -> new IllegalStateException(
                             "composite relocation commit lost a lane fence"));
-                held.put(lane.getKey(), records);
+                retained.add(committed);
+                held.put(lane.getKey(), committed.records());
             }
         } catch (RuntimeException failure) {
             synchronized (this) {
@@ -223,7 +241,7 @@ public final class ZLinkCompositeRelocationBarrier {
             active = null;
             committing = false;
         }
-        return Optional.of(Map.copyOf(held));
+        return Optional.of(new RelocationCommit(held, retained));
     }
 
     public synchronized Optional<Map<String, List<
@@ -350,6 +368,86 @@ public final class ZLinkCompositeRelocationBarrier {
 
         public List<String> laneIds() {
             return List.copyOf(lanes.keySet());
+        }
+    }
+
+    public static final class RelocationCommit {
+        private final Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> records;
+        private final List<ZLinkRetainedSerialQueueCommit.Commit> lanes;
+        private final List<String> laneIds;
+        private final AtomicBoolean completed = new AtomicBoolean();
+
+        private RelocationCommit(
+            Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> records,
+            List<ZLinkRetainedSerialQueueCommit.Commit> lanes) {
+            this.records = Collections.unmodifiableMap(
+                new LinkedHashMap<>(records));
+            this.lanes = List.copyOf(lanes);
+            this.laneIds = List.copyOf(records.keySet());
+        }
+
+        public Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> records() {
+            return records;
+        }
+
+        /** Captures one sequence-stable suffix cut across every lane. */
+        public Cut cut() {
+            LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
+                current = new LinkedHashMap<>();
+            List<ZLinkRetainedSerialQueueCommit.Cut> cuts = new ArrayList<>();
+            for (int index = 0; index < lanes.size(); index++) {
+                ZLinkRetainedSerialQueueCommit.Cut cut = lanes.get(index).cut();
+                cuts.add(cut);
+                current.put(laneIds.get(index), cut.records());
+            }
+            return new Cut(
+                Collections.unmodifiableMap(current),
+                List.copyOf(cuts));
+        }
+
+        /**
+         * Detaches all lanes only if no lane accepted ingress after this cut.
+         */
+        public boolean tryFinishCapture(Cut cut) {
+            Objects.requireNonNull(cut, "cut");
+            return ZLinkRetainedSerialQueueCommit.finishCapture(
+                lanes, cut.lanes);
+        }
+
+        public boolean tryEstablishDurableCut(Cut cut) {
+            Objects.requireNonNull(cut, "cut");
+            return ZLinkRetainedSerialQueueCommit.establishDurableCut(
+                lanes, cut.lanes);
+        }
+
+        private boolean tryEstablishAndFinish(Cut cut) {
+            Objects.requireNonNull(cut, "cut");
+            return ZLinkRetainedSerialQueueCommit.establishAndFinishCapture(
+                lanes, cut.lanes);
+        }
+
+        public void complete() {
+            if (completed.compareAndSet(false, true)) {
+                lanes.forEach(ZLinkRetainedSerialQueueCommit.Commit::complete);
+            }
+        }
+
+        public static final class Cut {
+            private final Map<String, List<
+                ZLinkAsyncSerialQueue.QueuedRecord>> records;
+            private final List<ZLinkRetainedSerialQueueCommit.Cut> lanes;
+
+            private Cut(
+                Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> records,
+                List<ZLinkRetainedSerialQueueCommit.Cut> lanes) {
+                this.records = records;
+                this.lanes = lanes;
+            }
+
+            public Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
+                records() {
+                return records;
+            }
         }
     }
 }

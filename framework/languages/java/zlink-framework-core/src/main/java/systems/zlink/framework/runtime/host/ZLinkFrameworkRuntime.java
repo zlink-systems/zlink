@@ -127,8 +127,6 @@ public final class ZLinkFrameworkRuntime
     private final ZLinkStoreLocationResolvers storeLocationResolvers;
     private final AtomicBoolean spotRuntimeStopped =
         new AtomicBoolean(false);
-    private final AtomicBoolean ready =
-        new AtomicBoolean(false);
     private final CompletableFuture<Void> startupReady =
         new CompletableFuture<>();
     private final AtomicReference<
@@ -221,6 +219,7 @@ public final class ZLinkFrameworkRuntime
         ZLinkHandlerActivator handlerFactory,
         ZLinkRuntimeEventDispatcher eventDispatcher) {
         options.validate();
+        options.registration().codecs().freeze();
         this.eventDispatcher = eventDispatcher;
         this.registration = options.registration();
         this.meshDrains = new systems.zlink.framework.runtime.internal.drain
@@ -516,9 +515,8 @@ public final class ZLinkFrameworkRuntime
                 ZLinkInternalMeshNode::markServiceReady))
             .whenComplete((ignored, failure) -> {
                 if (failure == null && !drainStarted.get()) {
-                    ready.set(true);
-                    startupReady.complete(null);
                     publishRuntimeState(ZLinkFrameworkRuntimeState.SERVING);
+                    startupReady.complete(null);
                     Logger.getLogger(
                         ZLinkFrameworkRuntime.class.getName())
                         .info("ZLINK_FRAMEWORK_READY");
@@ -635,11 +633,6 @@ public final class ZLinkFrameworkRuntime
     }
 
     static ZLinkMessageSerializer serializerFor(DefaultZLinkFrameworkOptions options) {
-        Optional<ZLinkMessageSerializer> custom =
-            options.registration().codecs().customSerializer();
-        if (custom.isPresent()) {
-            return custom.get();
-        }
         return options.registration().codecs().serializerWithFallback(new ZLinkJsonMessageSerializer());
     }
 
@@ -1485,7 +1478,7 @@ public final class ZLinkFrameworkRuntime
 
     private CompletionStage<ZLinkTerminationReason>
         retirePreflight() {
-        if (!ready.get()) {
+        if (!runtimeState.get().isReadyState()) {
             return CompletableFuture.completedFuture(
                 ZLinkTerminationReason.RUNTIME_NOT_READY);
         }
@@ -1659,10 +1652,8 @@ public final class ZLinkFrameworkRuntime
         return new systems.zlink.framework.monitoring
             .ZLinkFrameworkRuntimeStatus(
                 state,
-                state == ZLinkFrameworkRuntimeState.SERVING,
-                state == ZLinkFrameworkRuntimeState.SERVING
-                    && ready.get()
-                    && !drainStarted.get(),
+                state.isReadyState(),
+                state.acceptsWork(!drainStarted.get()),
                 Optional.ofNullable(terminationDeadline.get()),
                 Optional.ofNullable(lastRelocationResult.get()),
                 Optional.ofNullable(lastTerminationResult.get()),
@@ -1767,7 +1758,11 @@ public final class ZLinkFrameworkRuntime
     }
 
     private CompletionStage<Void> closeCoreAsync() {
-        ready.set(false);
+        ZLinkFrameworkRuntimeState currentState = runtimeState.get();
+        if (currentState != ZLinkFrameworkRuntimeState.STOPPED
+            && currentState != ZLinkFrameworkRuntimeState.ERROR) {
+            publishRuntimeState(ZLinkFrameworkRuntimeState.DRAINING);
+        }
         startupReady.completeExceptionally(
             new IllegalStateException("Framework runtime is shutting down"));
         if (spots != null && !spotRuntimeStopped.get()) {
@@ -1854,7 +1849,6 @@ public final class ZLinkFrameworkRuntime
             if (actors != null) {
                 actors.beginDrain();
             }
-            ready.set(false);
             publishRuntimeState(ZLinkFrameworkRuntimeState.DRAINING);
             runDrain();
             CompletableFuture.delayedExecutor(
@@ -1871,7 +1865,7 @@ public final class ZLinkFrameworkRuntime
     }
 
     public boolean isReady() {
-        return ready.get();
+        return runtimeState.get().isReadyState();
     }
 
     private void runDrain() {

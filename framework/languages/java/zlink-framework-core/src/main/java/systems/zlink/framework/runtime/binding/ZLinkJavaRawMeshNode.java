@@ -1747,6 +1747,178 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         return accepted;
     }
 
+    boolean forwardRelocationSpot(
+        ZLinkServiceM6BWireCodec.SpotMessage stale,
+        ZLinkServiceM6BWireCodec.SpotRouteFence target,
+        byte[] metadata,
+        List<Message> parts,
+        ZLinkInboundDispatchBudget.Lease inboundDispatchLease,
+        Consumer<List<Message>> reply,
+        Consumer<Throwable> failure) {
+        Objects.requireNonNull(stale, "stale");
+        Objects.requireNonNull(target, "target");
+        Objects.requireNonNull(parts, "parts");
+        Consumer<Throwable> onFailure = failure == null
+            ? ignored -> { }
+            : failure;
+        if (stale.messageFollowHopCount()
+                >= ZLinkServiceMessageFollowWireCodec.MAX_HOP_COUNT
+            || !readyRelocationPeer(target.targetNodeRid(),
+                target.targetNodeGeneration())) {
+            return false;
+        }
+        List<byte[]> frames = new ArrayList<>();
+        frames.add(statefulWire.encodeSpotHeader(
+            stale.request(),
+            stale.flags(),
+            stale.correlation(),
+            stale.operationHigh(),
+            stale.operationLow(),
+            stale.messageFollowHopCount() + 1,
+            stale.sourceSpotId(),
+            target));
+        if ((stale.flags() & ServiceWireConstants.FLAG_METADATA) != 0) {
+            frames.add(Objects.requireNonNull(metadata, "metadata").clone());
+        }
+        frames.add(wire.encodeApplicationPayload(applicationPayload(parts)));
+        boolean accepted;
+        if (stale.request()) {
+            accepted = port.request(
+                requireStarted(),
+                target.targetNodeRid(),
+                frames,
+                Duration.ofSeconds(30),
+                (result, replyFrames) -> forwardRelocationReply(
+                    stale.correlation(), result, replyFrames, reply, onFailure));
+        } else {
+            accepted = port.send(
+                requireStarted(), target.targetNodeRid(), frames);
+        }
+        if (accepted) {
+            parts.forEach(Message::close);
+            if (inboundDispatchLease != null) {
+                inboundDispatchLease.close();
+            }
+        }
+        return accepted;
+    }
+
+    boolean forwardRelocationActor(
+        ZLinkServiceM6BWireCodec.ActorMessage stale,
+        ZLinkServiceM6BWireCodec.ActorRouteFence target,
+        List<Message> parts,
+        ZLinkInboundDispatchBudget.Lease inboundDispatchLease,
+        Consumer<List<Message>> reply,
+        Consumer<Throwable> failure) {
+        Objects.requireNonNull(stale, "stale");
+        Objects.requireNonNull(target, "target");
+        Objects.requireNonNull(parts, "parts");
+        Consumer<Throwable> onFailure = failure == null
+            ? ignored -> { }
+            : failure;
+        if (stale.messageFollowHopCount()
+                >= ZLinkServiceMessageFollowWireCodec.MAX_HOP_COUNT
+            || !readyRelocationPeer(target.actor().nodeRid(),
+                target.targetNodeGeneration())) {
+            return false;
+        }
+        ZLinkBackendActorRef sourceActor = stale.sourceActor() == null
+            ? null
+            : new ZLinkBackendActorRef(
+                routingId,
+                stale.sourceActor().actorId(),
+                stale.sourceActor().generation());
+        List<byte[]> frames = List.of(
+            statefulWire.encodeActorHeader(
+                stale.request(),
+                stale.flags(),
+                stale.correlation(),
+                stale.operationHigh(),
+                stale.operationLow(),
+                stale.messageFollowHopCount() + 1,
+                sourceActor,
+                target,
+                stale.boundSession()),
+            wire.encodeApplicationPayload(applicationPayload(parts)));
+        boolean accepted;
+        if (stale.request()) {
+            accepted = port.request(
+                requireStarted(),
+                target.actor().nodeRid(),
+                frames,
+                Duration.ofSeconds(30),
+                (result, replyFrames) -> forwardRelocationReply(
+                    stale.correlation(), result, replyFrames, reply, onFailure));
+        } else {
+            accepted = port.send(
+                requireStarted(), target.actor().nodeRid(), frames);
+        }
+        if (accepted) {
+            parts.forEach(Message::close);
+            if (inboundDispatchLease != null) {
+                inboundDispatchLease.close();
+            }
+        }
+        return accepted;
+    }
+
+    private boolean readyRelocationPeer(
+        RoutingId targetNodeRid,
+        long targetNodeGeneration) {
+        Optional<ZLinkServiceTopologyRegistry.Peer> peer = topology == null
+            ? Optional.empty()
+            : topology.peer(targetNodeRid);
+        return peer.isPresent()
+            && isReadyPeer(peer.orElseThrow())
+            && peer.orElseThrow().descriptor().lifecycleGeneration()
+                == targetNodeGeneration;
+    }
+
+    private void forwardRelocationReply(
+        Long correlation,
+        RequestResult result,
+        List<byte[]> replyFrames,
+        Consumer<List<Message>> reply,
+        Consumer<Throwable> failure) {
+        if (result != RequestResult.OK) {
+            failure.accept(new ZlinkRequestException(result));
+            return;
+        }
+        try {
+            if (replyFrames.isEmpty() || replyFrames.size() > 2) {
+                throw new IllegalArgumentException(
+                    "invalid relocation-forward reply frame count");
+            }
+            ZLinkServiceM6AWireCodec.Reply response =
+                wire.decodeReplyHeader(replyFrames.getFirst());
+            if (!Objects.equals(response.correlation(), correlation)
+                || (response.terminalResult() == 0)
+                    != (replyFrames.size() == 2)) {
+                throw new IllegalArgumentException(
+                    "relocation-forward reply terminal differs");
+            }
+            if (response.terminalResult() != 0) {
+                failure.accept(new ZlinkRequestException(
+                    RequestResult.fromValue(response.terminalResult())));
+                return;
+            }
+            List<Message> decoded = decodeApplicationMessages(
+                replyFrames.get(1));
+            try {
+                if (reply == null) {
+                    decoded.forEach(Message::close);
+                } else {
+                    reply.accept(decoded);
+                }
+            } catch (RuntimeException callbackFailure) {
+                decoded.forEach(Message::close);
+                throw callbackFailure;
+            }
+        } catch (RuntimeException invalid) {
+            failure.accept(invalid);
+        }
+    }
+
     boolean sendBoundActor(
         ZLinkBackendActorRef actor,
         RoutingId sourceSessionRid,
@@ -4829,6 +5001,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         } finally {
                             replyParts.forEach(Message::close);
                         }
+                    },
+                    relayFailure -> {
+                        if (!terminal.tryWin(systems.zlink.framework.runtime.internal
+                                .completion.ZLinkTerminalWinner.Cause.FAILURE)) {
+                            return;
+                        }
+                        replySpotFailure(inbound, header, 102, 1);
                     });
             if (!accepted) {
                 streamTrace("spot-enqueue-rejected target="
@@ -5585,8 +5764,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 new ZLinkTerminalWinner();
             boolean accepted = ((ZLinkJavaRawSpotNode) spotNode())
                 .enqueueRemoteActor(
-                    acceptedAuthorities.source().sourceNodeRid(),
-                    acceptedAuthorities.source().sourceNodeGeneration(),
+                    acceptedAuthorities.source(),
                     header,
                     () -> ZLinkServiceFrozenRecordCodec.encodeActor(
                         acceptedAuthorities.source(),
@@ -7006,10 +7184,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         if (contentType == null) {
             return Optional.empty();
         }
-        String normalized = contentType.trim();
-        return "application/json".equalsIgnoreCase(normalized)
+        return "application/json".equals(contentType)
                 || "application/zlink-framework-json-v1"
-                    .equalsIgnoreCase(normalized)
+                    .equals(contentType)
             ? Optional.of(ZLinkStreamCodec.JSON)
             : Optional.empty();
     }

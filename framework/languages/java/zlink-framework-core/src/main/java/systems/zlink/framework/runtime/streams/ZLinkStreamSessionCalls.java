@@ -54,6 +54,8 @@ final class ZLinkStreamSessionClient implements ZLinkSessionClient {
 
     @Override
     public ZLinkSessionSendCall send(Object message) {
+        ZLinkStreamCodec codec = ZLinkPayloadEncoding.streamCodec(
+            serializer, message, defaultCodec);
         ZLinkPayloadEncoding.EncodedPayload encoded =
             ZLinkPayloadEncoding.encode(serializer, message);
         return new ZLinkStreamSessionSendCall(
@@ -63,13 +65,15 @@ final class ZLinkStreamSessionClient implements ZLinkSessionClient {
             encoded.packetName(),
             Map.of(),
             false,
-            defaultCodec,
+            codec,
             compressionCodec,
             oneWayCalls);
     }
 
     @Override
     public ZLinkSessionReplyCall reply(Object message) {
+        ZLinkStreamCodec codec = ZLinkPayloadEncoding.streamCodec(
+            serializer, message, defaultCodec);
         ZLinkPayloadEncoding.EncodedPayload encoded =
             ZLinkPayloadEncoding.encode(serializer, message);
         return new ZLinkStreamSessionReplyCall(
@@ -79,6 +83,7 @@ final class ZLinkStreamSessionClient implements ZLinkSessionClient {
             context,
             encoded.packetName(),
             false,
+            codec,
             compressionCodec);
     }
 }
@@ -220,6 +225,7 @@ record ZLinkStreamSessionReplyCall(
     ZLinkStreamSessionContextState context,
     String packetName,
     boolean compressed,
+    ZLinkStreamCodec codec,
     ZLinkStreamCompressionCodec compressionCodec,
     AtomicBoolean submitGate)
     implements ZLinkSessionReplyCall {
@@ -230,8 +236,9 @@ record ZLinkStreamSessionReplyCall(
         ZLinkStreamSessionContextState context,
         String packetName,
         boolean compressed,
+        ZLinkStreamCodec codec,
         ZLinkStreamCompressionCodec compressionCodec) {
-        this(stream, routingId, payload, context, packetName, compressed, compressionCodec,
+        this(stream, routingId, payload, context, packetName, compressed, codec, compressionCodec,
             new AtomicBoolean());
     }
     @Override
@@ -243,6 +250,7 @@ record ZLinkStreamSessionReplyCall(
             context,
             packetName,
             true,
+            codec,
             compressionCodec,
             submitGate);
     }
@@ -278,7 +286,7 @@ record ZLinkStreamSessionReplyCall(
         ZLinkStreamHeader current = currentHeader.get();
         ZLinkStreamHeader replyHeader = ZLinkStreamHeader.createResponse(
             current,
-            current.codec(),
+            codec,
             encoded.flags(),
             packetName,
             Map.of());

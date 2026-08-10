@@ -19,6 +19,8 @@ import systems.zlink.framework.ZLinkHandlerDispatchKind;
 import systems.zlink.framework.ZLinkHandlerFilter;
 import systems.zlink.framework.ZLinkHandlerFilterContext;
 import systems.zlink.framework.ZLinkHandlerFilterNext;
+import systems.zlink.framework.ZLinkEncodedPayload;
+import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.channels.ZLinkFanoutHandler;
 import systems.zlink.framework.channels.ZLinkPublishMessageContext;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
@@ -33,6 +35,46 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
 final class ZLinkChannelHandlerFilterContractTest {
+    @Test
+    void requestReplyUsesDeclaredReplyTypeInsteadOfRuntimeSubtype() {
+        ZLinkCodecRegistration codecs = new ZLinkCodecRegistration();
+        codecs.addSerializer(
+            "application/x-broad",
+            new ReplyMarkerSerializer("BROAD"),
+            type -> type == BaseReply.class || type == DerivedReply.class);
+        codecs.addSerializer(
+            "application/x-base",
+            new ReplyMarkerSerializer("BASE"),
+            BaseReply.class::equals);
+        ZLinkMessageSerializer serializer = codecs.serializerWithFallback(
+            new ZLinkStringMessageSerializer());
+        ZLinkChannelHandlerInvoker invoker = new ZLinkChannelHandlerInvoker(
+            serializer,
+            codecs,
+            type -> new DerivedReplyHandler(),
+            Runnable::run,
+            List.of(),
+            List.of());
+        Message request = text("request");
+
+        Message reply = invoker.invokeRequestHandler(
+                "channel-a",
+                new ChannelRequestHandlerRegistration(
+                    DerivedReplyHandler.class,
+                    String.class,
+                    BaseReply.class,
+                    "request"),
+                request)
+            .toCompletableFuture()
+            .join();
+        try {
+            assertEquals("BASE", reply.toUtf8String());
+        } finally {
+            request.close();
+            reply.close();
+        }
+    }
+
     @Test
     void exposesFiveDispatchKindsAndTopologyMeshNames() {
         Probe probe = new Probe();
@@ -296,6 +338,36 @@ final class ZLinkChannelHandlerFilterContractTest {
             ZLinkPublishMessageContext context) {
             probe.handlerCalls++;
             return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    private static class BaseReply {
+    }
+
+    private static final class DerivedReply extends BaseReply {
+    }
+
+    private static final class DerivedReplyHandler
+        implements ZLinkRequestHandler<String, BaseReply> {
+        @Override
+        public CompletionStage<BaseReply> handle(
+            String request,
+            ZLinkMessageContext context) {
+            return CompletableFuture.completedFuture(new DerivedReply());
+        }
+    }
+
+    private record ReplyMarkerSerializer(String marker)
+        implements ZLinkMessageSerializer {
+        @Override
+        public <T> ZLinkEncodedPayload serialize(T value) {
+            return ZLinkEncodedPayload.from(
+                marker.getBytes(StandardCharsets.UTF_8));
+        }
+
+        @Override
+        public <T> T deserialize(ZLinkEncodedPayload payload, Class<T> type) {
+            throw new UnsupportedOperationException();
         }
     }
 }

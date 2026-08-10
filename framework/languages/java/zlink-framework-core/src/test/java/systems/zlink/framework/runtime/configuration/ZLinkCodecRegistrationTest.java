@@ -59,12 +59,15 @@ final class ZLinkCodecRegistrationTest {
     }
 
     @Test
-    void ambiguousWhenMultipleCustomSerializersRegistered() {
+    void laterFallbackSerializerReplacesEarlierSelection() {
         ZLinkCodecRegistration registration = new ZLinkCodecRegistration();
-        registration.addSerializer("application/avro", new MarkerSerializer());
-        registration.addSerializer("application/thrift", new MarkerSerializer());
+        ZLinkMessageSerializer avro = new MarkerSerializer();
+        ZLinkMessageSerializer thrift = new MarkerSerializer();
+        registration.addSerializer("application/avro", avro);
+        registration.addSerializer("application/thrift", thrift);
 
-        assertThrows(ZLinkConfigurationException.class, registration::customSerializer);
+        assertSame(thrift, registration.customSerializer().orElseThrow());
+        assertEquals("application/thrift", registration.contentTypeFor(Probe.class));
     }
 
     @Test
@@ -84,6 +87,17 @@ final class ZLinkCodecRegistrationTest {
             json,
             registration.serializerForReceivedContentType(
                 "application/zlink-framework-json-v1", json));
+
+        ZLinkMessageSerializer composite =
+            registration.serializerWithFallback(json);
+        assertSame(
+            json,
+            ZLinkCodecRegistration.serializerForReceivedContentType(
+                composite, "application/json"));
+        assertSame(
+            avro,
+            ZLinkCodecRegistration.serializerForReceivedContentType(
+                composite, "application/avro"));
     }
 
     @Test
@@ -106,7 +120,7 @@ final class ZLinkCodecRegistrationTest {
             " application/x-protobuf ", ZLinkStreamCodec.PROTOBUF);
 
         assertEquals(
-            Optional.of(ZLinkStreamCodec.JSON),
+            Optional.empty(),
             registration.streamCodecForReceivedContentType("APPLICATION/JSON"));
         assertEquals(
             Optional.of(ZLinkStreamCodec.PROTOBUF),
@@ -116,6 +130,60 @@ final class ZLinkCodecRegistrationTest {
             Optional.empty(),
             registration.streamCodecForReceivedContentType(
                 "application/x-unregistered"));
+    }
+
+    @Test
+    void incomingStreamCodecSelectsItsExactSerializerAndRejectsUnmappedMarkers() {
+        ZLinkCodecRegistration registration = new ZLinkCodecRegistration();
+        ZLinkMessageSerializer json = new MarkerSerializer();
+        ZLinkMessageSerializer protobuf = new MarkerSerializer();
+        registration.addSerializer(
+            "application/x-protobuf", protobuf, Probe.class::equals);
+        registration.addStreamCodec(
+            "application/x-protobuf", ZLinkStreamCodec.PROTOBUF);
+        registration.freeze();
+        ZLinkMessageSerializer composite =
+            registration.serializerWithFallback(json);
+
+        assertSame(
+            protobuf,
+            ZLinkCodecRegistration.serializerForReceivedStreamCodec(
+                composite, ZLinkStreamCodec.PROTOBUF));
+        assertSame(
+            json,
+            ZLinkCodecRegistration.serializerForReceivedStreamCodec(
+                composite, ZLinkStreamCodec.JSON));
+        assertSame(
+            json,
+            ZLinkCodecRegistration.serializerForReceivedStreamCodec(
+                composite, ZLinkStreamCodec.RAW));
+        ZLinkFrameworkException failure = assertThrows(
+            ZLinkFrameworkException.class,
+            () -> ZLinkCodecRegistration.serializerForReceivedStreamCodec(
+                composite, ZLinkStreamCodec.MESSAGE_PACK));
+        assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
+    }
+
+    @Test
+    void normalizedStreamReplacementKeepsForwardAndReverseMapsConsistent() {
+        ZLinkCodecRegistration registration = new ZLinkCodecRegistration();
+        registration.addStreamCodec(
+            " \tApplication/X-Binary\t ", ZLinkStreamCodec.PROTOBUF);
+        registration.addStreamCodec(
+            "application/x-binary", ZLinkStreamCodec.MESSAGE_PACK);
+
+        assertEquals(
+            Optional.of(ZLinkStreamCodec.MESSAGE_PACK),
+            registration.streamCodec("application/x-binary"));
+        assertEquals(Optional.empty(), registration.streamContentType(ZLinkStreamCodec.PROTOBUF));
+
+        registration.addStreamCodec(
+            "application/x-message-pack", ZLinkStreamCodec.MESSAGE_PACK);
+
+        assertEquals(Optional.empty(), registration.streamCodec("application/x-binary"));
+        assertEquals(
+            Optional.of("application/x-message-pack"),
+            registration.streamContentType(ZLinkStreamCodec.MESSAGE_PACK));
     }
 
     record Probe(String text) {

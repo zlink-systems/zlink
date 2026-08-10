@@ -36,25 +36,25 @@ final class ZLinkStandaloneActorRelocationScheduler {
             .thenCompose(ignored -> source.freezeAndPrepare(cancellation))
             .thenCompose(ignored -> source.commitAuthority(cancellation))
             .thenCompose(published -> {
-                source.commitSourceQueue(
-                    published.targetOwnerGenerations());
                 committed.set(true);
-                return client.publish(
-                        request.targetNodeRid(), request.fence(), timeout)
-                    .thenCompose(ignored -> source.cleanupLocal())
-                    .thenCompose(ignored -> source.completeSourceCleanup(
-                        published, cancellation))
-                    .thenCompose(completed -> client.finalizeAfterCompletion(
-                        request.targetNodeRid(), request.fence(), timeout))
-                    .thenCompose(ignored ->
-                        source.discardInitialAfterCommit())
-                    .thenRun(() -> {
-                        source.releasePermitAfterCompletion();
-                        systems.zlink.framework.runtime.internal.metrics
-                            .ZLinkRuntimeMetrics.increment(
-                                "zlink.drain.actors.handed_off",
-                                Map.of());
-                    });
+                return source.commitSourceQueue(published, cancellation)
+                    .thenCompose(activated -> client.publish(
+                            request.targetNodeRid(), request.fence(), timeout)
+                        .thenRun(source::completeSourceQueueCommit)
+                        .thenCompose(ignored -> source.cleanupLocal())
+                        .thenCompose(ignored -> source.completeSourceCleanup(
+                            activated, cancellation))
+                        .thenCompose(completed -> client.finalizeAfterCompletion(
+                            request.targetNodeRid(), request.fence(), timeout))
+                        .thenCompose(ignored ->
+                            source.discardInitialAfterCommit())
+                        .thenRun(() -> {
+                            source.releasePermitAfterCompletion();
+                            systems.zlink.framework.runtime.internal.metrics
+                                .ZLinkRuntimeMetrics.increment(
+                                    "zlink.drain.actors.handed_off",
+                                    Map.of());
+                        }));
             });
         return operation.exceptionallyCompose(failure -> {
             Throwable original = unwrap(failure);

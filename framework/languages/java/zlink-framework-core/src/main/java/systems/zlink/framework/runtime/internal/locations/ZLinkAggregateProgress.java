@@ -27,9 +27,9 @@ public record ZLinkAggregateProgress(
             throw new IllegalArgumentException(
                 "aggregate progress reference must be non-blank");
         }
-        if (phase != 4 && phase != 8) {
+        if (phase != 3 && phase != 4 && phase != 8) {
             throw new IllegalArgumentException(
-                "aggregate progress phase must be 4 or 8");
+                "aggregate progress phase must be 3, 4 or 8");
         }
         if (sourceCleanupCompleted != (phase == 8)) {
             throw new IllegalArgumentException(

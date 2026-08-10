@@ -3,9 +3,13 @@ package systems.zlink.framework.runtime.binding;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.util.List;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import systems.zlink.framework.runtime.internal.binding.spot.OperationId;
 import systems.zlink.framework.runtime.internal.binding.spot.OperationKind;
@@ -52,6 +56,31 @@ class ZLinkJavaMeshOperationTrackerTest {
             var pending = tracker.trackCompletion(operation);
             assertTrue(tracker.accept(record));
             assertDoesNotThrow(() -> pending.toCompletableFuture().join());
+        }
+    }
+
+    @Test
+    void completionRunsOutsideTheTrackerGateOnANewTurn() throws Exception {
+        var executor = Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "mesh-completion-turn");
+            thread.setDaemon(true);
+            return thread;
+        });
+        try (ZLinkJavaMeshOperationTracker tracker =
+                 new ZLinkJavaMeshOperationTracker(executor)) {
+            OperationId operation = new OperationId(5L, 5L);
+            AtomicReference<String> callbackThread = new AtomicReference<>();
+            var pending = tracker.trackCompletion(operation);
+            pending.whenComplete((ignored, failure) ->
+                callbackThread.set(Thread.currentThread().getName()));
+
+            assertTrue(tracker.accept(completion(operation, RequestResult.OK)));
+            try (ZLinkMeshDispatchRecord ignored = pending.toCompletableFuture()
+                .get(5, TimeUnit.SECONDS)) {
+                assertEquals("mesh-completion-turn", callbackThread.get());
+            }
+        } finally {
+            executor.shutdownNow();
         }
     }
 

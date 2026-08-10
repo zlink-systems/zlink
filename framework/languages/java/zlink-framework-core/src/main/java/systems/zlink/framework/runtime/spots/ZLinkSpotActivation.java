@@ -59,6 +59,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEven
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
+import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.actors.ZLinkActorEntryTransferEnvelope;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.channels.ChannelRegistration;
@@ -625,10 +626,10 @@ final class SpotActivation
         List<Message> replies,
         ZLinkBackendActorRef actorRef,
         ZLinkActorSpotRoutePackets.WireHandoffPacket packet,
-        Optional<Message> reply) {
+        Optional<LocalActorReply> reply) {
         try {
             if (packet.replyRoute() == null || reply.isEmpty()) {
-                replies.add(reply.map(Message::from)
+                replies.add(reply.map(value -> Message.from(value.payload()))
                     .orElseGet(() -> Message.from(new byte[0])));
                 return replies;
             }
@@ -638,7 +639,7 @@ final class SpotActivation
             return replies;
         } finally {
             if (packet.replyRoute() == null) {
-                reply.ifPresent(Message::close);
+                reply.ifPresent(value -> value.payload().close());
             }
         }
     }

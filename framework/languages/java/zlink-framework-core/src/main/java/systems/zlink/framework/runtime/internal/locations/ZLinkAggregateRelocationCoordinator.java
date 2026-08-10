@@ -64,6 +64,23 @@ public final class ZLinkAggregateRelocationCoordinator {
                 null));
     }
 
+    /**
+     * Prepares a private replay-pending publication. Target activation must
+     * wait until {@link #activateCanonicalReplay} advances the aggregate
+     * marker after the source barrier fixes its final accepted suffix.
+     */
+    public CompletionStage<Prepared> prepareReplayPending(
+        Request request,
+        ZLinkStoreCancellation cancellation) {
+        return stageRoot(request, cancellation).thenCompose(staged ->
+            prepareAuthority(
+                staged.request(),
+                staged.inventoryDigest(),
+                staged.stored(),
+                cancellation,
+                3));
+    }
+
     /** Stores and verifies an initial factory/Restore root without publishing
      * or preparing Location authority. */
     public CompletionStage<StagedRoot> stageRoot(
@@ -232,6 +249,10 @@ public final class ZLinkAggregateRelocationCoordinator {
         return requireAggregateProgress(
                 fence, targetOwner, digest, cancellation)
             .thenCompose(marker -> {
+                if (marker.progress().phase() == 3) {
+                    return failed(new RelocationDataLostException(
+                        "relocation replay is still pending"));
+                }
                 var publication = new AtomicReference<
                     ZLinkCanonicalRelocationAuthorityStateCodec.Published>();
                 Map<String, Long> ownerGenerations = new LinkedHashMap<>();
@@ -839,6 +860,95 @@ public final class ZLinkAggregateRelocationCoordinator {
             });
     }
 
+    /**
+     * Makes a replay-pending aggregate visible only after its marker points at
+     * the exact final suffix root. The participant rows already carry the
+     * target authority fence; this private marker CAS is the publication gate.
+     */
+    public CompletionStage<Published> activateCanonicalReplay(
+        Prepared prepared,
+        ZLinkStoreCancellation cancellation) {
+        Objects.requireNonNull(prepared, "prepared");
+        Objects.requireNonNull(cancellation, "cancellation");
+        return requireAggregateProgress(
+                prepared.fence(),
+                prepared.request().targetOwner(),
+                prepared.inventoryDigest(),
+                cancellation)
+            .thenCompose(marker -> {
+                if (marker.progress().phase() == 4) {
+                    return publishedFromAggregateMarker(
+                        prepared, cancellation);
+                }
+                if (marker.progress().phase() != 3) {
+                    return failed(new RelocationDataLostException(
+                        "replay-pending aggregate has an invalid phase"));
+                }
+                var progress = marker.progress();
+                var ready = new ZLinkAggregateProgress(
+                    progress.reference(),
+                    progress.checksumCrc32c(),
+                    4,
+                    false,
+                    progress.terminalCompletionCount(),
+                    progress.pendingRelayCount());
+                CompletionStage<ZLinkAggregateProgressWriteResult> operation;
+                try {
+                    operation = authorityStore.compareExchangeAggregateProgress(
+                        prepared.fence(),
+                        marker.storeVersion(),
+                        ready,
+                        cancellation);
+                } catch (RuntimeException failure) {
+                    operation = failed(failure);
+                }
+                return operation
+                    .handle((result, failure) -> new Attempt<>(result, failure))
+                    .thenCompose(attempt -> {
+                        if (attempt.failure() == null
+                            && attempt.result()
+                                instanceof ZLinkAggregateProgressStored) {
+                            return publishedFromAggregateMarker(
+                                prepared, cancellation);
+                        }
+                        return authorityStore.readAggregateProgress(
+                                prepared.fence(), cancellation)
+                            .thenCompose(current -> {
+                                if (current.isPresent()
+                                    && sameProgressRoot(
+                                        ready, current.get().progress())
+                                    && current.get().progress().phase() == 4) {
+                                    return publishedFromAggregateMarker(
+                                        prepared, cancellation);
+                                }
+                                if (current.isPresent()
+                                    && sameProgressRoot(
+                                        progress, current.get().progress())
+                                    && current.get().progress().phase() == 3
+                                    && attempt.failure() == null) {
+                                    return activateCanonicalReplay(
+                                        prepared, cancellation);
+                                }
+                                Throwable failure = attempt.failure() == null
+                                    ? new RelocationDataLostException(
+                                        "replay-pending marker CAS conflicted")
+                                    : unwrap(attempt.failure());
+                                return failed(failure);
+                            });
+                    });
+            });
+    }
+
+    private static boolean sameProgressRoot(
+        ZLinkAggregateProgress left,
+        ZLinkAggregateProgress right) {
+        return left.reference().equals(right.reference())
+            && left.checksumCrc32c() == right.checksumCrc32c()
+            && left.terminalCompletionCount()
+                == right.terminalCompletionCount()
+            && left.pendingRelayCount() == right.pendingRelayCount();
+    }
+
     /** Reads the exact completion published by command 33's authority fence. */
     public CompletionStage<ZLinkServiceRelocationEnvelopeCodec.Completion>
         readCanonicalReply(
@@ -1402,15 +1512,16 @@ public final class ZLinkAggregateRelocationCoordinator {
         byte[] digest,
         ZLinkRelocationStored stored,
         ZLinkStoreCancellation cancellation,
-        Boolean sourceCleanupOverride) {
+        Integer phaseOverride) {
         List<ZLinkAggregateParticipant> mutations = new ArrayList<>();
-        boolean sourceCleanupCompleted = sourceCleanupOverride != null
-            ? sourceCleanupOverride
-            : request.participants().stream()
+        boolean sourceCleanupCompleted = request.participants().stream()
                 .allMatch(value -> value.ownerTransition()
                     == ZLinkAuthorityGenerationTransition.PRESERVE)
                 && request.capacityBundle().actorSlots() == 0
                 && request.capacityBundle().spotSlots() == 0;
+        int phase = phaseOverride == null
+            ? sourceCleanupCompleted ? 8 : 4
+            : phaseOverride;
         for (Participant participant : canonical(request.participants())) {
             byte[] authorityPayload =
                 ZLinkCanonicalRelocationAuthorityStateCodec.publish(
@@ -1418,7 +1529,7 @@ public final class ZLinkAggregateRelocationCoordinator {
                     request,
                     participant.ownerTransition(),
                     stored,
-                    sourceCleanupCompleted);
+                    phase);
             mutations.add(new ZLinkAggregateParticipant(
                 participant.authorityKey(),
                 participant.objectGeneration(),

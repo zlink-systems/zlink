@@ -20,6 +20,7 @@ import java.util.concurrent.Executor;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkCloseException;
 import systems.zlink.framework.actors.ZLinkActor;
+import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -247,6 +248,27 @@ final class ZLinkSpotLifecycle {
             .runRelocationReadyCompletion(
                 systems.zlink.framework.spots
                     .ZLinkSpotRelocationReadyOutcome.RELOCATED);
+    }
+
+    Object beginReservedIngressHold(PreparedUserSpot prepared) {
+        requireNewPrepared(prepared);
+        return prepared.created().activation().context
+            .trySealRelocation()
+            .orElseThrow(() -> new IllegalStateException(
+                "reserved relocation target ingress could not be sealed"));
+    }
+
+    void resumeReservedIngress(
+        PreparedUserSpot prepared,
+        Object ingressHold) {
+        requireNewPrepared(prepared);
+        if (!(ingressHold
+                instanceof ZLinkAsyncSerialQueue.RelocationSeal seal)
+            || !prepared.created().activation().context
+                .abortRelocation(seal)) {
+            throw new IllegalStateException(
+                "reserved relocation target ingress hold was lost");
+        }
     }
 
     CompletionStage<List<byte[]>> replayReserved(

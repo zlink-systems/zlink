@@ -175,6 +175,12 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
 
     @Override
     public ZLinkBoundSessionSendCall send(Object message) {
+        ZLinkBoundSessionSendOptions options =
+            ZLinkBoundSessionSendOptions.createForPayload(
+                serializer,
+                message,
+                ZLinkPayloadEncoding.resolvePacketName(message),
+                defaultCodec);
         ZLinkPayloadEncoding.EncodedPayload encoded =
             ZLinkPayloadEncoding.encode(serializer, message);
         return new SendCall(
@@ -182,7 +188,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
             sessionRid,
             actorId,
             encoded.payload(),
-            ZLinkBoundSessionSendOptions.create(encoded.packetName(), defaultCodec),
+            options,
             metadataPolicy,
             actorRuntime.oneWayCalls());
     }

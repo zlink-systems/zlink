@@ -191,6 +191,7 @@ public final class ZLinkUserSpotRetireRuntime {
                 .install(node);
             node.setRelocationReplyRelayHandler(
                 target::relayCanonicalReply);
+            node.spotNode().setRelocationStagingIngressHandler(target);
             if (!relocatableSpots.isEmpty()) {
                 configured.put(registration.meshName(), new Lane(
                     new ZLinkUserSpotRetireSourceBuilder(

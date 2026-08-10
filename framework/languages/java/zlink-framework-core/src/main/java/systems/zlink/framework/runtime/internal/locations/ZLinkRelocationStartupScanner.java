@@ -203,6 +203,12 @@ public final class ZLinkRelocationStartupScanner {
     private CompletionStage<Optional<Candidate>> verifyMarker(
         ZLinkAggregateProgressSnapshot marker,
         ZLinkStoreCancellation cancellation) {
+        if (marker.progress().phase() == 3) {
+            return failed(
+                "relocation replay remained pending across restart; "
+                    + "the incomplete root cannot be published: "
+                    + marker.fence().aggregateId());
+        }
         ZLinkAggregateFence fence = marker.fence();
         ZLinkLocationOwnerToken target = marker.request().targetOwner();
         List<ZLinkAggregateRelocationCoordinator.ExpectedParticipant> expected =
@@ -319,6 +325,14 @@ public final class ZLinkRelocationStartupScanner {
                         + " for aggregate " + fence.aggregateId());
             }
             var publication = first.get();
+            if (marker.progress().phase() == 4
+                && publication.phase() == 3) {
+                return ZLinkRelocationStartupScanner
+                    .<Optional<Candidate>>failed(
+                        "relocation replay activation did not reach source "
+                            + "cleanup; restart must fail explicitly: "
+                            + fence.aggregateId());
+            }
             return reconcileCompletedMarker(
                     marker,
                     publication,

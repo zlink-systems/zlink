@@ -92,7 +92,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             ZLinkPayloadEncoding.encode(
                 serializer,
                 message,
-                contentTypeResolver.apply(message == null ? null : message.getClass()));
+                contentTypeResolver.apply(ZLinkPayloadEncoding.declaredType(message)));
         return new DeferredSpotSendCall(
             spotId,
             encoded.payload(),
@@ -109,7 +109,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             ZLinkPayloadEncoding.encode(
                 serializer,
                 request,
-                contentTypeResolver.apply(request == null ? null : request.getClass()));
+                contentTypeResolver.apply(ZLinkPayloadEncoding.declaredType(request)));
         return new DeferredSpotRequestCall(
             spotId,
             encoded.payload(),
@@ -128,7 +128,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             ZLinkPayloadEncoding.encode(
                 serializer,
                 message,
-                contentTypeResolver.apply(message == null ? null : message.getClass()));
+                contentTypeResolver.apply(ZLinkPayloadEncoding.declaredType(message)));
         if (publisherChannelName != null && publishers.contains(publisherChannelName)) {
             return publishers.call(
                 publisherChannelName,

@@ -779,6 +779,14 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         private ZLinkAggregateRelocationCoordinator.Prepared prepared;
         private List<ZLinkAsyncSerialQueue.QueuedRecord> finalJournal =
             List.of();
+        private systems.zlink.framework.runtime.internal.relocation
+            .ZLinkRetainedSerialQueueCommit.Commit relocationCommit;
+        private byte[] committedRoot;
+        private ZLinkAggregateRelocationCoordinator.Published
+            activatedPublication;
+        private CompletionStage<
+            ZLinkAggregateRelocationCoordinator.Published> sourceCommitFlight;
+        private boolean captureFinished;
         private boolean committed;
         private boolean terminal;
 
@@ -871,7 +879,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                 initial.request().targetDescriptorLifecycleGeneration(),
                 initial.request().capacityBundle(),
                 initial.request().targetOwner());
-            return coordinator.prepare(request, cancellation)
+            return coordinator.prepareReplayPending(request, cancellation)
                 .thenApply(value -> {
                     synchronized (PreparedSource.this) {
                         prepared = value;
@@ -881,19 +889,165 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                 });
         }
 
-        synchronized void commitSourceQueue(
-            Map<String, Long> targetOwnerGenerations) {
-            if (terminal || committed || prepared == null) {
-                throw new IllegalStateException(
-                    "Actor relocation source queue cannot be committed");
+        synchronized CompletionStage<
+            ZLinkAggregateRelocationCoordinator.Published> commitSourceQueue(
+            ZLinkAggregateRelocationCoordinator.Published published,
+            ZLinkStoreCancellation cancellation) {
+            Objects.requireNonNull(published, "published");
+            Objects.requireNonNull(cancellation, "cancellation");
+            if (terminal || prepared == null) {
+                return failed(new IllegalStateException(
+                    "Actor relocation source queue cannot be committed"));
             }
-            Objects.requireNonNull(
-                targetOwnerGenerations,
-                "targetOwnerGenerations");
+            if (committed) {
+                return CompletableFuture.completedFuture(
+                    activatedPublication);
+            }
+            if (sourceCommitFlight != null) {
+                return sourceCommitFlight;
+            }
+            if (relocationCommit == null) {
+                relocationCommit = actors.retainActorRelocationCommit(
+                        owned.actorId(), seal)
+                    .orElseThrow(() -> new IllegalStateException(
+                        "Actor relocation source queue cannot be committed"));
+            }
+            CompletableFuture<ZLinkAggregateRelocationCoordinator.Published>
+                flight = new CompletableFuture<>();
+            sourceCommitFlight = flight;
+            commitNextSourceQueueCut(published, cancellation)
+                .whenComplete((activated, failure) -> {
+                Throwable terminal = failure;
+                if (terminal == null) {
+                    try {
+                        bindCommittedReplies(
+                            activated.targetOwnerGenerations());
+                    } catch (RuntimeException bindFailure) {
+                        terminal = bindFailure;
+                    }
+                }
+                synchronized (PreparedSource.this) {
+                    if (terminal == null) {
+                        committed = true;
+                        activatedPublication = activated;
+                    } else {
+                        sourceCommitFlight = null;
+                    }
+                }
+                if (terminal == null) {
+                    flight.complete(activated);
+                } else {
+                    flight.completeExceptionally(unwrap(terminal));
+                }
+            });
+            return flight;
+        }
+
+        private CompletionStage<
+            ZLinkAggregateRelocationCoordinator.Published>
+            commitNextSourceQueueCut(
+                ZLinkAggregateRelocationCoordinator.Published published,
+                ZLinkStoreCancellation cancellation) {
+            if (cancellation.isCancellationRequested()) {
+                return cancelled();
+            }
+            ZLinkAggregateRelocationCoordinator.Prepared authority;
+            systems.zlink.framework.runtime.internal.relocation
+                .ZLinkRetainedSerialQueueCommit.Commit retained;
+            boolean finished;
+            synchronized (this) {
+                authority = prepared;
+                retained = relocationCommit;
+                finished = captureFinished;
+            }
+            if (finished) {
+                return coordinator.activateCanonicalReplay(
+                    authority, cancellation);
+            }
+            var cut = retained.cut();
+            List<ZLinkAsyncSerialQueue.QueuedRecord> journal =
+                new ArrayList<>(seal.captured());
+            journal.addAll(cut.records());
+            journal.sort((left, right) -> Long.compareUnsigned(
+                left.sequence(), right.sequence()));
+            byte[] root = ZLinkCanonicalActorRelocationEnvelope.encode(
+                relocationId,
+                owned.actorId(),
+                owned.snapshot().objectGeneration(),
+                owned.snapshot().authorityOwnerGeneration(),
+                owned.snapshotPolicy(),
+                state,
+                journal,
+                timerEnvelope);
+            synchronized (this) {
+                finalJournal = List.copyOf(journal);
+                committedRoot = root.clone();
+            }
+            return coordinator.updateCanonicalReplay(
+                    authority.request().participants().stream()
+                        .map(value -> new ZLinkAggregateRelocationCoordinator
+                            .ExpectedParticipant(
+                                value.authorityKey(),
+                                value.objectGeneration(),
+                                value.authorityOwnerGeneration()))
+                        .toList(),
+                    authority.fence(),
+                    authority.request().targetOwner(),
+                    ignored -> ZLinkServiceRelocationEnvelopeCodec.decode(root),
+                    cancellation)
+                .thenCompose(ignored -> {
+                    if (cancellation.isCancellationRequested()) {
+                        return cancelled();
+                    }
+                    installRelocationForward(published);
+                    if (!retained.tryEstablishDurableCut(cut)) {
+                        return commitNextSourceQueueCut(
+                            published, cancellation);
+                    }
+                    if (!retained.tryFinishCapture(cut)) {
+                        return commitNextSourceQueueCut(
+                            published, cancellation);
+                    }
+                    synchronized (PreparedSource.this) {
+                        captureFinished = true;
+                    }
+                    return coordinator.activateCanonicalReplay(
+                        authority, cancellation);
+                });
+        }
+
+        private void installRelocationForward(
+            ZLinkAggregateRelocationCoordinator.Published published) {
+            long targetAuthorityGeneration = published.targetOwnerGeneration(
+                owned.authorityKey());
+            relocationReplies.nodeByRid(stageRequest.sourceNodeRid())
+                .installRelocationActorForward(
+                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                    new systems.zlink.framework.runtime.internal.backend
+                        .ZLinkBackendActorRef(
+                            stageRequest.sourceNodeRid(),
+                            owned.actorId(),
+                            owned.snapshot().objectGeneration()),
+                    stageRequest.sourceNodeGeneration(),
+                    owned.snapshot().authorityOwnerGeneration(),
+                    owned.snapshot().ownerLeaseGeneration()),
+                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                    new systems.zlink.framework.runtime.internal.backend
+                        .ZLinkBackendActorRef(
+                            stageRequest.targetNodeRid(),
+                            owned.actorId(),
+                            owned.snapshot().objectGeneration()),
+                    stageRequest.targetNodeGeneration(),
+                    targetAuthorityGeneration,
+                    stageRequest.targetOwnerLeaseGeneration()),
+                relocationReplies.relocationForwardRetention());
+        }
+
+        private void bindCommittedReplies(
+            Map<String, Long> targetOwnerGenerations) {
             ZLinkSpotRetireControl.ParticipantFence participant =
                 stageRequest.participants().stream()
-                    .filter(value ->
-                        value.objectId().equals(owned.actorId()))
+                    .filter(value -> value.objectId().equals(owned.actorId()))
                     .findFirst()
                     .orElseThrow(() -> new IllegalStateException(
                         "Actor relocation participant is missing"));
@@ -909,12 +1063,14 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                         targetOwnerGeneration(
                             targetOwnerGenerations,
                             participant.authorityKey()))));
-            if (actors.commitActorRelocation(
-                    owned.actorId(), seal).isEmpty()) {
+        }
+
+        synchronized void completeSourceQueueCommit() {
+            if (!committed || relocationCommit == null) {
                 throw new IllegalStateException(
-                    "Actor relocation source queue cannot be committed");
+                    "Actor relocation source queue is not durably committed");
             }
-            committed = true;
+            relocationCommit.complete();
         }
 
         CompletionStage<
@@ -946,7 +1102,9 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             }
             return coordinator.completeSourceCleanup(
                 published,
-                authority.request().root(),
+                committedRoot == null
+                    ? authority.request().root()
+                    : committedRoot,
                 cancellation);
         }
 

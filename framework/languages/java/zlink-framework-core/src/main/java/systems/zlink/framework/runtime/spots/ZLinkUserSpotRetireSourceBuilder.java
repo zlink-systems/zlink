@@ -965,7 +965,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
         var authority = spotAuthorities.decode(inventory.spot().snapshot().payload())
             .orElseThrow(() -> new IllegalStateException(
                 "User Spot authority payload is invalid"));
-        if (authority.kind() != ZLinkServiceAuthorityPayloadCodec.Kind.USER
+        if (authority.user().isEmpty()
             || authority.state()
                 != ZLinkServiceAuthorityPayloadCodec.State.READY
             || !authority.spotId().equals(inventory.spot().id())
@@ -1316,6 +1316,14 @@ final class ZLinkUserSpotRetireSourceBuilder {
         private boolean finalJournalEmpty;
         private Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
             finalJournal = Map.of();
+        private ZLinkUserSpotRelocationBarrier.RelocationCommit
+            relocationCommit;
+        private byte[] committedRoot;
+        private CompletionStage<
+            ZLinkAggregateRelocationCoordinator.Published> sourceCommitFlight;
+        private ZLinkAggregateRelocationCoordinator.Published
+            activatedPublication;
+        private boolean captureFinished;
         private boolean sourceCommitted;
         private boolean terminal;
 
@@ -1388,7 +1396,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 authorityRequest.targetDescriptorLifecycleGeneration(),
                 authorityRequest.capacityBundle(),
                 authorityRequest.targetOwner());
-            return coordinator.prepare(request, cancellation)
+            return coordinator.prepareReplayPending(request, cancellation)
                 .thenApply(prepared -> {
                     synchronized (PreparedSource.this) {
                         finalPrepared = prepared;
@@ -1419,15 +1427,188 @@ final class ZLinkUserSpotRetireSourceBuilder {
             return CompletableFuture.completedFuture(null);
         }
 
-        synchronized ZLinkUserSpotRelocationBarrier.Committed
-            commitSourceBarrier(Map<String, Long> targetOwnerGenerations) {
-            if (terminal || sourceCommitted || finalPrepared == null) {
-                throw new IllegalStateException(
-                    "source relocation final root is not prepared or is terminal");
+        synchronized CompletionStage<
+            ZLinkAggregateRelocationCoordinator.Published> commitSourceBarrier(
+            ZLinkAggregateRelocationCoordinator.Published published,
+            ZLinkStoreCancellation cancellation) {
+            if (terminal || finalPrepared == null) {
+                return failed(new IllegalStateException(
+                    "source relocation final root is not prepared or is terminal"));
             }
-            Objects.requireNonNull(
-                targetOwnerGenerations,
-                "targetOwnerGenerations");
+            Objects.requireNonNull(published, "published");
+            Objects.requireNonNull(cancellation, "cancellation");
+            if (sourceCommitted) {
+                return CompletableFuture.completedFuture(
+                    activatedPublication);
+            }
+            if (sourceCommitFlight != null) {
+                return sourceCommitFlight;
+            }
+            if (relocationCommit == null) {
+                relocationCommit = barrier.retainCommit(seal).orElseThrow(() ->
+                    new IllegalStateException(
+                        "source relocation barrier was lost"));
+            }
+            CompletableFuture<ZLinkAggregateRelocationCoordinator.Published>
+                flight = new CompletableFuture<>();
+            sourceCommitFlight = flight;
+            commitNextSourceBarrierCut(published, cancellation)
+                .whenComplete((activated, failure) -> {
+                Throwable terminal = failure;
+                if (terminal == null) {
+                    try {
+                        bindCommittedReplies(
+                            activated.targetOwnerGenerations());
+                    } catch (RuntimeException bindFailure) {
+                        terminal = bindFailure;
+                    }
+                }
+                synchronized (PreparedSource.this) {
+                    if (terminal == null) {
+                        sourceCommitted = true;
+                        activatedPublication = activated;
+                    } else {
+                        sourceCommitFlight = null;
+                    }
+                }
+                if (terminal == null) {
+                    flight.complete(activated);
+                } else {
+                    flight.completeExceptionally(unwrap(terminal));
+                }
+            });
+            return flight;
+        }
+
+        private CompletionStage<
+            ZLinkAggregateRelocationCoordinator.Published>
+            commitNextSourceBarrierCut(
+                ZLinkAggregateRelocationCoordinator.Published published,
+                ZLinkStoreCancellation cancellation) {
+            if (cancellation.isCancellationRequested()) {
+                return cancelled();
+            }
+            ZLinkAggregateRelocationCoordinator.Prepared authority;
+            ZLinkUserSpotRelocationBarrier.RelocationCommit retained;
+            boolean finished;
+            synchronized (this) {
+                authority = finalPrepared;
+                retained = relocationCommit;
+                finished = captureFinished;
+            }
+            if (finished) {
+                return coordinator.activateCanonicalReplay(
+                    authority, cancellation);
+            }
+            var cut = retained.cut();
+            var finalStaging = withHeldIngress(
+                captured.staging(),
+                cut.committed().heldIngress());
+            Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> journal =
+                finalStaging.acceptedJournal();
+            byte[] root = ZLinkCanonicalUserSpotRelocationEnvelope.encode(
+                finalStaging,
+                authorityRequest.aggregateId(),
+                captured.inventory().spot().snapshot()
+                    .authorityOwnerGeneration(),
+                participantFences(captured));
+            synchronized (this) {
+                finalJournal = journal;
+                finalJournalEmpty = journal.values().stream()
+                    .allMatch(List::isEmpty);
+                committedRoot = root.clone();
+            }
+            return coordinator.updateCanonicalReplay(
+                    authority.request().participants().stream()
+                        .map(value -> new ZLinkAggregateRelocationCoordinator
+                            .ExpectedParticipant(
+                                value.authorityKey(),
+                                value.objectGeneration(),
+                                value.authorityOwnerGeneration()))
+                        .toList(),
+                    authority.fence(),
+                    authority.request().targetOwner(),
+                    ignored -> ZLinkServiceRelocationEnvelopeCodec.decode(root),
+                    cancellation)
+                .thenCompose(ignored -> {
+                    if (cancellation.isCancellationRequested()) {
+                        return cancelled();
+                    }
+                    installRelocationForwards(published);
+                    if (!retained.tryEstablishDurableCut(cut)) {
+                        return commitNextSourceBarrierCut(
+                            published, cancellation);
+                    }
+                    if (!retained.tryFinishCapture(cut)) {
+                        return commitNextSourceBarrierCut(
+                            published, cancellation);
+                    }
+                    synchronized (PreparedSource.this) {
+                        captureFinished = true;
+                    }
+                    return coordinator.activateCanonicalReplay(
+                        authority, cancellation);
+                });
+        }
+
+        private void installRelocationForwards(
+            ZLinkAggregateRelocationCoordinator.Published published) {
+            var node = relocationReplies.nodeByRid(
+                stageRequest.sourceNodeRid());
+            Duration retention = relocationReplies.relocationForwardRetention();
+            Owned spot = captured.inventory().spot();
+            node.installRelocationSpotForward(
+                spotRoute(spot, false, published),
+                spotRoute(spot, true, published),
+                retention);
+            for (Owned actor : captured.inventory().actors()) {
+                node.installRelocationActorForward(
+                    actorRoute(actor, false, published),
+                    actorRoute(actor, true, published),
+                    retention);
+            }
+        }
+
+        private ZLinkServiceM6BWireCodec.SpotRouteFence spotRoute(
+            Owned spot,
+            boolean target,
+            ZLinkAggregateRelocationCoordinator.Published published) {
+            return new ZLinkServiceM6BWireCodec.SpotRouteFence(
+                spot.id(),
+                spot.snapshot().objectGeneration(),
+                target ? stageRequest.targetNodeRid()
+                    : stageRequest.sourceNodeRid(),
+                target ? stageRequest.targetNodeGeneration()
+                    : stageRequest.sourceNodeGeneration(),
+                target ? published.targetOwnerGeneration(spot.key())
+                    : spot.snapshot().authorityOwnerGeneration(),
+                target ? stageRequest.targetOwnerLeaseGeneration()
+                    : spot.snapshot().ownerLeaseGeneration());
+        }
+
+        private ZLinkServiceM6BWireCodec.ActorRouteFence actorRoute(
+            Owned actor,
+            boolean target,
+            ZLinkAggregateRelocationCoordinator.Published published) {
+            RoutingId nodeRid = target
+                ? stageRequest.targetNodeRid()
+                : stageRequest.sourceNodeRid();
+            return new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                new systems.zlink.framework.runtime.internal.backend
+                    .ZLinkBackendActorRef(
+                        nodeRid,
+                        actor.id(),
+                        actor.snapshot().objectGeneration()),
+                target ? stageRequest.targetNodeGeneration()
+                    : stageRequest.sourceNodeGeneration(),
+                target ? published.targetOwnerGeneration(actor.key())
+                    : actor.snapshot().authorityOwnerGeneration(),
+                target ? stageRequest.targetOwnerLeaseGeneration()
+                    : actor.snapshot().ownerLeaseGeneration());
+        }
+
+        private void bindCommittedReplies(
+            Map<String, Long> targetOwnerGenerations) {
             Map<String, ZLinkSpotRelocationReplyRoutes.CommittedFence>
                 replyFences = new LinkedHashMap<>();
             for (int index = 0;
@@ -1454,12 +1635,14 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 stageRequest.targetNodeRid(),
                 stageRequest.targetNodeGeneration(),
                 Map.copyOf(replyFences));
-            ZLinkUserSpotRelocationBarrier.Committed committed =
-                barrier.commit(seal).orElseThrow(() ->
-                    new IllegalStateException(
-                        "source relocation barrier was lost"));
-            sourceCommitted = true;
-            return committed;
+        }
+
+        synchronized void completeSourceBarrierCommit() {
+            if (!sourceCommitted || relocationCommit == null) {
+                throw new IllegalStateException(
+                    "source relocation barrier is not durably committed");
+            }
+            relocationCommit.complete();
         }
 
         CompletionStage<

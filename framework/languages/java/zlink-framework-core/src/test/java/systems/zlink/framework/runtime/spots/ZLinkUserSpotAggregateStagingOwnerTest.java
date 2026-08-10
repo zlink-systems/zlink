@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
@@ -66,6 +67,30 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
 
         assertTrue(backend.live.isEmpty());
         assertTrue(backend.operations.contains("discard:actor-a"));
+        assertEquals("discard:spot", backend.operations.getLast());
+    }
+
+    @Test
+    void abortNotifiesEveryHeldTargetIngressBeforeDiscardingStaging() {
+        FakeBackend backend = new FakeBackend();
+        ZLinkUserSpotAggregateStagingOwner owner =
+            new ZLinkUserSpotAggregateStagingOwner(backend);
+        var staged = owner.stage(request(), () -> false)
+            .toCompletableFuture().join();
+        AtomicInteger failures = new AtomicInteger();
+        assertTrue(owner.acceptSpotIngress(
+            staged, new byte[] {1}, null, ignored -> failures.incrementAndGet()));
+        assertTrue(owner.acceptActorIngress(
+            staged,
+            "actor-a",
+            new byte[] {2},
+            null,
+            ignored -> failures.incrementAndGet()));
+
+        owner.discard(staged).toCompletableFuture().join();
+
+        assertEquals(2, failures.get());
+        assertTrue(backend.live.isEmpty());
         assertEquals("discard:spot", backend.operations.getLast());
     }
 

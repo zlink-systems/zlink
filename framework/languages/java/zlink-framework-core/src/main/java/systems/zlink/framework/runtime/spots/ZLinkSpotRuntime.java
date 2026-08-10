@@ -19,6 +19,7 @@ import systems.zlink.framework.locations.ZLinkPageRequest;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing;
@@ -113,6 +114,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
 import systems.zlink.framework.runtime.actors.ZLinkActorReplyRoute;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
+import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.channels.ChannelRegistration;
 import systems.zlink.framework.runtime.channels.ChannelKind;
@@ -821,9 +823,7 @@ public final class ZLinkSpotRuntime
             var authority = userSpotAuthorities.decode(snapshot.payload())
                 .orElseThrow(() -> new IllegalStateException(
                     "invalid User Spot authority"));
-            if (authority.kind()
-                    != systems.zlink.framework.runtime.locations
-                        .ZLinkServiceAuthorityPayloadCodec.Kind.USER
+            if (authority.user().isEmpty()
                 || snapshot.allocation().objectKind()
                     != ZLinkPlacementObjectKind.USER_SPOT) {
                 return CompletableFuture.failedFuture(
@@ -1988,6 +1988,10 @@ public final class ZLinkSpotRuntime
         return frameworkRegistration.inboundDispatchBudget();
     }
 
+    Duration relocationForwardRetention() {
+        return frameworkRegistration.messageFollowDuration();
+    }
+
     private static RuntimeException closeRuntimeComponent(
         Runnable close,
         RuntimeException firstFailure) {
@@ -2015,7 +2019,7 @@ public final class ZLinkSpotRuntime
         return node;
     }
 
-    private ZLinkInternalSpotNode nodeByRid(RoutingId nodeRid) {
+    ZLinkInternalSpotNode nodeByRid(RoutingId nodeRid) {
         for (ZLinkInternalSpotNode node : nodes) {
             if (node.routingId().equals(nodeRid)) {
                 return node;
@@ -2165,9 +2169,7 @@ public final class ZLinkSpotRuntime
                     var authority = userSpotAuthorities.decode(snapshot.payload())
                         .orElse(null);
                     boolean stale = authority == null
-                        || authority.kind()
-                            != systems.zlink.framework.runtime.locations
-                                .ZLinkServiceAuthorityPayloadCodec.Kind.INSTANCE
+                        || authority.instance().isEmpty()
                         || authority.state()
                             != systems.zlink.framework.runtime.locations
                                 .ZLinkServiceAuthorityPayloadCodec.State.READY
@@ -2498,9 +2500,7 @@ public final class ZLinkSpotRuntime
         var authority = userSpotAuthorities.decode(snapshot.payload())
             .orElseThrow(() -> new IllegalStateException(
                 "invalid Instance Spot authority"));
-        if (authority.kind()
-                != systems.zlink.framework.runtime.locations
-                    .ZLinkServiceAuthorityPayloadCodec.Kind.INSTANCE
+        if (authority.instance().isEmpty()
             || !authority.stableType().equals(stableType)
             || !authority.meshName().equals(meshName)) {
             return CompletableFuture.failedFuture(
@@ -2549,9 +2549,7 @@ public final class ZLinkSpotRuntime
         var authority = userSpotAuthorities.decode(snapshot.payload())
             .orElseThrow(() -> new IllegalStateException(
                 "invalid Instance Spot authority"));
-        if (authority.kind()
-                != systems.zlink.framework.runtime.locations
-                    .ZLinkServiceAuthorityPayloadCodec.Kind.INSTANCE
+        if (authority.instance().isEmpty()
             || !authority.stableType().equals(stableType)
             || !authority.meshName().equals(meshName)
             || authority.state()
@@ -2608,9 +2606,7 @@ public final class ZLinkSpotRuntime
             var pending = snapshot.pendingCreation().orElseThrow(
                 () -> new IllegalStateException(
                     "Instance Spot creation projection is missing"));
-            if (authority.kind()
-                    != systems.zlink.framework.runtime.locations
-                        .ZLinkServiceAuthorityPayloadCodec.Kind.INSTANCE
+            if (authority.instance().isEmpty()
                 || authority.state()
                     != systems.zlink.framework.runtime.locations
                         .ZLinkServiceAuthorityPayloadCodec.State.CREATING
@@ -2717,14 +2713,14 @@ public final class ZLinkSpotRuntime
         return spotLocations.claimEntrySpotsAsync();
     }
 
-    public CompletionStage<Optional<Message>> dispatchLocalSessionActor(
+    public CompletionStage<Optional<LocalActorReply>> dispatchLocalSessionActor(
         ZLinkBackendActorRef actorRef,
         ZLinkStreamHeader header,
         Message payload) {
         return dispatchLocalSessionActor(actorRef, 0, header, payload);
     }
 
-    public CompletionStage<Optional<Message>> dispatchLocalSessionActor(
+    public CompletionStage<Optional<LocalActorReply>> dispatchLocalSessionActor(
         ZLinkBackendActorRef actorRef,
         long acceptedSessionSequence,
         ZLinkStreamHeader header,
@@ -2757,7 +2753,7 @@ public final class ZLinkSpotRuntime
                 actorRef,
                 header,
                 payload,
-                local));
+                local).thenApply(reply -> reply.map(LocalActorReply::payload)));
     }
 
     CompletionStage<Optional<byte[]>> replayPreparedActor(
@@ -2806,7 +2802,7 @@ public final class ZLinkSpotRuntime
                         + record.header().packetName()));
         }
         Message payload = Message.from(record.payload());
-        CompletionStage<Optional<Message>> dispatched;
+        CompletionStage<Optional<LocalActorReply>> dispatched;
         try {
             dispatched = dispatchLocalSessionActorPacket(
                 handler,
@@ -2820,18 +2816,18 @@ public final class ZLinkSpotRuntime
             return CompletableFuture.failedFuture(failure);
         }
         return dispatched.thenApply(reply -> reply.map(value -> {
-                try (value) {
-                    return value.toByteArray();
+                try (Message replyPayload = value.payload()) {
+                    return replyPayload.toByteArray();
                 }
             }))
             .whenComplete((ignored, failure) -> payload.close());
     }
 
-    Optional<Message> replyTransferredRequestDirect(
+    Optional<LocalActorReply> replyTransferredRequestDirect(
         ZLinkBackendActorRef targetActorRef,
         ZLinkStreamHeader requestHeader,
         ZLinkActorReplyRoute replyRoute,
-        Optional<Message> reply) {
+        Optional<LocalActorReply> reply) {
         if (replyRoute == null || reply.isEmpty()) {
             return reply;
         }
@@ -2846,10 +2842,11 @@ public final class ZLinkSpotRuntime
             replyRoute.sourceNodeRid().toString(),
             null,
             replyRoute.actorRef().actorId());
-        try (Message payload = reply.get()) {
+        LocalActorReply actorReply = reply.get();
+        try (Message payload = actorReply.payload()) {
             ZLinkStreamHeader responseHeader = ZLinkStreamHeader.createResponse(
                 requestHeader,
-                requestHeader.codec(),
+                actorReply.codec(),
                 EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
                 requestHeader.packetName(),
                 Map.of());
@@ -2875,7 +2872,7 @@ public final class ZLinkSpotRuntime
         return Optional.empty();
     }
 
-    private CompletionStage<Optional<Message>> dispatchLocalSessionActor(
+    private CompletionStage<Optional<LocalActorReply>> dispatchLocalSessionActor(
         ZLinkBackendActorRef actorRef,
         ZLinkStreamHeader header,
         Message payload,
@@ -2921,9 +2918,7 @@ public final class ZLinkSpotRuntime
             spotSurface,
             actor,
             payload,
-            frameworkRegistration.codecs()
-                .streamContentType(header.codec())
-                .orElse(null),
+            contentTypeFor(header.codec()),
             header.metadata());
     }
 
@@ -3226,13 +3221,18 @@ public final class ZLinkSpotRuntime
     }
 
     private ZLinkStreamCodec streamCodecFor(Class<?> payloadType) {
-        String contentType = frameworkRegistration.codecs().contentTypeFor(payloadType);
-        return frameworkRegistration.codecs().streamCodec(contentType)
-            .orElse(ZLinkStreamCodec.JSON);
+        return ZLinkCodecRegistration.streamCodecForDeclaredType(
+            serializer,
+            payloadType,
+            ZLinkStreamCodec.JSON);
     }
 
     private String contentTypeFor(ZLinkStreamCodec codec) {
-        return frameworkRegistration.codecs().streamContentType(codec).orElse(null);
+        if (codec == ZLinkStreamCodec.RAW) {
+            return null;
+        }
+        return frameworkRegistration.codecs()
+            .contentTypeForReceivedStreamCodec(codec);
     }
 
     private CompletionStage<Void> invokeActorSendHandler(
@@ -3645,7 +3645,7 @@ public final class ZLinkSpotRuntime
                 + ":actor=" + handler.actorType().getName();
     }
 
-    private CompletionStage<Optional<Message>> dispatchLocalSessionActorPacket(
+    private CompletionStage<Optional<LocalActorReply>> dispatchLocalSessionActorPacket(
         SpotActorPacketHandlerRegistration registration,
         Object spotSurface,
         ZLinkActor actor,
@@ -3679,7 +3679,7 @@ public final class ZLinkSpotRuntime
             "failed to invoke local session actor send handler");
     }
 
-    private CompletionStage<Optional<Message>> invokeLocalActorRequestHandler(
+    private CompletionStage<Optional<LocalActorReply>> invokeLocalActorRequestHandler(
         SpotActorPacketHandlerRegistration registration,
         Object spotSurface,
         ZLinkActor actor,
@@ -3695,7 +3695,10 @@ public final class ZLinkSpotRuntime
             metadata,
             handlerType -> systems.zlink.framework.runtime.internal.handlers
                 .ZLinkActorHandlerInstances.instance(actor, handlerType),
-            "failed to invoke local session actor request handler");
+            "failed to invoke local session actor request handler")
+            .thenApply(reply -> reply.map(payloadReply -> new LocalActorReply(
+                payloadReply,
+                streamCodecFor(registration.replyType()))));
     }
 
     private void attachRouteMeshSpotBridges(Map<String, ZLinkInternalSpotNode> routeBridgeNodesByName) {
@@ -3919,9 +3922,7 @@ public final class ZLinkSpotRuntime
             var authority = userSpotAuthorities.decode(snapshot.payload())
                 .orElseThrow(() -> new IllegalStateException(
                     "invalid Instance Spot authority"));
-            if (authority.kind()
-                    != systems.zlink.framework.runtime.locations
-                        .ZLinkServiceAuthorityPayloadCodec.Kind.INSTANCE
+            if (authority.instance().isEmpty()
                 || authority.state()
                     != systems.zlink.framework.runtime.locations
                         .ZLinkServiceAuthorityPayloadCodec.State.READY
@@ -4039,9 +4040,7 @@ public final class ZLinkSpotRuntime
             var authority = userSpotAuthorities.decode(snapshot.payload())
                 .orElseThrow(() -> new IllegalStateException(
                     "invalid Instance Spot authority"));
-            if (authority.kind()
-                    != systems.zlink.framework.runtime.locations
-                        .ZLinkServiceAuthorityPayloadCodec.Kind.INSTANCE
+            if (authority.instance().isEmpty()
                 || authority.state()
                     != systems.zlink.framework.runtime.locations
                         .ZLinkServiceAuthorityPayloadCodec.State.CLOSING

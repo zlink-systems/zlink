@@ -5,6 +5,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.ZLinkMessageSerializer;
+import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
@@ -24,6 +26,17 @@ record ZLinkBoundSessionSendOptions(
             Map.of(),
             Optional.empty(),
             codec);
+    }
+
+    static ZLinkBoundSessionSendOptions createForPayload(
+        ZLinkMessageSerializer serializer,
+        Object payload,
+        String defaultPacketName,
+        ZLinkStreamCodec fallbackCodec) {
+        return create(
+            defaultPacketName,
+            ZLinkPayloadEncoding.streamCodec(
+                serializer, payload, fallbackCodec));
     }
 
     ZLinkBoundSessionSendOptions withPacketName(String packetName) {

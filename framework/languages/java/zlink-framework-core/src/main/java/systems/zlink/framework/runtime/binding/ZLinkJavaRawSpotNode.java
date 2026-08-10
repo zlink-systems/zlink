@@ -101,6 +101,14 @@ final class ZLinkJavaRawSpotNode
     private volatile Runnable admissionShutdownHandler = () -> { };
     private volatile ZLinkInternalSpotNode.MessageFollowRelayHandler
         messageFollowRelayHandler;
+    private volatile ZLinkInternalSpotNode.RelocationStagingIngressHandler
+        relocationStagingIngressHandler;
+    private final Map<ZLinkServiceM6BWireCodec.SpotRouteFence,
+        ZLinkServiceM6BWireCodec.SpotRouteFence> relocationSpotForwards =
+            new ConcurrentHashMap<>();
+    private final Map<ZLinkServiceM6BWireCodec.ActorRouteFence,
+        ZLinkServiceM6BWireCodec.ActorRouteFence> relocationActorForwards =
+            new ConcurrentHashMap<>();
 
     ZLinkJavaRawSpotNode(ZLinkJavaRawMeshNode owner) {
         this.owner = owner;
@@ -219,6 +227,53 @@ final class ZLinkJavaRawSpotNode
         ZLinkInternalSpotNode.MessageFollowRelayHandler handler) {
         messageFollowRelayHandler = Objects.requireNonNull(
             handler, "handler");
+    }
+
+    @Override
+    public void setRelocationStagingIngressHandler(
+        ZLinkInternalSpotNode.RelocationStagingIngressHandler handler) {
+        relocationStagingIngressHandler = Objects.requireNonNull(
+            handler, "handler");
+    }
+
+    @Override
+    public void installRelocationSpotForward(
+        ZLinkServiceM6BWireCodec.SpotRouteFence source,
+        ZLinkServiceM6BWireCodec.SpotRouteFence target,
+        Duration retention) {
+        installRelocationForward(
+            relocationSpotForwards, source, target, retention);
+    }
+
+    @Override
+    public void installRelocationActorForward(
+        ZLinkServiceM6BWireCodec.ActorRouteFence source,
+        ZLinkServiceM6BWireCodec.ActorRouteFence target,
+        Duration retention) {
+        installRelocationForward(
+            relocationActorForwards, source, target, retention);
+    }
+
+    private static <T> void installRelocationForward(
+        Map<T, T> forwards,
+        T source,
+        T target,
+        Duration retention) {
+        Objects.requireNonNull(source, "source");
+        Objects.requireNonNull(target, "target");
+        Objects.requireNonNull(retention, "retention");
+        if (retention.isNegative() || retention.isZero()) {
+            throw new IllegalArgumentException(
+                "relocation forward retention must be positive");
+        }
+        T previous = forwards.putIfAbsent(source, target);
+        if (previous != null && !previous.equals(target)) {
+            throw new IllegalStateException(
+                "relocation forward source already has another target");
+        }
+        CompletableFuture.delayedExecutor(
+                retention.toMillis(), TimeUnit.MILLISECONDS)
+            .execute(() -> forwards.remove(source, target));
     }
 
     @Override
@@ -1380,6 +1435,57 @@ final class ZLinkJavaRawSpotNode
         String contentType,
         ZLinkInboundDispatchBudget.Lease inboundDispatchLease,
         Consumer<List<Message>> reply) {
+        return enqueueRemoteSpotLazy(
+            source,
+            header,
+            metadata,
+            acceptedJournalRecord,
+            acceptedJournalRecordSizeHint,
+            parts,
+            contentType,
+            inboundDispatchLease,
+            reply,
+            ignored -> { });
+    }
+
+    boolean enqueueRemoteSpotLazy(
+        ZLinkInternalMeshNode.PeerAuthorityFence source,
+        ZLinkServiceM6BWireCodec.SpotMessage header,
+        byte[] metadata,
+        Supplier<byte[]> acceptedJournalRecord,
+        int acceptedJournalRecordSizeHint,
+        List<Message> parts,
+        String contentType,
+        ZLinkInboundDispatchBudget.Lease inboundDispatchLease,
+        Consumer<List<Message>> reply,
+        Consumer<Throwable> failure) {
+        ZLinkInternalSpotNode.RelocationStagingIngressHandler staging =
+            relocationStagingIngressHandler;
+        if (staging != null && staging.handleSpot(
+            source,
+            header,
+            metadata,
+            acceptedJournalRecord,
+            acceptedJournalRecordSizeHint,
+            parts,
+            contentType,
+            inboundDispatchLease,
+            reply,
+            failure)) {
+            return true;
+        }
+        ZLinkServiceM6BWireCodec.SpotRouteFence forwarded =
+            relocationSpotForwards.get(header.target());
+        if (forwarded != null) {
+            return owner.forwardRelocationSpot(
+                header,
+                forwarded,
+                metadata,
+                parts,
+                inboundDispatchLease,
+                reply,
+                failure);
+        }
         ZLinkJavaRawSpot target = localSpot(
             routingId(),
             header.target().spotId(),
@@ -1554,7 +1660,57 @@ final class ZLinkJavaRawSpotNode
         ZLinkInboundDispatchBudget.Lease inboundDispatchLease,
         Consumer<List<Message>> reply,
         Consumer<Throwable> failure) {
+        return enqueueRemoteActor(
+            new ZLinkInternalMeshNode.PeerAuthorityFence(
+                sourceNodeRid,
+                Math.max(1, sourceNodeGeneration),
+                "legacy:" + sourceNodeRid,
+                1),
+            header,
+            acceptedJournalRecord,
+            parts,
+            contentType,
+            inboundDispatchLease,
+            reply,
+            failure);
+    }
+
+    boolean enqueueRemoteActor(
+        ZLinkInternalMeshNode.PeerAuthorityFence source,
+        ZLinkServiceM6BWireCodec.ActorMessage header,
+        Supplier<byte[]> acceptedJournalRecord,
+        List<Message> parts,
+        String contentType,
+        ZLinkInboundDispatchBudget.Lease inboundDispatchLease,
+        Consumer<List<Message>> reply,
+        Consumer<Throwable> failure) {
+        RoutingId sourceNodeRid = source.sourceNodeRid();
+        long sourceNodeGeneration = source.sourceNodeGeneration();
         ZLinkBackendActorRef actor = header.target().actor();
+        ZLinkInternalSpotNode.RelocationStagingIngressHandler staging =
+            relocationStagingIngressHandler;
+        if (staging != null && staging.handleActor(
+            source,
+            header,
+            acceptedJournalRecord,
+            parts,
+            contentType,
+            inboundDispatchLease,
+            reply,
+            failure)) {
+            return true;
+        }
+        ZLinkServiceM6BWireCodec.ActorRouteFence forwarded =
+            relocationActorForwards.get(header.target());
+        if (forwarded != null) {
+            return owner.forwardRelocationActor(
+                header,
+                forwarded,
+                parts,
+                inboundDispatchLease,
+                reply,
+                failure);
+        }
         if (!isCurrentActor(actor)) {
             ZLinkInternalSpotNode.MessageFollowRelayHandler relay =
                 messageFollowRelayHandler;

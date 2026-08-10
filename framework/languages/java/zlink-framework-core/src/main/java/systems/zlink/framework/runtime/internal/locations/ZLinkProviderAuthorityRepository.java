@@ -2979,7 +2979,7 @@ final class ZLinkProviderAuthorityRepository {
                 return new ZLinkAggregateProgress(
                     publication.reference(),
                     publication.checksumCrc32c(),
-                    publication.sourceCleanupCompleted() ? 8 : 4,
+                    publication.phase(),
                     publication.sourceCleanupCompleted(),
                     publication.terminalCompletionCount(),
                     publication.pendingRelayCount());

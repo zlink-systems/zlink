@@ -1,12 +1,15 @@
 package systems.zlink.framework.runtime.host;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.configuration.ZLinkCodecRegistrar;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 
 final class ZLinkFrameworkRuntimeCodecTest {
@@ -22,6 +25,19 @@ final class ZLinkFrameworkRuntimeCodecTest {
 
         Fallback fallback = serializer.deserialize(serializer.serialize(new Fallback("json")), Fallback.class);
         assertEquals(new Fallback("json"), fallback);
+    }
+
+    @Test
+    void runtimeStartupMakesCodecRegistrationImmutable() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.codecs().use(MarkerCodecExtension::register);
+
+        try (ZLinkFrameworkRuntime ignored = ZLinkFrameworkRuntime.start(
+            options, new ZLinkJavaBackendAdapterFactory())) {
+            assertThrows(
+                ZLinkConfigurationException.class,
+                () -> options.codecs().use(MarkerCodecExtension::register));
+        }
     }
 
     record Marker(String value) {

@@ -11,6 +11,8 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Consumer;
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
@@ -74,7 +76,8 @@ final class ZLinkUserSpotAggregateStagingOwner {
                         this,
                         request,
                         preparedSpot,
-                        preparedActors))
+                        preparedActors,
+                        backend.beginIngressHold(preparedSpot)))
                 .exceptionallyCompose(failure -> discardPartial(
                     preparedSpot,
                     preparedActors)
@@ -201,8 +204,125 @@ final class ZLinkUserSpotAggregateStagingOwner {
             backend.publishActorTimers(
                 staged.spot, actor, participant);
         }
+        backend.resumeIngress(staged.spot, staged.ingressHold);
         backend.publishTimers(staged.spot);
         staged.terminal = true;
+    }
+
+    boolean acceptSpotIngress(
+        Staged staged,
+        byte[] acceptedJournalRecord,
+        Consumer<List<Message>> reply,
+        Consumer<Throwable> failure) {
+        requireActive(staged);
+        synchronized (staged) {
+            if (staged.ingressClosed) {
+                return false;
+            }
+            staged.pendingIngress.add(new PendingIngress(
+                "spot",
+                Objects.requireNonNull(
+                    acceptedJournalRecord,
+                    "acceptedJournalRecord"),
+                reply,
+                failure));
+            return true;
+        }
+    }
+
+    boolean acceptActorIngress(
+        Staged staged,
+        String actorId,
+        byte[] acceptedJournalRecord,
+        Consumer<List<Message>> reply,
+        Consumer<Throwable> failure) {
+        requireActive(staged);
+        if (staged.request.actors().stream().noneMatch(
+            participant -> participant.actorId().equals(actorId))) {
+            return false;
+        }
+        synchronized (staged) {
+            if (staged.ingressClosed) {
+                return false;
+            }
+            staged.pendingIngress.add(new PendingIngress(
+                actorId,
+                Objects.requireNonNull(
+                    acceptedJournalRecord,
+                    "acceptedJournalRecord"),
+                reply,
+                failure));
+            return true;
+        }
+    }
+
+    CompletionStage<Void> closeAndReplayIngress(Staged staged) {
+        requireActive(staged);
+        List<PendingIngress> pending;
+        synchronized (staged) {
+            if (staged.ingressClosed) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                        "aggregate staging ingress was already closed"));
+            }
+            staged.ingressClosed = true;
+            pending = List.copyOf(staged.pendingIngress);
+            staged.pendingIngress.clear();
+        }
+        CompletionStage<Void> replay = CompletableFuture.completedFuture(null);
+        for (PendingIngress ingress : pending) {
+            replay = replay.thenCompose(ignored -> replayIngress(
+                staged, ingress));
+        }
+        return replay;
+    }
+
+    private CompletionStage<Void> replayIngress(
+        Staged staged,
+        PendingIngress ingress) {
+        CompletionStage<List<byte[]>> replay;
+        try {
+            if (ingress.laneId().equals("spot")) {
+                replay = replaySpot(
+                    staged,
+                    ZLinkSpotAcceptedJournal.decode(ingress.record()));
+            } else {
+                replay = replayActor(
+                        staged,
+                        ZLinkActorAcceptedJournal.decode(ingress.record()))
+                    .thenApply(reply -> reply.stream().toList());
+            }
+        } catch (RuntimeException failure) {
+            notifyIngressFailure(ingress, failure);
+            return CompletableFuture.failedFuture(failure);
+        }
+        return replay.handle((reply, failure) -> {
+            if (failure != null) {
+                Throwable cause = unwrap(failure);
+                notifyIngressFailure(ingress, cause);
+                throw new CompletionException(cause);
+            }
+            if (ingress.reply() != null && !reply.isEmpty()) {
+                List<Message> parts = reply.stream()
+                    .map(Message::from)
+                    .toList();
+                try {
+                    ingress.reply().accept(parts);
+                } catch (RuntimeException callbackFailure) {
+                    parts.forEach(Message::close);
+                    throw callbackFailure;
+                }
+            }
+            return null;
+        });
+    }
+
+    private static void notifyIngressFailure(
+        PendingIngress ingress,
+        Throwable failure) {
+        if (ingress.failure() != null) {
+            ingress.failure().accept(failure);
+        }
     }
 
     CompletionStage<List<byte[]>> replaySpot(
@@ -303,12 +423,22 @@ final class ZLinkUserSpotAggregateStagingOwner {
     }
 
     CompletionStage<Void> discard(Staged staged) {
-        requireActive(staged);
-        if (staged.published) {
-            return CompletableFuture.failedFuture(new IllegalStateException(
-                "committed aggregate staging cannot roll back to source"));
+        Objects.requireNonNull(staged, "staged");
+        List<PendingIngress> pending;
+        synchronized (staged) {
+            requireActive(staged);
+            if (staged.published) {
+                return CompletableFuture.failedFuture(new IllegalStateException(
+                    "committed aggregate staging cannot roll back to source"));
+            }
+            staged.ingressClosed = true;
+            staged.terminal = true;
+            pending = List.copyOf(staged.pendingIngress);
+            staged.pendingIngress.clear();
         }
-        staged.terminal = true;
+        IllegalStateException aborted = new IllegalStateException(
+            "aggregate relocation target staging was aborted");
+        pending.forEach(ingress -> notifyIngressFailure(ingress, aborted));
         return discardPartial(staged.spot, staged.actors);
     }
 
@@ -369,6 +499,13 @@ final class ZLinkUserSpotAggregateStagingOwner {
         default CompletionStage<Void> completeRelocationReady(
             Object preparedSpot) {
             return CompletableFuture.completedFuture(null);
+        }
+
+        default Object beginIngressHold(Object preparedSpot) {
+            return null;
+        }
+
+        default void resumeIngress(Object preparedSpot, Object ingressHold) {
         }
 
         default CompletionStage<Void> stageActorTimers(
@@ -525,18 +662,23 @@ final class ZLinkUserSpotAggregateStagingOwner {
         private final Request request;
         private final Object spot;
         private final List<Object> actors;
+        private final Object ingressHold;
+        private final List<PendingIngress> pendingIngress = new ArrayList<>();
         private boolean published;
+        private boolean ingressClosed;
         private boolean terminal;
 
         private Staged(
             ZLinkUserSpotAggregateStagingOwner owner,
             Request request,
             Object spot,
-            List<Object> actors) {
+            List<Object> actors,
+            Object ingressHold) {
             this.owner = owner;
             this.request = request;
             this.spot = spot;
             this.actors = List.copyOf(actors);
+            this.ingressHold = ingressHold;
         }
 
         int actorCount() {
@@ -602,6 +744,19 @@ final class ZLinkUserSpotAggregateStagingOwner {
         public CompletionStage<Void> completeRelocationReady(Object value) {
             return spots.completeRelocationReady(
                 (ZLinkSpotLifecycle.PreparedUserSpot) value);
+        }
+
+        @Override
+        public Object beginIngressHold(Object value) {
+            return spots.beginReservedIngressHold(
+                (ZLinkSpotLifecycle.PreparedUserSpot) value);
+        }
+
+        @Override
+        public void resumeIngress(Object value, Object ingressHold) {
+            spots.resumeReservedIngress(
+                (ZLinkSpotLifecycle.PreparedUserSpot) value,
+                ingressHold);
         }
 
         @Override
@@ -704,6 +859,21 @@ final class ZLinkUserSpotAggregateStagingOwner {
 
         @Override public void discardSpot(Object value) {
             spots.discardReserved((ZLinkSpotLifecycle.PreparedUserSpot) value);
+        }
+    }
+
+    private record PendingIngress(
+        String laneId,
+        byte[] record,
+        Consumer<List<Message>> reply,
+        Consumer<Throwable> failure) {
+        private PendingIngress {
+            Objects.requireNonNull(laneId, "laneId");
+            record = Objects.requireNonNull(record, "record").clone();
+        }
+
+        @Override public byte[] record() {
+            return record.clone();
         }
     }
 }

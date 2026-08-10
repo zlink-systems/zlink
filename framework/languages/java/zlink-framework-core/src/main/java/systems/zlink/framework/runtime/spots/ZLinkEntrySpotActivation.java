@@ -57,6 +57,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEven
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
+import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.channels.ChannelRegistration;
 import systems.zlink.framework.runtime.channels.ChannelKind;
@@ -461,8 +462,13 @@ final class EntrySpotActivation
                     if (reply.isEmpty()) {
                         return;
                     }
-                    try (Message replyPayload = reply.get();
-                         Message frame = ActorPacketFrames.encodeReply(packetHeader, replyPayload)) {
+                    LocalActorReply actorReply = reply.get();
+                    try (Message replyPayload = actorReply.payload();
+                         Message frame = ActorPacketFrames.encodeReply(
+                             packetHeader,
+                             replyPayload,
+                             packetHeader.packetName(),
+                             actorReply.codec())) {
                         host.primaryNode().replyActorNoBind(
                             headerPart.actor(),
                             headerPart.sourceNodeRid(),

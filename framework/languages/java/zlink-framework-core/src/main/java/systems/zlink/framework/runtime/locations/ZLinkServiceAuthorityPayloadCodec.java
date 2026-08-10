@@ -19,19 +19,33 @@ import systems.zlink.contracts.core.RoutingId;
 public final class ZLinkServiceAuthorityPayloadCodec {
     private static final byte[] MAGIC = {0x5a, 0x4c, 0x41, 0x55};
 
-    public enum Kind {
-        USER,
-        INSTANCE
-    }
-
     public enum State {
         CREATING,
         READY,
         CLOSING
     }
 
-    public record SpotAuthority(
-        Kind kind,
+    public sealed interface SpotAuthority
+        permits UserSpotAuthority, InstanceSpotAuthority {
+        State state();
+        String stableType();
+        String spotId();
+        String ownerId();
+        long ownerLeaseGeneration();
+        String meshName();
+        RoutingId nodeRid();
+        long nodeGeneration();
+
+        default Optional<UserSpotAuthority> user() {
+            return Optional.empty();
+        }
+
+        default Optional<InstanceSpotAuthority> instance() {
+            return Optional.empty();
+        }
+    }
+
+    public record UserSpotAuthority(
         State state,
         String stableType,
         String spotId,
@@ -39,7 +53,26 @@ public final class ZLinkServiceAuthorityPayloadCodec {
         long ownerLeaseGeneration,
         String meshName,
         RoutingId nodeRid,
-        long nodeGeneration) {
+        long nodeGeneration) implements SpotAuthority {
+        @Override
+        public Optional<UserSpotAuthority> user() {
+            return Optional.of(this);
+        }
+    }
+
+    public record InstanceSpotAuthority(
+        State state,
+        String stableType,
+        String spotId,
+        String ownerId,
+        long ownerLeaseGeneration,
+        String meshName,
+        RoutingId nodeRid,
+        long nodeGeneration) implements SpotAuthority {
+        @Override
+        public Optional<InstanceSpotAuthority> instance() {
+            return Optional.of(this);
+        }
     }
 
     public Optional<SpotAuthority> decode(byte[] payload) {
@@ -70,42 +103,39 @@ public final class ZLinkServiceAuthorityPayloadCodec {
             }
             int spotKind = object.u8();
             Reader spot = object.reader(object.u16());
-            Kind kind;
-            State state;
-            String spotId;
-            String stableType;
+            DecodedSpot decodedSpot;
             if (spotKind == 2) {
-                kind = Kind.USER;
-                spotId = spot.text8();
-                stableType = spot.text8();
+                String spotId = spot.text8();
+                String stableType = spot.text8();
                 int userState = spot.u8();
-                state = userState == 0 && operationKind == 1
+                State state = userState == 0 && operationKind == 1
                     ? State.CREATING
                     : userState == 1 && operationKind == 0
                         ? State.READY
                         : userState == 2 && operationKind == 3
                             ? State.CLOSING
                             : null;
+                decodedSpot = new DecodedUserSpot(state, stableType, spotId);
             } else if (spotKind == 3) {
-                kind = Kind.INSTANCE;
                 int instanceState = spot.u8();
                 Reader instance = spot.reader(spot.u16());
-                stableType = instance.text8();
-                spotId = instance.text8();
+                String stableType = instance.text8();
+                String spotId = instance.text8();
                 if (!instance.end()) {
                     return Optional.empty();
                 }
-                state = instanceState == 1 && operationKind == 1
+                State state = instanceState == 1 && operationKind == 1
                     ? State.CREATING
                     : instanceState == 2 && operationKind == 0
                         ? State.READY
                         : instanceState == 3 && operationKind == 3
                             ? State.CLOSING
                             : null;
+                decodedSpot = new DecodedInstanceSpot(state, stableType, spotId);
             } else {
                 return Optional.empty();
             }
-            if (state == null || !spot.end() || !object.end()) {
+            if (decodedSpot.state() == null || !spot.end() || !object.end()) {
                 return Optional.empty();
             }
             String ownerId = body.text8();
@@ -116,15 +146,11 @@ public final class ZLinkServiceAuthorityPayloadCodec {
             if (!emptyConditional32(body)) {
                 return Optional.empty();
             }
-            skipActivationRecovery(body, kind, state, operationKind);
+            decodedSpot.skipActivationRecovery(body, operationKind);
             if (!body.end()) {
                 return Optional.empty();
             }
-            return Optional.of(new SpotAuthority(
-                kind,
-                state,
-                stableType,
-                spotId,
+            return Optional.of(decodedSpot.authority(
                 ownerId,
                 ownerLeaseGeneration,
                 meshName,
@@ -235,9 +261,18 @@ public final class ZLinkServiceAuthorityPayloadCodec {
             && reader.u32() == 0;
     }
 
-    private static void skipActivationRecovery(
+    private static void skipEmptyActivationRecovery(Reader body) {
+        int present = body.u8();
+        int length = body.u32();
+        Reader recovery = body.reader(length);
+        if (present != 0 || length != 0 || !recovery.end()) {
+            throw new IllegalArgumentException(
+                "invalid empty activation recovery");
+        }
+    }
+
+    private static void skipInstanceActivationRecovery(
         Reader body,
-        Kind kind,
         State state,
         int operationKind) {
         int present = body.u8();
@@ -250,10 +285,7 @@ public final class ZLinkServiceAuthorityPayloadCodec {
             }
             return;
         }
-        if (present != 1
-            || kind != Kind.INSTANCE
-            || state != State.READY
-            || operationKind != 0) {
+        if (present != 1 || state != State.READY || operationKind != 0) {
             throw new IllegalArgumentException(
                 "invalid activation recovery discriminator");
         }
@@ -272,6 +304,64 @@ public final class ZLinkServiceAuthorityPayloadCodec {
             || !recovery.end()) {
             throw new IllegalArgumentException(
                 "invalid activation recovery");
+        }
+    }
+
+    private sealed interface DecodedSpot
+        permits DecodedUserSpot, DecodedInstanceSpot {
+        State state();
+        String stableType();
+        String spotId();
+        void skipActivationRecovery(Reader body, int operationKind);
+        SpotAuthority authority(
+            String ownerId,
+            long ownerLeaseGeneration,
+            String meshName,
+            RoutingId nodeRid,
+            long nodeGeneration);
+    }
+
+    private record DecodedUserSpot(
+        State state,
+        String stableType,
+        String spotId) implements DecodedSpot {
+        @Override
+        public void skipActivationRecovery(Reader body, int operationKind) {
+            skipEmptyActivationRecovery(body);
+        }
+
+        @Override
+        public SpotAuthority authority(
+            String ownerId,
+            long ownerLeaseGeneration,
+            String meshName,
+            RoutingId nodeRid,
+            long nodeGeneration) {
+            return new UserSpotAuthority(
+                state, stableType, spotId, ownerId, ownerLeaseGeneration,
+                meshName, nodeRid, nodeGeneration);
+        }
+    }
+
+    private record DecodedInstanceSpot(
+        State state,
+        String stableType,
+        String spotId) implements DecodedSpot {
+        @Override
+        public void skipActivationRecovery(Reader body, int operationKind) {
+            skipInstanceActivationRecovery(body, state, operationKind);
+        }
+
+        @Override
+        public SpotAuthority authority(
+            String ownerId,
+            long ownerLeaseGeneration,
+            String meshName,
+            RoutingId nodeRid,
+            long nodeGeneration) {
+            return new InstanceSpotAuthority(
+                state, stableType, spotId, ownerId, ownerLeaseGeneration,
+                meshName, nodeRid, nodeGeneration);
         }
     }
 

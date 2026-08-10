@@ -302,7 +302,7 @@ public final class ZLinkBackendReceived implements AutoCloseable {
     }
 
     public byte[] applicationMetadata() {
-        return applicationMetadata.clone();
+        return applicationMetadata;
     }
 
     public byte[] acceptedJournalRecord() {

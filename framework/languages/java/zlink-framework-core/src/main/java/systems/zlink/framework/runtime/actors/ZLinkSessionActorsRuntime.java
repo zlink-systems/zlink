@@ -90,11 +90,20 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
 
     @FunctionalInterface
     public interface LocalActorDispatcher {
-        CompletionStage<Optional<Message>> dispatch(
+        CompletionStage<Optional<LocalActorReply>> dispatch(
             ZLinkBackendActorRef actor,
             long sourceSessionSequence,
             ZLinkStreamHeader header,
             Message payload);
+    }
+
+    public record LocalActorReply(
+        Message payload,
+        ZLinkStreamCodec codec) {
+        public LocalActorReply {
+            Objects.requireNonNull(payload, "payload");
+            Objects.requireNonNull(codec, "codec");
+        }
     }
 
     @FunctionalInterface

@@ -4,6 +4,9 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.ZLinkEncodedPayload;
+import systems.zlink.framework.ZLinkMessageSerializer;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorBindOperation;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorUnbindOperation;
 
@@ -76,6 +79,8 @@ final class ZLinkStreamRuntimeIngressTest {
         TestSession.holdFirstDispatch = false;
         TestSession.failNextConstruction = false;
         TestSession.replacementMode = ReplacementMode.NONE;
+        TestSession.decodeWirePayload = false;
+        TestSession.decodedWirePayload.set(null);
         TestSession.createdCount.set(0);
         TestSession.lastSession.set(null);
         runtimes.forEach(runtime -> runtime.closeAsync().toCompletableFuture().join());
@@ -102,6 +107,24 @@ final class ZLinkStreamRuntimeIngressTest {
         assertTrue(stream.successfulReceives.get() >= 3);
         assertTrue(stream.readinessWaits.get() >= 3);
         assertEquals(List.of("segmented"), session.packetNames);
+    }
+
+    @Test
+    void sessionPayloadDecodeUsesTheSerializerMappedByTheWireCodec() throws Exception {
+        TestSession.decodeWirePayload = true;
+        FakeStream stream = new FakeStream();
+        stream.enqueue(
+            PEER_A,
+            frame("custom", ZLinkStreamCodec.PROTOBUF, "wire"));
+
+        ZLinkStreamRuntime runtime = startWithCustomReceiveCodec(stream);
+        runtimes.add(runtime);
+
+        TestSession session = awaitSession();
+        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+        assertEquals(
+            new WirePayload("CUSTOM"),
+            TestSession.decodedWirePayload.get());
     }
 
     @Test
@@ -639,6 +662,42 @@ final class ZLinkStreamRuntimeIngressTest {
                     CompletableFuture.completedFuture(null));
     }
 
+    private ZLinkStreamRuntime startWithCustomReceiveCodec(FakeStream stream) {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addStreamNode("stream")
+            .bind("tcp://127.0.0.1:18081")
+            .registerSession(TestSession.class);
+        ZLinkFrameworkRegistration registration = options.registration();
+        ZLinkCodecRegistration codecs = registration.codecs();
+        codecs.addSerializer(
+            "application/x-wire",
+            new WirePayloadSerializer(),
+            WirePayload.class::equals);
+        codecs.addStreamCodec(
+            "application/x-wire", ZLinkStreamCodec.PROTOBUF);
+        codecs.freeze();
+        ZLinkMessageSerializer serializer = codecs.serializerWithFallback(
+            new ZLinkJsonMessageSerializer());
+        lastRegistration = registration;
+        return new ZLinkStreamRuntime(
+            new FakeProvider(stream),
+            new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)),
+            registration,
+            Map.of(),
+            Map.of(),
+            serializer,
+            null,
+            ZLinkHandlerActivator.reflection(),
+            ignored -> true,
+            null,
+            null,
+            new FakeContext(),
+            false,
+            (ignoredBackend, ignoredKey) ->
+                (ignoredReady, ignoredShutdown) ->
+                    CompletableFuture.completedFuture(null));
+    }
+
     private static TestSession awaitSession() throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (System.nanoTime() < deadline) {
@@ -652,9 +711,16 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     private static byte[] frame(String packetName, String payload) {
+        return frame(packetName, ZLinkStreamCodec.JSON, payload);
+    }
+
+    private static byte[] frame(
+        String packetName,
+        ZLinkStreamCodec codec,
+        String payload) {
         ZLinkStreamHeader header = new ZLinkStreamHeader(
             ZLinkStreamMessageKind.SEND,
-            ZLinkStreamCodec.JSON,
+            codec,
             EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
             Optional.empty(),
             packetName,
@@ -684,6 +750,9 @@ final class ZLinkStreamRuntimeIngressTest {
         private static volatile boolean holdFirstDispatch;
         private static volatile boolean failNextConstruction;
         private static volatile ReplacementMode replacementMode = ReplacementMode.NONE;
+        private static volatile boolean decodeWirePayload;
+        private static final AtomicReference<WirePayload> decodedWirePayload =
+            new AtomicReference<>();
         private final ZLinkSessionContext context;
         private final CountDownLatch dispatchLatch = new CountDownLatch(1);
         private final CountDownLatch secondDispatchLatch = new CountDownLatch(1);
@@ -729,6 +798,9 @@ final class ZLinkStreamRuntimeIngressTest {
         @Override public CompletionStage<Void> onDispatch(
             ZLinkSessionDispatchContext dispatch,
             ZLinkMessage payload) {
+            if (decodeWirePayload) {
+                decodedWirePayload.set(payload.decode(WirePayload.class));
+            }
             int count = dispatchCount.incrementAndGet();
             packetNames.add(dispatch.packetName());
             dispatchLatch.countDown();
@@ -737,6 +809,23 @@ final class ZLinkStreamRuntimeIngressTest {
             }
             secondDispatchLatch.countDown();
             return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    private record WirePayload(String marker) {
+    }
+
+    private static final class WirePayloadSerializer
+        implements ZLinkMessageSerializer {
+        @Override
+        public <T> ZLinkEncodedPayload serialize(T value) {
+            return ZLinkEncodedPayload.from(
+                "CUSTOM".getBytes(StandardCharsets.UTF_8));
+        }
+
+        @Override
+        public <T> T deserialize(ZLinkEncodedPayload payload, Class<T> type) {
+            return type.cast(new WirePayload("CUSTOM"));
         }
     }
 

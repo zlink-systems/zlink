@@ -14,6 +14,7 @@ import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.actors.ZLinkActorEntryTransferEnvelope;
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
+import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
@@ -135,7 +136,12 @@ final class ZLinkRoutedActorTransferHandler {
                 return replies;
             }
             host.replyTransferredRequestDirect(
-                actorRef, packet.header(), packet.replyRoute(), reply);
+                actorRef,
+                packet.header(),
+                packet.replyRoute(),
+                reply.map(message -> new LocalActorReply(
+                    message,
+                    packet.header().codec())));
             replies.add(Message.from(new byte[0]));
             return replies;
         } finally {

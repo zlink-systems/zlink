@@ -153,8 +153,7 @@ public final class ZLinkDeferredJoinCompletionAuthority {
                         "target Spot authority payload is invalid"));
                 if (target.state()
                         != ZLinkServiceAuthorityPayloadCodec.State.READY
-                    || target.kind()
-                        != ZLinkServiceAuthorityPayloadCodec.Kind.USER
+                    || target.user().isEmpty()
                     || !target.spotId().equals(targetSpotId)
                     || !target.nodeRid().equals(targetNodeRid)) {
                     return CompletableFuture.failedFuture(

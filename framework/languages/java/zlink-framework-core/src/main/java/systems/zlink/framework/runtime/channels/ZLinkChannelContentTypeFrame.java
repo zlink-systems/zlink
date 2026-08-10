@@ -14,9 +14,9 @@ public final class ZLinkChannelContentTypeFrame {
     }
 
     public static Message encode(String contentType) {
-        String value = Objects.requireNonNull(contentType, "contentType").trim();
+        String value = Objects.requireNonNull(contentType, "contentType");
         if (value.isEmpty()) {
-            throw new IllegalArgumentException("content type must not be blank");
+            throw new IllegalArgumentException("content type must not be empty");
         }
         return Message.from((PREFIX + value).getBytes(StandardCharsets.UTF_8));
     }
@@ -28,7 +28,7 @@ public final class ZLinkChannelContentTypeFrame {
         for (int index = 2; index < parts.size(); index++) {
             String value = parts.get(index).toUtf8String();
             if (value.startsWith(PREFIX)) {
-                String contentType = value.substring(PREFIX.length()).trim();
+                String contentType = value.substring(PREFIX.length());
                 return contentType.isEmpty() ? null : contentType;
             }
         }

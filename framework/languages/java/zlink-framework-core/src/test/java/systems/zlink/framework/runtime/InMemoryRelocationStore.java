@@ -34,6 +34,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.zip.CRC32C;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.internal.locations.*;
@@ -42,6 +43,8 @@ public final class InMemoryRelocationStore implements
     ZLinkRelocationStore,
     systems.zlink.framework.locationprovider.ZLinkRelocationStore {
     private final Map<String, Entry> values = new ConcurrentHashMap<>();
+    private final AtomicReference<PutGate> nextInternalPut =
+        new AtomicReference<>();
 
     public InMemoryRelocationStore() {
     }
@@ -51,6 +54,12 @@ public final class InMemoryRelocationStore implements
         byte[] payload,
         Duration retention,
         ZLinkStoreCancellation cancellation) {
+        PutGate gate = nextInternalPut.getAndSet(null);
+        if (gate != null) {
+            gate.entered().complete(null);
+            return gate.release().thenCompose(ignored ->
+                put(payload, retention, cancellation));
+        }
         String reference = UUID.randomUUID().toString();
         Instant now = Instant.now();
         Instant expiresAt = now.plus(retention);
@@ -61,6 +70,17 @@ public final class InMemoryRelocationStore implements
         return CompletableFuture.completedFuture(
             new ZLinkRelocationStored(
                 reference, checksum.getValue(), expiresAt, now));
+    }
+
+    public void gateNextInternalPut(
+        CompletableFuture<Void> entered,
+        CompletableFuture<Void> release) {
+        if (!nextInternalPut.compareAndSet(
+                null,
+                new PutGate(entered, release))) {
+            throw new IllegalStateException(
+                "an internal relocation put gate is already installed");
+        }
     }
 
     @Override
@@ -180,5 +200,10 @@ public final class InMemoryRelocationStore implements
         @Override public byte[] payload() {
             return payload.clone();
         }
+    }
+
+    private record PutGate(
+        CompletableFuture<Void> entered,
+        CompletableFuture<Void> release) {
     }
 }

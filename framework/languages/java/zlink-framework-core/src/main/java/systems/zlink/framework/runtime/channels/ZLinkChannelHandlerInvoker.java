@@ -285,7 +285,9 @@ final class ZLinkChannelHandlerInvoker {
                         request,
                         context,
                         handlers)))
-                .thenApply(reply -> ZLinkMessagePayloads.message(serializer.serialize(reply)));
+                .thenApply(reply -> ZLinkMessagePayloads.message(
+                    ZLinkCodecRegistration.serializeForDeclaredType(
+                        serializer, reply, registration.replyType())));
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
         }
@@ -565,7 +567,9 @@ final class ZLinkChannelHandlerInvoker {
                         context,
                         handlers))
                     .thenApply(reply ->
-                        ZLinkMessagePayloads.message(serializer.serialize(reply))));
+                        ZLinkMessagePayloads.message(
+                            ZLinkCodecRegistration.serializeForDeclaredType(
+                                serializer, reply, registration.replyType()))));
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
         }
@@ -596,8 +600,8 @@ final class ZLinkChannelHandlerInvoker {
         String wireContentType) {
         ZLinkMessageSerializer selected = wireContentType == null
             ? serializer
-            : codecs.serializerForReceivedContentType(
-                wireContentType, serializer);
+            : ZLinkCodecRegistration.serializerForReceivedContentType(
+                serializer, wireContentType);
         return ZLinkMessagePayloads.deserialize(selected, payload, payloadType);
     }
 

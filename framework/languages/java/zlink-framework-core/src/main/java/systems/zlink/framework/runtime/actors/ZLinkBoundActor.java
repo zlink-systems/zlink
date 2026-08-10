@@ -301,21 +301,20 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
 
     private CompletionStage<Void> replyLocal(
         ZLinkStreamHeader header,
-        Message reply) {
+        ZLinkSessionActorsRuntime.LocalActorReply reply) {
         try {
             if (header.requestSequence().isEmpty()) {
-                reply.close();
                 return CompletableFuture.failedFuture(new ZLinkConfigurationException(
                     "actor reply requires a stream request sequence: "
                         + header.packetName()));
             }
             ZLinkStreamHeader replyHeader = ZLinkStreamHeader.createResponse(
                 header,
-                header.codec(),
+                reply.codec(),
                 EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
                 header.packetName(),
                 Map.of());
-            byte[] replyBytes = reply.toByteArray();
+            byte[] replyBytes = reply.payload().toByteArray();
             return ZLinkActorRetryScheduler.submitRelayUntilAccepted(
                 ZLinkSessionActorsRuntime.RELAY_SUBMIT_TIMEOUT,
                 () -> {
@@ -331,7 +330,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                     "local actor session reply was not ready before timeout: "
                         + ref.actorId()));
         } finally {
-            reply.close();
+            reply.payload().close();
         }
     }
 

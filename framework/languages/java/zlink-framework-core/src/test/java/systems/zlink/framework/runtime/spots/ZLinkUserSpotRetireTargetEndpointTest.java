@@ -4,6 +4,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -25,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
@@ -508,7 +510,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
     }
 
     @Test
-    void targetStaysInvisibleUntilExactAuthorityRootIsPublished() {
+    void targetStaysInvisibleAndStagesPostCutRequestUntilExactRootIsPublished() {
         RoutingId sourceRid = RoutingId.from("source-node");
         RoutingId targetRid = RoutingId.from("target-node");
         long targetNodeGeneration = 17;
@@ -746,16 +748,69 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         assertEquals(1, inboundPermits.snapshot().inboundUnits());
         assertEquals(1, inboundPermits.snapshot().restoreCallbacks());
         assertTrue(inboundPermits.snapshot().payloadBytes() > 0);
+        List<byte[]> stagedReplies = new CopyOnWriteArrayList<>();
+        AtomicInteger stagedFailures = new AtomicInteger();
+        byte[] stagedRecord = acceptedSpotRequest(spotId, 3);
+        var stagedHeader = new ZLinkServiceM6BWireCodec.SpotMessage(
+            true,
+            0,
+            43L,
+            301,
+            303,
+            1,
+            "source",
+            new ZLinkServiceM6BWireCodec.SpotRouteFence(
+                spotId,
+                3,
+                targetRid,
+                targetNodeGeneration,
+                6,
+                23));
+        Message wrongSourcePart = Message.from("wrong-source");
+        assertFalse(recoveredEndpoint.handleSpot(
+            new ZLinkInternalMeshNode.PeerAuthorityFence(
+                sourceRid, 11, "wrong-owner", 12),
+            stagedHeader,
+            new byte[0],
+            () -> stagedRecord,
+            stagedRecord.length,
+            List.of(wrongSourcePart),
+            null,
+            null,
+            null,
+            ignored -> stagedFailures.incrementAndGet()));
+        wrongSourcePart.close();
+        assertTrue(recoveredEndpoint.handleSpot(
+            new ZLinkInternalMeshNode.PeerAuthorityFence(
+                sourceRid, 11, "source-owner", 12),
+            stagedHeader,
+            new byte[0],
+            () -> stagedRecord,
+            stagedRecord.length,
+            List.of(Message.from("target-staged-request")),
+            null,
+            null,
+            reply -> {
+                stagedReplies.add(reply.getFirst().toByteArray());
+                reply.forEach(Message::close);
+            },
+            ignored -> stagedFailures.incrementAndGet()));
+        assertTrue(stagedReplies.isEmpty());
+        assertEquals(0, stagedFailures.get());
         recoveredEndpoint.publish(request).toCompletableFuture().join();
 
         assertEquals(List.of(actorId, "spot"), recoveredBackend.live);
         assertEquals(List.of(
             "prepare", "restore", "prepare-actor", "replay-send:1",
             "replay-request:2",
-            "publish-actor", "publish", "complete-actor", "timers"),
+            "publish-actor", "publish", "replay-request:3",
+            "complete-actor", "timers"),
             recoveredBackend.operations,
             "admission (timers, staged terminal) opens at publish with no"
                 + " command 35 delivered");
+        assertEquals(1, stagedReplies.size());
+        assertArrayEquals(new byte[] {9}, stagedReplies.getFirst());
+        assertEquals(0, stagedFailures.get());
         assertEquals(2, relays.get(),
             "command 33 is retried until command 46 reports terminal");
         assertThrows(CompletionException.class, () ->
@@ -784,7 +839,8 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         assertEquals(List.of(
             "prepare", "restore", "prepare-actor", "replay-send:1",
             "replay-request:2",
-            "publish-actor", "publish", "complete-actor", "timers",
+            "publish-actor", "publish", "replay-request:3",
+            "complete-actor", "timers",
             "command44", "normalize"),
             recoveredBackend.operations,
             "a failed finalize leaves admission open and the retried"

@@ -16,7 +16,10 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
@@ -40,6 +43,9 @@ import systems.zlink.framework.runtime.internal.locations
     .ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.spots.ZLinkSpot;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 
 /**
  * Target-side owner for relocation stage, authority-gated publication and
@@ -47,7 +53,8 @@ import systems.zlink.framework.spots.ZLinkSpot;
  * the Location Store exposes the exact root and target-owner fence.
  */
 final class ZLinkUserSpotRetireTargetEndpoint
-    implements ZLinkSpotRetireControl.TargetEndpoint {
+    implements ZLinkSpotRetireControl.TargetEndpoint,
+        ZLinkInternalSpotNode.RelocationStagingIngressHandler {
     private static final ZLinkStoreCancellation OPEN = () -> false;
     private static final ZLinkRelocationCancellation NOT_CANCELLED =
         () -> false;
@@ -356,16 +363,150 @@ final class ZLinkUserSpotRetireTargetEndpoint
                     finalRequest,
                     productionReplayer(target, request),
                     actorOwnerGenerations)
-                    .thenRun(() -> {
+                    .thenCompose(ignored -> {
                         //  Admission opens at publish: owner and membership
                         //  CAS, restore/replay, timer publication, queue
                         //  merge and dispatch switch are complete. Completed
                         //  verification, route switch and normalization
                         //  converge after Ready and never gate admission.
                         target.published().set(true);
-                        staging.openAdmission(target.staged());
+                        return staging.closeAndReplayIngress(target.staged())
+                            .thenRun(() -> staging.openAdmission(
+                                target.staged()));
                     });
             });
+    }
+
+    @Override
+    public boolean handleSpot(
+        ZLinkInternalMeshNode.PeerAuthorityFence source,
+        ZLinkServiceM6BWireCodec.SpotMessage header,
+        byte[] metadata,
+        Supplier<byte[]> acceptedJournalRecord,
+        int acceptedJournalRecordSizeHint,
+        List<Message> parts,
+        String contentType,
+        ZLinkInboundDispatchBudget.Lease inboundDispatchLease,
+        Consumer<List<Message>> reply,
+        Consumer<Throwable> failure) {
+        TargetStage target = stages.values().stream()
+            .filter(candidate -> matchesSource(
+                    candidate.request(), source)
+                && matchesSpotIngress(
+                    candidate.request(), header.target()))
+            .findFirst()
+            .orElse(null);
+        if (target == null) {
+            return false;
+        }
+        boolean accepted = staging.acceptSpotIngress(
+            target.staged(), acceptedJournalRecord.get(), reply, failure);
+        if (accepted) {
+            parts.forEach(Message::close);
+            if (inboundDispatchLease != null) {
+                inboundDispatchLease.close();
+            }
+        }
+        return accepted;
+    }
+
+    @Override
+    public boolean handleActor(
+        ZLinkInternalMeshNode.PeerAuthorityFence source,
+        ZLinkServiceM6BWireCodec.ActorMessage header,
+        Supplier<byte[]> acceptedJournalRecord,
+        List<Message> parts,
+        String contentType,
+        ZLinkInboundDispatchBudget.Lease inboundDispatchLease,
+        Consumer<List<Message>> reply,
+        Consumer<Throwable> failure) {
+        ActorTargetStage standalone = actorStages.values().stream()
+            .filter(candidate -> matchesSource(
+                    candidate.request(), source)
+                && matchesActorIngress(
+                    candidate.request(), header.target()))
+            .findFirst()
+            .orElse(null);
+        boolean accepted;
+        if (standalone != null) {
+            accepted = actorStaging.acceptIngress(
+                standalone.staged(), acceptedJournalRecord.get(), reply, failure);
+        } else {
+            TargetStage aggregate = stages.values().stream()
+                .filter(candidate -> matchesSource(
+                        candidate.request(), source)
+                    && matchesActorIngress(
+                        candidate.request(), header.target()))
+                .findFirst()
+                .orElse(null);
+            if (aggregate == null) {
+                return false;
+            }
+            accepted = staging.acceptActorIngress(
+                aggregate.staged(),
+                header.target().actor().actorId(),
+                acceptedJournalRecord.get(),
+                reply,
+                failure);
+        }
+        if (accepted) {
+            parts.forEach(Message::close);
+            if (inboundDispatchLease != null) {
+                inboundDispatchLease.close();
+            }
+        }
+        return accepted;
+    }
+
+    private static boolean matchesSpotIngress(
+        ZLinkSpotRetireControl.StageRequest request,
+        ZLinkServiceM6BWireCodec.SpotRouteFence route) {
+        var participant = request.participants().stream()
+            .filter(value -> value.objectKind()
+                == ZLinkPlacementObjectKind.USER_SPOT.value())
+            .findFirst()
+            .orElse(null);
+        return participant != null
+            && request.targetNodeRid().equals(route.targetNodeRid())
+            && request.targetNodeGeneration() == route.targetNodeGeneration()
+            && request.spotId().equals(route.spotId())
+            && participant.objectGeneration() == route.spotGeneration()
+            && participant.sourceAuthorityOwnerGeneration() != Long.MAX_VALUE
+            && participant.sourceAuthorityOwnerGeneration() + 1
+                == route.authorityOwnerGeneration()
+            && request.targetOwnerLeaseGeneration()
+                == route.ownerLeaseGeneration();
+    }
+
+    private static boolean matchesSource(
+        ZLinkSpotRetireControl.StageRequest request,
+        ZLinkInternalMeshNode.PeerAuthorityFence source) {
+        return request.sourceNodeRid().equals(source.sourceNodeRid())
+            && request.sourceNodeGeneration()
+                == source.sourceNodeGeneration()
+            && request.sourceOwnerId().equals(source.ownerId())
+            && request.sourceOwnerLeaseGeneration()
+                == source.ownerLeaseGeneration();
+    }
+
+    private static boolean matchesActorIngress(
+        ZLinkSpotRetireControl.StageRequest request,
+        ZLinkServiceM6BWireCodec.ActorRouteFence route) {
+        var participant = request.participants().stream()
+            .filter(value -> value.objectKind()
+                    == ZLinkPlacementObjectKind.ACTOR.value()
+                && value.objectId().equals(route.actor().actorId()))
+            .findFirst()
+            .orElse(null);
+        return participant != null
+            && request.targetNodeRid().equals(route.actor().nodeRid())
+            && request.targetNodeGeneration() == route.targetNodeGeneration()
+            && participant.objectGeneration() == route.actor().generation()
+            && participant.sourceAuthorityOwnerGeneration() != Long.MAX_VALUE
+            && participant.sourceAuthorityOwnerGeneration() + 1
+                == route.authorityOwnerGeneration()
+            && request.targetOwnerLeaseGeneration()
+                == route.ownerLeaseGeneration();
     }
 
     private ZLinkUserSpotAggregateStagingOwner.JournalReplayer
@@ -1227,9 +1368,11 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 root.payload(),
                 root.targetOwnerGeneration(participant.authorityKey()),
                 productionActorReplayer(target, request)))
-            .thenRun(() -> {
+            .thenCompose(ignored -> {
                 target.published().set(true);
-                actorStaging.openAdmission(target.staged());
+                return actorStaging.closeAndReplayIngress(target.staged())
+                    .thenRun(() -> actorStaging.openAdmission(
+                        target.staged()));
             });
     }
 

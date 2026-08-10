@@ -67,7 +67,7 @@ public record ZLinkBackendTopicMessage(
 
     @Override
     public byte[] applicationMetadata() {
-        return applicationMetadata.clone();
+        return applicationMetadata;
     }
 
     public void closeAdmission() {

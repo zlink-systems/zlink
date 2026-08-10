@@ -220,8 +220,18 @@ final class ZLinkSpotHandlerLoader {
     private static void addConfiguredSubscriptionHandler(
         Map<String, List<SpotSubscriptionHandlerRegistration>> handlers,
         SpotSubscriptionHandlerRegistration registration) {
-        handlers.computeIfAbsent(registration.topic(), ignored -> new ArrayList<>())
-            .add(registration);
+        List<SpotSubscriptionHandlerRegistration> topicHandlers =
+            handlers.computeIfAbsent(registration.topic(), ignored -> new ArrayList<>());
+        for (SpotSubscriptionHandlerRegistration existing : topicHandlers) {
+            if (existing.packetName().equals(registration.packetName())
+                && existing.messageType() != registration.messageType()) {
+                throw new ZLinkConfigurationException(
+                    "SPOT subscription handlers for topic '" + registration.topic()
+                        + "' and packet '" + registration.packetName()
+                        + "' must declare the same message type");
+            }
+        }
+        topicHandlers.add(registration);
     }
 
     private static SpotPacketHandlerRegistration createSpotPacketRegistration(

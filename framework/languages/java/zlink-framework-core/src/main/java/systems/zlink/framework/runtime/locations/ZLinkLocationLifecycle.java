@@ -132,7 +132,7 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
                 var spot = spotAuthorities.decode(spotSnapshot.payload())
                     .orElseThrow(() -> new IllegalStateException(
                         "Spot authority payload is invalid: " + spotId));
-                if (spot.kind() != ZLinkServiceAuthorityPayloadCodec.Kind.USER
+                if (spot.user().isEmpty()
                     || spot.state()
                         != ZLinkServiceAuthorityPayloadCodec.State.READY
                     || !spot.spotId().equals(spotId)
