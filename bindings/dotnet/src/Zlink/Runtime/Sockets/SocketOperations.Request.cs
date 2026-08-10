@@ -176,7 +176,12 @@ internal abstract class RouterRequestOperation : RequestOperation,
             throw new ArgumentNullException(nameof(callback));
         EnsureReady();
         _submission.MarkSubmittedAfterValidation();
-        return SubmitCore(_parts.Parts, callback, _flags, _timeout);
+        // Keep single-part submission on the same ownership and callback path
+        // without creating the temporary one-item list used by multi-part
+        // submission.
+        return _parts.IsSingle
+            ? SubmitSingleCore(_parts.Single, callback, _flags, _timeout)
+            : SubmitCore(_parts.Parts, callback, _flags, _timeout);
     }
 
     private void AddMessage(Message message)
@@ -203,6 +208,12 @@ internal abstract class RouterRequestOperation : RequestOperation,
 
     protected abstract bool SubmitCore(
         IReadOnlyList<Message> parts,
+        RequestCallback callback,
+        SendFlags flags,
+        TimeSpan timeout);
+
+    protected abstract bool SubmitSingleCore(
+        Message part,
         RequestCallback callback,
         SendFlags flags,
         TimeSpan timeout);
@@ -236,6 +247,16 @@ internal sealed class RouterPeerRequestOperation : RouterRequestOperation
         TimeSpan timeout)
     {
         return _socket.RequestCallbackCore(_peerRid, parts, callback, flags,
+            timeout);
+    }
+
+    protected override bool SubmitSingleCore(
+        Message part,
+        RequestCallback callback,
+        SendFlags flags,
+        TimeSpan timeout)
+    {
+        return _socket.RequestCallbackCore(_peerRid, part, callback, flags,
             timeout);
     }
 }
