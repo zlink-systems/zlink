@@ -180,7 +180,8 @@ async function verifyExistingPlayer(gatewayEndpoint: string, ops: ZlinkStreamCon
     await moveAndWait(game, joined.playerId, 30, 30);
     await walkTo(game, joined.playerId, { x: 30, y: 30 }, 30, 48);
     const changed = game.waitFor<ZoneChangedNotify>(PacketNames.zoneChangedNotify)
-      .where((message) => message.payload.zoneId === ZoneIds.southWest).submit();
+      .where((message) => message.payload.zoneId === ZoneIds.southWest)
+      .timeout(60_000).submit();
     await game.send(new MoveMsg(30, 52)).packetName(PacketNames.moveMsg).submit();
     zlinkStreamAssert.ensure(!(await changed).payload.transferred, 'ZW-E2 node-local move transferred the actor.');
     console.log('scenario ZW-E2 passed');
@@ -198,7 +199,8 @@ async function verifyDeparture(gatewayEndpoint: string, ops: ZlinkStreamConnecto
     await walkTo(game, joined.playerId, joined, 48, 25);
     await setMaintenance(ops, NodeIds.west, true);
     const changed = game.waitFor<ZoneChangedNotify>(PacketNames.zoneChangedNotify)
-      .where((message) => message.payload.nodeId === NodeIds.east).submit();
+      .where((message) => message.payload.nodeId === NodeIds.east)
+      .timeout(60_000).submit();
     await game.send(new MoveMsg(52, 25)).packetName(PacketNames.moveMsg).submit();
     zlinkStreamAssert.ensure((await changed).payload.transferred, 'ZW-E3 departure did not transfer the actor.');
     console.log('scenario ZW-E3 passed');
