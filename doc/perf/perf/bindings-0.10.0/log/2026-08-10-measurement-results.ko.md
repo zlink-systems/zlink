@@ -921,3 +921,13 @@ baseline throughput ratio는 `64.025% / 69.152% / 64.325% / 58.416% / 87.238% / 
 | .NET own RouterRequestOperation helper inlining | 57803 / 55918 / 56454 / 47068 / 11961 / 6128 | 0.603 / 0.623 / 0.629 / 0.798 / 3.966 / 7.946 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_230807_dotnet-router-router-reqrep-wss-own-router-operation-inline-100.txt` |
 
 baseline throughput ratio는 `62.560% / 82.738% / 52.932% / 71.644% / 104.656% / 82.432%`, 산술평균은 `76.160%`이며 평균 latency ratio는 `1.487x / 1.097x / 1.334x / 1.293x / 0.961x / 1.208x`, 산술평균은 `1.230x`다. 자체 개선은 private `RouterRequestOperation.AddMessage`/`EnsureReady`/`EnsureNotSubmitted`에 AggressiveInlining을 적용했다. own throughput ratio는 `70.389% / 83.790% / 67.240% / 70.912% / 105.878% / 87.958%`, 산술평균은 `81.028%`이며 평균 latency ratio는 `1.262x / 1.082x / 1.338x / 1.293x / 0.947x / 1.141x`, 산술평균은 `1.177x`다. baseline 대비 throughput과 latency가 개선됐다. Sol review는 변경 유지를 GO하고 추가 builder/callback/native submit 경계 후보를 no-go로 판정했다. public contract·builder state·Message ownership·exception/error semantics는 변경하지 않았으며 최종 상태는 `통과`다. build `0 warning / 0 error`, contract test `149 passed / 0 failed / 0 skipped`다.
+
+### Python Single PAIR/tcp
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 2396.815 / 1211.775 / 666.060 / 39.687 / 23.774 / 15.644 | 0.104 / 0.239 / 0.311 / 5.122 / 8.605 / 13.190 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_010532_python-pair-tcp-native-builder-c.txt` |
+| Python baseline | 120.962 / 118.698 / 113.169 / 39.257 / 20.468 / 13.010 | 0.117 / 0.096 / 0.123 / 3.385 / 10.309 / 20.178 | `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_010229_python-pair-tcp-paired-baseline.txt` |
+| Python final | 132.816 / 126.421 / 125.324 / 36.295 / 22.118 / 13.654 | 0.107 / 0.112 / 0.129 / 0.675 / 8.214 / 17.708 | `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_010548_python-pair-tcp-native-builder-after.txt` |
+
+final throughput ratio는 `5.541% / 10.433% / 18.816% / 91.453% / 93.034% / 87.279%`, 산술평균 `51.093%`이며 평균 latency ratio 산술평균은 `0.724x`다. 단순 one-way 최소 기준 `35%`를 통과한다. baseline throughput ratio 산술평균은 `48.824%`였고, final은 이를 초과한다.

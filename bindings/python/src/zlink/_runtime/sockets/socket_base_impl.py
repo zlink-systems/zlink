@@ -301,8 +301,12 @@ class _NativeBuilderSendOp(_SocketSendOp):
             raise SubmitError(SubmitResult.INVALID_STATE, 0)
         payload = self._payload_or_raise()
         self._submitted = True
-        parts = self._parts if self._parts is not None else (self._payload,)
-        if any(isinstance(part, Message) for part in parts):
+        has_native_message = (
+            isinstance(payload, Message)
+            if self._parts is None
+            else any(isinstance(part, Message) for part in self._parts)
+        )
+        if has_native_message:
             fallback = self._fallback_factory()
             if self._parts is not None:
                 fallback.messages(*self._parts)

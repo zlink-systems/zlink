@@ -1269,15 +1269,15 @@ transport 상태를 판정한다.
 ### 9.7 Python
 
 - perf 경로: `bindings/python/perf`
-- Single 상태: `미측정`
+- Single 상태: `진행 (PAIR/tcp 통과)`
 - Multi 상태: `미측정`
-- 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
+- 다음 작업: 다음 transport·pattern을 C와 순차 paired 측정한다.
 
 #### 9.7.1 Single suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `PAIR` | 5.541% | 10.433% | 18.816% | 91.453% | 93.034% | 87.279% | 산술평균 51.093%, latency 산술평균 0.724x, 단순 one-way 최소 기준 35% 통과. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_010532_python-pair-tcp-native-builder-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_010548_python-pair-tcp-native-builder-after.txt` |
 | `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1568,7 +1568,7 @@ transport 상태를 판정한다.
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 5 | Go | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 6 | Rust | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
-| 7 | Python | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
+| 7 | Python | 진행·PAIR/tcp 통과 | 미측정 | 다음 transport·pattern의 paired 측정을 진행한다. |
 
 ## 11. 측정 기록과 결과
 
@@ -1576,6 +1576,7 @@ transport 상태를 판정한다.
 
 | 날짜 | 언어 | 대상 | pair tag | size별 throughput ratio | size 중앙값 | 판정 | report |
 |------|------|------|----------|-------------------------|------------|------|--------|
+| 2026-08-11 | Python | Single / PAIR / tcp / 64·256·1024·65536·131072·262144B | `python-pair-tcp-native-builder-after` | 5.541%, 10.433%, 18.816%, 91.453%, 93.034%, 87.279% | 51.093% (산술평균), latency 0.724x | 통과·single-part native builder 검사 최적화 유지 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_010532_python-pair-tcp-native-builder-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_010548_python-pair-tcp-native-builder-after.txt` |
 | 2026-08-11 | .NET | Multi / MULTI_ROUTER_ROUTER_REQREP / tls / 64·256·1024·4096·65536·131072B | `dotnet-router-router-reqrep-tls-paired-baseline-100` | 65.432%, 68.435%, 63.576%, 66.536%, 95.939%, 95.995% | 67.486% (산술평균 gate 75.801%) | 통과·자체 인라이닝 후보 원복·Sol NO-GO | C 독립 reports: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_000254_dotnet-router-router-reqrep-tls-c-64-repro-100.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_000228_dotnet-router-router-reqrep-tls-c-256-repro-100.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_000304_dotnet-router-router-reqrep-tls-c-1024-repro-100.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_000312_dotnet-router-router-reqrep-tls-c-4096-repro-100.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_000320_dotnet-router-router-reqrep-tls-c-65536-repro-100.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_000328_dotnet-router-router-reqrep-tls-c-131072-repro-100.txt`; .NET baseline: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260811_000346_dotnet-router-router-reqrep-tls-paired-baseline-100.txt`; partial C full sweep excluded: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_000051_dotnet-router-router-reqrep-tls-paired-c-100.txt`; own candidate reverted: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260811_000530_dotnet-router-router-reqrep-tls-own-router-request-factory-inline-100.txt` |
 | 2026-08-11 | .NET | Multi / MULTI_PUBSUB / tls / 64·256·1024·4096·65536·131072B | `dotnet-pubsub-tls-own-publisher-validation-inline-100` | 63.463%, 66.419%, 77.933%, 95.121%, 133.794%, 100.834% | 86.527% (산술평균 89.594%) | 통과·throughput aggregate 통과·자체 후보 유지·Sol GO | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_001824_dotnet-pubsub-tls-paired-c-100.txt`; .NET baseline: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260811_001838_dotnet-pubsub-tls-paired-baseline-100.txt`; own: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260811_001957_dotnet-pubsub-tls-own-publisher-validation-inline-100.txt`; Sol: `SOL-DOTNET-MULTI-PUBSUB-TLS-20260811`
 | 2026-08-10 | C/C++ | Multi / MULTI_ROUTER_ROUTER_REQREP / ws / 64·256·1024·4096·65536·131072B | `multi-router-router-reqrep-ws-pool-bypass-ab-c1` | 99.34%, 107.52%, 98.21%, 97.91%, 98.17%, 97.49% | 98.19% | 통과·pool bypass 개선 채택 | C throughput Kops/s: 93847.8 / 84024.6 / 78344.2 / 62913.6 / 18783.4 / 12128.8; C++: 93225.6 / 90344.0 / 76939.2 / 61600.2 / 18439.0 / 11824.4. 평균 latency ratio: 0.995x / 0.929x / 1.007x / 0.998x / 0.962x / 0.942x. C report: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_083025_multi-router-router-reqrep-ws-pool-bypass-ab-c1.txt`; C++ report: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_083105_multi-router-router-reqrep-ws-pool-bypass-ab-c1.txt` |
