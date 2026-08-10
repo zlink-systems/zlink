@@ -278,3 +278,15 @@ throughput ratio는 `59.94% / 87.13% / 100.10% / 96.97% / 94.94% / 89.23%`, 산�
 throughput ratio는 `57.49% / 68.06% / 87.72% / 94.43% / 99.75% / 90.66%`, 산술평균은
 `83.02%`다. latency ratio는 `1.269x / 1.131x / 1.043x / 1.044x / 0.992x / 1.090x`,
 산술평균은 `1.095x`다. .NET socket request/reply aggregate 기준을 충족해 통과로 판정한다.
+
+### .NET Single PAIR/tls
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 2002027 / 961213 / 317590 / 13380 / 7870 / 4190 | 41.730 / 0.297 / 0.638 / 14.609 / 24.699 / 45.601 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_155818_pair-tls-paired-c1.txt` |
+| .NET before | 1713235 / 747265 / 322010 / 12056 / 7088 / 3714 | 37.130 / 40.005 / 11.208 / 16.115 / 27.178 / 51.213 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_155831_pair-tls-paired-final.txt` |
+| .NET after | 1523006 / 791552 / 341356 / 11732 / 7119 / 3650 | 41.682 / 30.041 / 9.157 / 16.508 / 27.103 / 52.193 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_160225_pair-tls-own-after-clock.txt` |
+
+before throughput ratio는 `85.575% / 77.742% / 101.392% / 90.105% / 90.064% / 88.640%`, 산술평균은 `88.919%`다. after throughput ratio는 `76.073% / 82.349% / 107.483% / 87.683% / 90.457% / 87.112%`, 산술평균은 `88.526%`다. before latency ratio는 `0.890x / 134.697x / 17.567x / 1.103x / 1.100x / 1.123x`, 산술평균은 `26.080x`다. after latency ratio는 `0.999x / 101.148x / 14.353x / 1.130x / 1.097x / 1.145x`, 산술평균은 `19.979x`다.
+
+`EpochNs()`의 Stopwatch 기반 wall-epoch 변환 후 256B·1024B latency가 개선됐지만 latency aggregate는 미달이다. Sol 2차 리뷰에서 `MessageSocketSendOperation` 재사용과 private direct-send는 public 호출자 참조·mutable state·ownership 계약 위험으로 no-go 판정했다. 측정값 기준으로 `자체 개선 후 no-go·보류`한다. 다음 대상은 `.NET Single PUBSUB/tls`다.

@@ -36,7 +36,9 @@ public static class PerfShared
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ulong EpochNs()
     {
-        return (ulong)(DateTime.UtcNow.Ticks * 100L);
+        // Keep the wall-clock epoch meaning used by the C harness while
+        // avoiding a DateTime.UtcNow call on every hot-path message.
+        return EpochNsFromTimestamp(Stopwatch.GetTimestamp());
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
