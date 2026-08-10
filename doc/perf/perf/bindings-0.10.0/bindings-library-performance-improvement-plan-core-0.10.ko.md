@@ -834,12 +834,12 @@ transport 상태를 판정한다.
 ### 9.2 .NET
 
 - perf 경로: `bindings/dotnet/perf`
-- Single 상태: `DEALER_ROUTER/tcp`·`DEALER_ROUTER_REQREP/tcp`·`ROUTER_ROUTER_REQREP/tcp`·`PAIR/ws`·`DEALER_DEALER/ws`·`DEALER_ROUTER/ws`·`ROUTER_ROUTER/ws`·`DEALER_ROUTER_REQREP/ws`·`ROUTER_ROUTER_REQREP/ws`·`PAIR/wss`·`PUBSUB/wss`·`DEALER_DEALER/wss`·`DEALER_ROUTER/wss`·`DEALER_ROUTER_REQREP/wss`·`ROUTER_ROUTER/wss` 완료·통과, `PAIR/tcp`·`PUBSUB/tcp`·`DEALER_DEALER/tcp`·`ROUTER_ROUTER/tcp`·`PUBSUB/ws` 완료·보류, 나머지 대상 측정 중
+- Single 상태: `DEALER_ROUTER/tcp`·`DEALER_ROUTER_REQREP/tcp`·`ROUTER_ROUTER_REQREP/tcp`·`PAIR/ws`·`DEALER_DEALER/ws`·`DEALER_ROUTER/ws`·`ROUTER_ROUTER/ws`·`DEALER_ROUTER_REQREP/ws`·`ROUTER_ROUTER_REQREP/ws`·`PAIR/wss`·`PUBSUB/wss`·`DEALER_DEALER/wss`·`DEALER_ROUTER/wss`·`DEALER_ROUTER_REQREP/wss`·`ROUTER_ROUTER/wss`·`ROUTER_ROUTER_REQREP/wss` 완료·통과, `PAIR/tcp`·`PUBSUB/tcp`·`DEALER_DEALER/tcp`·`ROUTER_ROUTER/tcp`·`PUBSUB/ws` 완료·보류, 나머지 대상 측정 중
 - Multi 상태: `미측정`
 - `미측정` 행은 완료나 다음 언어 전환을 의미하지 않는다. 특히 9.2.2의 `tls` `MULTI_*`
   행은 .NET에서 아직 측정하지 않은 대상이며, C++ 9.1의 같은 이름 행이 완료되어도 .NET
   측정 완료로 간주하지 않는다.
-- 다음 작업: `Single ROUTER_ROUTER_REQREP / wss`를 C → .NET 순서로 한 대상씩 측정한다.
+- 다음 작업: `Single PAIR / tls`를 C → .NET 순서로 한 대상씩 측정한다.
 
 #### 9.2.1 Single suite
 
@@ -865,7 +865,7 @@ transport 상태를 판정한다.
 | `wss` | `DEALER_ROUTER` | 70.60% | 84.93% | 97.86% | 93.69% | 95.87% | 92.32% | 통과·throughput 산술평균 89.21%, 평균 latency ratio 1.018x. 64B·256B 개별 ratio는 기록값이며 .NET routed one-way aggregate 기준을 바꾸지 않는다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_154433_dealer-router-wss-paired-c1.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_154448_dotnet-dealer-router-wss-paired-final.txt` |
 | `wss` | `DEALER_ROUTER_REQREP` | 61.55% | 73.74% | 83.05% | 93.50% | 88.95% | 97.12% | 통과·throughput 산술평균 82.98%, 평균 latency ratio 1.104x. 64B·256B 개별 ratio는 기록값이며 .NET socket request/reply aggregate 기준을 바꾸지 않는다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_155235_dealer-router-reqrep-wss-paired-c1.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_155250_dealer-router-reqrep-wss-paired-final.txt` |
 | `wss` | `ROUTER_ROUTER` | 59.94% | 87.13% | 100.10% | 96.97% | 94.94% | 89.23% | 통과·throughput 산술평균 88.05%, 평균 latency ratio 0.943x. 64B 개별 ratio는 기록값이며 .NET routed one-way aggregate 기준을 바꾸지 않는다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_155438_router-router-wss-paired-c1.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_155452_router-router-wss-paired-final.txt` |
-| `wss` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `ROUTER_ROUTER_REQREP` | 57.49% | 68.06% | 87.72% | 94.43% | 99.75% | 90.66% | 통과·throughput 산술평균 83.02%, 평균 latency ratio 1.095x. 64B·256B 개별 ratio는 기록값이며 .NET socket request/reply aggregate 기준을 바꾸지 않는다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_155632_router-router-reqrep-wss-paired-c1.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_155645_router-router-reqrep-wss-paired-final.txt` |
 | `tls` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1308,10 +1308,10 @@ transport 상태를 판정한다.
 | 구분 | 상태 | 결과 파일 / 메모 |
 |------|------|------------------|
 | 현재 언어 | .NET |  |
-| 현재 pattern | 완료·통과 | `ROUTER_ROUTER / wss` throughput 산술평균은 88.05%, 평균 latency ratio는 0.943x로 .NET routed one-way 기준을 충족했다. 다음 대상은 `.NET Single ROUTER_ROUTER_REQREP / wss`다. |
-| paired C | 완료 | C throughput은 1752137/735231/230999/9861/6071/3463 Kmsg/s, 평균 latency는 48.749/36.335/38.287/73.953/42.437/67.473 ms다. report는 `perf_c_single_linux_20260810_155438_router-router-wss-paired-c1.txt`다. |
-| binding paired 결과 | 완료·통과 | .NET throughput은 1050212/640637/231238/9562/5764/3090 Kmsg/s, 평균 latency는 69.053/33.221/32.011/32.777/42.947/70.039 ms다. report는 `perf_dotnet_single_linux_20260810_155452_router-router-wss-paired-final.txt`다. |
-| 개선 결과 | 통과·추가 변경 없음 | throughput ratio 산술평균 88.05%, 평균 latency ratio 0.943x로 통과했다. 개별 ratio는 측정값으로 기록하고 추가 hot-path 변경 없이 다음 대상 `.NET Single ROUTER_ROUTER_REQREP / wss`로 이동한다. |
+| 현재 pattern | 완료·통과 | `ROUTER_ROUTER_REQREP / wss` throughput 산술평균은 83.02%, 평균 latency ratio는 1.095x로 .NET socket request/reply 기준을 충족했다. 다음 대상은 `.NET Single PAIR / tls`다. |
+| paired C | 완료 | C throughput은 204449/152615/76590/4616/2751/1659 Kops/s, 평균 latency는 0.245/0.375/0.816/2.599/2.179/1.805 ms다. report는 `perf_c_single_linux_20260810_155632_router-router-reqrep-wss-paired-c1.txt`다. |
+| binding paired 결과 | 완료·통과 | .NET throughput은 117535/103869/67185/4359/2744/1504 Kops/s, 평균 latency는 0.311/0.424/0.851/2.713/2.162/1.967 ms다. report는 `perf_dotnet_single_linux_20260810_155645_router-router-reqrep-wss-paired-final.txt`다. |
+| 개선 결과 | 통과·추가 변경 없음 | throughput ratio 산술평균 83.02%, 평균 latency ratio 1.095x로 통과했다. 개별 ratio는 측정값으로 기록하고 추가 hot-path 변경 없이 다음 대상 `.NET Single PAIR / tls`로 이동한다. |
 
 | request/reply paired C | 완료 | `DEALER_ROUTER_REQREP / tcp` C report median: 212,245.6 / 192,437.8 / 176,009.8 / 17,174.8 / 11,981.0 / 7,339.6 msg/s. C++ 구형 실행은 공식 비교에서 제외했으며, parity 보정 후 C++을 다시 측정했다. |
 | request/reply binding paired 결과 | 완료·미달 | C++ full sweep ratio: 95.10%, 93.51%, 96.72%, 94.99%, 95.76%, 93.89%, 중앙값 95.05%. 1024B·65536B boundary 재검증 ratio: 94.64%, 95.73%. 공식 재계산 중앙값 94.87%, latency ratio 모두 1.057배 이내. |
@@ -1442,7 +1442,7 @@ transport 상태를 판정한다.
 | 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
 |------|------|-------------|------------|-----------|
 | 1 | C++ | 완료·통과 35 / 보류 7 | 완료·통과 25 / 보류 3 | C++ perf는 추가 실행하지 않고 .NET으로 전환 |
-| 2 | .NET | 완료·통과 15 / 보류 5 | 미측정 | 다음 대상은 `Single ROUTER_ROUTER_REQREP / wss`; C → .NET 순서로 한 대상씩 측정 |
+| 2 | .NET | 완료·통과 16 / 보류 5 | 미측정 | 다음 대상은 `Single PAIR / tls`; C → .NET 순서로 한 대상씩 측정 |
 | 3 | Java | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 5 | Go | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
@@ -1566,6 +1566,7 @@ transport 상태를 판정한다.
 | 2026-08-10 | .NET | Single / DEALER_ROUTER / wss / 64·256·1024·65536·131072·262144B | `dotnet-dealer-router-wss-paired-final` | 70.60%, 84.93%, 97.86%, 93.69%, 95.87%, 92.32% | 89.21% (산술평균) | 통과·평균 latency ratio 1.018x | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_154433_dealer-router-wss-paired-c1.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_154448_dotnet-dealer-router-wss-paired-final.txt` |
 | 2026-08-10 | .NET | Single / DEALER_ROUTER_REQREP / wss / 64·256·1024·65536·131072·262144B | `dotnet-dealer-router-reqrep-wss-paired-final` | 61.55%, 73.74%, 83.05%, 93.50%, 88.95%, 97.12% | 82.98% (산술평균) | 통과·평균 latency ratio 1.104x | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_155235_dealer-router-reqrep-wss-paired-c1.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_155250_dealer-router-reqrep-wss-paired-final.txt` |
 | 2026-08-10 | .NET | Single / ROUTER_ROUTER / wss / 64·256·1024·65536·131072·262144B | `dotnet-router-router-wss-paired-final` | 59.94%, 87.13%, 100.10%, 96.97%, 94.94%, 89.23% | 88.05% (산술평균) | 통과·평균 latency ratio 0.943x | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_155438_router-router-wss-paired-c1.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_155452_router-router-wss-paired-final.txt` |
+| 2026-08-10 | .NET | Single / ROUTER_ROUTER_REQREP / wss / 64·256·1024·65536·131072·262144B | `dotnet-router-router-reqrep-wss-paired-final` | 57.49%, 68.06%, 87.72%, 94.43%, 99.75%, 90.66% | 83.02% (산술평균) | 통과·평균 latency ratio 1.095x | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_155632_router-router-reqrep-wss-paired-c1.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_155645_router-router-reqrep-wss-paired-final.txt` |
 
 ### 11.1 이전 측정값 판정 이력
 
