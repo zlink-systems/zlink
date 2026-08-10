@@ -443,14 +443,16 @@ test('framework package exports only the public root contract', () => {
   assert.equal(packageJson.exports['.'].types, './dist/index.d.ts');
 });
 
-test('framework public root excludes raw route storage and serializer selection details', () => {
+test('framework public root exposes declared-type codec selection without per-message context', () => {
   const publicRoot = fs.readFileSync(path.join(declarationsRoot, 'index.d.ts'), 'utf8');
   const codecDeclarations = readTree(path.join(declarationsRoot, 'Codecs'));
   assert.doesNotMatch(publicRoot, /ZLinkRouteKind|ZLinkRouteLocation/);
   assert.doesNotMatch(
     codecDeclarations,
-    /ZLinkSerializerSelectionContext|canSerialize|selection|packetName|messageType|parseMessage/
+    /ZLinkSerializerSelectionContext|packetName|messageType|parseMessage/
   );
+  assert.match(codecDeclarations, /ZLinkMessageTypeSelector/);
+  assert.match(codecDeclarations, /canSerialize: ZLinkMessageTypeSelector/);
 });
 
 test('NestJS package declarations stay inside declared public package boundaries', () => {

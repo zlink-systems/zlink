@@ -411,27 +411,21 @@ export class DefaultZLinkSpotManager {
         this.scheduleIdleSweep();
       },
       releaseLocation: (activation, meshName, spotId) => {
-        if (!this.isInstanceFactory(meshName, activation.spotType)) {
+        if (activation.domain.kind === 'user') {
           return this.locationClaim.release(meshName, spotId);
         }
         const currentApplication = this.options.instanceSpotApplicationTargetProvider?.(
           meshName,
           spotId
         );
-        if (
-          activation.objectGeneration !== undefined
-          && currentApplication !== undefined
-          && currentApplication.objectGeneration !== activation.objectGeneration
-        ) {
+        if (currentApplication !== undefined
+          && currentApplication.objectGeneration !== activation.domain.objectGeneration) {
           // A superseded local application must not release the authority row
           // that now belongs to the newer object generation.
           return Promise.resolve();
         }
         const key = `${meshName}\0${String(spotId)}`;
-        const objectGeneration = activation.objectGeneration;
-        if (objectGeneration === undefined) {
-          return Promise.resolve();
-        }
+        const objectGeneration = activation.domain.objectGeneration;
         if (this.pendingInstanceTerminals.has(key)) {
           this.deferInstanceAuthorityRelease(key, objectGeneration);
           return Promise.resolve();
@@ -763,7 +757,7 @@ export class DefaultZLinkSpotManager {
       candidate.meshName === meshName && String(candidate.spotId) === String(spotId)
     );
     return activation !== undefined
-      && this.isInstanceFactory(meshName, activation.spotType)
+      && activation.domain.kind === 'instance'
       && activation.isIdleEvicting;
   }
 
@@ -773,7 +767,7 @@ export class DefaultZLinkSpotManager {
     );
     if (
       activation === undefined
-      || !this.isInstanceFactory(meshName, activation.spotType)
+      || activation.domain.kind !== 'instance'
       || !activation.isIdleFor(
         Date.now(),
         this.options.instanceSpotIdleTimeoutMs?.get(meshName) ?? 0
@@ -881,14 +875,6 @@ export class DefaultZLinkSpotManager {
     return factory;
   }
 
-  private isInstanceFactory(
-    meshName: string,
-    implementation: Type<ZLinkSpot>
-  ): boolean {
-    return [...(this.options.instanceSpotFactories?.get(meshName)?.values() ?? [])]
-      .some(factory => factory === implementation);
-  }
-
   private scheduleIdleSweep(): void {
     if (this.idleSweepTimer !== undefined) return;
     if (!this.hasIdleSweepTarget()) return;
@@ -917,7 +903,7 @@ export class DefaultZLinkSpotManager {
         const timeoutMs = this.options.instanceSpotIdleTimeoutMs?.get(activation.meshName) ?? 0;
         if (
           timeoutMs <= 0
-          || !this.isInstanceFactory(activation.meshName, activation.spotType)
+          || activation.domain.kind !== 'instance'
           || !activation.isIdleFor(now, timeoutMs)
           || !activation.beginIdleEviction()
         ) {
@@ -1130,7 +1116,7 @@ export class DefaultZLinkSpotManager {
       return false;
     }
     const currentTurn = activation.serial.isCurrentTurn;
-    const isInstance = this.isInstanceFactory(meshName, activation.spotType);
+    const isInstance = activation.domain.kind === 'instance';
     const beginClose = () => {
       const seal = activation.sealExecution();
       const operation = this.activations.startClose(
@@ -1539,13 +1525,14 @@ export class DefaultZLinkSpotManager {
       try {
         await this.ensureInstanceApplicationActivation(meshName, spotId);
         const activation = this.activations.resolve(meshName, spotId);
-        if (activation === undefined || !this.isInstanceFactory(meshName, activation.spotType)) {
+        if (activation === undefined || activation.domain.kind !== 'instance') {
           throw new ZLinkConfigurationException(
             `MeshNode Instance Spot target '${String(spotId)}' is not active.`
           );
         }
         const target = this.options.instanceSpotApplicationTargetProvider?.(meshName, spotId);
-        if (target !== undefined && activation.objectGeneration !== target.objectGeneration) {
+        if (target !== undefined
+          && activation.domain.objectGeneration !== target.objectGeneration) {
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.SpotGenerationStale,
             `Instance Spot target '${String(spotId)}' application generation is stale.`

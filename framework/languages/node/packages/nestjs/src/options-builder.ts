@@ -20,6 +20,7 @@ import type {
   ZLinkMeshPeerConnection,
   ZLinkMeshPeerConnections,
   ZLinkMessageSerializer,
+  ZLinkMessageTypeSelector,
   ZLinkNetworkOptions,
   ZLinkSession,
   ZLinkSessionFactory,
@@ -101,9 +102,14 @@ function createBuilderState(): ZLinkNestBuilderState {
 function registerSerializer(
   state: ZLinkNestBuilderState,
   contentType: string,
-  serializer: ZLinkMessageSerializer
+  serializer: ZLinkMessageSerializer,
+  canSerialize?: ZLinkMessageTypeSelector
 ): void {
-  state.codecRegistry.addSerializer(contentType, serializer);
+  if (canSerialize === undefined) {
+    state.codecRegistry.addSerializer(contentType, serializer);
+  } else {
+    state.codecRegistry.addSerializer(contentType, serializer, canSerialize);
+  }
 }
 
 function registerStreamCodec(state: ZLinkNestBuilderState, contentType: string, codec: unknown): void {
@@ -322,8 +328,18 @@ class DefaultZLinkNestCodecRegistryBuilder extends ZLinkNestOptionsBuilder imple
     super(state);
   }
 
-  addSerializer(contentType: string, serializer: ZLinkMessageSerializer): this {
-    registerSerializer(this.state, contentType, serializer);
+  addSerializer(contentType: string, serializer: ZLinkMessageSerializer): this;
+  addSerializer(
+    contentType: string,
+    serializer: ZLinkMessageSerializer,
+    canSerialize: ZLinkMessageTypeSelector
+  ): this;
+  addSerializer(
+    contentType: string,
+    serializer: ZLinkMessageSerializer,
+    canSerialize?: ZLinkMessageTypeSelector
+  ): this {
+    registerSerializer(this.state, contentType, serializer, canSerialize);
     return this;
   }
 

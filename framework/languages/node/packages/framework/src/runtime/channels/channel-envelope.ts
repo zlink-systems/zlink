@@ -9,6 +9,10 @@ import {
   type ZLinkFlowOrigin
 } from '../../contracts';
 import { borrowEncodedPayload } from '../../contracts/Common/encoded-payload-storage';
+import {
+  isZLinkMessage,
+  readZLinkMessageDeclaredType
+} from '../../contracts/Common/ZLinkMessage';
 import { ZLinkConfigurationException } from '../configuration';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -16,9 +20,9 @@ import {
 } from '../framework-errors-internal';
 import { resolveFrameworkPacketName } from '../messaging/packet-name';
 import {
-  contentTypeForSerializer,
-  selectSerializer
+  selectSerializerWithContentType
 } from '../messaging/payload-codec';
+import { isCanonicalCodecContentType } from '../../contracts/Configuration/CodecContentType';
 import {
   parseFrameworkJsonV1,
   stringifyFrameworkJsonV1
@@ -239,16 +243,16 @@ export function decodeChannelReply<TReply>(
   if (header.kind !== ZLinkChannelMessageKind.Response) {
     throw new ZLinkConfigurationException(`Channel reply kind '${header.kind}' is not a response.`);
   }
+  if (!isCanonicalCodecContentType(header.contentType)) {
+    throw unsupportedChannelContentType(header.contentType);
+  }
   const serializer = codecs?.serializers.get(header.contentType);
   if (
     serializer === undefined
     && header.contentType !== BINARY_CONTENT_TYPE
     && header.contentType !== JSON_CONTENT_TYPE
   ) {
-    throw createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed,
-      `ProtocolError: unsupported channel content type '${header.contentType}'.`
-    );
+    throw unsupportedChannelContentType(header.contentType);
   }
   if (parts.length < 2 || parts[1].data().length === 0) {
     return undefined as TReply;
@@ -299,6 +303,9 @@ export function decodeChannelPayload(
   codecs?: ZLinkChannelEnvelopeCodecRegistry
 ): unknown {
   try {
+    if (!isCanonicalCodecContentType(envelope.header.contentType)) {
+      throw unsupportedChannelContentType(envelope.header.contentType);
+    }
     const serializer = codecs?.serializers.get(envelope.header.contentType);
     if (serializer !== undefined) {
       return serializer.deserialize(ZLinkEncodedPayload.from(envelope.payload), Object as never);
@@ -314,10 +321,7 @@ export function decodeChannelPayload(
         schemaForInboundChannelEnvelope(envelope.header)
       );
     }
-    throw createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed,
-      `ProtocolError: unsupported channel content type '${envelope.header.contentType}'.`
-    );
+    throw unsupportedChannelContentType(envelope.header.contentType);
   } catch (error) {
     if (error instanceof ZLinkFrameworkException) {
       throw error;
@@ -328,6 +332,13 @@ export function decodeChannelPayload(
       error
     );
   }
+}
+
+function unsupportedChannelContentType(contentType: string): ZLinkFrameworkException {
+  return createInternalFrameworkException(
+    ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed,
+    `ProtocolError: unsupported channel content type '${contentType}'.`
+  );
 }
 
 export function closeMessages(parts: readonly MessageLike[]): void {
@@ -347,12 +358,22 @@ function encodePayload(
   readonly contentType: string;
   readonly message: MessageLike;
 } {
-  const serializer = selectSerializer(value, codecs);
-  if (serializer !== undefined && !(Buffer.isBuffer(value) || value instanceof Uint8Array || isMessage(value))) {
-    const contentType = requireDefaultSerializerContentType(codecs, serializer);
-    const payload = serializer.serialize(value);
+  if (isZLinkMessage(value) && value.isEncoded()) {
+    const payload = value.toEncodedPayload();
     return {
-      contentType,
+      contentType: BINARY_CONTENT_TYPE,
+      message: borrowEncodedPayload(payload) ?? payload.data()
+    };
+  }
+  const declaredType = isZLinkMessage(value)
+    ? readZLinkMessageDeclaredType(value)
+    : undefined;
+  if (isZLinkMessage(value)) value = value.decode();
+  const selected = selectSerializerWithContentType(value, codecs, declaredType);
+  if (selected !== undefined && !(Buffer.isBuffer(value) || value instanceof Uint8Array || isMessage(value))) {
+    const payload = selected.serializer.serialize(value);
+    return {
+      contentType: selected.contentType,
       message: borrowEncodedPayload(payload) ?? payload.data()
     };
   }
@@ -404,19 +425,6 @@ export function decodeChannelHeader(parts: readonly Message[]): ZLinkChannelEnve
     throw new ZLinkConfigurationException('Channel envelope header part is missing.');
   }
   return validateChannelHeader(parseWireJson(parts[0].data().toString()));
-}
-
-function requireDefaultSerializerContentType(
-  codecs: ZLinkChannelEnvelopeCodecRegistry | undefined,
-  serializer: ZLinkMessageSerializer
-): string {
-  const contentType = contentTypeForSerializer(serializer, codecs);
-  if (contentType === undefined) {
-    throw new ZLinkConfigurationException(
-      'Channel payload serializer is not registered under a content type.'
-    );
-  }
-  return contentType;
 }
 
 function parseWireJson(payload: string, schema?: ZLinkJsonSchema): unknown {

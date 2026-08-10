@@ -21,6 +21,10 @@ import {
 } from './service-runtime-contracts';
 import type { ServiceMailboxRecord } from './service-mailbox';
 import {
+  MessageFollowSuppressionRegistry,
+  type MessageFollowSuppressionFence
+} from './message-follow-suppression-registry';
+import {
   ServiceStaleGenerationError,
   ServiceStatefulRegistry,
   ServiceTerminalOperationRegistry,
@@ -108,12 +112,14 @@ interface ServiceSpotMessageFollowRecord {
 
 interface ServiceSpotMessageFollowState {
   readonly seal: ServiceSpotMessageFollowSeal;
+  readonly objectKind: 'userSpot' | 'instanceSpot';
   readonly source: ServiceDirectSpotRouteFence;
   readonly queued: Array<ServiceSpotMessageFollowRecord | undefined>;
   queuedHead: number;
   queuedCount: number;
   queuedBytes: number;
   target?: ServiceDirectSpotRouteFence;
+  suppressionFence?: MessageFollowSuppressionFence;
   expiresAtMs?: number;
   draining: boolean;
   retryTimer?: ReturnType<typeof setTimeout>;
@@ -343,6 +349,7 @@ export class ServiceStatefulRuntime {
   private readonly spotRoutes = new Map<string, ServiceDirectSpotRouteFence>();
   private readonly directSpotRoutes = new Map<string, ServiceDirectSpotRouteFence>();
   private readonly spotMessageFollow = new Map<string, ServiceSpotMessageFollowState>();
+  private readonly spotMessageFollowSuppression = new MessageFollowSuppressionRegistry();
   private nextMessageFollowSerial = 1n;
   private nextMessageFollowOperation = 1n;
   private nextSpotId = 1n;
@@ -1013,9 +1020,9 @@ export class ServiceStatefulRuntime {
   sendMessageFollowNotification(
     targetNodeRid: string,
     record: Omit<import('./service-stateful-wire-codec').ServiceMessageFollowRecord, 'kind'>
-  ): void {
+  ): boolean {
     this.requireOpen();
-    this.raw.sendService(targetNodeRid, [encodeMessageFollowHeader(record)]);
+    return this.raw.sendService(targetNodeRid, [encodeMessageFollowHeader(record)]);
   }
 
   setMessageFollowHandler(handler: (
@@ -1036,9 +1043,11 @@ export class ServiceStatefulRuntime {
     }
     const key = spotKey(source.spot);
     if (this.spotMessageFollow.has(key)) return undefined;
+    const sourceSpot = this.registry.requireSpot(source.spot);
     const seal = Object.freeze({ key, serial: this.nextMessageFollowSerial++ });
     this.spotMessageFollow.set(key, {
       seal,
+      objectKind: sourceSpot.kind === 'user' ? 'userSpot' : 'instanceSpot',
       source: freezeDirectSpotRoute(source),
       queued: [],
       queuedHead: 0,
@@ -1083,6 +1092,12 @@ export class ServiceStatefulRuntime {
       throw new ServiceStaleGenerationError('spot', state.source.spot.spotId);
     }
     state.target = freezeDirectSpotRoute(target);
+    state.suppressionFence = spotMessageFollowSuppressionFence(
+      state.objectKind,
+      state.source,
+      state.target
+    );
+    this.spotMessageFollowSuppression.retainRoute(state.suppressionFence);
     state.expiresAtMs = durationMs === 0
       ? Number.MAX_SAFE_INTEGER
       : Date.now() + durationMs;
@@ -4481,12 +4496,15 @@ export class ServiceStatefulRuntime {
     current: ServiceSpotMessageFollowRecord
   ): void {
     const target = state.target;
-    if (target === undefined) return;
+    const suppressionFence = state.suppressionFence;
+    if (target === undefined || suppressionFence === undefined) return;
+    const claim = this.spotMessageFollowSuppression.begin(suppressionFence);
+    if (claim === undefined) return;
     const operationLow = current.ingress.requestSequence !== undefined
       && current.ingress.requestSequence !== 0n
       ? current.ingress.requestSequence
       : this.nextMessageFollowOperation++;
-    this.raw.sendService(current.ingress.sourceRoutingId, [encodeMessageFollowHeader({
+    const accepted = this.raw.sendService(current.ingress.sourceRoutingId, [encodeMessageFollowHeader({
       source: messageFollowSpotRoute(state.source),
       target: messageFollowSpotRoute(target),
       hopCount: 1,
@@ -4498,6 +4516,11 @@ export class ServiceStatefulRuntime {
       },
       originalReplyRouteId: current.ingress.requestSequence ?? 0n
     })]);
+    if (accepted) {
+      this.spotMessageFollowSuppression.markSent(claim);
+    } else {
+      this.spotMessageFollowSuppression.abort(claim);
+    }
   }
 
   private failExpiredSpotMessageFollow(state: ServiceSpotMessageFollowState): void {
@@ -4531,6 +4554,9 @@ export class ServiceStatefulRuntime {
     }
     if (state.retryTimer !== undefined) clearTimeout(state.retryTimer);
     state.retryTimer = undefined;
+    if (state.suppressionFence !== undefined) {
+      this.spotMessageFollowSuppression.expireRoute(state.suppressionFence);
+    }
   }
 
   private peekSpotMessageFollow(
@@ -5066,6 +5092,26 @@ function messageFollowSpotRoute(
     authorityOwnerGeneration: route.authorityOwnerGeneration,
     ownerLeaseGeneration: route.ownerLeaseGeneration
   };
+}
+
+function spotMessageFollowSuppressionFence(
+  objectKind: 'userSpot' | 'instanceSpot',
+  source: ServiceDirectSpotRouteFence,
+  target: ServiceDirectSpotRouteFence
+): MessageFollowSuppressionFence {
+  return Object.freeze({
+    objectKind,
+    logicalObjectId: source.spot.spotId,
+    objectGeneration: source.spot.generation.toString(),
+    sourceNodeRid: source.targetNodeRid,
+    sourceNodeGeneration: source.targetNodeGeneration.toString(),
+    sourceAuthorityOwnerGeneration: source.authorityOwnerGeneration.toString(),
+    sourceOwnerLeaseGeneration: source.ownerLeaseGeneration.toString(),
+    targetNodeRid: target.targetNodeRid,
+    targetNodeGeneration: target.targetNodeGeneration.toString(),
+    targetAuthorityOwnerGeneration: target.authorityOwnerGeneration.toString(),
+    targetOwnerLeaseGeneration: target.ownerLeaseGeneration.toString()
+  });
 }
 
 function sameMessageFollowSpotSource(

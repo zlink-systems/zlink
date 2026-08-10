@@ -34,6 +34,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import type { Message } from '../../contracts/Common/Message';
 import { ServiceDiscoveryRegistry } from '../foundation/service-discovery-registry';
+import { discoveryAvailabilityForRuntimeState } from '../foundation/runtime-state-projections';
 import { ServiceWireProtocolError } from '../foundation/service-wire-m6a-codec';
 import {
   decodeClientServerControl,
@@ -760,7 +761,7 @@ export class ZLinkChannelSocketRegistry {
       lifecycleGeneration: descriptor.lifecycleGeneration,
       descriptorRevision: descriptor.descriptorRevision,
       advertisedEndpoint: descriptor.endpoint,
-      state: runtimeStateName(descriptor.state)
+      state: discoveryAvailabilityForRuntimeState(descriptor.state)
     }, fanoutDiscoveryConnectionId(connectionId));
     this.notifyFanoutTopology(descriptor.channelName);
     return admitted;
@@ -1744,25 +1745,11 @@ function admissionToDiscoveryDescriptor(admission: ZLinkClientServerAdmission) {
     lifecycleGeneration: admission.lifecycleGeneration,
     descriptorRevision: admission.descriptorRevision,
     weight: admission.weight,
-    state: runtimeStateName(admission.state),
+    state: discoveryAvailabilityForRuntimeState(admission.state),
     securityIdentity: admission.securityIdentity,
     effectiveMaxMessageBytes: admission.normalizedEffectiveMaxMessageBytes,
     advertisedEndpoint: admission.advertisedEndpoint
   };
-}
-
-function runtimeStateName(
-  state: ZLinkFrameworkRuntimeState
-): 'preparing' | 'serving' | 'retiring' | 'stopped' | 'error' {
-  switch (state) {
-    case ZLinkFrameworkRuntimeState.Preparing: return 'preparing';
-    case ZLinkFrameworkRuntimeState.Serving: return 'serving';
-    case ZLinkFrameworkRuntimeState.Relocating:
-    case ZLinkFrameworkRuntimeState.Relocated:
-    case ZLinkFrameworkRuntimeState.Draining: return 'retiring';
-    case ZLinkFrameworkRuntimeState.Stopped: return 'stopped';
-    default: return 'error';
-  }
 }
 
 function sameClientServerDiscoveryDescriptor(

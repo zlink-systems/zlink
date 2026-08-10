@@ -3,6 +3,9 @@ import { ZLinkEncodedPayload } from './ZLinkEncodedPayload';
 
 type ZLinkMessageDecoder = <T>(type?: Type<T>) => T;
 const runtimeDecoders = new WeakMap<ZLinkMessage, ZLinkMessageDecoder>();
+const runtimeDecodedValues = new WeakMap<ZLinkMessage, unknown>();
+const runtimeDecoded = new WeakSet<ZLinkMessage>();
+const declaredMessageTypes = new WeakMap<ZLinkMessage, Type>();
 
 export class ZLinkMessage<TValue = unknown> {
   private constructor(
@@ -10,8 +13,12 @@ export class ZLinkMessage<TValue = unknown> {
     private readonly encoded: ZLinkEncodedPayload | undefined
   ) {}
 
-  static from<T>(value: T): ZLinkMessage<T> {
-    return new ZLinkMessage(value, undefined);
+  static from<T>(value: T, declaredType?: Type<T>): ZLinkMessage<T> {
+    const message = new ZLinkMessage(value, undefined);
+    if (declaredType !== undefined) {
+      declaredMessageTypes.set(message, declaredType);
+    }
+    return message;
   }
 
   static fromEncoded(payload: ZLinkEncodedPayload): ZLinkMessage {
@@ -22,17 +29,30 @@ export class ZLinkMessage<TValue = unknown> {
     if (this.encoded === undefined) {
       return this.value as T;
     }
+    if (runtimeDecoded.has(this)) {
+      return runtimeDecodedValues.get(this) as T;
+    }
     if (this.encoded.isEmpty()) {
+      runtimeDecoded.add(this);
+      runtimeDecodedValues.set(this, undefined);
       return undefined as T;
     }
     const decoder = runtimeDecoders.get(this);
     if (decoder !== undefined) {
-      return decoder(type);
+      const value = decoder(type);
+      runtimeDecoded.add(this);
+      runtimeDecodedValues.set(this, value);
+      return value;
     }
     const text = this.encoded.getString('utf8');
     try {
-      return materializeZLinkMessageValue(JSON.parse(text) as T, type);
+      const value = materializeZLinkMessageValue(JSON.parse(text) as T, type);
+      runtimeDecoded.add(this);
+      runtimeDecodedValues.set(this, value);
+      return value;
     } catch {
+      runtimeDecoded.add(this);
+      runtimeDecodedValues.set(this, text);
       return text as T;
     }
   }
@@ -64,6 +84,11 @@ export function createZLinkMessageFromEncoded(
 
 export function isZLinkMessage(value: unknown): value is ZLinkMessage {
   return value instanceof ZLinkMessage;
+}
+
+/** Internal runtime accessor for the type explicitly retained by `ZLinkMessage.from`. */
+export function readZLinkMessageDeclaredType(message: ZLinkMessage): Type | undefined {
+  return declaredMessageTypes.get(message);
 }
 
 /**

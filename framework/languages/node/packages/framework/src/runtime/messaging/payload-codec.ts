@@ -10,7 +10,8 @@ import {
 import type { Message } from '../../contracts/Common/Message';
 import {
   createZLinkMessageFromEncoded,
-  materializeZLinkMessageValue
+  materializeZLinkMessageValue,
+  readZLinkMessageDeclaredType
 } from '../../contracts/Common/ZLinkMessage';
 import { adoptEncodedPayload, borrowEncodedPayload } from '../../contracts/Common/encoded-payload-storage';
 import { ZLinkConfigurationException } from '../configuration';
@@ -24,27 +25,30 @@ import {
   readFrameworkPacketJsonContract,
   resolveFrameworkPacketJsonContract
 } from './packet-name';
+import { isCanonicalCodecContentType } from '../../contracts/Configuration/CodecContentType';
+import {
+  codecSerializerSelectionsOf,
+  matchEveryDeclaredMessageType
+} from '../../contracts/Configuration/CodecSerializerSelection';
 
 export interface ZLinkSerializerRegistryLike {
   readonly serializers: ReadonlyMap<string, ZLinkMessageSerializer>;
 }
 
-interface ZLinkSelectableMessageSerializer extends ZLinkMessageSerializer {
-  canSerialize?(value: unknown): boolean;
+interface ZLinkSerializerSelectionEntry {
+  readonly contentType: string;
+  readonly serializer: ZLinkMessageSerializer;
+  readonly selector: (declaredType: Type) => boolean;
+  readonly fallback: boolean;
 }
 
 interface ZLinkSerializerSelectionPlan {
-  readonly serializers: readonly ZLinkSelectableMessageSerializer[];
-  readonly contentTypes: ReadonlyMap<ZLinkMessageSerializer, string>;
-  readonly defaultSerializer: ZLinkMessageSerializer | undefined;
-  select(value: unknown): ZLinkMessageSerializer | undefined;
-  contentTypeOf(serializer: ZLinkMessageSerializer): string | undefined;
+  readonly serializers: readonly ZLinkSerializerSelectionEntry[];
+  readonly defaultSerializer: ZLinkSerializerSelectionEntry | undefined;
+  select(declaredType: Type | undefined): ZLinkSerializerSelectionEntry | undefined;
 }
 
 const noSerializer = Symbol('noSerializer');
-const nullPayloadType = Object.freeze({ kind: 'null' });
-const undefinedPayloadType = Object.freeze({ kind: 'undefined' });
-const objectWithoutConstructorType = Object.freeze({ kind: 'objectWithoutConstructor' });
 const JSON_CONTENT_TYPE = 'application/json';
 
 // Registration maps are created during host configuration and are immutable
@@ -74,6 +78,7 @@ export function encodeFrameworkPayload(
   packetName?: string,
   contractPart: 'payload' | 'reply' = 'payload'
 ): ZLinkEncodedFrameworkPayload {
+  let declaredType: Type | undefined;
   if (isZLinkMessage(payload)) {
     if (payload.isEncoded()) {
       return {
@@ -81,7 +86,8 @@ export function encodeFrameworkPayload(
         contentType: 'application/octet-stream'
       };
     }
-    return encodeFrameworkPayload(payload.decode(), registry, packetName, contractPart);
+    declaredType = readZLinkMessageDeclaredType(payload);
+    payload = payload.decode();
   }
   if (isMessage(payload)) {
     throw new ZLinkConfigurationException(
@@ -94,17 +100,14 @@ export function encodeFrameworkPayload(
     );
   }
 
-  const serializer = selectSerializer(payload, registry);
-  if (serializer !== undefined) {
-    const contentType = contentTypeForSerializer(serializer, registry);
-    if (contentType === undefined) {
-      throw new ZLinkConfigurationException(
-        'Payload serializer is not registered under a content type.'
-      );
-    }
+  const selected = selectSerializerWithContentType(payload, registry, declaredType);
+  if (selected !== undefined) {
     return {
-      message: rememberContentType(toRuntimeMessage(serializer.serialize(payload)), contentType),
-      contentType
+      message: rememberContentType(
+        toRuntimeMessage(selected.serializer.serialize(payload)),
+        selected.contentType
+      ),
+      contentType: selected.contentType
     };
   }
 
@@ -155,6 +158,9 @@ function decodeFrameworkPayload<T>(
   packetName: string | undefined,
   contractPart: 'payload' | 'reply'
 ): T {
+  if (!isCanonicalCodecContentType(contentType)) {
+    throw unsupportedContentType(contentType);
+  }
   if (contentType !== JSON_CONTENT_TYPE) {
     const serializer = serializerMapOf(registry)?.get(contentType);
     if (serializer === undefined) throw unsupportedContentType(contentType);
@@ -199,6 +205,9 @@ function decodeFrameworkEncodedPayload<T>(
   packetName: string | undefined,
   contractPart: 'payload' | 'reply'
 ): T {
+  if (!isCanonicalCodecContentType(contentType)) {
+    throw unsupportedContentType(contentType);
+  }
   if (contentType !== JSON_CONTENT_TYPE) {
     const serializer = serializerMapOf(registry)?.get(contentType);
     if (serializer === undefined) throw unsupportedContentType(contentType);
@@ -237,25 +246,25 @@ function schemaForDecode(
 export function selectDefaultSerializer(
   registry?: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer>
 ): ZLinkMessageSerializer | undefined {
-  return serializerSelectionPlanOf(registry)?.defaultSerializer;
+  return serializerSelectionPlanOf(registry)?.defaultSerializer?.serializer;
 }
 
 export function selectSerializer(
   value: unknown,
-  registry?: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer>
+  registry?: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer>,
+  declaredType?: Type
 ): ZLinkMessageSerializer | undefined {
-  return serializerSelectionPlanOf(registry)?.select(value);
+  return selectSerializerWithContentType(value, registry, declaredType)?.serializer;
 }
 
-export function contentTypeForSerializer(
-  serializer: ZLinkMessageSerializer,
-  registry?: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer>
-): string | undefined {
-  return serializerSelectionPlanOf(registry)?.contentTypeOf(serializer);
-}
-
-function isSelectableSerializer(serializer: ZLinkMessageSerializer): serializer is ZLinkSelectableMessageSerializer & { canSerialize: (value: unknown) => boolean } {
-  return typeof (serializer as ZLinkSelectableMessageSerializer).canSerialize === 'function';
+export function selectSerializerWithContentType(
+  value: unknown,
+  registry?: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer>,
+  declaredType?: Type
+): ZLinkSerializerSelectionEntry | undefined {
+  return serializerSelectionPlanOf(registry)?.select(
+    declaredType ?? outboundBusinessType(value)
+  );
 }
 
 function serializerSelectionPlanOf(
@@ -270,87 +279,83 @@ function serializerSelectionPlanOf(
   if (cached !== undefined) {
     return cached;
   }
-  const entries: ZLinkSelectableMessageSerializer[] = [];
-  const contentTypes = new Map<ZLinkMessageSerializer, string>();
+  const entries: ZLinkSerializerSelectionEntry[] = [];
+  const registeredSelections = codecSerializerSelectionsOf(serializers);
   for (const [contentType, serializer] of serializers) {
-    entries.push(serializer as ZLinkSelectableMessageSerializer);
-    contentTypes.set(serializer, contentType);
+    const selection = registeredSelections?.get(contentType);
+    entries.push({
+      contentType,
+      serializer,
+      selector: selection?.selector ?? matchEveryDeclaredMessageType,
+      fallback: selection?.fallback ?? true
+    });
   }
   const frozenEntries = Object.freeze(entries);
-  const outboundByBusinessType = new WeakMap<object, ZLinkMessageSerializer | typeof noSerializer>();
-  const defaultSerializer = frozenEntries.length === 1
-    ? frozenEntries[0]
-    : selectSerializerFromEntries(frozenEntries, undefined);
+  const outboundByBusinessType = new WeakMap<
+    object,
+    ZLinkSerializerSelectionEntry | typeof noSerializer
+  >();
+  let cachedBusinessTypeCount = 0;
+  const defaultSerializer = selectDefaultSerializerFromEntries(frozenEntries);
   const plan: ZLinkSerializerSelectionPlan = {
     serializers: frozenEntries,
-    contentTypes,
     defaultSerializer,
-    select: (value) => {
-      const businessType = outboundBusinessType(value);
-      const cached = outboundByBusinessType.get(businessType);
+    select: (declaredType) => {
+      if (declaredType === undefined) return defaultSerializer;
+      const cached = outboundByBusinessType.get(declaredType);
       if (cached !== undefined) {
         return cached === noSerializer ? undefined : cached;
       }
-      const selected = selectSerializerFromEntries(frozenEntries, value);
-      outboundByBusinessType.set(businessType, selected ?? noSerializer);
+      const selected = selectSerializerFromEntries(frozenEntries, declaredType);
+      if (cachedBusinessTypeCount < 1024) {
+        outboundByBusinessType.set(declaredType, selected ?? noSerializer);
+        cachedBusinessTypeCount += 1;
+      }
       return selected;
-    },
-    contentTypeOf: (serializer) => contentTypes.get(serializer)
+    }
   };
   serializerSelectionPlans.set(key, plan);
   return plan;
 }
 
-function outboundBusinessType(value: unknown): object {
-  if (value === null) return nullPayloadType;
-  if (value === undefined) return undefinedPayloadType;
+function outboundBusinessType(value: unknown): Type | undefined {
+  if (value === null || value === undefined) return undefined;
   switch (typeof value) {
-    case 'string': return String;
-    case 'number': return Number;
-    case 'boolean': return Boolean;
-    case 'bigint': return BigInt;
-    case 'symbol': return Symbol;
-    case 'function': return value;
+    case 'string': return String as unknown as Type;
+    case 'number': return Number as unknown as Type;
+    case 'boolean': return Boolean as unknown as Type;
+    case 'bigint': return BigInt as unknown as Type;
+    case 'symbol': return Symbol as unknown as Type;
+    case 'function': return Function as unknown as Type;
     case 'object': {
       const constructor = (value as { constructor?: unknown }).constructor;
       return typeof constructor === 'function'
-        ? constructor
-        : objectWithoutConstructorType;
+        ? constructor as Type
+        : Object as Type;
     }
   }
   throw new TypeError('Unsupported payload type.');
 }
 
 function selectSerializerFromEntries(
-  serializers: readonly ZLinkSelectableMessageSerializer[],
-  value: unknown
-): ZLinkMessageSerializer | undefined {
-  let matching: ZLinkMessageSerializer | undefined;
-  let matchingCount = 0;
-  let allSelectable = true;
-  for (const serializer of serializers) {
-    if (!isSelectableSerializer(serializer)) {
-      allSelectable = false;
-      continue;
-    }
-    if (serializer.canSerialize(value) === true) {
-      matching = serializer;
-      matchingCount += 1;
-      if (matchingCount > 1) {
-        throw new ZLinkConfigurationException(
-          'Payload serializer is ambiguous because more than one serializer accepts the payload.'
-        );
-      }
-    }
+  serializers: readonly ZLinkSerializerSelectionEntry[],
+  declaredType: Type
+): ZLinkSerializerSelectionEntry | undefined {
+  for (let index = serializers.length - 1; index >= 0; index--) {
+    const entry = serializers[index]!;
+    if (entry.selector(declaredType)) return entry;
   }
-  if (matchingCount === 1) return matching;
-  if (serializers.length === 1) {
-    return isSelectableSerializer(serializers[0]!) ? undefined : serializers[0];
+  return undefined;
+}
+
+function selectDefaultSerializerFromEntries(
+  serializers: readonly ZLinkSerializerSelectionEntry[]
+): ZLinkSerializerSelectionEntry | undefined {
+  for (let index = serializers.length - 1; index >= 0; index--) {
+    const entry = serializers[index]!;
+    if (entry.fallback) return entry;
   }
-  if (allSelectable) return undefined;
-  throw new ZLinkConfigurationException(
-    'Payload serializer is ambiguous because more than one serializer is registered.'
-  );
+  return undefined;
 }
 
 function unsupportedContentType(contentType: string): Error {

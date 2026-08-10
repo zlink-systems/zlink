@@ -49,7 +49,7 @@ const systemClock: OperationClock = {
 
 /** Owns request completion so reply, timeout, cancellation, and shutdown race safely. */
 export class OperationRegistry<T> {
-  static readonly DEFAULT_MAX_PENDING_OPERATIONS = 65_536;
+  static readonly DEFAULT_MAX_PENDING_OPERATIONS = 4_096;
 
   private readonly entries = new Map<bigint, Entry<T>>();
   private nextId = 1n;

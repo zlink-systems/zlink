@@ -13,6 +13,10 @@ import {
   type ReceiveRecord
 } from '../foundation/service-runtime-contracts';
 import type { ServiceMessageFollowRecord } from '../foundation/service-stateful-wire-codec';
+import {
+  runtimeAcceptsWork,
+  runtimeStateIsReady
+} from '../foundation/runtime-state-projections';
 import { createDeadlineExceededError, isDeadlineExceededError } from '../abort';
 import {
   meshActorSessionNodeAdapter,
@@ -526,11 +530,13 @@ export class ZLinkFrameworkRuntimeHost implements
               `Actor Message Follow source runtime '${context.sourceOwner.nodeRid}' is unavailable.`
             );
           }
+          return true;
         } catch (error) {
           this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
             'actor Message Follow notification',
             error
           );
+          return false;
         }
       },
       isStaleActorRef: (actorId, actorRef) => {
@@ -753,8 +759,11 @@ export class ZLinkFrameworkRuntimeHost implements
   get status(): ZLinkFrameworkRuntimeStatus {
     return {
       state: this.runtimeState,
-      isReady: this.runtimeState === ZLinkFrameworkRuntimeState.Serving,
-      acceptingWork: this.runtimeState === ZLinkFrameworkRuntimeState.Serving,
+      isReady: runtimeStateIsReady(this.runtimeState),
+      acceptingWork: runtimeAcceptsWork(
+        this.runtimeState,
+        this.admission.acceptsNewWork
+      ),
       deadline: this.runtimeDeadline,
       relocationResult: this.runtimeRelocationResult,
       terminationResult: this.runtimeTerminationResult,

@@ -15,6 +15,10 @@ import {
   ZLINK_DEFAULT_TERMINAL_OBSERVATION_CAPACITY
 } from '../diagnostics/runtime-observation-queue';
 import { createDeadlineExceededError } from '../abort';
+import {
+  runtimeStateIsReady,
+  topologyRuntimeIsReady
+} from '../foundation/runtime-state-projections';
 
 type ZLinkDrainForceReason =
   | 'deadline_exceeded'
@@ -168,7 +172,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
       && (hasUnavailableRequiredPeer || !locationStoreHealthy)
       ? ZLinkTopologyState.Degraded
       : hostTopologyState;
-    const hostReady = hostState === ZLinkFrameworkRuntimeState.Serving;
+    const hostReady = runtimeStateIsReady(hostState);
     const objectRole = descriptor?.objectRole ?? ZLinkObjectRole.None;
     const placementWeight = descriptor?.placementWeight ?? 0;
     const capacityAvailable = descriptor !== undefined
@@ -187,7 +191,10 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
     const snapshot: ZLinkRouteMeshStatus = {
       meshName,
       state,
-      isReady: hostReady && state === ZLinkTopologyState.Ready,
+      isReady: topologyRuntimeIsReady(
+        hostState,
+        state === ZLinkTopologyState.Ready ? 1 : 0
+      ),
       readyPeerCount: peers.filter(peer => peer.state === ZLinkPeerState.Ready).length,
       channels: hostReady
         ? channels

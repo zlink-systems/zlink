@@ -3515,11 +3515,13 @@ export class ZLinkHostServiceRelocationRuntime {
     activation: ZLinkSpotActivation
   ): 'user_spot' | 'instance_spot' | undefined {
     const node = this.options.registration.spotNodes.get(meshName);
-    if (Object.values(node?.spotFactoryRegistrations ?? {})
-      .some(value => value.implementation === activation.spotType)) return 'user_spot';
-    if (Object.values(node?.instanceSpotFactoryRegistrations ?? {})
-      .some(value => value.implementation === activation.spotType)) return 'instance_spot';
-    return undefined;
+    const registrations = activation.domain.kind === 'user'
+      ? node?.spotFactoryRegistrations
+      : node?.instanceSpotFactoryRegistrations;
+    return Object.values(registrations ?? {})
+      .some(value => value.implementation === activation.spotType)
+      ? activation.domain.kind === 'user' ? 'user_spot' : 'instance_spot'
+      : undefined;
   }
 
   private spotRegistration(

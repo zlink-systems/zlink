@@ -120,9 +120,6 @@ test('actor client submit completes without exposing an admission result', async
 test('actor client writes the selected serializer into the packet codec header', async () => {
   const sent = [];
   const serializer = {
-    canSerialize(value) {
-      return value instanceof ActorNotify;
-    },
     serialize(value) {
       return framework.ZLinkEncodedPayload.from(Buffer.from(`packed:${value.value}`));
     },
@@ -130,6 +127,13 @@ test('actor client writes the selected serializer into the packet codec header',
       return Buffer.from(payload.data()).toString('utf8');
     }
   };
+  const messageSerializers = new framework.DefaultZLinkCodecRegistryBuilder()
+    .addSerializer(
+      'application/x-msgpack',
+      serializer,
+      (declaredType) => declaredType === ActorNotify
+    )
+    .registeredSerializers;
   const client = new framework.DefaultZLinkActorClient({
     nodeProvider: () => ({
       sendToActor(_actor, parts) {
@@ -141,7 +145,7 @@ test('actor client writes the selected serializer into the packet codec header',
       }
     }),
     locationResolver: () => createResolver(),
-    messageSerializers: new Map([['application/x-msgpack', serializer]])
+    messageSerializers
   });
 
   await client.sendToActor('actor-1', new ActorNotify('ping')).submit();

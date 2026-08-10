@@ -627,6 +627,67 @@ test('Message Follow relays before duration expiry and prunes route and stale re
   assert.equal(coordinator.isKnownStale(actorRef(1n)), false);
 });
 
+test('Message Follow notification suppression retries rejection and marks only accepted transport', async () => {
+  let notificationAttempts = 0;
+  let acceptNotification = false;
+  const coordinator = new framework.ZLinkActorHandoffCoordinator({
+    routedTransport: {
+      async sendToSpot() {},
+      async requestToSpot() { return { ok: true }; }
+    },
+    messageFollowDurationMs: 1_000,
+    requestSource: () => ({
+      ownerId: 'source-owner',
+      ownerLeaseGeneration: 1n,
+      nodeRid: 'source-node',
+      nodeGeneration: 1n
+    }),
+    onMessageFollowRelayed: async () => {
+      notificationAttempts += 1;
+      return acceptNotification;
+    }
+  });
+  coordinator.begin('actor-1', 1n);
+  coordinator.snapshot('actor-1');
+  coordinator.complete(
+    'actor-1',
+    target(),
+    targetActorRef(),
+    [],
+    ownerFence('target', 2n)
+  );
+  const origin = {
+    sourceNodeRid: zlink.RoutingId.from('ingress-source'),
+    originalOperation: { high: 7n, low: 11n },
+    originalReplyRouteId: 13n
+  };
+
+  const relay = async (value, operationId) => {
+    const parts = frame(value);
+    try {
+      await coordinator.capture(
+        'actor-1',
+        parts,
+        false,
+        undefined,
+        contextRef(parts, { operationId }),
+        undefined,
+        origin
+      );
+    } finally {
+      parts.forEach((part) => part.close());
+    }
+  };
+
+  await relay('retry-notification', '10101010101010101010101010101010');
+  assert.equal(notificationAttempts, 1);
+  acceptNotification = true;
+  await relay('accepted-notification', '20202020202020202020202020202020');
+  assert.equal(notificationAttempts, 2);
+  await relay('suppressed-notification', '30303030303030303030303030303030');
+  assert.equal(notificationAttempts, 2);
+});
+
 test('a returning tenure with a newer authority fence bypasses the departed stale record', async () => {
   const { coordinator, followed, markers } = harness();
   coordinator.begin('actor-1', 1n, 'source');

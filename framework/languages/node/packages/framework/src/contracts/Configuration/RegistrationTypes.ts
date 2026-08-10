@@ -15,6 +15,7 @@ import type {
   ZLinkTimerOptions
 } from '../../contracts';
 import type { ZLinkMessageSerializer } from '../Codecs';
+import type { ZLinkMessageTypeSelector } from '../Codecs';
 import type { ZLinkDispatchOptions } from '../Dispatch';
 import type { ZLinkLocationStore, ZLinkRelocationStore } from '../Locations';
 import type { ZLinkNetworkOptions } from './Builders';
@@ -98,6 +99,7 @@ export interface ZLinkWorkerOptions {
 export interface ZLinkCodecSerializerRegistration {
   readonly contentType: string;
   readonly serializer: ZLinkMessageSerializer;
+  readonly canSerialize?: ZLinkMessageTypeSelector;
 }
 
 export interface ZLinkStreamCodecRegistration {

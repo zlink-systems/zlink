@@ -58,7 +58,8 @@ import {
   ZLinkFrameworkException,
   ZLinkSpotRelocationReadinessMode,
   ZLinkSpotRelocationReadyOutcome,
-  ZLinkTimerOverrunPolicy
+  ZLinkTimerOverrunPolicy,
+  ZLinkUserSpotExecutionMode
 } from '../../packages/framework/src/contracts';
 import { ZLinkSpotActivation } from '../../packages/framework/src/runtime/spots/spot-activation-state';
 import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';
@@ -266,6 +267,11 @@ test('ApplicationSignaled relocation consumes one deferred boundary and reports 
   const activation = new ZLinkSpotActivation({
     meshName: 'mesh-a',
     spotId: 'spot-a',
+    domain: {
+      kind: 'user',
+      executionMode: ZLinkUserSpotExecutionMode.SpotWide,
+      relocationReadiness: ZLinkSpotRelocationReadinessMode.ApplicationSignaled
+    },
     spotType: class {} as never,
     spot: {
       async onRelocationReadyCompleted(completion: { outcome: ZLinkSpotRelocationReadyOutcome }) {
@@ -273,7 +279,6 @@ test('ApplicationSignaled relocation consumes one deferred boundary and reports 
       }
     } as never,
     serial,
-    relocationReadiness: ZLinkSpotRelocationReadinessMode.ApplicationSignaled,
     timers: {} as never,
     actorHandlers: {} as never,
     handlers: {} as never
@@ -324,10 +329,14 @@ test('ApplicationSignaled relocation consumes one deferred boundary and reports 
   const anyTurn = new ZLinkSpotActivation({
     meshName: 'mesh-a',
     spotId: 'spot-b',
+    domain: {
+      kind: 'user',
+      executionMode: ZLinkUserSpotExecutionMode.SpotWide,
+      relocationReadiness: ZLinkSpotRelocationReadinessMode.AnyTurnBoundary
+    },
     spotType: class {} as never,
     spot: {} as never,
     serial: new ZLinkSpotSerialExecutor(true),
-    relocationReadiness: ZLinkSpotRelocationReadinessMode.AnyTurnBoundary,
     timers: {} as never,
     actorHandlers: {} as never,
     handlers: {} as never
@@ -344,6 +353,11 @@ test('ApplicationSignaled defer without active relocation completes before the n
   const activation = new ZLinkSpotActivation({
     meshName: 'mesh-a',
     spotId: 'spot-ready-without-relocation',
+    domain: {
+      kind: 'user',
+      executionMode: ZLinkUserSpotExecutionMode.SpotWide,
+      relocationReadiness: ZLinkSpotRelocationReadinessMode.ApplicationSignaled
+    },
     spotType: class {} as never,
     spot: {
       async onRelocationReadyCompleted(
@@ -353,7 +367,6 @@ test('ApplicationSignaled defer without active relocation completes before the n
       }
     } as never,
     serial,
-    relocationReadiness: ZLinkSpotRelocationReadinessMode.ApplicationSignaled,
     timers: {} as never,
     actorHandlers: {} as never,
     handlers: {} as never
@@ -1202,6 +1215,7 @@ test('restart recovery atomically takes over expired PerActor Spot and Actor aut
 
 test('Retire preflight precedes publication and ready units use bounded permits', async () => {
   const events: string[] = [];
+  const states: string[] = [];
   let active = 0;
   let peak = 0;
   const runtime = new ServiceMaintenanceRuntime({
@@ -1216,6 +1230,7 @@ test('Retire preflight precedes publication and ready units use bounded permits'
       events.push('force');
     }
   });
+  runtime.observe(snapshot => states.push(snapshot.state));
   for (let index = 0; index < 4; index++) {
     runtime.enqueue({
       id: `unit-${index}`,
@@ -1233,6 +1248,16 @@ test('Retire preflight precedes publication and ready units use bounded permits'
   assert.equal(terminal.state, 'completed');
   assert.equal(peak, 2);
   assert.deepEqual(events.slice(0, 3), ['preflight', 'retiring', 'draining']);
+  assert.deepEqual(states.slice(0, 4), [
+    'serving',
+    'serving',
+    'serving',
+    'serving'
+  ]);
+  assert.ok(states.includes('preparing'));
+  assert.ok(states.includes('retiring'));
+  assert.ok(states.includes('draining'));
+  assert.equal(states.at(-1), 'completed');
 });
 
 test('shutdown intent lets admitted relocation finish without starting a queued unit', async () => {

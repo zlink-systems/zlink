@@ -2,11 +2,19 @@ import type {
   ZLinkCodecExtension,
   ZLinkCodecRegistrar,
   ZLinkCodecRegistryBuilder,
+  ZLinkMessageTypeSelector,
   ZLinkMessageSerializer
 } from '../../contracts';
+import { normalizeCodecContentType } from '../../contracts/Configuration/CodecContentType';
+import {
+  matchEveryDeclaredMessageType,
+  rememberCodecSerializerSelections,
+  type ZLinkCodecSerializerSelection
+} from '../../contracts/Configuration/CodecSerializerSelection';
 
 export class DefaultZLinkCodecRegistryBuilder implements ZLinkCodecRegistryBuilder, ZLinkCodecRegistrar {
   private readonly serializers = new Map<string, ZLinkMessageSerializer>();
+  private readonly serializerSelections = new Map<string, ZLinkCodecSerializerSelection>();
   private readonly streamCodecs = new Map<string, unknown>();
   private readonly codecs = new Set<string>();
 
@@ -15,7 +23,7 @@ export class DefaultZLinkCodecRegistryBuilder implements ZLinkCodecRegistryBuild
   }
 
   get registeredSerializers(): ReadonlyMap<string, ZLinkMessageSerializer> {
-    return this.serializers;
+    return rememberCodecSerializerSelections(this.serializers, this.serializerSelections);
   }
 
   get registeredStreamCodecs(): ReadonlyMap<string, unknown> {
@@ -27,26 +35,35 @@ export class DefaultZLinkCodecRegistryBuilder implements ZLinkCodecRegistryBuild
     return this;
   }
 
-  addSerializer(contentType: string, serializer: ZLinkMessageSerializer): this {
-    const normalized = normalizeContentType(contentType);
+  addSerializer(contentType: string, serializer: ZLinkMessageSerializer): this;
+  addSerializer(
+    contentType: string,
+    serializer: ZLinkMessageSerializer,
+    canSerialize: ZLinkMessageTypeSelector
+  ): this;
+  addSerializer(
+    contentType: string,
+    serializer: ZLinkMessageSerializer,
+    canSerialize?: ZLinkMessageTypeSelector
+  ): this {
+    const normalized = normalizeCodecContentType(contentType);
+    this.serializers.delete(normalized);
+    this.serializerSelections.delete(normalized);
     this.serializers.set(normalized, serializer);
+    this.serializerSelections.set(normalized, {
+      selector: canSerialize ?? matchEveryDeclaredMessageType,
+      fallback: canSerialize === undefined
+    });
     this.codecs.add(normalized);
     return this;
   }
 
   addStreamCodec(contentType: string, codec: unknown): this {
-    const normalized = normalizeContentType(contentType);
+    const normalized = normalizeCodecContentType(contentType);
+    this.streamCodecs.delete(normalized);
     this.streamCodecs.set(normalized, codec);
     this.codecs.add(normalized);
     return this;
   }
 
-}
-
-function normalizeContentType(contentType: string): string {
-  const normalized = contentType.trim();
-  if (normalized.length === 0) {
-    throw new Error('Codec content type must not be empty.');
-  }
-  return normalized;
 }

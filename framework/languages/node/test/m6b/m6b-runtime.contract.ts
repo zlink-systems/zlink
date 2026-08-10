@@ -25,6 +25,9 @@ import {
 import {
   ZLinkNodeRawMeshBackend
 } from '../../packages/framework/src/runtime/backend/node/node-raw-mesh-backend';
+import {
+  ZLinkNodeRawBindingPort
+} from '../../packages/framework/src/runtime/backend/node/node-raw-binding-port';
 import type {
   RawServiceIngressRecord,
   RawServiceMeshRuntime
@@ -2070,8 +2073,10 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
       ownerLeaseGeneration: target.ownerLeaseGeneration
     });
     assert.equal(sendFollow.queuedMessages, 1);
+    assert.equal(sendFollow.originalOperation.low, 1n);
     assert.equal(sendFollow.originalReplyRouteId, 0n);
   }
+  const callerFollowCount = relayed.filter(record => record.target === 'caller').length;
 
   assert.equal(ingress?.({
     command: M6bServiceWireCommand.spotRequest,
@@ -2088,14 +2093,11 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
     terminalResult: RequestResult.Ok,
     failureCode: 0
   });
-  const requestFollow = decodeStatefulHeader(
-    relayed.filter(record => record.target === 'caller').at(-1)!.parts[0]!
+  assert.equal(
+    relayed.filter(record => record.target === 'caller').length,
+    callerFollowCount,
+    'the exact source/target route sends one Message Follow notification'
   );
-  assert.equal(requestFollow.kind, 'messageFollow');
-  if (requestFollow.kind === 'messageFollow') {
-    assert.equal(requestFollow.originalOperation.low, 17n);
-    assert.equal(requestFollow.originalReplyRouteId, 17n);
-  }
 
   runtime.restoreSpotAuthority('abort-room', 'user_spot', 'Room', 6n, 11n);
   const abortSource = {
@@ -2312,7 +2314,24 @@ test('retained peer routes may submit while endpoint convergence reports not rea
 
 test('global Spot and Actor identities fence stale generations and retain stable type', () => {
   const registry = new ServiceStatefulRegistry('node-a', 4n);
+  const entry = registry.createEntrySpot();
+  assert.equal(entry.kind, 'entry');
+  assert.equal(entry.stableType, 'entry');
+  assert.equal(registry.closeSpot(entry.ref), false);
+  assert.throws(
+    () => registry.restoreSpot(
+      { spotId: 'another-entry', generation: 4n },
+      'entry',
+      'entry',
+      4n
+    ),
+    /identity is fixed/
+  );
   const spotV1 = registry.createSpot('spot-a', 'user', 'Room');
+  assert.equal(spotV1.kind, 'user');
+  const instance = registry.createSpot('instance-a', 'instance', 'TenantWorker');
+  assert.equal(instance.kind, 'instance');
+  assert.equal(registry.closeSpot(instance.ref), true);
   const actorV1 = registry.createActor('actor-a', 'Player', spotV1.ref);
   assert.equal(registry.closeSpot(spotV1.ref), false);
   registry.destroyActor(actorV1.ref);
@@ -4966,7 +4985,11 @@ test('concurrent Instance activation CAS loser joins Ready and returns the winne
 test('raw backend dispatches Spot requests and Actor sends through M6B owners', async () => {
   const nonce = `${process.pid}-${Date.now()}`;
   const endpoint = `ipc:///tmp/zlink-m6b-node-${nonce}.sock`;
-  const backend = new ZLinkNodeRawMeshBackend('m6b-mesh', 'm6b-node');
+  const backend = new ZLinkNodeRawMeshBackend(
+    'm6b-mesh',
+    'm6b-node',
+    new ZLinkNodeRawBindingPort()
+  );
   backend.setBind(endpoint);
   backend.start();
   const instanceRoute = {

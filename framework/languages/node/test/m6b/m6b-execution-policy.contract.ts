@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  ZLinkSpotRelocationReadinessMode,
   ZLinkUserSpotExecutionMode
 } from '../../packages/framework/src/contracts/Configuration/ObjectRoles';
 import { ZLinkConfigurationException } from '../../packages/framework/src/runtime/configuration';
@@ -37,7 +38,11 @@ function activation(
     spotType: class TestSpot {} as never,
     spot: {} as never,
     serial,
-    executionMode,
+    domain: {
+      kind: 'user',
+      executionMode,
+      relocationReadiness: ZLinkSpotRelocationReadinessMode.AnyTurnBoundary
+    },
     timers: {} as never,
     actorHandlers: {} as never,
     handlers: {} as never

@@ -1,6 +1,6 @@
 export type ServiceMaintenanceKind = 'retire' | 'shutdown';
 export type ServiceMaintenanceState =
-  | 'serving' | 'preflight' | 'retiring' | 'draining'
+  | 'serving' | 'preparing' | 'retiring' | 'draining'
   | 'completed' | 'blocked' | 'forceStopped';
 
 export interface ServiceRelocationUnit {
@@ -43,7 +43,7 @@ export class ServiceMaintenanceRuntime {
   constructor(private readonly options: ServiceMaintenanceOptions) {}
 
   enqueue(unit: ServiceRelocationUnit): void {
-    if (this.state !== 'serving' && this.state !== 'preflight' && this.state !== 'retiring') {
+    if (this.state !== 'serving' && this.state !== 'preparing' && this.state !== 'retiring') {
       throw new Error('Maintenance admission is sealed.');
     }
     if (unit.id.length === 0 || unit.encodedUpperBound < 0) {
@@ -100,7 +100,7 @@ export class ServiceMaintenanceRuntime {
       abortSignal?.addEventListener('abort', abort, { once: true });
     }
     try {
-      this.transition('preflight');
+      this.transition('preparing');
       if (!await this.options.preflight(kind, controller.signal)) {
         this.transition('blocked');
         return this.snapshot();
@@ -116,7 +116,7 @@ export class ServiceMaintenanceRuntime {
       return this.snapshot();
     } catch (error) {
       this.terminalError = error;
-      if (this.state === 'preflight') {
+      if (this.state === 'preparing') {
         this.transition('blocked');
       } else {
         await this.options.forceStop();

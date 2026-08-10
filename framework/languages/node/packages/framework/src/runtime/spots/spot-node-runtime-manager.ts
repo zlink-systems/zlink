@@ -602,8 +602,7 @@ export class ZLinkSpotNodeRuntimeManager {
     for (const node of this.meshNodes.values()) {
       if (String(node.status().routingId) !== sourceNodeRid) continue;
       if (node.sendMessageFollowNotification === undefined) return false;
-      node.sendMessageFollowNotification(targetNodeRid, record);
-      return true;
+      return node.sendMessageFollowNotification(targetNodeRid, record);
     }
     return false;
   }

@@ -12,6 +12,7 @@ import {
   ZLinkFrameworkRuntimeState,
   ZLinkObjectRole,
   ZLinkSpotKind,
+  ZLinkSpotRelocationReadinessMode,
   ZLinkTimerOverrunPolicy,
   ZLinkUserSpotExecutionMode
 } from '../../packages/framework/src/contracts';
@@ -2367,7 +2368,12 @@ test('production host inventory relocates User Spot aggregate Instance Spot and 
     new RoomSpot() as RoomSpot & { identity: string },
     RoomSpot,
     events,
-    true
+    true,
+    {
+      kind: 'user',
+      executionMode: ZLinkUserSpotExecutionMode.SpotWide,
+      relocationReadiness: ZLinkSpotRelocationReadinessMode.AnyTurnBoundary
+    }
   );
   (roomActivation.spot as RoomSpot & { identity: string }).identity = 'room-a';
   const matchmakerActivation = productionSourceActivation(
@@ -2375,7 +2381,8 @@ test('production host inventory relocates User Spot aggregate Instance Spot and 
     new MatchmakerSpot() as MatchmakerSpot & { identity: string },
     MatchmakerSpot,
     events,
-    false
+    false,
+    { kind: 'instance', objectGeneration: 1n }
   );
   (matchmakerActivation.spot as MatchmakerSpot & { identity: string }).identity =
     'matchmaker-a';
@@ -3019,13 +3026,23 @@ function productionSourceActivation<T extends object>(
   spot: T,
   spotType: new () => T,
   events: string[],
-  withTimer: boolean
+  withTimer: boolean,
+  domain:
+    | {
+        readonly kind: 'user';
+        readonly executionMode: ZLinkUserSpotExecutionMode;
+        readonly relocationReadiness: ZLinkSpotRelocationReadinessMode;
+      }
+    | { readonly kind: 'instance'; readonly objectGeneration: bigint }
 ) {
   return {
     spotId,
     spot,
     spotType,
-    executionMode: ZLinkUserSpotExecutionMode.SpotWide,
+    domain,
+    executionMode: domain.kind === 'user'
+      ? domain.executionMode
+      : ZLinkUserSpotExecutionMode.SpotWide,
     async captureRelocation() {
       events.push(`source-spot-sealed:${spotId}`);
       return {

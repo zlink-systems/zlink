@@ -285,16 +285,22 @@ export class ZLinkSpotActivationLifecycle {
       activation = new ZLinkSpotActivation({
         meshName,
         spotId,
-        objectGeneration,
+        domain: objectKind === 'user_spot'
+          ? {
+              kind: 'user',
+              executionMode: this.options.userSpotExecutionMode?.(
+                meshName,
+                implementation as unknown as Type<ZLinkSpot>
+              ) ?? ZLinkUserSpotExecutionMode.SpotWide,
+              relocationReadiness: this.options.userSpotRelocationReadiness?.(
+                meshName,
+                implementation as unknown as Type<ZLinkSpot>
+              ) ?? ZLinkSpotRelocationReadinessMode.AnyTurnBoundary
+            }
+          : { kind: 'instance', objectGeneration },
         spotType: implementation as unknown as Type<ZLinkSpot>,
         spot: instance as unknown as ZLinkSpot,
         serial,
-        relocationReadiness: objectKind === 'user_spot'
-          ? this.options.userSpotRelocationReadiness?.(
-              meshName,
-              implementation as unknown as Type<ZLinkSpot>
-            )
-          : ZLinkSpotRelocationReadinessMode.AnyTurnBoundary,
         timers,
         actorHandlers,
         handlers,
@@ -378,7 +384,7 @@ export class ZLinkSpotActivationLifecycle {
     const activation = new ZLinkSpotActivation({
       meshName,
       spotId,
-      objectGeneration,
+      domain: { kind: 'instance', objectGeneration },
       spotType: implementation as unknown as Type<ZLinkSpot>,
       spot: instance as unknown as ZLinkSpot,
       serial,
@@ -585,11 +591,17 @@ export class ZLinkSpotActivationLifecycle {
       activation = new ZLinkSpotActivation({
         meshName,
         spotId,
+        domain: {
+          kind: 'user',
+          executionMode,
+          relocationReadiness: this.options.userSpotRelocationReadiness?.(
+            meshName,
+            spotType
+          ) ?? ZLinkSpotRelocationReadinessMode.AnyTurnBoundary
+        },
         spotType,
         spot,
         serial,
-        executionMode,
-        relocationReadiness: this.options.userSpotRelocationReadiness?.(meshName, spotType),
         timers,
         actorHandlers,
         handlers,
@@ -681,11 +693,17 @@ export class ZLinkSpotActivationLifecycle {
     activation = new ZLinkSpotActivation({
       meshName,
       spotId,
+      domain: {
+        kind: 'user',
+        executionMode,
+        relocationReadiness: this.options.userSpotRelocationReadiness?.(
+          meshName,
+          spotType
+        ) ?? ZLinkSpotRelocationReadinessMode.AnyTurnBoundary
+      },
       spotType,
       spot,
       serial,
-      executionMode,
-      relocationReadiness: this.options.userSpotRelocationReadiness?.(meshName, spotType),
       timers,
       actorHandlers,
       handlers,

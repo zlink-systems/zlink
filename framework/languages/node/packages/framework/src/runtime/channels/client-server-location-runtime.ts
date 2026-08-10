@@ -22,6 +22,7 @@ import {
   encodeClientServerHello,
   type ZLinkClientServerAdmission
 } from './client-server-service-wire';
+import { discoveryAvailabilityForRuntimeState } from '../foundation/runtime-state-projections';
 
 interface ActiveClientServerTarget {
   descriptor: ZLinkClientServerServerDescriptor;
@@ -447,7 +448,7 @@ function toDiscoveryDescriptor(
     lifecycleGeneration: descriptor.lifecycleGeneration,
     descriptorRevision: descriptor.descriptorRevision,
     weight: descriptor.weight,
-    state: runtimeStateName(descriptor.state),
+    state: discoveryAvailabilityForRuntimeState(descriptor.state),
     securityIdentity: descriptor.securityIdentity,
     effectiveMaxMessageBytes,
     advertisedEndpoint: descriptor.endpoint
@@ -542,18 +543,4 @@ function normalizedMessageLimit(value: number): number {
   return Number.isSafeInteger(value) && value > 0
     ? Math.min(value, 0xffff_ffff)
     : 0x7fff_ffff;
-}
-
-function runtimeStateName(
-  state: ZLinkFrameworkRuntimeState
-): 'preparing' | 'serving' | 'retiring' | 'stopped' | 'error' {
-  switch (state) {
-    case ZLinkFrameworkRuntimeState.Preparing: return 'preparing';
-    case ZLinkFrameworkRuntimeState.Serving: return 'serving';
-    case ZLinkFrameworkRuntimeState.Relocating:
-    case ZLinkFrameworkRuntimeState.Relocated:
-    case ZLinkFrameworkRuntimeState.Draining: return 'retiring';
-    case ZLinkFrameworkRuntimeState.Stopped: return 'stopped';
-    default: return 'error';
-  }
 }

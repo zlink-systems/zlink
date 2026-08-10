@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type {
+  ZLinkRawBindingPort,
   ZLinkRawHostPort,
   ZLinkRawMonitorRecord,
   ZLinkRawMonitorPort,
   ZLinkRawRouterPort
-} from '../backend/node/node-raw-binding-port';
-import { ZLinkNodeRawBindingPort } from '../backend/node/node-raw-binding-port';
+} from '../backend/raw-binding-port';
 import { RequestResult } from '../backend/runtime-values';
 import { OperationRegistry, type PendingOperation } from './operation-registry';
 import { ServiceLivenessRegistry, type ServiceLivenessTick } from './service-liveness-registry';
@@ -78,7 +78,7 @@ export interface RawServiceMeshRuntimeOptions {
   readonly mailbox?: Partial<ServiceMailboxLimits>;
   readonly probeIntervalMs?: number;
   readonly peerTimeoutMs?: number;
-  readonly bindingPort?: { createHost(): ZLinkRawHostPort };
+  readonly bindingPort: ZLinkRawBindingPort;
   readonly onPeerNotRequired?: (
     nodeRoutingId: string,
     endpoint: string
@@ -183,7 +183,7 @@ export class RawServiceMeshRuntime {
   private readonly monitorConnectionStates = new Map<string, string | null>();
   private monitorEvents: ZLinkRawMonitorRecord[] = [];
   private monitorDrainBuffer: ZLinkRawMonitorRecord[] = [];
-  private readonly bindingPort: { createHost(): ZLinkRawHostPort };
+  private readonly bindingPort: ZLinkRawBindingPort;
   private readonly onPeerNotRequired?: RawServiceMeshRuntimeOptions['onPeerNotRequired'];
   private readonly onPeerDisconnected?: RawServiceMeshRuntimeOptions['onPeerDisconnected'];
   private readonly onInboundMessageDropped?: RawServiceMeshRuntimeOptions['onInboundMessageDropped'];
@@ -201,7 +201,7 @@ export class RawServiceMeshRuntime {
     this.topology = new ServiceTopologyRegistry(options.descriptor);
     this.mailbox = new ServiceMailbox({ ...DEFAULT_MAILBOX_LIMITS, ...options.mailbox });
     this.liveness = new ServiceLivenessRegistry(options.probeIntervalMs, options.peerTimeoutMs);
-    this.bindingPort = options.bindingPort ?? new ZLinkNodeRawBindingPort();
+    this.bindingPort = options.bindingPort;
     this.onPeerNotRequired = options.onPeerNotRequired;
     this.onPeerDisconnected = options.onPeerDisconnected;
     this.onInboundMessageDropped = options.onInboundMessageDropped;

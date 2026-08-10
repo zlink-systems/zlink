@@ -27,16 +27,24 @@ import {
 } from '../execution';
 import type { ZLinkTimerRelocationState } from './spot-timer';
 
+export type ZLinkSpotActivationDomain =
+  | {
+      readonly kind: 'user';
+      readonly executionMode: ZLinkUserSpotExecutionMode;
+      readonly relocationReadiness: ZLinkSpotRelocationReadinessMode;
+    }
+  | {
+      readonly kind: 'instance';
+      readonly objectGeneration: bigint;
+    };
+
 export interface ZLinkSpotActivationOptions {
   readonly meshName: string;
   readonly spotId: RoutingId;
-  /** Object generation for an Instance activation; absent for non-Instance Spots. */
-  readonly objectGeneration?: bigint;
+  readonly domain: ZLinkSpotActivationDomain;
   readonly spotType: Type<ZLinkSpot>;
   readonly spot: ZLinkSpot;
   readonly serial: ZLinkSpotSerialExecutor;
-  readonly executionMode?: ZLinkUserSpotExecutionMode;
-  readonly relocationReadiness?: ZLinkSpotRelocationReadinessMode;
   readonly timers: ZLinkSpotTimerRegistry;
   readonly actorHandlers: ZLinkSpotActorHandlerRegistryRuntime;
   readonly handlers: DefaultZLinkSpotHandlerRegistry;
@@ -69,12 +77,10 @@ export class ZLinkSpotCloseOccupiedError extends Error {
 export class ZLinkSpotActivation {
   readonly meshName: string;
   readonly spotId: RoutingId;
-  readonly objectGeneration?: bigint;
+  readonly domain: ZLinkSpotActivationDomain;
   readonly spotType: Type<ZLinkSpot>;
   readonly spot: ZLinkSpot;
   readonly serial: ZLinkSpotSerialExecutor;
-  readonly executionMode: ZLinkUserSpotExecutionMode;
-  readonly relocationReadiness: ZLinkSpotRelocationReadinessMode;
   readonly timers: ZLinkSpotTimerRegistry;
   readonly actorHandlers: ZLinkSpotActorHandlerRegistryRuntime;
   readonly handlers: DefaultZLinkSpotHandlerRegistry;
@@ -105,14 +111,13 @@ export class ZLinkSpotActivation {
   constructor(options: ZLinkSpotActivationOptions) {
     this.meshName = options.meshName;
     this.spotId = options.spotId;
-    this.objectGeneration = options.objectGeneration;
+    this.domain = options.domain;
+    if (this.domain.kind === 'instance' && this.domain.objectGeneration <= 0n) {
+      throw new RangeError('Instance Spot object generation must be positive.');
+    }
     this.spotType = options.spotType;
     this.spot = options.spot;
     this.serial = options.serial;
-    this.executionMode =
-      options.executionMode ?? ZLinkUserSpotExecutionMode.SpotWide;
-    this.relocationReadiness =
-      options.relocationReadiness ?? ZLinkSpotRelocationReadinessMode.AnyTurnBoundary;
     this.executionBarrier = options.executionBarrier ?? new ZLinkExecutionBarrier();
     this.serial.setExecutionBarrier(this.executionBarrier);
     if (typeof options.timers.setExecutionBarrier === 'function') {
@@ -126,6 +131,24 @@ export class ZLinkSpotActivation {
     this.nativeSpot = options.nativeSpot;
     this.closeWhenReady = options.closeWhenReady;
     this.actorDispatch = options.actorDispatch;
+  }
+
+  get objectGeneration(): bigint | undefined {
+    return this.domain.kind === 'instance'
+      ? this.domain.objectGeneration
+      : undefined;
+  }
+
+  get executionMode(): ZLinkUserSpotExecutionMode {
+    return this.domain.kind === 'user'
+      ? this.domain.executionMode
+      : ZLinkUserSpotExecutionMode.SpotWide;
+  }
+
+  get relocationReadiness(): ZLinkSpotRelocationReadinessMode {
+    return this.domain.kind === 'user'
+      ? this.domain.relocationReadiness
+      : ZLinkSpotRelocationReadinessMode.AnyTurnBoundary;
   }
 
   relocationReadyCall(): ZLinkSpotRelocationReadyCall {

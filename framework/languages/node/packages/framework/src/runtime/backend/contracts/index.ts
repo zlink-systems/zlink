@@ -91,7 +91,7 @@ export interface ZLinkBackendMeshNode {
       import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord,
       'kind'
     >
-  ): void;
+  ): boolean;
   shutdown(timeoutMs: number): RequestResult;
   close(): void;
   addChannelName(name: string): void;

@@ -418,6 +418,21 @@ test('Relocate rejects local manual topology before changing host state and Shut
   assert.equal(shutdown.outcome, framework.ZLinkFrameworkTerminationOutcome.Stopped);
 });
 
+test('Serving readiness stays public while a sealed admission gate stops new work', () => {
+  const host = new internal.ZLinkFrameworkRuntimeHost({
+    registration: internal.createFrameworkRegistration()
+  });
+  host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
+  host.admission.register('mesh-a');
+  assert.equal(host.status.isReady, true);
+  assert.equal(host.status.acceptingWork, true);
+
+  host.admission.seal('mesh-a');
+  assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
+  assert.equal(host.status.isReady, true);
+  assert.equal(host.status.acceptingWork, false);
+});
+
 test('Relocate keeps Serving when descriptor publication is reversibly rolled back', async () => {
   const host = new internal.ZLinkFrameworkRuntimeHost({
     registration: internal.createFrameworkRegistration()

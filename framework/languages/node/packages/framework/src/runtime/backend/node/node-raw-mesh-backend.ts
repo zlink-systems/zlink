@@ -94,7 +94,7 @@ import type {
   ZLinkBackendObjectPlacement,
   ZLinkBackendMeshNode
 } from '../contracts';
-import type { ZLinkRawBindingPort } from './node-raw-binding-port';
+import type { ZLinkRawBindingPort } from '../raw-binding-port';
 
 const MULTIPART_PACKET_NAME = SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME;
 const MULTIPART_CONTENT_TYPE = SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
@@ -194,7 +194,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   constructor(
     private readonly meshName: string,
     routingId: string | undefined,
-    private readonly bindingPort?: ZLinkRawBindingPort
+    private readonly bindingPort: ZLinkRawBindingPort
   ) {
     if (meshName.length === 0) throw new TypeError('MeshName must be non-empty.');
     if (routingId === undefined || routingId.length === 0) {
@@ -421,8 +421,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord,
       'kind'
     >
-  ): void {
-    this.requireStateful().sendMessageFollowNotification(targetNodeRid, record);
+  ): boolean {
+    return this.requireStateful().sendMessageFollowNotification(targetNodeRid, record);
   }
 
   shutdown(_timeoutMs: number): RequestResultValue {

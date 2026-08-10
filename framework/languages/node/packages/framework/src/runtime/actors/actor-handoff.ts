@@ -6,6 +6,10 @@ import {
 } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
+import {
+  MessageFollowSuppressionRegistry,
+  type MessageFollowSuppressionFence
+} from '../foundation/message-follow-suppression-registry';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import {
   decodeActorRequestDeadlineUnixMs,
@@ -137,6 +141,7 @@ interface MessageFollowRoute {
   readonly targetOwner: ZLinkActorMessageFollowOwnerFence;
   readonly target: ZLinkSpotRouteTarget;
   readonly targetActorRef: ActorRef;
+  readonly suppressionFence: MessageFollowSuppressionFence;
   readonly expiresAt: number;
   readonly deadline: ReturnType<typeof setTimeout>;
   tail: Promise<void>;
@@ -173,7 +178,7 @@ export interface ZLinkActorHandoffCoordinatorOptions {
     origin: ZLinkMessageFollowOrigin,
     queuedMessages: number,
     queuedBytes: number
-  ) => void | Promise<void>;
+  ) => boolean | Promise<boolean>;
   readonly isStaleActorRef?: (actorId: string, actorRef?: ActorRef) => boolean;
   readonly isCurrentHandoffTarget?: (actorId: string, spotId: string) => boolean;
   readonly isCurrentActorRef?: (actorId: string, actorRef: ActorRef) => boolean;
@@ -192,6 +197,7 @@ export interface ZLinkActorHandoffCoordinatorOptions {
 export class ZLinkActorHandoffCoordinator {
   private readonly active = new Map<string, ActiveHandoff>();
   private readonly messageFollowRoutes = new Map<string, MessageFollowRoute>();
+  private readonly messageFollowSuppression = new MessageFollowSuppressionRegistry();
   // Relocation preserves ObjectGeneration, so (nodeRid, objectGeneration) alone
   // also matches a tenure that later RETURNS to a previously-visited node. The
   // stale-tenure identity therefore keeps the departing tenure's
@@ -546,7 +552,8 @@ export class ZLinkActorHandoffCoordinator {
       returnResponse,
       remoteBoundSessionTarget,
       fallbackActorRef,
-      context
+      context,
+      messageFollowOrigin
     );
     return this.enqueueMessageFollow(followRoute, actorId, packet);
   }
@@ -788,6 +795,12 @@ export class ZLinkActorHandoffCoordinator {
     const key = messageFollowRouteKey(actorId, oldGeneration, sourceOwner);
     const previous = this.messageFollowRoutes.get(key);
     if (previous !== undefined) clearTimeout(previous.deadline);
+    const suppressionFence = actorMessageFollowSuppressionFence(
+      actorId,
+      oldGeneration,
+      sourceOwner,
+      targetOwner
+    );
     const expiresAt = Date.now() + this.messageFollowDurationMs;
     const entry = {
       key,
@@ -797,6 +810,7 @@ export class ZLinkActorHandoffCoordinator {
       targetOwner,
       target,
       targetActorRef,
+      suppressionFence,
       expiresAt,
       deadline: undefined as unknown as ReturnType<typeof setTimeout>,
       tail: Promise.resolve(),
@@ -809,6 +823,14 @@ export class ZLinkActorHandoffCoordinator {
       this.messageFollowDurationMs
     );
     entry.deadline.unref();
+    if (previous === undefined) {
+      this.messageFollowSuppression.retainRoute(suppressionFence);
+    } else {
+      this.messageFollowSuppression.replaceRoute(
+        previous.suppressionFence,
+        suppressionFence
+      );
+    }
     this.messageFollowRoutes.set(key, entry);
     this.options.onMarker?.('message_follow_registered', actorId, this.messageFollowDurationMs);
     return entry;
@@ -818,6 +840,7 @@ export class ZLinkActorHandoffCoordinator {
     if (this.messageFollowRoutes.get(entry.key) !== entry) return;
     clearTimeout(entry.deadline);
     this.messageFollowRoutes.delete(entry.key);
+    this.messageFollowSuppression.expireRoute(entry.suppressionFence);
     this.pruneStaleTenureRecords(entry);
     this.options.onMarker?.(
       'message_follow_route_removed',
@@ -1109,16 +1132,49 @@ export class ZLinkActorHandoffCoordinator {
   ): Promise<void> {
     this.options.onMarker?.('message_follow_relay', actorId, undefined, context);
     if (packet.messageFollowOrigin !== undefined) {
-      await this.options.onMessageFollowRelayed?.(
-        actorId,
-        entry.targetActorRef,
-        context,
-        packet.messageFollowOrigin,
-        entry.queuedMessages,
-        entry.queuedBytes
-      );
+      const claim = this.messageFollowSuppression.begin(entry.suppressionFence);
+      if (claim === undefined) return;
+      let accepted = false;
+      try {
+        accepted = await this.options.onMessageFollowRelayed?.(
+          actorId,
+          entry.targetActorRef,
+          context,
+          packet.messageFollowOrigin,
+          entry.queuedMessages,
+          entry.queuedBytes
+        ) === true;
+      } catch {
+        accepted = false;
+      }
+      if (accepted) {
+        this.messageFollowSuppression.markSent(claim);
+      } else {
+        this.messageFollowSuppression.abort(claim);
+      }
     }
   }
+}
+
+function actorMessageFollowSuppressionFence(
+  actorId: string,
+  objectGeneration: bigint,
+  source: ZLinkActorMessageFollowOwnerFence,
+  target: ZLinkActorMessageFollowOwnerFence
+): MessageFollowSuppressionFence {
+  return Object.freeze({
+    objectKind: 'actor',
+    logicalObjectId: actorId,
+    objectGeneration: objectGeneration.toString(),
+    sourceNodeRid: source.nodeRid,
+    sourceNodeGeneration: source.nodeGeneration,
+    sourceAuthorityOwnerGeneration: source.authorityOwnerGeneration,
+    sourceOwnerLeaseGeneration: source.ownerLeaseGeneration,
+    targetNodeRid: target.nodeRid,
+    targetNodeGeneration: target.nodeGeneration,
+    targetAuthorityOwnerGeneration: target.authorityOwnerGeneration,
+    targetOwnerLeaseGeneration: target.ownerLeaseGeneration
+  });
 }
 
 export function decodeHandoffPacket(packet: ZLinkActorHandoffPacket): {

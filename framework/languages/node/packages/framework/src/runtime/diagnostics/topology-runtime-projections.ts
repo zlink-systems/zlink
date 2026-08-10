@@ -19,6 +19,10 @@ import {
   RuntimeEventQueue,
   ZLINK_DEFAULT_TERMINAL_OBSERVATION_CAPACITY
 } from './runtime-observation-queue';
+import {
+  runtimeStateIsReady,
+  topologyRuntimeIsReady
+} from '../foundation/runtime-state-projections';
 
 export { RuntimeEventQueue } from './runtime-observation-queue';
 
@@ -61,7 +65,7 @@ export class ZLinkClientServerRuntimeProjection implements ZLinkClientServerRunt
       target => target.state === ZLinkPeerState.Ready && target.weight > 0
     ).length;
     const hostState = this.hostState();
-    const hostReady = hostState === ZLinkFrameworkRuntimeState.Serving;
+    const hostReady = runtimeStateIsReady(hostState);
     return {
       channelName,
       localRole: topology.localRole,
@@ -70,7 +74,7 @@ export class ZLinkClientServerRuntimeProjection implements ZLinkClientServerRunt
           ? ZLinkTopologyState.Ready
           : ZLinkTopologyState.Degraded
         : topologyStateForHost(hostState),
-      isReady: hostReady && readyTargetCount > 0,
+      isReady: topologyRuntimeIsReady(hostState, readyTargetCount),
       readyTargetCount,
       targets,
       sequence: this.sequence,
@@ -183,7 +187,7 @@ export class ZLinkFanoutRuntimeProjection implements ZLinkFanoutRuntime {
       publisher => publisher.state === ZLinkPeerState.Ready
     ).length;
     const hostState = this.hostState();
-    const hostReady = hostState === ZLinkFrameworkRuntimeState.Serving;
+    const hostReady = runtimeStateIsReady(hostState);
     return {
       channelName,
       state: hostReady
@@ -191,7 +195,7 @@ export class ZLinkFanoutRuntimeProjection implements ZLinkFanoutRuntime {
           ? ZLinkTopologyState.Ready
           : ZLinkTopologyState.Degraded
         : topologyStateForHost(hostState),
-      isReady: hostReady && readyPublisherCount > 0,
+      isReady: topologyRuntimeIsReady(hostState, readyPublisherCount),
       readyPublisherCount,
       publishers,
       sequence: this.sequence,
