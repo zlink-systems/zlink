@@ -314,3 +314,15 @@ before throughput ratio는 `68.328% / 79.460% / 108.843% / 95.379% / 91.873% / 8
 before throughput ratio는 `57.667% / 81.758% / 106.454% / 92.324% / 83.314% / 70.961%`, 산술평균은 `82.080%`다. after throughput ratio는 `61.676% / 83.301% / 111.675% / 92.195% / 91.520% / 90.589%`, 산술평균은 `88.493%`다. before latency ratio는 `1.541x / 92.801x / 14.033x / 1.081x / 1.191x / 1.380x`, 산술평균은 `18.671x`다. after latency ratio는 `1.489x / 82.516x / 12.670x / 1.081x / 1.083x / 1.091x`, 산술평균은 `16.655x`다.
 
 `SendMessageUnchecked`에 AggressiveInlining을 적용한 후 throughput·latency aggregate가 모두 개선됐지만 latency 기준은 미달했다. Sol 2차 리뷰는 `MessageSocketSendOperation` pooling·singleton·private direct-send를 independent builder와 stale-reference·ownership 계약 위험으로 no-go 판정했다. 측정값 기준으로 `자체 개선 후 no-go·보류`한다. 다음 대상은 `.NET Single DEALER_ROUTER/tls`다.
+
+### .NET Single DEALER_ROUTER/tls
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 2153255 / 1032204 / 337869 / 13319 / 7944 / 4487 | 40.947 / 0.321 / 0.604 / 14.883 / 25.267 / 45.121 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_162440_dotnet-dealer-router-tls-paired-c1.txt` |
+| .NET final before | 1193408 / 843356 / 346456 / 12294 / 7432 / 3849 | 52.982 / 22.270 / 12.926 / 16.046 / 26.678 / 52.010 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_162451_dotnet-dealer-router-tls-paired-before.txt` |
+| .NET removed after | 1142369 / 857861 / 338651 / 12552 / 7304 / 4105 | 62.651 / 32.110 / 15.209 / 15.756 / 27.110 / 49.535 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_162542_dotnet-dealer-router-tls-own-after-inline.txt` |
+
+final before throughput ratio는 `55.423% / 81.704% / 102.542% / 92.304% / 93.555% / 85.781%`, 산술평균은 `85.218%`다. 제거한 after throughput ratio는 `53.053% / 83.110% / 100.231% / 94.241% / 91.944% / 91.487%`, 산술평균은 `85.678%`다. final before latency ratio는 `1.294x / 69.377x / 21.401x / 1.078x / 1.056x / 1.153x`, 산술평균은 `15.893x`다. 제거한 after latency ratio는 `1.530x / 100.031x / 25.180x / 1.059x / 1.073x / 1.098x`, 산술평균은 `21.662x`다.
+
+`SendRoutedMessageUnchecked` AggressiveInlining 후보는 throughput aggregate를 0.46%p 높였지만 latency aggregate를 악화시켜 revert했다. Sol 2차 리뷰는 latency 회귀를 확인하고 routed builder pooling·private direct·추가 inlining을 no-go 판정했다. 최종은 before 측정값 기준으로 `자체 후보 제거 후 no-go·보류`한다. 다음 대상은 `.NET Single DEALER_ROUTER_REQREP/tls`다.
