@@ -2260,6 +2260,27 @@ internal sealed partial class ZLinkFrameworkRuntime
                         throw new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.Rejected,
                             $"Actor type '{request.ActorType}' relocation policy is not registered on the target node.");
+                    //  Acquire the inbound permit before reserving capacity.
+                    //  A reservation that is made and then aborted advances
+                    //  the Actor's authority generation, so answering `busy`
+                    //  after reserving invalidates the source's own retry: it
+                    //  resends the same fence and the target then reports
+                    //  `authority changed during target reservation`. Taking
+                    //  the permit first leaves a refused admission with no
+                    //  state change, so the retry succeeds unchanged.
+                    if (!_relocationPermits.TryAcquire(
+                            ZLinkRelocationPermitRequest.Inbound(
+                                request.PredictedPayloadBytes,
+                                restore: relocation.PolicyKind == 2),
+                            out var reservationLease))
+                    {
+                        throw new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.Unavailable,
+                            $"Actor '{request.ActorId}' target relocation admission is busy.");
+                    }
+                    var permitOwned = false;
+                    try
+                    {
                     var capacityRequest =
                         new ZLinkRelocationCapacityReservationRequest(
                             Guid.ParseExact(request.HandoffId, "N"),
@@ -2331,24 +2352,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                         throw new ZLinkRelocationDataLostException(
                             $"Actor '{request.ActorId}' target reservation returned an invalid authority generation.");
                     }
-                    if (!_relocationPermits.TryAcquire(
-                            ZLinkRelocationPermitRequest.Inbound(
-                                request.PredictedPayloadBytes,
-                                restore: relocation.PolicyKind == 2),
-                            out var reservationLease))
-                    {
-                        await _actorHandoffAdmissions
-                            .OwnAndAbortCapacityAsync(
-                                request,
-                                spotId,
-                                capacityFence,
-                                default,
-                                ct)
-                            .ConfigureAwait(false);
-                        throw new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.Unavailable,
-                            $"Actor '{request.ActorId}' target relocation admission is busy.");
-                    }
                     var reservation = new ZLinkActorRelocationReservation(
                         Guid.NewGuid().ToString("N"),
                         request.PredictedPayloadBytes,
@@ -2402,6 +2405,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                         }
                         ZLinkFrameworkDebugLog.SpotDiscovery(
                             $"admit_reply_built actor={request.ActorId} accepted=true");
+                        permitOwned = true;
                         return new ZLinkActorHandoffAdmissionDecision(
                             ZLinkRemoteActorJoinPackets.CreateAdmissionReply(
                                 true,
@@ -2423,7 +2427,17 @@ internal sealed partial class ZLinkFrameworkRuntime
                                     reservationLease,
                                     ct)
                                 .ConfigureAwait(false);
+                        permitOwned = true;
                         throw;
+                    }
+                    }
+                    finally
+                    {
+                        //  Every path that leaves before the decision owns the
+                        //  lease must return the permit, or one refused
+                        //  admission starves every later one.
+                        if (!permitOwned)
+                            reservationLease.Dispose();
                     }
                 },
                 cancellationToken)
