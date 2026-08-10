@@ -678,8 +678,8 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
   `ROUTER_ROUTER / inproc`: ratio 약 90.24%/92.39%/83.22%/19.63%/57.02%/64.64%, 중앙값 약 73.93%이며 65536B·131072B·262144B 개별 기준 미달이다.
   `ROUTER_ROUTER / ipc`: ratio 91.89%/84.44%/100.00%/85.54%/90.76%/92.00%, 중앙값 91.33%로 통과다.
   측정 대상은 Core v0.10.1 release runtime과 paired C 기준으로 기록했으며, 전체 matrix를 한 번에 실행하지 않았다.
-- Multi 상태: `부분 완료` — 기존 paired 대상에 `MULTI_PUBSUB / tls` 최종 재측정을 반영했다. `MULTI_PUBSUB / tls`는 직접 수신 경로와 `message_t()` 기본 생성자의 storage 초기화 제거를 적용한 최종 ratio `98.67%/88.45%/95.73%/99.44%/99.72%/96.75%`, 중앙값 `97.71%`, aggregate latency 중앙값 `1.052x`로 통과했다. 256B의 개별 ratio 88.45%는 기록값이며 aggregate 판정을 막지 않는다. `MULTI_PUBSUB / wss`도 latency ratio의 aggregate 중앙값이 기준 이내이므로 최종 aggregate 기준으로 통과로 정정한다. 그 밖의 기존 Multi 대상은 paired 측정값을 유지한다.
-- 다음 작업: `MULTI_PUBSUB / tls`는 C와 C++ 모두 6개 size를 측정했고, 실제 개선 후보를 적용·측정한 뒤 aggregate throughput 중앙값 97.71%와 aggregate latency 중앙값 1.052x로 통과했다. 다음 선택 대상은 `MULTI_DEALER_DEALER / tls`이며 C→C++ 순서로 짧게 측정한다.
+- Multi 상태: `부분 완료` — 기존 paired 대상에 `MULTI_PUBSUB / tls`와 `MULTI_DEALER_DEALER / tls` 최종 재측정을 반영했다. `MULTI_PUBSUB / tls`는 throughput 중앙값 `97.71%`, aggregate latency 중앙값 `1.052x`로 통과했고, `MULTI_DEALER_DEALER / tls`는 throughput 중앙값 `97.95%`, aggregate latency 중앙값 `0.978x`로 통과했다. 개별 size outlier는 기록값이며 aggregate 판정을 막지 않는다. `MULTI_PUBSUB / wss`도 latency ratio의 aggregate 중앙값이 기준 이내이므로 최종 aggregate 기준으로 통과로 정정한다. 그 밖의 기존 Multi 대상은 paired 측정값을 유지한다.
+- 다음 작업: `MULTI_DEALER_DEALER / tls`는 C와 C++ 모두 6개 size를 측정했고 기존 적용 개선 상태에서 aggregate throughput 중앙값 97.95%와 aggregate latency 중앙값 0.978x로 통과했다. 다음 선택 대상은 `MULTI_DEALER_ROUTER_SENDSEND / tls`이며 C→C++ 순서로 짧게 측정한다.
 
 #### 9.1.1 Single suite
 
@@ -770,6 +770,16 @@ transport 상태를 판정한다.
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 최종 결과 |
 |-----------|---------|----|-----|------|------|-------|--------|-----------|
 | `tls` | `MULTI_PUBSUB` | 통과 (98.67%) | 통과 (88.45%) | 통과 (95.73%) | 통과 (99.44%) | 통과 (99.72%) | 통과 (96.75%) | aggregate throughput 중앙값 97.71%, aggregate latency 중앙값 1.052x, 통과. 256B throughput과 65536B·131072B latency는 개별 outlier로 기록한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_111320_multi-pubsub-tls-storage-default-full-c12.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_111359_multi-pubsub-tls-storage-default-full-c12.txt` |
+
+### 9.1.4 Multi DEALER_DEALER TLS 최종 측정
+
+`MULTI_DEALER_DEALER / tls`는 C를 먼저 측정하고 C++을 단독 실행했다. 두 report가 모두
+`status: complete`이고 6개 size의 결과가 있으므로 throughput과 latency aggregate 중앙값으로
+판정한다.
+
+| Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 최종 결과 |
+|-----------|---------|----|-----|------|------|-------|--------|-----------|
+| `tls` | `MULTI_DEALER_DEALER` | 통과 (95.04%) | 통과 (96.77%) | 통과 (100.63%) | 통과 (99.76%) | 통과 (93.72%) | 통과 (99.12%) | aggregate throughput 중앙값 97.95%, aggregate latency 중앙값 0.978x, 통과. 64B latency 1.143x와 65536B latency 1.041x는 개별 기록값이다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_112546_multi-dealer-dealer-tls-short-c1.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_113100_multi-dealer-dealer-tls-short-c2.txt` |
 
 ### 9.2 .NET
 
@@ -1351,13 +1361,17 @@ transport 상태를 판정한다.
 | Multi one-way binding 결과 (PUBSUB/tls) | 완료·통과 | C++ throughput `1242.949 / 1164.497 / 851.554 / 309.257 / 27.785 / 16.000 Kmsg/s`, 평균 latency `1907.878 / 1504.449 / 696.901 / 567.991 / 825.959 / 1220.168 ms`. ratio `98.67% / 88.45% / 95.73% / 99.44% / 99.72% / 96.75%`, 중앙값 `97.71%`; latency ratio `1.008x / 1.028x / 0.975x / 1.076x / 3.055x / 4.959x`, aggregate 중앙값 `1.052x`. 개별 size outlier는 기록만 한다. | C++ report: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_111359_multi-pubsub-tls-storage-default-full-c12.txt`; 30/30 result lines, 6 success, 0 fail |
 | Multi one-way 개선 결과 (PUBSUB/tls) | 통과·다음 대상 진행 | 직접 수신 경로와 `message_t()` 기본 생성자의 opaque storage zero-initialization 제거를 적용했다. `message_t(size_t)`와 public interface는 변경하지 않았다. aggregate throughput 중앙값과 aggregate latency 중앙값이 기준을 충족해 다음 대상 `MULTI_DEALER_DEALER / tls`로 진행한다. |
 
+| Multi one-way paired C (DEALER_DEALER/tls) | 완료 | C throughput `2789.348 / 1415.828 / 858.784 / 368.671 / 38.928 / 15.523 Kmsg/s`, 평균 latency `1.141 / 0.496 / 19.245 / 51.000 / 594.805 / 1245.419 ms`. | C report: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_112546_multi-dealer-dealer-tls-short-c1.txt`; 30/30 result lines, 6 success, 0 fail |
+| Multi one-way binding 결과 (DEALER_DEALER/tls) | 완료·통과 | C++ throughput `2650.994 / 1370.150 / 864.166 / 367.782 / 36.484 / 15.386 Kmsg/s`, 평균 latency `1.304 / 0.333 / 17.286 / 51.094 / 619.191 / 1189.153 ms`. ratio `95.04% / 96.77% / 100.63% / 99.76% / 93.72% / 99.12%`, 중앙값 `97.95%`; latency ratio `1.143x / 0.671x / 0.898x / 1.002x / 1.041x / 0.955x`, aggregate 중앙값 `0.978x`. 개별 size outlier는 기록만 한다. | C++ report: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_113100_multi-dealer-dealer-tls-short-c2.txt`; 30/30 result lines, 6 success, 0 fail |
+| Multi one-way 개선 결과 (DEALER_DEALER/tls) | 통과·다음 대상 진행 | 기존에 적용한 C++ 내부 개선 상태에서 aggregate throughput·latency 기준을 충족했다. 이 대상의 추가 public interface 또는 구조 변경은 필요하지 않으며 다음 대상 `MULTI_DEALER_ROUTER_SENDSEND / tls`로 진행한다. |
+
 ### 10.3 언어 진행 상태
 
 | 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
 |------|------|-------------|------------|-----------|
-| 최신 정정 | C++ | 진행 중 | `MULTI_PUBSUB / tls` 최종 aggregate 통과 | 최종 6-size ratio `98.67%/88.45%/95.73%/99.44%/99.72%/96.75%`, throughput 중앙값 `97.71%`, aggregate latency 중앙값 `1.052x`다. 256B throughput과 큰 size latency는 개별 기록값이며 판정을 막지 않는다. 다음 대상은 `MULTI_DEALER_DEALER / tls`다. |
-| 현재 | C++ | 진행 중 | 부분 완료 | `MULTI_ROUTER_ROUTER_REQREP / ws`는 throughput 중앙값 98.19%와 평균 latency 기준을 모두 통과했다. `MULTI_PUBSUB / ws`는 throughput 중앙값 103.79%지만 1024B 이상 평균 latency가 미달이다. `MULTI_DEALER_DEALER / wss`는 throughput 중앙값 90.04%와 65536B ratio 79.67%로 미달이고 평균 latency는 기준 이내다. `MULTI_DEALER_ROUTER_SENDSEND / wss`는 중앙값 86.70%로 통과했다. `MULTI_DEALER_ROUTER_REQREP / wss`는 중앙값 82.02%로 미달이다. `MULTI_ROUTER_ROUTER_SENDSEND / wss`는 중앙값 107.22%, 최소 ratio 100.40%, 최대 latency ratio 0.991x로 통과했다. `MULTI_ROUTER_ROUTER_REQREP / wss`는 중앙값 86.67%, 최소 ratio 80.80%, 최대 latency ratio 1.222x로 통과했다. `MULTI_PUBSUB / wss`는 throughput 중앙값 95.23%로 통과했지만 65536B·131072B latency ratio 3.309x·4.802x로 미달이다. `MULTI_PUBSUB / tls`는 throughput 중앙값 81.40%와 256B·1024B·4096B·65536B 개별 ratio, 65536B·131072B latency가 미달이다. 다음 대상은 `MULTI_DEALER_DEALER / tls`다. |
-| 1 | C++ | 진행 중 | 부분 완료 | `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER`의 선택 transport와 현재 기록된 `ROUTER_ROUTER` 계열은 상세 표의 ratio로 통과·미달을 판정했다. `MULTI_DEALER_DEALER / tcp`는 256B, `MULTI_DEALER_ROUTER_SENDSEND / tcp`는 65536B, `MULTI_PUBSUB / tcp`는 64B·1024B·65536B, `MULTI_DEALER_DEALER / ws`는 1024B·65536B, `MULTI_STREAM / tcp`는 64B, `MULTI_STREAM / ws`는 64B, `MULTI_STREAM / tls`는 64B·256B가 개별 기준 미달이다. `MULTI_ROUTER_ROUTER_SENDSEND / wss`는 6개 size를 측정했고 ratio 104.09%/101.35%/110.36%/100.40%/111.91%/123.69%, 중앙값 107.22%로 통과했다. `MULTI_ROUTER_ROUTER_REQREP / wss`도 6개 size를 측정했고 ratio 93.26%/90.33%/86.67%/80.87%/80.80%/91.49%, 중앙값 86.67%로 통과했다. `MULTI_PUBSUB / wss`도 6개 size를 측정했고 throughput ratio 94.04%/90.30%/96.42%/97.56%/91.99%/96.61%, 중앙값 95.23%로 통과했지만 65536B·131072B latency는 미달이다. `MULTI_PUBSUB / tls`도 6개 size를 측정했고 throughput ratio 90.67%/81.83%/80.96%/77.05%/71.64%/98.78%, 중앙값 81.40%로 미달이며 latency 최대 5.170x다. 다음 Multi 대상은 `MULTI_DEALER_DEALER / tls`다. |
+| 최신 정정 | C++ | 진행 중 | `MULTI_PUBSUB / tls`, `MULTI_DEALER_DEALER / tls` 최종 aggregate 통과 | `MULTI_PUBSUB / tls` throughput 중앙값 `97.71%`, aggregate latency 중앙값 `1.052x`; `MULTI_DEALER_DEALER / tls` throughput 중앙값 `97.95%`, aggregate latency 중앙값 `0.978x`다. 개별 size outlier는 기록만 한다. 다음 대상은 `MULTI_DEALER_ROUTER_SENDSEND / tls`다. |
+| 현재 | C++ | 진행 중 | 부분 완료 | `MULTI_ROUTER_ROUTER_REQREP / ws`는 throughput 중앙값 98.19%와 latency 기준을 통과했다. `MULTI_PUBSUB / ws`와 `MULTI_PUBSUB / wss`는 throughput은 통과했지만 latency aggregate 기준을 추가 개선 대상으로 기록했다. `MULTI_DEALER_ROUTER_REQREP / wss`는 중앙값 82.02%로 미달이고, `MULTI_DEALER_DEALER / wss`는 중앙값 90.04%와 65536B 개별 ratio 79.67%를 기록했다. `MULTI_PUBSUB / tls`는 최종 aggregate throughput 중앙값 97.71%, latency 중앙값 1.052x로 통과했고, `MULTI_DEALER_DEALER / tls`도 최종 aggregate throughput 중앙값 97.95%, latency 중앙값 0.978x로 통과했다. 다음 대상은 `MULTI_DEALER_ROUTER_SENDSEND / tls`다. |
+| 1 | C++ | 진행 중 | 부분 완료 | 선택 transport·pattern은 상세 표의 ratio와 aggregate 중앙값으로 판정했다. 기존 개별 기준 미달 기록은 그대로 보존한다. `MULTI_PUBSUB / wss`는 throughput 중앙값 95.23%와 latency aggregate 기준으로 최종 통과로 정정했고, `MULTI_PUBSUB / tls`는 throughput 중앙값 97.71%, latency aggregate 중앙값 1.052x, `MULTI_DEALER_DEALER / tls`는 throughput 중앙값 97.95%, latency aggregate 중앙값 0.978x로 통과했다. 다음 Multi 대상은 `MULTI_DEALER_ROUTER_SENDSEND / tls`다. |
 | 2 | .NET | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 3 | Java | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
@@ -1519,6 +1533,8 @@ transport 상태를 판정한다.
 | `MULTI_ROUTER_ROUTER_REQREP / wss` | 93.26%, 90.33%, 86.67%, 80.87%, 80.80%, 91.49% | 86.67% | 통과·개별 최소 75%, 중앙값 목표 85%, latency ratio 최대 1.222x |
 | `MULTI_PUBSUB / wss` | 94.04%, 90.30%, 96.42%, 97.56%, 91.99%, 96.61% | 95.23% | throughput 통과·65536B/131072B latency ratio 3.309x/4.802x 미달·binding-only 개선 no-go |
 | `MULTI_PUBSUB / tls` | 98.67%, 88.45%, 95.73%, 99.44%, 99.72%, 96.75% | 97.71% | 통과·aggregate latency 중앙값 1.052x; 256B ratio 88.45%와 65536B·131072B 개별 latency outlier는 기록만 함. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_111320_multi-pubsub-tls-storage-default-full-c12.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_111359_multi-pubsub-tls-storage-default-full-c12.txt` |
+
+| `MULTI_DEALER_DEALER / tls` | 95.04%, 96.77%, 100.63%, 99.76%, 93.72%, 99.12% | 97.95% | 통과·aggregate latency 중앙값 0.978x; 64B·65536B 개별 latency outlier는 기록만 함. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_112546_multi-dealer-dealer-tls-short-c1.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_113100_multi-dealer-dealer-tls-short-c2.txt` |
 
 ## 12. 완료 기준
 
