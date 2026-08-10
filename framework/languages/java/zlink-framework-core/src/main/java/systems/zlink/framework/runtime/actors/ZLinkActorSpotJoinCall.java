@@ -782,7 +782,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                 currentActorRef,
                 address.targetNodeRid(),
                 coreId)
-            .thenCompose(sessionRouteCommand44 ->
+            .thenCompose(sessionRoute ->
                 services.actors().beginRemoteMove(actor)
             .thenCompose(ignored -> services.actors().transferOut(actor))
             .thenApply(transfer -> {
@@ -810,7 +810,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                             transferState.toByteArray(),
                             canonicalJournal(commit.backlog()),
                             admissionReply.toByteArray(),
-                            sessionRouteCommand44);
+                            sessionRoute.command44());
                 return completionManifest.thenCompose(manifest -> {
                     acceptedCompletionManifest.set(manifest);
                     services.actors().traceActorTransferMarker(
@@ -857,7 +857,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                                 corePrepared == null ? 0L
                                     : corePrepared.result().reserveByteCount()),
                             manifest,
-                            sessionRouteCommand44);
+                            sessionRoute.command44());
                     commitRetryTemplate.set(commitParts.stream()
                         .map(Message::from)
                         .toList());
@@ -922,6 +922,14 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                     return restored.handle((ignored, restoreError) -> {
                         if (restoreError != null) {
                             cause.addSuppressed(unwrap(restoreError));
+                        }
+                        return null;
+                    }).thenCompose(ignored ->
+                        services.actors().abortDirectJoinSessionRoute(
+                            sessionRoute))
+                    .handle((ignored, abortError) -> {
+                        if (abortError != null) {
+                            cause.addSuppressed(unwrap(abortError));
                         }
                         throw new CompletionException(cause);
                     });

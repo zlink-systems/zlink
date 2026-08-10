@@ -3,7 +3,12 @@ package systems.zlink.framework.runtime.internal.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Arrays;
+import java.util.HexFormat;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.ActorIdentity;
@@ -15,10 +20,6 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.SessionRelocationRouteAction;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.SessionRelocationRouted;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.SessionRelocationRouteIntent;
-import java.io.ByteArrayOutputStream;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.nio.charset.StandardCharsets;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.ActorRouteFence;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.SessionRelocationSeal;
@@ -40,6 +41,19 @@ final class ZLinkServiceM6BSessionRelocationWireCodecTest {
 
         assertEquals(route, codec.decodeSessionRelocationRoute(
             codec.encodeSessionRelocationRoute(route)));
+    }
+
+    @Test
+    void command44AbortRequiresTheSourceRoleAndRoundTrips() {
+        SessionRelocationRoute abort = abort();
+
+        assertEquals(abort, codec.decodeSessionRelocationRoute(
+            codec.encodeSessionRelocationRoute(abort)));
+        assertThrows(ZLinkServiceWireException.class,
+            () -> new SessionRelocationRoute(
+                abort.relocation(), abort.coordinator(), RelocationRole.TARGET,
+                abort.actor(), abort.session(), abort.action(),
+                0, 11, null, 0, 0));
     }
 
     @Test
@@ -154,45 +168,41 @@ final class ZLinkServiceM6BSessionRelocationWireCodecTest {
                 actorRoute(), session()));
     }
 
-    /**
-     * Byte-for-byte cross-language check. No golden fixture under
-     * `runtime/protocol/golden/` covers commands 42/43, so the expected bytes
-     * are laid out here directly from the C++ reference encoders
-     * `encode_session_relocation_seal` / `encode_session_relocation_sealed`
-     * (`framework/languages/cpp/framework/src/runtime/protocol/service_wire_codec.cpp:1139`
-     * and `:1238`) and from command 42/43 in
-     * `runtime/protocol/service-wire-v1.schema.json`.
-     */
     @Test
-    void command42And43MatchTheCppByteLayout() {
+    void command42And43MatchTheSharedGoldenFixture() throws Exception {
         SessionRelocationSeal seal = seal();
-
-        Bytes expected42 = new Bytes()
-            .u8(90).u8(77).u8(1).u8(42).u8(0)
-            .u64(7).u64(9)
-            .text("coordinator").u64(3).rid(SOURCE).u64(2)
-            .text16("store-v17")
-            .u8(1)
-            .text("actor-1").u64(5).rid(TARGET).u64(4).u64(11).u64(13)
-            .rid(SOURCE).u64(2).text("session-owner").u64(8)
-            .rid(SESSION).u64(6);
-        assertArrayEquals(expected42.toByteArray(),
+        assertArrayEquals(golden("sessionRelocationSeal"),
             codec.encodeSessionRelocationSeal(seal));
 
         SessionRelocationSealed sealed = new SessionRelocationSealed(
             seal.relocation(), seal.coordinator(), seal.actor(),
             seal.session(), 41);
-        Bytes expected43 = new Bytes()
-            .u8(90).u8(77).u8(1).u8(43).u8(0)
-            .u64(7).u64(9)
-            .text("coordinator").u64(3).rid(SOURCE).u64(2)
-            .text16("store-v17")
-            .text("actor-1").u64(5).rid(TARGET).u64(4).u64(11).u64(13)
-            .rid(SOURCE).u64(2).text("session-owner").u64(8)
-            .rid(SESSION).u64(6)
-            .u64(41);
-        assertArrayEquals(expected43.toByteArray(),
+        assertArrayEquals(golden("sessionRelocationSealed"),
             codec.encodeSessionRelocationSealed(sealed));
+    }
+
+    @Test
+    void command44And45MatchTheSharedGoldenFixture() throws Exception {
+        SessionRelocationRoute commit = commitWithGoldenHighWater();
+        assertArrayEquals(golden("sessionRelocationRouteCommit"),
+            codec.encodeSessionRelocationRoute(commit));
+        assertArrayEquals(golden("sessionRelocationRoutedCommit"),
+            codec.encodeSessionRelocationRouted(new SessionRelocationRouted(
+                commit.relocation(), commit.coordinator(), commit.actor(),
+                commit.session(), commit.action(),
+                ZLinkServiceM6BWireCodec.SessionRelocationRouteResult.APPLIED,
+                commit.currentAuthorityOwnerGeneration(),
+                commit.lastAcceptedSessionSequence())));
+
+        SessionRelocationRoute abort = abort();
+        assertArrayEquals(golden("sessionRelocationRouteAbort"),
+            codec.encodeSessionRelocationRoute(abort));
+        assertArrayEquals(golden("sessionRelocationRoutedAbort"),
+            codec.encodeSessionRelocationRouted(new SessionRelocationRouted(
+                abort.relocation(), abort.coordinator(), abort.actor(),
+                abort.session(), abort.action(),
+                ZLinkServiceM6BWireCodec.SessionRelocationRouteResult.APPLIED,
+                abort.currentAuthorityOwnerGeneration(), 41)));
     }
 
     private static SessionRelocationSeal seal() {
@@ -203,48 +213,33 @@ final class ZLinkServiceM6BSessionRelocationWireCodecTest {
 
     private static ActorRouteFence actorRoute() {
         return new ActorRouteFence(
-            new ZLinkBackendActorRef(TARGET, "actor-1", 5), 4, 11, 13);
+            new ZLinkBackendActorRef(SOURCE, "actor-1", 5), 2, 11, 13);
     }
 
-    private static final class Bytes {
-        private final ByteArrayOutputStream output = new ByteArrayOutputStream();
-
-        Bytes u8(int value) {
-            output.write(value);
-            return this;
+    private static byte[] golden(String name) throws Exception {
+        JsonNode fixture = new ObjectMapper().readTree(
+            Files.readString(sharedFixture()));
+        for (JsonNode canonical : fixture.path("canonical")) {
+            if (name.equals(canonical.path("name").asText())) {
+                return HexFormat.of().parseHex(
+                    canonical.path("hex").asText());
+            }
         }
+        throw new AssertionError("missing shared canonical frame: " + name);
+    }
 
-        Bytes u64(long value) {
-            output.writeBytes(ByteBuffer.allocate(Long.BYTES)
-                .order(ByteOrder.BIG_ENDIAN).putLong(value).array());
-            return this;
+    private static Path sharedFixture() {
+        Path current = Path.of(System.getProperty("user.dir")).toAbsolutePath();
+        while (current != null) {
+            Path candidate = current.resolve(
+                "runtime/protocol/golden/session-relocation-barrier-v1.json");
+            if (Files.isRegularFile(candidate)) {
+                return candidate;
+            }
+            current = current.getParent();
         }
-
-        Bytes text(String value) {
-            byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
-            output.write(bytes.length);
-            output.writeBytes(bytes);
-            return this;
-        }
-
-        Bytes text16(String value) {
-            byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
-            output.write((bytes.length >>> 8) & 0xff);
-            output.write(bytes.length & 0xff);
-            output.writeBytes(bytes);
-            return this;
-        }
-
-        Bytes rid(RoutingId value) {
-            byte[] bytes = value.toBytes();
-            output.write(bytes.length);
-            output.writeBytes(bytes);
-            return this;
-        }
-
-        byte[] toByteArray() {
-            return output.toByteArray();
-        }
+        throw new IllegalStateException(
+            "shared Session relocation barrier fixture was not found");
     }
 
     private static SessionRelocationRoute commit() {
@@ -252,6 +247,20 @@ final class ZLinkServiceM6BSessionRelocationWireCodecTest {
             relocation(), coordinator(), RelocationRole.TARGET,
             actor(), session(), SessionRelocationRouteAction.COMMIT,
             11, 12, TARGET, 4, 29);
+    }
+
+    private static SessionRelocationRoute commitWithGoldenHighWater() {
+        return new SessionRelocationRoute(
+            relocation(), coordinator(), RelocationRole.TARGET,
+            actor(), session(), SessionRelocationRouteAction.COMMIT,
+            11, 12, TARGET, 4, 41);
+    }
+
+    private static SessionRelocationRoute abort() {
+        return new SessionRelocationRoute(
+            relocation(), coordinator(), RelocationRole.SOURCE,
+            actor(), session(), SessionRelocationRouteAction.ABORT,
+            0, 11, null, 0, 0);
     }
 
     private static RelocationIdentity relocation() {

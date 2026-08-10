@@ -2721,8 +2721,17 @@ public final class ZLinkSpotRuntime
         ZLinkBackendActorRef actorRef,
         ZLinkStreamHeader header,
         Message payload) {
+        return dispatchLocalSessionActor(actorRef, 0, header, payload);
+    }
+
+    public CompletionStage<Optional<Message>> dispatchLocalSessionActor(
+        ZLinkBackendActorRef actorRef,
+        long acceptedSessionSequence,
+        ZLinkStreamHeader header,
+        Message payload) {
         return actorSessions.dispatchLocalSession(
             actorRef,
+            acceptedSessionSequence,
             header,
             payload,
             spotId -> spotSurfaceFor(spotId) != null,

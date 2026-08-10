@@ -1412,14 +1412,14 @@ public final class ZLinkServiceM6BWireCodec {
             Objects.requireNonNull(actor, "actor");
             Objects.requireNonNull(session, "session");
             Objects.requireNonNull(action, "action");
-            if (senderRole != RelocationRole.TARGET) {
-                throw protocol("route update sender must be target");
-            }
             if (currentAuthorityOwnerGeneration <= 0
                 || lastAcceptedSessionSequence < 0) {
                 throw protocol("route update generations are invalid");
             }
             if (action == SessionRelocationRouteAction.COMMIT) {
+                if (senderRole != RelocationRole.TARGET) {
+                    throw protocol("route commit sender must be target");
+                }
                 Objects.requireNonNull(targetNodeRid, "targetNodeRid");
                 if (previousAuthorityOwnerGeneration <= 0
                     || currentAuthorityOwnerGeneration
@@ -1427,10 +1427,15 @@ public final class ZLinkServiceM6BWireCodec {
                     || targetNodeGeneration <= 0) {
                     throw protocol("commit route update is invalid");
                 }
-            } else if (previousAuthorityOwnerGeneration != 0
-                || targetNodeRid != null || targetNodeGeneration != 0
-                || lastAcceptedSessionSequence != 0) {
-                throw protocol("abort route update contains commit fields");
+            } else {
+                if (senderRole != RelocationRole.SOURCE) {
+                    throw protocol("route abort sender must be source");
+                }
+                if (previousAuthorityOwnerGeneration != 0
+                    || targetNodeRid != null || targetNodeGeneration != 0
+                    || lastAcceptedSessionSequence != 0) {
+                    throw protocol("abort route update contains commit fields");
+                }
             }
         }
     }

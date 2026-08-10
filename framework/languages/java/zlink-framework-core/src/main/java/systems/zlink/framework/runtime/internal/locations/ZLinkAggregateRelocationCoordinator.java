@@ -1374,7 +1374,12 @@ public final class ZLinkAggregateRelocationCoordinator {
                         ? failed(original)
                         : failed(new PreparationOutcomeUnknownException(
                             "aggregate prepare outcome could not be reconciled",
-                            original)));
+                            original,
+                            new Prepared(
+                                expectedFence,
+                                stored,
+                                request,
+                                digest))));
             });
     }
 
@@ -1911,10 +1916,18 @@ public final class ZLinkAggregateRelocationCoordinator {
     /** The source seal must remain closed until recovery resolves prepare. */
     public static final class PreparationOutcomeUnknownException
         extends RuntimeException {
+        private final Prepared prepared;
+
         public PreparationOutcomeUnknownException(
             String message,
-            Throwable cause) {
+            Throwable cause,
+            Prepared prepared) {
             super(message, cause);
+            this.prepared = Objects.requireNonNull(prepared, "prepared");
+        }
+
+        public Prepared prepared() {
+            return prepared;
         }
     }
 

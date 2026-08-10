@@ -1,9 +1,12 @@
 package systems.zlink.framework.runtime.spots;
+import java.lang.reflect.Proxy;
+import java.lang.reflect.InvocationTargetException;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
@@ -21,21 +24,29 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
+import systems.zlink.framework.actors.ZLinkActorContext;
+import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
+import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
+import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkAggregateRelocationCoordinator;
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkRelocationPermitPool;
 import systems.zlink.framework.runtime.internal.relocation
     .ZLinkRelocationAdapterRegistry;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
@@ -48,6 +59,9 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
     private static final ZLinkStoreCancellation NEVER = () -> false;
     private static final String MESH = "retire-source";
     private static final String STABLE_TYPE = "room";
+    private static final String ACTOR_TYPE = "player";
+    private static final String ACTOR_ID = "player-a";
+    private static final String SECOND_ACTOR_ID = "player-b";
     private static final String SPOT_ID = "room-a";
     private static final RoutingId SOURCE_RID = RoutingId.from("source-node");
     private static final RoutingId TARGET_RID = RoutingId.from("target-node");
@@ -397,6 +411,206 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
     }
 
     @Test
+    void boundSessionUsesCommand43HighWaterAndAbortReleasesTheExactSeal()
+        throws Exception {
+        ZLinkInMemoryLocationStore locations = new ZLinkInMemoryLocationStore();
+        ZLinkLocationRepository baseRepository =
+            new ZLinkProviderLocationRepository(locations);
+        AtomicInteger authorityAbortAttempts = new AtomicInteger();
+        ZLinkLocationRepository repository = uncertainPreparationRepository(
+            baseRepository,
+            authorityAbortAttempts);
+        InMemoryRelocationStore relocations = new InMemoryRelocationStore();
+        DefaultZLinkFrameworkOptions options = options(locations, relocations);
+        var registration = options.registration();
+        var nodeRegistration = registration.meshNodes().getFirst();
+        var codec = new ZLinkServiceM6BWireCodec();
+        List<ZLinkServiceM6BWireCodec.SessionRelocationSeal> seals =
+            new CopyOnWriteArrayList<>();
+        List<ZLinkServiceM6BWireCodec.SessionRelocationRoute> aborts =
+            new CopyOnWriteArrayList<>();
+        AtomicBoolean rejectAbortAcks = new AtomicBoolean(true);
+        RoutingId sessionRid = RoutingId.from("session-a");
+        RoutingId secondSessionRid = RoutingId.from("session-b");
+        try (ZLinkFrameworkRuntime host =
+                ZLinkFrameworkRuntimeTestAccess.start(options)) {
+            ZLinkSpotRuntime runtime = (ZLinkSpotRuntime) host.spotManager();
+            ZLinkActorRuntime actorRuntime =
+                (ZLinkActorRuntime) host.actorManager();
+            ZLinkMeshNodeDescriptor source = repository.listMeshNodes(
+                    MESH,
+                    ZLinkPageRequest.firstPage())
+                .toCompletableFuture().get().items().stream()
+                .filter(value -> value.rid().equals(
+                    nodeRegistration.routingId()))
+                .findFirst().orElseThrow();
+            ZLinkLocationOwnerToken targetOwner = assertInstanceOf(
+                ZLinkOwnerLeaseClaimed.class,
+                repository.claimOwnerLease(
+                    "target-owner", Duration.ofSeconds(30))
+                    .toCompletableFuture().get()).token();
+            host.spotManager().getOrCreate(SPOT_ID, STABLE_TYPE)
+                .submit().toCompletableFuture().get();
+            host.actorManager().create(ACTOR_ID, ACTOR_TYPE)
+                .submit().toCompletableFuture().get();
+            TestActor actor = TestActor.last.get();
+            assertNotNull(actor);
+            host.actorManager().create(SECOND_ACTOR_ID, ACTOR_TYPE)
+                .submit().toCompletableFuture().get();
+            TestActor secondActor = TestActor.last.get();
+            assertNotNull(secondActor);
+            ZLinkBackendActorRef actorRef = actorRuntime.currentRef(actor);
+            actorRuntime.commitJoinedLocation(actor, actorRef, SPOT_ID)
+                .toCompletableFuture().get();
+            actorRuntime.markJoined(
+                    actor,
+                    actorRef,
+                    SPOT_ID,
+                    LiveSpot.last.get())
+                .toCompletableFuture().get();
+            ZLinkBackendActorRef secondActorRef =
+                actorRuntime.currentRef(secondActor);
+            actorRuntime.commitJoinedLocation(
+                    secondActor,
+                    secondActorRef,
+                    SPOT_ID)
+                .toCompletableFuture().get();
+            actorRuntime.markJoined(
+                    secondActor,
+                    secondActorRef,
+                    SPOT_ID,
+                    LiveSpot.last.get())
+                .toCompletableFuture().get();
+            assertEquals(List.of(ACTOR_ID, SECOND_ACTOR_ID),
+                runtime.actorSessions().actorIdsInSpot(SPOT_ID).stream()
+                    .sorted().toList());
+
+            actorRuntime.bindNativeSession(
+                actor,
+                inertSpotNode(),
+                actorRef,
+                source.rid(),
+                sessionRid,
+                12,
+                999);
+            actorRuntime.bindNativeSession(
+                secondActor,
+                inertSpotNode(),
+                secondActorRef,
+                source.rid(),
+                secondSessionRid,
+                13,
+                777);
+            repository.updateMeshNode(
+                    descriptor(TARGET_RID, 9, targetOwner,
+                        "inproc://retire-target"),
+                    ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get();
+
+            ZLinkInternalMeshNode peer = relocationPeer(
+                codec,
+                seals,
+                aborts,
+                Map.of(sessionRid, 41L, secondSessionRid, 73L),
+                rejectAbortAcks);
+            ZLinkAggregateRelocationCoordinator coordinator =
+                new ZLinkAggregateRelocationCoordinator(
+                    repository, relocations);
+            ZLinkRelocationPermitPool permits =
+                new ZLinkRelocationPermitPool(new ZLinkLocationOptions());
+            ZLinkUserSpotRetireSourceBuilder builder =
+                new ZLinkUserSpotRetireSourceBuilder(
+                    MESH,
+                    nodeRegistration.routingId(),
+                    source.lifecycleGeneration(),
+                    repository,
+                    coordinator,
+                    permits,
+                    runtime.spotLifecycle(),
+                    runtime.actorSessions(),
+                    new ZLinkRelocationAdapterRegistry(
+                        registration,
+                        ZLinkHandlerActivator.reflection()),
+                    nodeRegistration.relocatableSpotFactories(),
+                    nodeRegistration.relocatableActorFactories(),
+                    runtime,
+                    new ZLinkSessionRelocationPeerClient(peer));
+
+            ZLinkUserSpotRetireSourceBuilder.PreparedSource prepared =
+                builder.prepare(
+                    SPOT_ID,
+                    rollingToVersionOne(),
+                    NEVER).toCompletableFuture().get();
+
+            assertEquals(2, seals.size());
+            assertTrue(seals.stream().allMatch(seal ->
+                seal.senderRole()
+                    == ZLinkServiceM6BWireCodec.RelocationRole.SOURCE));
+            assertTrue(seals.stream().allMatch(seal ->
+                seal.actor().actor().nodeRid().equals(source.rid())
+                    && seal.actor().targetNodeGeneration()
+                        == source.lifecycleGeneration()));
+            assertEquals(
+                Map.of(ACTOR_ID, 41L, SECOND_ACTOR_ID, 73L),
+                prepared.stageRequest().sessionRoutes().stream()
+                    .collect(java.util.stream.Collectors.toMap(
+                        ZLinkSpotRetireControl.SessionRouteFence::actorId,
+                        ZLinkSpotRetireControl.SessionRouteFence
+                            ::lastAcceptedSessionSequence)),
+                "every staged fence must use command 43, not local estimates");
+
+            assertThrows(CompletionException.class, () ->
+                prepared.freezeAndPrepareFinal(NEVER)
+                    .toCompletableFuture().join());
+            assertEquals(1, authorityAbortAttempts.get(),
+                "the coordinator first tries to reconcile the lost prepare");
+            assertTrue(aborts.isEmpty(),
+                "Session abort must wait for an Aborted authority result");
+
+            assertThrows(CompletionException.class, () ->
+                prepared.abortPrecommit().toCompletableFuture().join());
+            assertEquals(2, authorityAbortAttempts.get(),
+                "the exact uncertain fence must reach Aborted before command 44");
+            assertEquals(1, builder.unresolvedPreparationCount());
+            assertEquals(1, permits.snapshot().outboundUnits(),
+                "a missing command 45 must keep the source permit and seal");
+            assertSame(LiveSpot.last.get(), runtime.spotFor(SPOT_ID),
+                "the source aggregate remains installed while ACK is pending");
+
+            rejectAbortAcks.set(false);
+            builder.reconcileUnresolvedPreparations()
+                .toCompletableFuture().get();
+            assertEquals(0, builder.unresolvedPreparationCount());
+
+            Map<RoutingId, Long> abortCounts = aborts.stream().collect(
+                java.util.stream.Collectors.groupingBy(
+                    abort -> abort.session().sessionRid(),
+                    java.util.stream.Collectors.counting()));
+            assertEquals(
+                Map.of(sessionRid, 0L, secondSessionRid, 0L).keySet(),
+                abortCounts.keySet());
+            assertTrue(abortCounts.values().stream().allMatch(count -> count >= 2),
+                "both exact aborts follow the retry schedule and converge");
+            for (var abort : aborts) {
+                var exactSeal = seals.stream()
+                    .filter(seal -> seal.session().equals(abort.session()))
+                    .findFirst().orElseThrow();
+                assertEquals(exactSeal.relocation(), abort.relocation());
+                assertEquals(exactSeal.coordinator(), abort.coordinator());
+                assertEquals(ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
+                    abort.senderRole());
+                assertEquals(
+                    ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.ABORT,
+                    abort.action());
+                assertEquals(0, abort.lastAcceptedSessionSequence(),
+                    "abort command 44 carries no high-water body");
+            }
+            assertEquals(0, permits.snapshot().outboundUnits());
+            assertSame(LiveSpot.last.get(), runtime.spotFor(SPOT_ID));
+        }
+    }
+
+    @Test
     void captureFailureAfterStagedRootDiscardsTheStagedRoot()
         throws Exception {
         ZLinkInMemoryLocationStore locations = new ZLinkInMemoryLocationStore();
@@ -580,8 +794,119 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                             .APPLICATION_SIGNALED);
                 }
             });
+        mesh.objects().server().addActorFactory(
+            ACTOR_TYPE,
+            TestActor.class,
+            TestActorFactory.class,
+            factory -> factory.recreateOnRelocation());
         options.validate();
         return options;
+    }
+
+    private static ZLinkInternalSpotNode inertSpotNode() {
+        return (ZLinkInternalSpotNode) Proxy.newProxyInstance(
+            ZLinkUserSpotRetireSourceBuilderTest.class.getClassLoader(),
+            new Class<?>[] {ZLinkInternalSpotNode.class},
+            (proxy, method, arguments) -> {
+                if (method.getName().equals("toString")) {
+                    return "session-owner";
+                }
+                throw new UnsupportedOperationException(method.getName());
+            });
+    }
+
+    private static ZLinkInternalMeshNode relocationPeer(
+        ZLinkServiceM6BWireCodec codec,
+        List<ZLinkServiceM6BWireCodec.SessionRelocationSeal> seals,
+        List<ZLinkServiceM6BWireCodec.SessionRelocationRoute> aborts,
+        Map<RoutingId, Long> acceptedHighWaters,
+        AtomicBoolean rejectAbortAcks) {
+        return (ZLinkInternalMeshNode) Proxy.newProxyInstance(
+            ZLinkUserSpotRetireSourceBuilderTest.class.getClassLoader(),
+            new Class<?>[] {ZLinkInternalMeshNode.class},
+            (proxy, method, arguments) -> {
+                if (method.getName().equals("requestSessionRelocationSeal")) {
+                    var command = codec.decodeSessionRelocationSeal(
+                        (byte[]) arguments[1]);
+                    seals.add(command);
+                    long acceptedHighWater = acceptedHighWaters.get(
+                        command.session().sessionRid());
+                    return CompletableFuture.completedFuture(
+                        codec.encodeSessionRelocationSealed(
+                            new ZLinkServiceM6BWireCodec
+                                .SessionRelocationSealed(
+                                    command.relocation(),
+                                    command.coordinator(),
+                                    command.actor(),
+                                    command.session(),
+                                    acceptedHighWater)));
+                }
+                if (method.getName().equals("requestSessionRelocationRoute")) {
+                    var command = codec.decodeSessionRelocationRoute(
+                        (byte[]) arguments[1]);
+                    aborts.add(command);
+                    long acceptedHighWater = acceptedHighWaters.get(
+                        command.session().sessionRid());
+                    long acknowledgedHighWater = rejectAbortAcks.get()
+                        ? acceptedHighWater + 1
+                        : acceptedHighWater;
+                    return CompletableFuture.completedFuture(
+                        codec.encodeSessionRelocationRouted(
+                            new ZLinkServiceM6BWireCodec
+                                .SessionRelocationRouted(
+                                    command.relocation(),
+                                    command.coordinator(),
+                                    command.actor(),
+                                    command.session(),
+                                    command.action(),
+                                    ZLinkServiceM6BWireCodec
+                                        .SessionRelocationRouteResult.APPLIED,
+                                    command.currentAuthorityOwnerGeneration(),
+                                    acknowledgedHighWater)));
+                }
+                if (method.getName().equals("toString")) {
+                    return "session-relocation-peer";
+                }
+                throw new UnsupportedOperationException(method.getName());
+            });
+    }
+
+    private static ZLinkLocationRepository uncertainPreparationRepository(
+        ZLinkLocationRepository delegate,
+        AtomicInteger abortAttempts) {
+        return (ZLinkLocationRepository) Proxy.newProxyInstance(
+            ZLinkUserSpotRetireSourceBuilderTest.class.getClassLoader(),
+            new Class<?>[] {ZLinkLocationRepository.class},
+            (proxy, method, arguments) -> {
+                if (method.getName().equals("prepareAggregate")) {
+                    @SuppressWarnings("unchecked")
+                    CompletionStage<Object> prepared =
+                        (CompletionStage<Object>) invoke(
+                            delegate, method, arguments);
+                    return prepared.thenCompose(ignored ->
+                        CompletableFuture.failedFuture(
+                            new IllegalStateException(
+                                "aggregate prepare response was lost")));
+                }
+                if (method.getName().equals("abortAggregate")
+                    && abortAttempts.incrementAndGet() == 1) {
+                    return CompletableFuture.failedFuture(
+                        new IllegalStateException(
+                            "first abort response was unavailable"));
+                }
+                return invoke(delegate, method, arguments);
+            });
+    }
+
+    private static Object invoke(
+        Object target,
+        java.lang.reflect.Method method,
+        Object[] arguments) throws Throwable {
+        try {
+            return method.invoke(target, arguments);
+        } catch (InvocationTargetException failure) {
+            throw failure.getCause();
+        }
     }
 
     private static ZLinkMeshNodeDescriptor descriptor(
@@ -597,12 +922,19 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
             endpoint,
             Map.of(MESH, 100),
             1,
-            List.of(new ZLinkObjectCapability(
-                ZLinkPlacementObjectKind.USER_SPOT,
-                STABLE_TYPE,
-                ZLinkObjectMaintenancePolicyKind.SNAPSHOT,
-                true,
-                0)),
+            List.of(
+                new ZLinkObjectCapability(
+                    ZLinkPlacementObjectKind.USER_SPOT,
+                    STABLE_TYPE,
+                    ZLinkObjectMaintenancePolicyKind.SNAPSHOT,
+                    true,
+                    0),
+                new ZLinkObjectCapability(
+                    ZLinkPlacementObjectKind.ACTOR,
+                    ACTOR_TYPE,
+                    ZLinkObjectMaintenancePolicyKind.RECREATE,
+                    false,
+                    0)),
             ZLinkMeshNodeObjectRole.SERVER,
             Optional.of("node-entry-00000000-0000-4000-8000-000000000001"),
             100,
@@ -668,6 +1000,28 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                     ? "continued"
                     : "relocated");
             return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class TestActor implements ZLinkActor {
+        private static final AtomicReference<TestActor> last =
+            new AtomicReference<>();
+        private final ZLinkActorContext context;
+
+        public TestActor(ZLinkActorContext context) {
+            this.context = context;
+            last.set(this);
+        }
+
+        @Override public ZLinkActorContext context() {
+            return context;
+        }
+    }
+
+    public static final class TestActorFactory implements ZLinkActorFactory {
+        @Override
+        public CompletionStage<ZLinkActor> create(ZLinkActorContext context) {
+            return CompletableFuture.completedFuture(new TestActor(context));
         }
     }
 

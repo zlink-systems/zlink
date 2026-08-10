@@ -46,6 +46,7 @@ final class ZLinkBoundActorRouteContractTest {
             null,
             new UnsupportedSerializer(),
             0,
+            1,
             ignored -> true,
             null,
             true,
@@ -53,6 +54,7 @@ final class ZLinkBoundActorRouteContractTest {
             new ZLinkSessionRelayHeaders(),
             null,
             () -> currentBinding,
+            operation -> operation.apply(1),
             ZLinkRelayMetadataPolicy.EMPTY);
     }
 

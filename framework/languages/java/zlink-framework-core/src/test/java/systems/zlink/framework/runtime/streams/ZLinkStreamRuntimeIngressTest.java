@@ -10,6 +10,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorUnbindO
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
@@ -20,6 +21,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
@@ -44,6 +46,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapt
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMonitoringBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkSpotBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkStreamBackendAdapter;
@@ -307,6 +310,85 @@ final class ZLinkStreamRuntimeIngressTest {
         assertFalse(session.packetNames.contains("after-replacement"));
         assertTrue(elapsedMillis >= 80, "replacement close must be timer driven");
         assertTrue(elapsedMillis < 2_000, "replacement close exceeded its timer");
+    }
+
+    @Test
+    void relocationHandlersFenceTheTransportSourceAndAcceptSourceAbort()
+        throws Exception {
+        FakeStream stream = new FakeStream();
+        stream.enqueue(PEER_A, frame("initial", "{}"));
+        ReplacementFixture fixture = startReplacement(stream);
+        runtimes.add(fixture.runtime());
+        TestSession session = awaitSession();
+        ZLinkActor actor = fixture.actors().getOrCreateLocalActor(
+                "relocation-actor", ZLinkActor.class)
+            .toCompletableFuture().join().orElseThrow();
+        ZLinkBackendActorRef actorRef = fixture.actors().currentRef(actor);
+        session.context().actors().bind(new ActorRef(
+                actorRef.actorId(),
+                actorRef.generation(),
+                MESH,
+                actorRef.nodeRid()))
+            .toCompletableFuture().join();
+        var codec = new ZLinkServiceM6BWireCodec();
+        var relocation = new ZLinkServiceM6BWireCodec.RelocationIdentity(3, 4);
+        var coordinator =
+            new ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
+                "actor-owner", 11, actorRef.nodeRid(), 3, "store-v1");
+        var owner = new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+            RoutingId.from("session-owner-node"),
+            3,
+            "session-owner",
+            5,
+            PEER_A,
+            1);
+        var seal = new ZLinkServiceM6BWireCodec.SessionRelocationSeal(
+            relocation,
+            coordinator,
+            ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
+            new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                actorRef, 3, 7, 11),
+            owner);
+
+        assertThrows(CompletionException.class, () ->
+            fixture.runtime().handleSessionRelocationSeal(
+                    PEER_B,
+                    codec.encodeSessionRelocationSeal(seal))
+                .toCompletableFuture().join());
+        var sealed = codec.decodeSessionRelocationSealed(
+            fixture.runtime().handleSessionRelocationSeal(
+                    actorRef.nodeRid(),
+                    codec.encodeSessionRelocationSeal(seal))
+                .toCompletableFuture().join());
+        var abort = new ZLinkServiceM6BWireCodec.SessionRelocationRoute(
+            relocation,
+            coordinator,
+            ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
+            new ZLinkServiceM6BWireCodec.ActorIdentity(
+                actorRef.actorId(), actorRef.generation()),
+            owner,
+            ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.ABORT,
+            0,
+            7,
+            null,
+            0,
+            0);
+
+        assertThrows(CompletionException.class, () ->
+            fixture.runtime().handleSessionRelocationRoute(
+                    PEER_B,
+                    codec.encodeSessionRelocationRoute(abort))
+                .toCompletableFuture().join());
+        var ack = codec.decodeSessionRelocationRouted(
+            fixture.runtime().handleSessionRelocationRoute(
+                    actorRef.nodeRid(),
+                    codec.encodeSessionRelocationRoute(abort))
+                .toCompletableFuture().join());
+
+        assertEquals(sealed.lastAcceptedSessionSequence(),
+            ack.lastAcceptedSessionSequence());
+        assertEquals(ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.ABORT,
+            ack.action());
     }
 
     @Test

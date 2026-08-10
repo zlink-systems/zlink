@@ -269,6 +269,24 @@ final class ZLinkActorTransferHandoffTest {
     }
 
     @Test
+    void precommitBacklogHasNoSixteenMebibyteRelocationLimit() {
+        ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
+        handoff.begin("actor");
+        try (Message payload = Message.from(new byte[17 * 1024 * 1024])) {
+            handoff.capture(
+                "actor",
+                new ZLinkStreamHeader("Large", Map.of(), Optional.empty()),
+                payload,
+                null,
+                new byte[] {1});
+        }
+
+        assertEquals(1, handoff.pendingCount("actor"));
+        handoff.finish("actor").forEach(ZLinkActorHandoffPacket::close);
+        handoff.close();
+    }
+
+    @Test
     void messageFollowNoticeClaimIsSingleUseUntilExplicitlyReleased() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
         handoff.retain(

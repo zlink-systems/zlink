@@ -205,7 +205,8 @@ public final class ZLinkUserSpotRetireRuntime {
                     adapters,
                     relocatableSpots,
                     relocatableActors,
-                    spots),
+                    spots,
+                    peerClient),
                 new ZLinkUserSpotRetireScheduler(coordinator, staging),
                     relocationClient,
                     node));

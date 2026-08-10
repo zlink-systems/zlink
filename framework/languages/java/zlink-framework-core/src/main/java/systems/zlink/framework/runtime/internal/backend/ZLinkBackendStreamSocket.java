@@ -31,13 +31,18 @@ public interface ZLinkBackendStreamSocket
     }
 
     /**
-     * Returns the last bound-Session sequence this owner handed to an Actor,
-     * or zero when it has forwarded nothing. This is the Session owner's
-     * accepted high-water reported in the command 43 seal ACK; it is the Java
-     * equivalent of the C++ `next_inbound_sequence - 1` read by
-     * `stream_session_registry_t::seal_remote_route`.
+     * Allocates the next ingress sequence owned by this physical Session.
+     * A zero result means that an alternate backend leaves allocation to the
+     * Framework Session ingress gate.
      */
-    default long boundSessionSequenceHighWater() {
+    default long allocateBoundSessionIngressSequence() {
+        return 0;
+    }
+
+    /** Returns the exact generation of the current bound-Actor route. */
+    default long boundActorBindingGeneration(
+        RoutingId sessionRid,
+        String actorId) {
         return 0;
     }
 
@@ -72,6 +77,32 @@ public interface ZLinkBackendStreamSocket
         ZLinkStreamHeader header,
         List<Message> parts,
         SendFlags flags);
+
+    /** Relays ingress with the sequence already accepted by the owner gate. */
+    default boolean relayBoundActor(
+        RoutingId sessionRid,
+        String actorId,
+        long sourceSessionSequence,
+        ZLinkStreamHeader header,
+        List<Message> parts,
+        SendFlags flags) {
+        return relayBoundActor(sessionRid, actorId, header, parts, flags);
+    }
+
+    /**
+     * Changes the physical Actor route without creating a new logical Session
+     * binding generation.
+     */
+    default CompletionStage<Void> relocateBoundActor(
+        RoutingId sessionRid,
+        String actorId,
+        long bindingGeneration,
+        ZLinkBackendActorRef targetActor,
+        Duration timeout) {
+        return unbindActor(sessionRid, actorId).submit(timeout)
+            .thenCompose(ignored -> bindActor(sessionRid, targetActor)
+                .submit(timeout));
+    }
 
     /**
      * Completes after an internal bound-Actor request has been handled by the

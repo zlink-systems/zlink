@@ -382,9 +382,15 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         var codec = new systems.zlink.framework.runtime.internal.service
             .ZLinkServiceM6BWireCodec();
         var command = codec.decodeSessionRelocationRoute(command44);
-        if (!command.targetNodeRid().equals(transportSource)) {
+        RoutingId expectedSource = command.action()
+                == systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceM6BWireCodec
+                    .SessionRelocationRouteAction.COMMIT
+            ? command.targetNodeRid()
+            : command.coordinator().nodeRid();
+        if (!expectedSource.equals(transportSource)) {
             return CompletableFuture.failedFuture(new ZLinkConfigurationException(
-                "command 44 transport source differs from target Actor owner"));
+                "command 44 transport source differs from its sender fence"));
         }
         List<SessionState> matches;
         synchronized (sessions) {

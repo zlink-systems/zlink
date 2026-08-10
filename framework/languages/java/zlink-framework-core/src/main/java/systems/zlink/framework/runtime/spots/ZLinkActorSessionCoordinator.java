@@ -234,7 +234,24 @@ final class ZLinkActorSessionCoordinator {
         Predicate<String> isLocalSpot,
         Function<LocalDispatch, CompletionStage<Optional<Message>>> localDispatch) {
         return dispatchLocalSession(
-            actorRef, header, payload, isLocalSpot, localDispatch, true);
+            actorRef, 0, header, payload, isLocalSpot, localDispatch, true);
+    }
+
+    CompletionStage<Optional<Message>> dispatchLocalSession(
+        ZLinkBackendActorRef actorRef,
+        long acceptedSessionSequence,
+        ZLinkStreamHeader header,
+        Message payload,
+        Predicate<String> isLocalSpot,
+        Function<LocalDispatch, CompletionStage<Optional<Message>>> localDispatch) {
+        return dispatchLocalSession(
+            actorRef,
+            acceptedSessionSequence,
+            header,
+            payload,
+            isLocalSpot,
+            localDispatch,
+            true);
     }
 
     CompletionStage<Optional<Message>> dispatchTransferBacklog(
@@ -281,6 +298,7 @@ final class ZLinkActorSessionCoordinator {
 
     private CompletionStage<Optional<Message>> dispatchLocalSession(
         ZLinkBackendActorRef actorRef,
+        long acceptedSessionSequence,
         ZLinkStreamHeader header,
         Message payload,
         Predicate<String> isLocalSpot,
@@ -295,13 +313,19 @@ final class ZLinkActorSessionCoordinator {
         ZLinkActor actor = localActor.get();
         if (captureMovingPacket && runtime.isMoving(actor)) {
             CompletionStage<Optional<Message>> captured =
-                runtime.captureMovingPacket(actor, header, payload);
+                runtime.captureMovingPacket(
+                    actor,
+                    header,
+                    payload,
+                    null,
+                    acceptedSessionSequence);
             if (captured != null) {
                 return captured;
             }
             return runtime.awaitMoveCompletion(actor)
                 .thenCompose(ignored -> dispatchLocalSession(
                     actorRef,
+                    acceptedSessionSequence,
                     header,
                     payload,
                     isLocalSpot,
@@ -340,7 +364,8 @@ final class ZLinkActorSessionCoordinator {
         byte[] acceptedRecord = runtime.encodeLocalSessionActorAccepted(
             actor,
             header,
-            payload);
+            payload,
+            acceptedSessionSequence);
         if (acceptedRecord.length == 0) {
             return CompletableFuture.failedFuture(
                 new ZLinkConfigurationException(

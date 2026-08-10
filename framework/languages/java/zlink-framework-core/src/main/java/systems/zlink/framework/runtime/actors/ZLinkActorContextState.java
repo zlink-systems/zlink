@@ -271,15 +271,22 @@ final class ZLinkActorContextState {
     }
 
     BoundSessionSource nextBoundSessionSource() {
+        return nextBoundSessionSource(
+            sessionSourceSequence == Long.MAX_VALUE
+                ? 0
+                : sessionSourceSequence + 1);
+    }
+
+    BoundSessionSource nextBoundSessionSource(long acceptedSessionSequence) {
         if (boundSession == null
             || boundSessionSourceNodeRid == null
             || boundSessionSourceSessionRid == null
             || sessionBindingToken <= 0
             || sessionBindingGeneration <= 0
-            || sessionSourceSequence == Long.MAX_VALUE) {
+            || acceptedSessionSequence <= sessionSourceSequence) {
             return null;
         }
-        sessionSourceSequence++;
+        sessionSourceSequence = acceptedSessionSequence;
         return new BoundSessionSource(
             boundSessionSourceNodeRid,
             boundSessionSourceSessionRid,

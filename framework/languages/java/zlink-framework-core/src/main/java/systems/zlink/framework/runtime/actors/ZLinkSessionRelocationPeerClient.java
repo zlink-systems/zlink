@@ -1,9 +1,9 @@
 package systems.zlink.framework.runtime.actors;
-import java.util.concurrent.CompletionException;
 
 import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
@@ -226,16 +226,108 @@ public final class ZLinkSessionRelocationPeerClient {
         switchRoute(
             ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
             Duration timeout) {
+        return switchRoute(command, command.lastAcceptedSessionSequence(), timeout);
+    }
+
+    /**
+     * Sends a source abort until the Session owner acknowledges the exact
+     * command-42 high-water or the caller's deadline elapses. The abort wire
+     * body deliberately carries zero, so the expected high-water must come
+     * from the matching command-43 context retained by the source.
+     */
+    public CompletionStage<ZLinkServiceM6BWireCodec.SessionRelocationRouted>
+        abortRouteUntilAck(
+            ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
+            long expectedHighWater,
+            Duration deadline) {
+        Objects.requireNonNull(command, "command");
+        Objects.requireNonNull(deadline, "deadline");
+        if (command.action()
+                != ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.ABORT
+            || expectedHighWater < 0) {
+            return CompletableFuture.failedFuture(
+                new ZLinkConfigurationException(
+                    "Session relocation abort context is invalid"));
+        }
+        byte[] command44 = codec.encodeSessionRelocationRoute(command);
+        CompletableFuture<ZLinkServiceM6BWireCodec.SessionRelocationRouted>
+            settled = new CompletableFuture<>();
+        attemptAbort(
+            command,
+            command44,
+            expectedHighWater,
+            System.nanoTime() + deadline.toNanos(),
+            settled,
+            0);
+        return settled;
+    }
+
+    private void attemptAbort(
+        ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
+        byte[] command44,
+        long expectedHighWater,
+        long deadlineNanos,
+        CompletableFuture<ZLinkServiceM6BWireCodec.SessionRelocationRouted>
+            settled,
+        int attempt) {
+        if (settled.isDone()) {
+            return;
+        }
+        long remainingNanos = deadlineNanos - System.nanoTime();
+        if (remainingNanos <= 0) {
+            settled.completeExceptionally(new ZLinkConfigurationException(
+                "Session relocation abort deadline elapsed before command 45"));
+            return;
+        }
+        Duration remaining = Duration.ofNanos(remainingNanos);
+        Duration interval = retransmitInterval(attempt);
+        Duration window =
+            remaining.compareTo(interval) < 0 ? remaining : interval;
+        long sentAt = System.nanoTime();
+        requestRoute(command, command44, expectedHighWater, window)
+            .whenComplete((ack, failure) -> {
+                if (failure == null) {
+                    settled.complete(ack);
+                    return;
+                }
+                Duration delay = interval.minusNanos(
+                    System.nanoTime() - sentAt);
+                ZLinkActorRetryScheduler.scheduleRouteAfter(
+                    () -> attemptAbort(
+                        command,
+                        command44,
+                        expectedHighWater,
+                        deadlineNanos,
+                        settled,
+                        attempt + 1),
+                    delay);
+            });
+    }
+
+    private CompletionStage<ZLinkServiceM6BWireCodec.SessionRelocationRouted>
+        switchRoute(
+            ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
+            long expectedHighWater,
+            Duration timeout) {
         Objects.requireNonNull(command, "command");
         Objects.requireNonNull(timeout, "timeout");
         byte[] command44 = codec.encodeSessionRelocationRoute(command);
+        return requestRoute(command, command44, expectedHighWater, timeout);
+    }
+
+    private CompletionStage<ZLinkServiceM6BWireCodec.SessionRelocationRouted>
+        requestRoute(
+            ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
+            byte[] command44,
+            long expectedHighWater,
+            Duration timeout) {
         return ZLinkActorRetryScheduler.retryRouteUntil(
                 timeout,
                 () -> node.requestSessionRelocationRoute(
                         command.session().nodeRid(), command44, timeout)
                     .thenApply(codec::decodeSessionRelocationRouted),
                 ZLinkSessionRelocationPeerClient::isRouteNotConnected)
-            .thenCompose(ack -> validateAck(command, ack)
+            .thenCompose(ack -> validateAck(command, expectedHighWater, ack)
                 ? CompletableFuture.completedFuture(ack)
                 : CompletableFuture.failedFuture(
                     new ZLinkConfigurationException(
@@ -262,19 +354,27 @@ public final class ZLinkSessionRelocationPeerClient {
 
     private static boolean validateAck(
         ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
+        long expectedHighWater,
         ZLinkServiceM6BWireCodec.SessionRelocationRouted ack) {
-        return ack.relocation().equals(command.relocation())
+        boolean exactCommand = ack.relocation().equals(command.relocation())
             && ack.coordinator().equals(command.coordinator())
             && ack.actor().equals(command.actor())
             && ack.session().equals(command.session())
-            && ack.action() == command.action()
-            //  `result` is the owner's answer, not an echo of the request, so
-            //  it is deliberately not compared: spec 20 §5 stops the
-            //  retransmission on any of the four results.
-            && ack.currentAuthorityOwnerGeneration()
-                == command.currentAuthorityOwnerGeneration()
-            && ack.lastAcceptedSessionSequence()
-                == command.lastAcceptedSessionSequence();
+            && ack.action() == command.action();
+        if (!exactCommand) {
+            return false;
+        }
+        //  A refusal reports the owner's current state rather than echoing the
+        //  requested fence. Its identity and action still close this exact
+        //  retransmission, while only a successful result can prove that the
+        //  requested authority and accepted high-water were applied.
+        return switch (ack.result()) {
+            case APPLIED, ALREADY_APPLIED ->
+                ack.currentAuthorityOwnerGeneration()
+                    == command.currentAuthorityOwnerGeneration()
+                && ack.lastAcceptedSessionSequence() == expectedHighWater;
+            case STALE, SESSION_OR_BINDING_CLOSED -> true;
+        };
     }
 
 }

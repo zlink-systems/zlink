@@ -300,6 +300,26 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         ZLinkStreamHeader streamHeader,
         List<Message> parts,
         SendFlags flags) {
+        return relayBoundActor(
+            sessionRid,
+            actorId,
+            allocateBoundSessionSequence(),
+            streamHeader,
+            parts,
+            flags);
+    }
+
+    @Override public boolean relayBoundActor(
+        RoutingId sessionRid,
+        String actorId,
+        long sourceSessionSequence,
+        ZLinkStreamHeader streamHeader,
+        List<Message> parts,
+        SendFlags flags) {
+        if (sourceSessionSequence <= 0) {
+            throw new IllegalArgumentException(
+                "bound Session ingress sequence must be positive");
+        }
         Message header = Message.from(ZLinkStreamHeaderCodec.encode(streamHeader));
         try {
             SessionBinding binding =
@@ -308,7 +328,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                 binding.actor(),
                 sessionRid,
                 binding.generation(),
-                allocateBoundSessionSequence(),
+                sourceSessionSequence,
                 this,
                 streamHeader,
                 prepend(header, parts));
@@ -503,13 +523,108 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         return (ZLinkJavaRawSpotNode) meshNode.spotNode();
     }
 
-    @Override public long boundSessionSequenceHighWater() {
-        return nextBoundSessionSequence.get() - 1;
+    @Override public long allocateBoundSessionIngressSequence() {
+        return allocateBoundSessionSequence();
+    }
+
+    @Override public long boundActorBindingGeneration(
+        RoutingId sessionRid,
+        String actorId) {
+        return requireBinding(sessionRid, actorId).generation();
+    }
+
+    @Override public CompletionStage<Void> relocateBoundActor(
+        RoutingId sessionRid,
+        String actorId,
+        long bindingGeneration,
+        ZLinkBackendActorRef targetActor,
+        Duration timeout) {
+        if (targetActor == null
+            || !actorId.equals(targetActor.actorId())
+            || bindingGeneration <= 0) {
+            return CompletableFuture.failedFuture(
+                new IllegalArgumentException(
+                    "exact bound Session relocation fence is required"));
+        }
+        BindingKey key = new BindingKey(sessionRid, actorId);
+        final SessionBinding source;
+        try {
+            source = requireBinding(sessionRid, actorId);
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+        if (source.generation() != bindingGeneration) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException(
+                    "bound Session relocation binding generation is stale"));
+        }
+        SessionBinding target = new SessionBinding(
+            targetActor,
+            bindingGeneration);
+        CompletionStage<Void> unbound = unbindBinding(
+            sessionRid,
+            source,
+            timeout);
+        CompletionStage<Void> prepared = unbound.thenCompose(ignored ->
+            bindExactSessionRoute(
+                sessionRid,
+                targetActor,
+                bindingGeneration,
+                timeout));
+        return prepared.handle((ignored, failure) -> {
+            if (failure != null) {
+                return bindExactSessionRoute(
+                        sessionRid,
+                        source.actor(),
+                        bindingGeneration,
+                        timeout)
+                    .handle((restored, restoreFailure) -> {
+                        Throwable cause = unwrapFailure(failure);
+                        if (restoreFailure != null) {
+                            cause.addSuppressed(unwrapFailure(restoreFailure));
+                        }
+                        return CompletableFuture.<Void>failedFuture(cause);
+                    }).thenCompose(stage -> stage);
+            }
+            return CompletableFuture.completedFuture(null);
+        }).thenCompose(stage -> stage)
+            .thenRun(() -> {
+                if (!bindings.replace(key, source, target)) {
+                    throw new IllegalStateException(
+                        "bound Session route changed during relocation");
+                }
+            });
+    }
+
+    private CompletionStage<Void> bindExactSessionRoute(
+        RoutingId sessionRid,
+        ZLinkBackendActorRef actor,
+        long bindingGeneration,
+        Duration timeout) {
+        return boundSessionLifecycle == null
+            ? rawSpotNode().bindStreamSession(
+                sessionRid,
+                actor,
+                bindingGeneration,
+                this,
+                timeout)
+            : boundSessionLifecycle.bind(
+                sessionRid,
+                actor,
+                bindingGeneration,
+                timeout);
     }
 
     private long allocateBoundSessionSequence() {
-        return nextBoundSessionSequence.getAndUpdate(
-            current -> current == Long.MAX_VALUE ? 1 : current + 1);
+        long sequence = nextBoundSessionSequence.getAndUpdate(
+            current -> current >= Long.MAX_VALUE - 1
+                ? Long.MAX_VALUE
+                : current + 1);
+        if (sequence <= 0 || sequence == Long.MAX_VALUE) {
+            throw new IllegalStateException(
+                "bound Session ingress sequence is exhausted");
+        }
+        return sequence;
     }
 
     private long allocateBoundSessionRequestSequence() {

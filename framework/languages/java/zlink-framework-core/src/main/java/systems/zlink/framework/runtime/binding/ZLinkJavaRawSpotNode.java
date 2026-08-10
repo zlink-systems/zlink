@@ -143,6 +143,21 @@ final class ZLinkJavaRawSpotNode
     }
 
     @Override
+    public long localNodeGeneration() {
+        return ownerLifecycleGeneration();
+    }
+
+    @Override
+    public String localAuthorityOwnerId() {
+        return owner.localAuthorityOwnerId();
+    }
+
+    @Override
+    public long actorNodeGeneration(ZLinkBackendActorRef actor) {
+        return owner.nodeLifecycleGeneration(actor.nodeRid());
+    }
+
+    @Override
     public void setRoutingId(RoutingId routingId) {
         owner.setRoutingId(routingId);
     }
@@ -1271,14 +1286,16 @@ final class ZLinkJavaRawSpotNode
             authorityOwnerGeneration);
     }
 
-    long actorAuthorityOwnerGeneration(ZLinkBackendActorRef actor) {
+    @Override
+    public long actorAuthorityOwnerGeneration(ZLinkBackendActorRef actor) {
         AuthorityFence fence = actorAuthorities.get(
             new ActorAuthorityKey(
                 actor.nodeRid(), actor.actorId(), actor.generation()));
         return fence == null ? 0L : fence.authorityOwnerGeneration();
     }
 
-    long actorAuthorityOwnerLeaseGeneration(
+    @Override
+    public long actorAuthorityOwnerLeaseGeneration(
         ZLinkBackendActorRef actor) {
         AuthorityFence fence = actorAuthorities.get(
             new ActorAuthorityKey(

@@ -269,8 +269,8 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         if (!source.tryAcquire(payloadBytes)) {
             return CompletableFuture.failedFuture(
                 new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
-                    "committed Message Follow route queue exceeds 1024 messages"));
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "committed Message Follow payload size is invalid"));
         }
         MessageFollowQueueSnapshot queueSnapshot = source.queueSnapshot();
         CompletionStage<T> submitted;

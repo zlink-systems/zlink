@@ -1292,6 +1292,17 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             : current.lifecycleGeneration();
     }
 
+    long nodeLifecycleGeneration(RoutingId nodeRid) {
+        if (routingId().equals(nodeRid)) {
+            return lifecycleGeneration();
+        }
+        return topology == null
+            ? 0L
+            : topology.peer(nodeRid)
+                .map(peer -> peer.descriptor().lifecycleGeneration())
+                .orElse(0L);
+    }
+
     boolean sendNode(
         RoutingId target,
         byte[] metadata,

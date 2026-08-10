@@ -8,6 +8,8 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.backend.*;
 
 import java.time.Duration;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -19,6 +21,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.function.LongFunction;
 import java.util.logging.Logger;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
@@ -26,6 +29,7 @@ import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.streams.ZLinkSessionActor;
 import systems.zlink.framework.streams.ZLinkSessionActors;
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
@@ -63,9 +67,17 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     //  still in flight when its route reached a terminal.
     private static final int SPENT_SEAL_TERMINAL_RETENTION = 64;
     private final java.util.LinkedHashMap<
-        ZLinkServiceM6BWireCodec.RelocationIdentity, SealTerminal>
+        SessionRelocationKey, SealTerminal>
         sealTerminals = new java.util.LinkedHashMap<>();
+    private final java.util.LinkedHashMap<
+        SessionRelocationKey, RouteTerminal>
+        routeTerminals = new java.util.LinkedHashMap<>();
+    private final java.util.HashMap<SessionRelocationKey, RouteFlight>
+        routeFlights = new java.util.HashMap<>();
     private final AtomicLong bindingGenerations = new AtomicLong();
+    private final java.util.HashMap<String, IngressGate> ingressGates =
+        new java.util.HashMap<>();
+    private long nextFallbackIngressSequence = 1;
     private ZLinkRelayMetadataPolicy metadataPolicy = ZLinkRelayMetadataPolicy.EMPTY;
 
     public ZLinkSessionActorsRuntime metadataPolicy(
@@ -80,8 +92,15 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     public interface LocalActorDispatcher {
         CompletionStage<Optional<Message>> dispatch(
             ZLinkBackendActorRef actor,
+            long sourceSessionSequence,
             ZLinkStreamHeader header,
             Message payload);
+    }
+
+    @FunctionalInterface
+    interface IngressAdmission {
+        CompletionStage<Void> submit(
+            LongFunction<CompletionStage<Void>> operation);
     }
 
     public static void enterRelayDispatch(ZLinkStreamHeader header) {
@@ -296,6 +315,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     + " actorId=" + ref.actorId()
                     + " generation=" + ref.generation());
                 AtomicReference<ZLinkBoundActor> binding = new AtomicReference<>();
+                long bindingGeneration = currentBindingGeneration(ref.actorId());
                 ZLinkBoundActor actor = new ZLinkBoundActor(
                     stream,
                     sessionRid,
@@ -305,6 +325,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     actors,
                     serializer,
                     0,
+                    bindingGeneration,
                     routeReady,
                     null,
                     true,
@@ -312,6 +333,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     RELAY_HEADERS,
                     flow,
                     () -> isCurrentBinding(binding.get()),
+                    operation -> admitIngress(binding.get(), operation),
                     metadataPolicy);
                 binding.set(actor);
                 actor.setUnbindListener(() -> removeBinding(actor));
@@ -356,6 +378,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                         stream, sessionRid, ref, RELAY_SUBMIT_TIMEOUT))
                 : CompletableFuture.completedFuture(null);
             return nativeBinding.thenApply(ignored -> {
+                long bindingGeneration = currentBindingGeneration(ref.actorId());
                 ZLinkBoundSessionRuntime boundSession =
                     new ZLinkBoundSessionRuntime(
                         stream,
@@ -376,7 +399,9 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     actor,
                     boundSession,
                     sourceNodeRid,
-                    sourceSessionRid);
+                    sourceSessionRid,
+                    bindingGeneration,
+                    0);
                 boundSession.setBindingToken(bindingToken);
                 AtomicReference<ZLinkBoundActor> binding = new AtomicReference<>();
                 ZLinkBoundActor boundActor = new ZLinkBoundActor(
@@ -388,6 +413,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     actors,
                     serializer,
                     bindingToken,
+                    bindingGeneration,
                     routeReady,
                     localActorDispatcher,
                     nativeSessionRelayAttached,
@@ -395,6 +421,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     RELAY_HEADERS,
                     flow,
                     () -> isCurrentBinding(binding.get()),
+                    operation -> admitIngress(binding.get(), operation),
                     metadataPolicy);
                 binding.set(boundActor);
                 boundSession.setUnbindListener(() -> removeBinding(boundActor));
@@ -465,30 +492,245 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         });
     }
 
+    private long currentBindingGeneration(String actorId) {
+        long generation = nativeSessionRelayAttached
+            ? stream.boundActorBindingGeneration(sessionRid, actorId)
+            : 0;
+        if (generation > 0) {
+            return generation;
+        }
+        generation = bindingGenerations.incrementAndGet();
+        if (generation <= 0) {
+            throw new ZLinkConfigurationException(
+                "Session binding generation is exhausted");
+        }
+        return generation;
+    }
+
     private ZLinkBoundActor installBinding(ZLinkBoundActor actor) {
         bound.add(actor);
         ActorRef current = actor.ref();
-        bindingRoutes.put(actor.actorId(), new StoredBindingRoute(
-            current.actorId(),
-            current.objectGeneration(),
-            current.meshName(),
-            current.nodeRid(),
-            0,
-            0,
-            0,
-            bindingGenerations.incrementAndGet(),
-            0));
+        ZLinkBackendActorRef backendRef = new ZLinkBackendActorRef(
+            current.nodeRid(), current.actorId(), current.objectGeneration());
+        long nodeGeneration = spotNode == null
+            ? 0L
+            : spotNode.actorNodeGeneration(backendRef);
+        long authorityGeneration = spotNode == null
+            ? 0L
+            : spotNode.actorAuthorityOwnerGeneration(backendRef);
+        long ownerLeaseGeneration = spotNode == null
+            ? 0L
+            : spotNode.actorAuthorityOwnerLeaseGeneration(backendRef);
+        long bindingGeneration = actor.bindingGeneration();
+        List<HeldIngress> abandoned = List.of();
+        SealTerminal abandonedSeal = null;
+        synchronized (sealTerminals) {
+            bindingRoutes.put(actor.actorId(), new StoredBindingRoute(
+                current.actorId(),
+                current.objectGeneration(),
+                current.meshName(),
+                current.nodeRid(),
+                nodeGeneration,
+                authorityGeneration,
+                ownerLeaseGeneration,
+                bindingGeneration,
+                0));
+            IngressGate previous = ingressGates.put(
+                actor.actorId(), new IngressGate(
+                    current.objectGeneration(), bindingGeneration));
+            if (previous != null) {
+                abandoned = previous.detachHeld();
+                if (previous.seal != null) {
+                    SessionRelocationKey previousKey =
+                        new SessionRelocationKey(
+                            previous.seal,
+                            actor.actorId(),
+                            previous.objectGeneration,
+                            sessionRid,
+                            previous.bindingGeneration);
+                    SealTerminal terminal = sealTerminals.get(previousKey);
+                    if (terminal != null && !terminal.consumed()) {
+                        terminal.consume();
+                        abandonedSeal = terminal;
+                    }
+                }
+            }
+        }
+        failHeld(abandoned, new ZLinkConfigurationException(
+            "Session binding changed while relocation ingress was held: "
+                + actor.actorId()));
+        if (abandonedSeal != null) {
+            abandonedSeal.fail(new ZLinkConfigurationException(
+                "Session binding changed before relocation seal drained: "
+                    + actor.actorId()));
+        }
         return actor;
     }
 
     private void removeBinding(ZLinkSessionActor actor) {
         if (bound.remove(actor)) {
-            bindingRoutes.computeIfPresent(actor.actorId(),
-                (ignored, route) -> bound.stream().anyMatch(
-                    candidate -> candidate.actorId().equals(actor.actorId()))
-                        ? route
-                        : null);
+            List<HeldIngress> abandoned = List.of();
+            SealTerminal abandonedSeal = null;
+            synchronized (sealTerminals) {
+                boolean replacementExists = bound.stream().anyMatch(
+                    candidate -> candidate.actorId().equals(actor.actorId()));
+                if (!replacementExists) {
+                    bindingRoutes.remove(actor.actorId());
+                    IngressGate removed = ingressGates.remove(actor.actorId());
+                    if (removed != null) {
+                        abandoned = removed.detachHeld();
+                        if (removed.seal != null) {
+                            SealTerminal terminal = sealTerminals.get(
+                                new SessionRelocationKey(
+                                    removed.seal,
+                                    actor.actorId(),
+                                    removed.objectGeneration,
+                                    sessionRid,
+                                    removed.bindingGeneration));
+                            if (terminal != null && !terminal.consumed()) {
+                                terminal.consume();
+                                abandonedSeal = terminal;
+                            }
+                        }
+                    }
+                }
+            }
+            failHeld(abandoned, new ZLinkConfigurationException(
+                "bound Actor was removed while relocation ingress was held: "
+                    + actor.actorId()));
+            if (abandonedSeal != null) {
+                abandonedSeal.fail(new ZLinkConfigurationException(
+                    "bound Actor was removed before relocation seal drained: "
+                        + actor.actorId()));
+            }
         }
+    }
+
+    /**
+     * Accepts one Session-to-Actor ingress record or holds it behind the
+     * relocation seal. This method and command 42 use {@link #sealTerminals}
+     * as their shared linearization lock, so the ACK high-water cannot race a
+     * post-seal relay into the captured prefix.
+     */
+    private CompletionStage<Void> admitIngress(
+        ZLinkBoundActor actor,
+        LongFunction<CompletionStage<Void>> operation) {
+        Objects.requireNonNull(operation, "operation");
+        CompletableFuture<Void> held = null;
+        IngressGate admittedGate = null;
+        long acceptedSequence = 0;
+        synchronized (sealTerminals) {
+            if (!isCurrentBinding(actor)) {
+                return CompletableFuture.failedFuture(
+                    new ZLinkConfigurationException(
+                        "bound Actor is no longer the current Session binding: "
+                            + actor.actorId()));
+            }
+            StoredBindingRoute route = bindingRoutes.get(actor.actorId());
+            IngressGate gate = ingressGates.get(actor.actorId());
+            if (route == null || gate == null
+                || gate.objectGeneration != route.objectGeneration()
+                || gate.bindingGeneration != route.bindingGeneration()) {
+                return CompletableFuture.failedFuture(
+                    new ZLinkConfigurationException(
+                        "Session ingress binding state is unavailable: "
+                            + actor.actorId()));
+            }
+            if (gate.seal != null) {
+                held = new CompletableFuture<>();
+                gate.held.addLast(new HeldIngress(actor, operation, held));
+            } else {
+                long accepted = allocateIngressSequence(gate);
+                gate.activeIngress++;
+                admittedGate = gate;
+                acceptedSequence = accepted;
+                bindingRoutes.put(actor.actorId(), route.withAcceptedHighWater(
+                    accepted));
+            }
+        }
+        if (held != null) {
+            return held;
+        }
+        IngressGate completionGate = admittedGate;
+        return invokeIngress(operation, acceptedSequence)
+            .whenComplete((ignored, failure) ->
+                completeIngress(actor, completionGate));
+    }
+
+    private long allocateIngressSequence(IngressGate gate) {
+        long sequence = stream.allocateBoundSessionIngressSequence();
+        if (sequence == 0) {
+            if (nextFallbackIngressSequence <= 0
+                || nextFallbackIngressSequence == Long.MAX_VALUE) {
+                throw new ZLinkConfigurationException(
+                    "Session ingress sequence is exhausted");
+            }
+            sequence = nextFallbackIngressSequence++;
+        }
+        return gate.accept(sequence);
+    }
+
+    private void completeIngress(
+        ZLinkBoundActor actor,
+        IngressGate admittedGate) {
+        SealTerminal drained = null;
+        synchronized (sealTerminals) {
+            if (ingressGates.get(actor.actorId()) == admittedGate
+                && admittedGate.activeIngress > 0) {
+                admittedGate.activeIngress--;
+                if (admittedGate.activeIngress == 0
+                    && admittedGate.seal != null) {
+                    SealTerminal terminal = sealTerminals.get(
+                        new SessionRelocationKey(
+                            admittedGate.seal,
+                            actor.actorId(),
+                            admittedGate.objectGeneration,
+                            sessionRid,
+                            admittedGate.bindingGeneration));
+                    if (terminal != null
+                        && !terminal.completion().isDone()
+                        && !terminal.consumed()) {
+                        drained = terminal;
+                    }
+                }
+            }
+        }
+        if (drained != null) {
+            drained.completeSealed();
+        }
+    }
+
+    private static CompletionStage<Void> invokeIngress(
+        LongFunction<CompletionStage<Void>> operation,
+        long sourceSessionSequence) {
+        try {
+            return Objects.requireNonNull(operation.apply(sourceSessionSequence),
+                "Session ingress operation stage");
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+    }
+
+    private void resumeHeld(List<HeldIngress> held) {
+        CompletionStage<Void> tail = CompletableFuture.completedFuture(null);
+        for (HeldIngress pending : held) {
+            tail = tail.handle((ignored, failure) -> null)
+                .thenComposeAsync(ignored ->
+                    admitIngress(pending.actor(), pending.operation()))
+                .whenComplete((ignored, failure) -> {
+                    if (failure == null) {
+                        pending.result().complete(null);
+                    } else {
+                        pending.result().completeExceptionally(failure);
+                    }
+                });
+        }
+    }
+
+    private static void failHeld(
+        List<HeldIngress> held,
+        RuntimeException failure) {
+        held.forEach(pending -> pending.result().completeExceptionally(failure));
     }
 
     /**
@@ -499,71 +741,149 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     CompletionStage<Void> applyRelocationRouteUpdate(
         RelocationRouteUpdate update) {
         Objects.requireNonNull(update, "update");
-        StoredBindingRoute observed = bindingRoutes.get(update.actorId());
-        if (observed == null || !observed.matchesSource(update)) {
-            return CompletableFuture.failedFuture(new ZLinkConfigurationException(
-                "stored binding route does not match relocation source: "
-                    + update.actorId()
-                    + (observed == null
-                        ? " observed=none"
-                        : " observedNode=" + observed.nodeRid()
-                            + " observedAuthority="
-                            + observed.authorityOwnerGeneration()
-                            + " observedBinding=" + observed.bindingGeneration()
-                            + " observedSeq="
-                            + observed.lastAcceptedSessionSequence()
-                            + " sourceNode=" + update.sourceNodeRid()
-                            + " sourceAuthority="
-                            + update.sourceAuthorityOwnerGeneration()
-                            + " updateBinding=" + update.bindingGeneration()
-                            + " updateSeq="
-                            + update.lastAcceptedSessionSequence())));
-        }
+        final StoredBindingRoute observed;
+        final ZLinkBoundActor actor;
+        final TargetAuthorityFence targetFence;
         ZLinkBackendActorRef target = new ZLinkBackendActorRef(
             update.targetNodeRid(),
             update.actorId(),
             update.objectGeneration());
-        if (spotNode != null) {
-            spotNode.rememberActorAuthority(
+        synchronized (sealTerminals) {
+            observed = bindingRoutes.get(update.actorId());
+            if (observed == null || !observed.matchesSource(update)) {
+                return CompletableFuture.failedFuture(
+                    staleRouteUpdate(update, observed));
+            }
+            actor = currentBoundActor(update.actorId());
+            targetFence = liveTargetFence(
                 target,
+                update.targetNodeGeneration(),
                 update.targetAuthorityOwnerGeneration(),
-                spotNode.localAuthorityLeaseGeneration());
-        }
-        return awaitRouteReady(target).thenCompose(ignored -> {
-            ZLinkBoundActor actor;
-            synchronized (this) {
-                StoredBindingRoute current = bindingRoutes.get(
-                    update.actorId());
-                if (current == null || !current.matchesSource(update)) {
-                    throw new ZLinkConfigurationException(
-                        "stored binding route changed before relocation ACK: "
-                            + update.actorId());
-                }
-                actor = bound.stream()
-                    .filter(candidate -> candidate.actorId().equals(
-                        update.actorId()))
-                    .map(ZLinkBoundActor.class::cast)
-                    .findFirst()
-                    .orElseThrow(() -> new ZLinkConfigurationException(
-                        "bound Actor disappeared before relocation ACK: "
+                observed).orElse(null);
+            if (targetFence == null) {
+                return CompletableFuture.failedFuture(
+                    new ZLinkConfigurationException(
+                        "target Actor authority is unavailable or stale: "
                             + update.actorId()));
             }
-            return actor.rebindNativeActorRoute(target, RELAY_SUBMIT_TIMEOUT)
-                .thenRun(() -> {
-                    synchronized (this) {
-                        StoredBindingRoute current = bindingRoutes.get(
-                            update.actorId());
-                        if (current == null || !current.matchesSource(update)) {
-                            throw new ZLinkConfigurationException(
-                                "stored binding route changed before relocation ACK: "
-                                    + update.actorId());
-                        }
+        }
+        ZLinkBackendActorRef source = new ZLinkBackendActorRef(
+            observed.nodeRid(), observed.actorId(), observed.objectGeneration());
+        return actor.prepareNativeActorRoute(target, RELAY_SUBMIT_TIMEOUT)
+            .exceptionallyCompose(failure -> compensateRoute(
+                actor, source, unwrapRouteFailure(failure)))
+            .thenCompose(ignored -> {
+                boolean changed;
+                synchronized (sealTerminals) {
+                    StoredBindingRoute current = bindingRoutes.get(
+                        update.actorId());
+                    changed = current != observed
+                        || !current.matchesSource(update)
+                        || !targetFence.equals(liveTargetFence(
+                            target,
+                            update.targetNodeGeneration(),
+                            update.targetAuthorityOwnerGeneration(),
+                            current).orElse(null));
+                    if (!changed) {
+                        actor.commitPreparedNativeActorRoute(target);
                         bindingRoutes.put(
                             update.actorId(),
-                            current.toTarget(update));
+                            current.toTarget(update, targetFence));
                     }
-                });
-        });
+                }
+                if (changed) {
+                    return compensateRoute(actor, source,
+                        new ZLinkConfigurationException(
+                            "stored binding route changed during native preparation: "
+                                + update.actorId()));
+                }
+                return CompletableFuture.completedFuture(null);
+            });
+    }
+
+    private ZLinkConfigurationException staleRouteUpdate(
+        RelocationRouteUpdate update,
+        StoredBindingRoute observed) {
+        return new ZLinkConfigurationException(
+            "stored binding route does not match relocation source: "
+                + update.actorId()
+                + (observed == null
+                    ? " observed=none"
+                    : " observedNode=" + observed.nodeRid()
+                        + " observedAuthority="
+                        + observed.authorityOwnerGeneration()
+                        + " observedBinding=" + observed.bindingGeneration()
+                        + " observedSeq="
+                        + observed.lastAcceptedSessionSequence()
+                        + " sourceNode=" + update.sourceNodeRid()
+                        + " sourceAuthority="
+                        + update.sourceAuthorityOwnerGeneration()
+                        + " updateBinding=" + update.bindingGeneration()
+                        + " updateSeq="
+                        + update.lastAcceptedSessionSequence()));
+    }
+
+    private ZLinkBoundActor currentBoundActor(String actorId) {
+        return bound.stream()
+            .filter(candidate -> candidate.actorId().equals(actorId))
+            .map(ZLinkBoundActor.class::cast)
+            .findFirst()
+            .orElseThrow(() -> new ZLinkConfigurationException(
+                "bound Actor is unavailable: " + actorId));
+    }
+
+    private Optional<TargetAuthorityFence> liveTargetFence(
+        ZLinkBackendActorRef target,
+        long expectedNodeGeneration,
+        long expectedAuthorityGeneration,
+        StoredBindingRoute source) {
+        if (spotNode == null) {
+            long lease = source.ownerLeaseGeneration() > 0
+                ? source.ownerLeaseGeneration()
+                : 1;
+            return Optional.of(new TargetAuthorityFence(
+                expectedNodeGeneration,
+                expectedAuthorityGeneration,
+                lease));
+        }
+        long nodeGeneration = spotNode.actorNodeGeneration(target);
+        long authorityGeneration =
+            spotNode.actorAuthorityOwnerGeneration(target);
+        long ownerLeaseGeneration =
+            spotNode.actorAuthorityOwnerLeaseGeneration(target);
+        if (nodeGeneration <= 0
+            || authorityGeneration <= 0
+            || ownerLeaseGeneration <= 0
+            || nodeGeneration != expectedNodeGeneration
+            || authorityGeneration != expectedAuthorityGeneration) {
+            return Optional.empty();
+        }
+        return Optional.of(new TargetAuthorityFence(
+            nodeGeneration,
+            authorityGeneration,
+            ownerLeaseGeneration));
+    }
+
+    private CompletionStage<Void> compensateRoute(
+        ZLinkBoundActor actor,
+        ZLinkBackendActorRef source,
+        Throwable failure) {
+        return actor.compensatePreparedNativeActorRoute(
+                source,
+                RELAY_SUBMIT_TIMEOUT)
+            .handle((ignored, compensationFailure) -> {
+                Throwable cause = failure;
+                if (compensationFailure != null) {
+                    cause.addSuppressed(compensationFailure);
+                }
+                throw new CompletionException(cause);
+            });
+    }
+
+    private record TargetAuthorityFence(
+        long nodeGeneration,
+        long authorityOwnerGeneration,
+        long ownerLeaseGeneration) {
     }
 
     /**
@@ -589,16 +909,21 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             return CompletableFuture.failedFuture(new ZLinkConfigurationException(
                 "Session relocation seal command does not target this Session"));
         }
+        long highWater;
+        ZLinkServiceM6BWireCodec.SessionRelocationSealed sealed;
+        SealTerminal installed;
         synchronized (sealTerminals) {
-            SealTerminal cached = sealTerminals.get(command.relocation());
+            SessionRelocationKey key = relocationKey(command);
+            SealTerminal cached = sealTerminals.get(key);
             if (cached != null) {
                 if (!cached.seal().equals(command)) {
                     return CompletableFuture.failedFuture(
                         new ZLinkConfigurationException(
+                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                             "Session relocation seal conflicts with the "
                                 + "recorded seal for this relocation"));
                 }
-                return CompletableFuture.completedFuture(cached.sealed());
+                return cached.completion();
             }
             if (sealTerminals.size() >= SEAL_TERMINAL_CAPACITY
                 && !evictOneSealTerminal()) {
@@ -606,55 +931,53 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     new ZLinkConfigurationException(
                         "Session relocation seal terminal store is full"));
             }
-        }
-        StoredBindingRoute observed =
-            bindingRoutes.get(command.actor().actor().actorId());
-        if (!sealFenceMatches(command, observed)) {
-            LOGGER.warning("[zlink-java-stream-trace] session-seal stale-fence"
-                + " refused actor=" + command.actor().actor().actorId()
-                + " commandBinding=" + command.session().bindingGeneration()
-                + " commandGeneration=" + command.actor().actor().generation()
-                + " commandNode=" + command.actor().actor().nodeRid()
-                + " commandAuthority=" + command.actor().authorityOwnerGeneration()
-                + (observed == null
-                    ? " observed=none"
-                    : " observedBinding=" + observed.bindingGeneration()
-                        + " observedGeneration=" + observed.objectGeneration()
-                        + " observedNode=" + observed.nodeRid()
-                        + " observedAuthority="
-                        + observed.authorityOwnerGeneration()));
-            return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                    "Session relocation seal fence differs from the current "
-                        + "binding: " + command.actor().actor().actorId()));
-        }
-        long highWater = stream == null
-            ? 0
-            : stream.boundSessionSequenceHighWater();
-        ZLinkServiceM6BWireCodec.SessionRelocationSealed sealed =
-            new ZLinkServiceM6BWireCodec.SessionRelocationSealed(
+            StoredBindingRoute observed =
+                bindingRoutes.get(command.actor().actor().actorId());
+            IngressGate gate = ingressGates.get(
+                command.actor().actor().actorId());
+            if (!sealFenceMatches(command, observed)
+                || gate == null
+                || gate.objectGeneration != command.actor().actor().generation()
+                || gate.bindingGeneration
+                    != command.session().bindingGeneration()) {
+                LOGGER.warning("[zlink-java-stream-trace] session-seal stale-fence"
+                    + " refused actor=" + command.actor().actor().actorId()
+                    + " commandBinding=" + command.session().bindingGeneration()
+                    + " commandGeneration=" + command.actor().actor().generation()
+                    + " commandNode=" + command.actor().actor().nodeRid()
+                    + " commandAuthority="
+                    + command.actor().authorityOwnerGeneration()
+                    + (observed == null
+                        ? " observed=none"
+                        : " observedBinding=" + observed.bindingGeneration()
+                            + " observedGeneration=" + observed.objectGeneration()
+                            + " observedNode=" + observed.nodeRid()
+                            + " observedAuthority="
+                            + observed.authorityOwnerGeneration()));
+                return CompletableFuture.failedFuture(
+                    new ZLinkConfigurationException(
+                        "Session relocation seal fence differs from the current "
+                            + "binding: " + command.actor().actor().actorId()));
+            }
+            if (gate.seal != null) {
+                return CompletableFuture.failedFuture(
+                    new ZLinkConfigurationException(
+                        ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                        "Session binding is already sealed by another relocation: "
+                            + command.actor().actor().actorId()));
+            }
+            observed = observed.withSealFence(command.actor());
+            bindingRoutes.put(command.actor().actor().actorId(), observed);
+            highWater = gate.acceptedHighWater;
+            sealed = new ZLinkServiceM6BWireCodec.SessionRelocationSealed(
                 command.relocation(),
                 command.coordinator(),
                 command.actor(),
                 command.session(),
                 highWater);
-        synchronized (sealTerminals) {
-            SealTerminal stored = sealTerminals.get(command.relocation());
-            if (stored != null) {
-                //  A concurrent identical seal already recorded a terminal.
-                //  C++ aborts the barrier it just took and refuses when the
-                //  stored record differs; an identical record is idempotent.
-                if (!stored.seal().equals(command)
-                    || !stored.sealed().equals(sealed)) {
-                    return CompletableFuture.failedFuture(
-                        new ZLinkConfigurationException(
-                            "Session relocation seal raced a conflicting seal"));
-                }
-                return CompletableFuture.completedFuture(stored.sealed());
-            }
-            sealTerminals.put(
-                command.relocation(),
-                new SealTerminal(command, sealed, false));
+            gate.seal = command.relocation();
+            installed = new SealTerminal(command, sealed);
+            sealTerminals.put(key, installed);
             pruneSpentSealTerminals();
         }
         if (STREAM_TRACE) {
@@ -663,33 +986,73 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 + " binding=" + command.session().bindingGeneration()
                 + " highWater=" + highWater);
         }
-        return CompletableFuture.completedFuture(sealed);
+        if (ingressDrained(command)) {
+            installed.completeSealed();
+        }
+        return installed.completion();
     }
 
-    //  Mirrors the binding checks in `seal_remote_route`
-    //  (stream_session_registry.cpp:330-386), restricted to the fences this
-    //  owner actually records: binding generation, ObjectGeneration, the
-    //  Actor owner node RID, and the AuthorityOwnerGeneration. The node
-    //  lifecycle and owner-lease generations that C++ also compares are not
-    //  part of a Java stored binding route (`installBinding` seeds them zero
-    //  and only a route update ever fills the node generation), so comparing
-    //  them would refuse the first seal on every binding. Generations this
-    //  owner has never learned are stored as zero, so a zero is treated as
-    //  "not yet recorded" exactly as `matchesSource` does.
-    private static boolean sealFenceMatches(
+    private boolean ingressDrained(
+        ZLinkServiceM6BWireCodec.SessionRelocationSeal command) {
+        synchronized (sealTerminals) {
+            IngressGate gate = ingressGates.get(
+                command.actor().actor().actorId());
+            return gate != null
+                && command.relocation().equals(gate.seal)
+                && gate.activeIngress == 0;
+        }
+    }
+
+    //  Production bindings compare the full Actor and Session owner fences
+    //  against the raw SpotNode's current node, authority, and lease view.
+    //  Constructors without a SpotNode exist for isolated backend tests; in
+    //  that case command 42 pins the previously unknown generations before
+    //  the ingress gate becomes sealed.
+    private boolean sealFenceMatches(
         ZLinkServiceM6BWireCodec.SessionRelocationSeal command,
         StoredBindingRoute observed) {
         if (observed == null) {
             return false;
         }
         var actor = command.actor();
-        return observed.bindingGeneration()
+        boolean storedRouteMatches = observed.bindingGeneration()
                 == command.session().bindingGeneration()
             && observed.objectGeneration() == actor.actor().generation()
             && observed.nodeRid().equals(actor.actor().nodeRid())
             && (observed.authorityOwnerGeneration() == 0
                 || observed.authorityOwnerGeneration()
-                    == actor.authorityOwnerGeneration());
+                    == actor.authorityOwnerGeneration())
+            && (observed.nodeGeneration() == 0
+                || observed.nodeGeneration() == actor.targetNodeGeneration())
+            && (observed.ownerLeaseGeneration() == 0
+                || observed.ownerLeaseGeneration()
+                    == actor.ownerLeaseGeneration());
+        if (!storedRouteMatches || spotNode == null) {
+            return storedRouteMatches;
+        }
+        long actorNodeGeneration = spotNode.actorNodeGeneration(actor.actor());
+        long actorAuthority =
+            spotNode.actorAuthorityOwnerGeneration(actor.actor());
+        long actorLease =
+            spotNode.actorAuthorityOwnerLeaseGeneration(actor.actor());
+        long localNodeGeneration = spotNode.localNodeGeneration();
+        long localOwnerLease = spotNode.localAuthorityLeaseGeneration();
+        String localOwnerId = spotNode.localAuthorityOwnerId();
+        var session = command.session();
+        return actorNodeGeneration > 0
+            && actorAuthority > 0
+            && actorLease > 0
+            && localNodeGeneration > 0
+            && localOwnerLease > 0
+            && localOwnerId != null
+            && !localOwnerId.isBlank()
+            && actorNodeGeneration == actor.targetNodeGeneration()
+            && actorAuthority == actor.authorityOwnerGeneration()
+            && actorLease == actor.ownerLeaseGeneration()
+            && spotNode.routingId().equals(session.nodeRid())
+            && localNodeGeneration == session.nodeGeneration()
+            && localOwnerId.equals(session.ownerId())
+            && localOwnerLease == session.ownerLeaseGeneration();
     }
 
     //  Evicts one terminal so a new seal can be recorded: a spent one first,
@@ -698,7 +1061,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     private boolean evictOneSealTerminal() {
         var iterator = sealTerminals.entrySet().iterator();
         while (iterator.hasNext()) {
-            if (iterator.next().getValue().consumed()) {
+            var entry = iterator.next();
+            if (entry.getValue().consumed()) {
                 iterator.remove();
                 return true;
             }
@@ -720,61 +1084,161 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         }
         var iterator = sealTerminals.entrySet().iterator();
         while (spent > SPENT_SEAL_TERMINAL_RETENTION && iterator.hasNext()) {
-            if (iterator.next().getValue().consumed()) {
+            var entry = iterator.next();
+            if (entry.getValue().consumed()) {
                 iterator.remove();
                 spent--;
             }
         }
     }
 
-    /**
-     * Returns the sealed high-water this owner reported for {@code relocation}
-     * while the seal is still unconsumed and its fence matches {@code command},
-     * or empty when this relocation never completed a command 42 handshake.
-     */
-    private Optional<Long> sealedHighWater(
-        ZLinkServiceM6BWireCodec.SessionRelocationRoute command) {
-        synchronized (sealTerminals) {
-            SealTerminal terminal = sealTerminals.get(command.relocation());
-            if (terminal == null || terminal.consumed()) {
-                return Optional.empty();
-            }
-            var seal = terminal.seal();
-            if (!seal.coordinator().equals(command.coordinator())
-                || !seal.session().equals(command.session())
-                || !seal.actor().actor().actorId().equals(
-                    command.actor().actorId())
-                || seal.actor().actor().generation()
-                    != command.actor().generation()) {
-                return Optional.empty();
-            }
-            return Optional.of(terminal.sealed().lastAcceptedSessionSequence());
-        }
-    }
-
-    /**
-     * Marks the seal spent once its route reached a terminal, so a replayed
-     * command 44 from this relocation can no longer re-arm the equality gate.
-     * The record itself stays until it is pruned, so a command 42 that was
-     * still in flight keeps getting the same cached ACK. C++ sets the same
-     * flag at ACK time (public_host_runtime.cpp:4266).
-     */
-    private void consumeSealTerminal(
-        ZLinkServiceM6BWireCodec.RelocationIdentity relocation) {
-        synchronized (sealTerminals) {
-            SealTerminal terminal = sealTerminals.get(relocation);
-            if (terminal != null && !terminal.consumed()) {
-                sealTerminals.put(relocation, new SealTerminal(
-                    terminal.seal(), terminal.sealed(), true));
-            }
-            pruneSpentSealTerminals();
-        }
-    }
-
-    private record SealTerminal(
+    private static boolean sealMatchesRoute(
         ZLinkServiceM6BWireCodec.SessionRelocationSeal seal,
-        ZLinkServiceM6BWireCodec.SessionRelocationSealed sealed,
-        boolean consumed) {
+        ZLinkServiceM6BWireCodec.SessionRelocationRoute route) {
+        return seal.coordinator().equals(route.coordinator())
+            && seal.session().equals(route.session())
+            && seal.actor().actor().actorId().equals(route.actor().actorId())
+            && seal.actor().actor().generation() == route.actor().generation();
+    }
+
+    private static final class SealTerminal {
+        private final ZLinkServiceM6BWireCodec.SessionRelocationSeal seal;
+        private final ZLinkServiceM6BWireCodec.SessionRelocationSealed sealed;
+        private final CompletableFuture<
+            ZLinkServiceM6BWireCodec.SessionRelocationSealed> completion =
+                new CompletableFuture<>();
+        private boolean consumed;
+
+        private SealTerminal(
+            ZLinkServiceM6BWireCodec.SessionRelocationSeal seal,
+            ZLinkServiceM6BWireCodec.SessionRelocationSealed sealed) {
+            this.seal = seal;
+            this.sealed = sealed;
+        }
+
+        private ZLinkServiceM6BWireCodec.SessionRelocationSeal seal() {
+            return seal;
+        }
+
+        private ZLinkServiceM6BWireCodec.SessionRelocationSealed sealed() {
+            return sealed;
+        }
+
+        private CompletableFuture<
+            ZLinkServiceM6BWireCodec.SessionRelocationSealed> completion() {
+            return completion;
+        }
+
+        private boolean consumed() {
+            return consumed;
+        }
+
+        private void consume() {
+            consumed = true;
+        }
+
+        private void completeSealed() {
+            completion.complete(sealed);
+        }
+
+        private void fail(Throwable failure) {
+            completion.completeExceptionally(failure);
+        }
+    }
+
+    private record SessionRelocationKey(
+        ZLinkServiceM6BWireCodec.RelocationIdentity relocation,
+        String actorId,
+        long objectGeneration,
+        RoutingId sessionRid,
+        long bindingGeneration) {
+    }
+
+    private static SessionRelocationKey relocationKey(
+        ZLinkServiceM6BWireCodec.SessionRelocationSeal command) {
+        return new SessionRelocationKey(
+            command.relocation(),
+            command.actor().actor().actorId(),
+            command.actor().actor().generation(),
+            command.session().sessionRid(),
+            command.session().bindingGeneration());
+    }
+
+    private static SessionRelocationKey relocationKey(
+        ZLinkServiceM6BWireCodec.SessionRelocationRoute command) {
+        return new SessionRelocationKey(
+            command.relocation(),
+            command.actor().actorId(),
+            command.actor().generation(),
+            command.session().sessionRid(),
+            command.session().bindingGeneration());
+    }
+
+    private record RouteTerminal(
+        ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
+        ZLinkServiceM6BWireCodec.SessionRelocationRouted routed) {
+    }
+
+    private record RouteFlight(
+        ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
+        StoredBindingRoute sourceRoute,
+        RelocationRouteUpdate update,
+        TargetAuthorityFence targetFence,
+        ZLinkBoundActor actor,
+        ZLinkBackendActorRef sourceActor,
+        ZLinkBackendActorRef targetActor,
+        CompletableFuture<
+            ZLinkServiceM6BWireCodec.SessionRelocationRouted> completion) {
+    }
+
+    private CompletionStage<ZLinkServiceM6BWireCodec.SessionRelocationRouted>
+        cachedRouteTerminal(
+            ZLinkServiceM6BWireCodec.SessionRelocationRoute command) {
+        synchronized (sealTerminals) {
+            RouteTerminal terminal = routeTerminals.get(relocationKey(command));
+            if (terminal == null) {
+                return null;
+            }
+            if (!terminal.command().equals(command)) {
+                return CompletableFuture.failedFuture(
+                    new ZLinkConfigurationException(
+                        ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                        "Session relocation route conflicts with the recorded "
+                            + "command 44 terminal"));
+            }
+            return CompletableFuture.completedFuture(withResult(
+                terminal.routed(),
+                ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
+                    .ALREADY_APPLIED));
+        }
+    }
+
+    private ZLinkServiceM6BWireCodec.SessionRelocationRouted
+        recordRouteTerminalLocked(
+            ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
+            ZLinkServiceM6BWireCodec.SessionRelocationRouteResult result,
+            long acknowledgedHighWater) {
+        ZLinkServiceM6BWireCodec.SessionRelocationRouted ack = routed(
+            command, result, acknowledgedHighWater);
+        SessionRelocationKey key = relocationKey(command);
+        RouteTerminal existing = routeTerminals.get(key);
+        if (existing != null) {
+            if (!existing.command().equals(command)) {
+                throw new ZLinkConfigurationException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    "Session relocation route raced a conflicting command 44");
+            }
+            return existing.routed();
+        }
+        if (routeTerminals.size() >= SEAL_TERMINAL_CAPACITY) {
+            var iterator = routeTerminals.entrySet().iterator();
+            if (iterator.hasNext()) {
+                iterator.next();
+                iterator.remove();
+            }
+        }
+        routeTerminals.put(key, new RouteTerminal(command, ack));
+        return ack;
     }
 
     public CompletionStage<ZLinkServiceM6BWireCodec.SessionRelocationRouted>
@@ -785,135 +1249,289 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             return CompletableFuture.failedFuture(new ZLinkConfigurationException(
                 "Session relocation route command does not target this Session"));
         }
+        CompletionStage<ZLinkServiceM6BWireCodec.SessionRelocationRouted>
+            cached = cachedRouteTerminal(command);
+        if (cached != null) {
+            return cached;
+        }
         if (command.action()
                 != ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.COMMIT) {
-            //  Abort route update. Internals 12 §"Ready 시점": a pre-owner-change
-            //  abort never changed the Session route, so there is no route to
-            //  cancel and nobody waits for a cancel response; §"Session route":
-            //  commands 44/45 are used only for the post-`Completed` route
-            //  switch and its ACK; spec 20 §6: after commit the route is never
-            //  rolled back to the source. So an abort action must leave this
-            //  binding's route and location snapshot untouched. It still gets a
-            //  terminal ACK — an unanswered command 44 is retransmitted for as
-            //  long as the sender lives (spec 20 §5 step 8).
-            LOGGER.warning("[zlink-java-stream-trace] session-route abort"
-                + " acknowledged without a route change actor="
-                + command.actor().actorId()
-                + " authority=" + command.currentAuthorityOwnerGeneration());
-            //  An abort is a terminal for this relocation's route command, so
-            //  its seal is spent as well - C++ marks the same terminal
-            //  consumed on the abort acknowledgement path
-            //  (public_host_runtime.cpp:4266).
-            consumeSealTerminal(command.relocation());
-            return CompletableFuture.completedFuture(routed(command,
-                ZLinkServiceM6BWireCodec.SessionRelocationRouteResult.APPLIED));
+            return applyRelocationAbort(command);
         }
-        StoredBindingRoute observed = bindingRoutes.get(command.actor().actorId());
-        //  Idempotent retransmit (AlreadyApplied): a command 44 whose target
-        //  route this owner already installed must re-ACK instead of failing
-        //  the source-fence CAS, or a lost command 45 leaves the target
-        //  retrying forever (spec 20 §5 idempotency).
-        if (observed != null
-            && observed.bindingGeneration()
-                == command.session().bindingGeneration()
-            && observed.objectGeneration() == command.actor().generation()
-            && observed.nodeRid().equals(command.targetNodeRid())
-            && observed.authorityOwnerGeneration()
-                == command.currentAuthorityOwnerGeneration()) {
-            LOGGER.warning("[zlink-java-stream-trace] session-route already-applied"
-                + " actor=" + command.actor().actorId()
-                + " target=" + command.targetNodeRid()
-                + " authority=" + command.currentAuthorityOwnerGeneration());
-            return CompletableFuture.completedFuture(routed(command,
-                ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
-                    .ALREADY_APPLIED));
-        }
-        //  Spec 20 §5 step 7: the Session owner verifies that the request's
-        //  high-water **equals** the value recorded on the current binding.
-        //  That equality is meaningful only because the
-        //  `sessionRelocationSeal(42)` / `sessionRelocationSealed(43)`
-        //  handshake makes the number this owner reported and the number the
-        //  target replays provably the same token: this owner answers 42 with
-        //  its own accepted high-water, the source journals that ACK value,
-        //  and the target replays it in command 44. When this relocation
-        //  completed that handshake the gate is exact equality against the
-        //  recorded seal (C++ `commit_remote_route` refuses without a barrier
-        //  at all — stream_session_registry.cpp:432).
-        //
-        //  Relocations that reach here without a seal — a route rebuilt from
-        //  a durable journal after a restart, or any source that could not
-        //  complete the handshake — keep the monotonic gate: a high-water that
-        //  regressed below an already applied one is a superseded relocation
-        //  and is rejected.
-        Optional<Long> sealed = sealedHighWater(command);
-        boolean staleHighWater = sealed
-            .map(value -> value != command.lastAcceptedSessionSequence())
-            .orElseGet(() -> observed != null
-                && observed.lastAcceptedSessionSequence()
-                    > command.lastAcceptedSessionSequence());
-        if (observed == null
-            || observed.bindingGeneration()
-                != command.session().bindingGeneration()
-            || staleHighWater) {
-            //  Spec 20 §5: a refused command 44 is answered with the result
-            //  that names the refusal so the target stops retransmitting.
-            LOGGER.warning(staleFenceDiagnostic(command, observed)
-                + " sealedSeq=" + sealed.map(String::valueOf).orElse("none"));
-            return CompletableFuture.completedFuture(routed(command,
-                observed == null
-                    ? ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
-                        .SESSION_OR_BINDING_CLOSED
-                    : ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
-                        .STALE));
-        }
-        RelocationRouteUpdate update;
-        try {
-            update = new RelocationRouteUpdate(
-                command.actor().actorId(),
-                command.actor().generation(),
-                observed.nodeRid(),
-                command.targetNodeRid(),
-                command.targetNodeGeneration(),
-                command.previousAuthorityOwnerGeneration(),
-                command.currentAuthorityOwnerGeneration(),
-                command.session().bindingGeneration(),
-                command.lastAcceptedSessionSequence());
-        } catch (RuntimeException invalid) {
-            LOGGER.warning(staleFenceDiagnostic(command, observed)
-                + " reason=" + invalid.getMessage());
-            return CompletableFuture.completedFuture(routed(command,
-                ZLinkServiceM6BWireCodec.SessionRelocationRouteResult.STALE));
-        }
-        return applyRelocationRouteUpdate(update).handle((ignored, failure) -> {
-            if (failure == null) {
-                //  The seal is spent once its route committed, so a later
-                //  relocation can reuse the terminal slot and a replayed 44
-                //  from this one can no longer re-arm the equality gate. C++
-                //  sets the same flag at ACK time
-                //  (public_host_runtime.cpp:4266).
-                consumeSealTerminal(command.relocation());
-                return CompletableFuture.completedFuture(routed(command,
+        final RouteFlight flight;
+        synchronized (sealTerminals) {
+            SessionRelocationKey key = relocationKey(command);
+            RouteTerminal terminal = routeTerminals.get(key);
+            if (terminal != null) {
+                if (!terminal.command().equals(command)) {
+                    return protocolRouteConflict(
+                        "command 44 conflicts with its recorded terminal");
+                }
+                return CompletableFuture.completedFuture(withResult(
+                    terminal.routed(),
                     ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
-                        .APPLIED));
+                        .ALREADY_APPLIED));
             }
-            Throwable cause = failure;
-            while (cause instanceof CompletionException && cause.getCause() != null) {
-                cause = cause.getCause();
+            RouteFlight active = routeFlights.get(key);
+            if (active != null) {
+                if (!active.command().equals(command)) {
+                    return protocolRouteConflict(
+                        "command 44 conflicts with an in-flight route update");
+                }
+                return active.completion();
             }
-            if (cause instanceof ZLinkConfigurationException) {
-                LOGGER.warning(staleFenceDiagnostic(command,
-                        bindingRoutes.get(command.actor().actorId()))
-                    + " reason=" + cause.getMessage());
+            StoredBindingRoute observed =
+                bindingRoutes.get(command.actor().actorId());
+            SealTerminal seal = sealTerminals.get(key);
+            if (observed == null || seal == null || seal.consumed()
+                || !seal.completion().isDone()
+                || !sealMatchesRoute(seal.seal(), command)
+                || seal.sealed().lastAcceptedSessionSequence()
+                    != command.lastAcceptedSessionSequence()
+                || observed.bindingGeneration()
+                    != command.session().bindingGeneration()) {
+                return CompletableFuture.completedFuture(routed(
+                    command,
+                    observed == null
+                        ? ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
+                            .SESSION_OR_BINDING_CLOSED
+                        : ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
+                            .STALE,
+                    0));
             }
-            //  Every failure stays unreplied; the source retransmits.
-            return CompletableFuture.<ZLinkServiceM6BWireCodec
-                .SessionRelocationRouted>failedFuture(failure);
-        }).thenCompose(stage -> stage);
+            RelocationRouteUpdate update;
+            try {
+                update = new RelocationRouteUpdate(
+                    command.actor().actorId(),
+                    command.actor().generation(),
+                    observed.nodeRid(),
+                    command.targetNodeRid(),
+                    command.targetNodeGeneration(),
+                    command.previousAuthorityOwnerGeneration(),
+                    command.currentAuthorityOwnerGeneration(),
+                    command.session().bindingGeneration(),
+                    command.lastAcceptedSessionSequence());
+            } catch (RuntimeException invalid) {
+                return CompletableFuture.completedFuture(routed(
+                    command,
+                    ZLinkServiceM6BWireCodec.SessionRelocationRouteResult.STALE,
+                    0));
+            }
+            if (!observed.matchesSource(update)) {
+                return CompletableFuture.completedFuture(routed(
+                    command,
+                    ZLinkServiceM6BWireCodec.SessionRelocationRouteResult.STALE,
+                    0));
+            }
+            ZLinkBackendActorRef target = new ZLinkBackendActorRef(
+                update.targetNodeRid(), update.actorId(), update.objectGeneration());
+            TargetAuthorityFence targetFence = liveTargetFence(
+                target,
+                update.targetNodeGeneration(),
+                update.targetAuthorityOwnerGeneration(),
+                observed).orElse(null);
+            if (targetFence == null) {
+                return CompletableFuture.failedFuture(
+                    new ZLinkConfigurationException(
+                        "target Actor authority is unavailable or stale: "
+                            + update.actorId()));
+            }
+            ZLinkBoundActor actor = currentBoundActor(update.actorId());
+            flight = new RouteFlight(
+                command,
+                observed,
+                update,
+                targetFence,
+                actor,
+                new ZLinkBackendActorRef(
+                    observed.nodeRid(), observed.actorId(),
+                    observed.objectGeneration()),
+                target,
+                new CompletableFuture<>());
+            routeFlights.put(key, flight);
+        }
+        startRoutePreparation(flight);
+        return flight.completion();
+    }
+
+    private CompletionStage<ZLinkServiceM6BWireCodec.SessionRelocationRouted>
+        applyRelocationAbort(
+            ZLinkServiceM6BWireCodec.SessionRelocationRoute command) {
+        List<HeldIngress> held;
+        ZLinkServiceM6BWireCodec.SessionRelocationRouted ack;
+        synchronized (sealTerminals) {
+            SessionRelocationKey key = relocationKey(command);
+            RouteTerminal recorded = routeTerminals.get(key);
+            if (recorded != null) {
+                if (!recorded.command().equals(command)) {
+                    return protocolRouteConflict(
+                        "abort conflicts with its recorded route terminal");
+                }
+                return CompletableFuture.completedFuture(withResult(
+                    recorded.routed(),
+                    ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
+                        .ALREADY_APPLIED));
+            }
+            RouteFlight flight = routeFlights.get(key);
+            if (flight != null) {
+                if (!flight.command().equals(command)) {
+                    return protocolRouteConflict(
+                        "abort conflicts with an in-flight route update");
+                }
+                return flight.completion();
+            }
+            SealTerminal terminal = sealTerminals.get(key);
+            IngressGate gate = ingressGates.get(command.actor().actorId());
+            if (terminal == null || terminal.consumed()
+                || !terminal.completion().isDone()
+                || !sealMatchesRoute(terminal.seal(), command)
+                || terminal.seal().actor().authorityOwnerGeneration()
+                    != command.currentAuthorityOwnerGeneration()
+                || gate == null
+                || !command.relocation().equals(gate.seal)) {
+                return CompletableFuture.completedFuture(routed(
+                    command,
+                    ZLinkServiceM6BWireCodec.SessionRelocationRouteResult.STALE,
+                    0));
+            }
+            long sealedHighWater =
+                terminal.sealed().lastAcceptedSessionSequence();
+            terminal.consume();
+            gate.seal = null;
+            held = gate.detachHeld();
+            ack = recordRouteTerminalLocked(
+                command,
+                ZLinkServiceM6BWireCodec.SessionRelocationRouteResult.APPLIED,
+                sealedHighWater);
+            pruneSpentSealTerminals();
+        }
+        resumeHeld(held);
+        return CompletableFuture.completedFuture(ack);
+    }
+
+    private CompletionStage<ZLinkServiceM6BWireCodec.SessionRelocationRouted>
+        protocolRouteConflict(String message) {
+        return CompletableFuture.failedFuture(
+            new ZLinkConfigurationException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                message));
+    }
+
+    private void startRoutePreparation(RouteFlight flight) {
+        CompletionStage<Void> preparation;
+        try {
+            preparation = flight.actor().prepareNativeActorRoute(
+                flight.targetActor(), RELAY_SUBMIT_TIMEOUT);
+        } catch (RuntimeException failure) {
+            preparation = CompletableFuture.failedFuture(failure);
+        }
+        preparation.whenComplete((ignored, failure) -> {
+            if (failure != null) {
+                compensateRouteFlight(flight, unwrapRouteFailure(failure));
+            } else {
+                commitPreparedRouteFlight(flight);
+            }
+        });
+    }
+
+    private void commitPreparedRouteFlight(RouteFlight flight) {
+        List<HeldIngress> held = null;
+        ZLinkServiceM6BWireCodec.SessionRelocationRouted ack = null;
+        Throwable failure = null;
+        synchronized (sealTerminals) {
+            SessionRelocationKey key = relocationKey(flight.command());
+            StoredBindingRoute current =
+                bindingRoutes.get(flight.command().actor().actorId());
+            SealTerminal seal = sealTerminals.get(key);
+            IngressGate gate =
+                ingressGates.get(flight.command().actor().actorId());
+            TargetAuthorityFence live = current == null
+                ? null
+                : liveTargetFence(
+                    flight.targetActor(),
+                    flight.update().targetNodeGeneration(),
+                    flight.update().targetAuthorityOwnerGeneration(),
+                    current).orElse(null);
+            ZLinkBoundActor liveActor = bound.stream()
+                .filter(candidate -> candidate.actorId().equals(
+                    flight.command().actor().actorId()))
+                .map(ZLinkBoundActor.class::cast)
+                .findFirst()
+                .orElse(null);
+            if (routeFlights.get(key) != flight
+                || current != flight.sourceRoute()
+                || !current.matchesSource(flight.update())
+                || liveActor != flight.actor()
+                || seal == null || seal.consumed()
+                || !seal.completion().isDone()
+                || !sealMatchesRoute(seal.seal(), flight.command())
+                || gate == null
+                || !flight.command().relocation().equals(gate.seal)
+                || !flight.targetFence().equals(live)) {
+                failure = new ZLinkConfigurationException(
+                    "Session route or authority changed during native preparation: "
+                        + flight.command().actor().actorId());
+            } else {
+                flight.actor().commitPreparedNativeActorRoute(
+                    flight.targetActor());
+                bindingRoutes.put(
+                    flight.command().actor().actorId(),
+                    current.toTarget(flight.update(), flight.targetFence()));
+                seal.consume();
+                gate.seal = null;
+                held = gate.detachHeld();
+                ack = recordRouteTerminalLocked(
+                    flight.command(),
+                    ZLinkServiceM6BWireCodec.SessionRelocationRouteResult.APPLIED,
+                    seal.sealed().lastAcceptedSessionSequence());
+                routeFlights.remove(key, flight);
+                pruneSpentSealTerminals();
+            }
+        }
+        if (failure != null) {
+            compensateRouteFlight(flight, failure);
+            return;
+        }
+        resumeHeld(held);
+        flight.completion().complete(ack);
+    }
+
+    private void compensateRouteFlight(
+        RouteFlight flight,
+        Throwable failure) {
+        CompletionStage<Void> compensation;
+        try {
+            compensation = flight.actor().compensatePreparedNativeActorRoute(
+                flight.sourceActor(), RELAY_SUBMIT_TIMEOUT);
+        } catch (RuntimeException compensationFailure) {
+            compensation = CompletableFuture.failedFuture(compensationFailure);
+        }
+        compensation.whenComplete((ignored, compensationFailure) -> {
+            Throwable terminal = failure;
+            if (compensationFailure != null) {
+                terminal.addSuppressed(unwrapRouteFailure(compensationFailure));
+            }
+            synchronized (sealTerminals) {
+                routeFlights.remove(
+                    relocationKey(flight.command()), flight);
+            }
+            flight.completion().completeExceptionally(terminal);
+        });
+    }
+
+    private static Throwable unwrapRouteFailure(Throwable failure) {
+        Throwable current = failure;
+        while (current instanceof CompletionException
+            && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current;
     }
 
     private static ZLinkServiceM6BWireCodec.SessionRelocationRouted routed(
         ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
-        ZLinkServiceM6BWireCodec.SessionRelocationRouteResult result) {
+        ZLinkServiceM6BWireCodec.SessionRelocationRouteResult result,
+        long acknowledgedHighWater) {
         return new ZLinkServiceM6BWireCodec.SessionRelocationRouted(
             command.relocation(),
             command.coordinator(),
@@ -922,7 +1540,21 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             command.action(),
             result,
             command.currentAuthorityOwnerGeneration(),
-            command.lastAcceptedSessionSequence());
+            acknowledgedHighWater);
+    }
+
+    private static ZLinkServiceM6BWireCodec.SessionRelocationRouted withResult(
+        ZLinkServiceM6BWireCodec.SessionRelocationRouted routed,
+        ZLinkServiceM6BWireCodec.SessionRelocationRouteResult result) {
+        return new ZLinkServiceM6BWireCodec.SessionRelocationRouted(
+            routed.relocation(),
+            routed.coordinator(),
+            routed.actor(),
+            routed.session(),
+            routed.action(),
+            result,
+            routed.currentAuthorityOwnerGeneration(),
+            routed.lastAcceptedSessionSequence());
     }
 
     private static String staleFenceDiagnostic(
@@ -1001,22 +1633,30 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 && nodeRid.equals(update.sourceNodeRid())
                 && (update.bindingGeneration() == 0
                     || bindingGeneration == update.bindingGeneration())
-                && lastAcceptedSessionSequence
-                    <= update.lastAcceptedSessionSequence()
-                && (authorityOwnerGeneration == 0
-                    || authorityOwnerGeneration
+                && (update.bindingGeneration() == 0
+                    ? lastAcceptedSessionSequence
+                        <= update.lastAcceptedSessionSequence()
+                    : lastAcceptedSessionSequence
+                        == update.lastAcceptedSessionSequence())
+                && (update.bindingGeneration() == 0
+                    ? authorityOwnerGeneration == 0
+                        || authorityOwnerGeneration
+                            == update.sourceAuthorityOwnerGeneration()
+                    : authorityOwnerGeneration
                         == update.sourceAuthorityOwnerGeneration());
         }
 
-        StoredBindingRoute toTarget(RelocationRouteUpdate update) {
+        StoredBindingRoute toTarget(
+            RelocationRouteUpdate update,
+            TargetAuthorityFence targetFence) {
             return new StoredBindingRoute(
                 actorId,
                 objectGeneration,
                 meshName,
                 update.targetNodeRid(),
-                update.targetNodeGeneration(),
-                update.targetAuthorityOwnerGeneration(),
-                ownerLeaseGeneration,
+                targetFence.nodeGeneration(),
+                targetFence.authorityOwnerGeneration(),
+                targetFence.ownerLeaseGeneration(),
                 bindingGeneration,
                 update.lastAcceptedSessionSequence());
         }
@@ -1033,6 +1673,73 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 bindingGeneration,
                 lastAcceptedSessionSequence);
         }
+
+        StoredBindingRoute withAcceptedHighWater(long highWater) {
+            return new StoredBindingRoute(
+                actorId,
+                objectGeneration,
+                meshName,
+                nodeRid,
+                nodeGeneration,
+                authorityOwnerGeneration,
+                ownerLeaseGeneration,
+                bindingGeneration,
+                highWater);
+        }
+
+        StoredBindingRoute withSealFence(
+            ZLinkServiceM6BWireCodec.ActorRouteFence fence) {
+            return new StoredBindingRoute(
+                actorId,
+                objectGeneration,
+                meshName,
+                nodeRid,
+                fence.targetNodeGeneration(),
+                fence.authorityOwnerGeneration(),
+                fence.ownerLeaseGeneration(),
+                bindingGeneration,
+                lastAcceptedSessionSequence);
+        }
+    }
+
+    private static final class IngressGate {
+        private final long objectGeneration;
+        private final long bindingGeneration;
+        private long acceptedHighWater;
+        private long activeIngress;
+        private ZLinkServiceM6BWireCodec.RelocationIdentity seal;
+        private final ArrayDeque<HeldIngress> held = new ArrayDeque<>();
+
+        private IngressGate(
+            long objectGeneration,
+            long bindingGeneration) {
+            this.objectGeneration = objectGeneration;
+            this.bindingGeneration = bindingGeneration;
+        }
+
+        private long accept(long sequence) {
+            if (sequence <= 0 || sequence <= acceptedHighWater) {
+                throw new ZLinkConfigurationException(
+                    "Session ingress sequence is not monotonic");
+            }
+            acceptedHighWater = sequence;
+            return sequence;
+        }
+
+        private List<HeldIngress> detachHeld() {
+            if (held.isEmpty()) {
+                return List.of();
+            }
+            List<HeldIngress> pending = new ArrayList<>(held);
+            held.clear();
+            return pending;
+        }
+    }
+
+    private record HeldIngress(
+        ZLinkBoundActor actor,
+        LongFunction<CompletionStage<Void>> operation,
+        CompletableFuture<Void> result) {
     }
 
     private boolean isCurrentBinding(ZLinkBoundActor actor) {

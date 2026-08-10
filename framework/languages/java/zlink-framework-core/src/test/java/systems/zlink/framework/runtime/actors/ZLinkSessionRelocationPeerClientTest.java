@@ -68,8 +68,8 @@ final class ZLinkSessionRelocationPeerClientTest {
                     echo.session(), echo.action(),
                     ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
                         .STALE,
-                    echo.currentAuthorityOwnerGeneration(),
-                    echo.lastAcceptedSessionSequence()));
+                    999,
+                    0));
         });
         var terminal = new CompletableFuture<
             ZLinkServiceM6BWireCodec.SessionRelocationRouted>();
@@ -85,6 +85,9 @@ final class ZLinkSessionRelocationPeerClientTest {
         assertEquals(
             ZLinkServiceM6BWireCodec.SessionRelocationRouteResult.STALE,
             terminal.join().result());
+        assertEquals(999,
+            terminal.join().currentAuthorityOwnerGeneration(),
+            "a refusal reports owner evidence instead of echoing the request");
         assertEquals(1, submissions.get());
     }
 
@@ -305,6 +308,49 @@ final class ZLinkSessionRelocationPeerClientTest {
             new ZLinkSessionRelocationPeerClient(divergent, codec)
                 .sealRouteUntilAck(seal, Duration.ofSeconds(2))
                 .toCompletableFuture().join());
+    }
+
+    @Test
+    void sourceAbortValidatesTheRetainedCommand43HighWater() {
+        var codec = new ZLinkServiceM6BWireCodec();
+        var seal = seal();
+        var abort = new ZLinkServiceM6BWireCodec.SessionRelocationRoute(
+            seal.relocation(),
+            seal.coordinator(),
+            ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
+            new ZLinkServiceM6BWireCodec.ActorIdentity(
+                seal.actor().actor().actorId(),
+                seal.actor().actor().generation()),
+            seal.session(),
+            ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.ABORT,
+            0,
+            seal.actor().authorityOwnerGeneration(),
+            null,
+            0,
+            0);
+        ZLinkInternalMeshNode node = node((target, encoded) -> {
+            assertEquals(abort, codec.decodeSessionRelocationRoute(encoded));
+            return codec.encodeSessionRelocationRouted(
+                new ZLinkServiceM6BWireCodec.SessionRelocationRouted(
+                    abort.relocation(),
+                    abort.coordinator(),
+                    abort.actor(),
+                    abort.session(),
+                    abort.action(),
+                    ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
+                        .APPLIED,
+                    abort.currentAuthorityOwnerGeneration(),
+                    23));
+        });
+
+        var ack = new ZLinkSessionRelocationPeerClient(node, codec)
+            .abortRouteUntilAck(abort, 23, Duration.ofSeconds(2))
+            .toCompletableFuture().join();
+
+        assertEquals(0, abort.lastAcceptedSessionSequence(),
+            "abort carries no high-water in command 44");
+        assertEquals(23, ack.lastAcceptedSessionSequence(),
+            "command 45 is checked against retained command 43 context");
     }
 
     private static ZLinkServiceM6BWireCodec.SessionRelocationSeal seal() {
