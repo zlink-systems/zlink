@@ -170,3 +170,19 @@ throughput ratio는 `55.04% / 63.47% / 99.73% / 92.43% / 94.11% / 95.69%`, 산�
 `83.41%`다. latency ratio는 `1.899x / 1.003x / 0.846x / 1.046x / 1.045x / 1.018x`,
 산술평균은 `1.143x`다. 64B·256B 개별 ratio는 결과로 기록하고 .NET routed one-way aggregate
 기준을 충족해 통과로 기록한다. 다음 대상은 `DEALER_ROUTER_REQREP/ws`다.
+
+### .NET Single DEALER_ROUTER_REQREP/ws
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 222790 / 187340 / 106091 / 12421 / 8428 / 5234 | 0.219 / 0.287 / 0.576 / 0.963 / 0.709 / 0.570 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_152626_dealer-router-reqrep-ws-paired-c1.txt` |
+| .NET before | 134937 / 126862 / 91794 / 11558 / 8074 / 5140 | 0.258 / 760.274 / 0.554 / 1.017 / 0.726 / 0.569 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_152639_dotnet-dealer-router-reqrep-ws-paired-final.txt` |
+| .NET after | 138597 / 132138 / 94561 / 11797 / 8122 / 5327 | 0.254 / 0.297 / 0.548 / 0.992 / 0.721 / 0.546 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_153119_dotnet-dealer-router-reqrep-ws-own-after-c-parity.txt` |
+
+수정 전 throughput ratio는 `60.57% / 67.72% / 86.52% / 93.05% / 95.80% / 98.20%`,
+산술평균 `83.64%`이고 latency ratio 산술평균은 `442.376x`였다. C와 같은
+`SendFlags.None` request submit 의미로 맞춘 후 throughput ratio는
+`62.21% / 70.53% / 89.13% / 94.98% / 96.37% / 101.78%`, 산술평균 `85.83%`,
+latency ratio는 `1.160x / 1.035x / 0.951x / 1.030x / 1.017x / 0.958x`,
+산술평균 `1.025x`다. Sol 2차 후보는 no-go로 기록하고, socket request/reply aggregate
+기준을 충족해 통과로 판정한다. 다음 대상은 `ROUTER_ROUTER_REQREP/ws`다.

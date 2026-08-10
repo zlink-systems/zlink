@@ -211,7 +211,7 @@ internal static class PerfReqRep
             (message, callback) => client.Request()
                 .Message(message)
                 .Timeout(ResolveReqRepTimeout())
-                .Flags(SendFlags.DontWait)
+                .Flags(SendFlags.None)
                 .Submit(callback));
         stop.Set();
         if (!SendStopTokenBlocking(client, "[single-dealer-router-reqrep]"))
