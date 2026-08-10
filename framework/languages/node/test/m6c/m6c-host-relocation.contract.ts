@@ -58,6 +58,7 @@ import {
   encodeServiceWireFrozenActorApplicationRecord,
   type ServiceMaintenanceReplyRelay,
   type ServiceSessionRelocationRoute,
+  type ServiceSessionRelocationRouted,
   type ServiceSessionRelocationSeal,
   type ServiceWireRequestSourceFence,
   type ServiceMaintenanceRelocationPrepare,
@@ -385,6 +386,28 @@ test('session relocation requests single-flight exact bytes and validate late co
     const alreadyApplied = { ...routed, result: 'alreadyApplied' as const };
     assert.equal(await dispatchAck(encodeSessionRelocationRouted(alreadyApplied)), true);
     assert.deepEqual(await retriedRoute, alreadyApplied);
+
+    for (const [offset, result] of [
+      [1n, 'stale'],
+      [2n, 'sessionOrBindingClosed']
+    ] as const) {
+      const refusedRoute: ServiceSessionRelocationRoute = {
+        ...route,
+        relocation: { ...route.relocation, low: route.relocation.low + offset }
+      };
+      const refused = runtime.requestSessionRelocationRoute(
+        'mesh-a', 'session-owner', refusedRoute
+      );
+      const refusal: ServiceSessionRelocationRouted = {
+        ...routed,
+        relocation: refusedRoute.relocation,
+        result,
+        currentAuthorityOwnerGeneration: 999n,
+        lastAcceptedSessionSequence: 0n
+      };
+      assert.equal(await dispatchAck(encodeSessionRelocationRouted(refusal)), true);
+      assert.deepEqual(await refused, refusal);
+    }
   } finally {
     await runtime.dispose();
   }

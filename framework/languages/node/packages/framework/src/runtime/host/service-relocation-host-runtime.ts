@@ -5422,6 +5422,9 @@ function validateSessionRelocationResponse(
     || request.route.action !== response.action) {
     throw new ServiceWireProtocolError('Command 45 ACK does not echo command 44.');
   }
+  if (response.result !== 'applied' && response.result !== 'alreadyApplied') {
+    return;
+  }
   const expectedGeneration = request.route.action === 'commit'
     ? request.route.targetAuthorityOwnerGeneration
     : request.route.currentAuthorityOwnerGeneration;
