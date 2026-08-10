@@ -485,22 +485,26 @@ C와 binding의 pattern별 smoke가 모두 `status: complete`여야 본 측정�
 12. 두 개선 pass의 before/after와 aggregate 결과를 비교한다. 추가 반복은 원인 진단이나
     before/after 확인에 꼭 필요할 때만 수행하며, 변동값을 이유로 반복하지 않는다.
 13. 기능 테스트와 같은 pattern 안의 대상이 아닌 대표 셀에 대한 회귀 gate를 통과시킨다.
-14. 현재 transport의 모든 message size report가 complete이고 throughput·latency aggregate
+14. aggregate 평균이 이미 목표를 만족한 대상도 성능 hot path와 POSDDD 리팩토링 요소를
+    한 번 검토한다. 공개 contract·ownership·error semantics와 측정 의미를 유지하는
+    유효한 후보가 있으면 적용하고 before/after를 측정해 채택 여부를 결정한다. 후보가
+    없으면 no-go 근거를 결과 log에 기록한다. 이 검토는 기준 통과를 이유로 생략하지 않는다.
+15. 현재 transport의 모든 message size report가 complete이고 throughput·latency aggregate
     평균이 목표를 만족하면 transport 완료를 기록한다. 개별 size 미달은 결과에 기록한다.
-    성능 개선 코드를 채택했다면 검증된 변경과 측정 근거만 커밋하고 원격에 푸시한 뒤 다음
-    transport로 이동한다.
-15. aggregate 평균이 미달한 대상은 자체 pass와 Sol pass가 모두 끝난 뒤에도 공개 contract를
+    성능 개선 또는 POSDDD 리팩토링을 채택했다면 검증된 변경과 측정 근거만 커밋하고
+    원격에 푸시한 뒤 다음 transport로 이동한다.
+16. aggregate 평균이 미달한 대상은 자체 pass와 Sol pass가 모두 끝난 뒤에도 공개 contract를
     유지한 성능 또는 POSDDD 이득 후보가 없을 때만 `보류`로 기록하고 다음 transport로
     이동한다. POSDDD 이득만으로 채택한 후보는 성능 aggregate 미달을 통과로 바꾸지 않는다.
-16. 선택한 pattern의 모든 공식 transport report가 complete이고 각 transport의
+17. 선택한 pattern의 모든 공식 transport report가 complete이고 각 transport의
     throughput·latency aggregate 평균이 통과 또는 보류로 확정되면 pattern 완료를 기록하고
     관련 문서를 커밋해 원격에 푸시한다.
-17. pattern 커밋과 푸시가 끝난 뒤에만 같은 언어의 다음 pattern을 선택한다.
-18. 현재 언어의 Single과 Multi 모든 pattern이 완료된 뒤 pattern별 최종 report와 표를
+18. pattern 커밋과 푸시가 끝난 뒤에만 같은 언어의 다음 pattern을 선택한다.
+19. 현재 언어의 Single과 Multi 모든 pattern이 완료된 뒤 pattern별 최종 report와 표를
     다시 대조한다. 미측정 또는 유효한 report가 없는 셀이 남아 있으면 다음 언어로
     이동하지 않는다. aggregate 평균 미달이지만 hot path 검토와 후보 A/B, 필요한 Sol
     리뷰를 끝낸 대상은 `보류`로 기록하고 다음 선택 대상에 진행할 수 있다.
-19. 현재 언어가 모두 완료된 뒤에만 다음 언어로 이동한다.
+20. 현재 언어가 모두 완료된 뒤에만 다음 언어로 이동한다.
 
 한 번에 하나의 언어만 측정한다. C와 binding을 paired 제한 측정할 때도 공식 perf
 프로세스는 순차 실행해 서로 CPU와 memory에 영향을 주지 않게 한다.

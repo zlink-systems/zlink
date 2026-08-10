@@ -6,6 +6,7 @@ using static PerfRunner;
 internal static class PerfMultiPubSubServer
 {
     private const string Topic = "bench";
+    private const int PublishRetryPollTimeoutMs = 100;
 
     internal static int Run(PerfOptions options)
     {
@@ -34,6 +35,10 @@ internal static class PerfMultiPubSubServer
         PrintAutoHwmSnapshot(server, "server", options.Transport, size);
         WriteStdoutLine($"READY,{endpoint}");
 
+        using var sendPoller = Zlink.CreatePoller();
+        sendPoller.Add(server, PollEventFlags.PollOut, 0);
+        var sendEvents = new PollEvent[1];
+
         if (!controlState.WaitForStart(readyTimeoutMs))
         {
             if (!controlState.StopRequested)
@@ -45,8 +50,9 @@ internal static class PerfMultiPubSubServer
         ulong seq = 1;
         int payloadSize = Math.Max(size, PerfMetricHeaderSize);
 
-        if (!RunPublishPhase(server, payloadSize, runId, size, ref seq,
-                PerfPhase.Active, durationSeconds, controlState)
+        if (!RunPublishPhase(server, sendPoller, sendEvents, payloadSize,
+                runId, size, ref seq, PerfPhase.Active, durationSeconds,
+                controlState)
             || !PublishStopToken(server, controlState))
         {
             return 2;
@@ -72,11 +78,10 @@ internal static class PerfMultiPubSubServer
     private static bool PublishStopToken(IPubSocket server,
         RunnerControlState controlState)
     {
-        bool sent = false;
         // The active phase uses the same lossy PUB path as C. After the
-        // measured window, keep the wire stop token flowing until the runner
-        // observes the client result and sends STOP; otherwise a fast managed
-        // publisher can drop the single shutdown token behind saturated pipes.
+        // measured window, publish one blocking stop token and finish the
+        // server lifecycle. This matches the C runner's single successful
+        // stop-token send instead of extending the measured process lifetime.
         while (!controlState.StopRequested)
         {
             try
@@ -84,10 +89,7 @@ internal static class PerfMultiPubSubServer
                 using Message message = new(MultiStopToken.AsSpan());
                 if (server.Publish(Topic).Message(message)
                         .Flags(SendFlags.None).Submit())
-                {
-                    sent = true;
-                    continue;
-                }
+                    return true;
             }
             catch (ZlinkException ex) when (IsTransientStopPublishErrno(
                                                 ex.NativeErrno))
@@ -95,7 +97,7 @@ internal static class PerfMultiPubSubServer
             }
         }
 
-        return controlState.StopRequested || sent;
+        return true;
     }
 
     private static bool IsTransientStopPublishErrno(int errno)
@@ -103,8 +105,9 @@ internal static class PerfMultiPubSubServer
         return IsWouldBlock(errno) || IsInterrupted(errno) || errno == 110;
     }
 
-    private static bool RunPublishPhase(IPubSocket server, int payloadSize,
-        uint runId, int size, ref ulong seq, PerfPhase phase, int durationSeconds,
+    private static bool RunPublishPhase(IPubSocket server, IPoller sendPoller,
+        PollEvent[] sendEvents, int payloadSize, uint runId, int size,
+        ref ulong seq, PerfPhase phase, int durationSeconds,
         RunnerControlState controlState)
     {
         long deadlineTicks = Stopwatch.GetTimestamp()
@@ -120,9 +123,38 @@ internal static class PerfMultiPubSubServer
                 seq++;
                 continue;
             }
+
+            if (!WaitForWritable(sendPoller, sendEvents, controlState))
+                return false;
         }
 
         return true;
+    }
+
+    private static bool WaitForWritable(IPoller sendPoller,
+        PollEvent[] sendEvents, RunnerControlState controlState)
+    {
+        while (!controlState.StopRequested)
+        {
+            int ready;
+            try
+            {
+                ready = sendPoller.Wait(sendEvents,
+                    TimeSpan.FromMilliseconds(PublishRetryPollTimeoutMs));
+            }
+            catch (ZlinkException ex) when (IsWouldBlock(ex.NativeErrno)
+                                            || IsInterrupted(ex.NativeErrno))
+            {
+                continue;
+            }
+
+            if (ready <= 0)
+                continue;
+            if ((sendEvents[0].Revents & PollEventFlags.PollOut) != 0)
+                return true;
+        }
+
+        return false;
     }
 
 }

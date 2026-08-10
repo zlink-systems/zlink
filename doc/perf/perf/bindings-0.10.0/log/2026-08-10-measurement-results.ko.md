@@ -568,3 +568,19 @@ POSDDD 평가: routed peer identity를 암묵적인 connection 상태에 맡기�
 throughput ratio는 `60.123% / 56.588% / 64.781% / 61.228% / 125.799% / 102.361%`, 산술평균은 `78.480%`다. 평균 latency ratio는 `1.419x / 1.474x / 1.269x / 1.370x / 1.131x / 1.787x`, 산술평균은 `1.409x`다. .NET socket request/reply aggregate 목표 `70%`와 latency 기준을 충족해 최종 상태는 `통과`다. 개별 size ratio는 측정값으로 기록한다.
 
 POSDDD 평가: routed peer identity를 connection readiness의 암묵적인 전제에 두지 않고 Router client의 연결 설정 책임으로 명시했다. public contract·ownership·error semantics는 변경하지 않았고, aggregate가 목표를 충족하므로 추가 binding hotpath pass와 Sol review 기반 두 번째 개선 pass는 수행하지 않았다. build는 `0 warning / 0 error`, contract test는 `149 passed / 0 failed / 0 skipped`다.
+
+### .NET Multi MULTI_PUBSUB/tcp
+
+조건: Core `v0.10.1` release package, Release, `tcp`, clients `100`, duration `1s`, runs `1`, server/client I/O threads `4/4`, auto-HWM, connect-ready timeout `10000ms`, monitor-HWM `4096000`. C와 .NET 모두 6개 size와 30개 result line이 complete다.
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|----------------------------|--------------------------|--------|
+| C 기준 | 1578456 / 1516658 / 1115962 / 538284 / 102952 / 56610 | 346.451 / 385.566 / 309.695 / 255.565 / 106.523 / 95.833 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_195045_dotnet-multi-pubsub-tcp-paired-c1.txt` |
+| .NET initial baseline | 886490 / 939682 / 761242 / 420365 / 85465 / 48766 | 423.387 / 408.899 / 423.025 / 316.981 / 107.931 / 105.926 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_195100_dotnet-multi-pubsub-tcp-paired-before.txt` |
+| .NET own after `Publish` EAGAIN 후 PollOut 대기 | 896449 / 895251 / 882633 / 421806 / 89387 / 47371 | 426.581 / 416.587 / 411.942 / 327.109 / 111.389 / 107.967 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_195518_dotnet-multi-pubsub-tcp-own-after-publish-poll.txt` |
+| .NET lifecycle parity rebaseline | 956353 / 919808 / 861707 / 459917 / 109815 / 60586 | 421.442 / 417.280 / 390.531 / 312.956 / 99.327 / 85.491 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_195930_dotnet-multi-pubsub-tcp-rebaseline-lifecycle.txt` |
+| .NET Sol `Unsafe.SkipInit` A/B | 938519 / 1020783 / 943060 / 460975 / 96428 / 46873 | 415.460 / 424.304 / 394.469 / 305.968 / 91.003 / 105.737 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_200045_dotnet-multi-pubsub-tcp-sol-after-skipinit.txt` |
+
+initial baseline throughput ratio는 `56.162% / 61.957% / 68.214% / 78.094% / 83.014% / 86.144%`, 산술평균은 `72.264%`이며 평균 latency ratio는 `1.222x / 1.061x / 1.275x / 1.240x / 1.013x / 1.105x`, 산술평균은 `1.168x`다. 자체 PollOut after throughput ratio는 `56.793% / 59.028% / 79.092% / 78.361% / 86.824% / 83.680%`, 산술평균은 `73.963%`이며 평균 latency ratio는 `1.231x / 1.080x / 1.330x / 1.280x / 1.046x / 1.126x`, 산술평균은 `1.182x`다.
+
+lifecycle parity rebaseline throughput ratio는 `60.588% / 60.647% / 77.217% / 85.441% / 106.666% / 107.023%`, 산술평균은 `82.930%`이며 평균 latency ratio는 `1.216x / 1.082x / 1.261x / 1.225x / 0.932x / 0.892x`, 산술평균은 `1.101x`다. C와 .NET의 active deadline·단일 stop token 전송 책임을 맞춘 lifecycle 변경은 public contract·ownership·error semantics와 측정 의미를 유지하므로 채택했다. Sol `Unsafe.SkipInit` A/B throughput ratio는 `59.458% / 67.305% / 84.506% / 85.638% / 93.663% / 82.800%`, 산술평균은 `78.895%`이며 평균 latency ratio 산술평균은 `1.121x`로 lifecycle rebaseline보다 악화되어 제거했다. 최종 aggregate throughput `82.930%`가 .NET simple one-way 목표 `85%`에 미달하므로 `보류`다. build는 `0 warning / 0 error`, contract test는 `149 passed / 0 failed / 0 skipped`다.

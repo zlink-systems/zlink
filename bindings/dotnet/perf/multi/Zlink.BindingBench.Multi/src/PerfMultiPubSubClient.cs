@@ -7,6 +7,8 @@ using static PerfRunner;
 
 internal static class PerfMultiPubSubClient
 {
+    private const int ReceivePollTimeoutMs = 100;
+
     internal static int Run(PerfOptions options)
     {
         int size = Math.Max(1, options.Size);
@@ -67,8 +69,7 @@ internal static class PerfMultiPubSubClient
             }
 
             var result = RunMultiPubSubClientLoop(pollManager, activeClients,
-                size, latencySampleCap, durationSeconds,
-                ResolveMultiClientPollTimeoutMs(options));
+                size, latencySampleCap, durationSeconds);
 
             if (result.measureCount <= 0)
                 return 2;
@@ -89,13 +90,9 @@ internal static class PerfMultiPubSubClient
         double latencyP99Ns, long measureCount)
         RunMultiPubSubClientLoop(PollManager pollManager,
             List<ISocket> activeClients, int msgSize, int latencySampleCap,
-            int durationSeconds, int pollTimeoutMs)
+            int durationSeconds)
     {
         _ = pollManager;
-        // PERF_MULTI_TEST_POLICY § 1.3.1: poll timeout is unconditionally -1
-        // (signal-driven). The caller resolves it to -1; assert that here so
-        // the wait below is never a timer loop.
-        _ = pollTimeoutMs;
         const uint expectedRunId = 1;
         var activeLatSamples = new List<double>(latencySampleCap);
         long activeSampleSeen = 0;
@@ -122,7 +119,11 @@ internal static class PerfMultiPubSubClient
             bool phaseDone = false;
             while (!phaseDone)
             {
-                int readyCount = WaitForReadReady(poller, events);
+                if (Stopwatch.GetTimestamp() >= benchDeadlineTicks)
+                    break;
+
+                int readyCount = WaitForReadReady(poller, events,
+                    benchDeadlineTicks);
                 if (readyCount <= 0)
                     continue;
 
@@ -203,15 +204,23 @@ internal static class PerfMultiPubSubClient
         return (throughput, latencyNs, latencyP95Ns, latencyP99Ns, measureCount);
     }
 
-    // PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven (-1) poller wait, woken
-    // by the wire stop token published over the same topic. Matches C
-    // perf_multi_pubsub_client.cpp run_recv_duration's
-    // zlink_poller_wait(...,-1,NULL). No timer fallback / no stop deadline.
-    private static int WaitForReadReady(IPoller poller, PollEvent[] events)
+    // Matches C perf_multi_pubsub_client.cpp: poll for at most 100ms and
+    // leave the active receive phase at its deadline even if a stop token is
+    // delayed behind queued PUB/SUB traffic.
+    private static int WaitForReadReady(IPoller poller, PollEvent[] events,
+        long deadlineTicks)
     {
+        long remainingTicks = deadlineTicks - Stopwatch.GetTimestamp();
+        if (remainingTicks <= 0)
+            return 0;
+
+        long remainingMs = (remainingTicks * 1000L
+            + Stopwatch.Frequency - 1) / Stopwatch.Frequency;
+        int timeoutMs = (int)Math.Min(ReceivePollTimeoutMs,
+            Math.Max(1L, Math.Min(int.MaxValue, remainingMs)));
         try
         {
-            return poller.Wait(events, Timeout.InfiniteTimeSpan);
+            return poller.Wait(events, TimeSpan.FromMilliseconds(timeoutMs));
         }
         catch (ZlinkException ex) when (IsWouldBlock(ex.NativeErrno)
                                         || IsInterrupted(ex.NativeErrno))
