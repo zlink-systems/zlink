@@ -978,7 +978,7 @@ transport 상태를 판정한다.
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
 | `tcp` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `PUBSUB` | 7.895% | 13.547% | 20.143% | 96.214% | 85.896% | 100.402% | 산술평균 54.016%, latency 산술평균 0.575x, 단순 one-way 최소 기준 35% 통과. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_011037_python-pubsub-tcp-publisher-op-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_011110_python-pubsub-tcp-publisher-op-after.txt` |
+| `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1278,7 +1278,7 @@ transport 상태를 판정한다.
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
 | `tcp` | `PAIR` | 5.541% | 10.433% | 18.816% | 91.453% | 93.034% | 87.279% | 산술평균 51.093%, latency 산술평균 0.724x, 단순 one-way 최소 기준 35% 통과. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_010532_python-pair-tcp-native-builder-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_010548_python-pair-tcp-native-builder-after.txt` |
-| `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `PUBSUB` | 7.895% | 13.547% | 20.143% | 96.214% | 85.896% | 100.402% | 산술평균 54.016%, latency 산술평균 0.575x, 단순 one-way 최소 기준 35% 통과. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_011037_python-pubsub-tcp-publisher-op-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_011110_python-pubsub-tcp-publisher-op-after.txt` |
 | `tcp` | `DEALER_DEALER` | 5.141% | 10.641% | 19.637% | 87.558% | 83.146% | 55.828% | 산술평균 43.658%, latency 산술평균 0.851x, 단순 one-way 최소 기준 35% 통과. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_010946_python-dealer-dealer-tcp-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_011003_python-dealer-dealer-tcp-baseline.txt` |
 | `tcp` | `DEALER_ROUTER` | 5.016% | 9.437% | 15.975% | 81.605% | 79.304% | 54.424% | 산술평균 40.960%, latency 산술평균 0.805x, routed one-way 최소 기준 33% 통과. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_011554_python-dealer-router-tcp-router-owner-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_011614_python-dealer-router-tcp-router-owner-after.txt` |
 | `tcp` | `ROUTER_ROUTER` | 5.252% | 9.423% | 16.473% | 99.287% | 76.013% | 54.678% | 산술평균 43.521%, latency 산술평균 0.896x, routed one-way 최소 기준 33% 통과. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_011732_python-router-router-tcp-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_011749_python-router-router-tcp-baseline.txt` |
