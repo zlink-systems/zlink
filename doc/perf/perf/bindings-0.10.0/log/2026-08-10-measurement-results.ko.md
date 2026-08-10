@@ -969,3 +969,12 @@ final throughput ratio는 `5.016% / 9.437% / 15.975% / 81.605% / 79.304% / 54.42
 | Python final | 123.092 / 117.575 / 110.237 / 39.547 / 20.062 / 9.398 | 0.142 / 0.121 / 0.168 / 0.653 / 10.912 / 24.919 | `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_011749_python-router-router-tcp-baseline.txt` |
 
 throughput ratio는 `5.252% / 9.423% / 16.473% / 99.287% / 76.013% / 54.678%`, 산술평균 `43.521%`이며 평균 latency ratio 산술평균은 `0.896x`다. routed one-way 최소 기준 `33%`를 통과한다.
+
+### Python Single PAIR/ws
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 1407.346 / 1012.526 / 412.278 / 22.526 / 14.981 / 9.491 | 46.655 / 27.941 / 21.860 / 13.552 / 13.336 / 20.962 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_011932_python-pair-ws-paired-c.txt` |
+| Python final | 134.864 / 131.846 / 135.625 / 23.441 / 15.715 / 8.842 | 0.121 / 0.117 / 0.164 / 15.197 / 16.616 / 28.067 | `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_011949_python-pair-ws-current.txt` |
+
+throughput ratio는 `9.583% / 13.021% / 32.896% / 104.062% / 104.900% / 93.162%`, 산술평균 `59.604%`이며 평균 latency ratio 산술평균은 `0.620x`다. 단순 one-way 최소 기준 `35%`를 통과한다.
