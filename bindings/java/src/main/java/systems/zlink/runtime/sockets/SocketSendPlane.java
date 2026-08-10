@@ -295,7 +295,14 @@ final class SocketSendPlane {
 
     private static MemorySegment nativeTopic(SendScratch scratch,
                                              String topicId) {
-        return scratch.arena.allocateFrom(topicId, StandardCharsets.UTF_8);
+        if (topicId.equals(scratch.lastTopicId)) {
+            return scratch.lastNativeTopic;
+        }
+        MemorySegment nativeTopic = scratch.arena.allocateFrom(topicId,
+            StandardCharsets.UTF_8);
+        scratch.lastTopicId = topicId;
+        scratch.lastNativeTopic = nativeTopic;
+        return nativeTopic;
     }
 
     private void submitBlockingPart(PartSubmitter submitter, Message part,

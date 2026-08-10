@@ -13,4 +13,9 @@ public final class SendScratch {
         NativeLayouts.ROUTING_ID_LAYOUT);
     // Valid only while nativeRoutingId still contains this immutable value.
     public RoutingId lastRoutingId;
+    // Topic strings are immutable. Reuse the encoded segment while repeated
+    // publishes use the same topic instead of growing the confined arena on
+    // every message.
+    public String lastTopicId;
+    public MemorySegment lastNativeTopic;
 }

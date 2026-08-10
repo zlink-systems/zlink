@@ -67,8 +67,8 @@ final class PerfMeasurement {
     }
 
     static void writePayload(Message payload, int size, byte phase, long sentNanoTime) {
-        long sentTsNs = nowNs();
-        writePayloadHeader(payload, size, phase, SEQ.getAndIncrement(), sentTsNs);
+        writePayloadHeader(payload, size, phase, SEQ.getAndIncrement(),
+            sentNanoTime);
     }
 
     static Message resetAndWritePayload(Message payload, int size, byte phase,

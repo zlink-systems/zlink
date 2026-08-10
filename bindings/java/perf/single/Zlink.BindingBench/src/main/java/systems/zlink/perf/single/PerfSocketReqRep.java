@@ -36,6 +36,8 @@ final class PerfSocketReqRep {
         "SERVER".getBytes(StandardCharsets.UTF_8));
     private static final RoutingId CLIENT_RID = RoutingId.from(
         "CLIENT".getBytes(StandardCharsets.UTF_8));
+    private static final RoutingId DEALER_RID = RoutingId.from(
+        "DEALER-REQ".getBytes(StandardCharsets.UTF_8));
 
     private PerfSocketReqRep() {
     }
@@ -56,11 +58,13 @@ final class PerfSocketReqRep {
                  systems.zlink.contracts.eventing.MonitorEventType.CONNECTION_READY);
              var clientMonitor = client.monitorOpen(
                  systems.zlink.contracts.eventing.MonitorEventType.CONNECTION_READY)) {
-            server.setRoutingId(SERVER_RID);
-            server.options().mandatory(true);
             if (client instanceof RouterSocket router) {
+                server.setRoutingId(SERVER_RID);
+                server.options().mandatory(true);
                 router.setRoutingId(CLIENT_RID);
                 router.options().mandatory(true);
+            } else {
+                ((DealerSocket) client).setRoutingId(DEALER_RID);
             }
             PerfUtil.applyMonitorOptions(serverMonitor, config);
             PerfUtil.applyMonitorOptions(clientMonitor, config);
