@@ -128,8 +128,12 @@ internal static class PerfMultiSocketReqRep
                 if (routerRouter)
                 {
                     var router = ctx.CreateRouterSocket();
+                    // Match the C request/reply harness: the client routing
+                    // identity and the peer routing identity are configured
+                    // before Connect so routed readiness has the same meaning.
                     router.SetRoutingId(RoutingId.From(
-                        System.Text.Encoding.ASCII.GetBytes($"CLIENT-{i}")));
+                        System.Text.Encoding.ASCII.GetBytes($"client_{i}")));
+                    router.Options.SetConnectRoutingId(ServerRoutingId);
                     client = router;
                 }
                 else

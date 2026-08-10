@@ -555,3 +555,16 @@ POSDDD 평가: C와 .NET의 setup·retry 책임을 같은 계층에서 처리하
 throughput ratio는 `59.456% / 41.294% / 84.284% / 70.016% / 131.140% / 122.806%`, 산술평균은 `84.832%`다. 평균 latency ratio는 `1.541x / 2.178x / 1.122x / 1.346x / 1.002x / 1.137x`, 산술평균은 `1.388x`다. .NET multi routed echo aggregate 목표 `70%`와 latency 기준을 충족해 최종 상태는 `통과`다. 개별 size ratio는 측정값으로 기록한다.
 
 POSDDD 평가: routed peer identity를 암묵적인 connection 상태에 맡기지 않고 client connection setup 책임으로 명시했다. 이 parity correction은 public contract·ownership·error semantics를 변경하지 않으며 aggregate가 이미 목표를 충족하므로 추가 binding hotpath pass와 Sol review 기반 두 번째 개선 pass는 수행하지 않았다. build는 `0 warning / 0 error`, contract test는 `149 passed / 0 failed / 0 skipped`다.
+
+### .NET Multi MULTI_ROUTER_ROUTER_REQREP/tcp
+
+조건: Core `v0.10.1` release package, Release, `tcp`, clients `100`, duration `1s`, runs `1`, server/client I/O threads `4/4`, auto-HWM, connect-ready timeout `10000ms`, monitor-HWM `4096000`. C semantic pattern과 .NET runner pattern은 모두 `MULTI_ROUTER_ROUTER_REQREP`다. C와 .NET의 Router client identity를 맞추기 위해 `client_<index>` routing id와 `ConnectRoutingId=SERVER`를 Connect 전에 설정했다. 두 report 모두 6개 size와 30개 result line이 complete다.
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 90448 / 92255 / 84528 / 81417 / 20501 / 15162 | 0.365 / 0.371 / 0.386 / 0.408 / 1.255 / 1.631 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_194652_dotnet-multi-router-router-reqrep-tcp-paired-c1.txt` |
+| .NET runner `MULTI_ROUTER_ROUTER_REQREP` | 54380 / 52205 / 54758 / 49850 / 25790 / 15520 | 0.518 / 0.547 / 0.490 / 0.559 / 1.419 / 2.915 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_194708_dotnet-multi-router-router-reqrep-tcp-paired-before-connect-rid.txt` |
+
+throughput ratio는 `60.123% / 56.588% / 64.781% / 61.228% / 125.799% / 102.361%`, 산술평균은 `78.480%`다. 평균 latency ratio는 `1.419x / 1.474x / 1.269x / 1.370x / 1.131x / 1.787x`, 산술평균은 `1.409x`다. .NET socket request/reply aggregate 목표 `70%`와 latency 기준을 충족해 최종 상태는 `통과`다. 개별 size ratio는 측정값으로 기록한다.
+
+POSDDD 평가: routed peer identity를 connection readiness의 암묵적인 전제에 두지 않고 Router client의 연결 설정 책임으로 명시했다. public contract·ownership·error semantics는 변경하지 않았고, aggregate가 목표를 충족하므로 추가 binding hotpath pass와 Sol review 기반 두 번째 개선 pass는 수행하지 않았다. build는 `0 warning / 0 error`, contract test는 `149 passed / 0 failed / 0 skipped`다.
