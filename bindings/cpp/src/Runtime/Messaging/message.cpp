@@ -131,7 +131,7 @@ message_t::message_t () : _valid (false)
         _valid = true;
 }
 
-message_t::message_t (size_t size_) : _storage (), _valid (false)
+message_t::message_t (size_t size_) : _valid (false)
 {
     if (init_owned_message_storage (detail::native_handle (*this), size_) == 0)
         _valid = true;
