@@ -1,0 +1,94 @@
+{
+  "fixture": "zlink.framework.payload-ownership",
+  "version": 1,
+  "ownershipStates": [
+    "bindingBorrowed",
+    "frameworkOwned",
+    "applicationBorrowed",
+    "released"
+  ],
+  "ownershipInvariants": {
+    "transitionsAreForwardOnly": true,
+    "frameworkOwnsAfterAdmission": true,
+    "applicationReceivesReleaseResponsibility": false,
+    "rawViewValidThroughHandlerTurnOnly": true,
+    "typedPayloadReferencesTransportBuffer": false,
+    "releaseAfterTerminalCompletion": true,
+    "releaseExactlyOnceAfterFrameworkOwnership": true
+  },
+  "copyBudget": {
+    "bindingWithOwnershipHandoff": 0,
+    "bindingWithoutOwnershipHandoff": 1,
+    "frameworkCopiesAfterOwnership": 0,
+    "readonlyAccessorCopies": 0,
+    "maximumDeserializationsAfterAdmission": 1
+  },
+  "scenarios": [
+    {
+      "name": "admission-rejection-before-deserialize",
+      "handlerKind": "none",
+      "admitted": false,
+      "terminal": "capacityExceeded",
+      "frameworkOwnershipAcquired": false,
+      "deserializations": 0,
+      "frameworkReleases": 0,
+      "handlerInvocations": 0
+    },
+    {
+      "name": "accepted-handler-success",
+      "handlerKind": "typed",
+      "admitted": true,
+      "terminal": "success",
+      "frameworkOwnershipAcquired": true,
+      "deserializations": 1,
+      "frameworkReleases": 1,
+      "handlerInvocations": 1
+    },
+    {
+      "name": "accepted-handler-exception",
+      "handlerKind": "typed",
+      "admitted": true,
+      "terminal": "handlerException",
+      "frameworkOwnershipAcquired": true,
+      "deserializations": 1,
+      "frameworkReleases": 1,
+      "handlerInvocations": 1
+    },
+    {
+      "name": "accepted-cancellation-before-handler",
+      "handlerKind": "typed",
+      "admitted": true,
+      "terminal": "cancellation",
+      "frameworkOwnershipAcquired": true,
+      "deserializations": 0,
+      "frameworkReleases": 1,
+      "handlerInvocations": 0
+    },
+    {
+      "name": "accepted-malformed-payload",
+      "handlerKind": "typed",
+      "admitted": true,
+      "terminal": "protocolError",
+      "frameworkOwnershipAcquired": true,
+      "deserializations": 1,
+      "frameworkReleases": 1,
+      "handlerInvocations": 0
+    },
+    {
+      "name": "accepted-raw-handler-success",
+      "handlerKind": "raw",
+      "admitted": true,
+      "terminal": "success",
+      "frameworkOwnershipAcquired": true,
+      "deserializations": 0,
+      "frameworkReleases": 1,
+      "handlerInvocations": 1
+    }
+  ],
+  "accessorScenario": {
+    "reads": 3,
+    "fullBufferCopies": 0,
+    "viewIdentityIsNotContractual": true,
+    "backingOwner": "framework"
+  }
+}

@@ -1,0 +1,148 @@
+{
+  "fixture": "zlink.framework.codec-selection",
+  "version": 1,
+  "limits": {
+    "sendTypeCacheCapacity": 1024
+  },
+  "contentTypeNormalization": {
+    "registrationInput": "bareMediaType",
+    "outerWhitespace": "trimAsciiSpaceAndTab",
+    "typeAndSubtypeCase": "asciiLowercase",
+    "tokenCharacters": "!#$%&'*+-.^_`|~0-9A-Za-z",
+    "parametersAllowed": false,
+    "internalWhitespaceAllowed": false,
+    "wireRequiresCanonicalForm": true,
+    "nonCanonicalWireTerminal": "protocolError"
+  },
+  "registryInvariants": {
+    "immutableAfterStartup": true,
+    "normalizedContentTypeUnique": true,
+    "sameNormalizedContentTypeRegistration": "lastRegistrationReplaces",
+    "sendSelectorInput": "declaredMessageType",
+    "sendSelectorPriority": "lastRegisteredMatch",
+    "sendFallback": "json",
+    "receiveSelectorInput": "normalizedWireContentType",
+    "unknownReceiveContentType": "protocolError",
+    "unknownReceiveFallsBackToJson": false,
+    "receiveTableBuiltAtStartup": true,
+    "sendCacheEvictsExistingEntry": false,
+    "hotPathNormalizesContentType": false,
+    "hotPathAllocatesCandidateCollection": false
+  },
+  "extensions": [
+    {
+      "name": "baseCodec",
+      "contentType": "application/x-base",
+      "matchesDeclaredTypes": ["BaseMessage"]
+    },
+    {
+      "name": "broadCodec",
+      "contentType": "application/x-broad",
+      "matchesDeclaredTypes": ["BaseMessage", "OtherMessage"]
+    },
+    {
+      "name": "otherCodec",
+      "contentType": "application/x-other",
+      "matchesDeclaredTypes": ["OtherMessage"]
+    }
+  ],
+  "normalizationScenarios": [
+    {
+      "name": "ascii-case-and-outer-ows-normalize-at-registration",
+      "input": " \tApplication/X-Base\t ",
+      "expected": "application/x-base"
+    },
+    {
+      "name": "canonical-registration-remains-unchanged",
+      "input": "application/x-other",
+      "expected": "application/x-other"
+    },
+    {
+      "name": "parameterized-registration-is-rejected",
+      "input": "application/x-base; charset=utf-8",
+      "expectedError": "configurationError"
+    },
+    {
+      "name": "internal-ows-is-rejected",
+      "input": "application /x-base",
+      "expectedError": "configurationError"
+    },
+    {
+      "name": "missing-subtype-is-rejected",
+      "input": "application/",
+      "expectedError": "configurationError"
+    },
+    {
+      "name": "non-ascii-token-is-rejected",
+      "input": "application/x-코덱",
+      "expectedError": "configurationError"
+    }
+  ],
+  "normalizedDuplicateScenario": {
+    "registrationInputs": ["application/x-base", " \tApplication/X-Base\t"],
+    "finalEntryCount": 1,
+    "selectedRegistrationIndex": 1
+  },
+  "sendScenarios": [
+    {
+      "name": "declared-type-not-runtime-subtype-selects-codec",
+      "declaredType": "BaseMessage",
+      "runtimeType": "DerivedMessage",
+      "registrationOrder": ["broadCodec", "baseCodec"],
+      "expectedCodec": "baseCodec",
+      "expectedContentType": "application/x-base"
+    },
+    {
+      "name": "last-registered-match-wins",
+      "declaredType": "OtherMessage",
+      "runtimeType": "OtherMessage",
+      "registrationOrder": ["otherCodec", "broadCodec"],
+      "expectedCodec": "broadCodec",
+      "expectedContentType": "application/x-broad"
+    },
+    {
+      "name": "no-extension-match-uses-json",
+      "declaredType": "UnregisteredMessage",
+      "runtimeType": "UnregisteredMessage",
+      "registrationOrder": ["baseCodec", "broadCodec", "otherCodec"],
+      "expectedCodec": "json",
+      "expectedContentType": "application/json"
+    }
+  ],
+  "receiveScenarios": [
+    {
+      "name": "known-content-type-selects-startup-entry",
+      "wireContentType": "application/x-base",
+      "expectedCodec": "baseCodec",
+      "expectedTerminal": "success"
+    },
+    {
+      "name": "unknown-content-type-is-protocol-error",
+      "wireContentType": "application/x-unknown",
+      "expectedCodec": null,
+      "expectedTerminal": "protocolError"
+    },
+    {
+      "name": "non-canonical-case-is-protocol-error",
+      "wireContentType": "Application/X-Base",
+      "expectedCodec": null,
+      "expectedTerminal": "protocolError"
+    },
+    {
+      "name": "parameterized-wire-content-type-is-protocol-error",
+      "wireContentType": "application/x-base;charset=utf-8",
+      "expectedCodec": null,
+      "expectedTerminal": "protocolError"
+    }
+  ],
+  "cacheScenarios": [
+    {
+      "name": "cache-capacity-does-not-evict",
+      "distinctDeclaredTypes": 1025,
+      "cachedTypes": 1024,
+      "uncachedTypes": 1,
+      "existingCachedSelectionChanges": false,
+      "uncachedTypeReevaluatesSelector": true
+    }
+  ]
+}

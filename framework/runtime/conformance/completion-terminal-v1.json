@@ -1,0 +1,110 @@
+{
+  "fixture": "zlink.framework.completion-terminal",
+  "version": 1,
+  "limits": {
+    "pendingOperationCapacity": 4096,
+    "operationIdBits": 128,
+    "replyRouteIdBits": 64
+  },
+  "identityInvariants": {
+    "operationIdFields": ["high", "low"],
+    "operationIdAllZeroAllowed": false,
+    "replyRouteIdIsOperationId": false,
+    "requestReplyRouteIdAllZeroAllowed": false,
+    "operationIdUniqueForSourceLifecycle": true,
+    "replyRouteIdUniqueForSourceLifecycle": true,
+    "wrapOrReuseIsTerminalRuntimeError": true
+  },
+  "registryInvariants": {
+    "terminalWinner": "atomicTake",
+    "terminalTombstoneRetention": false,
+    "completionDispatchedOutsideRegistryGate": true,
+    "completionUsesNewExecutionTurn": true,
+    "capacityFailure": "capacityExceeded",
+    "sameTerminalDuplicateDiagnostic": "duplicateOrLate",
+    "conflictingTerminalDiagnostic": "protocolOrLate",
+    "unknownOperationDiagnostic": "unknownOrLate",
+    "lateUnknownChangesApplicationResult": false,
+    "lateConflictingTerminalChangesApplicationResult": false
+  },
+  "operations": {
+    "alpha": {
+      "operationId": { "high": "1311768467463790320", "low": "1147797409030816545" },
+      "replyRouteId": "41"
+    },
+    "beta": {
+      "operationId": { "high": "1311768467463790320", "low": "1147797409030816546" },
+      "replyRouteId": "42"
+    },
+    "gamma": {
+      "operationId": { "high": "1311768467463790321", "low": "1147797409030816545" },
+      "replyRouteId": "43"
+    }
+  },
+  "raceScenarios": [
+    {
+      "name": "reply-wins-timeout",
+      "operation": "alpha",
+      "events": ["reply:success", "timeout"],
+      "applicationTerminal": "reply:success",
+      "diagnosticEvents": ["timeout"],
+      "diagnosticClass": "late",
+      "applicationCompletionCount": 1
+    },
+    {
+      "name": "timeout-wins-reply",
+      "operation": "alpha",
+      "events": ["timeout", "reply:success"],
+      "applicationTerminal": "timeout",
+      "diagnosticEvents": ["reply:success"],
+      "diagnosticClass": "late",
+      "applicationCompletionCount": 1
+    },
+    {
+      "name": "cancellation-wins-close",
+      "operation": "alpha",
+      "events": ["cancellation", "close"],
+      "applicationTerminal": "cancellation",
+      "diagnosticEvents": ["close"],
+      "diagnosticClass": "late",
+      "applicationCompletionCount": 1
+    },
+    {
+      "name": "close-wins-cancellation",
+      "operation": "alpha",
+      "events": ["close", "cancellation"],
+      "applicationTerminal": "close",
+      "diagnosticEvents": ["cancellation"],
+      "diagnosticClass": "late",
+      "applicationCompletionCount": 1
+    },
+    {
+      "name": "duplicate-reply-does-not-complete-twice",
+      "operation": "alpha",
+      "events": ["reply:success", "reply:success"],
+      "applicationTerminal": "reply:success",
+      "diagnosticEvents": ["reply:success"],
+      "diagnosticClass": "duplicateOrLate",
+      "applicationCompletionCount": 1
+    },
+    {
+      "name": "conflicting-late-terminal-is-diagnostic-only",
+      "operation": "alpha",
+      "events": ["reply:success", "reply:protocolError"],
+      "applicationTerminal": "reply:success",
+      "diagnosticEvents": ["reply:protocolError"],
+      "diagnosticClass": "protocolOrLate",
+      "applicationCompletionCount": 1
+    },
+    {
+      "name": "unknown-operation-is-diagnostic-only",
+      "operation": "beta",
+      "registered": false,
+      "events": ["reply:success"],
+      "applicationTerminal": null,
+      "diagnosticEvents": ["reply:success"],
+      "diagnosticClass": "unknownOrLate",
+      "applicationCompletionCount": 0
+    }
+  ]
+}
