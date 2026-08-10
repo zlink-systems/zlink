@@ -862,6 +862,19 @@ baseline throughput ratio는 `65.432% / 68.435% / 63.576% / 66.536% / 95.939% / 
 
 baseline throughput ratio는 `61.333% / 58.440% / 60.148% / 108.726% / 119.459% / 94.835%`, 산술평균 `83.823%`이며 평균 latency ratio는 `1.161x / 1.271x / 1.305x / 1.388x / 1.311x / 0.987x`, 산술평균 `1.237x`다. 자체 `PublisherSendOperation.EnsureReady`/`EnsureNotSubmitted` AggressiveInlining 후 throughput ratio는 `60.318% / 62.222% / 67.203% / 92.443% / 78.733% / 72.399%`, 산술평균 `72.220%`, 평균 latency ratio는 `1.145x / 1.244x / 1.478x / 1.205x / 0.984x / 1.027x`, 산술평균 `1.181x`다. throughput 악화로 자체 후보는 원복했다. Sol review는 topic cache·기존 Message pool 유지와 builder allocation 제거·submit 경계 후보 no-go를 확인했다. 추가 contract-safe 후보가 없어 aggregate throughput 목표 `85%` 미달 상태를 `보류`한다. public contract·ownership·error semantics는 변경하지 않았다. build `0 warning / 0 error`, contract test `149 passed / 0 failed / 0 skipped`다.
 
+### .NET Multi MULTI_PUBSUB/tls
+
+조건: Core `v0.10.1` release package, Release, `tls`, clients `100`, duration `1s`, runs `1`, msg sizes `64/256/1024/4096/65536/131072B`, connect concurrency `128`, connect-ready timeout `10000ms`, monitor-HWM `4096000`, auto-HWM `balanced`, server/client I/O threads `4/4`다. C와 .NET report는 6개 size와 30개 result line이 complete다.
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 1091620 / 1310878 / 1033471 / 380915 / 28742 / 17505 | 409.054 / 406.597 / 345.450 / 196.042 / 168.965 / 161.046 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_001824_dotnet-pubsub-tls-paired-c-100.txt` |
+| .NET baseline | 698915 / 906496 / 664782 / 222515 / 25074 / 8518 | 457.623 / 469.661 / 414.368 / 335.520 / 166.168 / 235.984 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260811_001838_dotnet-pubsub-tls-paired-baseline-100.txt` |
+| .NET own `PublisherSendOperation` validation inlining | 692775 / 870673 / 805416 / 362331 / 38455 / 17651 | 469.667 / 480.440 / 401.232 / 261.812 / 134.683 / 128.185 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260811_001957_dotnet-pubsub-tls-own-publisher-validation-inline-100.txt` |
+
+baseline throughput ratio는 `64.025% / 69.152% / 64.325% / 58.416% / 87.238% / 48.660%`, 산술평균 `65.303%`이며 평균 latency ratio는 `1.119x / 1.155x / 1.200x / 1.711x / 0.983x / 1.465x`, 산술평균 `1.272x`다. `PublisherSendOperation.EnsureReady`/`EnsureNotSubmitted` AggressiveInlining 후 own throughput ratio는 `63.463% / 66.419% / 77.933% / 95.121% / 133.794% / 100.834%`, 산술평균 `89.594%`, 평균 latency ratio `1.070x`다. baseline 대비 throughput과 latency가 개선되어 후보를 유지하고 aggregate throughput 기준을 통과한다. Sol review `SOL-DOTNET-MULTI-PUBSUB-TLS-20260811`는 GO하고 `EnsureNotSubmitted → non-empty 검사 → submitted 표시 → publish` 순서, topic validation, Message ownership과 retry 의미가 유지됨을 확인했다. 추가 builder/public submit 경계 후보는 NO-GO다. 최종 상태는 `통과`다. public contract·builder state·Message ownership·exception/error semantics는 변경하지 않았다. build `0 warning / 0 error`, contract test `149 passed / 0 failed / 0 skipped`다.
+
+
 ### .NET Multi MULTI_ROUTER_ROUTER_REQREP/wss
 
 조건: Core `v0.10.1` release package, Release, `wss`, clients `100`, duration `1s`, runs `1`, msg sizes `64/256/1024/4096/65536/131072B`, connect concurrency `128`, connect-ready timeout `10000ms`, monitor-HWM `4096000`, auto-HWM `balanced`, server/client I/O threads `4/4`. C semantic pattern과 .NET runner pattern은 `MULTI_ROUTER_ROUTER_REQREP`이며 socket request/reply 의미로 paired 측정했다.

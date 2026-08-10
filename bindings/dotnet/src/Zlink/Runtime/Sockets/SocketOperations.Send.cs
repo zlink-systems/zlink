@@ -97,12 +97,14 @@ internal sealed class PublisherSendOperation : SendOperation, SendSubmitOperatio
             : _socket.PublishCore(_topic, _parts.Parts, _flags);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureReady()
     {
         EnsureNotSubmitted();
         _parts.EnsureNotEmpty();
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureNotSubmitted()
     {
         _submission.EnsureNotSubmitted();
