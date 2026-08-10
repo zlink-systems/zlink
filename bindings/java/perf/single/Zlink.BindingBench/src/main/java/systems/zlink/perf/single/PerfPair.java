@@ -170,9 +170,9 @@ final class PerfPair {
     // sample without advancing (send_step_retry). A non-transient failure
     // is fatal and propagates (send_step_fatal).
     private static boolean trySendActive(PairSocket sender, Message active) {
-        try (Message outbound = Message.from(active)) {
+        try {
             return sender.send()
-                .message(outbound)
+                .message(active)
                 .flags(SendFlags.DONT_WAIT)
                 .submit();
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {

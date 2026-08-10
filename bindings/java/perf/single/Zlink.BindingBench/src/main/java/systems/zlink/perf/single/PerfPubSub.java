@@ -5,18 +5,15 @@ package systems.zlink.perf.single;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.eventing.MonitorEventType;
-import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.sockets.PubSocket;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SocketType;
 import systems.zlink.contracts.sockets.SubSocket;
 import systems.zlink.contracts.messaging.TopicMessage;
-import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
 import java.time.Duration;
-import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class PerfPubSub {
@@ -144,14 +141,11 @@ final class PerfPubSub {
             recvThread.start();
             Message active = PerfUtil.payloadTemplate(config.size());
             try {
-                try (PerfSocketPollSet writable = PerfSocketPollSet.fromSockets(
-                    List.of(pub), PollEventFlags.POLLOUT)) {
-                    while (System.nanoTime() < activeEnd) {
-                        active = PerfUtil.resetAndWritePayload(active, config.size(),
-                            (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
-                        if (!publishWhenWritable(pub, writable, active, activeEnd)) {
-                            break;
-                        }
+                while (System.nanoTime() < activeEnd) {
+                    active = PerfUtil.resetAndWritePayload(active, config.size(),
+                        (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
+                    if (!publishWithRetry(pub, active, activeEnd)) {
+                        break;
                     }
                 }
             } finally {
@@ -161,10 +155,7 @@ final class PerfPubSub {
             // published on the same topic so the subscriber's filter delivers it.
             try (Message stop = PerfStopToken.newMessage()) {
                 long stopDeadline = System.nanoTime() + 2_000_000_000L;
-                try (PerfSocketPollSet writable = PerfSocketPollSet.fromSockets(
-                    List.of(pub), PollEventFlags.POLLOUT)) {
-                    publishWhenWritable(pub, writable, stop, stopDeadline);
-                }
+                publishWithRetry(pub, stop, stopDeadline);
             }
             PerfUtil.join(recvThread, "pubsub receiver",
                 Duration.ofSeconds(config.durationSeconds() + 10L));
@@ -199,22 +190,18 @@ final class PerfPubSub {
         }
     }
 
-    private static boolean publishWhenWritable(PubSocket pub,
-                                               PerfSocketPollSet writable,
-                                               Message message,
-                                               long deadlineNs) {
+    private static boolean publishWithRetry(PubSocket pub, Message message,
+                                            long deadlineNs) {
         // C parity (perf_pubsub.cpp send step + perf_single_one_way.hpp
         // send_active_samples): nonblocking publish; on transient backpressure
         // retry immediately (send_step_retry -> continue) until the deadline,
         // with no POLLOUT wait or sleep.
         while (System.nanoTime() < deadlineNs) {
-            try (Message outbound = Message.from(message)) {
-                if (pub.publish(TOPIC)
-                        .message(outbound)
-                        .flags(SendFlags.DONT_WAIT)
-                        .submit()) {
-                    return true;
-                }
+            if (pub.publish(TOPIC)
+                    .message(message)
+                    .flags(SendFlags.DONT_WAIT)
+                    .submit()) {
+                return true;
             }
         }
         return false;
