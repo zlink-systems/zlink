@@ -234,3 +234,14 @@ throughput ratio는 `69.59% / 83.52% / 97.04% / 93.95% / 95.11% / 91.45%`, 산�
 `88.44%`다. latency ratio는 `1.265x / 1.180x / 1.320x / 0.991x / 1.043x / 1.080x`,
 산술평균은 `1.146x`다. .NET 단순 one-way aggregate 기준을 충족해 통과로 판정한다.
 다음 대상은 `DEALER_ROUTER/wss`다.
+
+### .NET Single DEALER_ROUTER/wss
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 1761888 / 768779 / 244319 / 10117 / 6149 / 3335 | 57.733 / 43.288 / 27.707 / 31.479 / 54.809 / 68.452 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_154433_dealer-router-wss-paired-c1.txt` |
+| .NET | 1243969 / 652944 / 239091 / 9479 / 5895 / 3079 | 59.091 / 39.267 / 34.010 / 33.676 / 42.891 / 75.113 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_154448_dotnet-dealer-router-wss-paired-final.txt` |
+
+throughput ratio는 `70.60% / 84.93% / 97.86% / 93.69% / 95.87% / 92.32%`, 산술평균은
+`89.21%`다. latency ratio는 `1.024x / 0.907x / 1.227x / 1.070x / 0.783x / 1.097x`,
+산술평균은 `1.018x`다. .NET routed one-way aggregate 기준을 충족해 통과로 판정한다.
