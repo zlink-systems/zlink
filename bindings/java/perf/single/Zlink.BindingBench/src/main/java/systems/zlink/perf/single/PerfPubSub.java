@@ -5,6 +5,7 @@ package systems.zlink.perf.single;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.eventing.MonitorEventType;
+import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.sockets.PubSocket;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.SendFlags;
@@ -15,14 +16,16 @@ import systems.zlink.contracts.messaging.TopicMessage;
 import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.perf.PerfErrno;
+import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class PerfPubSub {
     private static final MonitorEventType READY_EVENT = MonitorEventType.CONNECTION_READY;
-    private static final String TOPIC = "perf.topic";
+    private static final String TOPIC = "bench";
 
     private PerfPubSub() {
     }
@@ -90,37 +93,15 @@ final class PerfPubSub {
             long activeEnd = System.nanoTime()
                 + config.durationSeconds() * 1_000_000_000L;
             Thread recvThread = new Thread(() -> {
-                // C parity: perf_single_one_way.hpp run_active_phase receiver
-                // thread (~276-327). C does NOT poll the SUB socket: it issues
-                // a blocking subscribe (bounded by RCVTIMEO so an idle socket
-                // returns EAGAIN and the loop keeps cycling) and, on each
-                // payload, burst-drains with ZLINK_DONTWAIT until EAGAIN.
-                // Using a poller here added a poll(-1) syscall round trip per
-                // ~200-message batch which, combined with PUB NODROP
-                // backpressure, throttled steady-state throughput ~4x. The
-                // loop ends purely on the wire-level stop token.
-                try (TopicMessage received = new TopicMessage()) {
+                // C parity: wait through the public poller, then drain every
+                // currently available publication with DONT_WAIT. The loop
+                // ends purely on the wire-level stop token.
+                try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
+                         List.of(sub), PollEventFlags.POLLIN);
+                     TopicMessage received = new TopicMessage()) {
                     boolean stop = false;
                     while (!stop) {
-                        if (!sub.subscribe(received, RecvFlags.NONE)) {
-                            // RCVTIMEO elapsed with no data: keep cycling
-                            // (matches C recv_result_again -> continue).
-                            continue;
-                        }
-                        if (PerfStopToken.isStopTokenMessage(
-                                received.firstPart())) {
-                            return;
-                        }
-                        long receivedNanoTime = System.nanoTime();
-                        PerfUtil.Header header = PerfUtil.decodeHeader(
-                            received.firstPart(), config.size(),
-                            receivedNanoTime);
-                        if (header != null
-                            && header.phase() == PerfUtil.PHASE_ACTIVE
-                            && receivedNanoTime < activeEnd) {
-                            metrics.recordNanos(header.latencyNanos());
-                        }
-                        // Inner DONT_WAIT burst drain (C lines ~289-315).
+                        pollSet.poll(-1);
                         while (true) {
                             if (!sub.subscribe(received,
                                     RecvFlags.DONT_WAIT)) {
@@ -131,14 +112,14 @@ final class PerfPubSub {
                                 stop = true;
                                 break;
                             }
-                            long burstReceivedNanoTime = System.nanoTime();
-                            PerfUtil.Header burst = PerfUtil.decodeHeader(
+                            long receivedNanoTime = System.nanoTime();
+                            PerfUtil.Header header = PerfUtil.decodeHeader(
                                 received.firstPart(), config.size(),
-                                burstReceivedNanoTime);
-                            if (burst != null
-                                && burst.phase() == PerfUtil.PHASE_ACTIVE
-                                && burstReceivedNanoTime < activeEnd) {
-                                metrics.recordNanos(burst.latencyNanos());
+                                receivedNanoTime);
+                            if (header != null
+                                && header.phase() == PerfUtil.PHASE_ACTIVE
+                                && receivedNanoTime < activeEnd) {
+                                metrics.recordNanos(header.latencyNanos());
                             }
                         }
                     }
@@ -161,10 +142,14 @@ final class PerfPubSub {
             }
             // PERF_SINGLE_TEST_POLICY § 1.4: signal phase end with stop token
             // published on the same topic so the subscriber's filter delivers it.
-            try (Message stop = PerfStopToken.newMessage()) {
-                PerfStopToken.sendWithRetry(
-                    () -> tryPublishBlocking(pub, stop), "pubsub");
-            }
+            PerfStopToken.sendWithRetry(() -> {
+                // C creates a fresh stop message for each non-blocking retry.
+                // Do the same so a backpressured submit cannot leave a reused
+                // message in an ambiguous native ownership state.
+                try (Message stop = PerfStopToken.newMessage()) {
+                    return tryPublish(pub, stop, SendFlags.DONT_WAIT);
+                }
+            }, "pubsub");
             PerfUtil.join(recvThread, "pubsub receiver",
                 Duration.ofSeconds(config.durationSeconds() + 10L));
             if (failure.get() != null) {
@@ -199,10 +184,15 @@ final class PerfPubSub {
     }
 
     private static boolean tryPublishBlocking(PubSocket pub, Message message) {
+        return tryPublish(pub, message, SendFlags.NONE);
+    }
+
+    private static boolean tryPublish(PubSocket pub, Message message,
+                                      SendFlags flags) {
         try {
             return pub.publish(TOPIC)
                 .message(message)
-                .flags(SendFlags.NONE)
+                .flags(flags)
                 .submit();
         } catch (ZlinkSubmitException ex) {
             if (ex.getResult() == SubmitResult.BACKPRESSURED) {

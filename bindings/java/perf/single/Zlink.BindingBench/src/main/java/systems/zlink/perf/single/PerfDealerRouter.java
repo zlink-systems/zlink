@@ -11,16 +11,12 @@ import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SocketType;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
-import systems.zlink.contracts.sockets.SubmitResult;
-import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfErrno;
 import systems.zlink.perf.PerfUtil;
 import java.time.Duration;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -33,8 +29,6 @@ final class PerfDealerRouter {
     static PerfUtil.Result run(PerfUtil.Config config) {
         String endpoint = PerfUtil.endpoint(config.transport(), "single-dealer-router");
         CountDownLatch finished = new CountDownLatch(1);
-        CountDownLatch routed = new CountDownLatch(1);
-        AtomicBoolean probePending = new AtomicBoolean(true);
         AtomicReference<Throwable> failure = new AtomicReference<>();
         PerfUtil.Metrics metrics = new PerfUtil.Metrics(config);
         try (Context ctx = PerfUtil.newContext(config);
@@ -59,11 +53,7 @@ final class PerfDealerRouter {
             PerfUtil.recalculateAutoHwm(ctx);
 
             // PERF_SINGLE_TEST_POLICY § 1.4: receiver waits with -1 and exits
-            // on wire-level stop token. The probe still uses a header phase
-            // (PHASE_WARMUP) since it is part of the ready barrier, not a
-            // shutdown signal.
-            long activeEnd = System.nanoTime()
-                + config.durationSeconds() * 1_000_000_000L;
+            // on wire-level stop token.
             Thread receiverThread = new Thread(() -> {
                 try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
                          List.of(receiver), PollEventFlags.POLLIN);
@@ -87,13 +77,7 @@ final class PerfDealerRouter {
                                 if (header == null) {
                                     continue;
                                 }
-                                if (header.phase() == PerfUtil.PHASE_WARMUP
-                                    && probePending.compareAndSet(true, false)) {
-                                    routed.countDown();
-                                    continue;
-                                }
-                                if (header.phase() == PerfUtil.PHASE_ACTIVE
-                                    && receivedNanoTime < activeEnd) {
+                                if (header.phase() == PerfUtil.PHASE_ACTIVE) {
                                     metrics.recordNanos(header.latencyNanos());
                                 }
                             } finally {
@@ -112,29 +96,10 @@ final class PerfDealerRouter {
             }, "single-dealer-router-receiver");
             receiverThread.start();
 
-            long probeDeadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
-            while (System.nanoTime() < probeDeadline && routed.getCount() != 0) {
-                try (var probe = PerfUtil.payload(config.size(),
-                         (byte) PerfUtil.PHASE_WARMUP, System.nanoTime())) {
-                    if (!trySendActive(sender, probe)) {
-                        Thread.onSpinWait();
-                    }
-                }
-                try {
-                    if (routed.await(10, java.util.concurrent.TimeUnit.MILLISECONDS)) {
-                        break;
-                    }
-                } catch (InterruptedException ex) {
-                    Thread.currentThread().interrupt();
-                    throw new IllegalStateException(
-                        "dealer/router self-check interrupted", ex);
-                }
-            }
-            PerfUtil.await(routed, "dealer/router self-check",
-                Duration.ofSeconds(10));
-
             Thread traffic = new Thread(() -> {
                 try {
+                    long activeEnd = System.nanoTime()
+                        + config.durationSeconds() * 1_000_000_000L;
                     Message active = PerfUtil.payloadTemplate(config.size());
                     try {
                         while (System.nanoTime() < activeEnd) {
@@ -181,27 +146,6 @@ final class PerfDealerRouter {
             PerfUtil.printSingleMonitorAutoHwm(config, senderMonitor, "sender",
                 SocketType.DEALER);
             return metrics.finishSingle(config);
-        }
-    }
-
-    private static boolean trySendActive(DealerSocket sender, Message active) {
-        try {
-            return sender.send()
-                .message(active)
-                .flags(SendFlags.DONT_WAIT)
-                .submit();
-        } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {
-            if (ex.getResult()
-                == systems.zlink.contracts.sockets.SubmitResult.BACKPRESSURED) {
-                return false;
-            }
-            throw ex;
-        } catch (systems.zlink.contracts.errors.ZlinkException ex) {
-            int errno = ex.getNativeErrno();
-            if (PerfErrno.isRetryableSend(errno)) {
-                return false;
-            }
-            throw ex;
         }
     }
 
