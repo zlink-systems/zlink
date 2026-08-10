@@ -1269,7 +1269,7 @@ transport 상태를 판정한다.
 ### 9.7 Python
 
 - perf 경로: `bindings/python/perf`
-- Single 상태: `진행 (5개 tcp pattern·PAIR·PUBSUB/ws 통과)`
+- Single 상태: `진행 (5개 tcp·5개 ws pattern 통과)`
 - Multi 상태: `미측정`
 - 다음 작업: 다음 transport·pattern을 C와 순차 paired 측정한다.
 
@@ -1284,9 +1284,9 @@ transport 상태를 판정한다.
 | `tcp` | `ROUTER_ROUTER` | 6.493% | 10.303% | 18.687% | 97.009% | 78.447% | 60.432% | 산술평균 45.228%, latency 산술평균 1.028x, routed one-way 최소 기준 33% 통과. routed send builder factory closure 제거 후 64/256/1024B Python 절대 throughput은 이전 결과보다 14.4%/6.5%/15.0% 증가했고 Sol review는 GO다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_012540_python-router-router-tcp-no-factory-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_012557_python-router-router-tcp-no-factory-after.txt` |
 | `ws` | `PAIR` | 9.583% | 13.021% | 32.896% | 104.062% | 104.900% | 93.162% | 산술평균 59.604%, latency 산술평균 0.620x, 단순 one-way 최소 기준 35% 통과. shared native send builder 개선과 Sol GO가 동일하게 적용된다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_011932_python-pair-ws-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_011949_python-pair-ws-current.txt` |
 | `ws` | `PUBSUB` | 10.922% | 14.666% | 32.528% | 97.852% | 77.047% | 99.709% | 산술평균 55.454%, latency 산술평균 0.633x, 단순 one-way 최소 기준 35% 통과. shared publisher closure 제거와 Sol GO가 동일하게 적용된다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_012029_python-pubsub-ws-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_012101_python-pubsub-ws-current.txt` |
-| `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `DEALER_DEALER` | 11.278% | 15.751% | 33.933% | 83.377% | 70.642% | 74.524% | 산술평균 48.251%, latency 산술평균 0.762x, 단순 one-way 최소 기준 35% 통과. shared native send builder 개선과 Sol GO가 적용된다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_013400_python-dealer-dealer-ws-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_013419_python-dealer-dealer-ws-current.txt` |
+| `ws` | `DEALER_ROUTER` | 7.798% | 14.247% | 33.196% | 91.588% | 79.042% | 68.867% | 산술평균 49.123%, latency 산술평균 0.726x, routed one-way 최소 기준 33% 통과. shared native send와 router receive owner 개선 및 Sol GO가 적용된다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_013430_python-dealer-router-ws-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_013448_python-dealer-router-ws-current.txt` |
+| `ws` | `ROUTER_ROUTER` | 7.706% | 12.925% | 31.079% | 88.123% | 81.651% | 62.900% | 산술평균 47.398%, latency 산술평균 0.749x, routed one-way 최소 기준 33% 통과. shared routed send와 router receive owner 개선 및 Sol GO가 적용된다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_013501_python-router-router-ws-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_013519_python-router-router-ws-current.txt` |
 | `wss` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1568,7 +1568,7 @@ transport 상태를 판정한다.
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 5 | Go | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 6 | Rust | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
-| 7 | Python | 진행·5개 tcp pattern·PAIR·PUBSUB/ws 통과 | 미측정 | 다음 transport·pattern의 paired 측정을 진행한다. |
+| 7 | Python | 진행·5개 tcp·5개 ws pattern 통과 | 미측정 | 다음 transport·pattern의 paired 측정을 진행한다. |
 
 ## 11. 측정 기록과 결과
 
@@ -1576,6 +1576,9 @@ transport 상태를 판정한다.
 
 | 날짜 | 언어 | 대상 | pair tag | size별 throughput ratio | size 중앙값 | 판정 | report |
 |------|------|------|----------|-------------------------|------------|------|--------|
+| 2026-08-11 | Python | Single / ROUTER_ROUTER / ws / 64·256·1024·65536·131072·262144B | `python-router-router-ws-current` | 7.706%, 12.925%, 31.079%, 88.123%, 81.651%, 62.900% | 47.398% (산술평균), latency 0.749x | 통과·shared routed send와 router receive owner 개선 유지·Sol GO | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_013501_python-router-router-ws-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_013519_python-router-router-ws-current.txt` |
+| 2026-08-11 | Python | Single / DEALER_ROUTER / ws / 64·256·1024·65536·131072·262144B | `python-dealer-router-ws-current` | 7.798%, 14.247%, 33.196%, 91.588%, 79.042%, 68.867% | 49.123% (산술평균), latency 0.726x | 통과·shared native send와 router receive owner 개선 유지·Sol GO | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_013430_python-dealer-router-ws-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_013448_python-dealer-router-ws-current.txt` |
+| 2026-08-11 | Python | Single / DEALER_DEALER / ws / 64·256·1024·65536·131072·262144B | `python-dealer-dealer-ws-current` | 11.278%, 15.751%, 33.933%, 83.377%, 70.642%, 74.524% | 48.251% (산술평균), latency 0.762x | 통과·shared native send builder 개선 유지·Sol GO | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_013400_python-dealer-dealer-ws-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_013419_python-dealer-dealer-ws-current.txt` |
 | 2026-08-11 | Python | Single / PUBSUB / ws / 64·256·1024·65536·131072·262144B | `python-pubsub-ws-current` | 10.922%, 14.666%, 32.528%, 97.852%, 77.047%, 99.709% | 55.454% (산술평균), latency 0.633x | 통과·private native publisher operation 유지 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_012029_python-pubsub-ws-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_012101_python-pubsub-ws-current.txt` |
 | 2026-08-11 | Python | Single / PAIR / ws / 64·256·1024·65536·131072·262144B | `python-pair-ws-current` | 9.583%, 13.021%, 32.896%, 104.062%, 104.900%, 93.162% | 59.604% (산술평균), latency 0.620x | 통과·shared native builder 유지 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_011932_python-pair-ws-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_011949_python-pair-ws-current.txt` |
 | 2026-08-11 | Python | Single / ROUTER_ROUTER / tcp / 64·256·1024·65536·131072·262144B | `python-router-router-tcp-no-factory-after` | 6.493%, 10.303%, 18.687%, 97.009%, 78.447%, 60.432% | 45.228% (산술평균), latency 1.028x | 통과·native routed receive owner bridge와 routed send factory closure 제거 유지·Sol GO | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_012540_python-router-router-tcp-no-factory-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_012557_python-router-router-tcp-no-factory-after.txt` |
