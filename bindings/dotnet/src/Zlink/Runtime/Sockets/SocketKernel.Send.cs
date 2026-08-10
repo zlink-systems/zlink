@@ -243,10 +243,14 @@ internal sealed partial class SocketKernel : IDisposable
     internal void PublishMessageUnchecked(string topic, Message message,
         SendFlags flags = SendFlags.None)
     {
-        var topicUtf8 = GetValidatedPublishTopicUtf8(topic, nameof(topic));
-        if (message == null)
-            throw new ArgumentNullException(nameof(message));
-        PublishSingleCore(topicUtf8, message, (int)flags);
+        lock (SubmitGate)
+        {
+            var topicUtf8 = GetValidatedPublishTopicUtf8Unlocked(topic,
+                nameof(topic));
+            if (message == null)
+                throw new ArgumentNullException(nameof(message));
+            PublishSingleCoreUnlocked(topicUtf8, message, (int)flags);
+        }
     }
 
     internal SendResult PublishNoWaitResult(string topic, Message message)

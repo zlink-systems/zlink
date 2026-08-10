@@ -290,3 +290,15 @@ throughput ratio는 `57.49% / 68.06% / 87.72% / 94.43% / 99.75% / 90.66%`, 산�
 before throughput ratio는 `85.575% / 77.742% / 101.392% / 90.105% / 90.064% / 88.640%`, 산술평균은 `88.919%`다. after throughput ratio는 `76.073% / 82.349% / 107.483% / 87.683% / 90.457% / 87.112%`, 산술평균은 `88.526%`다. before latency ratio는 `0.890x / 134.697x / 17.567x / 1.103x / 1.100x / 1.123x`, 산술평균은 `26.080x`다. after latency ratio는 `0.999x / 101.148x / 14.353x / 1.130x / 1.097x / 1.145x`, 산술평균은 `19.979x`다.
 
 `EpochNs()`의 Stopwatch 기반 wall-epoch 변환 후 256B·1024B latency가 개선됐지만 latency aggregate는 미달이다. Sol 2차 리뷰에서 `MessageSocketSendOperation` 재사용과 private direct-send는 public 호출자 참조·mutable state·ownership 계약 위험으로 no-go 판정했다. 측정값 기준으로 `자체 개선 후 no-go·보류`한다. 다음 대상은 `.NET Single PUBSUB/tls`다.
+
+### .NET Single PUBSUB/tls
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 1341628 / 789037 / 302617 / 13200 / 7703 / 4274 | 51.635 / 0.585 / 0.648 / 14.801 / 25.150 / 44.820 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_161248_dotnet-pubsub-tls-paired-c1.txt` |
+| .NET before | 916712 / 626971 / 329376 / 12590 / 7077 / 3777 | 57.247 / 31.743 / 12.801 / 15.467 / 27.285 / 50.491 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_161306_dotnet-pubsub-tls-paired-before.txt` |
+| .NET after | 925530 / 628641 / 318470 / 12867 / 7027 / 3788 | 49.458 / 31.455 / 12.441 / 15.149 / 27.503 / 50.548 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_161727_dotnet-pubsub-tls-own-after-lock.txt` |
+
+before throughput ratio는 `68.328% / 79.460% / 108.843% / 95.379% / 91.873% / 88.372%`, 산술평균은 `88.709%`다. after throughput ratio는 `68.986% / 79.672% / 105.239% / 97.477% / 91.224% / 88.629%`, 산술평균은 `88.538%`다. before latency ratio는 `1.109x / 54.262x / 19.755x / 1.045x / 1.085x / 1.127x`, 산술평균은 `13.064x`다. after latency ratio는 `0.958x / 53.769x / 19.199x / 1.024x / 1.094x / 1.128x`, 산술평균은 `12.862x`다.
+
+`PublishMessageUnchecked`에서 topic validation과 native submit을 같은 `SubmitGate` 구간으로 합친 후 latency aggregate가 소폭 개선됐지만 기준에는 미달했다. Sol 2차 리뷰는 `PublisherSendOperation` pooling·private direct path·topic validation 시점 변경을 public builder 참조·ownership·error semantics 위험으로 no-go 판정했다. 측정값 기준으로 `자체 개선 후 no-go·보류`한다. 다음 대상은 `.NET Single DEALER_DEALER/tls`다.
