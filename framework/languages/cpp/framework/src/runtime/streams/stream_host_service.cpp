@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/streams/stream_host_service.hpp"
+#include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/transport/listener_identity.hpp"
 #include "runtime/configuration/service_scope.hpp"
 #include "runtime/dispatch/receive_batch_budget.hpp"
@@ -1655,13 +1656,14 @@ class stream_host_service_t::listener_t
                         }
                         throw std::runtime_error ("Framework STREAM recv failed");
                     }
+                    detail::backend::binding_received_release_t received_release (
+                      received);
                     process_core_received (received, batch);
                     if (received.routing_id ()) {
                         trace_stream_host ("core-recv", _stream, std::nullopt,
                                            "rid=" + received.routing_id ()->to_hex () + " parts="
                                              + std::to_string (received.parts ().size ()));
                     }
-                    received.close ();
                 }
             }
             catch (...) {

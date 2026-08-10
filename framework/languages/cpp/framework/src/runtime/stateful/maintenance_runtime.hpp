@@ -539,7 +539,10 @@ class maintenance_runtime_t
     raw_relocation_replay_coordinator_t *_relocation_wire = nullptr;
 };
 
-enum class host_runtime_state_t
+// This state gates maintenance admission only. The public seven-state host
+// lifecycle projects into it one way; callers must not treat this narrower
+// state machine as the public host authority.
+enum class maintenance_admission_state_t
 {
     preparing,
     serving,
@@ -600,7 +603,7 @@ class host_maintenance_runtime_t
 
     void mark_serving ();
     void mark_error ();
-    host_runtime_state_t state () const;
+    maintenance_admission_state_t state () const;
     termination_result_t terminate (termination_intent_t intent);
     std::optional<termination_result_t> terminal_result () const;
     std::optional<termination_intent_t> intent_snapshot () const;
@@ -621,7 +624,8 @@ class host_maintenance_runtime_t
     observer_t _observer;
     mutable std::mutex _mutex;
     std::condition_variable _changed;
-    host_runtime_state_t _state = host_runtime_state_t::preparing;
+    maintenance_admission_state_t _state =
+      maintenance_admission_state_t::preparing;
     bool _active = false;
     bool _inventory_sealed = false;
     bool _shutdown_claimed = false;

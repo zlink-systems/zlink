@@ -753,13 +753,17 @@ stateful_error_t stateful_object_runtime_t::enqueue_locked (
     const auto relocating = application
       && object.state == object_state_t::moving
       && _relocation_holds.contains (object.barrier_generation);
+    const auto relocation_ingress_hold = relocating
+      || (application && object.state == object_state_t::recovering
+          && object.restore_identity.has_value ());
     const auto active_count = active ? std::size_t{1} : std::size_t{0};
-    if (pending_count >= count_capacity - std::min (
-                                  count_capacity, active_count)
-        || bytes > byte_capacity
-        || pending_bytes > byte_capacity
-        || active_bytes > byte_capacity - pending_bytes
-        || bytes > byte_capacity - pending_bytes - active_bytes) {
+    if (!relocation_ingress_hold
+        && (pending_count >= count_capacity - std::min (
+                                       count_capacity, active_count)
+            || bytes > byte_capacity
+            || pending_bytes > byte_capacity
+            || active_bytes > byte_capacity - pending_bytes
+            || bytes > byte_capacity - pending_bytes - active_bytes)) {
         return stateful_error_t::backpressured;
     }
     std::map<std::uint64_t, relocation_hold_state_t>::iterator hold;

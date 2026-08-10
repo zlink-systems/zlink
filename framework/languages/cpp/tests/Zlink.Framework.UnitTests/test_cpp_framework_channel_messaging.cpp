@@ -689,7 +689,9 @@ class local_internal_dispatcher_t final
     mutable int send_count = 0;
 };
 
-template <typename T> void add_int_serializer (zlink::framework::serializer_registry_t &serializers)
+template <typename T>
+void add_int_serializer (zlink::framework::serializer_registry_t &serializers,
+                         std::string content_type)
 {
     serializers.add<T> (
       [] (const T &value) {
@@ -698,7 +700,7 @@ template <typename T> void add_int_serializer (zlink::framework::serializer_regi
       [] (const zlink::framework::encoded_payload_t &payload) {
           return T{std::stoi (payload.to_string ())};
       },
-      "application/json");
+      std::move (content_type));
 }
 
 std::string unique_inproc_endpoint (const char *base)
@@ -1134,13 +1136,31 @@ int main ()
     auto provider = services.build_provider ();
 
     zlink::framework::serializer_registry_t serializers;
-    add_int_serializer<request_t> (serializers);
-    add_int_serializer<outer_route_request_t> (serializers);
-    add_int_serializer<inner_route_request_t> (serializers);
-    add_int_serializer<api_hop_request_t> (serializers);
-    add_int_serializer<missing_probe_request_t> (serializers);
-    add_int_serializer<reply_t> (serializers);
-    add_int_serializer<event_t> (serializers);
+    std::atomic_int request_deserialize_count{0};
+    serializers.add<request_t> (
+      [] (const request_t &value) {
+          return zlink::framework::encoded_payload_t::from_string (
+            std::to_string (value.value));
+      },
+      [&request_deserialize_count] (
+        const zlink::framework::encoded_payload_t &payload) {
+          request_deserialize_count.fetch_add (
+            1, std::memory_order_relaxed);
+          return request_t{std::stoi (payload.to_string ())};
+      },
+      "application/json");
+    add_int_serializer<outer_route_request_t> (
+      serializers, "application/x-zlink-test-outer-request");
+    add_int_serializer<inner_route_request_t> (
+      serializers, "application/x-zlink-test-inner-request");
+    add_int_serializer<api_hop_request_t> (
+      serializers, "application/x-zlink-test-api-hop-request");
+    add_int_serializer<missing_probe_request_t> (
+      serializers, "application/x-zlink-test-missing-probe-request");
+    add_int_serializer<reply_t> (
+      serializers, "application/x-zlink-test-reply");
+    add_int_serializer<event_t> (
+      serializers, "application/x-zlink-test-event");
 
     zlink::framework::detail::channel_runtime_t::from (outbound_only.message_bus ())
       .bind_serializers (serializers);
@@ -1302,6 +1322,7 @@ int main ()
     auto route_request_parts = envelope_codec.encode_raw_body_parts (
       route_dispatch_request_header, zlink::message_t::from (std::string ("24")));
     zlink::framework::detail::channel_packet_dispatcher_t packet_dispatcher (local_runtime);
+    request_deserialize_count.store (0, std::memory_order_relaxed);
     const auto packet_reply = packet_dispatcher.dispatch_server_message (
       "local", request_parts, provider, serializers, handlers);
     if (!packet_reply) {
@@ -1317,7 +1338,8 @@ int main ()
                .deserialize (
                  zlink::framework::detail::encoded_payload_from_raw (packet_reply_body.value ()))
                .value
-             != 124) {
+             != 124
+        || request_deserialize_count.load (std::memory_order_relaxed) != 1) {
         return 19;
     }
 
@@ -1346,6 +1368,7 @@ int main ()
     request_header.message_name = "missing";
     auto missing_parts = envelope_codec.encode_raw_body_parts (
       request_header, zlink::message_t::from (std::string ("24")));
+    request_deserialize_count.store (0, std::memory_order_relaxed);
     const auto packet_error = packet_dispatcher.dispatch_server_message (
       "local", missing_parts, provider, serializers, handlers);
     if (!packet_error) {
@@ -1355,7 +1378,8 @@ int main ()
     if (!packet_error_header
         || packet_error_header.value ().kind
              != zlink::framework::runtime::messaging::message_kind_t::error
-        || packet_error_header.value ().error_code.value_or ("") != "not_found") {
+        || packet_error_header.value ().error_code.value_or ("") != "not_found"
+        || request_deserialize_count.load (std::memory_order_relaxed) != 0) {
         return 21;
     }
     auto observed_dispatch_errors =
@@ -1413,6 +1437,7 @@ int main ()
     publish_header.message_name = "event";
     publish_header.topic = "publish";
     publish_header.correlation_id = "corr-publish";
+    publish_header.content_type = serializers.get<event_t> ().content_type ();
     auto publish_parts = envelope_codec.encode_raw_body_parts (
       publish_header, zlink::message_t::from (std::string ("34")));
     const auto packet_publish_result = packet_dispatcher.dispatch_server_message (
@@ -1458,6 +1483,7 @@ int main ()
       provider.get_required<local_handler_t> ().last_request;
     auto malformed_parts = envelope_codec.encode_raw_body_parts (
       malformed_header, zlink::message_t::from (std::string ("not-an-int")));
+    request_deserialize_count.store (0, std::memory_order_relaxed);
     const auto malformed_reply = packet_dispatcher.dispatch_server_message (
       "local", malformed_parts, provider, serializers, handlers);
     if (!malformed_reply) {
@@ -1469,7 +1495,8 @@ int main ()
              != zlink::framework::runtime::messaging::message_kind_t::error
         || malformed_reply_header.value ().error_code.value_or ("") != "protocol_error"
         || provider.get_required<local_handler_t> ().last_request
-             != last_request_before_malformed) {
+             != last_request_before_malformed
+        || request_deserialize_count.load (std::memory_order_relaxed) != 1) {
         return 109;
     }
     observed_dispatch_errors = wait_dispatch_errors (dispatch_errors, dispatch_errors_mutex, 1);
@@ -1499,6 +1526,7 @@ int main ()
     throwing_header.correlation_id = "corr-handler-exception";
     auto throwing_parts = envelope_codec.encode_raw_body_parts (
       throwing_header, zlink::message_t::from (std::string ("24")));
+    request_deserialize_count.store (0, std::memory_order_relaxed);
     const auto throwing_reply = packet_dispatcher.dispatch_server_message (
       "local", throwing_parts, provider, serializers, handlers);
     if (!throwing_reply) {
@@ -1510,7 +1538,8 @@ int main ()
              != zlink::framework::runtime::messaging::message_kind_t::error
         || throwing_reply_header.value ().error_code.value_or ("") != "internal_failure"
         || throwing_reply_header.value ().error_message.value_or ("")
-             != "DERR-007 handler exception") {
+             != "DERR-007 handler exception"
+        || request_deserialize_count.load (std::memory_order_relaxed) != 1) {
         return 106;
     }
     observed_dispatch_errors = wait_dispatch_errors (dispatch_errors, dispatch_errors_mutex, 1);
@@ -3326,7 +3355,6 @@ int main ()
         return 65;
     }
 
-    zlink::framework::detail::register_spot_route_packet_serializers (serializers);
     zlink::framework::zlink_builder_t stream_builder;
     stream_builder.stream ("routed-bound-session").bind ("tcp://0.0.0.0:9300");
     auto stream_runtime = zlink::framework::detail::stream_runtime_t::from (stream_builder);
@@ -3357,9 +3385,7 @@ int main ()
       actor_ref, "BingoRewardAnnouncedNotify", zlink::framework::stream_codec_t::json,
       zlink::message_t::from ("reward"));
     auto bound_parts = envelope_codec.encode_parts (
-      bound_header,
-      std::type_index (typeid (zlink::framework::detail::actor_bound_session_route_request_t)),
-      &bound_request, serializers);
+      bound_header, bound_request, serializers);
     auto bound_reply = actor_dispatcher.dispatch_request (
       zlink::framework::detail::route_received_packet_t{
         zlink::routing_id_t::from (std::string ("play-node")), 99, std::move (bound_parts)},
@@ -3386,9 +3412,7 @@ int main ()
     }
     bound_header.kind = zlink::framework::runtime::messaging::message_kind_t::command;
     auto bound_send_parts = envelope_codec.encode_parts (
-      bound_header,
-      std::type_index (typeid (zlink::framework::detail::actor_bound_session_route_request_t)),
-      &bound_request, serializers);
+      bound_header, bound_request, serializers);
     auto bound_send = actor_dispatcher.dispatch_send (
       zlink::framework::detail::route_received_packet_t{
         zlink::routing_id_t::from (std::string ("play-node")), 100, std::move (bound_send_parts)},

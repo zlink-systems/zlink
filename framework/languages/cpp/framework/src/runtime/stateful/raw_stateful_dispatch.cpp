@@ -3,7 +3,6 @@
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 
 #include <runtime/locations/location_repository.hpp>
-#include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/sha256.hpp"
 
@@ -25,8 +24,6 @@ constexpr std::uint32_t terminal_protocol_error = 104;
 constexpr std::uint32_t terminal_internal_error = 105;
 constexpr std::uint32_t terminal_rejected = 106;
 constexpr std::uint32_t terminal_conflict = 107;
-constexpr std::size_t max_relocation_temporary_records = 1024;
-constexpr std::size_t max_relocation_temporary_bytes = 16u * 1024u * 1024u;
 
 class mailbox_claim_release_guard_t final
 {
@@ -93,18 +90,6 @@ std::array<std::byte, 32> digest_bytes (
     for (const auto value : bytes)
         public_bytes.push_back (static_cast<std::byte> (value));
     return runtime::sha256 (public_bytes);
-}
-
-std::size_t relocation_temporary_record_bytes (
-  const protocol::relocation_data_t &data)
-{
-    if (!data.frozen_record)
-        return 0;
-    const auto encoded = protocol::encode_frozen_record (*data.frozen_record);
-    constexpr auto fixed = dispatch_limits::fixed_work_byte_cost;
-    if (encoded.size () > std::numeric_limits<std::size_t>::max () - fixed)
-        return std::numeric_limits<std::size_t>::max ();
-    return fixed + encoded.size ();
 }
 
 std::size_t retained_bytes (
@@ -1152,17 +1137,6 @@ bool raw_relocation_replay_coordinator_t::unregister_target (
             else
                 ++operation;
         }
-        const auto retained = found->second.accepted_bytes
-                              + found->second.staging_bytes;
-        if (group->second.record_count
-            >= found->second.accepted.size ()
-                 + (found->second.staging_sequence ? 1u : 0u)) {
-            group->second.record_count -=
-              found->second.accepted.size ()
-              + (found->second.staging_sequence ? 1u : 0u);
-        }
-        if (group->second.byte_count >= retained)
-            group->second.byte_count -= retained;
         if (group->second.participant_count != 0)
             --group->second.participant_count;
         if (group->second.participant_count == 0)
@@ -1346,15 +1320,6 @@ raw_relocation_replay_coordinator_t::process_data (
       data.participant_id);
     const auto digest = digest_bytes (
       protocol::encode_relocation_control (data));
-    std::size_t retained = 0;
-    try {
-        retained = relocation_temporary_record_bytes (data);
-    }
-    catch (...) {
-        return raw_relocation_replay_result_t::invalid;
-    }
-    if (retained == 0)
-        return raw_relocation_replay_result_t::invalid;
     const auto operation_key = std::pair{
       data.frozen_record->operation.high,
       data.frozen_record->operation.low};
@@ -1434,12 +1399,6 @@ raw_relocation_replay_coordinator_t::process_data (
           key (data.relocation, data.target_attempt_generation, 0));
         if (group == _target_groups.end ())
             return raw_relocation_replay_result_t::not_registered;
-        if (group->second.record_count
-              >= max_relocation_temporary_records
-            || retained > max_relocation_temporary_bytes
-            || group->second.byte_count
-                 > max_relocation_temporary_bytes - retained)
-            return raw_relocation_replay_result_t::restore_failed;
         try {
             if (!group->second.staging_operations
                    .emplace (operation_key, state_key)
@@ -1448,9 +1407,6 @@ raw_relocation_replay_coordinator_t::process_data (
             stage = registration.stage;
             rollback = registration.rollback;
             state.staging_sequence = data.sequence;
-            state.staging_bytes = retained;
-            ++group->second.record_count;
-            group->second.byte_count += retained;
             ++state.active_stages;
             activity_guard.activate ();
         }
@@ -1485,14 +1441,6 @@ raw_relocation_replay_coordinator_t::process_data (
             return raw_relocation_replay_result_t::stale_fence;
         const auto clear_staging = [&] () noexcept {
             group->second.staging_operations.erase (operation_key);
-            state.staging_bytes = 0;
-        };
-        auto release_staging = [&] () noexcept {
-            clear_staging ();
-            if (group->second.record_count != 0)
-                --group->second.record_count;
-            if (group->second.byte_count >= retained)
-                group->second.byte_count -= retained;
         };
         const auto rollback_stage = [&] () noexcept {
             if (!rollback)
@@ -1505,7 +1453,7 @@ raw_relocation_replay_coordinator_t::process_data (
         };
         if (!staged || state.closing) {
             rollback_stage ();
-            release_staging ();
+            clear_staging ();
             return raw_relocation_replay_result_t::restore_failed;
         }
         try {
@@ -1513,7 +1461,7 @@ raw_relocation_replay_coordinator_t::process_data (
               data.sequence, digest);
             if (!inserted) {
                 rollback_stage ();
-                release_staging ();
+                clear_staging ();
                 return raw_relocation_replay_result_t::conflicting_duplicate;
             }
             try {
@@ -1525,7 +1473,7 @@ raw_relocation_replay_coordinator_t::process_data (
                 if (!operation_inserted) {
                     rollback_stage ();
                     state.accepted.erase (accepted);
-                    release_staging ();
+                    clear_staging ();
                     return raw_relocation_replay_result_t::conflicting_duplicate;
                 }
                 (void) operation;
@@ -1533,15 +1481,14 @@ raw_relocation_replay_coordinator_t::process_data (
             catch (...) {
                 rollback_stage ();
                 state.accepted.erase (accepted);
-                release_staging ();
+                clear_staging ();
                 return raw_relocation_replay_result_t::restore_failed;
             }
-            state.accepted_bytes += retained;
             clear_staging ();
         }
         catch (...) {
             rollback_stage ();
-            release_staging ();
+            clear_staging ();
             return raw_relocation_replay_result_t::restore_failed;
         }
         state.high_water = data.sequence;

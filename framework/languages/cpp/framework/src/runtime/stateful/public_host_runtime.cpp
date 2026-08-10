@@ -799,7 +799,7 @@ zlink::submit_result_t spot_handle_t::request_to_spot (
               catch (...) {
               }
           }, protocol::wire_operation_id_t{operation.high, operation.low},
-          operation.low);
+          std::nullopt);
         if (!accepted)
             _host->release_completion (operation);
         return submitted (accepted);
@@ -2657,7 +2657,7 @@ zlink::submit_result_t public_host_runtime_t::request_to_actor (
             operation, operation_kind_t::none, terminal,
             std::move (payload));
           }, protocol::wire_operation_id_t{operation.high, operation.low},
-          std::move (bound_session_source), operation.low);
+          std::move (bound_session_source), std::nullopt);
     if (!accepted)
         release_completion (operation);
     return submitted (accepted);
@@ -2689,7 +2689,7 @@ zlink::submit_result_t public_host_runtime_t::request_to_node (
           host->complete_operation (
             operation, operation_kind_t::none, terminal,
           std::move (payload));
-      }, operation.low);
+      });
     if (!accepted)
         release_completion (operation);
     return submitted (accepted);
@@ -2720,7 +2720,7 @@ zlink::submit_result_t public_host_runtime_t::request_to_channel (
           host->complete_operation (
             operation, operation_kind_t::none, terminal,
           std::move (payload));
-      }, operation.low);
+      });
     if (!accepted)
         release_completion (operation);
     return submitted (accepted);
@@ -6581,12 +6581,15 @@ actor_ref_t public_host_runtime_t::framework_actor_ref (
 call_id_t public_host_runtime_t::next_operation ()
 {
     std::lock_guard lock (_mutex);
-    const auto low = _next_operation++;
-    if (low == 0 || _next_operation == 0) {
-        _next_operation = 1;
+    if (_next_operation == 0) {
         throw std::overflow_error (
           "framework public host operation id is exhausted");
     }
+    const auto low = _next_operation;
+    _next_operation =
+      low == std::numeric_limits<std::uint64_t>::max ()
+        ? 0
+        : low + 1;
     return {status ().lifecycle_generation (), low};
 }
 

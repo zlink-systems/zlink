@@ -316,8 +316,6 @@ class raw_relocation_replay_coordinator_t
         std::map<std::pair<std::uint64_t, std::uint64_t>, std::uint64_t>
           accepted_operations;
         std::optional<std::uint64_t> staging_sequence;
-        std::size_t accepted_bytes = 0;
-        std::size_t staging_bytes = 0;
         std::size_t active_stages = 0;
         bool closing = false;
         bool removing = false;
@@ -325,8 +323,6 @@ class raw_relocation_replay_coordinator_t
     struct target_group_state_t
     {
         std::size_t participant_count = 0;
-        std::size_t record_count = 0;
-        std::size_t byte_count = 0;
         std::map<std::pair<std::uint64_t, std::uint64_t>, key_t>
           staging_operations;
     };

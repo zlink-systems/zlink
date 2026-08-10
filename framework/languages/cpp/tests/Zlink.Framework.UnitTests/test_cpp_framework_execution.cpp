@@ -1601,7 +1601,8 @@ bool verify_idle_instance_spot_eviction_closes_local_context ()
     context->node = node;
     context->spot_id = "instance-1";
     context->spot_name = "instance-player";
-    context->kind = detail::spot_runtime_kind_t::instance;
+    context->lifecycle_domain =
+      detail::spot_lifecycle_domain_t::instance ();
     context->object_generation = 7;
     context->authority_owner_generation = 11;
     context->spot_instance = std::make_shared<int> (1);
@@ -2538,6 +2539,21 @@ int main ()
           std::make_shared<
             zlink::framework::detail::spot_node_builder_state_t> (
             "completion-node");
+        std::vector<zlink::framework::message_flow_event_t>
+          completion_failure_events;
+        completion_state->dispatch.message_flow (
+          zlink::framework::message_flow_log_mode_t::errors);
+        zlink::framework::detail::dispatch_options_access_t::
+          set_observer_for_tests (
+            completion_state->dispatch,
+            [&completion_failure_events] (
+              const zlink::framework::message_flow_event_t &event) {
+                if (event.packet_name == "JoinSpot"
+                    && event.outcome
+                         == zlink::framework::message_flow_outcome_t::error) {
+                    completion_failure_events.push_back (event);
+                }
+            });
         zlink::framework::detail::spot_node_runtime_t completion_runtime (
           completion_state);
         const zlink::framework::actor_ref_t completion_actor =
@@ -2645,8 +2661,24 @@ int main ()
                       actor_join_completion_outcome_t::failed
             || completion_error_kind
                  != zlink::framework::framework_error_kind_t::internal_failure
-            || completion_retryable) {
+            || completion_retryable
+            || completion_failure_events.size () != 2
+            || completion_failure_events.back ().actor_id
+                 != "completion-actor"
+            || completion_failure_events.back ().error_reason
+                 != zlink::framework::dispatch_error_reason_t::handler_exception
+            || !completion_failure_events.back ().exception) {
             return 72;
+        }
+        try {
+            std::rethrow_exception (
+              completion_failure_events.back ().exception);
+            return 73;
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            if (error.kind ()
+                != zlink::framework::framework_error_kind_t::internal_failure)
+                return 73;
         }
 
         zlink::framework::runtime::offload_executor_t target_executor (1);

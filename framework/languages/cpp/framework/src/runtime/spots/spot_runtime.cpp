@@ -3631,7 +3631,7 @@ void spot_node_runtime_t::commit_accepted_actor_join_unlocked (
       previous_context && previous_context->_state->owns_current_serial_turn ();
     auto &target_state = *context._state;
     bool created_entry_actor = false;
-    if (create_entry_actor && admission.kind == detail::spot_runtime_kind_t::entry
+    if (create_entry_actor && target_state.is_entry_spot ()
         && !_state->actor_created_keys.contains (key) && admission.on_create_actor) {
         auto &serializers = *target_state.channel_runtime->serializers;
         result_t<actor_create_response_t> create_result =
@@ -4325,7 +4325,8 @@ spot_node_runtime_t::capture_spot_relocation_state (const runtime::stateful::obj
         const auto configured = _state->spot_factory_relocations.find (stable_type);
         if (found == _state->spot_contexts_by_id.end ()
             || found->second._state->spot_name != stable_type
-            || configured == _state->spot_factory_relocations.end ()) {
+            || configured == _state->spot_factory_relocations.end ()
+            || !found->second._state->allows_relocation ()) {
             throw framework_exception_t (framework_error_kind_t::not_found,
                                          "Relocation source Spot is not materialized");
         }
@@ -5852,9 +5853,7 @@ result_t<actor_join_reply_t> spot_node_runtime_t::finalize_remote_actor_to_spot 
             if (appended != detail::handoff_append_result_t::appended) {
                 _state->actor_transfer_coordinator.fail_commit (transfer_id, true);
                 return result_t<actor_join_reply_t>::failure (
-                  appended == detail::handoff_append_result_t::capacity_exceeded
-                    ? framework_error_kind_t::capacity_exceeded
-                    : framework_error_kind_t::protocol_error,
+                  framework_error_kind_t::protocol_error,
                   "target Actor handoff backlog could not be staged until completion");
             }
         }
@@ -6140,12 +6139,10 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
     {
         // In-flight handoff (§10.2-1): actor packets that arrive while the actor
         // is moving are preserved in arrival order and travel to the target with
-        // the commit while the bounded temporary queue has room. Sends return
+        // the commit. Sends return
         // the empty success shape so preservation is indistinguishable from
         // immediate dispatch. A preserved request keeps its source reply token;
-        // the target sends one internal terminal envelope after replay. When
-        // the temporary queue is full, a request receives Unavailable and a
-        // one-way operation is dropped.
+        // the target sends one internal terminal envelope after replay.
         const bool is_request = message_kind == stream_message_kind_t::request;
         const auto append_result = _state->actor_transfer_coordinator.try_append_backlog (
           key, detail::handoff_packet_t{std::string (packet_name), message.to_bytes (),
@@ -6166,9 +6163,6 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
                 return result_t<std::optional<zlink::message_t>>::success (zlink::message_t{});
             }
             return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
-        }
-        if (append_result == detail::handoff_append_result_t::capacity_exceeded && !is_request) {
-            return result_t<std::optional<zlink::message_t>>::success (zlink::message_t{});
         }
         if (append_result != detail::handoff_append_result_t::not_moving) {
             return detail::result_access_t::failure<std::optional<zlink::message_t>> (
@@ -6490,13 +6484,6 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
                     detail::failure_origin_t::actor_transfer_in_progress,
                     "Actor request was preserved for a reserved Join"));
             }
-            if (appended == handoff_append_result_t::capacity_exceeded) {
-                if (!request_delivery)
-                    return result_t<zlink::message_t>::success (zlink::message_t{});
-                return result_t<zlink::message_t>::failure (
-                  framework_error_kind_t::capacity_exceeded,
-                  "Actor handoff backlog is full");
-            }
         }
         if (!admitted_source_fence
             || !state->actor_transfer_coordinator.matches_message_follow_source (
@@ -6709,9 +6696,10 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context_unlocked (
     context_state->spot_name = spot_name;
     const auto entry_spot =
       _state->snapshot.entry_spot_name && *_state->snapshot.entry_spot_name == spot_name;
-    context_state->kind = entry_spot      ? detail::spot_runtime_kind_t::entry
-                          : instance_spot ? detail::spot_runtime_kind_t::instance
-                                          : detail::spot_runtime_kind_t::user;
+    context_state->lifecycle_domain =
+      entry_spot      ? spot_lifecycle_domain_t::entry ()
+      : instance_spot ? spot_lifecycle_domain_t::instance ()
+                      : spot_lifecycle_domain_t::user ();
     if (const auto mode = _state->snapshot.spot_execution_modes.find (spot_name);
         mode != _state->snapshot.spot_execution_modes.end ()) {
         context_state->execution_mode = mode->second;
@@ -7117,8 +7105,7 @@ bool spot_node_runtime_t::close_all_user_spots ()
                 || context._state->native_spot.expired ()) {
                 continue;
             }
-            if (_state->snapshot.entry_spot_name
-                && context._state->spot_name == *_state->snapshot.entry_spot_name) {
+            if (context._state->is_entry_spot ()) {
                 continue;
             }
             user_spots.push_back (spot_id_t (rid));
@@ -7320,13 +7307,26 @@ void spot_node_runtime_t::release_actor_message_follow (const actor_ref_t &actor
       actor_key (actor_ref), source_fence, payload_bytes);
 }
 
-bool spot_node_runtime_t::mark_actor_message_follow_notified (
+bool spot_node_runtime_t::try_begin_actor_message_follow_notification (
   const actor_ref_t &actor_ref,
   const runtime::protocol::actor_route_fence_t &source_fence,
-  const zlink::routing_id_t &source_node)
+  const runtime::protocol::actor_route_fence_t &target_fence)
 {
-    return _state->actor_transfer_coordinator.mark_message_follow_notified (
-      actor_key (actor_ref), source_fence, source_node.to_bytes ());
+    return _state->actor_transfer_coordinator
+      .try_begin_message_follow_notification (
+        actor_key (actor_ref), source_fence, target_fence);
+}
+
+bool spot_node_runtime_t::complete_actor_message_follow_notification (
+  const actor_ref_t &actor_ref,
+  const runtime::protocol::actor_route_fence_t &source_fence,
+  const runtime::protocol::actor_route_fence_t &target_fence,
+  bool transport_accepted)
+{
+    return _state->actor_transfer_coordinator
+      .complete_message_follow_notification (
+        actor_key (actor_ref), source_fence, target_fence,
+        transport_accepted);
 }
 
 void spot_node_runtime_t::record_actor_route (const actor_ref_t &actor_ref, spot_route_t route)

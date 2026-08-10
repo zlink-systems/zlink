@@ -55,16 +55,21 @@ struct traced_reply_t
 };
 
 template <typename T>
-void add_int_serializer (zlink::framework::serializer_registry_t &serializers)
+requires (std::is_same_v<T, event_t> || std::is_same_v<T, request_t>
+          || std::is_same_v<T, reply_t> || std::is_same_v<T, traced_event_t>
+          || std::is_same_v<T, traced_request_t> || std::is_same_v<T, traced_reply_t>)
+void to_json (nlohmann::json &json, const T &value)
 {
-    serializers.add<T> (
-      [] (const T &value) {
-          return zlink::framework::encoded_payload_t::from_string (
-            std::to_string (value.value));
-      },
-      [] (const zlink::framework::encoded_payload_t &payload) {
-          return T{std::stoi (payload.to_string ())};
-      });
+    json = value.value;
+}
+
+template <typename T>
+requires (std::is_same_v<T, event_t> || std::is_same_v<T, request_t>
+          || std::is_same_v<T, reply_t> || std::is_same_v<T, traced_event_t>
+          || std::is_same_v<T, traced_request_t> || std::is_same_v<T, traced_reply_t>)
+void from_json (const nlohmann::json &json, T &value)
+{
+    value.value = json.get<int> ();
 }
 
 class resolver_t final : public zlink::framework::runtime::spot_address_resolver_t
@@ -139,9 +144,6 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       MissingIntentActivatesOnceAndReadyOwnerIgnoresPlacementHints)
 {
     zlink::framework::serializer_registry_t serializers;
-    add_int_serializer<event_t> (serializers);
-    add_int_serializer<request_t> (serializers);
-    add_int_serializer<reply_t> (serializers);
 
     zlink::framework::zlink_builder_t builder;
     auto runtime = zlink::framework::detail::channel_runtime_t::from (
@@ -199,8 +201,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
           reply_t reply{71};
           return zlink::framework::result_t<
             zlink::framework::runtime::messaging::message_parts_t>::success (
-            envelopes.encode_parts (header, std::type_index (typeid (reply_t)),
-                                    &reply, serializers));
+            envelopes.encode_parts (header, reply, serializers));
       });
 
     auto client = builder.route_client (serializers);
@@ -225,7 +226,6 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       MissingWithoutIntentDoesNotActivate)
 {
     zlink::framework::serializer_registry_t serializers;
-    add_int_serializer<event_t> (serializers);
     zlink::framework::zlink_builder_t builder;
     auto runtime = zlink::framework::detail::channel_runtime_t::from (
       builder.message_bus ());
@@ -262,8 +262,6 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       MissingRequestUsesDefaultTimeoutForColdActivation)
 {
     zlink::framework::serializer_registry_t serializers;
-    add_int_serializer<request_t> (serializers);
-    add_int_serializer<reply_t> (serializers);
 
     zlink::framework::zlink_builder_t builder;
     auto runtime = zlink::framework::detail::channel_runtime_t::from (
@@ -304,7 +302,6 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       MissingIsNotCachedAndEachOperationAttemptsActivationOnce)
 {
     zlink::framework::serializer_registry_t serializers;
-    add_int_serializer<event_t> (serializers);
     zlink::framework::zlink_builder_t builder;
     auto runtime = zlink::framework::detail::channel_runtime_t::from (
       builder.message_bus ());
@@ -343,9 +340,6 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       ColdActivationDispatchEmitsReceivedAndTerminalFlowEvents)
 {
     zlink::framework::serializer_registry_t serializers;
-    add_int_serializer<traced_event_t> (serializers);
-    add_int_serializer<traced_request_t> (serializers);
-    add_int_serializer<traced_reply_t> (serializers);
 
     std::mutex events_mutex;
     std::condition_variable events_changed;
@@ -390,7 +384,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       serializers.get<traced_event_t> ().serialize (traced_event_t{7}));
     const auto event_result = runtime->dispatch_instance_activation (
       zlink::framework::spot_id_t ("traced-player-1"), traced_event_t::packet_name,
-      "application/octet-stream", event_payload.to_bytes (), {}, false, "operation-send", provider,
+      serializers.get<traced_event_t> ().content_type (), event_payload.to_bytes (), {}, false,
+      "operation-send", provider,
       serializers, activation_flow_id, zlink::framework::flow_origin_t::application)
                                  .result ();
     ASSERT_TRUE (event_result);
@@ -399,7 +394,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       serializers.get<traced_request_t> ().serialize (traced_request_t{9}));
     const auto request_result = runtime->dispatch_instance_activation (
       zlink::framework::spot_id_t ("traced-player-1"), traced_request_t::packet_name,
-      "application/octet-stream", request_payload.to_bytes (), {}, true, "operation-request", provider,
+      serializers.get<traced_request_t> ().content_type (), request_payload.to_bytes (), {}, true,
+      "operation-request", provider,
       serializers, activation_flow_id, zlink::framework::flow_origin_t::application)
                                    .result ();
     ASSERT_TRUE (request_result);

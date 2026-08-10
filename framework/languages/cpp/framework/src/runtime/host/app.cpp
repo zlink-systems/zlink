@@ -2510,6 +2510,7 @@ app_t &app_t::add_hosted_service (std::unique_ptr<hosted_service_t> service)
 int app_t::run (int argc, char **argv)
 {
     _state->config.load_cli (argc, argv);
+    detail::serializer_registry_access_t::freeze (_state->serializers);
     _state->config.model ().set ("host.signal_handlers", "installed");
     g_stop_signal_requested = 0;
     std::signal (SIGINT, handle_process_signal);

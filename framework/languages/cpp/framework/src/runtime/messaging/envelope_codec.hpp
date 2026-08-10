@@ -76,6 +76,20 @@ class envelope_codec_t
                                   const void *body,
                                   const serializer_registry_t &serializers) const;
 
+    template <typename TBody>
+    message_parts_t encode_parts (
+      const envelope_header_t &header,
+      const TBody &body,
+      const serializer_registry_t &serializers) const
+    {
+        const auto serializer = serializers.get<TBody> ();
+        auto typed_header = header;
+        typed_header.content_type = serializer.content_type ();
+        return encode_raw_body_parts (
+          typed_header,
+          detail::encoded_payload_to_raw (serializer.serialize (body)));
+    }
+
     zlink::message_t encode_header (const envelope_header_t &header) const;
     result_t<envelope_header_t> decode_header (const zlink::message_t &message) const;
     result_t<envelope_header_t> decode_header (const message_parts_t &parts) const;

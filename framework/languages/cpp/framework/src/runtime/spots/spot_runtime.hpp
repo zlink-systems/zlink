@@ -37,6 +37,7 @@
 #include <thread>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace zlink::framework::detail
@@ -318,6 +319,83 @@ inline void record_actor_instance_index_unlocked (spot_node_builder_state_t &nod
     node.actor_types_by_id[actor_id] = actor_type;
 }
 
+struct entry_spot_domain_t final
+{
+};
+
+struct user_spot_domain_t final
+{
+};
+
+struct instance_spot_domain_t final
+{
+};
+
+// The Spot kind tag is consumed while a factory is registered or an
+// activation is constructed. A materialized Spot retains one of these domain
+// alternatives, so contradictory kind flags and unsupported lifecycle
+// combinations cannot be represented in the runtime state.
+class spot_lifecycle_domain_t final
+{
+  public:
+    static spot_lifecycle_domain_t entry ()
+    {
+        return spot_lifecycle_domain_t (entry_spot_domain_t{});
+    }
+
+    static spot_lifecycle_domain_t user ()
+    {
+        return spot_lifecycle_domain_t (user_spot_domain_t{});
+    }
+
+    static spot_lifecycle_domain_t instance ()
+    {
+        return spot_lifecycle_domain_t (instance_spot_domain_t{});
+    }
+
+    bool is_entry () const noexcept
+    {
+        return std::holds_alternative<entry_spot_domain_t> (_value);
+    }
+
+    bool is_instance () const noexcept
+    {
+        return std::holds_alternative<instance_spot_domain_t> (_value);
+    }
+
+    bool allows_relocation () const noexcept
+    {
+        return !is_entry ();
+    }
+
+    bool allows_idle_eviction () const noexcept
+    {
+        return is_instance ();
+    }
+
+  private:
+    using value_t = std::variant<entry_spot_domain_t,
+                                 user_spot_domain_t,
+                                 instance_spot_domain_t>;
+
+    explicit spot_lifecycle_domain_t (entry_spot_domain_t value) :
+        _value (value)
+    {
+    }
+
+    explicit spot_lifecycle_domain_t (user_spot_domain_t value) :
+        _value (value)
+    {
+    }
+
+    explicit spot_lifecycle_domain_t (instance_spot_domain_t value) :
+        _value (value)
+    {
+    }
+
+    value_t _value;
+};
+
 class spot_context_state_t : public std::enable_shared_from_this<spot_context_state_t>
 {
   public:
@@ -428,7 +506,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
       user_spot_execution_mode_t::spot_wide;
     spot_relocation_readiness_mode_t relocation_readiness =
       spot_relocation_readiness_mode_t::any_turn_boundary;
-    detail::spot_runtime_kind_t kind = detail::spot_runtime_kind_t::user;
+    spot_lifecycle_domain_t lifecycle_domain = spot_lifecycle_domain_t::user ();
     bool relocation_boundary_active = false;
     bool relocation_ready_deferred = false;
     std::vector<spot_packet_descriptor_t> packets;
@@ -474,12 +552,17 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
 
     bool is_entry_spot () const noexcept
     {
-        return kind == detail::spot_runtime_kind_t::entry;
+        return lifecycle_domain.is_entry ();
     }
 
     bool is_instance_spot () const noexcept
     {
-        return kind == detail::spot_runtime_kind_t::instance;
+        return lifecycle_domain.is_instance ();
+    }
+
+    bool allows_relocation () const noexcept
+    {
+        return lifecycle_domain.allows_relocation ();
     }
 
     bool accepts_route_fence (
@@ -509,7 +592,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
                                   .count ();
         const auto last_ns = last_application_work_completed_ns.load (
           std::memory_order_relaxed);
-        if (closed || !is_instance_spot () || !idle_quiescent () || last_ns <= 0
+        if (closed || !lifecycle_domain.allows_idle_eviction ()
+            || !idle_quiescent () || last_ns <= 0
             || now_ns < last_ns || now_ns - last_ns < timeout_ns) {
             return false;
         }
@@ -703,10 +787,15 @@ class spot_node_runtime_t
       const actor_ref_t &actor_ref,
       const runtime::protocol::actor_route_fence_t &source_fence,
       std::size_t payload_bytes) noexcept;
-    bool mark_actor_message_follow_notified (
+    bool try_begin_actor_message_follow_notification (
       const actor_ref_t &actor_ref,
       const runtime::protocol::actor_route_fence_t &source_fence,
-      const zlink::routing_id_t &source_node);
+      const runtime::protocol::actor_route_fence_t &target_fence);
+    bool complete_actor_message_follow_notification (
+      const actor_ref_t &actor_ref,
+      const runtime::protocol::actor_route_fence_t &source_fence,
+      const runtime::protocol::actor_route_fence_t &target_fence,
+      bool transport_accepted);
     void record_actor_route (const actor_ref_t &actor_ref, spot_route_t route);
     std::optional<std::string> actor_route_transport_name () const;
     void request_stop () noexcept;

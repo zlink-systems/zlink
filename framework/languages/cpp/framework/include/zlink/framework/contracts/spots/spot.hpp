@@ -466,8 +466,8 @@ class spot_node_builder_state_t;
 class spot_node_runtime_state_t;
 class spot_node_runtime_t;
 
-// Internal state distinguishes the three Spot lifecycles without parallel
-// boolean flags that can represent contradictory combinations.
+// Factory registration uses this tag once to construct the corresponding
+// lifecycle domain. Materialized Spot state does not retain the tag.
 enum class spot_runtime_kind_t : std::uint8_t
 {
     entry,
@@ -486,7 +486,6 @@ struct spot_actor_admission_callbacks_t
       on_create_actor;
     std::function<task_t<void> (void *, void *)> on_leave_actor;
     std::function<task_t<void> (void *, void *)> on_disconnect_actor;
-    spot_runtime_kind_t kind = spot_runtime_kind_t::user;
 };
 
 template <typename T> struct spot_member_function_traits_t;
@@ -1697,9 +1696,6 @@ class spot_handler_registry_t
           std::same_as<TActor, typename TSpot::actor_type>,
           "SPOT actor handler type must match the Spot base actor_type");
         detail::spot_actor_admission_callbacks_t callbacks;
-        callbacks.kind = detail::entry_spot_type<TSpot>
-                           ? detail::spot_runtime_kind_t::entry
-                           : detail::spot_runtime_kind_t::user;
         callbacks.join = [] (void *spot, std::string_view actor_id,
                              const zlink::message_t &request,
                              serializer_registry_t &serializers) {

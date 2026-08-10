@@ -198,6 +198,38 @@ struct actor_bound_session_route_reply_t
     bool accepted = true;
 };
 
+// These declarations make the framework's normal typed JSON serializer the
+// single codec path for internal Spot route packets. Definitions stay in the
+// implementation file with the wire-field validation.
+void to_json (nlohmann::json &json, const spot_multicast_route_send_t &value);
+void from_json (const nlohmann::json &json, spot_multicast_route_send_t &value);
+void to_json (nlohmann::json &json, const spot_actor_admission_route_request_t &value);
+void from_json (const nlohmann::json &json, spot_actor_admission_route_request_t &value);
+void to_json (nlohmann::json &json, const spot_actor_admission_route_reply_t &value);
+void from_json (const nlohmann::json &json, spot_actor_admission_route_reply_t &value);
+void to_json (nlohmann::json &json, const spot_actor_handoff_packet_t &value);
+void from_json (const nlohmann::json &json, spot_actor_handoff_packet_t &value);
+void to_json (nlohmann::json &json, const spot_actor_commit_route_request_t &value);
+void from_json (const nlohmann::json &json, spot_actor_commit_route_request_t &value);
+void to_json (nlohmann::json &json, const spot_actor_join_route_request_t &value);
+void from_json (const nlohmann::json &json, spot_actor_join_route_request_t &value);
+void to_json (nlohmann::json &json, const spot_actor_join_route_reply_t &value);
+void from_json (const nlohmann::json &json, spot_actor_join_route_reply_t &value);
+void to_json (nlohmann::json &json, const spot_actor_packet_route_request_t &value);
+void from_json (const nlohmann::json &json, spot_actor_packet_route_request_t &value);
+void to_json (nlohmann::json &json, const spot_actor_packet_route_reply_t &value);
+void from_json (const nlohmann::json &json, spot_actor_packet_route_reply_t &value);
+void to_json (nlohmann::json &json, const spot_actor_disconnect_route_request_t &value);
+void from_json (const nlohmann::json &json, spot_actor_disconnect_route_request_t &value);
+void to_json (nlohmann::json &json, const spot_actor_disconnect_route_reply_t &value);
+void from_json (const nlohmann::json &json, spot_actor_disconnect_route_reply_t &value);
+void to_json (nlohmann::json &json, const actor_bound_session_route_request_t &value);
+void from_json (const nlohmann::json &json, actor_bound_session_route_request_t &value);
+void to_json (nlohmann::json &json, const actor_bound_session_bind_route_request_t &value);
+void from_json (const nlohmann::json &json, actor_bound_session_bind_route_request_t &value);
+void to_json (nlohmann::json &json, const actor_bound_session_route_reply_t &value);
+void from_json (const nlohmann::json &json, actor_bound_session_route_reply_t &value);
+
 result_t<zlink::message_t> encode_actor_bound_session_frame (
   stream_codec_t codec,
   std::string packet_name,
@@ -244,7 +276,5 @@ actor_bound_session_route_request_t make_actor_bound_session_route_request (
 actor_ref_t actor_ref_from_bound_session_route (const actor_bound_session_route_request_t &request);
 actor_ref_t
 actor_ref_from_bound_session_route (const actor_bound_session_bind_route_request_t &request);
-
-void register_spot_route_packet_serializers (serializer_registry_t &serializers);
 
 } // namespace zlink::framework::detail

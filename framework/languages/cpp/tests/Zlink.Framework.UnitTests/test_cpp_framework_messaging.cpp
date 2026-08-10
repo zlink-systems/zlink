@@ -76,8 +76,6 @@ int main ()
 
     {
         zlink::framework::serializer_registry_t serializers;
-        zlink::framework::detail::
-          register_spot_route_packet_serializers (serializers);
         const auto packet_serializer =
           serializers.get<zlink::framework::detail::
                             spot_actor_packet_route_request_t> ();
@@ -85,11 +83,27 @@ int main ()
           zlink::framework::detail::spot_actor_packet_route_request_t{
             .payload = {0, 1, 2, 253, 254, 255}});
         const auto packet_json = nlohmann::json::parse (packet_wire.to_string ());
-        if (!packet_json.at ("payload").is_string ()
+        if (packet_serializer.content_type () != "application/json"
+            || !packet_json.at ("payload").is_string ()
             || packet_json.at ("payload").get<std::string> () != "AAEC/f7/"
             || packet_serializer.deserialize (packet_wire).payload
                  != std::vector<std::uint8_t> ({0, 1, 2, 253, 254, 255})) {
             return 154;
+        }
+        auto duplicate_field_wire = packet_wire.to_string ();
+        duplicate_field_wire.insert (
+          duplicate_field_wire.size () - 1,
+          R"(,"payload":"AA==")");
+        try {
+            (void) packet_serializer.deserialize (
+              zlink::framework::encoded_payload_t::from_string (
+                duplicate_field_wire));
+            return 158;
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            if (error.kind ()
+                != zlink::framework::framework_error_kind_t::protocol_error)
+                return 159;
         }
         const auto actor_node = zlink::routing_id_t::from ("actor-node-b");
         const auto fenced_packet = packet_serializer.deserialize (

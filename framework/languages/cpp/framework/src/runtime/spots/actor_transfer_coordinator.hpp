@@ -6,6 +6,7 @@
 
 #include "runtime/actors/actor_ref_access.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
+#include "runtime/spots/message_follow_suppression_registry.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -13,7 +14,6 @@
 #include <map>
 #include <mutex>
 #include <optional>
-#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -145,8 +145,7 @@ enum class handoff_append_result_t
 {
     appended,
     not_moving,
-    duplicate_request,
-    capacity_exceeded
+    duplicate_request
 };
 
 class actor_transfer_coordinator_t
@@ -166,7 +165,7 @@ class actor_transfer_coordinator_t
     std::optional<std::chrono::steady_clock::duration>
     complete_move (const std::string &actor_key);
     // Completes a source move while atomically taking packets that arrived
-    // after the first handoff snapshot. The caller relays that bounded batch
+    // after the first handoff snapshot. The caller relays the retained batch
     // after the owner transition without leaving a race between queue drain
     // and move completion.
     actor_move_completion_t complete_move_and_take_backlog (const std::string &actor_key);
@@ -180,9 +179,7 @@ class actor_transfer_coordinator_t
     std::optional<std::string> transfer_id (const std::string &actor_key) const;
 
     // In-flight handoff (spot-actor spec §10). Packets are preserved in arrival
-    // order until the commit path drains them into the commit request. The
-    // result identifies a full temporary queue so the caller can return
-    // Unavailable for requests and drop one-way operations.
+    // order until the commit path drains them into the commit request.
     handoff_append_result_t try_append_backlog (const std::string &actor_key,
                                                 handoff_packet_t packet);
     std::vector<handoff_packet_t> take_backlog (const std::string &actor_key);
@@ -213,10 +210,15 @@ class actor_transfer_coordinator_t
     void release_message_follow (const std::string &actor_key,
                                  const runtime::protocol::actor_route_fence_t &source_fence,
                                  std::size_t payload_bytes) noexcept;
-    bool mark_message_follow_notified (
+    bool try_begin_message_follow_notification (
       const std::string &actor_key,
       const runtime::protocol::actor_route_fence_t &source_fence,
-      std::vector<std::uint8_t> source_node_routing_id);
+      const runtime::protocol::actor_route_fence_t &target_fence);
+    bool complete_message_follow_notification (
+      const std::string &actor_key,
+      const runtime::protocol::actor_route_fence_t &source_fence,
+      const runtime::protocol::actor_route_fence_t &target_fence,
+      bool transport_accepted);
     std::vector<removed_actor_message_follow_t>
     remove_expired_message_follow (std::chrono::steady_clock::time_point now);
 
@@ -273,7 +275,7 @@ class actor_transfer_coordinator_t
         std::string transfer_id;
         std::size_t in_flight_messages = 0;
         std::size_t in_flight_bytes = 0;
-        std::set<std::vector<std::uint8_t>> notified_sources;
+        message_follow_suppression_key_t suppression_key;
     };
 
     mutable std::mutex _mutex;
@@ -281,8 +283,8 @@ class actor_transfer_coordinator_t
     std::map<std::string, pending_actor_admission_t> _admissions;
     std::map<std::string, pending_actor_admission_t> _completed_admissions;
     std::map<std::string, std::vector<handoff_packet_t>> _backlogs;
-    std::map<std::string, std::size_t> _backlog_bytes;
     std::map<std::string, std::vector<message_follow_route_t>> _message_follow_routes;
+    message_follow_suppression_registry_t _message_follow_suppression;
     std::uint64_t _next_transfer_id = 1;
 };
 

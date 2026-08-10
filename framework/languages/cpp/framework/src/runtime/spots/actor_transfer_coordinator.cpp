@@ -27,30 +27,6 @@ bool pending_actor_admission_t::matches_prepare (
            && completion_operation_id_low == operation_low;
 }
 
-namespace
-{
-
-std::size_t handoff_packet_bytes (const handoff_packet_t &packet) noexcept
-{
-    //  The backlog has no stored-size bound; the accounting only reports how
-    //  much a packet holds, saturating instead of overflowing.
-    std::size_t bytes = 0;
-    const auto add = [&bytes] (std::size_t value) {
-        constexpr auto ceiling = std::numeric_limits<std::size_t>::max ();
-        bytes = value > ceiling - bytes ? ceiling : bytes + value;
-    };
-    add (packet.packet_name.size ());
-    add (packet.payload.size ());
-    add (packet.content_type.size ());
-    for (const auto &[key, value] : packet.metadata) {
-        add (key.size ());
-        add (value.size ());
-    }
-    return bytes;
-}
-
-} // namespace
-
 bool actor_transfer_coordinator_t::try_reserve_source (const std::string &actor_key,
                                                        std::string transfer_id)
 {
@@ -97,7 +73,6 @@ void actor_transfer_coordinator_t::cancel_move (const std::string &actor_key)
     std::lock_guard lock (_mutex);
     _moves.erase (actor_key);
     _backlogs.erase (actor_key);
-    _backlog_bytes.erase (actor_key);
 }
 
 void actor_transfer_coordinator_t::mark_reconcile (const std::string &actor_key)
@@ -142,7 +117,6 @@ actor_move_completion_t actor_transfer_coordinator_t::complete_move_and_take_bac
     if (const auto queued = _backlogs.find (actor_key); queued != _backlogs.end ()) {
         backlog = std::move (queued->second);
         _backlogs.erase (queued);
-        _backlog_bytes.erase (actor_key);
     }
     _moves.erase (found);
     return actor_move_completion_t{std::move (elapsed), std::move (backlog), true};
@@ -159,7 +133,6 @@ actor_move_completion_t actor_transfer_coordinator_t::finish_move_replay (
     if (const auto queued = _backlogs.find (actor_key); queued != _backlogs.end ()) {
         backlog = std::move (queued->second);
         _backlogs.erase (queued);
-        _backlog_bytes.erase (actor_key);
     }
     if (!backlog.empty ())
         return actor_move_completion_t{std::nullopt, std::move (backlog), false};
@@ -211,13 +184,8 @@ handoff_append_result_t actor_transfer_coordinator_t::try_append_backlog (
             }
         }
     }
-    const auto packet_bytes = handoff_packet_bytes (packet);
-    const auto current_bytes = _backlog_bytes.contains (actor_key)
-                                  ? _backlog_bytes.at (actor_key)
-                                  : std::size_t{0};
     auto &backlog = _backlogs[actor_key];
     backlog.push_back (std::move (packet));
-    _backlog_bytes[actor_key] = current_bytes + packet_bytes;
     return handoff_append_result_t::appended;
 }
 
@@ -231,7 +199,6 @@ actor_transfer_coordinator_t::take_backlog (const std::string &actor_key)
     }
     auto backlog = std::move (found->second);
     _backlogs.erase (found);
-    _backlog_bytes.erase (actor_key);
     return backlog;
 }
 
@@ -251,11 +218,22 @@ void actor_transfer_coordinator_t::activate_message_follow (
           return route.source_fence == source_fence;
       });
     if (existing == routes.end ()) {
+        message_follow_suppression_key_t suppression_key{
+          source_fence, target_fence};
+        _message_follow_suppression.retain (suppression_key);
         routes.push_back (
           message_follow_route_t{std::move (source_fence), std::move (target_actor),
                                  std::move (target_route), std::move (target_fence), remove_at,
-                                 std::move (transfer_id), 0, 0, {}});
+                                 std::move (transfer_id), 0, 0,
+                                 std::move (suppression_key)});
         return;
+    }
+    const message_follow_suppression_key_t replacement_key{
+      source_fence, target_fence};
+    if (existing->suppression_key != replacement_key) {
+        _message_follow_suppression.erase (existing->suppression_key);
+        _message_follow_suppression.retain (replacement_key);
+        existing->suppression_key = replacement_key;
     }
     existing->target_actor = std::move (target_actor);
     existing->target_route = std::move (target_route);
@@ -384,13 +362,11 @@ void actor_transfer_coordinator_t::release_message_follow (
         : route->in_flight_bytes - payload_bytes;
 }
 
-bool actor_transfer_coordinator_t::mark_message_follow_notified (
+bool actor_transfer_coordinator_t::try_begin_message_follow_notification (
   const std::string &actor_key,
   const runtime::protocol::actor_route_fence_t &source_fence,
-  std::vector<std::uint8_t> source_node_routing_id)
+  const runtime::protocol::actor_route_fence_t &target_fence)
 {
-    if (source_node_routing_id.empty ())
-        return false;
     std::lock_guard lock (_mutex);
     const auto found = _message_follow_routes.find (actor_key);
     if (found == _message_follow_routes.end ())
@@ -400,11 +376,32 @@ bool actor_transfer_coordinator_t::mark_message_follow_notified (
           return candidate.source_fence == source_fence;
       });
     if (route == found->second.end ()
+        || route->target_fence != target_fence
         || route->remove_at <= std::chrono::steady_clock::now ())
         return false;
-    return route->notified_sources.insert (
-             std::move (source_node_routing_id))
-           .second;
+    return _message_follow_suppression.try_begin (route->suppression_key);
+}
+
+bool actor_transfer_coordinator_t::complete_message_follow_notification (
+  const std::string &actor_key,
+  const runtime::protocol::actor_route_fence_t &source_fence,
+  const runtime::protocol::actor_route_fence_t &target_fence,
+  bool transport_accepted)
+{
+    std::lock_guard lock (_mutex);
+    const auto found = _message_follow_routes.find (actor_key);
+    if (found == _message_follow_routes.end ())
+        return false;
+    const auto route = std::find_if (
+      found->second.begin (), found->second.end (), [&] (const auto &candidate) {
+          return candidate.source_fence == source_fence
+                 && candidate.target_fence == target_fence;
+      });
+    if (route == found->second.end ())
+        return false;
+    return transport_accepted
+             ? _message_follow_suppression.mark_sent (route->suppression_key)
+             : _message_follow_suppression.abort (route->suppression_key);
 }
 
 std::vector<removed_actor_message_follow_t>
@@ -423,6 +420,7 @@ actor_transfer_coordinator_t::remove_expired_message_follow (
             }
             removed.push_back (removed_actor_message_follow_t{
               found->first, route->source_fence, route->transfer_id});
+            _message_follow_suppression.erase (route->suppression_key);
             route = routes.erase (route);
         }
         if (routes.empty ()) {

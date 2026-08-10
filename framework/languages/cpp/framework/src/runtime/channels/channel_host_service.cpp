@@ -9,6 +9,7 @@
 #include "runtime/channels/channel_runtime_manager.hpp"
 #include "runtime/channels/channel_socket_options.hpp"
 #include "runtime/channels/socket_monitor_event.hpp"
+#include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 
@@ -133,8 +134,9 @@ class channel_host_service_t::server_loop_t
             if (rc != static_cast<int> (zlink::recv_result_t::ok)) {
                 continue;
             }
+            detail::backend::binding_received_release_t received_release (
+              _received);
             if (is_drained ()) {
-                _received.close ();
                 continue;
             }
             dispatch_async (_received);
@@ -201,25 +203,13 @@ class channel_host_service_t::server_loop_t
         completion_admission_owner_t::permit_t permit;
     };
 
-    static zlink::message_t clone (const zlink::message_t &message) { return message; }
-
-    static zlink::framework::runtime::messaging::message_parts_t
-    copy_parts (const std::vector<zlink::message_t> &parts)
-    {
-        std::vector<zlink::message_t> copied;
-        copied.reserve (parts.size ());
-        for (const auto &part : parts) {
-            copied.push_back (clone (part));
-        }
-        return zlink::framework::runtime::messaging::message_parts_t (std::move (copied));
-    }
-
     void dispatch_async (zlink::received_t &received)
     {
         auto routing_id = received.routing_id ();
         const auto request_seq = received.request_seq ();
-        auto request_parts = copy_parts (received.parts ());
-        received.close ();
+        auto request_parts =
+          zlink::framework::runtime::messaging::message_parts_t (
+            detail::backend::copy_binding_messages (received.parts ()));
         const auto payload_bytes =
           request_parts.size () >= 2
             ? static_cast<std::uint64_t> (request_parts[1].size ())
@@ -303,7 +293,7 @@ class channel_host_service_t::server_loop_t
         std::vector<zlink::message_t> copied;
         copied.reserve (completed.parts.size ());
         for (std::size_t index = 0; index < completed.parts.size (); ++index) {
-            copied.push_back (clone (completed.parts[index]));
+            copied.push_back (completed.parts[index]);
         }
         auto operation =
           _router->reply (*completed.routing_id, completed.request_seq).message (copied[0]);
@@ -499,7 +489,6 @@ class channel_host_service_t::subscriber_loop_t
                 || !_inbound_budget->can_start_application_receive ()) {
                 continue;
             }
-            _received_message.close ();
             const int rc = _subscriber->subscribe (
               _received_message, zlink::recv_flags_t::dontwait);
             if (rc == static_cast<int> (zlink::recv_result_t::no_data)) {
@@ -508,6 +497,8 @@ class channel_host_service_t::subscriber_loop_t
             if (rc != static_cast<int> (zlink::recv_result_t::ok)) {
                 continue;
             }
+            detail::backend::binding_received_release_t received_release (
+              _received_message);
             dispatch_async (_received_message);
         }
     }
@@ -550,23 +541,10 @@ class channel_host_service_t::subscriber_loop_t
     }
 
   private:
-    static zlink::message_t clone (const zlink::message_t &message) { return message; }
-
-    static zlink::framework::runtime::messaging::message_parts_t
-    copy_parts (const std::vector<zlink::message_t> &parts)
-    {
-        std::vector<zlink::message_t> copied;
-        copied.reserve (parts.size ());
-        for (const auto &part : parts) {
-            copied.push_back (clone (part));
-        }
-        return zlink::framework::runtime::messaging::message_parts_t (std::move (copied));
-    }
-
     void dispatch_async (zlink::topic_message_t &message)
     {
-        auto parts = copy_parts (message.parts ());
-        message.close ();
+        auto parts = zlink::framework::runtime::messaging::message_parts_t (
+          detail::backend::copy_binding_messages (message.parts ()));
         const auto payload_bytes =
           parts.size () >= 2
             ? static_cast<std::uint64_t> (parts[1].size ())

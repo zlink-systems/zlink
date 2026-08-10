@@ -2859,9 +2859,12 @@ result_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application
                   decoded, "Actor message follow relay failed");
             if ((original_operation.high != 0 || original_operation.low != 0)
                 && !source_node.to_bytes ().empty () && stale_route.owner_lease_generation != 0
-                && spot_runtime.mark_actor_message_follow_notified (
-                  actor, follow_target.source_fence, source_node)) {
-                (void) _node->send_message_follow (
+                && source_node.to_bytes ()
+                     == follow_target.source_fence.target_node_routing_id
+                && spot_runtime.try_begin_actor_message_follow_notification (
+                  actor, follow_target.source_fence,
+                  follow_target.target_fence)) {
+                const auto accepted = _node->send_message_follow (
                   source_node.to_bytes (),
                   runtime::protocol::message_follow_notice_t{
                     follow_target.source_fence, follow_target.target_fence,
@@ -2869,6 +2872,9 @@ result_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application
                     static_cast<std::uint32_t> (
                       std::min<std::size_t> (payload_bytes, runtime::protocol::messageFollowBytes)),
                     original_operation, original_reply_route_id});
+                (void) spot_runtime.complete_actor_message_follow_notification (
+                  actor, follow_target.source_fence,
+                  follow_target.target_fence, accepted);
             }
             return result_t<std::optional<zlink::message_t>>::success (
               decoded.value ().has_reply

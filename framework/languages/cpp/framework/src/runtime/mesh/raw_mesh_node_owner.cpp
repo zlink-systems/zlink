@@ -348,7 +348,8 @@ raw_mesh_node_owner_t::raw_mesh_node_owner_t (raw_mesh_node_options_t options) :
               _options.infrastructure_message_budget,
               _options.infrastructure_byte_budget),
     _operations (
-      std::make_shared<foundation::operation_registry_t> (4096))
+      std::make_shared<foundation::operation_registry_t> (
+        foundation::default_operation_capacity))
 {
 }
 
@@ -937,18 +938,7 @@ bool raw_mesh_node_owner_t::request_with_header (
         if (!port) {
             return false;
         }
-        correlation = requested_correlation.value_or (_next_correlation++);
-        if (correlation == 0
-            || (!requested_correlation && _next_correlation == 0)) {
-            _next_correlation = 1;
-            throw std::overflow_error ("raw mesh request correlation is exhausted");
-        }
-        if (requested_correlation) {
-            if (*requested_correlation == std::numeric_limits<std::uint64_t>::max ())
-                _next_correlation = 1;
-            else if (_next_correlation <= *requested_correlation)
-                _next_correlation = *requested_correlation + 1;
-        }
+        correlation = take_reply_route_id_locked (requested_correlation);
     }
     const auto id =
       operation_id (local.lifecycle_generation, correlation);
@@ -1609,12 +1599,7 @@ bool raw_mesh_node_owner_t::request_instance_spot_activation (
         if (!port) {
             return false;
         }
-        correlation = _next_correlation++;
-        if (correlation == 0 || _next_correlation == 0) {
-            _next_correlation = 1;
-            throw std::overflow_error (
-              "raw mesh request correlation is exhausted");
-        }
+        correlation = take_reply_route_id_locked ();
     }
     request.reply_route_id = request.request ? correlation : 0;
     detail::backend::raw_message_t parts{
@@ -1741,12 +1726,7 @@ bool raw_mesh_node_owner_t::request_infrastructure (
         if (!port) {
             return false;
         }
-        correlation = _next_correlation++;
-        if (correlation == 0 || _next_correlation == 0) {
-            _next_correlation = 1;
-            throw std::overflow_error (
-              "raw mesh request correlation is exhausted");
-        }
+        correlation = take_reply_route_id_locked ();
     }
     const auto id =
       operation_id (local.lifecycle_generation, correlation);
@@ -3284,12 +3264,35 @@ std::uint64_t raw_mesh_node_owner_t::next_operation_sequence ()
     std::lock_guard lifecycle_lock (_lifecycle_mutex);
     if (!_port)
         throw std::logic_error ("raw mesh node is not started");
-    const auto sequence = _next_correlation++;
-    if (sequence == 0 || _next_correlation == 0) {
-        _next_correlation = 1;
+    if (_next_operation_sequence == 0) {
         throw std::overflow_error ("raw mesh operation sequence is exhausted");
     }
+    const auto sequence = _next_operation_sequence;
+    _next_operation_sequence =
+      sequence == std::numeric_limits<std::uint64_t>::max ()
+        ? 0
+        : sequence + 1;
     return sequence;
+}
+
+std::uint64_t raw_mesh_node_owner_t::take_reply_route_id_locked (
+  std::optional<std::uint64_t> requested)
+{
+    if (_next_reply_route_id == 0) {
+        throw std::overflow_error (
+          "raw mesh reply route id is exhausted");
+    }
+    if (requested && (*requested == 0
+                      || *requested < _next_reply_route_id)) {
+        throw std::invalid_argument (
+          "raw mesh reply route id must be unique in the current lifecycle");
+    }
+    const auto reply_route_id = requested.value_or (_next_reply_route_id);
+    _next_reply_route_id =
+      reply_route_id == std::numeric_limits<std::uint64_t>::max ()
+        ? 0
+        : reply_route_id + 1;
+    return reply_route_id;
 }
 
 std::size_t raw_mesh_node_owner_t::drain_monitor_events (

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/fanout/raw_fanout_owner.hpp"
+#include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/messaging/async_submit_runtime.hpp"
 
 #include <zlink/Contracts/Core/context.hpp>
@@ -336,7 +337,6 @@ raw_fanout_subscriber_t::try_receive (
         catch (...) {
             return {fanout_receive_status_t::no_data, std::nullopt};
         }
-        _received.close ();
         const auto result =
           connection.socket->subscribe (_received, zlink::recv_flags_t::dontwait);
         if (result == static_cast<int> (zlink::recv_result_t::no_data)
@@ -348,6 +348,8 @@ raw_fanout_subscriber_t::try_receive (
             reopen_locked (connection);
             return {fanout_receive_status_t::protocol_error, std::nullopt};
         }
+        detail::backend::binding_received_release_t received_release (
+          _received);
         const auto &parts = _received.parts ();
         if (_received.topic () == raw_fanout_publisher_t::reserved_topic ()) {
             const auto payload = parts.empty ()
@@ -359,20 +361,17 @@ raw_fanout_subscriber_t::try_receive (
                 || !std::equal (payload.begin (), payload.end (), expected.begin (),
                                 [] (std::byte left, std::uint8_t right) {
                                     return static_cast<std::uint8_t> (left) == right;
-                                })) {
+                })) {
                 reopen_locked (connection);
-                _received.close ();
                 return {fanout_receive_status_t::protocol_error, std::nullopt};
             }
             connection.ready = true;
             connection.reconnecting = false;
             connection.deadline = now + fanout_receive_deadline;
-            _received.close ();
             return {fanout_receive_status_t::beacon, std::nullopt};
         }
         if (parts.size () != 1) {
             reopen_locked (connection);
-            _received.close ();
             return {fanout_receive_status_t::protocol_error, std::nullopt};
         }
         try {
@@ -384,14 +383,12 @@ raw_fanout_subscriber_t::try_receive (
             connection.reconnecting = false;
             connection.deadline = now + fanout_receive_deadline;
             auto topic = _received.topic ();
-            _received.close ();
             return {
               fanout_receive_status_t::application,
               fanout_received_t{intent.routing_id, std::move (topic), std::move (payload)}};
         }
         catch (const protocol::service_wire_error_t &) {
             reopen_locked (connection);
-            _received.close ();
             return {fanout_receive_status_t::protocol_error, std::nullopt};
         }
     }

@@ -955,7 +955,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_compile_features(test_cpp_framework_operation_registry PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_operation_registry PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-  target_link_libraries(test_cpp_framework_operation_registry PRIVATE Threads::Threads)
+  target_compile_definitions(test_cpp_framework_operation_registry PRIVATE
+    ZLINK_COMPLETION_TERMINAL_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/conformance/completion-terminal-v1.json")
+  target_link_libraries(test_cpp_framework_operation_registry PRIVATE
+    Threads::Threads
+    nlohmann_json::nlohmann_json)
   add_test(NAME test_cpp_framework_operation_registry
     COMMAND test_cpp_framework_operation_registry)
   set_tests_properties(test_cpp_framework_operation_registry PROPERTIES
@@ -1321,6 +1325,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_serializer_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_serializer_registry.cpp
     "framework-unit;serializer")
+  target_compile_definitions(test_cpp_framework_serializer_registry PRIVATE
+    ZLINK_CODEC_SELECTION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/conformance/codec-selection-v1.json"
+    ZLINK_PAYLOAD_OWNERSHIP_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/conformance/payload-ownership-v1.json")
   add_executable(test_cpp_framework_location_key_codec
     tests/Zlink.Framework.UnitTests/test_cpp_framework_location_key_codec.cpp)
   target_compile_features(test_cpp_framework_location_key_codec PRIVATE cxx_std_20)

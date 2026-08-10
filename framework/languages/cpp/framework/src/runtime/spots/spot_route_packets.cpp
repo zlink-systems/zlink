@@ -106,8 +106,6 @@ void validate_handoff_backlog_json (const nlohmann::json &backlog)
           "Actor handoff backlog must be an array");
     }
 
-    //  The handoff backlog has no stored-size bound.
-    const auto add_bytes = [] (std::size_t) { };
     for (const auto &item : backlog) {
         if (!item.is_object ()) {
             throw std::invalid_argument (
@@ -118,15 +116,12 @@ void validate_handoff_backlog_json (const nlohmann::json &backlog)
             throw std::invalid_argument (
               "Actor handoff backlog packet name is required");
         }
-        add_bytes (packet_name->get_ref<const std::string &> ().size ());
-
         const auto content_type = item.find ("contentType");
         if (content_type != item.end ()) {
             if (!content_type->is_string ()) {
                 throw std::invalid_argument (
                   "Actor handoff backlog content type must be text");
             }
-            add_bytes (content_type->get_ref<const std::string &> ().size ());
         }
 
         const auto payload = item.find ("payload");
@@ -134,7 +129,7 @@ void validate_handoff_backlog_json (const nlohmann::json &backlog)
             throw std::invalid_argument (
               "Actor handoff backlog payload is required");
         }
-        add_bytes (decode_base64 (payload->get_ref<const std::string &> ()).size ());
+        (void) decode_base64 (payload->get_ref<const std::string &> ());
 
         const auto metadata = item.find ("metadata");
         if (metadata == item.end ())
@@ -149,8 +144,7 @@ void validate_handoff_backlog_json (const nlohmann::json &backlog)
                 throw std::invalid_argument (
                   "Actor handoff backlog metadata value must be text");
             }
-            add_bytes (key.size ());
-            add_bytes (value.get_ref<const std::string &> ().size ());
+            (void) key;
         }
     }
 }
@@ -746,141 +740,6 @@ actor_ref_from_bound_session_route (const actor_bound_session_bind_route_request
 {
     return ::zlink::framework::detail::actor_ref_access_t::make (node_rid_t::from_string (request.actor_node_rid), request.actor_type,
                         request.actor_id, request.actor_generation);
-}
-
-void register_spot_route_packet_serializers (serializer_registry_t &serializers)
-{
-    if (!serializers.contains (std::type_index (typeid (spot_multicast_route_send_t)))) {
-        serializers.add<spot_multicast_route_send_t> (
-          [] (const spot_multicast_route_send_t &value) {
-              return encoded_payload_t::from_string (nlohmann::json (value).dump ());
-          },
-          [] (const encoded_payload_t &payload) {
-              return nlohmann::json::parse (payload.to_string ())
-                .get<spot_multicast_route_send_t> ();
-          });
-    }
-    if (!serializers.contains (std::type_index (typeid (spot_actor_admission_route_request_t)))) {
-        serializers.add<spot_actor_admission_route_request_t> (
-          [] (const spot_actor_admission_route_request_t &value) {
-              return encoded_payload_t::from_string (nlohmann::json (value).dump ());
-          },
-          [] (const encoded_payload_t &payload) {
-              return nlohmann::json::parse (payload.to_string ())
-                .get<spot_actor_admission_route_request_t> ();
-          });
-    }
-    if (!serializers.contains (std::type_index (typeid (spot_actor_admission_route_reply_t)))) {
-        serializers.add<spot_actor_admission_route_reply_t> (
-          [] (const spot_actor_admission_route_reply_t &value) {
-              return encoded_payload_t::from_string (nlohmann::json (value).dump ());
-          },
-          [] (const encoded_payload_t &payload) {
-              return nlohmann::json::parse (payload.to_string ())
-                .get<spot_actor_admission_route_reply_t> ();
-          });
-    }
-    if (!serializers.contains (std::type_index (typeid (spot_actor_commit_route_request_t)))) {
-        serializers.add<spot_actor_commit_route_request_t> (
-          [] (const spot_actor_commit_route_request_t &value) {
-              return encoded_payload_t::from_string (nlohmann::json (value).dump ());
-          },
-          [] (const encoded_payload_t &payload) {
-              return nlohmann::json::parse (payload.to_string ())
-                .get<spot_actor_commit_route_request_t> ();
-          });
-    }
-    if (!serializers.contains (std::type_index (typeid (spot_actor_join_route_request_t)))) {
-        serializers.add<spot_actor_join_route_request_t> (
-          [] (const spot_actor_join_route_request_t &value) {
-              return encoded_payload_t::from_string (nlohmann::json (value).dump ());
-          },
-          [] (const encoded_payload_t &payload) {
-              return nlohmann::json::parse (payload.to_string ())
-                .get<spot_actor_join_route_request_t> ();
-          });
-    }
-    if (!serializers.contains (std::type_index (typeid (spot_actor_join_route_reply_t)))) {
-        serializers.add<spot_actor_join_route_reply_t> (
-          [] (const spot_actor_join_route_reply_t &value) {
-              return encoded_payload_t::from_string (nlohmann::json (value).dump ());
-          },
-          [] (const encoded_payload_t &payload) {
-              return nlohmann::json::parse (payload.to_string ())
-                .get<spot_actor_join_route_reply_t> ();
-          });
-    }
-    if (!serializers.contains (std::type_index (typeid (spot_actor_packet_route_request_t)))) {
-        serializers.add<spot_actor_packet_route_request_t> (
-          [] (const spot_actor_packet_route_request_t &value) {
-              return encoded_payload_t::from_string (nlohmann::json (value).dump ());
-          },
-          [] (const encoded_payload_t &payload) {
-              return nlohmann::json::parse (payload.to_string ())
-                .get<spot_actor_packet_route_request_t> ();
-          });
-    }
-    if (!serializers.contains (std::type_index (typeid (spot_actor_packet_route_reply_t)))) {
-        serializers.add<spot_actor_packet_route_reply_t> (
-          [] (const spot_actor_packet_route_reply_t &value) {
-              return encoded_payload_t::from_string (nlohmann::json (value).dump ());
-          },
-          [] (const encoded_payload_t &payload) {
-              return nlohmann::json::parse (payload.to_string ())
-                .get<spot_actor_packet_route_reply_t> ();
-          });
-    }
-    if (!serializers.contains (std::type_index (typeid (spot_actor_disconnect_route_request_t)))) {
-        serializers.add<spot_actor_disconnect_route_request_t> (
-          [] (const spot_actor_disconnect_route_request_t &value) {
-              return encoded_payload_t::from_string (nlohmann::json (value).dump ());
-          },
-          [] (const encoded_payload_t &payload) {
-              return nlohmann::json::parse (payload.to_string ())
-                .get<spot_actor_disconnect_route_request_t> ();
-          });
-    }
-    if (!serializers.contains (std::type_index (typeid (spot_actor_disconnect_route_reply_t)))) {
-        serializers.add<spot_actor_disconnect_route_reply_t> (
-          [] (const spot_actor_disconnect_route_reply_t &value) {
-              return encoded_payload_t::from_string (nlohmann::json (value).dump ());
-          },
-          [] (const encoded_payload_t &payload) {
-              return nlohmann::json::parse (payload.to_string ())
-                .get<spot_actor_disconnect_route_reply_t> ();
-          });
-    }
-    if (!serializers.contains (std::type_index (typeid (actor_bound_session_route_request_t)))) {
-        serializers.add<actor_bound_session_route_request_t> (
-          [] (const actor_bound_session_route_request_t &value) {
-              return encoded_payload_t::from_string (nlohmann::json (value).dump ());
-          },
-          [] (const encoded_payload_t &payload) {
-              return nlohmann::json::parse (payload.to_string ())
-                .get<actor_bound_session_route_request_t> ();
-          });
-    }
-    if (!serializers.contains (
-          std::type_index (typeid (actor_bound_session_bind_route_request_t)))) {
-        serializers.add<actor_bound_session_bind_route_request_t> (
-          [] (const actor_bound_session_bind_route_request_t &value) {
-              return encoded_payload_t::from_string (nlohmann::json (value).dump ());
-          },
-          [] (const encoded_payload_t &payload) {
-              return nlohmann::json::parse (payload.to_string ())
-                .get<actor_bound_session_bind_route_request_t> ();
-          });
-    }
-    if (!serializers.contains (std::type_index (typeid (actor_bound_session_route_reply_t)))) {
-        serializers.add<actor_bound_session_route_reply_t> (
-          [] (const actor_bound_session_route_reply_t &value) {
-              return encoded_payload_t::from_string (nlohmann::json (value).dump ());
-          },
-          [] (const encoded_payload_t &payload) {
-              return nlohmann::json::parse (payload.to_string ())
-                .get<actor_bound_session_route_reply_t> ();
-          });
-    }
 }
 
 } // namespace zlink::framework::detail

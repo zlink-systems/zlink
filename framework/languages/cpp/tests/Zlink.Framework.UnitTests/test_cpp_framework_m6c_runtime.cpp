@@ -9,6 +9,8 @@
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 
+#include <zlink/framework.hpp>
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -54,6 +56,31 @@ struct test_context_t
         std::cerr << "V11-M6C-CPP: " << message << '\n';
     }
 };
+
+void test_spot_lifecycle_domain_rejects_invalid_kind_combinations (
+  test_context_t &test)
+{
+    namespace detail = zlink::framework::detail;
+
+    static_assert (!std::default_initializable<
+                   detail::spot_lifecycle_domain_t>);
+
+    const auto entry = detail::spot_lifecycle_domain_t::entry ();
+    const auto user = detail::spot_lifecycle_domain_t::user ();
+    const auto instance = detail::spot_lifecycle_domain_t::instance ();
+    test.require (
+      entry.is_entry () && !entry.allows_relocation ()
+        && !entry.allows_idle_eviction (),
+      "Entry Spot domain must exclude relocation and idle eviction");
+    test.require (
+      !user.is_entry () && user.allows_relocation ()
+        && !user.allows_idle_eviction (),
+      "User Spot domain must allow relocation but exclude idle eviction");
+    test.require (
+      !instance.is_entry () && instance.allows_relocation ()
+        && instance.allows_idle_eviction (),
+      "Instance Spot domain must own relocation and idle eviction rules");
+}
 
 #if 0
 struct host_relocation_ready_message_t
@@ -664,8 +691,9 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (
         state->node_rid = node_rid;
         state->spot_id = std::move (spot_id);
         state->spot_name = std::move (spot_name);
-        state->kind = entry_spot ? detail::spot_runtime_kind_t::entry
-                                 : detail::spot_runtime_kind_t::user;
+        state->lifecycle_domain =
+          entry_spot ? detail::spot_lifecycle_domain_t::entry ()
+                     : detail::spot_lifecycle_domain_t::user ();
         state->execution_mode = user_spot_execution_mode_t::spot_wide;
         state->relocation_readiness =
           spot_relocation_readiness_mode_t::application_signaled;
@@ -830,6 +858,229 @@ std::string authority_key (object_kind_t kind, const std::string &key)
 }
 
 inventory_digest_t digest_with (std::uint8_t value);
+
+struct accepted_decode_payload_t
+{
+    int value = 0;
+};
+
+struct rejected_decode_payload_t
+{
+    int value = 0;
+};
+
+struct failed_decode_payload_t
+{
+    int value = 0;
+};
+
+int successful_payload_deserializations = 0;
+int other_payload_deserializations = 0;
+int failed_payload_deserializations = 0;
+
+void to_json (
+  nlohmann::json &json,
+  const accepted_decode_payload_t &payload)
+{
+    json = nlohmann::json{{"value", payload.value}};
+}
+
+void to_json (
+  nlohmann::json &json,
+  const rejected_decode_payload_t &payload)
+{
+    json = nlohmann::json{{"value", payload.value}};
+}
+
+void to_json (
+  nlohmann::json &json,
+  const failed_decode_payload_t &payload)
+{
+    json = nlohmann::json{{"value", payload.value}};
+}
+
+void from_json (
+  const nlohmann::json &json,
+  accepted_decode_payload_t &payload)
+{
+    ++successful_payload_deserializations;
+    payload.value = json.at ("value").get<int> ();
+}
+
+void from_json (
+  const nlohmann::json &json,
+  rejected_decode_payload_t &payload)
+{
+    ++other_payload_deserializations;
+    payload.value = json.at ("value").get<int> ();
+}
+
+void from_json (
+  const nlohmann::json &,
+  failed_decode_payload_t &)
+{
+    ++failed_payload_deserializations;
+    throw std::runtime_error ("expected accepted-payload decode failure");
+}
+
+class payload_decode_spot_t final
+    : public zlink::framework::spot_t<zlink::framework::actor_t>
+{
+  public:
+    explicit payload_decode_spot_t (
+      zlink::framework::spot_context_t context) :
+        _context (std::move (context))
+    {
+    }
+
+    zlink::framework::spot_context_t &context () noexcept override
+    {
+        return _context;
+    }
+
+    const zlink::framework::spot_context_t &
+    context () const noexcept override
+    {
+        return _context;
+    }
+
+    void configure () override {}
+
+    zlink::framework::task_t<zlink::framework::spot_create_response_t>
+    on_create (const zlink::framework::message_t &request) override
+    {
+        if (!failure_mode) {
+            const auto first = request.decode<accepted_decode_payload_t> ();
+            const auto copied_request = request;
+            const auto second =
+              copied_request.decode<accepted_decode_payload_t> ();
+            bool other_rejected = false;
+            try {
+                (void) request.decode<rejected_decode_payload_t> ();
+            }
+            catch (const zlink::framework::framework_exception_t &error) {
+                other_rejected =
+                  error.kind ()
+                  == zlink::framework::framework_error_kind_t::protocol_error;
+            }
+            success_observed = first.value == 73 && second.value == 73
+                               && other_rejected;
+        }
+        else {
+            std::string first_error;
+            std::string repeated_error;
+            try {
+                (void) request.decode<failed_decode_payload_t> ();
+            }
+            catch (const zlink::framework::framework_exception_t &error) {
+                first_error = error.what ();
+            }
+            try {
+                (void) request.decode<rejected_decode_payload_t> ();
+            }
+            catch (const zlink::framework::framework_exception_t &error) {
+                repeated_error = error.what ();
+            }
+            failure_observed = !first_error.empty ()
+                               && repeated_error == first_error;
+        }
+        co_return zlink::framework::spot_create_response_t::accept ();
+    }
+
+    zlink::framework::task_t<void> on_initialize () override
+    {
+        co_return;
+    }
+
+    zlink::framework::task_t<zlink::framework::spot_actor_join_result_t>
+    on_actor_join (
+      std::string_view,
+      const zlink::framework::message_t &) override
+    {
+        co_return zlink::framework::spot_actor_join_result_t::reject ();
+    }
+
+    zlink::framework::task_t<void>
+    on_actor_joined (zlink::framework::actor_t &) override
+    {
+        co_return;
+    }
+
+    zlink::framework::task_t<void>
+    on_leave_actor (zlink::framework::actor_t &) override
+    {
+        co_return;
+    }
+
+    static inline bool failure_mode = false;
+    static inline bool success_observed = false;
+    static inline bool failure_observed = false;
+
+  private:
+    zlink::framework::spot_context_t _context;
+};
+
+void test_accepted_message_payload_is_deserialized_once (
+  test_context_t &test)
+{
+    payload_decode_spot_t::failure_mode = false;
+    payload_decode_spot_t::success_observed = false;
+    payload_decode_spot_t::failure_observed = false;
+    successful_payload_deserializations = 0;
+    other_payload_deserializations = 0;
+    failed_payload_deserializations = 0;
+
+    zlink::framework::zlink_builder_t builder;
+    auto mesh = builder.add_route_mesh ("decode-cache-mesh");
+    mesh.add_spot_factory<payload_decode_spot_t> (
+      "decode-cache",
+      [] (zlink::framework::spot_context_t context) {
+          return std::make_shared<payload_decode_spot_t> (
+            std::move (context));
+      },
+      [] (auto &factory) { factory.disable_relocation (); });
+    zlink::framework::serializer_registry_t serializers;
+    zlink::framework::detail::channel_runtime_t::from (
+      builder.message_bus ())
+      .bind_serializers (serializers);
+    auto found_runtime =
+      zlink::framework::detail::spot_node_runtime_t::from (
+        builder, "decode-cache-mesh");
+    test.require (
+      found_runtime.has_value (),
+      "accepted-payload decode test must resolve its Spot runtime");
+    if (!found_runtime)
+        return;
+    auto runtime = *found_runtime;
+
+    const auto success = runtime.get_or_create_spot (
+      "decode-cache",
+      zlink::framework::spot_id_t ("decode-success"),
+      zlink::message_t::from (R"({"value":73})"));
+    test.require (
+      success.state == zlink::framework::spot_create_state_t::created
+        && payload_decode_spot_t::success_observed
+        && successful_payload_deserializations == 1
+        && other_payload_deserializations == 0,
+      "one admitted payload must preserve its first successful decode across repeated and differently typed reads");
+
+    payload_decode_spot_t::failure_mode = true;
+    const auto failure = runtime.get_or_create_spot (
+      "decode-cache",
+      zlink::framework::spot_id_t ("decode-failure"),
+      zlink::message_t::from (R"({"value":91})"));
+    test.require (
+      failure.state == zlink::framework::spot_create_state_t::created
+        && payload_decode_spot_t::failure_observed
+        && failed_payload_deserializations == 1
+        && other_payload_deserializations == 0,
+      "one admitted payload must preserve its first decode failure without invoking another serializer");
+
+    runtime.request_stop ();
+    runtime.cancel_pending_dispatch ();
+    runtime.cancel_pending_work ();
+    runtime.release_native_handles ();
+}
 
 class fail_first_restore_spot_t final
     : public zlink::framework::spot_t<zlink::framework::actor_t>
@@ -2969,7 +3220,7 @@ void test_host_preflight_is_all_or_none (test_context_t &test)
        .exclusive = true,
        .instance_intent = false});
     test.require (
-      host.state () == host_runtime_state_t::serving
+      host.state () == maintenance_admission_state_t::serving
         && !host.terminal_result ()
         && after_blocked.status == create_status_t::reserved,
       "blocked Retire must restore Serving without a host terminal result");
@@ -3178,7 +3429,7 @@ void test_post_commit_failure_is_force_stopped (
           termination_reason_t::relocation_failed},
       "failure after one authority commit must not return Blocked");
     test.require (
-      host.state () == host_runtime_state_t::stopped
+      host.state () == maintenance_admission_state_t::stopped
         && host.terminal_result () == result,
       "postcommit failure must finish bounded teardown in Stopped");
 }
@@ -3726,7 +3977,8 @@ void test_production_relocation_restore_and_replay_vertical (
     target_transport.close ();
 }
 
-void test_target_replay_limits_are_relocation_scoped (test_context_t &test)
+void test_target_replay_has_no_relocation_specific_limit (
+  test_context_t &test)
 {
     namespace mesh = zlink::framework::runtime::mesh;
     namespace protocol = zlink::framework::runtime::protocol;
@@ -3826,7 +4078,7 @@ void test_target_replay_limits_are_relocation_scoped (test_context_t &test)
       register_target (1, 1, counting_stage),
       "target replay limit test must register its target participant");
     bool count_records_accepted = true;
-    for (std::uint64_t sequence = 1; sequence <= 1024; ++sequence) {
+    for (std::uint64_t sequence = 1; sequence <= 1025; ++sequence) {
         const auto result = wire.process (
           make_record (1, 1, sequence, 0, sequence));
         count_records_accepted =
@@ -3834,29 +4086,29 @@ void test_target_replay_limits_are_relocation_scoped (test_context_t &test)
            || result == raw_relocation_replay_result_t::transport_failed)
           && count_records_accepted;
     }
-    const auto count_overflow = wire.process (
-      make_record (1, 1, 1025, 0, 1025));
     test.require (
       count_records_accepted
-        && count_overflow == raw_relocation_replay_result_t::restore_failed
-        && staged_records == 1024
-        && wire.target_high_water (relocation, 1, 1) == 1024,
-      "one target participant must reject its 1,025th temporary record");
+        && staged_records == 1025
+        && wire.target_high_water (relocation, 1, 1) == 1025,
+      "target replay must accept records beyond the former 1,024-record "
+      "temporary limit");
     test.require (
       wire.unregister_target (relocation, 1, 1),
-      "target replay limit test must release the count-limited target");
+      "target replay test must release the participant after count coverage");
 
     staged_records = 0;
     test.require (
       register_target (2, 1, counting_stage),
       "target replay byte test must register its target participant");
-    const auto byte_overflow = wire.process (
-      make_record (2, 1, 1, 16u * 1024u * 1024u, 1));
+    const auto byte_result = wire.process (
+      make_record (2, 1, 1, 16u * 1024u * 1024u + 1u, 1));
     test.require (
-      byte_overflow == raw_relocation_replay_result_t::restore_failed
-        && staged_records == 0
-        && wire.target_high_water (relocation, 2, 1) == 0,
-      "one target participant must reject a temporary record over 16 MiB");
+      (byte_result == raw_relocation_replay_result_t::applied
+       || byte_result == raw_relocation_replay_result_t::transport_failed)
+        && staged_records == 1
+        && wire.target_high_water (relocation, 2, 1) == 1,
+      "target replay must accept a temporary record beyond the former "
+      "16 MiB limit");
     (void) wire.unregister_target (relocation, 2, 1);
 
     staged_records = 0;
@@ -3878,23 +4130,26 @@ void test_target_replay_limits_are_relocation_scoped (test_context_t &test)
                    == raw_relocation_replay_result_t::transport_failed)
           && shared_records_accepted;
     }
-    const auto shared_overflow = wire.process (
+    const auto shared_result = wire.process (
       make_record (3, 1, 513, 0, 1513));
     test.require (
       shared_records_accepted
-        && shared_overflow == raw_relocation_replay_result_t::restore_failed
-        && staged_records == 1024,
-      "target replay limits must be shared across relocation participants");
+        && (shared_result == raw_relocation_replay_result_t::applied
+            || shared_result
+                 == raw_relocation_replay_result_t::transport_failed)
+        && staged_records == 1025,
+      "target replay must not impose a relocation-wide temporary limit "
+      "across participants");
     test.require (
       wire.unregister_target (relocation, 3, 2),
       "target replay group test must unregister one participant");
     const auto after_unregister = wire.process (
-      make_record (3, 1, 513, 0, 1513));
+      make_record (3, 1, 514, 0, 1514));
     test.require (
       (after_unregister == raw_relocation_replay_result_t::applied
        || after_unregister
             == raw_relocation_replay_result_t::transport_failed),
-      "target replay accounting must release one participant's retained records");
+      "target replay must continue after another participant is removed");
     (void) wire.unregister_target (relocation, 3, 1);
 
     std::mutex concurrent_mutex;
@@ -3977,8 +4232,9 @@ void test_target_replay_limits_are_relocation_scoped (test_context_t &test)
         return true;
     };
     test.require (
-      register_target (5, 1, closing_stage),
-      "target replay close test must register its target participant");
+      register_target (5, 1, closing_stage)
+        && register_target (5, 2, counting_stage),
+      "target replay close test must register both target participants");
     raw_relocation_replay_result_t closing_result =
       raw_relocation_replay_result_t::invalid;
     std::thread closing_replay ([&] {
@@ -3997,19 +4253,35 @@ void test_target_replay_limits_are_relocation_scoped (test_context_t &test)
     test.require (
       wire.seal_target (relocation, 5, 1),
       "target replay close test must seal admission before cleanup");
+    bool unregister_result = false;
+    std::thread unregistering ([&] {
+        unregister_result = wire.unregister_target (
+          relocation, 5, 1);
+    });
+    const auto reserved_operation = wire.process (
+      make_record (5, 2, 1, 0, 888));
+    test.require (
+      reserved_operation
+        == raw_relocation_replay_result_t::conflicting_duplicate,
+      "a staged operation identity must remain reserved while target cleanup waits");
     {
         std::lock_guard lock (closing_mutex);
         release_closing_stage = true;
     }
     closing_condition.notify_all ();
     closing_replay.join ();
+    unregistering.join ();
     test.require (
       closing_result == raw_relocation_replay_result_t::restore_failed
+        && unregister_result
         && wire.target_high_water (relocation, 5, 1) == 0,
-      "sealed target staging must not advance high-water or emit an ACK");
+      "concurrent target cleanup must roll back staging before unregistering");
+    const auto reused_after_cleanup = wire.process (
+      make_record (5, 2, 1, 0, 888));
     test.require (
-      wire.unregister_target (relocation, 5, 1),
-      "target replay close test must unregister the sealed participant");
+      accepted_result (reused_after_cleanup),
+      "rolled-back staging must release operation identity for the surviving participant");
+    (void) wire.unregister_target (relocation, 5, 2);
     transport.close ();
 }
 
@@ -6431,7 +6703,7 @@ void test_relocation_hold_restores_without_dedicated_limits (
              == 1200,
       "relocation hold must accept records beyond the former aggregate "
       "1,024-record limit");
-    for (std::uint64_t sequence = 601; sequence <= 2047; ++sequence) {
+    for (std::uint64_t sequence = 601; sequence <= 2049; ++sequence) {
         count_records_accepted =
           count_limited.enqueue (
             count_first, turn_domain_t::application, {sequence, {}})
@@ -6440,11 +6712,10 @@ void test_relocation_hold_restores_without_dedicated_limits (
     }
     test.require (
       count_records_accepted
-        && count_limited.enqueue (
-             count_first, turn_domain_t::application, {2048, {}})
-             == stateful_error_t::backpressured,
-      "relocation hold must still enforce the configured application lane "
-      "record capacity");
+        && count_limited.pending (
+             count_first, turn_domain_t::application) == 2049,
+      "source relocation ingress must remain held beyond the configured "
+      "application-lane record capacity");
     if (membership_error == stateful_error_t::none) {
         test.require (
           count_limited.abort_membership_move (membership_move)
@@ -6464,6 +6735,24 @@ void test_relocation_hold_restores_without_dedicated_limits (
         && count_limited.abort_relocation (count_seal.token)
              == stateful_error_t::none,
       "aggregate hold count test must close its relocation generation");
+    bool source_abort_fifo = count_error == stateful_error_t::none;
+    for (std::uint64_t sequence = 1; sequence <= 2049; ++sequence) {
+        const auto [claim_error, claimed] = count_limited.try_claim (
+          count_first, turn_domain_t::application);
+        source_abort_fifo = source_abort_fifo
+          && claim_error == stateful_error_t::none && claimed
+          && claimed->sequence == sequence;
+        if (claimed) {
+            source_abort_fifo =
+              count_limited.complete_claim (
+                count_first, turn_domain_t::application)
+                == stateful_error_t::none
+              && source_abort_fifo;
+        }
+    }
+    test.require (
+      source_abort_fifo,
+      "source relocation abort must restore an over-capacity hold in FIFO order");
 
     stateful_object_runtime_t byte_limited (
       4096, 8, 20u * 1024u * 1024u, limits::control_mailbox_bytes);
@@ -6537,9 +6826,15 @@ void test_relocation_hold_restores_without_dedicated_limits (
           == stateful_error_t::none
         && byte_limited.enqueue (
              byte_first, turn_domain_t::application, {4, {}})
-             == stateful_error_t::backpressured,
-      "relocation hold must still enforce the configured application lane "
-      "byte capacity");
+             == stateful_error_t::none
+        && byte_limited.enqueue (
+             byte_first, turn_domain_t::application, {5, {}})
+             == stateful_error_t::none
+        && byte_limited.pending_bytes (
+             byte_first, turn_domain_t::application)
+             > 20u * 1024u * 1024u,
+      "source relocation ingress must remain held beyond the configured "
+      "application-lane byte capacity");
     if (byte_claim) {
         test.require (
           byte_limited.complete_claim (
@@ -6553,6 +6848,305 @@ void test_relocation_hold_restores_without_dedicated_limits (
         && byte_limited.abort_relocation (byte_seal.token)
              == stateful_error_t::none,
       "aggregate hold byte test must close its relocation generation");
+
+    stateful_object_runtime_t target_hold (
+      2, 8, limits::fixed_work_byte_cost + 1,
+      limits::control_mailbox_bytes);
+    std::mutex target_mutex;
+    std::condition_variable target_condition;
+    bool target_restore_entered = false;
+    bool release_target_restore = false;
+    target_hold.configure_relocation_state (
+      [] (const object_ref_t &, const std::string &, std::stop_token) {
+          return std::vector<std::uint8_t>{};
+      },
+      [&] (const frozen_object_state_t &, const object_ref_t &,
+           std::stop_token) {
+          std::unique_lock lock (target_mutex);
+          target_restore_entered = true;
+          target_condition.notify_all ();
+          target_condition.wait (
+            lock, [&] { return release_target_restore; });
+          return true;
+      });
+    const frozen_object_state_t target_frozen{
+      .owner =
+        {.kind = object_kind_t::user_spot,
+         .key = "target-unbounded-hold",
+         .object_generation = 1,
+         .authority_owner_generation = 1,
+         .mesh_name = "mesh",
+         .node_id = "source"},
+      .stable_type = "spot",
+      .application_state = {},
+      .pending_application = {},
+      .timers = {}};
+    auto target_ref = target_frozen.owner;
+    target_ref.authority_owner_generation = 2;
+    target_ref.node_id = "target";
+    const relocation_restore_identity_t target_identity{
+      "target-unbounded-root", 7, digest_with (0x71)};
+    stateful_error_t target_restore_result = stateful_error_t::conflict;
+    std::thread target_restoring ([&] {
+        target_restore_result = target_hold.restore_relocation (
+          target_frozen, target_ref, target_identity);
+    });
+    {
+        std::unique_lock lock (target_mutex);
+        test.require (
+          target_condition.wait_for (
+            lock, std::chrono::seconds (5), [&] {
+                return target_restore_entered;
+            }),
+          "target temporary hold test must enter restore before ingress");
+    }
+    bool target_records_held =
+      target_hold.enqueue (
+        target_ref, turn_domain_t::application,
+        {1, std::vector<std::uint8_t> (
+              17u * 1024u * 1024u, 0x51)})
+      == stateful_error_t::none;
+    for (std::uint64_t sequence = 2; sequence <= 1025; ++sequence) {
+        target_records_held =
+          target_hold.enqueue (
+            target_ref, turn_domain_t::application,
+            {sequence, {0x52}})
+            == stateful_error_t::none
+          && target_records_held;
+    }
+    {
+        std::lock_guard lock (target_mutex);
+        release_target_restore = true;
+    }
+    target_condition.notify_all ();
+    target_restoring.join ();
+    test.require (
+      target_records_held
+        && target_restore_result == stateful_error_t::none
+        && target_hold.pending (target_ref, turn_domain_t::application)
+             == 1025
+        && target_hold.pending_bytes (
+             target_ref, turn_domain_t::application)
+             > 16u * 1024u * 1024u
+        && target_hold.commit_relocation_restore (
+             target_ref, target_identity) == stateful_error_t::none,
+      "target relocation ingress must remain held beyond the configured lane "
+      "and former 1,024-record/16 MiB temporary limits");
+    for (std::uint64_t sequence = 1; sequence <= 1025; ++sequence) {
+        const auto [claim_error, claimed] = target_hold.try_claim (
+          target_ref, turn_domain_t::application);
+        test.require (
+          claim_error == stateful_error_t::none && claimed
+            && claimed->sequence == sequence,
+          "target relocation hold must resume in FIFO order after commit");
+        if (claimed) {
+            (void) target_hold.complete_claim (
+              target_ref, turn_domain_t::application);
+        }
+    }
+
+    stateful_object_runtime_t source_commit (
+      2, 8, 2u * limits::fixed_work_byte_cost + 1,
+      limits::control_mailbox_bytes);
+    const auto source_commit_spot = create_spot (
+      source_commit, object_kind_t::user_spot, "source-commit-fifo");
+    test.require (
+      source_commit.enqueue (
+        source_commit_spot, turn_domain_t::application, {1, {}})
+          == stateful_error_t::none
+        && source_commit.enqueue (
+             source_commit_spot, turn_domain_t::application, {2, {}})
+             == stateful_error_t::none,
+      "source commit FIFO setup must fill the configured normal lane");
+    const auto [source_active_error, source_active] =
+      source_commit.try_claim (
+        source_commit_spot, turn_domain_t::application);
+    stateful_error_t source_seal_error = stateful_error_t::conflict;
+    relocation_seal_t source_seal;
+    std::thread source_sealing ([&] {
+        auto result = source_commit.try_seal_relocation (
+          source_commit_spot);
+        source_seal_error = result.first;
+        source_seal = std::move (result.second);
+    });
+    const bool source_moving = wait_until_bounded (
+      [&] {
+          return source_commit.register_timer (
+                   source_commit_spot, {94, 1000, 1000, 1})
+                 == stateful_error_t::moving;
+      },
+      std::chrono::seconds (5));
+    test.require (
+      source_active_error == stateful_error_t::none && source_active
+        && source_moving
+        && source_commit.enqueue (
+             source_commit_spot, turn_domain_t::application, {3, {0x63}})
+             == stateful_error_t::none
+        && source_commit.enqueue (
+             source_commit_spot, turn_domain_t::application,
+             {4, std::vector<std::uint8_t> (
+                    17u * 1024u * 1024u, 0x64)})
+             == stateful_error_t::none,
+      "source relocation hold must accept post-seal work beyond the normal lane");
+    if (source_active)
+        (void) source_commit.complete_claim (
+          source_commit_spot, turn_domain_t::application);
+    source_sealing.join ();
+    const auto [source_commit_error, source_committed] =
+      source_commit.commit_relocation (
+        source_seal.token, "source-commit-target");
+    bool source_commit_fifo =
+      source_seal_error == stateful_error_t::none
+      && source_commit_error == stateful_error_t::none
+      && source_commit.pending_bytes (
+           source_committed, turn_domain_t::application)
+           > 16u * 1024u * 1024u;
+    for (std::uint64_t sequence = 2; sequence <= 4; ++sequence) {
+        const auto [claim_error, claimed] = source_commit.try_claim (
+          source_committed, turn_domain_t::application);
+        source_commit_fifo = source_commit_fifo
+          && claim_error == stateful_error_t::none && claimed
+          && claimed->sequence == sequence;
+        if (claimed)
+            (void) source_commit.complete_claim (
+              source_committed, turn_domain_t::application);
+    }
+    test.require (
+      source_commit_fifo,
+      "source relocation commit must merge frozen and over-capacity held records in FIFO order");
+
+    stateful_object_runtime_t target_abort (
+      1, 8, limits::fixed_work_byte_cost + 1,
+      limits::control_mailbox_bytes);
+    std::mutex abort_mutex;
+    std::condition_variable abort_condition;
+    bool abort_restore_entered = false;
+    bool release_abort_restore = false;
+    target_abort.configure_relocation_state (
+      [] (const object_ref_t &, const std::string &, std::stop_token) {
+          return std::vector<std::uint8_t>{};
+      },
+      [&] (const frozen_object_state_t &, const object_ref_t &,
+           std::stop_token) {
+          std::unique_lock lock (abort_mutex);
+          abort_restore_entered = true;
+          abort_condition.notify_all ();
+          abort_condition.wait (
+            lock, [&] { return release_abort_restore; });
+          return true;
+      });
+    auto abort_frozen = target_frozen;
+    abort_frozen.owner.key = "target-abort-hold";
+    auto abort_target = abort_frozen.owner;
+    abort_target.authority_owner_generation = 2;
+    abort_target.node_id = "target";
+    const relocation_restore_identity_t abort_identity{
+      "target-abort-root", 8, digest_with (0x72)};
+    stateful_error_t abort_restore_result = stateful_error_t::conflict;
+    std::thread abort_restoring ([&] {
+        abort_restore_result = target_abort.restore_relocation (
+          abort_frozen, abort_target, abort_identity);
+    });
+    {
+        std::unique_lock lock (abort_mutex);
+        test.require (
+          abort_condition.wait_for (
+            lock, std::chrono::seconds (5), [&] {
+                return abort_restore_entered;
+            }),
+          "target abort test must enter restore before ingress");
+    }
+    test.require (
+      target_abort.enqueue (
+        abort_target, turn_domain_t::application, {1, {0x71}})
+          == stateful_error_t::none
+        && target_abort.enqueue (
+             abort_target, turn_domain_t::application, {2, {0x72}})
+             == stateful_error_t::none,
+      "target abort test must hold records beyond its normal lane");
+    {
+        std::lock_guard lock (abort_mutex);
+        release_abort_restore = true;
+    }
+    abort_condition.notify_all ();
+    abort_restoring.join ();
+    test.require (
+      abort_restore_result == stateful_error_t::none
+        && target_abort.abort_relocation_restore (
+             abort_target, abort_identity) == stateful_error_t::none
+        && !target_abort.find (
+             abort_target.kind, abort_target.key),
+      "target relocation abort must discard its temporary hold and object reservation");
+    target_abort.configure_relocation_state (
+      [] (const object_ref_t &, const std::string &, std::stop_token) {
+          return std::vector<std::uint8_t>{};
+      },
+      [] (const frozen_object_state_t &, const object_ref_t &,
+          std::stop_token) { return true; });
+    test.require (
+      target_abort.restore_relocation (
+        abort_frozen, abort_target, abort_identity)
+          == stateful_error_t::none
+        && target_abort.commit_relocation_restore (
+             abort_target, abort_identity) == stateful_error_t::none
+        && target_abort.pending (
+             abort_target, turn_domain_t::application) == 0,
+      "target relocation abort must leave no held records in a retried restore");
+
+    stateful_object_runtime_t normal_lane_caps (
+      2, 8, 2u * limits::fixed_work_byte_cost + 4,
+      limits::control_mailbox_bytes);
+    const auto membership_capped = create_actor (
+      normal_lane_caps, "membership-normal-cap");
+    const object_ref_t remote_membership_target{
+      object_kind_t::user_spot, "membership-normal-target", 1, 1,
+      "mesh", "node-b"};
+    const auto [normal_move_error, normal_move] =
+      normal_lane_caps.begin_remote_membership_move (
+        membership_capped, remote_membership_target);
+    test.require (
+      normal_move_error == stateful_error_t::none
+        && normal_lane_caps.enqueue (
+             membership_capped, turn_domain_t::application,
+             {99, std::vector<std::uint8_t> (
+                    2u * limits::fixed_work_byte_cost + 5, 0x61)})
+             == stateful_error_t::backpressured
+        && normal_lane_caps.enqueue (
+             membership_capped, turn_domain_t::application, {1, {}})
+             == stateful_error_t::none
+        && normal_lane_caps.enqueue (
+             membership_capped, turn_domain_t::application, {2, {}})
+             == stateful_error_t::none
+        && normal_lane_caps.enqueue (
+             membership_capped, turn_domain_t::application, {3, {}})
+             == stateful_error_t::backpressured,
+      "membership-only movement must retain the normal application count and byte caps");
+    if (normal_move_error == stateful_error_t::none)
+        (void) normal_lane_caps.abort_membership_move (normal_move);
+
+    const auto closing_capped = create_spot (
+      normal_lane_caps, object_kind_t::user_spot, "closing-normal-cap");
+    const auto [close_error, close_token] =
+      normal_lane_caps.begin_close_spot (closing_capped);
+    test.require (
+      close_error == stateful_error_t::none && close_token
+        && normal_lane_caps.enqueue (
+             closing_capped, turn_domain_t::application,
+             {99, std::vector<std::uint8_t> (
+                    2u * limits::fixed_work_byte_cost + 5, 0x62)})
+             == stateful_error_t::backpressured
+        && normal_lane_caps.enqueue (
+             closing_capped, turn_domain_t::application, {1, {}})
+             == stateful_error_t::none
+        && normal_lane_caps.enqueue (
+             closing_capped, turn_domain_t::application, {2, {}})
+             == stateful_error_t::none
+        && normal_lane_caps.enqueue (
+             closing_capped, turn_domain_t::application, {3, {}})
+             == stateful_error_t::backpressured,
+      "closing objects must retain the normal application count and byte caps");
+    if (close_token)
+        (void) normal_lane_caps.abort_close_spot (*close_token);
 }
 
 void test_session_relocation_barrier_holds_production_ingress (
@@ -6735,10 +7329,12 @@ void test_session_relocation_barrier_holds_production_ingress (
 int main ()
 {
     test_context_t test;
+    test_spot_lifecycle_domain_rejects_invalid_kind_combinations (test);
     test_generation_barrier_quiesces_yield_spot_and_timer (test);
     test_relocation_ready_completion_runs_once_on_spot_turn (test);
     test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test);
     test_temporary_channel_request_yield_owns_call_state (test);
+    test_accepted_message_payload_is_deserialized_once (test);
     test_close_barrier_waits_and_abort_restores_ingress (test);
     test_envelope_round_trip (test);
     test_spot_restore_stages_before_publication (test);
@@ -6760,7 +7356,7 @@ int main ()
     test_public_authority_store_adapter (test);
     test_durable_join_completion_replacement_and_ordering (test);
     test_production_relocation_restore_and_replay_vertical (test);
-    test_target_replay_limits_are_relocation_scoped (test);
+    test_target_replay_has_no_relocation_specific_limit (test);
     test_application_relocation_uses_maintenance_and_fails_closed (test);
     test_missing_session_seal_ack_fails_closed_without_high_water_fallback (
       test);

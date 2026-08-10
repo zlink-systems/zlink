@@ -311,16 +311,22 @@ class duplicate_next_filter_t
     int duplicate_rejections = 0;
 };
 
-template <typename T> void add_int_serializer (zlink::framework::serializer_registry_t &serializers)
+template <typename T>
+requires (std::is_same_v<T, request_t> || std::is_same_v<T, reply_t>
+          || std::is_same_v<T, command_t> || std::is_same_v<T, event_t>
+          || std::is_same_v<T, async_request_t> || std::is_same_v<T, delayed_request_t>)
+void to_json (nlohmann::json &json, const T &value)
 {
-    serializers.add<T> (
-      [] (const T &value) {
-          return zlink::framework::encoded_payload_t::from_string (std::to_string (value.value));
-      },
-      [] (const zlink::framework::encoded_payload_t &payload) {
-          return T{std::stoi (payload.to_string ())};
-      },
-      "application/json");
+    json = value.value;
+}
+
+template <typename T>
+requires (std::is_same_v<T, request_t> || std::is_same_v<T, reply_t>
+          || std::is_same_v<T, command_t> || std::is_same_v<T, event_t>
+          || std::is_same_v<T, async_request_t> || std::is_same_v<T, delayed_request_t>)
+void from_json (const nlohmann::json &json, T &value)
+{
+    value.value = json.get<int> ();
 }
 
 zlink::framework::task_t<reply_t> delayed_reply_task (int value)
@@ -371,12 +377,6 @@ int main ()
     auto provider = services.build_provider ();
 
     zlink::framework::serializer_registry_t serializers;
-    add_int_serializer<request_t> (serializers);
-    add_int_serializer<reply_t> (serializers);
-    add_int_serializer<command_t> (serializers);
-    add_int_serializer<event_t> (serializers);
-    add_int_serializer<async_request_t> (serializers);
-    add_int_serializer<delayed_request_t> (serializers);
 
     zlink::framework::handler_registry_t handlers;
     int failure_events = 0;

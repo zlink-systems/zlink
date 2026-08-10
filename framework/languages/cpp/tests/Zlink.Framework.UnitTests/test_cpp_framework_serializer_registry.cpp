@@ -4,10 +4,20 @@
 
 #include "runtime/messaging/envelope_codec.hpp"
 
+#include <fstream>
 #include <memory>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
+
+#ifndef ZLINK_CODEC_SELECTION_CONFORMANCE_PATH
+#error "codec selection conformance fixture path is required"
+#endif
+
+#ifndef ZLINK_PAYLOAD_OWNERSHIP_CONFORMANCE_PATH
+#error "payload ownership conformance fixture path is required"
+#endif
 
 namespace
 {
@@ -23,6 +33,26 @@ struct missing_t
 };
 
 struct json_payload_t
+{
+    int value{};
+};
+
+struct decode_source_t
+{
+    int value{};
+};
+
+struct decode_once_t
+{
+    int value{};
+};
+
+struct decode_other_t
+{
+    int value{};
+};
+
+struct decode_failure_t
 {
     int value{};
 };
@@ -54,10 +84,154 @@ void from_json (const nlohmann::json &json, json_payload_t &payload)
     payload.value = json.at ("value").get<int> ();
 }
 
+const nlohmann::json &codec_selection_fixture ()
+{
+    static const auto fixture = [] {
+        std::ifstream input (ZLINK_CODEC_SELECTION_CONFORMANCE_PATH);
+        if (!input)
+            throw std::runtime_error (
+              "codec selection conformance fixture could not be opened");
+        return nlohmann::json::parse (input);
+    } ();
+    return fixture;
+}
+
+const nlohmann::json &payload_ownership_fixture ()
+{
+    static const auto fixture = [] {
+        std::ifstream input (ZLINK_PAYLOAD_OWNERSHIP_CONFORMANCE_PATH);
+        if (!input)
+            throw std::runtime_error (
+              "payload ownership conformance fixture could not be opened");
+        return nlohmann::json::parse (input);
+    } ();
+    return fixture;
+}
+
 } // namespace
 
 int main ()
 {
+    const auto &fixture = codec_selection_fixture ();
+    if (fixture.at ("fixture") != "zlink.framework.codec-selection"
+        || fixture.at ("version") != 1)
+        return 20;
+    if (fixture.at ("limits").at ("sendTypeCacheCapacity")
+          != zlink::framework::detail::serializer_send_type_cache_capacity)
+        return 25;
+
+    const auto &ownership = payload_ownership_fixture ();
+    if (ownership.at ("fixture") != "zlink.framework.payload-ownership"
+        || ownership.at ("version") != 1
+        || ownership.at ("copyBudget").at ("frameworkCopiesAfterOwnership") != 0
+        || ownership.at ("copyBudget").at ("readonlyAccessorCopies") != 0
+        || ownership.at ("copyBudget")
+             .at ("maximumDeserializationsAfterAdmission") != 1
+        || ownership.at ("accessorScenario").at ("reads") != 3)
+        return 27;
+
+    const auto raw_payload = zlink::message_t::from (std::string ("borrowed"));
+    const auto borrowed_payload =
+      zlink::framework::detail::encoded_payload_from_raw (raw_payload);
+    const auto first_view = borrowed_payload.bytes ();
+    const auto second_view = borrowed_payload.bytes ();
+    const auto third_view = borrowed_payload.bytes ();
+    if (first_view.data () != raw_payload.bytes ().data ()
+        || second_view.data () != first_view.data ()
+        || third_view.data () != first_view.data ()
+        || borrowed_payload.to_string () != "borrowed")
+        return 28;
+
+    // Copying a borrowed bridge value preserves the public value semantics and
+    // is the only point at which this test intentionally requests a copy.
+    const auto copied_payload = borrowed_payload;
+    if (copied_payload.bytes ().data () == raw_payload.bytes ().data ()
+        || copied_payload.to_string () != "borrowed")
+        return 29;
+
+    for (const auto &scenario : fixture.at ("normalizationScenarios")) {
+        zlink::framework::serializer_registry_t registry;
+        bool rejected = false;
+        try {
+            registry.add<payload_t> (
+              [] (const payload_t &payload) {
+                  return zlink::framework::encoded_payload_t::from_string (
+                    std::to_string (payload.value));
+              },
+              [] (const zlink::framework::encoded_payload_t &payload) {
+                  return payload_t{std::stoi (payload.to_string ())};
+              },
+              scenario.at ("input").get<std::string> ());
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            rejected = error.kind ()
+                       == zlink::framework::framework_error_kind_t::protocol_error;
+        }
+        if (scenario.contains ("expectedError")) {
+            if (!rejected)
+                return 21;
+        }
+        else if (rejected
+                 || registry.content_type (
+                      std::type_index (typeid (payload_t)))
+                      != scenario.at ("expected").get<std::string> ()) {
+            return 22;
+        }
+    }
+
+    const auto &duplicate = fixture.at ("normalizedDuplicateScenario");
+    zlink::framework::serializer_registry_t duplicate_registry;
+    duplicate_registry.add<payload_t> (
+      [] (const payload_t &payload) {
+          return zlink::framework::encoded_payload_t::from_string (
+            std::to_string (payload.value));
+      },
+      [] (const zlink::framework::encoded_payload_t &payload) {
+          return payload_t{std::stoi (payload.to_string ())};
+      },
+      duplicate.at ("registrationInputs").at (0).get<std::string> ());
+    duplicate_registry.add<missing_t> (
+      [] (const missing_t &payload) {
+          return zlink::framework::encoded_payload_t::from_string (
+            std::to_string (payload.value));
+      },
+      [] (const zlink::framework::encoded_payload_t &payload) {
+          return missing_t{std::stoi (payload.to_string ())};
+      },
+      duplicate.at ("registrationInputs").at (1).get<std::string> ());
+    if (duplicate.at ("finalEntryCount") != 1
+        || duplicate.at ("selectedRegistrationIndex") != 1
+        || duplicate_registry.contains (
+          std::type_index (typeid (payload_t)))
+        || !duplicate_registry.contains (
+          std::type_index (typeid (missing_t)))
+        || duplicate_registry.content_type (
+             std::type_index (typeid (missing_t)))
+             != "application/x-base") {
+        return 23;
+    }
+
+    zlink::framework::detail::serializer_registry_access_t::freeze (
+      duplicate_registry);
+    bool frozen_registry_rejected = false;
+    try {
+        duplicate_registry.add<payload_t> (
+          [] (const payload_t &payload) {
+              return zlink::framework::encoded_payload_t::from_string (
+                std::to_string (payload.value));
+          },
+          [] (const zlink::framework::encoded_payload_t &payload) {
+              return payload_t{std::stoi (payload.to_string ())};
+          },
+          "application/x-after-startup");
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        frozen_registry_rejected = error.kind ()
+                                   == zlink::framework::framework_error_kind_t::invalid_operation;
+    }
+    if (!frozen_registry_rejected)
+        return 26;
+
     zlink::framework::serializer_registry_t serializers;
     serializers.add<payload_t> (
       [] (const payload_t &payload) {
@@ -100,16 +274,17 @@ int main ()
         return 4;
     }
 
-    bool duplicate_failed = false;
-    try {
-        serializers.add<payload_t> ([] (const payload_t &) { return zlink::framework::encoded_payload_t{}; },
-                                    [] (const zlink::framework::encoded_payload_t &) { return payload_t{}; });
-    }
-    catch (const zlink::framework::framework_exception_t &error) {
-        duplicate_failed =
-          error.kind () == zlink::framework::framework_error_kind_t::protocol_error;
-    }
-    if (!duplicate_failed) {
+    serializers.add<payload_t> (
+      [] (const payload_t &payload) {
+          return zlink::framework::encoded_payload_t::from_string (
+            std::to_string (payload.value));
+      },
+      [] (const zlink::framework::encoded_payload_t &payload) {
+          return payload_t{std::stoi (payload.to_string ())};
+      },
+      "application/x-replaced");
+    if (serializers.content_type (std::type_index (typeid (payload_t)))
+          != "application/x-replaced") {
         return 5;
     }
 
@@ -201,6 +376,36 @@ int main ()
         return 12;
     }
 
+    zlink::framework::serializer_registry_t receive_registry;
+    receive_registry.add<payload_t> (
+      [] (const payload_t &payload) {
+          return zlink::framework::encoded_payload_t::from_string (
+            std::to_string (payload.value));
+      },
+      [] (const zlink::framework::encoded_payload_t &payload) {
+          return payload_t{std::stoi (payload.to_string ())};
+      },
+      "application/x-base");
+    for (const auto &scenario : fixture.at ("receiveScenarios")) {
+        bool protocol_error = false;
+        std::optional<payload_t> received;
+        try {
+            received = zlink::framework::detail::
+              deserialize_typed_payload<payload_t> (
+                receive_registry,
+                zlink::message_t::from (std::string ("17")),
+                scenario.at ("wireContentType").get<std::string> ());
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            protocol_error = error.kind ()
+                             == zlink::framework::framework_error_kind_t::protocol_error;
+        }
+        const auto success = scenario.at ("expectedTerminal") == "success";
+        if ((success && (protocol_error || !received || received->value != 17))
+            || (!success && !protocol_error))
+            return 24;
+    }
+
     // A resolved serializer owns the erased functions it invokes. Moving the
     // registry must not leave the cached serializer pointing at the old object.
     zlink::framework::serializer_registry_t movable_serializers;
@@ -220,6 +425,98 @@ int main ()
         || moved_serializers.get<payload_t> ().deserialize (retained_payload).value
              != 31) {
         return 14;
+    }
+
+    zlink::framework::serializer_registry_t decode_serializers;
+    int successful_deserializations = 0;
+    int other_deserializations = 0;
+    int failed_deserializations = 0;
+    decode_serializers.add<decode_source_t> (
+      [] (const decode_source_t &value) {
+          return zlink::framework::encoded_payload_t::from_string (
+            std::to_string (value.value));
+      },
+      [] (const zlink::framework::encoded_payload_t &payload) {
+          return decode_source_t{std::stoi (payload.to_string ())};
+      },
+      "application/x-decode-source");
+    decode_serializers.add<decode_once_t> (
+      [] (const decode_once_t &value) {
+          return zlink::framework::encoded_payload_t::from_string (
+            std::to_string (value.value));
+      },
+      [&] (const zlink::framework::encoded_payload_t &payload) {
+          ++successful_deserializations;
+          return decode_once_t{std::stoi (payload.to_string ())};
+      },
+      "application/x-decode-once");
+    decode_serializers.add<decode_other_t> (
+      [] (const decode_other_t &value) {
+          return zlink::framework::encoded_payload_t::from_string (
+            std::to_string (value.value));
+      },
+      [&] (const zlink::framework::encoded_payload_t &payload) {
+          ++other_deserializations;
+          return decode_other_t{std::stoi (payload.to_string ())};
+      },
+      "application/x-decode-other");
+    decode_serializers.add<decode_failure_t> (
+      [] (const decode_failure_t &value) {
+          return zlink::framework::encoded_payload_t::from_string (
+            std::to_string (value.value));
+      },
+      [&] (const zlink::framework::encoded_payload_t &) -> decode_failure_t {
+          ++failed_deserializations;
+          throw std::runtime_error ("expected decode failure");
+      },
+      "application/x-decode-failure");
+
+    const auto decoded_message =
+      zlink::framework::message_t::from (decode_source_t{73});
+    const auto first_decoded =
+      decoded_message.decode<decode_once_t> (decode_serializers);
+    const auto copied_message = decoded_message;
+    const auto second_decoded =
+      copied_message.decode<decode_once_t> (decode_serializers);
+    bool different_type_rejected = false;
+    try {
+        (void) decoded_message.decode<decode_other_t> (
+          decode_serializers);
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        different_type_rejected =
+          error.kind ()
+          == zlink::framework::framework_error_kind_t::protocol_error;
+    }
+    if (first_decoded.value != 73 || second_decoded.value != 73
+        || successful_deserializations != 1
+        || other_deserializations != 0
+        || !different_type_rejected) {
+        return 30;
+    }
+
+    const auto failed_message =
+      zlink::framework::message_t::from (decode_source_t{91});
+    std::string first_failure;
+    std::string repeated_failure;
+    try {
+        (void) failed_message.decode<decode_failure_t> (
+          decode_serializers);
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        first_failure = error.what ();
+    }
+    try {
+        (void) failed_message.decode<decode_other_t> (
+          decode_serializers);
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        repeated_failure = error.what ();
+    }
+    if (failed_deserializations != 1 || other_deserializations != 0
+        || first_failure.empty ()
+        || repeated_failure != first_failure) {
+        return 31;
     }
 
     return 0;

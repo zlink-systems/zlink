@@ -1353,14 +1353,21 @@ void verify_session_binding_and_terminal_once ()
     foundation::operation_registry_t operations (1);
     foundation::call_id_t id{};
     id.low = 1;
-    std::size_t terminal_count = 0;
+    std::atomic_size_t terminal_count{0};
     assert (operations.register_operation (
       id, foundation::operation_registry_t::clock_t::now () + 1s,
       [&] (foundation::operation_terminal_t,
-           std::vector<std::uint8_t>) { ++terminal_count; }));
+           std::vector<std::uint8_t>) {
+          terminal_count.fetch_add (1, std::memory_order_release);
+      }));
     assert (operations.complete (id, {1}));
     assert (!operations.cancel (id));
-    assert (terminal_count == 1);
+    const auto terminal_deadline = std::chrono::steady_clock::now () + 5s;
+    while (terminal_count.load (std::memory_order_acquire) != 1
+           && std::chrono::steady_clock::now () < terminal_deadline) {
+        std::this_thread::yield ();
+    }
+    assert (terminal_count.load (std::memory_order_acquire) == 1);
 }
 
 void verify_displaced_stream_binding_can_be_restored ()
@@ -1431,7 +1438,7 @@ void verify_verified_remote_stream_binding ()
             == stateful::stateful_error_t::invalid);
 }
 
-void verify_bounded_message_follow ()
+void verify_message_follow_route_admission_and_suppression ()
 {
     using namespace zlink::framework;
     spots::actor_transfer_coordinator_t coordinator;
@@ -1484,8 +1491,9 @@ void verify_bounded_message_follow ()
     assert (!hop_bound
             && hop_bound.error_kind ()
                  == framework_error_kind_t::unavailable);
-    //  The Message Follow queue has no message-count or stored-size bound, so
-    //  an oversized payload and a large backlog are both acquired.
+    // Message Follow admission has no relocation-specific message-count or
+    // stored-size bound. Keep the acquisitions concurrent so this checks the
+    // former count boundary rather than repeatedly reusing one slot.
     const auto oversized = coordinator.try_acquire_message_follow (
       "player:actor-message-follow", 7, 16u * 1024u * 1024u + 1u, 0,
       source_fence);
@@ -1522,6 +1530,47 @@ void verify_bounded_message_follow ()
       "player:actor-message-follow", source_fence, 1);
     coordinator.release_message_follow (
       "player:actor-message-follow", repeated_source_fence, 1);
+
+    std::atomic_int notification_winners{0};
+    std::vector<std::thread> notification_attempts;
+    for (int attempt = 0; attempt != 8; ++attempt) {
+        notification_attempts.emplace_back ([&] {
+            if (coordinator.try_begin_message_follow_notification (
+                  "player:actor-message-follow", source_fence,
+                  target_fence)) {
+                notification_winners.fetch_add (
+                  1, std::memory_order_relaxed);
+            }
+        });
+    }
+    for (auto &attempt : notification_attempts)
+        attempt.join ();
+    assert (notification_winners.load (std::memory_order_relaxed) == 1);
+    assert (!coordinator.try_begin_message_follow_notification (
+      "player:actor-message-follow", source_fence, target_fence));
+    assert (coordinator.complete_message_follow_notification (
+      "player:actor-message-follow", source_fence, target_fence, false));
+    assert (coordinator.try_begin_message_follow_notification (
+      "player:actor-message-follow", source_fence, target_fence));
+    assert (coordinator.complete_message_follow_notification (
+      "player:actor-message-follow", source_fence, target_fence, true));
+    assert (!coordinator.try_begin_message_follow_notification (
+      "player:actor-message-follow", source_fence, target_fence));
+    assert (!coordinator.try_begin_message_follow_notification (
+      "player:actor-message-follow", source_fence, repeated_target_fence));
+
+    auto replacement_target_fence = target_fence;
+    ++replacement_target_fence.authority_owner_generation;
+    ++replacement_target_fence.owner_lease_generation;
+    coordinator.activate_message_follow (
+      "player:actor-message-follow", source_fence, target, route,
+      replacement_target_fence, expires, "relocation-1-replaced");
+    assert (coordinator.try_begin_message_follow_notification (
+      "player:actor-message-follow", source_fence,
+      replacement_target_fence));
+    assert (coordinator.complete_message_follow_notification (
+      "player:actor-message-follow", source_fence,
+      replacement_target_fence, true));
 
     coordinator.activate_message_follow (
       "player:expired-message-follow", source_fence, target, route, target_fence,
@@ -1562,7 +1611,7 @@ void verify_actor_commit_terminal_is_replayable_until_deadline ()
       "transfer-replay", std::move (admission)));
 }
 
-void verify_bounded_actor_handoff_backlog ()
+void verify_unbounded_actor_handoff_backlog ()
 {
     using namespace zlink::framework;
     using detail::handoff_append_result_t;
@@ -3192,6 +3241,8 @@ void verify_atomic_raw_stateful_ingress_commit ()
             == stateful::stateful_error_t::backpressured);
     assert_no_queued_reservation ();
     assert (dispatch.complete (*first) == stateful::stateful_error_t::none);
+    assert (dispatch.complete (*first)
+            == stateful::stateful_error_t::conflict);
 
     enqueue (4, "accepted-two");
     assert (dispatch.ingest (actor) == stateful::stateful_error_t::none);
@@ -5142,9 +5193,9 @@ int main ()
     verify_session_binding_and_terminal_once ();
     verify_displaced_stream_binding_can_be_restored ();
     verify_verified_remote_stream_binding ();
-    verify_bounded_message_follow ();
+    verify_message_follow_route_admission_and_suppression ();
     verify_actor_commit_terminal_is_replayable_until_deadline ();
-    verify_bounded_actor_handoff_backlog ();
+    verify_unbounded_actor_handoff_backlog ();
     verify_public_host_dispatches_one_application_record_per_turn ();
     verify_local_application_enqueue_wakes_dispatch_wait ();
     verify_remote_session_route_ack_and_atomic_switch ();

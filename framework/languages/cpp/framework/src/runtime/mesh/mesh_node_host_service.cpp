@@ -412,7 +412,6 @@ mesh_node_host_service_t::mesh_node_host_service_t (
         : std::make_shared<completion_admission_owner_t> (65'536)),
     _listener_statuses (std::move (listener_statuses))
 {
-    detail::register_spot_route_packet_serializers (serializers);
     _nodes.reserve (_registrations.size ());
     for (const auto &registration : _registrations) {
         auto node = std::make_shared<detail::mesh_node_runtime_t> (registration);

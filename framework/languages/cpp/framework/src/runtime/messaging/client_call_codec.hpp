@@ -31,8 +31,7 @@ class client_call_codec_t
                                            const TMessage &message,
                                            const serializer_registry_t &serializers) const
     {
-        return _codec.encode_parts (header, std::type_index (typeid (TMessage)), &message,
-                                    serializers);
+        return _codec.encode_parts (header, message, serializers);
     }
 
     template <typename TReply>
