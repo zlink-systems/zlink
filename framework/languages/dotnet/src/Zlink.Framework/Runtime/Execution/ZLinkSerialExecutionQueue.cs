@@ -372,9 +372,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 return ZLinkAcceptedWorkAdmission.Closed;
             }
             if (_relocated
-                || _relocation?.IngressFrozen == true
-                || (_relocation is { } relocation
-                    ))
+                || _relocation?.IngressFrozen == true)
             {
                 item = null!;
                 return ZLinkAcceptedWorkAdmission.RelocationMoving;

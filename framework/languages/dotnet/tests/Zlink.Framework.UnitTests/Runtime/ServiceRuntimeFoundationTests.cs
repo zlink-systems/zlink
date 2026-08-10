@@ -88,7 +88,7 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
-    public void MessageFollow_RejectsVersionLengthAndBoundsViolations()
+    public void MessageFollow_RejectsFramingViolationsAndAcceptsVolumeMetadata()
     {
         var route = new ZLinkServiceWireCodec.MessageFollowRoute(
             ZLinkServiceWireCodec.MessageFollowSpotKind,
@@ -127,15 +127,20 @@ public sealed class ServiceRuntimeFoundationTests
             ZLinkServiceWireCodec.DecodeError.InvalidField,
             trailingError);
 
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
-            new ZLinkServiceWireCodec.MessageFollowRecord(
-                route,
-                route,
-                1,
-                1025,
-                0,
-                new MeshOperationId(1, 0),
-                0));
+        var volumeRecord = new ZLinkServiceWireCodec.MessageFollowRecord(
+            route,
+            route,
+            1,
+            uint.MaxValue,
+            uint.MaxValue,
+            new MeshOperationId(1, 1),
+            0);
+        Assert.True(ZLinkServiceWireCodec.TryDecodeMessageFollow(
+            ZLinkServiceWireCodec.EncodeMessageFollow(volumeRecord),
+            out var decodedVolumeRecord,
+            out var volumeError));
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, volumeError);
+        Assert.Equal(volumeRecord, decodedVolumeRecord);
     }
 
     [Fact]

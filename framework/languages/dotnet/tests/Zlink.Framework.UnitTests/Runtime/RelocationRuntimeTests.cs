@@ -2618,7 +2618,7 @@ public sealed class RelocationRuntimeTests
     }
 
     [Fact]
-    public void SpotMessageFollowEnforcesMessageAndByteBounds()
+    public void SpotMessageFollowDoesNotApplyFormerMessageAndByteBounds()
     {
         var owner = new ZLinkLocationOwnerToken("owner", 3);
         var messages = new ZLinkSpotMessageFollow(
@@ -2632,12 +2632,11 @@ public sealed class RelocationRuntimeTests
             owner,
             DateTimeOffset.UtcNow.AddSeconds(30));
         var messageLeases = new List<ZLinkSpotMessageFollow.AdmissionLease>();
-        for (var index = 0; index < 1_024; index++)
+        for (var index = 0; index < 1_025; index++)
         {
             Assert.True(messages.TryAcquire(0, out var lease));
             messageLeases.Add(lease!);
         }
-        Assert.False(messages.TryAcquire(0, out _));
         foreach (var lease in messageLeases)
             lease.Dispose();
 
@@ -2652,8 +2651,9 @@ public sealed class RelocationRuntimeTests
             owner,
             DateTimeOffset.UtcNow.AddSeconds(30));
         Assert.True(bytes.TryAcquire(16L * 1024 * 1024, out var byteLease));
-        Assert.False(bytes.TryAcquire(1, out _));
+        Assert.True(bytes.TryAcquire(1, out var nextByteLease));
         byteLease!.Dispose();
+        nextByteLease!.Dispose();
     }
 
     [Fact]
@@ -2684,8 +2684,9 @@ public sealed class RelocationRuntimeTests
     }
 
     [Fact]
-    public void SpotMessageFollowCountsWireHeaderMetadataAndPayloadAtByteBoundary()
+    public void SpotMessageFollowCountsWireBytesAtConfiguredAdmissionBoundary()
     {
+        const long byteCapacity = 16L * 1024 * 1024;
         var owner = new ZLinkLocationOwnerToken("source-owner", 3);
         var targetOwner = new ZLinkLocationOwnerToken("target-owner", 4);
         var messageFollow = new ZLinkSpotMessageFollow(
@@ -2697,7 +2698,8 @@ public sealed class RelocationRuntimeTests
             8,
             owner,
             targetOwner,
-            DateTimeOffset.UtcNow.AddSeconds(30));
+            DateTimeOffset.UtcNow.AddSeconds(30),
+            new ZLinkBoundedIngressAdmission(8, byteCapacity));
         var metadata = ZLinkMeshMetadataCodec.Encode(
             new ZLinkMessageMetadata(
                 new Dictionary<string, string>(StringComparer.Ordinal)
@@ -2719,8 +2721,7 @@ public sealed class RelocationRuntimeTests
             [empty],
             metadata);
         using var payload = new Message(checked((int)(
-            ZLinkBoundedIngressAdmission.SourceIngressHoldByteCapacity
-            - fixedBytes)));
+            byteCapacity - fixedBytes)));
         var encodedBytes = ZLinkServiceWireCodec.MeasureSpotMessageFollowEncodedBytes(
             request: true,
             new MeshOperationId(1, 2),
@@ -2735,9 +2736,7 @@ public sealed class RelocationRuntimeTests
             [payload],
             metadata);
 
-        Assert.Equal(
-            ZLinkBoundedIngressAdmission.SourceIngressHoldByteCapacity,
-            encodedBytes);
+        Assert.Equal(byteCapacity, encodedBytes);
         Assert.True(messageFollow.TryAcquire(encodedBytes, out var lease));
         Assert.Equal((1, encodedBytes), messageFollow.AdmissionSnapshot());
         lease!.Dispose();

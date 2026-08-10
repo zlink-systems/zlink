@@ -270,20 +270,20 @@ public sealed class ActorHandoffTests
     }
 
     [Fact]
-    public void SourceIngressHold_Uses1024RecordsAnd16MiBContractDefaults()
+    public void SourceIngressHold_DoesNotApplyFormerVolumeDefaults()
     {
         Assert.Equal(
-            1_024,
+            int.MaxValue,
             ZLinkBoundedIngressAdmission.SourceIngressHoldRecordCapacity);
         Assert.Equal(
-            16L * 1024 * 1024,
+            long.MaxValue,
             ZLinkBoundedIngressAdmission.SourceIngressHoldByteCapacity);
 
         var admission = new ZLinkBoundedIngressAdmission();
-        for (var record = 0; record < 1_024; record++)
+        for (var record = 0; record < 1_025; record++)
             Assert.True(admission.TryAcquire(1));
-        Assert.False(admission.TryAcquire(0));
-        Assert.Equal((1_024, 1_024L), admission.Snapshot());
+        Assert.True(admission.TryAcquire(16L * 1024 * 1024 + 1));
+        Assert.Equal((1_026, 16L * 1024 * 1024 + 1_026), admission.Snapshot());
     }
 
     [Fact]

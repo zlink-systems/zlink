@@ -290,28 +290,23 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
-    public async Task RelocationIngressHoldRemainsOpenUntilCommitAndIsBounded()
+    public async Task RelocationIngressHoldDoesNotApplyFormerCountBound()
     {
         await using var queue = CreateQueue(CancellationToken.None);
         var seal = await queue.SealRelocationAsync(CancellationToken.None);
-        for (var index = 0; index < 1_024; index++)
+        for (var index = 0; index < 1_025; index++)
             Assert.Equal(ZLinkAcceptedWorkAdmission.Accepted, queue.TryPostAccepted(
                 new byte[] { 7 },
                 static _ => ValueTask.CompletedTask,
                 static () => { },
                 out _));
-        Assert.Equal(ZLinkAcceptedWorkAdmission.RelocationMoving, queue.TryPostAccepted(
-            new byte[] { 8 },
-            static _ => ValueTask.CompletedTask,
-            static () => { },
-            out _));
 
         Assert.True(queue.TryCommitRelocation(seal, out var held));
-        Assert.Equal(1_024, held.Count);
+        Assert.Equal(1_025, held.Count);
     }
 
     [Fact]
-    public async Task RelocationIngressHoldRejectsPayloadPastByteBound()
+    public async Task RelocationIngressHoldDoesNotApplyFormerByteBound()
     {
         await using var queue = CreateQueue(CancellationToken.None);
         var seal = await queue.SealRelocationAsync(CancellationToken.None);
@@ -320,14 +315,14 @@ public sealed class SerialExecutorTests
             static _ => ValueTask.CompletedTask,
             static () => { },
             out _));
-        Assert.Equal(ZLinkAcceptedWorkAdmission.RelocationMoving, queue.TryPostAccepted(
+        Assert.Equal(ZLinkAcceptedWorkAdmission.Accepted, queue.TryPostAccepted(
             new byte[] { 1 },
             static _ => ValueTask.CompletedTask,
             static () => { },
             out _));
 
         Assert.True(queue.TryCommitRelocation(seal, out var held));
-        Assert.Single(held);
+        Assert.Equal(2, held.Count);
     }
 
     [Fact]
