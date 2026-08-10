@@ -296,6 +296,14 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                         ZLinkFrameworkErrorKind kind = cause instanceof ZLinkFrameworkException framework
                             ? framework.kind()
                             : ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
+                        //  A deferred Join that ends in `Failed` is reported to
+                        //  the application as a bare error kind. Without the
+                        //  cause the runtime leaves no record of why the
+                        //  relocation could not proceed.
+                        LOGGER.warning(
+                            "[zlink-java-stream-trace] join completion failed"
+                                + " kind=" + kind
+                                + " cause=" + cause);
                         return (ZLinkActorJoinCompletion) new ZLinkActorJoinCompletion.Failed(
                             operationId,
                             kind);

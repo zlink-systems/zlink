@@ -1815,7 +1815,6 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       aggregateId: "nonzero-128-bit",
       messageFollowHopCountMaximum: { $bound: "messageFollowHopCount" },
       messageFollowQueuedMessagesMaximum: { $bound: "messageFollowMessages" },
-      messageFollowQueuedBytesMaximum: { $bound: "messageFollowBytes" },
       routingIdEntropyBits: 128,
       routingIdCollisionAttemptsMaximum: { $bound: "routingIdCollisionAttempts" },
       nodeActiveCapacityDefault: { $bound: "nodeActiveCapacityDefault" },

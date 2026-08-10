@@ -35,7 +35,6 @@ import {
 export const DEFAULT_MESSAGE_FOLLOW_DURATION_MS = 30_000;
 const MAX_MESSAGE_FOLLOW_HOPS = 8;
 const MAX_MESSAGE_FOLLOW_MESSAGES = 1024;
-const MAX_MESSAGE_FOLLOW_BYTES = 16 * 1024 * 1024;
 const RELOCATION_REPLY_RETENTION_MS = 24 * 60 * 60 * 1_000;
 
 export interface ZLinkActorHandoffPacket {
@@ -422,7 +421,7 @@ export class ZLinkActorHandoffCoordinator {
         context,
         messageFollowOrigin
       );
-      this.admitBounded(handoff.pending.length, handoff.pendingBytes, packet);
+      this.admitBounded(handoff.pending.length);
       handoff.pendingBytes += packetBytes(packet);
       this.options.onMarker?.('handoff_backlog', actorId, packet.index);
       if (returnResponse) {
@@ -988,7 +987,7 @@ export class ZLinkActorHandoffCoordinator {
     }
     const bytes = packetBytes(packet);
     try {
-      this.admitBounded(entry.queuedMessages, entry.queuedBytes, packet);
+      this.admitBounded(entry.queuedMessages);
       if (entry.operations.size >= MAX_MESSAGE_FOLLOW_MESSAGES) {
         throw messageFollowCapacityExceeded(actorId);
       }
@@ -1028,11 +1027,8 @@ export class ZLinkActorHandoffCoordinator {
     return result;
   }
 
-  private admitBounded(messageCount: number, byteCount: number, packet: ZLinkActorHandoffPacket): void {
-    if (
-      messageCount >= MAX_MESSAGE_FOLLOW_MESSAGES
-      || byteCount + packetBytes(packet) > MAX_MESSAGE_FOLLOW_BYTES
-    ) {
+  private admitBounded(messageCount: number): void {
+    if (messageCount >= MAX_MESSAGE_FOLLOW_MESSAGES) {
       throw messageFollowCapacityExceeded('message-follow-bound');
     }
   }

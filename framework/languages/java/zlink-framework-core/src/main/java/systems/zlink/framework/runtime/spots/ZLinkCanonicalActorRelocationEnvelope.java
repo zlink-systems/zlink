@@ -100,8 +100,25 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
         writer.u64(1);
         writer.u64(acceptedBoundary);
         writer.u64(0);
-        writer.u32(records.size());
-        for (var record : records) {
+        //  Only a canonical service-wire-v1 frozen record can be replayed:
+        //  `ZLinkActorAcceptedJournal.decode` rejects everything else. Turns
+        //  whose accepted-journal bytes are not canonical - an empty array
+        //  when the backend had no record, or a local dispatch that carries
+        //  its stream header and payload instead - therefore have nothing to
+        //  replay, and encoding them corrupts the envelope: the reader takes
+        //  the first byte of every journal record as its `kind`, so a
+        //  non-canonical entry makes it read the following field and reject
+        //  the whole envelope with "journal record kind". The accepted
+        //  boundary above still counts those turns; only the encoded journal
+        //  drops them.
+        List<ZLinkAsyncSerialQueue.QueuedRecord> encodedRecords =
+            records.stream()
+                .filter(record -> systems.zlink.framework.runtime.internal
+                    .service.ZLinkServiceFrozenRecordCodec.isCanonical(
+                        record.payload()))
+                .toList();
+        writer.u32(encodedRecords.size());
+        for (var record : encodedRecords) {
             writer.u64(1);
             writer.u64(record.sequence());
             writer.raw(record.payload());

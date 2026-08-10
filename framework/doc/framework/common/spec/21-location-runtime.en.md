@@ -733,7 +733,7 @@ period. An invalid configuration is a configuration error.
 The previous owner only uses the source→target information recorded when the move
 completed — it doesn't re-read the Store. The new owner's `AuthorityOwnerGeneration` must
 be greater than the previous value, and forwarding continues for at most 8 hops. The
-amount retainable per move is 1,024 messages and 16 MiB. The existing operation ID,
+amount retainable per move is 1,024 messages, with no stored-size cap. The existing operation ID,
 `ObjectGeneration`, payload, and reply route are kept unchanged. A cycle is `Unavailable`,
 a generation mismatch is `InvalidOperation`, and exceeding the limit is
 `CapacityExceeded`.
@@ -1137,7 +1137,7 @@ framework owns.
 | Whole User Spot move | When changing owner, only the space the new owner will use is secured. When clearing completion info, owner, generation, membership, and space are kept. An invalid combination doesn't change the Store. |
 | Deletion | Confirms the current owner lease and space in use, and handles location-record deletion and space reduction together. |
 | Instance Spot first creation | The source doesn't pre-create an owner. Only one target runs the factory. The first message and recovery info are stored before `Ready`. |
-| Location cache and previous-owner delivery | `Missing`, `Creating`, and Store errors aren't cached. The cache doesn't exceed the owner's new-work-acceptance deadline. Delivery is at most 8 hops, 1,024 messages, and 16 MiB. |
+| Location cache and previous-owner delivery | `Missing`, `Creating`, and Store errors aren't cached. The cache doesn't exceed the owner's new-work-acceptance deadline. Delivery is at most 8 hops and 1,024 messages, with no stored-size cap. |
 | Relocation stages | Follows the owner rules and target attempt number of §7.2. A previous target attempt can't change owner or receive new messages. |
 | Relay before the owner change | The target keeps receiving source messages after registering the current target attempt's temporary queue. On an abort before commit, the temporary queue is discarded and the source original is kept. The source doesn't remove the hold original until it receives target dispatch switchover completion. |
 | Membership | An Entry Spot member Actor move and a whole User Spot move each change the needed owner and membership together, in one step. |

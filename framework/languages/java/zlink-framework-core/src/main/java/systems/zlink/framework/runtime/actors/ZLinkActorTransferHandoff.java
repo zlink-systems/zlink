@@ -31,7 +31,6 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 /** Owns the transfer-only backlog and bounded source-retirement state. */
 final class ZLinkActorTransferHandoff implements AutoCloseable {
     static final int MAX_MESSAGE_FOLLOW_MESSAGES = 1024;
-    static final long MAX_MESSAGE_FOLLOW_BYTES = 16L * 1024L * 1024L;
     private final ScheduledExecutorService retirementsExecutor =
         Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "zlink-actor-transfer-retirement");
@@ -73,11 +72,10 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
                 return null;
             }
             long bytes = packet.retainedBytes();
-            if (backlog.packets.size() >= MAX_MESSAGE_FOLLOW_MESSAGES
-                || bytes > MAX_MESSAGE_FOLLOW_BYTES - backlog.bytes) {
+            if (backlog.packets.size() >= MAX_MESSAGE_FOLLOW_MESSAGES) {
                 packet.fail(new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.UNAVAILABLE,
-                    "Actor relocation backlog exceeds 1024 messages or 16 MiB"));
+                    "Actor relocation backlog exceeds 1024 messages"));
                 packet.close();
                 return packet;
             }
@@ -280,7 +278,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
             return CompletableFuture.failedFuture(
                 new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
-                    "committed Message Follow route queue exceeds 1024 messages or 16 MiB"));
+                    "committed Message Follow route queue exceeds 1024 messages"));
         }
         MessageFollowQueueSnapshot queueSnapshot = source.queueSnapshot();
         CompletionStage<T> submitted;
@@ -420,9 +418,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         }
 
         private synchronized boolean tryAcquire(long bytes) {
-            if (bytes < 0 || bytes > MAX_MESSAGE_FOLLOW_BYTES
-                || pendingMessages >= MAX_MESSAGE_FOLLOW_MESSAGES
-                || pendingBytes + bytes > MAX_MESSAGE_FOLLOW_BYTES) {
+            if (bytes < 0 || pendingMessages >= MAX_MESSAGE_FOLLOW_MESSAGES) {
                 return false;
             }
             pendingMessages++;

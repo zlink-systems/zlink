@@ -763,8 +763,8 @@ payload와 reply route를 보존한다. Bound Session의 `sessionRelocationRoute
 기다리지 않는다. Route가 만료된 뒤 이전 route로 도착한 request는 `Unavailable`로 끝난다.
 
 Message Follow route는 global key, ObjectGeneration, source·target AuthorityOwnerGeneration과 [owner fence](01-glossary.ko.md#owner-fence)를 exact 검증한다.
-Owner generation은 hop마다 증가하며 최대 8 hops다. Route 하나의 queue는 1024 messages와 16 MiB 이하이고
-negotiated message bound도 지킨다. Message Follow duration 만료, route 없음과 loop는 `Unavailable`, generation
+Owner generation은 hop마다 증가하며 최대 8 hops다. Route 하나의 queue는 1024 messages 이하이고
+저장 크기 상한은 없으며 negotiated message bound는 지킨다. Message Follow duration 만료, route 없음과 loop는 `Unavailable`, generation
 mismatch는 `InvalidOperation`, bound 초과는 `CapacityExceeded`다. Framework는 failed operation을 fresh owner에게 hidden retry하지 않는다.
 이 `ObjectGeneration` 검사는 relocation route가 같은 incarnation에 속하는지 확인한다. 일반
 Actor·Spot message의 target은 logical ID이며 generation mismatch로 handler target을 제한하지 않는다.

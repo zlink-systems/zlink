@@ -253,7 +253,7 @@ is a different value if the purpose differs.
 |---|---|---|
 | Execution queue | Two axes: count and bytes (includes fixed per-work cost, counts running work too) | One execution authority |
 | Pending processing | Sum of payload bytes | One process's application receiving |
-| Pending during a move | Both count and bytes | 1,024 items / 16 MiB per move |
+| Pending during a move | Count only | 1,024 items per move |
 
 Why the bound is measured in bytes rather than count is covered by
 [8. Object Kind And Activation 「6. Which Unit Memory Accounting Uses」](08-object-lifecycle.en.md#6-which-unit-memory-accounting-uses).

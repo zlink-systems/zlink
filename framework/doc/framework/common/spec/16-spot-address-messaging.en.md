@@ -469,8 +469,8 @@ route exactly verifies Spot ID,
 AuthorityOwnerGeneration, and owner fence. Target owner generation
 increases per hop, up to 8 hops max.
 
-One Message Follow route's queue is at most 1024 messages and 16 MiB, and
-also respects the negotiated message bound. Message Follow preserves the
+One Message Follow route's queue is at most 1024 messages, has no stored-size cap,
+and respects the negotiated message bound. Message Follow preserves the
 original operation ID, generation, payload, and reply route. No route/
 expiry and a loop end with `Unavailable`; generation mismatch is
 `InvalidOperation`; exceeding the bound is `CapacityExceeded`. A failed

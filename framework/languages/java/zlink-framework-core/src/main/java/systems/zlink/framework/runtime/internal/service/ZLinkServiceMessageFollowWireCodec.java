@@ -22,7 +22,9 @@ import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 public final class ZLinkServiceMessageFollowWireCodec {
     public static final int MAX_HOP_COUNT = 8;
     public static final long MAX_QUEUED_MESSAGES = 1024;
-    public static final long MAX_QUEUED_BYTES = 16L * 1024L * 1024L;
+    //  Frame guard, not a queue bound: the Message Follow queue has no stored
+    //  size cap, but a single encoded record still must not be unbounded.
+    public static final long MAX_ENCODED_BYTES = 16L * 1024L * 1024L;
     private static final int PREFIX_BYTES = 5;
     private static final int VERSION_BYTES = 1;
     private static final int BODY_LENGTH_BYTES = 4;
@@ -41,7 +43,7 @@ public final class ZLinkServiceMessageFollowWireCodec {
         writeBits64(body, notice.originalReplyRouteId());
 
         byte[] bodyBytes = body.toByteArray();
-        if (bodyBytes.length > MAX_QUEUED_BYTES) {
+        if (bodyBytes.length > MAX_ENCODED_BYTES) {
             throw protocol("Message Follow notice exceeds its encoded byte bound");
         }
         ByteArrayOutputStream result = new ByteArrayOutputStream(
@@ -71,7 +73,7 @@ public final class ZLinkServiceMessageFollowWireCodec {
             throw protocol("Message Follow notice version must be one");
         }
         long bodyLength = reader.u32("bodyLength");
-        if (bodyLength > MAX_QUEUED_BYTES || bodyLength != reader.remaining()) {
+        if (bodyLength > MAX_ENCODED_BYTES || bodyLength != reader.remaining()) {
             throw protocol("Message Follow notice has an invalid body length");
         }
         Reader body = reader.slice((int) bodyLength);
@@ -299,7 +301,6 @@ public final class ZLinkServiceMessageFollowWireCodec {
                 || queuedMessages < 0
                 || queuedMessages > MAX_QUEUED_MESSAGES
                 || queuedBytes < 0
-                || queuedBytes > MAX_QUEUED_BYTES
                 || (originalOperationHigh == 0 && originalOperationLow == 0)) {
                 throw protocol("Message Follow notice contains an invalid fence or bound");
             }

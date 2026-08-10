@@ -179,7 +179,15 @@ final class ZLinkActorDispatchSerials {
                                 + turn.actorId));
                 }
             }
+            //  Only the first part of a multi-part message carries an
+            //  accepted-journal record; the remaining parts are handed an
+            //  empty array (ZLinkJavaRawSpotNode). An empty record has nothing
+            //  to replay, and enqueuing it as relocatable writes a zero-length
+            //  entry into the relocation envelope - the reader takes the first
+            //  byte of every journal record as its `kind`, so the empty entry
+            //  makes it read the following field and reject the envelope.
             return acceptedJournalRecord == null
+                || acceptedJournalRecord.length == 0
                 ? turn.queue.enqueue(turnOperation)
                 : turn.queue.enqueueRelocatable(
                     acceptedJournalRecord,

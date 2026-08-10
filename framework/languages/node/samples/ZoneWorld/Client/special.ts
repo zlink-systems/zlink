@@ -27,7 +27,7 @@ import type {
   ZoneChangedNotify,
   ZoneStateNotify
 } from '../Shared/contracts';
-import { MoveRejectReasons, NodeAlertKinds, NodeIds, ZoneIds, zoneOf } from '../Shared/spec';
+import { MoveRejectReasons, NodeAlertKinds, NodeIds, ZoneIds, ZoneWorldErrors, zoneOf } from '../Shared/spec';
 import { readConfigPath, validateConfiguration } from '../Server/Configuration/configuration';
 
 async function main(): Promise<void> {
@@ -235,7 +235,12 @@ async function runMaintenanceRestore(opsEndpoint: string): Promise<void> {
   try {
     await ops.connect();
     await watch(ops);
-    const diagnostics = await diagnose(ops, NodeIds.east);
+    //  Ops answers a diagnostics request it cannot route with
+    //  `nodeUnavailable` and `maintenance: false`. A node that just restarted
+    //  can still be between transport connections, so that answer says
+    //  nothing about the stored desired state - poll until Ops can reach the
+    //  node before judging the restore.
+    const diagnostics = await diagnoseUntilReachable(ops, NodeIds.east);
     zlinkStreamAssert.ensure(diagnostics.maintenance, 'ZW-E5 maintenance state was not restored.');
     console.log('scenario ZW-E5 passed');
     await setMaintenance(ops, NodeIds.east, false);
@@ -312,10 +317,36 @@ async function diagnose(ops: ZlinkStreamConnector, nodeId: string): Promise<Node
     .packetName(PacketNames.nodeDiagnosticsReq).submit<NodeDiagnosticsRes>();
 }
 
+async function diagnoseUntilReachable(
+  ops: ZlinkStreamConnector,
+  nodeId: string
+): Promise<NodeDiagnosticsRes> {
+  const deadline = Date.now() + 20_000;
+  let last = await diagnose(ops, nodeId);
+  while (last.error !== null && Date.now() < deadline) {
+    await new Promise<void>((resolve) => { setTimeout(resolve, 100); });
+    last = await diagnose(ops, nodeId);
+  }
+  zlinkStreamAssert.ensure(
+    last.error === null,
+    `ZW-E5 Ops could not reach '${nodeId}' to read its maintenance state.`
+  );
+  return last;
+}
+
 async function setMaintenance(ops: ZlinkStreamConnector, nodeId: string, enabled: boolean): Promise<SetMaintenanceRes> {
   const response = await ops.request(new SetMaintenanceReq(nodeId, enabled))
     .packetName(PacketNames.setMaintenanceReq).submit<SetMaintenanceRes>();
-  zlinkStreamAssert.ensure(response.error === null, `Maintenance request for '${nodeId}' failed.`);
+  //  Ops commits the desired state before it tries the owner-consistent
+  //  channel to the node, so `nodeUnavailable` still means the state was
+  //  recorded - a node that is between transport connections reads it back
+  //  when it reconnects. Only that answer carries no status notification, so
+  //  the observation below applies to the reachable case.
+  zlinkStreamAssert.ensure(
+    response.error === null || response.error === ZoneWorldErrors.nodeUnavailable,
+    `Maintenance request for '${nodeId}' failed.`
+  );
+  if (response.error !== null) return response;
   const observed = ops.waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
     .where((message) => message.payload.nodeId === nodeId && message.payload.maintenance === enabled)
     .timeout(20_000).submit();

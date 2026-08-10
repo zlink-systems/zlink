@@ -864,7 +864,7 @@ expires, a request arriving on the previous route ends with `Unavailable`.
 The Message Follow route exactly verifies the global key, ObjectGeneration,
 source/target AuthorityOwnerGeneration, and [owner fence](01-glossary.en.md#owner-fence).
 Owner generation increases per hop, up to 8 hops max. One route's queue is at most
-1024 messages and 16 MiB, and also respects the negotiated message bound. Message
+1024 messages, has no stored-size cap, and respects the negotiated message bound. Message
 Follow duration expiry, no route, and a loop are `Unavailable`; generation mismatch
 is `InvalidOperation`; exceeding the bound is `CapacityExceeded`. The framework
 doesn't hidden-retry a failed operation against a fresh owner.

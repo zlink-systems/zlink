@@ -702,8 +702,8 @@ Message Follow라고 하며, 기간인 `MessageFollowDuration`의 기본값은 3
 
 이전 owner는 이동이 완료될 때 기록한 source→target 정보만 사용하며 Store를 새로
 읽지 않는다. 새 owner의 `AuthorityOwnerGeneration`은 이전 값보다 커야 하며 최대
-8번까지만 이어서 전달한다. 이동 하나당 보관할 수 있는 양은 message 1,024개와
-16 MiB다. 기존 operation ID, `ObjectGeneration`, payload와 reply route를 그대로
+8번까지만 이어서 전달한다. 이동 하나당 보관할 수 있는 양은 message 1,024개이며 저장
+크기 상한은 없다. 기존 operation ID, `ObjectGeneration`, payload와 reply route를 그대로
 유지한다. 순환은 `Unavailable`, generation 불일치는 `InvalidOperation`, 제한 초과는
 `CapacityExceeded`다.
 
@@ -1080,7 +1080,7 @@ Deadline을 넘으면 `ForceStopped` 결과를 한 번만 완료한다. Timer, S
 | User Spot 전체 이동 | Owner를 바꿀 때는 새 owner가 사용할 공간만 확보한다. 완료 정보를 지울 때는 owner, generation, membership과 공간을 유지한다. 잘못된 조합은 Store를 변경하지 않는다. |
 | 삭제 | 현재 owner lease와 사용 중인 공간을 확인하고 위치 record 삭제와 공간 감소를 함께 처리한다. |
 | Instance Spot 최초 생성 | Source가 owner를 미리 만들지 않는다. 하나의 target만 factory를 실행한다. 최초 message와 복구 정보를 `Ready` 전에 저장한다. |
-| 위치 cache와 이전 owner 전달 | `Missing`, `Creating`과 Store 오류를 cache하지 않는다. Cache는 owner의 새 작업 허용 시각을 넘지 않는다. 전달은 최대 8번, message 1,024개와 16 MiB다. |
+| 위치 cache와 이전 owner 전달 | `Missing`, `Creating`과 Store 오류를 cache하지 않는다. Cache는 owner의 새 작업 허용 시각을 넘지 않는다. 전달은 최대 8번, message 1,024개이며 저장 크기 상한은 없다. |
 | Relocation 단계 | §7.2의 owner 규칙과 target 시도 번호를 지킨다. 이전 target 시도는 owner를 바꾸거나 새 message를 받을 수 없다. |
 | Owner 변경 전 relay | Target이 현재 target attempt의 temporary queue를 등록한 뒤 source message를 계속 받는다. Commit 전 abort에서는 temporary queue를 폐기하고 source 원본을 유지한다. Source는 target dispatch 전환 완료를 받을 때까지 hold 원본을 제거하지 않는다. |
 | Membership | Entry Spot member Actor와 User Spot 전체 이동은 각각 필요한 owner와 membership을 한 번에 바꾼다. |

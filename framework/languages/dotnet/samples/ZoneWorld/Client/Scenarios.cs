@@ -1292,7 +1292,22 @@ public static class Scenarios
             .Last().NodeId;
         try
         {
+            //  Ops answers a diagnostics request it cannot route with
+            //  NodeUnavailable and Maintenance=false. A node that just
+            //  restarted can still be between transport connections, so that
+            //  answer says nothing about the stored desired state - poll until
+            //  Ops can reach the node before judging the restore.
             var diagnostics = await ops.DiagnoseAsync(targetNodeId, ct);
+            var reachableBy = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(20);
+            while (diagnostics.Error is not null
+                && DateTimeOffset.UtcNow < reachableBy)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(100), ct);
+                diagnostics = await ops.DiagnoseAsync(targetNodeId, ct);
+            }
+            ZlinkStreamAssert.Ensure(
+                diagnostics.Error is null,
+                "Ops can reach the restarted node to read its maintenance state");
             ZlinkStreamAssert.Ensure(diagnostics.Maintenance, "the restarted node came up still under maintenance");
         }
         finally

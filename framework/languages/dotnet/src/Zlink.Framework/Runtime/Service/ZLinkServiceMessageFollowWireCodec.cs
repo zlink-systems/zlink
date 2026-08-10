@@ -10,7 +10,9 @@ internal static partial class ZLinkServiceWireCodec
     internal const byte MessageFollowVersion = 1;
     internal const byte MessageFollowMaximumHopCount = 8;
     internal const uint MessageFollowMaximumQueuedMessages = 1024;
-    internal const uint MessageFollowMaximumQueuedBytes = 16 * 1024 * 1024;
+    //  Frame guard, not a queue bound: the Message Follow queue has no stored
+    //  size cap, but a single encoded record still must not be unbounded.
+    internal const uint MessageFollowMaximumEncodedBytes = 16 * 1024 * 1024;
 
     /// <summary>
     /// A route fence carried by the infrastructure-only Message Follow record.
@@ -80,7 +82,6 @@ internal static partial class ZLinkServiceWireCodec
                 || source.ObjectGeneration != target.ObjectGeneration
                 || hopCount is 0 or > MessageFollowMaximumHopCount
                 || queuedMessages > MessageFollowMaximumQueuedMessages
-                || queuedBytes > MessageFollowMaximumQueuedBytes
                 || originalOperation == default)
                 throw new ArgumentOutOfRangeException(nameof(source));
             Source = source;
@@ -112,7 +113,7 @@ internal static partial class ZLinkServiceWireCodec
         WriteOperationId(body, record.OriginalOperation);
         body.U64(record.OriginalReplyRouteId);
 
-        if (body.Count > MessageFollowMaximumQueuedBytes)
+        if (body.Count > MessageFollowMaximumEncodedBytes)
             throw new ArgumentOutOfRangeException(nameof(record));
 
         var bytes = Prefix(
@@ -156,7 +157,7 @@ internal static partial class ZLinkServiceWireCodec
                 return false;
             }
             if (!reader.TryU32(out var bodyLength)
-                || bodyLength > MessageFollowMaximumQueuedBytes
+                || bodyLength > MessageFollowMaximumEncodedBytes
                 || bodyLength != (uint)reader.Remaining
                 || bodyLength > int.MaxValue
                 || !reader.TrySlice((int)bodyLength, out var encodedBody))

@@ -43,8 +43,17 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
         for (var lane : request.acceptedJournal().entrySet()) {
             long participantId = participantId(inventory, lane.getKey());
             for (var record : lane.getValue()) {
-                journal.add(new Journal(
-                    participantId, record.sequence(), record.payload()));
+                //  Same rule as the Actor envelope: only canonical
+                //  service-wire-v1 frozen records can be replayed, so anything
+                //  else must not be encoded or the reader takes the next field
+                //  as its record `kind`. The accepted boundary still counts
+                //  the turn.
+                if (systems.zlink.framework.runtime.internal.service
+                        .ZLinkServiceFrozenRecordCodec.isCanonical(
+                            record.payload())) {
+                    journal.add(new Journal(
+                        participantId, record.sequence(), record.payload()));
+                }
                 boundaries.merge(
                     participantId, record.sequence(), Math::max);
             }

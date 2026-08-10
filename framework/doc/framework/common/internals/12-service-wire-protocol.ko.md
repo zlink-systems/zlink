@@ -197,7 +197,7 @@ relay 시점의 queue count·byte, 원래 operation ID와 원래 reply route ID�
 
 - source와 target route는 같은 object kind와 object identity를 가져야 한다.
 - 각 route에는 object generation, target node RID와 generation, authority owner generation, owner lease generation이 들어가며, 수신자는 source route의 target node가 현재 admitted peer인지 먼저 확인한다.
-- hop count는 1..8, queue count는 1,024 이하, queue byte는 16 MiB 이하만 허용한다.
+- hop count는 1..8, queue count는 1,024 이하만 허용한다. queue byte에는 상한을 두지 않는다.
 - 다른 object를 가리키거나 route fence가 맞지 않는 record는 application dispatch 전에 protocol error로 끝낸다.
 
 #### 통지 중복 억제

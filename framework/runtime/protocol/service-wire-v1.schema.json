@@ -1208,9 +1208,6 @@
       "messageFollowQueuedMessagesMaximum": {
         "$bound": "messageFollowMessages"
       },
-      "messageFollowQueuedBytesMaximum": {
-        "$bound": "messageFollowBytes"
-      },
       "routingIdEntropyBits": 128,
       "routingIdCollisionAttemptsMaximum": {
         "$bound": "routingIdCollisionAttempts"
@@ -4265,10 +4262,7 @@
         {
           "name": "queuedBytes",
           "$ref": "u32",
-          "minimum": 0,
-          "maximum": {
-            "$bound": "messageFollowBytes"
-          }
+          "minimum": 0
         },
         {
           "name": "originalOperation",

@@ -230,18 +230,10 @@ final class ZLinkActorTransferHandoffTest {
             ((ZLinkFrameworkException) messageLimit.getCause()).kind());
         pending.forEach(value -> value.complete(null));
 
+        //  The Message Follow queue has no stored-size bound, so a single
+        //  oversized record is admitted on its own.
         CompletableFuture<Void> bytes = new CompletableFuture<>();
-        handoff.follow(
-            "actor", 7, ZLinkActorTransferHandoff.MAX_MESSAGE_FOLLOW_BYTES,
-            () -> bytes);
-        CompletionException byteLimit = assertThrows(CompletionException.class, () ->
-            handoff.follow(
-                    "actor", 7, 1,
-                    () -> CompletableFuture.completedFuture(null))
-                .toCompletableFuture().join());
-        assertEquals(
-            ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
-            ((ZLinkFrameworkException) byteLimit.getCause()).kind());
+        handoff.follow("actor", 7, 64L * 1024 * 1024, () -> bytes);
         bytes.complete(null);
         handoff.close();
     }
