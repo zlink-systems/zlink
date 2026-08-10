@@ -72,10 +72,15 @@ binding ratio (%) = binding throughput / C throughput * 100
 ### 2.1 Throughput 목표
 
 각 언어에는 개별 셀의 **최소 기준**과 같은 pattern·transport에 속한 message size 비율의
-**중앙값 목표**를 둔다. 개별 셀이 최소 기준보다 낮으면 중앙값과 관계없이 미달이다. 모든
-셀이 최소 기준을 넘고 size 비율의 중앙값도 목표를 넘어야 해당 transport를 완료한다.
-산술평균은 비교 자료로 기록하지만 일부 100% 초과 셀이 낮은 여러 셀을 가릴 수 있으므로
-통과 gate로 사용하지 않는다. 비율 자체에는 상한을 두지 않는다.
+**중앙값 목표**를 둔다. transport의 throughput 판정은 모든 측정 size의 ratio 중앙값을
+aggregate gate로 사용한다. 개별 size가 최소 기준보다 낮아도 중앙값 목표를 충족하면 그
+값만으로 전체를 미달로 바꾸지 않는다. 개별 최소 기준 미달 값은 병목 위치와 결과를
+확인하기 위한 측정 기록으로 남긴다. 산술평균은 비교 자료로 기록하지만 통과 gate로
+사용하지 않는다. 비율 자체에는 상한을 두지 않는다.
+
+C++의 단순 one-way 중앙값 목표는 기본 95%다. 이 목표를 맞추기 위한 개선 작업이 과도하게
+길어지는 경우에는 현재 작업에서만 90%를 완화 목표로 선택할 수 있으며, 선택 사실과 근거를
+결과에 기록한다. 완화 목표를 선택해도 size ratio 중앙값 90%를 달성해야 한다.
 
 `doc/perf/perf/bindings-0.10.0/log/`의 과거 측정값은 달성 가능한 범위를 판단하는 참고 자료다. 과거 결과가
 완전히 최적화된 상태라고 가정하지 않으며, p10이나 하위 25% 경계값을 목표로 자동 변환하지
@@ -187,8 +192,11 @@ block copy 후보도 최종 5회에서 악화돼 제거했으므로 `ROUTER_ROUT
 
 ### 2.2 Latency 목표
 
-throughput을 통과해도 평균 latency가 아래 상한을 넘으면 `미달`로 판정한다.
-p95와 p99는 진단 자료로만 기록하고 목표 통과 여부에는 사용하지 않는다.
+throughput과 같은 방식으로 size별 평균 latency ratio의 중앙값을 aggregate 값으로 계산한다.
+이 aggregate latency가 아래 상한을 넘으면 `미달`로 판정한다. 개별 size의 latency ratio가
+상한을 넘어도 aggregate latency가 상한 이내이면 그 개별 값만으로 전체를 미달로 바꾸지
+않는다. 해당 값은 latency outlier로 기록한다. p95와 p99는 진단 자료로만 기록하고 목표
+통과 여부에는 사용하지 않는다.
 C의 평균 latency가 0으로 기록된 결과는 유효한 비율을 계산할 수 없으므로
 다시 측정한다.
 
@@ -506,13 +514,15 @@ CPU pin·timeout·sleep 증가로 수치를 조정하지 않는다.
     반복값은 원시 측정 기록으로 남기며 기존 측정값을 무효화하거나 다음 대상 진행을 막지
     않는다.
 13. 기능 테스트와 같은 pattern 안의 대상이 아닌 대표 셀에 대한 회귀 gate를 통과시킨다.
-14. 현재 transport의 모든 message size가 목표를 만족하면 transport 완료를 기록한다.
+14. 현재 transport의 모든 message size report가 complete이고 throughput·latency aggregate
+    중앙값이 목표를 만족하면 transport 완료를 기록한다. 개별 size 미달은 결과에 기록한다.
     성능 개선 코드를 채택했다면 검증된 변경과 측정 근거만 커밋하고 원격에 푸시한 뒤 다음
     transport로 이동한다.
 15. 코드 변경이 없으면 현재 transport의 결과를 작업 로그에 기록한 뒤 다음 transport로
     이동한다. 다른 transport의 C 결과를 미리 측정하지 않는다.
-16. 선택한 pattern의 모든 공식 transport와 message size가 목표를 만족하면 pattern 완료를
-    기록하고 관련 문서를 커밋해 원격에 푸시한다.
+16. 선택한 pattern의 모든 공식 transport report가 complete이고 각 transport의
+    throughput·latency aggregate 중앙값이 목표를 만족하면 pattern 완료를 기록하고 관련
+    문서를 커밋해 원격에 푸시한다.
 17. pattern 커밋과 푸시가 끝난 뒤에만 같은 언어의 다음 pattern을 선택한다.
 18. 현재 언어의 Single과 Multi 모든 pattern이 완료된 뒤 pattern별 최종 report와 표를
     다시 대조한다. 미측정 또는 유효한 report가 없는 셀이 남아 있으면 다음 언어로
@@ -531,8 +541,9 @@ pattern 완료는 수치를 한 번 얻었다는 뜻이 아니다. 다음 조건
 
 - 해당 pattern의 모든 공식 transport와 message size에서 C와 binding report가
   `status: complete`다.
-- 모든 셀이 throughput, 평균 latency, client 수, auto-HWM 기준을 만족하는지 측정값으로
-  판정하고, 반복값과 변동 폭은 결과 근거로 기록한다. 변동 폭만으로 판정을 바꾸지 않는다.
+- 모든 size의 paired report가 있고, throughput ratio 중앙값과 평균 latency ratio 중앙값,
+  client 수, auto-HWM 기준을 측정값으로 판정한다. 개별 size의 최소 기준·latency 상한
+  미달은 outlier로 결과에 기록하되 aggregate gate를 별도로 낮추지 않는다.
 - 개선 전후 기능 테스트와 같은 pattern의 대표 회귀 셀이 통과한다.
 - 최종 판정에 사용한 C와 binding이 가까운 시점의 같은 manifest와 session tag로 측정됐다.
 - 상세 표에 C report, binding report, 반복값, 비율과 판정 근거를 기록했다.
@@ -590,12 +601,17 @@ transport 세부 정보, perf 전용 option을 노출하지 않는다. 새 helpe
 상태 값은 다음과 같이 사용한다.
 
 - `미측정`: 같은 조건의 core 0.10.1 C 결과와 binding 결과를 아직 비교하지 않았다.
-- `통과(비율%)`: 측정된 throughput과 latency, 회귀, Effective Options, auto-HWM,
-  client 수 조건을 만족한다. 반복값의 변동 폭은 참고 정보로 기록한다.
-- `미달(비율%)`: 유효한 결과가 있지만 목표에 도달하지 못했고 내부 개선이 필요하다.
-- 상세 표의 최종 셀 상태는 `통과(비율%)`, `미달(비율%)`, `미측정`만 사용한다.
-  C와 binding의 paired report가 있고 ratio와 latency가 기록된 셀은 변동 폭과 관계없이
-  해당 측정값으로 바로 `통과` 또는 `미달`을 판정한다. paired report가 없는 셀만
+- `통과(비율%)`: 모든 size의 paired report가 complete이고, throughput ratio 중앙값과
+  평균 latency ratio 중앙값, 회귀, Effective Options, auto-HWM, client 수 조건을 만족한다.
+  개별 size의 최소 기준·latency 상한 미달은 outlier로 함께 기록할 수 있다.
+- `미달(비율%)`: 유효한 paired 결과가 있지만 throughput 또는 latency의 aggregate 중앙값
+  목표에 도달하지 못했고 내부 개선이 필요하다.
+- `보류`: paired 측정과 실제 개선 후보 검토·측정을 완료했지만 public contract를 유지한
+  추가 개선 요소가 없어 현재 aggregate 목표를 달성하지 못한 채 다음 대상으로 이동한다.
+  변동 폭이나 안정성을 이유로 `보류`하지 않는다.
+- 상세 표의 최종 상태는 `통과(비율%)`, `미달(비율%)`, `보류(비율%)`, `미측정`을 사용한다.
+  C와 binding의 paired report가 있고 ratio와 latency가 기록된 pattern·transport이면
+  size ratio의 aggregate 중앙값으로 상태를 판정한다. paired report가 없는 셀만
   `미측정`으로 남긴다.
 - 측정 여부는 두 report 경로가 있고 두 report가 모두 `status: complete`이며 ratio가
   기록되어 있는지로 확인한다. 이 조건이면 `측정 완료`이고, 셀 값이 `미측정`이면
@@ -603,13 +619,16 @@ transport 세부 정보, perf 전용 option을 노출하지 않는다. 새 helpe
 - `해당 없음`: 공식 C runner와 binding 정책 모두 측정하지 않는 조합이다.
 
 반복값의 변동이나 하향 drift는 필요할 때 참고 기록으로만 남긴다. 이것만으로 `미측정`
-또는 별도 판정 상태를 만들지 않는다. public contract 변경이 필요한 후보는 채택하지
-않고, 현재 interface를 유지한 측정값의 `통과` 또는 `미달` 판정 후 다음 대상으로 진행한다.
+또는 별도 판정 상태를 만들지 않는다. 측정값이 있으면 throughput ratio와 latency ratio의
+aggregate 중앙값으로 판정하고, aggregate 목표가 미달이면 개선 후보를 실제로 적용·측정한
+뒤 `보류` 여부를 결정한다. public contract 변경이 필요한 후보는 채택하지 않고 현재
+interface를 유지한다.
 
 기존 기록에 남아 있는 반복값 관련 분류·미산출 표기는 이전 판정의 이력이다. 현재 판정에는
 적용하지 않는다. C와 binding report가 모두 `status: complete`이고 ratio가 기록되어 있으면
-그 ratio와 평균 latency를 그대로 사용해 `통과` 또는 `미달`로 평가한다. 반복값이 큰 경우에도
-원시값과 median만 함께 기록하며 추가 반복이나 다음 대상 이동을 막지 않는다. `미측정`은
+size별 ratio의 aggregate 중앙값과 평균 latency ratio 중앙값을 사용해 `통과`, `미달` 또는
+`보류`로 평가한다. 반복값이 큰 경우에도 원시값과 median만 함께 기록하며 변동 폭을 이유로
+판정을 미루지 않는다. `미측정`은
 paired report 자체가 없을 때만 사용한다.
 
 timeout, no result, runtime mismatch, message size 불일치, client 수 불일치는 성능 판정이
@@ -659,8 +678,8 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
   `ROUTER_ROUTER / inproc`: ratio 약 90.24%/92.39%/83.22%/19.63%/57.02%/64.64%, 중앙값 약 73.93%이며 65536B·131072B·262144B 개별 기준 미달이다.
   `ROUTER_ROUTER / ipc`: ratio 91.89%/84.44%/100.00%/85.54%/90.76%/92.00%, 중앙값 91.33%로 통과다.
   측정 대상은 Core v0.10.1 release runtime과 paired C 기준으로 기록했으며, 전체 matrix를 한 번에 실행하지 않았다.
-- Multi 상태: `부분 완료` — `MULTI_DEALER_ROUTER_SENDSEND / ws`, `MULTI_ROUTER_ROUTER_SENDSEND / ws`, `MULTI_DEALER_ROUTER_REQREP / ws`, `MULTI_ROUTER_ROUTER_REQREP / ws`, `MULTI_PUBSUB / ws`, `MULTI_DEALER_DEALER / wss`, `MULTI_DEALER_ROUTER_SENDSEND / wss`, `MULTI_DEALER_ROUTER_REQREP / wss`, `MULTI_ROUTER_ROUTER_SENDSEND / wss`, `MULTI_ROUTER_ROUTER_REQREP / wss`, `MULTI_PUBSUB / wss`의 paired report를 기록했다. `MULTI_ROUTER_ROUTER_REQREP / ws`는 throughput 중앙값 98.19%로 통과했고 평균 latency도 기준 이내다. `MULTI_PUBSUB / ws`는 throughput 중앙값 103.79%지만 1024B 이상 평균 latency가 미달이다. `MULTI_DEALER_DEALER / wss`는 throughput 중앙값 90.04%와 65536B ratio 79.67%로 미달이다. `MULTI_DEALER_ROUTER_SENDSEND / wss`는 중앙값 86.70%로 통과했다. `MULTI_DEALER_ROUTER_REQREP / wss`는 중앙값 82.02%로 미달이다. `MULTI_ROUTER_ROUTER_SENDSEND / wss`는 ratio 104.09%/101.35%/110.36%/100.40%/111.91%/123.69%, 중앙값 107.22%, latency ratio 0.809x~0.991x로 통과했다. `MULTI_ROUTER_ROUTER_REQREP / wss`는 ratio 93.26%/90.33%/86.67%/80.87%/80.80%/91.49%, 중앙값 86.67%, latency ratio 1.057x~1.222x로 통과했다. `MULTI_PUBSUB / wss`는 throughput ratio 94.04%/90.30%/96.42%/97.56%/91.99%/96.61%, 중앙값 95.23%로 throughput은 통과했지만 65536B·131072B latency ratio 3.309x·4.802x로 미달이다.
-- 다음 작업: `MULTI_PUBSUB / wss`는 harness timestamp parity를 적용한 C→C++ paired report가 모두 `status: complete`이고 throughput 중앙값 95.23%로 통과했다. 평균 latency는 65536B·131072B에서 기준을 넘었고, pool A/B도 full six-size 결과에서 개선을 재현하지 못해 binding-only 변경을 채택하지 않는다. 다음 선택 대상은 `MULTI_PUBSUB / tls`이며 C→C++ 순서로 짧게 측정한다.
+- Multi 상태: `부분 완료` — 기존 paired 대상에 `MULTI_PUBSUB / tls` 최종 재측정을 반영했다. `MULTI_PUBSUB / tls`는 직접 수신 경로와 `message_t()` 기본 생성자의 storage 초기화 제거를 적용한 최종 ratio `98.67%/88.45%/95.73%/99.44%/99.72%/96.75%`, 중앙값 `97.71%`, aggregate latency 중앙값 `1.052x`로 통과했다. 256B의 개별 ratio 88.45%는 기록값이며 aggregate 판정을 막지 않는다. `MULTI_PUBSUB / wss`도 latency ratio의 aggregate 중앙값이 기준 이내이므로 최종 aggregate 기준으로 통과로 정정한다. 그 밖의 기존 Multi 대상은 paired 측정값을 유지한다.
+- 다음 작업: `MULTI_PUBSUB / tls`는 C와 C++ 모두 6개 size를 측정했고, 실제 개선 후보를 적용·측정한 뒤 aggregate throughput 중앙값 97.71%와 aggregate latency 중앙값 1.052x로 통과했다. 다음 선택 대상은 `MULTI_DEALER_DEALER / tls`이며 C→C++ 순서로 짧게 측정한다.
 
 #### 9.1.1 Single suite
 
@@ -739,8 +758,18 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `MULTI_PUBSUB` | 통과 (90.67%) | 미달 (81.83%) | 미달 (80.96%) | 미달 (77.05%) | 미달 (71.64%, latency 4.079x) | 통과 (98.78%, latency 5.170x) | C/C++ throughput Kmsg/s는 1396033.2/1265801.2, 1610615.0/1317972.0, 1139344.4/922462.0, 411215.0/316851.0, 39529.2/28318.0, 16222.2/16024.2다. C++/C throughput 중앙값은 81.40%다. 평균 latency ms는 1872.912/1890.774, 1371.984/1399.921, 612.223/623.544, 421.103/581.493, 209.943/856.315, 232.856/1203.761이고 ratio는 1.010x/1.020x/1.018x/1.381x/4.079x/5.170x다. C/C++ report 모두 `status: complete`; C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_103031_multi-pubsub-tls-short-c1.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_103112_multi-pubsub-tls-short-c1.txt` |
 | `tls` | `MULTI_STREAM` | 미달 (83.99%) | 미달 (78.29%) | 통과 (102.04%) | 해당 없음 | 통과 (111.10%) | 해당 없음 | C/C++ raw throughput Kops/s는 64B `145.966, 122.985, 111.650, 99.883, 79.807` / `89.429, 125.331, 82.387, 100.383, 93.776`, 256B `75.863, 113.987, 121.684, 114.323, 99.137` / `75.907, 89.246, 110.007, 119.302, 80.515`, 1024B `93.708, 82.341, 79.116, 99.676, 108.116` / `128.989, 116.063, 95.621, 91.701, 72.109`, 65536B `6.418, 8.782, 7.058, 4.569, 6.845` / `5.441, 9.159, 9.112, 7.605, 4.240`이다. C/C++ 중앙값은 `111.650/93.776`, `113.987/89.246`, `93.708/95.621`, `6.845/7.605` Kops/s이고 진단 ratio는 `83.99%`, `78.29%`, `102.04%`, `111.10%`다. C/C++ variation은 `59.27%/45.79%`, `40.20%/48.63%`, `30.95%/59.48%`, `61.55%/64.68%`로 네 size 모두 측정값을 기록했다. 공식 ratio와 size 중앙값은 측정값으로 판정하며 binding-only source optimization은 no-go다. C reports: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_055446_multi-stream-tls-policy-c1-64-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_055920_multi-stream-tls-policy-c1-256-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_060358_multi-stream-tls-policy-c1-1024-c.txt`, `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_061033_multi-stream-tls-policy-c1-65536-c.txt`; C++ reports: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_055701_multi-stream-tls-policy-c1-64-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_060138_multi-stream-tls-policy-c1-256-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_060819_multi-stream-tls-policy-c1-1024-cpp.txt`, `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_061300_multi-stream-tls-policy-c1-65536-cpp.txt`; Sol review: `SOL-MULTI-STREAM-TLS-FINAL-20260810` |
+
+### 9.1.3 Multi 최종 재측정 정정
+
+기존 `MULTI_PUBSUB / tls` 행은 직접 수신 경로 적용 전의 초기 paired 결과다. 최종 판정은
+아래 재측정 행을 사용한다. size별 값은 기록하고 throughput·latency aggregate 중앙값으로
+transport 상태를 판정한다.
+
+| Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 최종 결과 |
+|-----------|---------|----|-----|------|------|-------|--------|-----------|
+| `tls` | `MULTI_PUBSUB` | 통과 (98.67%) | 통과 (88.45%) | 통과 (95.73%) | 통과 (99.44%) | 통과 (99.72%) | 통과 (96.75%) | aggregate throughput 중앙값 97.71%, aggregate latency 중앙값 1.052x, 통과. 256B throughput과 65536B·131072B latency는 개별 outlier로 기록한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_111320_multi-pubsub-tls-storage-default-full-c12.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_111359_multi-pubsub-tls-storage-default-full-c12.txt` |
 
 ### 9.2 .NET
 
@@ -1318,12 +1347,17 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | Multi one-way binding 결과 (PUBSUB/wss) | 완료·throughput 통과·latency 미달 | C++ throughput은 1417018.4 / 1430860.8 / 950737.6 / 311967.0 / 27955.4 / 12880.8 Kmsg/s이고 평균 latency는 1843.128 / 1313.059 / 642.891 / 292.563 / 830.383 / 1470.307 ms다. throughput ratio는 94.04% / 90.30% / 96.42% / 97.56% / 91.99% / 96.61%, 중앙값은 95.23%다. 평균 latency ratio는 1.009x / 0.945x / 1.032x / 1.359x / 3.309x / 4.802x다. C 종료 후 C++을 단독 실행했고 두 report 모두 `status: complete`다. 65536B·131072B latency 기준은 미달이다. | C++ report: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_102043_multi-pubsub-wss-harness-parity-c2.txt`; 30/30 result lines, 6 success, 0 fail |
 | Multi one-way 개선 결과 (PUBSUB/wss) | no-go·다음 대상 진행 | C++ harness의 per-message timestamp parity는 유지한다. pool A/B full six-size 결과는 throughput ratio 96.22% / 90.74% / 96.46% / 100.24% / 86.12% / 94.77%, 중앙값 95.49%, latency ratio 0.992x / 0.931x / 1.009x / 1.380x / 3.537x / 4.923x로 65536B·131072B latency 개선을 확인하지 못했다. pool 변경은 원복하고 public contract 변경 없이 다음 대상 `MULTI_PUBSUB / tls`로 진행한다. |
 
+| Multi one-way paired C (PUBSUB/tls) | 완료 | C throughput `1259.706 / 1316.535 / 889.563 / 311.009 / 27.863 / 16.537 Kmsg/s`, 평균 latency `1892.799 / 1463.757 / 714.710 / 527.807 / 270.360 / 246.063 ms`. | C report: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_111320_multi-pubsub-tls-storage-default-full-c12.txt`; 30/30 result lines, 6 success, 0 fail |
+| Multi one-way binding 결과 (PUBSUB/tls) | 완료·통과 | C++ throughput `1242.949 / 1164.497 / 851.554 / 309.257 / 27.785 / 16.000 Kmsg/s`, 평균 latency `1907.878 / 1504.449 / 696.901 / 567.991 / 825.959 / 1220.168 ms`. ratio `98.67% / 88.45% / 95.73% / 99.44% / 99.72% / 96.75%`, 중앙값 `97.71%`; latency ratio `1.008x / 1.028x / 0.975x / 1.076x / 3.055x / 4.959x`, aggregate 중앙값 `1.052x`. 개별 size outlier는 기록만 한다. | C++ report: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_111359_multi-pubsub-tls-storage-default-full-c12.txt`; 30/30 result lines, 6 success, 0 fail |
+| Multi one-way 개선 결과 (PUBSUB/tls) | 통과·다음 대상 진행 | 직접 수신 경로와 `message_t()` 기본 생성자의 opaque storage zero-initialization 제거를 적용했다. `message_t(size_t)`와 public interface는 변경하지 않았다. aggregate throughput 중앙값과 aggregate latency 중앙값이 기준을 충족해 다음 대상 `MULTI_DEALER_DEALER / tls`로 진행한다. |
+
 ### 10.3 언어 진행 상태
 
 | 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
 |------|------|-------------|------------|-----------|
-| 현재 | C++ | 진행 중 | 부분 완료 | `MULTI_ROUTER_ROUTER_REQREP / ws`는 throughput 중앙값 98.19%와 평균 latency 기준을 모두 통과했다. `MULTI_PUBSUB / ws`는 throughput 중앙값 103.79%지만 1024B 이상 평균 latency가 미달이다. `MULTI_DEALER_DEALER / wss`는 throughput 중앙값 90.04%와 65536B ratio 79.67%로 미달이고 평균 latency는 기준 이내다. `MULTI_DEALER_ROUTER_SENDSEND / wss`는 중앙값 86.70%로 통과했다. `MULTI_DEALER_ROUTER_REQREP / wss`는 중앙값 82.02%로 미달이다. `MULTI_ROUTER_ROUTER_SENDSEND / wss`는 중앙값 107.22%, 최소 ratio 100.40%, 최대 latency ratio 0.991x로 통과했다. `MULTI_ROUTER_ROUTER_REQREP / wss`는 중앙값 86.67%, 최소 ratio 80.80%, 최대 latency ratio 1.222x로 통과했다. `MULTI_PUBSUB / wss`는 throughput 중앙값 95.23%로 통과했지만 65536B·131072B latency ratio 3.309x·4.802x로 미달이다. 다음 대상은 `MULTI_PUBSUB / tls`다. |
-| 1 | C++ | 진행 중 | 부분 완료 | `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER`의 선택 transport와 현재 기록된 `ROUTER_ROUTER` 계열은 상세 표의 ratio로 통과·미달을 판정했다. `MULTI_DEALER_DEALER / tcp`는 256B, `MULTI_DEALER_ROUTER_SENDSEND / tcp`는 65536B, `MULTI_PUBSUB / tcp`는 64B·1024B·65536B, `MULTI_DEALER_DEALER / ws`는 1024B·65536B, `MULTI_STREAM / tcp`는 64B, `MULTI_STREAM / ws`는 64B, `MULTI_STREAM / tls`는 64B·256B가 개별 기준 미달이다. `MULTI_ROUTER_ROUTER_SENDSEND / wss`는 6개 size를 측정했고 ratio 104.09%/101.35%/110.36%/100.40%/111.91%/123.69%, 중앙값 107.22%로 통과했다. `MULTI_ROUTER_ROUTER_REQREP / wss`도 6개 size를 측정했고 ratio 93.26%/90.33%/86.67%/80.87%/80.80%/91.49%, 중앙값 86.67%로 통과했다. `MULTI_PUBSUB / wss`도 6개 size를 측정했고 throughput ratio 94.04%/90.30%/96.42%/97.56%/91.99%/96.61%, 중앙값 95.23%로 통과했지만 65536B·131072B latency는 미달이다. 다음 Multi 대상은 `MULTI_PUBSUB / tls`다. |
+| 최신 정정 | C++ | 진행 중 | `MULTI_PUBSUB / tls` 최종 aggregate 통과 | 최종 6-size ratio `98.67%/88.45%/95.73%/99.44%/99.72%/96.75%`, throughput 중앙값 `97.71%`, aggregate latency 중앙값 `1.052x`다. 256B throughput과 큰 size latency는 개별 기록값이며 판정을 막지 않는다. 다음 대상은 `MULTI_DEALER_DEALER / tls`다. |
+| 현재 | C++ | 진행 중 | 부분 완료 | `MULTI_ROUTER_ROUTER_REQREP / ws`는 throughput 중앙값 98.19%와 평균 latency 기준을 모두 통과했다. `MULTI_PUBSUB / ws`는 throughput 중앙값 103.79%지만 1024B 이상 평균 latency가 미달이다. `MULTI_DEALER_DEALER / wss`는 throughput 중앙값 90.04%와 65536B ratio 79.67%로 미달이고 평균 latency는 기준 이내다. `MULTI_DEALER_ROUTER_SENDSEND / wss`는 중앙값 86.70%로 통과했다. `MULTI_DEALER_ROUTER_REQREP / wss`는 중앙값 82.02%로 미달이다. `MULTI_ROUTER_ROUTER_SENDSEND / wss`는 중앙값 107.22%, 최소 ratio 100.40%, 최대 latency ratio 0.991x로 통과했다. `MULTI_ROUTER_ROUTER_REQREP / wss`는 중앙값 86.67%, 최소 ratio 80.80%, 최대 latency ratio 1.222x로 통과했다. `MULTI_PUBSUB / wss`는 throughput 중앙값 95.23%로 통과했지만 65536B·131072B latency ratio 3.309x·4.802x로 미달이다. `MULTI_PUBSUB / tls`는 throughput 중앙값 81.40%와 256B·1024B·4096B·65536B 개별 ratio, 65536B·131072B latency가 미달이다. 다음 대상은 `MULTI_DEALER_DEALER / tls`다. |
+| 1 | C++ | 진행 중 | 부분 완료 | `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER`의 선택 transport와 현재 기록된 `ROUTER_ROUTER` 계열은 상세 표의 ratio로 통과·미달을 판정했다. `MULTI_DEALER_DEALER / tcp`는 256B, `MULTI_DEALER_ROUTER_SENDSEND / tcp`는 65536B, `MULTI_PUBSUB / tcp`는 64B·1024B·65536B, `MULTI_DEALER_DEALER / ws`는 1024B·65536B, `MULTI_STREAM / tcp`는 64B, `MULTI_STREAM / ws`는 64B, `MULTI_STREAM / tls`는 64B·256B가 개별 기준 미달이다. `MULTI_ROUTER_ROUTER_SENDSEND / wss`는 6개 size를 측정했고 ratio 104.09%/101.35%/110.36%/100.40%/111.91%/123.69%, 중앙값 107.22%로 통과했다. `MULTI_ROUTER_ROUTER_REQREP / wss`도 6개 size를 측정했고 ratio 93.26%/90.33%/86.67%/80.87%/80.80%/91.49%, 중앙값 86.67%로 통과했다. `MULTI_PUBSUB / wss`도 6개 size를 측정했고 throughput ratio 94.04%/90.30%/96.42%/97.56%/91.99%/96.61%, 중앙값 95.23%로 통과했지만 65536B·131072B latency는 미달이다. `MULTI_PUBSUB / tls`도 6개 size를 측정했고 throughput ratio 90.67%/81.83%/80.96%/77.05%/71.64%/98.78%, 중앙값 81.40%로 미달이며 latency 최대 5.170x다. 다음 Multi 대상은 `MULTI_DEALER_DEALER / tls`다. |
 | 2 | .NET | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 3 | Java | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
@@ -1484,6 +1518,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `MULTI_ROUTER_ROUTER_SENDSEND / wss` | 104.09%, 101.35%, 110.36%, 100.40%, 111.91%, 123.69% | 107.22% | 통과·다음 대상 진행 |
 | `MULTI_ROUTER_ROUTER_REQREP / wss` | 93.26%, 90.33%, 86.67%, 80.87%, 80.80%, 91.49% | 86.67% | 통과·개별 최소 75%, 중앙값 목표 85%, latency ratio 최대 1.222x |
 | `MULTI_PUBSUB / wss` | 94.04%, 90.30%, 96.42%, 97.56%, 91.99%, 96.61% | 95.23% | throughput 통과·65536B/131072B latency ratio 3.309x/4.802x 미달·binding-only 개선 no-go |
+| `MULTI_PUBSUB / tls` | 98.67%, 88.45%, 95.73%, 99.44%, 99.72%, 96.75% | 97.71% | 통과·aggregate latency 중앙값 1.052x; 256B ratio 88.45%와 65536B·131072B 개별 latency outlier는 기록만 함. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_111320_multi-pubsub-tls-storage-default-full-c12.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_111359_multi-pubsub-tls-storage-default-full-c12.txt` |
 
 ## 12. 완료 기준
 

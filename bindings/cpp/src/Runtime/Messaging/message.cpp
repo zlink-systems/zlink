@@ -125,7 +125,7 @@ zlink_config_result_t init_owned_message_storage (zlink_msg_t *message_, size_t 
 
 } // namespace
 
-message_t::message_t () : _storage (), _valid (false)
+message_t::message_t () : _valid (false)
 {
     if (zlink_msg_init (detail::native_handle (*this)) == 0)
         _valid = true;

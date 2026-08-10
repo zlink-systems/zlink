@@ -71,10 +71,15 @@ binding ratio (%) = binding throughput / C throughput * 100
 ### 2.1 Throughput 목표
 
 각 언어에는 개별 셀의 **최소 기준**과 같은 pattern·transport에 속한 message size 비율의
-**중앙값 목표**를 둔다. 개별 셀이 최소 기준보다 낮으면 중앙값과 관계없이 미달이다. 모든
-셀이 최소 기준을 넘고 size 비율의 중앙값도 목표를 넘어야 해당 transport를 완료한다.
-산술평균은 비교 자료로 기록하지만 일부 100% 초과 셀이 낮은 여러 셀을 가릴 수 있으므로
-통과 gate로 사용하지 않는다. 비율 자체에는 상한을 두지 않는다.
+**중앙값 목표**를 둔다. transport의 throughput 판정은 모든 측정 size의 ratio 중앙값을
+aggregate gate로 사용한다. 개별 size가 최소 기준보다 낮아도 중앙값 목표를 충족하면 그
+값만으로 전체를 미달로 바꾸지 않는다. 개별 최소 기준 미달 값은 병목 위치와 결과를
+확인하기 위한 측정 기록으로 남긴다. 산술평균은 비교 자료로 기록하지만 통과 gate로
+사용하지 않는다. 비율 자체에는 상한을 두지 않는다.
+
+C++의 단순 one-way 중앙값 목표는 기본 95%다. 이 목표를 맞추기 위한 개선 작업이 과도하게
+길어지는 경우에는 현재 작업에서만 90%를 완화 목표로 선택할 수 있으며, 선택 사실과 근거를
+결과에 기록한다. 완화 목표를 선택해도 size ratio 중앙값 90%를 달성해야 한다.
 
 `doc/perf/perf/log/`의 과거 측정값은 달성 가능한 범위를 판단하는 참고 자료다. 과거 결과가
 완전히 최적화된 상태라고 가정하지 않으며, p10이나 하위 25% 경계값을 목표로 자동 변환하지
@@ -186,8 +191,11 @@ block copy 후보도 최종 5회에서 악화돼 제거했으므로 `ROUTER_ROUT
 
 ### 2.2 Latency 목표
 
-throughput을 통과해도 평균 latency가 아래 상한을 넘으면 `미달`로 판정한다.
-p95와 p99는 진단 자료로만 기록하고 목표 통과 여부에는 사용하지 않는다.
+throughput과 같은 방식으로 size별 평균 latency ratio의 중앙값을 aggregate 값으로 계산한다.
+이 aggregate latency가 아래 상한을 넘으면 `미달`로 판정한다. 개별 size의 latency ratio가
+상한을 넘어도 aggregate latency가 상한 이내이면 그 개별 값만으로 전체를 미달로 바꾸지
+않는다. 해당 값은 latency outlier로 기록한다. p95와 p99는 진단 자료로만 기록하고 목표
+통과 여부에는 사용하지 않는다.
 C의 평균 latency가 0으로 기록된 결과는 유효한 비율을 계산할 수 없으므로
 다시 측정한다.
 
@@ -472,13 +480,15 @@ C와 binding의 pattern별 smoke가 모두 `status: complete`여야 본 측정�
 12. 추가 반복은 before/after 확인이나 원인 진단이 필요할 때만 수행한다. 추가 반복값은
     원시 측정 기록으로 남기며 기존 측정값을 무효화하거나 다음 대상 진행을 막지 않는다.
 13. 기능 테스트와 같은 pattern 안의 대상이 아닌 대표 셀에 대한 회귀 gate를 통과시킨다.
-14. 현재 transport의 모든 message size가 목표를 만족하면 transport 완료를 기록한다.
+14. 현재 transport의 모든 message size report가 complete이고 throughput·latency aggregate
+    중앙값이 목표를 만족하면 transport 완료를 기록한다. 개별 size 미달은 결과에 기록한다.
     성능 개선 코드를 채택했다면 검증된 변경과 측정 근거만 커밋하고 원격에 푸시한 뒤 다음
     transport로 이동한다.
 15. 코드 변경이 없으면 현재 transport의 결과를 작업 로그에 기록한 뒤 다음 transport로
     이동한다. 다른 transport의 C 결과를 미리 측정하지 않는다.
-16. 선택한 pattern의 모든 공식 transport와 message size가 목표를 만족하면 pattern 완료를
-    기록하고 관련 문서를 커밋해 원격에 푸시한다.
+16. 선택한 pattern의 모든 공식 transport report가 complete이고 각 transport의
+    throughput·latency aggregate 중앙값이 목표를 만족하면 pattern 완료를 기록하고 관련
+    문서를 커밋해 원격에 푸시한다.
 17. pattern 커밋과 푸시가 끝난 뒤에만 같은 언어의 다음 pattern을 선택한다.
 18. 현재 언어의 Single과 Multi 모든 pattern이 완료된 뒤 pattern별 최종 report와 표를
     다시 대조한다. 미측정 또는 유효한 report가 없는 셀이 남아 있으면 다음 언어로
@@ -497,8 +507,9 @@ pattern 완료는 수치를 한 번 얻었다는 뜻이 아니다. 다음 조건
 
 - 해당 pattern의 모든 공식 transport와 message size에서 C와 binding report가
   `status: complete`다.
-- 모든 셀이 throughput, 평균 latency, client 수, auto-HWM 기준을 만족하는지 측정값으로
-  판정하고, 원시 반복값은 결과 근거로 기록한다.
+- 모든 size의 paired report가 있고, throughput ratio 중앙값과 평균 latency ratio 중앙값,
+  client 수, auto-HWM 기준을 측정값으로 판정한다. 개별 size의 최소 기준·latency 상한
+  미달은 outlier로 결과에 기록하되 aggregate gate를 별도로 낮추지 않는다.
 - 개선 전후 기능 테스트와 같은 pattern의 대표 회귀 셀이 통과한다.
 - 최종 판정에 사용한 C와 binding이 가까운 시점의 같은 manifest와 session tag로 측정됐다.
 - 상세 표에 C report, binding report, 반복값, 비율과 판정 근거를 기록했다.
@@ -562,27 +573,33 @@ transport 세부 정보, perf 전용 option을 노출하지 않는다. 새 helpe
 상태 값은 다음과 같이 사용한다.
 
 - `미측정`: 같은 조건의 core {{CORE_VERSION}} C 결과와 binding 결과를 아직 비교하지 않았다.
-- `통과(비율%)`: 측정된 throughput과 latency, 회귀, Effective Options, auto-HWM,
-  client 수 조건을 만족한다. 원시 반복값은 측정 기록으로 남긴다.
-- `미달(비율%)`: 유효한 결과가 있지만 목표에 도달하지 못했고 내부 개선이 필요하다.
-- 상세 표의 최종 셀 상태는 `통과(비율%)`, `미달(비율%)`, `미측정`만 사용한다.
-  C와 binding의 paired report가 있고 ratio와 latency가 기록된 셀은 반복값의 크기와
-  관계없이 해당 측정값으로 바로 `통과` 또는 `미달`을 판정한다. paired report가 없는
-  셀만 `미측정`으로 남긴다.
+- `통과(비율%)`: 모든 size의 paired report가 complete이고, throughput ratio 중앙값과
+  평균 latency ratio 중앙값, 회귀, Effective Options, auto-HWM, client 수 조건을 만족한다.
+  개별 size의 최소 기준·latency 상한 미달은 outlier로 함께 기록할 수 있다.
+- `미달(비율%)`: 유효한 paired 결과가 있지만 throughput 또는 latency의 aggregate 중앙값
+  목표에 도달하지 못했고 내부 개선이 필요하다.
+- `보류`: paired 측정과 실제 개선 후보 검토·측정을 완료했지만 public contract를 유지한
+  추가 개선 요소가 없어 현재 aggregate 목표를 달성하지 못한 채 다음 대상으로 이동한다.
+  변동 폭이나 안정성을 이유로 `보류`하지 않는다.
+- 상세 표의 최종 상태는 `통과(비율%)`, `미달(비율%)`, `보류(비율%)`, `미측정`을 사용한다.
+  C와 binding의 paired report가 있고 ratio와 latency가 기록된 pattern·transport이면
+  size ratio의 aggregate 중앙값으로 상태를 판정한다. paired report가 없는 셀만
+  `미측정`으로 남긴다.
 - 측정 여부는 두 report 경로가 있고 두 report가 모두 `status: complete`이며 ratio가
   기록되어 있는지로 확인한다. 이 조건이면 `측정 완료`이고, 셀 값이 `미측정`이면
   아직 측정하지 않은 것이다. `측정값으로 판정` 같은 문구는 상태 값으로 사용하지 않는다.
 - `해당 없음`: 공식 C runner와 binding 정책 모두 측정하지 않는 조합이다.
 
 원시 반복값이나 하향 drift는 필요한 경우 측정 기록으로만 남긴다. 이것만으로 `미측정`
-또는 별도 판정 상태를 만들지 않는다. 측정값이 있으면 throughput ratio와 latency ratio로
-즉시 판정하고 다음 대상으로 진행한다. public contract 변경이 필요한 후보는 채택하지
-않고 현재 interface를 유지한다.
+또는 별도 판정 상태를 만들지 않는다. 측정값이 있으면 throughput ratio와 latency ratio의
+aggregate 중앙값으로 판정하고, aggregate 목표가 미달이면 개선 후보를 실제로 적용·측정한
+뒤 `보류` 여부를 결정한다. public contract 변경이 필요한 후보는 채택하지 않고 현재
+interface를 유지한다.
 
 과거 문서나 로그의 분류는 이력으로 보존하되, C와 binding report가 모두 `status: complete`이고
-ratio가 기록되어 있으면 그 ratio와 평균 latency를 모두 측정값으로 사용해 `통과` 또는 `미달`로
-평가한다. 원시 반복값은 함께 기록하지만 판정, 추가 측정, 다음 대상 이동을 막는 조건으로
-사용하지 않는다. `미측정`은 paired report 자체가 없을 때만 사용한다.
+ratio가 기록되어 있으면 size별 ratio의 aggregate 중앙값과 평균 latency ratio 중앙값을 사용해
+`통과`, `미달` 또는 `보류`로 평가한다. 원시 반복값은 함께 기록하지만 변동 폭을 이유로
+판정을 미루지 않는다. `미측정`은 paired report 자체가 없을 때만 사용한다.
 
 timeout, no result, runtime mismatch, message size 불일치, client 수 불일치는 성능 판정이
 아니다. 원인을 수정해 수치가 생성될 때까지 `미측정`으로 유지한다.

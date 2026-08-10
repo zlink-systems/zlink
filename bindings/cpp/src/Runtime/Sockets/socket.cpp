@@ -261,8 +261,28 @@ int socket_t::subscribe_part (std::optional<routing_id_t> &source_rid_out_,
     char topic_buffer[256];
     size_t topic_size = sizeof (topic_buffer);
     const zlink_routing_id_t *source_rid = nullptr;
-    detail::scoped_native_message_t native_part;
     zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+
+    // The common benchmark and receive pattern supplies a valid empty output
+    // message. Receive directly into that storage to avoid a temporary native
+    // message and an ownership handoff. Keep the existing temporary path for
+    // non-empty output so failure and allocation-error handling remain intact.
+    if (part_out_.valid () && zlink_msg_size (detail::native_handle (part_out_)) == 0) {
+        const int rc = zlink_subscribe_part (
+          detail::native_handle (*this), &source_rid, topic_buffer, sizeof (topic_buffer),
+          &topic_size, detail::native_handle (part_out_), &has_more,
+          static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
+        if (rc != ZLINK_RECV_OK)
+            return static_cast<int> (rc);
+
+        detail::message_access_t::valid (part_out_) = true;
+        detail::assign_subscription_metadata (&source_rid_out_, topic_out_, has_more_out_,
+                                              source_rid, topic_buffer, topic_size,
+                                              sizeof (topic_buffer), has_more);
+        return 0;
+    }
+
+    detail::scoped_native_message_t native_part;
     if (!native_part.init ())
         return -1;
 

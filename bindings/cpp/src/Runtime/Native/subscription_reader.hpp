@@ -51,6 +51,21 @@ inline routing_id_t routing_id_or_empty (const zlink_routing_id_t *routing_id_)
                                                 : unchecked_empty_routing_id ();
 }
 
+inline void assign_subscription_metadata (std::optional<routing_id_t> *source_out_,
+                                          std::string &topic_out_,
+                                          bool &has_more_out_,
+                                          const zlink_routing_id_t *source_,
+                                          const char *topic_,
+                                          size_t topic_length_,
+                                          size_t topic_capacity_,
+                                          zlink_part_flag_t has_more_)
+{
+    if (source_out_)
+        *source_out_ = optional_native_routing_id (source_);
+    topic_out_.assign (topic_, bounded_topic_size (topic_length_, topic_capacity_));
+    has_more_out_ = has_more_ != ZLINK_PART_FINAL;
+}
+
 inline void assign_subscription_part (std::optional<routing_id_t> *source_out_,
                                       std::string &topic_out_,
                                       message_t &part_out_,
@@ -62,11 +77,9 @@ inline void assign_subscription_part (std::optional<routing_id_t> *source_out_,
                                       zlink_msg_t *part_,
                                       zlink_part_flag_t has_more_)
 {
-    if (source_out_)
-        *source_out_ = optional_native_routing_id (source_);
-    topic_out_.assign (topic_, bounded_topic_size (topic_length_, topic_capacity_));
+    assign_subscription_metadata (source_out_, topic_out_, has_more_out_, source_, topic_,
+                                  topic_length_, topic_capacity_, has_more_);
     adopt_native_message (part_out_, part_);
-    has_more_out_ = has_more_ != ZLINK_PART_FINAL;
 }
 
 template <typename ReceivePart>
