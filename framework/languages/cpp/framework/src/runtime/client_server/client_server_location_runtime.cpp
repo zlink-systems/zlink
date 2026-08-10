@@ -483,7 +483,7 @@ client_server_location_runtime_t::observe (
         std::lock_guard lock (_gate);
         _observers[channel_name].push_back (value);
         const auto current = build_snapshot_locked (channel_name);
-        value->enqueue (client_server_runtime_event_t{
+        value->enqueue (channel_name, client_server_runtime_event_t{
           .identifier = "zlink.runtime.client_server.channel_changed",
           .sequence = current.sequence,
           .timestamp = current.observed_at,
@@ -539,7 +539,9 @@ void client_server_location_runtime_t::publish_snapshot_changes ()
         }
     }
     for (auto &notification : notifications)
-        notification.first->enqueue (std::move (notification.second));
+        notification.first->enqueue (
+          notification.second.channel_name,
+          std::move (notification.second));
 }
 
 void client_server_location_runtime_t::start ()

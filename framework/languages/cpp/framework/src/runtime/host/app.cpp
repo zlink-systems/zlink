@@ -572,7 +572,7 @@ std::shared_ptr<framework_observer_state_t> framework_runtime_status_source_t::o
     auto initial = snapshot ();
     const bool terminal = initial.state == framework_runtime_state_t::stopped
                           || initial.state == framework_runtime_state_t::error;
-    state->enqueue (std::move (initial), terminal);
+    state->enqueue ("framework-runtime", std::move (initial), terminal);
     return state;
 }
 
@@ -598,7 +598,7 @@ void framework_runtime_status_source_t::run () noexcept
             const bool terminal = status.state == framework_runtime_state_t::stopped
                                   || status.state == framework_runtime_state_t::error;
             for (const auto &observer : observers)
-                observer->enqueue (status, terminal);
+                observer->enqueue ("framework-runtime", status, terminal);
         }
         std::unique_lock lock (_observers_mutex);
         _changed.wait_for (lock, std::chrono::milliseconds (10),

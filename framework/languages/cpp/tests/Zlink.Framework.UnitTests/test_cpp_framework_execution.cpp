@@ -47,6 +47,10 @@ namespace
 #error "serial execution conformance fixture path is required"
 #endif
 
+#ifndef ZLINK_RUNTIME_OBSERVATION_CONFORMANCE_PATH
+#error "runtime observation conformance fixture path is required"
+#endif
+
 const nlohmann::json &serial_execution_fixture ()
 {
     static const auto fixture = [] {
@@ -54,6 +58,18 @@ const nlohmann::json &serial_execution_fixture ()
         if (!input)
             throw std::runtime_error (
               "serial execution conformance fixture could not be opened");
+        return nlohmann::json::parse (input);
+    } ();
+    return fixture;
+}
+
+const nlohmann::json &runtime_observation_fixture ()
+{
+    static const auto fixture = [] {
+        std::ifstream input (ZLINK_RUNTIME_OBSERVATION_CONFORMANCE_PATH);
+        if (!input)
+            throw std::runtime_error (
+              "runtime observation conformance fixture could not be opened");
         return nlohmann::json::parse (input);
     } ();
     return fixture;
@@ -671,6 +687,8 @@ bool verify_serial_queue_lanes_and_byte_budget ()
         std::unique_lock lock (gate);
         if (!changed.wait_for (lock, std::chrono::seconds (1),
                               [&] { return first_entered; })) {
+            release_first = true;
+            changed.notify_all ();
             return false;
         }
     }
@@ -1185,6 +1203,8 @@ bool verify_runtime_observation_loss_and_terminal_retention ()
     struct probe_status_t
     {
         int sequence = 0;
+        std::string source;
+        std::string value;
     };
     using observer_t = zlink::framework::observation_detail::
       runtime_observer_state_t<probe_status_t>;
@@ -1207,17 +1227,21 @@ bool verify_runtime_observation_loss_and_terminal_retention ()
           changed.notify_all ();
       });
     observer->start ();
-    observer->enqueue (probe_status_t{1});
+    observer->enqueue ("A", probe_status_t{1});
     {
         std::unique_lock lock (gate);
         if (!changed.wait_for (lock, std::chrono::seconds (1),
                               [&] { return first_entered; })) {
+            release_first = true;
+            changed.notify_all ();
+            lock.unlock ();
+            observer->close ();
             return false;
         }
     }
-    observer->enqueue (probe_status_t{2});
-    observer->enqueue (probe_status_t{3});
-    observer->enqueue (probe_status_t{4}, true);
+    observer->enqueue ("A", probe_status_t{2});
+    observer->enqueue ("A", probe_status_t{3});
+    observer->enqueue ("A", probe_status_t{4}, true);
     {
         std::lock_guard lock (gate);
         release_first = true;
@@ -1258,17 +1282,21 @@ bool verify_runtime_observation_loss_and_terminal_retention ()
           terminal_changed.notify_all ();
       });
     terminal_observer->start ();
-    terminal_observer->enqueue (probe_status_t{10});
+    terminal_observer->enqueue ("A", probe_status_t{10});
     {
         std::unique_lock lock (terminal_gate);
         if (!terminal_changed.wait_for (
               lock, std::chrono::seconds (1),
               [&] { return terminal_first_entered; })) {
+            terminal_release_first = true;
+            terminal_changed.notify_all ();
+            lock.unlock ();
+            terminal_observer->close ();
             return false;
         }
     }
-    terminal_observer->enqueue (probe_status_t{11}, true);
-    terminal_observer->enqueue (probe_status_t{12}, true);
+    terminal_observer->enqueue ("A", probe_status_t{11}, true);
+    terminal_observer->enqueue ("A", probe_status_t{12}, true);
     {
         std::lock_guard lock (terminal_gate);
         terminal_release_first = true;
@@ -1287,6 +1315,276 @@ bool verify_runtime_observation_loss_and_terminal_retention ()
         }
     }
     terminal_observer->close ();
+
+    const auto &fixture = runtime_observation_fixture ();
+    if (fixture.at ("fixture") != "zlink.framework.runtime-observation"
+        || fixture.at ("version") != 1)
+        return false;
+    const auto scenario = std::find_if (
+      fixture.at ("scenarios").begin (),
+      fixture.at ("scenarios").end (),
+      [] (const auto &candidate) {
+          return candidate.at ("name")
+                 == "multi-source-retention-and-terminal-overflow";
+      });
+    if (scenario == fixture.at ("scenarios").end ())
+        return false;
+
+    std::mutex fixture_gate;
+    std::condition_variable fixture_changed;
+    bool fixture_blocked = false;
+    bool release_fixture = false;
+    std::vector<zlink::framework::observed_status_t<probe_status_t>>
+      fixture_received;
+    auto fixture_observer = std::make_shared<observer_t> (
+      scenario->at ("terminalCapacity").get<std::size_t> (),
+      [&] (const auto &observed) {
+          std::unique_lock lock (fixture_gate);
+          fixture_received.push_back (observed);
+          if (observed.status.sequence == -1) {
+              fixture_blocked = true;
+              fixture_changed.notify_all ();
+              fixture_changed.wait (lock, [&] { return release_fixture; });
+          }
+          fixture_changed.notify_all ();
+      });
+    fixture_observer->start ();
+    fixture_observer->enqueue (
+      "blocker", probe_status_t{-1, "blocker", "blocker"});
+    {
+        std::unique_lock lock (fixture_gate);
+        if (!fixture_changed.wait_for (
+              lock, std::chrono::seconds (1),
+              [&] { return fixture_blocked; })) {
+            release_fixture = true;
+            fixture_changed.notify_all ();
+            lock.unlock ();
+            fixture_observer->close ();
+            return false;
+        }
+    }
+    for (const auto &operation : scenario->at ("operations")) {
+        const auto source = operation.at ("source").get<std::string> ();
+        fixture_observer->enqueue (
+          source,
+          probe_status_t{
+            operation.at ("sequence").get<int> (),
+            source,
+            operation.at ("value").get<std::string> ()},
+          operation.at ("kind") == "terminal");
+    }
+    {
+        std::lock_guard lock (fixture_gate);
+        release_fixture = true;
+        fixture_changed.notify_all ();
+    }
+
+    const auto expected_count =
+      1 + scenario->at ("expectedTerminalFifo").size ()
+      + scenario->at ("expectedRetainedIntermediateBySource").size ();
+    {
+        std::unique_lock lock (fixture_gate);
+        if (!fixture_changed.wait_for (
+              lock, std::chrono::seconds (2), [&] {
+                  return fixture_received.size () == expected_count;
+              }))
+            return false;
+
+        std::size_t received_index = 1;
+        for (const auto &expected : scenario->at ("expectedTerminalFifo")) {
+            const auto &actual = fixture_received.at (received_index++).status;
+            if (actual.source
+                  != expected.at ("source").get<std::string> ()
+                || actual.sequence != expected.at ("sequence").get<int> ()
+                || actual.value
+                     != expected.at ("value").get<std::string> ())
+                return false;
+        }
+        for (const auto &[source, expected] :
+             scenario->at ("expectedRetainedIntermediateBySource").items ()) {
+            const auto &actual = fixture_received.at (received_index++).status;
+            if (actual.source != source
+                || actual.sequence != expected.at ("sequence").get<int> ()
+                || actual.value
+                     != expected.at ("value").get<std::string> ())
+                return false;
+        }
+        const auto &loss = fixture_received.back ().loss;
+        if (loss.coalesced_count
+              != std::stoull (scenario->at ("expectedLoss")
+                                .at ("coalescedIntermediateCount")
+                                .get<std::string> ())
+            || loss.discarded_terminal_count
+                 != std::stoull (scenario->at ("expectedLoss")
+                                   .at ("discardedTerminalCount")
+                                   .get<std::string> ()))
+            return false;
+    }
+    fixture_observer->close ();
+
+    const auto saturation_scenario = std::find_if (
+      fixture.at ("scenarios").begin (),
+      fixture.at ("scenarios").end (),
+      [] (const auto &candidate) {
+          return candidate.at ("name")
+                 == "loss-counters-saturate-independently";
+      });
+    if (saturation_scenario == fixture.at ("scenarios").end ())
+        return false;
+    auto coalesced_loss = static_cast<std::uint64_t> (std::stoull (
+      saturation_scenario->at ("initialLoss")
+        .at ("coalescedIntermediateCount")
+        .get<std::string> ()));
+    auto discarded_loss = static_cast<std::uint64_t> (std::stoull (
+      saturation_scenario->at ("initialLoss")
+        .at ("discardedTerminalCount")
+        .get<std::string> ()));
+    for (int index = 0;
+         index
+         < saturation_scenario->at ("increments")
+             .at ("coalescedIntermediateCount")
+             .get<int> ();
+         ++index) {
+        zlink::framework::observation_detail::
+          increment_runtime_observation_loss (coalesced_loss);
+    }
+    for (int index = 0;
+         index
+         < saturation_scenario->at ("increments")
+             .at ("discardedTerminalCount")
+             .get<int> ();
+         ++index) {
+        zlink::framework::observation_detail::
+          increment_runtime_observation_loss (discarded_loss);
+    }
+    if (coalesced_loss
+          != std::stoull (
+            saturation_scenario->at ("expectedLoss")
+              .at ("coalescedIntermediateCount")
+              .get<std::string> ())
+        || discarded_loss
+             != std::stoull (
+               saturation_scenario->at ("expectedLoss")
+                 .at ("discardedTerminalCount")
+                 .get<std::string> ()))
+        return false;
+
+    std::mutex lifetime_gate;
+    std::condition_variable lifetime_changed;
+    bool lifetime_blocked = false;
+    bool release_lifetime = false;
+    std::vector<zlink::framework::observed_status_t<probe_status_t>>
+      lifetime_received;
+    auto lifetime_observer = std::make_shared<observer_t> (
+      1,
+      [&] (const auto &observed) {
+          std::unique_lock lock (lifetime_gate);
+          lifetime_received.push_back (observed);
+          if (observed.status.sequence == -1) {
+              lifetime_blocked = true;
+              lifetime_changed.notify_all ();
+              lifetime_changed.wait (
+                lock, [&] { return release_lifetime; });
+          }
+          lifetime_changed.notify_all ();
+      });
+    lifetime_observer->start ();
+    lifetime_observer->enqueue (
+      "blocker", probe_status_t{-1, "blocker", "blocker"});
+    {
+        std::unique_lock lock (lifetime_gate);
+        if (!lifetime_changed.wait_for (
+              lock, std::chrono::seconds (1),
+              [&] { return lifetime_blocked; })) {
+            release_lifetime = true;
+            lifetime_changed.notify_all ();
+            lock.unlock ();
+            lifetime_observer->close ();
+            return false;
+        }
+    }
+    lifetime_observer->enqueue (
+      "A", probe_status_t{1, "A", "terminal-A"}, true);
+    lifetime_observer->enqueue (
+      "A", probe_status_t{2, "A", "suppressed-A"});
+    lifetime_observer->enqueue (
+      "B", probe_status_t{3, "B", "terminal-B"}, true);
+    lifetime_observer->enqueue (
+      "A", probe_status_t{4, "A", "restarted-A"});
+    {
+        std::lock_guard lock (lifetime_gate);
+        release_lifetime = true;
+        lifetime_changed.notify_all ();
+    }
+    {
+        std::unique_lock lock (lifetime_gate);
+        if (!lifetime_changed.wait_for (
+              lock, std::chrono::seconds (2), [&] {
+                  return lifetime_received.size () == 3;
+              }))
+            return false;
+        if (lifetime_received[1].status.value != "terminal-B"
+            || lifetime_received[2].status.value != "restarted-A"
+            || lifetime_received[2].loss.coalesced_count != 1
+            || lifetime_received[2].loss.discarded_terminal_count != 1)
+            return false;
+    }
+    lifetime_observer->close ();
+
+    std::mutex shared_gate;
+    std::condition_variable shared_changed;
+    bool slow_entered = false;
+    bool release_slow = false;
+    bool fast_delivered = false;
+    auto slow_observer = std::make_shared<observer_t> (
+      1,
+      [&] (const auto &) {
+          std::unique_lock lock (shared_gate);
+          slow_entered = true;
+          shared_changed.notify_all ();
+          shared_changed.wait (lock, [&] { return release_slow; });
+      });
+    auto fast_observer = std::make_shared<observer_t> (
+      1,
+      [&] (const auto &) {
+          std::lock_guard lock (shared_gate);
+          fast_delivered = true;
+          shared_changed.notify_all ();
+      });
+    slow_observer->start ();
+    fast_observer->start ();
+    slow_observer->enqueue ("slow", probe_status_t{1});
+    {
+        std::unique_lock lock (shared_gate);
+        if (!shared_changed.wait_for (
+              lock, std::chrono::seconds (1),
+              [&] { return slow_entered; })) {
+            release_slow = true;
+            shared_changed.notify_all ();
+            lock.unlock ();
+            slow_observer->close ();
+            fast_observer->close ();
+            return false;
+        }
+    }
+    fast_observer->enqueue ("fast", probe_status_t{1});
+    {
+        std::unique_lock lock (shared_gate);
+        if (!shared_changed.wait_for (
+              lock, std::chrono::seconds (1),
+              [&] { return fast_delivered; })) {
+            release_slow = true;
+            shared_changed.notify_all ();
+            lock.unlock ();
+            slow_observer->close ();
+            fast_observer->close ();
+            return false;
+        }
+        release_slow = true;
+        shared_changed.notify_all ();
+    }
+    slow_observer->close ();
+    fast_observer->close ();
     return true;
 }
 
