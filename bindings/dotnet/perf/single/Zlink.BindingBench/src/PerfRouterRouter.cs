@@ -70,8 +70,10 @@ internal static class PerfRouterRouter
             receiver.Bind(endpoint);
             endpoint = receiver.Options.LastEndpoint;
             sender.Connect(endpoint);
-            if (!(WaitForConnectionReady(receiverMonitor, readyTimeoutMs)
-                && WaitForConnectionReady(senderMonitor, readyTimeoutMs)))
+            if (!(WaitForConnectionReadyWithActivity(receiverMonitor, receiver,
+                    readyTimeoutMs, acceptAccepted: false)
+                && WaitForConnectionReadyWithActivity(senderMonitor, sender,
+                    readyTimeoutMs, acceptAccepted: false)))
             {
                 DebugLog("single_router_router_error:connection_not_ready");
                 TryCleanup(sender, receiver, endpoint);
@@ -225,6 +227,7 @@ internal static class PerfRouterRouter
     {
         _ = recvTimeoutMs;
         long received = 0;
+        long activeDeadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
         Exception? sendError = null;
         var samples = new List<double>(Math.Max(0, latencyCap));
         long sampleSeen = 0;
@@ -246,13 +249,16 @@ internal static class PerfRouterRouter
                 return false;
             }
 
-            received++;
-            ulong nowNs = EpochNs();
-            if (nowNs >= header.SentTsNs)
+            if (Stopwatch.GetTimestamp() < activeDeadlineTicks)
             {
-                double latencyNs = nowNs - header.SentTsNs;
-                ReservoirSample(samples, latencyNs, ref sampleSeen, latencyCap,
-                    ref rng);
+                received++;
+                ulong nowNs = EpochNs();
+                if (nowNs >= header.SentTsNs)
+                {
+                    double latencyNs = nowNs - header.SentTsNs;
+                    ReservoirSample(samples, latencyNs, ref sampleSeen, latencyCap,
+                        ref rng);
+                }
             }
 
             return false;

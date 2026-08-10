@@ -834,7 +834,7 @@ transport 상태를 판정한다.
 ### 9.2 .NET
 
 - perf 경로: `bindings/dotnet/perf`
-- Single 상태: `DEALER_ROUTER/tcp` 완료·통과, `PAIR/tcp`·`PUBSUB/tcp`·`DEALER_DEALER/tcp` 완료·보류, 나머지 대상 측정 중
+- Single 상태: `DEALER_ROUTER/tcp`·`DEALER_ROUTER_REQREP/tcp` 완료·통과, `PAIR/tcp`·`PUBSUB/tcp`·`DEALER_DEALER/tcp`·`ROUTER_ROUTER/tcp` 완료·보류, 나머지 대상 측정 중
 - Multi 상태: `미측정`
 - `미측정` 행은 완료나 다음 언어 전환을 의미하지 않는다. 특히 9.2.2의 `tls` `MULTI_*`
   행은 .NET에서 아직 측정하지 않은 대상이며, C++ 9.1의 같은 이름 행이 완료되어도 .NET
@@ -850,7 +850,7 @@ transport 상태를 판정한다.
 | `tcp` | `DEALER_DEALER` | 46.71% | 68.90% | 87.55% | 82.23% | 91.14% | 92.12% | 보류·자체 pass `76.69% → 78.11%`, 평균 latency ratio `8.142x`. 자체 후보는 `flags == None` 분기이며 Sol pass는 추가 builder pool/private direct/ownership 변경 no-go. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_135400_dotnet-dealer-dealer-tcp-c1.txt`; 자체 before: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_143235_dotnet-dealer-dealer-tcp-own-before-pool.txt`; after: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_142040_dotnet-dealer-dealer-tcp-parity-baseline.txt` |
 | `tcp` | `DEALER_ROUTER` | 49.87% | 87.08% | 94.87% | 90.23% | 92.32% | 89.17% | 통과·throughput 산술평균 83.92%, 평균 latency ratio 1.059x. 64B 개별 ratio는 기록값이며 aggregate gate를 바꾸지 않는다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_135529_dotnet-dealer-router-tcp-c1.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_141217_dotnet-dealer-router-tcp-baseline.txt` |
 | `tcp` | `DEALER_ROUTER_REQREP` | 67.99% | 68.49% | 73.79% | 111.35% | 108.83% | 109.94% | 통과·throughput 산술평균 90.06%, 평균 latency ratio 1.012x. Router monitor wait를 C의 activity-driven setup과 맞춘 parity correction 후 측정했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_211628_dealer-router-reqrep-tcp-policy-c1.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_143942_dotnet-dealer-router-reqrep-tcp-paired-v2.txt` |
-| `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `ROUTER_ROUTER` | 41.74% | 73.54% | 92.63% | 89.35% | 93.05% | 89.63% | 보류·동일 조건 paired throughput 산술평균 79.99%, 평균 latency ratio 52.546x. 자체 routed `flags == None` pass는 진단값에서 throughput 99.17%→100.26%, latency 43.945x→40.405x였고, Sol pass는 추가 builder/message pool·private direct·queue 조정 no-go. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_144914_router-router-tcp-paired-c1.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_144931_dotnet-router-router-tcp-paired-final.txt` |
 | `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |

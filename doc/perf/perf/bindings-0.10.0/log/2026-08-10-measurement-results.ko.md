@@ -79,3 +79,19 @@ Throughput ratio is `49.87% / 87.08% / 94.87% / 90.23% / 92.32% / 89.17%`, arith
 | .NET | 144.297 / 131.794 / 129.872 / 19.124 / 13.039 / 8.069 | 0.239 / 0.263 / 0.262 / 0.602 / 0.442 / 0.357 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_143942_dotnet-dealer-router-reqrep-tcp-paired-v2.txt` |
 
 Throughput ratio is `67.99% / 68.49% / 73.79% / 111.35% / 108.83% / 109.94%`, arithmetic mean `90.06%`. Average latency ratio is `1.285x / 1.246x / 0.894x / 0.871x / 0.891x / 0.884x`, arithmetic mean `1.012x`. The request/reply aggregate targets pass. The Router setup wait was aligned with the C activity-driven monitor gate before this measurement.
+
+### .NET Single ROUTER_ROUTER/tcp
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 2301.443 / 1294.360 / 710.263 / 40.080 / 25.590 / 16.033 | 0.153 / 0.269 / 0.292 / 5.099 / 8.056 / 12.995 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_144914_router-router-tcp-paired-c1.txt` |
+| .NET 자체 pass before | 1056.839 / 966.593 / 653.096 / 36.327 / 23.264 / 14.245 | 38.877 / 0.362 / 0.444 / 5.562 / 8.770 / 14.382 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_144617_dotnet-router-router-tcp-parity-final.txt` |
+| .NET 자체 pass after | 1089.388 / 958.659 / 674.102 / 36.141 / 23.993 / 14.095 | 35.744 / 0.281 / 0.371 / 5.605 / 8.519 / 14.530 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_144719_dotnet-router-router-tcp-own-after.txt` |
+| .NET 최종 paired | 960.579 / 951.917 / 657.919 / 35.811 / 23.811 / 14.371 | 47.393 / 0.262 / 0.373 / 5.659 / 8.578 / 14.175 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_144931_dotnet-router-router-tcp-paired-final.txt` |
+
+최종 paired throughput ratio는 `41.74% / 73.54% / 92.63% / 89.35% / 93.05% / 89.63%`,
+산술평균 `79.99%`다. 평균 latency ratio는 `309.758x / 0.974x / 1.277x / 1.110x /
+1.065x / 1.091x`, 산술평균 `52.546x`다. 자체 routed `flags == None` 분기는 진단 A/B에서
+throughput `99.17% → 100.26%`, latency `43.945x → 40.405x`를 기록했지만, Sol pass에서
+추가 builder/message pool·private direct·queue 조정 외의 contract-safe 후보를 찾지 못했다.
+throughput과 latency aggregate가 모두 목표를 충족하지 않아 측정값으로 보류한다.
