@@ -450,3 +450,12 @@ Sol `ReceiveRouterParts` `Unsafe.SkipInit` after throughput ratio는 `54.791% / 
 | .NET | 1335168 / 939693 / 656589 / 37658 / 24481 / 14622 | 0.156 / 0.298 / 0.299 / 5.395 / 8.357 / 14.039 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_175032_dotnet-router-router-ipc-paired-before.txt` |
 
 throughput ratio는 `60.032% / 71.008% / 78.735% / 91.036% / 90.126% / 90.287%`, 산술평균은 `80.204%`다. 평균 latency ratio는 `1.560x / 0.580x / 1.045x / 1.093x / 1.098x / 1.090x`, 산술평균은 `1.078x`다. 64B·256B·1024B throughput 개별 기준 미달은 측정 결과로 기록하고 aggregate 기준으로 통과한다. 추가 hotpath 또는 POSDDD 구조 변경은 채택하지 않았으며 public contract·ownership·error semantics는 변경하지 않았다.
+
+### .NET Single PAIR/ipc
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 2825899 / 1287412 / 790957 / 41608 / 26907 / 15344 | 0.080 / 0.208 / 0.264 / 4.876 / 7.626 / 13.420 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_175801_dotnet-pair-ipc-paired-c1.txt` |
+| .NET | 1702707 / 1010821 / 702584 / 39199 / 25074 / 15460 | 0.115 / 0.197 / 0.271 / 5.191 / 8.134 / 13.171 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_175814_dotnet-pair-ipc-paired-before.txt` |
+
+throughput ratio는 `60.254% / 78.516% / 88.827% / 94.210% / 93.188% / 100.756%`, 산술평균은 `85.958%`다. 평균 latency ratio는 `1.438x / 0.947x / 1.027x / 1.065x / 1.067x / 0.981x`, 산술평균은 `1.087x`다. 64B throughput 개별 기준 미달은 측정 결과로 기록하고 aggregate 기준으로 통과한다. 추가 hotpath 또는 POSDDD 구조 변경은 채택하지 않았으며 public contract·ownership·error semantics는 변경하지 않았다.
