@@ -49,6 +49,9 @@ test('ZoneWorld roles use one physical MeshNode with automatic logical handlers'
 
 test('ZoneWorld runner proves the canonical scenario with generated routing identities', () => {
   const runner = read('samples/ZoneWorld/Runner/sample-runner.mjs');
+  const specialClient = read('samples/ZoneWorld/Client/special.ts');
+  const contracts = read('samples/ZoneWorld/Shared/contracts.ts');
+  const playerHandlers = read('samples/ZoneWorld/Server/ZoneNode/Infrastructure/ZLink/Handlers/player-handlers.ts');
   const zoneSpot = read('samples/ZoneWorld/Server/ZoneNode/Infrastructure/ZLink/Spots/zone-spot.ts');
   const zoneNodeMain = read('samples/ZoneWorld/Server/ZoneNode/main.ts');
   for (const marker of [
@@ -83,7 +86,13 @@ test('ZoneWorld runner proves the canonical scenario with generated routing iden
     /addTimer\(\s*['"]bot-tick['"][\s\S]*?stopOnUnhandledException:\s*false/
   );
   assert.match(zoneSpot, /tickBots\(\): void \{[\s\S]*?if \(this\.botTickTask !== undefined\) return;[\s\S]*?this\.runBotTicks\(\)/);
-  assert.match(zoneSpot, /private async runBotTicks\(\): Promise<void> \{[\s\S]*?for \(const actor[\s\S]*?await this\.actorClient\.requestToActor\(/);
+  assert.match(zoneSpot, /private async runBotTicks\(\): Promise<void> \{[\s\S]*?for \(const actor[\s\S]*?await this\.actorClient\.sendToActor\(/);
+  assert.match(contracts, /class BotTickMsg \{\}/);
+  assert.doesNotMatch(contracts, /BotTickReq|BotTickRes/);
+  assert.match(playerHandlers, /@zlinkSpotActorSendHandler\([\s\S]*?packetName: PacketNames\.botTickMsg/);
+  assert.doesNotMatch(playerHandlers, /packetName: PacketNames\.botTickReq/);
+  assert.match(specialClient, /representatives = \[BotIds\.northEastX, BotIds\.southWestY\]/);
+  assert.doesNotMatch(specialClient, /moved\.size < bots\.size/);
   assert.match(zoneSpot, /if \(!this\.nodeState\.canTickBots\(\)\) return;/);
   assert.match(zoneNodeMain, /await spawnBots\(app, zones\);[\s\S]*?state\.enableBotTicks\(\);/);
   assert.match(

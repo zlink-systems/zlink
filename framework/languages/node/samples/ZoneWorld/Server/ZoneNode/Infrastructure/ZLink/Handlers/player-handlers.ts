@@ -8,7 +8,6 @@ import {
 import {
   EnterWorldRes,
   EnterZoneMsg,
-  BotTickRes,
   JoinWorldRes,
   MessageFollowProbeRes,
   MoveRejectedNotify,
@@ -20,7 +19,7 @@ import { nextBotStep } from '../../../Domain/bot-patrol';
 import { validateMove } from '../../../Domain/move-policy';
 import { NodeRuntimeState } from '../../../Domain/node-runtime-state';
 import type {
-  BotTickReq,
+  BotTickMsg,
   EnterWorldReq,
   JoinWorldReq,
   MessageFollowProbeReq,
@@ -251,10 +250,10 @@ class PlayerMessageFollowProbeSendHandler {
 }
 
 @Injectable()
-@zlinkSpotActorRequestHandler({
+@zlinkSpotActorSendHandler({
   spot: () => ZoneSpot,
   actor: () => PlayerActor,
-  packetName: PacketNames.botTickReq
+  packetName: PacketNames.botTickMsg
 })
 class PlayerBotTickHandler {
   constructor(private readonly movement: PlayerMovement) {}
@@ -263,12 +262,11 @@ class PlayerBotTickHandler {
     _spot: ZoneSpot,
     actor: PlayerActor,
     _context: ZLinkMessageContext,
-    _message: BotTickReq
-  ): Promise<BotTickRes> {
-    if (!actor.isBot || actor.hasPendingJoin) return new BotTickRes();
+    _message: BotTickMsg
+  ): Promise<void> {
+    if (!actor.isBot || actor.hasPendingJoin) return;
     const next = nextBotStep(actor.x, actor.y, actor.dirX, actor.dirY);
     await this.movement.move(actor, next.x, next.y);
-    return new BotTickRes();
   }
 }
 

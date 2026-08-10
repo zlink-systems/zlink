@@ -22,12 +22,22 @@ import type {
   NodeAlertNotify,
   NodeDiagnosticsRes,
   NodeStatusNotify,
+  PlayerView,
   SetMaintenanceRes,
   WatchNodesRes,
   ZoneChangedNotify,
   ZoneStateNotify
 } from '../Shared/contracts';
-import { MoveRejectReasons, NodeAlertKinds, NodeIds, ZoneIds, ZoneWorldErrors, zoneOf } from '../Shared/spec';
+import {
+  BotIds,
+  MoveRejectReasons,
+  NodeAlertKinds,
+  NodeIds,
+  ZoneIds,
+  ZoneWorldErrors,
+  ZoneWorldSpec,
+  zoneOf
+} from '../Shared/spec';
 import { readConfigPath, validateConfiguration } from '../Server/Configuration/configuration';
 
 async function main(): Promise<void> {
@@ -236,13 +246,21 @@ async function runMaintenanceRestore(opsEndpoint: string): Promise<void> {
   const ops = connector(opsEndpoint);
   try {
     await ops.connect();
-    await watch(ops);
-    //  Ops answers a diagnostics request it cannot route with
-    //  `nodeUnavailable` and `maintenance: false`. A node that just restarted
-    //  can still be between transport connections, so that answer says
-    //  nothing about the stored desired state - poll until Ops can reach the
-    //  node before judging the restore.
-    const diagnostics = await diagnoseUntilReachable(ops, NodeIds.east);
+    const nodes = await watch(ops);
+    const east = nodes.nodes.find((node) => node.nodeId === NodeIds.east);
+    if (east?.registered !== true || east.connected !== true) {
+      await ops.waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
+        .where((message) => message.payload.nodeId === NodeIds.east
+          && message.payload.registered
+          && message.payload.connected)
+        .timeout(20_000)
+        .submit();
+    }
+    const diagnostics = await diagnose(ops, NodeIds.east);
+    zlinkStreamAssert.ensure(
+      diagnostics.error === null,
+      `ZW-E5 Ops could not reach '${NodeIds.east}' to read its maintenance state.`
+    );
     zlinkStreamAssert.ensure(diagnostics.maintenance, 'ZW-E5 maintenance state was not restored.');
     console.log('scenario ZW-E5 passed');
     await setMaintenance(ops, NodeIds.east, false);
@@ -258,31 +276,21 @@ async function runBots(gatewayEndpoint: string, opsEndpoint: string): Promise<vo
     await Promise.all([game.connect(), ops.connect()]);
     await watch(ops);
     const joined = await join(game, 'player-f');
-    const initial = await game.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
-      .where((message) => message.payload.players.some((player) => player.isBot))
-      .timeout(30_000).submit();
-    const bots = new Map(initial.payload.players.filter((player) => player.isBot).map((bot) => [bot.playerId, `${bot.x},${bot.y}`]));
-    const moved = new Set<string>();
-    while (moved.size < bots.size) {
-      const state = await game.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify).submit();
-      for (const bot of state.payload.players.filter((player) => bots.has(player.playerId))) {
-        if (bots.get(bot.playerId) !== `${bot.x},${bot.y}`) moved.add(bot.playerId);
-      }
-    }
+    await resetMaintenance(ops);
+    await setMaintenance(ops, NodeIds.east, true);
+    await verifyRepresentativeBotMovement(game);
     console.log('scenario ZW-F1 passed');
     await ops.request(new AnnounceWorldReq('bot-path-check')).packetName(PacketNames.announceWorldReq).submit();
     await expectRejected(game, -40, joined.y, MoveRejectReasons.outOfRange);
     await game.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
       .where((message) => message.payload.players.some((player) => player.isBot)).submit();
     console.log('scenario ZW-F3 passed');
-    await resetMaintenance(ops);
-    await setMaintenance(ops, NodeIds.east, true);
     const peak = await game.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
       .where((message) => message.payload.players.some((player) =>
-        player.isBot && player.playerId.endsWith('-x') && player.zoneId === ZoneIds.northWest && player.x >= 46))
+        player.playerId === BotIds.northEastX && player.zoneId === ZoneIds.northWest && player.x >= 46))
       .timeout(60_000).submit();
     const candidate = peak.payload.players.find((player) =>
-      player.isBot && player.playerId.endsWith('-x') && player.zoneId === ZoneIds.northWest && player.x >= 46);
+      player.playerId === BotIds.northEastX && player.zoneId === ZoneIds.northWest && player.x >= 46);
     if (candidate === undefined) throw new Error('ZW-F4 boundary bot disappeared.');
     await game.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
       .where((message) => message.payload.players.some((player) =>
@@ -293,6 +301,44 @@ async function runBots(gatewayEndpoint: string, opsEndpoint: string): Promise<vo
     await setMaintenance(ops, NodeIds.east, false).catch(() => undefined);
     await closeAll(game, ops);
   }
+}
+
+async function verifyRepresentativeBotMovement(game: ZlinkStreamConnector): Promise<void> {
+  const representatives = [BotIds.northEastX, BotIds.southWestY] as const;
+  const initial = await game.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
+    .where((message) => representatives.every((playerId) => message.payload.players.some((player) =>
+      player.playerId === playerId && player.zoneId === ZoneIds.northWest)))
+    .timeout(30_000)
+    .submit();
+  const xBot = requirePlayer(initial.payload.players, BotIds.northEastX);
+  const yBot = requirePlayer(initial.payload.players, BotIds.southWestY);
+  const xMoved = game.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
+    .where((message) => message.payload.players.some((player) =>
+      player.playerId === xBot.playerId && player.x !== xBot.x && player.y === xBot.y))
+    .timeout(30_000)
+    .submit();
+  const yMoved = game.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
+    .where((message) => message.payload.players.some((player) =>
+      player.playerId === yBot.playerId && player.x === yBot.x && player.y !== yBot.y))
+    .timeout(30_000)
+    .submit();
+  const [xState, yState] = await Promise.all([xMoved, yMoved]);
+  assertBotAxisStep(requirePlayer(xState.payload.players, xBot.playerId), xBot, 'x');
+  assertBotAxisStep(requirePlayer(yState.payload.players, yBot.playerId), yBot, 'y');
+}
+
+function requirePlayer(players: readonly PlayerView[], playerId: string): PlayerView {
+  const player = players.find((candidate) => candidate.playerId === playerId);
+  if (player === undefined) throw new Error(`Bot '${playerId}' disappeared from the observed zone.`);
+  return player;
+}
+
+function assertBotAxisStep(current: PlayerView, previous: PlayerView, axis: 'x' | 'y'): void {
+  const distance = Math.abs(current[axis] - previous[axis]);
+  zlinkStreamAssert.ensure(
+    distance >= ZoneWorldSpec.botStep && distance % ZoneWorldSpec.botStep === 0,
+    `Bot '${current.playerId}' did not follow the deterministic ${axis.toUpperCase()} patrol step.`
+  );
 }
 
 function connector(endpoint: string): ZlinkStreamConnector {
@@ -317,23 +363,6 @@ async function watch(ops: ZlinkStreamConnector): Promise<WatchNodesRes> {
 async function diagnose(ops: ZlinkStreamConnector, nodeId: string): Promise<NodeDiagnosticsRes> {
   return await ops.request(new NodeDiagnosticsReq(nodeId))
     .packetName(PacketNames.nodeDiagnosticsReq).submit<NodeDiagnosticsRes>();
-}
-
-async function diagnoseUntilReachable(
-  ops: ZlinkStreamConnector,
-  nodeId: string
-): Promise<NodeDiagnosticsRes> {
-  const deadline = Date.now() + 20_000;
-  let last = await diagnose(ops, nodeId);
-  while (last.error !== null && Date.now() < deadline) {
-    await new Promise<void>((resolve) => { setTimeout(resolve, 100); });
-    last = await diagnose(ops, nodeId);
-  }
-  zlinkStreamAssert.ensure(
-    last.error === null,
-    `ZW-E5 Ops could not reach '${nodeId}' to read its maintenance state.`
-  );
-  return last;
 }
 
 async function setMaintenance(ops: ZlinkStreamConnector, nodeId: string, enabled: boolean): Promise<SetMaintenanceRes> {

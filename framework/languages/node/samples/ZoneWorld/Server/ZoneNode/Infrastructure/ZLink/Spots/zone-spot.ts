@@ -6,8 +6,7 @@ import {
 } from '@zlink-systems/nestjs';
 import { ZoneWorldNames, ZoneWorldSpec } from '../../../../../Shared/spec';
 import type { ZoneId } from '../../../../../Shared/spec';
-import { BotTickReq, EnterZoneMsg, ZoneChangedNotify, ZoneBorderEvent, ZoneStateNotify } from '../../../../../Shared/contracts';
-import type { BotTickRes } from '../../../../../Shared/contracts';
+import { BotTickMsg, EnterZoneMsg, ZoneChangedNotify, ZoneBorderEvent, ZoneStateNotify } from '../../../../../Shared/contracts';
 import type {
   ZLinkActorClient,
   ZLinkMessage,
@@ -195,10 +194,13 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
 
   private async runBotTicks(): Promise<void> {
     for (const actor of [...this.actors.values()].filter((candidate) => candidate.isBot)) {
-      await this.actorClient.requestToActor(
+      // Movement is owned by the Actor turn. The Spot timer only submits the
+      // command, so it must not depend on a reply terminal before scheduling
+      // the next tick.
+      await this.actorClient.sendToActor(
         actor.actorId,
-        new BotTickReq()
-      ).submit<BotTickRes>();
+        new BotTickMsg()
+      ).submit();
     }
   }
 
