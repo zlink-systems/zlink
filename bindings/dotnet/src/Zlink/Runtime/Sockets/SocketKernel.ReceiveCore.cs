@@ -164,7 +164,7 @@ internal sealed partial class SocketKernel
         {
             while (true)
             {
-                ZlinkMsg part = default;
+                Unsafe.SkipInit(out ZlinkMsg part);
                 var initRc = NativeMethods.zlink_msg_init(ref part);
                 if (initRc != 0)
                     throw ZlinkException.CreateRecvException(

@@ -428,3 +428,16 @@ before throughput ratio는 `48.346% / 45.404% / 47.076% / 59.498% / 102.851% / 1
 | .NET | 130843 / 130885 / 125631 / 21052 / 14751 / 8780 | 0.260 / 0.258 / 0.264 / 0.557 / 0.398 / 0.333 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_172710_dotnet-router-router-reqrep-ipc-paired-before.txt` |
 
 throughput ratio는 `51.040% / 57.706% / 54.210% / 96.299% / 100.286% / 97.124%`, 산술평균은 `76.111%`다. latency ratio는 `1.733x / 1.491x / 1.375x / 1.024x / 0.985x / 1.015x`, 산술평균은 `1.271x`다. 6개 size와 30개 result line이 모두 complete이며 .NET request/reply aggregate 기준을 충족해 최종 상태는 `통과`다. 현재 적용된 single-part 내부 경로와 public contract를 유지하고, 추가 hotpath 또는 POSDDD 구조 변경은 채택하지 않는다. 다음 대상은 아직 미측정인 `ROUTER_ROUTER / inproc`이다.
+
+### .NET Single ROUTER_ROUTER/inproc
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 2688652 / 1822075 / 2001808 / 483366 / 165454 / 85244 | 0.015 / 0.166 / 0.177 / 0.006 / 0.013 / 0.020 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_173203_dotnet-router-router-inproc-paired-c1.txt` |
+| .NET before | 1354680 / 984394 / 1020907 / 111930 / 95780 / 57852 | 0.141 / 0.316 / 0.325 / 0.027 / 0.023 / 0.030 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_173216_dotnet-router-router-inproc-paired-before.txt` |
+| .NET own native routing-id cache | 1112061 / 906648 / 914556 / 239681 / 94543 / 59649 | 0.074 / 0.252 / 0.361 / 0.014 / 0.023 / 0.028 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_173725_dotnet-router-router-inproc-own-after-native-rid.txt` |
+| .NET Sol `Unsafe.SkipInit` | 1473140 / 1185362 / 1019612 / 113906 / 99686 / 54731 | 0.103 / 0.252 / 0.339 / 0.028 / 0.022 / 0.032 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_174425_dotnet-router-router-inproc-sol-after-skipinit.txt` |
+
+before throughput ratio는 `50.385% / 54.026% / 50.999% / 23.156% / 57.889% / 67.866%`, 산술평균은 `50.720%`다. before latency ratio는 `9.400x / 1.904x / 1.836x / 4.500x / 1.769x / 1.500x`, 산술평균은 `3.485x`다. 자체 native routing-id cache after throughput ratio는 `41.361% / 49.759% / 45.686% / 49.586% / 57.142% / 69.974%`, 산술평균은 `52.251%`이며 latency ratio는 `4.933x / 1.518x / 2.040x / 2.333x / 1.769x / 1.400x`, 산술평균은 `2.332x`다. Sol review는 native cache의 동시 P/Invoke ref 사용은 안전하지만 public `RoutingId` struct layout과 생성 비용을 바꾸므로 제거하도록 판정했다.
+
+Sol `ReceiveRouterParts` `Unsafe.SkipInit` after throughput ratio는 `54.791% / 65.056% / 50.935% / 23.565% / 60.250% / 64.205%`, 산술평균은 `53.134%`이며 latency ratio는 `6.867x / 1.518x / 1.915x / 4.667x / 1.692x / 1.600x`, 산술평균은 `3.043x`다. Sol 후보는 before보다 throughput과 latency를 모두 개선했지만 local `ROUTER_ROUTER / inproc` 목표 throughput 55%와 .NET latency 상한 3.0x에 미달한다. 추가 contract-safe 후보가 없어 `Unsafe.SkipInit`은 유지하고 최종 상태는 `보류`다. public contract·ownership·error semantics는 변경하지 않았으며 build는 0 warning/error, contract test는 `149 passed / 0 failed / 0 skipped`다.
