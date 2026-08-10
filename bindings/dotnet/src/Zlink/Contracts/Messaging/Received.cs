@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
+using System.Runtime.CompilerServices;
+
 namespace Systems.Zlink;
 
 /// <summary>
@@ -125,6 +127,7 @@ public sealed partial class Received : IDisposable
     /// <summary>
     ///     Start a send operation addressed to the source route of this envelope.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public SendOperation Send()
     {
         return new ReceivedSendOperationImpl(this);

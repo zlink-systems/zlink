@@ -801,6 +801,18 @@ baseline throughput ratio는 `81.580% / 91.618% / 82.252% / 86.304% / 110.096% /
 
 baseline throughput ratio는 `51.314% / 61.355% / 86.976% / 87.676% / 102.895% / 81.331%`, 산술평균 `78.591%`이며 평균 latency ratio는 `0.951x / 0.807x / 0.407x / 1.069x / 0.867x / 0.889x`, 산술평균 `0.832x`다. `Message.MoveTo` AggressiveInlining 후 own throughput ratio는 `60.372% / 68.392% / 88.648% / 88.489% / 104.220% / 105.492%`, 산술평균 `85.935%`, 평균 latency ratio는 `0.519x / 0.600x / 0.065x / 0.985x / 0.809x / 0.823x`, 산술평균 `0.633x`다. Sol review는 `EnsureValid → destination 초기화 → native move → source 무효화`와 실패 시 `RestoreFrom` 동작이 동일함을 확인하고 변경을 GO했다. `SinglePartSubmit`·native submitter는 이미 inline이며 `RestoreFrom` 및 추가 pool/ownership 전이 후보는 no-go다. public contract·ownership·error semantics는 변경하지 않았다. 최종 상태는 `통과`다. build `0 warning / 0 error`, contract test `149 passed / 0 failed / 0 skipped`다.
 
+### .NET Multi MULTI_DEALER_ROUTER_SENDSEND/tls
+
+조건: C semantic pattern `MULTI_DEALER_ROUTER_SENDSEND`, .NET runner pattern `MULTI_DEALER_ROUTER`, Core `v0.10.1` release package, Release, `tls`, clients `100`, duration `1s`, runs `1`, msg sizes `64/256/1024/4096/65536/131072B`, connect concurrency `128`, connect-ready timeout `10000ms`, monitor-HWM `4096000`, auto-HWM `balanced`, server/client I/O threads `4/4`다. C와 .NET report는 6개 size와 30개 result line이 complete다.
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 145689 / 134066 / 143556 / 119283 / 17848 / 9284 | 0.323 / 0.349 / 0.331 / 0.402 / 2.756 / 5.277 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_233427_dotnet-dealer-router-sendsend-tls-paired-c-100.txt` |
+| .NET baseline | 112245 / 123930 / 124972 / 102199 / 17751 / 9735 | 0.400 / 0.365 / 0.365 / 0.450 / 2.782 / 5.079 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_233453_dotnet-dealer-router-sendsend-tls-paired-baseline-100.txt` |
+| .NET own Received.Send inlining | 127557 / 125612 / 119795 / 104284 / 17850 / 9779 | 0.355 / 0.359 / 0.378 / 0.441 / 2.766 / 5.046 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_233648_dotnet-dealer-router-sendsend-tls-own-received-send-inline-100.txt` |
+
+baseline throughput ratio는 `77.044% / 92.440% / 87.055% / 85.678% / 99.457% / 104.858%`, 산술평균 `91.088%`이며 평균 latency ratio는 `1.238x / 1.046x / 1.103x / 1.119x / 1.009x / 0.962x`, 산술평균 `1.080x`다. `Received.Send()` AggressiveInlining 후 own throughput ratio는 `87.554% / 93.694% / 83.448% / 87.426% / 100.011% / 105.332%`, 산술평균 `92.911%`, 평균 latency ratio는 `1.099x / 1.029x / 1.142x / 1.097x / 1.004x / 0.956x`, 산술평균 `1.054x`다. Sol review는 독립적인 `ReceivedSendOperationImpl` 생성과 builder lifetime이 유지됨을 확인하고 변경을 GO했다. `Received.SendCore`/`SendReceivedSingle` 확대와 builder 재사용·private bypass 후보는 no-go다. public contract·ownership·error semantics는 변경하지 않았다. 최종 상태는 `통과`다. build `0 warning / 0 error`, contract test `149 passed / 0 failed / 0 skipped`다.
+
 ### .NET Multi MULTI_PUBSUB/wss
 
 조건: Core `v0.10.1` release package, Release, `wss`, clients `100`, duration `1s`, runs `1`, msg sizes `64/256/1024/4096/65536/131072B`, connect concurrency `128`, connect-ready timeout `10000ms`, monitor-HWM `4096000`, auto-HWM `balanced`, server/client I/O threads `4/4`다. C full sweep는 64·256·1024·4096·65536B result line이 완료됐고, 131072B는 같은 옵션의 별도 retry report가 완료됐다.
