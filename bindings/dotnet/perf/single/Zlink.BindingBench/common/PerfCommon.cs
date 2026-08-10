@@ -58,7 +58,8 @@ internal static partial class PerfRunner
     // Keep that setup-only activity in the perf harness; it is not part of
     // the measured send/receive loop.
     internal static bool WaitForConnectionReadyWithActivity(
-        MonitorSocket monitor, IZlinkSocket activitySocket, int timeoutMs)
+        MonitorSocket monitor, IZlinkSocket activitySocket, int timeoutMs,
+        bool acceptAccepted = true)
     {
         using var activityPoller = Zlink.CreatePoller();
         var events = new PollEvent[1];
@@ -78,7 +79,7 @@ internal static partial class PerfRunner
                     if (evt == null)
                         break;
                     if (evt.Event == MonitorEventType.ConnectionReady
-                        || evt.Event == MonitorEventType.Accepted)
+                        || (acceptAccepted && evt.Event == MonitorEventType.Accepted))
                         return true;
                 }
             }

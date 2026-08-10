@@ -70,3 +70,12 @@ After throughput ratio is `46.71% / 68.90% / 87.55% / 82.23% / 91.14% / 92.12%`,
 | .NET baseline | 1189.906 / 1005.534 / 676.978 / 36.908 / 23.706 / 14.595 | 53.346 / 0.274 / 0.516 / 5.517 / 8.690 / 14.259 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_141217_dotnet-dealer-router-tcp-baseline.txt` |
 
 Throughput ratio is `49.87% / 87.08% / 94.87% / 90.23% / 92.32% / 89.17%`, arithmetic mean `83.92%`. Average latency ratio is `2.624x / 0.365x / 0.055x / 1.109x / 1.081x / 1.120x`, arithmetic mean `1.059x`. The aggregate throughput and latency targets pass; the 64B throughput ratio is recorded as an individual result and does not change the aggregate decision.
+
+### .NET Single DEALER_ROUTER_REQREP/tcp
+
+| 구분 | size별 throughput (Kops/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 212.246 / 192.438 / 176.010 / 17.175 / 11.981 / 7.340 | 0.186 / 0.211 / 0.293 / 0.691 / 0.496 / 0.404 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_211628_dealer-router-reqrep-tcp-policy-c1.txt` |
+| .NET | 144.297 / 131.794 / 129.872 / 19.124 / 13.039 / 8.069 | 0.239 / 0.263 / 0.262 / 0.602 / 0.442 / 0.357 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_143942_dotnet-dealer-router-reqrep-tcp-paired-v2.txt` |
+
+Throughput ratio is `67.99% / 68.49% / 73.79% / 111.35% / 108.83% / 109.94%`, arithmetic mean `90.06%`. Average latency ratio is `1.285x / 1.246x / 0.894x / 0.871x / 0.891x / 0.884x`, arithmetic mean `1.012x`. The request/reply aggregate targets pass. The Router setup wait was aligned with the C activity-driven monitor gate before this measurement.
