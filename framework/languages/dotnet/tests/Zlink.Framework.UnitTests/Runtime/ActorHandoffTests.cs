@@ -943,7 +943,7 @@ public sealed class ActorHandoffTests
             "handoff-1",
             new ZLinkBackendActorRef(targetNode, "actor-1", 7),
             targetAuthorityOwnerGeneration: 12,
-            targetMeshName: "play",
+            targetMeshName: ZLinkMeshName.FromBoundary("play", "targetMeshName"),
             targetNodeGeneration: 5,
             targetOwnerLeaseGeneration: 9);
         state.RecordRelocatedSessionAccepted(sessionRid);
@@ -999,7 +999,7 @@ public sealed class ActorHandoffTests
             "handoff-1",
             new ZLinkBackendActorRef(targetNode, "actor-1", 7),
             targetAuthorityOwnerGeneration: 12,
-            targetMeshName: "play",
+            targetMeshName: ZLinkMeshName.FromBoundary("play", "targetMeshName"),
             targetNodeGeneration: 5,
             targetOwnerLeaseGeneration: 9);
 
@@ -1043,7 +1043,7 @@ public sealed class ActorHandoffTests
             "handoff-1",
             new ZLinkBackendActorRef(targetNode, "actor-1", 7),
             targetAuthorityOwnerGeneration: 12,
-            targetMeshName: "play",
+            targetMeshName: ZLinkMeshName.FromBoundary("play", "targetMeshName"),
             targetNodeGeneration: 5,
             targetOwnerLeaseGeneration: 9);
 
@@ -1102,7 +1102,7 @@ public sealed class ActorHandoffTests
             "handoff-1",
             new ZLinkBackendActorRef(targetNode, "actor-1", 7),
             targetAuthorityOwnerGeneration: 12,
-            targetMeshName: "play",
+            targetMeshName: ZLinkMeshName.FromBoundary("play", "targetMeshName"),
             targetNodeGeneration: 5,
             targetOwnerLeaseGeneration: 9);
 
@@ -1137,7 +1137,7 @@ public sealed class ActorHandoffTests
             "handoff-1",
             new ZLinkBackendActorRef(targetNode, "actor-1", 7),
             targetAuthorityOwnerGeneration: 12,
-            targetMeshName: "play",
+            targetMeshName: ZLinkMeshName.FromBoundary("play", "targetMeshName"),
             targetNodeGeneration: 5,
             targetOwnerLeaseGeneration: 9);
 

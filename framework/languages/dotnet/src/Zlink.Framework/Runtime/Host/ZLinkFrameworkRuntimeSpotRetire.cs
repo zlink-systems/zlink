@@ -461,7 +461,9 @@ internal sealed partial class ZLinkFrameworkRuntime
                         actorRef,
                         stage.TargetActorAuthorityOwnerGeneration(
                             actorState.RuntimeActorId),
-                        stage.TargetMeshName,
+                        ZLinkMeshName.FromBoundary(
+                            stage.TargetMeshName,
+                            nameof(stage.TargetMeshName)),
                         stage.TargetNodeLifecycleGeneration,
                         stage.TargetOwnerLeaseGeneration);
                 }

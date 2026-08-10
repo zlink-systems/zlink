@@ -81,6 +81,7 @@
         <Compile Include="Runtime/Dispatch/CompletionAdmissionOwnerTests.cs"/>
         <Compile Include="Runtime/DeferredActorJoinContractTests.cs"/>
         <Compile Include="Runtime/DeferredActorJoinDurabilityTests.cs"/>
+        <Compile Include="Runtime/DirectReplyCompletionRegistryTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.cs"/>
         <Compile Include="Runtime/EntrySpotIdentityStoreTests.cs"/>
         <Compile Include="Runtime/RuntimeIdentifierTests.cs"/>
@@ -95,6 +96,7 @@
         <Compile Include="Runtime/HttpExecutionSchedulerTests.cs"/>
         <Compile Include="Runtime/InMemoryLocationStoreTests.cs"/>
         <Compile Include="Runtime/LocationLifecycleTests.cs"/>
+        <Compile Include="Runtime/LayeringConvergenceTests.cs"/>
         <Compile Include="Runtime/LocationResolverTests.cs"/>
         <Compile Include="Runtime/LocationRuntimeQueryTests.cs"/>
         <Compile Include="Runtime/InstanceSpotActivationJournalTests.cs"/>
@@ -107,6 +109,9 @@
         <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.cs"/>
         <Compile Include="Runtime/ProviderRelocationRepositoryTests.cs"/>
         <Compile Include="Runtime/MessageFlowTracerTests.cs"/>
+        <Compile Include="Runtime/MessageFollowSuppressionRegistryTests.cs"/>
+        <Compile Include="Runtime/MessagePayloadOwnershipConvergenceTests.cs"/>
+        <Compile Include="Runtime/MeshCompletionTableConvergenceTests.cs"/>
         <Compile Include="Runtime/MeshNodeRouteDispatcherTests.cs"/>
         <Compile Include="Runtime/PublicContractSnapshotTests.cs"/>
         <Compile Include="Runtime/SerialExecutionQueueBenchmarkTests.cs"/>
@@ -128,6 +133,7 @@
         <Compile Include="Runtime/TimerLifecycleTests.cs"/>
         <Compile Include="Runtime/SpotHandlerInvokerTests.cs"/>
         <Compile Include="Runtime/SpotIdValidationTests.cs"/>
+        <Compile Include="Runtime/SpotLifecycleKindTests.cs"/>
         <Compile Include="Runtime/SpotMessageFollowSubmitTests.cs"/>
         <Compile Include="Runtime/SpotOutboundTransportTests.cs"/>
         <Compile Include="Runtime/SpotRouteDispatcherTests.cs"/>

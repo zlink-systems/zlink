@@ -6,6 +6,7 @@ using Microsoft.Extensions.Hosting;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Actors;
 using Zlink.Framework.Contracts.Configuration;
+using Zlink.Framework.Contracts.Errors;
 using Zlink.Framework.Contracts.Locations;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
@@ -188,14 +189,24 @@ public sealed class ActorManagerProductionTests
                 ? new CancellationTokenSource(TimeSpan.FromMilliseconds(50))
                 : new CancellationTokenSource();
 
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-                await provider.GetRequiredService<IZLinkActorManager>()
+            async Task SubmitAsync() =>
+                _ = await provider.GetRequiredService<IZLinkActorManager>()
                     .GetOrCreate("reservation-cancelled", "player")
                     .Timeout(
                         callerCancels
                             ? TimeSpan.FromSeconds(5)
                             : TimeSpan.FromMilliseconds(50))
-                    .Async(cancellation.Token));
+                    .Async(cancellation.Token);
+
+            if (callerCancels)
+            {
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(SubmitAsync);
+            }
+            else
+            {
+                var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(SubmitAsync);
+                Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
+            }
 
             Assert.Equal(0, TestActorFactory.CreateCount);
             Assert.Equal(0, TestEntrySpot.CreateCount);

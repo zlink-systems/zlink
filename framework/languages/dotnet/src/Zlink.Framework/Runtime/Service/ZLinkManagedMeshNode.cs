@@ -43,6 +43,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly int _maxPendingOperations;
     private readonly TimeSpan _remoteUserSpotTerminalRetention;
     private readonly TimeSpan _inboundOperationShutdownTimeout;
+    private readonly ZLinkDeadlineClock _deadlineClock;
     private readonly object _gate = new();
     private readonly object _socketGate = new();
     private readonly object _readyGate = new();
@@ -160,7 +161,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         string meshName,
         int maxPendingOperations = DefaultMaxPendingOperations,
         TimeSpan? remoteUserSpotTerminalRetention = null,
-        TimeSpan? inboundOperationShutdownTimeout = null)
+        TimeSpan? inboundOperationShutdownTimeout = null,
+        TimeProvider? deadlineTimeProvider = null)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         ArgumentException.ThrowIfNullOrWhiteSpace(meshName);
@@ -182,6 +184,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _inboundOperationShutdownTimeout =
             inboundOperationShutdownTimeout
             ?? DefaultInboundOperationShutdownTimeout;
+        _deadlineClock = new ZLinkDeadlineClock(
+            deadlineTimeProvider ?? TimeProvider.System);
     }
 
     public RoutingId RoutingId => _routingId;
@@ -6152,7 +6156,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     retained));
             return;
         }
-        if (deadlineUnixMs <= checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
+        if (deadlineUnixMs <= checked((ulong)_deadlineClock.GetUnixTimeMilliseconds()))
         {
             SendUserSpotFailure(
                 sourceRid,
@@ -6221,7 +6225,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ulong deadlineUnixMs)
     {
         var remaining = checked((long)deadlineUnixMs)
-                        - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                        - _deadlineClock.GetUnixTimeMilliseconds();
         if (remaining <= 0)
             return new UserSpotOperationTerminal(
                 RequestResult.TimedOut,
@@ -6432,11 +6436,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             var retentionDeadline = checked(
                 (long)deadline
                 + (long)_remoteUserSpotTerminalRetention.TotalMilliseconds);
-            var remaining = Math.Max(
-                0,
-                retentionDeadline - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-            await Task.Delay(
-                    TimeSpan.FromMilliseconds(remaining),
+            await DelayUntilRemoteOperationExpiryAsync(
+                    retentionDeadline,
                     _stop?.Token ?? CancellationToken.None)
                 .ConfigureAwait(false);
         }
@@ -6584,7 +6585,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return;
         }
         if (operation.DeadlineUnixMs
-            <= checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
+            <= checked((ulong)_deadlineClock.GetUnixTimeMilliseconds()))
         {
             SendActorCreateFailure(
                 sourceRid,
@@ -6770,7 +6771,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ulong deadlineUnixMs)
     {
         var remaining = checked((long)deadlineUnixMs)
-                        - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                        - _deadlineClock.GetUnixTimeMilliseconds();
         if (remaining <= 0)
             return new ActorCreateOperationTerminal(
                 RequestResult.TimedOut,
@@ -6881,11 +6882,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             var retentionDeadline = checked(
                 (long)invocation.Record.Operation.DeadlineUnixMs
                 + (long)_remoteUserSpotTerminalRetention.TotalMilliseconds);
-            var remaining = Math.Max(
-                0,
-                retentionDeadline - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-            await Task.Delay(
-                    TimeSpan.FromMilliseconds(remaining),
+            await DelayUntilRemoteOperationExpiryAsync(
+                    retentionDeadline,
                     _stop?.Token ?? CancellationToken.None)
                 .ConfigureAwait(false);
         }
@@ -6897,6 +6895,24 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             new KeyValuePair<RemoteActorCreateOperationKey, RemoteActorCreateInvocation>(
                 key,
                 invocation));
+    }
+
+    private async Task DelayUntilRemoteOperationExpiryAsync(
+        long retentionDeadlineUnixMs,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            var now = _deadlineClock.GetUnixTimeMilliseconds();
+            if (now >= retentionDeadlineUnixMs)
+                return;
+
+            var remaining = retentionDeadlineUnixMs - now;
+            await Task.Delay(
+                    TimeSpan.FromMilliseconds(Math.Min(remaining, int.MaxValue)),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
     }
 
     private void SendActorCreateFailure(

@@ -47,4 +47,11 @@ namespace Zlink.Framework.Runtime.Diagnostics
         {
         }
     }
+
+    internal static class ZLinkFrameworkDebugLog
+    {
+        internal static void TaskFailure(string taskName, Exception exception)
+        {
+        }
+    }
 }

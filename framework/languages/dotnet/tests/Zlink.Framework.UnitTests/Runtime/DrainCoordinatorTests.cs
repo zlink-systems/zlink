@@ -271,7 +271,7 @@ public sealed class DrainCoordinatorTests
 
         var blocked = Assert.IsType<DrainBlocked>(result);
         Assert.Equal(ZLinkFrameworkRelocationReason.RelocationFailed, blocked.Reason);
-        Assert.True(coordinator.IsReady);
+        Assert.False(admission.IsDraining);
         Assert.Contains("reopen-admission", probe.Events);
     }
 
@@ -429,7 +429,7 @@ public sealed class DrainCoordinatorTests
         Assert.Contains("restore-serving", probe.Events);
         Assert.Contains("reopen-admission", probe.Events);
         Assert.DoesNotContain("stop-runtime", probe.Events);
-        Assert.True(coordinator.IsReady);
+        Assert.False(admission.IsDraining);
     }
 
     [Fact]
@@ -989,14 +989,15 @@ public sealed class DrainCoordinatorTests
     public async Task Deadline_Validation_Happens_Before_Drain_Starts()
     {
         var executor = new FakeDrainExecutor();
+        var admission = new ZLinkDrainAdmissionGate();
         using var coordinator = new ZLinkDrainCoordinator(
-            new ZLinkDrainAdmissionGate(),
+            admission,
             executor);
 
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () =>
             await coordinator.DrainAsync(TimeSpan.Zero));
 
-        Assert.True(coordinator.IsReady);
+        Assert.False(admission.IsDraining);
         Assert.Equal(0, executor.ExecuteCount);
     }
 

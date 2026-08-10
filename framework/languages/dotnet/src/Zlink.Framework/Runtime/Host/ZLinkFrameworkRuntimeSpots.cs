@@ -259,38 +259,6 @@ internal sealed partial class ZLinkFrameworkRuntime
         if (state.RouteMeshNodesByChannel.TryGetValue(channelName, out var nodeRuntime))
             return nodeRuntime;
 
-        // Registration is a startup contract, but the internal publisher
-        // surface still permits a diagnostic registration to be added after
-        // startup. Preserve that compatibility on the cold miss path without
-        // putting a scan or lock on the normal channel-send path.
-        ZLinkSpotNodeRuntime? lateMatch = null;
-        foreach (var registration in Registration.SpotNodes.Values)
-        {
-            var matches = false;
-            foreach (var membership in registration.ChannelMemberships)
-            {
-                if (string.Equals(
-                        membership.ChannelName,
-                        channelName,
-                        StringComparison.Ordinal))
-                {
-                    matches = true;
-                    break;
-                }
-            }
-            if (!matches
-                || !state.SpotNodes.TryGetValue(
-                    registration.SpotNodeName,
-                    out var candidate))
-                continue;
-            if (lateMatch is not null && !ReferenceEquals(lateMatch, candidate))
-                throw new ZLinkConfigurationException(
-                    $"ChannelName '{channelName}' resolves to more than one process-local RouteMesh.");
-            lateMatch = candidate;
-        }
-        if (lateMatch is not null)
-            return lateMatch;
-
         throw new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.NotFound,
             $"No process-local RouteMesh or ClientServer client is registered for ChannelName '{channelName}'.");

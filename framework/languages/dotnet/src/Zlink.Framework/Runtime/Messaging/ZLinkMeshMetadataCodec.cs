@@ -1,7 +1,7 @@
 using System.Text;
 using Zlink.Framework.Contracts.Streams;
 
-namespace Zlink.Framework.Runtime.Backend.DotNet;
+namespace Zlink.Framework.Runtime.Messaging;
 
 // RouteMesh 10.0.0 send/receive application-metadata wire codec (S8-06A).
 //

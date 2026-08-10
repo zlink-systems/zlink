@@ -664,6 +664,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             _capacityRegistration = null;
         }
 
+        Exception? loopFailure = null;
         if (loop is not null)
             try
             {
@@ -672,10 +673,20 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             catch (OperationCanceledException)
             {
             }
+            catch (Exception exception)
+            {
+                loopFailure = exception;
+            }
 
-        _completions.FailAll(RequestResult.Terminated);
-        _stop?.Dispose();
-        _signal.Dispose();
+        var failures = new ZLinkFailureCollector(loopFailure);
+        failures.Capture(() =>
+            _completions.FailAll(RequestResult.Terminated));
+        await failures.CaptureAsync(() =>
+                new ValueTask(_completions.CompletionDrained))
+            .ConfigureAwait(false);
+        failures.Capture(() => _stop?.Dispose());
+        failures.Capture(_signal.Dispose);
+        failures.ThrowIfAny();
     }
 
     // Per-spot decoded-record queues plus the registered dispatch-event handler.

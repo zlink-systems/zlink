@@ -937,23 +937,6 @@ internal sealed class ZLinkActorRuntimeState(
         }
     }
 
-    // String input remains available only for the legacy test/configuration
-    // boundary; the relocation session state stores a typed mesh identity.
-    public void MarkRelocationSessionAuthorityCommitted(
-        string handoffId,
-        ZLinkBackendActorRef targetActor,
-        ulong targetAuthorityOwnerGeneration,
-        string targetMeshName,
-        ulong targetNodeGeneration,
-        ulong targetOwnerLeaseGeneration) =>
-        MarkRelocationSessionAuthorityCommitted(
-            handoffId,
-            targetActor,
-            targetAuthorityOwnerGeneration,
-            ZLinkMeshName.FromBoundary(targetMeshName, nameof(targetMeshName)),
-            targetNodeGeneration,
-            targetOwnerLeaseGeneration);
-
     public bool TryGetCommittedRelocationSessionRoute(
         string handoffId,
         out ZLinkPendingActorSessionRoute route)

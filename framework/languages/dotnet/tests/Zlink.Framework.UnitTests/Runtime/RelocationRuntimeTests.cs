@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
@@ -2288,7 +2289,7 @@ public sealed class RelocationRuntimeTests
     }
 
     [Fact]
-    public void HeldIngressRequiresStrictSequenceAndBoundedCapacity()
+    public void HeldIngressRequiresStrictSequenceWithoutRelocationSpecificCapacity()
     {
         ZLinkSpotRetireTargetRuntime.ValidateHeldRecords(
         [
@@ -2302,14 +2303,126 @@ public sealed class RelocationRuntimeTests
                 new ZLinkSpotRetireHeldRecord(4, new byte[] { 1 }),
                 new ZLinkSpotRetireHeldRecord(4, new byte[] { 2 })
             ]));
-        Assert.Throws<ZLinkFrameworkException>(
-            () => ZLinkSpotRetireTargetRuntime.ValidateHeldRecords(
-                Enumerable.Range(1, 1_025)
-                    .Select(static index =>
-                        new ZLinkSpotRetireHeldRecord(
-                            checked((ulong)index),
-                            []))
-                    .ToArray()));
+
+        var moreThanFormerCountLimit = Enumerable.Range(1, 1_025)
+            .Select(static index => new ZLinkSpotRetireHeldRecord(
+                checked((ulong)index),
+                []))
+            .ToArray();
+        ZLinkSpotRetireTargetRuntime.ValidateHeldRecords(
+            moreThanFormerCountLimit);
+
+        var sharedPayload = new byte[(1024 * 1024) + 1];
+        var moreThanFormerByteLimit = Enumerable.Range(1, 17)
+            .Select(index => new ZLinkSpotRetireHeldRecord(
+                checked((ulong)index),
+                sharedPayload))
+            .ToArray();
+        Assert.True(
+            moreThanFormerByteLimit.Sum(static record =>
+                record.Payload.LongLength)
+            > 16L * 1024 * 1024);
+        ZLinkSpotRetireTargetRuntime.ValidateHeldRecords(
+            moreThanFormerByteLimit);
+    }
+
+    [Fact]
+    public void HeldIngressBeyondFormerCodecLimitRoundTripsAndRestores()
+    {
+        const int recordCount = 65_537;
+        var frozenRecord = CreateMinimalCanonicalFrozenRecord();
+        Assert.True(ZLinkRelocationEnvelopeCodec
+            .TryValidateCanonicalFrozenRecord(frozenRecord));
+        var accepted = Enumerable.Range(1, recordCount)
+            .Select(index => new ZLinkRelocationQueuedJob(
+                checked((ulong)index),
+                frozenRecord))
+            .ToArray();
+        var inventory = new ZLinkRelocationEnvelope(
+            Guid.NewGuid(),
+            1,
+            new byte[32],
+            [
+                new ZLinkRelocationParticipantEnvelope(
+                    new ZLinkAuthorityKey("spot:room"),
+                    ZLinkPlacementObjectKind.UserSpot,
+                    1,
+                    1,
+                    ReadOnlyMemory<byte>.Empty,
+                    [],
+                    []),
+                new ZLinkRelocationParticipantEnvelope(
+                    new ZLinkAuthorityKey("actor:room:held"),
+                    ZLinkPlacementObjectKind.Actor,
+                    1,
+                    1,
+                    ReadOnlyMemory<byte>.Empty,
+                    accepted,
+                    [])
+            ]);
+
+        var legacyEncoded = ZLinkRelocationEnvelopeCodec.Encode(inventory);
+        var legacyDecoded = ZLinkRelocationEnvelopeCodec.Decode(legacyEncoded);
+        Assert.Equal(recordCount, legacyDecoded.Participants[1].AcceptedJobs.Count);
+
+        var canonical = ZLinkCanonicalSpotRelocationWriter.CreateInitial(
+            inventory,
+            "room",
+            nameof(RelocationRuntimeTests),
+            RoutingId.From("target"),
+            1);
+        var canonicalEncoded = ZLinkRelocationEnvelopeCodec.Encode(canonical);
+        var canonicalDecoded = ZLinkRelocationEnvelopeCodec.Decode(
+            canonicalEncoded);
+        var restoredAccepted = canonicalDecoded.Participants[1].AcceptedJobs;
+        Assert.Equal(recordCount, restoredAccepted.Count);
+        Assert.Equal<ulong>(1, restoredAccepted[0].AcceptedSequence);
+        Assert.Equal<ulong>(recordCount, restoredAccepted[^1].AcceptedSequence);
+
+        var held = restoredAccepted.Select(static job =>
+                new ZLinkSpotRetireHeldRecord(
+                    job.AcceptedSequence,
+                    job.Payload.ToArray()))
+            .ToArray();
+        var stage = CreateTargetStageForHeldJournal();
+        ZLinkSpotRetireTargetRuntime.ValidateHeldRecords(held);
+        Assert.True(ZLinkSpotRetireTargetRuntime.TrySetHeldRecords(stage, held));
+        Assert.Equal(recordCount, stage.HeldRecords.Count);
+        Assert.Equal<ulong>(recordCount, stage.HeldHighWater);
+
+        var impossibleLegacyCount = ZLinkRelocationEnvelopeCodec.Encode(
+            inventory with
+            {
+                Participants = [inventory.Participants[0]]
+            });
+        var acceptedCountOffset = sizeof(uint) + sizeof(ushort) + 16
+                                  + sizeof(ulong) + sizeof(int) + 32
+                                  + sizeof(int);
+        var keyLength = BinaryPrimitives.ReadUInt16LittleEndian(
+            impossibleLegacyCount.AsSpan(acceptedCountOffset));
+        acceptedCountOffset += sizeof(ushort) + keyLength
+                               + sizeof(byte) + 2 * sizeof(ulong);
+        var stateLength = BinaryPrimitives.ReadInt32LittleEndian(
+            impossibleLegacyCount.AsSpan(acceptedCountOffset));
+        acceptedCountOffset += sizeof(int) + stateLength;
+        BinaryPrimitives.WriteInt32LittleEndian(
+            impossibleLegacyCount.AsSpan(acceptedCountOffset),
+            int.MaxValue);
+        Assert.Throws<InvalidDataException>(() =>
+            ZLinkRelocationEnvelopeCodec.Decode(impossibleLegacyCount));
+        using var impossibleLegacyStream = new MemoryStream(
+            impossibleLegacyCount,
+            writable: false);
+        Assert.Throws<InvalidDataException>(() =>
+            ZLinkRelocationEnvelopeCodec.Decode(impossibleLegacyStream));
+
+        var impossibleCanonicalCount = canonicalEncoded.ToArray();
+        BinaryPrimitives.WriteUInt32BigEndian(
+            impossibleCanonicalCount.AsSpan(
+                canonical.CanonicalLayout!.JournalStart),
+            uint.MaxValue);
+        Assert.Throws<InvalidDataException>(() =>
+            ZLinkRelocationEnvelopeCodec.Decode(impossibleCanonicalCount));
     }
 
     [Fact]
@@ -5494,6 +5607,65 @@ public sealed class RelocationRuntimeTests
                     [],
                     [])
             ]);
+    }
+
+    private static byte[] CreateMinimalCanonicalFrozenRecord()
+    {
+        using var source = new MemoryStream();
+        WriteText8(source, "n");
+        WriteUInt64(source, 1);
+        WriteText8(source, "o");
+        WriteUInt64(source, 1);
+
+        using var payload = new MemoryStream();
+        WriteText8(payload, "p");
+        WriteText8(payload, "application/octet-stream");
+        WriteUInt32(payload, 0);
+
+        using var record = new MemoryStream();
+        record.WriteByte(1);
+        record.WriteByte(1);
+        WriteUInt16(record, checked((ushort)source.Length));
+        source.Position = 0;
+        source.CopyTo(record);
+        record.WriteByte(0);
+        WriteUInt64(record, 0);
+        WriteUInt64(record, 0);
+        WriteUInt32(record, 0);
+        WriteUInt16(record, 0);
+        record.WriteByte(1);
+        WriteUInt32(record, checked((uint)payload.Length));
+        payload.Position = 0;
+        payload.CopyTo(record);
+        return record.ToArray();
+
+        static void WriteText8(Stream stream, string value)
+        {
+            var bytes = Encoding.UTF8.GetBytes(value);
+            stream.WriteByte(checked((byte)bytes.Length));
+            stream.Write(bytes);
+        }
+
+        static void WriteUInt16(Stream stream, ushort value)
+        {
+            Span<byte> bytes = stackalloc byte[sizeof(ushort)];
+            BinaryPrimitives.WriteUInt16BigEndian(bytes, value);
+            stream.Write(bytes);
+        }
+
+        static void WriteUInt32(Stream stream, uint value)
+        {
+            Span<byte> bytes = stackalloc byte[sizeof(uint)];
+            BinaryPrimitives.WriteUInt32BigEndian(bytes, value);
+            stream.Write(bytes);
+        }
+
+        static void WriteUInt64(Stream stream, ulong value)
+        {
+            Span<byte> bytes = stackalloc byte[sizeof(ulong)];
+            BinaryPrimitives.WriteUInt64BigEndian(bytes, value);
+            stream.Write(bytes);
+        }
     }
 
     private static ZLinkRelocationEnvelope CreateLargeEnvelope(

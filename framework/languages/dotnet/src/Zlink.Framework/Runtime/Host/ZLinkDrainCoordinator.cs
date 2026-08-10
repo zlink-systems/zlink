@@ -199,8 +199,6 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
         _logger = logger;
     }
 
-    public bool IsReady => !_admission.IsDraining;
-
     internal void RequestShutdown(TimeSpan deadline)
     {
         if (deadline <= TimeSpan.Zero)

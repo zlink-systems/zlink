@@ -35,7 +35,10 @@ public sealed class BackendStreamSocketConcurrencyTests
         ];
 
         await using var backend = new ZLinkBackendStreamSocketWrapper(
-            socket, node, completions: null, ownsNode: false);
+            socket,
+            node,
+            new ZLinkMeshCompletionTable(),
+            ownsNode: false);
         using var firstHeader = Message.From("first-header");
         using var firstBody = Message.From("first-body");
         using var secondHeader = Message.From("second-header");

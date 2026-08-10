@@ -23,7 +23,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
     IZLinkBackendBoundSessionReplacementNotifications
 {
     private readonly IMeshNode _node;
-    private readonly ZLinkMeshCompletionTable _completions = new();
+    private readonly ZLinkMeshCompletionTable _completions;
     private readonly ZLinkMeshDispatchPump _pump;
     private readonly ActorMessageFollowIngressAdapter _messageFollowIngress;
     private readonly ConcurrentDictionary<string, ulong> _peerIntents =
@@ -249,10 +249,10 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         _pump.SetInboundDispatchBudget(budget);
     }
 
-    // Explicit host-startup Start (spec 21 §3): the runtime calls this after
-    // routing id, bind and channels are configured, so the node is not started
-    // lazily on first spot use. Idempotent; EnsureStarted stays as a defensive
-    // fallback for paths that reach a spot before explicit startup.
+    // Explicit host startup calls Start after routing id, bind, and channels
+    // are configured. Local nodes without a router bind have no native bind
+    // event, so every backend entry point converges on the same idempotent
+    // adapter-owned transition through EnsureStarted.
     public void Start()
     {
         EnsureStarted();
@@ -470,7 +470,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         if (submit != SubmitResult.Ok)
             throw new ZlinkSubmitException(
                 (ZlinkSubmitException.ErrorCode)(int)submit);
-        await using (cancellationToken.Register(
+        await using (_completions.RegisterCancellation(
+                         correlationId,
+                         cancellationToken,
                          () => terminal.TrySetCanceled(cancellationToken))
                      .ConfigureAwait(false))
             return await terminal.Task.ConfigureAwait(false);
@@ -535,7 +537,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         if (submit != SubmitResult.Ok)
             throw new ZlinkSubmitException(
                 (ZlinkSubmitException.ErrorCode)(int)submit);
-        await using (cancellationToken.Register(
+        await using (_completions.RegisterCancellation(
+                         correlationId,
+                         cancellationToken,
                          () => terminal.TrySetCanceled(cancellationToken))
                      .ConfigureAwait(false))
             return await terminal.Task.ConfigureAwait(false);
@@ -620,7 +624,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         if (submit != SubmitResult.Ok)
             throw new ZlinkSubmitException(
                 (ZlinkSubmitException.ErrorCode)(int)submit);
-        await using (cancellationToken.Register(
+        await using (_completions.RegisterCancellation(
+                         correlationId,
+                         cancellationToken,
                          () => terminal.TrySetCanceled(cancellationToken))
                      .ConfigureAwait(false))
             return await terminal.Task.ConfigureAwait(false);
@@ -668,7 +674,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         if (submit != SubmitResult.Ok)
             throw new ZlinkSubmitException(
                 (ZlinkSubmitException.ErrorCode)(int)submit);
-        await using (cancellationToken.Register(
+        await using (_completions.RegisterCancellation(
+                         correlationId,
+                         cancellationToken,
                          () => terminal.TrySetCanceled(cancellationToken))
                      .ConfigureAwait(false))
             return await terminal.Task.ConfigureAwait(false);
@@ -716,7 +724,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         if (submit != SubmitResult.Ok)
             throw new ZlinkSubmitException(
                 (ZlinkSubmitException.ErrorCode)(int)submit);
-        await using (cancellationToken.Register(
+        await using (_completions.RegisterCancellation(
+                         correlationId,
+                         cancellationToken,
                          () => terminal.TrySetCanceled(cancellationToken))
                      .ConfigureAwait(false))
             return await terminal.Task.ConfigureAwait(false);
@@ -1128,8 +1138,11 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 RequireManagedNode().DestroyActor(ToNativeActor(actor), id, timeout);
                 return SubmitResult.Ok;
             });
-        await using (cancellationToken.Register(() => completion.TrySetCanceled())
-                         .ConfigureAwait(false))
+        await using (_completions.RegisterCancellation(
+                         correlationId,
+                         cancellationToken,
+                         () => completion.TrySetCanceled(cancellationToken))
+                     .ConfigureAwait(false))
             await completion.Task.ConfigureAwait(false);
     }
 
@@ -1217,7 +1230,10 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 ToNativeActor(actor), parts, id, timeout ?? default));
         if (submit != SubmitResult.Ok)
             throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)submit);
-        await using (cancellationToken.Register(() => completion.TrySetCanceled())
+        await using (_completions.RegisterCancellation(
+                         correlationId,
+                         cancellationToken,
+                         () => completion.TrySetCanceled(cancellationToken))
                          .ConfigureAwait(false))
             return await completion.Task.ConfigureAwait(false);
     }

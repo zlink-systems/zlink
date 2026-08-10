@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using System.Text;
 
 namespace Zlink.Framework.Contracts.Messaging;
@@ -8,6 +9,9 @@ public sealed partial class ZLinkMessage
     private readonly Type? _declaredType;
     private readonly ReadOnlyMemory<byte> _payload;
     private readonly object? _value;
+    private object? _decodedValue;
+    private ExceptionDispatchInfo? _decodeFailure;
+    private int _decodeState;
 
     private ZLinkMessage(object? value, Type? declaredType)
     {
@@ -95,18 +99,73 @@ public sealed partial class ZLinkMessage
 
     private object? Decode(Type targetType)
     {
-        if (StreamCodec == ZlinkStreamCodec.Raw)
+        if (targetType == typeof(ReadOnlyMemory<byte>))
+            return _payload;
+
+        if (targetType == typeof(byte[]))
+            return _payload.ToArray();
+
+        return DecodeTyped(targetType);
+    }
+
+    private object? DecodeTyped(Type targetType)
+    {
+        var wait = new SpinWait();
+        while (true)
         {
-            if (targetType == typeof(string)) return Encoding.UTF8.GetString(_payload.Span);
+            var state = Volatile.Read(ref _decodeState);
+            if (state == 2)
+                return CoerceDecodedValue(
+                    Volatile.Read(ref _decodedValue),
+                    targetType);
 
-            if (targetType == typeof(byte[])) return _payload.ToArray();
+            if (state == 3)
+            {
+                Volatile.Read(ref _decodeFailure)!.Throw();
+                return null;
+            }
+
+            if (state == 0
+                && Interlocked.CompareExchange(ref _decodeState, 1, 0) == 0)
+            {
+                try
+                {
+                    var decoded = DecodeTypedCore(targetType);
+                    // Validate the cache owner's requested type before any
+                    // waiter can observe a successful state. A serializer
+                    // that returns the wrong runtime type is one retained
+                    // failure, never a transient success for a wider type.
+                    var ownerValue = CoerceDecodedValue(decoded, targetType);
+                    Volatile.Write(ref _decodedValue, decoded);
+                    Volatile.Write(ref _decodeState, 2);
+                    return ownerValue;
+                }
+                catch (Exception exception)
+                {
+                    Volatile.Write(
+                        ref _decodeFailure,
+                        ExceptionDispatchInfo.Capture(exception));
+                    Volatile.Write(ref _decodeState, 3);
+                    throw;
+                }
+            }
+
+            // The current cache owner publishes either a value or a failure.
+            // Waiters cannot deserialize the same accepted payload again.
+            wait.SpinOnce();
         }
+    }
 
-        if (targetType == typeof(ReadOnlyMemory<byte>)) return _payload;
+    private object? DecodeTypedCore(Type targetType)
+    {
+        if (StreamCodec == ZlinkStreamCodec.Raw
+            && targetType == typeof(string))
+            return Encoding.UTF8.GetString(_payload.Span);
 
-        if (targetType == typeof(byte[])) return _payload.ToArray();
-
-        if (_payload.Length == 0) return targetType.IsValueType ? Activator.CreateInstance(targetType) : null;
+        if (_payload.Length == 0)
+            return targetType.IsValueType
+                ? Activator.CreateInstance(targetType)
+                : null;
 
         if (ContentType is not null
             && _codecs is not null
@@ -123,6 +182,25 @@ public sealed partial class ZLinkMessage
         return ZLinkFrameworkJsonPayloadCodec.Deserialize(
             _payload.Span,
             targetType);
+    }
+
+    private static object? CoerceDecodedValue(
+        object? decoded,
+        Type targetType)
+    {
+        if (decoded is null)
+        {
+            if (!targetType.IsValueType
+                || Nullable.GetUnderlyingType(targetType) is not null)
+                return null;
+        }
+        else if (targetType.IsInstanceOfType(decoded))
+        {
+            return decoded;
+        }
+
+        throw new InvalidCastException(
+            $"The retained message value cannot be decoded as '{targetType}'.");
     }
 
     private static ZLinkEncodedPayload EncodeValue(

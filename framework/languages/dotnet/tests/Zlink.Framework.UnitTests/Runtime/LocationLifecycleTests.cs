@@ -13,6 +13,9 @@ public sealed class LocationLifecycleTests
     private static ZLinkMeshName Mesh(string value) =>
         ZLinkMeshName.FromBoundary(value, nameof(value));
 
+    private static ZLinkActorId Actor(string value) =>
+        ZLinkActorId.FromBoundary(value, nameof(value));
+
     private static ZLinkSpotId Spot(string value) =>
         ZLinkSpotId.FromBoundary(value, nameof(value));
 
@@ -26,9 +29,9 @@ public sealed class LocationLifecycleTests
         var key = new ZLinkActorLocationKey(ActorId);
 
         var winner = await nodeA.ActorOwnership.ExecuteActorClaimThenActivateAsync(
-            MeshName,
+            Mesh(MeshName),
             ActorType,
-            ActorId,
+            Actor(ActorId),
             RoutingId.From("node-a"),
             deactivate: null,
             activate: async cancellationToken =>
@@ -49,9 +52,9 @@ public sealed class LocationLifecycleTests
         Assert.Null(winner.ExistingLocation);
 
         var loser = await nodeB.ActorOwnership.ExecuteActorClaimThenActivateAsync<string>(
-            MeshName,
+            Mesh(MeshName),
             ActorType,
-            ActorId,
+            Actor(ActorId),
             RoutingId.From("node-b"),
             deactivate: null,
             activate: _ =>
@@ -91,9 +94,9 @@ public sealed class LocationLifecycleTests
         var activated = 0;
 
         var result = await node.ActorOwnership.ExecuteActorClaimThenActivateAsync(
-            MeshName,
+            Mesh(MeshName),
             ActorType,
-            ActorId,
+            Actor(ActorId),
             RoutingId.From("node-b"),
             deactivate: null,
             activate: _ =>
@@ -116,9 +119,9 @@ public sealed class LocationLifecycleTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await node.ActorOwnership.ExecuteActorClaimThenActivateAsync<string>(
-                MeshName,
+                Mesh(MeshName),
                 ActorType,
-                ActorId,
+                Actor(ActorId),
                 RoutingId.From("node-a"),
                 deactivate: null,
                 activate: _ => throw new InvalidOperationException("factory failed"),
@@ -128,7 +131,7 @@ public sealed class LocationLifecycleTests
         // lifecycle coordinator only rolls back its failed Ready authority.
         Assert.Null(await node.Resolvers.ResolveActorRowAsync(
             new ZLinkActorLocationKey(ActorId)));
-        Assert.False(node.ActorOwnership.OwnsActor(ActorId));
+        Assert.False(node.ActorOwnership.OwnsActor(Actor(ActorId)));
     }
 
     [Fact]
@@ -144,9 +147,9 @@ public sealed class LocationLifecycleTests
 
         var failure = await Assert.ThrowsAsync<AggregateException>(async () =>
             await node.ActorOwnership.ExecuteActorClaimThenActivateAsync<string>(
-                MeshName,
+                Mesh(MeshName),
                 ActorType,
-                ActorId,
+                Actor(ActorId),
                 RoutingId.From("node-a"),
                 deactivate: null,
                 activate: _ => throw new InvalidOperationException("factory failed"),
@@ -155,10 +158,12 @@ public sealed class LocationLifecycleTests
         Assert.Contains(
             failure.InnerExceptions,
             exception => exception is InvalidOperationException { Message: "factory failed" });
-        for (var attempt = 0; attempt < 50 && node.ActorOwnership.OwnsActor(ActorId); attempt++)
+        for (var attempt = 0;
+             attempt < 50 && node.ActorOwnership.OwnsActor(Actor(ActorId));
+             attempt++)
             await Task.Delay(20);
 
-        Assert.False(node.ActorOwnership.OwnsActor(ActorId));
+        Assert.False(node.ActorOwnership.OwnsActor(Actor(ActorId)));
         Assert.Null(await node.Resolvers.ResolveActorRowAsync(
             new ZLinkActorLocationKey(ActorId)));
     }
@@ -171,9 +176,9 @@ public sealed class LocationLifecycleTests
         var key = new ZLinkActorLocationKey(ActorId);
 
         var first = await node.ActorOwnership.ExecuteActorClaimThenActivateAsync(
-            MeshName,
+            Mesh(MeshName),
             ActorType,
-            ActorId,
+            Actor(ActorId),
             RoutingId.From("node-a"),
             deactivate: null,
             activate: _ => ValueTask.FromResult("instance-a"),
@@ -182,9 +187,9 @@ public sealed class LocationLifecycleTests
 
         var secondActivated = 0;
         var second = await node.ActorOwnership.ExecuteActorClaimThenActivateAsync<string>(
-            MeshName,
+            Mesh(MeshName),
             ActorType,
-            ActorId,
+            Actor(ActorId),
             RoutingId.From("node-a"),
             deactivate: null,
             activate: _ =>
@@ -197,7 +202,7 @@ public sealed class LocationLifecycleTests
         Assert.Null(second.Activated);
         Assert.Null(second.ExistingLocation);
         Assert.Equal(0, secondActivated);
-        Assert.True(node.ActorOwnership.OwnsActor(ActorId));
+        Assert.True(node.ActorOwnership.OwnsActor(Actor(ActorId)));
         Assert.NotNull(await node.Resolvers.ResolveActorRowAsync(key));
     }
 
@@ -241,7 +246,7 @@ public sealed class LocationLifecycleTests
 
         // ActorManager committed the reservation, but this target runtime did
         // not run the ordinary claim path that installs local ownership.
-        Assert.False(node.ActorOwnership.OwnsActor(ActorId));
+        Assert.False(node.ActorOwnership.OwnsActor(Actor(ActorId)));
 
         await node.ActorOwnership.AdoptCommittedActorAuthorityAsync(
             ActorId,
@@ -253,7 +258,7 @@ public sealed class LocationLifecycleTests
             "spot-after-create",
             spotGeneration: 9);
 
-        Assert.True(node.ActorOwnership.OwnsActor(ActorId));
+        Assert.True(node.ActorOwnership.OwnsActor(Actor(ActorId)));
         var joined = await node.Resolvers.ResolveActorRowAsync(
             new ZLinkActorLocationKey(ActorId));
         Assert.NotNull(joined);
@@ -270,7 +275,7 @@ public sealed class LocationLifecycleTests
         const string spotId = "spot-7";
 
         await CreateTrackedActorAsync(node);
-        await node.ActorOwnership.ReleaseActorAsync(ActorId);
+        await node.ActorOwnership.ReleaseActorAsync(Actor(ActorId));
         Assert.Null(await node.Resolvers.ResolveActorRowAsync(
             new ZLinkActorLocationKey(ActorId)));
 
@@ -305,9 +310,9 @@ public sealed class LocationLifecycleTests
         var node = await fixture.NodeAsync("node-a", controlled);
         await CreateTrackedActorAsync(node);
 
-        var first = node.ActorOwnership.ReleaseActorAsync(ActorId).AsTask();
+        var first = node.ActorOwnership.ReleaseActorAsync(Actor(ActorId)).AsTask();
         await controlled.RemoveStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var second = node.ActorOwnership.ReleaseActorAsync(ActorId).AsTask();
+        var second = node.ActorOwnership.ReleaseActorAsync(Actor(ActorId)).AsTask();
 
         Assert.Equal(1, controlled.RemoveCalls);
         Assert.False(first.IsCompleted);
@@ -317,7 +322,7 @@ public sealed class LocationLifecycleTests
         await Task.WhenAll(first, second);
 
         Assert.Equal(1, controlled.RemoveCalls);
-        Assert.False(node.ActorOwnership.OwnsActor(ActorId));
+        Assert.False(node.ActorOwnership.OwnsActor(Actor(ActorId)));
     }
 
     [Fact]
@@ -368,7 +373,7 @@ public sealed class LocationLifecycleTests
             "spot-1",
             spotGeneration: 1).AsTask();
         await controlled.RenewStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var release = node.ActorOwnership.ReleaseActorAsync(ActorId).AsTask();
+        var release = node.ActorOwnership.ReleaseActorAsync(Actor(ActorId)).AsTask();
 
         Assert.Equal(0, controlled.RemoveCalls);
         controlled.RenewGate.SetResult();
@@ -563,7 +568,7 @@ public sealed class LocationLifecycleTests
             await nodeA.ActorOwnership.NotifyActorJoinedSpotAsync(
                 ActorId, "spot-1", spotGeneration: 1));
         await deactivated.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.False(nodeA.ActorOwnership.OwnsActor(ActorId));
+        Assert.False(nodeA.ActorOwnership.OwnsActor(Actor(ActorId)));
         var currentSnapshot = Assert.IsType<ZLinkAuthorityReadResult.Found>(
             await fixture.Store.ReadAuthorityAsync(
                 ZLinkActorAuthorityPayloadCodec.AuthorityKey(ActorId))).Snapshot;
@@ -583,7 +588,7 @@ public sealed class LocationLifecycleTests
         // committed handoff cleanup ran. Cleanup must still submit the old
         // conditional delete and let the Store fence it against node B.
         await nodeA.ActorOwnership.ReleaseActorAfterMoveAsync(
-            ActorId,
+            Actor(ActorId),
             sourceSnapshot);
 
         Assert.True(
@@ -625,10 +630,10 @@ public sealed class LocationLifecycleTests
         Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, stale.Kind);
 
         await deactivated.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.False(nodeA.ActorOwnership.OwnsActor(ActorId));
+        Assert.False(nodeA.ActorOwnership.OwnsActor(Actor(ActorId)));
 
         // The stale owner must not be able to damage the new row.
-        await nodeA.ActorOwnership.ReleaseActorAsync(ActorId);
+        await nodeA.ActorOwnership.ReleaseActorAsync(Actor(ActorId));
         var row = await nodeB.Resolvers.ResolveActorRowAsync(
             new ZLinkActorLocationKey(ActorId));
         Assert.Equal(nodeB.Runtime.OwnerId, row!.OwnerId);
@@ -724,7 +729,7 @@ public sealed class LocationLifecycleTests
         var key = new ZLinkActorLocationKey(ActorId);
 
         var activation = await nodeA.ActorOwnership.ExecuteActorClaimThenActivateAsync(
-            MeshName, ActorType, ActorId, RoutingId.From("node-a"),
+            Mesh(MeshName), ActorType, Actor(ActorId), RoutingId.From("node-a"),
             deactivate: null,
             activate: async cancellationToken =>
             {
@@ -763,7 +768,7 @@ public sealed class LocationLifecycleTests
         // local instance is activated.
         var activatedB = 0;
         var reconnect = await nodeB.ActorOwnership.ExecuteActorClaimThenActivateAsync<string>(
-            MeshName, ActorType, ActorId, RoutingId.From("node-b"),
+            Mesh(MeshName), ActorType, Actor(ActorId), RoutingId.From("node-b"),
             deactivate: null,
             activate: _ =>
             {
@@ -785,9 +790,9 @@ public sealed class LocationLifecycleTests
         Func<CancellationToken, ValueTask>? deactivate = null)
     {
         var activation = await node.ActorOwnership.ExecuteActorClaimThenActivateAsync(
-            MeshName,
+            Mesh(MeshName),
             ActorType,
-            ActorId,
+            Actor(ActorId),
             RoutingId.From("node-a"),
             deactivate,
             static _ => ValueTask.FromResult(new object()),

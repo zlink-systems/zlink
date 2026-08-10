@@ -3664,18 +3664,130 @@ public sealed class StatefulServiceRuntimeTests
         Assert.Equal(0, target.RetainedUserSpotOperationCount);
     }
 
+    [Fact]
+    public async Task RemoteUserSpotExpiryRejectsReplayAfterWallClockRollback()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        var deadlineTime = new AdjustableTimeProvider(DateTimeOffset.UtcNow);
+        await using var source = NewNode(context, "rollback-source");
+        await using var target = NewNode(
+            context,
+            "rollback-target",
+            TimeSpan.FromMilliseconds(50),
+            deadlineTime);
+        var suffix = Guid.NewGuid().ToString("N");
+        var sourceEndpoint = $"inproc://rollback-source-{suffix}";
+        var targetEndpoint = $"inproc://rollback-target-{suffix}";
+        source.SetBind(sourceEndpoint);
+        target.SetBind(targetEndpoint);
+        source.ConnectPeer(targetEndpoint, target.RoutingId);
+        target.ConnectPeer(sourceEndpoint, source.RoutingId);
+        var operationTarget = new RecordingUserSpotOperationTarget();
+        target.SetUserSpotOperationTarget(operationTarget);
+        source.Start();
+        target.Start();
+        await WaitUntilAsync(
+            () => source.Status().AdmittedPeerCount == 1
+                  && target.Status().AdmittedPeerCount == 1);
+
+        var targetGeneration = target.Status().LifecycleGeneration;
+        var reservation = new ObjectReservationFence(
+            "rollback-reservation",
+            "rollback-store",
+            109,
+            113,
+            target.RoutingId,
+            targetGeneration,
+            "rollback-owner",
+            127,
+            1);
+        var deadline = checked(
+            (ulong)deadlineTime.GetUtcNow().AddMilliseconds(50)
+                .ToUnixTimeMilliseconds());
+        Assert.Equal(
+            SubmitResult.Ok,
+            source.CreateUserSpot(
+                target.RoutingId,
+                "rollback-spot",
+                "Sample.RollbackSpot",
+                reservation,
+                deadline,
+                out var operationId,
+                TimeSpan.FromSeconds(2)));
+        await WaitUntilAsync(() =>
+            source.Status().PendingInfrastructureMessages > 0);
+        _ = DrainRecords(source);
+        Assert.Equal(1, operationTarget.CreateCount);
+        Assert.Equal(1, target.RetainedUserSpotOperationCount);
+
+        var replay = new ZLinkServiceWireCodec.UserSpotOperationRecord(
+            ServiceWireConstants.Command.UserSpotCreate,
+            new UserSpotCreateOperation(
+                131,
+                operationId,
+                source.RoutingId,
+                source.Status().LifecycleGeneration,
+                "rollback-spot",
+                "Sample.RollbackSpot",
+                reservation,
+                deadline),
+            default);
+
+        deadlineTime.Advance(
+            wallClock: TimeSpan.FromHours(-1),
+            monotonic: TimeSpan.FromMilliseconds(100));
+        await WaitUntilAsync(() => target.RetainedUserSpotOperationCount == 0);
+        Assert.Equal(
+            SubmitResult.Ok,
+            source.ResubmitUserSpotOperation(target.RoutingId, replay));
+        await Task.Delay(TimeSpan.FromMilliseconds(100));
+
+        Assert.Equal(1, operationTarget.CreateCount);
+        Assert.Equal(0, target.RetainedUserSpotOperationCount);
+    }
+
     private static ZLinkManagedMeshNode NewNode(
         IContext context,
         string rid,
-        TimeSpan? remoteUserSpotTerminalRetention = null)
+        TimeSpan? remoteUserSpotTerminalRetention = null,
+        TimeProvider? deadlineTimeProvider = null)
     {
         var node = new ZLinkManagedMeshNode(
             context,
             "mesh",
             remoteUserSpotTerminalRetention:
-                remoteUserSpotTerminalRetention);
+                remoteUserSpotTerminalRetention,
+            deadlineTimeProvider: deadlineTimeProvider);
         node.SetRoutingId(RoutingId.From(rid));
         return node;
+    }
+
+    private sealed class AdjustableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private readonly object _gate = new();
+        private DateTimeOffset _utcNow = utcNow;
+        private long _timestamp;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            lock (_gate) return _utcNow;
+        }
+
+        public override long GetTimestamp()
+        {
+            lock (_gate) return _timestamp;
+        }
+
+        internal void Advance(TimeSpan wallClock, TimeSpan monotonic)
+        {
+            lock (_gate)
+            {
+                _utcNow += wallClock;
+                _timestamp += monotonic.Ticks;
+            }
+        }
     }
 
     private sealed class RecordingReplyRelayTarget(

@@ -1,4 +1,5 @@
 using Systems.Zlink.Stream.Connector.Runtime;
+using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 
 namespace Zlink.Framework.Runtime.Actors;
 
@@ -80,8 +81,8 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
         if (result.Result == RequestResult.NotConnected)
         {
             ZLinkMessageParts.DisposeAll(replyParts);
-            // Not connected locally — the remote fallback below is traced by the
-            // route client; no reply_received here.
+            // The process-local path is an optimization. NotConnected resumes
+            // the canonical remote route; that route owns the observable trace.
             return await JoinRemoteAsync(
                     getState(),
                     spotNodeRid,

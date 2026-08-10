@@ -10,27 +10,30 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
 {
     private readonly IStreamSocket _socket;
     private readonly IMeshNode _node;
-    private readonly ZLinkMeshCompletionTable? _completions;
+    private readonly ZLinkMeshCompletionTable _completions;
+    private readonly ZLinkMeshDispatchPump? _ownedCompletionPump;
     private readonly bool _ownsNode;
     private readonly object _sendGate = new();
     private readonly object _sessionGate = new();
     private IStreamSessionService? _session;
     private bool _sessionStarted;
 
-    // completions is the shared MeshNode's completion table (non-null when the
-    // node is the framework's single MeshNode); the dispatch pump resolves the
-    // StreamBind/StreamUnbind completions this wrapper awaits. ownsNode is false
-    // for the shared node so it is not disposed here.
+    // The shared Framework MeshNode supplies its completion table and owns its
+    // pump. A standalone StreamNode supplies a private table and pump owned by
+    // this wrapper, so bind/unbind use the same terminal-completion contract.
     public ZLinkBackendStreamSocketWrapper(
         IStreamSocket socket,
         IMeshNode node,
-        ZLinkMeshCompletionTable? completions,
-        bool ownsNode)
+        ZLinkMeshCompletionTable completions,
+        bool ownsNode,
+        ZLinkMeshDispatchPump? ownedCompletionPump = null)
     {
         _socket = socket;
         _node = node;
-        _completions = completions;
+        _completions = completions
+            ?? throw new ArgumentNullException(nameof(completions));
         _ownsNode = ownsNode;
+        _ownedCompletionPump = ownedCompletionPump;
     }
 
     internal IStreamSocket NativeSocket => _socket;
@@ -169,10 +172,8 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
     }
 
     // Awaits a MeshNode operation (StreamBind/StreamUnbind) to terminal
-    // completion via the shared node's completion table so bind/unbind are
-    // observably complete (spec 31 §7 — binding update runs on the infrastructure
-    // claim). When no shared completion table is available (standalone minted
-    // node) the submit result is the only signal and the operation is not awaited.
+    // completion so bind/unbind are observably complete (spec 31 §7 — binding
+    // update runs on the infrastructure claim).
     private async ValueTask UnbindAndAwaitAsync(
         IStreamSessionService session,
         RoutingId sessionRid,
@@ -197,9 +198,6 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
         CancellationToken cancellationToken)
     {
         var correlationId = _node.AllocateOperationId();
-        if (_completions is null)
-            return submitOperation(correlationId);
-
         var completion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var submit = _completions.RegisterBeforeSubmit(
@@ -219,8 +217,11 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
             submitOperation);
         if (submit != SubmitResult.Ok)
             return submit;
-        await using (cancellationToken.Register(() => completion.TrySetCanceled())
-                         .ConfigureAwait(false))
+        await using (_completions.RegisterCancellation(
+                         correlationId,
+                         cancellationToken,
+                         () => completion.TrySetCanceled(cancellationToken))
+                     .ConfigureAwait(false))
             await completion.Task.ConfigureAwait(false);
         return SubmitResult.Ok;
     }
@@ -263,6 +264,10 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
         // The shared framework MeshNode is owned by its spot node runtime; only a
         // standalone minted node is disposed here.
         if (_ownsNode)
+        {
+            if (_ownedCompletionPump is not null)
+                await _ownedCompletionPump.DisposeAsync().ConfigureAwait(false);
             await _node.DisposeAsync().ConfigureAwait(false);
+        }
     }
 }

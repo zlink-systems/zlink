@@ -2,28 +2,19 @@ namespace Zlink.Framework.Runtime.Spots;
 
 internal sealed class ZLinkActorMessageFollower
 {
-    private const int Capacity = 4096;
-    private const int RouteMessageCapacity = 1024;
-    private const long RouteByteCapacity = 16L * 1024 * 1024;
+    private const int DirectReplyCapacity = 4096;
     private readonly ZLinkFrameworkRuntime _runtime;
-    private readonly SemaphoreSlim _admissionSlots;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<MessageFollowKey, ActorQueue>
         _queues = new();
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<
+    private readonly ZLinkDirectReplyCompletionRegistry<
         DirectReplyKey,
-        PendingDirectReply> _directReplies = new();
-    private readonly object _directReplyTerminalGate = new();
-    private readonly Dictionary<DirectReplyKey, DateTimeOffset>
-        _directReplyTerminals = [];
-    private readonly Queue<DirectReplyKey> _directReplyTerminalOrder = [];
+        PendingDirectReply> _directReplyCompletions = new(
+            DirectReplyCapacity,
+            ZLinkRelocationReplyLifetime.TerminalRetention);
 
-    public ZLinkActorMessageFollower(
-        ZLinkFrameworkRuntime runtime,
-        int capacity = Capacity)
+    public ZLinkActorMessageFollower(ZLinkFrameworkRuntime runtime)
     {
         _runtime = runtime;
-        if (capacity <= 0) throw new ArgumentOutOfRangeException(nameof(capacity));
-        _admissionSlots = new SemaphoreSlim(capacity, capacity);
     }
 
     public void Enqueue(
@@ -70,12 +61,9 @@ internal sealed class ZLinkActorMessageFollower
         ReadOnlyMemory<byte> applicationMetadata = default)
     {
         _runtime.ShutdownToken.ThrowIfCancellationRequested();
-        if (!_admissionSlots.Wait(0))
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                $"Actor ref '{messageFollowRoute.SourceActor.ActorId}' could not use Message Follow because its queue is full.");
         MessageFollowFrame? frame = null;
         DirectReplyKey? directReplyKey = null;
+        PendingDirectReply? directReplyPending = null;
         try
         {
             if (directReply is not null
@@ -92,13 +80,12 @@ internal sealed class ZLinkActorMessageFollower
                 var pending = new PendingDirectReply(
                     directReply,
                     routeContext.DeadlineUnixMs);
-                if (IsDirectReplyTerminal(replyKey)
-                    || _directReplies.Count >= Capacity
-                    || !_directReplies.TryAdd(replyKey, pending))
+                if (!_directReplyCompletions.TryRegister(replyKey, pending))
                     throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.Unavailable,
                         $"Actor ref '{messageFollowRoute.SourceActor.ActorId}' could not preserve its Message Follow reply route.");
                 directReplyKey = replyKey;
+                directReplyPending = pending;
                 routeContext = routeContext with
                 {
                     ReplyRequestId = requestId,
@@ -127,8 +114,7 @@ internal sealed class ZLinkActorMessageFollower
                 applicationMetadata.ToArray(),
                 header,
                 ZLinkStreamProtocolDefaults.EncodeHeader(header).ToArray(),
-                body.ToArray(),
-                _admissionSlots);
+                body.ToArray());
             var key = new MessageFollowKey(
                 messageFollowRoute.SourceActor.NodeRid,
                 messageFollowRoute.SourceActor.ActorId,
@@ -152,12 +138,12 @@ internal sealed class ZLinkActorMessageFollower
         }
         catch
         {
-            if (directReplyKey is { } key)
-                _directReplies.TryRemove(key, out _);
-            if (frame is null)
-                _admissionSlots.Release();
-            else
-                frame.ReleaseAdmission();
+            if (directReplyKey is { } key
+                && directReplyPending is { } pending)
+                _directReplyCompletions.TryRemove(
+                    key,
+                    pending,
+                    rememberTerminal: false);
             throw;
         }
     }
@@ -186,7 +172,7 @@ internal sealed class ZLinkActorMessageFollower
             actorId,
             requestId,
             replyCapability);
-        if (!_directReplies.TryGetValue(key, out var pending))
+        if (!_directReplyCompletions.TryGet(key, out var pending))
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"actor_follow_reply_not_found actor={actorId} request_id={requestId}");
@@ -215,11 +201,10 @@ internal sealed class ZLinkActorMessageFollower
                 || pending.IsExpired)
             {
                 pending.Complete();
-                RememberDirectReplyTerminal(key);
-                _directReplies.TryRemove(
-                    new KeyValuePair<DirectReplyKey, PendingDirectReply>(
-                        key,
-                        pending));
+                _directReplyCompletions.TryRemove(
+                    key,
+                    pending,
+                    rememberTerminal: true);
             }
             else
             {
@@ -246,9 +231,7 @@ internal sealed class ZLinkActorMessageFollower
         var capability = CreateReplyCapability(replyNodeRid, deadlineUnixMs);
         var key = new DirectReplyKey(actorId, requestId, capability);
         var pending = new PendingDirectReply(directReply, deadlineUnixMs);
-        if (IsDirectReplyTerminal(key)
-            || _directReplies.Count >= Capacity
-            || !_directReplies.TryAdd(key, pending))
+        if (!_directReplyCompletions.TryRegister(key, pending))
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 $"Actor ref '{actorId}' could not preserve its relocation reply route.");
@@ -259,10 +242,10 @@ internal sealed class ZLinkActorMessageFollower
                     pending,
                     ct)))
         {
-            _directReplies.TryRemove(
-                new KeyValuePair<DirectReplyKey, PendingDirectReply>(
-                    key,
-                    pending));
+            _directReplyCompletions.TryRemove(
+                key,
+                pending,
+                rememberTerminal: false);
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ShuttingDown,
                 "The runtime stopped before the relocation reply route was registered.");
@@ -320,7 +303,7 @@ internal sealed class ZLinkActorMessageFollower
         if (flags != ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind)
             return false;
         var key = new DirectReplyKey(actorId, requestId, replyCapability);
-        if (!_directReplies.TryGetValue(key, out var pending))
+        if (!_directReplyCompletions.TryGet(key, out var pending))
             return false;
         if (!pending.TryBeginDelivery())
         {
@@ -348,11 +331,10 @@ internal sealed class ZLinkActorMessageFollower
                 || pending.IsExpired)
             {
                 pending.Complete();
-                RememberDirectReplyTerminal(key);
-                _directReplies.TryRemove(
-                    new KeyValuePair<DirectReplyKey, PendingDirectReply>(
-                        key,
-                        pending));
+                _directReplyCompletions.TryRemove(
+                    key,
+                    pending,
+                    rememberTerminal: true);
             }
             else
             {
@@ -368,7 +350,7 @@ internal sealed class ZLinkActorMessageFollower
         IReadOnlyList<Message> parts,
         SendFlags flags)
     {
-        if (!_directReplies.TryGetValue(key, out var current)
+        if (!_directReplyCompletions.TryGet(key, out var current)
             || !ReferenceEquals(current, pending)
             || !pending.TryBeginDelivery())
             return SubmitResult.Terminated;
@@ -399,13 +381,10 @@ internal sealed class ZLinkActorMessageFollower
         {
             pending.ReleaseDelivery();
             if (terminal)
-            {
-                RememberDirectReplyTerminal(key);
-                _directReplies.TryRemove(
-                    new KeyValuePair<DirectReplyKey, PendingDirectReply>(
-                        key,
-                        pending));
-            }
+                _directReplyCompletions.TryRemove(
+                    key,
+                    pending,
+                    rememberTerminal: true);
         }
     }
 
@@ -444,53 +423,10 @@ internal sealed class ZLinkActorMessageFollower
         finally
         {
             pending.Expire();
-            RememberDirectReplyTerminal(key);
-            _directReplies.TryRemove(
-                new KeyValuePair<DirectReplyKey, PendingDirectReply>(
-                    key,
-                    pending));
-        }
-    }
-
-    private void RememberDirectReplyTerminal(DirectReplyKey key)
-    {
-        lock (_directReplyTerminalGate)
-        {
-            var now = DateTimeOffset.UtcNow;
-            RemoveExpiredDirectReplyTerminalsUnderLock(now);
-            if (_directReplyTerminals.TryAdd(
-                    key,
-                    now + ZLinkRelocationReplyLifetime.TerminalRetention))
-                _directReplyTerminalOrder.Enqueue(key);
-            else
-                _directReplyTerminals[key] =
-                    now + ZLinkRelocationReplyLifetime.TerminalRetention;
-            while (_directReplyTerminals.Count > Capacity
-                   && _directReplyTerminalOrder.TryDequeue(out var evicted))
-                _directReplyTerminals.Remove(evicted);
-        }
-    }
-
-    private bool IsDirectReplyTerminal(DirectReplyKey key)
-    {
-        lock (_directReplyTerminalGate)
-        {
-            RemoveExpiredDirectReplyTerminalsUnderLock(DateTimeOffset.UtcNow);
-            return _directReplyTerminals.ContainsKey(key);
-        }
-    }
-
-    private void RemoveExpiredDirectReplyTerminalsUnderLock(
-        DateTimeOffset now)
-    {
-        while (_directReplyTerminalOrder.TryPeek(out var oldest)
-               && (!_directReplyTerminals.TryGetValue(
-                       oldest,
-                       out var expiresAt)
-                   || expiresAt <= now))
-        {
-            _directReplyTerminalOrder.Dequeue();
-            _directReplyTerminals.Remove(oldest);
+            _directReplyCompletions.TryRemove(
+                key,
+                pending,
+                rememberTerminal: true);
         }
     }
 
@@ -707,7 +643,6 @@ internal sealed class ZLinkActorMessageFollower
         finally
         {
             frame.Complete(submitted);
-            frame.ReleaseAdmission();
         }
     }
 
@@ -715,7 +650,23 @@ internal sealed class ZLinkActorMessageFollower
         ActorQueue queue,
         MessageFollowFrame frame)
     {
-        if (!frame.MessageFollowRoute.Lease.TryClaimMessageFollowNotice())
+        var source = frame.MessageFollowRoute.SourceActor;
+        var target = frame.MessageFollowRoute.TargetActor;
+        var fence = new ZLinkMessageFollowFence(
+            ZLinkMessageFollowObjectKind.Actor,
+            source.ActorId,
+            target.ActorId,
+            source.NodeRid,
+            target.NodeRid,
+            source.Generation,
+            target.Generation,
+            frame.MessageFollowRoute.SourceNodeGeneration,
+            frame.MessageFollowRoute.TargetNodeGeneration,
+            frame.MessageFollowRoute.SourceAuthorityOwnerGeneration,
+            frame.MessageFollowRoute.TargetAuthorityOwnerGeneration,
+            frame.MessageFollowRoute.SourceOwnerLeaseGeneration,
+            frame.MessageFollowRoute.TargetOwnerLeaseGeneration);
+        if (!frame.MessageFollowRoute.Lease.TryBeginMessageFollowNotice(fence))
             return;
 
         var operationId = frame.MessageFollowRouteContext.OperationId;
@@ -724,14 +675,12 @@ internal sealed class ZLinkActorMessageFollower
             || frame.SourceNodeRid.IsEmpty
             || hopCount is 0 or > ZLinkServiceWireCodec.MessageFollowMaximumHopCount)
         {
-            frame.MessageFollowRoute.Lease.ReleaseMessageFollowNoticeClaim();
+            frame.MessageFollowRoute.Lease.AbortMessageFollowNotice(fence);
             return;
         }
 
         try
         {
-            var source = frame.MessageFollowRoute.SourceActor;
-            var target = frame.MessageFollowRoute.TargetActor;
             var record = new ZLinkServiceWireCodec.MessageFollowRecord(
                 new ZLinkServiceWireCodec.MessageFollowRoute(
                     ZLinkServiceWireCodec.MessageFollowActorKind,
@@ -761,14 +710,16 @@ internal sealed class ZLinkActorMessageFollower
                 || !sender.TrySendMessageFollowNotification(
                     frame.SourceNodeRid,
                     record))
-                frame.MessageFollowRoute.Lease.ReleaseMessageFollowNoticeClaim();
+                frame.MessageFollowRoute.Lease.AbortMessageFollowNotice(fence);
+            else
+                frame.MessageFollowRoute.Lease.MarkMessageFollowNoticeSent(fence);
         }
         catch (Exception exception)
             when (exception is InvalidOperationException
                 or ZlinkException
                 or ZLinkFrameworkException)
         {
-            frame.MessageFollowRoute.Lease.ReleaseMessageFollowNoticeClaim();
+            frame.MessageFollowRoute.Lease.AbortMessageFollowNotice(fence);
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"message follow notification failed: {exception.Message}");
         }
@@ -789,20 +740,20 @@ internal sealed class ZLinkActorMessageFollower
                     owner._runtime.ShutdownToken,
                     owner._runtime.ExecutionOwner),
                 owner._runtime.ErrorSink,
-                owner._runtime.ShutdownToken,
-                RouteMessageCapacity,
-                RouteByteCapacity);
+                owner._runtime.ShutdownToken);
         private bool _retired;
         private bool _retirementScheduled;
 
         internal uint SnapshotQueuedMessages()
         {
-            return checked((uint)_queue.ApplicationPendingCount);
+            return (uint)_queue.ApplicationPendingCount;
         }
 
         internal uint SnapshotQueuedBytes()
         {
-            return checked((uint)_queue.ApplicationPendingRetainedBytes);
+            return (uint)Math.Min(
+                _queue.ApplicationPendingRetainedBytes,
+                uint.MaxValue);
         }
 
         public bool TryEnqueue(MessageFollowFrame frame)
@@ -810,7 +761,7 @@ internal sealed class ZLinkActorMessageFollower
             lock (_lifecycleGate)
             {
                 if (_retired) return false;
-                var admission = _queue.TryPostApplicationWithAdmission(
+                var admission = _queue.TryPostApplicationWithoutConfiguredLimit(
                     frame.EncodedSize,
                     cancellationToken => owner.FollowAsync(
                         this,
@@ -826,11 +777,6 @@ internal sealed class ZLinkActorMessageFollower
                     }
                     return true;
                 }
-                if (admission == ZLinkSerialPostAdmission.QueueFull)
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.Unavailable,
-                        $"Actor ref '{key.ActorId}' could not use Message Follow because "
-                        + "its Message Follow route reached the 1,024 message or 16 MiB bound.");
                 _retired = true;
                 return false;
             }
@@ -868,10 +814,8 @@ internal sealed class ZLinkActorMessageFollower
         byte[] applicationMetadata,
         ZlinkStreamHeader header,
         byte[] headerBytes,
-        byte[] bodyBytes,
-        SemaphoreSlim admissionSlots)
+        byte[] bodyBytes)
     {
-        private int _admissionHeld = 1;
         private readonly TaskCompletionSource<bool> _completion =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -897,11 +841,6 @@ internal sealed class ZLinkActorMessageFollower
         public Task<bool> Completion => _completion.Task;
         public void Complete(bool submitted) =>
             _completion.TrySetResult(submitted);
-        public void ReleaseAdmission()
-        {
-            if (Interlocked.Exchange(ref _admissionHeld, 0) != 0)
-                admissionSlots.Release();
-        }
     }
 
     private readonly record struct MessageFollowKey(

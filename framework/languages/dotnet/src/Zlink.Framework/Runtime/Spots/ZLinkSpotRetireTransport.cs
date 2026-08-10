@@ -997,10 +997,6 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
     internal static void ValidateHeldRecords(
         IReadOnlyList<ZLinkSpotRetireHeldRecord> records)
     {
-        if (records.Count > 1_024)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Rejected,
-                "A Spot relocation held-ingress queue cannot exceed 1,024 messages.");
         long bytes = 0;
         ulong previous = 0;
         foreach (var record in records)
@@ -1011,10 +1007,6 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     "Held Spot ingress sequences must be strictly increasing.");
             previous = record.AcceptedSequence;
             bytes = checked(bytes + record.Payload.LongLength);
-            if (bytes > 16L * 1024 * 1024)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Rejected,
-                    "A Spot relocation held-ingress queue cannot exceed 16 MiB.");
         }
     }
 

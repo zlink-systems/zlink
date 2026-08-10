@@ -139,8 +139,10 @@ internal static class ZLinkRelocationEnvelopeCodec
     private const ushort Version = 2;
     private const int MaxFieldBytes = 64 * 1024 * 1024;
     private const int MinEncodedParticipantBytes = 38;
+    private const int MinEncodedAcceptedJobBytes = sizeof(ulong) + sizeof(int);
     private const int MinCanonicalStateBytes = 17;
-    private const int MaxItemsPerParticipant = 65_536;
+    private const int MinCanonicalJournalEntryBytes = 2 * sizeof(ulong) + 2;
+    private const int MaxTimerOrCompletionItems = 65_536;
 
     internal static byte[] Encode(ZLinkRelocationEnvelope envelope)
     {
@@ -245,7 +247,7 @@ internal static class ZLinkRelocationEnvelopeCodec
             .OrderBy(static item => item.ParticipantId)
             .ThenBy(static item => item.AcceptedSequence)
             .ToArray();
-        if (completions.Length > MaxItemsPerParticipant)
+        if (completions.Length > MaxTimerOrCompletionItems)
             throw new ArgumentOutOfRangeException(nameof(completion));
         using var stream = new MemoryStream();
         var original = envelope.CanonicalLogicalStream.Span;
@@ -684,8 +686,8 @@ internal static class ZLinkRelocationEnvelopeCodec
                     "Relocation participant generations must be non-zero.");
             var state = reader.ReadByteField(MaxFieldBytes);
             var jobs = new ZLinkRelocationQueuedJob[
-                reader.ReadCount(
-                    MaxItemsPerParticipant,
+                reader.ReadCountWithinRemaining(
+                    MinEncodedAcceptedJobBytes,
                     "accepted job")];
             ulong previousSequence = 0;
             for (var jobIndex = 0;
@@ -703,7 +705,7 @@ internal static class ZLinkRelocationEnvelopeCodec
             }
             var timers = new ZLinkRelocationLogicalTimer[
                 reader.ReadCount(
-                    MaxItemsPerParticipant,
+                    MaxTimerOrCompletionItems,
                     "logical timer")];
             var timerIds = new HashSet<string>(StringComparer.Ordinal);
             for (var timerIndex = 0;
@@ -778,7 +780,11 @@ internal static class ZLinkRelocationEnvelopeCodec
                     "Relocation participant generations must be non-zero.");
             var state = ReadBytes(reader, MaxFieldBytes);
             var jobs = new ZLinkRelocationQueuedJob[
-                ReadCount(reader, MaxItemsPerParticipant, "accepted job")];
+                ReadCountWithinRemaining(
+                    reader,
+                    input,
+                    MinEncodedAcceptedJobBytes,
+                    "accepted job")];
             ulong previousSequence = 0;
             for (var jobIndex = 0; jobIndex < jobs.Length; jobIndex++)
             {
@@ -792,7 +798,7 @@ internal static class ZLinkRelocationEnvelopeCodec
                     ReadBytes(reader, MaxFieldBytes));
             }
             var timers = new ZLinkRelocationLogicalTimer[
-                ReadCount(reader, MaxItemsPerParticipant, "logical timer")];
+                ReadCount(reader, MaxTimerOrCompletionItems, "logical timer")];
             var timerIds = new HashSet<string>(StringComparer.Ordinal);
             for (var timerIndex = 0; timerIndex < timers.Length; timerIndex++)
             {
@@ -1040,7 +1046,9 @@ internal static class ZLinkRelocationEnvelopeCodec
             static id => id,
             static _ => (IReadOnlyList<ZLinkRelocationQueuedJob>)
                 new List<ZLinkRelocationQueuedJob>());
-        var count = reader.ReadBoundedCount(MaxItemsPerParticipant, "journal");
+        var count = reader.ReadCountWithinRemaining(
+            MinCanonicalJournalEntryBytes,
+            "journal");
         var operations = new HashSet<CanonicalJournalOperation>();
         ulong previousParticipantId = 0;
         ulong previousSequence = 0;
@@ -1092,7 +1100,9 @@ internal static class ZLinkRelocationEnvelopeCodec
             static id => id,
             static _ => (IReadOnlyList<CanonicalTimerProjection>)
                 new List<CanonicalTimerProjection>());
-        var count = reader.ReadBoundedCount(MaxItemsPerParticipant, "timer registration");
+        var count = reader.ReadBoundedCount(
+            MaxTimerOrCompletionItems,
+            "timer registration");
         ulong previousParticipantId = 0;
         string? previousName = null;
         for (var index = 0; index < count; index++)
@@ -1142,7 +1152,9 @@ internal static class ZLinkRelocationEnvelopeCodec
         ICollection<ulong> participantIds,
         Dictionary<ulong, IReadOnlyList<CanonicalTimerProjection>> timers)
     {
-        var count = reader.ReadBoundedCount(MaxItemsPerParticipant, "pending timer tick");
+        var count = reader.ReadBoundedCount(
+            MaxTimerOrCompletionItems,
+            "pending timer tick");
         ulong previousParticipantId = 0;
         ulong previousSequence = 0;
         for (var index = 0; index < count; index++)
@@ -1186,7 +1198,9 @@ internal static class ZLinkRelocationEnvelopeCodec
         var records = participantIds.ToDictionary(
             static id => id,
             static _ => new List<ZLinkCanonicalTerminalCompletion>());
-        var count = reader.ReadBoundedCount(MaxItemsPerParticipant, "terminal completion");
+        var count = reader.ReadBoundedCount(
+            MaxTimerOrCompletionItems,
+            "terminal completion");
         var operations = new HashSet<(string OwnerId, ulong OwnerLease, string NodeRid,
             ulong NodeGeneration, ulong OperationHigh, ulong OperationLow)>();
         ulong previousParticipantId = 0;
@@ -1829,6 +1843,17 @@ internal static class ZLinkRelocationEnvelopeCodec
             return count;
         }
 
+        internal int ReadCountWithinRemaining(
+            int minimumItemBytes,
+            string name)
+        {
+            var count = ReadCount(int.MaxValue, name);
+            if (count > Remaining / minimumItemBytes)
+                throw new InvalidDataException(
+                    $"The relocation {name} count exceeds the remaining payload.");
+            return count;
+        }
+
         internal ReadOnlyMemory<byte> ReadBytes(int length)
         {
             if (length < 0 || length > _source.Length - _offset)
@@ -1920,6 +1945,19 @@ internal static class ZLinkRelocationEnvelopeCodec
             return checked((int)count);
         }
 
+        internal int ReadCountWithinRemaining(
+            int minimumItemBytes,
+            string field)
+        {
+            var count = ReadUInt32();
+            if (count > int.MaxValue
+                || (ulong)count * checked((ulong)minimumItemBytes)
+                > checked((ulong)Remaining))
+                throw new InvalidDataException(
+                    $"The relocation {field} count exceeds the remaining payload.");
+            return checked((int)count);
+        }
+
         internal ReadOnlyMemory<byte> CopyRange(int start)
         {
             if (start < 0 || start > _offset)
@@ -1975,11 +2013,10 @@ internal static class ZLinkRelocationEnvelopeCodec
                 throw new ArgumentOutOfRangeException(
                     nameof(envelope),
                     "Relocation participant generations must be non-zero signed 63-bit values.");
-            if (participant.AcceptedJobs.Count > MaxItemsPerParticipant
-                || participant.LogicalTimers.Count > MaxItemsPerParticipant)
+            if (participant.LogicalTimers.Count > MaxTimerOrCompletionItems)
                 throw new ArgumentOutOfRangeException(
                     nameof(envelope),
-                    "A relocation participant contains too many jobs or timers.");
+                    "A relocation participant contains too many timers.");
 
             ulong previousSequence = 0;
             foreach (var job in participant.AcceptedJobs)
@@ -2047,6 +2084,19 @@ internal static class ZLinkRelocationEnvelopeCodec
         if (count < 0 || count > maximum)
             throw new InvalidDataException(
                 $"The relocation {name} count exceeds its bound.");
+        return count;
+    }
+
+    private static int ReadCountWithinRemaining(
+        BinaryReader reader,
+        Stream input,
+        int minimumItemBytes,
+        string name)
+    {
+        var count = ReadCount(reader, int.MaxValue, name);
+        if (count > (input.Length - input.Position) / minimumItemBytes)
+            throw new InvalidDataException(
+                $"The relocation {name} count exceeds the remaining payload.");
         return count;
     }
 

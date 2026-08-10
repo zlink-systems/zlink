@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Net;
 using System.Text;
 using Xunit;
+using Zlink.Framework.Contracts.Codecs;
 using Zlink.Framework.Contracts.Errors;
 using Zlink.HttpClient.Runtime;
 
@@ -160,6 +161,26 @@ public sealed class RuntimeUnitTests
     }
 
     [Fact]
+    public void HttpCodecRegistry_canonicalizes_registration_and_parses_response_parameters()
+    {
+        var codecs = new HttpClientCodecRegistry();
+        codecs.AddSerializer(" \tApplication/X-Test\t", MarkerSerializer.Instance);
+
+        var encoded = codecs.Encode("request", typeof(string));
+        var decoded = codecs.Decode(
+            Encoding.UTF8.GetBytes("response"),
+            typeof(string),
+            "Application/X-Test; charset=utf-8");
+
+        Assert.Equal("application/x-test", encoded.ContentType);
+        Assert.Equal("response", decoded);
+        Assert.Throws<ArgumentException>(() =>
+            codecs.AddSerializer("application/x-test; charset=utf-8", MarkerSerializer.Instance));
+        Assert.Throws<ArgumentException>(() =>
+            codecs.AddSerializer("application /x-test", MarkerSerializer.Instance));
+    }
+
+    [Fact]
     public async Task Proxy_credentials_are_not_added_to_origin_request_headers()
     {
         var handler = new CapturingRequestHandler();
@@ -216,6 +237,21 @@ public sealed class RuntimeUnitTests
             {
                 Content = new ByteArrayContent([])
             });
+        }
+    }
+
+    private sealed class MarkerSerializer : IZLinkMessageSerializer
+    {
+        public static MarkerSerializer Instance { get; } = new();
+
+        public ZLinkEncodedPayload Serialize(object value, Type type)
+        {
+            return ZLinkEncodedPayload.From(Encoding.UTF8.GetBytes((string)value));
+        }
+
+        public object? Deserialize(ZLinkEncodedPayload payload, Type type)
+        {
+            return Encoding.UTF8.GetString(payload.Bytes.Span);
         }
     }
 

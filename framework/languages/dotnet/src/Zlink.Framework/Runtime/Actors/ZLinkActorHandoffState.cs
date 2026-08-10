@@ -1701,7 +1701,7 @@ internal readonly record struct ZLinkActorMessageFollowRoute(
 internal sealed class ZLinkActorMessageFollowLease(TimeProvider timeProvider)
 {
     private readonly object _gate = new();
-    private int _messageFollowNoticeClaimed;
+    private readonly ZLinkMessageFollowSuppressionRegistry _suppression = new(capacity: 1);
     private ZLinkActorMessageFollowLeasePhase _phase;
     private long _committedAt;
     private TimeSpan _duration;
@@ -1747,17 +1747,28 @@ internal sealed class ZLinkActorMessageFollowLease(TimeProvider timeProvider)
 
     public void Cancel()
     {
-        lock (_gate) _phase = ZLinkActorMessageFollowLeasePhase.Cancelled;
+        lock (_gate)
+        {
+            _phase = ZLinkActorMessageFollowLeasePhase.Cancelled;
+            _suppression.ExpireAll();
+        }
     }
 
-    internal bool TryClaimMessageFollowNotice() =>
-        Interlocked.CompareExchange(
-            ref _messageFollowNoticeClaimed,
-            1,
-            0) == 0;
+    internal bool TryBeginMessageFollowNotice(ZLinkMessageFollowFence fence)
+    {
+        lock (_gate)
+        {
+            return _phase == ZLinkActorMessageFollowLeasePhase.Committed
+                   && timeProvider.GetElapsedTime(_committedAt) < _duration
+                   && _suppression.TryBegin(fence);
+        }
+    }
 
-    internal void ReleaseMessageFollowNoticeClaim() =>
-        Volatile.Write(ref _messageFollowNoticeClaimed, 0);
+    internal void MarkMessageFollowNoticeSent(ZLinkMessageFollowFence fence) =>
+        _suppression.MarkSent(fence);
+
+    internal void AbortMessageFollowNotice(ZLinkMessageFollowFence fence) =>
+        _suppression.Abort(fence);
 }
 
 internal enum ZLinkActorMessageFollowLeasePhase

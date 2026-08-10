@@ -108,37 +108,48 @@ public sealed class RuntimeConformanceFixtureTests
             .GetProperty("retainedPayloadBytesPerWork").GetInt64();
         using var errorSink = new ZLinkRuntimeErrorSink();
         await using var queue = CreateQueue(errorSink);
-        var release = Signal();
+        var releaseApplication = Signal();
+        var releaseLifecycle = Signal();
+        try
+        {
+            Assert.Equal(
+                ZLinkSerialPostAdmission.Accepted,
+                queue.TryPostApplicationWithAdmission(
+                    applicationBytes,
+                    async _ => await releaseApplication.Task.ConfigureAwait(false),
+                    out var application));
+            Assert.Equal(applicationBytes, queue.ApplicationPendingRetainedBytes);
+            Assert.Equal(
+                ZLinkSerialPostAdmission.QueueFull,
+                queue.TryPostApplicationWithAdmission(
+                    static _ => ValueTask.CompletedTask,
+                    out _));
 
-        Assert.Equal(
-            ZLinkSerialPostAdmission.Accepted,
-            queue.TryPostApplicationWithAdmission(
-                applicationBytes,
-                async _ => await release.Task.ConfigureAwait(false),
-                out var application));
-        Assert.Equal(applicationBytes, queue.ApplicationPendingRetainedBytes);
-        Assert.Equal(
-            ZLinkSerialPostAdmission.QueueFull,
-            queue.TryPostApplicationWithAdmission(
-                static _ => ValueTask.CompletedTask,
-                out _));
+            Assert.Equal(
+                ZLinkSerialPostAdmission.Accepted,
+                queue.TryPostNextWithAdmission(
+                    lifecycleBytes,
+                    async _ => await releaseLifecycle.Task.ConfigureAwait(false),
+                    out var lifecycle));
+            Assert.Equal(lifecycleBytes, queue.LifecyclePendingRetainedBytes);
+            Assert.Equal(
+                ZLinkSerialPostAdmission.QueueFull,
+                queue.TryPostNextWithAdmission(
+                    static _ => ValueTask.CompletedTask,
+                    out _));
 
-        Assert.Equal(
-            ZLinkSerialPostAdmission.Accepted,
-            queue.TryPostNextWithAdmission(
-                lifecycleBytes,
-                static _ => ValueTask.CompletedTask,
-                out var lifecycle));
-        Assert.Equal(lifecycleBytes, queue.LifecyclePendingRetainedBytes);
-        Assert.Equal(
-            ZLinkSerialPostAdmission.QueueFull,
-            queue.TryPostNextWithAdmission(
-                static _ => ValueTask.CompletedTask,
-                out _));
-
-        release.TrySetResult();
-        await Task.WhenAll(application.Completion, lifecycle.Completion)
-            .WaitAsync(TimeSpan.FromSeconds(5));
+            releaseApplication.TrySetResult();
+            releaseLifecycle.TrySetResult();
+            await Task.WhenAll(application.Completion, lifecycle.Completion)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            // A failed assertion must not strand DisposeAsync behind either
+            // intentionally blocked callback and mask the actual failure.
+            releaseApplication.TrySetResult();
+            releaseLifecycle.TrySetResult();
+        }
     }
 
     [Fact]

@@ -6,7 +6,7 @@ entry _rels/.rels
 entry lib/net8.0/Zlink.Framework.Contracts.dll
 entry lib/net8.0/Zlink.Framework.Contracts.xml
 entry package/services/metadata/core-properties/{CORE_PROPERTIES}.psmdcp
-content-sha256 lib/net8.0/Zlink.Framework.Contracts.xml=59eb26b3285af7bca31cb03d457d0f3ab774a814d4d6253ed64326affa2a7de6
+content-sha256 lib/net8.0/Zlink.Framework.Contracts.xml=07e3708b402627d0613499cd1862795b77d1f6512d78c0443ba9ebc9e6c0c183
 metadata authors=Zlink.Framework.Contracts
 metadata description=Package-neutral codec and error contracts shared by ZLink framework packages.
 metadata id=Zlink.Framework.Contracts

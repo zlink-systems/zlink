@@ -89,11 +89,18 @@ internal sealed class ZLinkDotNetBackendRuntimeContext
                 socket, shared.NativeNode, shared.Completions, ownsNode: false);
 
         var node = new ZLinkManagedMeshNode(_context, standaloneMeshName);
+        var completions = new ZLinkMeshCompletionTable();
+        var completionPump = new ZLinkMeshDispatchPump(node, completions);
         node.SetRoutingId(RoutingId.From(Guid.NewGuid()));
         node.SetBind($"inproc://zlink-stream-{Guid.NewGuid():N}");
         node.Start();
+        completionPump.EnsureStarted();
         return new ZLinkBackendStreamSocketWrapper(
-            socket, node, completions: null, ownsNode: true);
+            socket,
+            node,
+            completions,
+            ownsNode: true,
+            ownedCompletionPump: completionPump);
     }
 
     public ValueTask DisposeAsync()

@@ -287,6 +287,39 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         return ZLinkSerialPostAdmission.Accepted;
     }
 
+    internal ZLinkSerialPostAdmission TryPostApplicationWithoutConfiguredLimit(
+        long retainedBytes,
+        Func<CancellationToken, ValueTask> callback,
+        out ZLinkSerialWorkItem item)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        if (retainedBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(retainedBytes));
+        var accountingBytes = checked(WorkItemFixedCostBytes + retainedBytes);
+        var candidate = new ZLinkSerialWorkItem(
+            callback,
+            lane: ZLinkSerialWorkLane.Application,
+            accountingBytes: accountingBytes);
+        lock (_admissionGate)
+        {
+            if (Volatile.Read(ref _completed) != 0
+                || _applicationAdmissionClosed)
+            {
+                item = null!;
+                return ZLinkSerialPostAdmission.Closed;
+            }
+            CommitWorkItemWithoutConfiguredLimitUnderLock(
+                _applicationQueue,
+                candidate,
+                ZLinkSerialWorkLane.Application,
+                accountingBytes);
+            item = candidate;
+        }
+
+        ScheduleDrain();
+        return ZLinkSerialPostAdmission.Accepted;
+    }
+
     public bool TryPostNext(
         Func<CancellationToken, ValueTask> callback,
         out ZLinkSerialWorkItem item)
@@ -751,6 +784,30 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             accountingBytes,
             applicationDrained);
         return true;
+    }
+
+    private void CommitWorkItemWithoutConfiguredLimitUnderLock(
+        Queue<ZLinkSerialWorkItem> destination,
+        ZLinkSerialWorkItem item,
+        ZLinkSerialWorkLane lane,
+        long accountingBytes)
+    {
+        ref var pendingCount = ref PendingCount(lane);
+        ref var pendingBytes = ref PendingBytes(lane);
+        if (pendingCount == int.MaxValue
+            || _pendingCount == int.MaxValue
+            || pendingBytes > long.MaxValue - accountingBytes)
+            throw new OverflowException(
+                "ZLink serial execution queue accounting range is exhausted.");
+
+        // Keep the append and accounting publication atomic even though this
+        // admission path intentionally has no configured count or byte limit.
+        var applicationDrained = NewApplicationDrainedSignalUnderLock(lane);
+        destination.Enqueue(item);
+        CommitReservationUnderLock(
+            lane,
+            accountingBytes,
+            applicationDrained);
     }
 
     private bool TryCommitAcceptedWorkUnderLock(

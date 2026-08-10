@@ -2,6 +2,7 @@ namespace Zlink.Framework.Runtime.Streams;
 
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Identifiers;
 
 internal sealed class ZLinkSessionActorCoordinator(

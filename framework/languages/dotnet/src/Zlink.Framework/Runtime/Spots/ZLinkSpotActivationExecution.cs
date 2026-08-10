@@ -1552,14 +1552,28 @@ internal abstract partial class ZLinkSpotActivation
         MeshOperationId operationId,
         byte hopCount)
     {
-        if (!messageFollow.TryClaimMessageFollowNotice())
+        var fence = new ZLinkMessageFollowFence(
+            ZLinkMessageFollowObjectKind.Spot,
+            SpotId,
+            SpotId,
+            NodeRid,
+            messageFollow.TargetNodeRid,
+            ObjectGeneration,
+            messageFollow.ObjectGeneration,
+            SourceNodeLifecycleGeneration,
+            messageFollow.TargetNodeGeneration,
+            messageFollow.SourceAuthorityOwnerGeneration,
+            messageFollow.TargetAuthorityOwnerGeneration,
+            checked((ulong)messageFollow.SourceOwner.LeaseGeneration),
+            checked((ulong)messageFollow.TargetOwner.LeaseGeneration));
+        if (!messageFollow.TryBeginMessageFollowNotice(fence))
             return;
         if (sourceNodeRid is not { } source
             || source.IsEmpty
             || operationId == default
             || hopCount is 0 or > ZLinkServiceWireCodec.MessageFollowMaximumHopCount)
         {
-            messageFollow.ReleaseMessageFollowNoticeClaim();
+            messageFollow.AbortMessageFollowNotice(fence);
             return;
         }
 
@@ -1584,21 +1598,23 @@ internal abstract partial class ZLinkSpotActivation
                     messageFollow.TargetAuthorityOwnerGeneration,
                     checked((ulong)messageFollow.TargetOwner.LeaseGeneration)),
                 hopCount,
-                checked((uint)admission.Records),
-                checked((uint)admission.Bytes),
+                (uint)admission.Records,
+                (uint)Math.Min(admission.Bytes, uint.MaxValue),
                 operationId,
                 replyRouteId);
             var node = _runtime.GetMeshNodeRuntime(MeshName).Node;
             if (node is not IZLinkBackendMessageFollowNotifications sender
                 || !sender.TrySendMessageFollowNotification(source, record))
-                messageFollow.ReleaseMessageFollowNoticeClaim();
+                messageFollow.AbortMessageFollowNotice(fence);
+            else
+                messageFollow.MarkMessageFollowNoticeSent(fence);
         }
         catch (Exception exception)
             when (exception is InvalidOperationException
                 or ZlinkException
                 or ZLinkFrameworkException)
         {
-            messageFollow.ReleaseMessageFollowNoticeClaim();
+            messageFollow.AbortMessageFollowNotice(fence);
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"spot message follow notification failed: {exception.Message}");
         }

@@ -10,7 +10,7 @@ internal sealed class HttpClientCodecRegistry : IZLinkCodecRegistryBuilder, IZLi
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly Dictionary<string, RegisteredSerializer> _serializers =
-        new(StringComparer.OrdinalIgnoreCase);
+        new(StringComparer.Ordinal);
 
     // Per-type resolution cache: the registry is snapshot at Build() and requests resolve the
     // same payload types repeatedly, so the linear scan runs once per type instead of per call.
@@ -74,8 +74,8 @@ internal sealed class HttpClientCodecRegistry : IZLinkCodecRegistryBuilder, IZLi
 
         if (body.Length == 0) return type.IsValueType ? Activator.CreateInstance(type) : null;
 
-        if (!string.IsNullOrWhiteSpace(contentType)
-            && _serializers.TryGetValue(NormalizeContentType(contentType), out var found))
+        if (TryNormalizeResponseContentType(contentType, out var normalizedContentType)
+            && _serializers.TryGetValue(normalizedContentType, out var found))
             return found.Serializer.Deserialize(ZLinkEncodedPayload.FromOwned(body), type);
 
         if (type == typeof(string)) return DecodeString(body);
@@ -104,10 +104,7 @@ internal sealed class HttpClientCodecRegistry : IZLinkCodecRegistryBuilder, IZLi
     {
         ArgumentNullException.ThrowIfNull(serializer);
         ArgumentNullException.ThrowIfNull(canSerialize);
-        if (string.IsNullOrWhiteSpace(contentType))
-            throw new ArgumentException("HTTP codec content type must not be blank.", nameof(contentType));
-
-        _serializers[NormalizeContentType(contentType)] =
+        _serializers[NormalizeRegisteredContentType(contentType)] =
             new RegisteredSerializer(serializer, canSerialize, isFallbackSerializer);
         _resolved.Clear();
     }
@@ -163,11 +160,69 @@ internal sealed class HttpClientCodecRegistry : IZLinkCodecRegistryBuilder, IZLi
         return true;
     }
 
-    private static string NormalizeContentType(string contentType)
+    private static bool TryNormalizeResponseContentType(
+        string? contentType,
+        out string normalized)
     {
+        if (contentType is null)
+        {
+            normalized = string.Empty;
+            return false;
+        }
         var separator = contentType.IndexOf(';');
-        return (separator < 0 ? contentType : contentType[..separator]).Trim();
+        try
+        {
+            normalized = NormalizeRegisteredContentType(
+                separator < 0 ? contentType : contentType[..separator]);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            normalized = string.Empty;
+            return false;
+        }
     }
+
+    private static string NormalizeRegisteredContentType(string contentType)
+    {
+        ArgumentNullException.ThrowIfNull(contentType);
+        var first = 0;
+        var last = contentType.Length;
+        while (first < last && contentType[first] is ' ' or '\t') first++;
+        while (last > first && contentType[last - 1] is ' ' or '\t') last--;
+
+        var slash = -1;
+        var normalized = new char[last - first];
+        for (var source = first; source < last; source++)
+        {
+            var value = contentType[source];
+            var target = source - first;
+            if (value == '/')
+            {
+                if (slash >= 0 || target == 0 || source == last - 1)
+                    throw InvalidContentType();
+                slash = target;
+                normalized[target] = value;
+                continue;
+            }
+            if (!IsTokenCharacter(value)) throw InvalidContentType();
+            normalized[target] = value is >= 'A' and <= 'Z'
+                ? (char)(value + ('a' - 'A'))
+                : value;
+        }
+        if (slash < 0) throw InvalidContentType();
+        return new string(normalized);
+    }
+
+    private static bool IsTokenCharacter(char value) =>
+        value is >= '0' and <= '9'
+        or >= 'A' and <= 'Z'
+        or >= 'a' and <= 'z'
+        or '!' or '#' or '$' or '%' or '&' or '\'' or '*' or '+' or '-'
+        or '.' or '^' or '_' or '`' or '|' or '~';
+
+    private static ArgumentException InvalidContentType() =>
+        new("HTTP codec content type must be a parameter-free ASCII type/subtype.", "contentType");
 
     private sealed record RegisteredSerializer(
         IZLinkMessageSerializer Serializer,

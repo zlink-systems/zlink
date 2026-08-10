@@ -1752,7 +1752,7 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
-    public void CompletionTable_CompletesTaskExactlyOnce()
+    public async Task CompletionTable_CompletesTaskExactlyOnce()
     {
         var table = new ZLinkMeshCompletionTable();
         var operation = new MeshOperationId(0, 7);
@@ -1762,12 +1762,13 @@ public sealed class ServiceRuntimeFoundationTests
         var record = Completion(operation);
         table.Complete(record, Array.Empty<Message>());
         table.Complete(record, Array.Empty<Message>());
+        await table.CompletionDrained;
 
         Assert.Equal(1, calls);
     }
 
     [Fact]
-    public void CompletionTable_FailAllPreservesTerminalResult()
+    public async Task CompletionTable_FailAllPreservesTerminalResult()
     {
         var table = new ZLinkMeshCompletionTable();
         var operation = new MeshOperationId(0, 8);
@@ -1777,12 +1778,13 @@ public sealed class ServiceRuntimeFoundationTests
             (result, _) => completed = result));
 
         table.FailAll(RequestResult.Terminated);
+        await table.CompletionDrained;
 
         Assert.Equal(RequestResult.Terminated, completed);
     }
 
     [Fact]
-    public void CompletionTable_RegisterBeforeSubmitHandlesSynchronousCompletion()
+    public async Task CompletionTable_RegisterBeforeSubmitDispatchesOnSharedLane()
     {
         var table = new ZLinkMeshCompletionTable();
         var correlation = new MeshOperationId(7, 10);
@@ -1794,17 +1796,18 @@ public sealed class ServiceRuntimeFoundationTests
             {
                 Assert.Equal(RequestResult.Ok, result);
                 Assert.Empty(reply);
+                Assert.True(ZLinkCompletionDispatcher.IsCurrentExecution);
                 completedDuringSubmit = true;
             },
             id =>
             {
                 Assert.Equal(correlation, id);
                 table.Complete(Completion(id), Array.Empty<Message>());
-                Assert.True(completedDuringSubmit);
                 return SubmitResult.Ok;
             });
 
         Assert.Equal(SubmitResult.Ok, submit);
+        await table.CompletionDrained;
         Assert.True(completedDuringSubmit);
     }
 

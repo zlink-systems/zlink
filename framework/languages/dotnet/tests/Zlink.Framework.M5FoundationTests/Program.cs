@@ -15,6 +15,7 @@ static void VerifyCompletionFailureResult()
         "completion registration failed");
 
     table.FailAll(RequestResult.Terminated);
+    table.CompletionDrained.GetAwaiter().GetResult();
 
     Require(terminal == RequestResult.Terminated,
         $"FailAll replaced {RequestResult.Terminated} with {terminal}");

@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Reflection;
 using System.Reflection.Emit;
 using MessagePack;
@@ -350,17 +351,50 @@ public sealed class CustomSerializerEnvelopeTests
     }
 
     [Fact]
-    public void Serializer_Type_Cache_Replaces_Old_Entries_After_Saturation()
+    public async Task Serializer_Type_First_Use_Is_Single_Flight()
     {
-        var hotTypeResolutions = 0;
+        var resolutionCalls = 0;
+        var codecs = new ZLinkCodecRegistryBuilder();
+        codecs.AddSerializer(
+            "application/avro",
+            new MarkerSerializer(),
+            _ =>
+            {
+                Interlocked.Increment(ref resolutionCalls);
+                Thread.Sleep(5);
+                return true;
+            });
+        using var start = new ManualResetEventSlim();
+
+        var resolutions = Enumerable.Range(0, 32)
+            .Select(_ => Task.Run(() =>
+            {
+                start.Wait();
+                return codecs.TryResolveSerializer(
+                    typeof(Probe),
+                    out var contentType,
+                    out var serializer)
+                    && contentType == "application/avro"
+                    && serializer is MarkerSerializer;
+            }))
+            .ToArray();
+        start.Set();
+
+        Assert.All(await Task.WhenAll(resolutions), Assert.True);
+        Assert.Equal(1, resolutionCalls);
+    }
+
+    [Fact]
+    public void Serializer_Type_Cache_Does_Not_Evict_Existing_Entries_After_Saturation()
+    {
+        var resolutions = new Dictionary<Type, int>();
         var codecs = new ZLinkCodecRegistryBuilder();
         codecs.AddSerializer(
             "application/avro",
             new MarkerSerializer(),
             type =>
             {
-                if (type == typeof(Probe))
-                    hotTypeResolutions++;
+                resolutions[type] = resolutions.GetValueOrDefault(type) + 1;
                 return type == typeof(Probe);
             });
 
@@ -373,17 +407,22 @@ public sealed class CustomSerializerEnvelopeTests
             new AssemblyName("Zlink.SerializerCacheSaturation"),
             AssemblyBuilderAccess.Run);
         var module = assembly.DefineDynamicModule("Main");
-        for (var index = 0; index < 4_096; index++)
+        Type? uncachedType = null;
+        for (var index = 0; index < 1_024; index++)
         {
             var type = module.DefineType($"Payload{index}").CreateTypeInfo()!.AsType();
             Assert.False(codecs.TryResolveSerializer(type, out _, out _));
+            uncachedType = type;
         }
 
         Assert.True(codecs.TryResolveSerializer(
             typeof(Probe),
             out _,
             out _));
-        Assert.Equal(2, hotTypeResolutions);
+        Assert.Equal(1, resolutions[typeof(Probe)]);
+        Assert.NotNull(uncachedType);
+        Assert.False(codecs.TryResolveSerializer(uncachedType, out _, out _));
+        Assert.Equal(2, resolutions[uncachedType]);
     }
 
     [Fact]
@@ -462,13 +501,108 @@ public sealed class CustomSerializerEnvelopeTests
     }
 
     [Fact]
-    public void Two_Custom_Serializers_Are_Ambiguous()
+    public void Later_Fallback_Serializer_Wins()
     {
         var codecs = new ZLinkCodecRegistryBuilder();
         codecs.AddSerializer("application/avro", new MarkerSerializer());
-        codecs.AddSerializer("application/thrift", new MarkerSerializer());
+        var selected = new ReplacementSerializer();
+        codecs.AddSerializer("application/thrift", selected);
 
-        Assert.Throws<InvalidOperationException>(() => codecs.SingleCustomSerializer());
+        var fallback = codecs.SingleCustomSerializer();
+        Assert.NotNull(fallback);
+        Assert.Equal("application/thrift", fallback.Value.ContentType);
+        Assert.Same(selected, fallback.Value.Serializer);
+    }
+
+    [Fact]
+    public void Codec_Content_Type_And_Receive_Lookup_Match_Shared_Fixture()
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(
+            Common.FrameworkTestEnvironment.GetRepoRoot(),
+            "framework",
+            "runtime",
+            "conformance",
+            "codec-selection-v1.json")));
+        var root = document.RootElement;
+        Assert.Equal("zlink.framework.codec-selection", root.GetProperty("fixture").GetString());
+        Assert.Equal(1, root.GetProperty("version").GetInt32());
+
+        foreach (var scenario in root.GetProperty("normalizationScenarios").EnumerateArray())
+        {
+            var codecs = new ZLinkCodecRegistryBuilder();
+            var input = scenario.GetProperty("input").GetString()!;
+            if (scenario.TryGetProperty("expectedError", out _))
+            {
+                Assert.Throws<ArgumentException>(() =>
+                    codecs.AddSerializer(input, new MarkerSerializer()));
+                continue;
+            }
+
+            codecs.AddSerializer(input, new MarkerSerializer());
+            Assert.Equal(
+                scenario.GetProperty("expected").GetString(),
+                Assert.Single(codecs.Serializers).Key);
+        }
+
+        var duplicate = root.GetProperty("normalizedDuplicateScenario");
+        var registrations = duplicate.GetProperty("registrationInputs");
+        var replacement = new ReplacementSerializer();
+        var duplicateCodecs = new ZLinkCodecRegistryBuilder();
+        duplicateCodecs.AddSerializer(registrations[0].GetString()!, new MarkerSerializer());
+        duplicateCodecs.AddSerializer(registrations[1].GetString()!, replacement);
+        Assert.Equal(
+            duplicate.GetProperty("finalEntryCount").GetInt32(),
+            duplicateCodecs.Serializers.Count);
+        Assert.Same(replacement, duplicateCodecs.Serializers["application/x-base"]);
+
+        var receiveCodecs = new ZLinkCodecRegistryBuilder();
+        receiveCodecs.AddSerializer("application/x-base", new MarkerSerializer());
+        foreach (var scenario in root.GetProperty("receiveScenarios").EnumerateArray())
+        {
+            var contentType = scenario.GetProperty("wireContentType").GetString()!;
+            var expectedSuccess = scenario.GetProperty("expectedTerminal").GetString()
+                                  == "success";
+            Assert.Equal(
+                expectedSuccess,
+                receiveCodecs.TryGetSerializer(contentType, out _));
+        }
+    }
+
+    [Fact]
+    public void Later_Matching_Declared_Type_Selector_Wins()
+    {
+        var codecs = new ZLinkCodecRegistryBuilder();
+        codecs.AddSerializer(
+            "application/x-first",
+            new MarkerSerializer(),
+            static type => type == typeof(Probe));
+        var selected = new ReplacementSerializer();
+        codecs.AddSerializer(
+            "application/x-second",
+            selected,
+            static type => type == typeof(Probe));
+
+        Assert.True(codecs.TryResolveSerializer(
+            typeof(Probe),
+            out var contentType,
+            out var serializer));
+        Assert.Equal("application/x-second", contentType);
+        Assert.Same(selected, serializer);
+    }
+
+    [Fact]
+    public void Codec_Registry_Rejects_Registration_After_Runtime_Startup_Freeze()
+    {
+        var codecs = new ZLinkCodecRegistryBuilder();
+        codecs.AddSerializer("application/x-before", new MarkerSerializer());
+
+        codecs.Freeze();
+
+        Assert.Throws<InvalidOperationException>(() =>
+            codecs.AddSerializer("application/x-after", new ReplacementSerializer()));
+        Assert.Throws<InvalidOperationException>(() =>
+            codecs.RegisterStreamCodec("application/x-stream", ZlinkStreamCodec.MessagePack));
+        Assert.Single(codecs.Serializers);
     }
 
     [Fact]

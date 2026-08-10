@@ -877,6 +877,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         {
             if (Volatile.Read(ref _lifecyclePhase) == (int)ZLinkRuntimeLifecyclePhase.Running) return;
 
+            Registration.Codecs.Freeze();
             Volatile.Write(ref _lifecyclePhase, (int)ZLinkRuntimeLifecyclePhase.Starting);
             try
             {

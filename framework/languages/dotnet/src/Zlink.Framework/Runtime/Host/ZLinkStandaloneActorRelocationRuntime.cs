@@ -1521,7 +1521,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             handoffId,
             actorRef,
             authority.Snapshot.AuthorityOwnerGeneration,
-            targetAuthority.MeshName,
+            ZLinkMeshName.FromBoundary(
+                targetAuthority.MeshName,
+                nameof(targetAuthority.MeshName)),
             targetAuthority.NodeGeneration,
             targetAuthority.OwnerLeaseGeneration);
         if (!actorState.Handoff.IsAuthorityCommitted(handoffId))
@@ -1992,7 +1994,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             stage.Envelope.AggregateId.ToString("N"),
             actorRef,
             stage.TargetAuthorityOwnerGeneration,
-            stage.TargetAuthority.MeshName,
+            ZLinkMeshName.FromBoundary(
+                stage.TargetAuthority.MeshName,
+                nameof(stage.TargetAuthority.MeshName)),
             stage.TargetAuthority.NodeGeneration,
             stage.TargetAuthority.OwnerLeaseGeneration);
         if (!stage.ActorState.Handoff.IsAuthorityCommitted(

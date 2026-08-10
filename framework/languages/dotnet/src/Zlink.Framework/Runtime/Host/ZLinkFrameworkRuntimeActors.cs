@@ -1,5 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using System.Runtime.ExceptionServices;
+using Zlink.Framework.Runtime.Backend.DotNet;
+using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Host;
@@ -847,7 +849,9 @@ internal sealed partial class ZLinkFrameworkRuntime
                     request.HandoffId,
                     actorRef,
                     publishedFound.Snapshot.AuthorityOwnerGeneration,
-                    committedAuthority.MeshName,
+                    ZLinkMeshName.FromBoundary(
+                        committedAuthority.MeshName,
+                        nameof(committedAuthority.MeshName)),
                     committedAuthority.NodeGeneration,
                     committedAuthority.OwnerLeaseGeneration);
             }
