@@ -70,7 +70,10 @@ export class ZLinkMeshCompletionTable {
       ));
     }
     const operationId = operation();
-    if (this.isDisposed()) {
+    // The backend submission callback can synchronously re-enter `dispose()`.
+    // TypeScript's control-flow analysis cannot observe mutation through it.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+    if (this.disposed) {
       return Promise.reject(new Error('Mesh completion table is disposed.'));
     }
     const key = operationIdentityKey(operationId);
@@ -108,10 +111,13 @@ export class ZLinkMeshCompletionTable {
       });
       return;
     }
-    const completion = copyCompletion(record);
     this.pending.delete(key);
     pending.removeAbort?.();
-    pending.resolve(completion);
+    try {
+      pending.resolve(copyCompletion(record));
+    } catch (error) {
+      pending.reject(error);
+    }
   }
 
   dispose(reason: unknown = new Error('Mesh completion table is disposed.')): void {
@@ -133,9 +139,6 @@ export class ZLinkMeshCompletionTable {
     return this.pending.size;
   }
 
-  private isDisposed(): boolean {
-    return this.disposed;
-  }
 }
 
 function copyCompletion(record: ReceiveRecord): ZLinkMeshCompletion {

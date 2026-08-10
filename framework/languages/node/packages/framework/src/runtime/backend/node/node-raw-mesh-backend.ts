@@ -1791,7 +1791,7 @@ class RawStreamSessionService implements StreamSessionService {
   }
 
   status() {
-    const bindings = this.allBindings();
+    const bindings = this.stateful.allSessionBindings();
     return {
       state: this.state,
       lifecycleGeneration: 1n,
@@ -1896,10 +1896,6 @@ class RawStreamSessionService implements StreamSessionService {
       this.sessionTargets.delete(sessionRid);
       return false;
     }
-  }
-
-  private allBindings() {
-    return this.stateful.allSessionBindings();
   }
 
   private requireStarted(): void {
