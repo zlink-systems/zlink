@@ -1101,3 +1101,11 @@ C++·.NET·Python 완료 행을 transport가 아니라 shared implementation pat
 | `ROUTER_ROUTER/tls` | 6.798% / 14.518% / 45.411% / 89.530% / 77.828% / 71.894% | 50.996% | 0.790x | 통과 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_014128_python-router-router-tls-paired-c.txt`; Python: `/home/hep7hep7/project/zlink/bindings/python/perf/results/single/report/perf_python_single_linux_20260811_014145_python-router-router-tls-current.txt` |
 
 다섯 대상 모두 shared native send, publisher 또는 routed receive owner 개선과 Sol review 범위에 포함되며 public interface·ownership·error 의미는 변경하지 않았다.
+## 2026-08-11 C++ 누락 개선 검토 재측정
+
+- 조건: Core v0.10.1 release, TCP, clients 100, duration 1초, runs 1, I/O threads 4/4, auto-HWM balanced, C → C++ 직렬 실행.
+- `MULTI_DEALER_ROUTER_REQREP`: 96.236% / 98.780% / 97.914% / 93.033% / 96.739% / 99.805%, 산술평균 97.084%, latency ratio 산술평균 1.027x, 통과.
+- `MULTI_ROUTER_ROUTER_REQREP`: 94.782% / 98.699% / 95.375% / 93.002% / 97.810% / 100.994%, 산술평균 96.777%, latency ratio 산술평균 1.020x, 통과.
+- `MULTI_PUBSUB`: 93.151% / 93.596% / 100.300% / 94.422% / 96.241% / 99.536%, 산술평균 96.208%, latency ratio 산술평균 1.515x, 통과.
+- C reports: `perf_c_multi_linux_20260811_022801_cpp-re-review-dealer-router-reqrep-tcp-c.txt`, `perf_c_multi_linux_20260811_022834_cpp-re-review-router-router-reqrep-tcp-c.txt`, `perf_c_multi_linux_20260811_022900_cpp-re-review-pubsub-tcp-c.txt`.
+- C++ reports: `perf_cpp_multi_linux_20260811_023204_cpp-re-review-dealer-router-reqrep-tcp-rebuilt.txt`, `perf_cpp_multi_linux_20260811_023217_cpp-re-review-router-router-reqrep-tcp-rebuilt.txt`, `perf_cpp_multi_linux_20260811_023231_cpp-re-review-pubsub-tcp-rebuilt.txt`.

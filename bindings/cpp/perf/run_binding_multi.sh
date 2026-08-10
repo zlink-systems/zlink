@@ -891,6 +891,33 @@ if [[ "${BUILD_MODE}" != "reuse" ]]; then
       cpp_comp_src_stream_server
   fi
 fi
+
+# Reuse keeps the configured build tree, but it must not reuse binaries that
+# predate binding or perf source changes. Incremental CMake builds only stale
+# targets and never rebuilds the released Core runtime.
+if [[ "${BUILD_MODE}" == "reuse" ]]; then
+  CPP_MULTI_TARGETS=(
+    cpp_comp_src_dealer_dealer_server
+    cpp_comp_src_dealer_dealer_client
+    cpp_comp_src_dealer_router_server
+    cpp_comp_src_dealer_router_client
+    cpp_comp_src_dealer_router_reqrep_server
+    cpp_comp_src_dealer_router_reqrep_client
+    cpp_comp_src_router_router_server
+    cpp_comp_src_router_router_client
+    cpp_comp_src_router_router_reqrep_server
+    cpp_comp_src_router_router_reqrep_client
+    cpp_comp_src_pubsub_server
+    cpp_comp_src_pubsub_client
+    cpp_comp_src_stream_server
+  )
+  if [[ "${IS_WINDOWS}" -eq 1 ]]; then
+    cmake --build "${OFFICIAL_BUILD_DIR}" --config Release --target "${CPP_MULTI_TARGETS[@]}"
+  else
+    bash "${NORMALIZE_TIMESTAMPS_SH}" "${OFFICIAL_BUILD_DIR}"
+    cmake --build "${OFFICIAL_BUILD_DIR}" --target "${CPP_MULTI_TARGETS[@]}"
+  fi
+fi
 ensure_cpp_core_build_runtime_enabled "${OFFICIAL_BUILD_DIR}"
 
 prepare_cpp_runtime_dir() {

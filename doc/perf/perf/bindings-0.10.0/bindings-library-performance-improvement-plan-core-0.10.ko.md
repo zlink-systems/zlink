@@ -842,6 +842,17 @@ transport 상태를 판정한다.
 |-----------|---------|----|-----|------|------|-------|--------|-----------|
 | `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 통과 (111.07%) | 통과 (96.37%) | 통과 (82.53%) | 통과 (93.72%) | 통과 (99.54%) | 통과 (116.25%) | baseline throughput 중앙값 82.98%에서 최종 aggregate throughput 중앙값 97.95%, aggregate latency 중앙값 1.008x로 개선·통과. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_120243_multi-router-router-reqrep-tls-short-c1.txt`; baseline C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_120331_multi-router-router-reqrep-tls-short-c2.txt`; 최종 C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260810_120837_multi-router-router-reqrep-tls-copy-ctor-c3.txt` |
 
+### 9.1.9 기존 개선 검토 누락 행 재측정
+
+아래 결과는 현재 C++ binding source로 선택 target을 다시 빌드한 뒤 측정했으며, 9.1.2의 같은
+TCP 행에 기록된 이전 결과를 대체한다. Core는 `v0.10.1` release runtime을 그대로 사용했다.
+
+| Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 최종 결과 |
+|-----------|---------|----|-----|------|------|-------|--------|-----------|
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 통과 (96.236%) | 통과 (98.780%) | 통과 (97.914%) | 통과 (93.033%) | 통과 (96.739%) | 통과 (99.805%) | throughput 산술평균 97.084%, 평균 latency ratio 산술평균 1.027x로 통과. `message_t(size_t)`의 불필요한 opaque storage zero-init 제거를 유지하고 Sol 재검토에서 GO를 확인했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_022801_cpp-re-review-dealer-router-reqrep-tcp-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260811_023204_cpp-re-review-dealer-router-reqrep-tcp-rebuilt.txt` |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 통과 (94.782%) | 통과 (98.699%) | 통과 (95.375%) | 통과 (93.002%) | 통과 (97.810%) | 통과 (100.994%) | throughput 산술평균 96.777%, 평균 latency ratio 산술평균 1.020x로 통과. size/copy constructor의 불필요한 opaque storage zero-init 제거를 유지하고 Sol 재검토에서 GO를 확인했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_022834_cpp-re-review-router-router-reqrep-tcp-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260811_023217_cpp-re-review-router-router-reqrep-tcp-rebuilt.txt` |
+| `tcp` | `MULTI_PUBSUB` | 통과 (93.151%) | 통과 (93.596%) | 통과 (100.300%) | 통과 (94.422%) | 통과 (96.241%) | 통과 (99.536%) | throughput 산술평균 96.208%, 평균 latency ratio 산술평균 1.515x로 통과. default constructor zero-init 제거와 caller-owned empty message 직접 수신을 유지하고 Sol 재검토에서 GO를 확인했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_022900_cpp-re-review-pubsub-tcp-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260811_023231_cpp-re-review-pubsub-tcp-rebuilt.txt` |
+
 ### 9.2 .NET
 
 - perf 경로: `bindings/dotnet/perf`
