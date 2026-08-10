@@ -11,6 +11,10 @@ const replacedFixture = JSON.parse(fs.readFileSync(
   path.join(root, "golden/bound-session-replaced-v1.json"),
   "utf8",
 ));
+const sessionBarrierFixture = JSON.parse(fs.readFileSync(
+  path.join(root, "golden/session-relocation-barrier-v1.json"),
+  "utf8",
+));
 const commands = new Map(schema.commands.map((entry) => [entry.id, entry]));
 const frameworkErrorType = schema.types.find((entry) => entry.name === "framework-error-code");
 const frameworkErrors = new Map(frameworkErrorType.values.map((entry) => [entry.value, entry]));
@@ -109,6 +113,150 @@ function decodeBoundSessionReplaced(bytes) {
   return result;
 }
 
+function decodeSessionRelocationBarrier(hex) {
+  const bytes = Buffer.from(hex, "hex");
+  let offset = 0;
+  const need = (count) => {
+    if (offset + count > bytes.length) fail("truncated-field");
+  };
+  const byte = () => {
+    need(1);
+    return bytes[offset++];
+  };
+  const u16 = () => {
+    need(2);
+    const value = bytes.readUInt16BE(offset);
+    offset += 2;
+    return value;
+  };
+  const u64 = (allowZero = false) => {
+    need(8);
+    const value = bytes.readBigUInt64BE(offset);
+    offset += 8;
+    if (!allowZero && value === 0n) fail("invalid-field");
+    return value.toString();
+  };
+  const text8 = () => {
+    const length = byte();
+    if (length === 0) fail("invalid-field");
+    need(length);
+    const value = bytes.subarray(offset, offset + length).toString("utf8");
+    offset += length;
+    if (value.includes("\0")) fail("invalid-field");
+    return value;
+  };
+  const text16 = () => {
+    const length = u16();
+    if (length === 0) fail("invalid-field");
+    need(length);
+    const value = bytes.subarray(offset, offset + length).toString("utf8");
+    offset += length;
+    if (value.includes("\0")) fail("invalid-field");
+    return value;
+  };
+  const actor = () => ({ actorId: text8(), objectGeneration: u64() });
+  const actorFence = () => ({
+    ...actor(),
+    targetNodeRid: text8(),
+    targetNodeGeneration: u64(),
+    authorityOwnerGeneration: u64(),
+    ownerLeaseGeneration: u64(),
+  });
+  const session = () => ({
+    sessionOwnerNodeRid: text8(),
+    sessionOwnerNodeGeneration: u64(),
+    sessionOwnerId: text8(),
+    sessionOwnerLeaseGeneration: u64(),
+    sessionRid: text8(),
+    bindingGeneration: u64(),
+  });
+  need(5);
+  if (byte() !== schema.protocol.magic[0] || byte() !== schema.protocol.magic[1]) fail("invalid-magic");
+  if (byte() !== schema.protocol.wireMajor) fail("invalid-major");
+  const command = byte();
+  if (byte() !== 0) fail("forbidden-flag");
+  const relocation = { high: u64(true), low: u64(true) };
+  if (relocation.high === "0" && relocation.low === "0") fail("invalid-field");
+  const coordinator = {
+    ownerId: text8(),
+    leaseGeneration: u64(),
+    nodeRid: text8(),
+    nodeGeneration: u64(),
+    expectedAuthorityStoreVersion: text16(),
+  };
+  let result;
+  if (command === 42) {
+    const senderRole = byte();
+    if (senderRole !== 1) fail("invalid-field");
+    result = { command, relocation, coordinator, senderRole: "source", actor: actorFence(), session: session() };
+  } else if (command === 43) {
+    result = {
+      command,
+      relocation,
+      coordinator,
+      actor: actorFence(),
+      session: session(),
+      lastAcceptedSessionSequence: u64(true),
+    };
+  } else if (command === 44) {
+    const senderRole = byte();
+    const actorRef = actor();
+    const sessionFence = session();
+    const action = byte();
+    const routeLength = u16();
+    const routeEnd = offset + routeLength;
+    if (routeEnd > bytes.length) fail("truncated-field");
+    let route;
+    if (action === 1 && senderRole === 2) {
+      route = {
+        action: "commit",
+        previousAuthorityOwnerGeneration: u64(),
+        targetAuthorityOwnerGeneration: u64(),
+        targetNodeRid: text8(),
+        targetNodeGeneration: u64(),
+        replayedHighWater: u64(true),
+      };
+      if (BigInt(route.targetAuthorityOwnerGeneration)
+          <= BigInt(route.previousAuthorityOwnerGeneration)) fail("invalid-field");
+    } else if (action === 2 && senderRole === 1) {
+      route = { action: "abort", currentAuthorityOwnerGeneration: u64() };
+    } else {
+      fail("invalid-field");
+    }
+    if (offset !== routeEnd) fail("invalid-field");
+    result = {
+      command,
+      relocation,
+      coordinator,
+      senderRole: senderRole === 2 ? "target" : "source",
+      actor: actorRef,
+      session: sessionFence,
+      route,
+    };
+  } else if (command === 45) {
+    const actorRef = actor();
+    const sessionFence = session();
+    const actionValue = byte();
+    const resultValue = byte();
+    if (actionValue < 1 || actionValue > 2 || resultValue > 3) fail("invalid-field");
+    result = {
+      command,
+      relocation,
+      coordinator,
+      actor: actorRef,
+      session: sessionFence,
+      action: actionValue === 1 ? "commit" : "abort",
+      result: ["applied", "alreadyApplied", "stale", "sessionOrBindingClosed"][resultValue],
+      currentAuthorityOwnerGeneration: u64(),
+      lastAcceptedSessionSequence: u64(true),
+    };
+  } else {
+    fail("unknown-command");
+  }
+  if (offset !== bytes.length) fail("trailing-byte");
+  return result;
+}
+
 for (const fixture of fixtures.canonical) {
   const decoded = decode(fixture.bytes);
   if (decoded.command !== fixture.name || decoded.probeId.toString() !== fixtures.probeId) {
@@ -173,9 +321,61 @@ if (replacedFixture.receiverFenceCases[0]?.result !== "apply"
   throw new Error("boundSessionReplaced receiver lifecycle fixture is incomplete");
 }
 
+const barrierIdentity = sessionBarrierFixture.identity;
+const barrierRecords = new Map(sessionBarrierFixture.canonical.map((fixture) => {
+  const decoded = decodeSessionRelocationBarrier(fixture.hex);
+  if (decoded.command !== fixture.command
+      || decoded.relocation.high !== barrierIdentity.relocationHigh
+      || decoded.relocation.low !== barrierIdentity.relocationLow
+      || decoded.coordinator.ownerId !== barrierIdentity.coordinatorOwnerId
+      || decoded.coordinator.leaseGeneration !== barrierIdentity.coordinatorLeaseGeneration
+      || decoded.coordinator.nodeRid !== barrierIdentity.coordinatorNodeRid
+      || decoded.coordinator.nodeGeneration !== barrierIdentity.coordinatorNodeGeneration
+      || decoded.coordinator.expectedAuthorityStoreVersion
+         !== barrierIdentity.expectedAuthorityStoreVersion
+      || decoded.actor.actorId !== barrierIdentity.actorId
+      || decoded.actor.objectGeneration !== barrierIdentity.objectGeneration
+      || decoded.session.sessionOwnerNodeRid !== barrierIdentity.sessionOwnerNodeRid
+      || decoded.session.sessionOwnerNodeGeneration
+         !== barrierIdentity.sessionOwnerNodeGeneration
+      || decoded.session.sessionOwnerId !== barrierIdentity.sessionOwnerId
+      || decoded.session.sessionOwnerLeaseGeneration
+         !== barrierIdentity.sessionOwnerLeaseGeneration
+      || decoded.session.sessionRid !== barrierIdentity.sessionRid
+      || decoded.session.bindingGeneration !== barrierIdentity.bindingGeneration) {
+    throw new Error(`session relocation barrier identity mismatch: ${fixture.name}`);
+  }
+  for (const [name, value] of Object.entries(fixture.decoded)) {
+    const actual = name in decoded ? decoded[name] : decoded.route?.[name] ?? decoded.actor?.[name];
+    if (actual !== value) {
+      throw new Error(`session relocation barrier field mismatch: ${fixture.name}.${name}`);
+    }
+  }
+  return [fixture.name, decoded];
+}));
+if (barrierRecords.size !== 6
+    || !barrierRecords.has("sessionRelocationSeal")
+    || !barrierRecords.has("sessionRelocationSealed")
+    || !barrierRecords.has("sessionRelocationRouteCommit")
+    || !barrierRecords.has("sessionRelocationRoutedCommit")
+    || !barrierRecords.has("sessionRelocationRouteAbort")
+    || !barrierRecords.has("sessionRelocationRoutedAbort")) {
+  throw new Error("session relocation barrier canonical fixture is incomplete");
+}
+const receiverCases = new Map(sessionBarrierFixture.receiverCases.map((entry) => [entry.name, entry]));
+if (receiverCases.get("identicalSealDuplicate")?.result !== "idempotent"
+    || receiverCases.get("conflictingSealDuplicate")?.result !== "protocolError"
+    || receiverCases.get("identicalCommitDuplicate")?.result !== "alreadyApplied"
+    || receiverCases.get("conflictingCommitDuplicate")?.result !== "protocolError"
+    || receiverCases.get("matchingAbort")?.result !== "applied"
+    || receiverCases.get("differentRelocationAbort")?.result !== "stale") {
+  throw new Error("session relocation barrier receiver cases are incomplete");
+}
+
 console.log(
   `service wire decoder fixtures valid: canonical=${fixtures.canonical.length} `
     + `malformed=${fixtures.malformed.length} frameworkErrors=${fixtures.frameworkErrors.canonical.length} `
     + `frameworkErrorMalformed=${fixtures.frameworkErrors.malformed.length} probeEcho=pass `
-    + `RelocationDataLost=wire35/public34 boundSessionReplaced=pass`,
+    + `RelocationDataLost=wire35/public34 boundSessionReplaced=pass `
+    + `sessionRelocationBarrier=${barrierRecords.size}`,
 );
