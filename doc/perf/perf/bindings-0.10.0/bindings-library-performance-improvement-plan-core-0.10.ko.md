@@ -834,7 +834,7 @@ transport 상태를 판정한다.
 ### 9.2 .NET
 
 - perf 경로: `bindings/dotnet/perf`
-- Single 상태: `DEALER_ROUTER/tcp`·`DEALER_ROUTER_REQREP/tcp`·`ROUTER_ROUTER_REQREP/tcp`·`PAIR/ws` 완료·통과, `PAIR/tcp`·`PUBSUB/tcp`·`DEALER_DEALER/tcp`·`ROUTER_ROUTER/tcp`·`PUBSUB/ws` 완료·보류, 나머지 대상 측정 중
+- Single 상태: `DEALER_ROUTER/tcp`·`DEALER_ROUTER_REQREP/tcp`·`ROUTER_ROUTER_REQREP/tcp`·`PAIR/ws`·`DEALER_DEALER/ws` 완료·통과, `PAIR/tcp`·`PUBSUB/tcp`·`DEALER_DEALER/tcp`·`ROUTER_ROUTER/tcp`·`PUBSUB/ws` 완료·보류, 나머지 대상 측정 중
 - Multi 상태: `미측정`
 - `미측정` 행은 완료나 다음 언어 전환을 의미하지 않는다. 특히 9.2.2의 `tls` `MULTI_*`
   행은 .NET에서 아직 측정하지 않은 대상이며, C++ 9.1의 같은 이름 행이 완료되어도 .NET
@@ -854,7 +854,7 @@ transport 상태를 판정한다.
 | `tcp` | `ROUTER_ROUTER_REQREP` | 61.81% | 63.07% | 58.03% | 96.05% | 98.61% | 98.70% | 통과·throughput 산술평균 79.38%, 평균 latency ratio 1.119x. C activity-driven readiness와 동일한 setup gate를 적용했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_145246_router-router-reqrep-tcp-paired-c1.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_145502_dotnet-router-router-reqrep-tcp-paired-final.txt` |
 | `ws` | `PAIR` | 78.19% | 73.99% | 97.32% | 94.92% | 94.07% | 97.43% | 통과·throughput 산술평균 89.32%, 평균 latency ratio 1.133x. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_145939_dotnet-pair-ws-c-paired.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_145953_dotnet-pair-ws-paired-final.txt` |
 | `ws` | `PUBSUB` | 68.29% | 53.13% | 94.54% | 90.84% | 95.12% | 98.40% | 보류·자체 1차 개선 후 throughput 산술평균 83.39%, 평균 latency ratio 1.090x. 1차 후보는 내부 `PublishMessageUnchecked` 경로이며 baseline 80.39%에서 개선됐다. Sol 2차 lock coalesce 후보는 78.40%·1.193x로 악화되어 제거했다. 추가 contract-safe 후보 no-go. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_150225_dotnet-pubsub-ws-c-paired.txt`; baseline: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_150246_dotnet-pubsub-ws-paired-final.txt`; 1차 after: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_150638_dotnet-pubsub-ws-own-after-unchecked-publish.txt`; Sol 2차 after: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_151007_dotnet-pubsub-ws-sol-after-lock-coalesce.txt` |
-| `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `DEALER_DEALER` | 70.80% | 62.08% | 94.44% | 91.10% | 92.77% | 98.79% | 통과·throughput 산술평균 85.00%, 평균 latency ratio 1.013x. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_151412_dotnet-dealer-dealer-ws-c-paired.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_151426_dotnet-dealer-dealer-ws-paired-final.txt` |
 | `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1308,10 +1308,10 @@ transport 상태를 판정한다.
 | 구분 | 상태 | 결과 파일 / 메모 |
 |------|------|------------------|
 | 현재 언어 | .NET |  |
-| 현재 pattern | 완료·보류 | `ROUTER_ROUTER_REQREP / tcp`는 throughput 산술평균 79.38%, 평균 latency ratio 1.119x로 통과했고, `PAIR / ws`는 throughput 산술평균 89.32%, 평균 latency ratio 1.133x로 통과했다. `PUBSUB / ws`는 자체 1차 후보 후 throughput 산술평균 83.39%로 중앙 목표 85%에 미달했으며, Sol 2차 후보는 78.40%로 악화되어 제거했다. 다음 대상은 `.NET Single DEALER_DEALER / ws`다. |
+| 현재 pattern | 완료·통과 | `ROUTER_ROUTER_REQREP / tcp`는 throughput 산술평균 79.38%, 평균 latency ratio 1.119x로 통과했고, `PAIR / ws`는 89.32%·1.133x, `DEALER_DEALER / ws`는 85.00%·1.013x로 통과했다. `PUBSUB / ws`는 자체 1차 후보 후 83.39%로 중앙 목표 85%에 미달했으며, Sol 2차 후보는 78.40%로 악화되어 제거했다. 다음 대상은 `.NET Single DEALER_ROUTER / ws`다. |
 | paired C | 완료 | C throughput은 224539/230228/216393/20018/13572/8164 Kops/s이며 report는 `perf_c_single_linux_20260810_145246_router-router-reqrep-tcp-paired-c1.txt`다. |
 | binding paired 결과 | 완료·통과 | .NET throughput은 138790/145207/125575/19227/13384/8058 Kops/s, 평균 latency는 0.243/0.225/0.257/0.596/0.427/0.354 ms다. report는 `perf_dotnet_single_linux_20260810_145502_dotnet-router-router-reqrep-tcp-paired-final.txt`다. |
-| 개선 결과 | 보류·추가 후보 no-go | `PUBSUB / ws`는 자체 1차 개선을 적용했지만 aggregate throughput 목표를 넘지 못했다. Sol 2차 lock coalesce 후보도 측정값으로 악화되어 제거했으며, public contract·ownership을 유지하는 추가 후보가 없어 보류한다. |
+| 개선 결과 | 통과·추가 변경 없음 | `DEALER_DEALER / ws`는 throughput과 latency aggregate 기준을 충족해 추가 hot-path 변경 없이 다음 대상으로 이동한다. |
 
 | request/reply paired C | 완료 | `DEALER_ROUTER_REQREP / tcp` C report median: 212,245.6 / 192,437.8 / 176,009.8 / 17,174.8 / 11,981.0 / 7,339.6 msg/s. C++ 구형 실행은 공식 비교에서 제외했으며, parity 보정 후 C++을 다시 측정했다. |
 | request/reply binding paired 결과 | 완료·미달 | C++ full sweep ratio: 95.10%, 93.51%, 96.72%, 94.99%, 95.76%, 93.89%, 중앙값 95.05%. 1024B·65536B boundary 재검증 ratio: 94.64%, 95.73%. 공식 재계산 중앙값 94.87%, latency ratio 모두 1.057배 이내. |
@@ -1442,7 +1442,7 @@ transport 상태를 판정한다.
 | 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
 |------|------|-------------|------------|-----------|
 | 1 | C++ | 완료·통과 35 / 보류 7 | 완료·통과 25 / 보류 3 | C++ perf는 추가 실행하지 않고 .NET으로 전환 |
-| 2 | .NET | 완료·통과 4 / 보류 5 | 미측정 | 다음 대상은 `Single DEALER_DEALER / ws`; C → .NET 순서로 한 대상씩 측정 |
+| 2 | .NET | 완료·통과 5 / 보류 5 | 미측정 | 다음 대상은 `Single DEALER_ROUTER / ws`; C → .NET 순서로 한 대상씩 측정 |
 | 3 | Java | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 5 | Go | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
@@ -1562,6 +1562,7 @@ transport 상태를 판정한다.
 | 2026-08-10 | .NET | Single / ROUTER_ROUTER_REQREP / tcp / 64·256·1024·65536·131072·262144B | `router-router-reqrep-tcp-paired-final` | 61.81%, 63.07%, 58.03%, 96.05%, 98.61%, 98.70% | 79.38% (산술평균) | 통과·평균 latency ratio 1.119x | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_145246_router-router-reqrep-tcp-paired-c1.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_145502_dotnet-router-router-reqrep-tcp-paired-final.txt` |
 | 2026-08-10 | .NET | Single / PAIR / ws / 64·256·1024·65536·131072·262144B | `dotnet-pair-ws-paired-final` | 78.19%, 73.99%, 97.32%, 94.92%, 94.07%, 97.43% | 89.32% (산술평균) | 통과·평균 latency ratio 1.133x | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_145939_dotnet-pair-ws-c-paired.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_145953_dotnet-pair-ws-paired-final.txt` |
 | 2026-08-10 | .NET | Single / PUBSUB / ws / 64·256·1024·65536·131072·262144B | `dotnet-pubsub-ws-own-after-unchecked-publish` | 68.29%, 53.13%, 94.54%, 90.84%, 95.12%, 98.40% | 83.39% (산술평균) | 보류·자체 1차 개선 후 aggregate 미달·Sol 2차 후보 no-go | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_150225_dotnet-pubsub-ws-c-paired.txt`; baseline: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_150246_dotnet-pubsub-ws-paired-final.txt`; 1차 after: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_150638_dotnet-pubsub-ws-own-after-unchecked-publish.txt`; Sol 2차 after: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_151007_dotnet-pubsub-ws-sol-after-lock-coalesce.txt` |
+| 2026-08-10 | .NET | Single / DEALER_DEALER / ws / 64·256·1024·65536·131072·262144B | `dotnet-dealer-dealer-ws-paired-final` | 70.80%, 62.08%, 94.44%, 91.10%, 92.77%, 98.79% | 85.00% (산술평균) | 통과·평균 latency ratio 1.013x | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_151412_dotnet-dealer-dealer-ws-c-paired.txt`; .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_151426_dotnet-dealer-dealer-ws-paired-final.txt` |
 
 ### 11.1 이전 측정값 판정 이력
 

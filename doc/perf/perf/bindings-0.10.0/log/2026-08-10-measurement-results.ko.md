@@ -135,3 +135,14 @@ baseline throughput ratio는 `63.69% / 68.79% / 92.68% / 94.77% / 75.59% / 86.82
 `62.23% / 49.93% / 91.06% / 87.37% / 91.22% / 88.57%`, 산술평균 `78.40%`,
 latency 산술평균 `1.193x`로 1차 후보보다 악화되어 제거했다. 최종은 자체 1차 후보를
 유지하며 aggregate throughput 목표 미달과 추가 후보 no-go로 보류한다.
+
+### .NET Single DEALER_DEALER/ws
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 1589034 / 1049658 / 455499 / 22908 / 15237 / 9224 | 48.835 / 32.324 / 19.929 / 13.725 / 13.099 / 21.614 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_151412_dotnet-dealer-dealer-ws-c-paired.txt` |
+| .NET | 1125067 / 651578 / 430151 / 20869 / 14136 / 9112 | 36.100 / 36.486 / 20.972 / 14.822 / 14.023 / 21.729 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_151426_dotnet-dealer-dealer-ws-paired-final.txt` |
+
+throughput ratio는 `70.80% / 62.08% / 94.44% / 91.10% / 92.77% / 98.79%`, 산술평균은
+`85.00%`다. latency ratio는 `0.739x / 1.129x / 1.052x / 1.080x / 1.071x / 1.005x`,
+산술평균은 `1.013x`다. .NET 단순 one-way 기준을 충족해 통과로 기록한다.
