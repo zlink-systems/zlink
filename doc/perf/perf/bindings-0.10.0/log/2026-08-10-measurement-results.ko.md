@@ -106,3 +106,14 @@ throughput과 latency aggregate가 모두 목표를 충족하지 않아 측정�
 throughput ratio는 `61.81% / 63.07% / 58.03% / 96.05% / 98.61% / 98.70%`, 산술평균은
 `79.38%`다. latency ratio는 `1.365x / 1.316x / 1.084x / 1.003x / 0.975x / 0.973x`,
 산술평균은 `1.119x`다. .NET socket request/reply 기준을 충족해 통과로 기록한다.
+
+### .NET Single PAIR/ws
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | report |
+|------|-----------------------------|---------------------------|--------|
+| C 기준 | 1888260 / 1062209 / 434911 / 23059 / 15331 / 9309 | 40.495 / 24.090 / 20.763 / 13.255 / 13.052 / 21.383 | `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260810_145939_dotnet-pair-ws-c-paired.txt` |
+| .NET | 1476467 / 785953 / 423259 / 21887 / 14422 / 9070 | 45.809 / 38.210 / 18.671 / 14.608 / 13.782 / 21.832 | `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260810_145953_dotnet-pair-ws-paired-final.txt` |
+
+throughput ratio는 `78.19% / 73.99% / 97.32% / 94.92% / 94.07% / 97.43%`, 산술평균은
+`89.32%`다. latency ratio는 `1.131x / 1.586x / 0.899x / 1.102x / 1.056x / 1.021x`,
+산술평균은 `1.133x`다. .NET 단순 one-way 기준을 충족해 통과로 기록한다.
