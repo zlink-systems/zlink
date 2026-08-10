@@ -1060,9 +1060,9 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 ### 9.3 Java
 
 - perf 경로: `bindings/java/perf`
-- Single 상태: `진행 (통과 29, 보류 6, 미측정 7)`
-- Multi 상태: `미측정`
-- 다음 작업: `PAIR / ipc`를 C와 순차 paired 측정하고 개선 검토한다.
+- Single 상태: `완료 (통과 36, 보류 6, 미측정 0)`
+- Multi 상태: `진행 (통과 0, 보류 1, 미측정 27)`
+- 다음 작업: `MULTI_DEALER_ROUTER_SENDSEND / tcp`를 C와 순차 paired 측정하고 개선 검토한다.
 
 #### 9.3.1 Single suite
 
@@ -1103,19 +1103,19 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 | `inproc` | `DEALER_ROUTER_REQREP` | 미달 (37.392%) | 미달 (36.328%) | 미달 (34.832%) | 미달 (43.527%) | 미달 (42.221%) | 미달 (48.068%) | 보류·C와 같은 DEALER routing ID를 적용한 최종 throughput 산술평균 40.395%, latency 중앙값 2.724x. 추가 contract-safe 후보가 없어 측정값으로 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_064631_java-dealer-router-reqrep-inproc-id-parity-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_064652_java-dealer-router-reqrep-inproc-id-parity.txt` |
 | `inproc` | `ROUTER_ROUTER` | 미달 (72.892%) | 미달 (44.244%) | 미달 (71.627%) | 미달 (60.971%) | 통과 (82.866%) | 통과 (83.044%) | 보류·throughput 산술평균 69.274%, latency 중앙값 2.828x. 앞서 회귀한 route cache와 중복 attach 후보를 재적용하지 않고 측정값으로 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_064416_java-final-router-router-inproc-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_064427_java-final-router-router-inproc.txt` |
 | `inproc` | `ROUTER_ROUTER_REQREP` | 미달 (43.112%) | 미달 (41.795%) | 미달 (35.294%) | 미달 (49.040%) | 통과 (54.145%) | 통과 (52.329%) | 보류·throughput 산술평균 45.952%, latency 중앙값 2.311x. 자체 hot path 검토와 Sol review 뒤 추가 적용 후보가 없어 측정값으로 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_064452_java-final-router-router-reqrep-inproc-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_064503_java-final-router-router-reqrep-inproc.txt` |
-| `ipc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ipc` | `PAIR` | 미달 (59.184%) | 통과 (98.052%) | 통과 (124.833%) | 통과 (125.441%) | 통과 (108.592%) | 통과 (117.184%) | 통과·throughput 산술평균 105.548%, latency 중앙값 0.938x. inproc에서 채택한 timestamp 1회 기록과 direct native `Message` 경로를 유지한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_065231_java-final-pair-ipc-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_065237_java-final-pair-ipc.txt` |
+| `ipc` | `PUBSUB` | 미달 (51.860%) | 통과 (75.621%) | 통과 (115.266%) | 통과 (124.694%) | 통과 (100.624%) | 통과 (110.309%) | 통과·throughput 산술평균 96.396%, latency 중앙값 0.858x. topic native encoding cache를 포함한 최종 경로다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_065253_java-final-pubsub-ipc-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_065305_java-final-pubsub-ipc.txt` |
+| `ipc` | `DEALER_DEALER` | 미달 (64.326%) | 통과 (92.963%) | 통과 (104.451%) | 통과 (125.810%) | 통과 (111.262%) | 통과 (113.747%) | 통과·throughput 산술평균 102.093%, latency 중앙값 1.000x. direct native `Message`와 caller-owned receive 경로를 유지한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_065326_java-final-dealer-dealer-ipc-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_065332_java-final-dealer-dealer-ipc.txt` |
+| `ipc` | `DEALER_ROUTER` | 미달 (50.561%) | 통과 (80.972%) | 통과 (93.038%) | 통과 (113.937%) | 통과 (106.961%) | 통과 (113.403%) | 통과·throughput 산술평균 93.145%, latency 중앙값 1.155x. C와 같은 active-window 집계와 최종 routed receive 경로를 유지한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_065349_java-final-dealer-router-ipc-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_065355_java-final-dealer-router-ipc.txt` |
+| `ipc` | `DEALER_ROUTER_REQREP` | 미달 (38.597%) | 미달 (45.130%) | 미달 (41.027%) | 통과 (85.175%) | 통과 (72.634%) | 통과 (64.207%) | 통과·throughput 산술평균 57.795%, latency 중앙값 1.804x. completion poller와 `DEALER-REQ` routing ID parity가 적용된 최종 경로다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_065411_java-final-dealer-router-reqrep-ipc-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_065417_java-final-dealer-router-reqrep-ipc.txt` |
+| `ipc` | `ROUTER_ROUTER` | 미달 (53.589%) | 통과 (81.937%) | 통과 (103.899%) | 통과 (127.405%) | 통과 (107.421%) | 통과 (99.857%) | 통과·throughput 산술평균 95.685%, latency 중앙값 1.129x. 회귀한 route cache와 중복 attach 후보는 적용하지 않은 최종 경로다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_065432_java-final-router-router-ipc-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_065438_java-final-router-router-ipc.txt` |
+| `ipc` | `ROUTER_ROUTER_REQREP` | 미달 (39.496%) | 미달 (46.059%) | 미달 (42.489%) | 통과 (92.065%) | 통과 (63.117%) | 통과 (60.214%) | 통과·throughput 산술평균 57.240%, latency 중앙값 1.825x. PING/PONG route handshake와 completion poller parity가 적용된 최종 경로다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_065454_java-final-router-router-reqrep-ipc-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_065500_java-final-router-router-reqrep-ipc.txt` |
 
 #### 9.3.2 Multi suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 미달 (23.738%) | 미달 (20.106%) | 미달 (13.926%) | 미달 (33.411%) | 미달 (7.349%) | 미달 (7.344%) | 보류·Java client의 누적 source `Message`와 추가 full copy를 제거한 자체 개선 뒤 throughput 산술평균 17.646%, latency 중앙값 0.084x. Sol의 private non-routed submit lambda 제거 후보는 17.247%로 낮아 원복했고 추가 contract-safe 후보가 없어 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_065653_java-multi-dealer-dealer-tcp-c.txt`; Java baseline: `/home/hep7hep7/project/zlink/bindings/java/perf/results/multi/report/perf_java_multi_linux_20260811_065702_java-multi-dealer-dealer-tcp.txt`; final: `/home/hep7hep7/project/zlink/bindings/java/perf/results/multi/report/perf_java_multi_linux_20260811_065836_java-multi-dealer-dealer-tcp-own-direct-message.txt` |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |

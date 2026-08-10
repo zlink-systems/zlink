@@ -181,10 +181,6 @@ final class PerfMultiDealerDealer {
             PerfControl.awaitStart(config.size(), "dealer/dealer client");
             List<systems.zlink.contracts.sockets.Socket> pollSockets = new ArrayList<>(clients.size());
             pollSockets.addAll(clients);
-            Message[] payloads = new Message[clients.size()];
-            for (int i = 0; i < payloads.length; i++) {
-                payloads[i] = PerfUtil.payloadTemplate(config.size());
-            }
             try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
                      pollSockets, PollEventFlags.POLLOUT)) {
                 for (int i = 0; i < clients.size(); i++) {
@@ -211,10 +207,8 @@ final class PerfMultiDealerDealer {
                         // socket to its HWM in a burst (re-stamping every
                         // message) keeps stamp-to-wire tight like C.
                         DealerSocket socket = clients.get(index);
-                        Message payload = payloads[index];
                         while (System.nanoTime() < activeEnd) {
-                            if (sendOneActive(socket, payload,
-                                    config.size())) {
+                            if (sendOneActive(socket, config.size())) {
                                 progressed = true;
                                 continue;
                             }
@@ -231,8 +225,6 @@ final class PerfMultiDealerDealer {
                     // POLLOUT readiness; no timer-based fallback.
                     pollWritable(pollSet, pending, -1);
                 }
-            } finally {
-                Message.closeAll(List.of(payloads));
             }
             // C parity: send one wire-level stop token on every client socket
             // so the server's signal-driven receive loop is guaranteed to wake.
@@ -273,12 +265,10 @@ final class PerfMultiDealerDealer {
     // fresh payload immediately before the non-blocking send. Returns true on
     // send_status_ok, false on transient backpressure (send_status_blocked);
     // a non-transient error is fatal.
-    private static boolean sendOneActive(DealerSocket socket, Message payload,
-                                         int size) {
-        payload = PerfUtil.resetAndWritePayload(payload, size,
-            (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
-        try (Message outbound = Message.from(payload)) {
-            return socket.send().message(outbound)
+    private static boolean sendOneActive(DealerSocket socket, int size) {
+        try (Message payload = PerfUtil.payload(size,
+                 (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime())) {
+            return socket.send().message(payload)
                 .flags(SendFlags.DONT_WAIT).submit();
         } catch (ZlinkSubmitException ex) {
             if (isTransient(ex)) {
