@@ -2570,7 +2570,7 @@ spot_context_t::erased_request_call_t spot_context_t::request_to_erased (node_ri
           if (!release_turn && state && state->spot_id == target_spot_id
               && state->owns_current_serial_turn ()) {
               return result_t<void>::failure (
-                framework_error_kind_t::not_configured,
+                framework_error_kind_t::invalid_operation,
                 "awaited request requires the current Spot execution gate");
           }
           return result_t<void>::success ();

@@ -2,6 +2,7 @@
 
 #include "runtime/foundation/operation_registry.hpp"
 #include <runtime/locations/location_repository.hpp>
+#include "runtime/actors/actor_client.hpp"
 #include "runtime/execution/actor_execution_context.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
@@ -28,6 +29,7 @@
 #include <array>
 #include <cassert>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <future>
 #include <limits>
@@ -630,14 +632,71 @@ void verify_self_actor_request_rejected_before_submission ()
         node_rid_t::from_string ("node"), "player", "actor-1", 1);
     runtime::actor_execution_scope_t scope (
       "player:actor-1", "spot-1");
-    actor_request_call_t request (
+    actor_request_call_t async_request (
       actor_client, actor.actor_id (), "SelfRequest", message_t{});
 
-    const auto result = request.submit_message ().result ();
-    assert (!result);
+    const auto async_result = async_request.submit_message ().result ();
+    assert (!async_result);
     assert (
-      result.error_kind ()
+      async_result.error_kind ()
       == framework_error_kind_t::invalid_operation);
+    actor_request_call_t yield_request (
+      actor_client, actor.actor_id (), "SelfRequest", message_t{});
+    const auto yield_result = yield_request.yield_message ().result ();
+    assert (!yield_result);
+    assert (
+      yield_result.error_kind ()
+      == framework_error_kind_t::invalid_operation);
+    assert (actor_client.request_submissions.load () == 0);
+
+    runtime::offload_executor_t executor (2);
+    runtime::serial_execution_queue_t queue (
+      executor,
+      runtime::serial_execution_queue_options_t{},
+      {},
+      runtime::serial_lane_policy_t::spot_wide ());
+    std::mutex gate;
+    std::condition_variable changed;
+    bool yield_checked = false;
+    bool release_probe = false;
+    bool sibling_ran = false;
+    assert (queue.try_post (
+      "self-actor-yield",
+      [&] {
+          runtime::actor_execution_scope_t turn_scope (
+            "player:actor-1", "spot-1");
+          assert (runtime::actor_request_requires_current_spot_gate (
+            "spot-1", false));
+          assert (!runtime::actor_request_requires_current_spot_gate (
+            "spot-1", true));
+          assert (!runtime::actor_request_requires_current_spot_gate (
+            "spot-2", false));
+          actor_request_call_t request (
+            actor_client, actor.actor_id (), "SelfRequest", message_t{});
+          const auto result = request.yield_message ().result ();
+          assert (!result);
+          assert (result.error_kind ()
+                  == framework_error_kind_t::invalid_operation);
+          std::unique_lock lock (gate);
+          yield_checked = true;
+          changed.notify_all ();
+          changed.wait (lock, [&] { return release_probe; });
+      }));
+    assert (queue.try_post ("self-actor-sibling", [&] {
+        std::lock_guard lock (gate);
+        sibling_ran = true;
+        changed.notify_all ();
+    }));
+    {
+        std::unique_lock lock (gate);
+        assert (changed.wait_for (
+          lock, 1s, [&] { return yield_checked; }));
+        assert (!sibling_ran);
+        release_probe = true;
+    }
+    changed.notify_all ();
+    queue.drain ();
+    assert (sibling_ran);
     assert (actor_client.request_submissions.load () == 0);
 }
 
@@ -661,6 +720,70 @@ void verify_actor_context_survives_coroutine_await ()
     assert (result.error_kind () == framework_error_kind_t::invalid_operation);
     assert (actor_client.request_submissions.load () == 1);
     queue.close ();
+}
+
+void verify_actor_yield_releases_spot_gate_before_reply ()
+{
+    using namespace zlink::framework;
+
+    runtime::offload_executor_t executor (2);
+    runtime::serial_execution_queue_t queue (
+      executor,
+      runtime::serial_execution_queue_options_t{},
+      {},
+      runtime::serial_lane_policy_t::spot_wide ());
+    recording_actor_client_t actor_client;
+    actor_client.delay_next_request.store (true);
+    std::mutex gate;
+    std::condition_variable changed;
+    bool sibling_ran = false;
+    bool request_completed = false;
+    std::shared_ptr<task_t<message_t>> request_task;
+
+    assert (queue.try_post_async (
+      "different-member-actor-yield",
+      [&] (auto complete) {
+          runtime::actor_execution_scope_t actor_scope (
+            "player:actor-1", "spot-1");
+          actor_request_call_t request (
+            actor_client,
+            actor_id_t ("actor-2"),
+            "OtherRequest",
+            message_t{});
+          request_task = std::make_shared<task_t<message_t>> (
+            request.yield_message ());
+          observe_task_completion (
+            *request_task,
+            [&, request_task,
+             complete = std::move (complete)] (const auto &result) mutable {
+                assert (result);
+                {
+                    std::lock_guard lock (gate);
+                    request_completed = true;
+                }
+                changed.notify_all ();
+                complete ([] {});
+            });
+      }));
+    assert (queue.try_post ("same-spot-sibling", [&] {
+        std::lock_guard lock (gate);
+        sibling_ran = true;
+        changed.notify_all ();
+    }));
+    {
+        std::unique_lock lock (gate);
+        assert (changed.wait_for (lock, 1s, [&] { return sibling_ran; }));
+        assert (!request_completed);
+    }
+    assert (actor_client.request_submissions.load () == 1);
+    actor_client.delayed_request.complete (
+      result_t<message_t>::success (message_t{}));
+    {
+        std::unique_lock lock (gate);
+        assert (changed.wait_for (
+          lock, 1s, [&] { return request_completed; }));
+    }
+    queue.drain ();
 }
 
 void verify_same_gate_request_rejected_before_submission ()
@@ -2933,6 +3056,203 @@ void verify_relocated_source_reply_failure_keeps_terminal_record ()
     target.close ();
 }
 
+void verify_atomic_raw_stateful_ingress_commit ()
+{
+    mesh::raw_mesh_node_owner_t target (
+      mesh::raw_mesh_node_options_t{descriptor ("atomic-ingress-target")});
+    target.start ();
+    const auto target_descriptor = target.topology ().local_descriptor ();
+
+    stateful::stateful_object_runtime_t objects (
+      1,
+      128,
+      1024,
+      4u * 1024u * 1024u);
+    objects.replace_placement_candidates (
+      {{"m6b-mesh", "atomic-ingress-target", {"player"},
+        100, 16, 0, 8, 0}});
+    const auto actor = create_ready (
+      objects,
+      {stateful::object_kind_t::actor,
+       "atomic-actor",
+       "player",
+       std::nullopt,
+       {},
+       false,
+       false});
+
+    const auto source_routing_id = bytes ("atomic-ingress-source");
+    constexpr std::uint64_t source_generation = 7;
+    constexpr std::uint64_t owner_lease_generation = 19;
+    bool authority_live = false;
+    std::size_t authority_queries = 0;
+    stateful::raw_stateful_dispatch_t dispatch (
+      objects,
+      target,
+      [&] (const stateful::accepted_record_authority_query_t &query)
+        -> std::optional<stateful::accepted_record_authority_t> {
+          ++authority_queries;
+          assert (query.target == actor);
+          assert (query.source_node_routing_id == source_routing_id);
+          assert (query.source_node_generation == source_generation);
+          if (!authority_live)
+              return std::nullopt;
+          return stateful::accepted_record_authority_t{
+            {"atomic-source-owner", 23, source_routing_id,
+             source_generation},
+            owner_lease_generation};
+      });
+    const protocol::actor_route_fence_t fence{
+      actor.key,
+      actor.object_generation,
+      target_descriptor.node_routing_id,
+      target_descriptor.lifecycle_generation,
+      actor.authority_owner_generation,
+      owner_lease_generation};
+    const auto enqueue = [&] (std::uint64_t operation_low,
+                              std::string payload) {
+        const protocol::wire_operation_id_t operation{41, operation_low};
+        assert (target.mailbox ().try_enqueue (
+          mesh::service_mailbox_record_t{
+            "actor:atomic-actor",
+            mesh::service_mailbox_domain_t::application,
+            {protocol::encode_actor_message_header (
+               protocol::command::actorSend,
+               std::nullopt,
+               fence,
+               operation),
+             protocol::encode_application_payload (
+               {"ActorPacket", "application/json",
+                bytes (std::move (payload))})},
+            source_routing_id,
+            std::nullopt,
+            std::nullopt,
+            source_generation,
+            std::make_pair (operation.high, operation.low)}));
+    };
+    const auto assert_no_queued_reservation = [&] {
+        assert (objects.pending (
+                  actor, stateful::turn_domain_t::application)
+                == 0);
+        assert (objects.pending_bytes (
+                  actor, stateful::turn_domain_t::application)
+                == 0);
+    };
+
+    // Authority rejection is outside the accepted-ingress transaction and
+    // cannot allocate sequence 1 or reserve queue capacity.
+    enqueue (1, "authority-rejected");
+    assert (dispatch.ingest (actor) == stateful::stateful_error_t::conflict);
+    assert_no_queued_reservation ();
+    authority_live = true;
+
+    // Exercise the object enqueue rejection through the production object
+    // port while no transport claim is active. The raw transaction must
+    // remove its provisional pending row and retain sequence 1.
+    assert (objects.enqueue (
+              actor,
+              stateful::turn_domain_t::application,
+              stateful::turn_record_t{900, bytes ("capacity-filler"), 1})
+            == stateful::stateful_error_t::none);
+    const auto filled_count = objects.pending (
+      actor, stateful::turn_domain_t::application);
+    const auto filled_bytes = objects.pending_bytes (
+      actor, stateful::turn_domain_t::application);
+    enqueue (2, "capacity-rejected");
+    const auto capacity_rejection = dispatch.ingest (actor);
+    assert (capacity_rejection
+            == stateful::stateful_error_t::backpressured);
+    assert (objects.pending (
+              actor, stateful::turn_domain_t::application)
+            == filled_count);
+    assert (objects.pending_bytes (
+              actor, stateful::turn_domain_t::application)
+            == filled_bytes);
+    assert (dispatch.discard_pending (actor, 900)
+            == stateful::stateful_error_t::not_found);
+    assert (objects.discard_application (actor, 900)
+            == stateful::stateful_error_t::none);
+    assert_no_queued_reservation ();
+
+    enqueue (3, "accepted-one");
+    assert (dispatch.ingest (actor) == stateful::stateful_error_t::none);
+    const auto [first_error, first] = dispatch.try_claim (actor);
+    assert (first_error == stateful::stateful_error_t::none && first);
+    assert (first->turn.sequence == 1);
+    assert (first->frozen.source.owner_id == "atomic-source-owner");
+    assert (first->frozen.source.lease_generation == 23);
+    assert_no_queued_reservation ();
+
+    // The running item retains the sole object reservation until terminal
+    // completion even though it has left the pending FIFO.
+    assert (objects.enqueue (
+              actor,
+              stateful::turn_domain_t::application,
+              stateful::turn_record_t{901, bytes ("while-running"), 1})
+            == stateful::stateful_error_t::backpressured);
+    assert_no_queued_reservation ();
+    assert (dispatch.complete (*first) == stateful::stateful_error_t::none);
+
+    enqueue (4, "accepted-two");
+    assert (dispatch.ingest (actor) == stateful::stateful_error_t::none);
+    const auto [second_error, second] = dispatch.try_claim (actor);
+    assert (second_error == stateful::stateful_error_t::none && second);
+    assert (second->turn.sequence == 2);
+    assert (dispatch.complete (*second) == stateful::stateful_error_t::none);
+
+    protocol::frozen_application_record_t staged_record;
+    staged_record.kind = protocol::frozen_record_kind_t::actor_send;
+    staged_record.source_kind = protocol::frozen_source_kind_t::node;
+    staged_record.source = {
+      "atomic-source-owner", 23, source_routing_id, source_generation};
+    staged_record.operation = {51, 3};
+    staged_record.body = protocol::frozen_actor_application_body_t{
+      fence,
+      {"ActorPacket", "application/json", bytes ("staged-three")}};
+    const auto encoded_staged =
+      protocol::encode_frozen_application_record (staged_record);
+    bool relocated_terminal_called = false;
+    assert (dispatch.stage_relocated (
+              actor,
+              stateful::turn_record_t{
+                3, encoded_staged.canonical_bytes},
+              [&] (const auto &) {
+                  relocated_terminal_called = true;
+                  return true;
+              })
+            == stateful::stateful_error_t::none);
+    const auto staged_count = objects.pending (
+      actor, stateful::turn_domain_t::application);
+    const auto staged_bytes = objects.pending_bytes (
+      actor, stateful::turn_domain_t::application);
+    assert (staged_count == 1 && staged_bytes != 0);
+
+    // The live allocator is still at sequence 3. The existing pending row
+    // rejects the provisional commit before object enqueue, preserving both
+    // queue accounting and the next accepted sequence.
+    enqueue (5, "pending-collision");
+    assert (dispatch.ingest (actor) == stateful::stateful_error_t::conflict);
+    assert (objects.pending (
+              actor, stateful::turn_domain_t::application)
+            == staged_count);
+    assert (objects.pending_bytes (
+              actor, stateful::turn_domain_t::application)
+            == staged_bytes);
+    assert (!relocated_terminal_called);
+    assert (dispatch.discard_pending (actor, 3)
+            == stateful::stateful_error_t::none);
+    assert_no_queued_reservation ();
+
+    enqueue (6, "accepted-three");
+    assert (dispatch.ingest (actor) == stateful::stateful_error_t::none);
+    const auto [third_error, third] = dispatch.try_claim (actor);
+    assert (third_error == stateful::stateful_error_t::none && third);
+    assert (third->turn.sequence == 3);
+    assert (dispatch.complete (*third) == stateful::stateful_error_t::none);
+    assert (authority_queries == 6);
+    target.close ();
+}
+
 void verify_node_request_requires_remote_admission ()
 {
     mesh::raw_mesh_node_owner_t source (
@@ -4811,6 +5131,8 @@ int main ()
     verify_entry_spot_identity_claim_is_global_and_fenced ();
     verify_user_spot_execution_mode_registration ();
     verify_self_actor_request_rejected_before_submission ();
+    verify_actor_context_survives_coroutine_await ();
+    verify_actor_yield_releases_spot_gate_before_reply ();
     verify_same_gate_request_rejected_before_submission ();
     verify_creation_terminal_operation_isolation ();
     verify_typed_capacity_retry_uses_second_candidate ();
@@ -4828,6 +5150,7 @@ int main ()
     verify_remote_session_route_ack_and_atomic_switch ();
     verify_location_store_accepted_record_authority ();
     verify_raw_spot_and_actor_routing ();
+    verify_atomic_raw_stateful_ingress_commit ();
     verify_relocated_source_reply_failure_keeps_terminal_record ();
     verify_node_request_requires_remote_admission ();
     verify_unadmitted_request_queue_overflow_replies_immediately ();

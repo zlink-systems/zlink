@@ -1313,6 +1313,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-regression;execution;spot;yield")
   target_include_directories(test_cpp_framework_execution PRIVATE
     ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+  target_compile_definitions(test_cpp_framework_execution PRIVATE
+    ZLINK_SERIAL_EXECUTION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/conformance/serial-execution-v1.json")
   add_zlink_framework_test(
     test_cpp_framework_serializer_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_serializer_registry.cpp

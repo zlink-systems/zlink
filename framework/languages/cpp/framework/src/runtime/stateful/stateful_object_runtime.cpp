@@ -724,38 +724,6 @@ stateful_error_t stateful_object_runtime_t::enqueue (
     return enqueue_locked (*object, domain, std::move (record));
 }
 
-stateful_error_t stateful_object_runtime_t::application_admission (
-  const object_ref_t &owner,
-  std::size_t application_payload_bytes) const
-{
-    std::lock_guard lock (_mutex);
-    stateful_error_t error = stateful_error_t::none;
-    const auto *object = find_record_locked (owner, error);
-    if (object == nullptr)
-        return error;
-
-    const auto &queue = object->queue;
-    constexpr auto fixed = dispatch_limits::fixed_work_byte_cost;
-    if (application_payload_bytes
-        > std::numeric_limits<std::size_t>::max () - fixed)
-        return stateful_error_t::backpressured;
-    const auto bytes = fixed + application_payload_bytes;
-    const auto pending_count =
-      queue.application.size () + queue.held_application.size ();
-    const auto active_count = queue.application_active ? std::size_t{1} : 0;
-    if (pending_count >= _application_capacity
-                              - std::min (_application_capacity, active_count)
-        || bytes > _application_byte_capacity
-        || queue.application_bytes > _application_byte_capacity
-        || queue.application_active_bytes
-             > _application_byte_capacity - queue.application_bytes
-        || bytes > _application_byte_capacity - queue.application_bytes
-                             - queue.application_active_bytes)
-        return stateful_error_t::backpressured;
-
-    return stateful_error_t::none;
-}
-
 stateful_error_t stateful_object_runtime_t::enqueue_locked (
   object_record_t &object,
   turn_domain_t domain,

@@ -16,25 +16,48 @@
 #include <zlink/framework/contracts/spots/spot.hpp>
 #include <zlink/framework/contracts/actors/actor.hpp>
 
+#include <nlohmann/json.hpp>
+
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <exception>
+#include <fstream>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <stdexcept>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <vector>
 
 namespace
 {
+
+#ifndef ZLINK_SERIAL_EXECUTION_CONFORMANCE_PATH
+#error "serial execution conformance fixture path is required"
+#endif
+
+const nlohmann::json &serial_execution_fixture ()
+{
+    static const auto fixture = [] {
+        std::ifstream input (ZLINK_SERIAL_EXECUTION_CONFORMANCE_PATH);
+        if (!input)
+            throw std::runtime_error (
+              "serial execution conformance fixture could not be opened");
+        return nlohmann::json::parse (input);
+    } ();
+    return fixture;
+}
 
 class controlled_worker_scheduler_t final : public zlink::framework::detail::worker_scheduler_t
 {
@@ -778,20 +801,40 @@ bool verify_inbound_budget_atomic_pending_and_observations ()
 bool verify_common_dispatch_limits ()
 {
     using namespace zlink::framework::runtime;
+    const auto &fixture = serial_execution_fixture ();
+    const auto &limits = fixture.at ("limits");
     const serial_execution_queue_options_t queue_options;
     const receive_batch_budget_t receive_options;
-    return queue_options.application_message_capacity
-             == dispatch_limits::application_mailbox_messages
+    return fixture.at ("fixture") == "zlink.framework.serial-execution"
+           && fixture.at ("version") == 1
+           && queue_options.application_message_capacity
+                == limits.at ("application").at ("messageCapacity")
+           && queue_options.application_message_capacity
+                == dispatch_limits::application_mailbox_messages
+           && queue_options.application_byte_capacity
+                == limits.at ("application").at ("byteCapacity")
            && queue_options.application_byte_capacity
                 == dispatch_limits::application_mailbox_bytes
            && queue_options.lifecycle_message_capacity
+                == limits.at ("lifecycle").at ("messageCapacity")
+           && queue_options.lifecycle_message_capacity
                 == dispatch_limits::control_mailbox_messages
+           && queue_options.lifecycle_byte_capacity
+                == limits.at ("lifecycle").at ("byteCapacity")
            && queue_options.lifecycle_byte_capacity
                 == dispatch_limits::control_mailbox_bytes
            && queue_options.owner_time_budget
+                == std::chrono::milliseconds (
+                  limits.at ("ownerTimeBudgetMilliseconds")
+                    .get<std::int64_t> ())
+           && queue_options.owner_time_budget
                 == dispatch_limits::owner_time_budget
            && queue_options.lifecycle_burst_limit
+                == limits.at ("lifecycleBurstLimit")
+           && queue_options.lifecycle_burst_limit
                 == dispatch_limits::lifecycle_burst_limit
+           && serial_execution_queue_t::fixed_work_byte_cost
+                == limits.at ("fixedWorkByteCost")
            && serial_execution_queue_t::fixed_work_byte_cost
                 == dispatch_limits::fixed_work_byte_cost
            && receive_options.max_messages
@@ -800,6 +843,299 @@ bool verify_common_dispatch_limits ()
                 == dispatch_limits::receive_batch_bytes
            && receive_options.max_elapsed
                 == dispatch_limits::receive_batch_time;
+}
+
+bool verify_fixture_accounting_boundaries ()
+{
+    using namespace zlink::framework::runtime;
+    try {
+        const auto &fixture = serial_execution_fixture ();
+        for (const auto &scenario : fixture.at ("accountingScenarios")) {
+            const auto lane_name = scenario.at ("lane").get<std::string> ();
+            const auto lane = lane_name == "application"
+              ? serial_work_lane_t::application
+              : lane_name == "lifecycle"
+                  ? serial_work_lane_t::lifecycle
+                  : throw std::runtime_error ("unknown serial work lane");
+            const auto payload_bytes =
+              scenario.at ("retainedPayloadBytesPerWork")
+                .get<std::size_t> ();
+            const auto accepted =
+              scenario.at ("acceptedWorkCount").get<std::size_t> ();
+            const auto byte_cost =
+              serial_execution_queue_t::fixed_work_byte_cost + payload_bytes;
+            if (accepted == 0
+                || scenario.at ("nextAdmission") != "capacityExceeded"
+                || !scenario.at ("runningWorkConsumesReservation")
+                       .get<bool> ()) {
+                return false;
+            }
+
+            offload_executor_t executor (2);
+            serial_execution_queue_t queue (executor,
+                                             serial_execution_queue_options_t{});
+            std::mutex gate;
+            std::condition_variable changed;
+            bool active = false;
+            std::optional<serial_execution_queue_t::async_completion_t>
+              finish_active;
+            const auto options = serial_work_options_t{lane, byte_cost};
+            if (!queue.try_post_async (
+                  scenario.at ("name").get<std::string> (),
+                  [&] (auto complete) {
+                      std::lock_guard lock (gate);
+                      finish_active.emplace (std::move (complete));
+                      active = true;
+                      changed.notify_all ();
+                  },
+                  options)) {
+                return false;
+            }
+            {
+                std::unique_lock lock (gate);
+                if (!changed.wait_for (
+                      lock, std::chrono::seconds (1), [&] { return active; })) {
+                    return false;
+                }
+            }
+            for (std::size_t index = 1; index < accepted; ++index) {
+                if (!queue.try_post ("fixture-boundary", [] {}, options))
+                    return false;
+            }
+            if (queue.try_post ("fixture-over-boundary", [] {}, options)
+                || queue.pending_count (lane) != accepted
+                || queue.pending_bytes () != accepted * byte_cost) {
+                return false;
+            }
+
+            serial_execution_queue_t::async_completion_t finish;
+            {
+                std::lock_guard lock (gate);
+                finish = std::move (*finish_active);
+            }
+            finish ([] {});
+            queue.drain ();
+            if (queue.pending_count () != 0 || queue.pending_bytes () != 0
+                || !queue.try_post ("fixture-after-terminal", [] {}, options)) {
+                return false;
+            }
+            queue.drain ();
+        }
+        return true;
+    }
+    catch (...) {
+        return false;
+    }
+}
+
+bool verify_fixture_arbitration_and_owner_isolation ()
+{
+    using namespace zlink::framework::runtime;
+    try {
+        const auto &fixture = serial_execution_fixture ();
+        const auto &invariants = fixture.at ("dispatchInvariants");
+        if (!invariants.at ("applicationAndLifecycleUseDistinctFifos")
+               .get<bool> ()
+            || !invariants.at ("applicationAndLifecycleHaveIndependentAdmission")
+                  .get<bool> ()
+            || !invariants.at ("emptyToNonEmptySchedulesImmediately")
+                  .get<bool> ()
+            || !invariants.at ("pollingIsNotAProgressMechanism").get<bool> ()
+            || invariants.at ("implicitInlineExecution").get<bool> ()
+            || !invariants.at ("resumeAfterYieldUsesNewTurn").get<bool> ()) {
+            return false;
+        }
+        const auto same_owner = [&] (std::string_view target)
+          -> const nlohmann::json & {
+            const auto &rules = fixture.at ("sameOwnerCalls");
+            const auto found = std::find_if (
+              rules.begin (), rules.end (), [&] (const auto &rule) {
+                  return rule.at ("target") == target;
+              });
+            if (found == rules.end ())
+                throw std::runtime_error ("same-owner fixture rule is missing");
+            return *found;
+        };
+        const auto &self_actor = same_owner ("selfActor");
+        const auto &same_spot = same_owner ("sameSpot");
+        const auto &member_actor =
+          same_owner ("differentMemberActorOnSameSpot");
+        const auto &different_owner = same_owner ("differentOwner");
+        if (self_actor.at ("async") != "invalidOperation"
+            || self_actor.at ("yield") != "invalidOperation"
+            || self_actor.at ("actorClaimAfterYield") != "retained"
+            || same_spot.at ("async") != "invalidOperation"
+            || same_spot.at ("yield") != "resumeOnNewTurn"
+            || member_actor.at ("async") != "invalidOperation"
+            || member_actor.at ("yield") != "resumeOnNewTurn"
+            || member_actor.at ("actorClaimAfterYield") != "retained"
+            || different_owner.at ("async") != "awaitWithoutGateRelease"
+            || different_owner.at ("yield") != "resumeOnNewTurn") {
+            return false;
+        }
+
+        const auto &scenario = fixture.at ("arbitrationScenarios").at (0);
+        const auto applications =
+          scenario.at ("applicationInput").get<std::vector<std::string>> ();
+        const auto lifecycle =
+          scenario.at ("lifecycleInput").get<std::vector<std::string>> ();
+        const auto expected =
+          scenario.at ("expectedSelection").get<std::vector<std::string>> ();
+        if (lifecycle.empty ())
+            return false;
+
+        offload_executor_t arbitration_executor (2);
+        serial_execution_queue_t arbitration_queue (
+          arbitration_executor, serial_execution_queue_options_t{});
+        std::mutex order_gate;
+        std::condition_variable order_changed;
+        std::vector<std::string> order;
+        std::optional<serial_execution_queue_t::async_completion_t>
+          release_first;
+        if (!arbitration_queue.try_post_async (
+              lifecycle.front (),
+              [&] (auto complete) {
+                  std::lock_guard lock (order_gate);
+                  order.push_back (lifecycle.front ());
+                  release_first.emplace (std::move (complete));
+                  order_changed.notify_all ();
+              },
+              {serial_work_lane_t::lifecycle,
+               serial_execution_queue_t::fixed_work_byte_cost})) {
+            return false;
+        }
+        {
+            std::unique_lock lock (order_gate);
+            if (!order_changed.wait_for (
+                  lock, std::chrono::seconds (1),
+                  [&] { return release_first.has_value (); })) {
+                return false;
+            }
+        }
+        for (const auto &name : applications) {
+            if (!arbitration_queue.try_post (
+                  name,
+                  [&, name] {
+                      std::lock_guard lock (order_gate);
+                      order.push_back (name);
+                  },
+                  {serial_work_lane_t::application,
+                   serial_execution_queue_t::fixed_work_byte_cost})) {
+                return false;
+            }
+        }
+        for (auto item = std::next (lifecycle.begin ());
+             item != lifecycle.end (); ++item) {
+            if (!arbitration_queue.try_post (
+                  *item,
+                  [&, name = *item] {
+                      std::lock_guard lock (order_gate);
+                      order.push_back (name);
+                  },
+                  {serial_work_lane_t::lifecycle,
+                   serial_execution_queue_t::fixed_work_byte_cost})) {
+                return false;
+            }
+        }
+        serial_execution_queue_t::async_completion_t finish_first;
+        {
+            std::lock_guard lock (order_gate);
+            finish_first = std::move (*release_first);
+        }
+        finish_first ([] {});
+        arbitration_queue.drain ();
+        {
+            std::lock_guard lock (order_gate);
+            if (order != expected)
+                return false;
+        }
+
+        offload_executor_t shared_executor (2);
+        serial_execution_queue_t owner_a (
+          shared_executor, serial_execution_queue_options_t{});
+        serial_execution_queue_t owner_b (
+          shared_executor, serial_execution_queue_options_t{});
+        std::mutex progress_gate;
+        std::condition_variable progress_changed;
+        std::optional<serial_execution_queue_t::async_completion_t>
+          release_owner_a;
+        bool owner_a_lifecycle_ran = false;
+        std::size_t owner_b_runs = 0;
+        bool inline_execution = false;
+        const auto caller_thread = std::this_thread::get_id ();
+        if (!owner_a.try_post_async (
+              "owner-a-active",
+              [&] (auto complete) {
+                  std::lock_guard lock (progress_gate);
+                  release_owner_a.emplace (std::move (complete));
+                  progress_changed.notify_all ();
+              })) {
+            return false;
+        }
+        {
+            std::unique_lock lock (progress_gate);
+            if (!progress_changed.wait_for (
+                  lock, std::chrono::seconds (1),
+                  [&] { return release_owner_a.has_value (); })) {
+                return false;
+            }
+        }
+        const auto application_capacity =
+          fixture.at ("limits").at ("application")
+            .at ("messageCapacity").get<std::size_t> ();
+        for (std::size_t index = 1; index < application_capacity; ++index) {
+            if (!owner_a.try_post ("owner-a-saturated", [] {}))
+                return false;
+        }
+        if (owner_a.try_post ("owner-a-over-capacity", [] {})
+            || !owner_a.try_post (
+              "owner-a-lifecycle",
+              [&] {
+                  std::lock_guard lock (progress_gate);
+                  owner_a_lifecycle_ran = true;
+              },
+              {serial_work_lane_t::lifecycle,
+               serial_execution_queue_t::fixed_work_byte_cost})) {
+            return false;
+        }
+        const auto record_owner_b_progress = [&] {
+            std::lock_guard lock (progress_gate);
+            inline_execution = inline_execution
+                               || std::this_thread::get_id () == caller_thread;
+            ++owner_b_runs;
+            progress_changed.notify_all ();
+        };
+        if (!owner_b.try_post (
+              "owner-b-lifecycle", record_owner_b_progress,
+              {serial_work_lane_t::lifecycle,
+               serial_execution_queue_t::fixed_work_byte_cost})
+            || !owner_b.try_post (
+              "owner-b-application", record_owner_b_progress)) {
+            return false;
+        }
+        {
+            std::unique_lock lock (progress_gate);
+            if (!progress_changed.wait_for (
+                  lock, std::chrono::seconds (1),
+                  [&] { return owner_b_runs == 2; })
+                || owner_a_lifecycle_ran || inline_execution) {
+                return false;
+            }
+        }
+        serial_execution_queue_t::async_completion_t finish_owner_a;
+        {
+            std::lock_guard lock (progress_gate);
+            finish_owner_a = std::move (*release_owner_a);
+        }
+        finish_owner_a ([] {});
+        owner_a.drain ();
+        owner_b.drain ();
+        std::lock_guard lock (progress_gate);
+        return owner_a_lifecycle_ran;
+    }
+    catch (...) {
+        return false;
+    }
 }
 
 bool verify_serial_lane_policies ()
@@ -1535,6 +1871,12 @@ int main ()
     }
     if (!verify_common_dispatch_limits ()) {
         return 55;
+    }
+    if (!verify_fixture_accounting_boundaries ()) {
+        return 60;
+    }
+    if (!verify_fixture_arbitration_and_owner_isolation ()) {
+        return 61;
     }
     if (!verify_serial_lane_policies ()) {
         return 57;
