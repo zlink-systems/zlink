@@ -1060,9 +1060,9 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 ### 9.3 Java
 
 - perf 경로: `bindings/java/perf`
-- Single 상태: `진행 (통과 22, 보류 1, 미측정 19)`
+- Single 상태: `진행 (통과 27, 보류 1, 미측정 14)`
 - Multi 상태: `미측정`
-- 다음 작업: `DEALER_DEALER / tls`를 C와 순차 paired 측정하고 개선 검토한다.
+- 다음 작업: `PAIR / inproc`를 C와 순차 paired 측정하고 개선 검토한다.
 
 #### 9.3.1 Single suite
 
@@ -1091,11 +1091,11 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 | `wss` | `ROUTER_ROUTER_REQREP` | 미달 (44.492%) | 통과 (56.876%) | 통과 (88.368%) | 통과 (96.494%) | 통과 (90.750%) | 통과 (82.068%) | 통과·throughput 산술평균 76.508%, latency 중앙값 1.089x. 최종 request/reply parity shared path를 자체 검토하고 Sol review에서 추가 후보 없음으로 확정했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_061427_java-final-router-router-reqrep-wss-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_061433_java-final-router-router-reqrep-wss.txt` |
 | `tls` | `PAIR` | 통과 (81.543%) | 통과 (113.330%) | 통과 (193.813%) | 통과 (156.074%) | 통과 (143.430%) | 통과 (163.363%) | 통과·throughput 산술평균 141.925%, latency 중앙값 0.895x. retained direct native `Message`와 caller-owned receive 경로를 자체 검토하고 Sol review에서 추가 binding-only 후보 없음으로 확정했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_061600_java-final-pair-tls-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_061607_java-final-pair-tls.txt` |
 | `tls` | `PUBSUB` | 미달 (53.571%) | 통과 (78.110%) | 통과 (147.578%) | 통과 (147.316%) | 통과 (143.629%) | 통과 (148.629%) | 통과·throughput 산술평균 119.805%, latency 중앙값 0.918x. topic을 C와 같은 `bench`로 맞추고 `poll(-1)` 뒤 `DONT_WAIT` drain을 적용했다. 하나의 stop `Message`를 blocking publish로 재사용해 발생한 partial failure도 매 retry 새 `Message`와 `DONT_WAIT` publish로 수정했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_062114_java-pubsub-tls-final-parity-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_062139_java-pubsub-tls-final-parity.txt` |
-| `tls` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `DEALER_DEALER` | 미달 (69.881%) | 통과 (109.770%) | 통과 (213.285%) | 통과 (88.992%) | 통과 (157.889%) | 통과 (96.448%) | 통과·throughput 산술평균 122.711%, latency 중앙값 1.046x. retained direct native `Message`, caller-owned `Received`, poll 후 drain 경로에서 추가 TLS 고유 binding 후보가 없어 현재 구현을 유지했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_062323_java-final-dealer-dealer-tls-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_062334_java-final-dealer-dealer-tls.txt` |
+| `tls` | `DEALER_ROUTER` | 미달 (62.344%) | 통과 (95.450%) | 통과 (193.006%) | 통과 (156.039%) | 통과 (86.222%) | 통과 (93.952%) | 통과·throughput 산술평균 114.502%, latency 중앙값 1.305x. canonical custom C와 같은 active 시작·집계 의미를 유지하며 추가 TLS 고유 binding 후보가 없어 현재 구현을 유지했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_062402_java-final-dealer-router-tls-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_062412_java-final-dealer-router-tls.txt` |
+| `tls` | `DEALER_ROUTER_REQREP` | 미달 (38.564%) | 미달 (42.566%) | 미달 (46.745%) | 통과 (88.380%) | 통과 (78.026%) | 통과 (100.802%) | 통과·throughput 산술평균 65.847%, latency 중앙값 1.368x로 최소 기준 50%를 넘는다. request `Message` 재사용 후보는 ref-counted native storage의 in-flight snapshot을 훼손할 수 있고 DEALER A/B도 회귀해 제거했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_063127_java-dealer-router-reqrep-tls-final-conditional-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_063150_java-dealer-router-reqrep-tls-final-conditional.txt` |
+| `tls` | `ROUTER_ROUTER` | 미달 (72.418%) | 통과 (105.967%) | 통과 (196.611%) | 통과 (169.269%) | 통과 (171.084%) | 통과 (177.500%) | 통과·throughput 산술평균 148.808%, latency 중앙값 0.926x. TCP에서 회귀한 route sender cache와 중복 attach 제거를 재적용하지 않았고 추가 TLS 고유 후보가 없어 현재 구현을 유지했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_062516_java-final-router-router-tls-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_062526_java-final-router-router-tls.txt` |
+| `tls` | `ROUTER_ROUTER_REQREP` | 미달 (32.335%) | 미달 (41.786%) | 통과 (60.854%) | 통과 (99.745%) | 통과 (100.576%) | 통과 (102.877%) | 통과·C와 같은 PING/PONG route handshake를 active phase 전에 적용한 최종 throughput 산술평균 73.029%, latency 중앙값 1.080x. request `Message` 재사용 후보는 ref-counted native storage의 in-flight snapshot을 훼손할 수 있어 제거했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_063235_java-router-router-reqrep-tls-handshake-final-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_063254_java-router-router-reqrep-tls-handshake-final.txt` |
 | `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |

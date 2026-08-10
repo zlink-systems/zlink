@@ -76,6 +76,7 @@ final class PerfRouterRouter {
             PerfUtil.waitForMonitorEventWithActivity(senderMonitor, sender,
                 READY_EVENT, 1, readyTimeout, "router/router sender ready");
             RoutingId targetRoute = performRouterRouterHandshake(receiver, sender,
+                ROUTER1, ROUTER2,
                 Duration.ofMillis(config.connectReadyTimeoutMs()));
             drainRouterSocket(receiver);
             drainRouterSocket(sender);
@@ -202,9 +203,11 @@ final class PerfRouterRouter {
     // the active phase and uses the observed peer routing id for active and
     // stop-token sends. Without this step, websocket ROUTER->ROUTER can report
     // connection readiness before the explicit route is usable.
-    private static RoutingId performRouterRouterHandshake(RouterSocket receiver,
-                                                          RouterSocket sender,
-                                                          Duration timeout) {
+    static RoutingId performRouterRouterHandshake(RouterSocket receiver,
+                                                  RouterSocket sender,
+                                                  RoutingId receiverRoute,
+                                                  RoutingId senderRouteFallback,
+                                                  Duration timeout) {
         long deadline = System.nanoTime() + timeout.toNanos();
         RoutingId senderRoute = null;
         systems.zlink.contracts.messaging.Received received =
@@ -212,14 +215,15 @@ final class PerfRouterRouter {
         try {
             while (System.nanoTime() < deadline && senderRoute == null) {
                 try (Message ping = Message.from(PING)) {
-                    if (!trySendActive(sender, ROUTER1, ping)) {
+                    if (!trySendActive(sender, receiverRoute, ping)) {
                         Thread.onSpinWait();
                     }
                 }
                 while (recvIntoNoWait(receiver, received)) {
                     try {
                         if (Arrays.equals(received.firstPart().data(), PING)) {
-                            senderRoute = received.getRoutingId().orElse(ROUTER2);
+                            senderRoute = received.getRoutingId().orElse(
+                                senderRouteFallback);
                             break;
                         }
                     } finally {
@@ -249,7 +253,7 @@ final class PerfRouterRouter {
                             throw new IllegalStateException(
                                 "router/router handshake received unexpected payload");
                         }
-                        return received.getRoutingId().orElse(ROUTER1);
+                        return received.getRoutingId().orElse(receiverRoute);
                     } finally {
                         received.close();
                     }

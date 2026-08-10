@@ -34,6 +34,8 @@ import java.util.concurrent.atomic.AtomicReference;
 final class PerfSocketReqRep {
     private static final RoutingId SERVER_RID = RoutingId.from(
         "SERVER".getBytes(StandardCharsets.UTF_8));
+    private static final RoutingId CLIENT_RID = RoutingId.from(
+        "CLIENT".getBytes(StandardCharsets.UTF_8));
 
     private PerfSocketReqRep() {
     }
@@ -57,8 +59,7 @@ final class PerfSocketReqRep {
             server.setRoutingId(SERVER_RID);
             server.options().mandatory(true);
             if (client instanceof RouterSocket router) {
-                router.setRoutingId(RoutingId.from(
-                    "CLIENT".getBytes(StandardCharsets.UTF_8)));
+                router.setRoutingId(CLIENT_RID);
                 router.options().mandatory(true);
             }
             PerfUtil.applyMonitorOptions(serverMonitor, config);
@@ -89,6 +90,12 @@ final class PerfSocketReqRep {
                     1, readyTimeout, "reqrep client ready");
             }
             PerfUtil.recalculateAutoHwm(ctx);
+            if (client instanceof RouterSocket router) {
+                Duration handshakeTimeout = Duration.ofMillis(Math.max(1,
+                    PerfUtil.intEnv("PERF_ROUTER_HANDSHAKE_TIMEOUT_MS", 3000)));
+                PerfRouterRouter.performRouterRouterHandshake(server, router,
+                    SERVER_RID, CLIENT_RID, handshakeTimeout);
+            }
 
             int completionDrainTimeoutMs = Math.max(1, PerfUtil.intEnv(
                 "PERF_SINGLE_REQREP_DRAIN_TIMEOUT_MS", 10_000));
