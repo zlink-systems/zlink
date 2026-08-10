@@ -113,10 +113,10 @@ import {
   ZLinkRuntimeMetrics
 } from '../diagnostics';
 import {
-  RuntimeEventQueue,
   ZLinkClientServerRuntimeProjection,
   ZLinkFanoutRuntimeProjection
 } from '../diagnostics/topology-runtime-projections';
+import { RuntimeEventQueue } from '../diagnostics/runtime-observation-queue';
 import {
   DefaultZLinkSpotManager,
   ZLinkPublicSpotManager,
@@ -240,6 +240,7 @@ export class ZLinkFrameworkRuntimeHost implements
   private executionState?: ZLinkFrameworkExecutionState;
   private runtimeState = ZLinkFrameworkRuntimeState.Preparing;
   private runtimeSequence = 0n;
+  private readonly runtimeObservationSource = Symbol('zlink.framework-runtime');
   private runtimeDeadline?: Date;
   private runtimeRelocationResult?: ZLinkFrameworkRelocationResult;
   private runtimeTerminationResult?: ZLinkFrameworkTerminationResult;
@@ -764,7 +765,7 @@ export class ZLinkFrameworkRuntimeHost implements
   }
 
   observe(signal?: AbortSignal): AsyncIterable<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>> {
-    const queue = new RuntimeEventQueue<ZLinkFrameworkRuntimeStatus>(64, signal);
+    const queue = new RuntimeEventQueue<ZLinkFrameworkRuntimeStatus>(undefined, signal);
     this.runtimeObservers.add(queue);
     queue.onClose(() => this.runtimeObservers.delete(queue));
     return queue;
@@ -1069,8 +1070,11 @@ export class ZLinkFrameworkRuntimeHost implements
     this.notifyTopologyHostStateChanged();
     const status = this.status;
     for (const observer of this.runtimeObservers) {
-      if (state === ZLinkFrameworkRuntimeState.Stopped) observer.seal(status);
-      else observer.push(status);
+      if (state === ZLinkFrameworkRuntimeState.Stopped) {
+        observer.seal(status, this.runtimeObservationSource);
+      } else {
+        observer.push(status, this.runtimeObservationSource);
+      }
     }
     if (state === ZLinkFrameworkRuntimeState.Stopped) {
       this.runtimeObservers.clear();

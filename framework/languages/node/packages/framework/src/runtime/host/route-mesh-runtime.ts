@@ -10,7 +10,10 @@ import {
   type ZLinkRouteMeshStatus,
   type ZLinkRouteMeshRuntime
 } from '../../contracts';
-import { RuntimeEventQueue } from '../diagnostics/topology-runtime-projections';
+import {
+  RuntimeEventQueue,
+  ZLINK_DEFAULT_TERMINAL_OBSERVATION_CAPACITY
+} from '../diagnostics/runtime-observation-queue';
 import { createDeadlineExceededError } from '../abort';
 
 type ZLinkDrainForceReason =
@@ -213,7 +216,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
 
   observe(
     meshName: string,
-    capacity = 64,
+    capacity = ZLINK_DEFAULT_TERMINAL_OBSERVATION_CAPACITY,
     signal?: AbortSignal
   ): AsyncIterable<ZLinkObservedStatus<ZLinkRouteMeshStatus>> {
     const state = this.requireState(meshName);
@@ -243,7 +246,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
       } catch {
         continue;
       }
-      for (const observer of state.observers) observer.push(snapshot);
+      for (const observer of state.observers) observer.push(snapshot, meshName);
     }
   }
 
@@ -300,7 +303,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
       }
       for (const observer of [...state.observers]) {
         if (terminal === undefined) observer.close();
-        else observer.seal(terminal);
+        else observer.seal(terminal, meshName);
       }
       state.observers.clear();
     }
@@ -622,9 +625,9 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
           sequence: terminalSequence,
           observedAt: new Date()
         };
-        for (const observer of state.observers) observer.seal(terminalStatus);
+        for (const observer of state.observers) observer.seal(terminalStatus, meshName);
       } else if (snapshotAvailable) {
-        for (const observer of state.observers) observer.push(current);
+        for (const observer of state.observers) observer.push(current, meshName);
       }
     }
     if (terminal) {
@@ -671,7 +674,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
         this.locationStoreHealthFingerprints.set(meshName, locationStoreHealthy);
         state.sequence += 1n;
         for (const observer of state.observers) {
-          observer.push(this.snapshot(meshName));
+          observer.push(this.snapshot(meshName), meshName);
         }
       }
       const descriptor = this.options.meshNodeDescriptor?.(meshName);
@@ -682,7 +685,9 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
       const node = this.options.meshNode(meshName);
       if (previous !== undefined && previous !== fingerprint) {
         state.sequence += 1n;
-        for (const observer of state.observers) observer.push(this.snapshot(meshName));
+        for (const observer of state.observers) {
+          observer.push(this.snapshot(meshName), meshName);
+        }
       }
 
       const previousPeers = this.peerFingerprints.get(meshName) ?? new Map();
@@ -695,7 +700,9 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
       ])) {
         if (previousPeers.get(peerRid) === nextPeers.get(peerRid)) continue;
         state.sequence += 1n;
-        for (const observer of state.observers) observer.push(this.snapshot(meshName));
+        for (const observer of state.observers) {
+          observer.push(this.snapshot(meshName), meshName);
+        }
       }
     }
   }

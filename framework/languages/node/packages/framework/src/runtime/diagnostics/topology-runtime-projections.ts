@@ -15,6 +15,12 @@ import {
 } from '../../contracts';
 import { ZLinkConfigurationException } from '../configuration';
 import type { ZLinkChannelRuntimeManager } from '../channels/channel-runtime-manager';
+import {
+  RuntimeEventQueue,
+  ZLINK_DEFAULT_TERMINAL_OBSERVATION_CAPACITY
+} from './runtime-observation-queue';
+
+export { RuntimeEventQueue } from './runtime-observation-queue';
 
 type RuntimeAccessor = () => ZLinkChannelRuntimeManager | undefined;
 type HostStateAccessor = () => ZLinkFrameworkRuntimeState;
@@ -74,7 +80,7 @@ export class ZLinkClientServerRuntimeProjection implements ZLinkClientServerRunt
 
   observe(
     channelName: string,
-    capacity = 64,
+    capacity = ZLINK_DEFAULT_TERMINAL_OBSERVATION_CAPACITY,
     signal?: AbortSignal
   ): AsyncIterable<ZLinkObservedStatus<ZLinkClientServerStatus>> {
     const runtime = this.requireRuntime();
@@ -83,13 +89,13 @@ export class ZLinkClientServerRuntimeProjection implements ZLinkClientServerRunt
     const stop = runtime.observeClientServerTopology(channelName, () => {
       this.sequence += 1n;
       lastSnapshot = this.snapshot(channelName);
-      queue.push(lastSnapshot);
+      queue.push(lastSnapshot, channelName);
     });
     const hostObserver: HostObserver = {
       changed: () => {
         this.sequence += 1n;
         lastSnapshot = this.snapshot(channelName);
-        queue.push(lastSnapshot);
+        queue.push(lastSnapshot, channelName);
       },
       stop: () => {
         this.sequence += 1n;
@@ -106,7 +112,7 @@ export class ZLinkClientServerRuntimeProjection implements ZLinkClientServerRunt
           isReady: false,
           sequence: this.sequence,
           observedAt: new Date()
-        });
+        }, channelName);
       }
     };
     this.hostObservers.add(hostObserver);
@@ -195,7 +201,7 @@ export class ZLinkFanoutRuntimeProjection implements ZLinkFanoutRuntime {
 
   observe(
     channelName: string,
-    capacity = 64,
+    capacity = ZLINK_DEFAULT_TERMINAL_OBSERVATION_CAPACITY,
     signal?: AbortSignal
   ): AsyncIterable<ZLinkObservedStatus<ZLinkFanoutStatus>> {
     const runtime = this.requireRuntime();
@@ -204,13 +210,13 @@ export class ZLinkFanoutRuntimeProjection implements ZLinkFanoutRuntime {
     const stop = runtime.observeFanoutTopology(channelName, () => {
       this.sequence += 1n;
       lastSnapshot = this.snapshot(channelName);
-      queue.push(lastSnapshot);
+      queue.push(lastSnapshot, channelName);
     });
     const hostObserver: HostObserver = {
       changed: () => {
         this.sequence += 1n;
         lastSnapshot = this.snapshot(channelName);
-        queue.push(lastSnapshot);
+        queue.push(lastSnapshot, channelName);
       },
       stop: () => {
         this.sequence += 1n;
@@ -227,7 +233,7 @@ export class ZLinkFanoutRuntimeProjection implements ZLinkFanoutRuntime {
           isReady: false,
           sequence: this.sequence,
           observedAt: new Date()
-        });
+        }, channelName);
       }
     };
     this.hostObservers.add(hostObserver);
@@ -281,184 +287,4 @@ function topologyStateForHost(state: ZLinkFrameworkRuntimeState): ZLinkTopologyS
     case ZLinkFrameworkRuntimeState.Serving:
       return ZLinkTopologyState.Degraded;
   }
-}
-
-export class RuntimeEventQueue<T>
-  implements AsyncIterable<ZLinkObservedStatus<T>>, AsyncIterator<ZLinkObservedStatus<T>> {
-  private pending?: T;
-  private terminal?: T;
-  private readonly waiters: Array<
-    ((result: IteratorResult<ZLinkObservedStatus<T>>) => void) | undefined
-  > = [];
-  private waitersHead = 0;
-  private waitersCount = 0;
-  private cleanup?: () => void;
-  private abortCleanup?: () => void;
-  private coalescedCount = 0n;
-  private discardedTerminalCount = 0n;
-  private sealed = false;
-  private closed = false;
-  private completeAfterTerminal = false;
-
-  constructor(capacity: number, signal?: AbortSignal) {
-    if (!Number.isInteger(capacity) || capacity <= 0) throw new RangeError('Observer capacity must be positive.');
-    if (signal !== undefined) {
-      //  Removed again on close(): with { once } alone, a queue closed
-      //  normally would stay registered on a long-lived signal and leak one
-      //  listener (retaining the whole queue) per observe() call.
-      const onAbort = () => this.close();
-      signal.addEventListener('abort', onAbort, { once: true });
-      this.abortCleanup = () => signal.removeEventListener('abort', onAbort);
-    }
-  }
-
-  [Symbol.asyncIterator](): AsyncIterator<ZLinkObservedStatus<T>> { return this; }
-
-  next(): Promise<IteratorResult<ZLinkObservedStatus<T>>> {
-    if (this.pending !== undefined) {
-      const value = this.pending;
-      this.pending = undefined;
-      return Promise.resolve({ done: false, value: this.observed(value) });
-    }
-    if (this.terminal !== undefined) {
-      const value = this.terminal;
-      this.terminal = undefined;
-      const result = Promise.resolve({ done: false, value: this.observed(value) });
-      if (this.completeAfterTerminal) this.finishAfterTerminal();
-      return result;
-    }
-    if (this.closed) return Promise.resolve({ done: true, value: undefined });
-    return new Promise(resolve => {
-      this.waiters.push(resolve);
-      this.waitersCount += 1;
-    });
-  }
-
-  return(): Promise<IteratorResult<ZLinkObservedStatus<T>>> {
-    this.close();
-    return Promise.resolve({ done: true, value: undefined });
-  }
-
-  onClose(cleanup: () => void): void {
-    if (this.closed) cleanup();
-    else this.cleanup = cleanup;
-  }
-
-  push(value: T): void {
-    if (this.closed || this.sealed) return;
-    const waiter = this.takeWaiter();
-    if (waiter !== undefined) waiter({ done: false, value: this.observed(value) });
-    else {
-      if (this.pending !== undefined) this.coalescedCount = saturatingIncrement(this.coalescedCount);
-      this.pending = value;
-    }
-  }
-
-  seal(value: T): void {
-    if (this.closed) return;
-    if (this.sealed) {
-      this.replacePendingTerminal(value, false);
-      return;
-    }
-    this.sealed = true;
-    this.detachSource();
-    const waiter = this.takeWaiter();
-    if (waiter !== undefined) {
-      waiter({ done: false, value: this.observed(value) });
-    }
-    else {
-      this.terminal = value;
-    }
-  }
-
-  complete(value: T): void {
-    if (this.closed) return;
-    if (this.sealed) {
-      this.replacePendingTerminal(value, true);
-      return;
-    }
-    this.sealed = true;
-    this.completeAfterTerminal = true;
-    this.detachSource();
-    const waiter = this.takeWaiter();
-    if (waiter !== undefined) {
-      waiter({ done: false, value: this.observed(value) });
-      this.finishAfterTerminal();
-    }
-    else {
-      this.terminal = value;
-    }
-  }
-
-  close(): void {
-    if (this.closed) return;
-    this.closed = true;
-    this.abortCleanup?.();
-    this.abortCleanup = undefined;
-    this.pending = undefined;
-    this.terminal = undefined;
-    this.detachSource();
-    let waiter: ((result: IteratorResult<ZLinkObservedStatus<T>>) => void) | undefined;
-    while ((waiter = this.takeWaiter()) !== undefined) {
-      waiter({ done: true, value: undefined });
-    }
-  }
-
-  private finishAfterTerminal(): void {
-    this.completeAfterTerminal = false;
-    this.closed = true;
-    this.pending = undefined;
-    this.terminal = undefined;
-    this.detachSource();
-    let waiter: ((result: IteratorResult<ZLinkObservedStatus<T>>) => void) | undefined;
-    while ((waiter = this.takeWaiter()) !== undefined) {
-      waiter({ done: true, value: undefined });
-    }
-  }
-
-  private replacePendingTerminal(value: T, completesStream: boolean): void {
-    this.discardedTerminalCount = saturatingIncrement(this.discardedTerminalCount);
-    if (this.terminal === undefined) return;
-    this.terminal = value;
-    if (completesStream) this.completeAfterTerminal = true;
-  }
-
-  private detachSource(): void {
-    this.cleanup?.();
-    this.cleanup = undefined;
-  }
-
-  private observed(status: T): ZLinkObservedStatus<T> {
-    return {
-      status,
-      loss: {
-        coalescedCount: this.coalescedCount,
-        discardedTerminalCount: this.discardedTerminalCount
-      }
-    };
-  }
-
-  private takeWaiter():
-    | ((result: IteratorResult<ZLinkObservedStatus<T>>) => void)
-    | undefined {
-    if (this.waitersCount === 0) return undefined;
-    const waiter = this.waiters[this.waitersHead];
-    this.waiters[this.waitersHead] = undefined;
-    this.waitersHead += 1;
-    this.waitersCount -= 1;
-    if (this.waitersCount === 0) {
-      this.waiters.length = 0;
-      this.waitersHead = 0;
-    } else if (this.waitersHead >= 1024 && this.waitersHead * 2 >= this.waiters.length) {
-      this.waiters.splice(0, this.waitersHead);
-      this.waitersHead = 0;
-    }
-    return waiter;
-  }
-}
-
-const MAX_OBSERVATION_LOSS = 9_223_372_036_854_775_807n;
-
-function saturatingIncrement(value: bigint): bigint {
-  return value >= MAX_OBSERVATION_LOSS ? MAX_OBSERVATION_LOSS : value + 1n;
 }

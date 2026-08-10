@@ -169,7 +169,11 @@ test('Framework runtime shutdown surface emits status and Nest exports topology 
     host.status.terminationResult.outcome,
     framework.ZLinkFrameworkTerminationOutcome.Stopped
   );
-  assert.equal(event.value.status.state, framework.ZLinkFrameworkRuntimeState.Draining);
+  assert.equal(event.value.status.state, framework.ZLinkFrameworkRuntimeState.Stopped);
+  assert.deepEqual(event.value.loss, {
+    coalescedCount: 1n,
+    discardedTerminalCount: 0n
+  });
   assert.equal(typeof nestjs.ZLINK_CLIENT_SERVER_RUNTIME, 'symbol');
   assert.equal(typeof nestjs.ZLINK_FANOUT_RUNTIME, 'symbol');
 });
