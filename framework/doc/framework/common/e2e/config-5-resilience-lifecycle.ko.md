@@ -246,20 +246,6 @@ Resource cleanup 내부 count는 E2E public contract가 아니다. E2E에서는 
 - 검증: Pending public operations가 없고 old process가 종료되며 replacement listeners가 ready가 된다.
 - 세부 동작: [Shutdown과 Relocate의 경쟁](../spec/28-graceful-drain-handoff.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
 
-#### RL-C2 Crash한 provider를 owner lease 만료 뒤 제외한다
-
-우선순위: `P2`
-
-Descriptor remove를 수행하지 못한 crash도 current lease가 만료되면 ready target에서 빠져야 한다.
-
-**검증 질문:** Provider B crash 뒤 A만 follow-up requests를 처리하는가.
-
-- 시작 조건: A와 B가 ready다.
-- 절차: B를 강제 종료하고 configured lease·status convergence를 기다린 뒤 requests 20개를 보낸다.
-- 검증: Public status에는 B가 ready로 없고 A가 20개를 처리한다.
-- 세부 동작: [Location runtime §5](../spec/21-location-runtime.ko.md)를
-  검증한다.
-
 #### RL-C3 정상 restart 뒤 새 lifecycle로 수렴한다
 
 우선순위: `P2`
@@ -291,26 +277,6 @@ Established connection의 liveness는 Store polling과 별개다.
   검증한다.
 
 ### Track D — 부하와 observability failure를 격리
-
-#### RL-D1 High fanout에서 subscriber를 서로 격리한다
-
-우선순위: `P2`
-
-모호한 “높은 부하에서 안정적” 대신 subscriber 수와 application marker를 고정한다. Classic fanout의
-subscriber 간 순서와 lossless delivery는 이 scenario의 계약이 아니다.
-
-**검증 질문:** Ready subscriber 20개가 같은 marker를 독립적으로 관찰하고 한 subscriber의 처리가 다른
-subscriber를 막지 않는가.
-
-- 시작 조건: 20 subscribers가 publisher를 ready로 보고 있다. 한 subscriber의 `fanout-start` handler만
-  application gate에서 대기시키고 나머지 gate는 열어 둔다. 시작 marker는 작게 유지하며 network block은
-  넣지 않는다.
-- 절차: Publisher가 `fanout-start` marker를 보낸 뒤 선택한 subscriber의 gate가 대기 중인 것을 확인하고
-  bounded rate로 부하 event를 보낸다. 다른 subscribers의 marker evidence를 확인한 뒤 gate를 연다.
-- 검증: 각 subscriber evidence가 `fanout-start` marker를 기록하고, 한 subscriber의 처리 지연이 다른
-  subscriber의 public ready 상태나 marker 처리를 막지 않는다. Event sequence의 완전성·순서와 drop 수는
-  판정하지 않는다.
-- 세부 동작: [Framework API §11](../spec/06-framework-api.ko.md)을 검증한다.
 
 #### RL-D2 Telemetry provider failure를 messaging에서 격리한다
 
@@ -480,25 +446,6 @@ Preflight 뒤 target capacity가 부족해지거나 target이 unavailable이면 
 - 세부 동작: [Mode에 맞는 target 선택](../spec/28-graceful-drain-handoff.ko.md#5-mode에-맞는-target을-선택한다)과
   [Relocation unit과 실행량 제한](../spec/28-graceful-drain-handoff.ko.md#7-relocation-unit과-실행량-제한)을 검증한다.
 
-#### RL-F2 Rebind 뒤 이전 Session message를 새 binding에 적용하지 않는다
-
-우선순위: `P0`
-
-Actor owner가 A→B→A로 바뀌더라도 이전 Session binding token은 새 binding과 다른 identity다.
-
-**검증 질문:** Old Session의 delayed relay·logical disconnect가 new binding과 Actor state를 바꾸지 않는가.
-
-- 시작 조건: Actor가 Session S1에 bind된 상태에서 target owner로 이동하고 새 Session S2에 rebind한다.
-- 절차: S2 rebind를 완료하여 이전 exact S1 binding의 disconnect callback을 제출한다. Callback 완료와
-  tombstone 기록을 확인한 뒤 network gate에 지연한 S1 relay와 logical disconnect result를 전달한다.
-  Callback failure variant도 실행하고 S2에서 normal relay와 push를 보낸다.
-- 검증: 이전 exact binding의 disconnect callback은 최대 한 번 실행되고 terminal tombstone 뒤에는 반복하지
-  않는다. Callback failure도 S2 binding을 제거하거나 Actor state를 바꾸지 않는다. Tombstone 뒤 old
-  operations는 stale binding result이고 Actor handler evidence가 없다. S2 relay와 push는
-  한 번씩 성공하며 current binding은 S2다.
-- 세부 동작: [Session Actor dispatch §4](../spec/20-session-actor-dispatch.ko.md)를
-  검증한다.
-
 #### RL-F3 Cross-language terminal failure를 같게 해석한다
 
 우선순위: `P0`
@@ -512,21 +459,6 @@ Source와 target 언어가 달라도 정식 public ErrorKind와 typed `Rejected`
 - 검증: Caller가 받은 terminal kind와 application payload가 scenario와 일치한다. Raw unknown code 주입은
   protocol contract test 책임이다.
 - 세부 동작: [오류 모델 §8](../spec/32-framework-error-model.ko.md)을 검증한다.
-
-#### RL-F4 Client role이 없는 ClientServer process는 outbound 호출하지 못한다
-
-우선순위: `P0`
-
-ClientServer Server role만 등록한 process는 같은 ChannelName의 Client egress를 갖지 않는다.
-
-**검증 질문:** Server-only process의 request는 `NotConfigured`이고 정상 Client request는 성공하는가.
-
-- 시작 조건: Server-only process와 별도 Client role process가 ready다.
-- 절차: 두 process가 같은 ChannelName request를 각각 시작한다.
-- 검증: Server-only call은 `NotConfigured`이고 handler가 실행되지 않는다. Client call은 server handler에서 한 번
-  처리된다.
-- 세부 동작: [ClientServer Channel §3](../spec/09-client-server-channel.ko.md)을
-  검증한다.
 
 #### RL-F5 Relocation 중 받은 messages를 target에서 순서대로 처리한다
 
@@ -589,12 +521,13 @@ source의 accepted work와 Host admission을 바꾸지 않는다.
 
 **검증 질문:** Manual-only topology의 Relocate가 `ManualTopologyUnsupported`로 끝나고 source를 유지하는가.
 
-- 시작 조건: Manual RouteMesh 또는 ClientServer endpoint만 가진 fresh Host에 stateful source object와
-  application gate에서 대기하는 accepted request를 준비한다.
+- 시작 조건: Manual RouteMesh peer, ClientServer endpoint 또는 manual fanout endpoint만 가진 fresh Host에
+  stateful source object와 application gate에서 대기하는 accepted request를 준비한다.
 - 절차: Public Host Relocate를 호출하고 terminal을 확인한다. 이어서 request gate를 해제하고 source object의
-  follow-up request를 보낸다.
+  follow-up request를 보낸 뒤 explicit Shutdown을 호출한다.
 - 검증: Relocate는 `Blocked/ManualTopologyUnsupported`이고 Host는 `Serving`을 유지한다. Accepted request와
-  follow-up request는 source에서 한 번씩 처리되며 target restore·factory evidence는 없다.
+  follow-up request는 source에서 한 번씩 처리되며 target restore·factory evidence는 없다. Shutdown은
+  manual topology를 blocker로 사용하지 않고 bounded terminal로 끝난다.
 - 세부 동작: [Host maintenance §4](../spec/28-graceful-drain-handoff.ko.md)와
   [§10](../spec/28-graceful-drain-handoff.ko.md)을 검증한다.
 

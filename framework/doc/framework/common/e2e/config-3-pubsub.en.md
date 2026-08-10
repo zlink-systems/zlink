@@ -130,23 +130,29 @@ handler registration, and not receive events published during the disconnection?
 
 ### Track B — Isolate Processing Across Subscribers
 
-#### PS-B1 A Slow Subscriber Does Not Block Another Subscriber
+#### PS-B1 Isolate A Slow Subscriber From Other Subscribers
 
 Priority: `P1`
 
 Each subscriber processes events in its own separate process. Even if one handler takes a long time,
 another subscriber's handler must keep running.
 
-**Verification question:** While subscriber A's handler is waiting, does subscriber B process a
-subsequent event?
+**Verification question:** In both basic and 20-subscriber profiles, while one subscriber handler is
+waiting, does another ready subscriber process its marker independently?
 
-- Starting condition: A and B are ready, and A's handler is configured to wait on an application
-  signal at the first marker.
-- Procedure: A gate marker is published to confirm A has entered the handler, and a `B-follow-up`
-  marker is published. B's evidence is confirmed, then A's gate is released.
-- Verification: While A is waiting, B processes the `B-follow-up` marker. This scenario does not set
-  a pass condition on B's receive order or how many events A catches up on or drops.
-- Detailed behavior: verifies subscriber process and handler dispatch isolation in [Channel Topology](../spec/07-channel-topology.en.md).
+- Starting condition: The basic profile uses A and B; the scale profile uses 20 ready subscribers.
+  In each profile, only one selected subscriber's `fanout-start` handler waits on an application
+  gate, while all others remain open. No network block is introduced.
+- Procedure: The basic profile publishes a gate marker followed by `B-follow-up`. The scale profile
+  uses a small `fanout-start` marker to confirm the selected handler is waiting, sends load events at
+  a bounded rate, and confirms marker evidence from the other subscribers. Then open the gate.
+- Verification: In the basic profile, B processes `B-follow-up` while A waits. In the scale profile,
+  all 20 subscribers record `fanout-start`, and one subscriber's delay does not block another's
+  public ready state or marker processing. Cross-subscriber ordering, lossless delivery, catch-up or
+  drop counts, and completeness of the load-event sequence are not judged.
+- Detailed behavior: verifies subscriber-process isolation in
+  [Channel Topology](../spec/07-channel-topology.en.md) and fanout dispatch isolation in
+  [Framework API §11](../spec/06-framework-api.en.md).
 
 #### PS-B2 An Existing Subscriber Receives New Events After Publisher Restart
 

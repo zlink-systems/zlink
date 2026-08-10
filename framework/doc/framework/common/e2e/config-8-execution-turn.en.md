@@ -54,24 +54,6 @@ success conditions.
 
 ### Track A — Async Keeps The Current Turn
 
-#### TD-A1 A One-Way Send's Completion Does Not Wait For The Handler To Finish
-
-Priority: `P0`
-
-A one-way send waits only up to outbound admission. If a send stayed pending until the remote handler
-finished, it would carry the same completion meaning as a request.
-
-**Verification question:** Does the send complete first even while the remote handler waits on an
-application signal?
-
-- Starting condition: The delay handler is configured to receive the marker and then wait, with no
-  reply, until a release signal.
-- Procedure: The play node submits a one-way send to the delay Channel. The send terminal is
-  confirmed, handler evidence is read, and the release signal is sent.
-- Verification: The send returns a normal terminal before the handler release. The handler processes
-  the marker exactly once.
-- Detailed behavior: verifies send completion in [Error Model §4](../spec/32-framework-error-model.en.md).
-
 #### TD-A2 The Next Callback Of The Same Spot Does Not Start While Async Is Waiting
 
 Priority: `P0`
@@ -146,22 +128,27 @@ run after the handler finishes?
 
 ### Track B — Yield And Giving Back The Shared Spot Gate
 
-#### TD-B1 A Callback Of The Same Spot Runs While Yield Is Waiting
+#### TD-B1 Request And Timer Callbacks Of The Same Spot Run While Yield Is Waiting
 
 Priority: `P0`
 
 The reason to use `Yield` is to make progress on other work in the same Spot while waiting on a remote
 operation.
 
-**Verification question:** Does the same Spot's probe callback complete while a Yield request is
-waiting?
+**Verification question:** Do the same Spot's probe request and due timer callback each complete
+while a Yield request is waiting?
 
-- Starting condition: A `SpotWide` User Spot's delay request waits on the release signal.
-- Procedure: Once the first handler is Yield-held, a probe request is sent to the same Spot. The
-  probe reply is confirmed, then the delay reply is released.
-- Verification: The evidence order is `yield-released, probe-started, probe-completed, yield-resumed,
-  yield-completed`.
-- Detailed behavior: verifies [Async Execution Policy §1.1](../spec/05-async-execution-policy.en.md).
+- Starting condition: A `SpotWide` User Spot's delay request waits on the release signal. The request
+  variant prepares a probe handler on the same Spot, and the timer variant prepares a one-shot timer.
+- Procedure: Run each variant in a fresh fixture. Once the first handler is Yield-held, complete the
+  probe request/reply in the request variant and use a bounded evidence wait to confirm the due
+  callback in the timer variant. Then release the delay reply.
+- Verification: The request variant order is `yield-released, probe-started, probe-completed,
+  yield-resumed, yield-completed`. The timer variant order is `yield-released, timer-started,
+  timer-completed, yield-resumed`; it does not infer timer completion from a fixed sleep.
+- Detailed behavior: verifies shared Spot gate release in
+  [Async Execution Policy §1.1](../spec/05-async-execution-policy.en.md) and the timer application turn
+  in [§5](../spec/05-async-execution-policy.en.md).
 
 #### TD-B2 A Yield Continuation Follows The Existing Queue Order
 
@@ -200,23 +187,6 @@ the first handler was Yielding?
   value. It does not go on using the 10 it read before the Yield.
 - Detailed behavior: verifies [Handler Turn And Claim](../spec/05-async-execution-policy.en.md#3-handler-turn-and-claim)
   and [Gate And Claim On `Yield`](../spec/05-async-execution-policy.en.md#gate-and-claim-on-yield).
-
-#### TD-B4 A Timer Callback Runs While Yield Is Waiting
-
-Priority: `P0`
-
-Because Yield gives back the shared Spot gate, a due timer must not be pushed behind a remote request
-wait.
-
-**Verification question:** Does a one-shot timer run during a Yield-held window?
-
-- Starting condition: A one-shot timer is registered on a `SpotWide` User Spot, and the delay reply
-  is held.
-- Procedure: Once the handler is Yield-held, timer evidence is polled with a bounded wait. After the
-  timer completes, the delay reply is released.
-- Verification: The evidence order is `yield-released, timer-started, timer-completed,
-  yield-resumed`.
-- Detailed behavior: verifies [Async Execution Policy §5](../spec/05-async-execution-policy.en.md).
 
 ### Track C — Separate Worker Kind From Spot Turn
 

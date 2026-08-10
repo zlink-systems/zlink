@@ -130,18 +130,19 @@ If a Ready owner terminates, the Framework does not automatically pick another n
 or create a new incarnation of the same ID. A new request cannot be used until the Application has
 explicitly completed Close and re-create.
 
-**Verification question:** After the previous owner terminates, does the new request end in a
-bounded `Unavailable` without running on another owner?
+**Verification question:** After the previous owner terminates, do both single and concurrent
+requests each end in bounded `Unavailable` without running on another owner?
 
 - Starting condition: The Spot is Ready on owner A, and domain state is stored in the external
   store. Another node, B, provides the same type but is not this Spot's owner.
-- Procedure: A is crashed, and after public liveness/owner-lease status becomes invalid, a request is
-  sent. Whether the Location Store authority record is automatically deleted is not judged in this
+- Procedure: Crash A and wait until public liveness/owner-lease status becomes invalid. In fresh
+  fixtures, send one single-caller request and then two concurrent requests from separate callers.
+  Whether the Location Store authority record is automatically deleted is not judged in this
   scenario.
-- Verification: The request ends exactly once in `Unavailable`. Neither A nor B has handler/factory
-  evidence for that operation ID, and the Framework does not automatically create a new generation.
-  Explicit recreate and rebind are confirmed separately in `IS-E2E-08` and application recovery
-  scenarios.
+- Verification: The single request and both concurrent requests each end exactly once in
+  `Unavailable`. Neither A nor B has handler/factory evidence for any operation ID, and the Framework
+  does not automatically create a new generation. Explicit recreate and rebind are confirmed
+  separately in `IS-E2E-08` and application recovery scenarios.
 - Contract basis: [Failure And Failover](../spec/31-failure-failover-policy.en.md)
 
 #### IS-E2E-06 A Creating-Owner Crash Respects The Same Generation's Recovery Boundary
@@ -201,23 +202,6 @@ instance?
 - Verification: The new factory instance ID differs from the previous value, and the handler runs
   exactly once on the new instance.
 - Contract basis: [Location Runtime](../spec/21-location-runtime.en.md)
-
-#### IS-E2E-09 Concurrent Requests After A Ready-Owner Crash Do Not Auto-Switch
-
-Priority: `P0`
-
-Even if multiple callers request at the same time after a Ready owner is invalidated, the Framework
-does not automatically create a new owner and factory.
-
-**Verification question:** After the crash, do concurrent requests each end in a bounded failure with
-no automatic takeover?
-
-- Starting condition: The previous owner crash has been invalidated in public liveness/owner-lease
-  status, and no Application recreate has run.
-- Procedure: Two callers concurrently send requests to the same ID.
-- Verification: Both requests each end exactly once in `Unavailable`, with no handler/factory
-  evidence on any owner.
-- Contract basis: [Failure And Failover](../spec/31-failure-failover-policy.en.md)
 
 #### IS-E2E-10 No Automatic Owner Even After A Stale Owner Resumes
 

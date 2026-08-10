@@ -476,27 +476,6 @@ not-ready, and complete relocation once ready?
   [Conditions Checked Before Selecting A Target](../spec/28-graceful-drain-handoff.en.md#4-conditions-checked-before-selecting-a-target)
   and [Selecting A Target Matching The Mode](../spec/28-graceful-drain-handoff.en.md#5-selecting-a-target-matching-the-mode).
 
-#### OBS-C9B Manual Topology Blocks Relocate At Preflight
-
-Priority: `P0`
-
-A manual connection Framework can't prove replacement readiness for
-can't be used as an automatic handoff target.
-
-**Verification question:** Does a manual-only topology's Relocate end
-in `ManualTopologyUnsupported`, keeping the source?
-
-- Start condition: There's a fresh Host with only a manual RouteMesh or
-  ClientServer endpoint, and a stateful source object.
-- Procedure: Call public Relocate and send a source request after
-  terminal. Then call explicit Shutdown.
-- Verification: Relocate has blocked reason
-  `ManualTopologyUnsupported`, and the source request succeeds.
-  Shutdown doesn't use manual topology as a blocker and ends in a
-  bounded terminal.
-- Detailed behavior: verifies
-  [Conditions Checked Before Selecting A Target](../spec/28-graceful-drain-handoff.en.md#4-conditions-checked-before-selecting-a-target)
-  and [Selecting A Target Matching The Mode](../spec/28-graceful-drain-handoff.en.md#5-selecting-a-target-matching-the-mode).
 
 #### OBS-C10 Select Only The Exact Version The Relocation Mode Defines
 

@@ -431,29 +431,6 @@ the specified provider, and does a non-existent RID end in
   and
   [Error Model §5](../spec/32-framework-error-model.en.md#5-request-completion-and-failure).
 
-#### RM-C3 Distribute Requests Across Providers Of The Same Weight
-
-Priority: `P0`
-
-If two ready providers offer the same Channel, Framework selects one
-of them as each operation's target. Since the exact alternating order
-per request isn't part of the public contract, this is judged by
-overall processing count and both providers' participation.
-
-**Verification question:** Sending requests to two providers of the
-same weight, do both process them, with the total handler count
-matching the request count?
-
-- Start condition: A and B are ready Channel targets at weight `100`.
-- Procedure: The client sends 400 profile-lookups with different
-  markers.
-- Verification: The sum of both providers' unique markers is 400, with
-  no duplicate marker. Each provider processes 35–65% of the total,
-  140–260 each. The client receives 400 replies. The exact per-request
-  alternating order isn't used as an assertion.
-- Detailed behavior: verifies the select-one contract from
-  [Channel Messaging §3.2](../spec/08-channel-messaging.en.md#32-channelname-select-one).
-
 #### RM-C4 Discard A Late Reply After Timeout
 
 Priority: `P0`
@@ -512,28 +489,30 @@ end in `NotFound`, and does a send not run an application handler?
   and
   [Message Flow Tracing §3.1](../spec/26-message-flow-tracing.en.md#31-closed-values-shared-by-every-language).
 
-#### RM-C7 Set The Provider Selection Ratio By Weight
+#### RM-C7 Select Providers By Weight Profile
 
-Priority: `P1`
+Priority: `P0`
 
-An application can set the selection ratio of providers offering the
-same Channel via startup weight. This scenario starts two providers
-with different weights from the start, verifying the long-run
-selection ratio without separately waiting for runtime propagation.
+An application sets the selection order and ratio for providers of the
+same Channel through startup weight. The same public selection contract
+is verified with both equal-weight and weighted profiles.
 
-**Verification question:** With A's weight `300` and B's weight `100`,
-does A process about 75% of the total over enough requests?
+**Verification question:** When ready providers A and B start with
+`100:100` or `300:100` weights, do they process every request exactly
+once in the deterministic smooth weighted-round-robin order?
 
-- Start condition: A starts with startup weight `300`, and B with
-  startup weight `100`; both are ready targets.
-- Procedure: The client sends 800 profile-lookups with different
-  markers.
-- Verification: The sum of both providers' unique markers is 800, with
-  no duplicate marker. A processes 65–85% of the total, 520–680. The
-  client receives 800 replies. An exact per-request order or an exact
-  3:1 result isn't required.
-- Detailed behavior: verifies the positive-weight long-run selection
-  ratio from
+- Start condition: Run both profiles in fresh runtimes. The equal
+  profile uses `100:100`; the weighted profile uses `300:100`. Both
+  providers are ready targets, and their candidate identifier order is
+  recorded in evidence.
+- Procedure: The client sends 400 profile lookups with distinct markers
+  for the equal profile and 800 for the weighted profile.
+- Verification: In each profile, the providers' unique-marker sum and
+  client reply count equal the request count, with no duplicate marker.
+  The equal profile follows the exact alternation determined by candidate
+  identifier order. The weighted profile follows the exact `3:1` cycle
+  and per-request order defined by the spec's smooth weighted round robin.
+- Detailed behavior: verifies deterministic smooth weighted round robin from
   [Channel Messaging §3.2](../spec/08-channel-messaging.en.md#32-channelname-select-one).
   Excluding/restoring weight at runtime is verified by
   [Config 5 RL-B4](config-5-resilience-lifecycle.en.md).
@@ -605,7 +584,7 @@ finishes?
 ## 5. Completion Conditions
 
 - The `P0` scenarios RM-A1, RM-A2, RM-A3, RM-A4, RM-A7, RM-B1, RM-B2,
-  RM-B3, RM-C1, RM-C2, RM-C3, RM-C4, and RM-C5 all pass.
+  RM-B3, RM-C1, RM-C2, RM-C4, RM-C5, and RM-C7 all pass.
 - Each scenario uses the client result together with role server
   evidence. A judgment needing public status uses an immutable
   snapshot or status stream the runtime-owning consumer or provider

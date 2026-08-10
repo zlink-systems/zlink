@@ -271,21 +271,6 @@ the same listeners?
   listeners become ready.
 - Detailed behavior: verifies [The Race Between Shutdown And Relocate](../spec/28-graceful-drain-handoff.en.md#11-the-race-between-shutdown-and-relocate).
 
-#### RL-C2 Exclude A Crashed Provider After Its Owner Lease Expires
-
-Priority: `P2`
-
-Even a crash that couldn't remove its descriptor must drop out of ready targets once the current
-lease expires.
-
-**Verification question:** After provider B crashes, does only A process follow-up requests?
-
-- Starting condition: A and B are ready.
-- Procedure: B is force-terminated, the configured lease/status convergence is awaited, then 20
-  requests are sent.
-- Verification: Public status does not show B as ready, and A processes all 20.
-- Detailed behavior: verifies [Location Runtime §5](../spec/21-location-runtime.en.md).
-
 #### RL-C3 Converge On The New Lifecycle After A Normal Restart
 
 Priority: `P2`
@@ -319,27 +304,6 @@ with status returning to Ready after recovery?
 - Detailed behavior: verifies [Transport Liveness §7](../spec/29-transport-liveness.en.md).
 
 ### Track D — Isolate Load And Observability Failures
-
-#### RL-D1 Isolate Subscribers From Each Other Under High Fanout
-
-Priority: `P2`
-
-Instead of a vague "stable under high load," the subscriber count and application marker are fixed.
-Cross-subscriber ordering and lossless delivery in Classic fanout are not this scenario's contract.
-
-**Verification question:** Do 20 ready subscribers independently observe the same marker, with one
-subscriber's processing not blocking another?
-
-- Starting condition: 20 subscribers see the publisher as ready. Only one subscriber's
-  `fanout-start` handler waits on an application gate, with the rest left open. The start marker is
-  kept small, with no network block introduced.
-- Procedure: The publisher sends the `fanout-start` marker, the selected subscriber's gate is
-  confirmed waiting, and load events are sent at a bounded rate. The other subscribers' marker
-  evidence is confirmed, then the gate is opened.
-- Verification: Each subscriber's evidence records the `fanout-start` marker, and one subscriber's
-  processing delay does not block another subscriber's public ready state or marker processing.
-  Event-sequence completeness/order and drop counts are not judged.
-- Detailed behavior: verifies [Framework API §11](../spec/06-framework-api.en.md).
 
 #### RL-D2 Isolate A Telemetry Provider Failure From Messaging
 
@@ -523,27 +487,6 @@ target-capacity/availability race?
 - Detailed behavior: verifies [Selecting A Target Matching The Mode](../spec/28-graceful-drain-handoff.en.md#5-selecting-a-target-matching-the-mode)
   and [Relocation Units And Concurrency Limits](../spec/28-graceful-drain-handoff.en.md#7-relocation-units-and-concurrency-limits).
 
-#### RL-F2 A Previous Session's Message Does Not Apply To The New Binding After Rebind
-
-Priority: `P0`
-
-Even if the Actor owner changes A→B→A, the previous Session-binding token has a different identity
-from the new binding.
-
-**Verification question:** Does an old Session's delayed relay/logical disconnect not change the new binding and
-Actor state?
-
-- Starting condition: The Actor, bound to Session S1, moves to a target owner and rebinds to a new
-  Session S2.
-- Procedure: Complete the S2 rebind, which submits the disconnect callback for the exact old S1
-  binding. After callback completion and tombstone recording, deliver S1's gated relay and logical
-  disconnect result. Also run callback failure, then send a normal relay and push on S2.
-- Verification: The exact old binding's disconnect callback runs at most once and is not repeated
-  after the terminal tombstone. Callback failure neither removes S2's binding nor changes Actor
-  state. Post-tombstone old operations end stale with no Actor handler evidence. S2's
-  relay and push each succeed exactly once, and the current binding is S2.
-- Detailed behavior: verifies [Session Actor Dispatch §4](../spec/20-session-actor-dispatch.en.md).
-
 #### RL-F3 Interpret Cross-Language Terminal Failures The Same Way
 
 Priority: `P0`
@@ -561,22 +504,6 @@ directional language combinations?
 - Verification: The caller's received terminal kind and application payload match the scenario. Raw
   unknown-code injection is the protocol contract test's responsibility.
 - Detailed behavior: verifies [Error Model §8](../spec/32-framework-error-model.en.md).
-
-#### RL-F4 A ClientServer Process With No Client Role Cannot Call Outbound
-
-Priority: `P0`
-
-A process that registers only the ClientServer Server role has no Client egress for the same
-ChannelName.
-
-**Verification question:** Does a server-only process's request return `NotConfigured`, while a normal
-Client request succeeds?
-
-- Starting condition: A server-only process and a separate Client-role process are ready.
-- Procedure: Both processes each start a request for the same ChannelName.
-- Verification: The server-only call is `NotConfigured`, and its handler does not run. The Client call is
-  processed exactly once by the server handler.
-- Detailed behavior: verifies [ClientServer Channel §3](../spec/09-client-server-channel.en.md).
 
 #### RL-F5 Process Messages Received During Relocation In Order At The Target
 
@@ -646,13 +573,15 @@ preflight. In this case, source's accepted work and Host admission are not chang
 **Verification question:** Does Relocate on a manual-only topology end in `ManualTopologyUnsupported`
 while keeping the source?
 
-- Starting condition: A fresh Host with only a manual RouteMesh or ClientServer endpoint has a
-  stateful source object and an accepted request waiting on an application gate.
+- Starting condition: A fresh Host with only a manual RouteMesh peer, ClientServer endpoint, or
+  manual fanout endpoint has a stateful source object and an accepted request waiting on an
+  application gate.
 - Procedure: Public Host Relocate is called and the terminal is confirmed. The request gate is then
-  released, and a follow-up request is sent to the source object.
+  released, a follow-up request is sent to the source object, and explicit Shutdown is called.
 - Verification: Relocate is `Blocked/ManualTopologyUnsupported`, and the Host stays `Serving`. The
   accepted request and follow-up request are each processed once at the source, with no target
-  restore/factory evidence.
+  restore/factory evidence. Shutdown does not use manual topology as a blocker and ends in a
+  bounded terminal.
 - Detailed behavior: verifies [Host Maintenance §4](../spec/28-graceful-drain-handoff.en.md) and
   [§10](../spec/28-graceful-drain-handoff.en.md).
 

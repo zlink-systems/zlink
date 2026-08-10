@@ -64,58 +64,36 @@ of a failure.
 
 ### Track A — Separate Session Binding From Direct Message
 
-#### TA-A1 Send A Direct Send/Request To A Bound Actor
+#### TA-A1 Send Actor Direct Messages Independently Of Session Binding
 
 Priority: `P0`
 
-Even if an Actor is already bound to a Session, a server-to-server
-direct message must be handled by the same Actor handler. If a direct
-message changes an existing binding, a later Actor push can be
-delivered to the wrong client.
+Actor direct messaging does not presuppose Session binding. It must
+neither change an existing binding nor create an implicit binding for
+an unbound Actor.
 
-**Verification question:** Even when a direct send/request is sent to
-a bound Actor, does the handler process it and does the existing
-Session binding stay intact?
+**Verification question:** Regardless of binding presence, does the
+Actor process a direct send/request while its binding state remains
+unchanged?
 
-- Start condition: The client connects to `session-a` and creates and
-  binds `actor-bound`. The Session gateway's public binding lookup
-  confirms that Actor, and the client receives the `BeforeNotify` push
-  the Actor sent.
-- Procedure: The caller server sends one direct send and one request
-  to `actor-bound` each. After processing finishes, the Actor sends
-  `AfterNotify` via the bound-session API.
-- Verification: The Actor handler processes the send and the request
-  once each, and the request returns a reply containing the input
-  marker. The public binding-lookup result is the same before and
-  after, and `BeforeNotify` and `AfterNotify` are received only by the
-  originally-connected client.
+- Start condition: In the bound variant, the client connects to
+  `session-a`, binds `actor-bound`, and confirms both public binding
+  lookup and a `BeforeNotify` push. In the unbound variant, create
+  `actor-unbound` and confirm it is absent from both Session gateways'
+  public binding lookups.
+- Procedure: The caller server sends one direct send and one request to
+  each Actor. After the bound variant is processed, that Actor sends
+  `AfterNotify` through the bound-session API.
+- Verification: Each Actor handler processes its send and request once,
+  and the caller receives a reply containing the input marker. The
+  bound Actor's public binding is unchanged, and only the originally
+  connected client receives both pushes. The unbound Actor still has
+  no binding afterward, and no Stream client receives a push from it.
 - Detailed behavior: verifies the separation between direct message
   and binding from
+  [Actor Model §2.3](../spec/14-actor-model.en.md#23-spot-membership-and-stream-binding),
   [Actor Model §5](../spec/14-actor-model.en.md#5-actor-messaging) and
   [Session Actor Dispatch §4](../spec/20-session-actor-dispatch.en.md#4-how-a-session-holds-an-actor-route).
-
-#### TA-A2 Send A Direct Send/Request To An Unbound Actor
-
-Priority: `P0`
-
-Direct Actor messaging doesn't presuppose a Session binding. If this
-path required a binding, a backend job or another server couldn't call
-the Actor directly.
-
-**Verification question:** Does an Actor with no bound Session still
-process a direct send and reply to a direct request?
-
-- Start condition: `actor-unbound` is created on an Actor node. Neither
-  Session gateway's public binding lookup has this Actor.
-- Procedure: The caller server sends one direct send and one request
-  to `actor-unbound` each.
-- Verification: The Actor handler processes both messages once each,
-  and the caller server receives the request reply. No Session binding
-  is created afterward either, and there's no push the Stream client
-  received.
-- Detailed behavior: verifies binding independence from
-  [Actor Model §2.3](../spec/14-actor-model.en.md#23-spot-membership-and-stream-binding)
-  and [§5](../spec/14-actor-model.en.md#5-actor-messaging).
 
 #### TA-A3 Bind A Session After A Direct Message
 

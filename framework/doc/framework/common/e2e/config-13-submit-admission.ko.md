@@ -196,40 +196,25 @@ Target node가 같은 process인지 다른 process인지와 관계없이 send te
 - 세부 동작: [Interaction model §3](../spec/03-interaction-model.ko.md)을
   검증한다.
 
-#### SA-E2E-09 RouteMesh Channel send deadline을 적용한다
+#### SA-E2E-09 Channel topology별 send deadline을 적용한다
 
 우선순위: `P0`
 
-RouteMesh Channel send도 queue capacity가 없으면 family send deadline까지 기다린 뒤 terminal 하나로
-끝나야 한다.
+RouteMesh와 ClientServer Channel send는 queue capacity가 없으면 family send deadline까지 기다린 뒤
+같은 public terminal 하나로 끝나야 한다.
 
-**검증 질문:** Channel send가 capacity 회복 전에는 pending이고 deadline 전 회복 시 성공하는가.
+**검증 질문:** RouteMesh와 ClientServer Channel send가 capacity 회복 전에는 pending이고 deadline 전
+회복 시 성공하며, 회복하지 않으면 같은 timeout 결과를 반환하는가.
 
-- 시작 조건: 성공 variant와 timeout variant를 서로 다른 ChannelName과 target process로 구성한다. 각
-  target에 public HWM과 handler gate를 설정하고 blocker payload를 먼저 보내 pending과 Application receive
-  paused 상태를 확인한다.
-- 절차: 성공 target으로 send를 시작해 deadline 전에 gate를 열고, timeout target으로 별도 operation을
-  시작해 gate를 deadline까지 유지한다.
-- 검증: 성공 target의 send는 정상 완료하고 handler가 한 번 실행된다. Timeout target의 send는
-  `DeadlineExceeded`이고 handler marker가 없다.
-- 세부 동작: [Channel messaging §7](../spec/08-channel-messaging.ko.md)을 검증한다.
-
-#### SA-E2E-10 ClientServer Channel send deadline을 적용한다
-
-우선순위: `P0`
-
-ClientServer도 RouteMesh와 같은 public send terminal을 사용한다.
-
-**검증 질문:** ClientServer send의 capacity 회복과 deadline 결과가 RouteMesh Channel과 같은가.
-
-- 시작 조건: 성공 variant와 timeout variant를 서로 다른 ClientServer ChannelName과 target process로 구성하고
-  각 target에 handler gate와 작은 public HWM을 설정한다. 각 target에 blocker payload를 먼저 보내 handler
-  진입과 Application receive paused 상태를 확인한다.
-- 절차: 성공 target의 gate를 deadline 전에 열고 timeout target의 gate는 deadline까지 유지한 채 각 target에
-  별도 send를 시작한다.
-- 검증: Success는 payload 없는 terminal과 handler 1회, timeout은 `DeadlineExceeded`와 handler 0회다.
-- 세부 동작: [ClientServer Channel §6](../spec/09-client-server-channel.ko.md)를
-  검증한다.
+- 시작 조건: RouteMesh와 ClientServer를 실제 별도 topology로 구성한다. 각 topology에서 성공·timeout
+  variant는 서로 다른 ChannelName과 target process를 사용한다. 각 target에 작은 public HWM과 handler
+  gate를 설정하고 blocker payload로 handler 진입, pending과 Application receive paused 상태를 확인한다.
+- 절차: 각 topology의 성공 target으로 send를 시작해 deadline 전에 gate를 열고, timeout target의 별도
+  send는 gate를 deadline까지 유지한다.
+- 검증: 두 topology 모두 success send는 payload 없는 정상 terminal과 handler 1회를 만들고, timeout
+  send는 `DeadlineExceeded`와 handler 0회를 만든다.
+- 세부 동작: [Channel messaging §7](../spec/08-channel-messaging.ko.md)과
+  [ClientServer Channel §6](../spec/09-client-server-channel.ko.md)를 검증한다.
 
 #### SA-E2E-11 SpotId send의 admission과 logical identity를 유지한다
 

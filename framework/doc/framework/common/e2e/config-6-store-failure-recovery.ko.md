@@ -148,8 +148,8 @@ Provider가 descriptor를 지우지 못하고 종료되어도 owner lease가 만
 **검증 질문:** Provider B crash 뒤 ready target에서 B가 빠지고 follow-up request를 A만 처리하는가.
 
 - 시작 조건: A와 B가 ready이고 각자 baseline request를 처리했다.
-- 절차: Runner가 B를 강제 종료하고 public status가 current target set에 수렴할 때까지 기다린다. Follow-up
-  request 20개를 보낸다.
+- 절차: Runner가 B를 강제 종료하고 configured owner lease가 만료된 뒤 public status가 current target
+  set에 수렴할 때까지 기다린다. Follow-up request 20개를 보낸다.
 - 검증: Status의 ready peer·target에는 B가 없고 20개를 A가 처리한다. B endpoint로 반복 timeout을 발생시켜
   성공으로 간주하지 않는다.
 - 세부 동작: [실행 중인 node와 제공 기능을 찾는다](../spec/21-location-runtime.ko.md#3-실행-중인-node와-제공-기능을-찾는다)를
@@ -528,23 +528,6 @@ Population limit 0은 unlimited이며 activation concurrency는 동시에 factor
 - 검증: Factory active count는 concurrency limit을 넘지 않지만 모든 valid creates는 결국 성공한다.
   Entry Spot은 Spot population에 포함되지 않고 member Actors는 Actor count에 포함된다.
 - 세부 동작: [MeshNode §5](../spec/13-mesh-node.ko.md)를 검증한다.
-
-#### SF-G3 User Spot aggregate capacity를 all-or-none으로 적용한다
-
-우선순위: `P0`
-
-User Spot과 N member Actors를 함께 옮기려면 target에 Spot slot 하나와 Actor slots N개가 모두 있어야 한다.
-
-**검증 질문:** 한 capacity bucket이라도 부족하면 source aggregate가 유지되고 모두 충분할 때만 target으로
-이동하는가.
-
-- 시작 조건: Spot slot 부족, Actor slot 부족, stable type slot 부족과 all-sufficient target variants를
-  각각 준비한다.
-- 절차: 같은 크기의 aggregate를 각 fresh target으로 Relocate한다.
-- 검증: 부족 variants는 capacity blocker result이고 public locations와 state가 source에 유지된다.
-  Sufficient variant는 Spot과 모든 Actors가 target에서 같은 state와 generations로 처리된다.
-- 세부 동작: [Host maintenance §8.5](../spec/28-graceful-drain-handoff.ko.md)를
-  검증한다.
 
 ## 5. 완료 기준
 

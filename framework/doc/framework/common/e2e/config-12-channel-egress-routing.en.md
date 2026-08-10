@@ -326,7 +326,7 @@ first new request succeed with no application retry or fixed settle?
 
 #### CH-E2E-05 A Process Without A Client Role Can't Start A ClientServer Request
 
-Priority: `P1`
+Priority: `P0`
 
 On ClientServer, only a process that registered a Client role has a
 server connection and send path. A process with only a Server role

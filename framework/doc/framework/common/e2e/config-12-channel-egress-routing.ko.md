@@ -250,7 +250,7 @@ Server process가 재시작되면 이전 lifecycle의 connection과 reply는 더
 
 #### CH-E2E-05 Client role이 없는 process는 ClientServer request를 시작하지 못한다
 
-우선순위: `P1`
+우선순위: `P0`
 
 ClientServer에서는 Client role을 등록한 process만 server connection과 송신 경로를 가진다. Server role만
 있는 process가 같은 이름을 호출해 local handler를 직접 실행해서는 안 된다.

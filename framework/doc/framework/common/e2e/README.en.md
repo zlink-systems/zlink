@@ -501,10 +501,11 @@ endpoints a client calls are also decided from this viewpoint.
   `AllScenario`, `ScenarioSet`, `DriverScenario` — and delegate to a
   driver.
 - One scenario ID in the config document must correspond to one client
-  scenario file. For example, `RC-B1`, `RC-B2`, `RC-B3`, `RC-B4` are
-  each kept as independent files, not one bundled codec file. Even if a
-  common endpoint returns the same response, the client verification
-  unit must be split.
+  scenario file. For example, `RC-B1`, `RC-B2`, and `RC-B4` are each
+  kept as independent files. Codec, topology, or other variants required
+  by one scenario all run from that canonical scenario file, but distinct
+  IDs aren't bundled into one file. Even if a common endpoint returns the
+  same response, the client verification unit must be split.
 - Multiple scenarios calling the same server endpoint is fine. But
   each scenario file only directly asserts the reply, push, topology,
   and evidence conditions its own ID must check.
@@ -562,7 +563,7 @@ The reference templates live under this directory's
   sequence.
 - An individual config runner supports running a single scenario or a
   scenario list. Example: `./run_e2e.sh RC-B2`, `./run_e2e.sh RL-A4`,
-  `./run_e2e.sh RL-A4,RL-C2`, `./run_e2e.sh RL-A4 RL-C2`. Comma and
+  `./run_e2e.sh RL-A4,RL-C3`, `./run_e2e.sh RL-A4 RL-C3`. Comma and
   space arguments mean the same thing, and the runner normalizes them
   into one scenario selector the client understands before passing it
   along.
@@ -621,7 +622,7 @@ The reference templates live under this directory's
   it runs only the specified configs. To run only some scenarios
   within a config, use the `Config:ScenarioA,ScenarioB` form. Example:
   `./run_e2e_all.sh RegistrationCodec:RC-B2,RC-B4` or
-  `./run_e2e_all.sh ResilienceLifecycle:RL-A4,RL-C2 PubSub:PS-A1`.
+  `./run_e2e_all.sh ResilienceLifecycle:RL-A4,RL-C3 PubSub:PS-A1`.
   The aggregate runner only interprets this selection info; actual
   readiness, Redis endpoint creation, server startup, and client
   scenario execution are delegated to that config's individual
@@ -950,6 +951,36 @@ prefix.
 
 The test name can be changed to match language convention, but the
 config id and scenario id must be visible in the report.
+
+### 7.1 Consolidated Previous IDs
+
+The following IDs either repeated the same public question in another
+config or separated one scenario configuration axis, and have been
+consolidated into canonical scenarios. A previous ID is no longer a
+common scenario selector. Per-language runners, feature maps, and new
+evidence use the canonical ID. Logs and reports created before
+consolidation can retain their original ID as provenance. A canonical
+scenario retains every variant and assertion previously owned by its
+source.
+
+| Previous ID | Canonical ID | Owning config |
+|---|---|---|
+| `RL-C2` | `SF-C1` | Store failure/recovery |
+| `RL-F4` | `CH-E2E-05` | Channel egress routing |
+| `OBS-C9B` | `RL-F8` | Resilience/lifecycle |
+| `RL-F2` | `SM-D4A` | Spot service |
+| `TD-A1` | `SA-E2E-20` | One-way submit admission |
+| `RM-C3` | `RM-C7` | Location messaging |
+| `SM-B5` | `SM-E1` | Spot service |
+| `SM-D1` | `SM-D2` | Spot service |
+| `RC-A2` | `RC-A1` | Registration/codec |
+| `RC-B3` | `RC-B2` | Registration/codec |
+| `RL-D1` | `PS-B1` | Pub/Sub |
+| `SF-G3` | `ST-G2` | Spot/Actor relocation |
+| `TD-B4` | `TD-B1` | Execution turn and terminator |
+| `TA-A2` | `TA-A1` | To-actor messaging |
+| `SA-E2E-10` | `SA-E2E-09` | One-way submit admission |
+| `IS-E2E-09` | `IS-E2E-05` | Instance Spot |
 
 ## 8. Completion Criteria
 

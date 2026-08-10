@@ -72,54 +72,39 @@ used to diagnose failure.
 
 ### Track A — Handler Registration And Dispatch
 
-#### RC-A1 Scan A Handler In A Supporting Language
+#### RC-A1 Register Handlers Through Each Language's Public Scan Surface
 
 Priority: `P0`
 
 A language offering runtime reflection can find a handler in an
-assembly, module, or package the application specifies. If the scan
-scope is misinterpreted, the host starts but can't find the handler
-for a real request.
+assembly, module, or package the application specifies. When an
+annotation or attribute is the scan marker in an exact interface, its
+metadata must also become the exact dispatch key. A language without
+that surface isn't required to use the same syntax.
 
 **Verification question:** In a language supporting scan, does a
-request/send handler in the specified scope process the message
-without explicit registration?
+request/send handler registered through the scope and metadata defined
+by its exact interface process the specified packet without explicit
+registration?
 
-- Start condition: The registration server registers only the public
-  scan scope containing the `EchoScanReq` and `EchoScanMsg` handlers.
-  It doesn't add the same handler to the explicit builder.
-- Procedure: The client sends one request and one send of the scan
-  variant each, through the caller endpoint.
-- Verification: The request receives the exact `EchoRes`, and the send
-  marker is recorded once in handler evidence. A control handler
-  outside the scan scope doesn't run. The C++ runner records this
-  scenario as `not-applicable` and runs RC-A3 as mandatory instead.
+- Start condition: Register only the assembly, module, package, or
+  provider scan scope exposed by the language's exact interface. A
+  language offering annotation/attribute markers also places a marked
+  handler variant in that scope. No variant is added to the explicit
+  builder.
+- Procedure: The client sends one request and one send for the scope
+  variant and, when the exact interface provides it, the
+  annotation/attribute variant.
+- Verification: Each request receives the exact `EchoRes`, and each
+  send marker is recorded once in handler evidence. A control handler
+  outside the scan scope doesn't run. A language without the metadata
+  surface records only that variant as `not-applicable` and adds no
+  substitute helper. The C++ runner records the whole scan scenario as
+  `not-applicable` and runs RC-A3 as mandatory instead.
 - Detailed behavior: verifies the boundary between runtime reflection
   and C++ explicit registration from
-  [Framework API §8](../spec/06-framework-api.en.md#8-handler-registration-and-dispatch).
-
-#### RC-A2 Scan A Per-Language Annotation/Attribute Handler
-
-Priority: `P1`
-
-A language using an annotation or attribute as the handler-scan marker
-must confirm that metadata converts exactly into a dispatch key. A
-language without that surface isn't required to use the same syntax.
-
-**Verification question:** In a language whose per-language public
-interface offers annotation/attribute scan, does the marked handler
-process a request and send with the specified packet name?
-
-- Start condition: Register a handler and a scan scope using that
-  language's public annotation/attribute.
-- Procedure: The client sends one request and one send of the
-  annotation variant each.
-- Verification: The request reply's and send evidence's marker/payload
-  match the input. A language whose per-language public interface has
-  no such registration method is `not-applicable`, and no substitute
-  annotation helper is added.
-- Detailed behavior: verifies the per-language expression and common
-  dispatch semantics from
+  [Framework API §8](../spec/06-framework-api.en.md#8-handler-registration-and-dispatch)
+  and the per-language expression from
   [Public Contract Governance](../spec/00-public-contract-governance.en.md).
 
 #### RC-A3 Register A Handler Explicitly
@@ -243,46 +228,28 @@ correctly with no codec extension registered at all?
   [Framework API §9](../spec/06-framework-api.en.md#9-codec) and
   [Message Model §1](../spec/04-message-model.en.md#1-typed-messages).
 
-#### RC-B2 Use A Protobuf Extension Registered At The Root
+#### RC-B2 Use Typed Codec Extensions Registered At The Root
 
 Priority: `P0`
 
-An application using Protobuf registers the extension once at the
-root instead of passing an encoder per message. If the payload type
-matches an extension, Framework selects that codec.
+An application using Protobuf or MessagePack registers the official
+extension once at the root instead of passing an encoder per message.
+When a payload type matches an extension, Framework selects that codec.
 
-**Verification question:** Once a Protobuf extension is registered
-once at the root, are Protobuf DTO request and send processed through
-that extension?
+**Verification question:** Once Protobuf and MessagePack extensions are
+each registered once at the root, are the corresponding DTO request and
+send processed through the selected extension?
 
-- Start condition: Caller and codec server each register the official
-  Protobuf extension once at the root.
-- Procedure: Send a Protobuf DTO request and send each once.
-- Verification: The reply's and send evidence's application values
-  match the input. The caller-encode and server-decode extension
-  callbacks each run once per message. No codec option is passed at
-  the handler call site.
-- Detailed behavior: verifies root codec extension from
-  [Framework API §9](../spec/06-framework-api.en.md#9-codec).
-
-#### RC-B3 Use A MessagePack Extension Registered At The Root
-
-Priority: `P1`
-
-MessagePack also uses the same root-extension rule as Protobuf, and
-codec isn't selected by packet name or Channel configuration.
-
-**Verification question:** Once a MessagePack extension is registered
-once at the root, are MessagePack DTO request and send processed
-through that extension?
-
-- Start condition: Caller and codec server each register the official
-  MessagePack extension once at the root.
-- Procedure: Send a MessagePack DTO request and send each once.
-- Verification: The reply and send evidence match the input, and the
-  extension's encode/decode callbacks each run once per message.
-  Packet name isn't used as a codec-selection value.
-- Detailed behavior: verifies extension selection from
+- Start condition: Run the Protobuf and MessagePack variants with fresh
+  roots. In each variant, caller and codec server register the relevant
+  official extension once at the root.
+- Procedure: Send one DTO request and one DTO send for each variant.
+- Verification: Each reply and send evidence matches the input. The
+  extension's encode/decode callbacks each run once per message. No
+  codec option is passed at the handler call site, and neither packet
+  name nor Channel configuration is used as the codec selector.
+- Detailed behavior: verifies root codec extension and type-based
+  extension selection from
   [Framework API §9](../spec/06-framework-api.en.md#9-codec).
 
 #### RC-B4 Use Multiple Codecs Together At One Root

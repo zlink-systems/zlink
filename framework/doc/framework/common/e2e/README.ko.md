@@ -355,7 +355,8 @@ C++처럼 같은 config를 여러 start order로 반복하는 runner는 config �
 - 시나리오가 여러 개이면 client scenario 파일도 여러 개로 나눈다. 여러 시나리오를 하나의
   `AllScenario`, `ScenarioSet`, `DriverScenario` 파일로 묶어 driver에 위임하지 않는다.
 - config 문서의 시나리오 ID 하나는 client scenario 파일 하나와 대응해야 한다. 예를 들어 `RC-B1`,
-  `RC-B2`, `RC-B3`, `RC-B4`는 하나의 codec 묶음 파일이 아니라 각각 독립 파일로 둔다. 공통 endpoint가
+  `RC-B2`, `RC-B4`는 각각 독립 파일로 둔다. 한 scenario가 요구하는 codec·topology 같은 variant는 그
+  canonical scenario 파일에서 모두 실행하되, 서로 다른 ID를 한 파일로 묶지 않는다. 공통 endpoint가
   같은 응답을 반환하더라도 client 검증 단위는 나누어야 한다.
 - 여러 시나리오가 같은 server endpoint를 호출해도 된다. 단 각 scenario 파일은 자기 ID가 확인해야
   하는 reply, push, topology, evidence 조건만 직접 단언한다.
@@ -396,8 +397,8 @@ Redis endpoint를 공유하거나 fallback으로 사용하면 안 된다. key pr
 
 - 기본 실행은 해당 config의 구현된 시나리오를 순차 실행한다.
 - 개별 config runner는 단일 시나리오와 시나리오 리스트 실행을 지원한다. 예:
-  `./run_e2e.sh RC-B2`, `./run_e2e.sh RL-A4`, `./run_e2e.sh RL-A4,RL-C2`,
-  `./run_e2e.sh RL-A4 RL-C2`. 쉼표와 공백 인자는 같은 의미이며, runner는 이를
+  `./run_e2e.sh RC-B2`, `./run_e2e.sh RL-A4`, `./run_e2e.sh RL-A4,RL-C3`,
+  `./run_e2e.sh RL-A4 RL-C3`. 쉼표와 공백 인자는 같은 의미이며, runner는 이를
   client가 이해하는 하나의 scenario selector로 정규화해서 전달한다.
 - 스크립트는 build → 로그 디렉토리 생성 → 서버 시작 → readiness 확인 → client 실행 → 서버 종료
   순서를 책임진다.
@@ -435,7 +436,7 @@ Redis endpoint를 공유하거나 fallback으로 사용하면 안 된다. key pr
 - 통합 e2e runner도 실행 대상을 좁힐 수 있어야 한다. 인자가 없으면 모든 config의 `all`을 실행하고,
   인자가 있으면 지정한 config만 실행한다. config 안의 일부 시나리오만 실행할 때는
   `Config:ScenarioA,ScenarioB` 형식을 사용한다. 예: `./run_e2e_all.sh RegistrationCodec:RC-B2,RC-B4`
-  또는 `./run_e2e_all.sh ResilienceLifecycle:RL-A4,RL-C2 PubSub:PS-A1`. 통합 runner는 이 선택
+  또는 `./run_e2e_all.sh ResilienceLifecycle:RL-A4,RL-C3 PubSub:PS-A1`. 통합 runner는 이 선택
   정보를 해석만 하고, 실제 readiness, Redis endpoint 생성, server 시작, client scenario 실행은
   해당 config의 개별 `run_e2e.*`에 위임한다.
 - 통합 e2e runner는 config별 내부 동작을 다시 구현하지 않는다. 선택한 개별 `run_e2e.*`를 호출하고,
@@ -676,6 +677,32 @@ Config 1은 `RM` 접두사를 사용한다.
 | `IS` | Instance Spot |
 
 테스트 이름은 언어 관례에 맞게 바꿔도 되지만, 리포트에는 config id와 시나리오 id가 드러나야 한다.
+
+### 7.1 통합된 이전 ID
+
+같은 public 질문을 다른 config에서 반복하거나 하나의 scenario 구성 축으로 분리했던 다음 ID는 canonical
+시나리오로 통합했다. 이전 ID는 더 이상 common scenario selector가 아니다. 언어별 runner, feature map과
+새 evidence는 canonical ID를 사용한다. 통합 전에 생성한 log와 report는 당시 ID를 provenance로 유지할
+수 있다. Canonical scenario는 표의 source가 검증하던 variant와 assertion을 모두 유지한다.
+
+| 이전 ID | Canonical ID | 소유 config |
+|---|---|---|
+| `RL-C2` | `SF-C1` | Store 장애·복구 |
+| `RL-F4` | `CH-E2E-05` | Channel egress routing |
+| `OBS-C9B` | `RL-F8` | Resilience/lifecycle |
+| `RL-F2` | `SM-D4A` | Spot 서비스 |
+| `TD-A1` | `SA-E2E-20` | One-way submit admission |
+| `RM-C3` | `RM-C7` | Location messaging |
+| `SM-B5` | `SM-E1` | Spot 서비스 |
+| `SM-D1` | `SM-D2` | Spot 서비스 |
+| `RC-A2` | `RC-A1` | 등록·codec |
+| `RC-B3` | `RC-B2` | 등록·codec |
+| `RL-D1` | `PS-B1` | Pub/Sub |
+| `SF-G3` | `ST-G2` | Spot·Actor relocation |
+| `TD-B4` | `TD-B1` | 실행 turn과 terminator |
+| `TA-A2` | `TA-A1` | To-actor messaging |
+| `SA-E2E-10` | `SA-E2E-09` | One-way submit admission |
+| `IS-E2E-09` | `IS-E2E-05` | Instance Spot |
 
 ## 8. 완료 기준
 

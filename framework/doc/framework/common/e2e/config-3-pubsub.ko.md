@@ -122,22 +122,28 @@ replay되지 않는다.
 
 ### Track B — Subscriber 간 처리를 격리
 
-#### PS-B1 느린 subscriber가 다른 subscriber를 막지 않는다
+#### PS-B1 느린 subscriber를 다른 subscriber와 격리한다
 
 우선순위: `P1`
 
 Subscriber는 각자 별도 process에서 event를 처리한다. 한 handler가 오래 걸려도 다른 subscriber의 handler는
 계속 실행되어야 한다.
 
-**검증 질문:** Subscriber A handler가 대기 중이어도 subscriber B가 후속 event를 처리하는가.
+**검증 질문:** 기본·20-subscriber profile에서 한 subscriber handler가 대기 중이어도 다른 ready
+subscriber가 marker를 독립적으로 처리하는가.
 
-- 시작 조건: A와 B가 ready이며 A handler는 첫 marker에서 application signal을 기다리도록 구성한다.
-- 절차: Gate marker를 publish하여 A가 handler에 들어간 것을 확인하고 `B-follow-up` marker를 publish한다.
-  B의 evidence를 확인한 뒤 A gate를 해제한다.
-- 검증: A가 대기 중인 동안 B는 `B-follow-up` marker를 처리한다. B의 수신 순서와 A의 catch-up 또는 drop
-  수는 이 scenario의 통과 조건으로 정하지 않는다.
-- 세부 동작: [Channel topology](../spec/07-channel-topology.ko.md)의 subscriber process와 handler dispatch
-  격리를 검증한다.
+- 시작 조건: 기본 profile은 A와 B를, scale profile은 ready subscriber 20개를 사용한다. 각 profile에서
+  선택한 subscriber 하나의 `fanout-start` handler만 application gate에서 기다리고 나머지는 열어 둔다.
+  Network block은 넣지 않는다.
+- 절차: 기본 profile은 gate marker 뒤 `B-follow-up` marker를 publish한다. Scale profile은 작은
+  `fanout-start` marker로 선택한 handler의 대기를 확인한 뒤 bounded rate로 load events를 보내고 다른
+  subscribers의 marker evidence를 확인한다. 그 뒤 gate를 연다.
+- 검증: 기본 profile에서는 A가 대기 중일 때 B가 `B-follow-up`을 처리한다. Scale profile에서는 20개
+  subscriber 모두 `fanout-start`를 기록하고 한 subscriber의 지연이 다른 subscriber의 public ready 상태나
+  marker 처리를 막지 않는다. Subscriber 간 순서, lossless delivery, catch-up·drop 수와 load-event
+  sequence 완전성은 판정하지 않는다.
+- 세부 동작: [Channel topology](../spec/07-channel-topology.ko.md)의 subscriber process 격리와
+  [Framework API §11](../spec/06-framework-api.ko.md)의 fanout dispatch 격리를 검증한다.
 
 #### PS-B2 Publisher 재시작 뒤 기존 subscriber가 새 event를 받는다
 

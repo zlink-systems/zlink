@@ -358,23 +358,6 @@ topology status에서 ready가 된 뒤 workload를 이동해야 한다.
 - 세부 동작: [Target 선택 전 조건](../spec/28-graceful-drain-handoff.ko.md#4-target을-선택하기-전에-확인하는-조건)과
   [Mode에 맞는 target 선택](../spec/28-graceful-drain-handoff.ko.md#5-mode에-맞는-target을-선택한다)을 검증한다.
 
-#### OBS-C9B Manual topology는 Relocate를 preflight에서 막는다
-
-우선순위: `P0`
-
-Framework가 replacement readiness를 증명할 수 없는 manual connection은 automatic handoff target으로 사용할
-수 없다.
-
-**검증 질문:** Manual-only topology의 Relocate가 `ManualTopologyUnsupported`로 끝나고 source를 유지하는가.
-
-- 시작 조건: Manual RouteMesh 또는 ClientServer endpoint만 가진 fresh Host와 stateful source object가 있다.
-- 절차: Public Relocate를 호출하고 terminal 뒤 source request를 보낸다. 이어서 explicit Shutdown을
-  호출한다.
-- 검증: Relocate는 blocked reason `ManualTopologyUnsupported`이며 source request가 성공한다. Shutdown은
-  manual topology를 blocker로 사용하지 않고 bounded terminal로 끝난다.
-- 세부 동작: [Target 선택 전 조건](../spec/28-graceful-drain-handoff.ko.md#4-target을-선택하기-전에-확인하는-조건)과
-  [Mode에 맞는 target 선택](../spec/28-graceful-drain-handoff.ko.md#5-mode에-맞는-target을-선택한다)을 검증한다.
-
 #### OBS-C10 Relocation mode가 정한 exact version만 선택한다
 
 우선순위: `P0`
