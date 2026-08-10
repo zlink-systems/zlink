@@ -24,6 +24,8 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.locations
+    .ZLinkRelocationStartupScanner;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 
 /**
@@ -297,6 +299,12 @@ final class ZLinkSpotRetireControl {
         CompletionStage<Void> abort(StageRequest request);
 
         CompletionStage<Void> finalizeAfterCompletion(StageRequest request);
+
+        default CompletionStage<Void> recoverRetainedSessionAbort(
+            ZLinkRelocationStartupScanner.RetainedSessionAbort retained) {
+            return CompletableFuture.failedFuture(new IllegalStateException(
+                "retained Session abort recovery is unavailable"));
+        }
 
         default CompletionStage<ZLinkSpotRelocationReplyRoutes.Ack> relayReply(
             RoutingId transportSource,

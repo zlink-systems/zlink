@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.util.zip.CRC32C;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
@@ -176,30 +177,17 @@ public final class ZLinkDeferredJoinCompletionAuthority {
                 long sequence = journal.isEmpty()
                     ? 1L
                     : journal.getLast().sequence() + 1L;
-                var completion =
-                    new ZLinkServiceRelocationEnvelopeCodec.Completion(
-                        operationId.high(),
-                        operationId.low(),
-                        actorSnapshot.ownerId(),
-                        actorSnapshot.ownerLeaseGeneration(),
-                        source.nodeRid().toString(),
-                        source.nodeGeneration(),
-                        1,
-                        sequence,
-                        0,
-                        0,
-                        1,
-                        new ZLinkServiceRelocationEnvelopeCodec.Payload(
-                            PACKET,
-                            RELOCATION_CONTENT_TYPE,
-                            encodeRelocationCompletion(
-                                rawReply,
-                                sessionRouteCommand44)));
-                byte[] root =
-                    ZLinkServiceRelocationEnvelopeCodec.encodeSuccessor(
-                        envelope,
-                        envelope.participantProgress(),
-                        List.of(completion));
+                byte[] root = putRelocationCompletion(
+                    envelope,
+                    operationId,
+                    actorSnapshot.ownerId(),
+                    actorSnapshot.ownerLeaseGeneration(),
+                    source.nodeRid(),
+                    source.nodeGeneration(),
+                    1,
+                    sequence,
+                    rawReply,
+                    sessionRouteCommand44).canonicalBytes();
                 byte[] targetAuthority =
                     new ZLinkActorAuthorityPayloadCodec().encode(
                         ZLinkActorAuthorityPayloadCodec.State.READY,
@@ -208,11 +196,15 @@ public final class ZLinkDeferredJoinCompletionAuthority {
                         targetSpotId,
                         spotSnapshot.objectGeneration(),
                         2,
-                        spotSnapshot.ownerId(),
-                        spotSnapshot.ownerLeaseGeneration(),
-                        target.meshName(),
-                        target.nodeRid(),
-                        target.nodeGeneration());
+                        //  The aggregate codec records this owner as the
+                        //  source fence before it projects owner and node to
+                        //  the request's committed target. The Spot identity
+                        //  is already the target identity.
+                        actorSnapshot.ownerId(),
+                        actorSnapshot.ownerLeaseGeneration(),
+                        source.meshName(),
+                        source.nodeRid(),
+                        source.nodeGeneration());
                 var participant =
                     new ZLinkAggregateRelocationCoordinator.Participant(
                         actorKey,
@@ -477,8 +469,10 @@ public final class ZLinkDeferredJoinCompletionAuthority {
     }
 
     /**
-     * Waits for the source-cleanup CAS that closes the relocation admission
-     * gate before target route activation and application callbacks proceed.
+     * Waits for the source-cleanup CAS that authorizes the target to start the
+     * bound-Session command 44. Target Ready, admission and application
+     * callbacks do not wait for this marker; the canonical completion root
+     * remains referenced until command 45 is terminal.
      */
     public CompletionStage<Void> awaitSourceCleanup(
         UUID aggregateId,
@@ -593,6 +587,90 @@ public final class ZLinkDeferredJoinCompletionAuthority {
                     reference,
                     NEVER);
             });
+    }
+
+    /**
+     * Records the Aborted authority decision but keeps the exact completion
+     * root discoverable until the Session owner acknowledges command 44/45.
+     */
+    public CompletionStage<RetainedAbort> abortPreparedRetainingRoot(
+        UUID aggregateId,
+        long aggregateGeneration,
+        String reference,
+        long checksumCrc32c) {
+        Objects.requireNonNull(aggregateId, "aggregateId");
+        Objects.requireNonNull(reference, "reference");
+        ZLinkAggregateFence fence = new ZLinkAggregateFence(
+            aggregateId, aggregateGeneration);
+        return authority.retainAggregateAbort(fence, NEVER)
+            .thenCompose(snapshot -> {
+                validateRetainedAbort(
+                    snapshot, reference, checksumCrc32c);
+                return load(reference, checksumCrc32c)
+                    .thenApply(ignored -> new RetainedAbort(
+                        snapshot, reference, checksumCrc32c));
+            });
+    }
+
+    public CompletionStage<Void> completeRetainedAbort(
+        RetainedAbort retained) {
+        Objects.requireNonNull(retained, "retained");
+        validateRetainedAbort(
+            retained.snapshot(),
+            retained.reference(),
+            retained.checksumCrc32c());
+        return new ZLinkAggregateRelocationCoordinator(authority, relocation)
+            .completeRetainedAbort(
+                retained.snapshot(), retained.reference(), NEVER);
+    }
+
+    /** Extends every component of the retained root while command 45 is pending. */
+    public CompletionStage<Void> renewRetainedAbort(RetainedAbort retained) {
+        Objects.requireNonNull(retained, "retained");
+        validateRetainedAbort(
+            retained.snapshot(),
+            retained.reference(),
+            retained.checksumCrc32c());
+        return ZLinkRelocationTreeStore.renew(
+            relocation,
+            retained.reference(),
+            retained.checksumCrc32c(),
+            RETENTION,
+            NEVER);
+    }
+
+    public CompletionStage<Void> renewCompletionRoot(
+        String reference,
+        long checksumCrc32c) {
+        Objects.requireNonNull(reference, "reference");
+        return ZLinkRelocationTreeStore.renew(
+            relocation,
+            reference,
+            checksumCrc32c,
+            RETENTION,
+            NEVER);
+    }
+
+    static void validateRetainedAbort(
+        ZLinkAggregateAbortRecoverySnapshot snapshot,
+        String reference,
+        long checksumCrc32c) {
+        boolean exact = snapshot.request().participants().size() == 1;
+        if (exact) {
+            var publication = ZLinkCanonicalRelocationAuthorityStateCodec.decode(
+                snapshot.request().participants().getFirst().authorityPayload());
+            exact = publication != null
+                && publication.aggregateId().equals(
+                    snapshot.fence().aggregateId())
+                && publication.aggregateGeneration()
+                    == snapshot.fence().aggregateGeneration()
+                && publication.reference().equals(reference)
+                && publication.checksumCrc32c() == checksumCrc32c;
+        }
+        if (!exact) {
+            throw new IllegalStateException(
+                "retained direct-Join abort root differs from authority");
+        }
     }
 
     public CompletionStage<PreparedRoot> loadPrepared(
@@ -1281,6 +1359,68 @@ public final class ZLinkDeferredJoinCompletionAuthority {
         }
     }
 
+    /** Returns exact command-44 intents retained by direct-Join completions.
+     * This internal projection is used by startup reconciliation after the
+     * original transfer request and target process are both gone. */
+    public static List<byte[]> retainedSessionRouteCommands(
+        ZLinkServiceRelocationEnvelopeCodec.Envelope root) {
+        Objects.requireNonNull(root, "root");
+        List<byte[]> commands = new ArrayList<>();
+        for (var completion : root.terminalCompletions()) {
+            var payload = completion.payload();
+            if (payload == null
+                || !PACKET.equals(payload.packetName())
+                || !RELOCATION_CONTENT_TYPE.equals(payload.contentType())) {
+                continue;
+            }
+            byte[] command = decodeRelocationCompletion(completion)
+                .sessionRouteCommand44();
+            if (command.length != 0) {
+                commands.add(command);
+            }
+        }
+        return commands.stream().map(byte[]::clone).toList();
+    }
+
+    /** Adds the canonical direct-Join completion retained through initial
+     * prepare and restart reconciliation. */
+    public static ZLinkServiceRelocationEnvelopeCodec.Envelope
+        putRelocationCompletion(
+            ZLinkServiceRelocationEnvelopeCodec.Envelope root,
+            ZLinkActorJoinOperationId operationId,
+            String sourceOwnerId,
+            long sourceOwnerLeaseGeneration,
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            long participantId,
+            long sequence,
+            byte[] rawReply,
+            byte[] sessionRouteCommand44) {
+        Objects.requireNonNull(root, "root");
+        Objects.requireNonNull(operationId, "operationId");
+        Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");
+        var completion = new ZLinkServiceRelocationEnvelopeCodec.Completion(
+            operationId.high(),
+            operationId.low(),
+            sourceOwnerId,
+            sourceOwnerLeaseGeneration,
+            sourceNodeRid.toString(),
+            sourceNodeGeneration,
+            participantId,
+            sequence,
+            0,
+            0,
+            1,
+            new ZLinkServiceRelocationEnvelopeCodec.Payload(
+                PACKET,
+                RELOCATION_CONTENT_TYPE,
+                encodeRelocationCompletion(
+                    rawReply,
+                    sessionRouteCommand44)));
+        return ZLinkServiceRelocationEnvelopeCodec.putTerminalCompletion(
+            root, completion);
+    }
+
     private static long crc32c(byte[] payload) {
         CRC32C checksum = new CRC32C();
         checksum.update(payload, 0, payload.length);
@@ -1334,6 +1474,20 @@ public final class ZLinkDeferredJoinCompletionAuthority {
 
         @Override public byte[] sessionRouteCommand44() {
             return sessionRouteCommand44.clone();
+        }
+    }
+
+    public record RetainedAbort(
+        ZLinkAggregateAbortRecoverySnapshot snapshot,
+        String reference,
+        long checksumCrc32c) {
+        public RetainedAbort {
+            Objects.requireNonNull(snapshot, "snapshot");
+            Objects.requireNonNull(reference, "reference");
+            if (reference.isBlank()) {
+                throw new IllegalArgumentException(
+                    "retained direct-Join abort reference is required");
+            }
         }
     }
 

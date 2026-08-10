@@ -8,6 +8,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -144,6 +145,47 @@ final class ZLinkBoundSessionSendCallContractTest {
             ((ZLinkFrameworkException) failure.getCause()).kind());
         assertEquals(1, attempts.get());
         assertEquals(0, sends.get());
+    }
+
+    @Test
+    void synchronousJoinWithABoundSessionFailsBeforeCommand42() {
+        AtomicInteger sends = new AtomicInteger();
+        ZLinkInternalSpotNode spotNode = spotNode(sends);
+        ZLinkActorRuntime actors = new ZLinkActorRuntime(
+            spotNode,
+            Map.of("probe", ProbeFactory.class),
+            Duration.ofSeconds(1),
+            new ZLinkJsonMessageSerializer());
+        ZLinkActor actor = actors
+            .getOrCreateLocalActor("actor-1", ZLinkActor.class)
+            .toCompletableFuture()
+            .join()
+            .orElseThrow();
+        actors.bindNativeSession(
+            actor,
+            spotNode,
+            new ZLinkBackendActorRef(
+                RoutingId.from("node-a"),
+                "actor-1",
+                7));
+
+        CompletionException failure = assertThrows(
+            CompletionException.class,
+            () -> actors.directJoinSessionRouteCommand(
+                    actor,
+                    actors.currentRef(actor),
+                    RoutingId.from("node-b"),
+                    UUID.randomUUID(),
+                    false)
+                .toCompletableFuture()
+                .join());
+
+        assertEquals(
+            "StateIncompatible: bound-Session direct Join requires durable "
+                + "source-cleanup completion evidence",
+            failure.getCause().getMessage());
+        assertEquals(0, sends.get(),
+            "the unsupported Join must fail before any relocation ingress");
     }
 
     private static ZLinkInternalSpotNode spotNode(AtomicInteger sends) {

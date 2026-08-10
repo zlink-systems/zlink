@@ -45,18 +45,20 @@ import systems.zlink.framework.runtime.internal.locations
     .ZLinkDeferredJoinCompletionAuthority;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.testing.ZLinkLocationStoreTestAdapter;
 
 final class ZLinkDeferredJoinCompletionAuthorityTest {
     private static final ZLinkStoreCancellation NEVER = () -> false;
 
     @Test
-    void canonicalAuthorityKeepsEachCursorAndClearsReferenceAfterSourceCleanup() {
+    void completedEvidenceSurvivesCrashBeforeCommand44AndAckReleasesIt() {
         MemoryLocationStore locations = new MemoryLocationStore();
         MemoryRelocationStore roots = new MemoryRelocationStore();
         String actorId = "actor-a";
         String authorityKey = ZLinkAuthorityKeyCodec.actor(actorId);
         UUID relocationId = new UUID(17, 29);
+        var operation = new ZLinkActorJoinOperationId(41, 73);
         byte[] steady = new ZLinkActorAuthorityPayloadCodec().encode(
             ZLinkActorAuthorityPayloadCodec.State.READY,
             "Player",
@@ -69,7 +71,7 @@ final class ZLinkDeferredJoinCompletionAuthorityTest {
             "game",
             RoutingId.from("node-a"),
             7);
-        byte[] root = ZLinkCanonicalActorRelocationEnvelope.encode(
+        byte[] initialRoot = ZLinkCanonicalActorRelocationEnvelope.encode(
             relocationId,
             actorId,
             17,
@@ -77,6 +79,42 @@ final class ZLinkDeferredJoinCompletionAuthorityTest {
             false,
             new byte[0],
             List.of());
+        var routeIntent = new ZLinkServiceM6BWireCodec
+            .SessionRelocationRouteIntent(
+                new ZLinkServiceM6BWireCodec.RelocationIdentity(17, 29),
+                new ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
+                    "owner-a", 5, RoutingId.from("node-a"), 7, "source-v1"),
+                ZLinkServiceM6BWireCodec.RelocationRole.TARGET,
+                new ZLinkServiceM6BWireCodec.ActorIdentity(actorId, 17),
+                new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                    RoutingId.from("session-owner"),
+                    21,
+                    "session-owner",
+                    22,
+                    RoutingId.from("session-a"),
+                    23),
+                ZLinkServiceM6BWireCodec
+                    .SessionRelocationRouteAction.COMMIT,
+                9,
+                RoutingId.from("node-b"),
+                11,
+                24);
+        byte[] reply = "\"accepted\"".getBytes(
+            StandardCharsets.UTF_8);
+        byte[] root = ZLinkDeferredJoinCompletionAuthority
+            .putRelocationCompletion(
+                ZLinkServiceRelocationEnvelopeCodec.decode(initialRoot),
+                operation,
+                "owner-a",
+                5,
+                RoutingId.from("node-a"),
+                7,
+                1,
+                1,
+                reply,
+                new ZLinkServiceM6BWireCodec()
+                    .encodeSessionRelocationRouteIntent(routeIntent))
+            .canonicalBytes();
         var source = new ZLinkAggregateRelocationCoordinator.Participant(
             authorityKey,
             ZLinkPlacementObjectKind.ACTOR,
@@ -106,11 +144,8 @@ final class ZLinkDeferredJoinCompletionAuthorityTest {
 
         var journal = new ZLinkDeferredJoinCompletionAuthority(
             locations, roots);
-        var operation = new ZLinkActorJoinOperationId(41, 73);
         var actor = new ZLinkBackendActorRef(
             RoutingId.from("node-b"), actorId, 17);
-        byte[] reply = "\"accepted\"".getBytes(
-            StandardCharsets.UTF_8);
 
         journal.awaitTargetCommit(
                 relocationId,
@@ -149,6 +184,33 @@ final class ZLinkDeferredJoinCompletionAuthorityTest {
                 actor,
                 Duration.ofSeconds(1))
             .toCompletableFuture().join();
+        String crashRecoveryReference = locations.reference(
+            locations.rows.get(authorityKey).payload());
+        assertTrue(roots.values.containsKey(crashRecoveryReference),
+            "awaiting Completed must retain the exact command 44 recovery root");
+        assertMarkerResolves(
+            locations,
+            roots,
+            new ZLinkAggregateFence(relocationId, 1),
+            authorityKey);
+        var startupCandidate = new ZLinkRelocationStartupScanner(
+                locations,
+                roots)
+            .scan(NEVER)
+            .toCompletableFuture()
+            .join()
+            .getFirst();
+        assertTrue(startupCandidate.sourceCleanupCompleted());
+        var retainedRoutes = ZLinkDeferredJoinCompletionAuthority
+            .retainedSessionRouteCommands(
+                ZLinkServiceRelocationEnvelopeCodec.decode(
+                    startupCandidate.root().payload()));
+        assertEquals(1, retainedRoutes.size());
+        assertEquals(
+            routeIntent,
+            new ZLinkServiceM6BWireCodec()
+                .decodeSessionRelocationRouteIntent(retainedRoutes.getFirst()),
+            "startup scan reads the exact command 44 from the durable completion");
 
         var delivered = journal.advance(committed, actor, 3)
             .toCompletableFuture().join();
@@ -162,7 +224,20 @@ final class ZLinkDeferredJoinCompletionAuthorityTest {
                 actor,
                 Duration.ofSeconds(1))
             .toCompletableFuture().join();
+        String terminalPendingReference = locations.reference(
+            locations.rows.get(authorityKey).payload());
+        assertTrue(roots.values.containsKey(terminalPendingReference),
+            "the completion root stays referenced until command 45 is terminal");
+        int renewalsBeforeCommand44 = roots.renewals.get();
+        journal.renewCompletionRoot(
+                terminalPendingReference,
+                roots.checksum(terminalPendingReference))
+            .toCompletableFuture().join();
+        assertTrue(roots.renewals.get() > renewalsBeforeCommand44,
+            "pending command 45 extends every durable root component");
 
+        //  Simulate the target's valid command 45 observer. Only this step may
+        //  restore the steady authority payload and delete the recovery root.
         journal.completeSourceCleanupAndRelease(delivered, actor)
             .toCompletableFuture().join();
 
@@ -507,6 +582,14 @@ final class ZLinkDeferredJoinCompletionAuthorityTest {
         implements ZLinkRelocationStore {
         private final Map<String, byte[]> values = new ConcurrentHashMap<>();
         private final AtomicInteger sequence = new AtomicInteger();
+        private final AtomicInteger renewals = new AtomicInteger();
+
+        private long checksum(String reference) {
+            byte[] payload = values.get(reference);
+            CRC32C checksum = new CRC32C();
+            checksum.update(payload, 0, payload.length);
+            return checksum.getValue();
+        }
 
         @Override
         public CompletionStage<ZLinkRelocationStored> put(
@@ -540,6 +623,7 @@ final class ZLinkDeferredJoinCompletionAuthorityTest {
             String reference,
             Duration retention,
             ZLinkStoreCancellation cancellation) {
+            renewals.incrementAndGet();
             return CompletableFuture.completedFuture(
                 new ZLinkRelocationRenewed(
                     Instant.now().plus(retention),

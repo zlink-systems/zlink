@@ -6,6 +6,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BiConsumer;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
@@ -19,6 +20,10 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
 public final class ZLinkSessionRelocationPeerClient {
     private final ZLinkInternalMeshNode node;
     private final ZLinkServiceM6BWireCodec codec;
+    private volatile BiConsumer<
+        ZLinkServiceM6BWireCodec.SessionRelocationRoute,
+        ZLinkServiceM6BWireCodec.SessionRelocationRouted>
+            routeTerminalObserver = (ignoredCommand, ignoredAck) -> { };
 
     public ZLinkSessionRelocationPeerClient(ZLinkInternalMeshNode node) {
         this(node, new ZLinkServiceM6BWireCodec());
@@ -29,6 +34,14 @@ public final class ZLinkSessionRelocationPeerClient {
         ZLinkServiceM6BWireCodec codec) {
         this.node = Objects.requireNonNull(node, "node");
         this.codec = Objects.requireNonNull(codec, "codec");
+    }
+
+    void setRouteTerminalObserver(BiConsumer<
+        ZLinkServiceM6BWireCodec.SessionRelocationRoute,
+        ZLinkServiceM6BWireCodec.SessionRelocationRouted> observer) {
+        routeTerminalObserver = observer == null
+            ? (ignoredCommand, ignoredAck) -> { }
+            : observer;
     }
 
     //  Spec 20 §5 step 8 and §5.1: the first retransmission happens 1s after
@@ -77,12 +90,41 @@ public final class ZLinkSessionRelocationPeerClient {
         BiConsumer<
             ZLinkServiceM6BWireCodec.SessionRelocationRouted,
             Throwable> onTerminal) {
+        return switchRouteUntilTerminal(
+            command,
+            timeout,
+            superseded,
+            () -> CompletableFuture.completedFuture(null),
+            onTerminal);
+    }
+
+    /**
+     * Adds a durable pre-send step that is repeated before every identical
+     * command 44 retransmission. Runtime recovery uses it to renew the root
+     * that owns the exact route context until command 45 is terminal.
+     */
+    public CompletionStage<Void> switchRouteUntilTerminal(
+        ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
+        Duration timeout,
+        Supplier<CompletionStage<Boolean>> superseded,
+        Supplier<CompletionStage<Void>> beforeAttempt,
+        BiConsumer<
+            ZLinkServiceM6BWireCodec.SessionRelocationRouted,
+            Throwable> onTerminal) {
         Objects.requireNonNull(command, "command");
         Objects.requireNonNull(timeout, "timeout");
         Objects.requireNonNull(superseded, "superseded");
+        Objects.requireNonNull(beforeAttempt, "beforeAttempt");
         Objects.requireNonNull(onTerminal, "onTerminal");
         CompletableFuture<Void> settled = new CompletableFuture<>();
-        attemptRoute(command, timeout, superseded, onTerminal, settled, 0);
+        attemptRoute(
+            command,
+            timeout,
+            superseded,
+            beforeAttempt,
+            onTerminal,
+            settled,
+            0);
         return settled;
     }
 
@@ -96,6 +138,7 @@ public final class ZLinkSessionRelocationPeerClient {
         ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
         Duration timeout,
         Supplier<CompletionStage<Boolean>> superseded,
+        Supplier<CompletionStage<Void>> beforeAttempt,
         BiConsumer<
             ZLinkServiceM6BWireCodec.SessionRelocationRouted,
             Throwable> onTerminal,
@@ -104,9 +147,17 @@ public final class ZLinkSessionRelocationPeerClient {
         Duration interval = retransmitInterval(attempt);
         Duration window = timeout.compareTo(interval) < 0 ? timeout : interval;
         long sentAt = System.nanoTime();
-        switchRoute(command, window).whenComplete((ack, failure) -> {
+        CompletionStage<Void> ready;
+        try {
+            ready = Objects.requireNonNull(
+                beforeAttempt.get(), "route pre-send stage");
+        } catch (RuntimeException failure) {
+            ready = CompletableFuture.failedFuture(failure);
+        }
+        ready.thenCompose(ignored -> switchRoute(command, window))
+            .whenComplete((ack, failure) -> {
             if (failure == null) {
-                notifyTerminal(onTerminal, ack, failure);
+                notifyTerminal(command, onTerminal, ack, failure);
                 settled.complete(null);
                 return;
             }
@@ -120,7 +171,7 @@ public final class ZLinkSessionRelocationPeerClient {
             check.whenComplete((terminal, error) -> {
                 settled.complete(null);
                 if (error == null && Boolean.TRUE.equals(terminal)) {
-                    notifyTerminal(onTerminal, null, failure);
+                    notifyTerminal(command, onTerminal, null, failure);
                     return;
                 }
                 //  The retransmission clock is anchored at the previous send,
@@ -130,19 +181,33 @@ public final class ZLinkSessionRelocationPeerClient {
                     System.nanoTime() - sentAt);
                 ZLinkActorRetryScheduler.scheduleRouteAfter(
                     () -> attemptRoute(
-                        command, timeout, superseded, onTerminal, settled,
+                        command,
+                        timeout,
+                        superseded,
+                        beforeAttempt,
+                        onTerminal,
+                        settled,
                         attempt + 1),
                     remaining);
             });
         });
     }
 
-    private static void notifyTerminal(
+    private void notifyTerminal(
+        ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
         BiConsumer<
             ZLinkServiceM6BWireCodec.SessionRelocationRouted,
             Throwable> onTerminal,
         ZLinkServiceM6BWireCodec.SessionRelocationRouted ack,
         Throwable failure) {
+        if (ack != null) {
+            try {
+                routeTerminalObserver.accept(command, ack);
+            } catch (RuntimeException ignoredRecovery) {
+                //  The observer owns its durable retry; diagnostics below must
+                //  still receive the terminal command 45.
+            }
+        }
         try {
             onTerminal.accept(ack, failure);
         } catch (RuntimeException ignoredDiagnostic) {
@@ -240,8 +305,19 @@ public final class ZLinkSessionRelocationPeerClient {
             ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
             long expectedHighWater,
             Duration deadline) {
+        return abortRouteUntilAck(
+            command, expectedHighWater, deadline, () -> false);
+    }
+
+    CompletionStage<ZLinkServiceM6BWireCodec.SessionRelocationRouted>
+        abortRouteUntilAck(
+            ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
+            long expectedHighWater,
+            Duration deadline,
+            BooleanSupplier stopped) {
         Objects.requireNonNull(command, "command");
         Objects.requireNonNull(deadline, "deadline");
+        Objects.requireNonNull(stopped, "stopped");
         if (command.action()
                 != ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.ABORT
             || expectedHighWater < 0) {
@@ -257,6 +333,7 @@ public final class ZLinkSessionRelocationPeerClient {
             command44,
             expectedHighWater,
             System.nanoTime() + deadline.toNanos(),
+            stopped,
             settled,
             0);
         return settled;
@@ -267,10 +344,16 @@ public final class ZLinkSessionRelocationPeerClient {
         byte[] command44,
         long expectedHighWater,
         long deadlineNanos,
+        BooleanSupplier stopped,
         CompletableFuture<ZLinkServiceM6BWireCodec.SessionRelocationRouted>
             settled,
         int attempt) {
         if (settled.isDone()) {
+            return;
+        }
+        if (stopped.getAsBoolean()) {
+            settled.completeExceptionally(new ZLinkConfigurationException(
+                "Session relocation abort stopped before command 45"));
             return;
         }
         long remainingNanos = deadlineNanos - System.nanoTime();
@@ -290,6 +373,12 @@ public final class ZLinkSessionRelocationPeerClient {
                     settled.complete(ack);
                     return;
                 }
+                if (stopped.getAsBoolean()) {
+                    settled.completeExceptionally(
+                        new ZLinkConfigurationException(
+                            "Session relocation abort stopped before command 45"));
+                    return;
+                }
                 Duration delay = interval.minusNanos(
                     System.nanoTime() - sentAt);
                 ZLinkActorRetryScheduler.scheduleRouteAfter(
@@ -298,6 +387,7 @@ public final class ZLinkSessionRelocationPeerClient {
                         command44,
                         expectedHighWater,
                         deadlineNanos,
+                        stopped,
                         settled,
                         attempt + 1),
                     delay);

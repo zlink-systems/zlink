@@ -145,6 +145,21 @@ public final class ZLinkAggregateRelocationCoordinator {
                 value.inventoryDigest()));
     }
 
+    /** Extends every immutable component of an exact relocation root. */
+    public CompletionStage<Void> renewRoot(
+        String reference,
+        long checksumCrc32c,
+        ZLinkStoreCancellation cancellation) {
+        Objects.requireNonNull(reference, "reference");
+        Objects.requireNonNull(cancellation, "cancellation");
+        return ZLinkRelocationTreeStore.renew(
+            relocationStore,
+            reference,
+            checksumCrc32c,
+            RETENTION,
+            cancellation);
+    }
+
     /**
      * Verifies that Location authority has published the exact immutable root
      * and target owner before a target activation becomes visible.
@@ -1008,6 +1023,92 @@ public final class ZLinkAggregateRelocationCoordinator {
                 }
                 return deleteOrphan(prepared.stored().reference());
             });
+    }
+
+    /**
+     * Records the exact external terminal, then resumes cleanup from its
+     * durable tombstone until the root and tombstone are both absent.
+     */
+    public CompletionStage<Void> completeRetainedAbort(
+        ZLinkAggregateAbortRecoverySnapshot retained,
+        String reference,
+        ZLinkStoreCancellation cancellation) {
+        Objects.requireNonNull(retained, "retained");
+        Objects.requireNonNull(reference, "reference");
+        Objects.requireNonNull(cancellation, "cancellation");
+        long checksumCrc32c = retainedAbortChecksum(retained, reference);
+        return authorityStore.markAggregateAbortTerminal(
+                retained.fence(),
+                retained.storeVersion(),
+                reference,
+                checksumCrc32c,
+                cancellation)
+            .thenCompose(cleanup -> cleanup.isPresent()
+                ? resumeTerminalAggregateAbortCleanup(
+                    cleanup.orElseThrow(), cancellation)
+                : ZLinkRelocationTreeStore.deleteStrict(
+                    relocationStore, reference, cancellation));
+    }
+
+    /** Resumes terminal cleanups left by an earlier process. */
+    public CompletionStage<Void> resumeTerminalAggregateAbortCleanups(
+        ZLinkStoreCancellation cancellation) {
+        Objects.requireNonNull(cancellation, "cancellation");
+        return authorityStore.listTerminalAggregateAborts(cancellation)
+            .thenCompose(cleanups -> {
+                CompletionStage<Void> chain =
+                    CompletableFuture.completedFuture(null);
+                for (ZLinkAggregateAbortCleanupSnapshot cleanup : cleanups) {
+                    chain = chain.thenCompose(ignored ->
+                        resumeTerminalAggregateAbortCleanup(
+                            cleanup, cancellation));
+                }
+                return chain;
+            });
+    }
+
+    private CompletionStage<Void> resumeTerminalAggregateAbortCleanup(
+        ZLinkAggregateAbortCleanupSnapshot cleanup,
+        ZLinkStoreCancellation cancellation) {
+        return authorityStore.cleanupTerminalAggregateAbortInventory(
+                cleanup, cancellation)
+            .thenCompose(ignored -> ZLinkRelocationTreeStore.deleteStrict(
+                relocationStore,
+                cleanup.reference(),
+                cancellation))
+            .thenCompose(ignored -> authorityStore.removeTerminalAggregateAbort(
+                cleanup, cancellation))
+            .thenCompose(removed -> {
+                if (removed) {
+                    return CompletableFuture.completedFuture(null);
+                }
+                return authorityStore.listTerminalAggregateAborts(cancellation)
+                    .thenCompose(current -> current.stream().anyMatch(value ->
+                            value.fence().equals(cleanup.fence()))
+                        ? failed(new RelocationDataLostException(
+                            "aggregate abort cleanup tombstone CAS conflicted"))
+                        : CompletableFuture.completedFuture(null));
+            });
+    }
+
+    private static long retainedAbortChecksum(
+        ZLinkAggregateAbortRecoverySnapshot retained,
+        String reference) {
+        if (retained.request().participants().size() != 1) {
+            throw new IllegalStateException(
+                "retained direct-Join abort inventory is not singular");
+        }
+        var publication = ZLinkCanonicalRelocationAuthorityStateCodec.decode(
+            retained.request().participants().getFirst().authorityPayload());
+        if (publication == null) {
+            throw new IllegalStateException(
+                "retained direct-Join abort has no canonical publication");
+        }
+        ZLinkDeferredJoinCompletionAuthority.validateRetainedAbort(
+            retained,
+            reference,
+            publication.checksumCrc32c());
+        return publication.checksumCrc32c();
     }
 
     public record Root(byte[] payload, byte[] inventoryDigest) {

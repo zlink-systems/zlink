@@ -257,10 +257,31 @@ public final class ZLinkUserSpotRetireRuntime {
     }
 
     public CompletionStage<Void> startup() {
-        if (recoveryOwners.isEmpty()) {
-            return CompletableFuture.completedFuture(null);
-        }
-        return startupScanner.scan(() -> false)
+        return startupScanner.scanRetainedSessionAborts(() -> false)
+            .thenCompose(retained -> {
+                CompletionStage<Void> chain =
+                    CompletableFuture.completedFuture(null);
+                for (var candidate : retained) {
+                    var owner = recoveryOwners.stream()
+                        .filter(value -> value
+                            .canRecoverRetainedSessionAbort(candidate))
+                        .findFirst()
+                        .orElse(null);
+                    if (owner == null) {
+                        return CompletableFuture.failedFuture(
+                            new IllegalStateException(
+                                "retained Session abort has no recovery owner "
+                                    + "for mesh "
+                                    + candidate.targetMeshName()));
+                    }
+                    chain = chain.thenCompose(ignored ->
+                        owner.recoverRetainedSessionAbort(candidate));
+                }
+                return chain;
+            })
+            .thenCompose(ignored -> recoveryOwners.isEmpty()
+                ? CompletableFuture.completedFuture(List.of())
+                : startupScanner.scan(() -> false))
             .thenCompose(candidates -> {
                 CompletionStage<Void> chain =
                     CompletableFuture.completedFuture(null);

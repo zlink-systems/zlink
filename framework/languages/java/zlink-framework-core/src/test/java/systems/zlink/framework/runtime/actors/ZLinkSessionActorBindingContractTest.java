@@ -199,9 +199,18 @@ final class ZLinkSessionActorBindingContractTest {
             new ZLinkBackendActorRef(NODE_B, "actor-1", 7));
 
         assertEquals(NODE_B, actor.ref().nodeRid());
-        runtime.applyRelocationRouteUpdate(
-            new ZLinkSessionActorsRuntime.RelocationRouteUpdate(
-                "actor-1", 7, NODE_B, NODE_A, 4, 9, 10))
+        var relocation = new ZLinkServiceM6BWireCodec.RelocationIdentity(30, 31);
+        var sealed = runtime.applyRelocationSealCommand(
+                seal(relocation, 7, NODE_B, 9))
+            .toCompletableFuture().join();
+        runtime.applyRelocationRouteCommand(
+                route(
+                    relocation,
+                    sealed.lastAcceptedSessionSequence(),
+                    9,
+                    10,
+                    NODE_A,
+                    4))
             .toCompletableFuture().join();
         assertEquals(NODE_A, actor.ref().nodeRid());
     }
@@ -260,20 +269,29 @@ final class ZLinkSessionActorBindingContractTest {
             new ActorRef("actor-1", 7, MESH, NODE_A))
             .toCompletableFuture().join();
 
-        runtime.applyRelocationRouteUpdate(
-            new ZLinkSessionActorsRuntime.RelocationRouteUpdate(
-                "actor-1", 7, NODE_A, NODE_B, 4, 9, 10))
+        var relocation = new ZLinkServiceM6BWireCodec.RelocationIdentity(32, 33);
+        var sealed = runtime.applyRelocationSealCommand(
+                seal(relocation, 7, NODE_A, 9))
+            .toCompletableFuture().join();
+        runtime.applyRelocationRouteCommand(
+                route(
+                    relocation,
+                    sealed.lastAcceptedSessionSequence(),
+                    9,
+                    10,
+                    NODE_B,
+                    4))
             .toCompletableFuture().join();
 
         assertEquals(NODE_B, actor.ref().nodeRid());
         assertEquals(7, actor.ref().objectGeneration());
+        var stale = new ZLinkServiceM6BWireCodec.RelocationIdentity(34, 35);
         assertThrows(
             CompletionException.class,
-            () -> runtime.applyRelocationRouteUpdate(
-                    new ZLinkSessionActorsRuntime.RelocationRouteUpdate(
-                        "actor-1", 7, NODE_A, NODE_B, 5, 9, 10))
+            () -> runtime.applyRelocationSealCommand(
+                    seal(stale, 7, NODE_A, 9))
                 .toCompletableFuture().join(),
-            "a repeated command with the stale source route must not ACK");
+            "the production command 42 path must reject the stale source route");
     }
 
     @Test

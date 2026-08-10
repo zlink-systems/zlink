@@ -193,6 +193,21 @@ final class ZLinkRelocationTreeStore {
             .handle((value, failure) -> null);
     }
 
+    static CompletionStage<Void> deleteStrict(
+        ZLinkRelocationStore store,
+        String rootReference,
+        ZLinkStoreCancellation cancellation) {
+        Objects.requireNonNull(store, "store");
+        Objects.requireNonNull(rootReference, "rootReference");
+        Objects.requireNonNull(cancellation, "cancellation");
+        return store.delete(rootReference, cancellation)
+            .thenCompose(result -> result == ZLinkRelocationDeleteResult.DELETED
+                    || result == ZLinkRelocationDeleteResult.MISSING
+                ? CompletableFuture.completedFuture(null)
+                : failed(new DataLostException(
+                    "relocation manifest deletion returned no result")));
+    }
+
     private static CompletionStage<ZLinkRelocationStored> putVerified(
         ZLinkRelocationStore store,
         byte[] encoded,

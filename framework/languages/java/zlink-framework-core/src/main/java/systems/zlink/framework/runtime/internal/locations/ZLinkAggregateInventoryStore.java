@@ -167,10 +167,10 @@ final class ZLinkAggregateInventoryStore {
     /**
      * Deletes every immutable value belonging to one aggregate fence.
      *
-     * <p>The aggregate marker is removed by the authority repository before
-     * this method is called. Every item is still protected by the version
-     * observed in the scan page so a concurrent cleanup cannot delete a
-     * replacement value.</p>
+     * <p>The aggregate marker remains as a terminal cleanup tombstone while
+     * this method runs. Every item is also protected by the version observed
+     * in the scan page so a concurrent cleanup cannot delete a replacement
+     * value.</p>
      */
     CompletionStage<Void> delete(
         ZLinkAggregateFence fence,

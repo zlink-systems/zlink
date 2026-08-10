@@ -26,6 +26,8 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityEntry;
+import systems.zlink.framework.runtime.internal.locations
+    .ZLinkDeferredJoinCompletionAuthority;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPage;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
@@ -40,6 +42,10 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
+import systems.zlink.framework.runtime.internal.locations
+    .ZLinkServiceRelocationEnvelopeCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
 
 final class ZLinkCanonicalRelocationStateMachineTest {
     private static final ZLinkStoreCancellation OPEN = () -> false;
@@ -397,6 +403,122 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         assertEquals(1, endpoint.finalized.get());
         assertTrue(ackCount.get() >= 2,
             "recovered command 31 and seal both send canonical replies");
+    }
+
+    @Test
+    void publishedDirectJoinCompletionReentersTargetFinalizeAfterRestart() {
+        RoutingId sourceRid = RoutingId.from("source-node");
+        RoutingId targetRid = RoutingId.from("target-node");
+        RoutingId sessionOwnerRid = RoutingId.from("session-owner-node");
+        RoutingId sessionRid = RoutingId.from("session-a");
+        String actorId = "actor-a";
+        String authorityKey = ZLinkAuthorityKeyCodec.actor(actorId);
+        UUID relocationId = UUID.randomUUID();
+        var wire = new ZLinkServiceM6BWireCodec();
+        var routeIntent = new ZLinkServiceM6BWireCodec
+            .SessionRelocationRouteIntent(
+                new ZLinkServiceM6BWireCodec.RelocationIdentity(
+                    relocationId.getMostSignificantBits(),
+                    relocationId.getLeastSignificantBits()),
+                new ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
+                    "source-owner", 7, sourceRid, 11, "source-store"),
+                ZLinkServiceM6BWireCodec.RelocationRole.TARGET,
+                new ZLinkServiceM6BWireCodec.ActorIdentity(actorId, 3),
+                new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                    sessionOwnerRid,
+                    31,
+                    "session-owner",
+                    32,
+                    sessionRid,
+                    33),
+                ZLinkServiceM6BWireCodec
+                    .SessionRelocationRouteAction.COMMIT,
+                5,
+                targetRid,
+                12,
+                42);
+        byte[] initial = ZLinkCanonicalActorRelocationEnvelope.encode(
+            relocationId,
+            actorId,
+            3,
+            5,
+            true,
+            new byte[] {1},
+            List.of());
+        var operation = new ZLinkActorJoinOperationId(41, 73);
+        var completionRoot = ZLinkDeferredJoinCompletionAuthority
+            .putRelocationCompletion(
+                ZLinkServiceRelocationEnvelopeCodec.decode(initial),
+                operation,
+                "source-owner",
+                7,
+                sourceRid,
+                11,
+                1,
+                1,
+                new byte[] {9},
+                wire.encodeSessionRelocationRouteIntent(routeIntent));
+        byte[] root = ZLinkServiceRelocationEnvelopeCodec.completeDelivery(
+                completionRoot,
+                operation.high(),
+                operation.low(),
+                "source-owner",
+                7,
+                sourceRid,
+                11,
+                3)
+            .canonicalBytes();
+        ZLinkAuthoritySnapshot targetAuthority =
+            targetActorAuthority(actorId, targetRid);
+        var candidate = new ZLinkRelocationStartupScanner.Candidate(
+            "direct-join-root",
+            0,
+            new ZLinkAggregateFence(relocationId, 1),
+            "source-owner",
+            7,
+            sourceRid,
+            11,
+            new ZLinkLocationOwnerToken("target-owner", 8),
+            targetRid,
+            12,
+            true,
+            new ZLinkAggregateRelocationCoordinator.PublishedRoot(
+                "direct-join-root",
+                0,
+                root,
+                new byte[] {1},
+                Map.of(authorityKey, 6L)),
+            List.of(new ZLinkAuthorityEntry(
+                authorityKey, targetAuthority)));
+        CountingEndpoint endpoint = new CountingEndpoint();
+        AtomicInteger replies = new AtomicInteger();
+        var machine = new ZLinkCanonicalRelocationStateMachine(
+            capturingNode(targetRid, 12, replies),
+            "mesh",
+            "target-entry",
+            repository(authorityKey, targetAuthority),
+            new ZLinkAggregateRelocationCoordinator(
+                repository(authorityKey, targetAuthority),
+                new InMemoryRelocationStore()),
+            endpoint);
+
+        machine.recoverPublished(candidate).toCompletableFuture().join();
+
+        assertEquals(1, endpoint.staged.get());
+        assertEquals(1, endpoint.published.get());
+        assertEquals(1, endpoint.finalized.get(),
+            "Completed authority evidence re-enters target finalize after restart");
+        var request = endpoint.lastStaged.get();
+        assertEquals("target-entry", request.spotId(),
+            "recovery uses the live target Actor authority Spot");
+        assertEquals(1, request.sessionRoutes().size());
+        var recovered = request.sessionRoutes().getFirst();
+        assertEquals(actorId, recovered.actorId());
+        assertEquals("source-store", recovered.sourceAuthorityStoreVersion());
+        assertEquals(sessionOwnerRid, recovered.sessionOwnerNodeRid());
+        assertEquals(sessionRid, recovered.sessionRid());
+        assertEquals(33, recovered.bindingGeneration());
+        assertEquals(42, recovered.lastAcceptedSessionSequence());
     }
 
     private static ZLinkAuthoritySnapshot actorAuthority(

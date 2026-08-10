@@ -77,7 +77,12 @@ final class ZLinkServiceM6BSessionRelocationWireCodecTest {
                 route.relocation(), route.coordinator(), route.actor(),
                 route.session(), route.action(), result,
                 route.currentAuthorityOwnerGeneration(),
-                route.lastAcceptedSessionSequence());
+                result == ZLinkServiceM6BWireCodec
+                        .SessionRelocationRouteResult.STALE
+                    || result == ZLinkServiceM6BWireCodec
+                        .SessionRelocationRouteResult.SESSION_OR_BINDING_CLOSED
+                    ? 0
+                    : route.lastAcceptedSessionSequence());
             byte[] encoded = codec.encodeSessionRelocationRouted(refused);
             assertEquals(refused, codec.decodeSessionRelocationRouted(encoded));
         }

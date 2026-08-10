@@ -733,96 +733,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         held.forEach(pending -> pending.result().completeExceptionally(failure));
     }
 
-    /**
-     * Applies relocation command 44 to this Session owner's stored route.
-     * Successful completion is command 45 ACK; the route is changed only
-     * after the target route is Ready and the exact source route still matches.
-     */
-    CompletionStage<Void> applyRelocationRouteUpdate(
-        RelocationRouteUpdate update) {
-        Objects.requireNonNull(update, "update");
-        final StoredBindingRoute observed;
-        final ZLinkBoundActor actor;
-        final TargetAuthorityFence targetFence;
-        ZLinkBackendActorRef target = new ZLinkBackendActorRef(
-            update.targetNodeRid(),
-            update.actorId(),
-            update.objectGeneration());
-        synchronized (sealTerminals) {
-            observed = bindingRoutes.get(update.actorId());
-            if (observed == null || !observed.matchesSource(update)) {
-                return CompletableFuture.failedFuture(
-                    staleRouteUpdate(update, observed));
-            }
-            actor = currentBoundActor(update.actorId());
-            targetFence = liveTargetFence(
-                target,
-                update.targetNodeGeneration(),
-                update.targetAuthorityOwnerGeneration(),
-                observed).orElse(null);
-            if (targetFence == null) {
-                return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                        "target Actor authority is unavailable or stale: "
-                            + update.actorId()));
-            }
-        }
-        ZLinkBackendActorRef source = new ZLinkBackendActorRef(
-            observed.nodeRid(), observed.actorId(), observed.objectGeneration());
-        return actor.prepareNativeActorRoute(target, RELAY_SUBMIT_TIMEOUT)
-            .exceptionallyCompose(failure -> compensateRoute(
-                actor, source, unwrapRouteFailure(failure)))
-            .thenCompose(ignored -> {
-                boolean changed;
-                synchronized (sealTerminals) {
-                    StoredBindingRoute current = bindingRoutes.get(
-                        update.actorId());
-                    changed = current != observed
-                        || !current.matchesSource(update)
-                        || !targetFence.equals(liveTargetFence(
-                            target,
-                            update.targetNodeGeneration(),
-                            update.targetAuthorityOwnerGeneration(),
-                            current).orElse(null));
-                    if (!changed) {
-                        actor.commitPreparedNativeActorRoute(target);
-                        bindingRoutes.put(
-                            update.actorId(),
-                            current.toTarget(update, targetFence));
-                    }
-                }
-                if (changed) {
-                    return compensateRoute(actor, source,
-                        new ZLinkConfigurationException(
-                            "stored binding route changed during native preparation: "
-                                + update.actorId()));
-                }
-                return CompletableFuture.completedFuture(null);
-            });
-    }
-
-    private ZLinkConfigurationException staleRouteUpdate(
-        RelocationRouteUpdate update,
-        StoredBindingRoute observed) {
-        return new ZLinkConfigurationException(
-            "stored binding route does not match relocation source: "
-                + update.actorId()
-                + (observed == null
-                    ? " observed=none"
-                    : " observedNode=" + observed.nodeRid()
-                        + " observedAuthority="
-                        + observed.authorityOwnerGeneration()
-                        + " observedBinding=" + observed.bindingGeneration()
-                        + " observedSeq="
-                        + observed.lastAcceptedSessionSequence()
-                        + " sourceNode=" + update.sourceNodeRid()
-                        + " sourceAuthority="
-                        + update.sourceAuthorityOwnerGeneration()
-                        + " updateBinding=" + update.bindingGeneration()
-                        + " updateSeq="
-                        + update.lastAcceptedSessionSequence()));
-    }
-
     private ZLinkBoundActor currentBoundActor(String actorId) {
         return bound.stream()
             .filter(candidate -> candidate.actorId().equals(actorId))
@@ -862,22 +772,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             nodeGeneration,
             authorityGeneration,
             ownerLeaseGeneration));
-    }
-
-    private CompletionStage<Void> compensateRoute(
-        ZLinkBoundActor actor,
-        ZLinkBackendActorRef source,
-        Throwable failure) {
-        return actor.compensatePreparedNativeActorRoute(
-                source,
-                RELAY_SUBMIT_TIMEOUT)
-            .handle((ignored, compensationFailure) -> {
-                Throwable cause = failure;
-                if (compensationFailure != null) {
-                    cause.addSuppressed(compensationFailure);
-                }
-                throw new CompletionException(cause);
-            });
     }
 
     private record TargetAuthorityFence(
@@ -1577,7 +1471,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     + " observedGeneration=" + observed.objectGeneration());
     }
 
-    record RelocationRouteUpdate(
+    private record RelocationRouteUpdate(
         String actorId,
         long objectGeneration,
         RoutingId sourceNodeRid,
@@ -1587,25 +1481,12 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         long targetAuthorityOwnerGeneration,
         long bindingGeneration,
         long lastAcceptedSessionSequence) {
-        RelocationRouteUpdate(
-            String actorId,
-            long objectGeneration,
-            RoutingId sourceNodeRid,
-            RoutingId targetNodeRid,
-            long targetNodeGeneration,
-            long sourceAuthorityOwnerGeneration,
-            long targetAuthorityOwnerGeneration) {
-            this(actorId, objectGeneration, sourceNodeRid, targetNodeRid,
-                targetNodeGeneration, sourceAuthorityOwnerGeneration,
-                targetAuthorityOwnerGeneration, 0, 0);
-        }
-
         RelocationRouteUpdate {
             if (actorId == null || actorId.isBlank()
                 || objectGeneration <= 0
                 || targetNodeGeneration <= 0
                 || sourceAuthorityOwnerGeneration <= 0
-                || bindingGeneration < 0
+                || bindingGeneration <= 0
                 || lastAcceptedSessionSequence < 0
                 || targetAuthorityOwnerGeneration
                     <= sourceAuthorityOwnerGeneration) {
@@ -1631,19 +1512,11 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             return actorId.equals(update.actorId())
                 && objectGeneration == update.objectGeneration()
                 && nodeRid.equals(update.sourceNodeRid())
-                && (update.bindingGeneration() == 0
-                    || bindingGeneration == update.bindingGeneration())
-                && (update.bindingGeneration() == 0
-                    ? lastAcceptedSessionSequence
-                        <= update.lastAcceptedSessionSequence()
-                    : lastAcceptedSessionSequence
-                        == update.lastAcceptedSessionSequence())
-                && (update.bindingGeneration() == 0
-                    ? authorityOwnerGeneration == 0
-                        || authorityOwnerGeneration
-                            == update.sourceAuthorityOwnerGeneration()
-                    : authorityOwnerGeneration
-                        == update.sourceAuthorityOwnerGeneration());
+                && bindingGeneration == update.bindingGeneration()
+                && lastAcceptedSessionSequence
+                    == update.lastAcceptedSessionSequence()
+                && authorityOwnerGeneration
+                    == update.sourceAuthorityOwnerGeneration();
         }
 
         StoredBindingRoute toTarget(

@@ -246,6 +246,53 @@ final class ZLinkDeferredJoinAcceptedRecovery {
             manifest.reference());
     }
 
+    CompletionStage<ZLinkDeferredJoinCompletionAuthority.RetainedAbort>
+        abortPreparedRetainingRoot(Manifest manifest) {
+        if (authorityJournal == null || !manifest.hasAggregateFence()) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException(
+                    "direct Actor Join relocation fence is missing"));
+        }
+        return authorityJournal.abortPreparedRetainingRoot(
+            new UUID(
+                manifest.aggregateIdHigh(),
+                manifest.aggregateIdLow()),
+            manifest.aggregateGeneration(),
+            manifest.reference(),
+            manifest.checksumCrc32c());
+    }
+
+    CompletionStage<Void> completeRetainedAbort(
+        ZLinkDeferredJoinCompletionAuthority.RetainedAbort retained) {
+        if (authorityJournal == null) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException(
+                    "direct Actor Join relocation recovery is unavailable"));
+        }
+        return authorityJournal.completeRetainedAbort(retained);
+    }
+
+    CompletionStage<Void> renewRetainedAbort(
+        ZLinkDeferredJoinCompletionAuthority.RetainedAbort retained) {
+        if (authorityJournal == null) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException(
+                    "direct Actor Join relocation recovery is unavailable"));
+        }
+        return authorityJournal.renewRetainedAbort(retained);
+    }
+
+    CompletionStage<Void> renewCompletionRoot(Manifest manifest) {
+        if (authorityJournal == null || manifest == null
+            || !manifest.hasAggregateFence()) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException(
+                    "direct Actor Join relocation fence is missing"));
+        }
+        return authorityJournal.renewCompletionRoot(
+            manifest.reference(), manifest.checksumCrc32c());
+    }
+
     private CompletionStage<Manifest> prepareLegacy(
         ZLinkActorJoinOperationId operationId,
         ZLinkBackendActorRef actor,

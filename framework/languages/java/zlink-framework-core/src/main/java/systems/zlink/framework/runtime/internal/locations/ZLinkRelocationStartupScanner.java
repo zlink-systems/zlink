@@ -2,6 +2,8 @@ package systems.zlink.framework.runtime.internal.locations;
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicReference;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -61,6 +63,141 @@ public final class ZLinkRelocationStartupScanner {
                     .sorted(Comparator.comparing(Candidate::reference))
                     .toList());
             });
+    }
+
+    /**
+     * Finds direct-Join aggregates whose authority was durably aborted before
+     * the matching SOURCE command 44 reached command 45.
+     */
+    public CompletionStage<List<RetainedSessionAbort>>
+        scanRetainedSessionAborts(
+            ZLinkStoreCancellation cancellation) {
+        Objects.requireNonNull(cancellation, "cancellation");
+        return coordinator.resumeTerminalAggregateAbortCleanups(cancellation)
+            .thenCompose(ignored ->
+                authorityStore.listRetainedAggregateAborts(cancellation))
+            .thenCompose(retained -> {
+                CompletionStage<List<RetainedSessionAbort>> result =
+                    CompletableFuture.completedFuture(new ArrayList<>());
+                for (ZLinkAggregateAbortRecoverySnapshot snapshot : retained) {
+                    result = result.thenCompose(found ->
+                        retainedSessionAbort(snapshot, cancellation)
+                            .thenApply(candidate -> {
+                                found.add(candidate);
+                                return found;
+                            }));
+                }
+                return result.thenApply(found -> found.stream()
+                    .sorted(Comparator.comparing(RetainedSessionAbort::reference))
+                    .toList());
+            });
+    }
+
+    private CompletionStage<RetainedSessionAbort> retainedSessionAbort(
+        ZLinkAggregateAbortRecoverySnapshot snapshot,
+        ZLinkStoreCancellation cancellation) {
+        if (snapshot.request().participants().size() != 1) {
+            return failedRetainedAbort(
+                "retained direct-Join abort inventory is not singular");
+        }
+        ZLinkAggregateParticipant participant =
+            snapshot.request().participants().getFirst();
+        var publication = ZLinkCanonicalRelocationAuthorityStateCodec.decode(
+            participant.authorityPayload());
+        if (publication == null) {
+            return failedRetainedAbort(
+                "retained direct-Join abort has no canonical publication");
+        }
+        try {
+            ZLinkDeferredJoinCompletionAuthority.validateRetainedAbort(
+                snapshot,
+                publication.reference(),
+                publication.checksumCrc32c());
+        } catch (RuntimeException invalid) {
+            return CompletableFuture.failedFuture(invalid);
+        }
+        return coordinator.readRoot(
+                publication.reference(),
+                publication.checksumCrc32c(),
+                cancellation)
+            .thenCompose(root -> {
+                var envelope = ZLinkServiceRelocationEnvelopeCodec.decode(
+                    root.payload());
+                List<byte[]> commands = ZLinkDeferredJoinCompletionAuthority
+                    .retainedSessionRouteCommands(envelope);
+                if (!Arrays.equals(
+                        root.inventoryDigest(),
+                        snapshot.request().inventoryDigest())
+                    || envelope.relocationHigh()
+                        != snapshot.fence().aggregateId()
+                            .getMostSignificantBits()
+                    || envelope.relocationLow()
+                        != snapshot.fence().aggregateId()
+                            .getLeastSignificantBits()
+                    || commands.size() != 1) {
+                    return failedRetainedAbort(
+                        "retained direct-Join abort root inventory differs");
+                }
+                var intent = new ZLinkServiceM6BWireCodec()
+                    .decodeSessionRelocationRouteIntent(commands.getFirst());
+                var actor = new ZLinkActorAuthorityPayloadCodec()
+                    .decode(publication.applicationPayload())
+                    .orElse(null);
+                var coordinatorFence = intent.coordinator();
+                boolean exact = actor != null
+                    && intent.senderRole()
+                        == ZLinkServiceM6BWireCodec.RelocationRole.TARGET
+                    && intent.action()
+                        == ZLinkServiceM6BWireCodec
+                            .SessionRelocationRouteAction.COMMIT
+                    && intent.relocation().high()
+                        == snapshot.fence().aggregateId()
+                            .getMostSignificantBits()
+                    && intent.relocation().low()
+                        == snapshot.fence().aggregateId()
+                            .getLeastSignificantBits()
+                    && intent.actor().actorId().equals(actor.actorId())
+                    && intent.actor().generation()
+                        == participant.objectGeneration()
+                    && intent.previousAuthorityOwnerGeneration()
+                        == participant.sourceAuthorityOwnerGeneration()
+                    && coordinatorFence.ownerId().equals(
+                        publication.sourceOwnerId())
+                    && coordinatorFence.leaseGeneration()
+                        == publication.sourceOwnerLeaseGeneration()
+                    && coordinatorFence.nodeRid().equals(
+                        publication.sourceNodeRid())
+                    && coordinatorFence.nodeGeneration()
+                        == publication.sourceNodeGeneration()
+                    && coordinatorFence.expectedAuthorityStoreVersion().equals(
+                        participant.expectedStoreVersion())
+                    && intent.targetNodeRid().equals(
+                        snapshot.request().targetDescriptor().rid())
+                    && intent.targetNodeGeneration()
+                        == snapshot.request()
+                            .targetDescriptorLifecycleGeneration();
+                if (!exact) {
+                    return failedRetainedAbort(
+                        "retained direct-Join abort route fence differs");
+                }
+                return CompletableFuture.completedFuture(
+                    new RetainedSessionAbort(
+                        snapshot,
+                        publication.reference(),
+                        publication.checksumCrc32c(),
+                        snapshot.request().targetDescriptor().meshName(),
+                        snapshot.request().targetDescriptor().rid(),
+                        snapshot.request()
+                            .targetDescriptorLifecycleGeneration(),
+                        intent));
+            });
+    }
+
+    private static <T> CompletionStage<T> failedRetainedAbort(
+        String message) {
+        return CompletableFuture.failedFuture(
+            new ZLinkAggregateRelocationCoordinator.RelocationDataLostException(
+                message));
     }
 
     private CompletionStage<Optional<Candidate>> verifyMarker(
@@ -134,7 +271,9 @@ public final class ZLinkRelocationStartupScanner {
                                 || !publication.sourceNodeRid().equals(
                                     initial.sourceNodeRid())
                                 || publication.sourceNodeGeneration()
-                                    != initial.sourceNodeGeneration())) {
+                                    != initial.sourceNodeGeneration()
+                                || publication.sourceCleanupCompleted()
+                                    != initial.sourceCleanupCompleted())) {
                         return failed(
                             "published relocation participant fence differs: "
                                 + participant.authorityKey());
@@ -180,9 +319,13 @@ public final class ZLinkRelocationStartupScanner {
                         + " for aggregate " + fence.aggregateId());
             }
             var publication = first.get();
-            return coordinator.readRoot(
-                    marker.progress().reference(),
-                    marker.progress().checksumCrc32c(),
+            return reconcileCompletedMarker(
+                    marker,
+                    publication,
+                    cancellation)
+                .thenCompose(completedMarker -> coordinator.readRoot(
+                    completedMarker.progress().reference(),
+                    completedMarker.progress().checksumCrc32c(),
                     cancellation)
                 .whenComplete((root, readFailure) -> {
                     if (readFailure != null) {
@@ -191,16 +334,21 @@ public final class ZLinkRelocationStartupScanner {
                             () -> "relocation startup root read failed."
                                 + " aggregate=" + fence.aggregateId()
                                 + " generation=" + fence.aggregateGeneration()
-                                + " markerRef=" + marker.progress().reference()
+                                + " markerRef="
+                                + completedMarker.progress().reference()
                                 + " markerCrc="
-                                + marker.progress().checksumCrc32c()
-                                + " phase=" + marker.progress().phase()
+                                + completedMarker.progress().checksumCrc32c()
+                                + " phase="
+                                + completedMarker.progress().phase()
                                 + " cleanup="
-                                + marker.progress().sourceCleanupCompleted()
+                                + completedMarker.progress()
+                                    .sourceCleanupCompleted()
                                 + " terminals="
-                                + marker.progress().terminalCompletionCount()
+                                + completedMarker.progress()
+                                    .terminalCompletionCount()
                                 + " pendingRelays="
-                                + marker.progress().pendingRelayCount()
+                                + completedMarker.progress()
+                                    .pendingRelayCount()
                                 + " targetOwner=" + target.ownerId()
                                 + "/" + target.leaseGeneration()
                                 + " targetNode="
@@ -247,14 +395,79 @@ public final class ZLinkRelocationStartupScanner {
                             marker.request().targetDescriptor().rid(),
                             marker.request()
                                 .targetDescriptorLifecycleGeneration(),
-                            marker.progress().sourceCleanupCompleted(),
+                            completedMarker.progress()
+                                    .sourceCleanupCompleted()
+                                || publication.sourceCleanupCompleted(),
                             verified,
                             authorities.stream()
                                 .sorted(Comparator.comparing(
                                     ZLinkAuthorityEntry::key))
                                 .toList())));
-                });
+                }));
         });
+    }
+
+    /**
+     * Direct Join writes the participant's Completed publication before the
+     * aggregate progress marker. A process can stop between those CAS writes.
+     * Startup reconciles only that one monotonic bit after every participant
+     * proved the same exact publication fence; no route or high-water is
+     * inferred from the stale marker.
+     */
+    private CompletionStage<ZLinkAggregateProgressSnapshot>
+        reconcileCompletedMarker(
+            ZLinkAggregateProgressSnapshot marker,
+            ZLinkCanonicalRelocationAuthorityStateCodec.Published publication,
+            ZLinkStoreCancellation cancellation) {
+        if (!publication.sourceCleanupCompleted()
+            || marker.progress().sourceCleanupCompleted()) {
+            return CompletableFuture.completedFuture(marker);
+        }
+        var progress = marker.progress();
+        var completed = new ZLinkAggregateProgress(
+            progress.reference(),
+            progress.checksumCrc32c(),
+            8,
+            true,
+            progress.terminalCompletionCount(),
+            progress.pendingRelayCount());
+        return authorityStore.compareExchangeAggregateProgress(
+                marker.fence(),
+                marker.storeVersion(),
+                completed,
+                cancellation)
+            .thenCompose(result -> {
+                if (result instanceof ZLinkAggregateProgressStored stored) {
+                    return CompletableFuture.completedFuture(
+                        stored.snapshot());
+                }
+                return authorityStore.readAggregateProgress(
+                        marker.fence(), cancellation)
+                    .thenCompose(current -> {
+                        if (current.isEmpty()
+                            || !sameProgressRoot(
+                                marker.progress(),
+                                current.get().progress())
+                            || !current.get().progress()
+                                .sourceCleanupCompleted()) {
+                            return failed(
+                                "completed relocation marker reconciliation conflicted: "
+                                    + marker.fence().aggregateId());
+                        }
+                        return CompletableFuture.completedFuture(
+                            current.get());
+                    });
+            });
+    }
+
+    private static boolean sameProgressRoot(
+        ZLinkAggregateProgress expected,
+        ZLinkAggregateProgress actual) {
+        return expected.reference().equals(actual.reference())
+            && expected.checksumCrc32c() == actual.checksumCrc32c()
+            && expected.terminalCompletionCount()
+                == actual.terminalCompletionCount()
+            && expected.pendingRelayCount() == actual.pendingRelayCount();
     }
 
     private static <T> CompletionStage<T> failed(String message) {
@@ -294,6 +507,29 @@ public final class ZLinkRelocationStartupScanner {
                 || targetNodeGeneration <= 0) {
                 throw new IllegalArgumentException(
                     "relocation recovery owner and node fences are invalid");
+            }
+        }
+    }
+
+    public record RetainedSessionAbort(
+        ZLinkAggregateAbortRecoverySnapshot snapshot,
+        String reference,
+        long checksumCrc32c,
+        String targetMeshName,
+        RoutingId targetNodeRid,
+        long targetNodeGeneration,
+        ZLinkServiceM6BWireCodec.SessionRelocationRouteIntent intent) {
+        public RetainedSessionAbort {
+            Objects.requireNonNull(snapshot, "snapshot");
+            Objects.requireNonNull(reference, "reference");
+            Objects.requireNonNull(targetMeshName, "targetMeshName");
+            Objects.requireNonNull(targetNodeRid, "targetNodeRid");
+            Objects.requireNonNull(intent, "intent");
+            if (reference.isBlank()
+                || targetMeshName.isBlank()
+                || targetNodeGeneration <= 0) {
+                throw new IllegalArgumentException(
+                    "retained Session abort target fence is invalid");
             }
         }
     }

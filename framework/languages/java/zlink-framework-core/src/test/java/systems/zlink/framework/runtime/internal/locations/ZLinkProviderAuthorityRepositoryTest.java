@@ -7,6 +7,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreReadFound;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Constructor;
@@ -23,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
@@ -438,6 +440,179 @@ final class ZLinkProviderAuthorityRepositoryTest {
             decodeAggregate(committed.value().bytes())));
     }
 
+    @Test
+    void retainedAbortSurvivesScanRejectsCommitAndDeletesOnlyAfterTerminal()
+        throws ReflectiveOperationException {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var targetDescriptor = new ZLinkMeshNodeDescriptorKey(
+            "game", RoutingId.from("target-node"));
+        var targetOwner = new ZLinkLocationOwnerToken("target-owner", 12);
+        var applicationPayload = new ZLinkActorAuthorityPayloadCodec().encode(
+            ZLinkActorAuthorityPayloadCodec.State.READY,
+            "Actor",
+            "actor-a",
+            "spot-a",
+            1,
+            1,
+            "source-owner",
+            7,
+            "game",
+            RoutingId.from("source-node"),
+            3);
+        var relocationRequest = new ZLinkAggregateRelocationCoordinator.Request(
+            new UUID(0, 9),
+            1,
+            List.of(new ZLinkAggregateRelocationCoordinator.Participant(
+                "actor:a",
+                ZLinkPlacementObjectKind.ACTOR,
+                1,
+                1,
+                "version-a",
+                ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                applicationPayload,
+                new byte[0])),
+            goldenRoot(),
+            targetDescriptor,
+            4,
+            ZLinkPlacementCapacityBundle.actor(1),
+            targetOwner);
+        var stored = new ZLinkRelocationStored(
+            "root-reference",
+            17,
+            Instant.now().plus(Duration.ofHours(1)),
+            Instant.now());
+        byte[] canonicalPayload =
+            ZLinkCanonicalRelocationAuthorityStateCodec.publish(
+                applicationPayload,
+                relocationRequest,
+                ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                stored,
+                false);
+        var request = new ZLinkAggregatePrepareRequest(
+            relocationRequest.aggregateId(),
+            1,
+            List.of(new ZLinkAggregateParticipant(
+                "actor:a",
+                1,
+                1,
+                "version-a",
+                ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                canonicalPayload,
+                new byte[0])),
+            new byte[32],
+            targetDescriptor,
+            4,
+            ZLinkPlacementCapacityBundle.actor(1),
+            targetOwner);
+        var fence = new ZLinkAggregateFence(
+            request.aggregateId(), request.aggregateGeneration());
+        new ZLinkAggregateInventoryStore(provider)
+            .store(request, () -> false)
+            .toCompletableFuture().join();
+        provider.write(
+                new ZLinkStoreWriteRequest(
+                    List.of(),
+                    List.of(new ZLinkStorePut(
+                        aggregateKey(request),
+                        encodedAggregate((byte) 1, request),
+                        null))),
+                () -> false)
+            .toCompletableFuture().join();
+        var repository = new ZLinkProviderAuthorityRepository(provider);
+
+        var retained = repository.retainAggregateAbort(fence, () -> false)
+            .toCompletableFuture().join();
+
+        assertEquals(fence, retained.fence());
+        assertEquals(1,
+            repository.listRetainedAggregateAborts(() -> false)
+                .toCompletableFuture().join().size());
+        assertEquals(
+            ZLinkAggregateCommitResult.STALE,
+            repository.commitAggregate(fence, () -> false)
+                .toCompletableFuture().join(),
+            "the retained Aborted CAS must win over a late commit");
+        assertEquals(
+            ZLinkAggregateAbortResult.STALE,
+            repository.abortAggregate(fence, () -> false)
+                .toCompletableFuture().join(),
+            "generic abort must not expose permission to delete the retained root");
+        var marker = (ZLinkStoreReadFound) provider.read(
+                aggregateKey(request), () -> false)
+            .toCompletableFuture().join();
+        Method state = decodeAggregate(marker.value().bytes())
+            .getClass().getDeclaredMethod("state");
+        state.setAccessible(true);
+        assertEquals((byte) 3, state.invoke(
+            decodeAggregate(marker.value().bytes())));
+
+        var cleanup = repository.markAggregateAbortTerminal(
+                fence,
+                retained.storeVersion(),
+                stored.reference(),
+                stored.checksumCrc32c(),
+                () -> false)
+            .toCompletableFuture().join().orElseThrow();
+        assertTrue(repository.listRetainedAggregateAborts(() -> false)
+            .toCompletableFuture().join().isEmpty());
+        assertEquals(
+            ZLinkAggregateAbortResult.STALE,
+            repository.abortAggregate(fence, () -> false)
+                .toCompletableFuture().join());
+        assertEquals(
+            List.of(cleanup),
+            repository.listTerminalAggregateAborts(() -> false)
+                .toCompletableFuture().join());
+        var terminalMarker = (ZLinkStoreReadFound) provider.read(
+                aggregateKey(request), () -> false)
+            .toCompletableFuture().join();
+        assertEquals((byte) 4, stateOf(terminalMarker.value().bytes()));
+
+        assertTrue(repository.cleanupTerminalAggregateAbortInventory(
+                cleanup, () -> false)
+            .toCompletableFuture().join());
+        var restartedRepository =
+            new ZLinkProviderAuthorityRepository(provider);
+        assertEquals(
+            List.of(cleanup),
+            restartedRepository.listTerminalAggregateAborts(() -> false)
+                .toCompletableFuture().join(),
+            "restart scan must not depend on the deleted inventory");
+        assertEquals((byte) 4, stateOf(
+            ((ZLinkStoreReadFound) provider.read(
+                    aggregateKey(request), () -> false)
+                .toCompletableFuture().join()).value().bytes()),
+            "inventory cleanup must retain the terminal tombstone");
+        assertTrue(restartedRepository.removeTerminalAggregateAbort(
+                cleanup, () -> false)
+            .toCompletableFuture().join());
+        assertTrue(restartedRepository.listTerminalAggregateAborts(() -> false)
+            .toCompletableFuture().join().isEmpty());
+        assertTrue(!(provider.read(aggregateKey(request), () -> false)
+            .toCompletableFuture().join() instanceof ZLinkStoreReadFound));
+
+        new ZLinkAggregateInventoryStore(provider)
+            .store(request, () -> false)
+            .toCompletableFuture().join();
+        provider.write(
+                new ZLinkStoreWriteRequest(
+                    List.of(),
+                    List.of(new ZLinkStorePut(
+                        aggregateKey(request),
+                        encodedCommittedAggregate(request),
+                        null))),
+                () -> false)
+            .toCompletableFuture().join();
+        CompletionException commitWon = assertThrows(
+            CompletionException.class,
+            () -> repository.retainAggregateAbort(fence, () -> false)
+                .toCompletableFuture().join());
+        assertInstanceOf(
+            ZLinkAggregateAbortCommitWonException.class,
+            commitWon.getCause(),
+            "the claim loser must switch to committed recovery");
+    }
+
     private static byte[] encodedAuthorityRecord()
         throws ReflectiveOperationException {
         return encodedAuthorityRecord(null);
@@ -607,6 +782,23 @@ final class ZLinkProviderAuthorityRepositoryTest {
         return (byte[]) encode.invoke(null, state, request);
     }
 
+    private static byte[] encodedCommittedAggregate(
+        ZLinkAggregatePrepareRequest request)
+        throws ReflectiveOperationException {
+        Method encode = ZLinkProviderAuthorityRepository.class
+            .getDeclaredMethod(
+                "encodeAggregate",
+                byte.class,
+                ZLinkAggregatePrepareRequest.class,
+                ZLinkAggregateProgress.class);
+        encode.setAccessible(true);
+        return (byte[]) encode.invoke(
+            null,
+            (byte) 2,
+            request,
+            new ZLinkAggregateProgress("committed-root", 1, 4, false));
+    }
+
     private static Object decodeAuthority(byte[] bytes)
         throws ReflectiveOperationException {
         Method decode = ZLinkProviderAuthorityRepository.class
@@ -621,6 +813,14 @@ final class ZLinkProviderAuthorityRepositoryTest {
             .getDeclaredMethod("decodeAggregate", byte[].class);
         decode.setAccessible(true);
         return decode.invoke(null, bytes);
+    }
+
+    private static byte stateOf(byte[] bytes)
+        throws ReflectiveOperationException {
+        Object aggregate = decodeAggregate(bytes);
+        Method state = aggregate.getClass().getDeclaredMethod("state");
+        state.setAccessible(true);
+        return (byte) state.invoke(aggregate);
     }
 
     private static ZLinkStoreKey authorityKey(String key) {

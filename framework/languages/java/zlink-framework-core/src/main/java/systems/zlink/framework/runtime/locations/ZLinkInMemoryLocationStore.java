@@ -4,6 +4,10 @@ import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
 import systems.zlink.framework.locations.ZLinkObjectCapability;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateAbortResult;
+import systems.zlink.framework.runtime.internal.locations
+    .ZLinkAggregateAbortCleanupSnapshot;
+import systems.zlink.framework.runtime.internal.locations
+    .ZLinkAggregateAbortRecoverySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateCommitResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareRequest;
@@ -293,6 +297,59 @@ public final class ZLinkInMemoryLocationStore
         listAggregateProgress(
             ZLinkStoreCancellation cancellation) {
         return authority.listAggregateProgress(cancellation);
+    }
+
+    @Override
+    public CompletionStage<ZLinkAggregateAbortRecoverySnapshot>
+        retainAggregateAbort(
+            ZLinkAggregateFence fence,
+            ZLinkStoreCancellation cancellation) {
+        return authority.retainAggregateAbort(fence, cancellation);
+    }
+
+    @Override
+    public CompletionStage<List<ZLinkAggregateAbortRecoverySnapshot>>
+        listRetainedAggregateAborts(
+            ZLinkStoreCancellation cancellation) {
+        return authority.listRetainedAggregateAborts(cancellation);
+    }
+
+    @Override
+    public CompletionStage<Optional<ZLinkAggregateAbortCleanupSnapshot>>
+        markAggregateAbortTerminal(
+        ZLinkAggregateFence fence,
+        String expectedStoreVersion,
+        String reference,
+        long checksumCrc32c,
+        ZLinkStoreCancellation cancellation) {
+        return authority.markAggregateAbortTerminal(
+            fence,
+            expectedStoreVersion,
+            reference,
+            checksumCrc32c,
+            cancellation);
+    }
+
+    @Override
+    public CompletionStage<List<ZLinkAggregateAbortCleanupSnapshot>>
+        listTerminalAggregateAborts(
+            ZLinkStoreCancellation cancellation) {
+        return authority.listTerminalAggregateAborts(cancellation);
+    }
+
+    @Override
+    public CompletionStage<Boolean> cleanupTerminalAggregateAbortInventory(
+        ZLinkAggregateAbortCleanupSnapshot cleanup,
+        ZLinkStoreCancellation cancellation) {
+        return authority.cleanupTerminalAggregateAbortInventory(
+            cleanup, cancellation);
+    }
+
+    @Override
+    public CompletionStage<Boolean> removeTerminalAggregateAbort(
+        ZLinkAggregateAbortCleanupSnapshot cleanup,
+        ZLinkStoreCancellation cancellation) {
+        return authority.removeTerminalAggregateAbort(cleanup, cancellation);
     }
 
     @Override

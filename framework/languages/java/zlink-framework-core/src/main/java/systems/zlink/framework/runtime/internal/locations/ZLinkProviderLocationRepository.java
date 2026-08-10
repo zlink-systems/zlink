@@ -265,6 +265,59 @@ public final class ZLinkProviderLocationRepository
     }
 
     @Override
+    public CompletionStage<ZLinkAggregateAbortRecoverySnapshot>
+        retainAggregateAbort(
+            ZLinkAggregateFence fence,
+            ZLinkStoreCancellation cancellation) {
+        return authority.retainAggregateAbort(fence, cancellation);
+    }
+
+    @Override
+    public CompletionStage<List<ZLinkAggregateAbortRecoverySnapshot>>
+        listRetainedAggregateAborts(
+            ZLinkStoreCancellation cancellation) {
+        return authority.listRetainedAggregateAborts(cancellation);
+    }
+
+    @Override
+    public CompletionStage<Optional<ZLinkAggregateAbortCleanupSnapshot>>
+        markAggregateAbortTerminal(
+        ZLinkAggregateFence fence,
+        String expectedStoreVersion,
+        String reference,
+        long checksumCrc32c,
+        ZLinkStoreCancellation cancellation) {
+        return authority.markAggregateAbortTerminal(
+            fence,
+            expectedStoreVersion,
+            reference,
+            checksumCrc32c,
+            cancellation);
+    }
+
+    @Override
+    public CompletionStage<List<ZLinkAggregateAbortCleanupSnapshot>>
+        listTerminalAggregateAborts(
+            ZLinkStoreCancellation cancellation) {
+        return authority.listTerminalAggregateAborts(cancellation);
+    }
+
+    @Override
+    public CompletionStage<Boolean> cleanupTerminalAggregateAbortInventory(
+        ZLinkAggregateAbortCleanupSnapshot cleanup,
+        ZLinkStoreCancellation cancellation) {
+        return authority.cleanupTerminalAggregateAbortInventory(
+            cleanup, cancellation);
+    }
+
+    @Override
+    public CompletionStage<Boolean> removeTerminalAggregateAbort(
+        ZLinkAggregateAbortCleanupSnapshot cleanup,
+        ZLinkStoreCancellation cancellation) {
+        return authority.removeTerminalAggregateAbort(cleanup, cancellation);
+    }
+
+    @Override
     public CompletionStage<Boolean> removeAggregateProgress(
         ZLinkAggregateFence fence,
         String expectedStoreVersion,

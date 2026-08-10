@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.actors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -12,6 +13,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
@@ -208,6 +210,41 @@ final class ZLinkSessionRelocationPeerClientTest {
     }
 
     @Test
+    void durableRootIsRenewedBeforeEveryCommand44Attempt()
+        throws InterruptedException {
+        var codec = new ZLinkServiceM6BWireCodec();
+        var command = command();
+        AtomicInteger submissions = new AtomicInteger();
+        AtomicInteger renewals = new AtomicInteger();
+        CountDownLatch converged = new CountDownLatch(1);
+        ZLinkInternalMeshNode node = node((target, encoded) -> {
+            if (submissions.incrementAndGet() == 1) {
+                throw new CompletionException(
+                    new IllegalStateException("route switch failed"));
+            }
+            converged.countDown();
+            return codec.encodeSessionRelocationRouted(ack(command));
+        });
+
+        new ZLinkSessionRelocationPeerClient(node, codec)
+            .switchRouteUntilTerminal(
+                command,
+                Duration.ofSeconds(1),
+                () -> CompletableFuture.completedFuture(false),
+                () -> {
+                    renewals.incrementAndGet();
+                    return CompletableFuture.completedFuture(null);
+                },
+                (ack, failure) -> { })
+            .toCompletableFuture().join();
+
+        assertTrue(converged.await(3, TimeUnit.SECONDS));
+        assertEquals(2, submissions.get());
+        assertEquals(2, renewals.get(),
+            "the recovery root stays renewable for the whole retry lifetime");
+    }
+
+    @Test
     void onlyTheCommand45AckReportsTheRouteAsSwitched()
         throws InterruptedException {
         var codec = new ZLinkServiceM6BWireCodec();
@@ -242,6 +279,36 @@ final class ZLinkSessionRelocationPeerClientTest {
         assertTrue(reported.await(3, TimeUnit.SECONDS));
         Thread.sleep(120);
         assertEquals(List.of("switched"), terminals);
+    }
+
+    @Test
+    void command45ObserverRunsBeforeCompletionRootReleaseCallback() {
+        var codec = new ZLinkServiceM6BWireCodec();
+        var command = command();
+        List<String> order = new CopyOnWriteArrayList<>();
+        ZLinkInternalMeshNode node = node((target, encoded) -> {
+            order.add("command-45");
+            return codec.encodeSessionRelocationRouted(ack(command));
+        });
+        var peer = new ZLinkSessionRelocationPeerClient(node, codec);
+        peer.setRouteTerminalObserver((observed, routed) -> {
+            assertEquals(command, observed);
+            assertEquals(ack(command), routed);
+            order.add("release-root");
+        });
+
+        peer.switchRouteUntilTerminal(
+                command,
+                Duration.ofSeconds(1),
+                () -> CompletableFuture.completedFuture(false),
+                (routed, failure) -> order.add("diagnostic"))
+            .toCompletableFuture()
+            .join();
+
+        assertEquals(
+            List.of("command-45", "release-root", "diagnostic"),
+            order,
+            "the completion root remains referenced until a valid ACK arrives");
     }
 
     @Test
@@ -351,6 +418,101 @@ final class ZLinkSessionRelocationPeerClientTest {
             "abort carries no high-water in command 44");
         assertEquals(23, ack.lastAcceptedSessionSequence(),
             "command 45 is checked against retained command 43 context");
+    }
+
+    @Test
+    void sourceAbortRetainsExactContextAcrossCommand45Loss()
+        throws Exception {
+        var codec = new ZLinkServiceM6BWireCodec();
+        var seal = seal();
+        var abort = new ZLinkServiceM6BWireCodec.SessionRelocationRoute(
+            seal.relocation(),
+            seal.coordinator(),
+            ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
+            new ZLinkServiceM6BWireCodec.ActorIdentity(
+                seal.actor().actor().actorId(),
+                seal.actor().actor().generation()),
+            seal.session(),
+            ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.ABORT,
+            0,
+            seal.actor().authorityOwnerGeneration(),
+            null,
+            0,
+            0);
+        AtomicInteger submissions = new AtomicInteger();
+        CountDownLatch firstLost = new CountDownLatch(1);
+        ZLinkInternalMeshNode node = node((target, encoded) -> {
+            assertEquals(abort, codec.decodeSessionRelocationRoute(encoded));
+            if (submissions.incrementAndGet() == 1) {
+                firstLost.countDown();
+                throw new CompletionException(
+                    new IllegalStateException("command 45 lost"));
+            }
+            return codec.encodeSessionRelocationRouted(
+                new ZLinkServiceM6BWireCodec.SessionRelocationRouted(
+                    abort.relocation(),
+                    abort.coordinator(),
+                    abort.actor(),
+                    abort.session(),
+                    abort.action(),
+                    ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
+                        .ALREADY_APPLIED,
+                    abort.currentAuthorityOwnerGeneration(),
+                    23));
+        });
+
+        CompletableFuture<ZLinkServiceM6BWireCodec.SessionRelocationRouted>
+            terminal = new ZLinkSessionRelocationPeerClient(node, codec)
+                .abortRouteUntilAck(abort, 23, Duration.ofSeconds(3))
+                .toCompletableFuture();
+
+        assertTrue(firstLost.await(1, TimeUnit.SECONDS));
+        assertFalse(terminal.isDone(),
+            "the source seal stays retained while command 45 is missing");
+        assertEquals(23, terminal.get(3, TimeUnit.SECONDS)
+            .lastAcceptedSessionSequence());
+        assertEquals(2, submissions.get());
+    }
+
+    @Test
+    void stoppedSourceAbortDoesNotRunItsScheduledRetransmission() {
+        var codec = new ZLinkServiceM6BWireCodec();
+        var seal = seal();
+        var abort = new ZLinkServiceM6BWireCodec.SessionRelocationRoute(
+            seal.relocation(),
+            seal.coordinator(),
+            ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
+            new ZLinkServiceM6BWireCodec.ActorIdentity(
+                seal.actor().actor().actorId(),
+                seal.actor().actor().generation()),
+            seal.session(),
+            ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.ABORT,
+            0,
+            seal.actor().authorityOwnerGeneration(),
+            null,
+            0,
+            0);
+        AtomicInteger submissions = new AtomicInteger();
+        AtomicBoolean stopped = new AtomicBoolean();
+        ZLinkInternalMeshNode node = node((target, encoded) -> {
+            submissions.incrementAndGet();
+            throw new CompletionException(
+                new IllegalStateException("command 45 unavailable"));
+        });
+
+        CompletableFuture<ZLinkServiceM6BWireCodec.SessionRelocationRouted>
+            terminal = new ZLinkSessionRelocationPeerClient(node, codec)
+                .abortRouteUntilAck(
+                    abort,
+                    23,
+                    Duration.ofSeconds(5),
+                    stopped::get)
+                .toCompletableFuture();
+        stopped.set(true);
+
+        assertThrows(CompletionException.class, terminal::join);
+        assertEquals(1, submissions.get(),
+            "runtime drain cancels the delayed command-44 retransmission");
     }
 
     private static ZLinkServiceM6BWireCodec.SessionRelocationSeal seal() {

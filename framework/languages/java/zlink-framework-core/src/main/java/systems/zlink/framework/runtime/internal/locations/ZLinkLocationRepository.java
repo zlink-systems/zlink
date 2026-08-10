@@ -131,6 +131,69 @@ public interface ZLinkLocationRepository {
         ZLinkAggregateFence fence,
         ZLinkStoreCancellation cancellation);
 
+    /**
+     * Records an aborted authority decision while retaining the immutable
+     * aggregate inventory for an external terminal-recovery operation.
+     */
+    default CompletionStage<ZLinkAggregateAbortRecoverySnapshot>
+        retainAggregateAbort(
+            ZLinkAggregateFence fence,
+            ZLinkStoreCancellation cancellation) {
+        return CompletableFuture.failedFuture(
+            new UnsupportedOperationException(
+                "retained aggregate abort is not supported by this repository"));
+    }
+
+    /** Lists abort tombstones whose external terminal is still pending. */
+    default CompletionStage<List<ZLinkAggregateAbortRecoverySnapshot>>
+        listRetainedAggregateAborts(ZLinkStoreCancellation cancellation) {
+        return CompletableFuture.failedFuture(
+            new UnsupportedOperationException(
+                "retained aggregate abort is not supported by this repository"));
+    }
+
+    /**
+     * Records the proven external terminal and preserves its root identity for
+     * crash-resumable cleanup.
+     */
+    default CompletionStage<Optional<ZLinkAggregateAbortCleanupSnapshot>>
+        markAggregateAbortTerminal(
+        ZLinkAggregateFence fence,
+        String expectedStoreVersion,
+        String reference,
+        long checksumCrc32c,
+        ZLinkStoreCancellation cancellation) {
+        return CompletableFuture.failedFuture(
+            new UnsupportedOperationException(
+                "aggregate abort terminal cleanup is not supported by this repository"));
+    }
+
+    /** Lists terminal cleanups that must resume before retained-abort recovery. */
+    default CompletionStage<List<ZLinkAggregateAbortCleanupSnapshot>>
+        listTerminalAggregateAborts(ZLinkStoreCancellation cancellation) {
+        return CompletableFuture.failedFuture(
+            new UnsupportedOperationException(
+                "aggregate abort terminal cleanup is not supported by this repository"));
+    }
+
+    /** Removes participant markers and inventory while retaining the tombstone. */
+    default CompletionStage<Boolean> cleanupTerminalAggregateAbortInventory(
+        ZLinkAggregateAbortCleanupSnapshot cleanup,
+        ZLinkStoreCancellation cancellation) {
+        return CompletableFuture.failedFuture(
+            new UnsupportedOperationException(
+                "aggregate abort terminal cleanup is not supported by this repository"));
+    }
+
+    /** Removes the exact terminal cleanup tombstone as the final durable step. */
+    default CompletionStage<Boolean> removeTerminalAggregateAbort(
+        ZLinkAggregateAbortCleanupSnapshot cleanup,
+        ZLinkStoreCancellation cancellation) {
+        return CompletableFuture.failedFuture(
+            new UnsupportedOperationException(
+                "aggregate abort terminal cleanup is not supported by this repository"));
+    }
+
     /** Reads the private committed aggregate marker, if one exists. */
     default CompletionStage<Optional<ZLinkAggregateProgressSnapshot>>
         readAggregateProgress(

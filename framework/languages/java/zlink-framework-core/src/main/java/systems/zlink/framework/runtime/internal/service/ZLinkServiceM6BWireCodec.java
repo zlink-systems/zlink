@@ -1494,8 +1494,12 @@ public final class ZLinkServiceM6BWireCodec {
             Objects.requireNonNull(session, "session");
             Objects.requireNonNull(action, "action");
             Objects.requireNonNull(result, "result");
+            boolean refusal = result == SessionRelocationRouteResult.STALE
+                || result
+                    == SessionRelocationRouteResult.SESSION_OR_BINDING_CLOSED;
             if (currentAuthorityOwnerGeneration <= 0
-                || lastAcceptedSessionSequence < 0) {
+                || lastAcceptedSessionSequence < 0
+                || refusal && lastAcceptedSessionSequence != 0) {
                 throw protocol("route ACK generations are invalid");
             }
         }
