@@ -87,6 +87,20 @@ struct mesh_node_builder_state_t
     spot_node_builder_t spot_builder;
 };
 
+struct bound_session_relocation_route_t
+{
+    zlink::routing_id_t session_owner_node;
+    std::uint64_t session_owner_node_generation = 0;
+    location_owner_token_t session_owner;
+    zlink::routing_id_t session;
+    std::uint64_t binding_generation = 0;
+    std::uint64_t observed_sequence = 0;
+
+    friend bool operator== (
+      const bound_session_relocation_route_t &,
+      const bound_session_relocation_route_t &) = default;
+};
+
 class mesh_node_runtime_t
 {
   public:
@@ -142,6 +156,12 @@ class mesh_node_runtime_t
                                std::vector<relocation_capacity_fence_t> capacity_fences);
     void configure_session_route_owner (
       std::function<std::optional<location_owner_token_t> ()> owner_resolver);
+    void configure_session_route_target_owner (
+      host::public_host_runtime_t::session_route_target_owner_resolver_t
+        owner_resolver);
+    void configure_bound_session_relocation_resolver (
+      std::function<std::optional<bound_session_relocation_route_t> (
+        const runtime::stateful::object_ref_t &)> resolver);
     void
     configure_stateful_dispatch (runtime::stateful::accepted_record_authority_resolver_t resolver);
     void configure_bound_session_operations (host::bound_session_operations_t operations);
@@ -360,6 +380,33 @@ class mesh_node_runtime_t
     registrations (zlink_builder_t &builder);
 
   private:
+    struct session_relocation_checkpoint_t
+    {
+        runtime::stateful::object_ref_t source;
+        authority_snapshot_t authority;
+        bound_session_relocation_route_t session;
+        host::session_relocation_seal_result_t seal;
+    };
+
+    struct session_relocation_seal_outcome_t
+    {
+        bool completed = false;
+        bool recovery_required = false;
+        std::vector<session_relocation_checkpoint_t> checkpoints;
+    };
+
+    session_relocation_seal_outcome_t seal_bound_sessions (
+      const std::vector<std::pair<runtime::stateful::object_ref_t,
+                                  authority_snapshot_t>> &participants,
+      const runtime::protocol::relocation_id_t &relocation,
+      const runtime::protocol::relocation_coordinator_fence_t &coordinator,
+      std::chrono::milliseconds timeout);
+    bool route_bound_sessions (
+      const std::vector<session_relocation_checkpoint_t> &checkpoints,
+      const mesh_node_descriptor_t &target,
+      runtime::protocol::session_relocation_route_action_t action,
+      std::chrono::milliseconds timeout);
+
     struct peer_callback_gate_t
     {
         std::mutex mutex;
@@ -395,6 +442,11 @@ class mesh_node_runtime_t
     std::shared_ptr<runtime::stateful::aggregate_authority_port_t> _aggregate_relocation_authority;
     location_owner_token_t _instance_spot_owner;
     std::function<std::optional<location_owner_token_t> ()> _session_route_owner_resolver;
+    host::public_host_runtime_t::session_route_target_owner_resolver_t
+      _session_route_target_owner_resolver;
+    std::function<std::optional<bound_session_relocation_route_t> (
+      const runtime::stateful::object_ref_t &)>
+      _bound_session_relocation_resolver;
     runtime::stateful::accepted_record_authority_resolver_t _stateful_dispatch_resolver;
     std::optional<host::bound_session_operations_t> _bound_session_operations;
     std::function<void (const std::map<std::string, int> &, int, std::uint64_t)>

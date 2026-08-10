@@ -14,6 +14,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -4087,6 +4088,163 @@ void test_application_relocation_uses_maintenance_and_fails_closed (
     node.stop ();
 }
 
+void test_missing_session_seal_ack_fails_closed_without_high_water_fallback (
+  test_context_t &test)
+{
+    using namespace std::chrono_literals;
+    namespace detail = zlink::framework::detail;
+    namespace framework = zlink::framework;
+    namespace mesh = zlink::framework::runtime::mesh;
+    namespace protocol = zlink::framework::runtime::protocol;
+
+    const auto make_state = [] (const std::string &rid) {
+        auto state =
+          std::make_shared<detail::mesh_node_builder_state_t> (
+            "missing-session-seal-mesh");
+        state->listen_endpoint = "tcp://127.0.0.1:0";
+        state->routing_id = zlink::routing_id_t::from (rid);
+        state->spot_state->snapshot.actor_types.push_back (
+          "missing.seal.actor");
+        return state;
+    };
+
+    auto roots = std::make_shared<memory_relocation_repository_t> ();
+    auto authority = std::make_shared<memory_authority_store_t> ();
+    detail::mesh_node_runtime_t source (
+      make_state ("missing-session-seal-source"));
+    detail::mesh_node_runtime_t session_owner (
+      make_state ("missing-session-seal-owner"));
+    source.configure_relocation_runtime (authority, roots);
+    std::optional<detail::bound_session_relocation_route_t> route;
+    source.configure_bound_session_relocation_resolver (
+      [&route] (const object_ref_t &candidate)
+        -> std::optional<detail::bound_session_relocation_route_t> {
+          if (!route || candidate.key != "missing-session-seal-actor")
+              return std::nullopt;
+          return route;
+      });
+    source.start ();
+    session_owner.start ();
+    source.connect_peer (
+      session_owner.status ().routing_id (),
+      session_owner.status ().local_endpoint ());
+    const auto admission_deadline =
+      std::chrono::steady_clock::now () + 5s;
+    while ((!source.has_admitted_peer (
+               session_owner.status ().routing_id (),
+               session_owner.status ().lifecycle_generation ())
+            || !session_owner.has_admitted_peer (
+              source.status ().routing_id (),
+              source.status ().lifecycle_generation ()))
+           && std::chrono::steady_clock::now () < admission_deadline) {
+        (void) source.dispatch_ready (
+          [] (const auto &, const auto &, auto) {});
+        (void) session_owner.dispatch_ready (
+          [] (const auto &, const auto &, auto) {});
+        std::this_thread::sleep_for (1ms);
+    }
+    test.require (
+      source.has_admitted_peer (
+        session_owner.status ().routing_id (),
+        session_owner.status ().lifecycle_generation ()),
+      "missing-seal relocation source must admit the Session owner");
+
+    const auto created = source.create_application_actor (
+      "missing.seal.actor", "missing-session-seal-actor",
+      std::nullopt, 1s);
+    test.require (
+      static_cast<bool> (created),
+      "missing-seal relocation Actor must be created");
+    if (!created) {
+        source.stop ();
+        session_owner.stop ();
+        return;
+    }
+    const auto actor = created.value ();
+    const auto source_status = source.status ();
+    route = detail::bound_session_relocation_route_t{
+      session_owner.status ().routing_id (),
+      session_owner.status ().lifecycle_generation (),
+      {"missing-session-owner", 17},
+      zlink::routing_id_t::from ("missing-session"),
+      1,
+      0};
+    framework::authority_snapshot_t snapshot{
+      .store_version = "missing-seal-authority-v1",
+      .payload = {},
+      .object_generation = actor.object_generation (),
+      .authority_owner_generation = 1,
+      .owner = {"missing-seal-source-owner", 1},
+      .store_now = std::chrono::system_clock::now (),
+      .allocation =
+        {framework::placement_allocation_state_t::active,
+         framework::placement_object_kind_t::actor,
+         "missing.seal.actor",
+         {"missing-session-seal-mesh",
+          framework::node_rid_t::from_string (
+            source_status.routing_id ().to_string ()),
+          source_status.lifecycle_generation (),
+          {"missing-seal-source-owner", 1}},
+         {1, 0, std::nullopt}}};
+    framework::mesh_node_descriptor_t target;
+    target.mesh_name = "missing-session-seal-mesh";
+    target.rid = zlink::routing_id_t::from (
+      "missing-session-seal-target");
+    target.lifecycle_generation = 7;
+    target.owner_id = "missing-seal-target-owner";
+    target.lease_generation = 9;
+
+    // Do not dispatch the Session owner after admission. This models an owner
+    // restart that has no durable seal/high-water evidence: command 42 can
+    // arrive, but no command 43 can be reconstructed.
+    const auto result = source.relocate_application_actor (
+      actor, target, snapshot, {"missing-seal-capacity"});
+
+    std::size_t seal_commands = 0;
+    std::size_t route_commands = 0;
+    const auto receive_deadline =
+      std::chrono::steady_clock::now () + 1s;
+    while (std::chrono::steady_clock::now () < receive_deadline) {
+        (void) session_owner.native_node ().transport ().pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ());
+        while (auto claim = session_owner.native_node ()
+                              .transport ().mailbox ().try_claim (
+                                mesh::service_mailbox_domain_t::infrastructure,
+                                64, 1024 * 1024)) {
+            for (const auto &record : claim->records) {
+                if (record.parts.empty ())
+                    continue;
+                try {
+                    const auto kind =
+                      protocol::decode_header (record.parts.front ()).kind;
+                    if (kind == protocol::command::sessionRelocationSeal)
+                        ++seal_commands;
+                    else if (kind
+                             == protocol::command::sessionRelocationRoute)
+                        ++route_commands;
+                }
+                catch (const protocol::service_wire_error_t &) {
+                }
+            }
+            (void) session_owner.native_node ().transport ().mailbox ()
+              .release (*claim);
+        }
+        std::this_thread::sleep_for (1ms);
+    }
+
+    test.require (
+      result.terminal == relocation_terminal_t::recovery_required
+        && result.reason
+             == relocation_reason_t::bound_session_fence_incomplete
+        && !result.authority
+        && source.native_node ().resolve_actor (actor)
+        && seal_commands >= 1
+        && route_commands == 0,
+      "a missing durable command 43 seal/high-water must fail closed without an estimated command 44 abort");
+    source.stop ();
+    session_owner.stop ();
+}
+
 // Drives a full public host runtime as the relocation target from a raw
 // source node so individual relocation control commands can be withheld.
 class relocation_admission_harness_t
@@ -4882,6 +5040,7 @@ void test_application_relocation_remote_production_path (
     using namespace std::chrono_literals;
     namespace detail = zlink::framework::detail;
     namespace framework = zlink::framework;
+    namespace protocol = zlink::framework::runtime::protocol;
 
     const auto make_state = [] (
       const std::string &rid) {
@@ -4900,8 +5059,28 @@ void test_application_relocation_remote_production_path (
       make_state ("production-source"));
     detail::mesh_node_runtime_t target (
       make_state ("production-target"));
+    detail::mesh_node_runtime_t session_owner (
+      make_state ("production-session-owner"));
     source.configure_relocation_runtime (authority, roots);
     target.configure_relocation_runtime (authority, roots);
+    std::optional<detail::bound_session_relocation_route_t>
+      bound_session_route;
+    std::atomic<std::uint64_t> observed_session_sequence{0};
+    source.configure_bound_session_relocation_resolver (
+      [&bound_session_route, &observed_session_sequence] (
+        const object_ref_t &candidate)
+      -> std::optional<detail::bound_session_relocation_route_t> {
+          if (!bound_session_route
+              || candidate.key != "production-remote-actor"
+              || candidate.object_generation != 1
+              || candidate.authority_owner_generation != 1)
+              return std::nullopt;
+          auto resolved = *bound_session_route;
+          resolved.observed_sequence =
+            observed_session_sequence.load (
+              std::memory_order_acquire);
+          return resolved;
+      });
     source.configure_stateful_dispatch (
       [] (const accepted_record_authority_query_t &query)
         -> std::optional<accepted_record_authority_t> {
@@ -4930,11 +5109,48 @@ void test_application_relocation_remote_production_path (
           return std::optional<framework::location_owner_token_t>{
             {"target-owner", 9}};
       });
+    std::atomic<bool> route_owner_observed_target_ready{false};
+    session_owner.configure_session_route_owner (
+      [&target, &route_owner_observed_target_ready] {
+          if (target.native_node ().objects ().find (
+                object_kind_t::actor,
+                "production-remote-actor")) {
+              route_owner_observed_target_ready.store (
+                true, std::memory_order_release);
+          }
+          return std::optional<framework::location_owner_token_t>{
+            {"session-owner", 17}};
+      });
+    session_owner.configure_session_route_target_owner (
+      [&target] (
+        const std::string &actor_id,
+        std::uint64_t object_generation,
+        std::uint64_t authority_owner_generation,
+        const zlink::routing_id_t &target_node,
+        std::uint64_t target_node_generation)
+      -> std::optional<framework::location_owner_token_t> {
+          if (actor_id != "production-remote-actor"
+              || object_generation != 1
+              || authority_owner_generation != 2
+              || target_node != target.status ().routing_id ()
+              || target_node_generation
+                   != target.status ().lifecycle_generation ())
+              return std::nullopt;
+          return framework::location_owner_token_t{
+            "target-owner", 9};
+      });
     source.start ();
     target.start ();
+    session_owner.start ();
     source.connect_peer (
       target.status ().routing_id (),
       target.status ().local_endpoint ());
+    source.connect_peer (
+      session_owner.status ().routing_id (),
+      session_owner.status ().local_endpoint ());
+    target.connect_peer (
+      session_owner.status ().routing_id (),
+      session_owner.status ().local_endpoint ());
     const auto admission_deadline =
       std::chrono::steady_clock::now () + 5s;
     while ((!source.has_admitted_peer (
@@ -4942,20 +5158,40 @@ void test_application_relocation_remote_production_path (
                target.status ().lifecycle_generation ())
             || !target.has_admitted_peer (
               source.status ().routing_id (),
-              source.status ().lifecycle_generation ()))
+              source.status ().lifecycle_generation ())
+            || !source.has_admitted_peer (
+              session_owner.status ().routing_id (),
+              session_owner.status ().lifecycle_generation ())
+            || !session_owner.has_admitted_peer (
+              source.status ().routing_id (),
+              source.status ().lifecycle_generation ())
+            || !target.has_admitted_peer (
+              session_owner.status ().routing_id (),
+              session_owner.status ().lifecycle_generation ())
+            || !session_owner.has_admitted_peer (
+              target.status ().routing_id (),
+              target.status ().lifecycle_generation ()))
            && std::chrono::steady_clock::now ()
                 < admission_deadline) {
         (void) source.dispatch_ready (
           [] (const auto &, const auto &, auto) {});
         (void) target.dispatch_ready (
           [] (const auto &, const auto &, auto) {});
+        (void) session_owner.dispatch_ready (
+          [] (const auto &, const auto &, auto) {});
         std::this_thread::sleep_for (1ms);
     }
     test.require (
       source.has_admitted_peer (
         target.status ().routing_id (),
-        target.status ().lifecycle_generation ()),
-      "production relocation source must admit the target");
+        target.status ().lifecycle_generation ())
+        && source.has_admitted_peer (
+          session_owner.status ().routing_id (),
+          session_owner.status ().lifecycle_generation ())
+        && target.has_admitted_peer (
+          session_owner.status ().routing_id (),
+          session_owner.status ().lifecycle_generation ()),
+      "production relocation source must admit the target and Session owner");
 
     const auto created = source.create_application_actor (
       "production.actor", "production-remote-actor",
@@ -4966,6 +5202,7 @@ void test_application_relocation_remote_production_path (
     if (!created) {
         source.stop ();
         target.stop ();
+        session_owner.stop ();
         return;
     }
     const auto actor = created.value ();
@@ -4995,6 +5232,161 @@ void test_application_relocation_remote_production_path (
     target_descriptor.application_version = 1;
     target_descriptor.owner_id = "target-owner";
     target_descriptor.lease_generation = 9;
+
+    const auto bound_source_object =
+      source.native_node ().resolve_actor (actor);
+    test.require (
+      bound_source_object.has_value (),
+      "production relocation must resolve the bound Actor before Session sealing");
+    if (!bound_source_object) {
+        source.stop ();
+        target.stop ();
+        session_owner.stop ();
+        return;
+    }
+    const auto session_connection =
+      session_owner.native_node ().sessions ().open (
+        "production-bound-session");
+    const auto [session_bind_error, session_binding] =
+      session_owner.native_node ().sessions ().bind_remote (
+        session_connection, *bound_source_object,
+        source.status ().lifecycle_generation (), 1);
+    const auto [initial_inbound_error, initial_inbound] =
+      session_owner.native_node ().sessions ().admit_inbound (
+        session_binding);
+    test.require (
+      session_bind_error == stateful_error_t::none
+        && initial_inbound_error == stateful_error_t::none
+        && initial_inbound
+        && initial_inbound->inbound_sequence == 1,
+      "production Session checkpoint must retain pre-seal active ingress at its exact high-water");
+    bound_session_route = detail::bound_session_relocation_route_t{
+      session_owner.status ().routing_id (),
+      session_owner.status ().lifecycle_generation (),
+      {"session-owner", 17},
+      zlink::routing_id_t::from ("production-bound-session"),
+      session_binding.binding_generation,
+      0};
+
+    // First prove that a caller observation below command 43's exact
+    // high-water cannot fall through into ordinary relocation. The owner
+    // must receive command 44 Abort and keep the original route.
+    observed_session_sequence.store (0, std::memory_order_release);
+    std::atomic<bool> stop_checkpoint_dispatch{false};
+    std::thread source_checkpoint_pump ([&] {
+        while (!stop_checkpoint_dispatch.load (
+          std::memory_order_acquire)) {
+            (void) source.native_node ().transport ().pump_one (
+              zlink::framework::runtime::mesh::
+                service_liveness_registry_t::clock_t::now ());
+            std::this_thread::sleep_for (1ms);
+        }
+    });
+    std::thread session_checkpoint_dispatch ([&] {
+        while (!stop_checkpoint_dispatch.load (
+          std::memory_order_acquire)) {
+            (void) session_owner.dispatch_ready (
+              [] (const auto &, const auto &, auto) {});
+            std::this_thread::sleep_for (1ms);
+        }
+    });
+    relocation_result_t fenced;
+    std::thread fenced_relocation ([&] {
+        fenced = source.relocate_application_actor (
+          actor, target_descriptor, snapshot,
+          {"remote-capacity-fence-rejected"});
+    });
+    const auto barrier_installed = wait_until_bounded (
+      [&] {
+          return session_owner.native_node ().sessions ()
+            .remote_route_sealed ("production-remote-actor");
+      }, 5s);
+    std::atomic<bool> held_ingress_started{false};
+    std::atomic<bool> held_ingress_completed{false};
+    std::pair<stateful_error_t, std::optional<stream_dispatch_t>>
+      held_ingress;
+    std::thread post_seal_ingress ([&] {
+        held_ingress_started.store (true, std::memory_order_release);
+        held_ingress = session_owner.native_node ().sessions ()
+                         .admit_inbound (
+                           session_connection.connection_id,
+                           session_binding.binding_generation,
+                           "production-remote-actor", 2, 15s);
+        held_ingress_completed.store (true, std::memory_order_release);
+    });
+    const auto post_seal_held = wait_until_bounded (
+      [&] {
+          return held_ingress_started.load (
+                   std::memory_order_acquire)
+                 && !held_ingress_completed.load (
+                   std::memory_order_acquire);
+      }, 1s);
+    const auto initial_inbound_completed =
+      initial_inbound
+        && session_owner.native_node ().sessions ().complete_inbound (
+             *initial_inbound)
+             == stateful_error_t::none;
+    fenced_relocation.join ();
+    post_seal_ingress.join ();
+    const auto held_ingress_drained =
+      held_ingress.second
+        && session_owner.native_node ().sessions ().complete_inbound (
+             *held_ingress.second)
+             == stateful_error_t::none;
+    stop_checkpoint_dispatch.store (true, std::memory_order_release);
+    source_checkpoint_pump.join ();
+    session_checkpoint_dispatch.join ();
+    const auto binding_after_fence =
+      session_owner.native_node ().sessions ().current_binding (
+        "production-remote-actor");
+    if (fenced.terminal != relocation_terminal_t::blocked
+        || fenced.reason
+             != relocation_reason_t::bound_session_fence_incomplete
+        || fenced.authority || !binding_after_fence
+        || !barrier_installed || !post_seal_held
+        || !initial_inbound_completed
+        || held_ingress.first != stateful_error_t::none
+        || !held_ingress.second || !held_ingress_drained) {
+        std::cerr
+          << "V11-M6C-CPP Session barrier diagnostic: terminal="
+          << static_cast<int> (fenced.terminal)
+          << " reason=" << static_cast<int> (fenced.reason)
+          << " authority=" << fenced.authority.has_value ()
+          << " barrier=" << barrier_installed
+          << " held=" << post_seal_held
+          << " initial-complete=" << initial_inbound_completed
+          << " held-error=" << static_cast<int> (held_ingress.first)
+          << " held-dispatch=" << held_ingress.second.has_value ()
+          << " held-sequence="
+          << (held_ingress.second
+                ? held_ingress.second->inbound_sequence
+                : 0)
+          << " held-complete=" << held_ingress_drained
+          << " still-sealed="
+          << session_owner.native_node ().sessions ()
+               .remote_route_sealed ("production-remote-actor")
+          << '\n';
+    }
+    test.require (
+      fenced.terminal == relocation_terminal_t::blocked
+        && fenced.reason
+             == relocation_reason_t::bound_session_fence_incomplete
+        && !fenced.authority
+        && binding_after_fence
+        && binding_after_fence->actor == *bound_source_object
+        && source.native_node ().objects ().find (
+             object_kind_t::actor, "production-remote-actor")
+             == bound_source_object
+        && !target.native_node ().objects ().find (
+          object_kind_t::actor, "production-remote-actor")
+        && barrier_installed && post_seal_held
+        && initial_inbound_completed
+        && held_ingress.first == stateful_error_t::none
+        && held_ingress.second
+        && held_ingress.second->inbound_sequence == 2
+        && held_ingress_drained,
+      "an incomplete Session high-water fence must Abort exactly without authority or route fallback");
+    observed_session_sequence.store (2, std::memory_order_release);
 
     zlink::framework::runtime::host::call_id_t replay_operation;
     test.require (
@@ -5078,12 +5470,123 @@ void test_application_relocation_remote_production_path (
       [&] { dispatch (source, false); });
     std::thread target_dispatch (
       [&] { dispatch (target, true); });
+    std::thread session_owner_dispatch (
+      [&] { dispatch (session_owner, false); });
     relocation_thread.join ();
     const auto replay_completion =
       target.wait_for_completion (replay_operation, 5s);
+    const auto route_deadline =
+      std::chrono::steady_clock::now () + 5s;
+    while (std::chrono::steady_clock::now () < route_deadline) {
+        const auto current = session_owner.native_node ()
+                               .sessions ()
+                               .current_binding (
+                                 "production-remote-actor");
+        if (current
+            && current->actor.node_id
+                 == target.status ().routing_id ().to_string ())
+            break;
+        std::this_thread::sleep_for (1ms);
+    }
+
+    std::optional<protocol::session_relocation_seal_t>
+      committed_session_seal;
+    std::vector<durable_session_journal_root_t> journal_roots;
+    {
+        std::lock_guard lock (roots->mutex);
+        for (const auto &[reference, payload] : roots->roots) {
+            journal_roots.push_back (
+              {reference, maintenance_runtime_t::crc32c (payload)});
+        }
+    }
+    durable_session_journal_store_t journal_store (roots);
+    for (const auto &root : journal_roots) {
+        const auto recovered = journal_store.recover (root);
+        if (!recovered
+            || recovered->last_accepted_session_sequence != 2)
+            continue;
+        try {
+            const auto seal =
+              protocol::decode_session_relocation_seal (
+                recovered->accepted_journal);
+            if (seal.actor.actor_id
+                  == "production-remote-actor"
+                && seal.binding_generation
+                     == session_binding.binding_generation) {
+                committed_session_seal = seal;
+            }
+        }
+        catch (const protocol::service_wire_error_t &) {
+        }
+    }
+
+    using duplicate_route_completion_t = std::pair<
+      zlink::framework::runtime::foundation::operation_terminal_t,
+      std::optional<protocol::session_relocation_routed_t>>;
+    std::optional<duplicate_route_completion_t>
+      duplicate_route_result;
+    if (committed_session_seal) {
+        const protocol::session_relocation_route_t duplicate_route{
+          committed_session_seal->relocation,
+          committed_session_seal->coordinator,
+          protocol::relocation_role_t::target,
+          {committed_session_seal->actor.actor_id,
+           committed_session_seal->actor.object_generation},
+          committed_session_seal->session_owner_node_routing_id,
+          committed_session_seal->session_owner_node_generation,
+          committed_session_seal->session_owner_id,
+          committed_session_seal->session_owner_lease_generation,
+          committed_session_seal->session_routing_id,
+          committed_session_seal->binding_generation,
+          {protocol::session_relocation_route_action_t::commit,
+           bound_source_object->authority_owner_generation,
+           bound_source_object->authority_owner_generation + 1,
+           target.status ().routing_id ().to_bytes (),
+           target.status ().lifecycle_generation (),
+           2,
+           0}};
+        std::promise<duplicate_route_completion_t>
+          duplicate_route_completion;
+        auto duplicate_route_completed =
+          duplicate_route_completion.get_future ();
+        const auto duplicate_submitted =
+          target.native_node ().route_session_remote (
+            session_owner.status ().routing_id (),
+            duplicate_route, 5s,
+            [&duplicate_route_completion] (
+              zlink::framework::runtime::foundation::
+                operation_terminal_t terminal,
+              std::optional<protocol::session_relocation_routed_t>
+                ack) {
+                duplicate_route_completion.set_value (
+                  {terminal, std::move (ack)});
+            });
+        if (duplicate_submitted
+            && duplicate_route_completed.wait_for (5s)
+                 == std::future_status::ready) {
+            duplicate_route_result =
+              duplicate_route_completed.get ();
+        }
+    }
+
+    const auto committed_binding =
+      session_owner.native_node ().sessions ().current_binding (
+        "production-remote-actor");
+    const auto [continued_inbound_error, continued_inbound] =
+      committed_binding
+        ? session_owner.native_node ().sessions ().admit_inbound (
+            *committed_binding)
+        : std::pair{stateful_error_t::not_found,
+                    std::optional<stream_dispatch_t>{}};
+    const auto continued_inbound_completed =
+      continued_inbound
+        && session_owner.native_node ().sessions ().complete_inbound (
+             *continued_inbound)
+             == stateful_error_t::none;
     stop_dispatch.store (true, std::memory_order_release);
     source_dispatch.join ();
     target_dispatch.join ();
+    session_owner_dispatch.join ();
 
     object_ref_t expected_target{
       object_kind_t::actor,
@@ -5100,10 +5603,36 @@ void test_application_relocation_remote_production_path (
         || result.authority->target != expected_target
         || restored_target
              != std::optional<object_ref_t>{expected_target}
-        || roots->roots.size () != 1
+        || roots->roots.size () != 3
         || !replay_completion
         || (replay_completion
-            && replay_completion.value ().record.terminal_result != 0))
+            && replay_completion.value ().record.terminal_result != 0)
+        || !route_owner_observed_target_ready.load (
+          std::memory_order_acquire)
+        || !committed_binding
+        || (committed_binding
+            && (committed_binding->actor != expected_target
+                || committed_binding->binding_generation
+                     != session_binding.binding_generation
+                || committed_binding->target_node_generation
+                     != target.status ().lifecycle_generation ()
+                || committed_binding->owner_lease_generation != 9))
+        || continued_inbound_error != stateful_error_t::none
+        || !continued_inbound_completed
+        || !continued_inbound
+        || (continued_inbound
+            && continued_inbound->inbound_sequence != 3)
+        || !duplicate_route_result
+        || (duplicate_route_result
+            && (duplicate_route_result->first
+                  != zlink::framework::runtime::foundation::
+                       operation_terminal_t::completed
+                || !duplicate_route_result->second
+                || (duplicate_route_result->second
+                    && duplicate_route_result->second->result
+                         != protocol::
+                              session_relocation_route_result_t::
+                                already_applied))))
         std::cerr
           << "V11-M6C-CPP remote relocation diagnostic: terminal="
           << static_cast<int> (result.terminal)
@@ -5123,6 +5652,58 @@ void test_application_relocation_remote_production_path (
           << " target-pending="
           << target.native_node ().objects ().pending (
                expected_target, turn_domain_t::application)
+          << " route-after-ready="
+          << route_owner_observed_target_ready.load ()
+          << " binding=" << committed_binding.has_value ()
+          << " binding-node="
+          << (committed_binding ? committed_binding->actor.node_id
+                                : std::string {})
+          << " binding-authority="
+          << (committed_binding
+                ? committed_binding->actor.authority_owner_generation
+                : 0)
+          << " binding-generation="
+          << (committed_binding
+                ? committed_binding->binding_generation
+                : 0)
+          << " binding-target-generation="
+          << (committed_binding
+                ? committed_binding->target_node_generation
+                : 0)
+          << " binding-owner-lease="
+          << (committed_binding
+                ? committed_binding->owner_lease_generation
+                : 0)
+          << " continued-error="
+          << static_cast<int> (continued_inbound_error)
+          << " continued-dispatch="
+          << continued_inbound.has_value ()
+          << " continued-sequence="
+          << (continued_inbound
+                ? continued_inbound->inbound_sequence
+                : 0)
+          << " continued-complete="
+          << continued_inbound_completed
+          << " seal=" << committed_session_seal.has_value ()
+          << " duplicate=" << duplicate_route_result.has_value ()
+          << " duplicate-terminal="
+          << (duplicate_route_result
+                ? static_cast<int> (duplicate_route_result->first)
+                : -1)
+          << " duplicate-ack="
+          << (duplicate_route_result
+                && duplicate_route_result->second
+                ? static_cast<int> (
+                    duplicate_route_result->second->result)
+                : -1)
+          << " source-owner-peer="
+          << source.has_admitted_peer (
+               session_owner.status ().routing_id (),
+               session_owner.status ().lifecycle_generation ())
+          << " owner-source-peer="
+          << session_owner.has_admitted_peer (
+               source.status ().routing_id (),
+               source.status ().lifecycle_generation ())
           << '\n';
     test.require (
       result.terminal == relocation_terminal_t::completed
@@ -5130,12 +5711,33 @@ void test_application_relocation_remote_production_path (
         && result.authority->target == expected_target
         && restored_target
              == std::optional<object_ref_t>{expected_target}
-        && roots->roots.size () == 1
+        && roots->roots.size () == 3
         && replay_completion
-        && replay_completion.value ().record.terminal_result == 0,
-      "production relocation must negotiate target Restore, publish authority, and activate the target");
+        && replay_completion.value ().record.terminal_result == 0
+        && route_owner_observed_target_ready.load (
+          std::memory_order_acquire)
+        && committed_binding
+        && committed_binding->actor == expected_target
+        && committed_binding->binding_generation
+             == session_binding.binding_generation
+        && committed_binding->target_node_generation
+             == target.status ().lifecycle_generation ()
+        && committed_binding->owner_lease_generation == 9
+        && continued_inbound_error == stateful_error_t::none
+        && continued_inbound_completed
+        && continued_inbound->inbound_sequence == 3
+        && duplicate_route_result
+        && duplicate_route_result->first
+             == zlink::framework::runtime::foundation::
+                  operation_terminal_t::completed
+        && duplicate_route_result->second
+        && duplicate_route_result->second->result
+             == protocol::session_relocation_route_result_t::
+                  already_applied,
+      "production relocation must seal the exact Session high-water, activate target Ready before route commit, and replay duplicate routing idempotently");
     source.stop ();
     target.stop ();
+    session_owner.stop ();
 }
 
 void test_application_user_spot_aggregate_remote_production_path (
@@ -5599,7 +6201,7 @@ void test_aggregate_seal_failure_preserves_earlier_application_work (
       "aggregate capture failure must preserve the failing participant queue");
 }
 
-void test_relocation_hold_restores_and_enforces_limits (
+void test_relocation_hold_restores_without_dedicated_limits (
   test_context_t &test)
 {
     namespace limits = zlink::framework::runtime::dispatch_limits;
@@ -5807,7 +6409,7 @@ void test_relocation_hold_restores_and_enforces_limits (
              == stateful_error_t::none,
       "membership-only movement must retain ingress without relocation accounting");
     bool count_records_accepted = true;
-    for (std::uint64_t sequence = 1; sequence <= 512; ++sequence) {
+    for (std::uint64_t sequence = 1; sequence <= 600; ++sequence) {
         count_records_accepted =
           count_limited.enqueue (
             count_first, turn_domain_t::application, {sequence, {}})
@@ -5816,7 +6418,7 @@ void test_relocation_hold_restores_and_enforces_limits (
         count_records_accepted =
           count_limited.enqueue (
             count_second, turn_domain_t::application,
-            {1000 + sequence, {}})
+            {3000 + sequence, {}})
           == stateful_error_t::none
           && count_records_accepted;
     }
@@ -5826,13 +6428,23 @@ void test_relocation_hold_restores_and_enforces_limits (
              count_first, turn_domain_t::application)
              + count_limited.pending (
                  count_second, turn_domain_t::application)
-             == 1024,
-      "relocation hold must accept up to the aggregate 1,024 record limit");
+             == 1200,
+      "relocation hold must accept records beyond the former aggregate "
+      "1,024-record limit");
+    for (std::uint64_t sequence = 601; sequence <= 2047; ++sequence) {
+        count_records_accepted =
+          count_limited.enqueue (
+            count_first, turn_domain_t::application, {sequence, {}})
+          == stateful_error_t::none
+          && count_records_accepted;
+    }
     test.require (
-      count_limited.enqueue (
-        count_first, turn_domain_t::application, {2000, {}})
-        == stateful_error_t::backpressured,
-      "relocation hold must reject the 1,025th aggregate record");
+      count_records_accepted
+        && count_limited.enqueue (
+             count_first, turn_domain_t::application, {2048, {}})
+             == stateful_error_t::backpressured,
+      "relocation hold must still enforce the configured application lane "
+      "record capacity");
     if (membership_error == stateful_error_t::none) {
         test.require (
           count_limited.abort_membership_move (membership_move)
@@ -5854,7 +6466,7 @@ void test_relocation_hold_restores_and_enforces_limits (
       "aggregate hold count test must close its relocation generation");
 
     stateful_object_runtime_t byte_limited (
-      4096, 8, 64u * 1024u * 1024u, limits::control_mailbox_bytes);
+      4096, 8, 20u * 1024u * 1024u, limits::control_mailbox_bytes);
     const auto byte_first = create_spot (
       byte_limited, object_kind_t::user_spot, "held-byte-first");
     const auto byte_second = create_spot (
@@ -5903,12 +6515,31 @@ void test_relocation_hold_restores_and_enforces_limits (
              turn_domain_t::application,
              {1, std::vector<std::uint8_t> (held_payload_bytes, 0x42)})
              == stateful_error_t::none,
-      "relocation hold must accept bytes up to the aggregate 16 MiB limit");
+      "relocation hold byte setup must retain 16 MiB across participants");
+    const auto former_bound_excess_payload_bytes =
+      1u * 1024u * 1024u - limits::fixed_work_byte_cost;
     test.require (
       byte_limited.enqueue (
-        byte_first, turn_domain_t::application, {2, {}})
-        == stateful_error_t::backpressured,
-      "relocation hold must reject bytes beyond the aggregate 16 MiB limit");
+        byte_first, turn_domain_t::application,
+        {2, std::vector<std::uint8_t> (
+              former_bound_excess_payload_bytes, 0x43)})
+        == stateful_error_t::none,
+      "relocation hold must accept bytes beyond the former aggregate "
+      "16 MiB limit");
+    const auto application_capacity_fill_payload_bytes =
+      11u * 1024u * 1024u
+      - 2u * limits::fixed_work_byte_cost;
+    test.require (
+      byte_limited.enqueue (
+        byte_first, turn_domain_t::application,
+        {3, std::vector<std::uint8_t> (
+              application_capacity_fill_payload_bytes, 0x44)})
+          == stateful_error_t::none
+        && byte_limited.enqueue (
+             byte_first, turn_domain_t::application, {4, {}})
+             == stateful_error_t::backpressured,
+      "relocation hold must still enforce the configured application lane "
+      "byte capacity");
     if (byte_claim) {
         test.require (
           byte_limited.complete_claim (
@@ -5922,6 +6553,183 @@ void test_relocation_hold_restores_and_enforces_limits (
         && byte_limited.abort_relocation (byte_seal.token)
              == stateful_error_t::none,
       "aggregate hold byte test must close its relocation generation");
+}
+
+void test_session_relocation_barrier_holds_production_ingress (
+  test_context_t &test)
+{
+    using namespace std::chrono_literals;
+    using namespace zlink::framework::runtime::stateful;
+
+    const object_ref_t source{
+      object_kind_t::actor, "session-barrier-actor", 1, 1,
+      "mesh", "source-node"};
+    stream_session_registry_t sessions (
+      [&source] (const std::string &actor_id)
+        -> std::optional<object_ref_t> {
+          return actor_id == source.key
+            ? std::make_optional (source)
+            : std::nullopt;
+      });
+    const auto connection = sessions.open ("session-barrier-rid");
+    const auto [bind_error, binding] = sessions.bind_remote (
+      connection, source, 2, 3);
+    const auto [first_error, first] = sessions.admit_inbound (
+      connection.connection_id, binding.binding_generation,
+      source.key, 1, 0ms);
+    const auto sealed = sessions.seal_remote_route (
+      connection.connection_id, binding.binding_generation,
+      source, 2, 3);
+    test.require (
+      bind_error == stateful_error_t::none
+        && first_error == stateful_error_t::none && first
+        && sealed.error == stateful_error_t::backpressured
+        && sealed.barrier.token != 0
+        && sealed.last_accepted_sequence == 1
+        && !sessions.remote_route_seal_ready (sealed.barrier),
+      "command 42 must install the barrier and exact high-water before pre-seal active ingress drains");
+
+    std::atomic<bool> held_started{false};
+    std::atomic<bool> held_completed{false};
+    std::atomic<bool> later_held_started{false};
+    std::atomic<bool> later_held_completed{false};
+    std::pair<stateful_error_t, std::optional<stream_dispatch_t>>
+      held_result;
+    std::pair<stateful_error_t, std::optional<stream_dispatch_t>>
+      later_held_result;
+    std::thread later_held ([&] {
+        later_held_started.store (true, std::memory_order_release);
+        later_held_result = sessions.admit_inbound (
+          connection.connection_id, binding.binding_generation,
+          source.key, 3, 2s);
+        later_held_completed.store (true, std::memory_order_release);
+    });
+    std::thread held ([&] {
+        held_started.store (true, std::memory_order_release);
+        held_result = sessions.admit_inbound (
+          connection.connection_id, binding.binding_generation,
+          source.key, 2, 2s);
+        held_completed.store (true, std::memory_order_release);
+    });
+    const auto held_is_waiting = wait_until_bounded (
+      [&] {
+          return held_started.load (std::memory_order_acquire)
+                 && later_held_started.load (
+                   std::memory_order_acquire)
+                 && !held_completed.load (
+                   std::memory_order_acquire)
+                 && !later_held_completed.load (
+                   std::memory_order_acquire);
+      }, 1s);
+    test.require (
+      held_is_waiting,
+      "post-seal Session ingress must retain its payload/reply dispatch until routing is terminal");
+    test.require (
+      sessions.complete_inbound (*first)
+          == stateful_error_t::none
+        && sessions.remote_route_seal_ready (sealed.barrier),
+      "pre-seal active completion must make the pending command 43 ready without admitting later ingress");
+
+    auto target = source;
+    target.node_id = "target-node";
+    target.authority_owner_generation = 2;
+    std::atomic<bool> rejected_terminal_attempt{false};
+    const auto rejected = sessions.commit_remote_route (
+      connection.connection_id, binding.binding_generation,
+      source.key, source.object_generation,
+      source.authority_owner_generation, target, 4, 9,
+      sealed.last_accepted_sequence,
+      [&] (const stream_route_admission_t &) {
+          rejected_terminal_attempt.store (
+            true, std::memory_order_release);
+          return false;
+      });
+    test.require (
+      rejected.error == stateful_error_t::conflict
+        && rejected_terminal_attempt.load (
+          std::memory_order_acquire)
+        && sessions.current_binding (source.key) == binding
+        && sessions.remote_route_sealed (source.key)
+        && !held_completed.load (std::memory_order_acquire)
+        && !later_held_completed.load (
+          std::memory_order_acquire),
+      "terminal publication failure must roll the route and seal back before held ingress can observe either state");
+    std::atomic<bool> terminal_published{false};
+    const auto committed = sessions.commit_remote_route (
+      connection.connection_id, binding.binding_generation,
+      source.key, source.object_generation,
+      source.authority_owner_generation, target, 4, 9,
+      sealed.last_accepted_sequence,
+      [&] (const stream_route_admission_t &terminal) {
+          terminal_published.store (true, std::memory_order_release);
+          return terminal.binding
+                 && terminal.binding->actor == target
+                 && terminal.binding->owner_lease_generation == 9
+                 && !held_completed.load (
+                   std::memory_order_acquire)
+                 && !later_held_completed.load (
+                   std::memory_order_acquire);
+      });
+    held.join ();
+    later_held.join ();
+    test.require (
+      committed.error == stateful_error_t::none
+        && terminal_published.load (std::memory_order_acquire)
+        && held_result.first == stateful_error_t::none
+        && held_result.second
+        && held_result.second->inbound_sequence == 2
+        && held_result.second->binding.actor == target
+        && held_result.second->binding.owner_lease_generation == 9
+        && later_held_result.first == stateful_error_t::none
+        && later_held_result.second
+        && later_held_result.second->inbound_sequence == 3
+        && later_held_result.second->binding.actor == target
+        && later_held_result.second->binding.owner_lease_generation == 9,
+      "command 44 commit must publish its terminal, switch the target owner lease, release the seal, and resume FIFO ingress as one registry transition");
+    if (held_result.second) {
+        test.require (
+          sessions.complete_inbound (*held_result.second)
+            == stateful_error_t::none,
+          "resumed Session ingress must complete against the committed target binding");
+    }
+    if (later_held_result.second) {
+        test.require (
+          sessions.complete_inbound (*later_held_result.second)
+            == stateful_error_t::none,
+          "later held Session ingress must resume after its exact predecessor");
+    }
+
+    const auto abort_sealed = sessions.seal_remote_route (
+      connection.connection_id, binding.binding_generation,
+      target, 4, 9);
+    std::pair<stateful_error_t, std::optional<stream_dispatch_t>>
+      abort_held_result;
+    std::thread abort_held ([&] {
+        abort_held_result = sessions.admit_inbound (
+          connection.connection_id, binding.binding_generation,
+          target.key, 4, 2s);
+    });
+    const auto aborted = sessions.acknowledge_remote_abort (
+      connection.connection_id, binding.binding_generation,
+      target.key, target.object_generation,
+      target.authority_owner_generation,
+      [] (const stream_route_admission_t &terminal) {
+          return terminal.last_accepted_sequence == 3;
+      });
+    abort_held.join ();
+    test.require (
+      abort_sealed.error == stateful_error_t::none
+        && abort_sealed.last_accepted_sequence == 3
+        && aborted.error == stateful_error_t::none
+        && aborted.last_accepted_sequence == 3
+        && abort_held_result.first == stateful_error_t::none
+        && abort_held_result.second
+        && abort_held_result.second->inbound_sequence == 4
+        && abort_held_result.second->binding.actor == target
+        && abort_held_result.second->binding.owner_lease_generation == 9,
+      "command 44 abort must ACK the sealed high-water and resume FIFO on the unchanged route");
+    if (abort_held_result.second)
+        (void) sessions.complete_inbound (*abort_held_result.second);
 }
 
 int main ()
@@ -5954,6 +6762,8 @@ int main ()
     test_production_relocation_restore_and_replay_vertical (test);
     test_target_replay_limits_are_relocation_scoped (test);
     test_application_relocation_uses_maintenance_and_fails_closed (test);
+    test_missing_session_seal_ack_fails_closed_without_high_water_fallback (
+      test);
     test_relocation_target_admission_survives_lost_completion (test);
     test_zero_record_relocation_admission_opens_via_authority_poll (test);
     test_pending_completion_after_self_finalize_keeps_target (test);
@@ -5966,7 +6776,8 @@ int main ()
     test_application_user_spot_aggregate_remote_production_path (
       test);
     test_aggregate_seal_failure_preserves_earlier_application_work (test);
-    test_relocation_hold_restores_and_enforces_limits (test);
+    test_relocation_hold_restores_without_dedicated_limits (test);
+    test_session_relocation_barrier_holds_production_ingress (test);
     test_stateful_application_reservation_includes_active_work (test);
     return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -25,6 +25,7 @@
 #include <zlink/Contracts/Sockets/message_socket_contracts.hpp>
 
 #include <atomic>
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
@@ -51,6 +52,26 @@ namespace
 {
 
 mesh::service_node_descriptor_t descriptor (std::string rid);
+
+void verify_session_relocation_route_retry_cadence ()
+{
+    using schedule_t =
+      host::relocation_detail::session_route_retry_schedule_t;
+    schedule_t retry;
+    auto now = schedule_t::clock_t::time_point{std::chrono::seconds (100)};
+    constexpr std::array expected{
+      1s, 1s, 2s, 4s, 5s, 5s, 5s};
+
+    assert (retry.due (now));
+    for (std::size_t attempt = 0; attempt != expected.size (); ++attempt) {
+        const auto timeout = retry.started (now);
+        assert (timeout == expected[attempt]);
+        assert (retry.attempts == attempt + 1);
+        assert (!retry.due (now + expected[attempt] - 1ms));
+        assert (retry.due (now + expected[attempt]));
+        now += expected[attempt];
+    }
+}
 
 void verify_mesh_node_role_is_available_before_local_descriptor_publish ()
 {
@@ -1624,6 +1645,25 @@ void verify_remote_session_route_ack_and_atomic_switch ()
             zlink::framework::location_owner_token_t{
               "session-owner-lease", 17});
       });
+    session_owner->configure_session_route_target_owner (
+      [actor_target] (
+        const std::string &actor_id,
+        std::uint64_t object_generation,
+        std::uint64_t authority_owner_generation,
+        const zlink::routing_id_t &target_node,
+        std::uint64_t target_node_generation)
+      -> std::optional<zlink::framework::location_owner_token_t> {
+          const auto status = actor_target->status ();
+          if (actor_id != "session-route-actor"
+              || object_generation == 0
+              || authority_owner_generation == 0
+              || target_node != status.routing_id ()
+              || target_node_generation
+                   != status.lifecycle_generation ())
+              return std::nullopt;
+          return zlink::framework::location_owner_token_t{
+            "actor-target-lease", 31};
+      });
     session_owner->start ();
     actor_target->start ();
     const auto owner_status = session_owner->status ();
@@ -1874,6 +1914,7 @@ void verify_remote_session_route_ack_and_atomic_switch ()
             == target_status.routing_id ().to_string ());
     assert (current->target_node_generation
             == target_status.lifecycle_generation ());
+    assert (current->owner_lease_generation == 31);
 
     std::promise<completion_t> duplicate_completion;
     auto duplicate_completed = duplicate_completion.get_future ();
@@ -1916,6 +1957,80 @@ void verify_remote_session_route_ack_and_atomic_switch ()
         "session-route-actor");
     assert (duplicate_current == current);
 
+    auto no_seal_route = route;
+    no_seal_route.relocation = {77, 78};
+    no_seal_route.route.previous_authority_owner_generation =
+      current->actor.authority_owner_generation;
+    no_seal_route.route.target_authority_owner_generation =
+      current->actor.authority_owner_generation + 1;
+    no_seal_route.route.replayed_high_water = 999;
+    std::promise<completion_t> no_seal_completion;
+    auto no_seal_completed = no_seal_completion.get_future ();
+    assert (actor_target->route_session_remote (
+      owner_status.routing_id (), no_seal_route, 2s,
+      [&no_seal_completion] (
+        foundation::operation_terminal_t terminal,
+        std::optional<protocol::session_relocation_routed_t> ack) {
+          no_seal_completion.set_value (
+            {terminal, std::move (ack)});
+      }));
+    const auto no_seal_deadline =
+      std::chrono::steady_clock::now () + 2s;
+    while (no_seal_completed.wait_for (0ms)
+             != std::future_status::ready
+           && std::chrono::steady_clock::now ()
+                < no_seal_deadline) {
+        (void) session_owner->dispatch_ready (dispatch);
+        (void) actor_target->dispatch_ready (dispatch);
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (no_seal_completed.wait_for (0ms)
+            == std::future_status::ready);
+    const auto no_seal_result = no_seal_completed.get ();
+    assert (no_seal_result.first
+            == foundation::operation_terminal_t::completed);
+    assert (no_seal_result.second);
+    assert (no_seal_result.second->result
+            == protocol::session_relocation_route_result_t::stale);
+    assert (no_seal_result.second
+              ->current_authority_owner_generation
+            == current->actor.authority_owner_generation);
+    assert (no_seal_result.second
+              ->last_accepted_session_sequence == 0);
+
+    std::promise<completion_t> repeated_no_seal_completion;
+    auto repeated_no_seal_completed =
+      repeated_no_seal_completion.get_future ();
+    assert (actor_target->route_session_remote (
+      owner_status.routing_id (), no_seal_route, 2s,
+      [&repeated_no_seal_completion] (
+        foundation::operation_terminal_t terminal,
+        std::optional<protocol::session_relocation_routed_t> ack) {
+          repeated_no_seal_completion.set_value (
+            {terminal, std::move (ack)});
+      }));
+    const auto repeated_no_seal_deadline =
+      std::chrono::steady_clock::now () + 2s;
+    while (repeated_no_seal_completed.wait_for (0ms)
+             != std::future_status::ready
+           && std::chrono::steady_clock::now ()
+                < repeated_no_seal_deadline) {
+        (void) session_owner->dispatch_ready (dispatch);
+        (void) actor_target->dispatch_ready (dispatch);
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (repeated_no_seal_completed.wait_for (0ms)
+            == std::future_status::ready);
+    const auto repeated_no_seal_result =
+      repeated_no_seal_completed.get ();
+    assert (repeated_no_seal_result.first
+            == foundation::operation_terminal_t::completed);
+    assert (repeated_no_seal_result.second);
+    assert (repeated_no_seal_result.second->result
+            == protocol::session_relocation_route_result_t::stale);
+    assert (repeated_no_seal_result.second
+              ->last_accepted_session_sequence == 0);
+
     auto next_seal = seal;
     next_seal.relocation = {75, 76};
     next_seal.actor.target_node_routing_id =
@@ -1924,6 +2039,8 @@ void verify_remote_session_route_ack_and_atomic_switch ()
       target_status.lifecycle_generation ();
     next_seal.actor.authority_owner_generation =
       current->actor.authority_owner_generation;
+    next_seal.actor.owner_lease_generation =
+      current->owner_lease_generation;
     std::promise<seal_completion_t> next_seal_completion;
     auto next_seal_completed = next_seal_completion.get_future ();
     assert (actor_target->seal_session_remote (
@@ -1952,8 +2069,101 @@ void verify_remote_session_route_ack_and_atomic_switch ()
             == foundation::operation_terminal_t::completed);
     assert (next_seal_result.second);
 
+    const protocol::session_relocation_route_t abort_route{
+      next_seal.relocation,
+      next_seal.coordinator,
+      protocol::relocation_role_t::source,
+      {next_seal.actor.actor_id,
+       next_seal.actor.object_generation},
+      next_seal.session_owner_node_routing_id,
+      next_seal.session_owner_node_generation,
+      next_seal.session_owner_id,
+      next_seal.session_owner_lease_generation,
+      next_seal.session_routing_id,
+      next_seal.binding_generation,
+      {protocol::session_relocation_route_action_t::abort,
+       0,
+       0,
+       {},
+       0,
+       0,
+       current->actor.authority_owner_generation}};
+    std::promise<completion_t> abort_completion;
+    auto abort_completed = abort_completion.get_future ();
+    assert (actor_target->route_session_remote (
+      owner_status.routing_id (), abort_route, 2s,
+      [&abort_completion] (
+        foundation::operation_terminal_t terminal,
+        std::optional<protocol::session_relocation_routed_t> ack) {
+          abort_completion.set_value (
+            {terminal, std::move (ack)});
+      }));
+    const auto abort_deadline =
+      std::chrono::steady_clock::now () + 2s;
+    while (abort_completed.wait_for (0ms)
+             != std::future_status::ready
+           && std::chrono::steady_clock::now ()
+                < abort_deadline) {
+        (void) session_owner->dispatch_ready (dispatch);
+        (void) actor_target->dispatch_ready (dispatch);
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (abort_completed.wait_for (0ms)
+            == std::future_status::ready);
+    const auto abort_result = abort_completed.get ();
+    assert (abort_result.first
+            == foundation::operation_terminal_t::completed);
+    assert (abort_result.second);
+    assert (abort_result.second->action
+            == protocol::session_relocation_route_action_t::abort);
+    assert (abort_result.second->result
+            == protocol::session_relocation_route_result_t::applied);
+    assert (abort_result.second
+              ->current_authority_owner_generation
+            == current->actor.authority_owner_generation);
+    assert (abort_result.second
+              ->last_accepted_session_sequence
+            == next_seal_result.second->sealed
+                 .last_accepted_session_sequence);
+    assert (!session_owner->sessions ().remote_route_sealed (
+      "session-route-actor"));
+
+    auto wrong_high_water_seal = next_seal;
+    wrong_high_water_seal.relocation = {79, 80};
+    std::promise<seal_completion_t>
+      wrong_high_water_seal_completion;
+    auto wrong_high_water_seal_completed =
+      wrong_high_water_seal_completion.get_future ();
+    assert (actor_target->seal_session_remote (
+      owner_status.routing_id (), wrong_high_water_seal, 2s,
+      [] { return std::vector<std::uint8_t>{}; },
+      [&wrong_high_water_seal_completion] (
+        foundation::operation_terminal_t terminal,
+        std::optional<host::session_relocation_seal_result_t> result) {
+          wrong_high_water_seal_completion.set_value (
+            {terminal, std::move (result)});
+      }));
+    const auto wrong_high_water_seal_deadline =
+      std::chrono::steady_clock::now () + 2s;
+    while (wrong_high_water_seal_completed.wait_for (0ms)
+             != std::future_status::ready
+           && std::chrono::steady_clock::now ()
+                < wrong_high_water_seal_deadline) {
+        (void) session_owner->dispatch_ready (dispatch);
+        (void) actor_target->dispatch_ready (dispatch);
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (wrong_high_water_seal_completed.wait_for (0ms)
+            == std::future_status::ready);
+    const auto wrong_high_water_seal_result =
+      wrong_high_water_seal_completed.get ();
+    assert (wrong_high_water_seal_result.first
+            == foundation::operation_terminal_t::completed);
+    assert (wrong_high_water_seal_result.second);
+
     auto wrong_high_water_route = route;
-    wrong_high_water_route.relocation = {75, 76};
+    wrong_high_water_route.relocation =
+      wrong_high_water_seal.relocation;
     wrong_high_water_route.route.previous_authority_owner_generation =
       current->actor.authority_owner_generation;
     wrong_high_water_route.route.target_authority_owner_generation =
@@ -1985,8 +2195,17 @@ void verify_remote_session_route_ack_and_atomic_switch ()
     const auto wrong_high_water_result =
       wrong_high_water_completed.get ();
     assert (wrong_high_water_result.first
-            == foundation::operation_terminal_t::timed_out);
-    assert (!wrong_high_water_result.second);
+            == foundation::operation_terminal_t::completed);
+    assert (wrong_high_water_result.second);
+    assert (wrong_high_water_result.second->result
+            == protocol::session_relocation_route_result_t::stale);
+    assert (wrong_high_water_result.second
+              ->current_authority_owner_generation
+            == current->actor.authority_owner_generation);
+    assert (wrong_high_water_result.second
+              ->last_accepted_session_sequence
+            == wrong_high_water_seal_result.second->sealed
+                 .last_accepted_session_sequence);
     assert (session_owner->sessions ().current_binding (
               "session-route-actor")
             == current);
@@ -4583,6 +4802,7 @@ void verify_relocation_id_generation_retries_collisions ()
 
 int main ()
 {
+    verify_session_relocation_route_retry_cadence ();
     verify_mesh_node_role_is_available_before_local_descriptor_publish ();
     verify_mesh_node_zero_mailbox_budget_uses_framework_defaults ();
     verify_spot_id_contract ();

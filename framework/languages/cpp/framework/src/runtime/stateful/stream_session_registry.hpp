@@ -3,6 +3,8 @@
 
 #include "runtime/stateful/stateful_object_runtime.hpp"
 
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -89,6 +91,13 @@ class stream_session_registry_t
     stateful_error_t restore (const stream_binding_t &binding);
     std::pair<stateful_error_t, std::optional<stream_dispatch_t>>
     admit_inbound (const stream_binding_t &binding);
+    std::pair<stateful_error_t, std::optional<stream_dispatch_t>>
+    admit_inbound (
+      const std::string &connection_id,
+      std::uint64_t binding_generation,
+      const std::string &actor_id,
+      std::uint64_t expected_sequence,
+      std::chrono::milliseconds timeout);
     stateful_error_t complete_inbound (const stream_dispatch_t &dispatch);
     std::pair<stateful_error_t, stream_barrier_t>
     try_seal_actor (const object_ref_t &actor);
@@ -101,6 +110,15 @@ class stream_session_registry_t
       const object_ref_t &actor,
       std::uint64_t target_node_generation,
       std::uint64_t owner_lease_generation);
+    bool remote_route_seal_ready (
+      const stream_barrier_t &barrier) const;
+    bool remote_route_sealed (const std::string &actor_id) const;
+    /* Internal transaction hook. It runs while the registry mutex is held so
+     * route publication and terminal evidence have one linearization point.
+     * The hook may only publish owner-internal terminal state; it must not
+     * invoke application code or call back into this registry. */
+    using route_terminal_commit_t =
+      std::function<bool (const stream_route_admission_t &)>;
     stream_route_admission_t commit_remote_route (
       const std::string &connection_id,
       std::uint64_t binding_generation,
@@ -109,13 +127,16 @@ class stream_session_registry_t
       std::uint64_t previous_authority_owner_generation,
       object_ref_t target,
       std::uint64_t target_node_generation,
-      std::uint64_t replayed_high_water);
+      std::uint64_t target_owner_lease_generation,
+      std::uint64_t replayed_high_water,
+      route_terminal_commit_t commit_terminal = {});
     stream_route_admission_t acknowledge_remote_abort (
       const std::string &connection_id,
       std::uint64_t binding_generation,
       const std::string &actor_id,
       std::uint64_t object_generation,
-      std::uint64_t current_authority_owner_generation);
+      std::uint64_t current_authority_owner_generation,
+      route_terminal_commit_t commit_terminal = {});
     bool try_seal_all ();
     void release_all () noexcept;
     void force_close_all () noexcept;
@@ -144,6 +165,7 @@ class stream_session_registry_t
 
     authority_resolver_t _resolver;
     mutable std::mutex _mutex;
+    std::condition_variable _changed;
     std::map<std::string, connection_state_t> _connections;
     std::map<std::string, std::uint64_t> _last_connection_generation;
     std::map<std::string, stream_binding_t> _actor_bindings;

@@ -17,8 +17,6 @@ constexpr std::size_t max_creation_request_bytes = 1024u * 1024u;
 constexpr std::size_t max_restored_timers = 4096;
 constexpr std::size_t max_application_state_bytes =
   64u * 1024u * 1024u;
-constexpr std::size_t max_relocation_hold_records = 1024;
-constexpr std::size_t max_relocation_hold_bytes = 16u * 1024u * 1024u;
 
 std::uint64_t stable_hash (const std::string &value)
 {
@@ -755,22 +753,6 @@ stateful_error_t stateful_object_runtime_t::application_admission (
                              - queue.application_active_bytes)
         return stateful_error_t::backpressured;
 
-    const auto held = object->state == object_state_t::moving
-                      || object->state == object_state_t::recovering
-                      || object->state == object_state_t::closing;
-    if (held && (queue.held_application.size () >= max_relocation_hold_records
-                 || bytes > max_relocation_hold_bytes
-                 || queue.held_application_bytes
-                      > max_relocation_hold_bytes - bytes))
-        return stateful_error_t::backpressured;
-    if (object->state == object_state_t::moving
-        && _relocation_holds.contains (object->barrier_generation)) {
-        const auto &hold = _relocation_holds.at (object->barrier_generation);
-        if (hold.record_count >= max_relocation_hold_records
-            || bytes > max_relocation_hold_bytes
-            || hold.byte_count > max_relocation_hold_bytes - bytes)
-            return stateful_error_t::backpressured;
-    }
     return stateful_error_t::none;
 }
 
@@ -800,10 +782,6 @@ stateful_error_t stateful_object_runtime_t::enqueue_locked (
     const auto byte_capacity = application
       ? _application_byte_capacity
       : _infrastructure_byte_capacity;
-    const auto held = application
-      && (object.state == object_state_t::moving
-          || object.state == object_state_t::recovering
-          || object.state == object_state_t::closing);
     const auto relocating = application
       && object.state == object_state_t::moving
       && _relocation_holds.contains (object.barrier_generation);
@@ -816,22 +794,9 @@ stateful_error_t stateful_object_runtime_t::enqueue_locked (
         || bytes > byte_capacity - pending_bytes - active_bytes) {
         return stateful_error_t::backpressured;
     }
-    if (held
-        && (queue.held_application.size () >= max_relocation_hold_records
-            || bytes > max_relocation_hold_bytes
-            || queue.held_application_bytes
-                 > max_relocation_hold_bytes - bytes)) {
-        return stateful_error_t::backpressured;
-    }
     std::map<std::uint64_t, relocation_hold_state_t>::iterator hold;
     if (relocating) {
         hold = _relocation_holds.find (object.barrier_generation);
-        if (hold->second.record_count >= max_relocation_hold_records
-            || bytes > max_relocation_hold_bytes
-            || hold->second.byte_count
-                 > max_relocation_hold_bytes - bytes) {
-            return stateful_error_t::backpressured;
-        }
     }
     if (application
         && (object.state == object_state_t::moving

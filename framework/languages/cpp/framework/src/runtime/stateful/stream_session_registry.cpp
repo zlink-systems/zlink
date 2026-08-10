@@ -40,6 +40,7 @@ stream_connection_t stream_session_registry_t::open (
     }
     _connections[connection.connection_id] =
       connection_state_t{connection};
+    _changed.notify_all ();
     return connection;
 }
 
@@ -58,6 +59,7 @@ bool stream_session_registry_t::close (
             _actor_bindings.erase (indexed);
     }
     _connections.erase (current);
+    _changed.notify_all ();
     return true;
 }
 
@@ -137,6 +139,7 @@ stream_session_registry_t::bind_verified (
     }
     state.bindings[actor_id] = binding;
     _actor_bindings[actor_id] = binding;
+    _changed.notify_all ();
     return {stateful_error_t::none, binding};
 }
 
@@ -157,6 +160,7 @@ stateful_error_t stream_session_registry_t::unbind (
     const auto indexed = _actor_bindings.find (binding.actor.key);
     if (indexed != _actor_bindings.end () && indexed->second == binding)
         _actor_bindings.erase (indexed);
+    _changed.notify_all ();
     return stateful_error_t::none;
 }
 
@@ -218,6 +222,64 @@ stream_session_registry_t::admit_inbound (
               binding, sequence}};
 }
 
+std::pair<stateful_error_t, std::optional<stream_dispatch_t>>
+stream_session_registry_t::admit_inbound (
+  const std::string &connection_id,
+  std::uint64_t binding_generation,
+  const std::string &actor_id,
+  std::uint64_t expected_sequence,
+  std::chrono::milliseconds timeout)
+{
+    if (connection_id.empty () || binding_generation == 0
+        || actor_id.empty () || expected_sequence == 0
+        || timeout < std::chrono::milliseconds::zero ()) {
+        return {stateful_error_t::invalid, std::nullopt};
+    }
+    std::unique_lock lock (_mutex);
+    const auto deadline = std::chrono::steady_clock::now () + timeout;
+    for (;;) {
+        const auto connection = _connections.find (connection_id);
+        const auto indexed = _actor_bindings.find (actor_id);
+        if (connection == _connections.end ()
+            || indexed == _actor_bindings.end ()
+            || indexed->second.connection != connection->second.connection
+            || indexed->second.binding_generation != binding_generation) {
+            return {stateful_error_t::conflict, std::nullopt};
+        }
+        auto &state = connection->second;
+        const auto binding = state.bindings.find (actor_id);
+        if (binding == state.bindings.end ()
+            || binding->second != indexed->second)
+            return {stateful_error_t::conflict, std::nullopt};
+        if (!_all_sealed && !state.barrier_tokens.contains (actor_id)) {
+            if (state.next_inbound_sequence > expected_sequence
+                || state.next_inbound_sequence
+                     == std::numeric_limits<std::uint64_t>::max ()) {
+                return {stateful_error_t::conflict, std::nullopt};
+            }
+            if (state.next_inbound_sequence == expected_sequence) {
+                const auto sequence = state.next_inbound_sequence++;
+                state.active_inbound.emplace (sequence, actor_id);
+                _changed.notify_all ();
+                return {stateful_error_t::none,
+                        stream_dispatch_t{binding->second, sequence}};
+            }
+        }
+        if (timeout == std::chrono::milliseconds::zero ()
+            || !_changed.wait_until (lock, deadline, [&] {
+                   const auto current = _connections.find (connection_id);
+                   return current == _connections.end ()
+                          || (!_all_sealed
+                              && !current->second.barrier_tokens.contains (
+                                actor_id)
+                              && current->second.next_inbound_sequence
+                                   >= expected_sequence);
+               })) {
+            return {stateful_error_t::moving, std::nullopt};
+        }
+    }
+}
+
 stateful_error_t stream_session_registry_t::complete_inbound (
   const stream_dispatch_t &dispatch)
 {
@@ -233,6 +295,7 @@ stateful_error_t stream_session_registry_t::complete_inbound (
         || active->second != dispatch.binding.actor.key)
         return stateful_error_t::not_found;
     current->second.active_inbound.erase (active);
+    _changed.notify_all ();
     return stateful_error_t::none;
 }
 
@@ -284,6 +347,7 @@ stateful_error_t stream_session_registry_t::abort_barrier (
             state.barrier_tokens.erase (token);
     }
     _barriers.erase (found);
+    _changed.notify_all ();
     return stateful_error_t::none;
 }
 
@@ -323,6 +387,7 @@ stateful_error_t stream_session_registry_t::commit_barrier (
         state.barrier_tokens.erase (token);
     }
     _barriers.erase (found);
+    _changed.notify_all ();
     return stateful_error_t::none;
 }
 
@@ -367,11 +432,9 @@ stream_session_registry_t::seal_remote_route (
              != target_node_generation
         || binding->second.owner_lease_generation
              != owner_lease_generation
-        || active
         || state.barrier_tokens.contains (actor.key)
         || _next_barrier_token == 0) {
-        return {active ? stateful_error_t::backpressured
-                       : stateful_error_t::conflict,
+        return {stateful_error_t::conflict,
                 binding == state.bindings.end ()
                   ? std::optional<stream_binding_t>{}
                   : std::make_optional (binding->second),
@@ -381,8 +444,49 @@ stream_session_registry_t::seal_remote_route (
     const stream_barrier_t barrier{token, binding->second.actor};
     state.barrier_tokens.emplace (actor.key, token);
     _barriers.emplace (token, binding->second.actor);
-    return {stateful_error_t::none, binding->second,
+    return {active ? stateful_error_t::backpressured
+                   : stateful_error_t::none,
+            binding->second,
             barrier, last_sequence};
+}
+
+bool stream_session_registry_t::remote_route_seal_ready (
+  const stream_barrier_t &barrier) const
+{
+    std::lock_guard lock (_mutex);
+    const auto found = _barriers.find (barrier.token);
+    if (found == _barriers.end ()
+        || !exact_actor (found->second, barrier.actor))
+        return false;
+    const auto indexed = _actor_bindings.find (barrier.actor.key);
+    if (indexed == _actor_bindings.end ())
+        return true;
+    const auto connection = _connections.find (
+      indexed->second.connection.connection_id);
+    if (connection == _connections.end ()
+        || connection->second.connection != indexed->second.connection)
+        return false;
+    return std::none_of (
+      connection->second.active_inbound.begin (),
+      connection->second.active_inbound.end (),
+      [&barrier] (const auto &entry) {
+          return entry.second == barrier.actor.key;
+      });
+}
+
+bool stream_session_registry_t::remote_route_sealed (
+  const std::string &actor_id) const
+{
+    std::lock_guard lock (_mutex);
+    const auto indexed = _actor_bindings.find (actor_id);
+    if (indexed == _actor_bindings.end ())
+        return false;
+    const auto connection = _connections.find (
+      indexed->second.connection.connection_id);
+    return connection != _connections.end ()
+           && connection->second.connection
+                == indexed->second.connection
+           && connection->second.barrier_tokens.contains (actor_id);
 }
 
 stream_route_admission_t stream_session_registry_t::commit_remote_route (
@@ -393,7 +497,9 @@ stream_route_admission_t stream_session_registry_t::commit_remote_route (
   std::uint64_t previous_authority_owner_generation,
   object_ref_t target,
   std::uint64_t target_node_generation,
-  std::uint64_t replayed_high_water)
+  std::uint64_t target_owner_lease_generation,
+  std::uint64_t replayed_high_water,
+  route_terminal_commit_t commit_terminal)
 {
     std::lock_guard lock (_mutex);
     const auto connection = _connections.find (connection_id);
@@ -429,6 +535,7 @@ stream_route_admission_t stream_session_registry_t::commit_remote_route (
         || target.authority_owner_generation
              <= previous_authority_owner_generation
         || target_node_generation == 0
+        || target_owner_lease_generation == 0
         || active
         || replayed_high_water != last_sequence) {
         return {stateful_error_t::conflict,
@@ -440,11 +547,34 @@ stream_route_admission_t stream_session_registry_t::commit_remote_route (
     auto next = binding->second;
     next.actor = std::move (target);
     next.target_node_generation = target_node_generation;
+    next.owner_lease_generation = target_owner_lease_generation;
+    const stream_route_admission_t admission{
+      stateful_error_t::none, next, last_sequence};
+    auto previous = binding->second;
+    const auto barrier_token = barrier->second;
+    const auto barrier_actor = _barriers.at (barrier_token);
     binding->second = next;
     indexed->second = next;
-    _barriers.erase (barrier->second);
+    _barriers.erase (barrier_token);
     state.barrier_tokens.erase (barrier);
-    return {stateful_error_t::none, next, last_sequence};
+    bool published = true;
+    try {
+        published = !commit_terminal
+                    || commit_terminal (admission);
+    }
+    catch (...) {
+        published = false;
+    }
+    if (!published) {
+        binding->second = std::move (previous);
+        indexed->second = binding->second;
+        state.barrier_tokens.emplace (actor_id, barrier_token);
+        _barriers.emplace (barrier_token, barrier_actor);
+        return {stateful_error_t::conflict, binding->second,
+                last_sequence};
+    }
+    _changed.notify_all ();
+    return admission;
 }
 
 stream_route_admission_t
@@ -453,7 +583,8 @@ stream_session_registry_t::acknowledge_remote_abort (
   std::uint64_t binding_generation,
   const std::string &actor_id,
   std::uint64_t object_generation,
-  std::uint64_t current_authority_owner_generation)
+  std::uint64_t current_authority_owner_generation,
+  route_terminal_commit_t commit_terminal)
 {
     std::lock_guard lock (_mutex);
     const auto connection = _connections.find (connection_id);
@@ -479,9 +610,29 @@ stream_session_registry_t::acknowledge_remote_abort (
         return {stateful_error_t::conflict, indexed->second,
                 last_sequence};
     }
-    _barriers.erase (barrier->second);
+    const stream_route_admission_t admission{
+      stateful_error_t::none, indexed->second, last_sequence};
+    const auto barrier_token = barrier->second;
+    const auto barrier_actor = _barriers.at (barrier_token);
+    _barriers.erase (barrier_token);
     connection->second.barrier_tokens.erase (barrier);
-    return {stateful_error_t::none, indexed->second, last_sequence};
+    bool published = true;
+    try {
+        published = !commit_terminal
+                    || commit_terminal (admission);
+    }
+    catch (...) {
+        published = false;
+    }
+    if (!published) {
+        connection->second.barrier_tokens.emplace (
+          actor_id, barrier_token);
+        _barriers.emplace (barrier_token, barrier_actor);
+        return {stateful_error_t::conflict, indexed->second,
+                last_sequence};
+    }
+    _changed.notify_all ();
+    return admission;
 }
 
 std::optional<stream_binding_t> stream_session_registry_t::current_binding (
@@ -511,6 +662,7 @@ void stream_session_registry_t::release_all () noexcept
 {
     std::lock_guard lock (_mutex);
     _all_sealed = false;
+    _changed.notify_all ();
 }
 
 void stream_session_registry_t::force_close_all () noexcept
@@ -520,6 +672,7 @@ void stream_session_registry_t::force_close_all () noexcept
     _barriers.clear ();
     _actor_bindings.clear ();
     _connections.clear ();
+    _changed.notify_all ();
 }
 
 bool stream_session_registry_t::is_current (

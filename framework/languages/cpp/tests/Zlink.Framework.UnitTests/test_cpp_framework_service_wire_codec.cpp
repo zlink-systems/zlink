@@ -933,6 +933,136 @@ int main ()
               encoded_session_routed)
             == session_routed);
     {
+        std::ifstream fixture (
+          ZLINK_SESSION_RELOCATION_BARRIER_GOLDEN_PATH);
+        assert (fixture.good ());
+        const auto vectors = nlohmann::json::parse (fixture);
+        const auto &identity = vectors.at ("identity");
+        const auto ordinal = [&identity] (const char *name) {
+            return std::stoull (
+              identity.at (name).get<std::string> ());
+        };
+        const auto bytes = [&identity] (const char *name) {
+            const auto value = identity.at (name).get<std::string> ();
+            return std::vector<std::uint8_t> (
+              value.begin (), value.end ());
+        };
+        const auto canonical = [&vectors] (const char *name) {
+            const auto &items = vectors.at ("canonical");
+            const auto found = std::find_if (
+              items.begin (), items.end (),
+              [name] (const auto &item) {
+                  return item.at ("name").template get<std::string> ()
+                         == name;
+              });
+            assert (found != items.end ());
+            const auto encoded = from_hex (
+              found->at ("hex").template get<std::string> ());
+            assert (encoded.size () > 3);
+            assert (encoded[3]
+                    == found->at ("command").template get<std::uint8_t> ());
+            return encoded;
+        };
+        const protocol::relocation_id_t relocation{
+          ordinal ("relocationHigh"), ordinal ("relocationLow")};
+        const protocol::relocation_coordinator_fence_t coordinator{
+          identity.at ("coordinatorOwnerId").get<std::string> (),
+          ordinal ("coordinatorLeaseGeneration"),
+          bytes ("coordinatorNodeRid"),
+          ordinal ("coordinatorNodeGeneration"),
+          identity.at ("expectedAuthorityStoreVersion")
+            .get<std::string> ()};
+        const protocol::actor_route_fence_t actor{
+          identity.at ("actorId").get<std::string> (),
+          ordinal ("objectGeneration"),
+          bytes ("sourceNodeRid"),
+          ordinal ("sourceNodeGeneration"),
+          ordinal ("sourceAuthorityOwnerGeneration"),
+          ordinal ("sourceOwnerLeaseGeneration")};
+        const protocol::session_relocation_seal_t seal{
+          relocation,
+          coordinator,
+          protocol::relocation_role_t::source,
+          actor,
+          bytes ("sessionOwnerNodeRid"),
+          ordinal ("sessionOwnerNodeGeneration"),
+          identity.at ("sessionOwnerId").get<std::string> (),
+          ordinal ("sessionOwnerLeaseGeneration"),
+          bytes ("sessionRid"),
+          ordinal ("bindingGeneration")};
+        const protocol::session_relocation_sealed_t sealed{
+          relocation,
+          coordinator,
+          actor,
+          seal.session_owner_node_routing_id,
+          seal.session_owner_node_generation,
+          seal.session_owner_id,
+          seal.session_owner_lease_generation,
+          seal.session_routing_id,
+          seal.binding_generation,
+          ordinal ("lastAcceptedSessionSequence")};
+        const protocol::session_relocation_route_t commit{
+          relocation,
+          coordinator,
+          protocol::relocation_role_t::target,
+          {actor.actor_id, actor.object_generation},
+          seal.session_owner_node_routing_id,
+          seal.session_owner_node_generation,
+          seal.session_owner_id,
+          seal.session_owner_lease_generation,
+          seal.session_routing_id,
+          seal.binding_generation,
+          {protocol::session_relocation_route_action_t::commit,
+           ordinal ("sourceAuthorityOwnerGeneration"),
+           ordinal ("targetAuthorityOwnerGeneration"),
+           bytes ("targetNodeRid"),
+           ordinal ("targetNodeGeneration"),
+           ordinal ("lastAcceptedSessionSequence"),
+           0}};
+        const protocol::session_relocation_routed_t committed{
+          relocation,
+          coordinator,
+          commit.actor,
+          seal.session_owner_node_routing_id,
+          seal.session_owner_node_generation,
+          seal.session_owner_id,
+          seal.session_owner_lease_generation,
+          seal.session_routing_id,
+          seal.binding_generation,
+          protocol::session_relocation_route_action_t::commit,
+          protocol::session_relocation_route_result_t::applied,
+          ordinal ("targetAuthorityOwnerGeneration"),
+          ordinal ("lastAcceptedSessionSequence")};
+        auto abort = commit;
+        abort.sender_role = protocol::relocation_role_t::source;
+        abort.route = {
+          protocol::session_relocation_route_action_t::abort,
+          0,
+          0,
+          {},
+          0,
+          0,
+          ordinal ("sourceAuthorityOwnerGeneration")};
+        auto aborted = committed;
+        aborted.action =
+          protocol::session_relocation_route_action_t::abort;
+        aborted.current_authority_owner_generation =
+          ordinal ("sourceAuthorityOwnerGeneration");
+
+        assert (protocol::encode_session_relocation_seal (seal)
+                == canonical ("sessionRelocationSeal"));
+        assert (protocol::encode_session_relocation_sealed (sealed)
+                == canonical ("sessionRelocationSealed"));
+        assert (protocol::encode_session_relocation_route (commit)
+                == canonical ("sessionRelocationRouteCommit"));
+        assert (protocol::encode_session_relocation_routed (committed)
+                == canonical ("sessionRelocationRoutedCommit"));
+        assert (protocol::encode_session_relocation_route (abort)
+                == canonical ("sessionRelocationRouteAbort"));
+        assert (protocol::encode_session_relocation_routed (aborted)
+                == canonical ("sessionRelocationRoutedAbort"));
+    }
+    {
         auto malformed = encoded_session_route;
         malformed.push_back (0);
         bool rejected = false;

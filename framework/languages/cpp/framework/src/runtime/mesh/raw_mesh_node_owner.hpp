@@ -472,6 +472,10 @@ class raw_mesh_node_owner_t
       _expected_peers;
     raw_mesh_connection_candidates_t _connections;
     std::set<std::string> _outbound_endpoints;
+    std::map<std::string, std::vector<std::uint8_t>>
+      _session_relocation_seal_requests;
+    std::map<std::string, std::vector<std::uint8_t>>
+      _session_relocation_route_requests;
     std::uint64_t _next_correlation = 1;
     bool _closed = false;
 };

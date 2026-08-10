@@ -40,6 +40,22 @@ constexpr std::size_t max_pending_unadmitted_application_bytes =
   16u * 1024u * 1024u;
 constexpr std::size_t max_pending_admissions = 64;
 constexpr std::size_t max_pending_admission_bytes = 64u * 1024u;
+constexpr std::size_t max_session_relocation_replays = 65'536;
+
+template <typename T>
+std::string session_relocation_replay_key (const T &record)
+{
+    std::ostringstream key;
+    key << record.relocation.high << ':' << record.relocation.low
+        << ':' << record.actor.actor_id.size () << ':'
+        << record.actor.actor_id << ':' << record.actor.object_generation
+        << ':' << record.session_routing_id.size () << ':';
+    for (const auto value : record.session_routing_id)
+        key << std::hex << std::setw (2) << std::setfill ('0')
+            << static_cast<unsigned int> (value);
+    key << std::dec << ':' << record.binding_generation;
+    return key.str ();
+}
 
 bool mesh_trace_enabled ()
 {
@@ -2959,13 +2975,33 @@ raw_mesh_pump_result_t raw_mesh_node_owner_t::pump_one (
                          != admitted->descriptor.lifecycle_generation) {
                     return raw_mesh_pump_result_t::protocol_error;
                 }
+                const auto replay_key =
+                  session_relocation_replay_key (seal);
+                const auto replay =
+                  _session_relocation_seal_requests.find (
+                    replay_key);
+                if (replay
+                      != _session_relocation_seal_requests.end ()
+                    && replay->second != received->parts.front ()) {
+                    return raw_mesh_pump_result_t::protocol_error;
+                }
+                if (replay
+                    == _session_relocation_seal_requests.end ()) {
+                    if (_session_relocation_seal_requests.size ()
+                        >= max_session_relocation_replays) {
+                        return raw_mesh_pump_result_t::protocol_error;
+                    }
+                    _session_relocation_seal_requests.emplace (
+                      replay_key, received->parts.front ());
+                }
                 return enqueue_received_or_retain (
                   service_mailbox_record_t{
                     owner_key (local.node_routing_id),
                     service_mailbox_domain_t::infrastructure,
                     std::move (received->parts),
                     std::move (received->source_routing_id),
-                    std::nullopt, std::nullopt},
+                    std::nullopt, std::nullopt,
+                    admitted->descriptor.lifecycle_generation},
                   raw_mesh_pump_result_t::infrastructure);
             }
             if (header.kind
@@ -2976,17 +3012,11 @@ raw_mesh_pump_result_t raw_mesh_node_owner_t::pump_one (
                 const auto expected_source_rid =
                   route.sender_role == protocol::relocation_role_t::target
                     ? route.route.target_node_routing_id
-                  : route.sender_role
-                      == protocol::relocation_role_t::coordinator
-                    ? route.coordinator.node_routing_id
-                    : received->source_routing_id;
+                    : route.coordinator.node_routing_id;
                 const auto expected_source_generation =
                   route.sender_role == protocol::relocation_role_t::target
                     ? route.route.target_node_generation
-                  : route.sender_role
-                      == protocol::relocation_role_t::coordinator
-                    ? route.coordinator.node_generation
-                    : admitted->descriptor.lifecycle_generation;
+                    : route.coordinator.node_generation;
                 if (route.session_owner_node_routing_id
                       != local.node_routing_id
                     || route.session_owner_node_generation
@@ -2999,13 +3029,33 @@ raw_mesh_pump_result_t raw_mesh_node_owner_t::pump_one (
                          != admitted->descriptor.lifecycle_generation) {
                     return raw_mesh_pump_result_t::protocol_error;
                 }
+                const auto replay_key =
+                  session_relocation_replay_key (route);
+                const auto replay =
+                  _session_relocation_route_requests.find (
+                    replay_key);
+                if (replay
+                      != _session_relocation_route_requests.end ()
+                    && replay->second != received->parts.front ()) {
+                    return raw_mesh_pump_result_t::protocol_error;
+                }
+                if (replay
+                    == _session_relocation_route_requests.end ()) {
+                    if (_session_relocation_route_requests.size ()
+                        >= max_session_relocation_replays) {
+                        return raw_mesh_pump_result_t::protocol_error;
+                    }
+                    _session_relocation_route_requests.emplace (
+                      replay_key, received->parts.front ());
+                }
                 return enqueue_received_or_retain (
                   service_mailbox_record_t{
                     owner_key (local.node_routing_id),
                     service_mailbox_domain_t::infrastructure,
                     std::move (received->parts),
                     std::move (received->source_routing_id),
-                    std::nullopt, std::nullopt},
+                    std::nullopt, std::nullopt,
+                    admitted->descriptor.lifecycle_generation},
                   raw_mesh_pump_result_t::infrastructure);
             }
             if (header.kind

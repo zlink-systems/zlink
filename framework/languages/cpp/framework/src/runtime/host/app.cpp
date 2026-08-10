@@ -58,6 +58,7 @@
 #include <optional>
 #include <shared_mutex>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -140,6 +141,42 @@ decode_bound_session_frame (const stream_runtime_t &runtime,
     return {header.value (), zlink::message_t::from (std::vector<std::uint8_t> (
                                bytes.begin () + 6 + header_size, bytes.end ()))};
 }
+
+class session_ingress_completion_t final
+{
+  public:
+    session_ingress_completion_t () = default;
+    ~session_ingress_completion_t () noexcept
+    {
+        if (_registry && _dispatch)
+            (void) _registry->complete_inbound (*_dispatch);
+    }
+
+    session_ingress_completion_t (
+      const session_ingress_completion_t &) = delete;
+    session_ingress_completion_t &operator= (
+      const session_ingress_completion_t &) = delete;
+
+    void arm (
+      runtime::stateful::stream_session_registry_t &registry,
+      runtime::stateful::stream_dispatch_t dispatch)
+    {
+        _registry = &registry;
+        _dispatch = std::move (dispatch);
+    }
+
+    runtime::stateful::stateful_error_t complete () noexcept
+    {
+        if (!_registry || !_dispatch)
+            return runtime::stateful::stateful_error_t::none;
+        auto dispatch = std::exchange (_dispatch, std::nullopt);
+        return _registry->complete_inbound (*dispatch);
+    }
+
+  private:
+    runtime::stateful::stream_session_registry_t *_registry = nullptr;
+    std::optional<runtime::stateful::stream_dispatch_t> _dispatch;
+};
 
 class store_actor_directory_t final : public actor_directory_t
 {
@@ -1119,22 +1156,21 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
           },
           service_lifetime_t::singleton);
     }
-    if (_state->services.contains (std::type_index (typeid (location_repository_t)))
-        && !_state->services.contains (
+    if (!_state->services.contains (std::type_index (typeid (location_repository_t)))) {
+        auto store = std::make_shared<runtime::in_memory_location_repository_t> ();
+        _state->services.add_factory<location_repository_t> (
+          [store] (service_provider_t &) {
+              return std::static_pointer_cast<location_repository_t> (store);
+          },
+          service_lifetime_t::singleton);
+    }
+    if (!_state->services.contains (
           std::type_index (typeid (runtime::stateful::authority_relocation_port_t)))) {
         _state->services.add_factory<runtime::stateful::authority_relocation_port_t> (
           [] (service_provider_t &provider) {
               return std::unique_ptr<runtime::stateful::authority_relocation_port_t> (
                 std::make_unique<runtime::stateful::public_authority_store_adapter_t> (
                   provider.get_required<location_repository_t> ()));
-          },
-          service_lifetime_t::singleton);
-    }
-    if (!_state->services.contains (std::type_index (typeid (location_repository_t)))) {
-        auto store = std::make_shared<runtime::in_memory_location_repository_t> ();
-        _state->services.add_factory<location_repository_t> (
-          [store] (service_provider_t &) {
-              return std::static_pointer_cast<location_repository_t> (store);
           },
           service_lifetime_t::singleton);
     }
@@ -1365,9 +1401,174 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
         _state->route_mesh_nodes = mesh_nodes;
         auto provider = _state->services.build_provider ();
         auto &location_runtime = provider.get_required<runtime::location_runtime_t> ();
+        auto &location_store = provider.get_required<location_repository_t> ();
+        std::shared_ptr<runtime::stateful::authority_relocation_port_t>
+          relocation_authority;
+        std::shared_ptr<runtime::stateful::relocation_store_port_t>
+          relocation_store;
+        std::shared_ptr<runtime::stateful::aggregate_authority_port_t>
+          aggregate_relocation_authority;
+        if (_state->services.contains (std::type_index (
+              typeid (runtime::stateful::authority_relocation_port_t)))
+            && _state->services.contains (std::type_index (
+              typeid (runtime::stateful::relocation_store_port_t)))) {
+            relocation_authority =
+              std::shared_ptr<runtime::stateful::authority_relocation_port_t> (
+                &provider.get_required<
+                  runtime::stateful::authority_relocation_port_t> (),
+                [] (auto *) noexcept {});
+            relocation_store =
+              std::shared_ptr<runtime::stateful::relocation_store_port_t> (
+                &provider.get_required<
+                  runtime::stateful::relocation_store_port_t> (),
+                [] (auto *) noexcept {});
+            aggregate_relocation_authority = std::make_shared<
+              runtime::stateful::public_aggregate_authority_adapter_t> (
+                location_store);
+        }
         for (const auto &mesh_node : mesh_nodes) {
             mesh_node->configure_session_route_owner (
               [&location_runtime] { return location_runtime.current_owner_token (); });
+            mesh_node->configure_session_route_target_owner (
+              [&location_store,
+               mesh_name = mesh_node->mesh_name ()] (
+                const std::string &actor_id,
+                std::uint64_t object_generation,
+                std::uint64_t authority_owner_generation,
+                const zlink::routing_id_t &target_node,
+                std::uint64_t target_node_generation)
+              -> std::optional<location_owner_token_t> {
+                  if (actor_id.empty () || object_generation == 0
+                      || authority_owner_generation == 0
+                      || target_node.to_bytes ().empty ()
+                      || target_node_generation == 0)
+                      return std::nullopt;
+                  const auto authority = location_store
+                                           .read_authority (
+                                             runtime::actor_authority_key (
+                                               actor_id))
+                                           .result ();
+                  if (!authority)
+                      return std::nullopt;
+                  const auto *snapshot = std::get_if<authority_snapshot_t> (
+                    &authority.value ());
+                  if (!snapshot
+                      || snapshot->object_generation
+                           != object_generation
+                      || snapshot->authority_owner_generation
+                           != authority_owner_generation
+                      || snapshot->owner.owner_id.empty ()
+                      || snapshot->owner.lease_generation <= 0
+                      || snapshot->allocation.state
+                           != placement_allocation_state_t::active
+                      || snapshot->allocation.target.mesh_name
+                           != mesh_name
+                      || snapshot->allocation.target.node_rid.value ()
+                           != target_node.to_string ()
+                      || snapshot->allocation.target
+                           .node_lifecycle_generation
+                           != target_node_generation
+                      || snapshot->allocation.target.owner.owner_id
+                           != snapshot->owner.owner_id
+                      || snapshot->allocation.target.owner
+                           .lease_generation
+                           != snapshot->owner.lease_generation)
+                      return std::nullopt;
+                  runtime::live_location_reader_t live (
+                    location_store);
+                  location_page_request_t page;
+                  do {
+                      const auto listed = live
+                                            .list_mesh_nodes (
+                                              mesh_name, page)
+                                            .result ();
+                      if (!listed)
+                          return std::nullopt;
+                      const auto exact = std::find_if (
+                        listed.value ().items.begin (),
+                        listed.value ().items.end (),
+                        [&] (const mesh_node_descriptor_t &descriptor) {
+                            return descriptor.rid == target_node
+                                   && descriptor.lifecycle_generation
+                                        == target_node_generation
+                                   && descriptor.owner_id
+                                        == snapshot->owner.owner_id
+                                   && descriptor.lease_generation
+                                        == snapshot->owner.lease_generation;
+                        });
+                      if (exact != listed.value ().items.end ())
+                          return snapshot->owner;
+                      page.continuation_token =
+                        listed.value ().continuation_token;
+                  } while (page.continuation_token);
+                  return std::nullopt;
+              });
+            if (relocation_authority && relocation_store) {
+                mesh_node->configure_relocation_runtime (
+                  relocation_authority, relocation_store,
+                  aggregate_relocation_authority);
+            }
+            mesh_node->configure_bound_session_relocation_resolver (
+              [actor_gateway_runtime, &location_store,
+               mesh_name = mesh_node->mesh_name ()] (
+                const runtime::stateful::object_ref_t &source)
+              -> std::optional<detail::bound_session_relocation_route_t> {
+                  if (source.kind
+                        != runtime::stateful::object_kind_t::actor
+                      || source.object_generation == 0
+                      || source.authority_owner_generation == 0)
+                      return std::nullopt;
+
+                  const auto actor = detail::actor_ref_access_t::make (
+                    node_rid_t::from_string (source.node_id), {}, source.key,
+                    source.object_generation);
+                  const auto route =
+                    actor_gateway_runtime.bound_session_route (actor);
+                  if (!route || !route->session_rid)
+                      return std::nullopt;
+                  if (route->object_generation
+                        != source.object_generation
+                      || route->authority_owner_generation
+                           != source.authority_owner_generation
+                      || route->node_generation == 0
+                      || route->binding_generation == 0) {
+                      throw std::runtime_error (
+                        "Bound Session relocation route is stale");
+                  }
+
+                  location_page_request_t page;
+                  do {
+                      auto listed = location_store
+                                      .list_mesh_nodes (mesh_name, page)
+                                      .result ()
+                                      .value ();
+                      const auto owner = std::find_if (
+                        listed.items.begin (), listed.items.end (),
+                        [&route] (const mesh_node_descriptor_t &descriptor) {
+                            return descriptor.rid == route->node_rid
+                                   && descriptor.lifecycle_generation
+                                        == route->node_generation;
+                        });
+                      if (owner != listed.items.end ()) {
+                          if (owner->owner_id.empty ()
+                              || owner->lease_generation <= 0) {
+                              throw std::runtime_error (
+                                "Bound Session owner has no exact lease fence");
+                          }
+                          return detail::bound_session_relocation_route_t{
+                            route->node_rid,
+                            route->node_generation,
+                            {owner->owner_id, owner->lease_generation},
+                            *route->session_rid,
+                            route->binding_generation,
+                            route->session_sequence};
+                      }
+                      page.continuation_token =
+                        std::move (listed.continuation_token);
+                  } while (page.continuation_token);
+                  throw std::runtime_error (
+                    "Bound Session owner descriptor was not found");
+              });
         }
         if (!_state->services.contains (std::type_index (typeid (actor_manager_t))))
             _state->services.add_singleton<actor_manager_t> (
@@ -2026,9 +2227,49 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                                                const zlink::message_t &payload,
                                                std::optional<detail::bound_session_relay_source_t>
                                                  bound_session_source) {
-              return application_mesh->relay_application_actor (actor, header, payload,
-                                                                request_timeout, true,
-                                                                std::move (bound_session_source));
+              detail::session_ingress_completion_t ingress;
+              auto routed_actor = actor;
+              if (bound_session_source) {
+                  auto &sessions =
+                    application_mesh->native_node ().sessions ();
+                  auto [admission, dispatch] = sessions.admit_inbound (
+                    bound_session_source->session_rid.to_string (),
+                    bound_session_source->binding_generation,
+                    std::string (actor.actor_id ().value ()),
+                    bound_session_source->session_sequence,
+                    request_timeout);
+                  if (admission
+                        != runtime::stateful::stateful_error_t::none
+                      || !dispatch) {
+                      return result_t<std::optional<zlink::message_t>>::failure (
+                        admission
+                              == runtime::stateful::stateful_error_t::moving
+                          ? framework_error_kind_t::unavailable
+                          : framework_error_kind_t::invalid_operation,
+                        "bound Session ingress was not admitted by the relocation barrier");
+                  }
+                  ingress.arm (sessions, *dispatch);
+                  routed_actor = detail::actor_ref_access_t::make (
+                    node_rid_t::from_string (
+                      dispatch->binding.actor.node_id),
+                    std::string (
+                      detail::actor_ref_access_t::actor_type (actor)),
+                    dispatch->binding.actor.key,
+                    dispatch->binding.actor.object_generation);
+                  bound_session_source->session_sequence =
+                    dispatch->inbound_sequence;
+              }
+              auto relayed = application_mesh->relay_application_actor (
+                routed_actor, header, payload, request_timeout, true,
+                std::move (bound_session_source));
+              const auto completed = ingress.complete ();
+              if (completed
+                  != runtime::stateful::stateful_error_t::none) {
+                  return result_t<std::optional<zlink::message_t>>::failure (
+                    framework_error_kind_t::internal_failure,
+                    "bound Session ingress completion lost its exact fence");
+              }
+              return relayed;
           });
         actor_gateway_runtime.on_disconnect (
           [mesh_nodes, request_timeout] (const actor_ref_t &actor) {
