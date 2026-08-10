@@ -43,12 +43,14 @@ internal sealed class MessageSocketSendOperation : SendOperation,
             : _socket.SendCore(_parts.Parts, _flags);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureReady()
     {
         EnsureNotSubmitted();
         _parts.EnsureNotEmpty();
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureNotSubmitted()
     {
         _submission.EnsureNotSubmitted();
@@ -173,6 +175,7 @@ internal sealed class ReceivedSendOperationImpl : SendOperation,
         _received = received;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public SendSubmitOperation Message(Message message)
     {
         EnsureNotSubmitted();
@@ -180,6 +183,7 @@ internal sealed class ReceivedSendOperationImpl : SendOperation,
         return this;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public SendSubmitOperation Flags(SendFlags flags)
     {
         EnsureNotSubmitted();
@@ -187,6 +191,7 @@ internal sealed class ReceivedSendOperationImpl : SendOperation,
         return this;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Submit()
     {
         EnsureReady();
@@ -196,12 +201,14 @@ internal sealed class ReceivedSendOperationImpl : SendOperation,
             : _received.SendCore(_parts.Parts, _flags);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureReady()
     {
         EnsureNotSubmitted();
         _parts.EnsureNotEmpty();
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureNotSubmitted()
     {
         _submission.EnsureNotSubmitted();
