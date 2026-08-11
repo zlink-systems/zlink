@@ -2045,6 +2045,23 @@ pool 결과 대비 throughput 산술평균은 `104.803%`다. 자체 추가 후�
 제거했다. 두 후보 모두 짧은 단일 perf의 측정값으로 판정했으며, 추가 저위험 hot path 후보가 없어
 routed one-way 목표 `85%` 미달 상태를 `보류`한다.
 
+### 11.5 Node STREAM body materialization 측정 결과
+
+Release Core `0.10.1`, `tcp`, `MULTI_STREAM`, 64B, clients `100`, duration `1초`, runs `1`,
+auto-HWM `balanced` 조건에서 `Native`와 `Managed`를 한 번에 하나씩 실행했다.
+
+| Node STREAM body storage | Throughput | Mean latency | P95 | P99 |
+|---|---:|---:|---:|---:|
+| `Native` | 49,208 msg/s | 2.034 ms | 3.385 ms | 4.976 ms |
+| `Managed` | 42,840 msg/s | 2.337 ms | 3.844 ms | 4.866 ms |
+
+`Native`는 `Managed`보다 throughput이 `14.86%` 높고 mean latency가 `12.97%` 낮다.
+따라서 STREAM packet callback body의 기본값은 `Native`로 판정한다. JavaScript에서 body를
+직접 처리하는 경우에는 `Managed`를 명시적으로 선택할 수 있다.
+
+- Native: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260812_045948_stream-body-native-final.txt`
+- Managed: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260812_045959_stream-body-managed-final.txt`
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.

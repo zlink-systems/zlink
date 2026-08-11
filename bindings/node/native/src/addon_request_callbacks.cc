@@ -151,13 +151,25 @@ void request_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *
         } else {
             napi_value parts_array;
             napi_create_array_with_length (env, payload->parts.size (), &parts_array);
+            bool materialization_failed = false;
             for (size_t part_index = 0; part_index < payload->parts.size (); ++part_index) {
-                napi_value part_buf = create_message_data_buffer (
+                napi_value part_buf = create_received_message_buffer (
                   env, &payload->parts[part_index]);
-                if (!part_buf)
+                if (!part_buf) {
+                    materialization_failed = true;
                     break;
+                }
                 napi_set_element (env, parts_array, static_cast<uint32_t> (part_index),
                                   part_buf);
+            }
+            if (materialization_failed) {
+                release_request_state (env, state);
+                for (size_t remaining = index + 1; remaining < batch.size (); ++remaining) {
+                    std::unique_ptr<request_result_js_payload_t> remaining_payload (
+                      batch[remaining]);
+                    release_request_state (env, remaining_payload->state);
+                }
+                return;
             }
             napi_set_named_property (env, completion, "parts", parts_array);
         }

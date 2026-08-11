@@ -69,15 +69,16 @@ function normalizeBufferLike(value: BufferLike, label = 'value'): Buffer {
 }
 
 /**
- * A message payload backed by native storage. A successful submit consumes the
- * message; `close` releases it. Do not use a reference after either terminal
- * action because the runtime may reuse the returned wrapper identity.
+ * A message payload owned by this wrapper. The payload can use a JavaScript
+ * Buffer or native storage. A successful submit consumes the message; `close`
+ * releases it. Do not use a reference after either terminal action because the
+ * runtime may reuse the returned wrapper identity.
  */
 export class Message {
   private _buffer!: Buffer;
   private _refCount!: number;
   private _properties!: Readonly<Record<string, string>>;
-  /** Opaque native frame that owns _buffer's storage. */
+  /** Opaque owner when this message uses native storage. */
   private _nativeMessage?: unknown;
   /** True after ownership has ended and this facade has entered the pool. */
   private _released!: boolean;

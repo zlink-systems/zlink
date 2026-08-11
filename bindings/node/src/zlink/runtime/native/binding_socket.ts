@@ -22,10 +22,6 @@ export interface SocketNativeBinding {
   handleSetRoutingId: (handle: NativeHandle, routingId: Buffer) => void;
   monitorOpen: (socket: NativeHandle, eventMask: number) => NativeHandle;
   routerRecvMessage: (socket: NativeHandle, flags: number) => NativeReceivedRaw | null;
-  routerRecvMessageBatchNoWait: (
-    socket: NativeHandle,
-    maxCount: number
-  ) => NativeReceivedRaw[];
   routerRecvMessageNoWait: (socket: NativeHandle) => NativeReceivedRaw | null;
   routerReply: (
     socket: NativeHandle,
@@ -95,10 +91,6 @@ export interface SocketNativeBinding {
   ) => number;
   socketRecvMessage: (socket: NativeHandle, flags: number) => NativeReceivedRaw | null;
   socketRecvMessageNoWait: (socket: NativeHandle) => NativeReceivedRaw | null;
-  socketRecvMessageBatchNoWait: (
-    socket: NativeHandle,
-    batchSize: number
-  ) => NativeReceivedRaw[];
   socketSend: (socket: NativeHandle, payload: unknown, flags: number) => void;
   socketSendNoWaitResult: (socket: NativeHandle, payload: unknown) => number;
   socketSendNoWaitResultParts: (
@@ -161,7 +153,8 @@ export interface SocketNativeBinding {
   socketStreamAttach: (
     socket: NativeHandle,
     handler: (routingId: Buffer | null, packets: unknown[]) => number,
-    packetCount: number
+    packetCount: number,
+    bodyMaterialization: number
   ) => void;
   socketSubscribeMessage: (
     socket: NativeHandle,
@@ -177,10 +170,6 @@ export interface SocketNativeBinding {
     payload: unknown
   ) => number;
   socketTrySubscribeMessage: (socket: NativeHandle) => NativeTopicMessageRaw | null;
-  socketTrySubscribeMessageBatch: (
-    socket: NativeHandle,
-    batchSize: number
-  ) => NativeTopicMessageRaw[];
   socketTrySubscriptionEvent: (
     socket: NativeHandle
   ) => { routingId?: Buffer | null; topic: string; subscribed: boolean } | null;

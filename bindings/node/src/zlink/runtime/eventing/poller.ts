@@ -21,7 +21,6 @@ import {
 import { getNativeHandle } from '../handles/native_handle';
 import { requireNative } from '../native/native';
 import { flagsToMask } from '../sockets/socket_options';
-import { hasBufferedReceive } from '../sockets/socket_receive_state';
 import { PollEvents } from './poll_events';
 import { Timer } from './timer';
 import type { RuntimeBaseSocket as BaseSocket } from '../sockets';
@@ -102,68 +101,22 @@ export class Poller {
   }
 
   wait(events: PollEvents, timeoutMs: number): number {
-    const buffered = [] as Array<{
-      events: number;
-      handle: unknown;
-      slot: number;
-      revents: number;
-    }>;
-    for (const [socket, registration] of this._socketRegistrations) {
-      if (buffered.length >= events.capacity) break;
-      if ((registration.events & PollEventFlag.PollIn) !== 0 && hasBufferedReceive(socket)) {
-        buffered.push({
-          events: registration.events,
-          handle: registration.handle,
-          slot: registration.slot,
-          revents: PollEventFlag.PollIn,
-        });
-      }
-    }
-    for (const entry of buffered) {
-      const remainingEvents = entry.events & ~PollEventFlag.PollIn;
-      if (remainingEvents === 0) {
-        requireNative().pollerRemove(this._native, entry.handle);
-      } else {
-        requireNative().pollerModify(this._native, entry.handle, remainingEvents);
-      }
-    }
-    let nativeCount = 0;
-    let waitFailure: unknown;
     try {
-      nativeCount = requireNative().pollerWaitInto(
+      const nativeCount = requireNative().pollerWaitInto(
         this._native,
         getNativeHandle(events),
         events.capacity | 0,
-        buffered.length > 0 ? 0 : timeoutMs | 0
+        timeoutMs | 0
       ) as number;
+      events.markCombined(nativeCount | 0, []);
+      return nativeCount | 0;
     } catch (error) {
-      if (!isWouldBlock()) waitFailure = error;
-    } finally {
-      for (const entry of buffered) {
-        const remainingEvents = entry.events & ~PollEventFlag.PollIn;
-        if (remainingEvents === 0) {
-          requireNative().pollerAdd(
-            this._native,
-            entry.handle,
-            BigInt(entry.slot),
-            entry.events
-          );
-        } else {
-          requireNative().pollerModify(this._native, entry.handle, entry.events);
-        }
+      if (isWouldBlock()) {
+        events.markCombined(0, []);
+        return 0;
       }
+      throw recvNativeError(error, RecvFlags.None, 'poller wait failed');
     }
-    if (waitFailure !== undefined) {
-      throw recvNativeError(waitFailure, RecvFlags.None, 'poller wait failed');
-    }
-    const remaining = events.capacity - (nativeCount | 0);
-    const synthetic = remaining > 0
-      ? buffered
-        .map(({ slot, revents }) => ({ slot, revents }))
-        .slice(0, remaining)
-      : [];
-    events.markCombined(nativeCount | 0, synthetic);
-    return (nativeCount | 0) + synthetic.length;
   }
 
   destroy(): void {

@@ -86,15 +86,15 @@ test('pair messaging uses Message and Received by default', () => {
   ctx.close();
 });
 
-test('pair nonblocking recv preserves order across native batches', () => {
+test('pair nonblocking recv preserves order', () => {
   const ctx = zlink.createContext();
   const sender = zlink.createPairSocket(ctx);
   const receiver = zlink.createPairSocket(ctx);
   const poller = zlink.createPoller();
   const events = zlink.createPollEvents(1);
 
-  sender.bind('inproc://pair-native-recv-batch');
-  receiver.connect('inproc://pair-native-recv-batch');
+  sender.bind('inproc://pair-recv-order');
+  receiver.connect('inproc://pair-recv-order');
   poller.add(receiver, [zlink.PollEventFlag.PollIn], 17);
   for (let index = 0; index < 20; index += 1) {
     sender.send().message(`message-${index}`).submit();

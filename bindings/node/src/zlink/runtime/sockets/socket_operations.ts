@@ -13,8 +13,6 @@ import {
   materializeReceivedInto,
   materializeRoutedReceivedInto,
   materializeTopicMessage,
-  type NativeReceivedRaw,
-  type NativeTopicMessageRaw,
 } from '../messaging/message_materializer';
 import {
   normalizeMessageLikePayload,
@@ -54,12 +52,8 @@ export {
   RuntimeSendOperation,
 } from './socket_operation_builders';
 import { submitErrorFromResult } from './socket_submit_errors';
-import { setBufferedReceive } from './socket_receive_state';
-import { BufferedReceiveQueue } from './buffered_receive_queue';
 
 const native = requireNative();
-export const RECV_BATCH_MESSAGE_LIMIT = 64;
-const ROUTED_RECV_BATCH_MESSAGE_LIMIT = 32;
 
 export class SendSocket extends SendReadySocket {
   send(): SendOperation {
@@ -128,9 +122,6 @@ export class PublisherSocket extends SendReadySocket {
 }
 
 export class MessageSocket extends SendSocket {
-  private readonly bufferedReceive =
-    new BufferedReceiveQueue<NativeReceivedRaw>(this);
-
   /**
    * Receives into caller-provided storage. Pass a long-lived {@link Received}
    * and the binding refills its internal state in place each successful call.
@@ -139,41 +130,19 @@ export class MessageSocket extends SendSocket {
   recv(result: Received, flags: RecvFlags = RecvFlags.None): boolean {
     let raw;
     try {
-      raw = this.bufferedReceive.take();
-      if (raw == null && ((flags | 0) & (RecvFlags.DontWait | 0))) {
-        this.bufferedReceive.replace(native.socketRecvMessageBatchNoWait(
-          getNativeHandle(this),
-          RECV_BATCH_MESSAGE_LIMIT
-        ));
-        raw = this.bufferedReceive.take();
-      } else if (raw == null) {
-        raw = native.socketRecvMessage(getNativeHandle(this), flags | 0);
-      }
+      raw = ((flags | 0) & (RecvFlags.DontWait | 0))
+        ? native.socketRecvMessageNoWait(getNativeHandle(this))
+        : native.socketRecvMessage(getNativeHandle(this), flags | 0);
     } catch (error) {
       throw recvNativeError(error, flags, 'recv failed');
     }
-    if (raw == null) {
-      setBufferedReceive(this, false);
-      return false;
-    }
+    if (raw == null) return false;
     materializeReceivedInto(result, raw);
     return true;
-  }
-
-  close(): void {
-    this.bufferedReceive.drain((raw) => {
-      const pending = new Received();
-      materializeReceivedInto(pending, raw);
-      pending.close();
-    });
-    super.close();
   }
 }
 
 export class SubscriberSocket extends ConnectableSocket {
-  private readonly bufferedReceive =
-    new BufferedReceiveQueue<NativeTopicMessageRaw>(this);
-
   setSubscription(topicOrPattern: string): void {
     const topic = validateCString(topicOrPattern, 'topicOrPattern', Number.MAX_SAFE_INTEGER);
     configCall('subscription set failed', () => {
@@ -198,16 +167,9 @@ export class SubscriberSocket extends ConnectableSocket {
     const flags = hasResult ? maybeFlags : resultOrFlags as RecvFlags;
     let raw;
     try {
-      raw = this.bufferedReceive.take();
-      if (raw == null && ((flags | 0) & (RecvFlags.DontWait | 0))) {
-        this.bufferedReceive.replace(native.socketTrySubscribeMessageBatch(
-          getNativeHandle(this),
-          RECV_BATCH_MESSAGE_LIMIT
-        ));
-        raw = this.bufferedReceive.take();
-      } else if (raw == null) {
-        raw = native.socketSubscribeMessage(getNativeHandle(this), flags | 0);
-      }
+      raw = ((flags | 0) & (RecvFlags.DontWait | 0))
+        ? native.socketTrySubscribeMessage(getNativeHandle(this))
+        : native.socketSubscribeMessage(getNativeHandle(this), flags | 0);
     } catch (error) {
       throw recvNativeError(error, flags, 'subscribe failed');
     }
@@ -220,16 +182,9 @@ export class SubscriberSocket extends ConnectableSocket {
     }
     return materializeTopicMessage(raw);
   }
-
-  close(): void {
-    this.bufferedReceive.drain((raw) => materializeTopicMessage(raw).close());
-    super.close();
-  }
 }
 
 export class RoutedMessageSocket extends SendReadySocket {
-  private readonly bufferedReceive =
-    new BufferedReceiveQueue<NativeReceivedRaw>(this);
   private readonly receivedOperations = {
     send: (routingId: Buffer, parts: readonly Message[], flags: SendFlags) =>
       this.sendDirectRaw(routingId, parts, flags),
@@ -306,33 +261,14 @@ export class RoutedMessageSocket extends SendReadySocket {
   recv(result: Received, flags: RecvFlags = RecvFlags.None): boolean {
     let raw;
     try {
-      raw = this.bufferedReceive.take();
-      if (raw == null && ((flags | 0) & (RecvFlags.DontWait | 0))) {
-        this.bufferedReceive.replace(native.routerRecvMessageBatchNoWait(
-          getNativeHandle(this),
-          ROUTED_RECV_BATCH_MESSAGE_LIMIT
-        ));
-        raw = this.bufferedReceive.take();
-      } else if (raw == null) {
-        raw = native.routerRecvMessage(getNativeHandle(this), flags | 0);
-      }
+      raw = ((flags | 0) & (RecvFlags.DontWait | 0))
+        ? native.routerRecvMessageNoWait(getNativeHandle(this))
+        : native.routerRecvMessage(getNativeHandle(this), flags | 0);
     } catch (error) {
       throw recvNativeError(error, flags, 'recv failed');
     }
-    if (raw == null) {
-      setBufferedReceive(this, false);
-      return false;
-    }
+    if (raw == null) return false;
     materializeRoutedReceivedInto(result, raw, this.receivedOperations);
     return true;
-  }
-
-  close(): void {
-    this.bufferedReceive.drain((raw) => {
-      const pending = new Received();
-      materializeReceivedInto(pending, raw);
-      pending.close();
-    });
-    super.close();
   }
 }

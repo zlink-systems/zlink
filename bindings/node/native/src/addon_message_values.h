@@ -7,8 +7,6 @@
 #include <atomic>
 #include <new>
 
-static constexpr size_t copied_message_buffer_max_size = 1024;
-
 // A Message owns this frame. Its Buffer is only a JavaScript view of the
 // zlink_msg_t storage; it is never the owning payload allocation.
 struct native_message_frame_t
@@ -167,64 +165,22 @@ inline napi_value move_message_to_native_frame_value (napi_env env, zlink_msg_t 
 
 inline napi_value create_buffer_copy_or_empty (napi_env env, const void *data, size_t len)
 {
-    napi_value out;
-    napi_create_buffer_copy (env, len, len == 0 ? NULL : data, NULL, &out);
-    return out;
-}
-
-// Receive materialization transfers payload bytes directly into a JS-owned
-// Buffer. Keep this separate from create_message_data_buffer(): that helper
-// deliberately exposes large native message storage, while a received Message
-// must not retain a native frame merely to serve data() and close().
-inline napi_value create_received_message_buffer (napi_env env, zlink_msg_t *msg)
-{
-    return create_buffer_copy_or_empty (env, zlink_msg_data (msg), zlink_msg_size (msg));
-}
-
-inline void finalize_external_msg_buffer (napi_env env, void *data, void *hint)
-{
-    (void) env;
-    (void) data;
-    zlink_msg_t *msg = static_cast<zlink_msg_t *> (hint);
-    if (!msg)
-        return;
-    zlink_msg_close (msg);
-    delete msg;
-}
-
-inline napi_value create_message_data_buffer (napi_env env, zlink_msg_t *msg)
-{
-    const size_t size = zlink_msg_size (msg);
-    if (size == 0)
-        return create_buffer_copy_or_empty (env, NULL, 0);
-    if (size <= copied_message_buffer_max_size)
-        return create_buffer_copy_or_empty (env, zlink_msg_data (msg), size);
-
-    zlink_msg_t *owned = new (std::nothrow) zlink_msg_t;
-    if (!owned) {
+    napi_value out = NULL;
+    const napi_status status =
+      napi_create_buffer_copy (env, len, len == 0 ? NULL : data, NULL, &out);
+    if (status != napi_ok) {
         napi_throw_error (env, NULL, "message buffer allocation failed");
         return NULL;
     }
-    if (zlink_msg_init (owned) != 0) {
-        delete owned;
-        return throw_last_error (env, "message buffer init failed");
-    }
-    if (zlink_msg_move (owned, msg) != 0) {
-        zlink_msg_close (owned);
-        delete owned;
-        return throw_last_error (env, "message buffer move failed");
-    }
+    return out;
+}
 
-    napi_value data;
-    napi_status status = napi_create_external_buffer (env, size, zlink_msg_data (owned),
-                                                      finalize_external_msg_buffer, owned, &data);
-    if (status != napi_ok) {
-        zlink_msg_close (owned);
-        delete owned;
-        napi_throw_error (env, NULL, "message buffer creation failed");
-        return NULL;
-    }
-    return data;
+// Receive materialization copies payload bytes into a JS-owned Buffer. STREAM
+// callbacks use move_message_to_native_frame_value() only when the socket has
+// explicitly selected native body storage.
+inline napi_value create_received_message_buffer (napi_env env, zlink_msg_t *msg)
+{
+    return create_buffer_copy_or_empty (env, zlink_msg_data (msg), zlink_msg_size (msg));
 }
 
 inline napi_value create_routing_id_value (napi_env env, const zlink_routing_id_t &rid)

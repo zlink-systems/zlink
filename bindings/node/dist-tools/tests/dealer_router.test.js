@@ -46,18 +46,18 @@ test('router recv fills caller-provided Received with routing metadata', () => {
     router.close();
     ctx.close();
 });
-test('router forwards an unread received Message through native storage', () => {
+test('router forwards an unread received Message from managed storage', () => {
     const ctx = zlink.createContext();
     const router = zlink.createRouterSocket(ctx);
     const dealer = zlink.createDealerSocket(ctx);
-    router.bind('inproc://dealer-router-native-forward');
-    dealer.connect('inproc://dealer-router-native-forward');
+    router.bind('inproc://dealer-router-managed-forward');
+    dealer.connect('inproc://dealer-router-managed-forward');
     dealer.send().message(Buffer.alloc(4096, 0x61)).submit();
     const received = new zlink.Received();
     assert.equal(router.recv(received), true);
     assert.ok(received.routingId);
-    // Do not call data() before submit: the received native frame is the send
-    // source. This is the same receive-to-send operation used by routed echo.
+    // Forward the JS-owned receive Buffer without reading it first. Submit
+    // materializes the Core frame while preserving the public move contract.
     router.send(received.routingId).message(received.singlePartOrThrow()).submit();
     assert.equal(received.singlePartOrThrow().size(), 0);
     const echoed = new zlink.Received();
@@ -83,12 +83,12 @@ test('router nonblocking recv returns false without data', () => {
     router.close();
     ctx.close();
 });
-test('router nonblocking recv preserves order and multipart ownership across native batches', () => {
+test('router nonblocking recv preserves order and multipart ownership', () => {
     const ctx = zlink.createContext();
     const router = zlink.createRouterSocket(ctx);
     const dealer = zlink.createDealerSocket(ctx);
-    router.bind('inproc://dealer-router-native-recv-batch');
-    dealer.connect('inproc://dealer-router-native-recv-batch');
+    router.bind('inproc://dealer-router-recv-order');
+    dealer.connect('inproc://dealer-router-recv-order');
     for (let index = 0; index < 80; index += 1) {
         dealer.send()
             .message(Buffer.from(`header-${index}`))
@@ -106,57 +106,6 @@ test('router nonblocking recv preserves order and multipart ownership across nat
     const empty = new zlink.Received();
     assert.equal(router.recv(empty, zlink.RecvFlags.DontWait), false);
     empty.close();
-    dealer.close();
-    router.close();
-    ctx.close();
-});
-test('router pending batch remains receivable after the native poll state is drained', () => {
-    const ctx = zlink.createContext();
-    const router = zlink.createRouterSocket(ctx);
-    const dealer = zlink.createDealerSocket(ctx);
-    const poller = zlink.createPoller();
-    const events = zlink.createPollEvents(3);
-    const pairReceiver = zlink.createPairSocket(ctx);
-    const pairSender = zlink.createPairSocket(ctx);
-    router.bind('inproc://dealer-router-pending-batch-readiness');
-    dealer.connect('inproc://dealer-router-pending-batch-readiness');
-    pairReceiver.bind('inproc://dealer-router-pending-batch-other-source');
-    pairSender.connect('inproc://dealer-router-pending-batch-other-source');
-    poller.add(router, [zlink.PollEventFlag.PollIn], 0);
-    poller.add(pairReceiver, [zlink.PollEventFlag.PollIn], 0);
-    for (let index = 0; index < 16; index += 1) {
-        dealer.send().message(`message-${index}`).submit();
-    }
-    assert.equal(poller.wait(events, 1000), 1);
-    const first = new zlink.Received();
-    assert.equal(router.recv(first, zlink.RecvFlags.DontWait), true);
-    assert.equal(first.singlePartOrThrow().getString('utf8'), 'message-0');
-    first.close();
-    for (let index = 16; index < 20; index += 1) {
-        dealer.send().message(`message-${index}`).submit();
-    }
-    pairSender.send().message('other-source').submit();
-    assert.equal(poller.wait(events, 1000), 2);
-    assert.deepEqual([events.slot(0), events.slot(1)].sort((left, right) => left - right), [0, 0]);
-    const other = new zlink.Received();
-    assert.equal(pairReceiver.recv(other, zlink.RecvFlags.DontWait), true);
-    other.close();
-    for (let index = 1; index < 20; index += 1) {
-        assert.equal(poller.wait(events, 1000), 1, `missing readiness at message ${index}`);
-        assert.equal(events.hasEvent(0, zlink.PollEventFlag.PollIn), true);
-        assert.equal(events.slot(0), 0);
-        const received = new zlink.Received();
-        assert.equal(router.recv(received, zlink.RecvFlags.DontWait), true);
-        assert.equal(received.singlePartOrThrow().getString('utf8'), `message-${index}`);
-        received.close();
-    }
-    const empty = new zlink.Received();
-    assert.equal(router.recv(empty, zlink.RecvFlags.DontWait), false);
-    empty.close();
-    events.close();
-    poller.close();
-    pairSender.close();
-    pairReceiver.close();
     dealer.close();
     router.close();
     ctx.close();

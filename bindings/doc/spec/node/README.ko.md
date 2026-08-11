@@ -640,11 +640,28 @@ Node는 `SpotNode.getOrCreateSpot(spotRid)`를 노출한다. 이는
 - 논블로킹 no-data는 `false`를 반환하며 throw된 에러와 구별된다.
 - SPOT readable dispatch 이벤트는 readiness 알림이다. 호출자는 일치하는 receive
   API를 no-data가 될 때까지 비운다(drain).
-- 네이티브 기반 버퍼는 추가적인 JavaScript 버퍼 연결 없이 소유된 `Message` 객체가
-  된다.
+- 일반 socket, routed socket, subscription과 request completion에서 수신한 각 part는
+  addon이 만든 JavaScript 소유 `Buffer`를 payload로 사용하는 `Message`가 된다. Payload를
+  읽을 때 추가 native 호출이 발생하지 않으며 `Message`를 닫아도 `Buffer`의 수명 규칙은
+  Node가 관리한다.
 - Actor join 요청 receive 같은 서비스 제어/admission receive 경로는 재사용 가능한
   데이터 평면 저장보다 더 명확할 때 nullable, `undefined`, 또는 태그된 결과 반환
   형태를 사용할 수 있다. 그래도 no-data와 throw된 하드 receive 에러는 구별한다.
+
+### STREAM packet body storage
+
+STREAM packet callback의 header는 다른 Node receive와 같은 JavaScript 소유 `Buffer`를
+사용한다. Body는 socket의 `packetBodyMaterialization` option으로 storage를 선택한다.
+
+| 값 | Callback에 전달하는 `Message` | 주 용도 |
+|---|---|---|
+| `StreamPacketBodyMaterialization.Native` | Core native frame을 소유하고 `data()`가 그 frame의 view를 반환한다. | Body를 읽지 않고 다른 STREAM send로 전달하는 relay |
+| `StreamPacketBodyMaterialization.Managed` | Callback 전에 JavaScript 소유 `Buffer`로 복사한다. | Body를 JavaScript에서 읽거나 managed API에 전달하는 처리 |
+
+기본값은 `Native`다. Packet handler를 등록한 뒤에는 option을 변경할 수 없다. 이 option은
+packet callback의 body만 바꾸며 direct STREAM receive, framing, ordering, HWM, timeout과
+backpressure 결과는 바꾸지 않는다. 두 값 모두 callback이 받은 `Message`의 ownership과
+명시적 close 책임은 같다.
 
 ## 에러와 검증 정책
 

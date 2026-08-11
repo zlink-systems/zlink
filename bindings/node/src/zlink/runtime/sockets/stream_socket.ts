@@ -5,11 +5,8 @@ import { SocketBase } from './socket_base';
 import { messageFromNativeBuffer, normalizeMessageLikePayload } from '../buffers/message_conversion';
 import { normalizeRoutingId } from '../core/routing_id';
 import {
-  RECV_BATCH_MESSAGE_LIMIT,
   RuntimeSendOperation,
 } from './socket_operations';
-import { BufferedReceiveQueue } from './buffered_receive_queue';
-import { setBufferedReceive } from './socket_receive_state';
 import { submitErrorFromResult } from './socket_submit_errors';
 import type { RuntimeContext as Context } from '../core/context';
 import {
@@ -23,7 +20,6 @@ import {
   materializeReceived,
   materializeReceivedInto,
   nativeReceivedRoutingId,
-  type NativeReceivedRaw,
 } from '../messaging/message_materializer';
 import { messageFromNativeFrame } from '../messaging/message_snapshot';
 import { requireNative } from '../native/native';
@@ -35,7 +31,12 @@ import {
 } from '../../contracts';
 import { SubmitResult } from '../../contracts/errors/errors';
 import { wrapRoutingId } from '../core/routing_id_conversion';
-import { RecvFlags, SendFlags, SocketType as NativeSocketType } from '../../contracts/sockets/socket_constants';
+import {
+  RecvFlags,
+  SendFlags,
+  SocketType as NativeSocketType,
+  StreamPacketBodyMaterialization
+} from '../../contracts/sockets/socket_constants';
 import type {
   SendOperation,
   SocketSendReadyHandler,
@@ -47,8 +48,6 @@ const native = requireNative();
 export class StreamSocket extends SocketBase {
   readonly options: StreamSocketOptions;
   private readonly _packetRoutingIdCache = new Map<string, RoutingId>();
-  private readonly bufferedReceive =
-    new BufferedReceiveQueue<NativeReceivedRaw>(this);
   constructor(ctx: Context) {
     super(ctx, NativeSocketType.STREAM);
     this.options = StreamSocketOptions.create(this);
@@ -100,23 +99,13 @@ export class StreamSocket extends SocketBase {
     const recvFlags: RecvFlags = result ? flags : resultOrFlags as RecvFlags;
     let raw;
     try {
-      raw = this.bufferedReceive.take();
-      if (raw == null && ((recvFlags | 0) & (RecvFlags.DontWait | 0))) {
-        this.bufferedReceive.replace(native.socketRecvMessageBatchNoWait(
-          getNativeHandle(this),
-          RECV_BATCH_MESSAGE_LIMIT
-        ));
-        raw = this.bufferedReceive.take();
-      } else if (raw == null) {
-        raw = native.socketRecvMessage(getNativeHandle(this), recvFlags | 0);
-      }
+      raw = ((recvFlags | 0) & (RecvFlags.DontWait | 0))
+        ? native.socketRecvMessageNoWait(getNativeHandle(this))
+        : native.socketRecvMessage(getNativeHandle(this), recvFlags | 0);
     } catch (error) {
       throw recvNativeError(error, recvFlags, 'recv failed');
     }
-    if (raw == null) {
-      setBufferedReceive(this, false);
-      return result ? false : null;
-    }
+    if (raw == null) return result ? false : null;
     const receivedRaw = raw;
     const receivedRoutingId = nativeReceivedRoutingId(receivedRaw);
     const send = (parts: readonly Message[], sendFlags: SendFlags) => {
@@ -129,16 +118,9 @@ export class StreamSocket extends SocketBase {
     materializeReceivedInto(result, receivedRaw, undefined, send);
     return true;
   }
-  close(): void {
-    this.bufferedReceive.drain((raw) => {
-      const pending = new Received();
-      materializeReceivedInto(pending, raw);
-      pending.close();
-    });
-    super.close();
-  }
   setPacketHandler(handler: StreamPacketHandler): void {
     handlerCall('stream packet handler registration failed', () => {
+      const bodyMaterialization = this.options.packetBodyMaterialization;
       native.socketStreamAttach(
         getNativeHandle(this),
         (routingId: Buffer | null, packets: unknown[]) => {
@@ -147,12 +129,17 @@ export class StreamSocket extends SocketBase {
             return 0;
           }
           const header = messageFromNativeBuffer(packets[0] as Buffer);
-          const body = messageFromNativeFrame(packets[1]);
+          const body = bodyMaterialization ===
+            StreamPacketBodyMaterialization.Managed
+            ? messageFromNativeBuffer(packets[1] as Buffer)
+            : messageFromNativeFrame(packets[1]);
           handler(sourceRid, header, body);
           return 0;
         },
-        1
+        1,
+        bodyMaterialization
       );
+      this.options.markPacketHandlerAttached();
     });
   }
   private packetRoutingId(routingId: Buffer | null): RoutingId | null {

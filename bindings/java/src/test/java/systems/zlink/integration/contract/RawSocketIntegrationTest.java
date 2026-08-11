@@ -39,4 +39,32 @@ public class RawSocketIntegrationTest {
             }
         }
     }
+
+    @Test
+    public void installedCorePackageSupportsMultipartRoundTrip() {
+        TestSupport.assumeNative();
+
+        try (Context context = Zlink.createContext();
+             PairSocket sender = context.createPairSocket();
+             PairSocket receiver = context.createPairSocket()) {
+            String endpoint = TestSupport.inprocEndpoint(
+                "raw-multipart-integration");
+            sender.bind(endpoint);
+            receiver.connect(endpoint);
+
+            try (Message first = Message.from("first");
+                 Message second = Message.from("second")) {
+                sender.send().message(first).message(second).submit();
+            }
+
+            try (Received received = new Received()) {
+                assertTrue(receiver.recv(received, RecvFlags.NONE));
+                assertTrue(received.parts().size() == 2);
+                assertArrayEquals("first".getBytes(StandardCharsets.UTF_8),
+                    received.parts().get(0).toByteArray());
+                assertArrayEquals("second".getBytes(StandardCharsets.UTF_8),
+                    received.parts().get(1).toByteArray());
+            }
+        }
+    }
 }

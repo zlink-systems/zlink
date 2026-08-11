@@ -11,7 +11,6 @@
 #include <algorithm>
 #include <errno.h>
 #include <atomic>
-#include <chrono>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -27,48 +26,9 @@ static const size_t k_stream_slot_count = 8;
 static const size_t k_send_ready_handler_slot_count = 8;
 static const size_t k_socket_monitor_handler_slot_count = 8;
 static const int32_t k_stream_dispatch_len32be = 1;
-static const size_t k_router_recv_batch_byte_limit = 1024 * 1024;
-
-zlink_recv_result_t recv_router_parts_nowait_batch (
-  void *router,
-  zlink_routing_id_t *peer_rids,
-  uint64_t *request_seqs,
-  uint64_t *pair_ids,
-  uint64_t *pair_generations,
-  zlink_msg_t *parts,
-  zlink_part_flag_t *part_flags,
-  size_t capacity,
-  size_t *part_count)
-{
-    *part_count = 0;
-    size_t received_bytes = 0;
-    const std::chrono::steady_clock::time_point deadline =
-      std::chrono::steady_clock::now () + std::chrono::milliseconds (1);
-    for (size_t index = 0; index < capacity; ++index) {
-        const zlink_routing_id_t *source_rid = NULL;
-        const zlink_recv_result_t result = zlink_router_recv_part_v2 (
-          router, &source_rid, &request_seqs[index], &pair_ids[index],
-          &pair_generations[index], &parts[index], &part_flags[index],
-          ZLINK_RECV_FLAGS_DONTWAIT);
-        if (result == ZLINK_RECV_NO_DATA)
-            return index == 0 ? ZLINK_RECV_NO_DATA : ZLINK_RECV_OK;
-        if (result != ZLINK_RECV_OK)
-            return result;
-        peer_rids[index] = *source_rid;
-        *part_count = index + 1;
-        received_bytes += zlink_msg_size (&parts[index]);
-        // A multipart message remains atomic, so the materializer may finish
-        // its trailing parts after this bounded prefetch loop returns.
-        if (received_bytes >= k_router_recv_batch_byte_limit
-            || std::chrono::steady_clock::now () >= deadline)
-            break;
-    }
-    return ZLINK_RECV_OK;
-}
-
 struct stream_js_payload_t
 {
-    stream_js_payload_t () : packet_count (0) {}
+    stream_js_payload_t () : packet_count (0), body_materialization (0) {}
     ~stream_js_payload_t ()
     {
         if (packet_count > 0)
@@ -78,6 +38,7 @@ struct stream_js_payload_t
     std::vector<unsigned char> routing_id;
     std::vector<zlink_msg_t> packets;
     size_t packet_count;
+    int body_materialization;
 };
 
 struct socket_monitor_handler_js_payload_t
@@ -93,7 +54,8 @@ struct completion_control_js_payload_t
 
 struct stream_js_state_t
 {
-    stream_js_state_t () : used (false), socket (NULL), env (NULL), tsfn (NULL), stop_requested (0)
+    stream_js_state_t () : used (false), socket (NULL), env (NULL), tsfn (NULL),
+                           stop_requested (0), body_materialization (0)
     {
     }
 
@@ -102,6 +64,7 @@ struct stream_js_state_t
     napi_env env;
     napi_threadsafe_function tsfn;
     std::atomic<int> stop_requested;
+    int body_materialization;
     std::vector<std::vector<unsigned char>> peer_routing_ids;
 };
 
@@ -177,6 +140,7 @@ void reset_stream_slot_unsafe (stream_js_state_t *state)
     reset_tsfn_slot_base (state);
     state->socket = NULL;
     state->stop_requested.store (0, std::memory_order_release);
+    state->body_materialization = 0;
     state->peer_routing_ids.clear ();
 }
 
@@ -734,9 +698,9 @@ void stream_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *d
         return;
     }
     for (size_t i = 0; i < payload->packets.size (); ++i) {
-        napi_value packet_value = i == 1
+        napi_value packet_value = i == 1 && payload->body_materialization == 0
           ? move_message_to_native_frame_value (env, &payload->packets[i])
-          : create_message_data_buffer (env, &payload->packets[i]);
+          : create_received_message_buffer (env, &payload->packets[i]);
         if (!packet_value) {
             return;
         }
@@ -878,6 +842,7 @@ void stream_on_packet_slot (void *stream_,
         tsfn = state->tsfn;
         remember_stream_peer_unsafe (state, rid_);
         payload.reset (new stream_js_payload_t ());
+        payload->body_materialization = state->body_materialization;
         payload->routing_id.assign (rid_->data, rid_->data + rid_->size);
         payload->packets.resize (2);
         if (zlink_msg_init (&payload->packets[0]) != 0) {
@@ -933,7 +898,11 @@ void stream_release_slot (void *socket)
         if (!state)
             return;
         tsfn = state->tsfn;
-        reset_stream_slot_unsafe (state);
+        // The TSFN finalizer owns the transition back to an unused slot. If
+        // close makes this slot reusable first, the old finalizer can reset a
+        // new STREAM handler that acquired the same slot in the meantime.
+        state->socket = NULL;
+        state->stop_requested.store (1, std::memory_order_release);
     }
     if (tsfn)
         (void) napi_release_threadsafe_function (tsfn, napi_tsfn_abort);
@@ -2571,52 +2540,6 @@ napi_value socket_try_recv_message (napi_env env, napi_callback_info info)
     return out;
 }
 
-napi_value socket_try_recv_message_batch (napi_env env, napi_callback_info info)
-{
-    napi_value argv[2];
-    size_t argc = 2;
-    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
-    if (argc < 2) {
-        napi_throw_type_error (env, NULL,
-                               "socketRecvMessageBatchNoWait requires socket and batch size");
-        return NULL;
-    }
-    void *sock = NULL;
-    napi_get_value_external (env, argv[0], &sock);
-    int32_t max_count = 0;
-    if (napi_get_value_int32 (env, argv[1], &max_count) != napi_ok
-        || max_count < 1 || max_count > 64) {
-        napi_throw_range_error (env, NULL, "batch size must be 1..64");
-        return NULL;
-    }
-
-    napi_value out;
-    napi_create_array (env, &out);
-    size_t received_bytes = 0;
-    uint32_t count = 0;
-    const std::chrono::steady_clock::time_point deadline =
-      std::chrono::steady_clock::now () + std::chrono::milliseconds (1);
-    while (count < static_cast<uint32_t> (max_count)
-           && received_bytes < k_router_recv_batch_byte_limit
-           && std::chrono::steady_clock::now () < deadline) {
-        napi_value received = NULL;
-        size_t message_bytes = 0;
-        const int rc = recv_message_value (
-          env, sock, static_cast<int32_t> (ZLINK_RECV_FLAGS_DONTWAIT),
-          &received, &message_bytes);
-        if (rc != ZLINK_RECV_OK) {
-            if (zlink_errno () == EAGAIN)
-                break;
-            return throw_last_error (env, "socketRecvMessageBatchNoWait failed");
-        }
-        if (napi_set_element (env, out, count, received) != napi_ok)
-            return NULL;
-        ++count;
-        received_bytes += message_bytes;
-    }
-    return out;
-}
-
 napi_value socket_subscribe_message (napi_env env, napi_callback_info info)
 {
     napi_value argv[1];
@@ -2716,50 +2639,6 @@ napi_value socket_try_subscribe_message (napi_env env, napi_callback_info info)
         return none;
     }
     return throw_last_error (env, "subscribeNoWait failed");
-}
-
-napi_value socket_try_subscribe_message_batch (napi_env env, napi_callback_info info)
-{
-    napi_value argv[2];
-    size_t argc = 2;
-    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
-    if (argc < 2) {
-        napi_throw_type_error (env, NULL,
-          "socketTrySubscribeMessageBatch requires socket and batch size");
-        return NULL;
-    }
-    void *sock = NULL;
-    napi_get_value_external (env, argv[0], &sock);
-    int32_t max_count = 0;
-    if (napi_get_value_int32 (env, argv[1], &max_count) != napi_ok
-        || max_count < 1 || max_count > 64) {
-        napi_throw_range_error (env, NULL, "batch size must be 1..64");
-        return NULL;
-    }
-    napi_value out;
-    napi_create_array (env, &out);
-    size_t received_bytes = 0;
-    uint32_t count = 0;
-    const std::chrono::steady_clock::time_point deadline =
-      std::chrono::steady_clock::now () + std::chrono::milliseconds (1);
-    while (count < static_cast<uint32_t> (max_count)
-           && received_bytes < k_router_recv_batch_byte_limit
-           && std::chrono::steady_clock::now () < deadline) {
-        napi_value received = NULL;
-        size_t message_bytes = 0;
-        const int rc = try_subscribe_message_value (
-          env, sock, &received, &message_bytes);
-        if (rc != ZLINK_RECV_OK) {
-            if (zlink_errno () == EAGAIN)
-                break;
-            return throw_last_error (env,
-                                     "socketTrySubscribeMessageBatch failed");
-        }
-        if (napi_set_element (env, out, count++, received) != napi_ok)
-            return NULL;
-        received_bytes += message_bytes;
-    }
-    return out;
 }
 
 napi_value socket_send_ready_handler (napi_env env, napi_callback_info info)
@@ -2895,11 +2774,13 @@ napi_value subscription_at (napi_env env, napi_callback_info info)
 
 napi_value socket_stream_attach (napi_env env, napi_callback_info info)
 {
-    napi_value argv[3];
-    size_t argc = 3;
+    napi_value argv[4];
+    size_t argc = 4;
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
     if (argc < 2) {
-        napi_throw_type_error (env, NULL, "streamAttach requires (socket, handler[, mode])");
+        napi_throw_type_error (
+          env, NULL,
+          "streamAttach requires (socket, handler[, mode[, bodyMaterialization]])");
         return NULL;
     }
 
@@ -2918,6 +2799,15 @@ napi_value socket_stream_attach (napi_env env, napi_callback_info info)
         napi_get_value_int32 (env, argv[2], &mode);
     if (mode != k_stream_dispatch_len32be) {
         napi_throw_range_error (env, NULL, "streamAttach mode must be PACKET(1)");
+        return NULL;
+    }
+
+    int32_t body_materialization = 0;
+    if (argc >= 4)
+        napi_get_value_int32 (env, argv[3], &body_materialization);
+    if (body_materialization != 0 && body_materialization != 1) {
+        napi_throw_range_error (env, NULL,
+                                "streamAttach body materialization must be Native(0) or Managed(1)");
         return NULL;
     }
 
@@ -2940,6 +2830,7 @@ napi_value socket_stream_attach (napi_env env, napi_callback_info info)
         std::lock_guard<std::mutex> lock (g_stream_slots_mu);
         bind_tsfn_subject_slot_unsafe (slot, &stream_js_state_t::socket, sock, env, tsfn);
         slot->stop_requested.store (0, std::memory_order_release);
+        slot->body_materialization = body_materialization;
         slot->peer_routing_ids.clear ();
     }
 
@@ -3483,113 +3374,6 @@ napi_value router_try_recv_message (napi_env env, napi_callback_info info)
       create_router_recv_message_value (env, peer_rid, request_seq, transport_pair_id,
                                         transport_pair_generation, parts.data (), parts.size ());
     close_msg_vector (parts);
-    return out;
-}
-
-napi_value router_try_recv_message_batch (napi_env env, napi_callback_info info)
-{
-    napi_value argv[2];
-    size_t argc = 2;
-    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
-    if (argc < 2) {
-        napi_throw_type_error (env, NULL, "routerRecvMessageBatchNoWait requires socket and batch size");
-        return NULL;
-    }
-    void *router = NULL;
-    napi_get_value_external (env, argv[0], &router);
-    int32_t max_count = 0;
-    if (napi_get_value_int32 (env, argv[1], &max_count) != napi_ok || max_count < 1
-        || max_count > 64) {
-        napi_throw_range_error (env, NULL, "batch size must be 1..64");
-        return NULL;
-    }
-    napi_value out;
-    napi_create_array (env, &out);
-    zlink_routing_id_t peer_rids[64];
-    uint64_t request_seqs[64] = {};
-    uint64_t pair_ids[64] = {};
-    uint64_t pair_generations[64] = {};
-    zlink_msg_t parts[64];
-    zlink_part_flag_t part_flags[64];
-    for (int32_t index = 0; index < max_count; ++index)
-        zlink_msg_init (&parts[index]);
-    size_t part_count = 0;
-    const zlink_recv_result_t result = recv_router_parts_nowait_batch (
-      router, peer_rids, request_seqs, pair_ids, pair_generations, parts, part_flags,
-      static_cast<size_t> (max_count), &part_count);
-    for (size_t index = part_count; index < static_cast<size_t> (max_count); ++index)
-        zlink_msg_close (&parts[index]);
-    if (result == ZLINK_RECV_NO_DATA)
-        return out;
-    if (result != ZLINK_RECV_OK) {
-        close_recv_parts (parts, part_count);
-        return throw_last_error (env, "routerRecvMessageBatchNoWait failed");
-    }
-    uint32_t count = 0;
-    size_t start = 0;
-    for (size_t index = 0; index < part_count; ++index) {
-        if (part_flags[index] != ZLINK_PART_FINAL)
-            continue;
-        napi_value received = create_router_recv_message_value (
-          env, peer_rids[start], request_seqs[start], pair_ids[start], pair_generations[start],
-          &parts[start], index - start + 1);
-        if (!received) {
-            close_recv_parts (parts, part_count);
-            return NULL;
-        }
-        napi_set_element (env, out, count++, received);
-        start = index + 1;
-    }
-
-    if (start < part_count) {
-        std::vector<zlink_msg_t> trailing_parts;
-        for (size_t index = start; index < part_count; ++index) {
-            if (!append_msg_move (&trailing_parts, &parts[index])) {
-                close_msg_vector (trailing_parts);
-                close_recv_parts (parts, part_count);
-                errno = ENOMEM;
-                return throw_last_error (env, "routerRecvMessageBatchNoWait failed");
-            }
-        }
-
-        zlink_part_flag_t has_more = part_flags[part_count - 1];
-        while (has_more == ZLINK_PART_MORE) {
-            const zlink_routing_id_t *source_rid = NULL;
-            uint64_t request_seq = 0;
-            uint64_t pair_id = 0;
-            uint64_t pair_generation = 0;
-            zlink_msg_t next_part;
-            if (zlink_msg_init (&next_part) != 0) {
-                close_msg_vector (trailing_parts);
-                close_recv_parts (parts, part_count);
-                return throw_last_error (env, "routerRecvMessageBatchNoWait failed");
-            }
-            const zlink_recv_result_t next_result = zlink_router_recv_part_v2 (
-              router, &source_rid, &request_seq, &pair_id, &pair_generation, &next_part,
-              &has_more, ZLINK_RECV_FLAGS_DONTWAIT);
-            if (next_result != ZLINK_RECV_OK
-                || !append_msg_move (&trailing_parts, &next_part)) {
-                zlink_msg_close (&next_part);
-                close_msg_vector (trailing_parts);
-                close_recv_parts (parts, part_count);
-                if (next_result == ZLINK_RECV_OK)
-                    errno = ENOMEM;
-                return throw_last_error (env, "routerRecvMessageBatchNoWait failed");
-            }
-        }
-
-        napi_value received = create_router_recv_message_value (
-          env, peer_rids[start], request_seqs[start], pair_ids[start], pair_generations[start],
-          trailing_parts.data (), trailing_parts.size ());
-        if (!received) {
-            close_msg_vector (trailing_parts);
-            close_recv_parts (parts, part_count);
-            return NULL;
-        }
-        napi_set_element (env, out, count, received);
-        close_msg_vector (trailing_parts);
-    }
-    close_recv_parts (parts, part_count);
     return out;
 }
 

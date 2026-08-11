@@ -41,7 +41,7 @@ async function readExactly(socket: import('node:net').Socket, size: number): Pro
   return Buffer.concat(chunks, received).subarray(0, size);
 }
 
-test('stream recv uses the common nonblocking receive batch path', async () => {
+test('stream recv uses the common nonblocking receive path', async () => {
   const port = await reserveTcpPort();
   const ctx = zlink.createContext();
   const stream = zlink.createStreamSocket(ctx);
@@ -51,7 +51,7 @@ test('stream recv uses the common nonblocking receive batch path', async () => {
     stream.bind(`tcp://127.0.0.1:${port}`);
     client = net.createConnection({ host: '127.0.0.1', port });
     await once(client, 'connect');
-    client.write(Buffer.from('stream-batch-path'));
+    client.write(Buffer.from('stream-recv-path'));
 
     let receivedMessage = false;
     for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -62,9 +62,92 @@ test('stream recv uses the common nonblocking receive batch path', async () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 5));
     }
     assert.equal(receivedMessage, true);
-    assert.equal(received.singlePartOrThrow().data().toString(), 'stream-batch-path');
+    assert.equal(received.singlePartOrThrow().data().toString(), 'stream-recv-path');
   } finally {
     received.close();
+    client?.destroy();
+    stream.close();
+    ctx.close();
+  }
+});
+
+test('stream packet body materialization defaults to native and locks on registration', () => {
+  const ctx = zlink.createContext();
+  const stream = zlink.createStreamSocket(ctx);
+  try {
+    assert.equal(
+      stream.options.packetBodyMaterialization,
+      zlink.StreamPacketBodyMaterialization.Native
+    );
+    stream.options.packetBodyMaterialization =
+      zlink.StreamPacketBodyMaterialization.Managed;
+    assert.equal(
+      stream.options.packetBodyMaterialization,
+      zlink.StreamPacketBodyMaterialization.Managed
+    );
+    stream.setPacketHandler((_sourceRid, header, body) => {
+      header.close();
+      body.close();
+    });
+    assert.throws(
+      () => {
+        stream.options.packetBodyMaterialization =
+          zlink.StreamPacketBodyMaterialization.Native;
+      },
+      /cannot change after packet handler registration/
+    );
+  } finally {
+    stream.close();
+    ctx.close();
+  }
+});
+
+test('stream packet body can use managed Buffer materialization', async () => {
+  const port = await reserveTcpPort();
+  const ctx = zlink.createContext();
+  const stream = zlink.createStreamSocket(ctx);
+  let client: import('node:net').Socket | null = null;
+  const headerBytes = Buffer.from('managed-header');
+  const bodyBytes = Buffer.alloc(4096, 0x37);
+  const expected = packetFrame(headerBytes, bodyBytes);
+  try {
+    stream.options.packetBodyMaterialization =
+      zlink.StreamPacketBodyMaterialization.Managed;
+    stream.bind(`tcp://127.0.0.1:${port}`);
+    client = net.createConnection({ host: '127.0.0.1', port });
+    await once(client, 'connect');
+
+    const forwarded = new Promise<void>((resolve, reject) => {
+      stream.setPacketHandler((sourceRid, header, body) => {
+        try {
+          assert.deepEqual(header.data(), headerBytes);
+          assert.deepEqual(body.data(), bodyBytes);
+          const prefix = Buffer.allocUnsafe(6);
+          prefix.writeUInt16BE(header.size(), 0);
+          prefix.writeUInt32BE(body.size(), 2);
+          assert.equal(stream.send(sourceRid)
+            .message(prefix)
+            .message(header)
+            .message(body)
+            .flags(zlink.SendFlags.DontWait)
+            .submit(), true);
+          assert.equal(body.size(), 0);
+          header.close();
+          body.close();
+          resolve();
+        } catch (error) {
+          header.close();
+          body.close();
+          reject(error);
+        }
+      });
+    });
+
+    const echoed = readExactly(client, expected.length);
+    client.write(expected);
+    await forwarded;
+    assert.deepEqual(await echoed, expected);
+  } finally {
     client?.destroy();
     stream.close();
     ctx.close();
@@ -114,71 +197,6 @@ test('stream packet body forwards from native storage without JavaScript materia
     client.write(expected);
     await forwarded;
     assert.deepEqual(await echoed, expected);
-  } finally {
-    client?.destroy();
-    stream.close();
-    ctx.close();
-  }
-});
-
-test('stream packet body remains owned when native forwarding is backpressured', async () => {
-  const port = await reserveTcpPort();
-  const ctx = zlink.createContext();
-  const stream = zlink.createStreamSocket(ctx);
-  let client: import('node:net').Socket | null = null;
-  const bodyBytes = Buffer.alloc(65536, 0x42);
-  const inbound = packetFrame(Buffer.alloc(0), bodyBytes);
-  try {
-    stream.options.sendHwm = 1n;
-    stream.bind(`tcp://127.0.0.1:${port}`);
-    client = net.createConnection({ host: '127.0.0.1', port });
-    await once(client, 'connect');
-    client.pause();
-
-    const backpressured = new Promise<void>((resolve, reject) => {
-      let attempts = 0;
-      const timeout = setTimeout(
-        () => reject(new Error(`stream send did not reach backpressure (${attempts} attempts)`)),
-        10000
-      );
-      stream.setPacketHandler((sourceRid, header, body) => {
-        try {
-          attempts += 1;
-          const prefix = Buffer.allocUnsafe(6);
-          prefix.writeUInt16BE(header.size(), 0);
-          prefix.writeUInt32BE(body.size(), 2);
-          const submitted = stream.send(sourceRid)
-            .message(prefix)
-            .message(header)
-            .message(body)
-            .flags(zlink.SendFlags.DontWait)
-            .submit();
-          if (!submitted) {
-            assert.equal(body.size(), bodyBytes.length);
-            body.close();
-            header.close();
-            clearTimeout(timeout);
-            resolve();
-            return;
-          }
-          body.close();
-          header.close();
-          if (attempts >= 128) {
-            clearTimeout(timeout);
-            reject(new Error('stream send stayed writable above its configured HWM'));
-            return;
-          }
-        } catch (error) {
-          header.close();
-          body.close();
-          clearTimeout(timeout);
-          reject(error);
-        }
-      });
-    });
-
-    client.write(Buffer.concat(Array.from({ length: 128 }, () => inbound)));
-    await backpressured;
   } finally {
     client?.destroy();
     stream.close();

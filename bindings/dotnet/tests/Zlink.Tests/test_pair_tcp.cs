@@ -56,7 +56,8 @@ public sealed class test_pair_tcp
 
         using Message part1 = Message.From("hello");
         using Message part2 = Message.From("world");
-        client.Send().Message(part1).Message(part2).Submit();
+        Assert.True(client.Send().Message(part1).Message(part2)
+            .Flags(SendFlags.DontWait).Submit());
 
         var received = Received.Create();
         server.Recv(received);

@@ -7,6 +7,7 @@ export {
   RecvFlags,
   RidDuplicatePolicy,
   SubmitRetryMode,
+  StreamPacketBodyMaterialization,
   PollEventFlag,
 } from './socket_constants';
 export type {
@@ -16,6 +17,7 @@ export type {
   RecvFlags as RecvFlagsValue,
   RidDuplicatePolicy as RidDuplicatePolicyValue,
   SubmitRetryMode as SubmitRetryModeValue,
+  StreamPacketBodyMaterialization as StreamPacketBodyMaterializationValue,
   PollEventFlagValue,
 } from './socket_constants';
 export type {

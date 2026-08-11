@@ -48,6 +48,15 @@ export type SubmitRetryMode =
   typeof SubmitRetryMode[keyof typeof SubmitRetryMode];
 export type SubmitRetryModeValue = SubmitRetryMode;
 
+/** How a STREAM packet callback materializes its body Message. */
+export const StreamPacketBodyMaterialization = Object.freeze({
+  Native: 0,
+  Managed: 1
+} as const);
+export type StreamPacketBodyMaterialization =
+  typeof StreamPacketBodyMaterialization[keyof typeof StreamPacketBodyMaterialization];
+export type StreamPacketBodyMaterializationValue = StreamPacketBodyMaterialization;
+
 /** Readiness conditions a poll source can be watched for or report (readable, writable, error). */
 export const PollEventFlag = Object.freeze({
   PollIn: 1,

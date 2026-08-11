@@ -79,6 +79,14 @@ async function main() {
     const pending = { items: [], head: 0 };
     try {
         applySocketPolicy(stream);
+        const bodyMaterialization = (process.env.PERF_STREAM_PACKET_BODY_MATERIALIZATION ?? 'native').toLowerCase();
+        if (bodyMaterialization === 'managed') {
+            stream.options.packetBodyMaterialization =
+                zlink.StreamPacketBodyMaterialization.Managed;
+        }
+        else if (bodyMaterialization !== 'native') {
+            throw new Error('PERF_STREAM_PACKET_BODY_MATERIALIZATION must be native or managed');
+        }
         configureTlsServer(stream, options.transport);
         applyAutoHwmMsgUnit(ctx, options.msgSize);
         ctx.recalculateAutoHwm();

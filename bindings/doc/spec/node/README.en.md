@@ -696,12 +696,31 @@ created the logical spot.
 - Non-blocking no-data returns `false`, distinct from a thrown error.
 - A SPOT readable dispatch event is a readiness notification. The caller
   drains the matching receive API until it reaches no-data.
-- Native-backed buffers become owned `Message` objects without an
-  additional JavaScript buffer concatenation.
+- Each part received from a general socket, routed socket, subscription, or
+  request completion becomes a `Message` whose payload is a JavaScript-owned
+  `Buffer` created by the addon. Reading the payload does not require another
+  native call, and Node manages the `Buffer` lifetime after the `Message` is
+  closed.
 - A service control/admission receive path such as Actor join request
   receive can use a nullable, `undefined`, or tagged result-return shape
   when that is clearer than reusable data-plane storage. It still
   distinguishes no-data from a thrown hard receive error.
+
+### STREAM Packet Body Storage
+
+A STREAM packet callback receives its header in a JavaScript-owned `Buffer`,
+the same as other Node receive paths. The socket's
+`packetBodyMaterialization` option selects the body storage.
+
+| Value | `Message` passed to the callback | Primary use |
+|---|---|---|
+| `StreamPacketBodyMaterialization.Native` | Owns the Core native frame, and `data()` returns a view of that frame. | Relaying a body to another STREAM send without reading it |
+| `StreamPacketBodyMaterialization.Managed` | Copies the body into a JavaScript-owned `Buffer` before invoking the callback. | Reading the body in JavaScript or passing it to a managed API |
+
+The default is `Native`. The option cannot change after a packet handler is
+registered. It changes only the packet callback body; it does not change direct
+STREAM receive, framing, ordering, HWM, timeout, or backpressure results. Both
+values have the same public `Message` ownership and explicit close responsibility.
 
 ## Error and Validation Policy
 
