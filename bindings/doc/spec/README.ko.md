@@ -22,9 +22,10 @@ title: "바인딩 API 정책"
 ## 구현 전 초안
 
 - [바인딩 Message 객체와 ownership 공통 계약](draft/message-ownership.ko.md)은
-  `Message`가 Core native frame을 직접 소유하고 Core 결과에 맞춰 ownership을 이전하도록
-  모든 binding을 정렬하는 목표 계약이다. 현재 공개 계약이 아니며, 하단의 구현 gap을
-  해소한 뒤 정식 공통 spec으로 승격한다.
+  Core 결과에 맞춘 `Message` ownership을 모든 binding에서 동일하게 제공하는 목표
+  계약이다. 기본 구현은 native frame을 직접 소유하며, 기존 perf에서 효과가 확인된 내부
+  최적화만 같은 public 동작을 유지하면서 허용한다. 현재 공개 계약이 아니며, 하단의 구현
+  gap을 해소한 뒤 정식 공통 spec으로 승격한다.
 
 | 절 | 다루는 내용 |
 |---|---|
