@@ -62,8 +62,10 @@ function materializeParts(parts: MessageSnapshot[]): Message[] {
 }
 
 function materializeReceivedParts(raw: NativeReceivedRaw): Message[] {
-  if (raw.data && raw.routingId && raw.routingId.length > 0) {
-    return [messageFromOwnedRoutedBuffer(raw.data, raw.routingId)];
+  if (raw.data !== undefined) {
+    return raw.routingId && raw.routingId.length > 0
+      ? [messageFromOwnedRoutedBuffer(raw.data, raw.routingId)]
+      : [messageFromOwnedBuffer(raw.data)];
   }
   return materializeParts(raw.parts ?? []);
 }

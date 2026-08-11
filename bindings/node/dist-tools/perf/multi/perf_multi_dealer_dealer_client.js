@@ -63,20 +63,25 @@ async function main() {
         const activeStopNs = currentEpochNs() + BigInt(Math.floor(options.duration * 1_000_000_000));
         let seq = 1n;
         while (currentEpochNs() < activeStopNs) {
-            let progressed = false;
+            let pendingCount = 0;
             for (let i = 0; i < dealers.length; i += 1) {
                 if (pending[i]) {
+                    pendingCount += 1;
                     continue;
                 }
-                stampPayload(payloads[i], { phase: 1, runId: 1, msgSize: options.msgSize, seq });
-                if (!trySocketSend(dealers[i], payloads[i])) {
-                    pending[i] = true;
-                    continue;
+                // Match the C sender window: keep one writable socket active until
+                // backpressure occurs, then wait for POLLOUT before returning to it.
+                while (currentEpochNs() < activeStopNs) {
+                    stampPayload(payloads[i], { phase: 1, runId: 1, msgSize: options.msgSize, seq });
+                    if (!trySocketSend(dealers[i], payloads[i])) {
+                        pending[i] = true;
+                        pendingCount += 1;
+                        break;
+                    }
+                    seq += 1n;
                 }
-                seq += 1n;
-                progressed = true;
             }
-            if (progressed) {
+            if (currentEpochNs() >= activeStopNs || pendingCount === 0) {
                 continue;
             }
             const readyCount = poller.wait(pollBuffer, -1);

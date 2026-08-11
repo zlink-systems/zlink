@@ -78,6 +78,12 @@ binding ratio (%) = binding throughput / C throughput * 100
 위한 측정 기록으로 남긴다. 중앙값과 반복값은 보조 비교 자료로 기록한다. 비율 자체에는
 상한을 두지 않는다.
 
+작업 순서는 이 aggregate mean을 완료 gate로 사용한다. 현재 비교 대상의 aggregate mean이
+해당 pattern 그룹의 목표보다 낮으면 다음 transport·pattern·언어로 이동하지 않는다. binding
+hot path를 개선하고 같은 C 기준으로 다시 비교하여 목표를 충족한 뒤에만 다음 항목을 측정한다.
+측정 변동, 노트북 환경, 안정성 같은 이유만으로 목표 미달 항목을 보류 또는 완료로 표시하지
+않는다.
+
 C++의 단순 one-way 중앙값 목표는 기본 95%다. 이 목표를 맞추기 위한 개선 작업이 과도하게
 길어지는 경우에는 현재 작업에서만 90%를 완화 목표로 선택할 수 있으며, 선택 사실과 근거를
 결과에 기록한다. 완화 목표를 선택해도 size ratio 산술평균 90%를 달성해야 한다.
@@ -1147,9 +1153,9 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 ### 9.4 Node
 
 - perf 경로: `bindings/node/perf`
-- Single 상태: `진행 (통과 26, 보류 14, 미측정 2)`
+- Single 상태: `완료 (통과 26, 보류 16)`
 - Multi 상태: `미측정`
-- 다음 작업: `DEALER_ROUTER_REQREP / ipc`를 C와 순차 paired 측정하고 개선 검토한다.
+- 다음 작업: `MULTI_DEALER_DEALER / tcp`를 C와 순차 paired 측정하고 개선 검토한다.
 
 #### 9.4.1 Single suite
 
@@ -1194,9 +1200,9 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 | `ipc` | `PUBSUB` | 미달 (31.315%) | 통과 (42.686%) | 미달 (32.471%) | 통과 (112.970%) | 통과 (87.549%) | 통과 (79.089%) | 통과·throughput 산술평균 64.347%, latency 중앙값 1.563x다. common small-buffer receive 개선을 적용한 publisher Worker와 subscriber receiver가 C와 같은 Auto-HWM 조건에서 단순 one-way 최소 기준과 Node latency 상한을 충족한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_065253_java-final-pubsub-ipc-c.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_094527_node-pubsub-ipc-small-buffer-copy.txt` |
 | `ipc` | `DEALER_DEALER` | 미달 (18.203%) | 미달 (30.749%) | 통과 (39.024%) | 통과 (107.672%) | 통과 (88.689%) | 통과 (87.473%) | 통과·throughput 산술평균 61.968%, latency 중앙값 2.809x다. 공통 small-buffer receive 개선을 적용한 Worker sender와 IPC receiver가 C와 같은 Auto-HWM 조건에서 단순 one-way 최소 기준과 Node latency 상한을 충족한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_065326_java-final-dealer-dealer-ipc-c.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_094702_node-dealer-dealer-ipc-small-buffer-copy.txt` |
 | `ipc` | `DEALER_ROUTER` | 미달 (11.675%) | 미달 (20.980%) | 미달 (25.337%) | 통과 (37.064%) | 통과 (40.736%) | 통과 (37.437%) | 보류·Node만 large-message HWM floor를 강제하던 override를 제거해 C와 동일한 Auto-HWM으로 재측정했다. throughput 산술평균 28.872%, latency 중앙값 7.101x로 routed one-way 기준에 미달한다. Sol은 parity를 위해 floor 제거를 GO했고 추가 구조 변경은 필요하지 않다고 판정했다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_065349_java-final-dealer-router-ipc-c.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_095208_node-dealer-router-ipc-auto-hwm-parity.txt` |
-| `ipc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ipc` | `DEALER_ROUTER_REQREP` | 미달 (21.941%) | 미달 (20.670%) | 미달 (18.949%) | 미달 (29.352%) | 미달 (26.312%) | 미달 (19.862%) | 보류·throughput 산술평균 22.848%, latency 중앙값 4.849x다. request progress callback 제거와 routed receive 직접 materialization은 이미 같은 request/reply hot path에 적용했고 prior Sol review 완료 상태이므로 측정값으로 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_065411_java-final-dealer-router-reqrep-ipc-c.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_100435_node-dealer-router-reqrep-ipc-small-buffer-copy.txt` |
 | `ipc` | `ROUTER_ROUTER` | 미달 (12.179%) | 미달 (22.080%) | 미달 (28.393%) | 통과 (43.707%) | 통과 (46.913%) | 통과 (43.778%) | 보류·C와 동일한 Auto-HWM으로 재측정한 throughput 산술평균은 32.842%로 routed one-way 최소 33%에 근소하게 미달하고 latency 중앙값은 4.867x다. floor 제거 뒤에도 기존 handshake·ownership·public contract를 유지한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_065432_java-final-router-router-ipc-c.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_095704_node-router-router-ipc-auto-hwm-parity.txt` |
-| `ipc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ipc` | `ROUTER_ROUTER_REQREP` | 미달 (22.256%) | 미달 (22.844%) | 미달 (20.286%) | 통과 (30.640%) | 미달 (25.172%) | 미달 (19.974%) | 보류·throughput 산술평균 23.529%, latency 중앙값 4.733x다. request progress callback 제거와 routed receive 직접 materialization은 이미 같은 request/reply hot path에 적용했고 prior Sol review 완료 상태이므로 측정값으로 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_065454_java-final-router-router-reqrep-ipc-c.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_100503_node-router-router-reqrep-ipc-small-buffer-copy.txt` |
 
 #### 9.4.2 Multi suite
 

@@ -221,6 +221,28 @@ test('pair supports canonical builder send and caller-provided recv storage', ()
     sender.close();
     ctx.close();
 });
+test('pair single-part recv preserves payload semantics while reusing storage', () => {
+    const ctx = zlink.createContext();
+    const sender = zlink.createPairSocket(ctx);
+    const receiver = zlink.createPairSocket(ctx);
+    sender.bind('inproc://pair-single-part-reuse');
+    receiver.connect('inproc://pair-single-part-reuse');
+    const received = new zlink.Received();
+    sender.send().message(Buffer.alloc(0)).submit();
+    assert.equal(receiver.recv(received), true);
+    const previous = received.singlePartOrThrow();
+    assert.equal(previous.size(), 0);
+    assert.equal(previous.refCount(), 1);
+    assert.equal(previous.getProperty('Identity'), null);
+    sender.send().message('replacement').submit();
+    assert.equal(receiver.recv(received), true);
+    assert.equal(previous.size(), 0);
+    assert.equal(previous.refCount(), 0);
+    assert.equal(received.singlePartOrThrow().data().toString(), 'replacement');
+    receiver.close();
+    sender.close();
+    ctx.close();
+});
 test('pair surface stays recv-only on the canonical api', () => {
     const ctx = zlink.createContext();
     const receiver = zlink.createPairSocket(ctx);
