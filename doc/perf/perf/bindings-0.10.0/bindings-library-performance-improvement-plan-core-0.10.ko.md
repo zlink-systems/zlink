@@ -1981,10 +1981,10 @@ runs `1`, auto-HWM `balanced`, 64·256·1024·4096·65536·131072B 조건에서 
 | Binding | C 대비 throughput ratio | 산술평균 | 평균 latency ratio | 판정 |
 |---|---|---:|---:|---|
 | .NET | 80.431% / 84.027% / 84.921% / 86.635% / 127.538% / 135.780% | 99.889% | 1.103x | 통과·기존 routed receive wrapper pool 유지 |
-| Java | 61.157% / 54.576% / 57.909% / 54.630% / 96.175% / 82.310% | 67.793% | 1.590x | 개선 채택·목표 미달로 다음 개선 계속 |
+| Java | 61.876% / 58.567% / 61.442% / 57.064% / 96.148% / 93.513% | 71.435% | 1.517x | 개선 채택·자체 및 Sol 추가 후보 A/B 완료·목표 미달 보류 |
 
-Java 최종 throughput은 적용 전 저장값 대비 size별 `117.815% / 109.603% / 109.726% /
-102.049% / 144.193% / 121.791%`, 산술평균 `117.529%`다. Sol lifecycle 리뷰 뒤 owner
+Java 최종 throughput은 적용 전 저장값 대비 size별 `117.548% / 118.037% / 114.139% /
+108.522% / 146.487% / 133.232%`, 산술평균 `122.994%`다. Sol lifecycle 리뷰 뒤 owner
 alias가 제거된 성공 receive cleanup만 wrapper를 반환하도록 범위를 제한했다. DEALER receive와
 receive 실패 wrapper 반환 후보는 종료 회귀가 발생해 제외했다.
 최종 Sol 리뷰가 지적한 기존 idempotent close 정책 충돌은 승인된 반환 후 reference 사용 금지
@@ -1995,7 +1995,15 @@ GO 판정했다.
 - C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_163324_dotnet-wrapper-current-c.txt`
 - .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260811_163343_dotnet-wrapper-current.txt`
 - Java 적용 전: `/home/hep7hep7/project/zlink/bindings/java/perf/results/multi/report/perf_java_multi_linux_20260811_072513_java-multi-dealer-router-sendsend-tcp-ready-rid-final.txt`
-- Java 최종: `/home/hep7hep7/project/zlink/bindings/java/perf/results/multi/report/perf_java_multi_linux_20260811_165320_java-message-wrapper-pool-single-send.txt`
+- Java wrapper pool 적용: `/home/hep7hep7/project/zlink/bindings/java/perf/results/multi/report/perf_java_multi_linux_20260811_165320_java-message-wrapper-pool-single-send.txt`
+- Java 최종: `/home/hep7hep7/project/zlink/bindings/java/perf/results/multi/report/perf_java_multi_linux_20260811_172826_java-raw-rid-senders.txt`
+
+Java 최종 후보는 single-part routed echo에서 `RoutingId` 객체와 capturing sender lambda를
+매 receive마다 만들지 않고, raw routing-id bytes와 socket별 고정 sender를 사용한다. 기존 wrapper
+pool 결과 대비 throughput 산술평균은 `104.803%`다. 자체 추가 후보인 DEALER 고정 invoker는
+`90.885%`, Sol 제안의 DONT_WAIT receive/errno bridge 후보는 `97.787%`로 최종 후보보다 낮아
+제거했다. 두 후보 모두 짧은 단일 perf의 측정값으로 판정했으며, 추가 저위험 hot path 후보가 없어
+routed one-way 목표 `85%` 미달 상태를 `보류`한다.
 
 ## 12. 완료 기준
 

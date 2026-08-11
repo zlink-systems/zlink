@@ -21,6 +21,33 @@ DEALER caller-provided receive와 no-data receive 실패 wrapper까지 pool 범�
 
 - .NET Release test: `149 passed, 0 failed, 0 skipped`.
 - Java test: `75 tests, 0 failures, 0 errors, 0 skipped`.
-- Java 적용 전 대비 최종 throughput 산술평균 개선: `17.529%`.
-- Java C 대비 throughput ratio 산술평균: `67.793%`. Routed one-way 목표 `85%`에 미달하므로 Java 완료로 판정하지 않는다.
+- Java 적용 전 대비 최종 throughput 산술평균 개선: `22.994%`.
+- Java C 대비 throughput ratio 산술평균: `71.435%`, 평균 latency ratio: `1.517x`.
 - 모든 C, .NET, Java perf는 병렬 실행하지 않고 종료를 확인한 뒤 다음 process를 실행했다.
+
+## Java routed echo 추가 개선
+
+Wrapper pool 적용 뒤 single-part routed echo에서 매 receive마다 `RoutingId` 객체와 capturing
+sender lambda를 만드는 비용을 제거했다. `Received`는 raw routing-id bytes와 socket별 고정
+single/multipart sender를 내부에서 보관하며, multipart 또는 request/reply fallback만 기존
+`RoutingId` 경로를 사용한다. Public API signature와 send ownership/error mapping은 유지했다.
+
+Retained 후보는 C 대비 size별 `61.876% / 58.567% / 61.442% / 57.064% / 96.148% /
+93.513%`, 산술평균 `71.435%`를 기록했다. Wrapper pool 적용 결과 대비 산술평균은
+`104.803%`다.
+
+자체 두 번째 후보로 DEALER의 매 호출 lambda를 socket별 고정 method reference로 바꿨다.
+75개 test는 통과했지만 retained 후보 대비 throughput 산술평균이 `90.885%`여서 제거했다.
+
+Sol 리뷰는 DONT_WAIT receive 실패와 후속 `zlink_errno()`를 binding native bridge 한 번으로
+합치는 후보를 제안했다. Public API와 Core ABI를 바꾸지 않고 구현했으며 75개 test가 통과했다.
+C 대비 throughput 산술평균은 `69.915%`, retained 후보 대비 `97.787%`여서 제거했다.
+
+두 번째 자체 후보와 Sol 후보 모두 실제 public receive/send 경로에서 검증했지만 성능이
+하락했다. 추가 저위험 hot path 후보가 없어 routed one-way 목표 `85%` 미달 상태를
+측정값 기준 `보류`로 확정했다.
+
+- paired C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_172800_java-raw-rid-c.txt`
+- retained Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/multi/report/perf_java_multi_linux_20260811_172826_java-raw-rid-senders.txt`
+- rejected own candidate: `/home/hep7hep7/project/zlink/bindings/java/perf/results/multi/report/perf_java_multi_linux_20260811_173428_java-stable-dealer-invokers.txt`
+- rejected Sol candidate: `/home/hep7hep7/project/zlink/bindings/java/perf/results/multi/report/perf_java_multi_linux_20260811_173640_java-recv-errno-bridge.txt`

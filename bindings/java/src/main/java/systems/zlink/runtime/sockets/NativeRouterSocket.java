@@ -35,6 +35,10 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
     private final RouterSocketOptions options = ContractAccess.routerSocketOptions(this);
     private final Object routedRequests =
       InternalAccess.routerReceiveSupport(this, false);
+    private final ContractAccess.RoutedSingleSendInvoker receivedSingleSender =
+      this::sendReceivedSingle;
+    private final ContractAccess.RoutedMultipartSendInvoker receivedMultipartSender =
+      this::sendReceivedMultipart;
 
     NativeRouterSocket(Context ctx) {
         super(ctx, SocketType.ROUTER);
@@ -67,6 +71,17 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
     private boolean sendInternal(RoutingId rid, List<Message> parts, SendFlags flags) {
         return runtime().send(rid, parts, SendFlag.fromValue(flags.value()));
     }
+    private boolean sendReceivedSingle(byte[] routingIdBytes, Message part,
+                                       SendFlags flags) {
+        return runtime().send(routingIdBytes, part,
+            SendFlag.fromValue(flags.value()));
+    }
+    private boolean sendReceivedMultipart(byte[] routingIdBytes,
+                                          List<Message> parts,
+                                          SendFlags flags) {
+        return sendInternal(ContractAccess.routingIdFromTrusted(routingIdBytes),
+            parts, flags);
+    }
     /** Receives into caller-provided storage. */
     public boolean recv(Received result, RecvFlags flags) {
         java.util.Objects.requireNonNull(result, "result");
@@ -85,6 +100,11 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
     }
 
     void attachSendSender(Received result) {
+        if (ContractAccess.receivedHasRoutingIdBytes(result)) {
+            ContractAccess.receivedSetRoutedSenders(result,
+                receivedSingleSender, receivedMultipartSender);
+            return;
+        }
         RoutingId nodeRid = result.getRoutingId().orElse(null);
         if (nodeRid == null) return;
         ContractAccess.receivedSetSendSender(result, (parts, flags) ->

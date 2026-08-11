@@ -63,6 +63,8 @@ public final class Received implements AutoCloseable {
     private BiConsumer<List<Message>, SendFlags> replySender;
     private BiFunction<List<Message>, SendFlags, Boolean> sendSender;
     private BiFunction<Message, SendFlags, Boolean> singleSendSender;
+    private ContractAccess.RoutedSingleSendInvoker routedSingleSendSender;
+    private ContractAccess.RoutedMultipartSendInvoker routedMultipartSendSender;
     private byte[] routingIdBytes;
     private Runnable onTerminalState;
     private ArrayList<Message> realizedParts;
@@ -177,6 +179,19 @@ public final class Received implements AutoCloseable {
             }
 
             @Override
+            public void setRoutedSenders(
+              Received received,
+              ContractAccess.RoutedSingleSendInvoker singleSender,
+              ContractAccess.RoutedMultipartSendInvoker multipartSender) {
+                received.setRoutedSenders(singleSender, multipartSender);
+            }
+
+            @Override
+            public boolean hasRoutingIdBytes(Received received) {
+                return received.routingIdBytes != null;
+            }
+
+            @Override
             public void adoptFrom(Received target, Received source) {
                 target.adoptFrom(source);
             }
@@ -195,6 +210,8 @@ public final class Received implements AutoCloseable {
         this.replySender = null;
         this.sendSender = null;
         this.singleSendSender = null;
+        this.routedSingleSendSender = null;
+        this.routedMultipartSendSender = null;
         this.routingIdBytes = null;
         this.onTerminalState = null;
         this.realizedParts = null;
@@ -243,6 +260,8 @@ public final class Received implements AutoCloseable {
         this.replySender = replySender;
         this.sendSender = null;
         this.singleSendSender = null;
+        this.routedSingleSendSender = null;
+        this.routedMultipartSendSender = null;
         this.onTerminalState = onTerminalState;
         if (this.realizedParts == null) {
             this.realizedParts = acquirePartsList(1);
@@ -272,6 +291,8 @@ public final class Received implements AutoCloseable {
         this.replySender = source.replySender;
         this.sendSender = source.sendSender;
         this.singleSendSender = source.singleSendSender;
+        this.routedSingleSendSender = source.routedSingleSendSender;
+        this.routedMultipartSendSender = source.routedMultipartSendSender;
         this.routingIdBytes = source.routingIdBytes;
         this.onTerminalState = source.onTerminalState;
         this.realizedParts = source.realizedParts;
@@ -285,6 +306,8 @@ public final class Received implements AutoCloseable {
         source.replySender = null;
         source.sendSender = null;
         source.singleSendSender = null;
+        source.routedSingleSendSender = null;
+        source.routedMultipartSendSender = null;
         source.routingIdBytes = null;
         source.onTerminalState = null;
         source.realizedParts = null;
@@ -567,6 +590,13 @@ public final class Received implements AutoCloseable {
         this.singleSendSender = singleSendSender;
     }
 
+    void setRoutedSenders(
+      ContractAccess.RoutedSingleSendInvoker singleSender,
+      ContractAccess.RoutedMultipartSendInvoker multipartSender) {
+        this.routedSingleSendSender = singleSender;
+        this.routedMultipartSendSender = multipartSender;
+    }
+
     private final class SendBuilder implements SendOperation, SendSubmitOperation {
         private final BuilderParts parts = new BuilderParts();
         private SendFlags flags = SendFlags.NONE;
@@ -592,9 +622,26 @@ public final class Received implements AutoCloseable {
             if (parts.isEmpty())
                 throw new IllegalArgumentException("at least one message required");
             submitted = true;
+            if (routedSingleSendSender != null && routingIdBytes != null
+                && parts.parts == null) {
+                try {
+                    return routedSingleSendSender.submit(routingIdBytes,
+                        parts.singlePart, flags);
+                } catch (IllegalStateException ex) {
+                    throw new ZlinkSubmitException(SubmitResult.TERMINATED);
+                }
+            }
             if (singleSendSender != null && parts.parts == null) {
                 try {
                     return singleSendSender.apply(parts.singlePart, flags);
+                } catch (IllegalStateException ex) {
+                    throw new ZlinkSubmitException(SubmitResult.TERMINATED);
+                }
+            }
+            if (routedMultipartSendSender != null && routingIdBytes != null) {
+                try {
+                    return routedMultipartSendSender.submit(routingIdBytes,
+                        parts.asList(), flags);
                 } catch (IllegalStateException ex) {
                     throw new ZlinkSubmitException(SubmitResult.TERMINATED);
                 }

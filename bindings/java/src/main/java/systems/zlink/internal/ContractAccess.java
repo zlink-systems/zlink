@@ -123,6 +123,18 @@ public final class ContractAccess {
         void close();
     }
 
+    @FunctionalInterface
+    public interface RoutedSingleSendInvoker {
+        boolean submit(byte[] routingIdBytes, Message message,
+                       SendFlags flags);
+    }
+
+    @FunctionalInterface
+    public interface RoutedMultipartSendInvoker {
+        boolean submit(byte[] routingIdBytes, List<Message> messages,
+                       SendFlags flags);
+    }
+
     public interface ReceivedAccess {
         Received create(RoutingId routingId, Message[] parts);
 
@@ -177,6 +189,12 @@ public final class ContractAccess {
 
         void setSingleSendSender(Received received,
                                  BiFunction<Message, SendFlags, Boolean> sendSender);
+
+        void setRoutedSenders(Received received,
+                              RoutedSingleSendInvoker singleSender,
+                              RoutedMultipartSendInvoker multipartSender);
+
+        boolean hasRoutingIdBytes(Received received);
 
         void adoptFrom(Received target, Received source);
     }
@@ -592,6 +610,18 @@ public final class ContractAccess {
       Received received,
       BiFunction<Message, SendFlags, Boolean> sendSender) {
         receivedAccess().setSingleSendSender(received, sendSender);
+    }
+
+    public static void receivedSetRoutedSenders(
+      Received received,
+      RoutedSingleSendInvoker singleSender,
+      RoutedMultipartSendInvoker multipartSender) {
+        receivedAccess().setRoutedSenders(received, singleSender,
+            multipartSender);
+    }
+
+    public static boolean receivedHasRoutingIdBytes(Received received) {
+        return receivedAccess().hasRoutingIdBytes(received);
     }
 
     public static void receivedAdoptFrom(Received target, Received source) {
