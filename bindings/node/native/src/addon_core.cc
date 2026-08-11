@@ -1818,6 +1818,7 @@ napi_value socket_close (napi_env env, napi_callback_info info)
     stream_release_slot (sock);
     release_socket_send_ready_handler_slot (sock);
     release_socket_completion_control_handler_slot (sock);
+    release_socket_request_dispatcher (sock);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -2913,7 +2914,7 @@ napi_value dealer_request (napi_env env, napi_callback_info info)
     napi_get_value_int32 (env, argv[3], &flags);
     int32_t timeout_ms = 0;
     napi_get_value_int32 (env, argv[4], &timeout_ms);
-    request_js_state_t *state = create_core_request_js_state (env, argv[2]);
+    request_js_state_t *state = create_core_request_js_state (env, dealer, argv[2]);
     if (!state) {
         close_msg_vector (parts);
         return NULL;
@@ -2961,7 +2962,7 @@ napi_value router_request (napi_env env, napi_callback_info info)
     napi_get_value_int32 (env, argv[4], &flags);
     int32_t timeout_ms = 0;
     napi_get_value_int32 (env, argv[5], &timeout_ms);
-    request_js_state_t *state = create_core_request_js_state (env, argv[3]);
+    request_js_state_t *state = create_core_request_js_state (env, router, argv[3]);
     if (!state) {
         close_msg_vector (parts);
         return NULL;
@@ -3017,7 +3018,7 @@ napi_value router_request_transport_pair (napi_env env, napi_callback_info info)
     int32_t timeout_ms = 0;
     napi_get_value_int32 (env, argv[6], &flags);
     napi_get_value_int32 (env, argv[7], &timeout_ms);
-    request_js_state_t *state = create_core_request_js_state (env, argv[5]);
+    request_js_state_t *state = create_core_request_js_state (env, router, argv[5]);
     if (!state) {
         close_msg_vector (parts);
         return NULL;

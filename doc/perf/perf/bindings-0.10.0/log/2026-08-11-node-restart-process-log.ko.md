@@ -82,3 +82,24 @@ materialization을 제안했다. Public property와 ownership을 유지하는 �
 - context 재사용: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_180856_node-restart-dealer-router-tcp-context-cache.txt`
 - 최종: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_181227_node-restart-dealer-router-tcp-context-cache-batch64.txt`
 - 제거한 Sol 후보: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_181449_node-restart-dealer-router-tcp-lazy-route.txt`
+
+## Single DEALER_ROUTER_REQREP / tcp
+
+최초 Node/C throughput 산술평균은 `23.177%`, latency ratio 중앙값은 `4.322x`였다. 자체
+검토에서 request builder마다 만들던 socket-capturing invoker를 socket별 고정 함수로 바꿔
+`23.402%`까지 개선했다.
+
+Sol 리뷰는 저위험 변경으로 범위를 제한하지 않고 실제 framework의 concurrent request에도
+적용되는 completion 경계를 검토했다. Native request마다 TSFN을 만들던 구조를 socket-scoped
+dispatcher로 바꾸고, 대기 없이 이미 준비된 completion을 최대 64개까지 한 JS 진입에서
+처리하도록 구현했다. 최종 throughput 산술평균은 `24.710%`, latency ratio 중앙값은
+`4.026x`이며 최초 대비 throughput은 `107.557%`다. Reply를 native frame으로 직접 넘기는
+후보는 `64B`와 전체 latency가 악화되어 제거했다. 자체 후보와 Sol 구조 후보를 적용한 뒤에도
+socket request/reply 최소 `30%`에 미달해 보류한다.
+
+- C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_181716_node-restart-dealer-router-reqrep-tcp-c.txt`
+- Node baseline: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_181737_node-restart-dealer-router-reqrep-tcp-context64.txt`
+- 자체 invoker: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_181833_node-restart-dealer-router-reqrep-tcp-dealer-invoker.txt`
+- socket dispatcher: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_182455_node-restart-dealer-router-reqrep-tcp-coalesced-dispatcher.txt`
+- 제거한 native-frame 후보: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_182631_node-restart-dealer-router-reqrep-tcp-native-frame-completion.txt`
+- 최종: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_182735_node-restart-dealer-router-reqrep-tcp-dispatcher-final.txt`

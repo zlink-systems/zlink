@@ -17,26 +17,32 @@ import { RoutingId, type Message, type MessageLike } from '../../contracts';
 import { SendFlags, SocketType as NativeSocketType } from '../../contracts/sockets/socket_constants';
 import type { RequestCallback, RequestOperation } from '../../contracts/messaging';
 
+const native = requireNative();
+
 export class DealerSocket extends MessageSocket {
+  private readonly requestInvoker = (
+    parts: MessageLike | readonly MessageLike[],
+    callbackOrTimeout?: RequestCallback | number,
+    flagsOrTimeout?: SendFlags | number,
+    maybeTimeout?: number,
+  ) => this.requestDirect(parts, callbackOrTimeout, flagsOrTimeout, maybeTimeout);
   readonly options: DealerSocketOptions;
   constructor(ctx: Context) { super(ctx, NativeSocketType.DEALER); this.options = DealerSocketOptions.create(this); }
   setRoutingId(routingId: RoutingId): void {
     const normalizedRoutingId = normalizeRoutingId(routingId);
     configCall('routing id set failed', () => {
-      requireNative().handleSetRoutingId(getNativeHandle(this), normalizedRoutingId);
+      native.handleSetRoutingId(getNativeHandle(this), normalizedRoutingId);
     });
   }
   getRoutingId(): RoutingId {
     return RoutingId.from(
       configCall('routing id get failed', () =>
-        requireNative().handleGetRoutingId(getNativeHandle(this)) as Buffer
+        native.handleGetRoutingId(getNativeHandle(this)) as Buffer
       )
     );
   }
   request(): RequestOperation {
-    return new RuntimeRequestOperation((parts, cbOrTimeout, opFlags, opTimeout) =>
-      this.requestDirect(parts, cbOrTimeout, opFlags, opTimeout)
-    );
+    return new RuntimeRequestOperation(this.requestInvoker);
   }
   private requestDirect(
     payloadOrParts: MessageLike | readonly MessageLike[],
@@ -52,7 +58,7 @@ export class DealerSocket extends MessageSocket {
       maybeTimeout,
       startProgress: () => startRequestProgress(nativeHandle),
       invoke: (callback, flags, timeoutMs) => {
-        requireNative().dealerRequest(
+        native.dealerRequest(
           nativeHandle,
           parts,
           callback,
