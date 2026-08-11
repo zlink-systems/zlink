@@ -58,7 +58,7 @@ import { setBufferedReceive } from './socket_receive_state';
 import { BufferedReceiveQueue } from './buffered_receive_queue';
 
 const native = requireNative();
-export const RECV_BATCH_MESSAGE_LIMIT = 16;
+export const RECV_BATCH_MESSAGE_LIMIT = 64;
 const ROUTED_RECV_BATCH_MESSAGE_LIMIT = 32;
 
 export class SendSocket extends SendReadySocket {

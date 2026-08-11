@@ -17,7 +17,10 @@ const char *get_c_string_arg (
   napi_env env, napi_value val, char *stack_buf, size_t stack_buf_size, std::string *heap_buf);
 bool build_msg_vector (napi_env env, napi_value arr, std::vector<zlink_msg_t> *out);
 bool build_msg_vector_or_single (napi_env env, napi_value value, std::vector<zlink_msg_t> *out);
-bool init_msg_from_value (napi_env env, napi_value value, zlink_msg_t *msg);
+bool init_msg_from_value (napi_env env,
+                          napi_value value,
+                          zlink_msg_t *msg,
+                          bool *contains_native_frame = NULL);
 void close_msg_vector (std::vector<zlink_msg_t> &parts);
 void release_socket_send_ready_handler_slot (void *socket);
 void release_socket_completion_control_handler_slot (void *socket);

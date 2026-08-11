@@ -206,3 +206,38 @@ hot path에 적용된다. 단순 one-way 최소 `35%`, 평균 목표 `60%`, late
 | `ipc` | `DEALER_ROUTER_REQREP` | 23.713% | 측정값 | 보류 | `192754_node-restart-dealer-router-reqrep-ipc-c` / `192813_node-restart-dealer-router-reqrep-ipc-current` |
 | `ipc` | `ROUTER_ROUTER` | 29.168% | 측정값 | 보류 | `192818_node-restart-router-router-ipc-c` / `192845_node-restart-router-router-ipc-current` |
 | `ipc` | `ROUTER_ROUTER_REQREP` | 24.884% | 측정값 | 보류 | `192850_node-restart-router-router-reqrep-ipc-c` / `192930_node-restart-router-router-reqrep-current` |
+
+## Multi DEALER_DEALER / tcp ownership regression 확인
+
+같은 pattern의 이전 28.926% 결과는 commit `8e421d7b40`에서 측정됐다. 이 시점은
+native Message ownership과 relay 경로를 추가한 commit `5530224c24`보다 앞선다. 당시 one-part
+receive는 1024B 이하 payload를 JS Buffer로 복사했고, 그보다 큰 payload만 external Buffer가
+이동한 `zlink_msg_t`를 소유했다. `Message.data()`는 JS field를 반환했고 Message 교체 시 별도
+native close 호출이 없었다.
+
+현재 공통 ownership 경로는 모든 크기에서 `native_message_frame`과 external handle을 만들며,
+payload를 읽을 때 `messageFrameData`, 재사용 `Received`가 이전 Message를 교체할 때
+`messageFrameClose`를 각각 호출한다. wrapper pool은 JS facade만 재사용하고 native frame과 Buffer는
+재사용하지 않는다. receive batch도 socket receive 경계만 묶으므로 이 두 호출은 메시지마다 남는다.
+그 결과 같은 DEALER_DEALER의 Node 절대 throughput은 64B `608492→363557`, 256B
+`566613→390032`, 1024B `486581→222914` msg/s로 낮아졌다. routed send/send는 payload를 읽지 않고
+native frame을 다시 submit하므로 같은 ownership 변경의 zero-copy 이득을 받는다. 서로 다른 pattern의
+44.511% 결과를 DEALER_DEALER 결과로 해석하면 안 된다.
+
+자체 후보로 native external과 payload Buffer를 한 객체로 합쳐 `data()` 경계 호출을 제거했다.
+regression test 21개는 통과했지만 throughput 평균은 19.62%로 낮아져 제거했다. Sol review는 Buffer
+backing-store와 Message lease를 분리하지 않으면 retained Buffer와 `subarray()`에서 UAF 위험이 있다고
+판정했다. 안전한 dual-lease 구현은 객체와 reference 관리가 더 늘어 측정 후보보다 단순하지 않아
+채택하지 않았다. native close를 module-local queue에 지연하는 후보도 deterministic release와 대형
+payload 보존 상한을 지키지 못해 제외했다.
+
+general receive batch를 16에서 64로 늘린 최종 후보는 기존 1MiB와 1ms 상한을 유지한다. Node/C
+throughput ratio는 `13.450% / 25.795% / 35.059% / 16.303% / 10.989% / 20.571%`, 산술평균
+`20.361%`다. 16개 batch 결과 `19.910%`보다 `0.451%p` 개선되어 채택한다. 자체 후보와 Sol review에서
+추가 contract-safe 개선이 나오지 않았으므로 이 pattern은 보류한다.
+
+- 이전 Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_104248_node-multi-dealer-dealer-tcp-stack-single-recv.txt`
+- 현재 C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_200019_node-baseline-common-ownership-c.txt`
+- 16개 batch: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_201631_node-sol-direct-native-recv.txt`, `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_201656_node-sol-direct-native-recv-65536-retry.txt`
+- 제거한 단일 Buffer 후보: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_203633_node-native-buffer-frame.txt`
+- 최종 64개 batch: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_204207_node-general-recv-batch64.txt`

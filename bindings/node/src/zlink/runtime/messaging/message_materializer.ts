@@ -29,7 +29,7 @@ import {
   replaceTopicMessage
 } from './topic_message_state';
 
-export interface NativeReceivedRaw {
+export interface NativeReceivedEnvelope {
   parts?: MessageSnapshot[];
   data?: Buffer;
   nativeMessage?: unknown;
@@ -39,10 +39,14 @@ export interface NativeReceivedRaw {
   transportPairGeneration?: bigint;
 }
 
+/** Internal receive transfer: either an envelope or an unrouted native frame. */
+export type NativeReceivedRaw = NativeReceivedEnvelope | object;
+
 export interface NativeTopicMessageRaw {
   topic: string;
   parts?: MessageSnapshot[];
   data?: Buffer;
+  nativeMessage?: unknown;
   routingId?: Buffer | null;
 }
 
@@ -64,6 +68,21 @@ interface RoutedReceiveContext {
 
 const routedReceiveContexts = new WeakMap<Received, RoutedReceiveContext>();
 
+function envelopeOf(raw: NativeReceivedRaw): NativeReceivedEnvelope | null {
+  const candidate = raw as NativeReceivedEnvelope;
+  return candidate.data !== undefined
+      || candidate.nativeMessage !== undefined
+      || candidate.parts !== undefined
+      || candidate.routingId !== undefined
+      || candidate.requestSeq !== undefined
+    ? candidate
+    : null;
+}
+
+export function nativeReceivedRoutingId(raw: NativeReceivedRaw): Buffer | null {
+  return envelopeOf(raw)?.routingId ?? null;
+}
+
 function wrapNativeRoutingId(routingId: Buffer | null | undefined): RoutingId | null {
   if (!routingId || routingId.length === 0) {
     return null;
@@ -83,21 +102,25 @@ function materializeParts(parts: MessageSnapshot[]): Message[] {
 }
 
 function materializeReceivedParts(raw: NativeReceivedRaw): Message[] {
-  if (raw.data !== undefined) {
-    return raw.routingId && raw.routingId.length > 0
-      ? [messageFromOwnedRoutedBuffer(raw.data, raw.routingId, raw.nativeMessage)]
-      : [messageFromOwnedBuffer(raw.data, raw.nativeMessage)];
+  const envelope = envelopeOf(raw);
+  if (envelope === null) {
+    return [messageFromNativeFrame(raw)];
   }
-  if (raw.nativeMessage !== undefined) {
-    const identity = raw.routingId && raw.routingId.length > 0
-      ? raw.routingId.toString()
+  if (envelope.data !== undefined) {
+    return envelope.routingId && envelope.routingId.length > 0
+      ? [messageFromOwnedRoutedBuffer(envelope.data, envelope.routingId, envelope.nativeMessage)]
+      : [messageFromOwnedBuffer(envelope.data, envelope.nativeMessage)];
+  }
+  if (envelope.nativeMessage !== undefined) {
+    const identity = envelope.routingId && envelope.routingId.length > 0
+      ? envelope.routingId.toString()
       : undefined;
     return [messageFromNativeFrame(
-      raw.nativeMessage,
+      envelope.nativeMessage,
       identity === undefined ? undefined : { 'Routing-Id': identity, Identity: identity }
     )];
   }
-  return materializeParts(raw.parts ?? []);
+  return materializeParts(envelope.parts ?? []);
 }
 
 function materializeTopicParts(raw: NativeTopicMessageRaw): Message[] {
@@ -106,6 +129,9 @@ function materializeTopicParts(raw: NativeTopicMessageRaw): Message[] {
     // passes the owned payload Buffer directly so public TopicMessage adoption
     // avoids a per-message native parts array and snapshot object.
     return [messageFromOwnedBuffer(raw.data)];
+  }
+  if (raw.nativeMessage !== undefined) {
+    return [messageFromNativeFrame(raw.nativeMessage)];
   }
   return materializeParts(raw.parts ?? []);
 }
@@ -119,10 +145,11 @@ export function materializeReceived(
   reply?: (requestSeq: bigint, parts: readonly MessageLike[], flags: SendFlags) => void,
   send?: (parts: readonly Message[], flags: SendFlags) => boolean
 ): Received {
-  const requestSeq = raw.requestSeq ?? null;
+  const envelope = envelopeOf(raw);
+  const requestSeq = envelope?.requestSeq ?? null;
   return createReceived(
     materializeReceivedParts(raw),
-    wrapNativeRoutingId(raw.routingId ?? null),
+    wrapNativeRoutingId(envelope?.routingId ?? null),
     requestSeq,
     hasReplyableRequestSeq(requestSeq) && reply
       ? {
@@ -154,11 +181,12 @@ export function materializeReceivedInto(
   reply?: (requestSeq: bigint, parts: readonly MessageLike[], flags: SendFlags) => void,
   send?: (parts: readonly Message[], flags: SendFlags) => boolean
 ): void {
-  const requestSeq = raw.requestSeq ?? null;
+  const envelope = envelopeOf(raw);
+  const requestSeq = envelope?.requestSeq ?? null;
   replaceReceived(
     target,
     materializeReceivedParts(raw),
-    wrapNativeRoutingId(raw.routingId ?? null),
+    wrapNativeRoutingId(envelope?.routingId ?? null),
     requestSeq,
     hasReplyableRequestSeq(requestSeq) && reply
       ? {
@@ -186,8 +214,8 @@ export function materializeReceivedInto(
     transportPairId?: bigint;
     transportPairGeneration?: bigint;
   };
-  targetInternal.transportPairId = raw.transportPairId;
-  targetInternal.transportPairGeneration = raw.transportPairGeneration;
+  targetInternal.transportPairId = envelope?.transportPairId;
+  targetInternal.transportPairGeneration = envelope?.transportPairGeneration;
 }
 
 export function materializeRoutedReceivedInto(
@@ -195,6 +223,10 @@ export function materializeRoutedReceivedInto(
   raw: NativeReceivedRaw,
   operations: RoutedReceiveOperations
 ): void {
+  const envelope = envelopeOf(raw);
+  if (envelope === null) {
+    throw new Error('routed receive requires a receive envelope');
+  }
   let context = routedReceiveContexts.get(target);
   if (!context) {
     context = {
@@ -227,8 +259,8 @@ export function materializeRoutedReceivedInto(
     };
     routedReceiveContexts.set(target, context);
   }
-  context.routingId = raw.routingId ?? null;
-  context.requestSeq = raw.requestSeq ?? null;
+  context.routingId = envelope.routingId ?? null;
+  context.requestSeq = envelope.requestSeq ?? null;
   context.operations = operations;
   if (context.routingId === null) {
     context.cachedRoutingBytes = null;
@@ -250,8 +282,8 @@ export function materializeRoutedReceivedInto(
     transportPairId?: bigint;
     transportPairGeneration?: bigint;
   };
-  targetInternal.transportPairId = raw.transportPairId;
-  targetInternal.transportPairGeneration = raw.transportPairGeneration;
+  targetInternal.transportPairId = envelope.transportPairId;
+  targetInternal.transportPairGeneration = envelope.transportPairGeneration;
 }
 
 export function materializeTopicMessage(raw: NativeTopicMessageRaw): TopicMessage {

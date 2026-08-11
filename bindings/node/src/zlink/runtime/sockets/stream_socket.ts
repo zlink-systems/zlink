@@ -22,6 +22,7 @@ import { getNativeHandle } from '../handles/native_handle';
 import {
   materializeReceived,
   materializeReceivedInto,
+  nativeReceivedRoutingId,
   type NativeReceivedRaw,
 } from '../messaging/message_materializer';
 import { requireNative } from '../native/native';
@@ -116,11 +117,12 @@ export class StreamSocket extends SocketBase {
       return result ? false : null;
     }
     const receivedRaw = raw;
+    const receivedRoutingId = nativeReceivedRoutingId(receivedRaw);
     const send = (parts: readonly Message[], sendFlags: SendFlags) => {
-        if (!receivedRaw.routingId) {
+        if (!receivedRoutingId) {
           throw submitErrorFromResult(SubmitResult.InvalidState, 'missing routed send target');
         }
-        return this.sendDirect(RoutingId.from(receivedRaw.routingId), parts, sendFlags);
+        return this.sendDirect(RoutingId.from(receivedRoutingId), parts, sendFlags);
       };
     if (!result) return materializeReceived(receivedRaw, undefined, send);
     materializeReceivedInto(result, receivedRaw, undefined, send);

@@ -492,6 +492,12 @@ napi_value create_recv_message_value (napi_env env,
     // materializer, not a public Received object. Do not add unused per-
     // message fields here; each property set is paid on every recv().
     if (part_count == 1) {
+        if (routing_id.size == 0) {
+            // The common non-routed case needs only the native frame. Avoid
+            // an intermediate JS envelope before the pooled Message wrapper
+            // adopts this external value.
+            return move_message_to_native_frame_value (env, &parts[0]);
+        }
         // A one-part receive needs neither a parts array nor a part snapshot.
         // The TypeScript materializer derives the routed synthetic properties
         // only when a routing id is present, preserving both public shapes.
@@ -620,14 +626,12 @@ napi_value create_subscribed_value (napi_env env,
     napi_create_object (env, &obj);
 
     if (part_count == 1) {
-        // Hot path: SUB receive usually carries one payload part. Return the
-        // owned Buffer directly so the public TopicMessage facade can still be
-        // materialized without allocating a native parts array and snapshot
-        // object for every message.
-        napi_value data = create_message_data_buffer (env, &parts[0]);
-        if (!data)
+        // Keep the received frame under Message ownership. The public payload
+        // Buffer is created only when the caller reads the Message data.
+        napi_value native_message = move_message_to_native_frame_value (env, &parts[0]);
+        if (!native_message)
             return NULL;
-        napi_set_named_property (env, obj, "data", data);
+        napi_set_named_property (env, obj, "nativeMessage", native_message);
     } else {
         napi_value parts_array;
         napi_create_array_with_length (env, part_count, &parts_array);
@@ -1247,8 +1251,6 @@ const char *get_c_string_arg (
 
 bool get_uint64_like (napi_env env, napi_value value, uint64_t *out);
 
-bool init_msg_from_value (napi_env env, napi_value value, zlink_msg_t *msg);
-
 static void close_built_msg_vector (std::vector<zlink_msg_t> *parts, size_t built)
 {
     if (!parts)
@@ -1336,8 +1338,13 @@ bool get_uint64_like (napi_env env, napi_value value, uint64_t *out)
     return true;
 }
 
-bool init_msg_from_value (napi_env env, napi_value value, zlink_msg_t *msg)
+bool init_msg_from_value (napi_env env,
+                          napi_value value,
+                          zlink_msg_t *msg,
+                          bool *contains_native_frame)
 {
+    if (contains_native_frame)
+        *contains_native_frame = false;
     bool is_buf = false;
     if (napi_is_buffer (env, value, &is_buf) == napi_ok && is_buf) {
         void *data = NULL;
@@ -1373,6 +1380,8 @@ bool init_msg_from_value (napi_env env, napi_value value, zlink_msg_t *msg)
             zlink_msg_close (msg);
             return false;
         }
+        if (contains_native_frame)
+            *contains_native_frame = true;
         return true;
     }
 
@@ -2170,14 +2179,15 @@ napi_value socket_try_send (napi_env env, napi_callback_info info)
     void *sock = NULL;
     napi_get_value_external (env, argv[0], &sock);
     zlink_msg_t msg;
-    if (!init_msg_from_value (env, argv[1], &msg))
+    bool contains_native_frame = false;
+    if (!init_msg_from_value (env, argv[1], &msg, &contains_native_frame))
         return throw_last_error (env, "sendNoWaitResult failed");
     int rc = send_parts (sock, &msg, 1, ZLINK_SEND_FLAGS_DONTWAIT);
     if (rc != ZLINK_SUBMIT_OK)
         rc = classify_try_send_errno ();
     if (rc < 0)
         return throw_last_error (env, "sendNoWaitResult failed");
-    if (rc == ZLINK_SUBMIT_OK)
+    if (rc == ZLINK_SUBMIT_OK && contains_native_frame)
         consume_native_message_value (env, argv[1]);
     napi_value out;
     napi_create_int32 (env, rc, &out);
