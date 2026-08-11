@@ -4,8 +4,10 @@
 
 Node는 inventory gate부터 Single, Multi 순서로 다시 측정한다. 각 transport와 pattern은 C를
 먼저 단독 실행하고 종료한 뒤 Node를 단독 실행한다. 자체 성능 개선과 POSDDD 리팩터링을 함께
-검토하고, 의미 있는 구조 변경 후보는 Sol 리뷰를 거친다. Public interface와 Message ownership,
-C perf의 측정 의미는 변경하지 않는다.
+검토하고, 의미 있는 구조 변경 후보는 Sol 리뷰를 거친다. Sol 리뷰는 저위험 변경만 고르는
+절차가 아니다. Public interface를 유지하면서 hot path, 경계 호출, allocation과 ownership
+구조에서 측정치를 유의미하게 높일 후보를 찾고, 변경 위험은 측정과 test로 판단한다. Public
+interface와 Message ownership, C perf의 측정 의미는 변경하지 않는다.
 
 ## Single PAIR / tcp
 
@@ -50,3 +52,33 @@ lifecycle로 구조를 단순화하므로 후보를 유지한다.
 - C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_175308_node-restart-pubsub-tcp-c.txt`
 - Node baseline: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_175349_node-restart-pubsub-tcp.txt`
 - Node 최종: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_175620_node-restart-pubsub-tcp-batched-final.txt`
+
+## Single DEALER_DEALER / tcp
+
+PAIR에서 적용한 일반 socket bounded native receive와 공통 buffered receive queue를 같은 public
+recv hot path에서 사용했다. Node/C throughput ratio는 `10.233% / 23.094% / 43.175% /
+143.583% / 105.659% / 94.226%`, 산술평균 `69.995%`다. Latency ratio 중앙값은
+`3.848x`다. 처리량 목표 `60%`와 latency 상한 `5x`를 모두 충족한다. Pattern 전용 구조를
+추가하지 않고 공통 receive module을 유지한다.
+
+- C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_175750_node-restart-dealer-dealer-tcp-c.txt`
+- Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_175817_node-restart-dealer-dealer-tcp-batched.txt`
+
+## Single DEALER_ROUTER / tcp
+
+최초 Node/C throughput 산술평균은 `26.392%`, latency ratio 중앙값은 `5.011x`였다. 자체
+hot path 검토에서 재사용 `Received`마다 routed send/reply context와 closure를 다시 만들던
+비용을 제거했고, ROUTER prefetch 상한을 이전 A/B 근거가 있는 64개로 조정했다. 최종 throughput
+산술평균은 `30.740%`, latency ratio 중앙값은 `4.938x`다. 최초값 대비 throughput은
+`116.48%`다.
+
+Sol은 변경 위험을 제한하지 않고 allocation과 ownership 구조를 검토해 routed metadata lazy
+materialization을 제안했다. Public property와 ownership을 유지하는 후보를 적용했지만 throughput
+평균 `29.268%`, latency 중앙값 `6.104x`로 하락해 제거했다. 자체 개선과 의미 있는 Sol 구조
+후보를 모두 측정했으나 routed one-way 최소 `33%`에 미달하므로 최종 후보를 유지하고 보류한다.
+
+- C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_175859_node-restart-dealer-router-tcp-c.txt`
+- Node baseline: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_175927_node-restart-dealer-router-tcp-batched.txt`
+- context 재사용: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_180856_node-restart-dealer-router-tcp-context-cache.txt`
+- 최종: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_181227_node-restart-dealer-router-tcp-context-cache-batch64.txt`
+- 제거한 Sol 후보: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_181449_node-restart-dealer-router-tcp-lazy-route.txt`

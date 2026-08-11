@@ -11,6 +11,7 @@ import {
 import {
   adoptTopicMessage,
   materializeReceivedInto,
+  materializeRoutedReceivedInto,
   materializeTopicMessage,
   type NativeReceivedRaw,
   type NativeTopicMessageRaw,
@@ -57,6 +58,7 @@ import { BufferedReceiveQueue } from './buffered_receive_queue';
 
 const native = requireNative();
 const RECV_BATCH_MESSAGE_LIMIT = 16;
+const ROUTED_RECV_BATCH_MESSAGE_LIMIT = 64;
 
 export class SendSocket extends SendReadySocket {
   send(): SendOperation {
@@ -227,6 +229,13 @@ export class SubscriberSocket extends ConnectableSocket {
 export class RoutedMessageSocket extends SendReadySocket {
   private readonly bufferedReceive =
     new BufferedReceiveQueue<NativeReceivedRaw>(this);
+  private readonly receivedOperations = {
+    send: (routingId: Buffer, parts: readonly Message[], flags: SendFlags) =>
+      this.sendDirectRaw(routingId, parts, flags),
+    reply: (routingId: Buffer, requestSeq: bigint,
+            parts: readonly Message[], flags: SendFlags) =>
+      this.replyToRoutedMessage(RoutingId.from(routingId), requestSeq, parts, flags),
+  };
 
   send(routingId: RoutingId): SendOperation {
     return new RuntimeSendOperation((parts, flags) => this.sendDirect(routingId, parts, flags));
@@ -292,7 +301,7 @@ export class RoutedMessageSocket extends SendReadySocket {
       if (raw == null && ((flags | 0) & (RecvFlags.DontWait | 0))) {
         this.bufferedReceive.replace(native.routerRecvMessageBatchNoWait(
           getNativeHandle(this),
-          RECV_BATCH_MESSAGE_LIMIT
+          ROUTED_RECV_BATCH_MESSAGE_LIMIT
         ));
         raw = this.bufferedReceive.take();
       } else if (raw == null) {
@@ -305,27 +314,7 @@ export class RoutedMessageSocket extends SendReadySocket {
       setBufferedReceive(this, false);
       return false;
     }
-    // A ROUTER recv can always route a reply back to the source by routing id;
-    // the request sequence only gates the correlated reply() path, not send().
-    const send = raw.routingId == null
-      ? undefined
-      : (parts: readonly Message[], sendFlags: SendFlags) => {
-        if (!raw.routingId) {
-          throw submitErrorFromResult(SubmitResult.InvalidState, 'missing routed send target');
-        }
-        return this.sendDirectRaw(raw.routingId, parts, sendFlags);
-      };
-    const reply = raw.routingId == null || raw.requestSeq == null || raw.requestSeq === 0n
-      ? undefined
-      : (requestSeq: bigint, parts: readonly Message[], replyFlags: SendFlags) => {
-        if (!raw.routingId) {
-          throw submitErrorFromResult(SubmitResult.InvalidState, 'missing request reply target');
-        }
-        this.replyToRoutedMessage(
-          RoutingId.from(raw.routingId), requestSeq, parts, replyFlags
-        );
-      };
-    materializeReceivedInto(result, raw, reply, send);
+    materializeRoutedReceivedInto(result, raw, this.receivedOperations);
     return true;
   }
 

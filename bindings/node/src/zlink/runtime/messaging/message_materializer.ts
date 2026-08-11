@@ -45,6 +45,22 @@ export interface NativeTopicMessageRaw {
   routingId?: Buffer | null;
 }
 
+export interface RoutedReceiveOperations {
+  send(routingId: Buffer, parts: readonly Message[], flags: SendFlags): boolean;
+  reply(routingId: Buffer, requestSeq: bigint,
+        parts: readonly Message[], flags: SendFlags): void;
+}
+
+interface RoutedReceiveContext {
+  routingId: Buffer | null;
+  requestSeq: bigint | null;
+  operations: RoutedReceiveOperations;
+  sendContext: { beginSend(): ReturnType<typeof createReceivedSendOperation> };
+  replyContext: { beginReply(): ReturnType<typeof createReceivedReplyOperation> };
+}
+
+const routedReceiveContexts = new WeakMap<Received, RoutedReceiveContext>();
+
 function wrapNativeRoutingId(routingId: Buffer | null | undefined): RoutingId | null {
   if (!routingId || routingId.length === 0) {
     return null;
@@ -162,6 +178,60 @@ export function materializeReceivedInto(
           }
         }
       : null
+  );
+  const targetInternal = target as Received & {
+    transportPairId?: bigint;
+    transportPairGeneration?: bigint;
+  };
+  targetInternal.transportPairId = raw.transportPairId;
+  targetInternal.transportPairGeneration = raw.transportPairGeneration;
+}
+
+export function materializeRoutedReceivedInto(
+  target: Received,
+  raw: NativeReceivedRaw,
+  operations: RoutedReceiveOperations
+): void {
+  let context = routedReceiveContexts.get(target);
+  if (!context) {
+    context = {
+      routingId: null,
+      requestSeq: null,
+      operations,
+      sendContext: {
+        beginSend() {
+          const routingId = context!.routingId;
+          const operations = context!.operations;
+          if (routingId == null) throw new Error('missing routed send target');
+          return createReceivedSendOperation((parts, flags) =>
+            operations.send(routingId, parts, flags));
+        }
+      },
+      replyContext: {
+        beginReply() {
+          const routingId = context!.routingId;
+          const requestSeq = context!.requestSeq;
+          const operations = context!.operations;
+          if (routingId == null || requestSeq == null || requestSeq === 0n) {
+            throw new Error('missing request reply target');
+          }
+          return createReceivedReplyOperation((parts, flags) =>
+            operations.reply(routingId, requestSeq, parts, flags));
+        }
+      }
+    };
+    routedReceiveContexts.set(target, context);
+  }
+  context.routingId = raw.routingId ?? null;
+  context.requestSeq = raw.requestSeq ?? null;
+  context.operations = operations;
+  replaceReceived(
+    target,
+    materializeReceivedParts(raw),
+    wrapNativeRoutingId(context.routingId),
+    context.requestSeq,
+    hasReplyableRequestSeq(context.requestSeq) ? context.replyContext : null,
+    context.routingId == null ? null : context.sendContext
   );
   const targetInternal = target as Received & {
     transportPairId?: bigint;
