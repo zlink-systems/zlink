@@ -30,6 +30,39 @@ function handshakeRouterReceiver(receiver) {
         ping.close();
     }
 }
+async function handshakeRouterReceiverWithRetry(receiver) {
+    const ping = new zlink.Received();
+    try {
+        const configuredMs = integerEnv('PERF_ROUTER_HANDSHAKE_TIMEOUT_MS', 3000);
+        const timeoutMs = configuredMs > 0 ? configuredMs : 3000;
+        const deadlineNs = process.hrtime.bigint() + BigInt(timeoutMs) * 1000000n;
+        let received = false;
+        while (!received && process.hrtime.bigint() < deadlineNs) {
+            try {
+                received = receiver.recv(ping, zlink.RecvFlags.DontWait);
+            }
+            catch (error) {
+                if (!(error instanceof zlink.RecvError && error.result === zlink.RecvResult.NoData)) {
+                    throw error;
+                }
+            }
+            if (!received) {
+                await new Promise((resolve) => setTimeout(resolve, 1));
+            }
+        }
+        if (!received) {
+            throw new Error('router-router handshake ping timeout');
+        }
+        if (ping.routingId === null || partStrings(ping).join(',') !== 'PING') {
+            throw new Error('router-router handshake receive failed');
+        }
+        receiver.send(ping.routingId).message(Buffer.from('PONG')).submit();
+        return ping.routingId;
+    }
+    finally {
+        ping.close();
+    }
+}
 async function runRouterRouterBenchmark(msgSize, options) {
     const socketOptions = routedLargeMessageSocketPolicy(options, msgSize);
     if (options.transport === 'inproc') {
@@ -118,7 +151,7 @@ async function runRouterRouterBenchmark(msgSize, options) {
             workerError.then((message) => Promise.reject(new Error(message.message)))
         ]);
         worker.postMessage({ type: 'handshake' });
-        handshakeRouterReceiver(receiver);
+        await handshakeRouterReceiverWithRetry(receiver);
         await Promise.race([
             waitForWorkerMessage(worker, 'ready'),
             workerError.then((message) => Promise.reject(new Error(message.message)))

@@ -3,7 +3,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const { parentPort, workerData } = require('node:worker_threads');
 const zlink = require('@zlink-systems/zlink');
-const { createPayload, stampPayload } = require('../common/perf_metrics');
+const { createPayload, integerEnv, stampPayload } = require('../common/perf_metrics');
 const { applyContextPolicy, applyAutoHwmMsgUnit, applySocketPolicy, configureTlsClient, configureTlsServer, emitSingleSocketHwmDetail, waitForConnectionReady, } = require('./perf_single_common');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 const DEFAULT_TOPIC = 'perf.topic';
@@ -37,10 +37,46 @@ async function connectSender(kind, socket, endpoint, transport) {
 async function handshakeRouterSender(port, sender, receiverRoutingId) {
     port.postMessage({ type: 'connected' });
     await waitForCommand(port, 'handshake');
-    sender.send(receiverRoutingId).message(Buffer.from('PING')).submit();
+    const configuredMs = integerEnv('PERF_ROUTER_HANDSHAKE_TIMEOUT_MS', 3000);
+    const timeoutMs = configuredMs > 0 ? configuredMs : 3000;
+    const deadlineNs = process.hrtime.bigint() + BigInt(timeoutMs) * 1000000n;
+    let pingSent = false;
+    while (!pingSent && process.hrtime.bigint() < deadlineNs) {
+        try {
+            pingSent = sender.send(receiverRoutingId).message(Buffer.from('PING'))
+                .flags(zlink.SendFlags.DontWait).submit();
+        }
+        catch (error) {
+            if (!isTransientSubmit(error)) {
+                throw error;
+            }
+        }
+        if (!pingSent) {
+            sleepMillis(1);
+        }
+    }
+    if (!pingSent) {
+        throw new Error('router-router handshake ping timeout');
+    }
     const reply = new zlink.Received();
-    sender.recv(reply);
     try {
+        let received = false;
+        while (!received && process.hrtime.bigint() < deadlineNs) {
+            try {
+                received = sender.recv(reply, zlink.RecvFlags.DontWait);
+            }
+            catch (error) {
+                if (!(error instanceof zlink.RecvError && error.result === zlink.RecvResult.NoData)) {
+                    throw error;
+                }
+            }
+            if (!received) {
+                sleepMillis(1);
+            }
+        }
+        if (!received) {
+            throw new Error('router-router handshake pong timeout');
+        }
         const text = reply.parts.map((part) => part.data().toString()).join(',');
         if (text !== 'PONG') {
             throw new Error('router-router handshake reply failed');
@@ -209,10 +245,6 @@ async function main() {
                 applyAutoHwmMsgUnit(ctx, msgSize);
                 socket.setRoutingId(zlink.RoutingId.from(Buffer.from(senderRoutingIdBytes)));
                 ctx.recalculateAutoHwm();
-                // C progresses ROUTER readiness through its PING/PONG handshake.
-                // Waiting on the sender monitor first deadlocks because neither
-                // ROUTER is receiving yet, so connect and let the handshake below
-                // drive both peers.
                 configureTlsClient(socket, transport);
                 socket.connect(endpoint);
                 activeReceiverRoutingId = await handshakeRouterSender(port, socket, activeReceiverRoutingId);
