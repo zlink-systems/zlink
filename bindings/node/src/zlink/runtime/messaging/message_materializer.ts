@@ -104,6 +104,9 @@ function materializeParts(parts: MessageSnapshot[]): Message[] {
 function materializeReceivedParts(raw: NativeReceivedRaw): Message[] {
   const envelope = envelopeOf(raw);
   if (envelope === null) {
+    if (Buffer.isBuffer(raw)) {
+      return [messageFromOwnedBuffer(raw)];
+    }
     return [messageFromNativeFrame(raw)];
   }
   if (envelope.data !== undefined) {

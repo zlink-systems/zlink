@@ -2461,6 +2461,11 @@ int recv_message_value (napi_env env,
     if (has_more == ZLINK_PART_FINAL) {
         if (received_bytes)
             *received_bytes = zlink_msg_size (&first_part);
+        if (routing_id.size == 0) {
+            *out = create_received_message_buffer (env, &first_part);
+            zlink_msg_close (&first_part);
+            return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
+        }
         *out = create_recv_message_value (env, routing_id, &first_part, 1);
         zlink_msg_close (&first_part);
         return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;

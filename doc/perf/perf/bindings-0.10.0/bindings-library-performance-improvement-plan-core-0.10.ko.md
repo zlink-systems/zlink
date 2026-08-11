@@ -2109,6 +2109,14 @@ STREAM packet callback에서 읽히지 않던 peer routing-id 상태와 선형 �
 interface와 packet body storage 옵션은 그대로다. 측정 조건과 Sol 검토 결과는
 `log/2026-08-12-node-stream-held-second-pass.ko.md`에 기록한다.
 
+### 11.9 Node DEALER_DEALER 보류 항목 2차 측정 결과
+
+| Transport / pattern | C 대비 throughput 비율 (64·256·1024·4096·65536·131072B) | 산술평균 | 최종 판정 |
+|---|---|---:|---|
+| TCP / `MULTI_DEALER_DEALER` | 25.33 / 32.00 / 30.59 / 62.42 / 48.62 / 45.46% | 40.74% | 통과·simple one-way 최소 평균 35% 통과 |
+
+plain single-part receive는 routing metadata가 없을 때 managed Buffer를 내부 envelope 없이 직접 materialize한다. public Message·Received ownership, multipart와 DONTWAIT 동작은 그대로다. 상세 결과는 `log/2026-08-12-node-dealer-dealer-held-second-pass.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
