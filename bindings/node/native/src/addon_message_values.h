@@ -6,6 +6,8 @@
 
 #include <new>
 
+static constexpr size_t copied_message_buffer_max_size = 1024;
+
 inline napi_value create_buffer_copy_or_empty (napi_env env, const void *data, size_t len)
 {
     napi_value out;
@@ -29,6 +31,8 @@ inline napi_value create_message_data_buffer (napi_env env, zlink_msg_t *msg)
     const size_t size = zlink_msg_size (msg);
     if (size == 0)
         return create_buffer_copy_or_empty (env, NULL, 0);
+    if (size <= copied_message_buffer_max_size)
+        return create_buffer_copy_or_empty (env, zlink_msg_data (msg), size);
 
     zlink_msg_t *owned = new (std::nothrow) zlink_msg_t;
     if (!owned) {

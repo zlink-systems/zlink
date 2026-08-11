@@ -1147,21 +1147,21 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 ### 9.4 Node
 
 - perf 경로: `bindings/node/perf`
-- Single 상태: `미측정`
+- Single 상태: `진행 (통과 1, 보류 6, 미측정 35)`
 - Multi 상태: `미측정`
-- 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
+- 다음 작업: `PAIR / ws`를 C와 순차 paired 측정하고 개선 검토한다.
 
 #### 9.4.1 Single suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `PAIR` | 미달 (15.298%) | 미달 (34.813%) | 통과 (48.751%) | 통과 (142.688%) | 통과 (108.015%) | 통과 (95.370%) | 보류·1KiB 이하 receive를 V8-owned Buffer copy로 바꿔 native heap message와 deferred finalizer를 제거했다. 64B·256B 처리량은 각각 약 27%·21%, latency는 약 20%·32% 개선됐다. throughput 산술평균 74.156%는 통과하지만 latency 중앙값 32.79x가 상한 5x를 넘어 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_052133_java-parity-pair-tcp-c.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_090104_node-pair-tcp-small-buffer-copy.txt` |
+| `tcp` | `PUBSUB` | 미달 (23.214%) | 통과 (38.383%) | 통과 (60.352%) | 통과 (129.281%) | 통과 (104.991%) | 통과 (84.100%) | 통과·throughput 산술평균 73.387%, latency 중앙값 4.371x로 단순 one-way 최소 기준과 Node latency 상한을 충족한다. 공통 small-buffer receive 개선을 유지하며 추가 pattern 전용 구조 변경 없이 다음 행으로 이동한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_052241_java-parity-pubsub-tcp-c.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_081639_node-pubsub-tcp-final.txt` |
+| `tcp` | `DEALER_DEALER` | 미달 (12.657%) | 미달 (27.492%) | 통과 (44.678%) | 통과 (141.443%) | 통과 (116.554%) | 통과 (91.984%) | 보류·throughput 산술평균 72.468%는 통과하지만 latency 중앙값 9.49x가 상한 5x를 넘는다. non-routed direct Buffer 자체 후보는 회귀했고 공통 small-buffer copy 개선까지 적용했으므로 측정값으로 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_052314_java-parity-dealer-dealer-tcp-c.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_081657_node-dealer-dealer-tcp-final.txt` |
+| `tcp` | `DEALER_ROUTER` | 미달 (12.837%) | 미달 (21.609%) | 미달 (29.404%) | 통과 (34.884%) | 통과 (42.358%) | 통과 (37.161%) | 보류·native routed receive의 owned Buffer 직접 materialization과 Sol의 1KiB 이하 V8-owned Buffer copy를 적용했다. throughput 산술평균은 기존 약 28.0%에서 29.709%로 개선됐지만 routed one-way 최소 33%에 미달해 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_061038_java-dealer-router-final-parity-tcp-c.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_090126_node-dealer-router-tcp-small-buffer-copy.txt` |
+| `tcp` | `DEALER_ROUTER_REQREP` | 미달 (23.228%) | 미달 (24.533%) | 미달 (20.727%) | 통과 (32.488%) | 미달 (28.087%) | 미달 (23.304%) | 보류·request progress의 반복 no-op callback 제거와 routed receive 직접 materialization을 적용한 throughput 산술평균은 25.394%다. 공통 small-buffer 개선과 Sol 검토 뒤에도 socket request/reply 최소 30%에 미달해 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_064720_java-dealer-router-reqrep-tcp-id-parity-c.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_082453_node-dealer-router-reqrep-tcp-own-routed-data.txt` |
+| `tcp` | `ROUTER_ROUTER` | 미달 (13.267%) | 미달 (18.265%) | 통과 (33.705%) | 통과 (38.625%) | 통과 (42.909%) | 통과 (43.284%) | 보류·routed receive 직접 materialization과 1KiB 이하 Buffer copy를 적용한 throughput 산술평균은 31.676%다. 최소 33%에 미달하며 자체·Sol 두 차례 개선 검토를 완료해 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_055123_java-final-router-router-tcp-latency-c2.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_090147_node-router-router-tcp-small-buffer-copy.txt` |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 미달 (22.999%) | 미달 (24.874%) | 미달 (25.039%) | 통과 (32.937%) | 미달 (28.190%) | 미달 (22.491%) | 보류·request progress callback allocation 제거와 routed receive 직접 materialization을 적용한 throughput 산술평균은 26.088%다. 공통 small-buffer 개선과 Sol 검토 뒤에도 socket request/reply 최소 30%에 미달해 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_055924_java-final-parity-router-router-reqrep-tcp-c.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_082505_node-router-router-reqrep-tcp-own-routed-data.txt` |
 | `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
