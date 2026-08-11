@@ -26,6 +26,44 @@ static const size_t k_stream_slot_count = 8;
 static const size_t k_send_ready_handler_slot_count = 8;
 static const size_t k_socket_monitor_handler_slot_count = 8;
 static const int32_t k_stream_dispatch_len32be = 1;
+static const size_t k_router_recv_batch_byte_limit = 1024 * 1024;
+
+zlink_recv_result_t recv_router_parts_nowait_batch (
+  void *router,
+  zlink_routing_id_t *peer_rids,
+  uint64_t *request_seqs,
+  uint64_t *pair_ids,
+  uint64_t *pair_generations,
+  zlink_msg_t *parts,
+  zlink_part_flag_t *part_flags,
+  size_t capacity,
+  size_t *part_count)
+{
+    *part_count = 0;
+    size_t received_bytes = 0;
+    const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now () + std::chrono::milliseconds (1);
+    for (size_t index = 0; index < capacity; ++index) {
+        const zlink_routing_id_t *source_rid = NULL;
+        const zlink_recv_result_t result = zlink_router_recv_part_v2 (
+          router, &source_rid, &request_seqs[index], &pair_ids[index],
+          &pair_generations[index], &parts[index], &part_flags[index],
+          ZLINK_RECV_FLAGS_DONTWAIT);
+        if (result == ZLINK_RECV_NO_DATA)
+            return index == 0 ? ZLINK_RECV_NO_DATA : ZLINK_RECV_OK;
+        if (result != ZLINK_RECV_OK)
+            return result;
+        peer_rids[index] = *source_rid;
+        *part_count = index + 1;
+        received_bytes += zlink_msg_size (&parts[index]);
+        // A multipart message remains atomic, so the materializer may finish
+        // its trailing parts after this bounded prefetch loop returns.
+        if (received_bytes >= k_router_recv_batch_byte_limit
+            || std::chrono::steady_clock::now () >= deadline)
+            break;
+    }
+    return ZLINK_RECV_OK;
+}
 
 struct stream_js_payload_t
 {
@@ -457,10 +495,10 @@ napi_value create_recv_message_value (napi_env env,
         // A one-part receive needs neither a parts array nor a part snapshot.
         // The TypeScript materializer derives the routed synthetic properties
         // only when a routing id is present, preserving both public shapes.
-        napi_value data = create_message_data_buffer (env, &parts[0]);
-        if (!data)
+        napi_value native_message = move_message_to_native_frame_value (env, &parts[0]);
+        if (!native_message)
             return NULL;
-        napi_set_named_property (env, obj, "data", data);
+        napi_set_named_property (env, obj, "nativeMessage", native_message);
         if (routing_id.size > 0) {
             napi_value rid = create_routing_id_value (env, routing_id);
             napi_set_named_property (env, obj, "routingId", rid);
@@ -1313,6 +1351,31 @@ bool init_msg_from_value (napi_env env, napi_value value, zlink_msg_t *msg)
         return true;
     }
 
+    bool has_native_message = false;
+    if (napi_has_named_property (env, value, "nativeMessage", &has_native_message) != napi_ok) {
+        napi_throw_type_error (env, NULL, "message snapshot native frame lookup failed");
+        return false;
+    }
+    if (has_native_message) {
+        napi_value native_message;
+        if (napi_get_named_property (env, value, "nativeMessage", &native_message) != napi_ok) {
+            napi_throw_type_error (env, NULL, "message snapshot native frame read failed");
+            return false;
+        }
+        native_message_frame_t *frame = get_native_message_frame (
+          env, native_message, "message snapshot native frame is invalid");
+        if (!frame) {
+            return false;
+        }
+        if (zlink_msg_init (msg) != 0)
+            return false;
+        if (zlink_msg_copy (msg, &frame->message) != 0) {
+            zlink_msg_close (msg);
+            return false;
+        }
+        return true;
+    }
+
     napi_value data_value;
     if (napi_get_named_property (env, value, "data", &data_value) != napi_ok) {
         napi_throw_type_error (env, NULL, "message must be a Buffer or message snapshot");
@@ -1328,6 +1391,140 @@ bool init_msg_from_value (napi_env env, napi_value value, zlink_msg_t *msg)
         return false;
 
     return true;
+}
+
+void consume_native_message_value (napi_env env, napi_value value)
+{
+    bool is_array = false;
+    if (napi_is_array (env, value, &is_array) == napi_ok && is_array) {
+        uint32_t length = 0;
+        napi_get_array_length (env, value, &length);
+        for (uint32_t index = 0; index < length; ++index) {
+            napi_value part;
+            if (napi_get_element (env, value, index, &part) == napi_ok)
+                consume_native_message_value (env, part);
+        }
+        return;
+    }
+    napi_valuetype value_type = napi_undefined;
+    if (napi_typeof (env, value, &value_type) != napi_ok || value_type != napi_object)
+        return;
+    bool has_native_message = false;
+    if (napi_has_named_property (env, value, "nativeMessage", &has_native_message) != napi_ok
+        || !has_native_message)
+        return;
+    napi_value native_message;
+    native_message_frame_handle_t *handle = NULL;
+    if (napi_get_named_property (env, value, "nativeMessage", &native_message) != napi_ok
+        || napi_get_value_external (
+             env, native_message, reinterpret_cast<void **> (&handle)) != napi_ok
+        || !handle || !handle->frame)
+        return;
+    zlink_msg_close (&handle->frame->message);
+    zlink_msg_init (&handle->frame->message);
+}
+
+napi_value message_from_buffer (napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    size_t argc = 1;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    if (argc < 1) {
+        napi_throw_type_error (env, NULL, "messageFromBuffer requires a Buffer");
+        return NULL;
+    }
+    void *data = NULL;
+    size_t size = 0;
+    if (napi_get_buffer_info (env, argv[0], &data, &size) != napi_ok) {
+        napi_throw_type_error (env, NULL, "messageFromBuffer requires a Buffer");
+        return NULL;
+    }
+    native_message_frame_t *frame = new (std::nothrow) native_message_frame_t;
+    if (!frame) {
+        napi_throw_error (env, NULL, "native message frame allocation failed");
+        return NULL;
+    }
+    if (!init_msg_from_bytes (&frame->message, data, size)) {
+        delete frame;
+        return throw_last_error (env, "message native allocation failed");
+    }
+    return create_native_message_value (env, frame);
+}
+
+napi_value message_allocate (napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    size_t argc = 1;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    int64_t size = 0;
+    if (argc < 1 || napi_get_value_int64 (env, argv[0], &size) != napi_ok || size < 0) {
+        napi_throw_range_error (env, NULL, "messageAllocate requires a non-negative size");
+        return NULL;
+    }
+    native_message_frame_t *frame = new (std::nothrow) native_message_frame_t;
+    if (!frame) {
+        napi_throw_error (env, NULL, "native message frame allocation failed");
+        return NULL;
+    }
+    if (zlink_msg_init_size (&frame->message, static_cast<size_t> (size)) != 0) {
+        delete frame;
+        return throw_last_error (env, "message native allocation failed");
+    }
+    return create_native_message_value (env, frame);
+}
+
+napi_value message_frame_data (napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    size_t argc = 1;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    if (argc < 1) {
+        napi_throw_type_error (env, NULL, "messageFrameData requires a native message frame");
+        return NULL;
+    }
+    native_message_frame_t *frame = get_native_message_frame (
+      env, argv[0], "messageFrameData requires a native message frame");
+    if (!frame)
+        return NULL;
+    return create_native_message_data_buffer (env, frame);
+}
+
+napi_value message_frame_size (napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    size_t argc = 1;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    if (argc < 1) {
+        napi_throw_type_error (env, NULL, "messageFrameSize requires a native message frame");
+        return NULL;
+    }
+    native_message_frame_t *frame = get_native_message_frame (
+      env, argv[0], "messageFrameSize requires a native message frame");
+    if (!frame)
+        return NULL;
+    napi_value size;
+    napi_create_double (env, static_cast<double> (zlink_msg_size (&frame->message)), &size);
+    return size;
+}
+
+napi_value message_frame_close (napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    size_t argc = 1;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    native_message_frame_handle_t *handle = NULL;
+    if (argc < 1
+        || napi_get_value_external (
+             env, argv[0], reinterpret_cast<void **> (&handle)) != napi_ok
+        || !handle) {
+        napi_throw_type_error (env, NULL, "messageFrameClose requires a native message frame");
+        return NULL;
+    }
+    release_native_message_frame (handle->frame);
+    handle->frame = NULL;
+    napi_value out;
+    napi_get_undefined (env, &out);
+    return out;
 }
 
 napi_value version (napi_env env, napi_callback_info info)
@@ -1796,6 +1993,7 @@ napi_value socket_send (napi_env env, napi_callback_info info)
     int rc = send_parts (sock, &msg, 1, static_cast<zlink_send_flags_t> (flags));
     if (rc != ZLINK_SUBMIT_OK)
         return throw_last_error (env, "send failed");
+    consume_native_message_value (env, argv[1]);
     napi_value out;
     napi_create_int32 (env, static_cast<int32_t> (len), &out);
     return out;
@@ -1823,6 +2021,7 @@ napi_value socket_send_parts (napi_env env, napi_callback_info info)
     if (rc != ZLINK_SUBMIT_OK) {
         return throw_last_error (env, "sendParts failed");
     }
+    consume_native_message_value (env, argv[1]);
 
     napi_value out;
     napi_create_int32 (env, static_cast<int32_t> (total), &out);
@@ -1876,6 +2075,7 @@ napi_value socket_publish (napi_env env, napi_callback_info info)
     if (rc != ZLINK_SUBMIT_OK) {
         return throw_last_error (env, "publish failed");
     }
+    consume_native_message_value (env, argv[2]);
 
     napi_value out;
     napi_create_int32 (env, static_cast<int32_t> (total), &out);
@@ -1930,6 +2130,8 @@ napi_value socket_try_publish (napi_env env, napi_callback_info info)
     if (rc < 0) {
         return throw_last_error (env, "publishNoWaitResult failed");
     }
+    if (rc == ZLINK_SUBMIT_OK)
+        consume_native_message_value (env, argv[2]);
     napi_value out;
     napi_create_int32 (env, rc, &out);
     return out;
@@ -1950,6 +2152,8 @@ napi_value socket_try_send (napi_env env, napi_callback_info info)
         rc = classify_try_send_errno ();
     if (rc < 0)
         return throw_last_error (env, "sendNoWaitResult failed");
+    if (rc == ZLINK_SUBMIT_OK)
+        consume_native_message_value (env, argv[1]);
     napi_value out;
     napi_create_int32 (env, rc, &out);
     return out;
@@ -1973,6 +2177,8 @@ napi_value socket_try_send_parts (napi_env env, napi_callback_info info)
     if (rc < 0) {
         return throw_last_error (env, "trySendParts failed");
     }
+    if (rc == ZLINK_SUBMIT_OK)
+        consume_native_message_value (env, argv[1]);
     napi_value out;
     napi_create_int32 (env, rc, &out);
     return out;
@@ -1998,6 +2204,8 @@ napi_value socket_try_send_routing (napi_env env, napi_callback_info info)
         rc = classify_try_send_errno ();
     if (rc < 0)
         return throw_last_error (env, "trySendTo failed");
+    if (rc == ZLINK_SUBMIT_OK)
+        consume_native_message_value (env, argv[2]);
     napi_value out;
     napi_create_int32 (env, rc, &out);
     return out;
@@ -2026,6 +2234,8 @@ napi_value socket_try_send_routing_parts (napi_env env, napi_callback_info info)
     if (rc < 0) {
         return throw_last_error (env, "trySendPartsTo failed");
     }
+    if (rc == ZLINK_SUBMIT_OK)
+        consume_native_message_value (env, argv[2]);
     napi_value out;
     napi_create_int32 (env, rc, &out);
     return out;
@@ -2053,6 +2263,7 @@ napi_value socket_send_routing (napi_env env, napi_callback_info info)
     int rc = send_parts_rid (sock, &routing_id, &msg, 1, static_cast<zlink_send_flags_t> (flags));
     if (rc != ZLINK_SUBMIT_OK)
         return throw_last_error (env, "send failed");
+    consume_native_message_value (env, argv[2]);
 
     napi_value out;
     napi_create_int32 (env, static_cast<int32_t> (len), &out);
@@ -2081,6 +2292,7 @@ napi_value socket_send_routing_parts (napi_env env, napi_callback_info info)
                              static_cast<zlink_send_flags_t> (flags));
     if (rc != ZLINK_SUBMIT_OK)
         return throw_last_error (env, "sendPartsTo failed");
+    consume_native_message_value (env, argv[2]);
 
     napi_value ok;
     napi_get_undefined (env, &ok);
@@ -2595,6 +2807,7 @@ napi_value dealer_request (napi_env env, napi_callback_info info)
         abort_request_js_state (state);
         return throw_last_error (env, "dealerRequest failed");
     }
+    consume_native_message_value (env, argv[1]);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -2642,6 +2855,7 @@ napi_value router_request (napi_env env, napi_callback_info info)
         abort_request_js_state (state);
         return throw_last_error (env, "routerRequest failed");
     }
+    consume_native_message_value (env, argv[2]);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -2698,6 +2912,7 @@ napi_value router_request_transport_pair (napi_env env, napi_callback_info info)
         abort_request_js_state (state);
         return throw_last_error (env, "routerRequestTransportPair failed");
     }
+    consume_native_message_value (env, argv[4]);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -2743,6 +2958,7 @@ napi_value router_send_transport_pair (napi_env env, napi_callback_info info)
     parts.clear ();
     if (rc != ZLINK_SUBMIT_OK)
         return throw_last_error (env, "routerSendTransportPair failed");
+    consume_native_message_value (env, argv[4]);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -2786,6 +3002,7 @@ napi_value router_reply (napi_env env, napi_callback_info info)
     if (rc != ZLINK_SUBMIT_OK) {
         return throw_last_error (env, "routerReply failed");
     }
+    consume_native_message_value (env, argv[3]);
     napi_value ok;
     napi_get_undefined (env, &ok);
     return ok;
@@ -2825,6 +3042,8 @@ napi_value router_try_send_completion_control (
     parts.clear ();
     if (rc != ZLINK_SUBMIT_OK && rc != ZLINK_SUBMIT_BACKPRESSURED)
         return throw_last_error (env, "routerTrySendCompletionControl failed");
+    if (rc == ZLINK_SUBMIT_OK)
+        consume_native_message_value (env, argv[2]);
 
     napi_value result;
     napi_get_boolean (env, rc == ZLINK_SUBMIT_OK, &result);
@@ -2872,6 +3091,8 @@ napi_value router_try_send_completion_control_transport_pair (
     parts.clear ();
     if (rc != ZLINK_SUBMIT_OK && rc != ZLINK_SUBMIT_BACKPRESSURED)
         return throw_last_error (env, "routerTrySendCompletionControlTransportPair failed");
+    if (rc == ZLINK_SUBMIT_OK)
+        consume_native_message_value (env, argv[4]);
     napi_value result;
     napi_get_boolean (env, rc == ZLINK_SUBMIT_OK, &result);
     return result;
@@ -2963,6 +3184,113 @@ napi_value router_try_recv_message (napi_env env, napi_callback_info info)
       create_router_recv_message_value (env, peer_rid, request_seq, transport_pair_id,
                                         transport_pair_generation, parts.data (), parts.size ());
     close_msg_vector (parts);
+    return out;
+}
+
+napi_value router_try_recv_message_batch (napi_env env, napi_callback_info info)
+{
+    napi_value argv[2];
+    size_t argc = 2;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    if (argc < 2) {
+        napi_throw_type_error (env, NULL, "routerRecvMessageBatchNoWait requires socket and batch size");
+        return NULL;
+    }
+    void *router = NULL;
+    napi_get_value_external (env, argv[0], &router);
+    int32_t max_count = 0;
+    if (napi_get_value_int32 (env, argv[1], &max_count) != napi_ok || max_count < 1
+        || max_count > 64) {
+        napi_throw_range_error (env, NULL, "batch size must be 1..64");
+        return NULL;
+    }
+    napi_value out;
+    napi_create_array (env, &out);
+    zlink_routing_id_t peer_rids[64];
+    uint64_t request_seqs[64] = {};
+    uint64_t pair_ids[64] = {};
+    uint64_t pair_generations[64] = {};
+    zlink_msg_t parts[64];
+    zlink_part_flag_t part_flags[64];
+    for (int32_t index = 0; index < max_count; ++index)
+        zlink_msg_init (&parts[index]);
+    size_t part_count = 0;
+    const zlink_recv_result_t result = recv_router_parts_nowait_batch (
+      router, peer_rids, request_seqs, pair_ids, pair_generations, parts, part_flags,
+      static_cast<size_t> (max_count), &part_count);
+    for (size_t index = part_count; index < static_cast<size_t> (max_count); ++index)
+        zlink_msg_close (&parts[index]);
+    if (result == ZLINK_RECV_NO_DATA)
+        return out;
+    if (result != ZLINK_RECV_OK) {
+        close_recv_parts (parts, part_count);
+        return throw_last_error (env, "routerRecvMessageBatchNoWait failed");
+    }
+    uint32_t count = 0;
+    size_t start = 0;
+    for (size_t index = 0; index < part_count; ++index) {
+        if (part_flags[index] != ZLINK_PART_FINAL)
+            continue;
+        napi_value received = create_router_recv_message_value (
+          env, peer_rids[start], request_seqs[start], pair_ids[start], pair_generations[start],
+          &parts[start], index - start + 1);
+        if (!received) {
+            close_recv_parts (parts, part_count);
+            return NULL;
+        }
+        napi_set_element (env, out, count++, received);
+        start = index + 1;
+    }
+
+    if (start < part_count) {
+        std::vector<zlink_msg_t> trailing_parts;
+        for (size_t index = start; index < part_count; ++index) {
+            if (!append_msg_move (&trailing_parts, &parts[index])) {
+                close_msg_vector (trailing_parts);
+                close_recv_parts (parts, part_count);
+                errno = ENOMEM;
+                return throw_last_error (env, "routerRecvMessageBatchNoWait failed");
+            }
+        }
+
+        zlink_part_flag_t has_more = part_flags[part_count - 1];
+        while (has_more == ZLINK_PART_MORE) {
+            const zlink_routing_id_t *source_rid = NULL;
+            uint64_t request_seq = 0;
+            uint64_t pair_id = 0;
+            uint64_t pair_generation = 0;
+            zlink_msg_t next_part;
+            if (zlink_msg_init (&next_part) != 0) {
+                close_msg_vector (trailing_parts);
+                close_recv_parts (parts, part_count);
+                return throw_last_error (env, "routerRecvMessageBatchNoWait failed");
+            }
+            const zlink_recv_result_t next_result = zlink_router_recv_part_v2 (
+              router, &source_rid, &request_seq, &pair_id, &pair_generation, &next_part,
+              &has_more, ZLINK_RECV_FLAGS_DONTWAIT);
+            if (next_result != ZLINK_RECV_OK
+                || !append_msg_move (&trailing_parts, &next_part)) {
+                zlink_msg_close (&next_part);
+                close_msg_vector (trailing_parts);
+                close_recv_parts (parts, part_count);
+                if (next_result == ZLINK_RECV_OK)
+                    errno = ENOMEM;
+                return throw_last_error (env, "routerRecvMessageBatchNoWait failed");
+            }
+        }
+
+        napi_value received = create_router_recv_message_value (
+          env, peer_rids[start], request_seqs[start], pair_ids[start], pair_generations[start],
+          trailing_parts.data (), trailing_parts.size ());
+        if (!received) {
+            close_msg_vector (trailing_parts);
+            close_recv_parts (parts, part_count);
+            return NULL;
+        }
+        napi_set_element (env, out, count, received);
+        close_msg_vector (trailing_parts);
+    }
+    close_recv_parts (parts, part_count);
     return out;
 }
 

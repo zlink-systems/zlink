@@ -11,6 +11,7 @@ import { routingIdFromOwnedBuffer } from '../core/routing_id';
 import {
   messageFromOwnedBuffer,
   messageFromOwnedRoutedBuffer,
+  messageFromNativeFrame,
   messageFromSnapshot,
   type MessageSnapshot
 } from './message_snapshot';
@@ -30,6 +31,7 @@ import {
 export interface NativeReceivedRaw {
   parts?: MessageSnapshot[];
   data?: Buffer;
+  nativeMessage?: unknown;
   routingId?: Buffer | null;
   requestSeq?: bigint | null;
   transportPairId?: bigint;
@@ -64,8 +66,17 @@ function materializeParts(parts: MessageSnapshot[]): Message[] {
 function materializeReceivedParts(raw: NativeReceivedRaw): Message[] {
   if (raw.data !== undefined) {
     return raw.routingId && raw.routingId.length > 0
-      ? [messageFromOwnedRoutedBuffer(raw.data, raw.routingId)]
-      : [messageFromOwnedBuffer(raw.data)];
+      ? [messageFromOwnedRoutedBuffer(raw.data, raw.routingId, raw.nativeMessage)]
+      : [messageFromOwnedBuffer(raw.data, raw.nativeMessage)];
+  }
+  if (raw.nativeMessage !== undefined) {
+    const identity = raw.routingId && raw.routingId.length > 0
+      ? raw.routingId.toString()
+      : undefined;
+    return [messageFromNativeFrame(
+      raw.nativeMessage,
+      identity === undefined ? undefined : { 'Routing-Id': identity, Identity: identity }
+    )];
   }
   return materializeParts(raw.parts ?? []);
 }

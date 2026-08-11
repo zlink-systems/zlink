@@ -4,6 +4,11 @@ import type { NativeHandle, NativeVersion, NullableNativeHandle } from './bindin
 
 export interface CoreNativeBinding {
   errno: () => number;
+  messageAllocate: (size: number) => { data: Buffer; nativeMessage: unknown };
+  messageFrameData: (nativeMessage: unknown) => Buffer;
+  messageFrameSize: (nativeMessage: unknown) => number;
+  messageFrameClose: (nativeMessage: unknown) => void;
+  messageFromBuffer: (data: Buffer) => { data: Buffer; nativeMessage: unknown };
   has: (capability: string) => boolean;
   proxy: (
     frontend: NativeHandle,

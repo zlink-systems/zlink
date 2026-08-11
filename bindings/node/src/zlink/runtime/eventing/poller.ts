@@ -21,6 +21,7 @@ import {
 import { getNativeHandle } from '../handles/native_handle';
 import { requireNative } from '../native/native';
 import { flagsToMask } from '../sockets/socket_options';
+import { hasBufferedReceive } from '../sockets/socket_receive_state';
 import { PollEvents } from './poll_events';
 import { Timer } from './timer';
 import type { RuntimeBaseSocket as BaseSocket } from '../sockets';
@@ -37,6 +38,10 @@ function validateSlot(slot: number): number {
 export class Poller {
   private _native: unknown | null;
   private readonly _externalProgressHandles = new Set<unknown>();
+  private readonly _socketRegistrations = new Map<
+    BasePollable,
+    { events: number; handle: unknown; slot: number }
+  >();
 
   constructor() { this._native = requireNative().pollerNew(); }
 
@@ -97,22 +102,68 @@ export class Poller {
   }
 
   wait(events: PollEvents, timeoutMs: number): number {
+    const buffered = [] as Array<{
+      events: number;
+      handle: unknown;
+      slot: number;
+      revents: number;
+    }>;
+    for (const [socket, registration] of this._socketRegistrations) {
+      if (buffered.length >= events.capacity) break;
+      if ((registration.events & PollEventFlag.PollIn) !== 0 && hasBufferedReceive(socket)) {
+        buffered.push({
+          events: registration.events,
+          handle: registration.handle,
+          slot: registration.slot,
+          revents: PollEventFlag.PollIn,
+        });
+      }
+    }
+    for (const entry of buffered) {
+      const remainingEvents = entry.events & ~PollEventFlag.PollIn;
+      if (remainingEvents === 0) {
+        requireNative().pollerRemove(this._native, entry.handle);
+      } else {
+        requireNative().pollerModify(this._native, entry.handle, remainingEvents);
+      }
+    }
+    let nativeCount = 0;
+    let waitFailure: unknown;
     try {
-      const count = requireNative().pollerWaitInto(
+      nativeCount = requireNative().pollerWaitInto(
         this._native,
         getNativeHandle(events),
         events.capacity | 0,
-        timeoutMs | 0
+        buffered.length > 0 ? 0 : timeoutMs | 0
       ) as number;
-      events.markReadyCount(count | 0);
-      return count | 0;
     } catch (error) {
-      if (isWouldBlock()) {
-        events.markReadyCount(0);
-        return 0;
+      if (!isWouldBlock()) waitFailure = error;
+    } finally {
+      for (const entry of buffered) {
+        const remainingEvents = entry.events & ~PollEventFlag.PollIn;
+        if (remainingEvents === 0) {
+          requireNative().pollerAdd(
+            this._native,
+            entry.handle,
+            BigInt(entry.slot),
+            entry.events
+          );
+        } else {
+          requireNative().pollerModify(this._native, entry.handle, entry.events);
+        }
       }
-      throw recvNativeError(error, RecvFlags.None, 'poller wait failed');
     }
+    if (waitFailure !== undefined) {
+      throw recvNativeError(waitFailure, RecvFlags.None, 'poller wait failed');
+    }
+    const remaining = events.capacity - (nativeCount | 0);
+    const synthetic = remaining > 0
+      ? buffered
+        .map(({ slot, revents }) => ({ slot, revents }))
+        .slice(0, remaining)
+      : [];
+    events.markCombined(nativeCount | 0, synthetic);
+    return (nativeCount | 0) + synthetic.length;
   }
 
   destroy(): void {
@@ -126,6 +177,7 @@ export class Poller {
       releaseExternalRequestProgress(handle);
     }
     this._externalProgressHandles.clear();
+    this._socketRegistrations.clear();
   }
 
   close(): void { this.destroy(); }
@@ -134,6 +186,12 @@ export class Poller {
     const normalizedSlot = validateSlot(slot);
     try {
       requireNative().pollerAdd(this._native, getNativeHandle(socket), BigInt(normalizedSlot), events | 0);
+      const handle = getNativeHandle(socket);
+      this._socketRegistrations.set(socket, {
+        events: events | 0,
+        handle,
+        slot: normalizedSlot,
+      });
       if ((events & PollEventFlag.PollCompletion) !== 0) {
         const handle = getNativeHandle(socket);
         acquireExternalRequestProgress(handle);
@@ -149,6 +207,8 @@ export class Poller {
     configCall('poller socket modify failed', () => {
       requireNative().pollerModify(this._native, handle, events | 0);
     });
+    const registration = this._socketRegistrations.get(socket);
+    if (registration) registration.events = events | 0;
     const hasExternal = this._externalProgressHandles.has(handle);
     const wantsExternal = (events & PollEventFlag.PollCompletion) !== 0;
     if (wantsExternal && !hasExternal) {
@@ -168,6 +228,7 @@ export class Poller {
     if (this._externalProgressHandles.delete(handle)) {
       releaseExternalRequestProgress(handle);
     }
+    this._socketRegistrations.delete(socket);
     return true;
   }
 

@@ -6,7 +6,7 @@ const readline = require('node:readline');
 const zlink = require('@zlink-systems/zlink');
 const { configureTlsServer } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
-const { isStopToken } = require('../perf_stop_token');
+const { isStopTokenParts } = require('../perf_stop_token');
 const {
   POLLIN,
   POLLOUT,
@@ -41,7 +41,7 @@ function receiveAndQueueReplies(router, pending, received) {
       }
       const routingId = received.routingId;
       const payload = received.singlePartOrThrow();
-      if (isStopToken(payload.data())) {
+      if (isStopTokenParts([payload])) {
         return true;
       }
       if (pending.length === 0 && trySocketSend(router, routingId, payload)) {

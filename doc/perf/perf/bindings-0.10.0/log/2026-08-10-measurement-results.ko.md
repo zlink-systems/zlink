@@ -4,6 +4,25 @@ Core `v0.10.1` Git release runtime, Release build, auto-HWM balanced, I/O thread
 timeout 200ms 조건을 사용했다. 각 paired target은 C를 먼저 실행한 뒤 binding을 실행했으며,
 perf process는 동시에 실행하지 않았다. 아래에는 유효한 측정값과 결과만 기록한다.
 
+### Node public Message PAIR/tcp 후보 비교
+
+| 구분 | size별 throughput (Kmsg/s) | size별 평균 latency (ms) | 판정 |
+|------|-----------------------------|---------------------------|------|
+| C | 2867.494 / 1216.632 / 675.305 / 39.853 / 25.661 / 15.719 | 0.213 / 0.280 / 0.306 / 5.078 / 7.975 / 13.101 | 기준 |
+| current `Message.from` | 277.792 / 370.081 / 292.948 / 53.515 / 27.132 / 13.612 | 48.484 / 13.754 / 11.877 / 3.741 / 6.302 / 11.231 | 기준 |
+| native-owner/direct-move 후보 | 115.402 / 10.560 / 120.671 / 54.956 / 27.140 / 13.934 | 0.565 / 0.255 / 0.297 / 4.345 / 8.901 / 15.824 | 미채택 |
+
+후보/current throughput ratio는 `41.54% / 2.85% / 41.19% / 102.69% / 100.03% /
+102.37%`, 산술평균은 `65.11%`다. 후보는 small payload throughput이 하락했고 64KiB 이상도
+throughput 개선이 `0.03~2.69%`에 그치면서 평균 latency가 악화되어 제거했다. 기본 Buffer
+control throughput은 `345.825 / 362.489 / 294.280 / 54.551 / 29.588 / 14.368 Kmsg/s`로
+기존 Buffer baseline과 같은 범위를 유지했다.
+
+Reports: C `perf_c_single_linux_20260811_121559_node-message-baseline-c.txt`, current Message
+`perf_node_single_linux_20260811_122131_node-message-object-current.txt`, rejected candidate
+`perf_node_single_linux_20260811_122450_node-message-native-move.txt`, Buffer control
+`perf_node_single_linux_20260811_122515_node-message-native-buffer-control.txt`.
+
 | 대상 | size별 C throughput | size별 C++ throughput | size별 ratio | 중앙값 | latency ratio 중앙값 | 판정 |
 |------|---------------------|-----------------------|--------------|--------|----------------------|------|
 | Single `DEALER_ROUTER_REQREP / wss` | 169.9074 / 133.8474 / 56.7648 / 3.9784 / 2.7550 / 1.4842 Kops/s | 133.7758 / 122.6814 / 67.2556 / 4.0006 / 2.6088 / 1.3776 Kops/s | 78.73% / 91.66% / 118.48% / 100.56% / 94.69% / 92.82% | 93.76% | 1.067x | 통과 |
@@ -1183,3 +1202,129 @@ zero-fill 제거 후보는 DR request/reply 85.967%→76.294%, RR request/reply
 STREAM은 10,000-client 시도가 `max_clients=7361` memory guard로 skip되어 C와 C++ 모두
 7,000 clients로 측정했다. Routed echo POSDDD 대표 A/B, PUBSUB typed subscriber before/after,
 RR direct receive 제거 결과와 DEALER_DEALER의 incomplete 최초 report는 process log에 기록했다.
+
+## 2026-08-11 Node native Message owner, pool 미사용
+
+- 조건: Core `v0.10.1` release, `tcp`, `MULTI_DEALER_ROUTER_SENDSEND`, clients `100`, duration `1초`, runs `1`, I/O threads `4/4`, auto-HWM `balanced`, C → Node 직렬 실행.
+- 구현: `Message`와 수신 frame은 `zlink_msg_t` native storage를 소유한다. JavaScript `Buffer`는 그 storage의 view이며 custom payload/frame pool은 사용하지 않는다.
+
+| Size | C throughput | Node throughput | Node/C |
+|---:|---:|---:|---:|
+| 64B | 184323 | 56952 | 30.898% |
+| 256B | 184787 | 50570 | 27.367% |
+| 1024B | 178501 | 50822 | 28.471% |
+| 4096B | 168408 | 33986 | 20.181% |
+| 65536B | 37838 | 8615 | 22.769% |
+| 131072B | 21827 | 6007 | 27.526% |
+
+- throughput ratio 산술평균: `26.202%`.
+- C report: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_133848_native-message-owner-node-parity-c-1s.txt`.
+- Node report: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_133948_native-message-owner-no-pool-node-parity-1s.txt`.
+
+## 2026-08-11 Node native boundary batch 크기 비교
+
+- 조건: Core `v0.10.1` release, `tcp`, `MULTI_DEALER_ROUTER`, clients `100`, duration `1초`, runs `1`, auto-HWM `balanced`, `monitor-hwm=1000`, `connect-ready-timeout=5000ms`, perf 단독 실행.
+
+| batch | 64B | 256B | 1024B | 4096B | 65536B | 131072B | C 대비 평균 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 미사용 | 56952 | 50570 | 50822 | 33986 | 8615 | 6007 | 26.202% |
+| 32 | 62564 | 60479 | 52366 | 34630 | 10001 | 6256 | 28.61% |
+| 64 | 63718 | 55354 | 53165 | 36789 | 9724 | 6626 | 28.70% |
+| 128 | 60839 | 54462 | 51637 | 37670 | 9650 | 4760 | 26.85% |
+
+- batch 32 report: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_135010_native-boundary-batch32-node-1s-final.txt`.
+- batch 64 report: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_135110_native-boundary-batch64-node-1s-final.txt`.
+- batch 128 report: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_135213_native-boundary-batch128-node-1s-final.txt`.
+- 측정상 최고값: batch `64`. perf 전용 batch 경로이므로 최종 구현에서는 제외했다.
+
+## 2026-08-11 Core batch API, 1ms 예산
+
+- 조건: candidate Core `0.10.1`, `tcp`, `MULTI_DEALER_ROUTER`, clients `100`, duration `1초`, runs `1`, auto-HWM `balanced`, perf 단독 실행.
+- 동작: 한 번의 Core C API 호출에서 즉시 준비된 항목만 처리한다. batch를 채우기 위해 기다리지 않으며 `64개` 또는 `1ms`에 도달하면 반환한다.
+
+| batch | 64B | 256B | 1024B | 4096B | 65536B | 131072B | C 대비 평균 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 16 | 63203 | 61930 | 55927 | 37775 | 10022 | 6718 | 29.805% |
+| 32 | 67316 | 61689 | 55501 | 29703 | 9092 | 5212 | 27.757% |
+| 64 | 74608 | 68615 | 63565 | 36660 | 9906 | 5622 | 31.154% |
+
+- batch 16 report: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_141433_core-batch16-1ms-node-1s.txt`.
+- batch 32 report: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_141546_core-batch32-1ms-node-1s.txt`.
+- batch 64 report: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_140946_core-batch64-1ms-node-1s.txt`.
+- 측정상 최고값: batch `64`. Core public ABI를 추가하는 후보이므로 최종 구현에서는 제외했다.
+
+## 2026-08-11 Node native batch envelope와 Core bulk fast path
+
+- 조건: candidate Core `0.10.1`, `tcp`, `MULTI_DEALER_ROUTER`, clients `100`, duration `1초`, runs `1`, auto-HWM `balanced`, batch `64`, 처리 예산 `1ms`, perf 단독 실행.
+
+| 구현 | 64B | 256B | 1024B | 4096B | 65536B | 131072B | C 대비 평균 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| native envelope | 75023 | 73154 | 64131 | 37630 | 10021 | 6369 | 32.371% |
+| envelope + true bulk send | 67763 | 70990 | 66751 | 41066 | 11033 | 7351 | 33.300% |
+| envelope + true bulk send/recv | 72740 | 64994 | 64556 | 39300 | 10083 | 6253 | 31.572% |
+
+- native envelope report: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_143036_native-envelope-batch64-1ms-node-1s.txt`.
+- true bulk send report: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_143634_native-envelope-true-send-batch64-node-1s.txt`.
+- true bulk send/recv report: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_143928_native-envelope-true-send-recv-batch64-node-1s.txt`.
+- 측정값은 비교 기록으로만 남긴다. perf 전용 native envelope와 Core public ABI 후보는 모두 최종 구현에서 제외했다.
+
+## 2026-08-11 Node public `recv()` native prefetch 64-part 후보
+
+- 조건: candidate Core `0.10.1`, `tcp`, `MULTI_DEALER_ROUTER`, clients `100`, duration `1초`, runs `1`, auto-HWM `balanced`, public `RouterSocket.recv()` 경로, perf 단독 실행.
+- 구현: `DontWait` 수신 시 binding 내부에서 최대 64개 part를 한 번에 가져오고, 기존 public `recv()` 호출마다 순서대로 하나의 `Received`를 채운다. public interface와 `Message` ownership 계약은 변경하지 않았으며 pool은 사용하지 않는다.
+
+| Size | C throughput | Node throughput | Node/C |
+|---:|---:|---:|---:|
+| 64B | 184323 | 72047 | 39.087% |
+| 256B | 184787 | 68386 | 37.008% |
+| 1024B | 178501 | 58585 | 32.821% |
+| 4096B | 168408 | 37575 | 22.312% |
+| 65536B | 37838 | 10367 | 27.398% |
+| 131072B | 21827 | 7281 | 33.358% |
+
+- throughput ratio 산술평균: `31.997%`.
+- 기존 public `recv()` 경로 평균 `26.202%` 대비 개선율: `22.118%`.
+- C report: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_133848_native-message-owner-node-parity-c-1s.txt`.
+- Node report: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_145739_public-recv-prefetch64-node-1s.txt`.
+
+- 이 후보는 poll readiness와 bounded backpressure 검토 뒤 제외했다.
+
+## 2026-08-11 Node public `recv()` release Core 1차값
+
+- 조건: release Core `0.10.1`, `tcp`, `MULTI_DEALER_ROUTER`, clients `100`, duration `1초`, runs `1`, auto-HWM `balanced`, public `RouterSocket.recv()` 경로, perf 단독 실행.
+- 구현: Node addon이 기존 `zlink_router_recv_part_v2`를 한 번의 JS→native 호출 안에서 반복한다. 최대 16개 part 또는 1ms에서 반환하며 pool은 사용하지 않는다.
+
+| Size | C throughput | Node throughput | Node/C |
+|---:|---:|---:|---:|
+| 64B | 184323 | 81294 | 44.104% |
+| 256B | 184787 | 79065 | 42.787% |
+| 1024B | 178501 | 70058 | 39.248% |
+| 4096B | 168408 | 42286 | 25.109% |
+| 65536B | 37838 | 13078 | 34.563% |
+| 131072B | 21827 | 8619 | 39.488% |
+
+- throughput ratio 산술평균: `37.550%`.
+- 기존 public `recv()` 경로 평균 `26.202%` 대비 개선율: `43.309%`.
+- latency ratio: `2.104x / 2.140x / 2.407x / 4.121x / 3.904x / 3.392x`, 산술평균 `3.011x`.
+- C report: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_133848_native-message-owner-node-parity-c-1s.txt`.
+- Node report: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_150940_public-recv-prefetch16-release-core-node-1s.txt`.
+
+## 2026-08-11 Node public `recv()` contract 반영 최종값
+
+- 조건: release Core `0.10.1`, `tcp`, `MULTI_DEALER_ROUTER`, clients `100`, duration `1초`, runs `1`, auto-HWM `balanced`, public `RouterSocket.recv()` 경로, perf 단독 실행.
+- 구현: 기존 Core part API를 addon 내부에서 반복하고 최대 16개 part·1MiB·1ms에서 반환한다. public poll readiness와 send 후 `Message` 소비 계약을 유지하며 pool은 사용하지 않는다.
+
+| Size | C throughput | Node throughput | Node/C |
+|---:|---:|---:|---:|
+| 64B | 184323 | 72959 | 39.582% |
+| 256B | 184787 | 70806 | 38.318% |
+| 1024B | 178501 | 66791 | 37.418% |
+| 4096B | 168408 | 47951 | 28.473% |
+| 65536B | 37838 | 13061 | 34.518% |
+| 131072B | 21827 | 9843 | 45.096% |
+
+- throughput ratio 산술평균: `37.234%`.
+- 기존 public `recv()` 경로 평균 `26.202%` 대비 개선율: `42.104%`.
+- latency ratio: `2.292x / 2.336x / 2.438x / 3.557x / 3.904x / 2.962x`, 산술평균 `2.915x`.
+- C report: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_133848_native-message-owner-node-parity-c-1s.txt`.
+- Node report: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_154701_public-recv-prefetch16-poller-go-final-node-1s.txt`.

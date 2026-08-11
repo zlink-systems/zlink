@@ -11,6 +11,11 @@ napi_value has (napi_env env, napi_callback_info info);
 napi_value proxy (napi_env env, napi_callback_info info);
 napi_value proxy_steerable (napi_env env, napi_callback_info info);
 napi_value sleep (napi_env env, napi_callback_info info);
+napi_value message_from_buffer (napi_env env, napi_callback_info info);
+napi_value message_allocate (napi_env env, napi_callback_info info);
+napi_value message_frame_data (napi_env env, napi_callback_info info);
+napi_value message_frame_size (napi_env env, napi_callback_info info);
+napi_value message_frame_close (napi_env env, napi_callback_info info);
 
 napi_value ctx_new (napi_env env, napi_callback_info info);
 napi_value ctx_shutdown (napi_env env, napi_callback_info info);
@@ -65,6 +70,7 @@ napi_value router_try_send_completion_control_transport_pair (napi_env env, napi
 napi_value router_completion_control_handler (napi_env env, napi_callback_info info);
 napi_value router_recv_message (napi_env env, napi_callback_info info);
 napi_value router_try_recv_message (napi_env env, napi_callback_info info);
+napi_value router_try_recv_message_batch (napi_env env, napi_callback_info info);
 
 napi_value monitor_open (napi_env env, napi_callback_info info);
 napi_value monitor_handler (napi_env env, napi_callback_info info);

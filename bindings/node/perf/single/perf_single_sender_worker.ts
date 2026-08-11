@@ -123,18 +123,21 @@ function isTransientSubmit(error) {
 }
 
 function submitOnce(kind, socket, body, receiverRoutingId, topic) {
+  const message = process.env.PERF_NODE_MESSAGE_PAYLOAD === '1'
+    ? zlink.Message.from(body)
+    : body;
   if (kind === 'pubsub') {
-    return socket.publish(topic).message(body)
+    return socket.publish(topic).message(message)
       .flags(zlink.SendFlags.DontWait).submit();
   }
   if (kind === 'router_router') {
-    return socket.send(receiverRoutingId).message(body)
+    return socket.send(receiverRoutingId).message(message)
       .flags(zlink.SendFlags.None).submit();
   }
   if (kind === 'dealer_router') {
-    return socket.send().message(body).flags(zlink.SendFlags.None).submit();
+    return socket.send().message(message).flags(zlink.SendFlags.None).submit();
   }
-  return socket.send().message(body).flags(zlink.SendFlags.DontWait).submit();
+  return socket.send().message(message).flags(zlink.SendFlags.DontWait).submit();
 }
 
 // Retry through transient backpressure until accepted (C send_step_retry

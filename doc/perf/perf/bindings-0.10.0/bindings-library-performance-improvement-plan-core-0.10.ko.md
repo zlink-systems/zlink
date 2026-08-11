@@ -1209,7 +1209,7 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
 | `tcp` | `MULTI_DEALER_DEALER` | 미달 (23.899%) | 통과 (37.219%) | 통과 (44.094%) | 미달 (32.659%) | 미달 (15.504%) | 미달 (20.180%) | 진행 중·C와 같은 per-socket send window, single-part receive raw materialization, stack single-part native receive를 적용했다. throughput 산술평균은 28.926%이며 Node 단순 one-way 목표 60%에 도달하지 않아 다음 transport·pattern으로 이동하지 않는다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_065653_java-multi-dealer-dealer-tcp-c.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_104248_node-multi-dealer-dealer-tcp-stack-single-recv.txt` |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 통과 (39.582%) | 통과 (38.318%) | 통과 (37.418%) | 미달 (28.473%) | 통과 (34.518%) | 통과 (45.096%) | 통과·throughput 산술평균 37.234%로 multi routed echo 최소 기준 30%를 통과하고 latency 산술평균은 2.915x로 5.0x 상한을 통과한다. release Core 0.10.1의 기존 part API만 사용해 Node binding 내부에서 최대 16개 part·1MiB·1ms까지 prefetch한다. public poller와 framework는 binding buffered receive를 drain하며 다른 native ready source도 함께 반환한다. 성공한 send는 같은 addon 호출에서 source `Message`를 empty로 만들어 ownership 계약과 hot path를 함께 유지한다. public interface는 변경하지 않았으며 pool은 사용하지 않는다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_133848_native-message-owner-node-parity-c-1s.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_154701_public-recv-prefetch16-poller-go-final-node-1s.txt` |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
@@ -1962,6 +1962,15 @@ throughput 평균은 83.823%다. 따라서 ws는 `통과`, wss는 throughput 미
 Multi 행은 throughput과 평균 latency aggregate를 측정값으로 판정한다. `MULTI_DEALER_ROUTER_REQREP / wss`의
 현재 throughput 평균은 75.578%이지만 개별 socket request/reply 최소 기준과 latency 조건을 충족해
 기존 중앙값 기반 문구와 별도로 기록하며, 추가 개선 결과와 최종 상태는 각 최신 결과 행을 따른다.
+
+### 11.3 Node public Message ownership 후보 측정 결과
+
+`PAIR/tcp`, 64·256·1024·65536·131072·262144B, 1초·1회 조건에서 C, current Node
+`Message.from`, native-owner/direct-move 후보, Node Buffer control을 직렬 실행했다. 후보/current
+throughput ratio는 `41.54% / 2.85% / 41.19% / 102.69% / 100.03% / 102.37%`이고
+산술평균은 `65.11%`다. large payload의 throughput 증가는 `0.03~2.69%`였지만 평균 latency가
+악화됐으므로 후보를 제거했다. Node public contract와 기존 Message lifecycle은 변경하지 않았다.
+최종 측정 report는 `log/2026-08-10-measurement-results.ko.md`에 기록했다.
 
 ## 12. 완료 기준
 

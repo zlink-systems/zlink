@@ -7,6 +7,8 @@ import { requireNative } from '../native/native';
 
 export class PollEvents extends NativeHandle {
   private _readyCount = 0;
+  private _nativeReadyCount = 0;
+  private _synthetic: ReadonlyArray<{ slot: number; revents: number }> = [];
   readonly capacity: number;
 
   constructor(capacity: number) {
@@ -21,21 +23,29 @@ export class PollEvents extends NativeHandle {
 
   sourceKind(index: number): number {
     this.checkReadyIndex(index);
+    if (index >= this._nativeReadyCount) return 1;
     return requireNative().pollEventsSourceKind(this._native, index | 0) as number;
   }
 
   slot(index: number): number {
     this.checkReadyIndex(index);
+    if (index >= this._nativeReadyCount) {
+      return this._synthetic[index - this._nativeReadyCount].slot;
+    }
     return requireNative().pollEventsSlot(this._native, index | 0) as number;
   }
 
   revents(index: number): number {
     this.checkReadyIndex(index);
+    if (index >= this._nativeReadyCount) {
+      return this._synthetic[index - this._nativeReadyCount].revents;
+    }
     return requireNative().pollEventsRevents(this._native, index | 0) as number;
   }
 
   fd(index: number): number {
     this.checkReadyIndex(index);
+    if (index >= this._nativeReadyCount) return -1;
     return Number(requireNative().pollEventsFd(this._native, index | 0));
   }
 
@@ -49,6 +59,21 @@ export class PollEvents extends NativeHandle {
       throw new RangeError('ready count out of range');
     }
     this._readyCount = count;
+    this._nativeReadyCount = count;
+    this._synthetic = [];
+  }
+
+  /** @internal */
+  markCombined(
+    nativeCount: number,
+    entries: ReadonlyArray<{ slot: number; revents: number }>
+  ): void {
+    if (nativeCount < 0 || nativeCount + entries.length > this.capacity) {
+      throw new RangeError('ready count out of range');
+    }
+    this._nativeReadyCount = nativeCount;
+    this._synthetic = entries;
+    this._readyCount = nativeCount + entries.length;
   }
 
   close(): void {
@@ -58,6 +83,8 @@ export class PollEvents extends NativeHandle {
     });
     this._native = null;
     this._readyCount = 0;
+    this._nativeReadyCount = 0;
+    this._synthetic = [];
   }
 
   private checkReadyIndex(index: number): void {

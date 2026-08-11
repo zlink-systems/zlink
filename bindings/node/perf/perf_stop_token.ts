@@ -39,6 +39,11 @@ function isStopTokenParts(parts) {
   if (part && typeof part.size === 'function' && part.size() !== STOP_TOKEN_BYTES.length) {
     return false;
   }
+  // This reads only the stop token. It does not expose the writable Buffer of
+  // normal relay payloads, so they retain their native frame for the reply.
+  if (part && typeof part.getString === 'function') {
+    return part.getString('utf8') === STOP_TOKEN_STRING;
+  }
   if ((Buffer.isBuffer(part) || part instanceof Uint8Array)
       && part.length !== STOP_TOKEN_BYTES.length) {
     return false;

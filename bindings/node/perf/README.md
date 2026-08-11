@@ -48,6 +48,11 @@ Current alignment notes:
   layout required by policy
 - benchmark code is split by pattern file, and the entry scripts select the
   pattern through `--pattern`
+- `PERF_NODE_MESSAGE_PAYLOAD=1` makes the single sender create a public
+  `Message` for each logical submit attempt. The default remains the canonical
+  bytes-like `Buffer` workload. This selector measures the real public
+  `Message` path with the existing perf runner; it does not enable a private
+  benchmark-only send path.
 
 Result files are written under:
 

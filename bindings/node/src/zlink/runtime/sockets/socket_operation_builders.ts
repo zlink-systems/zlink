@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { Message, type MessageLike } from '../../contracts';
+import { consumeSubmittedMessage } from '../../contracts/messaging/message';
 import { SendFlags } from '../../contracts/sockets/socket_constants';
 import type { OperationPayloadValue } from '../messaging/operation_payload';
 import { SendOperationBase } from '../messaging/send_operation_base';
@@ -29,6 +30,13 @@ export type RequestInvoker = (
 ) => Promise<Message[]> | boolean;
 export type ReplyInvoker = (parts: OperationPayloadValue<MessageLike>, flags: SendFlags) => void;
 
+function consumeSubmittedMessages(payload: OperationPayloadValue<MessageLike>): void {
+  const parts = Array.isArray(payload) ? payload : [payload];
+  for (const part of parts) {
+    if (part instanceof Message) consumeSubmittedMessage(part);
+  }
+}
+
 export class RuntimeSendOperation
   extends SendOperationBase<MessageLike, MessageLike>
   implements SendOperation, SendSubmitOperation {
@@ -40,7 +48,10 @@ export class RuntimeSendOperation
   }
 
   submit(): boolean {
-    return this._invoke(this.consumePayload(), this._flags);
+    const payload = this.consumePayload();
+    const accepted = this._invoke(payload, this._flags);
+    if (accepted) consumeSubmittedMessages(payload);
+    return accepted;
   }
 }
 
@@ -57,7 +68,10 @@ export class PublishOperation
   }
 
   submit(): boolean {
-    return this._invoke(this._topic, this.consumePayload(), this._flags);
+    const payload = this.consumePayload();
+    const accepted = this._invoke(this._topic, payload, this._flags);
+    if (accepted) consumeSubmittedMessages(payload);
+    return accepted;
   }
 }
 
@@ -88,11 +102,16 @@ export class RuntimeRequestOperation
   submit(): Promise<Message[]>;
   submit(callback: RequestCallback): boolean;
   submit(callback?: RequestCallback): Promise<Message[]> | boolean {
+    const payload = this.consumePayload();
     if (callback === undefined) {
-      return this._invoke(this.consumePayload(), this._timeoutMs) as Promise<Message[]>;
+      const reply = this._invoke(payload, this._timeoutMs) as Promise<Message[]>;
+      consumeSubmittedMessages(payload);
+      return reply;
     }
     const flags = this._callbackMode ? this._flags : SendFlags.None;
-    return this._invoke(this.consumePayload(), callback, flags, this._timeoutMs) as boolean;
+    const accepted = this._invoke(payload, callback, flags, this._timeoutMs) as boolean;
+    if (accepted) consumeSubmittedMessages(payload);
+    return accepted;
   }
 }
 
@@ -107,6 +126,8 @@ export class RuntimeReplyOperation
   }
 
   submit(): void {
-    this._invoke(this.consumePayload(), this._flags);
+    const payload = this.consumePayload();
+    this._invoke(payload, this._flags);
+    consumeSubmittedMessages(payload);
   }
 }

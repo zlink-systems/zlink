@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import type { BufferLike } from '../../contracts/core/buffer_like';
-import { Message } from '../../contracts/messaging/message';
+import {
+  Message,
+  consumeSubmittedMessage,
+} from '../../contracts/messaging/message';
 import type {
   ReplyOperation,
   ReplySubmitOperation,
@@ -22,7 +25,12 @@ class RuntimeReceivedSendOperation
   }
 
   submit(): boolean {
-    return this._invoke(this.consumeParts(), this._flags);
+    const parts = this.consumeParts();
+    const accepted = this._invoke(parts, this._flags);
+    if (accepted) {
+      for (const part of parts) consumeSubmittedMessage(part);
+    }
+    return accepted;
   }
 }
 
@@ -37,7 +45,9 @@ class RuntimeReceivedReplyOperation
   }
 
   submit(): void {
-    this._invoke(this.consumeParts(), this._flags);
+    const parts = this.consumeParts();
+    this._invoke(parts, this._flags);
+    for (const part of parts) consumeSubmittedMessage(part);
   }
 }
 

@@ -48,11 +48,18 @@ export function prepareDevelopmentRuntimeLink(packageRoot: string): void {
   const addonDir = path.join(packageRoot, 'build', 'Release');
   const coreDir = path.join(packageRoot, '..', '..', 'core', 'build', 'lib');
   const coreAltDir = path.join(packageRoot, '..', 'build_cpp', 'lib');
-  refreshAddonRuntimeLink(path.join(addonDir, LINUX_SONAME), [
-    path.join(coreDir, LINUX_SONAME),
-    path.join(coreAltDir, LINUX_SONAME)
-  ]);
-  prependLibraryPath([coreDir, coreAltDir, addonDir]);
+  const releaseDir = process.env.ZLINK_CORE_SOURCE === 'release'
+    && process.env.ZLINK_CORE_PACKAGE_PREFIX
+    ? path.join(process.env.ZLINK_CORE_PACKAGE_PREFIX, 'lib')
+    : undefined;
+  const runtimeDirs = [releaseDir, coreDir, coreAltDir].filter(
+    (entry): entry is string => entry !== undefined
+  );
+  refreshAddonRuntimeLink(
+    path.join(addonDir, LINUX_SONAME),
+    runtimeDirs.map((entry) => path.join(entry, LINUX_SONAME))
+  );
+  prependLibraryPath([...runtimeDirs, addonDir]);
 }
 
 export function preparePrebuiltRuntimePath(prebuiltDir: string): void {

@@ -2,6 +2,8 @@
 
 export * from './zlink/contracts';
 
+import { configureMessageNativeOperations } from './zlink/contracts/messaging/message';
+import { requireNative } from './zlink/runtime/native/native';
 import {
   has as runtimeHas,
   multipartClose as runtimeMultipartClose,
@@ -53,6 +55,14 @@ import type {
   XSubSocket,
 } from './zlink/contracts';
 import type { BaseSocket, Message } from './zlink/contracts';
+
+configureMessageNativeOperations({
+  allocate: (size) => requireNative().messageAllocate(size),
+  close: (nativeMessage) => requireNative().messageFrameClose(nativeMessage),
+  data: (nativeMessage) => requireNative().messageFrameData(nativeMessage),
+  fromBuffer: (data) => requireNative().messageFromBuffer(data),
+  size: (nativeMessage) => requireNative().messageFrameSize(nativeMessage),
+});
 
 export function createContext(): Context {
   return asPublicContract<Context>(new RuntimeContext());

@@ -21,6 +21,10 @@ export interface SocketNativeBinding {
   handleSetRoutingId: (handle: NativeHandle, routingId: Buffer) => void;
   monitorOpen: (socket: NativeHandle, eventMask: number) => NativeHandle;
   routerRecvMessage: (socket: NativeHandle, flags: number) => NativeReceivedRaw | null;
+  routerRecvMessageBatchNoWait: (
+    socket: NativeHandle,
+    maxCount: number
+  ) => NativeReceivedRaw[];
   routerRecvMessageNoWait: (socket: NativeHandle) => NativeReceivedRaw | null;
   routerReply: (
     socket: NativeHandle,
