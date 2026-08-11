@@ -2461,14 +2461,11 @@ napi_value socket_subscribe_message (napi_env env, napi_callback_info info)
     }
 }
 
-napi_value socket_try_subscribe_message (napi_env env, napi_callback_info info)
+int try_subscribe_message_value (napi_env env,
+                                 void *sock,
+                                 napi_value *out,
+                                 size_t *received_bytes = NULL)
 {
-    napi_value argv[1];
-    size_t argc = 1;
-    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
-    void *sock = NULL;
-    napi_get_value_external (env, argv[0], &sock);
-
     std::vector<char> topic (256, '\0');
     zlink_routing_id_t routing_id;
     size_t topic_len = topic.size ();
@@ -2478,39 +2475,106 @@ napi_value socket_try_subscribe_message (napi_env env, napi_callback_info info)
         const zlink_routing_id_t *source_rid = NULL;
         zlink_msg_t first_part;
         if (zlink_msg_init (&first_part) != 0)
-            return throw_last_error (env, "trySubscribe failed");
+            return ZLINK_RECV_INTERNAL_ERROR;
         zlink_part_flag_t has_more = ZLINK_PART_FINAL;
         int rc = zlink_subscribe_part (sock, &source_rid, topic.data (), topic.size (), &topic_len,
                                        &first_part, &has_more, ZLINK_RECV_FLAGS_DONTWAIT);
         if (rc == ZLINK_RECV_OK) {
             copy_routing_id (&routing_id, source_rid);
             if (!has_more) {
-                napi_value out = create_subscribed_value (env, routing_id, topic.data (), topic_len,
-                                                          &first_part, 1);
+                if (received_bytes)
+                    *received_bytes = zlink_msg_size (&first_part);
+                *out = create_subscribed_value (env, routing_id, topic.data (), topic_len,
+                                                &first_part, 1);
                 zlink_msg_close (&first_part);
-                return out;
+                return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
             }
 
             std::vector<zlink_msg_t> parts;
             rc = collect_recv_parts (sock, &first_part, has_more, &parts);
             if (rc == ZLINK_RECV_OK) {
-                napi_value out = create_subscribed_value (env, routing_id, topic.data (), topic_len,
-                                                          parts.data (), parts.size ());
+                if (received_bytes) {
+                    *received_bytes = 0;
+                    for (size_t index = 0; index < parts.size (); ++index)
+                        *received_bytes += zlink_msg_size (&parts[index]);
+                }
+                *out = create_subscribed_value (env, routing_id, topic.data (), topic_len,
+                                                parts.data (), parts.size ());
                 close_msg_vector (parts);
-                return out;
+                return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
             }
         }
         const int err = zlink_errno ();
         zlink_msg_close (&first_part);
-        if (err == EAGAIN) {
-            napi_value none;
-            napi_get_null (env, &none);
-            return none;
-        }
+        if (err == EAGAIN)
+            return rc;
         if (err != EMSGSIZE)
-            return throw_last_error (env, "subscribeNoWait failed");
+            return rc;
         topic.assign (topic_len > 0 ? topic_len : 1, '\0');
     }
+}
+
+napi_value socket_try_subscribe_message (napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    size_t argc = 1;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    void *sock = NULL;
+    napi_get_value_external (env, argv[0], &sock);
+    napi_value out = NULL;
+    const int rc = try_subscribe_message_value (env, sock, &out);
+    if (rc == ZLINK_RECV_OK)
+        return out;
+    if (zlink_errno () == EAGAIN) {
+        napi_value none;
+        napi_get_null (env, &none);
+        return none;
+    }
+    return throw_last_error (env, "subscribeNoWait failed");
+}
+
+napi_value socket_try_subscribe_message_batch (napi_env env, napi_callback_info info)
+{
+    napi_value argv[2];
+    size_t argc = 2;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    if (argc < 2) {
+        napi_throw_type_error (env, NULL,
+          "socketTrySubscribeMessageBatch requires socket and batch size");
+        return NULL;
+    }
+    void *sock = NULL;
+    napi_get_value_external (env, argv[0], &sock);
+    int32_t max_count = 0;
+    if (napi_get_value_int32 (env, argv[1], &max_count) != napi_ok
+        || max_count < 1 || max_count > 64) {
+        napi_throw_range_error (env, NULL, "batch size must be 1..64");
+        return NULL;
+    }
+    napi_value out;
+    napi_create_array (env, &out);
+    size_t received_bytes = 0;
+    uint32_t count = 0;
+    const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now () + std::chrono::milliseconds (1);
+    while (count < static_cast<uint32_t> (max_count)
+           && received_bytes < k_router_recv_batch_byte_limit
+           && std::chrono::steady_clock::now () < deadline) {
+        napi_value received = NULL;
+        size_t message_bytes = 0;
+        const int rc = try_subscribe_message_value (
+          env, sock, &received, &message_bytes);
+        if (rc != ZLINK_RECV_OK) {
+            if (zlink_errno () == EAGAIN)
+                break;
+            return throw_last_error (env,
+                                     "socketTrySubscribeMessageBatch failed");
+        }
+        if (napi_set_element (env, out, count++, received) != napi_ok)
+            return NULL;
+        received_bytes += message_bytes;
+    }
+    return out;
 }
 
 napi_value socket_send_ready_handler (napi_env env, napi_callback_info info)

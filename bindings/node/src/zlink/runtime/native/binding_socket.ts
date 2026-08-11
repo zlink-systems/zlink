@@ -165,6 +165,10 @@ export interface SocketNativeBinding {
     payload: unknown
   ) => number;
   socketTrySubscribeMessage: (socket: NativeHandle) => NativeTopicMessageRaw | null;
+  socketTrySubscribeMessageBatch: (
+    socket: NativeHandle,
+    batchSize: number
+  ) => NativeTopicMessageRaw[];
   socketTrySubscriptionEvent: (
     socket: NativeHandle
   ) => { routingId?: Buffer | null; topic: string; subscribed: boolean } | null;

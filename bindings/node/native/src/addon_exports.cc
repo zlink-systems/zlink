@@ -62,6 +62,7 @@ void define_core_exports (napi_env env, napi_value exports)
       ZLINK_METHOD ("socketRecvMessageBatchNoWait", socket_try_recv_message_batch),
       ZLINK_METHOD ("socketSubscribeMessage", socket_subscribe_message),
       ZLINK_METHOD ("socketTrySubscribeMessage", socket_try_subscribe_message),
+      ZLINK_METHOD ("socketTrySubscribeMessageBatch", socket_try_subscribe_message_batch),
       ZLINK_METHOD ("socketSendReadyHandler", socket_send_ready_handler),
       ZLINK_METHOD ("socketSubscriptionEvent", socket_subscription_event),
       ZLINK_METHOD ("socketTrySubscriptionEvent", socket_try_subscription_event),

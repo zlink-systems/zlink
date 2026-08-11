@@ -13,6 +13,7 @@ import {
   materializeReceivedInto,
   materializeTopicMessage,
   type NativeReceivedRaw,
+  type NativeTopicMessageRaw,
 } from '../messaging/message_materializer';
 import {
   normalizeMessageLikePayload,
@@ -167,6 +168,9 @@ export class MessageSocket extends SendSocket {
 }
 
 export class SubscriberSocket extends ConnectableSocket {
+  private readonly bufferedReceive =
+    new BufferedReceiveQueue<NativeTopicMessageRaw>(this);
+
   setSubscription(topicOrPattern: string): void {
     const topic = validateCString(topicOrPattern, 'topicOrPattern', Number.MAX_SAFE_INTEGER);
     configCall('subscription set failed', () => {
@@ -191,9 +195,16 @@ export class SubscriberSocket extends ConnectableSocket {
     const flags = hasResult ? maybeFlags : resultOrFlags as RecvFlags;
     let raw;
     try {
-      raw = ((flags | 0) & (RecvFlags.DontWait | 0))
-        ? native.socketTrySubscribeMessage(getNativeHandle(this))
-        : native.socketSubscribeMessage(getNativeHandle(this), flags | 0);
+      raw = this.bufferedReceive.take();
+      if (raw == null && ((flags | 0) & (RecvFlags.DontWait | 0))) {
+        this.bufferedReceive.replace(native.socketTrySubscribeMessageBatch(
+          getNativeHandle(this),
+          RECV_BATCH_MESSAGE_LIMIT
+        ));
+        raw = this.bufferedReceive.take();
+      } else if (raw == null) {
+        raw = native.socketSubscribeMessage(getNativeHandle(this), flags | 0);
+      }
     } catch (error) {
       throw recvNativeError(error, flags, 'subscribe failed');
     }
@@ -205,6 +216,11 @@ export class SubscriberSocket extends ConnectableSocket {
       return true;
     }
     return materializeTopicMessage(raw);
+  }
+
+  close(): void {
+    this.bufferedReceive.drain((raw) => materializeTopicMessage(raw).close());
+    super.close();
   }
 }
 

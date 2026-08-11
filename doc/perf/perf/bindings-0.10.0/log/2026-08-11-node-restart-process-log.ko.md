@@ -29,3 +29,24 @@ public batch interface 없이 추가로 경계 호출 수를 줄일 의미 있�
 - Node baseline: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_174355_node-restart-pair-tcp.txt`
 - Node batching A/B: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_174919_node-restart-pair-tcp-batched-recv.txt`
 - Node 최종: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_175116_node-restart-pair-tcp-batched-posddd-final.txt`
+
+## Single PUBSUB / tcp
+
+Baseline Node/C throughput 산술평균은 `77.060%`, latency ratio 중앙값은 `1.780x`로 기준을
+충족했다. 통과 뒤에도 개선과 POSDDD 구조를 검토했으며, Sol은 Subscriber의 message별 N-API
+호출을 bounded native prefetch로 바꾸고 공통 `BufferedReceiveQueue`를 사용하는 후보를 GO로
+판정했다.
+
+Topic, source routing-id와 multipart frame은 다음 Core receive 전에 native envelope에 고정한다.
+Topic buffer가 부족한 `EMSGSIZE` 경로는 frame을 유실하지 않고 buffer를 늘려 다시 받는다.
+Public `subscribe`는 기존처럼 topic message 하나만 반환하고, pending queue와 poll readiness,
+socket close cleanup은 일반 socket과 ROUTER가 사용하는 같은 내부 module이 담당한다.
+
+전체 Node test와 sample이 통과했다. 최종 Node/C throughput ratio는 `27.966% / 45.947% /
+62.436% / 135.835% / 109.622% / 85.076%`, 산술평균 `77.814%`다. Baseline 대비 throughput
+산술평균은 `101.059%`, latency ratio 중앙값은 `1.919x`다. 성능 기준을 충족하고 공통 receive
+lifecycle로 구조를 단순화하므로 후보를 유지한다.
+
+- C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_175308_node-restart-pubsub-tcp-c.txt`
+- Node baseline: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_175349_node-restart-pubsub-tcp.txt`
+- Node 최종: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_175620_node-restart-pubsub-tcp-batched-final.txt`
