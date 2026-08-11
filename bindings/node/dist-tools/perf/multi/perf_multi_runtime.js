@@ -29,7 +29,18 @@ function pollEventHas(event, mask) {
     return ((event?.revents ?? event?.events ?? 0) & mask) !== 0;
 }
 function waitPollerOne(poller, events, timeoutMs) {
-    const count = poller.wait(events, timeoutMs);
+    let count;
+    try {
+        count = poller.wait(events, timeoutMs);
+    }
+    catch (error) {
+        // C perf retries an interrupted poll. A signal must not turn a waiting
+        // benchmark endpoint into a failed measurement.
+        if (error instanceof zlink.RecvError && error.nativeErrno === 4) {
+            return null;
+        }
+        throw error;
+    }
     if (count <= 0)
         return null;
     return {

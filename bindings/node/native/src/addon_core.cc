@@ -190,32 +190,6 @@ bool init_msg_from_bytes (zlink_msg_t *msg, const void *data, size_t len)
     return true;
 }
 
-int recv_parts (void *sock,
-                zlink_routing_id_t *routing_id,
-                std::vector<zlink_msg_t> *parts,
-                int32_t flags)
-{
-    const zlink_routing_id_t *source_rid = NULL;
-    zlink_msg_t first_part;
-    if (zlink_msg_init (&first_part) != 0)
-        return ZLINK_RECV_INTERNAL_ERROR;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-
-    copy_routing_id (routing_id, NULL);
-    if (parts)
-        parts->clear ();
-
-    int rc = zlink_recv_part (sock, &source_rid, &first_part, &has_more,
-                              static_cast<zlink_recv_flags_t> (flags));
-    if (rc != ZLINK_RECV_OK) {
-        zlink_msg_close (&first_part);
-        return rc;
-    }
-
-    copy_routing_id (routing_id, source_rid);
-    return collect_recv_parts (sock, &first_part, has_more, parts);
-}
-
 int subscribe_parts (void *sock,
                      zlink_routing_id_t *routing_id,
                      char *topic,
@@ -2113,6 +2087,45 @@ napi_value socket_send_routing_parts (napi_env env, napi_callback_info info)
     return ok;
 }
 
+int recv_message_value (napi_env env,
+                        void *sock,
+                        int32_t flags,
+                        napi_value *out)
+{
+    if (!out)
+        return ZLINK_RECV_INTERNAL_ERROR;
+
+    *out = NULL;
+    zlink_routing_id_t routing_id;
+    zlink_msg_t first_part;
+    if (zlink_msg_init (&first_part) != 0)
+        return ZLINK_RECV_INTERNAL_ERROR;
+
+    const zlink_routing_id_t *source_rid = NULL;
+    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+    const int rc = zlink_recv_part (sock, &source_rid, &first_part, &has_more,
+                                    static_cast<zlink_recv_flags_t> (flags));
+    if (rc != ZLINK_RECV_OK) {
+        zlink_msg_close (&first_part);
+        return rc;
+    }
+
+    copy_routing_id (&routing_id, source_rid);
+    if (has_more == ZLINK_PART_FINAL) {
+        *out = create_recv_message_value (env, routing_id, &first_part, 1);
+        zlink_msg_close (&first_part);
+        return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
+    }
+
+    std::vector<zlink_msg_t> parts;
+    const int collect_rc = collect_recv_parts (sock, &first_part, has_more, &parts);
+    if (collect_rc != ZLINK_RECV_OK)
+        return collect_rc;
+    *out = create_recv_message_value (env, routing_id, parts.data (), parts.size ());
+    close_msg_vector (parts);
+    return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
+}
+
 napi_value socket_recv_message (napi_env env, napi_callback_info info)
 {
     napi_value argv[2];
@@ -2124,14 +2137,10 @@ napi_value socket_recv_message (napi_env env, napi_callback_info info)
     if (argc >= 2)
         napi_get_value_int32 (env, argv[1], &flags);
 
-    zlink_routing_id_t routing_id;
-    std::vector<zlink_msg_t> parts;
-    int rc = recv_parts (sock, &routing_id, &parts, flags);
+    napi_value out;
+    int rc = recv_message_value (env, sock, flags, &out);
     if (rc != ZLINK_RECV_OK)
         return throw_last_error (env, "recv failed");
-
-    napi_value out = create_recv_message_value (env, routing_id, parts.data (), parts.size ());
-    close_msg_vector (parts);
     return out;
 }
 
@@ -2143,10 +2152,9 @@ napi_value socket_try_recv_message (napi_env env, napi_callback_info info)
     void *sock = NULL;
     napi_get_value_external (env, argv[0], &sock);
 
-    zlink_routing_id_t routing_id;
-    std::vector<zlink_msg_t> parts;
-    int rc =
-      recv_parts (sock, &routing_id, &parts, static_cast<int32_t> (ZLINK_RECV_FLAGS_DONTWAIT));
+    napi_value out;
+    int rc = recv_message_value (env, sock, static_cast<int32_t> (ZLINK_RECV_FLAGS_DONTWAIT),
+                                 &out);
     if (rc != ZLINK_RECV_OK) {
         if (zlink_errno () == EAGAIN) {
             napi_value none;
@@ -2155,8 +2163,6 @@ napi_value socket_try_recv_message (napi_env env, napi_callback_info info)
         }
         return throw_last_error (env, "tryReceive failed");
     }
-    napi_value out = create_recv_message_value (env, routing_id, parts.data (), parts.size ());
-    close_msg_vector (parts);
     return out;
 }
 

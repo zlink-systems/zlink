@@ -1154,8 +1154,8 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 
 - perf 경로: `bindings/node/perf`
 - Single 상태: `완료 (통과 26, 보류 16)`
-- Multi 상태: `미측정`
-- 다음 작업: `MULTI_DEALER_DEALER / tcp`를 C와 순차 paired 측정하고 개선 검토한다.
+- Multi 상태: `진행 중 (MULTI_DEALER_DEALER / tcp)`
+- 다음 작업: `MULTI_DEALER_DEALER / tcp`의 throughput 산술평균 60%를 달성할 때까지 C와 순차 paired 측정과 binding hot-path 개선을 계속한다.
 
 #### 9.4.1 Single suite
 
@@ -1208,7 +1208,7 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 미달 (23.899%) | 통과 (37.219%) | 통과 (44.094%) | 미달 (32.659%) | 미달 (15.504%) | 미달 (20.180%) | 진행 중·C와 같은 per-socket send window, single-part receive raw materialization, stack single-part native receive를 적용했다. throughput 산술평균은 28.926%이며 Node 단순 one-way 목표 60%에 도달하지 않아 다음 transport·pattern으로 이동하지 않는다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_065653_java-multi-dealer-dealer-tcp-c.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_104248_node-multi-dealer-dealer-tcp-stack-single-recv.txt` |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
