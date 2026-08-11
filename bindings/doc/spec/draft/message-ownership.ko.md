@@ -243,6 +243,26 @@ GC와 finalizer는 누수를 막는 마지막 보호 수단으로 사용할 수 
 GC 시점에 맡기면 안 되며, 언어별 public API는 deterministic cleanup을 제공해야 한다.
 RAII 언어는 destructor나 `Drop`으로 이 책임을 표현할 수 있다.
 
+### Wrapper pool
+
+객체 참조를 사용하는 binding은 종료된 `Message` wrapper를 다시 사용해 allocation과 GC
+부담을 줄일 수 있다. 이 최적화는 payload ownership을 바꾸지 않으며 다음 규칙을 모두
+지켜야 한다.
+
+1. `owned` 또는 `held` 상태의 wrapper는 pool에 반환하지 않는다.
+2. Send가 native frame을 소비한 시점과 wrapper를 pool에 반환하는 시점을 구분한다.
+3. `close()`, `Dispose()` 또는 owner envelope 정리가 끝나고 남은 내부 reference를 제거한
+   뒤에만 wrapper를 반환한다.
+4. Pool에서 얻은 wrapper에는 payload, native handle, size cache, metadata, routing state와
+   종료 상태를 모두 새 ownership 값으로 초기화한다.
+5. Pool 상한을 넘은 wrapper의 native resource는 즉시 해제한다. Pool 크기는 무제한으로
+   증가하면 안 된다.
+6. Thread-local pool을 사용하면 반환 thread와 재사용 thread의 관계를 binding 내부에서
+   관리한다. 다른 thread에서 종료할 수 있는 객체를 잘못된 thread의 native scope에
+   연결하면 안 된다.
+7. Pool 사용 여부, 크기와 재사용 순서는 내부 구현이며 새 public API나 선택 option으로
+   노출하지 않는다.
+
 Reference 객체를 사용하는 binding은 `close()`, `Dispose()` 또는 owner envelope 정리가
 끝난 wrapper를 bounded pool에 보관할 수 있다. Send가 payload를 소비했다는 사실만으로
 wrapper까지 즉시 pool에 넣으면 안 된다. Operation이나 수신 envelope가 그 wrapper를
@@ -256,6 +276,15 @@ Wrapper pool을 사용하는 binding에서는 반환 전후의 객체 identity�
 Application은 `Message` identity를 장기 `Map`, `WeakMap`이나 별도 metadata의 key로 사용하면
 안 되며, 임의 property를 추가해 다음 ownership으로 전달한다고 가정하면 안 된다. Binding은
 이 내부 최적화를 public API로 노출하지 않으며 pool 크기와 재사용 순서를 보장하지 않는다.
+
+언어별 runtime은 같은 계약을 다음과 같이 표현할 수 있다. 아래 방식과 숫자는 구현 예이며
+공개 계약이 아니다.
+
+| Runtime | 허용되는 내부 표현 |
+|---|---|
+| Java | `ThreadLocal` free list에서 wrapper를 대여하고 `AutoCloseable.close()` 또는 owner 정리 뒤 반환한다. Native message slot pool과 wrapper pool은 서로의 ownership을 중복해서 가지면 안 된다. |
+| .NET | `[ThreadStatic]` free list에서 wrapper를 대여하고 `Dispose()` 또는 owner 정리 뒤 반환한다. 다른 thread에서 dispose될 수 있는 경로는 해당 thread pool로 반환하거나 native state를 직접 해제한다. |
+| Node | JavaScript isolate별 bounded free list에서 wrapper를 대여한다. `close()` 또는 owner envelope 정리가 part reference를 제거한 뒤 반환하며, send consume만으로 즉시 반환하지 않는다. |
 
 ## 언어별 표현 범위
 
@@ -356,8 +385,8 @@ allocation/copy 계측과 source-level boundary test는 원인을 확인하는 �
 |---|---|---|
 | C | `zlink_msg_t`와 Core `*_part` API를 직접 사용한다. | 기준 구현이다. Socket별 ownership 예외를 wrapper binding test의 기준으로 사용해야 한다. |
 | C++ | `message_t`가 native frame을 소유한다. Direct rvalue send는 frame을 move하지만 기본 builder helper는 각 part에 `zlink_msg_copy()`로 temporary native view를 만들어 모든 결과에서 원본을 보존한다. 이 copy는 작은 inline payload는 값으로 복사하고 큰 payload는 refcount storage를 공유한다. 일부 move 경로는 실패한 native part를 원본에 복원한다. | 기본 builder의 ownership을 Core consume 규칙과 맞춰야 한다. Temporary init/copy/close 제거의 성능 효과는 기존 perf에서 확인한 뒤 구현 방식을 선택해야 한다. |
-| .NET | `Message`가 `ZlinkMsg`를 소유한다. Single-part submit은 native part로 move한 뒤 실패하면 `RestoreFrom`으로 원본을 복원한다. Multipart helper는 전체 입력을 clone하고 clone만 Core에 제출하여 모든 결과에서 원본을 보존한다. | Single-part 일반 socket 실패를 consumed 상태로 반영하고, multipart clone-submit을 원본 ownership 이전으로 바꿔야 한다. STREAM backpressure에서만 operation이 Core가 보존한 frame을 유지해야 한다. |
-| Java | `Message`가 FFM `MemorySegment`의 native frame을 소유한다. `from(Message)`는 payload를 물리적으로 복사한다. Send 성공에서만 `markTransferred()`를 호출하며 일부 retry loop가 실패한 같은 frame을 다시 제출한다. | Core가 실패에서 소비한 frame을 valid로 남기거나 재제출하지 않게 해야 한다. STREAM backpressure 예외를 분리해야 한다. `copy()`의 Core refcount 공유 적용은 기존 perf에서 효과를 확인해야 한다. |
+| .NET | `Message`가 `ZlinkMsg`를 소유한다. Routed single-part receive는 `[ThreadStatic]` wrapper pool을 사용한다. Single-part submit은 native part로 move한 뒤 실패하면 `RestoreFrom`으로 원본을 복원하고, multipart helper는 전체 입력을 clone해 제출한다. | 기존 wrapper pool이 deterministic cleanup 뒤에만 반환되는지 contract test로 고정해야 한다. 일반 socket 실패의 consume 규칙, multipart ownership 이전과 STREAM backpressure 예외도 목표 계약에 맞춰야 한다. |
+| Java | `Message`가 FFM native frame을 소유한다. `ThreadLocal` pool은 native message slot과 `Received` parts list를 재사용하지만 public `Message` wrapper는 재사용하지 않는다. Send 성공에서만 `markTransferred()`를 호출하며 일부 retry loop가 실패한 같은 frame을 다시 제출한다. | Wrapper pool 후보는 native slot ownership과 중복되지 않게 설계하고 기존 perf에서 효과를 확인해야 한다. Core가 실패에서 소비한 frame의 상태와 STREAM backpressure 예외도 목표 계약에 맞춰야 한다. |
 | Node | `Message`가 native frame을 소유하고 수신 frame을 payload copy 없이 다시 send할 수 있다. Routed receive는 기존 Core part API를 addon 내부에서 bounded prefetch하고, deterministic cleanup이 끝난 public wrapper를 최대 64개까지 재사용한다. Send가 consume한 wrapper는 owner envelope 또는 guard가 정리하기 전까지 pool에 반환하지 않는다. | STREAM backpressure에서 retained payload를 copy 없이 재시도하는 계약과 wrapper 반환 뒤 접근 금지를 나머지 contract test에 맞춰야 한다. Receive의 size별 copy/adopt와 wrapper pool은 기존 perf A/B 결과를 계속 기록한다. |
 | Go | `Message`가 native frame을 소유한다. 기본 `Message(...)`는 submit용 frame을 copy하여 실패 시 원본을 보존하고 성공 시 원본을 닫아 moved 상태로 바꾼다. `MoveMessage(...)`만 처음부터 ownership을 이전한다. | 기본 `Message` send의 추가 copy를 없애고 결과별로 달라지는 원본 상태를 Core 규칙에 맞춰야 한다. 별도 move 선택 없이 기본 경로가 ownership을 이전해야 한다. |
 | Rust | `Message`가 inline native frame을 소유하고 builder가 값을 받아 submit에서 Core로 전달한다. 일반 socket의 submit 뒤에는 builder part를 drop한다. STREAM backpressure에서도 결과를 판정하기 전에 part를 drop하여 retained payload를 남기지 않는다. | 일반 socket 구조는 목표에 가깝다. STREAM backpressure에서는 retained part나 retry 가능한 operation을 결과에 보존해야 한다. Multipart cleanup 범위도 contract test로 고정해야 한다. |
