@@ -72,6 +72,35 @@ test('pair messaging uses Message and Received by default', () => {
     sender.close();
     ctx.close();
 });
+test('pair nonblocking recv preserves order across native batches', () => {
+    const ctx = zlink.createContext();
+    const sender = zlink.createPairSocket(ctx);
+    const receiver = zlink.createPairSocket(ctx);
+    const poller = zlink.createPoller();
+    const events = zlink.createPollEvents(1);
+    sender.bind('inproc://pair-native-recv-batch');
+    receiver.connect('inproc://pair-native-recv-batch');
+    poller.add(receiver, [zlink.PollEventFlag.PollIn], 17);
+    for (let index = 0; index < 20; index += 1) {
+        sender.send().message(`message-${index}`).submit();
+    }
+    for (let index = 0; index < 20; index += 1) {
+        assert.equal(poller.wait(events, 1000), 1);
+        assert.equal(events.slot(0), 17);
+        const received = new zlink.Received();
+        assert.equal(receiver.recv(received, zlink.RecvFlags.DontWait), true);
+        assert.equal(received.singlePartOrThrow().getString('utf8'), `message-${index}`);
+        received.close();
+    }
+    const empty = new zlink.Received();
+    assert.equal(receiver.recv(empty, zlink.RecvFlags.DontWait), false);
+    empty.close();
+    events.close();
+    poller.close();
+    receiver.close();
+    sender.close();
+    ctx.close();
+});
 test('poller writes reusable event buffer and dispatches by slot', () => {
     const ctx = zlink.createContext();
     const sender = zlink.createPairSocket(ctx);

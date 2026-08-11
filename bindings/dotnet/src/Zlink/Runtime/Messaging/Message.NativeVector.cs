@@ -152,7 +152,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
 
     internal static Message MoveFromNative(ref ZlinkMsg source)
     {
-        var result = new Message(false);
+        var result = RentFromPool();
         result.Init();
         try
         {

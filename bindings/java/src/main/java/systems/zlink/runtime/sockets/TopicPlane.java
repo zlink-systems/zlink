@@ -159,7 +159,7 @@ final class TopicPlane {
             RoutingId routingId = null;
             String topicId = "";
             while (true) {
-                Message part = new Message();
+                Message part = InternalAccess.messageAcquireReceive();
                 boolean success = false;
                 try {
                     int rc = Native.subscribePart(socket.handle(),
@@ -232,7 +232,7 @@ final class TopicPlane {
         while (true) {
             scratch.topicLenOut.set(ValueLayout.JAVA_LONG, 0,
                 RecvScratch.TOPIC_CAPACITY);
-            Message part = new Message();
+            Message part = InternalAccess.messageAcquireReceive();
             boolean success = false;
             try {
                 int rc = Native.subscribePartNoWaitCritical(socket.handle(),
@@ -317,7 +317,7 @@ final class TopicPlane {
         boolean restartOnEintr,
         boolean allowNoData) {
         while (true) {
-            Message next = new Message();
+            Message next = InternalAccess.messageAcquireReceive();
             boolean ok = false;
             try {
                 int rc = Native.subscribePart(socket.handle(),

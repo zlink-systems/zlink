@@ -5,8 +5,11 @@ import { SocketBase } from './socket_base';
 import { messageFromNativeBuffer, normalizeMessageLikePayload } from '../buffers/message_conversion';
 import { normalizeRoutingId } from '../core/routing_id';
 import {
+  RECV_BATCH_MESSAGE_LIMIT,
   RuntimeSendOperation,
 } from './socket_operations';
+import { BufferedReceiveQueue } from './buffered_receive_queue';
+import { setBufferedReceive } from './socket_receive_state';
 import { submitErrorFromResult } from './socket_submit_errors';
 import type { RuntimeContext as Context } from '../core/context';
 import {
@@ -19,6 +22,7 @@ import { getNativeHandle } from '../handles/native_handle';
 import {
   materializeReceived,
   materializeReceivedInto,
+  type NativeReceivedRaw,
 } from '../messaging/message_materializer';
 import { requireNative } from '../native/native';
 import {
@@ -41,6 +45,8 @@ const native = requireNative();
 export class StreamSocket extends SocketBase {
   readonly options: StreamSocketOptions;
   private readonly _packetRoutingIdCache = new Map<string, RoutingId>();
+  private readonly bufferedReceive =
+    new BufferedReceiveQueue<NativeReceivedRaw>(this);
   constructor(ctx: Context) {
     super(ctx, NativeSocketType.STREAM);
     this.options = StreamSocketOptions.create(this);
@@ -92,22 +98,41 @@ export class StreamSocket extends SocketBase {
     const recvFlags: RecvFlags = result ? flags : resultOrFlags as RecvFlags;
     let raw;
     try {
-      raw = ((recvFlags | 0) & (RecvFlags.DontWait | 0))
-        ? native.socketRecvMessageNoWait(getNativeHandle(this))
-        : native.socketRecvMessage(getNativeHandle(this), recvFlags | 0);
+      raw = this.bufferedReceive.take();
+      if (raw == null && ((recvFlags | 0) & (RecvFlags.DontWait | 0))) {
+        this.bufferedReceive.replace(native.socketRecvMessageBatchNoWait(
+          getNativeHandle(this),
+          RECV_BATCH_MESSAGE_LIMIT
+        ));
+        raw = this.bufferedReceive.take();
+      } else if (raw == null) {
+        raw = native.socketRecvMessage(getNativeHandle(this), recvFlags | 0);
+      }
     } catch (error) {
       throw recvNativeError(error, recvFlags, 'recv failed');
     }
-    if (raw == null) return result ? false : null;
+    if (raw == null) {
+      setBufferedReceive(this, false);
+      return result ? false : null;
+    }
+    const receivedRaw = raw;
     const send = (parts: readonly Message[], sendFlags: SendFlags) => {
-        if (!raw.routingId) {
+        if (!receivedRaw.routingId) {
           throw submitErrorFromResult(SubmitResult.InvalidState, 'missing routed send target');
         }
-        return this.sendDirect(RoutingId.from(raw.routingId), parts, sendFlags);
+        return this.sendDirect(RoutingId.from(receivedRaw.routingId), parts, sendFlags);
       };
-    if (!result) return materializeReceived(raw, undefined, send);
-    materializeReceivedInto(result, raw, undefined, send);
+    if (!result) return materializeReceived(receivedRaw, undefined, send);
+    materializeReceivedInto(result, receivedRaw, undefined, send);
     return true;
+  }
+  close(): void {
+    this.bufferedReceive.drain((raw) => {
+      const pending = new Received();
+      materializeReceivedInto(pending, raw);
+      pending.close();
+    });
+    super.close();
   }
   setPacketHandler(handler: StreamPacketHandler): void {
     handlerCall('stream packet handler registration failed', () => {

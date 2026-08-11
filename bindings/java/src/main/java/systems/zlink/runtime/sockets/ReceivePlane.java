@@ -184,7 +184,7 @@ final class ReceivePlane {
         prepareRecvLikeOperation();
         RecvScratch scratch = socket.recvScratch();
         while (true) {
-            Message frame = new Message();
+            Message frame = InternalAccess.messageAcquireReceive();
             boolean success = false;
             try {
                 int rc = Native.recvPartNoWaitCritical(socket.handle(),
@@ -262,7 +262,7 @@ final class ReceivePlane {
                                          ReceiveFlag flags,
                                          boolean allowNoData) {
         while (true) {
-            Message part = new Message();
+            Message part = InternalAccess.messageAcquireReceive();
             boolean success = false;
             try {
                 int rc = Native.recv(socket.handle(), scratch.sourceRidOut,
@@ -315,7 +315,7 @@ final class ReceivePlane {
             if (closed || !hasMore)
                 return null;
             while (true) {
-                Message next = new Message();
+                Message next = InternalAccess.messageAcquireReceive();
                 boolean success = false;
                 try {
                     int rc = Native.recv(socket.handle(), sourceRidOut,

@@ -966,7 +966,7 @@ public final class Native {
                 : Math.max(0L,
                     topicIdLenOut.get(ValueLayout.JAVA_LONG, 0));
             while (true) {
-                Message part = new Message();
+                Message part = InternalAccess.messageAcquireReceive();
                 boolean success = false;
                 try {
                     int rc = subscribePart(subject, routingIdPtrOut,

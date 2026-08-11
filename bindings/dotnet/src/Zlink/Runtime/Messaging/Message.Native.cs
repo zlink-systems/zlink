@@ -286,14 +286,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
 
     internal static Message AdoptNative(ref ZlinkMsg source)
     {
-        var result = new Message(false)
-        {
-            _msg = source,
-            _knownSize = -1,
-            IsValid = true
-        };
-        source = default;
-        return result;
+        return AdoptNativeFromPool(ref source);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

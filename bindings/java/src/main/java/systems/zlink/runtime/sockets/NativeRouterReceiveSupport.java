@@ -460,7 +460,7 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
         MemorySegment hasMoreOut = scratch.hasMoreOut;
         boolean hasMore = true;
         while (hasMore) {
-            Message next = new Message();
+            Message next = InternalAccess.messageAcquireReceive();
             boolean nextOk = false;
             try {
                 int rc = routerRecvPart(sourceNodeRidOut,
