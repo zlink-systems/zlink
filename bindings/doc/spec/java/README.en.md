@@ -693,7 +693,13 @@ contract types.
 - owns or shares message payload according to documented ownership rules;
 - exposes Java-friendly factories such as `Message.from(...)`;
 - must not expose raw `wrapNative`, `wrapDirect`, native pointer, or borrowed
-  Java-buffer send paths as public API.
+  Java-buffer send paths as public API;
+- a receive wrapper may return to a bounded `ThreadLocal` pool only after its
+  owner `Received` removes part references and completes `close()`;
+- the `Message` reference is invalid when deterministic cleanup returns. The
+  caller must not use it again, including repeated `close()`, payload access,
+  or identity-based `Map`/`WeakMap` lookup. A wrapper that has not been returned
+  and a caller-created owned `Message` are not reused for another ownership.
 
 `Received`:
 

@@ -434,6 +434,12 @@ C보다 좁거나 더 관용적일 수 있지만, 의미는 동일하게 유지�
 part 루프, 콜백 userdata, interop 마샬링, request 진행을 보조하기 위해서만
 존재하는 네이티브 헬퍼 함수는 internal로 유지한다.
 
+`Message` receive wrapper는 owner `Received` 또는 `TopicMessage`가 part reference를
+제거하고 `Dispose()`를 완료한 뒤 bounded thread-local pool에 반환될 수 있다. Deterministic
+cleanup이 반환되면 그 `Message` reference는 무효다. 반복 `Dispose()`, payload 접근,
+object identity 기반 dictionary 조회를 포함해 다시 사용하면 안 된다. 반환되지 않은 wrapper와
+호출자가 직접 생성한 owned `Message`는 다른 ownership에 재사용하지 않는다.
+
 ## Receive 및 Subscribe 형태
 
 .NET의 recv 계열 데이터 플레인 API는 할당 없는 drain을 위해 호출자가 제공한

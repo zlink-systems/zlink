@@ -89,6 +89,8 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
         if (nodeRid == null) return;
         ContractAccess.receivedSetSendSender(result, (parts, flags) ->
             sendInternal(nodeRid, parts, flags));
+        ContractAccess.receivedSetSingleSendSender(result, (part, flags) ->
+            sendInternal(nodeRid, part, flags));
     }
     public void setSendReadyHandler(SendReadyHandler handler) { runtime().setSendReadyHandler(handler); }
 

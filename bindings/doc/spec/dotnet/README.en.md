@@ -348,6 +348,14 @@ A native helper function that exists only to support the part loop,
 callback userdata, interop marshalling, or request progress stays
 internal.
 
+A `Message` receive wrapper may return to a bounded thread-local pool only
+after its owner `Received` or `TopicMessage` removes part references and
+completes `Dispose()`. The `Message` reference is invalid when deterministic
+cleanup returns. The caller must not use it again, including repeated
+`Dispose()`, payload access, or object-identity dictionary lookup. A wrapper
+that has not been returned and a caller-created owned `Message` are not reused
+for another ownership.
+
 ## Receive and Subscribe shape
 
 .NET's recv-family data-plane API uses caller-provided output storage for

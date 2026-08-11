@@ -577,6 +577,12 @@ using TypeScript spelling.
 - The message payload factory is `Message.from(...)`. The public TypeScript
   contract does not require the caller to use `new Message(...)` to create a
   payload.
+- A receive wrapper may return to a bounded isolate-local pool only after its
+  owner envelope removes part references and completes `close()`. The
+  `Message` reference is invalid when cleanup returns. The caller must not use
+  it again, including repeated `close()`, payload access, or identity-based
+  `Map`/`WeakMap` lookup. A wrapper that has not been returned is not reused for
+  another ownership.
 - Operation-start naming follows the Function Naming Rules above. A
   builder's terminal method keeps using `submit(...)` even on a
   Promise-returning surface. Do not add a separate `submitAsync` terminal

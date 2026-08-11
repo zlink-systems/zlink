@@ -670,7 +670,12 @@ payload, flag, timeout, callback, async 동작은 builder 단계다. 대표적�
 - 문서화된 ownership 규칙에 따라 메시지 payload를 소유하거나 공유한다;
 - `Message.from(...)` 같은 Java 친화적 factory를 노출한다;
 - raw `wrapNative`, `wrapDirect`, native pointer, borrow된 Java buffer send
-  경로를 public API로 노출하지 않는다.
+  경로를 public API로 노출하지 않는다;
+- receive wrapper는 owner `Received`가 part reference를 제거하고 `close()`를 완료한 뒤
+  bounded `ThreadLocal` pool에 반환될 수 있다;
+- deterministic cleanup이 반환되면 그 `Message` reference는 무효다. 반복 `close()`, payload
+  접근, identity 기반 `Map`/`WeakMap` 조회를 포함해 다시 사용하면 안 된다. 반환되지 않은
+  wrapper와 사용자가 직접 생성한 owned `Message`는 다른 ownership에 재사용하지 않는다.
 
 `Received`:
 

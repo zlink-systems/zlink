@@ -231,6 +231,10 @@ public final class InternalAccess {
         return ContractAccess.messageFromSegment(segment, offset, length);
     }
 
+    public static Message messageAcquireReceive() {
+        return ContractAccess.messageAcquireReceive();
+    }
+
     public static void messageMoveTo(Message message,
                                      MemorySegment destination) {
         ContractAccess.messageMoveTo(message, destination);

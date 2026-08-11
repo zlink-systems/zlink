@@ -175,6 +175,9 @@ public final class ContractAccess {
         void setSendSender(Received received,
                            BiFunction<List<Message>, SendFlags, Boolean> sendSender);
 
+        void setSingleSendSender(Received received,
+                                 BiFunction<Message, SendFlags, Boolean> sendSender);
+
         void adoptFrom(Received target, Received source);
     }
 
@@ -237,6 +240,9 @@ public final class ContractAccess {
         Message fromSegment(Object segment, long offset, long length);
 
         boolean isReusable(Message message);
+
+        Message acquireReceive();
+
     }
 
     public interface NativeMessageAccess {
@@ -582,6 +588,12 @@ public final class ContractAccess {
         receivedAccess().setSendSender(received, sendSender);
     }
 
+    public static void receivedSetSingleSendSender(
+      Received received,
+      BiFunction<Message, SendFlags, Boolean> sendSender) {
+        receivedAccess().setSingleSendSender(received, sendSender);
+    }
+
     public static void receivedAdoptFrom(Received target, Received source) {
         receivedAccess().adoptFrom(target, source);
     }
@@ -674,6 +686,11 @@ public final class ContractAccess {
     public static boolean messageIsReusable(Message message) {
         return messageAccess().isReusable(message);
     }
+
+    public static Message messageAcquireReceive() {
+        return messageAccess().acquireReceive();
+    }
+
 
     public static Message messageAdoptOwnedNative(Object nativeMsg) {
         return messageAccess().adoptOwnedNative(nativeMsg);

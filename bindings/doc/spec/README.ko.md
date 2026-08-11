@@ -1942,7 +1942,13 @@ builder 는 하나 이상의 `Message` 를 누적해서 multipart payload 를 �
 - `ref_count()` 는 진단값이다. reference count 값으로 ownership 정책이나 send
   가능 여부를 판단하는 public contract 를 만들면 안 된다.
 - RAII 언어(C++, Rust)는 `close()`를 명시 노출하지 않아도 된다. 명시 lifecycle
-  언어(.NET, Java, Python, Go)는 idempotent close/dispose 를 제공해야 한다.
+  언어(.NET, Java, Python, Go)의 resource close/dispose는 기본적으로 idempotent해야 한다.
+  단, binding이 deterministic cleanup 뒤 public `Message` wrapper identity를 pool에 반환한다고
+  언어별 exact contract에 명시한 경우에는 cleanup 반환과 동시에 해당 reference가 무효가 된다.
+  이 `Message` reference에는 반복 close/dispose를 포함한 어떤 동작도 수행하면 안 된다.
+- Pool에 반환된 `Message` wrapper identity는 나중 receive에서 다시 사용될 수 있다. Application은
+  반환된 wrapper를 `Map`, `WeakMap`이나 별도 metadata의 key로 보관하거나 임의 property가 다음
+  ownership에도 유지된다고 가정하면 안 된다. Pool 크기와 재사용 순서는 public contract가 아니다.
 - closed / moved-from message 에 대한 `size`, `data`, `get_property` 동작은
   언어별 관례를 따르되, 빈 값 반환인지 예외/에러인지 문서화해야 한다.
 

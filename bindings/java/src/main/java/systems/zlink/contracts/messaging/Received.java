@@ -62,6 +62,7 @@ public final class Received implements AutoCloseable {
     private boolean hasRequestSequence;
     private BiConsumer<List<Message>, SendFlags> replySender;
     private BiFunction<List<Message>, SendFlags, Boolean> sendSender;
+    private BiFunction<Message, SendFlags, Boolean> singleSendSender;
     private byte[] routingIdBytes;
     private Runnable onTerminalState;
     private ArrayList<Message> realizedParts;
@@ -169,6 +170,13 @@ public final class Received implements AutoCloseable {
             }
 
             @Override
+            public void setSingleSendSender(Received received,
+                                            BiFunction<Message, SendFlags,
+                                                Boolean> sendSender) {
+                received.setSingleSendSender(sendSender);
+            }
+
+            @Override
             public void adoptFrom(Received target, Received source) {
                 target.adoptFrom(source);
             }
@@ -186,6 +194,7 @@ public final class Received implements AutoCloseable {
         this.hasRequestSequence = false;
         this.replySender = null;
         this.sendSender = null;
+        this.singleSendSender = null;
         this.routingIdBytes = null;
         this.onTerminalState = null;
         this.realizedParts = null;
@@ -212,13 +221,17 @@ public final class Received implements AutoCloseable {
         // Discard any prior owned state without recycling the parts list,
         // so we can reuse it without reallocation.
         if (realizedParts != null && !realizedParts.isEmpty()) {
-            for (int i = 0; i < realizedParts.size(); i++) {
-                Message part = realizedParts.get(i);
+            ArrayList<Message> previousParts = realizedParts;
+            realizedParts = null;
+            partsView = null;
+            for (int i = 0; i < previousParts.size(); i++) {
+                Message part = previousParts.get(i);
                 if (part != null) {
-                    try { part.close(); } catch (RuntimeException ignored) {}
+                    try { part.closeFromOwner(); } catch (RuntimeException ignored) {}
                 }
             }
-            realizedParts.clear();
+            previousParts.clear();
+            this.realizedParts = previousParts;
         }
         ContractAccess.ReceivedPartCursor pendingCursor = cursor;
         cursor = null;
@@ -229,6 +242,7 @@ public final class Received implements AutoCloseable {
         this.hasRequestSequence = hasRequestSequence;
         this.replySender = replySender;
         this.sendSender = null;
+        this.singleSendSender = null;
         this.onTerminalState = onTerminalState;
         if (this.realizedParts == null) {
             this.realizedParts = acquirePartsList(1);
@@ -257,6 +271,7 @@ public final class Received implements AutoCloseable {
         this.hasRequestSequence = source.hasRequestSequence;
         this.replySender = source.replySender;
         this.sendSender = source.sendSender;
+        this.singleSendSender = source.singleSendSender;
         this.routingIdBytes = source.routingIdBytes;
         this.onTerminalState = source.onTerminalState;
         this.realizedParts = source.realizedParts;
@@ -269,6 +284,7 @@ public final class Received implements AutoCloseable {
         source.hasRequestSequence = false;
         source.replySender = null;
         source.sendSender = null;
+        source.singleSendSender = null;
         source.routingIdBytes = null;
         source.onTerminalState = null;
         source.realizedParts = null;
@@ -546,6 +562,11 @@ public final class Received implements AutoCloseable {
         this.sendSender = sendSender;
     }
 
+    void setSingleSendSender(
+      BiFunction<Message, SendFlags, Boolean> singleSendSender) {
+        this.singleSendSender = singleSendSender;
+    }
+
     private final class SendBuilder implements SendOperation, SendSubmitOperation {
         private final BuilderParts parts = new BuilderParts();
         private SendFlags flags = SendFlags.NONE;
@@ -571,6 +592,13 @@ public final class Received implements AutoCloseable {
             if (parts.isEmpty())
                 throw new IllegalArgumentException("at least one message required");
             submitted = true;
+            if (singleSendSender != null && parts.parts == null) {
+                try {
+                    return singleSendSender.apply(parts.singlePart, flags);
+                } catch (IllegalStateException ex) {
+                    throw new ZlinkSubmitException(SubmitResult.TERMINATED);
+                }
+            }
             return submitSend(parts.asList(), flags);
         }
 
@@ -652,7 +680,7 @@ public final class Received implements AutoCloseable {
             partsView = Collections.emptyList();
             releasePartsList(fastParts);
             try {
-                part.close();
+                part.closeFromOwner();
             } catch (RuntimeException ignored) {
             }
             return;
@@ -688,15 +716,26 @@ public final class Received implements AutoCloseable {
         }
         if (singleToClose != null) {
             try {
-                singleToClose.close();
+                singleToClose.closeFromOwner();
             } catch (RuntimeException ignored) {
             }
         } else if (toClose != null) {
-            Message.closeAll(toClose);
+            closeOwnedParts(toClose);
         }
         releasePartsList(partsToRelease);
         closeCursorQuietly(pendingCursor);
         markTerminal();
+    }
+
+    private static void closeOwnedParts(List<Message> parts) {
+        for (Message part : parts) {
+            if (part != null) {
+                try {
+                    part.closeFromOwner();
+                } catch (RuntimeException ignored) {
+                }
+            }
+        }
     }
 
     Iterator<Message> iterator() {

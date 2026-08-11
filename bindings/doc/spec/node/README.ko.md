@@ -534,6 +534,10 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
   같은 borrowed Buffer send 헬퍼를 노출하거나 사용하지 않는다.
 - 메시지 payload 팩토리는 `Message.from(...)`을 사용한다. 공개 TypeScript 계약은
   호출자가 payload 생성을 위해 `new Message(...)`를 사용하도록 요구하지 않는다.
+- receive wrapper는 owner envelope가 part reference를 제거하고 `close()`를 완료한 뒤
+  bounded isolate-local pool에 반환될 수 있다. Cleanup이 반환되면 그 `Message` reference는
+  무효이며 반복 `close()`, payload 접근, identity 기반 `Map`/`WeakMap` 조회를 포함해 다시
+  사용하면 안 된다. 반환되지 않은 wrapper는 다른 ownership에 재사용하지 않는다.
 - operation-start 명명은 위의 함수 이름 규칙을 따른다. 빌더의 종단 메서드는
   Promise 반환 표면에서도 지금처럼 `submit(...)`을 사용한다. `submitAsync` 같은
   별도 종단 이름을 추가하지 않는다.

@@ -32,10 +32,69 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class SocketPollingContractTest {
+    @Test
+    public void routedReceivePoolReusesOnlyReleasedMessageWrapper() {
+        TestSupport.assumeNative();
+
+        try (Context ctx = Zlink.createContext();
+             RouterSocket server = ctx.createRouterSocket();
+             DealerSocket client = ctx.createDealerSocket();
+             Received second = new Received();
+             Received third = new Received();
+             Received fourth = new Received();
+             Received fifth = new Received()) {
+            String endpoint = TestSupport.inprocEndpoint("router-message-pool");
+            server.bind(endpoint);
+            client.connect(endpoint);
+
+            Received first = new Received();
+            try (Message outbound = Message.from("first")) {
+                client.send().message(outbound).submit();
+            }
+            assertTrue(server.recv(first, RecvFlags.NONE));
+            Message released = first.singlePartOrThrow();
+            assertEquals("first", released.toUtf8String());
+            first.close();
+
+            try (Message outbound = Message.from("second")) {
+                client.send().message(outbound).submit();
+            }
+            assertTrue(server.recv(second, RecvFlags.NONE));
+            Message retained = second.singlePartOrThrow();
+            assertSame(released, retained);
+            assertEquals("second", retained.toUtf8String());
+
+            try (Message outbound = Message.from("third")) {
+                client.send().message(outbound).submit();
+            }
+            assertTrue(server.recv(third, RecvFlags.NONE));
+            assertNotSame(retained, third.singlePartOrThrow());
+            assertEquals("second", retained.toUtf8String());
+            assertEquals("third", third.singlePartOrThrow().toUtf8String());
+
+            try (Message outbound = Message.from("fourth")) {
+                client.send().message(outbound).submit();
+            }
+            assertTrue(server.recv(fourth, RecvFlags.NONE));
+            Message directlyClosed = fourth.singlePartOrThrow();
+            directlyClosed.close();
+
+            try (Message outbound = Message.from("fifth")) {
+                client.send().message(outbound).submit();
+            }
+            assertTrue(server.recv(fifth, RecvFlags.NONE));
+            assertNotSame(directlyClosed, fifth.singlePartOrThrow());
+            fourth.close();
+            assertEquals("fifth", fifth.singlePartOrThrow().toUtf8String());
+        }
+    }
+
     @Test
     public void pollerTracksTypedSocketsThroughAbstractBase() {
         TestSupport.assumeNative();

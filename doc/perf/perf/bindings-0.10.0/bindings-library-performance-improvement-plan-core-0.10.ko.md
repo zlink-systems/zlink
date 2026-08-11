@@ -1972,6 +1972,31 @@ throughput ratio는 `41.54% / 2.85% / 41.19% / 102.69% / 100.03% / 102.37%`이�
 악화됐으므로 후보를 제거했다. Node public contract와 기존 Message lifecycle은 변경하지 않았다.
 최종 측정 report는 `log/2026-08-10-measurement-results.ko.md`에 기록했다.
 
+### 11.4 Message wrapper pool 적용 측정 결과
+
+Release Core `0.10.1`, `tcp`, `MULTI_DEALER_ROUTER_SENDSEND`, clients `100`, duration `1초`,
+runs `1`, auto-HWM `balanced`, 64·256·1024·4096·65536·131072B 조건에서 perf를 한 번에
+하나씩 실행했다.
+
+| Binding | C 대비 throughput ratio | 산술평균 | 평균 latency ratio | 판정 |
+|---|---|---:|---:|---|
+| .NET | 80.431% / 84.027% / 84.921% / 86.635% / 127.538% / 135.780% | 99.889% | 1.103x | 통과·기존 routed receive wrapper pool 유지 |
+| Java | 61.157% / 54.576% / 57.909% / 54.630% / 96.175% / 82.310% | 67.793% | 1.590x | 개선 채택·목표 미달로 다음 개선 계속 |
+
+Java 최종 throughput은 적용 전 저장값 대비 size별 `117.815% / 109.603% / 109.726% /
+102.049% / 144.193% / 121.791%`, 산술평균 `117.529%`다. Sol lifecycle 리뷰 뒤 owner
+alias가 제거된 성공 receive cleanup만 wrapper를 반환하도록 범위를 제한했다. DEALER receive와
+receive 실패 wrapper 반환 후보는 종료 회귀가 발생해 제외했다.
+최종 Sol 리뷰가 지적한 기존 idempotent close 정책 충돌은 승인된 반환 후 reference 사용 금지
+규칙을 정식 공통 정책과 Node·Java·.NET exact interface에 반영해 해소했다. 정책 반영과
+single-part error mapping 수정 뒤 최종 Sol 재검토는 public signature와 ownership을 유지한다고
+GO 판정했다.
+
+- C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_163324_dotnet-wrapper-current-c.txt`
+- .NET: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260811_163343_dotnet-wrapper-current.txt`
+- Java 적용 전: `/home/hep7hep7/project/zlink/bindings/java/perf/results/multi/report/perf_java_multi_linux_20260811_072513_java-multi-dealer-router-sendsend-tcp-ready-rid-final.txt`
+- Java 최종: `/home/hep7hep7/project/zlink/bindings/java/perf/results/multi/report/perf_java_multi_linux_20260811_165320_java-message-wrapper-pool-single-send.txt`
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.

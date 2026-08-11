@@ -12,7 +12,9 @@ namespace Systems.Zlink;
 /// <remarks>
 ///     A message is disposable because it may own native storage. Span-returning
 ///     APIs expose storage owned by this instance and are valid only while the
-///     message remains undisposed.
+///     message remains undisposed. Do not use the message, including repeated
+///     disposal or object-identity metadata lookup, after ownership is consumed
+///     or disposal returns; the runtime may reuse the returned wrapper identity.
 /// </remarks>
 public sealed partial class Message : IDisposable, IAsyncDisposable
 {
@@ -86,7 +88,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    ///     Releases the payload storage owned by this message.
+    ///     Releases the payload storage and returns this wrapper; do not use it afterward.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Dispose()

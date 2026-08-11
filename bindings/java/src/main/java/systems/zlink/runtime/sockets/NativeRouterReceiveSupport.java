@@ -280,7 +280,7 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
         MemorySegment sourceNodeRidOut = scratch.sourceNodeRidOut;
         MemorySegment requestSeqOut = scratch.requestSeqOut;
         MemorySegment hasMoreOut = scratch.hasMoreOut;
-        Message firstPart = new Message();
+        Message firstPart = InternalAccess.messageAcquireReceive();
         boolean firstPartConsumed = false;
         try {
             int rc;
@@ -386,7 +386,7 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
         MemorySegment sourceNodeRidOut = scratch.sourceNodeRidOut;
         MemorySegment requestSeqOut = scratch.requestSeqOut;
         MemorySegment hasMoreOut = scratch.hasMoreOut;
-        Message firstPart = new Message();
+        Message firstPart = InternalAccess.messageAcquireReceive();
         boolean firstPartConsumed = false;
         try {
             int rc;

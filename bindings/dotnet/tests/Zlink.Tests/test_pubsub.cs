@@ -210,7 +210,7 @@ public sealed class test_pubsub
     }
 
     [Fact]
-    public void pubsub_single_part_messages_do_not_alias_after_double_dispose()
+    public void pubsub_single_part_pool_reuses_only_released_wrapper()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -233,7 +233,6 @@ public sealed class test_pubsub
         TopicMessage first = SubscribeMessageWithTimeout(subscriber, 2000);
         Message firstPart = first.SinglePartOrThrow();
         Assert.Equal("first", firstPart.GetString());
-        firstPart.Dispose();
         first.Dispose();
 
         CoreTestSupport.PublishWithRetry(publisher, string.Empty, "second"u8,
@@ -241,6 +240,9 @@ public sealed class test_pubsub
         TopicMessage second = SubscribeMessageWithTimeout(subscriber, 2000);
         try
         {
+            Assert.Same(firstPart, second.SinglePartOrThrow());
+            Assert.Equal("second", second.SinglePartOrThrow().GetString());
+
             CoreTestSupport.PublishWithRetry(publisher, string.Empty,
                 "third"u8, 2000);
             using TopicMessage third = SubscribeMessageWithTimeout(subscriber,

@@ -19,6 +19,11 @@ import sun.misc.Unsafe;
  * <p>{@code copyOf*} always copies into message-owned storage. Java does not
  * expose borrowed payload wrappers because native queue lifetime is not safely
  * bounded by Java object reachability.
+ *
+ * <p>After a send consumes ownership or {@link #close()} releases ownership,
+ * the caller must not use this object again. This includes repeated close calls
+ * and identity-based metadata lookup because receive paths may reuse the Java
+ * wrapper for a later native frame.
  */
 public final class Message implements AutoCloseable {
     private static final Unsafe UNSAFE = UnsafeAccess.get();
@@ -30,6 +35,8 @@ public final class Message implements AutoCloseable {
     private final Object scope;
     private final long ownedMsgSlotAddress;
     private final Object msg;
+    private final boolean wrapperPoolEligible;
+    private final long wrapperPoolOwnerThreadId;
     private boolean valid;
     private boolean closed;
     private boolean recvArmed;
@@ -135,6 +142,12 @@ public final class Message implements AutoCloseable {
             public boolean isReusable(Message message) {
                 return message.isReusable();
             }
+
+            @Override
+            public Message acquireReceive() {
+                return Message.acquireReceive();
+            }
+
         });
     }
 
@@ -142,6 +155,8 @@ public final class Message implements AutoCloseable {
         this.scope = Objects.requireNonNull(scope, "scope");
         this.ownedMsgSlotAddress = 0L;
         this.msg = ContractAccess.nativeMessageAllocate(scope);
+        this.wrapperPoolEligible = false;
+        this.wrapperPoolOwnerThreadId = 0L;
         this.valid = false;
         this.closed = false;
         this.recvArmed = false;
@@ -154,6 +169,8 @@ public final class Message implements AutoCloseable {
         this.scope = null;
         this.ownedMsgSlotAddress = 0L;
         this.msg = Objects.requireNonNull(adoptedMsg, "adoptedMsg");
+        this.wrapperPoolEligible = false;
+        this.wrapperPoolOwnerThreadId = 0L;
         this.valid = true;
         this.closed = false;
         this.recvArmed = false;
@@ -162,10 +179,17 @@ public final class Message implements AutoCloseable {
     }
 
     private Message(long ownedMsgSlotAddress) {
+        this(ownedMsgSlotAddress, false);
+    }
+
+    private Message(long ownedMsgSlotAddress, boolean wrapperPoolEligible) {
         this.scope = null;
         this.ownedMsgSlotAddress = ownedMsgSlotAddress;
         this.msg = ContractAccess.nativeMessageHandleFromAddress(
             ownedMsgSlotAddress);
+        this.wrapperPoolEligible = wrapperPoolEligible;
+        this.wrapperPoolOwnerThreadId = wrapperPoolEligible
+            ? Thread.currentThread().threadId() : 0L;
         this.valid = false;
         this.closed = false;
         this.recvArmed = false;
@@ -176,6 +200,25 @@ public final class Message implements AutoCloseable {
 
     private Message(boolean raw) {
         this(allocateOwnedMsgSlot());
+    }
+
+    private static Message acquireReceive() {
+        Message message = MessageWrapperPool.acquire();
+        if (message == null) {
+            message = new Message(allocateOwnedMsgSlot(), true);
+        }
+        message.closed = false;
+        int rc = ContractAccess.nativeMessageInit(message.msg);
+        if (rc != 0) {
+            message.retireWrapperSlot();
+            throw ZlinkException.fromLastError(
+                systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+        }
+        message.valid = true;
+        message.recvArmed = true;
+        message.more = false;
+        message.clearPayloadCache();
+        return message;
     }
 
     public Message() {
@@ -873,6 +916,14 @@ public final class Message implements AutoCloseable {
 
     @Override
     public void close() {
+        closeInternal(false);
+    }
+
+    void closeFromOwner() {
+        closeInternal(true);
+    }
+
+    private void closeInternal(boolean ownerDetached) {
         if (closed)
             return;
         if (valid) {
@@ -882,7 +933,18 @@ public final class Message implements AutoCloseable {
         recvArmed = false;
         more = false;
         clearPayloadCache();
+        if (ownerDetached && wrapperPoolEligible
+            && wrapperPoolOwnerThreadId == Thread.currentThread().threadId()
+            && MessageWrapperPool.release(this)) {
+            closed = true;
+            return;
+        }
         releaseOwnedResources();
+    }
+
+    private void retireWrapperSlot() {
+        MessageSlotPool.release(ownedMsgSlotAddress);
+        closed = true;
     }
 
     private void prepareForReceive() {
@@ -986,6 +1048,45 @@ public final class Message implements AutoCloseable {
                 } else {
                     UNSAFE.freeMemory(slot);
                 }
+            }
+        }
+    }
+
+    private static final class MessageWrapperPool {
+        private static final ThreadLocal<Pool> POOL =
+            ThreadLocal.withInitial(Pool::new);
+
+        private MessageWrapperPool() {
+        }
+
+        static Message acquire() {
+            return POOL.get().acquire();
+        }
+
+        static boolean release(Message message) {
+            return POOL.get().release(message);
+        }
+
+        private static final class Pool {
+            private static final int CAPACITY = 32;
+            private final Message[] messages = new Message[CAPACITY];
+            private int count;
+
+            Message acquire() {
+                if (count == 0) {
+                    return null;
+                }
+                Message message = messages[--count];
+                messages[count] = null;
+                return message;
+            }
+
+            boolean release(Message message) {
+                if (count == CAPACITY) {
+                    return false;
+                }
+                messages[count++] = message;
+                return true;
             }
         }
     }

@@ -2270,8 +2270,16 @@ Rules:
   that judges ownership policy or send eligibility from the reference
   count.
 - An RAII language (C++, Rust) does not have to explicitly expose
-  `close()`. An explicit-lifecycle language (.NET, Java, Python, Go)
-  must provide an idempotent close/dispose.
+  `close()`. Resource close/dispose in an explicit-lifecycle language
+  (.NET, Java, Python, Go) is idempotent by default. An exception applies
+  when the language exact contract states that deterministic cleanup returns
+  a public `Message` wrapper identity to a pool. The reference becomes invalid
+  when cleanup returns, and no operation, including repeated close/dispose, is
+  allowed through that reference.
+- A pooled `Message` wrapper identity may represent a later receive. An
+  application must not retain a returned wrapper as a `Map`, `WeakMap`, or
+  metadata key, and must not assume custom properties survive into later
+  ownership. Pool capacity and reuse order are not public contract.
 - The behavior of `size`, `data`, and `get_property` on a closed or
   moved-from message follows per-language convention, but must document
   whether it returns an empty value or throws an exception/error.
