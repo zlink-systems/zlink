@@ -5,7 +5,7 @@ import { SocketBase } from './socket_base';
 import { messageFromNativeBuffer, normalizeMessageLikePayload } from '../buffers/message_conversion';
 import { normalizeRoutingId } from '../core/routing_id';
 import {
-  RuntimeSendOperation,
+  RoutedRuntimeSendOperation,
 } from './socket_operations';
 import { submitErrorFromResult } from './socket_submit_errors';
 import type { RuntimeContext as Context } from '../core/context';
@@ -48,22 +48,27 @@ const native = requireNative();
 export class StreamSocket extends SocketBase {
   readonly options: StreamSocketOptions;
   private readonly _packetRoutingIdCache = new Map<string, RoutingId>();
+  private readonly routedSend = {
+    submit: (routingId: Buffer,
+             parts: MessageLike | readonly MessageLike[], flags: SendFlags) =>
+      this.sendDirectRaw(routingId, parts, flags),
+  };
+
   constructor(ctx: Context) {
     super(ctx, NativeSocketType.STREAM);
     this.options = StreamSocketOptions.create(this);
   }
   send(routingId: RoutingId): SendOperation {
-    return new RuntimeSendOperation((parts, flags) => this.sendDirect(routingId, parts, flags));
+    return new RoutedRuntimeSendOperation(this.routedSend.submit, normalizeRoutingId(routingId));
   }
-  private sendDirect(routingId: RoutingId, payload: MessageLike | readonly MessageLike[], flags: SendFlags = SendFlags.None): boolean {
+  private sendDirectRaw(routingId: Buffer, payload: MessageLike | readonly MessageLike[], flags: SendFlags = SendFlags.None): boolean {
     const normalized = normalizeMessageLikePayload(payload);
-    const normalizedRoutingId = normalizeRoutingId(routingId);
     if ((flags | 0) & (SendFlags.DontWait | 0)) {
       let result;
       try {
         result = Array.isArray(normalized)
-          ? native.socketStreamSendRoutingNoWaitResultParts(getNativeHandle(this), normalizedRoutingId, normalized) as number
-          : native.socketSendRoutingNoWaitResult(getNativeHandle(this), normalizedRoutingId, normalized) as number;
+          ? native.socketStreamSendRoutingNoWaitResultParts(getNativeHandle(this), routingId, normalized) as number
+          : native.socketSendRoutingNoWaitResult(getNativeHandle(this), routingId, normalized) as number;
       } catch (error) {
         throw submitNativeError(error, flags, 'send failed');
       }
@@ -75,14 +80,14 @@ export class StreamSocket extends SocketBase {
       if (Array.isArray(normalized)) {
         native.socketStreamSendRoutingParts(
           getNativeHandle(this),
-          normalizedRoutingId,
+          routingId,
           normalized,
           flags | 0
         );
       } else {
         native.socketSendRouting(
           getNativeHandle(this),
-          normalizedRoutingId,
+          routingId,
           normalized,
           flags | 0
         );
@@ -112,7 +117,7 @@ export class StreamSocket extends SocketBase {
         if (!receivedRoutingId) {
           throw submitErrorFromResult(SubmitResult.InvalidState, 'missing routed send target');
         }
-        return this.sendDirect(RoutingId.from(receivedRoutingId), parts, sendFlags);
+        return this.sendDirectRaw(receivedRoutingId, parts, sendFlags);
       };
     if (!result) return materializeReceived(receivedRaw, undefined, send);
     materializeReceivedInto(result, receivedRaw, undefined, send);

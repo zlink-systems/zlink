@@ -1,36 +1,64 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { SendFlags } from '../../contracts/sockets/socket_constants';
-import { OperationPayload, type OperationPayloadValue } from './operation_payload';
+
+export type OperationPayloadValue<T> = T | readonly T[];
+
+function identity<T>(value: T): T {
+  return value;
+}
 
 export class SendOperationBase<TInput, TStored = TInput> {
-  protected readonly _payload: OperationPayload<TInput, TStored>;
+  private readonly _normalize: (value: TInput) => TStored;
+  private _single!: TStored;
+  private _hasSingle = false;
+  private _parts: TStored[] | null = null;
+  private _submitted = false;
   protected _flags: SendFlags = SendFlags.None;
 
-  constructor(normalize: (value: TInput) => TStored) {
-    this._payload = new OperationPayload<TInput, TStored>(normalize);
+  constructor(normalize: (value: TInput) => TStored = identity as (value: TInput) => TStored) {
+    this._normalize = normalize;
   }
 
   message(message: TInput): this {
-    this._payload.append(message);
+    this.ensureOpen();
+    const normalized = this._normalize(message);
+    if (this._parts) {
+      this._parts.push(normalized);
+    } else if (this._hasSingle) {
+      this._parts = [this._single, normalized];
+      this._hasSingle = false;
+      this._single = undefined as TStored;
+    } else {
+      this._single = normalized;
+      this._hasSingle = true;
+    }
     return this;
   }
 
   flags(flags: SendFlags): this {
-    this._payload.ensureOpen();
+    this.ensureOpen();
     this._flags = flags;
     return this;
   }
 
   protected ensureOpen(): void {
-    this._payload.ensureOpen();
+    if (this._submitted) {
+      throw new TypeError('operation has already been submitted');
+    }
   }
 
   protected consumePayload(): OperationPayloadValue<TStored> {
-    return this._payload.consume();
+    this.ensureOpen();
+    if (!this._parts && !this._hasSingle) {
+      throw new TypeError('operation requires at least one message');
+    }
+    this._submitted = true;
+    return this._parts ?? this._single;
   }
 
   protected consumeParts(): readonly TStored[] {
-    return this._payload.consumeParts();
+    const value = this.consumePayload();
+    return Array.isArray(value) ? value as readonly TStored[] : [value as TStored];
   }
 }

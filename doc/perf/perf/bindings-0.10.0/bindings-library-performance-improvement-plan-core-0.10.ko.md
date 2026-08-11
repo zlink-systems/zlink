@@ -1248,26 +1248,26 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미달 (13.450%) | 미달 (25.795%) | 통과 (35.059%) | 미달 (16.303%) | 미달 (10.989%) | 미달 (20.571%) | 보류·release Core `0.10.1`, common native Message ownership, wrapper pool과 64개·1MiB·1ms receive batch를 적용한 최종 throughput 산술평균은 20.361%다. 16개 batch 결과 19.910%보다 0.451%p 개선됐지만 단순 one-way 최소 기준 35%에 미달한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_200019_node-baseline-common-ownership-c.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_204207_node-general-recv-batch64.txt` |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 통과 (47.188%) | 통과 (47.429%) | 통과 (50.066%) | 통과 (34.708%) | 통과 (39.110%) | 통과 (48.563%) | 통과·deterministic cleanup이 끝난 `Message` wrapper만 최대 64개까지 재사용한다. Send consume과 wrapper 반환을 분리하고 `Received.close()`가 part reference를 제거해 반환되지 않은 wrapper가 다시 할당되지 않도록 했다. throughput 산술평균은 44.511%, latency 산술평균은 2.541x이며 이전 Node 결과보다 throughput이 평균 7.895% 개선됐다. 기존 Core 0.10.1 part API, 16 part·1MiB·1ms prefetch, public poll 의미와 public interface는 유지한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_160925_node-wrapper-pool-c-1s.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_161349_node-wrapper-pool-node-1s-final.txt` |
-| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 21.63% | 24.65% | 38.28% | 22.17% | 36.75% | 51.07% | 보류·평균 32.42%. 두 POSDDD 경계 정리와 Sol 검토 뒤 추가 후보 없음. |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 24.47% | 26.18% | 28.12% | 23.31% | 48.72% | 61.93% | 통과·평균 35.45%. Node runner 이름은 `MULTI_DEALER_ROUTER`다. |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 22.49% | 23.99% | 24.78% | 22.76% | 51.49% | 56.30% | 통과·평균 33.63%. Node runner 이름은 `MULTI_ROUTER_ROUTER`다. |
+| `tcp` | `MULTI_PUBSUB` | 17.10% | 19.51% | 19.01% | 33.43% | 38.81% | 41.57% | 보류·평균 28.24%. |
+| `tcp` | `MULTI_STREAM` | 13.36% | 14.85% | 15.13% | 해당 없음 | 63.51% | 해당 없음 | 보류·평균 26.71%. |
+| `ws` | `MULTI_DEALER_DEALER` | 16.19% | 29.84% | 27.07% | 48.75% | 80.83% | 87.18% | 통과·평균 48.31%. |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 26.08% | 30.11% | 30.52% | 31.97% | 61.14% | 66.54% | 통과·평균 41.06%. |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 24.92% | 26.59% | 27.38% | 32.19% | 55.76% | 64.74% | 통과·평균 38.60%. |
+| `ws` | `MULTI_PUBSUB` | 16.71% | 18.19% | 21.29% | 29.14% | 66.48% | 54.44% | 보류·평균 34.37%. |
+| `ws` | `MULTI_STREAM` | 15.86% | 15.04% | 15.64% | 해당 없음 | 81.31% | 해당 없음 | 통과·평균 31.96%. |
+| `wss` | `MULTI_DEALER_DEALER` | 17.26% | 24.38% | 31.84% | 46.94% | 90.19% | 138.74% | 통과·평균 58.23%. |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 39.44% | 39.70% | 39.05% | 53.47% | 84.07% | 87.73% | 통과·평균 57.24%. |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 33.52% | 37.83% | 38.00% | 43.70% | 83.79% | 80.96% | 통과·평균 52.97%. |
+| `wss` | `MULTI_PUBSUB` | 14.31% | 19.06% | 28.93% | 35.87% | 74.85% | 70.22% | 통과·평균 40.54%. |
+| `wss` | `MULTI_STREAM` | 23.61% | 23.44% | 22.66% | 해당 없음 | 90.69% | 해당 없음 | 통과·평균 40.10%. |
+| `tls` | `MULTI_DEALER_DEALER` | 13.23% | 27.13% | 37.72% | 58.70% | 129.30% | 154.08% | 통과·평균 70.03%. |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 28.09% | 31.11% | 33.10% | 40.56% | 81.16% | 84.98% | 통과·평균 49.83%. |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 30.17% | 30.43% | 31.97% | 35.08% | 73.21% | 96.65% | 통과·평균 49.58%. |
+| `tls` | `MULTI_PUBSUB` | 15.89% | 13.67% | 27.68% | 34.79% | 76.53% | 60.73% | 통과·평균 38.22%. |
+| `tls` | `MULTI_STREAM` | 19.80% | 20.06% | 21.28% | 해당 없음 | 110.04% | 해당 없음 | 통과·평균 42.79%. |
 
 ### 9.5 Go
 
@@ -1702,7 +1702,7 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 | 1 | C++ | 완료·통과 35 / 보류 7 | 완료·통과 25 / 보류 3 | C++ perf는 추가 실행하지 않고 .NET으로 전환 |
 | 2 | .NET | 완료·통과 26 / 보류 16 | 완료·통과 23 / 보류 7 | .NET Multi 24개 대상 완료; 다음은 Java inventory gate와 paired 기준 측정 |
 | 3 | Java | 완료·통과 36 / 보류 6 | 완료·통과 24 / 보류 4 | bounded payload template ring과 ROUTER request scratch까지 측정·검토했다. Java 측정과 개선 검토 완료; 다음은 Node inventory gate와 paired 기준 측정이다. |
-| 4 | Node | 재측정 진행 중·tcp 통과 2 / 보류 5 | 재측정 대기 | 다음 Node Single paired 측정 |
+| 4 | Node | Multi 완료·통과 16 / 보류 4 | Java·.NET TCP 재측정 완료 | public interface 변경 없이 send operation 경계를 정리했다. |
 | 5 | Go | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 6 | Rust | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 7 | Python | 완료·통과 25 / 보류 5 | 완료·통과 12 / 보류 8 | 누락됐던 자체 개선 검토와 Sol 2차 검토를 포함해 Python 범위를 완료했다. |
@@ -2061,6 +2061,28 @@ auto-HWM `balanced` 조건에서 `Native`와 `Managed`를 한 번에 하나씩 �
 
 - Native: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260812_045948_stream-body-native-final.txt`
 - Managed: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260812_045959_stream-body-managed-final.txt`
+
+### 11.6 2026-08-12 Node Multi 및 Java/.NET TCP 재측정
+
+Release Core `0.10.1`, clients `100`, duration `1초`, runs `1`, balanced auto-HWM 조건에서
+transport·pattern별 C를 먼저 실행한 뒤 binding을 하나씩 실행했다. Node는 4개 transport의
+5개 Multi pattern을 모두 측정했다. Java와 .NET은 이번 변경과 연결되는 TCP Multi 5개만 재측정했다.
+
+| Language | TCP pattern | C 대비 throughput 비율 (size 순서) | 산술평균 |
+|---|---|---|---:|
+| Java | `MULTI_DEALER_DEALER` | 65.40 / 71.17 / 91.15 / 83.64 / 65.31 / 70.48% | 74.52% |
+| Java | `MULTI_DEALER_ROUTER` | 24.29 / 28.81 / 30.98 / 28.39 / 77.20 / 65.03% | 42.45% |
+| Java | `MULTI_ROUTER_ROUTER` | 46.75 / 50.15 / 48.00 / 47.70 / 77.28 / 62.61% | 55.42% |
+| Java | `MULTI_PUBSUB` | 24.07 / 23.66 / 16.26 / 17.38 / 55.53 / 47.44% | 30.72% |
+| Java | `MULTI_STREAM` | 37.42 / 51.39 / 52.70 / 75.72% | 54.31% |
+| .NET | `MULTI_DEALER_DEALER` | 60.76 / 67.25 / 72.81 / 20.96 / 36.64 / 50.80% | 51.54% |
+| .NET | `MULTI_DEALER_ROUTER` | 36.73 / 45.45 / 70.04 / 83.08 / 130.33 / 140.88% | 84.42% |
+| .NET | `MULTI_ROUTER_ROUTER` | 76.92 / 79.55 / 69.62 / 81.89 / 126.45 / 121.21% | 92.61% |
+| .NET | `MULTI_PUBSUB` | 59.55 / 61.14 / 66.09 / 75.32 / 114.94 / 95.86% | 78.82% |
+| .NET | `MULTI_STREAM` | 86.54 / 94.52 / 87.64 / 91.70% | 90.10% |
+
+세 언어의 report 경로와 Node POSDDD 후보 및 Sol 검토 결론은
+`log/2026-08-12-node-multi-finalization.ko.md`에 기록한다.
 
 ## 12. 완료 기준
 

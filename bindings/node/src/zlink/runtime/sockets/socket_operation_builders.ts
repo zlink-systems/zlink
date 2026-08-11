@@ -3,8 +3,10 @@
 import { Message, type MessageLike } from '../../contracts';
 import { consumeSubmittedMessage } from '../../contracts/messaging/message';
 import { SendFlags } from '../../contracts/sockets/socket_constants';
-import type { OperationPayloadValue } from '../messaging/operation_payload';
-import { SendOperationBase } from '../messaging/send_operation_base';
+import {
+  SendOperationBase,
+  type OperationPayloadValue,
+} from '../messaging/send_operation_base';
 import type {
   RequestCallback,
   RequestCallbackSubmitOperation,
@@ -36,9 +38,14 @@ export type RoutedSendInvoker = (
 ) => boolean;
 
 function consumeSubmittedMessages(payload: OperationPayloadValue<MessageLike>): void {
-  const parts = Array.isArray(payload) ? payload : [payload];
-  for (const part of parts) {
-    if (part instanceof Message) consumeSubmittedMessage(part);
+  if (payload instanceof Message) {
+    consumeSubmittedMessage(payload);
+    return;
+  }
+  if (Array.isArray(payload)) {
+    for (const part of payload) {
+      if (part instanceof Message) consumeSubmittedMessage(part);
+    }
   }
 }
 
@@ -48,7 +55,7 @@ export class RuntimeSendOperation
   private readonly _invoke: SendInvoker;
 
   constructor(invoke: SendInvoker) {
-    super((message) => message);
+    super();
     this._invoke = invoke;
   }
 
@@ -68,7 +75,7 @@ export class RoutedRuntimeSendOperation
   private readonly _routingId: Buffer;
 
   constructor(invoke: RoutedSendInvoker, routingId: Buffer) {
-    super((message) => message);
+    super();
     this._invoke = invoke;
     this._routingId = routingId;
   }
@@ -88,7 +95,7 @@ export class PublishOperation
   private readonly _topic: string;
 
   constructor(invoke: PublishInvoker, topic: string) {
-    super((message) => message);
+    super();
     this._invoke = invoke;
     this._topic = topic;
   }
@@ -109,7 +116,7 @@ export class RuntimeRequestOperation
   private _callbackMode = false;
 
   constructor(invoke: RequestInvoker) {
-    super((message) => message);
+    super();
     this._invoke = invoke;
   }
 
@@ -147,7 +154,7 @@ export class RuntimeReplyOperation
   private readonly _invoke: ReplyInvoker;
 
   constructor(invoke: ReplyInvoker) {
-    super((message) => message);
+    super();
     this._invoke = invoke;
   }
 

@@ -47,6 +47,7 @@ import {
 } from './socket_operation_builders';
 export {
   PublishOperation,
+  RoutedRuntimeSendOperation,
   RuntimeReplyOperation,
   RuntimeRequestOperation,
   RuntimeSendOperation,
@@ -56,8 +57,13 @@ import { submitErrorFromResult } from './socket_submit_errors';
 const native = requireNative();
 
 export class SendSocket extends SendReadySocket {
+  private readonly sendOperation = {
+    submit: (parts: MessageLike | readonly MessageLike[], flags: SendFlags) =>
+      this.sendDirect(parts, flags),
+  };
+
   send(): SendOperation {
-    return new RuntimeSendOperation((parts, flags) => this.sendDirect(parts, flags));
+    return new RuntimeSendOperation(this.sendOperation.submit);
   }
   protected sendDirect(payloadOrParts: MessageLike | readonly MessageLike[], flags: SendFlags = SendFlags.None): boolean {
     const payload = normalizeMessageLikePayload(payloadOrParts);
