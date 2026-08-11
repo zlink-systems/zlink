@@ -205,7 +205,7 @@ export class RouterSocket extends RoutedMessageSocket {
   protected replyToRoutedMessage(
     sourceRid: RoutingId,
     requestSeq: bigint,
-    parts: readonly Message[],
+    parts: readonly MessageLike[],
     flags: SendFlags,
   ): void {
     this.replyDirect(sourceRid, requestSeq, parts, flags);

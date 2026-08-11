@@ -35,19 +35,21 @@ class RuntimeReceivedSendOperation
 }
 
 class RuntimeReceivedReplyOperation
-  extends SendOperationBase<Message | BufferLike, Message>
+  extends SendOperationBase<Message | BufferLike, Message | BufferLike>
   implements ReplyOperation, ReplySubmitOperation {
-  private readonly _invoke: (parts: readonly Message[], flags: SendFlags) => void;
+  private readonly _invoke: (parts: readonly (Message | BufferLike)[], flags: SendFlags) => void;
 
-  constructor(invoke: (parts: readonly Message[], flags: SendFlags) => void) {
-    super((message) => message instanceof Message ? message : Message.from(message));
+  constructor(invoke: (parts: readonly (Message | BufferLike)[], flags: SendFlags) => void) {
+    super((message) => message);
     this._invoke = invoke;
   }
 
   submit(): void {
     const parts = this.consumeParts();
     this._invoke(parts, this._flags);
-    for (const part of parts) consumeSubmittedMessage(part);
+    for (const part of parts) {
+      if (part instanceof Message) consumeSubmittedMessage(part);
+    }
   }
 }
 
@@ -58,7 +60,7 @@ export function createReceivedSendOperation(
 }
 
 export function createReceivedReplyOperation(
-  invoke: (parts: readonly Message[], flags: SendFlags) => void
+  invoke: (parts: readonly (Message | BufferLike)[], flags: SendFlags) => void
 ): ReplyOperation {
   return new RuntimeReceivedReplyOperation(invoke);
 }

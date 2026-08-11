@@ -5,7 +5,8 @@ import {
   Message,
   Received,
   RoutingId,
-  TopicMessage
+  TopicMessage,
+  type MessageLike
 } from '../../contracts';
 import { routingIdFromOwnedBuffer } from '../core/routing_id';
 import {
@@ -48,7 +49,7 @@ export interface NativeTopicMessageRaw {
 export interface RoutedReceiveOperations {
   send(routingId: Buffer, parts: readonly Message[], flags: SendFlags): boolean;
   reply(routingId: Buffer, requestSeq: bigint,
-        parts: readonly Message[], flags: SendFlags): void;
+        parts: readonly MessageLike[], flags: SendFlags): void;
 }
 
 interface RoutedReceiveContext {
@@ -115,7 +116,7 @@ function hasReplyableRequestSeq(requestSeq: bigint | null): requestSeq is bigint
 
 export function materializeReceived(
   raw: NativeReceivedRaw,
-  reply?: (requestSeq: bigint, parts: readonly Message[], flags: SendFlags) => void,
+  reply?: (requestSeq: bigint, parts: readonly MessageLike[], flags: SendFlags) => void,
   send?: (parts: readonly Message[], flags: SendFlags) => boolean
 ): Received {
   const requestSeq = raw.requestSeq ?? null;
@@ -127,7 +128,7 @@ export function materializeReceived(
       ? {
           beginReply() {
             return createReceivedReplyOperation(
-              (parts: readonly Message[], flags: SendFlags): void => {
+              (parts: readonly MessageLike[], flags: SendFlags): void => {
                 reply(requestSeq, parts, flags);
               }
             );
@@ -150,7 +151,7 @@ export function materializeReceived(
 export function materializeReceivedInto(
   target: Received,
   raw: NativeReceivedRaw,
-  reply?: (requestSeq: bigint, parts: readonly Message[], flags: SendFlags) => void,
+  reply?: (requestSeq: bigint, parts: readonly MessageLike[], flags: SendFlags) => void,
   send?: (parts: readonly Message[], flags: SendFlags) => boolean
 ): void {
   const requestSeq = raw.requestSeq ?? null;
@@ -163,7 +164,7 @@ export function materializeReceivedInto(
       ? {
           beginReply() {
             return createReceivedReplyOperation(
-              (parts: readonly Message[], flags: SendFlags): void => {
+              (parts: readonly MessageLike[], flags: SendFlags): void => {
                 reply(requestSeq, parts, flags);
               }
             );
