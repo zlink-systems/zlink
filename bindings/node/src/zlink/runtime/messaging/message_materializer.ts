@@ -54,6 +54,8 @@ export interface RoutedReceiveOperations {
 interface RoutedReceiveContext {
   routingId: Buffer | null;
   requestSeq: bigint | null;
+  cachedRoutingBytes: Buffer | null;
+  cachedRoutingId: RoutingId | null;
   operations: RoutedReceiveOperations;
   sendContext: { beginSend(): ReturnType<typeof createReceivedSendOperation> };
   replyContext: { beginReply(): ReturnType<typeof createReceivedReplyOperation> };
@@ -197,6 +199,8 @@ export function materializeRoutedReceivedInto(
     context = {
       routingId: null,
       requestSeq: null,
+      cachedRoutingBytes: null,
+      cachedRoutingId: null,
       operations,
       sendContext: {
         beginSend() {
@@ -225,10 +229,18 @@ export function materializeRoutedReceivedInto(
   context.routingId = raw.routingId ?? null;
   context.requestSeq = raw.requestSeq ?? null;
   context.operations = operations;
+  if (context.routingId === null) {
+    context.cachedRoutingBytes = null;
+    context.cachedRoutingId = null;
+  } else if (context.cachedRoutingBytes === null
+      || !context.cachedRoutingBytes.equals(context.routingId)) {
+    context.cachedRoutingBytes = context.routingId;
+    context.cachedRoutingId = wrapNativeRoutingId(context.routingId);
+  }
   replaceReceived(
     target,
     materializeReceivedParts(raw),
-    wrapNativeRoutingId(context.routingId),
+    context.cachedRoutingId,
     context.requestSeq,
     hasReplyableRequestSeq(context.requestSeq) ? context.replyContext : null,
     context.routingId == null ? null : context.sendContext

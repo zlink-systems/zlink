@@ -29,6 +29,11 @@ export type RequestInvoker = (
   maybeTimeout?: number
 ) => Promise<Message[]> | boolean;
 export type ReplyInvoker = (parts: OperationPayloadValue<MessageLike>, flags: SendFlags) => void;
+export type RoutedSendInvoker = (
+  routingId: Buffer,
+  parts: OperationPayloadValue<MessageLike>,
+  flags: SendFlags
+) => boolean;
 
 function consumeSubmittedMessages(payload: OperationPayloadValue<MessageLike>): void {
   const parts = Array.isArray(payload) ? payload : [payload];
@@ -50,6 +55,27 @@ export class RuntimeSendOperation
   submit(): boolean {
     const payload = this.consumePayload();
     const accepted = this._invoke(payload, this._flags);
+    if (accepted) consumeSubmittedMessages(payload);
+    return accepted;
+  }
+}
+
+/** @internal A routed builder with route bytes and socket submitter fixed at construction. */
+export class RoutedRuntimeSendOperation
+  extends SendOperationBase<MessageLike, MessageLike>
+  implements SendOperation, SendSubmitOperation {
+  private readonly _invoke: RoutedSendInvoker;
+  private readonly _routingId: Buffer;
+
+  constructor(invoke: RoutedSendInvoker, routingId: Buffer) {
+    super((message) => message);
+    this._invoke = invoke;
+    this._routingId = routingId;
+  }
+
+  submit(): boolean {
+    const payload = this.consumePayload();
+    const accepted = this._invoke(this._routingId, payload, this._flags);
     if (accepted) consumeSubmittedMessages(payload);
     return accepted;
   }

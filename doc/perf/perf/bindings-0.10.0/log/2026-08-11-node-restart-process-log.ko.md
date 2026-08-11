@@ -103,3 +103,29 @@ socket request/reply 최소 `30%`에 미달해 보류한다.
 - socket dispatcher: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_182455_node-restart-dealer-router-reqrep-tcp-coalesced-dispatcher.txt`
 - 제거한 native-frame 후보: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_182631_node-restart-dealer-router-reqrep-tcp-native-frame-completion.txt`
 - 최종: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_182735_node-restart-dealer-router-reqrep-tcp-dispatcher-final.txt`
+
+## Single ROUTER_ROUTER / tcp
+
+기준 C와 현재 Node의 paired 측정에서 Node/C throughput 산술평균은 `29.233%`였고,
+latency 중앙값은 `78.686x`였다. 자체 hot path 검토로 routed send builder가 매 submit 때
+만들던 socket-capturing closure와 route normalization을 builder 생성 시점으로 옮겼다. 재사용
+`Received`는 같은 routing bytes에 대해 immutable `RoutingId` facade를 재사용한다. 이 후보는
+throughput 산술평균 `31.437%`, latency 중앙값 `69.553x`로 개선됐다.
+
+Sol은 64개를 받는 native batch가 각 message의 JS raw object, routing Buffer와 BigInt를 모두
+만든 뒤 첫 `recv`를 반환하는 receive backlog를 성능 병목으로 확인했다. public interface를
+변경하지 않는 범위에서 batch 크기를 `4`, `8`, `16`, `32`로 각각 단독 측정했다. throughput
+산술평균은 각각 `31.102%`, `30.624%`, `30.369%`, `31.873%`였다. `32`가 가장 높고 64개 후보보다
+개선됐으므로 채택한다. 최종 latency 중앙값은 `60.398x`로 개선됐지만 Node 상한 `5x`를 넘는다.
+
+자체 builder/ownership 개선과 Sol이 지적한 receive backlog 후보를 모두 수치로 비교했다. 더 큰
+native compact cursor 재설계는 현재 후보 대비 효과를 보장하지 않는 내부 구조 확대가 되므로 이
+pattern에서는 채택하지 않는다. routed one-way 최소 `33%`에도 미달하므로 `보류`한다. public
+interface, routing ownership, message 순서와 C perf 의미는 변경하지 않았다. 전체 Node test와
+sample은 released Core `0.10.1` package 조건에서 통과했다.
+
+- C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_182912_node-restart-router-router-tcp-c.txt`
+- Node baseline: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_182942_node-restart-router-router-tcp-current.txt`
+- 자체 후보: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_183136_node-restart-router-router-tcp-routed-builder.txt`
+- Sol A/B: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_183740_node-restart-router-router-tcp-batch4.txt`, `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_183819_node-restart-router-router-tcp-batch8.txt`, `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_183847_node-restart-router-router-tcp-batch16.txt`
+- 최종: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_183913_node-restart-router-router-tcp-batch32.txt`

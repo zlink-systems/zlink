@@ -44,6 +44,7 @@ import type {
 } from '../../contracts/messaging';
 import {
   PublishOperation,
+  RoutedRuntimeSendOperation,
   RuntimeSendOperation,
 } from './socket_operation_builders';
 export {
@@ -58,7 +59,7 @@ import { BufferedReceiveQueue } from './buffered_receive_queue';
 
 const native = requireNative();
 const RECV_BATCH_MESSAGE_LIMIT = 16;
-const ROUTED_RECV_BATCH_MESSAGE_LIMIT = 64;
+const ROUTED_RECV_BATCH_MESSAGE_LIMIT = 32;
 
 export class SendSocket extends SendReadySocket {
   send(): SendOperation {
@@ -236,9 +237,17 @@ export class RoutedMessageSocket extends SendReadySocket {
             parts: readonly Message[], flags: SendFlags) =>
       this.replyToRoutedMessage(RoutingId.from(routingId), requestSeq, parts, flags),
   };
+  private readonly routedSend = {
+    submit: (routingId: Buffer,
+             parts: MessageLike | readonly MessageLike[], flags: SendFlags) =>
+      this.sendDirectRaw(routingId, parts, flags),
+  };
 
   send(routingId: RoutingId): SendOperation {
-    return new RuntimeSendOperation((parts, flags) => this.sendDirect(routingId, parts, flags));
+    return new RoutedRuntimeSendOperation(
+      this.routedSend.submit,
+      normalizeRoutingId(routingId)
+    );
   }
   protected sendDirect(routingId: RoutingId, payload: MessageLike | readonly MessageLike[], flags: SendFlags = SendFlags.None): boolean {
     const normalizedRoutingId = normalizeRoutingId(routingId);
