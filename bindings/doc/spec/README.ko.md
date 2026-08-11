@@ -19,6 +19,13 @@ title: "바인딩 API 정책"
 > 언어별 인터페이스 시그니처와 사용 예는
 > `c/`, `cpp/`, `java/`, `dotnet/`, `node/`, `python/`, `go/`, `rust/` 를 참조한다.
 
+## 구현 전 초안
+
+- [바인딩 Message 객체와 ownership 공통 계약](draft/message-ownership.ko.md)은
+  `Message`가 Core native frame을 직접 소유하고 Core 결과에 맞춰 ownership을 이전하도록
+  모든 binding을 정렬하는 목표 계약이다. 현재 공개 계약이 아니며, 하단의 구현 gap을
+  해소한 뒤 정식 공통 spec으로 승격한다.
+
 | 절 | 다루는 내용 |
 |---|---|
 | [목적](#목적) | 이 문서의 범위와 Required/Target 표기 의미 |
