@@ -1328,3 +1328,23 @@ RR direct receive 제거 결과와 DEALER_DEALER의 incomplete 최초 report는 
 - latency ratio: `2.292x / 2.336x / 2.438x / 3.557x / 3.904x / 2.962x`, 산술평균 `2.915x`.
 - C report: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_133848_native-message-owner-node-parity-c-1s.txt`.
 - Node report: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_154701_public-recv-prefetch16-poller-go-final-node-1s.txt`.
+
+## 2026-08-11 Node `Message` wrapper pool 최종값
+
+- 조건: release Core `0.10.1`, `tcp`, `MULTI_DEALER_ROUTER`, clients `100`, duration `1초`, runs `1`, auto-HWM `balanced`, C 다음 Node 순차 실행.
+- 구현: deterministic cleanup이 끝난 wrapper만 최대 64개까지 재사용한다. Send consume 직후에는 pool에 넣지 않고 `close()` 또는 owner envelope 정리가 reference를 제거한 뒤 반환한다.
+
+| Size | C throughput | Node throughput | Node/C |
+|---:|---:|---:|---:|
+| 64B | 180530 | 85188 | 47.188% |
+| 256B | 179899 | 85325 | 47.429% |
+| 1024B | 152665 | 76434 | 50.066% |
+| 4096B | 139794 | 48520 | 34.708% |
+| 65536B | 33470 | 13090 | 39.110% |
+| 131072B | 19105 | 9278 | 48.563% |
+
+- throughput ratio 산술평균: `44.511%`.
+- 이전 Node 최종값 대비 size별 throughput은 `116.761% / 120.505% / 114.438% / 101.187% / 100.222% / 94.260%`, 산술평균 `107.895%`다.
+- latency ratio: `1.941x / 1.953x / 1.908x / 3.037x / 3.494x / 2.909x`, 산술평균 `2.541x`.
+- C report: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260811_160925_node-wrapper-pool-c-1s.txt`.
+- Node report: `/home/hep7hep7/project/zlink/bindings/node/perf/results/multi/report/perf_node_multi_linux_20260811_161349_node-wrapper-pool-node-1s-final.txt`.

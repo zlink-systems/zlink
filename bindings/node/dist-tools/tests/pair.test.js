@@ -20,6 +20,40 @@ function recvText(socket) {
     socket.recv(received);
     return received.parts[0].data().toString();
 }
+test('message wrapper pool reuses only explicitly returned facades', () => {
+    const held = zlink.Message.from('held');
+    const returned = zlink.Message.from('returned');
+    returned.close();
+    const reused = zlink.Message.from('reused');
+    assert.strictEqual(reused, returned);
+    assert.notStrictEqual(reused, held);
+    assert.equal(reused.data().toString(), 'reused');
+    assert.equal(held.data().toString(), 'held');
+    reused.close();
+    held.close();
+});
+test('consumed message waits for deterministic cleanup before pool reuse', () => {
+    const ctx = zlink.createContext();
+    const sender = zlink.createPairSocket(ctx);
+    const receiver = zlink.createPairSocket(ctx);
+    sender.bind('inproc://message-wrapper-pool-consumed');
+    receiver.connect('inproc://message-wrapper-pool-consumed');
+    const consumed = zlink.Message.from('consumed');
+    sender.send().message(consumed).submit();
+    const beforeCleanup = zlink.Message.from('before-cleanup');
+    assert.notStrictEqual(beforeCleanup, consumed);
+    consumed.close();
+    const afterCleanup = zlink.Message.from('after-cleanup');
+    assert.strictEqual(afterCleanup, consumed);
+    const received = new zlink.Received();
+    receiver.recv(received);
+    received.close();
+    afterCleanup.close();
+    beforeCleanup.close();
+    receiver.close();
+    sender.close();
+    ctx.close();
+});
 test('pair messaging uses Message and Received by default', () => {
     const ctx = zlink.createContext();
     const sender = zlink.createPairSocket(ctx);
@@ -236,8 +270,6 @@ test('pair single-part recv preserves payload semantics while reusing storage', 
     assert.equal(previous.getProperty('Identity'), null);
     sender.send().message('replacement').submit();
     assert.equal(receiver.recv(received), true);
-    assert.equal(previous.size(), 0);
-    assert.equal(previous.refCount(), 0);
     assert.equal(received.singlePartOrThrow().data().toString(), 'replacement');
     receiver.close();
     sender.close();

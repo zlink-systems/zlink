@@ -7,6 +7,8 @@ function freezeMessageParts(parts: readonly Message[]): Message[] {
   return Object.freeze(parts.slice()) as Message[];
 }
 
+const EMPTY_MESSAGE_PARTS = freezeMessageParts([]);
+
 function invalidMultipartError(partsLength: number): RecvError {
   const error = new RecvError(RecvResult.NotSupported, 0);
   error.message = `expected exactly 1 part but received ${partsLength}`;
@@ -24,7 +26,7 @@ export abstract class MessagePartsEnvelope {
   parts: Message[];
 
   protected constructor() {
-    this.parts = freezeMessageParts([]);
+    this.parts = EMPTY_MESSAGE_PARTS;
   }
 
   /** Return true when the envelope holds exactly one part. */
@@ -53,5 +55,7 @@ export abstract class MessagePartsEnvelope {
     for (const part of this.parts) {
       part.close();
     }
+    // Drop aliases before a returned Message facade can be acquired again.
+    this.parts = EMPTY_MESSAGE_PARTS;
   }
 }

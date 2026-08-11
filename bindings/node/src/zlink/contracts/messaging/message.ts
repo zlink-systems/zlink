@@ -8,8 +8,20 @@ export const METADATA_KEY_USER_MIN = 0x0100;
 export const METADATA_VALUE_MAX = 65535;
 
 const EMPTY_PROPERTIES: Readonly<Record<string, string>> = Object.freeze({});
+const EMPTY_METADATA: Readonly<Map<number, Buffer>> = Object.freeze(new Map<number, Buffer>());
 const EMPTY_BUFFER = Buffer.alloc(0);
 const writableViews = new WeakSet<Message>();
+const MESSAGE_WRAPPER_POOL_CAPACITY = 64;
+const messageWrapperPool: Message[] = [];
+
+type MutableMessageState = {
+  _buffer: Buffer | undefined;
+  _refCount: number;
+  _properties: Readonly<Record<string, string>>;
+  _metadata: Readonly<Map<number, Buffer>>;
+  _nativeMessage?: unknown;
+  _released: boolean;
+};
 
 /** @internal */
 export interface MessageNativeOperations {
@@ -58,7 +70,8 @@ function normalizeBufferLike(value: BufferLike, label = 'value'): Buffer {
 
 /**
  * A message payload backed by native storage. A successful submit consumes the
- * message and leaves it empty; `close` releases an unsubmitted message early.
+ * message; `close` releases it. Do not use a reference after either terminal
+ * action because the runtime may reuse the returned wrapper identity.
  */
 export class Message {
   private _buffer!: Buffer;
@@ -66,25 +79,8 @@ export class Message {
   private _properties!: Readonly<Record<string, string>>;
   /** Opaque native frame that owns _buffer's storage. */
   private _nativeMessage?: unknown;
-
-  private constructor(data: BufferLike) {
-    const nativeMessage = requireMessageNativeOperations().fromBuffer(
-      normalizeBufferLike(data, 'data')
-    );
-    this.initialize(nativeMessage.data, 1, undefined, nativeMessage.nativeMessage);
-  }
-
-  private initialize(
-    buffer: Buffer,
-    refCount = 1,
-    properties?: Readonly<Record<string, string>>,
-    nativeMessage?: unknown
-  ): void {
-    this._buffer = buffer;
-    this._refCount = refCount | 0;
-    this._properties = normalizeMessageProperties(properties);
-    this._nativeMessage = nativeMessage;
-  }
+  /** True after ownership has ended and this facade has entered the pool. */
+  private _released!: boolean;
 
   /**
    * Create a message holding an independent copy of `buffer` (a buffer-like
@@ -92,10 +88,16 @@ export class Message {
    * afterward.
    */
   static from(buffer: BufferLike | Message): Message {
-    if (buffer instanceof Message) {
-      return new Message(buffer.ensureBuffer());
-    }
-    return new Message(buffer);
+    const source = buffer instanceof Message
+      ? buffer.ensureBuffer()
+      : normalizeBufferLike(buffer, 'data');
+    const nativeMessage = requireMessageNativeOperations().fromBuffer(source);
+    return acquireMessageWrapper(
+      nativeMessage.data,
+      1,
+      undefined,
+      nativeMessage.nativeMessage
+    );
   }
 
   /** Allocate a message with `size` bytes of writable payload storage. */
@@ -104,9 +106,12 @@ export class Message {
       throw new RangeError('size must be a non-negative safe integer');
     }
     const nativeMessage = requireMessageNativeOperations().allocate(size);
-    const message = Object.create(Message.prototype) as Message;
-    message.initialize(nativeMessage.data, 1, undefined, nativeMessage.nativeMessage);
-    return message;
+    return acquireMessageWrapper(
+      nativeMessage.data,
+      1,
+      undefined,
+      nativeMessage.nativeMessage
+    );
   }
 
   /** Return the payload as a Buffer backed by this message's storage. */
@@ -216,18 +221,15 @@ export class Message {
     return this._refCount;
   }
 
-  /**
-   * Release native storage and leave this message empty. Repeated calls have
-   * no effect.
-   */
+  /** Release native storage and return this wrapper; do not use it afterward. */
   close(): void {
+    if (this._released) {
+      return;
+    }
     if (this._nativeMessage !== undefined) {
       requireMessageNativeOperations().close(this._nativeMessage);
     }
-    this._buffer = EMPTY_BUFFER;
-    this._refCount = 0;
-    this._properties = EMPTY_PROPERTIES;
-    this._nativeMessage = undefined;
+    releaseMessageWrapper(this);
   }
 
   /** Return the payload decoded as a UTF-8 string. */
@@ -247,6 +249,54 @@ export class Message {
   }
 }
 
+/** @internal Acquire a Message facade for runtime-owned receive state. */
+export function acquireMessageWrapper(
+  buffer: Buffer | undefined,
+  refCount = 1,
+  properties?: Readonly<Record<string, string>>,
+  nativeMessage?: unknown,
+  metadata?: Readonly<Map<number, Buffer>>
+): Message {
+  const message = messageWrapperPool.pop()
+    ?? Object.create(Message.prototype) as Message;
+  const state = message as unknown as MutableMessageState;
+  state._buffer = buffer;
+  state._refCount = refCount | 0;
+  state._properties = normalizeMessageProperties(properties);
+  state._metadata = metadata ?? EMPTY_METADATA;
+  state._nativeMessage = nativeMessage;
+  state._released = false;
+  writableViews.delete(message);
+  return message;
+}
+
+function releaseMessageWrapper(message: Message): void {
+  const state = message as unknown as MutableMessageState;
+  if (state._released) {
+    return;
+  }
+  state._buffer = EMPTY_BUFFER;
+  state._refCount = 0;
+  state._properties = EMPTY_PROPERTIES;
+  state._metadata = EMPTY_METADATA;
+  state._nativeMessage = undefined;
+  state._released = true;
+  writableViews.delete(message);
+  if (messageWrapperPool.length < MESSAGE_WRAPPER_POOL_CAPACITY) {
+    messageWrapperPool.push(message);
+  }
+}
+
+function markMessageConsumed(message: Message): void {
+  const state = message as unknown as MutableMessageState;
+  state._buffer = EMPTY_BUFFER;
+  state._refCount = 0;
+  state._properties = EMPTY_PROPERTIES;
+  state._metadata = EMPTY_METADATA;
+  state._nativeMessage = undefined;
+  writableViews.delete(message);
+}
+
 /** @internal */
 export function canShareNativeMessage(message: Message): boolean {
   const state = message as unknown as { _nativeMessage?: unknown };
@@ -256,19 +306,18 @@ export function canShareNativeMessage(message: Message): boolean {
 /** @internal Mark a successfully submitted message empty without another native call. */
 export function consumeSubmittedMessage(message: Message): void {
   if (!canShareNativeMessage(message)) {
-    message.close();
+    const state = message as unknown as MutableMessageState;
+    if (state._nativeMessage !== undefined) {
+      requireMessageNativeOperations().close(state._nativeMessage);
+    }
+    markMessageConsumed(message);
     return;
   }
-  const state = message as unknown as {
-    _buffer: Buffer;
-    _refCount: number;
-    _properties: Readonly<Record<string, string>>;
-    _nativeMessage?: unknown;
-  };
-  state._buffer = EMPTY_BUFFER;
-  state._refCount = 0;
-  state._properties = EMPTY_PROPERTIES;
-  state._nativeMessage = undefined;
+  // The operation or Received envelope can still retain this facade after the
+  // frame is consumed. Keep it out of the pool until deterministic cleanup
+  // calls close(), otherwise that stale internal reference could close a newly
+  // adopted frame.
+  markMessageConsumed(message);
 }
 
 /** @internal Refill caller-provided receive storage with the next native frame. */
