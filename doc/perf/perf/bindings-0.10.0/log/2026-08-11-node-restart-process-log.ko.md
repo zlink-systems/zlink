@@ -166,3 +166,22 @@ hot path에 적용된다. 단순 one-way 최소 `35%`, 평균 목표 `60%`, late
 
 - C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_185936_node-restart-pair-ws-c.txt`
 - Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_190003_node-restart-pair-ws-current.txt`
+
+## Single ws·wss 최신 paired 측정
+
+모든 항목은 C를 먼저 실행하고 Node를 뒤이어 단독 실행했다. 실행 조건은 1초·1회, Auto-HWM, 64·256·1024·65536·131072·262144B다.
+
+| Transport | Pattern | throughput 평균 | latency 중앙값 | 판정 | C / Node report |
+|-----------|---------|----------------:|---------------:|------|-----------------|
+| `ws` | `PUBSUB` | 89.219% | 0.890x | 통과 | `190109_node-restart-pubsub-ws-c` / `190159_node-restart-pubsub-ws-current` |
+| `ws` | `DEALER_DEALER` | 80.538% | 1.090x | 통과 | `190215_node-restart-dealer-dealer-ws-c` / `190242_node-restart-dealer-dealer-ws-current` |
+| `ws` | `DEALER_ROUTER` | 44.919% | 1.940x | 통과 | `190253_node-restart-dealer-router-ws-c` / `190320_node-restart-dealer-router-ws-current` |
+| `ws` | `DEALER_ROUTER_REQREP` | 41.765% | 1.930x | 통과 | `190335_node-restart-dealer-router-reqrep-ws-c` / `190355_node-restart-dealer-router-reqrep-ws-current` |
+| `ws` | `ROUTER_ROUTER` | 47.747% | 1.960x | 통과 | `190406_node-restart-router-router-ws-c` / `190434_node-restart-router-router-ws-current` |
+| `ws` | `ROUTER_ROUTER_REQREP` | 41.495% | 1.890x | 통과 | `190446_node-restart-router-router-reqrep-ws-c` / `190507_node-restart-router-router-reqrep-ws-current` |
+| `wss` | `PUBSUB` | 116.722% | 0.707x | 통과 | `190604_node-restart-pubsub-wss-c` / `190806_node-restart-pubsub-wss-current` |
+| `wss` | `DEALER_DEALER` | 103.527% | 0.840x | 통과 | `190812_node-restart-dealer-dealer-wss-c` / `190840_node-restart-dealer-dealer-wss-current` |
+| `wss` | `DEALER_ROUTER` | 75.252% | 1.234x | 통과 | `190845_node-restart-dealer-router-wss-c` / `190911_node-restart-dealer-router-wss-current` |
+| `wss` | `DEALER_ROUTER_REQREP` | 68.236% | 1.122x | 통과 | `190916_node-restart-dealer-router-reqrep-wss-c` / `190936_node-restart-dealer-router-reqrep-wss-current` |
+| `wss` | `ROUTER_ROUTER` | 76.697% | 0.910x | 통과 | `190941_node-restart-router-router-wss-c` / `191008_node-restart-router-router-wss-current` |
+| `wss` | `ROUTER_ROUTER_REQREP` | 73.467% | 1.120x | 통과 | `191012_node-restart-router-router-reqrep-wss-c` / `191035_node-restart-router-router-reqrep-wss-current` |
