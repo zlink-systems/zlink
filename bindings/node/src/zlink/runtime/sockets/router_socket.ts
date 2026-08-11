@@ -60,18 +60,19 @@ export class RouterSocket extends RoutedMessageSocket {
       const peer = normalizeRoutingId(peerRid, 'peerRid');
       const nativeHandle = getNativeHandle(this);
       return executeNativeRequest({
+        handle: nativeHandle,
         callbackOrTimeout: cbOrTimeout,
         flagsOrTimeout: opFlags,
         maybeTimeout: opTimeout,
         startProgress: () => startRequestProgress(nativeHandle),
-        invoke: (callback, flags, timeoutMs) => {
+        invoke: (token, flags, timeoutMs) => {
           native.routerRequestTransportPair(
             nativeHandle,
             peer,
             transportPairId,
             transportPairGeneration,
             parts,
-            callback,
+            token,
             flags | 0,
             timeoutMs | 0
           );
@@ -114,16 +115,17 @@ export class RouterSocket extends RoutedMessageSocket {
     const peer = normalizeRoutingId(peerRid, 'peerRid');
     const nativeHandle = getNativeHandle(this);
     return executeNativeRequest({
+      handle: nativeHandle,
       callbackOrTimeout,
       flagsOrTimeout,
       maybeTimeout,
       startProgress: () => startRequestProgress(nativeHandle),
-      invoke: (callback, flags, timeoutMs) => {
+      invoke: (token, flags, timeoutMs) => {
         native.routerRequest(
           nativeHandle,
           peer,
           parts,
-          callback,
+          token,
           flags | 0,
           timeoutMs | 0
         );

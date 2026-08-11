@@ -1824,6 +1824,30 @@ napi_value socket_close (napi_env env, napi_callback_info info)
     return ok;
 }
 
+napi_value socket_request_completion_handler (napi_env env, napi_callback_info info)
+{
+    napi_value argv[2];
+    size_t argc = 2;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    if (argc < 2) {
+        napi_throw_type_error (env, NULL, "socketRequestCompletionHandler requires socket and handler");
+        return NULL;
+    }
+    void *socket = NULL;
+    napi_get_value_external (env, argv[0], &socket);
+    napi_valuetype handler_type = napi_undefined;
+    napi_typeof (env, argv[1], &handler_type);
+    if (handler_type != napi_function) {
+        napi_throw_type_error (env, NULL, "request completion handler must be a function");
+        return NULL;
+    }
+    if (!set_socket_request_completion_handler (env, socket, argv[1]))
+        return NULL;
+    napi_value ok;
+    napi_get_undefined (env, &ok);
+    return ok;
+}
+
 napi_value socket_bind (napi_env env, napi_callback_info info)
 {
     napi_value argv[2];
@@ -2903,18 +2927,14 @@ napi_value dealer_request (napi_env env, napi_callback_info info)
     std::vector<zlink_msg_t> parts;
     if (!build_msg_vector_or_single (env, argv[1], &parts))
         return NULL;
-    napi_valuetype handler_type = napi_undefined;
-    napi_typeof (env, argv[2], &handler_type);
-    if (handler_type != napi_function) {
-        close_msg_vector (parts);
-        napi_throw_type_error (env, NULL, "dealerRequest handler must be a function");
-        return NULL;
-    }
     int32_t flags = 0;
     napi_get_value_int32 (env, argv[3], &flags);
     int32_t timeout_ms = 0;
     napi_get_value_int32 (env, argv[4], &timeout_ms);
-    request_js_state_t *state = create_core_request_js_state (env, dealer, argv[2]);
+    uint64_t token = 0;
+    if (!get_uint64_like (env, argv[2], &token))
+        return NULL;
+    request_js_state_t *state = create_core_request_js_state (env, dealer, token);
     if (!state) {
         close_msg_vector (parts);
         return NULL;
@@ -2953,16 +2973,16 @@ napi_value router_request (napi_env env, napi_callback_info info)
         return NULL;
     napi_valuetype handler_type = napi_undefined;
     napi_typeof (env, argv[3], &handler_type);
-    if (handler_type != napi_function) {
+    uint64_t token = 0;
+    if (!get_uint64_like (env, argv[3], &token)) {
         close_msg_vector (parts);
-        napi_throw_type_error (env, NULL, "routerRequest handler must be a function");
         return NULL;
     }
     int32_t flags = 0;
     napi_get_value_int32 (env, argv[4], &flags);
     int32_t timeout_ms = 0;
     napi_get_value_int32 (env, argv[5], &timeout_ms);
-    request_js_state_t *state = create_core_request_js_state (env, router, argv[3]);
+    request_js_state_t *state = create_core_request_js_state (env, router, token);
     if (!state) {
         close_msg_vector (parts);
         return NULL;
@@ -3009,16 +3029,16 @@ napi_value router_request_transport_pair (napi_env env, napi_callback_info info)
         return NULL;
     napi_valuetype handler_type = napi_undefined;
     napi_typeof (env, argv[5], &handler_type);
-    if (handler_type != napi_function) {
+    uint64_t token = 0;
+    if (!get_uint64_like (env, argv[5], &token)) {
         close_msg_vector (parts);
-        napi_throw_type_error (env, NULL, "routerRequestTransportPair handler must be a function");
         return NULL;
     }
     int32_t flags = 0;
     int32_t timeout_ms = 0;
     napi_get_value_int32 (env, argv[6], &flags);
     napi_get_value_int32 (env, argv[7], &timeout_ms);
-    request_js_state_t *state = create_core_request_js_state (env, router, argv[5]);
+    request_js_state_t *state = create_core_request_js_state (env, router, token);
     if (!state) {
         close_msg_vector (parts);
         return NULL;

@@ -15,7 +15,7 @@
 struct request_completion_dispatcher_t
 {
     request_completion_dispatcher_t ()
-        : socket (NULL), env (NULL), tsfn (NULL), active (0), closing (false),
+        : socket (NULL), env (NULL), tsfn (NULL), handler (NULL), active (0), closing (false),
           scheduled (false)
     {
     }
@@ -23,6 +23,7 @@ struct request_completion_dispatcher_t
     void *socket;
     napi_env env;
     napi_threadsafe_function tsfn;
+    napi_ref handler;
     std::atomic<size_t> active;
     std::atomic<bool> closing;
     std::mutex queue_mu;
@@ -32,11 +33,11 @@ struct request_completion_dispatcher_t
 
 struct request_js_state_t
 {
-    request_js_state_t () : env (NULL), dispatcher (NULL), handler (NULL) {}
+    request_js_state_t () : env (NULL), dispatcher (NULL), token (0) {}
 
     napi_env env;
     request_completion_dispatcher_t *dispatcher;
-    napi_ref handler;
+    uint64_t token;
 };
 
 namespace
@@ -83,8 +84,6 @@ void release_request_state (napi_env env, request_js_state_t *state)
     if (!state)
         return;
     request_completion_dispatcher_t *dispatcher = state->dispatcher;
-    if (env && state->handler)
-        (void) napi_delete_reference (env, state->handler);
     delete state;
     if (dispatcher && dispatcher->active.fetch_sub (1) == 1
         && dispatcher->closing.load ())
@@ -95,9 +94,12 @@ void request_dispatcher_finalize (napi_env env,
                                   void *finalize_data,
                                   void *finalize_hint)
 {
-    (void) env;
     (void) finalize_hint;
-    delete static_cast<request_completion_dispatcher_t *> (finalize_data);
+    request_completion_dispatcher_t *dispatcher =
+      static_cast<request_completion_dispatcher_t *> (finalize_data);
+    if (env && dispatcher && dispatcher->handler)
+        (void) napi_delete_reference (env, dispatcher->handler);
+    delete dispatcher;
 }
 
 void request_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *data)
@@ -110,6 +112,7 @@ void request_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *
         return;
 
     std::vector<request_result_js_payload_t *> batch;
+    napi_value completions;
     bool reschedule = false;
     {
         std::lock_guard<std::mutex> lock (dispatcher->queue_mu);
@@ -124,23 +127,27 @@ void request_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *
         dispatcher->scheduled = reschedule;
     }
 
+    napi_create_array_with_length (env, batch.size (), &completions);
+
     for (size_t index = 0; index < batch.size (); ++index) {
         std::unique_ptr<request_result_js_payload_t> payload (batch[index]);
         request_js_state_t *state = payload->state;
-        if (!env || !state || !state->handler) {
+        if (!env || !state || !dispatcher->handler) {
             release_request_state (NULL, state);
             continue;
         }
-        napi_value handler;
-        if (napi_get_reference_value (env, state->handler, &handler) != napi_ok) {
-            release_request_state (env, state);
-            continue;
-        }
-
-        napi_value argv[2];
-        napi_create_int32 (env, payload->errnum, &argv[0]);
+        napi_value completion;
+        napi_create_object (env, &completion);
+        napi_value token;
+        napi_create_bigint_uint64 (env, state->token, &token);
+        napi_set_named_property (env, completion, "token", token);
+        napi_value result;
+        napi_create_int32 (env, payload->errnum, &result);
+        napi_set_named_property (env, completion, "result", result);
         if (payload->errnum != 0) {
-            napi_get_null (env, &argv[1]);
+            napi_value none;
+            napi_get_null (env, &none);
+            napi_set_named_property (env, completion, "parts", none);
         } else {
             napi_value parts_array;
             napi_create_array_with_length (env, payload->parts.size (), &parts_array);
@@ -152,14 +159,19 @@ void request_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *
                 napi_set_element (env, parts_array, static_cast<uint32_t> (part_index),
                                   part_buf);
             }
-            argv[1] = parts_array;
+            napi_set_named_property (env, completion, "parts", parts_array);
         }
-
-        napi_value recv;
-        napi_value this_arg;
-        napi_get_undefined (env, &this_arg);
-        (void) napi_call_function (env, this_arg, handler, 2, argv, &recv);
+        napi_set_element (env, completions, static_cast<uint32_t> (index), completion);
         release_request_state (env, state);
+    }
+
+    if (!batch.empty ()) {
+        napi_value handler;
+        napi_value this_arg;
+        napi_value recv;
+        napi_get_reference_value (env, dispatcher->handler, &handler);
+        napi_get_undefined (env, &this_arg);
+        napi_call_function (env, this_arg, handler, 1, &completions, &recv);
     }
 
     if (reschedule
@@ -202,21 +214,30 @@ request_completion_dispatcher_t *request_dispatcher (napi_env env, void *socket)
 } // namespace
 
 request_js_state_t *
-create_core_request_js_state (napi_env env, void *socket, napi_value handler)
+create_core_request_js_state (napi_env env, void *socket, uint64_t token)
 {
     request_completion_dispatcher_t *dispatcher = request_dispatcher (env, socket);
     if (!dispatcher)
         return NULL;
     request_js_state_t *state = new request_js_state_t ();
-    state->env = env;
     state->dispatcher = dispatcher;
-    if (napi_create_reference (env, handler, 1, &state->handler) != napi_ok) {
-        delete state;
-        napi_throw_error (env, NULL, "request callback reference setup failed");
-        return NULL;
-    }
+    state->token = token;
     dispatcher->active.fetch_add (1);
     return state;
+}
+
+bool set_socket_request_completion_handler (napi_env env, void *socket, napi_value handler)
+{
+    request_completion_dispatcher_t *dispatcher = request_dispatcher (env, socket);
+    if (!dispatcher)
+        return false;
+    if (dispatcher->handler)
+        (void) napi_delete_reference (env, dispatcher->handler);
+    if (napi_create_reference (env, handler, 1, &dispatcher->handler) != napi_ok) {
+        napi_throw_error (env, NULL, "request completion handler setup failed");
+        return false;
+    }
+    return true;
 }
 
 void abort_request_js_state (request_js_state_t *state)

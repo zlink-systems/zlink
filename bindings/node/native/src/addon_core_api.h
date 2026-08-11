@@ -27,6 +27,7 @@ napi_value ctx_recalculate_auto_hwm (napi_env env, napi_callback_info info);
 
 napi_value socket_new (napi_env env, napi_callback_info info);
 napi_value socket_close (napi_env env, napi_callback_info info);
+napi_value socket_request_completion_handler (napi_env env, napi_callback_info info);
 napi_value socket_bind (napi_env env, napi_callback_info info);
 napi_value socket_unbind (napi_env env, napi_callback_info info);
 napi_value socket_connect (napi_env env, napi_callback_info info);

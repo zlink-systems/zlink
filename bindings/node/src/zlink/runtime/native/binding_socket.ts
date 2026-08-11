@@ -13,10 +13,11 @@ export interface SocketNativeBinding {
   dealerRequest: (
     socket: NativeHandle,
     parts: unknown,
-    callback: unknown,
+    token: bigint,
     flags: number,
     timeoutMs: number
   ) => void;
+  socketRequestCompletionHandler: (socket: NativeHandle, handler: unknown) => void;
   handleGetRoutingId: (handle: NativeHandle) => Buffer;
   handleSetRoutingId: (handle: NativeHandle, routingId: Buffer) => void;
   monitorOpen: (socket: NativeHandle, eventMask: number) => NativeHandle;
@@ -52,7 +53,7 @@ export interface SocketNativeBinding {
     socket: NativeHandle,
     peerRid: Buffer,
     parts: unknown,
-    callback: NativeRequestCallback,
+    token: bigint,
     flags: number,
     timeoutMs: number
   ) => void;
@@ -62,7 +63,7 @@ export interface SocketNativeBinding {
     transportPairId: bigint,
     transportPairGeneration: bigint,
     parts: unknown,
-    callback: NativeRequestCallback,
+    token: bigint,
     flags: number,
     timeoutMs: number
   ) => void;

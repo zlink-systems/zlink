@@ -75,6 +75,7 @@ void define_core_exports (napi_env env, napi_value exports)
       ZLINK_METHOD ("handleSetRoutingId", handle_set_routing_id),
       ZLINK_METHOD ("handleGetRoutingId", handle_get_routing_id),
       ZLINK_METHOD ("dealerRequest", dealer_request),
+      ZLINK_METHOD ("socketRequestCompletionHandler", socket_request_completion_handler),
       ZLINK_METHOD ("routerRequest", router_request),
       ZLINK_METHOD ("routerRequestTransportPair", router_request_transport_pair),
       ZLINK_METHOD ("routerSendTransportPair", router_send_transport_pair),

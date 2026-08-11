@@ -53,15 +53,16 @@ export class DealerSocket extends MessageSocket {
     const parts = normalizeOperationPayload(payloadOrParts);
     const nativeHandle = getNativeHandle(this);
     return executeNativeRequest({
+      handle: nativeHandle,
       callbackOrTimeout,
       flagsOrTimeout,
       maybeTimeout,
       startProgress: () => startRequestProgress(nativeHandle),
-      invoke: (callback, flags, timeoutMs) => {
+      invoke: (token, flags, timeoutMs) => {
         native.dealerRequest(
           nativeHandle,
           parts,
-          callback,
+          token,
           flags | 0,
           timeoutMs | 0
         );

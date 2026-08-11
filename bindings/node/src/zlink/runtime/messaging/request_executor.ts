@@ -10,18 +10,38 @@ import { messageFromSnapshot } from './message_snapshot';
 export type RequestCallback = (result: RequestResult, replyParts: Message[]) => void;
 
 export interface NativeRequestOptions {
+  handle: unknown;
   callbackOrTimeout?: RequestCallback | number;
   flagsOrTimeout?: SendFlags | number;
   maybeTimeout?: number;
   startProgress: () => () => void;
   invoke: (
-    callback: (result: number, replyParts: Buffer[] | null) => void,
+    token: bigint,
     flags: SendFlags,
     timeoutMs: number
   ) => void;
   submitErrorMessage: string;
   requestErrorMessage: string;
   promiseTimeoutMayUseFlagsOrTimeout?: boolean;
+}
+
+type Completion = { token: bigint; result: number; parts: Buffer[] | null };
+interface Dispatcher { next: bigint; callbacks: Map<bigint, (result: number, parts: Buffer[] | null) => void>; }
+const dispatchers = new Map<unknown, Dispatcher>();
+function dispatcher(handle: unknown): Dispatcher {
+  let value = dispatchers.get(handle);
+  if (value) return value;
+  value = { next: 1n, callbacks: new Map() };
+  dispatchers.set(handle, value);
+  require('../native/native').requireNative().socketRequestCompletionHandler(handle, (items: Completion[]) => {
+    for (const item of items) {
+      const callback = value!.callbacks.get(item.token);
+      if (!callback) continue;
+      value!.callbacks.delete(item.token);
+      callback(item.result, item.parts);
+    }
+  });
+  return value;
 }
 
 export function normalizeCallbackFlagsAndTimeout(
@@ -60,17 +80,18 @@ function executeCallbackRequest(options: NativeRequestOptions, callback: Request
     options.maybeTimeout
   );
   const releaseProgress = options.startProgress();
+  const state = dispatcher(options.handle);
+  const token = state.next++;
   try {
-    options.invoke(
+    state.callbacks.set(token,
       (result, replyParts) => {
         releaseProgress();
         callback(result as RequestResult, messagesFromNativeBuffers(replyParts));
-      },
-      flags,
-      timeoutMs
-    );
+      });
+    options.invoke(token, flags, timeoutMs);
     return true;
   } catch (error) {
+    state.callbacks.delete(token);
     releaseProgress();
     return submitOrBackpressure(error, flags, options.submitErrorMessage);
   }
@@ -85,8 +106,10 @@ function executePromiseRequest(options: NativeRequestOptions): Promise<Message[]
 
   return new Promise<Message[]>((resolve, reject) => {
     const releaseProgress = options.startProgress();
+    const state = dispatcher(options.handle);
+    const token = state.next++;
     try {
-      options.invoke(
+      state.callbacks.set(token,
         (result, replyParts) => {
           releaseProgress();
           if (result !== RequestResult.Ok) {
@@ -94,11 +117,10 @@ function executePromiseRequest(options: NativeRequestOptions): Promise<Message[]
             return;
           }
           resolve(messagesFromNativeBuffers(replyParts));
-        },
-        SendFlags.None,
-        timeoutMs | 0
-      );
+        });
+      options.invoke(token, SendFlags.None, timeoutMs | 0);
     } catch (error) {
+      state.callbacks.delete(token);
       releaseProgress();
       reject(submitNativeError(error, SendFlags.None, options.submitErrorMessage));
     }

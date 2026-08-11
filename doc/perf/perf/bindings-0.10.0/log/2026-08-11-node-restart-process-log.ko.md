@@ -129,3 +129,29 @@ sample은 released Core `0.10.1` package 조건에서 통과했다.
 - 자체 후보: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_183136_node-restart-router-router-tcp-routed-builder.txt`
 - Sol A/B: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_183740_node-restart-router-router-tcp-batch4.txt`, `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_183819_node-restart-router-router-tcp-batch8.txt`, `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_183847_node-restart-router-router-tcp-batch16.txt`
 - 최종: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_183913_node-restart-router-router-tcp-batch32.txt`
+
+## Single ROUTER_ROUTER_REQREP / tcp
+
+C paired 기준에서 현재 Node/C throughput 산술평균은 `24.710%`였고 latency 중앙값은
+`3.595x`였다. 자체 candidate인 Router request route normalization의 builder-time 고정은 전체
+throughput을 낮춰 제거했다.
+
+Sol은 payload 크기와 무관하게 반복되는 약 1.1ms latency를 reply 생성과 request completion의
+N-API 경계 비용으로 분리했다. 첫 후보는 `Received.reply(Buffer)`가 Buffer를 Message로 만든 뒤
+다시 native frame으로 보내던 중간 단계를 없앤 것이다. public reply builder는 Buffer 또는 Message를
+그대로 보관하고 native submit 직전에 한 번만 normalize하며, 성공 시 Message만 consume한다. 이
+후보는 throughput 산술평균 `27.302%`를 기록했다.
+
+두 번째 후보는 socket별 token completion sink다. native request state는 request마다 callback
+reference 대신 token만 보관하고, 최대 64개 completion을 한 JS handler 호출로 전달한다. TypeScript
+dispatcher가 token별 callback과 progress release를 소유한다. submit failure에서는 token을 즉시
+제거하고, public callback signature·순서·Message ownership은 유지한다. 최종 평균은 `27.131%`,
+latency 중앙값은 `3.679x`다. 두 구조 후보 모두 실제 request/reply 경계 비용을 줄이지만 socket
+request/reply 최소 throughput `30%`에는 미달하므로 보류한다. 전체 Node test와 sample은 released
+Core `0.10.1` package 조건에서 통과했다.
+
+- C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_184251_node-restart-router-router-reqrep-tcp-c.txt`
+- Node baseline: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_184314_node-restart-router-router-reqrep-tcp-current.txt`
+- 제거한 자체 후보: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_184422_node-restart-router-router-reqrep-tcp-invoker.txt`
+- direct reply: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_184942_node-restart-router-router-reqrep-tcp-direct-reply.txt`
+- 최종: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_185740_node-restart-router-router-reqrep-tcp-token-completion-final.txt`
