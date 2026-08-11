@@ -2095,6 +2095,20 @@ Node SUB 수신의 256B topic 저장소를 stack-first로 바꿨다. 256B 초과
 사용하며 public interface, multipart와 message ownership은 변경하지 않았다. 측정 조건과
 후보·Sol 검토 내용은 `log/2026-08-12-node-pubsub-held-second-pass.ko.md`에 기록한다.
 
+### 11.8 Node STREAM 보류 항목 2차 측정 결과
+
+Release Core `0.10.1`, `tcp`, `MULTI_STREAM`, clients `100`, duration `1초`, runs `1`,
+balanced auto-HWM에서 C와 Node를 순서대로 측정했다.
+
+| Variant | C 대비 throughput 비율 (64·256·1024·65536B) | 산술평균 | 최종 판정 |
+|---|---|---:|---|
+| write-only peer 상태 제거 | 13.43 / 14.37 / 14.43 / 57.51% | 24.94% | 보류·multi routed echo 최소 평균 30% 미달, POSDDD 정리는 채택 |
+| 고정 payload 후보 | 13.02 / 13.76 / 14.38 / 54.97% | 24.03% | 원복 |
+
+STREAM packet callback에서 읽히지 않던 peer routing-id 상태와 선형 탐색을 제거했다. 공개
+interface와 packet body storage 옵션은 그대로다. 측정 조건과 Sol 검토 결과는
+`log/2026-08-12-node-stream-held-second-pass.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.

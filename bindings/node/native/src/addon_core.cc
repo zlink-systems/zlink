@@ -65,7 +65,6 @@ struct stream_js_state_t
     napi_threadsafe_function tsfn;
     std::atomic<int> stop_requested;
     int body_materialization;
-    std::vector<std::vector<unsigned char>> peer_routing_ids;
 };
 
 static std::mutex g_stream_slots_mu;
@@ -141,7 +140,6 @@ void reset_stream_slot_unsafe (stream_js_state_t *state)
     state->socket = NULL;
     state->stop_requested.store (0, std::memory_order_release);
     state->body_materialization = 0;
-    state->peer_routing_ids.clear ();
 }
 
 void reset_send_ready_handler_slot_unsafe (send_ready_handler_js_state_t *state)
@@ -787,23 +785,6 @@ void socket_monitor_handler_tsfn_call_js (napi_env env, napi_value js_cb, void *
     (void) napi_call_function (env, this_arg, js_cb, 1, argv, &recv);
 }
 
-void remember_stream_peer_unsafe (stream_js_state_t *state, const zlink_routing_id_t *rid)
-{
-    if (!state || !rid || rid->size == 0)
-        return;
-
-    for (size_t i = 0; i < state->peer_routing_ids.size (); ++i) {
-        const std::vector<unsigned char> &known = state->peer_routing_ids[i];
-        if (known.size () != rid->size)
-            continue;
-        if (memcmp (known.data (), rid->data, rid->size) == 0)
-            return;
-    }
-
-    std::vector<unsigned char> peer (rid->data, rid->data + rid->size);
-    state->peer_routing_ids.push_back (peer);
-}
-
 template <size_t Slot>
 void stream_on_packet_slot (void *stream_,
                             const zlink_routing_id_t *rid_,
@@ -840,7 +821,6 @@ void stream_on_packet_slot (void *stream_,
             return;
         }
         tsfn = state->tsfn;
-        remember_stream_peer_unsafe (state, rid_);
         payload.reset (new stream_js_payload_t ());
         payload->body_materialization = state->body_materialization;
         payload->routing_id.assign (rid_->data, rid_->data + rid_->size);
@@ -2853,7 +2833,6 @@ napi_value socket_stream_attach (napi_env env, napi_callback_info info)
         bind_tsfn_subject_slot_unsafe (slot, &stream_js_state_t::socket, sock, env, tsfn);
         slot->stop_requested.store (0, std::memory_order_release);
         slot->body_materialization = body_materialization;
-        slot->peer_routing_ids.clear ();
     }
 
     zlink_handler_result_t rc =
