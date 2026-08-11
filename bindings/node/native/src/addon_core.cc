@@ -2540,6 +2540,28 @@ napi_value socket_try_recv_message (napi_env env, napi_callback_info info)
     return out;
 }
 
+class subscribe_topic_buffer_t
+{
+  public:
+    subscribe_topic_buffer_t () : data_ (stack_), size_ (sizeof (stack_)) {}
+
+    char *data () { return data_; }
+    size_t size () const { return size_; }
+
+    void resize (size_t required_size)
+    {
+        heap_.assign (required_size > 0 ? required_size : 1, '\0');
+        data_ = heap_.data ();
+        size_ = heap_.size ();
+    }
+
+  private:
+    char stack_[256] = {};
+    std::vector<char> heap_;
+    char *data_;
+    size_t size_;
+};
+
 napi_value socket_subscribe_message (napi_env env, napi_callback_info info)
 {
     napi_value argv[1];
@@ -2548,7 +2570,7 @@ napi_value socket_subscribe_message (napi_env env, napi_callback_info info)
     void *sock = NULL;
     napi_get_value_external (env, argv[0], &sock);
 
-    std::vector<char> topic (256, '\0');
+    subscribe_topic_buffer_t topic;
     zlink_routing_id_t routing_id;
     std::vector<zlink_msg_t> parts;
     size_t topic_len = topic.size ();
@@ -2565,7 +2587,7 @@ napi_value socket_subscribe_message (napi_env env, napi_callback_info info)
         }
         if (zlink_errno () != EMSGSIZE)
             return throw_last_error (env, "subscribe failed");
-        topic.assign (topic_len > 0 ? topic_len : 1, '\0');
+        topic.resize (topic_len);
     }
 }
 
@@ -2574,7 +2596,7 @@ int try_subscribe_message_value (napi_env env,
                                  napi_value *out,
                                  size_t *received_bytes = NULL)
 {
-    std::vector<char> topic (256, '\0');
+    subscribe_topic_buffer_t topic;
     zlink_routing_id_t routing_id;
     size_t topic_len = topic.size ();
 
@@ -2618,7 +2640,7 @@ int try_subscribe_message_value (napi_env env,
             return rc;
         if (err != EMSGSIZE)
             return rc;
-        topic.assign (topic_len > 0 ? topic_len : 1, '\0');
+        topic.resize (topic_len);
     }
 }
 

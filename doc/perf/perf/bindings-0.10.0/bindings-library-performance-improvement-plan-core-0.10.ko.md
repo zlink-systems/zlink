@@ -2081,6 +2081,20 @@ transport·pattern별 C를 먼저 실행한 뒤 binding을 하나씩 실행했�
 세 언어의 report 경로와 Node POSDDD 후보 및 Sol 검토 결론은
 `log/2026-08-12-node-multi-finalization.ko.md`에 기록한다.
 
+### 11.7 Node PUBSUB 보류 항목 2차 측정 결과
+
+Release Core `0.10.1`, clients `100`, duration `1초`, runs `1`, balanced auto-HWM에서
+`MULTI_PUBSUB`만 C와 Node 순서로 측정했다.
+
+| Transport | C 대비 throughput 비율 (64·256·1024·4096·65536·131072B) | 산술평균 | 최종 판정 |
+|---|---|---:|---|
+| TCP | 18.28 / 19.40 / 21.00 / 25.88 / 40.48 / 46.22% | 28.54% | 보류·기존 28.24%보다 개선됐지만 simple one-way 최소 평균 35% 미달 |
+| WS | 18.38 / 21.64 / 22.96 / 30.83 / 68.33 / 75.34% | 39.58% | 통과·기존 보류 평균 34.37%에서 최소 평균 35% 통과 |
+
+Node SUB 수신의 256B topic 저장소를 stack-first로 바꿨다. 256B 초과 topic만 heap을
+사용하며 public interface, multipart와 message ownership은 변경하지 않았다. 측정 조건과
+후보·Sol 검토 내용은 `log/2026-08-12-node-pubsub-held-second-pass.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
