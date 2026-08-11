@@ -92,7 +92,7 @@ Options:
                        Override READY wait timeout.
   --connect-ready-timeout-ms N
                        Override connection-ready wait timeout.
-  --monitor-hwm N       Override PERF_MULTI_MONITOR_HWM.
+  --monitor-hwm N       Override PERF_MULTI_MONITOR_HWM (default: 4096000).
   --server-shutdown-timeout-ms N
                        Override graceful server shutdown wait.
   --server-bind-port N Override benchmark bind port (default: 0 = auto).
