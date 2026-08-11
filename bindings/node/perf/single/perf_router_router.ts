@@ -20,7 +20,6 @@ const {
   drainRouterRecvInto,
   emitSingleSocketHwmDetail,
   parseSingleBinaryArgs,
-  routedLargeMessageSocketPolicy,
   runLocalSocketOneWayBenchmark,
   spawnSenderWorker,
   waitForWorkerError,
@@ -91,7 +90,6 @@ async function handshakeRouterReceiverWithRetry(receiver) {
 }
 
 async function runRouterRouterBenchmark(msgSize, options) {
-  const socketOptions = routedLargeMessageSocketPolicy(options, msgSize);
   if (options.transport === 'inproc') {
     // inproc is context-local so the Worker sender path cannot reach it.
     // Run both ROUTER sockets in one shared context with the C-faithful
@@ -100,7 +98,7 @@ async function runRouterRouterBenchmark(msgSize, options) {
     return runLocalSocketOneWayBenchmark({
       pattern: 'ROUTER_ROUTER',
       msgSize,
-      options: socketOptions,
+      options,
       endpointToken: 'router-router',
       createReceiver: (ctx) => zlink.createRouterSocket(ctx),
       createSender: (ctx) => zlink.createRouterSocket(ctx),
@@ -155,7 +153,7 @@ async function runRouterRouterBenchmark(msgSize, options) {
   let worker = null;
 
   try {
-    applySocketPolicy(receiver, socketOptions);
+    applySocketPolicy(receiver, options);
     applyAutoHwmMsgUnit(ctx, msgSize);
     ctx.recalculateAutoHwm();
     receiver.setRoutingId(RECEIVER_ROUTING_ID);
@@ -170,7 +168,7 @@ async function runRouterRouterBenchmark(msgSize, options) {
       runId: options.runId ?? 1,
       receiverRoutingIdBytes: RECEIVER_ID,
       senderRoutingIdBytes: SENDER_ID,
-      options: socketOptions,
+      options,
     });
     const workerError = waitForWorkerError(worker);
     await Promise.race([

@@ -4,7 +4,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.configureTlsServer = exports.configureTlsClient = exports.applyAutoHwmMsgUnit = void 0;
 exports.applyContextPolicy = applyContextPolicy;
 exports.applySocketPolicy = applySocketPolicy;
-exports.routedLargeMessageSocketPolicy = routedLargeMessageSocketPolicy;
 exports.emitSingleSocketHwmDetail = emitSingleSocketHwmDetail;
 exports.benchmarkEndpoint = benchmarkEndpoint;
 exports.closeSenderWorker = closeSenderWorker;
@@ -88,26 +87,6 @@ function applySocketPolicy(socket, options = {}) {
             socket.options.noDrop = Boolean(options.noDrop);
         }
     }
-}
-function routedLargeMessageSocketPolicy(options = {}, msgSize) {
-    if (manualSocketOverridesEnabled('single')) {
-        return options;
-    }
-    if (!Number.isFinite(msgSize) || msgSize < 65536) {
-        return options;
-    }
-    const defaultFloor = String(options.transport || '').trim().toLowerCase() === 'tcp'
-        ? 64
-        : 32;
-    const floor = integerEnv('PERF_SINGLE_ROUTED_LARGE_HWM_FLOOR', defaultFloor);
-    if (!Number.isFinite(floor) || floor <= 0) {
-        return options;
-    }
-    return {
-        ...options,
-        hwm: Math.max(floor, Number.isFinite(options.hwm) ? Number(options.hwm) : 0),
-        policySocketOverrides: true,
-    };
 }
 function socketTypeName(socket) {
     if (typeof socket.setPacketHandler === 'function')
@@ -731,7 +710,6 @@ module.exports = {
     applyAutoHwmMsgUnit,
     applyContextPolicy,
     applySocketPolicy,
-    routedLargeMessageSocketPolicy,
     configureTlsClient,
     configureTlsServer,
     emitSingleSocketHwmDetail,

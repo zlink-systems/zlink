@@ -130,35 +130,6 @@ function applySocketPolicy(socket, options: SingleSocketPolicyOptions = {}) {
   }
 }
 
-function routedLargeMessageSocketPolicy(
-  options: SingleSocketPolicyOptions = {},
-  msgSize: number
-): SingleSocketPolicyOptions {
-  if (manualSocketOverridesEnabled('single')) {
-    return options;
-  }
-  if (!Number.isFinite(msgSize) || msgSize < 65536) {
-    return options;
-  }
-
-  const defaultFloor = String(options.transport || '').trim().toLowerCase() === 'tcp'
-    ? 64
-    : 32;
-  const floor = integerEnv('PERF_SINGLE_ROUTED_LARGE_HWM_FLOOR', defaultFloor);
-  if (!Number.isFinite(floor) || floor <= 0) {
-    return options;
-  }
-
-  return {
-    ...options,
-    hwm: Math.max(
-      floor,
-      Number.isFinite(options.hwm) ? Number(options.hwm) : 0
-    ),
-    policySocketOverrides: true,
-  };
-}
-
 function socketTypeName(socket) {
   if (typeof socket.setPacketHandler === 'function') return 'stream';
   if (typeof socket.reply === 'function') return 'router';
@@ -825,7 +796,6 @@ module.exports = {
   applyAutoHwmMsgUnit,
   applyContextPolicy,
   applySocketPolicy,
-  routedLargeMessageSocketPolicy,
   configureTlsClient,
   configureTlsServer,
   emitSingleSocketHwmDetail,
@@ -849,7 +819,6 @@ export {
   applyAutoHwmMsgUnit,
   applyContextPolicy,
   applySocketPolicy,
-  routedLargeMessageSocketPolicy,
   configureTlsClient,
   configureTlsServer,
   emitSingleSocketHwmDetail,

@@ -3,14 +3,13 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createRunId, currentEpochNs, integerEnv, summarizeMetrics, } = require('../common/perf_metrics');
-const { applyContextPolicy, applyAutoHwmMsgUnit, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRouterRecvInto, emitSingleSocketHwmDetail, parseSingleBinaryArgs, routedLargeMessageSocketPolicy, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerError, waitForWorkerMessage, } = require('./perf_single_common');
+const { applyContextPolicy, applyAutoHwmMsgUnit, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRouterRecvInto, emitSingleSocketHwmDetail, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerError, waitForWorkerMessage, } = require('./perf_single_common');
 async function runDealerRouterBenchmark(msgSize, options) {
-    const socketOptions = routedLargeMessageSocketPolicy(options, msgSize);
     if (options.transport === 'inproc') {
         return runLocalSocketOneWayBenchmark({
             pattern: 'DEALER_ROUTER',
             msgSize,
-            options: socketOptions,
+            options,
             endpointToken: 'dealer-router',
             createReceiver: (ctx) => zlink.createRouterSocket(ctx),
             createSender: (ctx) => zlink.createDealerSocket(ctx),
@@ -22,7 +21,7 @@ async function runDealerRouterBenchmark(msgSize, options) {
     const endpoint = await benchmarkEndpoint(options.transport, `dealer-router-${msgSize}`);
     let worker = null;
     try {
-        applySocketPolicy(router, socketOptions);
+        applySocketPolicy(router, options);
         applyAutoHwmMsgUnit(ctx, msgSize);
         ctx.recalculateAutoHwm();
         configureTlsServer(router, options.transport);
@@ -34,7 +33,7 @@ async function runDealerRouterBenchmark(msgSize, options) {
             duration: options.duration,
             msgSize,
             runId: options.runId ?? 1,
-            options: socketOptions,
+            options,
         });
         const workerError = waitForWorkerError(worker);
         await Promise.race([

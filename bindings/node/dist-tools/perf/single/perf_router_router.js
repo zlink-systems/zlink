@@ -3,7 +3,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createRunId, currentEpochNs, integerEnv, summarizeMetrics, } = require('../common/perf_metrics');
-const { applyContextPolicy, applyAutoHwmMsgUnit, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRouterRecvInto, emitSingleSocketHwmDetail, parseSingleBinaryArgs, routedLargeMessageSocketPolicy, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerError, waitForWorkerMessage, } = require('./perf_single_common');
+const { applyContextPolicy, applyAutoHwmMsgUnit, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRouterRecvInto, emitSingleSocketHwmDetail, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerError, waitForWorkerMessage, } = require('./perf_single_common');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 const RECEIVER_ID = Buffer.from('ROUTER1', 'ascii');
 const SENDER_ID = Buffer.from('ROUTER2', 'ascii');
@@ -64,7 +64,6 @@ async function handshakeRouterReceiverWithRetry(receiver) {
     }
 }
 async function runRouterRouterBenchmark(msgSize, options) {
-    const socketOptions = routedLargeMessageSocketPolicy(options, msgSize);
     if (options.transport === 'inproc') {
         // inproc is context-local so the Worker sender path cannot reach it.
         // Run both ROUTER sockets in one shared context with the C-faithful
@@ -73,7 +72,7 @@ async function runRouterRouterBenchmark(msgSize, options) {
         return runLocalSocketOneWayBenchmark({
             pattern: 'ROUTER_ROUTER',
             msgSize,
-            options: socketOptions,
+            options,
             endpointToken: 'router-router',
             createReceiver: (ctx) => zlink.createRouterSocket(ctx),
             createSender: (ctx) => zlink.createRouterSocket(ctx),
@@ -128,7 +127,7 @@ async function runRouterRouterBenchmark(msgSize, options) {
     const endpoint = await benchmarkEndpoint(options.transport, `router-router-${msgSize}`);
     let worker = null;
     try {
-        applySocketPolicy(receiver, socketOptions);
+        applySocketPolicy(receiver, options);
         applyAutoHwmMsgUnit(ctx, msgSize);
         ctx.recalculateAutoHwm();
         receiver.setRoutingId(RECEIVER_ROUTING_ID);
@@ -143,7 +142,7 @@ async function runRouterRouterBenchmark(msgSize, options) {
             runId: options.runId ?? 1,
             receiverRoutingIdBytes: RECEIVER_ID,
             senderRoutingIdBytes: SENDER_ID,
-            options: socketOptions,
+            options,
         });
         const workerError = waitForWorkerError(worker);
         await Promise.race([
