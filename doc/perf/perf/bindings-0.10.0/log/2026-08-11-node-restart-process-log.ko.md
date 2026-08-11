@@ -155,3 +155,14 @@ Core `0.10.1` package 조건에서 통과했다.
 - 제거한 자체 후보: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_184422_node-restart-router-router-reqrep-tcp-invoker.txt`
 - direct reply: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_184942_node-restart-router-router-reqrep-tcp-direct-reply.txt`
 - 최종: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_185740_node-restart-router-router-reqrep-tcp-token-completion-final.txt`
+
+## Single PAIR / ws
+
+C와 Node를 순차 paired 측정했다. Node/C throughput ratio는 `13.519% / 28.536% / 65.495% /
+135.263% / 130.454% / 106.890%`, 산술평균 `79.858%`이며 latency ratio 중앙값은 `1.211x`다.
+tcp에서 검토·적용한 bounded native receive와 공통 `BufferedReceiveQueue`가 같은 public recv
+hot path에 적용된다. 단순 one-way 최소 `35%`, 평균 목표 `60%`, latency 상한 `5x`를 충족하므로
+추가 pattern 전용 변경 없이 통과한다.
+
+- C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_185936_node-restart-pair-ws-c.txt`
+- Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_190003_node-restart-pair-ws-current.txt`
