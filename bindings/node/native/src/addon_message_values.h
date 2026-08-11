@@ -172,6 +172,15 @@ inline napi_value create_buffer_copy_or_empty (napi_env env, const void *data, s
     return out;
 }
 
+// Receive materialization transfers payload bytes directly into a JS-owned
+// Buffer. Keep this separate from create_message_data_buffer(): that helper
+// deliberately exposes large native message storage, while a received Message
+// must not retain a native frame merely to serve data() and close().
+inline napi_value create_received_message_buffer (napi_env env, zlink_msg_t *msg)
+{
+    return create_buffer_copy_or_empty (env, zlink_msg_data (msg), zlink_msg_size (msg));
+}
+
 inline void finalize_external_msg_buffer (napi_env env, void *data, void *hint)
 {
     (void) env;
@@ -283,11 +292,11 @@ inline napi_value create_message_snapshot_value (napi_env env,
             return throw_last_error (env, "message refcnt failed");
     }
 
-    napi_value native_message = move_message_to_native_frame_value (env, msg);
-    if (!native_message)
+    napi_value data = create_received_message_buffer (env, msg);
+    if (!data)
         return NULL;
 
-    napi_set_named_property (env, obj, "nativeMessage", native_message);
+    napi_set_named_property (env, obj, "data", data);
     if (refcnt != 1 || (flags & MESSAGE_SNAPSHOT_ALWAYS_REF_COUNT)) {
         napi_value ref_count;
         napi_create_int32 (env, refcnt, &ref_count);

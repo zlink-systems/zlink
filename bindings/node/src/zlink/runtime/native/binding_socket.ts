@@ -133,6 +133,17 @@ export interface SocketNativeBinding {
     routingId: Buffer,
     parts: readonly unknown[]
   ) => number;
+  socketStreamSendRoutingNoWaitResultParts: (
+    socket: NativeHandle,
+    routingId: Buffer,
+    parts: readonly unknown[]
+  ) => number;
+  socketStreamSendRoutingParts: (
+    socket: NativeHandle,
+    routingId: Buffer,
+    parts: readonly unknown[],
+    flags: number
+  ) => void;
   socketSetOpt: (socket: NativeHandle, option: number, value: Buffer) => void;
   socketSetSubscription: (socket: NativeHandle, topic: string) => void;
   socketSetTlsClient: (
@@ -149,7 +160,7 @@ export interface SocketNativeBinding {
   ) => void;
   socketStreamAttach: (
     socket: NativeHandle,
-    handler: (routingId: Buffer | null, packets: Buffer[]) => number,
+    handler: (routingId: Buffer | null, packets: unknown[]) => number,
     packetCount: number
   ) => void;
   socketSubscribeMessage: (

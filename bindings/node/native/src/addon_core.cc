@@ -13,6 +13,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -492,19 +493,13 @@ napi_value create_recv_message_value (napi_env env,
     // materializer, not a public Received object. Do not add unused per-
     // message fields here; each property set is paid on every recv().
     if (part_count == 1) {
-        if (routing_id.size == 0) {
-            // The common non-routed case needs only the native frame. Avoid
-            // an intermediate JS envelope before the pooled Message wrapper
-            // adopts this external value.
-            return move_message_to_native_frame_value (env, &parts[0]);
-        }
         // A one-part receive needs neither a parts array nor a part snapshot.
-        // The TypeScript materializer derives the routed synthetic properties
-        // only when a routing id is present, preserving both public shapes.
-        napi_value native_message = move_message_to_native_frame_value (env, &parts[0]);
-        if (!native_message)
+        // Allocate the payload as a JS-owned Buffer immediately. This keeps
+        // data() and close() on the JS side for every payload size.
+        napi_value data = create_received_message_buffer (env, &parts[0]);
+        if (!data)
             return NULL;
-        napi_set_named_property (env, obj, "nativeMessage", native_message);
+        napi_set_named_property (env, obj, "data", data);
         if (routing_id.size > 0) {
             napi_value rid = create_routing_id_value (env, routing_id);
             napi_set_named_property (env, obj, "routingId", rid);
@@ -626,12 +621,10 @@ napi_value create_subscribed_value (napi_env env,
     napi_create_object (env, &obj);
 
     if (part_count == 1) {
-        // Keep the received frame under Message ownership. The public payload
-        // Buffer is created only when the caller reads the Message data.
-        napi_value native_message = move_message_to_native_frame_value (env, &parts[0]);
-        if (!native_message)
+        napi_value data = create_received_message_buffer (env, &parts[0]);
+        if (!data)
             return NULL;
-        napi_set_named_property (env, obj, "nativeMessage", native_message);
+        napi_set_named_property (env, obj, "data", data);
     } else {
         napi_value parts_array;
         napi_create_array_with_length (env, part_count, &parts_array);
@@ -741,11 +734,13 @@ void stream_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *d
         return;
     }
     for (size_t i = 0; i < payload->packets.size (); ++i) {
-        napi_value packet_buf = create_message_data_buffer (env, &payload->packets[i]);
-        if (!packet_buf) {
+        napi_value packet_value = i == 1
+          ? move_message_to_native_frame_value (env, &payload->packets[i])
+          : create_message_data_buffer (env, &payload->packets[i]);
+        if (!packet_value) {
             return;
         }
-        napi_set_element (env, argv[1], static_cast<uint32_t> (i), packet_buf);
+        napi_set_element (env, argv[1], static_cast<uint32_t> (i), packet_value);
     }
 
     napi_value recv;
@@ -1399,6 +1394,99 @@ bool init_msg_from_value (napi_env env,
     if (!init_msg_from_bytes (msg, data, len))
         return false;
 
+    return true;
+}
+
+struct message_value_span_t
+{
+    const unsigned char *data;
+    size_t size;
+};
+
+bool get_message_value_span (napi_env env, napi_value value, message_value_span_t *span)
+{
+    bool is_buf = false;
+    if (napi_is_buffer (env, value, &is_buf) == napi_ok && is_buf) {
+        void *data = NULL;
+        if (napi_get_buffer_info (env, value, &data, &span->size) != napi_ok) {
+            napi_throw_type_error (env, NULL, "stream send buffer invalid");
+            return false;
+        }
+        span->data = static_cast<const unsigned char *> (data);
+        return true;
+    }
+
+    bool has_native_message = false;
+    if (napi_has_named_property (env, value, "nativeMessage", &has_native_message) != napi_ok) {
+        napi_throw_type_error (env, NULL, "stream message snapshot native frame lookup failed");
+        return false;
+    }
+    if (has_native_message) {
+        napi_value native_message;
+        if (napi_get_named_property (env, value, "nativeMessage", &native_message) != napi_ok) {
+            napi_throw_type_error (env, NULL, "stream message snapshot native frame read failed");
+            return false;
+        }
+        native_message_frame_t *frame = get_native_message_frame (
+          env, native_message, "stream message snapshot native frame is invalid");
+        if (!frame)
+            return false;
+        span->size = zlink_msg_size (&frame->message);
+        span->data = static_cast<const unsigned char *> (zlink_msg_data (&frame->message));
+        return true;
+    }
+
+    napi_value data_value;
+    if (napi_get_named_property (env, value, "data", &data_value) != napi_ok) {
+        napi_throw_type_error (env, NULL, "stream message must be a Buffer or message snapshot");
+        return false;
+    }
+    void *data = NULL;
+    if (napi_get_buffer_info (env, data_value, &data, &span->size) != napi_ok) {
+        napi_throw_type_error (env, NULL, "stream message snapshot data must be a Buffer");
+        return false;
+    }
+    span->data = static_cast<const unsigned char *> (data);
+    return true;
+}
+
+bool init_contiguous_msg_from_array (napi_env env, napi_value value, zlink_msg_t *msg)
+{
+    bool is_array = false;
+    if (napi_is_array (env, value, &is_array) != napi_ok || !is_array) {
+        napi_throw_type_error (env, NULL, "stream parts must be an array");
+        return false;
+    }
+
+    uint32_t length = 0;
+    if (napi_get_array_length (env, value, &length) != napi_ok || length == 0) {
+        napi_throw_type_error (env, NULL, "stream parts must not be empty");
+        return false;
+    }
+
+    std::vector<message_value_span_t> spans (length);
+    size_t total = 0;
+    for (uint32_t index = 0; index < length; ++index) {
+        napi_value part;
+        if (napi_get_element (env, value, index, &part) != napi_ok
+            || !get_message_value_span (env, part, &spans[index]))
+            return false;
+        if (spans[index].size > std::numeric_limits<size_t>::max () - total) {
+            napi_throw_range_error (env, NULL, "stream parts are too large");
+            return false;
+        }
+        total += spans[index].size;
+    }
+
+    if (zlink_msg_init_size (msg, total) != 0)
+        return false;
+    unsigned char *write = static_cast<unsigned char *> (zlink_msg_data (msg));
+    for (size_t index = 0; index < spans.size (); ++index) {
+        if (spans[index].size > 0) {
+            memcpy (write, spans[index].data, spans[index].size);
+            write += spans[index].size;
+        }
+    }
     return true;
 }
 
@@ -2276,6 +2364,38 @@ napi_value socket_try_send_routing_parts (napi_env env, napi_callback_info info)
     return out;
 }
 
+napi_value socket_stream_try_send_routing_parts (napi_env env, napi_callback_info info)
+{
+    napi_value argv[3];
+    size_t argc = 3;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    void *sock = NULL;
+    napi_get_value_external (env, argv[0], &sock);
+
+    zlink_routing_id_t routing_id;
+    if (!parse_routing_id_value (env, argv[1], &routing_id))
+        return NULL;
+
+    zlink_msg_t msg;
+    if (!init_contiguous_msg_from_array (env, argv[2], &msg))
+        return NULL;
+
+    int rc = send_parts_rid (sock, &routing_id, &msg, 1, ZLINK_SEND_FLAGS_DONTWAIT);
+    // Core consumes the temporary message only on successful submission.
+    // Closing an already-consumed message is safe and releases the allocation
+    // when backpressure or another error leaves ownership with this addon.
+    zlink_msg_close (&msg);
+    if (rc != ZLINK_SUBMIT_OK)
+        rc = classify_try_send_errno ();
+    if (rc < 0)
+        return throw_last_error (env, "tryStreamSendPartsTo failed");
+    if (rc == ZLINK_SUBMIT_OK)
+        consume_native_message_value (env, argv[2]);
+    napi_value out;
+    napi_create_int32 (env, rc, &out);
+    return out;
+}
+
 napi_value socket_send_routing (napi_env env, napi_callback_info info)
 {
     napi_value argv[4];
@@ -2327,6 +2447,36 @@ napi_value socket_send_routing_parts (napi_env env, napi_callback_info info)
                              static_cast<zlink_send_flags_t> (flags));
     if (rc != ZLINK_SUBMIT_OK)
         return throw_last_error (env, "sendPartsTo failed");
+    consume_native_message_value (env, argv[2]);
+
+    napi_value ok;
+    napi_get_undefined (env, &ok);
+    return ok;
+}
+
+napi_value socket_stream_send_routing_parts (napi_env env, napi_callback_info info)
+{
+    napi_value argv[4];
+    size_t argc = 4;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    void *sock = NULL;
+    napi_get_value_external (env, argv[0], &sock);
+
+    zlink_routing_id_t routing_id;
+    if (!parse_routing_id_value (env, argv[1], &routing_id))
+        return NULL;
+
+    zlink_msg_t msg;
+    if (!init_contiguous_msg_from_array (env, argv[2], &msg))
+        return NULL;
+
+    int32_t flags = 0;
+    napi_get_value_int32 (env, argv[3], &flags);
+    int rc = send_parts_rid (sock, &routing_id, &msg, 1,
+                             static_cast<zlink_send_flags_t> (flags));
+    zlink_msg_close (&msg);
+    if (rc != ZLINK_SUBMIT_OK)
+        return throw_last_error (env, "streamSendPartsTo failed");
     consume_native_message_value (env, argv[2]);
 
     napi_value ok;

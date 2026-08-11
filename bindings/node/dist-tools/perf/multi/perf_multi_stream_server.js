@@ -6,15 +6,11 @@ const zlink = require('@zlink-systems/zlink');
 const { configureTlsServer } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
 const { POLLOUT, applyAutoHwmMsgUnit, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, trySocketSend, waitPollerOne } = require('./perf_multi_runtime');
-function packetFrame(header, body) {
-    const headerBytes = header.data();
-    const bodyBytes = body.data();
-    const frame = Buffer.allocUnsafe(6 + headerBytes.length + bodyBytes.length);
-    frame.writeUInt16BE(headerBytes.length, 0);
-    frame.writeUInt32BE(bodyBytes.length, 2);
-    headerBytes.copy(frame, 6);
-    bodyBytes.copy(frame, 6 + headerBytes.length);
-    return frame;
+function packetParts(header, body) {
+    const prefix = Buffer.allocUnsafe(6);
+    prefix.writeUInt16BE(header.size(), 0);
+    prefix.writeUInt32BE(body.size(), 2);
+    return [prefix, header, body];
 }
 function isTransientSendError(error) {
     return error instanceof zlink.SubmitError
@@ -40,6 +36,13 @@ function pendingLength(pending) {
 function pushPending(pending, reply) {
     pending.items.push(reply);
 }
+function closeReply(reply) {
+    for (const part of reply.frame) {
+        if (part instanceof zlink.Message) {
+            part.close();
+        }
+    }
+}
 function compactPending(pending) {
     if (pending.head > 0 && pending.head >= pending.items.length) {
         pending.items.length = 0;
@@ -56,6 +59,7 @@ function drainPending(stream, pending) {
         if (!tryStreamSend(stream, reply.routingId, reply.frame)) {
             break;
         }
+        closeReply(reply);
         pending.head += 1;
     }
     compactPending(pending);
@@ -81,9 +85,19 @@ async function main() {
         emitMultiSocketHwmDetail(stream, 'endpoint', options.transport, options.msgSize);
         stream.bind(options.endpoint);
         stream.setPacketHandler((sourceRid, header, body) => {
-            const frame = packetFrame(header, body);
-            if (pendingLength(pending) > 0 || !tryStreamSend(stream, sourceRid, frame)) {
-                pushPending(pending, { routingId: sourceRid, frame });
+            let queued = false;
+            try {
+                const frame = packetParts(header, body);
+                if (pendingLength(pending) > 0 || !tryStreamSend(stream, sourceRid, frame)) {
+                    pushPending(pending, { routingId: sourceRid, frame });
+                    queued = true;
+                }
+            }
+            finally {
+                if (!queued) {
+                    header.close();
+                    body.close();
+                }
             }
         });
         poller.add(stream, pollEvents(POLLOUT), 0);
@@ -111,6 +125,9 @@ async function main() {
     }
     finally {
         rl?.close();
+        for (let index = pending.head; index < pending.items.length; index += 1) {
+            closeReply(pending.items[index]);
+        }
         pollBuffer?.close();
         poller.close();
         stream.close();

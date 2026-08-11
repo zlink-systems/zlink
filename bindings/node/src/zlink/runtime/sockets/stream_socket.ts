@@ -25,6 +25,7 @@ import {
   nativeReceivedRoutingId,
   type NativeReceivedRaw,
 } from '../messaging/message_materializer';
+import { messageFromNativeFrame } from '../messaging/message_snapshot';
 import { requireNative } from '../native/native';
 import {
   Received,
@@ -62,7 +63,7 @@ export class StreamSocket extends SocketBase {
       let result;
       try {
         result = Array.isArray(normalized)
-          ? native.socketSendRoutingNoWaitResultParts(getNativeHandle(this), normalizedRoutingId, normalized) as number
+          ? native.socketStreamSendRoutingNoWaitResultParts(getNativeHandle(this), normalizedRoutingId, normalized) as number
           : native.socketSendRoutingNoWaitResult(getNativeHandle(this), normalizedRoutingId, normalized) as number;
       } catch (error) {
         throw submitNativeError(error, flags, 'send failed');
@@ -73,7 +74,7 @@ export class StreamSocket extends SocketBase {
     }
     try {
       if (Array.isArray(normalized)) {
-        native.socketSendRoutingParts(
+        native.socketStreamSendRoutingParts(
           getNativeHandle(this),
           normalizedRoutingId,
           normalized,
@@ -140,13 +141,13 @@ export class StreamSocket extends SocketBase {
     handlerCall('stream packet handler registration failed', () => {
       native.socketStreamAttach(
         getNativeHandle(this),
-        (routingId: Buffer | null, packets: Buffer[]) => {
+        (routingId: Buffer | null, packets: unknown[]) => {
           const sourceRid = this.packetRoutingId(routingId);
           if (!sourceRid) {
             return 0;
           }
-          const header = messageFromNativeBuffer(packets[0]);
-          const body = messageFromNativeBuffer(packets[1]);
+          const header = messageFromNativeBuffer(packets[0] as Buffer);
+          const body = messageFromNativeFrame(packets[1]);
           handler(sourceRid, header, body);
           return 0;
         },
