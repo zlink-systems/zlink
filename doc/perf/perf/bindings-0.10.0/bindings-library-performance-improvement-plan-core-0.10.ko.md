@@ -942,12 +942,9 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 ### 9.2 .NET
 
 - perf 경로: `bindings/dotnet/perf`
-- Single 상태: `DEALER_ROUTER/tcp`·`DEALER_ROUTER_REQREP/tcp`·`ROUTER_ROUTER_REQREP/tcp`·`PAIR/ws`·`DEALER_DEALER/ws`·`DEALER_ROUTER/ws`·`ROUTER_ROUTER/ws`·`DEALER_ROUTER_REQREP/ws`·`ROUTER_ROUTER_REQREP/ws`·`PAIR/wss`·`PUBSUB/wss`·`DEALER_DEALER/wss`·`DEALER_ROUTER/wss`·`DEALER_ROUTER_REQREP/wss`·`ROUTER_ROUTER/wss`·`ROUTER_ROUTER_REQREP/wss`·`DEALER_ROUTER_REQREP/tls`·`ROUTER_ROUTER_REQREP/tls`·`PAIR/inproc`·`PUBSUB/inproc`·`DEALER_DEALER/inproc`·`DEALER_ROUTER/inproc`·`DEALER_ROUTER_REQREP/ipc`·`ROUTER_ROUTER_REQREP/ipc`·`ROUTER_ROUTER/ipc` 완료·통과, `PAIR/tcp`·`PUBSUB/tcp`·`DEALER_DEALER/tcp`·`ROUTER_ROUTER/tcp`·`PUBSUB/ws`·`PAIR/tls`·`PUBSUB/tls`·`DEALER_DEALER/tls`·`DEALER_ROUTER/tls`·`ROUTER_ROUTER/tls`·`DEALER_ROUTER_REQREP/inproc`·`ROUTER_ROUTER_REQREP/inproc`·`ROUTER_ROUTER/inproc` 완료·보류, Single 완료·Multi 미측정
+- Single 상태: 완료. 통과와 보류의 최종 판정, paired report, 자체 후보와 Sol 검토 근거는 9.2.1에 기록한다.
 - Multi 상태: `tcp / MULTI_DEALER_DEALER` 완료·보류, `tcp / MULTI_DEALER_ROUTER_SENDSEND` 완료·통과, `tcp / MULTI_DEALER_ROUTER_REQREP` 완료·통과, `tcp / MULTI_ROUTER_ROUTER_SENDSEND` 완료·통과, `tcp / MULTI_ROUTER_ROUTER_REQREP` 완료·통과, `tcp / MULTI_PUBSUB` 완료·보류, `tcp / MULTI_STREAM` 완료·보류, `ws / MULTI_DEALER_DEALER` 완료·보류, `ws / MULTI_DEALER_ROUTER_SENDSEND` 완료·통과, `ws / MULTI_DEALER_ROUTER_REQREP` 완료·통과, `ws / MULTI_ROUTER_ROUTER_SENDSEND` 완료·통과, `ws / MULTI_ROUTER_ROUTER_REQREP` 완료·통과, `ws / MULTI_PUBSUB` 완료·통과, `ws / MULTI_STREAM` 완료·보류, `wss / MULTI_DEALER_DEALER` 완료·보류, `wss / MULTI_DEALER_ROUTER_SENDSEND` 완료·통과, `wss / MULTI_DEALER_ROUTER_REQREP` 완료·통과, `wss / MULTI_ROUTER_ROUTER_SENDSEND` 완료·통과, `wss / MULTI_ROUTER_ROUTER_REQREP` 완료·통과, `wss / MULTI_PUBSUB` 완료·보류, `wss / MULTI_STREAM` 완료·통과, `tls / MULTI_DEALER_DEALER` 완료·통과, `tls / MULTI_DEALER_ROUTER_SENDSEND` 완료·통과, `tls / MULTI_DEALER_ROUTER_REQREP` 완료·통과, `tls / MULTI_ROUTER_ROUTER_SENDSEND` 완료·통과, `tls / MULTI_ROUTER_ROUTER_REQREP` 완료·통과, `tls / MULTI_PUBSUB` 완료·통과, `tls / MULTI_STREAM` 완료·통과, Multi 24개 대상 완료, 다음은 Java inventory gate다.
-- `미측정` 행은 완료나 다음 언어 전환을 의미하지 않는다. 특히 9.2.2의 `tls` `MULTI_*`
-  행은 .NET에서 아직 측정하지 않은 대상이며, C++ 9.1의 같은 이름 행이 완료되어도 .NET
-  측정 완료로 간주하지 않는다.
-- 다음 작업: .NET Multi 24개 대상의 C → .NET paired 측정과 자체·Sol 개선 검토를 모두 완료했다. 다음은 Java inventory gate와 paired 기준 측정이다.
+- 다음 작업: .NET Multi 대상의 C → .NET paired 측정과 자체·Sol 개선 검토를 완료했다. 최신 TCP 재측정은 11.6에 기록한다.
 
 #### 9.2.1 Single suite
 
