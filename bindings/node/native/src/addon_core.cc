@@ -2302,7 +2302,8 @@ napi_value socket_send_routing_parts (napi_env env, napi_callback_info info)
 int recv_message_value (napi_env env,
                         void *sock,
                         int32_t flags,
-                        napi_value *out)
+                        napi_value *out,
+                        size_t *received_bytes = NULL)
 {
     if (!out)
         return ZLINK_RECV_INTERNAL_ERROR;
@@ -2324,6 +2325,8 @@ int recv_message_value (napi_env env,
 
     copy_routing_id (&routing_id, source_rid);
     if (has_more == ZLINK_PART_FINAL) {
+        if (received_bytes)
+            *received_bytes = zlink_msg_size (&first_part);
         *out = create_recv_message_value (env, routing_id, &first_part, 1);
         zlink_msg_close (&first_part);
         return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
@@ -2333,6 +2336,11 @@ int recv_message_value (napi_env env,
     const int collect_rc = collect_recv_parts (sock, &first_part, has_more, &parts);
     if (collect_rc != ZLINK_RECV_OK)
         return collect_rc;
+    if (received_bytes) {
+        *received_bytes = 0;
+        for (size_t index = 0; index < parts.size (); ++index)
+            *received_bytes += zlink_msg_size (&parts[index]);
+    }
     *out = create_recv_message_value (env, routing_id, parts.data (), parts.size ());
     close_msg_vector (parts);
     return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
@@ -2374,6 +2382,52 @@ napi_value socket_try_recv_message (napi_env env, napi_callback_info info)
             return none;
         }
         return throw_last_error (env, "tryReceive failed");
+    }
+    return out;
+}
+
+napi_value socket_try_recv_message_batch (napi_env env, napi_callback_info info)
+{
+    napi_value argv[2];
+    size_t argc = 2;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    if (argc < 2) {
+        napi_throw_type_error (env, NULL,
+                               "socketRecvMessageBatchNoWait requires socket and batch size");
+        return NULL;
+    }
+    void *sock = NULL;
+    napi_get_value_external (env, argv[0], &sock);
+    int32_t max_count = 0;
+    if (napi_get_value_int32 (env, argv[1], &max_count) != napi_ok
+        || max_count < 1 || max_count > 64) {
+        napi_throw_range_error (env, NULL, "batch size must be 1..64");
+        return NULL;
+    }
+
+    napi_value out;
+    napi_create_array (env, &out);
+    size_t received_bytes = 0;
+    uint32_t count = 0;
+    const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now () + std::chrono::milliseconds (1);
+    while (count < static_cast<uint32_t> (max_count)
+           && received_bytes < k_router_recv_batch_byte_limit
+           && std::chrono::steady_clock::now () < deadline) {
+        napi_value received = NULL;
+        size_t message_bytes = 0;
+        const int rc = recv_message_value (
+          env, sock, static_cast<int32_t> (ZLINK_RECV_FLAGS_DONTWAIT),
+          &received, &message_bytes);
+        if (rc != ZLINK_RECV_OK) {
+            if (zlink_errno () == EAGAIN)
+                break;
+            return throw_last_error (env, "socketRecvMessageBatchNoWait failed");
+        }
+        if (napi_set_element (env, out, count, received) != napi_ok)
+            return NULL;
+        ++count;
+        received_bytes += message_bytes;
     }
     return out;
 }

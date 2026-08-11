@@ -47,6 +47,7 @@ napi_value socket_send_routing (napi_env env, napi_callback_info info);
 napi_value socket_send_routing_parts (napi_env env, napi_callback_info info);
 napi_value socket_recv_message (napi_env env, napi_callback_info info);
 napi_value socket_try_recv_message (napi_env env, napi_callback_info info);
+napi_value socket_try_recv_message_batch (napi_env env, napi_callback_info info);
 napi_value socket_subscribe_message (napi_env env, napi_callback_info info);
 napi_value socket_try_subscribe_message (napi_env env, napi_callback_info info);
 napi_value socket_send_ready_handler (napi_env env, napi_callback_info info);

@@ -94,6 +94,10 @@ export interface SocketNativeBinding {
   ) => number;
   socketRecvMessage: (socket: NativeHandle, flags: number) => NativeReceivedRaw | null;
   socketRecvMessageNoWait: (socket: NativeHandle) => NativeReceivedRaw | null;
+  socketRecvMessageBatchNoWait: (
+    socket: NativeHandle,
+    batchSize: number
+  ) => NativeReceivedRaw[];
   socketSend: (socket: NativeHandle, payload: unknown, flags: number) => void;
   socketSendNoWaitResult: (socket: NativeHandle, payload: unknown) => number;
   socketSendNoWaitResultParts: (

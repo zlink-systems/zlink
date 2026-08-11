@@ -1153,15 +1153,15 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 ### 9.4 Node
 
 - perf 경로: `bindings/node/perf`
-- Single 상태: `완료 (통과 26, 보류 16)`
-- Multi 상태: `진행 중 (MULTI_DEALER_DEALER / tcp)`
-- 다음 작업: `MULTI_DEALER_DEALER / tcp`의 throughput 산술평균 60%를 달성할 때까지 C와 순차 paired 측정과 binding hot-path 개선을 계속한다.
+- Single 상태: `재측정 진행 중 (PAIR / tcp 완료·보류)`
+- Multi 상태: `Node Single 재측정 완료 뒤 처음부터 재측정`
+- 다음 작업: `PUBSUB / tcp`를 C와 순차 paired 측정하고 binding hot-path와 POSDDD 개선을 함께 검토한다.
 
 #### 9.4.1 Single suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 미달 (15.298%) | 미달 (34.813%) | 통과 (48.751%) | 통과 (142.688%) | 통과 (108.015%) | 통과 (95.370%) | 보류·1KiB 이하 receive를 V8-owned Buffer copy로 바꿔 native heap message와 deferred finalizer를 제거했다. 64B·256B 처리량은 각각 약 27%·21%, latency는 약 20%·32% 개선됐다. throughput 산술평균 74.156%는 통과하지만 latency 중앙값 32.79x가 상한 5x를 넘어 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_052133_java-parity-pair-tcp-c.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_090104_node-pair-tcp-small-buffer-copy.txt` |
+| `tcp` | `PAIR` | 미달 (12.871%) | 미달 (25.751%) | 통과 (44.534%) | 통과 (143.393%) | 통과 (101.823%) | 통과 (80.618%) | 보류·throughput 산술평균 68.165%는 목표 60%를 넘지만 latency 중앙값 30.271x가 상한 5x를 넘는다. Sol이 제안한 일반 socket bounded native receive와 POSDDD 공통 buffered receive queue를 적용해 재측정 baseline보다 throughput 산술평균 2.724% 개선했다. public interface·순서·ownership·poll 의미는 유지했으며 추가 의미 있는 후보가 없어 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_174312_node-restart-pair-tcp-c.txt`; baseline: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_174355_node-restart-pair-tcp.txt`; 최종: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_175116_node-restart-pair-tcp-batched-posddd-final.txt` |
 | `tcp` | `PUBSUB` | 미달 (23.214%) | 통과 (38.383%) | 통과 (60.352%) | 통과 (129.281%) | 통과 (104.991%) | 통과 (84.100%) | 통과·throughput 산술평균 73.387%, latency 중앙값 4.371x로 단순 one-way 최소 기준과 Node latency 상한을 충족한다. 공통 small-buffer receive 개선을 유지하며 추가 pattern 전용 구조 변경 없이 다음 행으로 이동한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_052241_java-parity-pubsub-tcp-c.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_081639_node-pubsub-tcp-final.txt` |
 | `tcp` | `DEALER_DEALER` | 미달 (12.657%) | 미달 (27.492%) | 통과 (44.678%) | 통과 (141.443%) | 통과 (116.554%) | 통과 (91.984%) | 보류·throughput 산술평균 72.468%는 통과하지만 latency 중앙값 9.49x가 상한 5x를 넘는다. non-routed direct Buffer 자체 후보는 회귀했고 공통 small-buffer copy 개선까지 적용했으므로 측정값으로 보류한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_052314_java-parity-dealer-dealer-tcp-c.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_081657_node-dealer-dealer-tcp-final.txt` |
 | `tcp` | `DEALER_ROUTER` | 미달 (13.394%) | 미달 (21.787%) | 미달 (29.826%) | 통과 (42.691%) | 통과 (52.243%) | 통과 (43.605%) | 통과·Node만 64KiB 이상 manual HWM floor를 강제하던 perf override를 제거해 C와 동일한 Auto-HWM으로 재측정했다. throughput 산술평균 33.924%, latency 중앙값 3.572x로 routed one-way 최소 기준과 Node latency 상한을 충족한다. Sol GO: perf-only override 제거는 public contract·ownership·lifecycle에 영향이 없다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_061038_java-dealer-router-final-parity-tcp-c.txt`; Node: `/home/hep7hep7/project/zlink/bindings/node/perf/results/single/report/perf_node_single_linux_20260811_095347_node-dealer-router-tcp-auto-hwm-parity.txt` |
@@ -1662,7 +1662,7 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 | 1 | C++ | 완료·통과 35 / 보류 7 | 완료·통과 25 / 보류 3 | C++ perf는 추가 실행하지 않고 .NET으로 전환 |
 | 2 | .NET | 완료·통과 26 / 보류 16 | 완료·통과 23 / 보류 7 | .NET Multi 24개 대상 완료; 다음은 Java inventory gate와 paired 기준 측정 |
 | 3 | Java | 완료·통과 36 / 보류 6 | 완료·통과 24 / 보류 4 | bounded payload template ring과 ROUTER request scratch까지 측정·검토했다. Java 측정과 개선 검토 완료; 다음은 Node inventory gate와 paired 기준 측정이다. |
-| 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
+| 4 | Node | 재측정 진행 중·PAIR/tcp 보류 1 | 재측정 대기 | 다음은 Single PUBSUB/tcp paired 측정 |
 | 5 | Go | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 6 | Rust | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 7 | Python | 완료·통과 25 / 보류 5 | 완료·통과 12 / 보류 8 | 누락됐던 자체 개선 검토와 Sol 2차 검토를 포함해 Python 범위를 완료했다. |

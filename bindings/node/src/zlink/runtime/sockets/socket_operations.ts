@@ -52,9 +52,10 @@ export {
 } from './socket_operation_builders';
 import { submitErrorFromResult } from './socket_submit_errors';
 import { setBufferedReceive } from './socket_receive_state';
+import { BufferedReceiveQueue } from './buffered_receive_queue';
 
 const native = requireNative();
-const ROUTER_RECV_BATCH_PART_LIMIT = 16;
+const RECV_BATCH_MESSAGE_LIMIT = 16;
 
 export class SendSocket extends SendReadySocket {
   send(): SendOperation {
@@ -123,6 +124,9 @@ export class PublisherSocket extends SendReadySocket {
 }
 
 export class MessageSocket extends SendSocket {
+  private readonly bufferedReceive =
+    new BufferedReceiveQueue<NativeReceivedRaw>(this);
+
   /**
    * Receives into caller-provided storage. Pass a long-lived {@link Received}
    * and the binding refills its internal state in place each successful call.
@@ -131,15 +135,34 @@ export class MessageSocket extends SendSocket {
   recv(result: Received, flags: RecvFlags = RecvFlags.None): boolean {
     let raw;
     try {
-      raw = ((flags | 0) & (RecvFlags.DontWait | 0))
-        ? native.socketRecvMessageNoWait(getNativeHandle(this))
-        : native.socketRecvMessage(getNativeHandle(this), flags | 0);
+      raw = this.bufferedReceive.take();
+      if (raw == null && ((flags | 0) & (RecvFlags.DontWait | 0))) {
+        this.bufferedReceive.replace(native.socketRecvMessageBatchNoWait(
+          getNativeHandle(this),
+          RECV_BATCH_MESSAGE_LIMIT
+        ));
+        raw = this.bufferedReceive.take();
+      } else if (raw == null) {
+        raw = native.socketRecvMessage(getNativeHandle(this), flags | 0);
+      }
     } catch (error) {
       throw recvNativeError(error, flags, 'recv failed');
     }
-    if (raw == null) return false;
+    if (raw == null) {
+      setBufferedReceive(this, false);
+      return false;
+    }
     materializeReceivedInto(result, raw);
     return true;
+  }
+
+  close(): void {
+    this.bufferedReceive.drain((raw) => {
+      const pending = new Received();
+      materializeReceivedInto(pending, raw);
+      pending.close();
+    });
+    super.close();
   }
 }
 
@@ -186,8 +209,8 @@ export class SubscriberSocket extends ConnectableSocket {
 }
 
 export class RoutedMessageSocket extends SendReadySocket {
-  private pendingReceived: NativeReceivedRaw[] = [];
-  private pendingReceivedIndex = 0;
+  private readonly bufferedReceive =
+    new BufferedReceiveQueue<NativeReceivedRaw>(this);
 
   send(routingId: RoutingId): SendOperation {
     return new RuntimeSendOperation((parts, flags) => this.sendDirect(routingId, parts, flags));
@@ -249,17 +272,14 @@ export class RoutedMessageSocket extends SendReadySocket {
   recv(result: Received, flags: RecvFlags = RecvFlags.None): boolean {
     let raw;
     try {
-      if (this.pendingReceivedIndex < this.pendingReceived.length) {
-        raw = this.pendingReceived[this.pendingReceivedIndex++];
-      } else if ((flags | 0) & (RecvFlags.DontWait | 0)) {
-        this.pendingReceived = native.routerRecvMessageBatchNoWait(
+      raw = this.bufferedReceive.take();
+      if (raw == null && ((flags | 0) & (RecvFlags.DontWait | 0))) {
+        this.bufferedReceive.replace(native.routerRecvMessageBatchNoWait(
           getNativeHandle(this),
-          ROUTER_RECV_BATCH_PART_LIMIT
-        );
-        setBufferedReceive(this, this.pendingReceived.length > 0);
-        this.pendingReceivedIndex = this.pendingReceived.length > 0 ? 1 : 0;
-        raw = this.pendingReceived[0] ?? null;
-      } else {
+          RECV_BATCH_MESSAGE_LIMIT
+        ));
+        raw = this.bufferedReceive.take();
+      } else if (raw == null) {
         raw = native.routerRecvMessage(getNativeHandle(this), flags | 0);
       }
     } catch (error) {
@@ -268,10 +288,6 @@ export class RoutedMessageSocket extends SendReadySocket {
     if (raw == null) {
       setBufferedReceive(this, false);
       return false;
-    }
-    if (this.pendingReceivedIndex >= this.pendingReceived.length) {
-      this.pendingReceived = [];
-      this.pendingReceivedIndex = 0;
     }
     // A ROUTER recv can always route a reply back to the source by routing id;
     // the request sequence only gates the correlated reply() path, not send().
@@ -298,14 +314,11 @@ export class RoutedMessageSocket extends SendReadySocket {
   }
 
   close(): void {
-    for (let index = this.pendingReceivedIndex; index < this.pendingReceived.length; index += 1) {
+    this.bufferedReceive.drain((raw) => {
       const pending = new Received();
-      materializeReceivedInto(pending, this.pendingReceived[index]);
+      materializeReceivedInto(pending, raw);
       pending.close();
-    }
-    this.pendingReceived = [];
-    this.pendingReceivedIndex = 0;
-    setBufferedReceive(this, false);
+    });
     super.close();
   }
 }
