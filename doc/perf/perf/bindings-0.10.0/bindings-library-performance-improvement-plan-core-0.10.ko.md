@@ -2202,7 +2202,7 @@ transport·pattern별 C를 먼저 실행한 뒤 binding을 하나씩 실행했�
 | Language | TCP pattern | C 대비 throughput 비율 (size 순서) | 산술평균 |
 |---|---|---|---:|
 | Java | `MULTI_DEALER_DEALER` | 65.40 / 71.17 / 91.15 / 83.64 / 65.31 / 70.48% | 74.52% |
-| Java | `MULTI_DEALER_ROUTER` | 24.29 / 28.81 / 30.98 / 28.39 / 77.20 / 65.03% | 42.45% |
+| Java | `MULTI_DEALER_ROUTER` | 52.60 / 51.96 / 58.12 / 52.28 / 91.45 / 81.09% | 64.58% |
 | Java | `MULTI_ROUTER_ROUTER` | 46.75 / 50.15 / 48.00 / 47.70 / 77.28 / 62.61% | 55.42% |
 | Java | `MULTI_PUBSUB` | 36.49 / 39.01 / 51.68 / 54.41 / 68.23 / 58.84% | 51.44% |
 | Java | `MULTI_STREAM` | 37.42 / 51.39 / 52.70 / 75.72% | 54.31% |
