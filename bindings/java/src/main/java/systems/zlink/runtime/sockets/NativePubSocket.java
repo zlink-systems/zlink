@@ -7,8 +7,11 @@ import systems.zlink.internal.ContractAccess;
 
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.SendOperation;
+import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.runtime.messaging.MessageOperations;
+import java.util.List;
 
 final class NativePubSocket extends NativeSocketBase implements PubSocket {
     private final PubSocketOptions options = ContractAccess.pubSocketOptions(this);
@@ -27,11 +30,30 @@ final class NativePubSocket extends NativeSocketBase implements PubSocket {
     public void setRoutingId(RoutingId rid) { runtime().setRoutingId(rid); }
 
     public SendOperation publish(String topicId) {
-        return MessageOperations.send(
-            (part, flags) -> runtime().publish(topicId, part,
-                SendFlag.fromValue(flags.value())),
-            (parts, flags) ->
-            runtime().publish(topicId, parts, SendFlag.fromValue(flags.value())));
+        TopicSendInvoker invoker = new TopicSendInvoker(topicId);
+        return MessageOperations.send(invoker, invoker);
+    }
+
+    /** Binds one public publish operation to its topic without two lambdas. */
+    private final class TopicSendInvoker
+      implements MessageOperations.SingleSendInvoker, MessageOperations.SendInvoker {
+        private final String topicId;
+
+        private TopicSendInvoker(String topicId) {
+            this.topicId = topicId;
+        }
+
+        @Override
+        public boolean submit(Message part, SendFlags flags) {
+            return runtime().publish(topicId, part,
+                SendFlag.fromValue(flags.value()));
+        }
+
+        @Override
+        public boolean submit(List<Message> parts, SendFlags flags) {
+            return runtime().publish(topicId, parts,
+                SendFlag.fromValue(flags.value()));
+        }
     }
     public void setSendReadyHandler(SendReadyHandler handler) { runtime().setSendReadyHandler(handler); }
     @Override public PubSocketOptions options() { return options; }

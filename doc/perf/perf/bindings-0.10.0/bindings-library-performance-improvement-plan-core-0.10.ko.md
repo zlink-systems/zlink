@@ -2160,6 +2160,7 @@ socket은 routed sender 연결을 각각 담당한다. public interface, Core AB
 |---|---|---:|---|
 | `PAIR / tcp`, socket-owned send invoker | 64.18 / 96.02 / 129.22 / 162.06 / 142.88 / 105.00% | 116.56% | 이전 47.57% 대비 68.99%p 개선 |
 | `DEALER_DEALER / tcp`, socket-owned send invoker | 49.64 / 100.19 / 116.24 / 92.00 / 96.00 / 91.57% | 90.94% | 이전 44.14% 대비 46.80%p 개선 |
+| `PUBSUB / tcp`, topic-bound send invoker | 59.74 / 90.26 / 124.83 / 158.76 / 138.28 / 106.19% | 113.01% | 이전 38.02% 대비 74.99%p 개선 |
 
 `PAIR`와 `DEALER`가 매 `send()`에 만들던 capturing lambda를 socket lifetime으로 옮겼다.
 공개 operation builder의 lifetime과 Message ownership은 유지했다. 상세 결과는

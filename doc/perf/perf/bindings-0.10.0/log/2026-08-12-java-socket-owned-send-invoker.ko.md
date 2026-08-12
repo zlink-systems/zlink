@@ -48,3 +48,23 @@ Core release `0.10.1`, duration `1초`, runs `1`, balanced auto-HWM,
 
 - C report: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260812_092525_java-send-invoker-dealer-c.txt`
 - Java report: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260812_092537_java-send-invoker-dealer.txt`
+
+## PUBSUB / tcp 결과
+
+`PUBSUB`은 topic-bound invoker 하나가 single-part와 multipart publish dispatch를 함께
+수행하도록 했다. 같은 조건에서 C를 먼저, Java를 다음에 단독 실행했다.
+
+| Message size | C throughput | Java throughput | C 대비 비율 |
+|---|---:|---:|---:|
+| 64B | 1,431,194 msg/s | 854,994 msg/s | 59.74% |
+| 256B | 954,101 msg/s | 861,191 msg/s | 90.26% |
+| 1024B | 579,275 msg/s | 723,105 msg/s | 124.83% |
+| 65536B | 38,983 msg/s | 61,889 msg/s | 158.76% |
+| 131072B | 24,569 msg/s | 33,975 msg/s | 138.28% |
+| 262144B | 15,143 msg/s | 16,081 msg/s | 106.19% |
+| 산술평균 | - | - | 113.01% |
+
+이전 같은 TCP pattern의 38.02%보다 74.99%p 높다.
+
+- C report: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260812_092745_java-topic-invoker-pubsub-c.txt`
+- Java report: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260812_092803_java-topic-invoker-pubsub.txt`
