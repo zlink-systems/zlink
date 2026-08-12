@@ -50,6 +50,15 @@ export interface NativeTopicMessageRaw {
   routingId?: Buffer | null;
 }
 
+type NativeTopicMessageSinglePart = readonly [Buffer, string];
+type NativeTopicMessageEnvelope = NativeTopicMessageRaw | NativeTopicMessageSinglePart;
+
+function isNativeTopicMessageSinglePart(
+  raw: NativeTopicMessageEnvelope
+): raw is NativeTopicMessageSinglePart {
+  return Array.isArray(raw);
+}
+
 export interface RoutedReceiveOperations {
   send(routingId: Buffer, parts: readonly Message[], flags: SendFlags): boolean;
   reply(routingId: Buffer, requestSeq: bigint,
@@ -126,7 +135,10 @@ function materializeReceivedParts(raw: NativeReceivedRaw): Message[] {
   return materializeParts(envelope.parts ?? []);
 }
 
-function materializeTopicParts(raw: NativeTopicMessageRaw): Message[] {
+function materializeTopicParts(raw: NativeTopicMessageEnvelope): Message[] {
+  if (isNativeTopicMessageSinglePart(raw)) {
+    return [messageFromOwnedBuffer(raw[0])];
+  }
   if (raw.data) {
     // Hot path: core SUB messages are normally single-part. The native layer
     // passes the owned payload Buffer directly so public TopicMessage adoption
@@ -289,19 +301,27 @@ export function materializeRoutedReceivedInto(
   targetInternal.transportPairGeneration = envelope.transportPairGeneration;
 }
 
-export function materializeTopicMessage(raw: NativeTopicMessageRaw): TopicMessage {
+export function materializeTopicMessage(raw: NativeTopicMessageEnvelope): TopicMessage {
+  const topic = isNativeTopicMessageSinglePart(raw) ? raw[1] : raw.topic;
+  const routingId = isNativeTopicMessageSinglePart(raw)
+    ? null
+    : wrapNativeRoutingId(raw.routingId ?? null);
   return createTopicMessage(
-    raw.topic,
+    topic,
     materializeTopicParts(raw),
-    wrapNativeRoutingId(raw.routingId ?? null)
+    routingId
   );
 }
 
-export function adoptTopicMessage(result: TopicMessage, raw: NativeTopicMessageRaw): void {
+export function adoptTopicMessage(result: TopicMessage, raw: NativeTopicMessageEnvelope): void {
+  const topic = isNativeTopicMessageSinglePart(raw) ? raw[1] : raw.topic;
+  const routingId = isNativeTopicMessageSinglePart(raw)
+    ? null
+    : wrapNativeRoutingId(raw.routingId ?? null);
   replaceTopicMessage(
     result,
-    raw.topic,
+    topic,
     materializeTopicParts(raw),
-    wrapNativeRoutingId(raw.routingId ?? null)
+    routingId
   );
 }

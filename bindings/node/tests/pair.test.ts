@@ -64,6 +64,26 @@ test('consumed message waits for deterministic cleanup before pool reuse', () =>
   ctx.close();
 });
 
+test('successful message send detaches the writable payload view', () => {
+  const ctx = zlink.createContext();
+  const sender = zlink.createPairSocket(ctx);
+  const receiver = zlink.createPairSocket(ctx);
+  sender.bind('inproc://message-send-transfer');
+  receiver.connect('inproc://message-send-transfer');
+
+  const message = zlink.Message.allocate(4);
+  const view = message.data();
+  view.write('move');
+  sender.send().message(message).submit();
+
+  assert.equal(view.byteLength, 0);
+  assert.equal(recvText(receiver), 'move');
+
+  receiver.close();
+  sender.close();
+  ctx.close();
+});
+
 test('pair messaging uses Message and Received by default', () => {
   const ctx = zlink.createContext();
   const sender = zlink.createPairSocket(ctx);

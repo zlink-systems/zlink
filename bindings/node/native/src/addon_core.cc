@@ -597,8 +597,20 @@ napi_value create_subscribed_value (napi_env env,
                                     size_t part_count)
 {
     napi_value obj;
-    napi_create_object (env, &obj);
 
+    if (part_count == 1 && routing_id.size == 0) {
+        napi_value data = create_received_message_buffer (env, &parts[0]);
+        if (!data)
+            return NULL;
+        napi_value topic_value;
+        napi_create_string_utf8 (env, topic ? topic : "", topic ? topic_len : 0, &topic_value);
+        napi_create_array_with_length (env, 2, &obj);
+        napi_set_element (env, obj, 0, data);
+        napi_set_element (env, obj, 1, topic_value);
+        return obj;
+    }
+
+    napi_create_object (env, &obj);
     if (part_count == 1) {
         napi_value data = create_received_message_buffer (env, &parts[0]);
         if (!data)
@@ -1541,6 +1553,18 @@ void consume_native_message_value (napi_env env, napi_value value)
              env, native_message, reinterpret_cast<void **> (&handle)) != napi_ok
         || !handle || !handle->frame)
         return;
+    napi_value data;
+    bool has_data = false;
+    if (napi_has_named_property (env, value, "data", &has_data) == napi_ok && has_data
+        && napi_get_named_property (env, value, "data", &data) == napi_ok) {
+        napi_value array_buffer;
+        if (napi_get_named_property (env, data, "buffer", &array_buffer) == napi_ok) {
+            // A successful send consumes Message ownership. Detaching the
+            // previously returned writable Buffer view enforces that boundary
+            // before the shared native payload becomes visible to Core.
+            napi_detach_arraybuffer (env, array_buffer);
+        }
+    }
     zlink_msg_close (&handle->frame->message);
     zlink_msg_init (&handle->frame->message);
 }

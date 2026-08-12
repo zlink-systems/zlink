@@ -10,7 +10,6 @@ export const METADATA_VALUE_MAX = 65535;
 const EMPTY_PROPERTIES: Readonly<Record<string, string>> = Object.freeze({});
 const EMPTY_METADATA: Readonly<Map<number, Buffer>> = Object.freeze(new Map<number, Buffer>());
 const EMPTY_BUFFER = Buffer.alloc(0);
-const writableViews = new WeakSet<Message>();
 const MESSAGE_WRAPPER_POOL_CAPACITY = 64;
 const messageWrapperPool: Message[] = [];
 
@@ -117,14 +116,6 @@ export class Message {
 
   /** Return the payload as a Buffer backed by this message's storage. */
   data(): Buffer {
-    // The returned Buffer is writable. Later send must therefore make a
-    // payload copy instead of sharing native storage with an in-flight send.
-    // Managed Buffers never share a native frame on submit, so recording
-    // their writable view cannot affect ownership. Keep the tracking state
-    // only for native-backed messages.
-    if (this._nativeMessage !== undefined) {
-      writableViews.add(this);
-    }
     return this.ensureBuffer();
   }
 
@@ -280,16 +271,12 @@ function releaseMessageWrapper(message: Message): void {
   if (state._released) {
     return;
   }
-  const nativeBacked = state._nativeMessage !== undefined;
   state._buffer = EMPTY_BUFFER;
   state._refCount = 0;
   state._properties = EMPTY_PROPERTIES;
   state._metadata = EMPTY_METADATA;
   state._nativeMessage = undefined;
   state._released = true;
-  if (nativeBacked) {
-    writableViews.delete(message);
-  }
   if (messageWrapperPool.length < MESSAGE_WRAPPER_POOL_CAPACITY) {
     messageWrapperPool.push(message);
   }
@@ -297,37 +284,25 @@ function releaseMessageWrapper(message: Message): void {
 
 function markMessageConsumed(message: Message): void {
   const state = message as unknown as MutableMessageState;
-  const nativeBacked = state._nativeMessage !== undefined;
   state._buffer = EMPTY_BUFFER;
   state._refCount = 0;
   state._properties = EMPTY_PROPERTIES;
   state._metadata = EMPTY_METADATA;
   state._nativeMessage = undefined;
-  if (nativeBacked) {
-    writableViews.delete(message);
-  }
 }
 
 /** @internal */
 export function canShareNativeMessage(message: Message): boolean {
   const state = message as unknown as { _nativeMessage?: unknown };
-  return state._nativeMessage !== undefined && !writableViews.has(message);
+  return state._nativeMessage !== undefined;
 }
 
 /** @internal Mark a successfully submitted message empty without another native call. */
 export function consumeSubmittedMessage(message: Message): void {
-  if (!canShareNativeMessage(message)) {
-    const state = message as unknown as MutableMessageState;
-    if (state._nativeMessage !== undefined) {
-      requireMessageNativeOperations().close(state._nativeMessage);
-    }
-    markMessageConsumed(message);
-    return;
+  const state = message as unknown as MutableMessageState;
+  if (state._nativeMessage !== undefined) {
+    requireMessageNativeOperations().close(state._nativeMessage);
   }
-  // The operation or Received envelope can still retain this facade after the
-  // frame is consumed. Keep it out of the pool until deterministic cleanup
-  // calls close(), otherwise that stale internal reference could close a newly
-  // adopted frame.
   markMessageConsumed(message);
 }
 

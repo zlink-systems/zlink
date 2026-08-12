@@ -2369,8 +2369,34 @@ runs `1`, balanced auto-HWM에서 C를 먼저, lazy `Message.from(Buffer)`와 di
 | direct Buffer | 18.57 / 20.57 / 22.37 / 31.47 / 42.90 / 43.76% | 29.84% | standard harness 유지 |
 
 `Message.from()`과 `Message.allocate()`는 send-only 경로에서 external Buffer view를 lazy하게 만든다.
-`Message.allocate().data()`는 writable Buffer alias 때문에 copy-on-send를 사용하므로 standard send 경로로
-바꾸지 않는다. 상세 결과는 `log/2026-08-12-node-native-message-send.ko.md`에 기록한다.
+`Message.allocate().data()`의 successful send ownership transfer 결과는 다음 zero-copy 측정에 기록한다.
+상세 결과는 `log/2026-08-12-node-native-message-send.ko.md`에 기록한다.
+
+### 11.30 Node PUBSUB single-part tuple envelope 측정 결과
+
+`MULTI_PUBSUB / tcp`, 64·256·1024·4096·65536·131072B, clients `100`, duration `1초`,
+runs `1`, balanced auto-HWM에서 C를 먼저, Node를 다음에 단독 실행했다.
+
+| 변경 | C 대비 throughput 비율 (size 순서) | 산술평균 | 결과 |
+|---|---|---:|---|
+| single-part raw tuple | 21.76 / 20.72 / 20.08 / 35.65 / 42.52 / 47.21% | 31.32% | 이전 31.05% 대비 0.28%p 개선 |
+
+routing ID가 없는 single-part SUB receive에서만 raw object 하나를 없앴다. routed와 multipart receive는
+기존 object envelope를 유지한다. 상세 결과는 `log/2026-08-12-node-pub-tuple-envelope.ko.md`에 기록한다.
+
+### 11.31 Node Message successful-send zero-copy 측정 결과
+
+`MULTI_PUBSUB / tcp`, 64·256·1024·4096·65536·131072B, clients `100`, duration `1초`,
+runs `1`, balanced auto-HWM에서 C를 먼저, Node를 다음에 단독 실행했다.
+
+| 전송 입력 | C 대비 throughput 비율 (size 순서) | 산술평균 | 결과 |
+|---|---|---:|---|
+| `Message.allocate().data()` zero-copy | 21.23 / 21.33 / 21.14 / 28.97 / 40.01 / 32.10% | 27.46% | direct Buffer 29.56%보다 낮음 |
+| direct Buffer | 19.94 / 23.42 / 22.66 / 29.18 / 39.48 / 42.68% | 29.56% | standard harness 유지 |
+
+successful send는 Message payload view를 detach하고 native frame ownership을 Core로 넘긴다. 표준 perf는
+per-message Message wrapper와 external Buffer 생성 비용이 더 커 direct Buffer를 유지한다. 상세 결과는
+`log/2026-08-12-node-message-zero-copy.ko.md`에 기록한다.
 
 ## 12. 완료 기준
 

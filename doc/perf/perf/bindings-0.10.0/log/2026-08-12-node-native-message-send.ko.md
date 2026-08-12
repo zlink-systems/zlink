@@ -26,8 +26,9 @@
 PUB/SUB 전체 결과는 direct Buffer보다 0.24%p 낮아 이 경로만으로 standard aggregate를 올리지는 못했다.
 다만 send-only Message가 사용하지 않는 JS Buffer·finalizer를 만들지 않으므로 구현은 유지한다.
 
-`Message.allocate().data()`는 writable Buffer alias 때문에 copy-on-send를 사용한다. 같은 조건에서 128KiB
-throughput은 16,552 msg/s로 direct Buffer 24,774 msg/s보다 낮아 standard send 경로로 사용하지 않는다.
+이 측정 뒤 successful send에서 payload view를 detach해 native frame ownership을 Core로 이전하도록 수정했다.
+수정 뒤의 `Message.allocate().data()` zero-copy 결과는
+`2026-08-12-node-message-zero-copy.ko.md`에 기록한다.
 
 - C report: `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260812_110152_node-pub-lazy-message-c.txt`
 - lazy Message report: `bindings/node/perf/results/multi/report/perf_node_multi_linux_20260812_110228_node-pub-lazy-message-from.txt`
