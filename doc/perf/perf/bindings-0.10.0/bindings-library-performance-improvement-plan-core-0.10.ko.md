@@ -1446,10 +1446,10 @@ pattern은 11.6 재측정값을 사용하고, request/reply는 이 절의 최신
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 32.36% | 60.86% | 80.13% | 53.33% | 97.04% | 93.53% | 평균 69.54%. single-part builder 개선 후 simple one-way 중앙값 목표 65% 통과. |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 75.46% | 77.89% | 73.39% | 82.83% | 101.39% | 99.51% | 평균 85.08%. routed one-way 중앙값 목표 57% 통과. Go runner 이름은 `MULTI_DEALER_ROUTER`다. |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 66.03% | 65.71% | 62.63% | 63.52% | 96.13% | 101.38% | 평균 75.90%. routed one-way 중앙값 목표 57% 통과. Go runner 이름은 `MULTI_ROUTER_ROUTER`다. |
+| `tcp` | `MULTI_PUBSUB` | 237.78% | 127.23% | 79.84% | 93.02% | 109.23% | 139.39% | 평균 131.08%. simple one-way 중앙값 목표 65% 통과. |
 | `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
 | `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
