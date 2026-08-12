@@ -34,3 +34,17 @@ Java multi runner의 기본 connect-ready timeout과 monitor HWM을 C runner와 
 
 - C: `/tmp/zlink-java-rr-poller-c/multi/report/perf_c_multi_linux_20260812_212156.txt`
 - Java: `/tmp/zlink-java-rr-poller-java/multi/report/perf_java_multi_linux_20260812_212219.txt`
+
+## 거절한 send 경로 후보
+
+single-part `DONT_WAIT` send에서 capture lambda를 제거한 후보는
+`MULTI_DEALER_ROUTER_SENDSEND / tcp`에서 다음 결과를 냈다.
+
+| C throughput (Kops/s) | 후보 Java throughput (Kops/s) | Java/C ratio | 산술평균 |
+|---:|---:|---:|---:|
+| 180.471 / 180.004 / 173.318 / 158.824 / 35.312 / 21.456 | 97.197 / 83.684 / 66.344 / 60.183 / 29.124 / 14.245 | 53.9% / 46.5% / 38.3% / 37.9% / 82.5% / 66.4% | 54.2% |
+
+현재 parity 기준 61.6%보다 낮으므로 후보는 원복했다.
+
+- C: `/tmp/zlink-java-direct-send-c/multi/report/perf_c_multi_linux_20260812_212754.txt`
+- Java: `/tmp/zlink-java-direct-send-java/multi/report/perf_java_multi_linux_20260812_212818.txt`
