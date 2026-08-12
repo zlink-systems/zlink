@@ -2312,6 +2312,19 @@ balanced auto-HWM에서 C를 먼저, Node를 다음에 단독 실행했다.
 TSFN 전달 payload의 native allocation을 bounded pool로 재사용했지만 mutex와 반환 비용이 더 컸다.
 상세 결과는 `log/2026-08-12-node-stream-payload-pool-rejected.ko.md`에 기록한다.
 
+### 11.25 Node STREAM routing-id WeakMap cache 측정 결과
+
+`MULTI_STREAM / tcp`, 64·256·1024·65536B, clients `100`, duration `1초`, runs `1`,
+balanced auto-HWM에서 C를 먼저, Node를 다음에 단독 실행했다.
+
+| 변경 | C 대비 throughput 비율 (size 순서) | 산술평균 | 결과 |
+|---|---|---:|---|
+| routing-id `WeakMap<Buffer, RoutingId>` | 22.02 / 20.18 / 19.21 / 58.01% | 29.86% | 이전 29.59% 대비 0.27%p 개선 |
+
+native cache가 반환하는 같은 Buffer identity를 사용해 string key 생성과 명시적 cache cap 관리를 제거했다.
+공개 `RoutingId`는 기존처럼 immutable copy이며, 상세 결과는
+`log/2026-08-12-node-stream-routing-id-weakmap.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.

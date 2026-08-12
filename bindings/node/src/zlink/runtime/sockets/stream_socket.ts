@@ -47,7 +47,7 @@ const native = requireNative();
 
 export class StreamSocket extends SocketBase {
   readonly options: StreamSocketOptions;
-  private readonly _packetRoutingIdCache = new Map<string, RoutingId>();
+  private readonly _packetRoutingIdCache = new WeakMap<Buffer, RoutingId>();
   private readonly routedSend = {
     submit: (routingId: Buffer,
              parts: MessageLike | readonly MessageLike[], flags: SendFlags) =>
@@ -154,17 +154,13 @@ export class StreamSocket extends SocketBase {
     // Hot path: STREAM callbacks receive the same peer routing ids repeatedly.
     // Cache the public RoutingId facade so packet dispatch does not allocate a
     // new wrapper for every frame while keeping the public handler contract.
-    const key = routingId.toString('latin1');
-    const cached = this._packetRoutingIdCache.get(key);
+    const cached = this._packetRoutingIdCache.get(routingId);
     if (cached) {
       return cached;
     }
-    if (this._packetRoutingIdCache.size >= 16384) {
-      this._packetRoutingIdCache.clear();
-    }
     const wrapped = wrapRoutingId(routingId);
     if (wrapped) {
-      this._packetRoutingIdCache.set(key, wrapped);
+      this._packetRoutingIdCache.set(routingId, wrapped);
     }
     return wrapped;
   }
