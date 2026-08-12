@@ -1400,6 +1400,24 @@ pattern은 11.6 재측정값을 사용하고, request/reply는 이 절의 최신
 | `tls` | `MULTI_PUBSUB` | 15.89% | 13.67% | 27.68% | 34.79% | 76.53% | 60.73% | 통과·평균 38.22%. |
 | `tls` | `MULTI_STREAM` | 19.80% | 20.06% | 21.28% | 해당 없음 | 110.04% | 해당 없음 | 통과·평균 42.79%. |
 
+#### 9.4.3 언어별 Single·Multi 평균
+
+아래 값은 언어별 Single과 Multi를 섞지 않는다. Single은 각 transport + pattern
+행의 표기된 size ratio를 먼저 산술평균하고, Multi는 각 행의 최종 평균을 사용한 뒤
+언어별로 같은 가중치로 다시 평균했다. `MULTI_STREAM`은 지원하는 4개 size만
+사용한다. 통과 여부와 별개로 C 대비 throughput 비율만 기록한다.
+
+| 언어 | Single 평균 | Multi 평균 | 측정 상태 |
+|---|---:|---:|---|
+| C++ | 89.72% | 101.21% | Single 42행, Multi 28행 최종 표 기준 |
+| .NET | 81.15% | 84.86% | Single 42행, Multi 28행 최종 표 기준 |
+| Java | 92.47% | 61.31% | Single 42행, Multi 28행 최종 표 기준 |
+| Node | 56.37% | 47.50% | Single은 재측정 진행 중인 현재 표본, Multi는 20행 최종 표 기준 |
+
+Java Single 평균은 80%를 넘지만, Java Multi 평균은 61.31%다. 따라서 Java의
+전체 평균으로 Single과 Multi를 합산해 성능을 판정하지 않는다. Node Single 평균도
+재측정 완료 전에는 완료 판정이나 언어 간 비교의 기준으로 사용하지 않는다.
+
 ### 9.5 Go
 
 - perf 경로: `bindings/go/perf`
