@@ -1071,12 +1071,12 @@ pattern은 11.6 재측정값을 사용하고, request/reply는 이 절의 최신
 
 | Transport | Pattern | 평균 | 최소 기준 | 판정 |
 |-----------|---------|-----:|----------:|------|
-| `tcp` | `MULTI_DEALER_DEALER` | 76.38% | 64% | 통과 |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 84.42% | 50% | 통과 |
+| `tcp` | `MULTI_DEALER_DEALER` | 75.49% | 64% | 통과 |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 86.94% | 50% | 통과 |
 | `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 78.82% | 50% | 통과 |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 92.61% | 50% | 통과 |
 | `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 83.55% | 50% | 통과 |
-| `tcp` | `MULTI_PUBSUB` | 78.82% | 64% | 통과 |
+| `tcp` | `MULTI_PUBSUB` | 80.58% | 64% | 통과 |
 | `tcp` | `MULTI_STREAM` | 90.10% | 64% | 통과 |
 | `ws` | `MULTI_DEALER_DEALER` | 76.36% | 64% | 통과 |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 91.13% | 50% | 통과 |
@@ -1194,13 +1194,13 @@ pattern은 11.6 재측정값을 사용하고, request/reply는 이 절의 최신
 
 | Transport | Pattern | 평균 | 최소 기준 | 판정 |
 |-----------|---------|-----:|----------:|------|
-| `tcp` | `MULTI_DEALER_DEALER` | 72.21% | 70% | 통과 |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 71.11% | 50% | 통과 |
+| `tcp` | `MULTI_DEALER_DEALER` | 74.52% | 70% | 통과 |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 64.58% | 50% | 통과 |
 | `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 58.34% | 50% | 통과 |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 55.42% | 50% | 통과 |
 | `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 53.51% | 50% | 통과 |
-| `tcp` | `MULTI_PUBSUB` | 53.55% | 70% | 미달·개선 진행 |
-| `tcp` | `MULTI_STREAM` | 54.31% | 70% | 미달·개선 진행 |
+| `tcp` | `MULTI_PUBSUB` | 51.44% | 70% | 미달·개선 진행 |
+| `tcp` | `MULTI_STREAM` | 79.14% | 70% | 통과 |
 | `ws` | `MULTI_DEALER_DEALER` | 77.94% | 70% | 통과 |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 60.34% | 50% | 통과 |
 | `ws` | `MULTI_DEALER_ROUTER_REQREP` | 51.77% | 50% | 통과 |
@@ -2205,7 +2205,7 @@ transport·pattern별 C를 먼저 실행한 뒤 binding을 하나씩 실행했�
 | Java | `MULTI_DEALER_ROUTER` | 52.60 / 51.96 / 58.12 / 52.28 / 91.45 / 81.09% | 64.58% |
 | Java | `MULTI_ROUTER_ROUTER` | 46.75 / 50.15 / 48.00 / 47.70 / 77.28 / 62.61% | 55.42% |
 | Java | `MULTI_PUBSUB` | 36.49 / 39.01 / 51.68 / 54.41 / 68.23 / 58.84% | 51.44% |
-| Java | `MULTI_STREAM` | 37.42 / 51.39 / 52.70 / 75.72% | 54.31% |
+| Java | `MULTI_STREAM` | 79.72 / 67.28 / 68.66 / 100.90% | 79.14% |
 | .NET | `MULTI_DEALER_DEALER` | 30.92 / 56.28 / 97.30 / 82.79 / 104.66 / 81.00% | 75.49% |
 | .NET | `MULTI_DEALER_ROUTER` | 71.20 / 78.43 / 100.46 / 80.64 / 77.96 / 112.94% | 86.94% |
 | .NET | `MULTI_ROUTER_ROUTER` | 76.92 / 79.55 / 69.62 / 81.89 / 126.45 / 121.21% | 92.61% |
@@ -2335,10 +2335,11 @@ public routing-id bytes와 packet callback contract는 유지했다. 상세 결�
 |---|---|---:|---|
 | `MULTI_PUBSUB / tcp`, topic-bound send invoker | 43.91 / 46.44 / 45.15 / 37.38 / 64.75 / 80.04% | 52.95% | 이전 46.81% 대비 6.14%p 개선 |
 
-Java 전체 평균은 9.3절의 최종 paired 표본 412개 size cell에서 계산했다. 최신 TCP
-`PAIR`, `DEALER_DEALER`, `PUBSUB`, `MULTI_DEALER_DEALER`, `MULTI_DEALER_ROUTER`,
-`MULTI_PUBSUB` 결과로 같은 행을 교체하면 `80.32%`다. .NET은 9.2절의 최종 paired
-표본 418개 size cell 기준 `82.63%`다. 두 값은 각각 80% 목표를 충족한다.
+이번 TCP Multi 5개 pattern의 산술평균은 Java `65.02%`, .NET `85.14%`다. Java 값은
+11.6의 `MULTI_DEALER_DEALER`, `MULTI_DEALER_ROUTER`, `MULTI_ROUTER_ROUTER`,
+`MULTI_PUBSUB`, `MULTI_STREAM` 최신 paired 행만 사용한다. .NET도 같은 5개 pattern의
+11.6 최신 paired 행만 사용한다. 이 값은 전체 transport matrix 평균이 아니며, 전체
+평균은 모든 transport·pattern을 같은 기준으로 재측정한 뒤에만 기록한다.
 
 Node의 과거 batch 기반 값은 현재 batch 미사용 구현의 전체 평균에 포함하지 않는다. 현재 구현의
 모든 대상에 대해 새 paired 값이 누적되기 전에는 Node 전체 평균을 확정하지 않는다. 상세 결과는

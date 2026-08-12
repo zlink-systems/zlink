@@ -22,27 +22,6 @@ final class PerfMultiStream {
     private PerfMultiStream() {
     }
 
-    /**
-     * Reusable per-server frame scratch buffer. The stream packet callback is
-     * dispatched on a single socket-owned thread, so a single growable buffer
-     * is reused across echoed packets instead of allocating
-     * {@code new byte[6 + header + body]} per packet. This mirrors the C
-     * reference (perf_multi_stream_session.hpp build_packet_frame ~192-221),
-     * which writes the framed payload into a single message buffer without an
-     * intermediate per-packet heap allocation or a redundant second copy.
-     */
-    private static final class FrameScratch {
-        private byte[] buffer = new byte[0];
-
-        byte[] ensureCapacity(int required) {
-            if (buffer.length < required) {
-                int next = Math.max(required, buffer.length * 2);
-                buffer = new byte[next];
-            }
-            return buffer;
-        }
-    }
-
     static PerfUtil.Result runServer(PerfUtil.Config config) {
         AtomicBoolean stopRequested = new AtomicBoolean(false);
         Object stopSignal = new Object();
@@ -59,10 +38,9 @@ final class PerfMultiStream {
             server.options().recvTimeout(java.time.Duration.ZERO);
             server.bind(config.endpoint());
             PerfControl.emitReady(config.endpoint());
-            FrameScratch scratch = new FrameScratch();
             server.onPacket(
                 (routingId, header, body) ->
-                    onPacket(server, routingId, header, body, scratch,
+                    onPacket(server, routingId, header, body,
                         stopRequested, stopSignal));
 
             waitForStop(stopRequested, stopSignal);
@@ -102,7 +80,6 @@ final class PerfMultiStream {
                                  RoutingId routingId,
                                  Message header,
                                  Message body,
-                                 FrameScratch scratch,
                                  AtomicBoolean stopRequested,
                                  Object stopSignal) {
         if (routingId == null) {
@@ -114,7 +91,7 @@ final class PerfMultiStream {
             return;
         }
         try {
-            sendFramedPacket(server, routingId, header, body, scratch);
+            sendFramedPacket(server, routingId, header, body);
         } catch (RuntimeException ex) {
             stopRequested.set(true);
             signal(stopSignal);
@@ -125,9 +102,8 @@ final class PerfMultiStream {
     private static void sendFramedPacket(StreamSocket socket,
                                          RoutingId routingId,
                                          Message header,
-                                         Message body,
-                                         FrameScratch scratch) {
-        try (Message packet = buildPacketFrame(header, body, scratch)) {
+                                         Message body) {
+        try (Message packet = buildPacketFrame(header, body)) {
             if (!socket.send(routingId)
                 .message(packet)
                 .flags(SendFlags.DONT_WAIT)
@@ -137,28 +113,19 @@ final class PerfMultiStream {
         }
     }
 
-    // C parity: perf_multi_stream_session.hpp build_packet_frame (~192-221)
-    // writes the 2-byte BE header length, 4-byte BE body length, header and
-    // body into a single message buffer with no intermediate per-packet heap
-    // allocation. The frame staging buffer is reused across packets (allocated
-    // once per server, grown only when a larger frame is seen); Message.from
-    // is the single native copy into the owned send frame, matching C's single
-    // zlink_msg_init_size + memcpy.
-    private static Message buildPacketFrame(Message header, Message body,
-                                            FrameScratch scratch) {
+    // C parity: write the framing prefix and the received native frames into
+    // the outbound native Message. The public Message API copies native-to-
+    // native, so this avoids staging the complete packet in a Java byte[].
+    private static Message buildPacketFrame(Message header, Message body) {
         int headerSize = header.size();
         int bodySize = body.size();
         int total = 6 + headerSize + bodySize;
-        byte[] frame = scratch.ensureCapacity(total);
-        frame[0] = (byte) ((headerSize >>> 8) & 0xFF);
-        frame[1] = (byte) (headerSize & 0xFF);
-        frame[2] = (byte) ((bodySize >>> 24) & 0xFF);
-        frame[3] = (byte) ((bodySize >>> 16) & 0xFF);
-        frame[4] = (byte) ((bodySize >>> 8) & 0xFF);
-        frame[5] = (byte) (bodySize & 0xFF);
-        header.copyTo(frame, 0, 6, headerSize);
-        body.copyTo(frame, 0, 6 + headerSize, bodySize);
-        return Message.from(frame, 0, total);
+        Message packet = Message.allocate(total);
+        packet.writeShortBe(0, (short) headerSize);
+        packet.writeIntBe(2, bodySize);
+        packet.copyFrom(header, 0, 6, headerSize);
+        packet.copyFrom(body, 0, 6 + headerSize, bodySize);
+        return packet;
     }
 
     private static void waitForStop(AtomicBoolean stopRequested, Object stopSignal) {
