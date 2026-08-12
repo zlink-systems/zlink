@@ -43,6 +43,10 @@ public final class Message implements AutoCloseable {
     private boolean more;
     private int cachedSize;
     private long cachedAddress;
+    // `dataBuffer()` is often read more than once by codecs and framework
+    // handlers. Keep one base view for the currently owned native frame; the
+    // cache is cleared whenever ownership or the native payload changes.
+    private ByteBuffer cachedReadOnlyDataBuffer;
     static {
         ContractAccess.register(new ContractAccess.MessageAccess() {
             @Override
@@ -146,17 +150,6 @@ public final class Message implements AutoCloseable {
             @Override
             public Message acquireReceive() {
                 return Message.acquireReceive();
-            }
-
-            @Override
-            public int metricHeaderPhase(Message message, int expectedSize,
-                                         int expectedRunId) {
-                return message.metricHeaderPhase(expectedSize, expectedRunId);
-            }
-
-            @Override
-            public long metricHeaderSentTimestamp(Message message) {
-                return message.metricHeaderSentTimestamp();
             }
 
         });
@@ -528,29 +521,18 @@ public final class Message implements AutoCloseable {
         return NATIVE_LITTLE_ENDIAN ? value : Long.reverseBytes(value);
     }
 
-    private int metricHeaderPhase(int expectedSize, int expectedRunId) {
-        // Internal perf path: validate the frame once, then read all header
-        // fields directly from its native storage.  The public read methods
-        // retain their per-call range validation.
-        if (!valid || closed || cachedSize < 29
-            || readIntLeUnchecked(0) != 0x5A4C4E4B
-            || readIntLeUnchecked(4) != expectedRunId
-            || readIntLeUnchecked(9) != expectedSize) {
-            return -1;
-        }
-        int phase = readIntLeUnchecked(8) & 0xFF;
-        return phase == 0 || phase == 1 || phase == 2 ? phase : -1;
-    }
-
-    private long metricHeaderSentTimestamp() {
-        return readLongLeUnchecked(21);
-    }
-
     public ByteBuffer dataBuffer() {
-        Object seg = dataSegment();
-        if (ContractAccess.nativeMessageAddress(seg) == 0)
+        if (!valid || closed || cachedAddress == 0L)
             return ByteBuffer.allocate(0).asReadOnlyBuffer();
-        return ContractAccess.nativeMessageAsReadOnlyBuffer(seg);
+        ByteBuffer base = cachedReadOnlyDataBuffer;
+        if (base == null) {
+            base = ContractAccess.nativeMessageAsReadOnlyBuffer(dataSegment());
+            cachedReadOnlyDataBuffer = base;
+        }
+        // A duplicate preserves the public method's independent cursor
+        // semantics while avoiding a new FFM MemorySegment-to-ByteBuffer view
+        // for every read of the same message frame.
+        return base.duplicate();
     }
 
     public ByteBuffer mutableDataBuffer() {
@@ -993,12 +975,16 @@ public final class Message implements AutoCloseable {
     private void cachePayload(int size) {
         cachedSize = size;
         cachedAddress = size > 0 ? ContractAccess.nativeMessageDataAddress(msg) : 0L;
+        // A receive, move, or resize can replace the native frame address.
+        // Never let a view of the preceding frame escape through dataBuffer().
+        cachedReadOnlyDataBuffer = null;
     }
 
 
     private void clearPayloadCache() {
         cachedSize = 0;
         cachedAddress = 0L;
+        cachedReadOnlyDataBuffer = null;
     }
 
     private void releaseOwnedResources() {

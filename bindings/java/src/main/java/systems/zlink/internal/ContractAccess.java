@@ -261,11 +261,6 @@ public final class ContractAccess {
 
         Message acquireReceive();
 
-        int metricHeaderPhase(Message message, int expectedSize,
-                              int expectedRunId);
-
-        long metricHeaderSentTimestamp(Message message);
-
     }
 
     public interface NativeMessageAccess {
@@ -726,17 +721,6 @@ public final class ContractAccess {
 
     public static Message messageAcquireReceive() {
         return messageAccess().acquireReceive();
-    }
-
-    public static int messageMetricHeaderPhase(Message message,
-                                               int expectedSize,
-                                               int expectedRunId) {
-        return messageAccess().metricHeaderPhase(message, expectedSize,
-            expectedRunId);
-    }
-
-    public static long messageMetricHeaderSentTimestamp(Message message) {
-        return messageAccess().metricHeaderSentTimestamp(message);
     }
 
 

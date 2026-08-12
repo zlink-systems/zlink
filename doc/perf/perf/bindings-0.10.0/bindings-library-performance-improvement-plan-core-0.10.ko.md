@@ -47,7 +47,7 @@ pattern·transport 평균의 완료 목표다.
 | Java | `MULTI_DEALER_DEALER` | tcp | 재측정 대기 | - | 90% | 진행 중 |
 | Java | `MULTI_DEALER_ROUTER_REQREP` | tcp | 재측정 대기 | - | 70% | 진행 중 |
 | Java | `MULTI_DEALER_ROUTER_SENDSEND` | tcp | 재측정 대기 | - | 85% | 진행 중 |
-| Java | `MULTI_PUBSUB` | tcp | 36.45 / 42.60 / 44.93 / 26.76 / 64.79 / 77.67% | 48.87% | 90% | 미달 |
+| Java | `MULTI_PUBSUB` | tcp | 44.32 / 42.37 / 48.20 / 56.58 / 73.24 / 101.58% | 61.05% | 90% | 미달 |
 | Java | `MULTI_STREAM` | tcp | 재측정 대기 | - | 70% | 진행 중 |
 | Node | `MULTI_PUBSUB` | tcp | 22.05 / 21.75 / 21.23 / 32.79 / 44.52 / 41.94% | 30.71% | 60% | 미달 |
 | Node | `MULTI_DEALER_DEALER` | tcp | 18.38 / 32.11 / 34.51 / 61.13 / 40.19 / 46.82% | 38.86% | 60% | 미달 |
