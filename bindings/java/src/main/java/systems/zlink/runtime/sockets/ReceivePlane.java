@@ -34,9 +34,9 @@ final class ReceivePlane {
     boolean recvInto(Received result, ReceiveFlag flags) {
         Objects.requireNonNull(result, "result");
         Objects.requireNonNull(flags, "flags");
-        if (flags == ReceiveFlag.DONTWAIT
-            && !multipartReceiveState.get().hasPending()) {
-            return recvIntoNoWait(result);
+        MultipartReceiveState state = multipartReceiveState.get();
+        if (flags == ReceiveFlag.DONTWAIT && !state.hasPending()) {
+            return recvIntoNoWait(result, state);
         }
         Message frame = nextRecvFrame(flags, flags == ReceiveFlag.DONTWAIT);
         if (frame == null) {
@@ -152,7 +152,11 @@ final class ReceivePlane {
     }
 
     void prepareRecvLikeOperation() {
-        multipartReceiveState.get().closeRemaining();
+        prepareRecvLikeOperation(multipartReceiveState.get());
+    }
+
+    private void prepareRecvLikeOperation(MultipartReceiveState state) {
+        state.closeRemaining();
         Received active = activeLazyReceive.get();
         if (active != null) {
             InternalAccess.receivedForceMaterialize(active);
@@ -180,8 +184,9 @@ final class ReceivePlane {
         return multipartReceiveState.get().pendingCount();
     }
 
-    private boolean recvIntoNoWait(Received result) {
-        prepareRecvLikeOperation();
+    private boolean recvIntoNoWait(Received result,
+                                   MultipartReceiveState state) {
+        prepareRecvLikeOperation(state);
         RecvScratch scratch = socket.recvScratch();
         while (true) {
             Message frame = InternalAccess.messageAcquireReceive();
