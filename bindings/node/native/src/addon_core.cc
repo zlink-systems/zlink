@@ -3384,8 +3384,6 @@ napi_value router_try_send_completion_control (
     parts.clear ();
     if (rc != ZLINK_SUBMIT_OK && rc != ZLINK_SUBMIT_BACKPRESSURED)
         return throw_last_error (env, "routerTrySendCompletionControl failed");
-    if (rc == ZLINK_SUBMIT_OK)
-        consume_native_message_value (env, argv[2]);
 
     napi_value result;
     napi_get_boolean (env, rc == ZLINK_SUBMIT_OK, &result);
@@ -3433,8 +3431,6 @@ napi_value router_try_send_completion_control_transport_pair (
     parts.clear ();
     if (rc != ZLINK_SUBMIT_OK && rc != ZLINK_SUBMIT_BACKPRESSURED)
         return throw_last_error (env, "routerTrySendCompletionControlTransportPair failed");
-    if (rc == ZLINK_SUBMIT_OK)
-        consume_native_message_value (env, argv[4]);
     napi_value result;
     napi_get_boolean (env, rc == ZLINK_SUBMIT_OK, &result);
     return result;
