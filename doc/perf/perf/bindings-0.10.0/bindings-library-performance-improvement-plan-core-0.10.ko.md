@@ -1416,8 +1416,8 @@ pattern은 11.6 재측정값을 사용하고, request/reply는 이 절의 최신
 | `tcp` | `DEALER_DEALER` | 46.00% | 56.33% | 86.21% | 62.34% | 62.98% | 72.24% | 평균 64.35%. simple one-way 중앙값 목표 65%에 0.65%p 미달. single-part builder 개선은 이미 적용됐고, 추가 contract-safe hot path 후보가 없어 측정값으로 기록. |
 | `tcp` | `DEALER_ROUTER` | 32.90% | 63.32% | 100.77% | 97.92% | 102.45% | 111.65% | 평균 84.84%. routed one-way 중앙값 목표 57% 통과. ROUTER activity-aware readiness로 C harness와 연결 판정을 정렬. |
 | `tcp` | `ROUTER_ROUTER` | 31.26% | 50.22% | 88.45% | 96.02% | 96.44% | 105.72% | 평균 78.02%. routed one-way 중앙값 목표 57% 통과. |
-| `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `PAIR` | 38.32% | 61.04% | 85.65% | 87.00% | 84.89% | 83.24% | 평균 73.36%. simple one-way 중앙값 목표 65% 통과. |
+| `ws` | `PUBSUB` | 44.37% | 53.36% | 104.22% | 82.21% | 83.67% | 81.62% | 평균 74.91%. simple one-way 중앙값 목표 65% 통과. |
 | `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
