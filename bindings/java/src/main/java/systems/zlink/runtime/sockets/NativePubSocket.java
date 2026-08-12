@@ -15,6 +15,7 @@ import java.util.List;
 
 final class NativePubSocket extends NativeSocketBase implements PubSocket {
     private final PubSocketOptions options = ContractAccess.pubSocketOptions(this);
+    private TopicSendInvoker cachedTopicInvoker;
 
     NativePubSocket(Context ctx) {
         super(ctx, SocketType.PUB);
@@ -30,7 +31,11 @@ final class NativePubSocket extends NativeSocketBase implements PubSocket {
     public void setRoutingId(RoutingId rid) { runtime().setRoutingId(rid); }
 
     public SendOperation publish(String topicId) {
-        TopicSendInvoker invoker = new TopicSendInvoker(topicId);
+        TopicSendInvoker invoker = cachedTopicInvoker;
+        if (invoker == null || !invoker.matches(topicId)) {
+            invoker = new TopicSendInvoker(topicId);
+            cachedTopicInvoker = invoker;
+        }
         return MessageOperations.send(invoker, invoker);
     }
 
@@ -41,6 +46,10 @@ final class NativePubSocket extends NativeSocketBase implements PubSocket {
 
         private TopicSendInvoker(String topicId) {
             this.topicId = topicId;
+        }
+
+        private boolean matches(String value) {
+            return topicId == value || (topicId != null && topicId.equals(value));
         }
 
         @Override

@@ -1028,6 +1028,41 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 
 #### 9.2.2 Multi suite
 
+아래 평균은 `transport + pattern`별 throughput 산술평균이다. 각 행의 평균을 .NET 언어별
+최소 기준과 비교한다. `MULTI_STREAM`은 지원하는 4개 size의 평균을 사용한다. 최신 TCP 5개
+pattern은 11.6 재측정값을 사용하고, request/reply는 이 절의 최신 complete paired 값을 사용한다.
+
+| Transport | Pattern | 평균 | 최소 기준 | 판정 |
+|-----------|---------|-----:|----------:|------|
+| `tcp` | `MULTI_DEALER_DEALER` | 51.54% | 64% | 미달·개선 진행 |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 84.42% | 50% | 통과 |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 78.82% | 50% | 통과 |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 92.61% | 50% | 통과 |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 83.55% | 50% | 통과 |
+| `tcp` | `MULTI_PUBSUB` | 78.82% | 64% | 통과 |
+| `tcp` | `MULTI_STREAM` | 90.10% | 64% | 통과 |
+| `ws` | `MULTI_DEALER_DEALER` | 76.36% | 64% | 통과 |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 91.13% | 50% | 통과 |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 106.24% | 50% | 통과 |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 90.07% | 50% | 통과 |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 82.65% | 50% | 통과 |
+| `ws` | `MULTI_PUBSUB` | 94.71% | 64% | 통과 |
+| `ws` | `MULTI_STREAM` | 81.23% | 64% | 통과 |
+| `wss` | `MULTI_DEALER_DEALER` | 83.88% | 64% | 통과 |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 89.42% | 50% | 통과 |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 75.58% | 50% | 통과 |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 90.62% | 50% | 통과 |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 81.03% | 50% | 통과 |
+| `wss` | `MULTI_PUBSUB` | 83.82% | 64% | 통과 |
+| `wss` | `MULTI_STREAM` | 87.16% | 64% | 통과 |
+| `tls` | `MULTI_DEALER_DEALER` | 85.94% | 64% | 통과 |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 92.91% | 50% | 통과 |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 76.08% | 50% | 통과 |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 92.35% | 50% | 통과 |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 75.80% | 50% | 통과 |
+| `tls` | `MULTI_PUBSUB` | 65.30% | 64% | 통과 |
+| `tls` | `MULTI_STREAM` | 85.59% | 64% | 통과 |
+
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
 | `tcp` | `MULTI_DEALER_DEALER` | 41.415% | 67.082% | 123.920% | 76.729% | 82.112% | 78.791% | 보류·baseline throughput 산술평균 78.342%, 평균 latency ratio 4.268x. 자체 `Message`/단일 part builder 경계 inlining after는 throughput 80.959%·latency 2.222x로 개선했지만 throughput 목표 85%에 미달해 후보를 유지한다. Sol guard inlining A/B는 81.033%·latency 2.460x로 throughput +0.074%p에 그치고 latency가 악화되어 제거했다. C/.NET runner의 stop-token cleanup 경계를 C와 맞춘 뒤 30/30 complete를 확인했다. public contract·ownership·error semantics는 변경하지 않았다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260810_182810_dotnet-multi-dealer-dealer-tcp-paired-c1.txt`; .NET baseline: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_184232_dotnet-multi-dealer-dealer-tcp-paired-parity-final.txt`; own after: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_184721_dotnet-multi-dealer-dealer-tcp-own-after-inline.txt`; Sol after: `/home/hep7hep7/project/zlink/bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260810_184914_dotnet-multi-dealer-dealer-tcp-sol-after-guard-inline.txt` |
@@ -1115,6 +1150,41 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 | `ipc` | `ROUTER_ROUTER_REQREP` | 미달 (39.496%) | 미달 (46.059%) | 미달 (42.489%) | 통과 (92.065%) | 통과 (63.117%) | 통과 (60.214%) | 통과·throughput 산술평균 57.240%, latency 중앙값 1.825x. PING/PONG route handshake와 completion poller parity가 적용된 최종 경로다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260811_065454_java-final-router-router-reqrep-ipc-c.txt`; Java: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260811_065500_java-final-router-router-reqrep-ipc.txt` |
 
 #### 9.3.2 Multi suite
+
+아래 평균은 `transport + pattern`별 throughput 산술평균이다. 각 행의 평균을 Java 언어별
+최소 기준과 비교한다. `MULTI_STREAM`은 지원하는 4개 size의 평균을 사용한다. 최신 TCP
+개선값은 11.10~11.16의 재측정으로 교체했고, 그 외 행은 이 절의 최신 complete paired 값이다.
+
+| Transport | Pattern | 평균 | 최소 기준 | 판정 |
+|-----------|---------|-----:|----------:|------|
+| `tcp` | `MULTI_DEALER_DEALER` | 66.05% | 70% | 미달·개선 진행 |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 46.62% | 50% | 미달·개선 진행 |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 58.34% | 50% | 통과 |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 55.42% | 50% | 통과 |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 53.51% | 50% | 통과 |
+| `tcp` | `MULTI_PUBSUB` | 53.55% | 70% | 미달·개선 진행 |
+| `tcp` | `MULTI_STREAM` | 54.31% | 70% | 미달·개선 진행 |
+| `ws` | `MULTI_DEALER_DEALER` | 77.94% | 70% | 통과 |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 60.34% | 50% | 통과 |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 51.77% | 50% | 통과 |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 53.38% | 50% | 통과 |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 52.48% | 50% | 통과 |
+| `ws` | `MULTI_PUBSUB` | 45.40% | 70% | 미달·개선 진행 |
+| `ws` | `MULTI_STREAM` | 84.37% | 70% | 통과 |
+| `wss` | `MULTI_DEALER_DEALER` | 74.08% | 70% | 통과 |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 74.28% | 50% | 통과 |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 57.14% | 50% | 통과 |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 54.95% | 50% | 통과 |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 51.23% | 50% | 통과 |
+| `wss` | `MULTI_PUBSUB` | 39.61% | 70% | 미달·개선 진행 |
+| `wss` | `MULTI_STREAM` | 82.66% | 70% | 통과 |
+| `tls` | `MULTI_DEALER_DEALER` | 70.78% | 70% | 통과 |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 66.03% | 50% | 통과 |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 55.33% | 50% | 통과 |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 60.10% | 50% | 통과 |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 52.65% | 50% | 통과 |
+| `tls` | `MULTI_PUBSUB` | 29.38% | 70% | 미달·개선 진행 |
+| `tls` | `MULTI_STREAM` | 85.81% | 70% | 통과 |
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
