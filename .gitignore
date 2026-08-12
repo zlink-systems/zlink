@@ -1,9 +1,9 @@
 syntax: glob # for hg-git users
 
 # AI agent config files
-AGENTS.md
-GEMINI.md
-CLAUDE.md
+/AGENTS.md
+/GEMINI.md
+/CLAUDE.md
 
 # Generated build scripts and IDE generating files
 ## autotools
