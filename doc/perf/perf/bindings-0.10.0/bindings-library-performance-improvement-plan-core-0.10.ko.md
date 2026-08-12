@@ -44,17 +44,17 @@ pattern·transport 평균의 완료 목표다.
 | .NET | 전체 | 전체 | 재측정 대기 | - | - | 진행 중 |
 | .NET | `MULTI_DEALER_DEALER` | tcp | 33.59 / 58.56 / 148.39 / 78.57 / 137.74 / 91.77% | 91.44% | 85% | 통과 |
 | .NET | `MULTI_PUBSUB` | tcp | 66.58 / 60.71 / 57.22 / 76.19 / 110.03 / 103.58% | 79.05% | 85% | 미달 |
-| Java | `MULTI_DEALER_DEALER` | tcp | 69.65 / 76.42 / 82.47 / 72.36 / 79.20 / 122.69% | 83.80% | 90% | 미달 |
-| Java | `MULTI_DEALER_ROUTER_REQREP` | tcp | 57.29 / 60.88 / 64.99 / 55.84 / 97.43 / 92.99% | 71.57% | 70% | 통과 |
-| Java | `MULTI_DEALER_ROUTER_SENDSEND` | tcp | 79.87 / 84.45 / 84.32 / 74.96 / 115.32 / 115.14% | 92.34% | 85% | 통과 |
-| Java | `MULTI_PUBSUB` | tcp | 73.11 / 70.74 / 63.07 / 68.89 / 84.51 / 87.47% | 74.63% | 90% | 미달 |
-| Java | `MULTI_STREAM` | tcp | 88.82 / 74.36 / 77.56 / 114.70% | 88.86% | 70% | 통과 |
+| Java | `MULTI_DEALER_DEALER` | tcp | 재측정 대기 | - | 90% | 진행 중 |
+| Java | `MULTI_DEALER_ROUTER_REQREP` | tcp | 재측정 대기 | - | 70% | 진행 중 |
+| Java | `MULTI_DEALER_ROUTER_SENDSEND` | tcp | 재측정 대기 | - | 85% | 진행 중 |
+| Java | `MULTI_PUBSUB` | tcp | 36.45 / 42.60 / 44.93 / 26.76 / 64.79 / 77.67% | 48.87% | 90% | 미달 |
+| Java | `MULTI_STREAM` | tcp | 재측정 대기 | - | 70% | 진행 중 |
 | Node | `MULTI_PUBSUB` | tcp | 22.05 / 21.75 / 21.23 / 32.79 / 44.52 / 41.94% | 30.71% | 60% | 미달 |
 | Node | `MULTI_DEALER_DEALER` | tcp | 18.38 / 32.11 / 34.51 / 61.13 / 40.19 / 46.82% | 38.86% | 60% | 미달 |
 | Node | 나머지 | 전체 | 재측정 대기 | - | - | 진행 중 |
 
-Java 재측정 결과와 C parity 변경 내용은
-`log/2026-08-12-java-multi-harness-parity.ko.md`에 있다. Node PUB/SUB의 C parity
+Java 공개 API 경로 재측정 결과는
+`log/2026-08-13-java-public-api-policy-audit.ko.md`에 있다. Node PUB/SUB의 C parity
 결과는 `log/2026-08-12-node-pubsub-poll-parity.ko.md`에 있다.
 
 ## 완료 조건

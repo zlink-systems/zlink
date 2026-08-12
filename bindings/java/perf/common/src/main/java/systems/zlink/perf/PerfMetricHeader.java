@@ -3,9 +3,16 @@
 package systems.zlink.perf;
 
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.internal.ContractAccess;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+
 final class PerfMetricHeader {
     private static final int GENERIC_MAGIC = 0x5A4C4E4B; // ZLNK
+    private static final int HEADER_SIZE = 29;
+    private static final int RUN_ID_OFFSET = 4;
+    private static final int PHASE_OFFSET = 8;
+    private static final int MESSAGE_SIZE_OFFSET = 9;
+    private static final int SENT_TIMESTAMP_OFFSET = 21;
 
     private PerfMetricHeader() {
     }
@@ -16,11 +23,12 @@ final class PerfMetricHeader {
 
     static PerfUtil.Header decode(Message message, int expectedSize,
                                   long receivedNanoTime) {
-        int phase = headerPhase(message, expectedSize);
-        if (phase == PerfUtil.PHASE_UNKNOWN) {
+        ByteBuffer header = header(message, expectedSize);
+        if (header == null) {
             return null;
         }
-        long sentTsNs = ContractAccess.messageMetricHeaderSentTimestamp(message);
+        int phase = header.get(PHASE_OFFSET) & 0xFF;
+        long sentTsNs = header.getLong(SENT_TIMESTAMP_OFFSET);
         long latencyNanos = Math.max(0L, receivedNanoTime - sentTsNs);
         return new PerfUtil.Header((byte) phase, latencyNanos, sentTsNs);
     }
@@ -38,11 +46,12 @@ final class PerfMetricHeader {
                                        int expectedSize,
                                        boolean halfRoundTrip,
                                        long receivedNanoTime) {
-        int phase = headerPhase(message, expectedSize);
-        if (phase != PerfUtil.PHASE_ACTIVE) {
+        ByteBuffer header = header(message, expectedSize);
+        if (header == null || (header.get(PHASE_OFFSET) & 0xFF)
+            != PerfUtil.PHASE_ACTIVE) {
             return false;
         }
-        long sentTsNs = ContractAccess.messageMetricHeaderSentTimestamp(message);
+        long sentTsNs = header.getLong(SENT_TIMESTAMP_OFFSET);
         long latencyNanos = Math.max(0L, receivedNanoTime - sentTsNs);
         metrics.recordNanos(halfRoundTrip ? latencyNanos / 2L : latencyNanos);
         return true;
@@ -54,15 +63,15 @@ final class PerfMetricHeader {
 
     static int recordOneWayLatency(PerfUtil.Metrics metrics, Message message,
                                    int expectedSize, long activeEnd) {
-        int phase = headerPhase(message, expectedSize);
-        if (phase == PerfUtil.PHASE_UNKNOWN) {
+        ByteBuffer header = header(message, expectedSize);
+        if (header == null) {
             return PerfUtil.PHASE_UNKNOWN;
         }
+        int phase = header.get(PHASE_OFFSET) & 0xFF;
         if (phase == PerfUtil.PHASE_ACTIVE) {
             long receivedAt = PerfUtil.nowNs();
             if (receivedAt < activeEnd) {
-                long sentTsNs = ContractAccess.messageMetricHeaderSentTimestamp(
-                    message);
+                long sentTsNs = header.getLong(SENT_TIMESTAMP_OFFSET);
                 metrics.recordNanos(Math.max(0L, receivedAt - sentTsNs));
             }
         }
@@ -70,11 +79,31 @@ final class PerfMetricHeader {
     }
 
     private static int headerPhase(Message message, int expectedSize) {
-        if (message == null) {
+        ByteBuffer header = header(message, expectedSize);
+        if (header == null) {
             return PerfUtil.PHASE_UNKNOWN;
         }
-        int phase = ContractAccess.messageMetricHeaderPhase(message,
-            expectedSize, PerfMeasurement.runId());
-        return phase < 0 ? PerfUtil.PHASE_UNKNOWN : phase;
+        return header.get(PHASE_OFFSET) & 0xFF;
+    }
+
+    private static ByteBuffer header(Message message, int expectedSize) {
+        if (message == null) {
+            return null;
+        }
+        ByteBuffer data = message.dataBuffer().duplicate()
+            .order(ByteOrder.LITTLE_ENDIAN);
+        if (data.remaining() < HEADER_SIZE
+            || data.getInt(0) != GENERIC_MAGIC
+            || data.getInt(RUN_ID_OFFSET) != PerfMeasurement.runId()
+            || data.getInt(MESSAGE_SIZE_OFFSET) != expectedSize) {
+            return null;
+        }
+        int phase = data.get(PHASE_OFFSET) & 0xFF;
+        if (phase != PerfUtil.PHASE_WARMUP
+            && phase != PerfUtil.PHASE_ACTIVE
+            && phase != PerfUtil.PHASE_COOLDOWN) {
+            return null;
+        }
+        return data;
     }
 }
