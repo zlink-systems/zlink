@@ -12,6 +12,11 @@ import systems.zlink.contracts.messaging.SendOperation;
 import systems.zlink.runtime.messaging.MessageOperations;
 import java.util.List;
 final class NativePairSocket extends NativeSocketBase implements PairSocket {
+    private final MessageOperations.SingleSendInvoker singleSend =
+        (part, flags) -> runtime().send(part, SendFlag.fromValue(flags.value()));
+    private final MessageOperations.SendInvoker multipartSend =
+        (parts, flags) -> runtime().send(parts, SendFlag.fromValue(flags.value()));
+
     NativePairSocket(Context ctx) {
         super(ctx, SocketType.PAIR);
     }
@@ -25,9 +30,7 @@ final class NativePairSocket extends NativeSocketBase implements PairSocket {
     }
 
     public SendOperation send() {
-        return MessageOperations.send(
-            (part, flags) -> runtime().send(part, SendFlag.fromValue(flags.value())),
-            (parts, flags) -> runtime().send(parts, SendFlag.fromValue(flags.value())));
+        return MessageOperations.send(singleSend, multipartSend);
     }
     SendResult sendNoWaitResult(Message part) { return runtime().sendNoWaitResult(part); }
     SendResult sendNoWaitResult(List<Message> parts) { return runtime().sendNoWaitResult(parts); }

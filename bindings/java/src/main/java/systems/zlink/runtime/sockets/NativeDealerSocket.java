@@ -24,6 +24,10 @@ final class NativeDealerSocket extends NativeSocketBase implements DealerSocket 
     private static final boolean DEBUG_REQREP =
       Boolean.getBoolean("zlink.reqrep.debug");
     private final DealerSocketOptions options = ContractAccess.dealerSocketOptions(this);
+    private final MessageOperations.SingleSendInvoker singleSend =
+        (part, flags) -> runtime().send(part, SendFlag.fromValue(flags.value()));
+    private final MessageOperations.SendInvoker multipartSend =
+        (parts, flags) -> runtime().send(parts, SendFlag.fromValue(flags.value()));
 
     NativeDealerSocket(Context ctx) {
         super(ctx, SocketType.DEALER);
@@ -40,9 +44,7 @@ final class NativeDealerSocket extends NativeSocketBase implements DealerSocket 
     public RoutingId getRoutingId() { return runtime().getRoutingId(); }
 
     public SendOperation send() {
-        return MessageOperations.send(
-            (part, flags) -> runtime().send(part, SendFlag.fromValue(flags.value())),
-            (parts, flags) -> runtime().send(parts, SendFlag.fromValue(flags.value())));
+        return MessageOperations.send(singleSend, multipartSend);
     }
     SendResult sendNoWaitResult(Message part) { return runtime().sendNoWaitResult(part); }
     SendResult sendNoWaitResult(List<Message> parts) { return runtime().sendNoWaitResult(parts); }

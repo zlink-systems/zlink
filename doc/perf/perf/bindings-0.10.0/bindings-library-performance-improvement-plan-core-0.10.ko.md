@@ -2151,6 +2151,20 @@ non-blocking ROUTER receive는 critical FFM downcall을 사용하고, receive su
 socket은 routed sender 연결을 각각 담당한다. public interface, Core ABI, error mapping과 ownership은
 유지했다. Sol review와 상세 결과는 `log/2026-08-12-java-router-critical-receive.ko.md`에 기록한다.
 
+### 11.13 Java socket-owned send invoker 측정 결과
+
+`PAIR / tcp`, 64·256·1024·65536·131072·262144B, duration `1초`, runs `1`, balanced auto-HWM
+조건에서 C를 먼저, Java를 다음에 단독 실행했다.
+
+| 변경 | C 대비 throughput 비율 (size 순서) | 산술평균 | 결과 |
+|---|---|---:|---|
+| `PAIR / tcp`, socket-owned send invoker | 64.18 / 96.02 / 129.22 / 162.06 / 142.88 / 105.00% | 116.56% | 이전 47.57% 대비 68.99%p 개선 |
+| `DEALER_DEALER / tcp`, socket-owned send invoker | 49.64 / 100.19 / 116.24 / 92.00 / 96.00 / 91.57% | 90.94% | 이전 44.14% 대비 46.80%p 개선 |
+
+`PAIR`와 `DEALER`가 매 `send()`에 만들던 capturing lambda를 socket lifetime으로 옮겼다.
+공개 operation builder의 lifetime과 Message ownership은 유지했다. 상세 결과는
+`log/2026-08-12-java-socket-owned-send-invoker.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
