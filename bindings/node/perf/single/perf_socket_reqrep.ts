@@ -52,7 +52,7 @@ function monitorReady(monitor) {
 }
 
 async function waitForRequestSocketsReady(server, serverMonitor, clientMonitor) {
-  const timeoutMs = Math.max(1, Number(process.env.PERF_CONNECT_READY_TIMEOUT_MS ?? 10000));
+  const timeoutMs = Math.max(1, Number(process.env.PERF_CONNECT_READY_TIMEOUT_MS ?? 1000));
   const deadline = Date.now() + timeoutMs;
   const activity = new zlink.Received();
   let serverReady = false;

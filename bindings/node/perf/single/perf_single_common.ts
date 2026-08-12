@@ -258,7 +258,7 @@ function isStopTokenPayload(buffer, size) {
 async function waitForConnectionReady(
   socket,
   connectFn = null,
-  timeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 10000)
+  timeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 1000)
 ) {
   const monitor = socket.monitorOpen([MonitorEventType.ConnectionReady]);
   try {
@@ -287,7 +287,7 @@ async function waitForConnectionReady(
 
 async function waitForMonitorConnectionReady(
   monitor,
-  timeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 10000)
+  timeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 1000)
 ) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -700,7 +700,7 @@ function spawnSenderWorker(workerData): SenderWorker {
 function waitForWorkerMessage<T extends WorkerMessage = WorkerMessage>(
   worker: SenderWorker,
   expectedType: string,
-  timeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 10000)
+  timeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 1000)
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const state = senderWorkerState(worker);
@@ -762,7 +762,7 @@ function waitForWorkerError(worker: SenderWorker): Promise<WorkerMessage> {
 }
 
 function waitForWorkerDone(worker: SenderWorker, durationSeconds) {
-  const readyTimeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 10000);
+  const readyTimeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 1000);
   const activeMs = Math.ceil(Math.max(0, Number(durationSeconds) || 0) * 1000);
   return waitForWorkerMessage(worker, 'done', activeMs + readyTimeoutMs);
 }

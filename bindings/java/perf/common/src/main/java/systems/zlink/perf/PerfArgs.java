@@ -38,7 +38,7 @@ final class PerfArgs {
         int recvTimeoutMs = intEnv("PERF_SINGLE_RCVTIMEO_MS",
             intEnv("PERF_RCVTIMEO_MS", 200));
         int monitorHwm = intEnv("PERF_MONITOR_HWM", 4_096_000);
-        int connectReadyTimeoutMs = intEnv("PERF_CONNECT_READY_TIMEOUT_MS", 10_000);
+        int connectReadyTimeoutMs = intEnv("PERF_CONNECT_READY_TIMEOUT_MS", 1_000);
         for (int i = 3; i < args.length; i += 2) {
             requireOptionValue(args, i);
             switch (args[i]) {
