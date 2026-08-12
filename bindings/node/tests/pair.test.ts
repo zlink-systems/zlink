@@ -114,14 +114,15 @@ test('subscriber caller-provided TopicMessage alternates its single-part wrapper
   const topic = 'prices';
   const received = new zlink.TopicMessage();
 
-  function receive(payload) {
+  async function receive(payload) {
+    pub.publish(topic).message(payload).submit();
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline) {
-      pub.publish(topic).message(payload).submit();
       if (sub.subscribe(received, zlink.RecvFlags.DontWait)
           && received.singlePartOrThrow().data().toString() === payload) {
         return received.singlePartOrThrow();
       }
+      await new Promise((resolve) => setTimeout(resolve, 1));
     }
     throw new Error(`timed out waiting for ${payload}`);
   }
@@ -130,9 +131,12 @@ test('subscriber caller-provided TopicMessage alternates its single-part wrapper
     pub.bind(endpoint);
     sub.connect(endpoint);
     sub.setSubscription(topic);
-    const first = receive('first');
-    const second = receive('second');
-    const third = receive('third');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const first = await receive('first');
+    assert.equal(sub.subscribe(received, zlink.RecvFlags.DontWait), false);
+    assert.strictEqual(received.singlePartOrThrow(), first);
+    const second = await receive('second');
+    const third = await receive('third');
 
     assert.equal(received.topic, topic);
     assert.notStrictEqual(second, first);
