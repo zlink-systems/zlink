@@ -14,16 +14,16 @@
 
 | Size | C Kmsg/s | Java Kmsg/s | Java/C |
 |---|---:|---:|---:|
-| 64B | 1487.995 | 598.525 | 40.22% |
-| 256B | 1420.394 | 739.939 | 52.10% |
-| 1024B | 1126.460 | 558.944 | 49.62% |
-| 4096B | 588.660 | 242.222 | 41.15% |
-| 65536B | 111.554 | 62.768 | 56.27% |
-| 131072B | 59.450 | 39.140 | 65.83% |
-| 산술 평균 | - | - | **50.86%** |
+| 64B | 1499.454 | 691.628 | 46.13% |
+| 256B | 1554.100 | 611.956 | 39.38% |
+| 1024B | 1281.026 | 608.785 | 47.52% |
+| 4096B | 521.569 | 223.901 | 42.93% |
+| 65536B | 112.137 | 61.364 | 54.72% |
+| 131072B | 53.086 | 38.434 | 72.40% |
+| 산술 평균 | - | - | **50.51%** |
 
-이 값은 Java simple one-way 중앙값 목표 60%에 미달한다. 다음 단계는 PUBSUB send·receive hot path의
-allocation과 callback 경계 후보를 A/B로 확인하는 것이다.
+수신 경로는 반복 topic decode cache와 subscriber별 caller-provided `TopicMessage` 재사용을 적용했다.
+이 값은 Java simple one-way 중앙값 목표 60%에 미달한다.
 
-- C report: `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260812_144552_java-pubsub-tcp-current-c.txt`
-- Java report: `bindings/java/perf/results/multi/report/perf_java_multi_linux_20260812_144649_java-pubsub-tcp-current-java.txt`
+- C report: `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260812_150029_java-pubsub-tcp-received-slot-c.txt`
+- Java report: `bindings/java/perf/results/multi/report/perf_java_multi_linux_20260812_150051_java-pubsub-tcp-received-slot-java.txt`

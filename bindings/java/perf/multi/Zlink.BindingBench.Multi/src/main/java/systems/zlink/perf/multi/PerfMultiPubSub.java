@@ -77,6 +77,7 @@ final class PerfMultiPubSub {
         PerfUtil.Metrics metrics = new PerfUtil.Metrics(config);
         List<SubSocket> subscribers = new ArrayList<>(config.clients());
         List<SocketMonitor> monitors = new ArrayList<>(config.clients());
+        List<TopicMessage> receivedSlots = new ArrayList<>(config.clients());
         Context ctx = PerfUtil.newContext(config);
         try {
             for (int i = 0; i < config.clients(); i++) {
@@ -93,6 +94,7 @@ final class PerfMultiPubSub {
                 sub.setSubscription("");
                 subscribers.add(sub);
                 monitors.add(monitor);
+                receivedSlots.add(new TopicMessage());
             }
             // C parity: perf_multi_client_helpers.hpp applies
             // apply_benchmark_socket_options (auto-HWM) BEFORE zlink_connect
@@ -155,8 +157,9 @@ final class PerfMultiPubSub {
                             PollEventFlags.POLLIN)) {
                             continue;
                         }
-                        if (drainSubscriber(subscribers.get(index), config,
-                            metrics, activeEnd)) {
+                        if (drainSubscriber(subscribers.get(index),
+                            receivedSlots.get(index), config, metrics,
+                            activeEnd)) {
                             phaseDone = true;
                         }
                     }
@@ -164,6 +167,12 @@ final class PerfMultiPubSub {
             }
             return metrics.finishMulti(config);
         } finally {
+            for (TopicMessage received : receivedSlots) {
+                try {
+                    received.close();
+                } catch (RuntimeException ignored) {
+                }
+            }
             for (SocketMonitor monitor : monitors) {
                 try {
                     monitor.close();
@@ -217,32 +226,28 @@ final class PerfMultiPubSub {
     // mirroring C perf_multi_pubsub_client.cpp recv_one_pubsub_message: the
     // stop token is checked before header decode and ends the phase; counting
     // remains bounded by the active deadline.
-    private static boolean drainSubscriber(SubSocket sub, PerfUtil.Config config,
+    private static boolean drainSubscriber(SubSocket sub, TopicMessage received,
+                                           PerfUtil.Config config,
                                            PerfUtil.Metrics metrics,
                                            long activeEnd) {
-        TopicMessage received = new TopicMessage();
         while (true) {
             if (!sub.subscribe(received, RecvFlags.DONT_WAIT)) {
                 return false;
             }
-            try {
-                if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
-                    return true;
-                }
-                PerfUtil.Header header = PerfUtil.decodeHeader(
-                    received.firstPart(), config.size());
-                if (header == null) {
-                    continue;
-                }
-                if (header.phase() == PerfUtil.PHASE_COOLDOWN) {
-                    return true;
-                }
-                if (header.phase() == PerfUtil.PHASE_ACTIVE
-                    && System.nanoTime() < activeEnd) {
-                    metrics.recordNanos(header.latencyNanos());
-                }
-            } finally {
-                received.close();
+            if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
+                return true;
+            }
+            PerfUtil.Header header = PerfUtil.decodeHeader(
+                received.firstPart(), config.size());
+            if (header == null) {
+                continue;
+            }
+            if (header.phase() == PerfUtil.PHASE_COOLDOWN) {
+                return true;
+            }
+            if (header.phase() == PerfUtil.PHASE_ACTIVE
+                && System.nanoTime() < activeEnd) {
+                metrics.recordNanos(header.latencyNanos());
             }
         }
     }
