@@ -2585,6 +2585,28 @@ clients `100`, duration `1초`, runs `1`, balanced auto-HWM을 사용했다.
 `tcp / MULTI_PUBSUB` 최종 판정은 통과다. 상세 결과는
 `log/2026-08-12-node-pubsub-tcp-final-measurement.ko.md`에 기록한다.
 
+### 11.35 Go TCP DEALER_DEALER single-part builder 개선
+
+`MULTI_DEALER_DEALER / tcp`만 Core release `0.10.1` C를 먼저, Go를 다음에 단독 실행했다.
+clients `100`, duration `1초`, runs `1`, balanced auto-HWM을 사용했다.
+
+Go의 public `Send()` builder는 첫 single-part를 builder 내부 고정 배열에 보관하고, 두 번째
+part가 추가될 때만 multipart slice를 만든다. single-part send에서 불필요한 heap allocation을
+제거하며 public interface, multipart, ownership, backpressure 동작은 변경하지 않았다.
+
+| Size | C Kmsg/s | Go Kmsg/s | C 대비 |
+|---|---:|---:|---:|
+| 64B | 2739.702 | 886.488 | 32.36% |
+| 256B | 1425.961 | 867.852 | 60.86% |
+| 1024B | 1030.134 | 825.459 | 80.13% |
+| 4096B | 315.663 | 168.347 | 53.33% |
+| 65536B | 94.328 | 91.533 | 97.04% |
+| 131072B | 46.425 | 43.423 | 93.53% |
+| 산술 평균 | - | - | **69.54%** |
+
+산술평균 69.54%는 Go simple one-way 중앙값 목표 65%를 충족한다. 상세 결과는
+`log/2026-08-12-go-dealer-dealer-tcp-single-part-builder.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
