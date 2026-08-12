@@ -1243,18 +1243,45 @@ size별 ratio와 report 경로는 measurement log에 기록했다.
 
 #### 9.4.2 Multi suite
 
-| Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
+아래 평균은 `transport + pattern`별 throughput 산술평균이다. size별 값은 참고 기록으로 두고,
+각 행의 평균을 해당 pattern 그룹의 최소 기준과 비교한다. `MULTI_STREAM`은 지원하는 4개 size의
+평균을 사용한다. 이 표가 Node Multi의 최종 판정 기준이다.
+
+| Transport | Pattern | 평균 | 최소 기준 | 판정 |
+|-----------|---------|-----:|----------:|------|
+| `tcp` | `MULTI_DEALER_DEALER` | 40.74% | 35% | 통과 |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 50.80% | 30% | 통과 |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 38.01% | 30% | 통과 |
+| `tcp` | `MULTI_PUBSUB` | 30.56% | 35% | 보류 |
+| `tcp` | `MULTI_STREAM` | 54.71% | 35% | 통과 |
+| `ws` | `MULTI_DEALER_DEALER` | 48.31% | 35% | 통과 |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 41.06% | 30% | 통과 |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 38.60% | 30% | 통과 |
+| `ws` | `MULTI_PUBSUB` | 39.58% | 35% | 통과 |
+| `ws` | `MULTI_STREAM` | 62.21% | 35% | 통과 |
+| `wss` | `MULTI_DEALER_DEALER` | 58.23% | 35% | 통과 |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 57.24% | 30% | 통과 |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 52.97% | 30% | 통과 |
+| `wss` | `MULTI_PUBSUB` | 40.54% | 35% | 통과 |
+| `wss` | `MULTI_STREAM` | 40.10% | 35% | 통과 |
+| `tls` | `MULTI_DEALER_DEALER` | 70.03% | 35% | 통과 |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 49.83% | 30% | 통과 |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 49.58% | 30% | 통과 |
+| `tls` | `MULTI_PUBSUB` | 38.22% | 35% | 통과 |
+| `tls` | `MULTI_STREAM` | 42.79% | 35% | 통과 |
+
+| Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 이전 size별 측정 기록 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 21.63% | 24.65% | 38.28% | 22.17% | 36.75% | 51.07% | 보류·평균 32.42%. 두 POSDDD 경계 정리와 Sol 검토 뒤 추가 후보 없음. |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 24.47% | 26.18% | 28.12% | 23.31% | 48.72% | 61.93% | 통과·평균 35.45%. Node runner 이름은 `MULTI_DEALER_ROUTER`다. |
-| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 22.49% | 23.99% | 24.78% | 22.76% | 51.49% | 56.30% | 통과·평균 33.63%. Node runner 이름은 `MULTI_ROUTER_ROUTER`다. |
-| `tcp` | `MULTI_PUBSUB` | 17.10% | 19.51% | 19.01% | 33.43% | 38.81% | 41.57% | 보류·평균 28.24%. |
-| `tcp` | `MULTI_STREAM` | 13.36% | 14.85% | 15.13% | 해당 없음 | 63.51% | 해당 없음 | 보류·평균 26.71%. |
+| `tcp` | `MULTI_DEALER_DEALER` | 21.63% | 24.65% | 38.28% | 22.17% | 36.75% | 51.07% | 이후 재측정 평균 40.74%. 최종 pattern 종합 평균 54.33%로 통과. |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 24.47% | 26.18% | 28.12% | 23.31% | 48.72% | 61.93% | 이후 재측정 평균 50.80%. 최종 pattern 종합 평균 49.73%로 통과. Node runner 이름은 `MULTI_DEALER_ROUTER`다. |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 22.49% | 23.99% | 24.78% | 22.76% | 51.49% | 56.30% | 이후 재측정 평균 38.01%. 최종 pattern 종합 평균 44.79%로 통과. Node runner 이름은 `MULTI_ROUTER_ROUTER`다. |
+| `tcp` | `MULTI_PUBSUB` | 17.10% | 19.51% | 19.01% | 33.43% | 38.81% | 41.57% | 이후 재측정 평균 30.56%. TCP 최소 기준 35%에 미달. |
+| `tcp` | `MULTI_STREAM` | 13.36% | 14.85% | 15.13% | 해당 없음 | 63.51% | 해당 없음 | 이후 재측정 평균 54.71%. TCP 최소 기준 35% 통과. |
 | `ws` | `MULTI_DEALER_DEALER` | 16.19% | 29.84% | 27.07% | 48.75% | 80.83% | 87.18% | 통과·평균 48.31%. |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 26.08% | 30.11% | 30.52% | 31.97% | 61.14% | 66.54% | 통과·평균 41.06%. |
 | `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 24.92% | 26.59% | 27.38% | 32.19% | 55.76% | 64.74% | 통과·평균 38.60%. |
-| `ws` | `MULTI_PUBSUB` | 16.71% | 18.19% | 21.29% | 29.14% | 66.48% | 54.44% | 보류·평균 34.37%. |
-| `ws` | `MULTI_STREAM` | 15.86% | 15.04% | 15.64% | 해당 없음 | 81.31% | 해당 없음 | 통과·평균 31.96%. |
+| `ws` | `MULTI_PUBSUB` | 16.71% | 18.19% | 21.29% | 29.14% | 66.48% | 54.44% | 이후 재측정 평균 39.58%. 최종 pattern 종합 평균 37.42%로 통과. |
+| `ws` | `MULTI_STREAM` | 15.86% | 15.04% | 15.64% | 해당 없음 | 81.31% | 해당 없음 | 이후 재측정 평균 62.21%. WS 최소 기준 35% 통과. |
 | `wss` | `MULTI_DEALER_DEALER` | 17.26% | 24.38% | 31.84% | 46.94% | 90.19% | 138.74% | 통과·평균 58.23%. |
 | `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 39.44% | 39.70% | 39.05% | 53.47% | 84.07% | 87.73% | 통과·평균 57.24%. |
 | `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 33.52% | 37.83% | 38.00% | 43.70% | 83.79% | 80.96% | 통과·평균 52.97%. |
