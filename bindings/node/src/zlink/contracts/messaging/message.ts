@@ -119,7 +119,12 @@ export class Message {
   data(): Buffer {
     // The returned Buffer is writable. Later send must therefore make a
     // payload copy instead of sharing native storage with an in-flight send.
-    writableViews.add(this);
+    // Managed Buffers never share a native frame on submit, so recording
+    // their writable view cannot affect ownership. Keep the tracking state
+    // only for native-backed messages.
+    if (this._nativeMessage !== undefined) {
+      writableViews.add(this);
+    }
     return this.ensureBuffer();
   }
 
@@ -267,7 +272,6 @@ export function acquireMessageWrapper(
   state._metadata = metadata ?? EMPTY_METADATA;
   state._nativeMessage = nativeMessage;
   state._released = false;
-  writableViews.delete(message);
   return message;
 }
 
@@ -276,13 +280,16 @@ function releaseMessageWrapper(message: Message): void {
   if (state._released) {
     return;
   }
+  const nativeBacked = state._nativeMessage !== undefined;
   state._buffer = EMPTY_BUFFER;
   state._refCount = 0;
   state._properties = EMPTY_PROPERTIES;
   state._metadata = EMPTY_METADATA;
   state._nativeMessage = undefined;
   state._released = true;
-  writableViews.delete(message);
+  if (nativeBacked) {
+    writableViews.delete(message);
+  }
   if (messageWrapperPool.length < MESSAGE_WRAPPER_POOL_CAPACITY) {
     messageWrapperPool.push(message);
   }
@@ -290,12 +297,15 @@ function releaseMessageWrapper(message: Message): void {
 
 function markMessageConsumed(message: Message): void {
   const state = message as unknown as MutableMessageState;
+  const nativeBacked = state._nativeMessage !== undefined;
   state._buffer = EMPTY_BUFFER;
   state._refCount = 0;
   state._properties = EMPTY_PROPERTIES;
   state._metadata = EMPTY_METADATA;
   state._nativeMessage = undefined;
-  writableViews.delete(message);
+  if (nativeBacked) {
+    writableViews.delete(message);
+  }
 }
 
 /** @internal */

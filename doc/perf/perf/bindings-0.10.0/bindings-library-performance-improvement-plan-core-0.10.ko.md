@@ -2345,6 +2345,19 @@ runs `1`, balanced auto-HWM에서 C를 먼저, Node를 다음에 단독 실행�
 native 문자열 생성 감소보다 raw object property shape 변화와 fallback 처리 비용이 더 컸다.
 상세 결과는 `log/2026-08-12-node-pub-empty-topic-rejected.ko.md`에 기록한다.
 
+### 11.28 Node PUBSUB managed Message writable-state 분리 측정 결과
+
+`MULTI_PUBSUB / tcp`, 64·256·1024·4096·65536·131072B, clients `100`, duration `1초`,
+runs `1`, balanced auto-HWM에서 C를 먼저, Node를 다음에 단독 실행했다.
+
+| 변경 | C 대비 throughput 비율 (size 순서) | 산술평균 | 결과 |
+|---|---|---:|---|
+| managed Message의 writable `WeakSet` 생략 | 20.45 / 21.00 / 22.30 / 34.58 / 41.02 / 46.94% | 31.05% | 이전 30.62% 대비 0.43%p 개선 |
+
+native frame 공유 여부와 무관했던 managed Message의 writable-state 기록을 제거했다. native-backed
+Message의 send ownership 규칙은 유지한다. 상세 결과는
+`log/2026-08-12-node-pub-managed-weakset.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
