@@ -29,10 +29,9 @@ final class PerfMultiPubSub {
     private static final String TOPIC = "bench";
     private static final MonitorEventType READY_EVENT =
         MonitorEventType.CONNECTION_READY;
-    private static final long STOP_DRAIN_GRACE_NANOS =
-        Duration.ofMillis(500).toNanos();
     private static final long STOP_PUBLISH_GRACE_NANOS =
         Duration.ofSeconds(2).toNanos();
+    private static final int RECEIVE_POLL_TIMEOUT_MS = 100;
 
     private PerfMultiPubSub() {
     }
@@ -131,22 +130,17 @@ final class PerfMultiPubSub {
                 pollSockets, PollEventFlags.POLLIN)) {
                 long activeEnd = System.nanoTime()
                     + config.durationSeconds() * 1_000_000_000L;
-                // The active deadline is authoritative for measurement. After
-                // it expires, briefly drain for the stop token so normal
-                // teardown completes, but do not let a large PUB/SUB backlog
-                // turn the control terminator into an unbounded test hang.
+                // Match C run_recv_duration: the active deadline ends the
+                // receive loop. A delayed stop token must not extend the
+                // measurement or drain an already queued PUB/SUB backlog.
                 boolean phaseDone = false;
                 while (!phaseDone) {
                     long remainingNs = activeEnd - System.nanoTime();
-                    if (remainingNs <= -STOP_DRAIN_GRACE_NANOS) {
+                    if (remainingNs <= 0L) {
                         break;
                     }
-                    long pollBudgetNs = remainingNs > 0L
-                        ? remainingNs
-                        : Math.max(1L,
-                            STOP_DRAIN_GRACE_NANOS + remainingNs);
-                    int waitMs = (int) Math.min(Integer.MAX_VALUE,
-                        Math.max(1L, pollBudgetNs / 1_000_000L));
+                    int waitMs = (int) Math.min(RECEIVE_POLL_TIMEOUT_MS,
+                        Math.max(1L, remainingNs / 1_000_000L));
                     int readyCount = pollSet.poll(waitMs);
                     if (readyCount <= 0) {
                         continue;
@@ -231,6 +225,12 @@ final class PerfMultiPubSub {
                                            PerfUtil.Metrics metrics,
                                            long activeEnd) {
         while (true) {
+            // C checks the active deadline while draining each ready socket.
+            // Do the same so one busy SUB cannot consume the post-deadline
+            // interval before the outer loop observes it.
+            if (System.nanoTime() >= activeEnd) {
+                return true;
+            }
             if (!sub.subscribe(received, RecvFlags.DONT_WAIT)) {
                 return false;
             }
