@@ -20,8 +20,6 @@ public final class PerfSocketPollSet implements AutoCloseable {
     private static final int MASK_POLLCOMPLETION = 32;
     private static final Duration WAIT_FOREVER = Duration.ofMillis(-1);
     private final Socket[] sockets;
-    private final int[] readyIndexes;
-    private final int[] readyMasks;
     private final int[] currentMasks;
     private final Poller poller = Zlink.createPoller();
     private final PollEvents readyEventsBuffer;
@@ -30,8 +28,6 @@ public final class PerfSocketPollSet implements AutoCloseable {
     private PerfSocketPollSet(List<Socket> sockets,
                               PollEventFlags... initialEvents) {
         this.sockets = sockets.toArray(Socket[]::new);
-        this.readyIndexes = new int[this.sockets.length];
-        this.readyMasks = new int[this.sockets.length];
         this.currentMasks = new int[this.sockets.length];
         this.readyEventsBuffer = new PollEvents(
             Math.max(1, this.sockets.length));
@@ -68,14 +64,14 @@ public final class PerfSocketPollSet implements AutoCloseable {
         if (offset < 0 || offset >= readyCount) {
             throw new IndexOutOfBoundsException("ready offset " + offset);
         }
-        return readyIndexes[offset];
+        return (int) readyEventsBuffer.slot(offset);
     }
 
     public int readyMaskAt(int offset) {
         if (offset < 0 || offset >= readyCount) {
             throw new IndexOutOfBoundsException("ready offset " + offset);
         }
-        return readyMasks[offset];
+        return readyEventsBuffer.revents(offset);
     }
 
     public boolean readyHasEventAt(int offset, PollEventFlags event) {
@@ -94,18 +90,7 @@ public final class PerfSocketPollSet implements AutoCloseable {
             }
             throw ex;
         }
-        int count = readyEventsBuffer.readyCount();
-        for (int i = 0; i < count; i++) {
-            long slot = readyEventsBuffer.slot(i);
-            if (slot >= 0 && slot < sockets.length) {
-                int index = (int) slot;
-                int readyMask = readyEventsBuffer.revents(i);
-                if (readyMask != 0) {
-                    readyIndexes[readyCount++] = index;
-                    readyMasks[readyCount - 1] = readyMask;
-                }
-            }
-        }
+        readyCount = readyEventsBuffer.readyCount();
         return readyCount;
     }
 

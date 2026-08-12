@@ -14,16 +14,17 @@
 
 | Size | C Kmsg/s | Java Kmsg/s | Java/C |
 |---|---:|---:|---:|
-| 64B | 1499.454 | 691.628 | 46.13% |
-| 256B | 1554.100 | 611.956 | 39.38% |
-| 1024B | 1281.026 | 608.785 | 47.52% |
-| 4096B | 521.569 | 223.901 | 42.93% |
-| 65536B | 112.137 | 61.364 | 54.72% |
-| 131072B | 53.086 | 38.434 | 72.40% |
-| 산술 평균 | - | - | **50.51%** |
+| 64B | 1473.449 | 537.636 | 36.49% |
+| 256B | 1484.527 | 579.162 | 39.01% |
+| 1024B | 882.126 | 455.858 | 51.68% |
+| 4096B | 427.321 | 232.526 | 54.41% |
+| 65536B | 99.603 | 67.959 | 68.23% |
+| 131072B | 57.259 | 33.694 | 58.84% |
+| 산술 평균 | - | - | **51.44%** |
 
 수신 경로는 반복 topic decode cache와 subscriber별 caller-provided `TopicMessage` 재사용을 적용했다.
+Java perf poller는 이미 채운 `PollEvents`를 다시 복사하지 않고 직접 읽는다.
 이 값은 Java simple one-way 중앙값 목표 60%에 미달한다.
 
-- C report: `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260812_150029_java-pubsub-tcp-received-slot-c.txt`
-- Java report: `bindings/java/perf/results/multi/report/perf_java_multi_linux_20260812_150051_java-pubsub-tcp-received-slot-java.txt`
+- C report: `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260812_150415_java-pubsub-tcp-direct-pollevents-c.txt`
+- Java report: `bindings/java/perf/results/multi/report/perf_java_multi_linux_20260812_150438_java-pubsub-tcp-direct-pollevents-java.txt`
