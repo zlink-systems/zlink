@@ -2167,6 +2167,31 @@ socket은 routed sender 연결을 각각 담당한다. public interface, Core AB
 공개 operation builder의 lifetime과 Message ownership은 유지했다. 상세 결과는
 `log/2026-08-12-java-socket-owned-send-invoker.ko.md`에 기록한다.
 
+### 11.14 Node PUB scalar Buffer consume 최적화 측정 결과
+
+`MULTI_PUBSUB / tcp`, 64·256·1024·4096·65536·131072B, clients `100`, duration `1초`,
+runs `1`, balanced auto-HWM 조건에서 C를 먼저, Node를 다음에 단독 실행했다.
+
+| 변경 | C 대비 throughput 비율 (size 순서) | 산술평균 | 결과 |
+|---|---|---:|---|
+| scalar Buffer의 consume 검사 생략 | 17.51 / 20.50 / 19.00 / 27.52 / 46.55 / 52.66% | 30.62% | 이전 28.54% 대비 2.08%p 개선 |
+
+native-backed `Message`와 multipart는 기존 ownership consume 경로를 유지하고 scalar Buffer만
+성공 뒤 property 검사를 생략한다. 상세 결과는 `log/2026-08-12-node-pub-buffer-consume.ko.md`에 기록한다.
+
+### 11.15 Node STREAM inline routing-id 측정 결과
+
+`MULTI_STREAM / tcp`, 64·256·1024·65536B, clients `100`, duration `1초`, runs `1`,
+balanced auto-HWM 조건에서 C를 먼저, Node를 다음에 단독 실행했다.
+
+| 변경 | C 대비 throughput 비율 (size 순서) | 산술평균 | 결과 |
+|---|---|---:|---|
+| inline routing-id storage | 12.91 / 13.53 / 14.90 / 56.03% | 24.34% | packet별 routing-id heap allocation 제거·POSDDD 정리 유지 |
+
+STREAM callback의 고정 routing-id를 가변 vector가 아닌 payload inline storage에 보관한다.
+public routing-id bytes와 packet callback contract는 유지했다. 상세 결과는
+`log/2026-08-12-node-stream-inline-routing-id.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.

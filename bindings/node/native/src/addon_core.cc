@@ -28,14 +28,16 @@ static const size_t k_socket_monitor_handler_slot_count = 8;
 static const int32_t k_stream_dispatch_len32be = 1;
 struct stream_js_payload_t
 {
-    stream_js_payload_t () : packet_count (0), body_materialization (0) {}
+    stream_js_payload_t () : packet_count (0), body_materialization (0) {
+        memset (&routing_id, 0, sizeof (routing_id));
+    }
     ~stream_js_payload_t ()
     {
         if (packet_count > 0)
             close_recv_parts (packets, packet_count);
     }
 
-    std::vector<unsigned char> routing_id;
+    zlink_routing_id_t routing_id;
     zlink_msg_t packets[2];
     size_t packet_count;
     int body_materialization;
@@ -686,8 +688,8 @@ void stream_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *d
         return;
 
     napi_value argv[2];
-    if (napi_create_buffer_copy (env, payload->routing_id.size (),
-                                 payload->routing_id.empty () ? NULL : payload->routing_id.data (),
+    if (napi_create_buffer_copy (env, payload->routing_id.size,
+                                 payload->routing_id.size == 0 ? NULL : payload->routing_id.data,
                                  NULL, &argv[0])
         != napi_ok) {
         return;
@@ -823,7 +825,7 @@ void stream_on_packet_slot (void *stream_,
         tsfn = state->tsfn;
         payload.reset (new stream_js_payload_t ());
         payload->body_materialization = state->body_materialization;
-        payload->routing_id.assign (rid_->data, rid_->data + rid_->size);
+        copy_routing_id (&payload->routing_id, rid_);
         if (zlink_msg_init (&payload->packets[0]) != 0) {
             close_messages ();
             return;
@@ -2114,6 +2116,7 @@ napi_value socket_publish (napi_env env, napi_callback_info info)
     zlink_msg_t single_part;
     bool use_single_part = false;
     bool is_array = false;
+    bool contains_native_frame = false;
     napi_is_array (env, argv[2], &is_array);
     bool is_buf = false;
     napi_valuetype payload_type = napi_undefined;
@@ -2123,7 +2126,8 @@ napi_value socket_publish (napi_env env, napi_callback_info info)
             return NULL;
     } else if ((napi_is_buffer (env, argv[2], &is_buf) == napi_ok && is_buf)
                || payload_type == napi_object) {
-        if (!init_msg_from_value (env, argv[2], &single_part))
+        if (!init_msg_from_value (env, argv[2], &single_part,
+                                  &contains_native_frame))
             return throw_last_error (env, "publish failed");
         use_single_part = true;
     } else if (!build_msg_vector (env, argv[2], &parts)) {
@@ -2145,7 +2149,8 @@ napi_value socket_publish (napi_env env, napi_callback_info info)
     if (rc != ZLINK_SUBMIT_OK) {
         return throw_last_error (env, "publish failed");
     }
-    consume_native_message_value (env, argv[2]);
+    if (is_array || contains_native_frame)
+        consume_native_message_value (env, argv[2]);
 
     napi_value out;
     napi_create_int32 (env, static_cast<int32_t> (total), &out);
@@ -2168,6 +2173,7 @@ napi_value socket_try_publish (napi_env env, napi_callback_info info)
     zlink_msg_t single_part;
     bool use_single_part = false;
     bool is_array = false;
+    bool contains_native_frame = false;
     napi_is_array (env, argv[2], &is_array);
     bool is_buf = false;
     napi_valuetype payload_type = napi_undefined;
@@ -2186,7 +2192,8 @@ napi_value socket_try_publish (napi_env env, napi_callback_info info)
             return throw_last_error (env, "publishNoWaitResult failed");
         use_single_part = true;
     } else if (payload_type == napi_object) {
-        if (!init_msg_from_value (env, argv[2], &single_part))
+        if (!init_msg_from_value (env, argv[2], &single_part,
+                                  &contains_native_frame))
             return throw_last_error (env, "publishNoWaitResult failed");
         use_single_part = true;
     } else if (!build_msg_vector (env, argv[2], &parts)) {
@@ -2200,7 +2207,7 @@ napi_value socket_try_publish (napi_env env, napi_callback_info info)
     if (rc < 0) {
         return throw_last_error (env, "publishNoWaitResult failed");
     }
-    if (rc == ZLINK_SUBMIT_OK)
+    if (rc == ZLINK_SUBMIT_OK && (is_array || contains_native_frame))
         consume_native_message_value (env, argv[2]);
     napi_value out;
     napi_create_int32 (env, rc, &out);
