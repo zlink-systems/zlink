@@ -2250,6 +2250,19 @@ public API는 유지했다. 상세 결과는 `log/2026-08-12-node-stream-single-
 않는다. public routing-id·send·reply 계약과 request/reply metadata는 변경하지 않았다. 상세 결과는
 `log/2026-08-12-node-router-router-zero-metadata.ko.md`에 기록한다.
 
+### 11.20 Node STREAM routing-id cache 측정 결과
+
+`MULTI_STREAM / tcp`, 64·256·1024·65536B, clients `100`, duration `1초`, runs `1`,
+balanced auto-HWM 조건에서 C를 먼저, Node를 다음에 단독 실행했다.
+
+| 변경 | C 대비 throughput 비율 (size 순서) | 산술평균 | 결과 |
+|---|---|---:|---|
+| peer별 routing-id Buffer 재사용 | 15.89 / 17.87 / 16.90 / 62.19% | 28.21% | 이전 27.33% 대비 0.88%p 개선 |
+
+native cache는 stream JS callback thread에서만 `napi_ref`를 만들고 조회한다. TSFN finalizer가
+모든 reference를 해제하며, packet I/O callback과 public routing-id contract는 유지한다. 상세 결과는
+`log/2026-08-12-node-stream-routing-id-cache.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.

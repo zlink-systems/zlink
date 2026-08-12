@@ -67,6 +67,7 @@ struct stream_js_state_t
     napi_threadsafe_function tsfn;
     std::atomic<int> stop_requested;
     int body_materialization;
+    std::unordered_map<std::string, napi_ref> routing_id_cache;
 };
 
 static std::mutex g_stream_slots_mu;
@@ -142,6 +143,20 @@ void reset_stream_slot_unsafe (stream_js_state_t *state)
     state->socket = NULL;
     state->stop_requested.store (0, std::memory_order_release);
     state->body_materialization = 0;
+}
+
+void clear_stream_routing_id_cache (napi_env env, stream_js_state_t *state)
+{
+    if (!state)
+        return;
+    if (env) {
+        for (std::unordered_map<std::string, napi_ref>::iterator it =
+               state->routing_id_cache.begin ();
+             it != state->routing_id_cache.end (); ++it) {
+            napi_delete_reference (env, it->second);
+        }
+    }
+    state->routing_id_cache.clear ();
 }
 
 void reset_send_ready_handler_slot_unsafe (send_ready_handler_js_state_t *state)
@@ -622,6 +637,7 @@ void stream_tsfn_finalize (napi_env env, void *finalize_data, void *finalize_hin
     if (!state)
         return;
     std::lock_guard<std::mutex> lock (g_stream_slots_mu);
+    clear_stream_routing_id_cache (env, state);
     reset_stream_slot_unsafe (state);
 }
 
@@ -688,11 +704,26 @@ void stream_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *d
         return;
 
     napi_value argv[2];
-    if (napi_create_buffer_copy (env, payload->routing_id.size,
-                                 payload->routing_id.size == 0 ? NULL : payload->routing_id.data,
-                                 NULL, &argv[0])
-        != napi_ok) {
-        return;
+    const std::string routing_id_key (
+      reinterpret_cast<const char *> (payload->routing_id.data), payload->routing_id.size);
+    std::unordered_map<std::string, napi_ref>::iterator cached =
+      state->routing_id_cache.find (routing_id_key);
+    if (cached != state->routing_id_cache.end ()) {
+        if (napi_get_reference_value (env, cached->second, &argv[0]) != napi_ok)
+            return;
+    } else {
+        if (state->routing_id_cache.size () >= 16384)
+            clear_stream_routing_id_cache (env, state);
+        if (napi_create_buffer_copy (env, payload->routing_id.size,
+                                     payload->routing_id.size == 0 ? NULL : payload->routing_id.data,
+                                     NULL, &argv[0])
+            != napi_ok) {
+            return;
+        }
+        napi_ref reference = NULL;
+        if (napi_create_reference (env, argv[0], 1, &reference) != napi_ok)
+            return;
+        state->routing_id_cache.emplace (routing_id_key, reference);
     }
     if (napi_create_array_with_length (env, payload->packet_count, &argv[1]) != napi_ok) {
         return;
