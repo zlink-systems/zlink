@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { ActorRef } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkResolvedActorRoute } from '../locations';
+import { decodeRoutingId, encodeRoutingIdStorageHex } from '../routing-id';
 
 export const ZLINK_MESSAGE_FOLLOW_MAX_HOPS = 8;
 
@@ -9,6 +10,8 @@ export interface ZLinkActorMessageFollowOwnerFence {
   readonly ownerId: string;
   readonly ownerLeaseGeneration: string;
   readonly nodeRid: string;
+  /** Canonical opaque RoutingId bytes. Older wire contexts may omit this field. */
+  readonly nodeRidHex?: string;
   readonly nodeGeneration: string;
   readonly authorityOwnerGeneration: string;
 }
@@ -48,6 +51,7 @@ export function createInitialActorMessageFollowContext(
     ownerId: route.ownerId,
     ownerLeaseGeneration: route.ownerLeaseGeneration,
     nodeRid: String(route.actorRef.nodeRid),
+    nodeRidHex: encodeRoutingIdStorageHex(route.actorRef.nodeRid),
     nodeGeneration: route.ownerNodeGeneration,
     authorityOwnerGeneration: route.authorityOwnerGeneration
   });
@@ -104,8 +108,10 @@ export function decodeActorMessageFollowContext(
     throw invalidContext('visitedOwners does not match hopCount');
   }
   const visitedOwners = [...input.visitedOwners] as string[];
+  const targetOwnerKeys = messageFollowOwnerFenceCompatibleKeys(targetOwner);
   if (new Set(visitedOwners).size !== visitedOwners.length
-      || visitedOwners[visitedOwners.length - 1] !== messageFollowOwnerFenceKey(targetOwner)) {
+      || !targetOwnerKeys.includes(visitedOwners[visitedOwners.length - 1])
+      || visitedOwners.slice(0, -1).some(key => targetOwnerKeys.includes(key))) {
     throw invalidContext('visited owner fence chain is invalid');
   }
   return freezeContext({
@@ -135,7 +141,8 @@ export function advanceActorMessageFollowContext(
     throw invalidContext('Message Follow reached the 8-hop limit');
   }
   const targetKey = messageFollowOwnerFenceKey(targetOwner);
-  if (context.visitedOwners.includes(targetKey)) {
+  if (messageFollowOwnerFenceCompatibleKeys(targetOwner)
+    .some(key => context.visitedOwners.includes(key))) {
     throw invalidContext('Message Follow owner loop was detected');
   }
   return freezeContext({
@@ -188,13 +195,15 @@ export function verifyActorMessageFollowPayload(
 export function messageFollowOwnerFenceKey(
   fence: ZLinkActorMessageFollowOwnerFence
 ): string {
-  return [
-    fence.nodeRid,
+  return JSON.stringify([
+    'zlink-actor-message-follow-owner-fence',
+    2,
+    fence.nodeRidHex ?? encodeRoutingIdStorageHex(fence.nodeRid),
     fence.nodeGeneration,
     fence.ownerId,
     fence.ownerLeaseGeneration,
     fence.authorityOwnerGeneration
-  ].join('\u0000');
+  ]);
 }
 
 export function messageFollowOwnerFencesEqual(
@@ -204,13 +213,21 @@ export function messageFollowOwnerFencesEqual(
   return messageFollowOwnerFenceKey(left) === messageFollowOwnerFenceKey(right);
 }
 
+export function messageFollowOwnerNodeRid(
+  fence: ZLinkActorMessageFollowOwnerFence
+): ReturnType<typeof decodeRoutingId> {
+  return decodeRoutingId(fence.nodeRid, fence.nodeRidHex);
+}
+
 export function ownerFence(input: {
   readonly ownerId: string;
   readonly ownerLeaseGeneration: bigint | string;
   readonly nodeRid: string;
+  readonly nodeRidHex?: string;
   readonly nodeGeneration: bigint | string;
   readonly authorityOwnerGeneration: bigint | string;
 }): ZLinkActorMessageFollowOwnerFence {
+  const nodeRidHex = optionalNodeRidHex(input.nodeRidHex, 'nodeRidHex');
   const value = {
     ownerId: requireText(input.ownerId, 'ownerId'),
     ownerLeaseGeneration: requirePositiveBigInt(
@@ -218,6 +235,7 @@ export function ownerFence(input: {
       'ownerLeaseGeneration'
     ),
     nodeRid: requireText(input.nodeRid, 'nodeRid'),
+    ...(nodeRidHex === undefined ? {} : { nodeRidHex }),
     nodeGeneration: requirePositiveBigInt(String(input.nodeGeneration), 'nodeGeneration'),
     authorityOwnerGeneration: requirePositiveBigInt(
       String(input.authorityOwnerGeneration),
@@ -242,6 +260,7 @@ function decodeOwnerFence(
       `${name}.ownerLeaseGeneration`
     ),
     nodeRid: requireText(input.nodeRid, `${name}.nodeRid`),
+    nodeRidHex: optionalNodeRidHex(input.nodeRidHex, `${name}.nodeRidHex`),
     nodeGeneration: requirePositiveBigInt(input.nodeGeneration, `${name}.nodeGeneration`),
     authorityOwnerGeneration: requirePositiveBigInt(
       input.authorityOwnerGeneration,
@@ -285,6 +304,34 @@ function requirePositiveBigInt(value: unknown, name: string): string {
     throw invalidContext(`${name} must be a positive decimal integer`);
   }
   return value;
+}
+
+function optionalNodeRidHex(value: unknown, name: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length === 0 || value.length % 2 !== 0
+      || !/^[0-9a-f]+$/.test(value)) {
+    throw invalidContext(`${name} must be non-empty lowercase hexadecimal bytes`);
+  }
+  return value;
+}
+
+function messageFollowOwnerFenceCompatibleKeys(
+  fence: ZLinkActorMessageFollowOwnerFence
+): readonly string[] {
+  const canonical = messageFollowOwnerFenceKey(fence);
+  const textHex = encodeRoutingIdStorageHex(fence.nodeRid);
+  if (fence.nodeRid.includes('\u0000')
+      || fence.ownerId.includes('\u0000')
+      || (fence.nodeRidHex !== undefined && fence.nodeRidHex !== textHex)) {
+    return [canonical];
+  }
+  return [canonical, [
+    fence.nodeRid,
+    fence.nodeGeneration,
+    fence.ownerId,
+    fence.ownerLeaseGeneration,
+    fence.authorityOwnerGeneration
+  ].join('\u0000')];
 }
 
 function optionalPositiveSafeInteger(value: unknown, name: string): number | undefined {

@@ -1193,6 +1193,50 @@ final class ZLinkJavaRawSpotNode
     }
 
     @Override
+    public void installRelocatingActorBoundSession(
+        ZLinkServiceM6BWireCodec.ActorRouteFence actorRoute,
+        ZLinkServiceM6BWireCodec.SessionOwnerFence session) {
+        Objects.requireNonNull(actorRoute, "actorRoute");
+        Objects.requireNonNull(session, "session");
+        ZLinkBackendActorRef actor = actorRoute.actor();
+        if (!routingId().equals(actor.nodeRid())) {
+            throw new IllegalStateException(
+                "relocating bound Session does not target this SpotNode");
+        }
+        RemoteStreamBinding candidate = new RemoteStreamBinding(
+            session.nodeRid(),
+            session.nodeGeneration(),
+            session.ownerId(),
+            session.ownerLeaseGeneration(),
+            session.sessionRid(),
+            actor,
+            actorRoute.targetNodeGeneration(),
+            session.bindingGeneration(),
+            actorRoute.authorityOwnerGeneration(),
+            actorRoute.ownerLeaseGeneration());
+        boolean installed = false;
+        synchronized (this) {
+            RemoteStreamBinding current =
+                remoteStreamBindings.get(actor.actorId());
+            if (candidate.equals(current)) {
+                return;
+            }
+            if (current != null) {
+                throw new IllegalStateException(
+                    "relocating bound Session conflicts with an installed route");
+            }
+            remoteStreamBindings.put(actor.actorId(), candidate);
+            remoteStreamSequences.putIfAbsent(actor.actorId(), 0L);
+            streamBindings.remove(actor.actorId());
+            installed = true;
+        }
+        if (installed) {
+            admissionReadyHandler.accept(ZLinkBackendAdmissionKey.boundSession(
+                actor.nodeRid(), actor.actorId(), actor.generation()));
+        }
+    }
+
+    @Override
     public Optional<ZLinkInternalSpotNode.BoundSessionRoute>
         boundSessionRoute(ZLinkBackendActorRef actor) {
         RemoteStreamBinding remote = remoteStreamBindings.get(actor.actorId());
@@ -1711,30 +1755,30 @@ final class ZLinkJavaRawSpotNode
                 reply,
                 failure);
         }
-        if (!isCurrentActor(actor)) {
-            ZLinkInternalSpotNode.MessageFollowRelayHandler relay =
-                messageFollowRelayHandler;
-            if (relay != null) {
-                try {
-                    if (relay.handle(
-                        sourceNodeRid,
-                        sourceNodeGeneration,
-                        header,
-                        acceptedJournalRecord.get(),
-                        parts,
-                        contentType,
-                        inboundDispatchLease,
-                        reply,
-                        failure)) {
-                        return true;
-                    }
-                } catch (RuntimeException relayFailure) {
-                    streamTrace("remote enqueue relay failed actor="
-                        + actorSummary(actor)
-                        + " source=" + sourceNodeRid
-                        + " error=" + relayFailure.getClass().getSimpleName());
+        ZLinkInternalSpotNode.MessageFollowRelayHandler relay =
+            messageFollowRelayHandler;
+        if (relay != null) {
+            try {
+                if (relay.handle(
+                    sourceNodeRid,
+                    sourceNodeGeneration,
+                    header,
+                    acceptedJournalRecord.get(),
+                    parts,
+                    contentType,
+                    inboundDispatchLease,
+                    reply,
+                    failure)) {
+                    return true;
                 }
+            } catch (RuntimeException relayFailure) {
+                streamTrace("remote enqueue relay failed actor="
+                    + actorSummary(actor)
+                    + " source=" + sourceNodeRid
+                    + " error=" + relayFailure.getClass().getSimpleName());
             }
+        }
+        if (!isCurrentActor(actor)) {
             streamTrace("remote enqueue reject actor=" + actorSummary(actor)
                 + " source=" + sourceNodeRid
                 + " reason=not-current-actor current="
@@ -1745,11 +1789,16 @@ final class ZLinkJavaRawSpotNode
             return false;
         }
         long currentAuthority = actorAuthorityOwnerGeneration(actor);
-        if (currentAuthority != header.target().authorityOwnerGeneration()) {
+        long currentOwnerLease = actorAuthorityOwnerLeaseGeneration(actor);
+        if (currentAuthority != header.target().authorityOwnerGeneration()
+            || currentOwnerLease
+                != header.target().ownerLeaseGeneration()) {
             streamTrace("remote enqueue reject actor=" + actorSummary(actor)
                 + " source=" + sourceNodeRid
-                + " reason=authority-generation expected=" + currentAuthority
-                + " actual=" + header.target().authorityOwnerGeneration());
+                + " reason=authority-fence expected=" + currentAuthority
+                + "/" + currentOwnerLease
+                + " actual=" + header.target().authorityOwnerGeneration()
+                + "/" + header.target().ownerLeaseGeneration());
             if (inboundDispatchLease != null) {
                 inboundDispatchLease.close();
             }
@@ -2005,6 +2054,17 @@ final class ZLinkJavaRawSpotNode
         ZLinkServiceM6BWireCodec.BoundSessionBind command) {
         ZLinkServiceM6BWireCodec.ActorRouteFence route = command.actor();
         ZLinkBackendActorRef actor = route.actor();
+        RemoteStreamBinding candidate = new RemoteStreamBinding(
+            sourceNodeRid,
+            sourceNodeGeneration,
+            sessionOwnerId,
+            sessionOwnerLeaseGeneration,
+            command.sessionRid(),
+            actor,
+            route.targetNodeGeneration(),
+            command.bindingGeneration(),
+            route.authorityOwnerGeneration(),
+            route.ownerLeaseGeneration());
         RemoteStreamBinding replaced = null;
         ZLinkBackendAdmissionKey readyKey = null;
         synchronized (this) {
@@ -2015,6 +2075,11 @@ final class ZLinkJavaRawSpotNode
                     + " reason=actor-node-mismatch local=" + routingId());
                 return false;
             }
+            RemoteStreamBinding current =
+                remoteStreamBindings.get(actor.actorId());
+            if (command.active() && candidate.equals(current)) {
+                return true;
+            }
             if (route.targetNodeGeneration() != owner.lifecycleGeneration()) {
                 streamTrace("remote bind reject actor=" + actorSummary(actor)
                     + " source=" + sourceNodeRid
@@ -2024,15 +2089,6 @@ final class ZLinkJavaRawSpotNode
                     + route.targetNodeGeneration());
                 return false;
             }
-            RemoteStreamBinding candidate = new RemoteStreamBinding(
-                sourceNodeRid,
-                sourceNodeGeneration,
-                sessionOwnerId,
-                sessionOwnerLeaseGeneration,
-                command.sessionRid(),
-                actor,
-                command.bindingGeneration(),
-                route.authorityOwnerGeneration());
             if (!command.active()) {
                 if (remoteStreamBindings.remove(
                         actor.actorId(), candidate)) {
@@ -2057,11 +2113,6 @@ final class ZLinkJavaRawSpotNode
                     + actorAuthorityOwnerGeneration(actor) + " actual="
                     + route.authorityOwnerGeneration());
                 return false;
-            }
-            RemoteStreamBinding current =
-                remoteStreamBindings.get(actor.actorId());
-            if (candidate.equals(current)) {
-                return true;
             }
             if (current != null
                 && current.sameSessionOwnerEpoch(candidate)
@@ -2663,8 +2714,10 @@ final class ZLinkJavaRawSpotNode
         long sessionOwnerLeaseGeneration,
         RoutingId sessionRid,
         ZLinkBackendActorRef actor,
+        long targetNodeGeneration,
         long bindingGeneration,
-        long authorityOwnerGeneration) {
+        long authorityOwnerGeneration,
+        long actorOwnerLeaseGeneration) {
         boolean sameSessionOwnerEpoch(RemoteStreamBinding other) {
             return sessionOwnerNodeRid.equals(
                     other.sessionOwnerNodeRid)

@@ -184,11 +184,16 @@ int main ()
                       .completion_root_reference =
                         "join-root",
                       .completion_root_checksum =
-                        0x12345678}));
+                        0x12345678,
+                      .source_spot_id = "source-spot",
+                      .session_relocation_route = {3, 5, 8}}));
         if (commit_root.completion_root_reference
               != "join-root"
             || commit_root.completion_root_checksum
-                 != 0x12345678) {
+                 != 0x12345678
+            || commit_root.source_spot_id != "source-spot"
+            || commit_root.session_relocation_route
+                 != std::vector<std::uint8_t> ({3, 5, 8})) {
             return 151;
         }
         //  The handoff backlog has no record-count or stored-size bound, so a

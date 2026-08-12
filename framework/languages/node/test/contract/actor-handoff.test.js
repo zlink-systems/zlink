@@ -11,6 +11,7 @@ const actorRelayWire = require(
 const messageFollow = require(
   '../../packages/framework/dist/runtime/actors/actor-message-follow-context'
 );
+const routingIds = require('../../packages/framework/dist/runtime/routing-id');
 
 function frame(value) {
   return [zlink.Message.from(`header:${value}`), zlink.Message.from(value)];
@@ -31,7 +32,10 @@ function target(name = 'target') {
     targetNodeRid: zlink.RoutingId.from(`${name}-node`),
     spotId: zlink.RoutingId.from(`${name}-spot`),
     spotKind: framework.ZLinkSpotKind.User,
-    authorityOwnerGeneration: 2n
+    targetNodeGeneration: 1n,
+    authorityOwnerGeneration: 2n,
+    targetOwnerId: `${name}-owner`,
+    ownerLeaseGeneration: 1n
   };
 }
 
@@ -98,11 +102,21 @@ function harness(messageFollowDurationMs = 30) {
   let currentGeneration = 2n;
   let currentNodeRid = 'target-node';
   let currentOwner = ownerFence('target', 2n);
+  let sourceStateAvailable = true;
+  let sourceLookupCount = 0;
+  let replyHostOwnerId = 'source-owner';
+  let replyHostOwnerLeaseGeneration = 1n;
+  let replyHostNodeRid = 'source-node';
+  let replyHostNodeRidHex = Buffer.from(replyHostNodeRid).toString('hex');
+  let replyHostNodeGeneration = 1n;
   let requestSource = {
+    meshName: 'mesh',
+    objectGeneration: 1n,
     ownerId: 'source-owner',
     ownerLeaseGeneration: 1n,
     nodeRid: 'source-node',
-    nodeGeneration: 1n
+    nodeGeneration: 1n,
+    authorityOwnerGeneration: 1n
   };
   const transport = {
     async sendToSpot(_target, payload) {
@@ -122,7 +136,17 @@ function harness(messageFollowDurationMs = 30) {
       && String(ref.nodeRid) === currentNodeRid,
     isCurrentHandoffTarget: (_actorId, spotId) => spotId === 'target-spot',
     currentOwnerFence: () => currentOwner,
-    requestSource: () => requestSource,
+    requestSource: () => {
+      sourceLookupCount += 1;
+      if (!sourceStateAvailable) throw new Error('Actor source state was removed.');
+      return requestSource;
+    },
+    validateReplySource: (source) =>
+      source.ownerId === replyHostOwnerId
+      && source.ownerLeaseGeneration === replyHostOwnerLeaseGeneration
+      && source.nodeRid === replyHostNodeRid
+      && source.nodeRidHex === replyHostNodeRidHex
+      && source.nodeGeneration === replyHostNodeGeneration,
     onMarker: (marker, actorId, index) => markers.push({ marker, actorId, index })
   });
   return {
@@ -131,12 +155,96 @@ function harness(messageFollowDurationMs = 30) {
     messageFollowPayloads,
     markers,
     setCurrentGeneration(value) { currentGeneration = value; },
-    setCurrentNodeRid(value) { currentNodeRid = value; }
-    ,
+    setCurrentNodeRid(value) { currentNodeRid = value; },
     setCurrentOwner(value) { currentOwner = value; },
-    setRequestSource(value) { requestSource = value; }
+    setRequestSource(value) {
+      requestSource = { meshName: 'mesh', ...value };
+      sourceStateAvailable = true;
+      replyHostOwnerId = requestSource.ownerId;
+      replyHostOwnerLeaseGeneration = requestSource.ownerLeaseGeneration;
+      replyHostNodeRid = requestSource.nodeRid;
+      replyHostNodeRidHex = requestSource.nodeRidHex
+        ?? Buffer.from(requestSource.nodeRid).toString('hex');
+      replyHostNodeGeneration = requestSource.nodeGeneration;
+    },
+    removeSourceState() { sourceStateAvailable = false; },
+    setReplyHostOwnerLeaseGeneration(value) { replyHostOwnerLeaseGeneration = value; },
+    setReplyHostNodeGeneration(value) { replyHostNodeGeneration = value; },
+    sourceLookupCount() { return sourceLookupCount; }
   };
 }
+
+test('handoff admission requires committed source and target owner fences', () => {
+  let sourceLookupCount = 0;
+  const invalidGeneration = new framework.ZLinkActorHandoffCoordinator({
+    routedTransport: { async sendToSpot() {}, async requestToSpot() {} },
+    requestSource() {
+      sourceLookupCount += 1;
+      return {
+        meshName: 'mesh',
+        objectGeneration: 1n,
+        ownerId: 'source-owner',
+        ownerLeaseGeneration: 1n,
+        nodeRid: 'source-node',
+        nodeGeneration: 1n,
+        authorityOwnerGeneration: 1n
+      };
+    },
+    validateReplySource: () => true
+  });
+  assert.throws(
+    () => invalidGeneration.begin('actor-1', 0n),
+    /positive source ObjectGeneration/u
+  );
+  assert.equal(sourceLookupCount, 0);
+  assert.equal(invalidGeneration.isActive('actor-1'), false);
+
+  const replacedSource = new framework.ZLinkActorHandoffCoordinator({
+    routedTransport: { async sendToSpot() {}, async requestToSpot() {} },
+    requestSource: () => ({
+      meshName: 'mesh',
+      objectGeneration: 2n,
+      ownerId: 'replacement-owner',
+      ownerLeaseGeneration: 2n,
+      nodeRid: 'replacement-node',
+      nodeGeneration: 2n,
+      authorityOwnerGeneration: 2n
+    }),
+    validateReplySource: () => true
+  });
+  assert.throws(
+    () => replacedSource.begin('actor-1', 1n),
+    /source ObjectGeneration changed from 1 to 2/u
+  );
+  assert.equal(replacedSource.isActive('actor-1'), false);
+
+  const missingSource = new framework.ZLinkActorHandoffCoordinator({
+    routedTransport: { async sendToSpot() {}, async requestToSpot() {} },
+    requestSource() {
+      throw new Error('source fence unavailable');
+    },
+    validateReplySource: () => true
+  });
+  assert.throws(
+    () => missingSource.begin('actor-1', 1n),
+    /source fence unavailable/
+  );
+
+  const { coordinator } = harness();
+  coordinator.begin('actor-1', 1n);
+  coordinator.snapshot('actor-1');
+  const incompleteTarget = {
+    ...target(),
+    targetOwnerId: undefined,
+    ownerLeaseGeneration: undefined
+  };
+  assert.throws(
+    () => coordinator.complete('actor-1', incompleteTarget, targetActorRef(), []),
+    /committed target owner fence/
+  );
+  assert.equal(coordinator.isActive('actor-1'), true);
+  coordinator.cancel('actor-1');
+});
 
 test('in-flight handoff preserves moving packet arrival order in the commit backlog', async () => {
   const { coordinator, markers } = harness();
@@ -275,8 +383,12 @@ test('Message Follow rejects repeated stale packets that do not carry the origin
 
   for (let attempt = 0; attempt < 2; attempt++) {
     const parts = frame('missing-context');
+    const departedRef = {
+      ...actorRef(1n),
+      nodeRid: zlink.RoutingId.from('source-node')
+    };
     await assert.rejects(
-      coordinator.capture('actor-1', parts, false, undefined, actorRef(1n)),
+      coordinator.capture('actor-1', parts, false, undefined, departedRef),
       (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
     );
     parts.forEach((part) => part.close());
@@ -303,15 +415,19 @@ test('Message Follow request preserves its absolute deadline and drops a late re
     messageFollowDurationMs: 1_000,
     requestTimeoutMs: 30_000,
     requestSource: () => ({
+      meshName: 'mesh',
+      objectGeneration: 1n,
       ownerId: 'source-owner',
       ownerLeaseGeneration: 1n,
       nodeRid: 'source-node',
-      nodeGeneration: 1n
-    })
+      nodeGeneration: 1n,
+      authorityOwnerGeneration: 1n
+    }),
+    validateReplySource: () => true
   });
   coordinator.begin('actor-1', 1n);
   coordinator.snapshot('actor-1');
-  coordinator.complete('actor-1', target(), targetActorRef());
+  coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
 
   const deadlineUnixMs = Date.now() + 80;
   const correlationId = 'dddddddddddddddddddddddddddddddd';
@@ -375,15 +491,19 @@ test('Message Follow rejects an expired request before target transport admissio
     },
     messageFollowDurationMs: 1_000,
     requestSource: () => ({
+      meshName: 'mesh',
+      objectGeneration: 1n,
       ownerId: 'source-owner',
       ownerLeaseGeneration: 1n,
       nodeRid: 'source-node',
-      nodeGeneration: 1n
-    })
+      nodeGeneration: 1n,
+      authorityOwnerGeneration: 1n
+    }),
+    validateReplySource: () => true
   });
   coordinator.begin('actor-1', 1n);
   coordinator.snapshot('actor-1');
-  coordinator.complete('actor-1', target(), targetActorRef());
+  coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
 
   const parts = frame('expired');
   const deadlineUnixMs = Date.now() - 1;
@@ -430,16 +550,20 @@ test('Message Follow route has no relocation-specific 1024-message admission cap
     routedTransport: { sendToSpot: async () => new Promise(() => {}) },
     messageFollowDurationMs: 60_000,
     requestSource: () => ({
+      meshName: 'mesh',
+      objectGeneration: 1n,
       ownerId: 'source-owner',
       ownerLeaseGeneration: 1n,
       nodeRid: 'source-node',
-      nodeGeneration: 1n
+      nodeGeneration: 1n,
+      authorityOwnerGeneration: 1n
     }),
+    validateReplySource: () => true,
     onMarker: (marker, actorId, index) => markers.push({ marker, actorId, index })
   });
   coordinator.begin('actor-1', 1n);
   coordinator.snapshot('actor-1');
-  coordinator.complete('actor-1', target(), targetActorRef());
+  coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
   for (let index = 0; index < 1024; index++) {
     const parts = frame(`queued-${index}`);
     void coordinator.capture(
@@ -503,7 +627,8 @@ test('packets captured after the commit snapshot use Message Follow after backlo
     'actor-1',
     target(),
     targetActorRef(),
-    backlog.map((packet) => ({ index: packet.index, ok: true }))
+    backlog.map((packet) => ({ index: packet.index, ok: true })),
+    ownerFence('target', 2n)
   );
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(followed, ['D1']);
@@ -530,7 +655,8 @@ test('bound-session packets keep one sequence across snapshot and Message Follow
     'actor-1',
     target(),
     targetActorRef(),
-    backlog.map((packet) => ({ index: packet.index, ok: true }))
+    backlog.map((packet) => ({ index: packet.index, ok: true })),
+    ownerFence('target', 2n)
   );
   const s4 = frame('S4');
   await coordinator.capture(
@@ -603,7 +729,7 @@ test('Message Follow relays before duration expiry and prunes route and stale re
   const { coordinator, followed, markers } = harness(10);
   coordinator.begin('actor-1', 1n);
   coordinator.snapshot('actor-1');
-  coordinator.complete('actor-1', target(), targetActorRef());
+  coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
 
   const inside = frame('G1');
   await coordinator.capture('actor-1', inside, false, undefined, contextRef(inside));
@@ -637,11 +763,15 @@ test('Message Follow notification suppression retries rejection and marks only a
     },
     messageFollowDurationMs: 1_000,
     requestSource: () => ({
+      meshName: 'mesh',
+      objectGeneration: 1n,
       ownerId: 'source-owner',
       ownerLeaseGeneration: 1n,
       nodeRid: 'source-node',
-      nodeGeneration: 1n
+      nodeGeneration: 1n,
+      authorityOwnerGeneration: 1n
     }),
+    validateReplySource: () => true,
     onMessageFollowRelayed: async () => {
       notificationAttempts += 1;
       return acceptNotification;
@@ -689,7 +819,15 @@ test('Message Follow notification suppression retries rejection and marks only a
 });
 
 test('a returning tenure with a newer authority fence bypasses the departed stale record', async () => {
-  const { coordinator, followed, markers } = harness();
+  const { coordinator, followed, markers, setRequestSource } = harness();
+  setRequestSource({
+    objectGeneration: 1n,
+    ownerId: 'source-owner',
+    ownerLeaseGeneration: 1n,
+    nodeRid: 'source',
+    nodeGeneration: 1n,
+    authorityOwnerGeneration: 1n
+  });
   coordinator.begin('actor-1', 1n, 'source');
   coordinator.snapshot('actor-1');
   coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
@@ -738,7 +876,7 @@ test('a Core-routed packet owned by the current actor bypasses an older Message 
   const { coordinator, followed, markers } = harness();
   coordinator.begin('actor-1', 1n);
   coordinator.snapshot('actor-1');
-  coordinator.complete('actor-1', target(), targetActorRef());
+  coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
 
   const current = frame('current-owner');
   assert.equal(
@@ -755,7 +893,13 @@ test('a current ActorRef bypasses an older same-generation route after returning
   const { coordinator, followed, markers, setCurrentGeneration, setCurrentNodeRid } = harness();
   coordinator.begin('actor-1', 1n);
   coordinator.snapshot('actor-1');
-  coordinator.complete('actor-1', target(), targetActorRef('target', 1n));
+  coordinator.complete(
+    'actor-1',
+    target(),
+    targetActorRef('target', 1n),
+    [],
+    ownerFence('target', 2n)
+  );
   setCurrentGeneration(1n);
   setCurrentNodeRid(String(actorRef(1n).nodeRid));
 
@@ -820,10 +964,12 @@ test('chained relocation keeps exact source-owner routes with one ObjectGenerati
   assert.equal(coordinator.messageFollowCount('actor-1'), 1);
 
   setRequestSource({
+    objectGeneration: 1n,
     ownerId: firstFence.ownerId,
     ownerLeaseGeneration: BigInt(firstFence.ownerLeaseGeneration),
     nodeRid: firstFence.nodeRid,
-    nodeGeneration: BigInt(firstFence.nodeGeneration)
+    nodeGeneration: BigInt(firstFence.nodeGeneration),
+    authorityOwnerGeneration: BigInt(firstFence.authorityOwnerGeneration)
   });
   coordinator.begin('actor-1', 1n, 'first-node', 2n, 1n);
   coordinator.snapshot('actor-1');
@@ -980,11 +1126,15 @@ test('positive Message Follow request returns one correlated reply and preserves
     },
     messageFollowDurationMs: 1_000,
     requestSource: () => ({
+      meshName: 'mesh',
+      objectGeneration: 1n,
       ownerId: 'source-owner',
       ownerLeaseGeneration: 1n,
       nodeRid: 'source-node',
-      nodeGeneration: 1n
-    })
+      nodeGeneration: 1n,
+      authorityOwnerGeneration: 1n
+    }),
+    validateReplySource: () => true
   });
   coordinator.begin('actor-1', 1n, 'source-node', 1n, 1n);
   coordinator.snapshot('actor-1');
@@ -1037,7 +1187,7 @@ test('positive Message Follow request returns one correlated reply and preserves
 });
 
 test('in-flight request preserves framing, reply correlation, and the caller timeout', async () => {
-  const { coordinator } = harness();
+  const { coordinator, setRequestSource } = harness();
   const requestHeader = streamProtocol.encodeStreamHeader({
     kind: streamProtocol.ZLinkStreamMessageKind.Request,
     codec: streamProtocol.ZLinkStreamCodec.Json,
@@ -1071,13 +1221,27 @@ test('in-flight request preserves framing, reply correlation, and the caller tim
     ok: true,
     response: { marker: 'R1', requestSeq: '731' }
   };
-  coordinator.complete('actor-1', target(), targetActorRef(), [terminal]);
+  coordinator.complete(
+    'actor-1',
+    target(),
+    targetActorRef(),
+    [terminal],
+    ownerFence('target', 2n)
+  );
   assert.equal(
     coordinator.acceptRelocatedTerminal('actor-1', backlog[0], terminal, 'target-node', 2n),
     'terminalReceived'
   );
   assert.deepEqual(await pendingReply, { marker: 'R1', requestSeq: '731' });
 
+  setRequestSource({
+    objectGeneration: 2n,
+    ownerId: 'source-owner',
+    ownerLeaseGeneration: 1n,
+    nodeRid: 'source-node',
+    nodeGeneration: 1n,
+    authorityOwnerGeneration: 1n
+  });
   coordinator.begin('actor-1', 2n);
   const lateParts = [
     zlink.Message.from(Buffer.from(requestHeader)),
@@ -1096,7 +1260,13 @@ test('in-flight request preserves framing, reply correlation, and the caller tim
     ok: true,
     response: { marker: 'late' }
   };
-  coordinator.complete('actor-1', target('late'), targetActorRef('late', 3n), [lateTerminal]);
+  coordinator.complete(
+    'actor-1',
+    target('late'),
+    targetActorRef('late', 3n),
+    [lateTerminal],
+    ownerFence('late', 2n)
+  );
   assert.equal(
     coordinator.acceptRelocatedTerminal(
       'actor-1', lateBacklog[0], lateTerminal, 'late-node', 2n
@@ -1104,4 +1274,502 @@ test('in-flight request preserves framing, reply correlation, and the caller tim
     'terminalReceived'
   );
   assert.deepEqual(await lateReply, { marker: 'late' });
+});
+
+test('late terminal uses captured source evidence after Actor removal and rejects every stale fence', async () => {
+  const {
+    coordinator,
+    removeSourceState,
+    sourceLookupCount,
+    setReplyHostOwnerLeaseGeneration,
+    setReplyHostNodeGeneration
+  } = harness();
+  const request = frame('captured-terminal');
+  coordinator.begin('actor-1', 1n);
+  const pendingReply = coordinator.capture('actor-1', request, true, undefined, actorRef());
+  assert.equal(sourceLookupCount(), 1);
+  request.forEach((part) => part.close());
+  const [packet] = coordinator.snapshot('actor-1');
+  const terminal = { index: packet.index, ok: true, response: { accepted: true } };
+  coordinator.complete(
+    'actor-1',
+    target(),
+    targetActorRef(),
+    [terminal],
+    ownerFence('target', 2n)
+  );
+  removeSourceState();
+
+  const withSource = (source) => ({ ...packet, source: { ...packet.source, ...source } });
+  assert.equal(
+    coordinator.acceptRelocatedTerminal(
+      'actor-1', withSource({ ownerId: 'forged-owner' }), terminal, 'target-node', 2n
+    ),
+    'notAcknowledged'
+  );
+  assert.equal(
+    coordinator.acceptRelocatedTerminal(
+      'actor-1', withSource({ ownerLeaseGeneration: '2' }), terminal, 'target-node', 2n
+    ),
+    'notAcknowledged'
+  );
+  assert.equal(
+    coordinator.acceptRelocatedTerminal(
+      'actor-1', withSource({ nodeRid: 'forged-node' }), terminal, 'target-node', 2n
+    ),
+    'notAcknowledged'
+  );
+  assert.equal(
+    coordinator.acceptRelocatedTerminal(
+      'actor-1', withSource({ nodeGeneration: '2' }), terminal, 'target-node', 2n
+    ),
+    'notAcknowledged'
+  );
+  assert.equal(
+    coordinator.acceptRelocatedTerminal(
+      'actor-1', withSource({ replyRouteId: 'ffffffffffffffffffffffffffffffff' }),
+      terminal, 'target-node', 2n
+    ),
+    'notAcknowledged'
+  );
+  assert.equal(
+    coordinator.acceptRelocatedTerminal(
+      'forged-actor', packet, terminal, 'target-node', 2n
+    ),
+    'notAcknowledged'
+  );
+  assert.equal(
+    coordinator.acceptRelocatedTerminal(
+      'actor-1',
+      {
+        ...packet,
+        messageFollowContext: {
+          ...packet.messageFollowContext,
+          operationId: 'ffffffffffffffffffffffffffffffff'
+        }
+      },
+      terminal,
+      'target-node',
+      2n
+    ),
+    'notAcknowledged'
+  );
+  assert.equal(
+    coordinator.acceptRelocatedTerminal('actor-1', packet, terminal, 'forged-target', 2n),
+    'notAcknowledged'
+  );
+  assert.equal(
+    coordinator.acceptRelocatedTerminal('actor-1', packet, terminal, 'target-node', 3n),
+    'notAcknowledged'
+  );
+  assert.equal(
+    coordinator.acceptRelocatedTerminal(
+      'actor-1',
+      {
+        ...packet,
+        messageFollowContext: {
+          ...packet.messageFollowContext,
+          objectGeneration: '2'
+        }
+      },
+      terminal,
+      'target-node',
+      2n
+    ),
+    'notAcknowledged'
+  );
+  assert.equal(
+    coordinator.acceptRelocatedTerminal(
+      'actor-1',
+      {
+        ...packet,
+        messageFollowContext: {
+          ...packet.messageFollowContext,
+          targetOwner: {
+            ...packet.messageFollowContext.targetOwner,
+            authorityOwnerGeneration: '2'
+          }
+        }
+      },
+      terminal,
+      'target-node',
+      2n
+    ),
+    'notAcknowledged'
+  );
+
+  setReplyHostOwnerLeaseGeneration(2n);
+  assert.equal(
+    coordinator.acceptRelocatedTerminal('actor-1', packet, terminal, 'target-node', 2n),
+    'notAcknowledged'
+  );
+  setReplyHostOwnerLeaseGeneration(1n);
+  setReplyHostNodeGeneration(2n);
+  assert.equal(
+    coordinator.acceptRelocatedTerminal('actor-1', packet, terminal, 'target-node', 2n),
+    'notAcknowledged'
+  );
+  setReplyHostNodeGeneration(1n);
+
+  assert.equal(
+    coordinator.acceptRelocatedTerminal('actor-1', packet, terminal, 'target-node', 2n),
+    'terminalReceived'
+  );
+  assert.equal(sourceLookupCount(), 1);
+  assert.deepEqual(await pendingReply, { accepted: true });
+});
+
+test('Message Follow keeps opaque node identities that share the same display text', async () => {
+  const sourceA = routingIds.decodeRoutingId('\ufffd', 'ff');
+  const sourceB = routingIds.decodeRoutingId('\ufffd', 'fe');
+  assert.equal(String(sourceA), String(sourceB));
+  assert.equal(routingIds.routingIdsEqual(sourceA, sourceB), false);
+
+  const textPrefixFence = messageFollow.ownerFence({
+    ownerId: 'same-owner',
+    ownerLeaseGeneration: 1n,
+    nodeRid: 'rid:ff',
+    nodeGeneration: 1n,
+    authorityOwnerGeneration: 1n
+  });
+  const opaquePrefixFence = messageFollow.ownerFence({
+    ownerId: 'same-owner',
+    ownerLeaseGeneration: 1n,
+    nodeRid: String(sourceA),
+    nodeRidHex: routingIds.encodeRoutingIdStorageHex(sourceA),
+    nodeGeneration: 1n,
+    authorityOwnerGeneration: 1n
+  });
+  assert.notEqual(
+    messageFollow.messageFollowOwnerFenceKey(textPrefixFence),
+    messageFollow.messageFollowOwnerFenceKey(opaquePrefixFence)
+  );
+  assert.equal(
+    messageFollow.messageFollowOwnerFencesEqual(textPrefixFence, opaquePrefixFence),
+    false
+  );
+
+  const sourceFenceA = messageFollow.ownerFence({
+    ownerId: 'same-owner',
+    ownerLeaseGeneration: 1n,
+    nodeRid: String(sourceA),
+    nodeRidHex: routingIds.encodeRoutingIdStorageHex(sourceA),
+    nodeGeneration: 1n,
+    authorityOwnerGeneration: 1n
+  });
+  const sourceFenceB = messageFollow.ownerFence({
+    ownerId: 'same-owner',
+    ownerLeaseGeneration: 1n,
+    nodeRid: String(sourceB),
+    nodeRidHex: routingIds.encodeRoutingIdStorageHex(sourceB),
+    nodeGeneration: 1n,
+    authorityOwnerGeneration: 1n
+  });
+  assert.notEqual(
+    messageFollow.messageFollowOwnerFenceKey(sourceFenceA),
+    messageFollow.messageFollowOwnerFenceKey(sourceFenceB)
+  );
+  assert.equal(messageFollow.messageFollowOwnerFencesEqual(sourceFenceA, sourceFenceB), false);
+
+  let source = {
+    meshName: 'mesh',
+    objectGeneration: 1n,
+    ownerId: 'same-owner',
+    ownerLeaseGeneration: 1n,
+    nodeRid: String(sourceA),
+    nodeRidHex: routingIds.encodeRoutingIdStorageHex(sourceA),
+    nodeGeneration: 1n,
+    authorityOwnerGeneration: 1n
+  };
+  const relays = [];
+  const coordinator = new framework.ZLinkActorHandoffCoordinator({
+    routedTransport: {
+      async sendToSpot(targetRoute, payload) {
+        relays.push({ targetNodeRid: String(targetRoute.targetNodeRid), payload });
+      },
+      async requestToSpot() { return { ok: true }; }
+    },
+    requestSource: () => source,
+    validateReplySource: () => true
+  });
+
+  coordinator.begin('actor-1', 1n);
+  coordinator.snapshot('actor-1');
+  coordinator.complete(
+    'actor-1', target('first'), targetActorRef('first'), [], ownerFence('first', 2n)
+  );
+  source = {
+    ...source,
+    nodeRid: String(sourceB),
+    nodeRidHex: routingIds.encodeRoutingIdStorageHex(sourceB)
+  };
+  coordinator.begin('actor-1', 1n);
+  coordinator.snapshot('actor-1');
+  coordinator.complete(
+    'actor-1', target('second'), targetActorRef('second'), [], ownerFence('second', 2n)
+  );
+  assert.equal(coordinator.messageFollowCount('actor-1'), 2);
+
+  for (const [sourceRid, sourceOwner] of [[sourceA, sourceFenceA], [sourceB, sourceFenceB]]) {
+    const parts = frame(`opaque-${sourceOwner.nodeRidHex}`);
+    const ref = contextRef(parts, {
+      actorRef: { ...actorRef(), nodeRid: sourceRid },
+      sourceOwner,
+      targetOwner: sourceOwner
+    });
+    await coordinator.capture('actor-1', parts, false, undefined, ref);
+    parts.forEach((part) => part.close());
+  }
+  assert.deepEqual(relays.map((relay) => relay.targetNodeRid), ['first-node', 'second-node']);
+  assert.deepEqual(
+    relays.map((relay) => relay.payload.actorNodeRidHex),
+    [
+      Buffer.from('first-node').toString('hex'),
+      Buffer.from('second-node').toString('hex')
+    ]
+  );
+  assert.deepEqual(
+    relays.map((relay) =>
+      actorRelayWire.decodeRemoteActorPacketRelayPayload(
+        JSON.parse(JSON.stringify(relay.payload))
+      ).messageFollowContext.sourceOwner.nodeRidHex),
+    ['ff', 'fe']
+  );
+
+  coordinator.begin('actor-1', 1n);
+  const terminalParts = frame('opaque-target-terminal');
+  const terminalReply = coordinator.capture(
+    'actor-1', terminalParts, true, undefined, { ...actorRef(), nodeRid: sourceB }
+  );
+  terminalParts.forEach((part) => part.close());
+  const [terminalPacket] = coordinator.snapshot('actor-1');
+  const terminal = { index: terminalPacket.index, ok: true, response: 'opaque-target' };
+  const opaqueTarget = {
+    ...target('opaque'),
+    targetNodeRid: sourceA
+  };
+  const opaqueTargetRef = {
+    ...targetActorRef('opaque'),
+    nodeRid: sourceA
+  };
+  const opaqueTargetOwner = messageFollow.ownerFence({
+    ownerId: 'opaque-owner',
+    ownerLeaseGeneration: 1n,
+    nodeRid: String(sourceA),
+    nodeRidHex: routingIds.encodeRoutingIdStorageHex(sourceA),
+    nodeGeneration: 1n,
+    authorityOwnerGeneration: 2n
+  });
+  coordinator.complete(
+    'actor-1', opaqueTarget, opaqueTargetRef, [terminal], opaqueTargetOwner
+  );
+  assert.equal(
+    coordinator.acceptRelocatedTerminal(
+      'actor-1', terminalPacket, terminal, sourceB, 2n
+    ),
+    'notAcknowledged'
+  );
+  assert.equal(
+    coordinator.acceptRelocatedTerminal(
+      'actor-1', terminalPacket, terminal, sourceA, 2n
+    ),
+    'terminalReceived'
+  );
+  assert.equal(await terminalReply, 'opaque-target');
+  const duplicate = coordinator.acceptRelocatedTerminalRelay(
+    terminalPacket.messageFollowContext.operationId,
+    terminalPacket.source.replyRouteId,
+    undefined,
+    terminal,
+    sourceA,
+    2n,
+    'actor-1'
+  );
+  assert.equal(duplicate.status, 'alreadyTerminal');
+  assert.equal(routingIds.routingIdsEqual(duplicate.source.nodeRid, sourceB), true);
+  assert.equal(routingIds.routingIdsEqual(duplicate.source.nodeRid, sourceA), false);
+});
+
+test('Message Follow accepts legacy visited owner keys without weakening opaque RID fences', () => {
+  const parts = frame('legacy-visited-owner');
+  const legacyKey = (fence) => [
+    fence.nodeRid,
+    fence.nodeGeneration,
+    fence.ownerId,
+    fence.ownerLeaseGeneration,
+    fence.authorityOwnerGeneration
+  ].join('\u0000');
+  const legacyOwner = sourceOwnerFence();
+  const legacyOwnerKey = legacyKey(legacyOwner);
+  const legacyContext = {
+    operationId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    objectGeneration: '1',
+    sourceOwner: legacyOwner,
+    targetOwner: legacyOwner,
+    request: false,
+    hopCount: 0,
+    visitedOwners: [legacyOwnerKey],
+    payloadChecksumSha256: messageFollow.actorMessageFollowPayloadChecksum(parts)
+  };
+
+  const decodedLegacy = messageFollow.decodeActorMessageFollowContext(legacyContext);
+  assert.deepEqual(decodedLegacy.visitedOwners, [legacyOwnerKey]);
+  assert.notEqual(
+    legacyOwnerKey,
+    messageFollow.messageFollowOwnerFenceKey(legacyOwner)
+  );
+
+  const nextOwner = messageFollow.ownerFence({
+    ownerId: 'next-owner',
+    ownerLeaseGeneration: 2n,
+    nodeRid: 'next-node',
+    nodeRidHex: Buffer.from('next-node').toString('hex'),
+    nodeGeneration: 2n,
+    authorityOwnerGeneration: 2n
+  });
+  const advanced = messageFollow.advanceActorMessageFollowContext(
+    decodedLegacy,
+    legacyOwner,
+    nextOwner
+  );
+  assert.deepEqual(advanced.visitedOwners, [
+    legacyOwnerKey,
+    messageFollow.messageFollowOwnerFenceKey(nextOwner)
+  ]);
+  assert.deepEqual(
+    messageFollow.decodeActorMessageFollowContext(
+      JSON.parse(JSON.stringify(advanced))
+    ).visitedOwners,
+    advanced.visitedOwners
+  );
+
+  const legacyOwnerWithCanonicalTextBytes = messageFollow.ownerFence({
+    ...legacyOwner,
+    nodeRidHex: Buffer.from(legacyOwner.nodeRid).toString('hex')
+  });
+  assert.throws(
+    () => messageFollow.advanceActorMessageFollowContext(
+      advanced,
+      nextOwner,
+      legacyOwnerWithCanonicalTextBytes
+    ),
+    /owner loop was detected/u
+  );
+
+  const opaqueOwner = messageFollow.ownerFence({
+    ...legacyOwner,
+    nodeRid: '\ufffd',
+    nodeRidHex: 'ff'
+  });
+  assert.throws(
+    () => messageFollow.decodeActorMessageFollowContext({
+      ...legacyContext,
+      sourceOwner: opaqueOwner,
+      targetOwner: opaqueOwner,
+      visitedOwners: [legacyKey(opaqueOwner)]
+    }),
+    /visited owner fence chain is invalid/u
+  );
+
+  const legacyTextCollisionOwner = messageFollow.ownerFence({
+    ...legacyOwner,
+    nodeRid: 'rid:ff'
+  });
+  assert.notEqual(
+    legacyKey(legacyTextCollisionOwner),
+    messageFollow.messageFollowOwnerFenceKey(opaqueOwner)
+  );
+  const decodedTextCollision = messageFollow.decodeActorMessageFollowContext({
+    ...legacyContext,
+    sourceOwner: legacyTextCollisionOwner,
+    targetOwner: legacyTextCollisionOwner,
+    visitedOwners: [legacyKey(legacyTextCollisionOwner)]
+  });
+  const exactOpaqueAdvance = messageFollow.advanceActorMessageFollowContext(
+    decodedTextCollision,
+    legacyTextCollisionOwner,
+    opaqueOwner
+  );
+  assert.equal(exactOpaqueAdvance.hopCount, 1);
+  assert.deepEqual(
+    messageFollow.decodeActorMessageFollowContext(
+      JSON.parse(JSON.stringify(exactOpaqueAdvance))
+    ).visitedOwners,
+    exactOpaqueAdvance.visitedOwners
+  );
+  parts.forEach((part) => part.close());
+});
+
+test('Message Follow rejects ambiguous legacy keys across embedded NUL boundaries', () => {
+  const parts = frame('legacy-nul-boundary');
+  const legacyKey = (fence) => [
+    fence.nodeRid,
+    fence.nodeGeneration,
+    fence.ownerId,
+    fence.ownerLeaseGeneration,
+    fence.authorityOwnerGeneration
+  ].join('\u0000');
+  const nodeBoundaryFence = messageFollow.ownerFence({
+    ownerId: 'owner',
+    ownerLeaseGeneration: 1n,
+    nodeRid: 'node\u00001',
+    nodeGeneration: 2n,
+    authorityOwnerGeneration: 1n
+  });
+  const ownerBoundaryFence = messageFollow.ownerFence({
+    ownerId: '2\u0000owner',
+    ownerLeaseGeneration: 1n,
+    nodeRid: 'node',
+    nodeGeneration: 1n,
+    authorityOwnerGeneration: 1n
+  });
+  const ambiguousLegacyKey = legacyKey(nodeBoundaryFence);
+  assert.equal(ambiguousLegacyKey, legacyKey(ownerBoundaryFence));
+  assert.notEqual(
+    messageFollow.messageFollowOwnerFenceKey(nodeBoundaryFence),
+    messageFollow.messageFollowOwnerFenceKey(ownerBoundaryFence)
+  );
+
+  const context = (fence, visitedOwner) => ({
+    operationId: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    objectGeneration: '1',
+    sourceOwner: fence,
+    targetOwner: fence,
+    request: false,
+    hopCount: 0,
+    visitedOwners: [visitedOwner],
+    payloadChecksumSha256: messageFollow.actorMessageFollowPayloadChecksum(parts)
+  });
+  assert.throws(
+    () => messageFollow.decodeActorMessageFollowContext(
+      context(nodeBoundaryFence, ambiguousLegacyKey)
+    ),
+    /visited owner fence chain is invalid/u
+  );
+  assert.throws(
+    () => messageFollow.decodeActorMessageFollowContext(
+      context(ownerBoundaryFence, ambiguousLegacyKey)
+    ),
+    /visited owner fence chain is invalid/u
+  );
+
+  const decodedCanonical = messageFollow.decodeActorMessageFollowContext(
+    context(
+      nodeBoundaryFence,
+      messageFollow.messageFollowOwnerFenceKey(nodeBoundaryFence)
+    )
+  );
+  const advanced = messageFollow.advanceActorMessageFollowContext(
+    decodedCanonical,
+    nodeBoundaryFence,
+    ownerBoundaryFence
+  );
+  assert.equal(advanced.hopCount, 1);
+  assert.deepEqual(
+    messageFollow.decodeActorMessageFollowContext(
+      JSON.parse(JSON.stringify(advanced))
+    ).visitedOwners,
+    advanced.visitedOwners
+  );
+  parts.forEach((part) => part.close());
 });

@@ -3,6 +3,8 @@ set -euo pipefail
 umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../redis-common.sh"
+zlink_dotnet_e2e_acquire_run_lock "$0" "$@"
 CONFIG_DIR="$(mktemp -d)"
 LOCAL_READINESS_TIMEOUT_SECONDS=3
 LOCAL_READINESS_POLL_SECONDS=0.1
@@ -14,19 +16,19 @@ scenario="${*:-all}"
 
 case "$scenario" in
   IS-E2E-01|IS-E2E-02|IS-E2E-03|track-a)
-    "$SCRIPT_DIR/../SpotService/run_e2e.sh" instance-track-a
+    bash "$SCRIPT_DIR/../SpotService/run_e2e.sh" instance-track-a
     ;;
   IS-E2E-08|idle)
-    "$SCRIPT_DIR/../SpotService/run_e2e.sh" instance-idle
+    bash "$SCRIPT_DIR/../SpotService/run_e2e.sh" instance-idle
     ;;
   IS-E2E-05|owner-loss)
-    "$SCRIPT_DIR/../SpotService/run_e2e.sh" instance-owner-loss
+    bash "$SCRIPT_DIR/../SpotService/run_e2e.sh" instance-owner-loss
     ;;
   IS-E2E-35|queue-owner-loss)
-    "$SCRIPT_DIR/../SpotService/run_e2e.sh" instance-queue-owner-loss
+    bash "$SCRIPT_DIR/../SpotService/run_e2e.sh" instance-queue-owner-loss
     ;;
   creating-positive)
-    "$SCRIPT_DIR/../SpotService/run_e2e.sh" instance-creating-join
+    bash "$SCRIPT_DIR/../SpotService/run_e2e.sh" instance-creating-join
     ;;
   *)
     cat >&2 <<EOF

@@ -1,7 +1,5 @@
-package Scenarios;
+package systems.zlink.e2e.pubsub.client.Scenarios;
 
-import systems.zlink.e2e.pubsub.client.Scenarios;
-import systems.zlink.e2e.pubsub.client.Support;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -267,12 +265,12 @@ public final class CommonPubSubScenarios {
 
     private static boolean hasEvent(Contracts.EvidenceSnapshot snapshot, String scenario, int sequence) {
         return snapshot.entries().stream().anyMatch(entry ->
-            "EventMsg".equals(entry.marker()) && scenario.equals(entry.scenario())
+            "Event".equals(entry.marker()) && scenario.equals(entry.scenario())
                 && sequence == entry.sequence());
     }
 
-    private static Contracts.EventMsg event(String scenario, int sequence, String value) {
-        return new Contracts.EventMsg(scenario, sequence, value);
+    private static Contracts.Event event(String scenario, int sequence, String value) {
+        return new Contracts.Event(scenario, sequence, value);
     }
 
     private static void eventually(BooleanSupplier check, String label) {

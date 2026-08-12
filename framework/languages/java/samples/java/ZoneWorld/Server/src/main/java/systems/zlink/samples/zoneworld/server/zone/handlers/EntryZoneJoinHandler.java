@@ -28,7 +28,7 @@ public final class EntryZoneJoinHandler
         String zone = ZoneWorldSpec.zoneOf(actor.x(), actor.y());
         actor.context().joinSpot(
             zone,
-            new Messages.EnterZoneMsg(
+            new Messages.EnterZoneReq(
                 actor.actorId(), actor.x(), actor.y(), false, true, ""))
             .timeout(Duration.ofSeconds(10))
             .defer();

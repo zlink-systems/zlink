@@ -17,7 +17,7 @@ tictactoe_game_spot_t::place_mark (const player_actor_t &actor,
         throw std::runtime_error ("packet name is required");
     }
     auto state = match ().place (actor.actor_id, request);
-    game_state_notify_t state_notify{state.room_id, state.next_turn, state};
+    game_state_notify_t state_notify{state};
     co_await publisher.publish (state_notify, actor.actor_id);
     if (state.status == tictactoe_status_t::won || state.status == tictactoe_status_t::draw) {
         co_await publish_win_milestone (actor, state);

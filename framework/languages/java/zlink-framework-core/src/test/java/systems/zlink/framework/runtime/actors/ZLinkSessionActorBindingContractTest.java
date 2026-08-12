@@ -23,6 +23,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
@@ -704,6 +705,133 @@ final class ZLinkSessionActorBindingContractTest {
         assertEquals(1_025, stream.relays.size());
     }
 
+    @Test
+    void acceptedPredecessorFifoSurvivesSuccessorCommitAndBoundsAdmission() {
+        FakeStream stream = new FakeStream();
+        stream.boundPushAvailable = false;
+        ZLinkSessionActorsRuntime runtime = runtime(stream, 2);
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A))
+            .toCompletableFuture().join();
+        var first = relocation();
+        runtime.applyRelocationSealCommand(
+                seal(first, 7, NODE_A, 3, 9, 4))
+            .toCompletableFuture().join();
+        var targetB = boundSend(NODE_B, 4, 10, 4);
+        var firstAdmission = runtime.admitBoundSessionSend(
+            NODE_B, 4, targetB, outboundPayload("predecessor-1"));
+        var secondAdmission = runtime.admitBoundSessionSend(
+            NODE_B, 4, targetB, outboundPayload("predecessor-2"));
+        var backpressured = runtime.admitBoundSessionSend(
+            NODE_B, 4, targetB, outboundPayload("rejected"));
+        assertTrue(firstAdmission.admitted());
+        assertTrue(secondAdmission.admitted());
+        assertFalse(backpressured.admitted());
+        assertEquals(
+            ZLinkSessionActorsRuntime.TargetOutboundSettlement.BACKPRESSURED,
+            backpressured.settlement().toCompletableFuture().join());
+
+        runtime.applyRelocationRouteCommand(
+                route(first, 0, 9, 10, NODE_B, 4))
+            .toCompletableFuture().join();
+        var successor = new ZLinkServiceM6BWireCodec.RelocationIdentity(10, 11);
+        runtime.applyRelocationSealCommand(
+                seal(successor, 7, NODE_B, 4, 10, 4))
+            .toCompletableFuture().join();
+        runtime.applyRelocationRouteCommand(
+                route(successor, 0, 10, 11, NODE_C, 5))
+            .toCompletableFuture().join();
+        assertFalse(firstAdmission.settlement().toCompletableFuture().isDone());
+        assertFalse(secondAdmission.settlement().toCompletableFuture().isDone());
+
+        stream.boundPushAvailable = true;
+        awaitBoundPushes(stream, 2);
+        assertEquals(List.of("predecessor-1", "predecessor-2"),
+            stream.boundPushes,
+            "successor commit must drain already accepted predecessor entries "
+                + "without current-tenure reauthorization");
+        assertEquals(
+            ZLinkSessionActorsRuntime.TargetOutboundSettlement.DELIVERED,
+            firstAdmission.settlement().toCompletableFuture().join());
+        assertEquals(
+            ZLinkSessionActorsRuntime.TargetOutboundSettlement.DELIVERED,
+            secondAdmission.settlement().toCompletableFuture().join());
+
+        var targetC = boundSend(NODE_C, 5, 11, 4);
+        assertTrue(runtime.acceptBoundSessionSend(
+            NODE_C, 5, targetC, outboundPayload("successor")));
+        awaitBoundPushes(stream, 3);
+        assertEquals(List.of(
+            "predecessor-1", "predecessor-2", "successor"),
+            stream.boundPushes);
+    }
+
+    @Test
+    void acceptedProofRejectsMismatchedPendingEntryWithoutStoreLookup() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream, 2);
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A))
+            .toCompletableFuture().join();
+        var relocation = relocation();
+        runtime.applyRelocationSealCommand(
+                seal(relocation, 7, NODE_A, 3, 9, 4))
+            .toCompletableFuture().join();
+        var mismatched = runtime.admitBoundSessionSend(
+            NODE_B,
+            4,
+            boundSend(NODE_B, 4, 99, 4),
+            outboundPayload("mismatch"));
+        assertTrue(mismatched.admitted(),
+            "command 43 admits only producer-pending data");
+        stream.relocationEntered = () -> assertEquals(
+            ZLinkSessionActorsRuntime.TargetOutboundSettlement.REJECTED,
+            mismatched.settlement().toCompletableFuture().join(),
+            "accepted target proof must settle a mismatched producer entry "
+                + "before native ownership transfer starts");
+
+        var ack = runtime.applyRelocationRouteCommand(
+                route(relocation, 0, 9, 10, NODE_B, 4),
+                new ZLinkSessionActorsRuntime.AcceptedTargetProof(
+                    new ZLinkBackendActorRef(NODE_B, "actor-1", 7),
+                    4,
+                    10,
+                    4))
+            .toCompletableFuture().join();
+
+        assertEquals(ZLinkServiceM6BWireCodec.SessionRelocationRouteResult
+            .APPLIED, ack.result());
+        assertEquals(
+            ZLinkSessionActorsRuntime.TargetOutboundSettlement.REJECTED,
+            mismatched.settlement().toCompletableFuture().join());
+        assertTrue(stream.boundPushes.isEmpty());
+    }
+
+    @Test
+    void disconnectSettlesEachQueuedCommand36ExactlyOnce() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream, 1);
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A))
+            .toCompletableFuture().join();
+        runtime.applyRelocationSealCommand(
+                seal(relocation(), 7, NODE_A, 3, 9, 4))
+            .toCompletableFuture().join();
+        var admission = runtime.admitBoundSessionSend(
+            NODE_B,
+            4,
+            boundSend(NODE_B, 4, 10, 4),
+            outboundPayload("shutdown"));
+        AtomicInteger settlements = new AtomicInteger();
+        admission.settlement().whenComplete(
+            (ignored, failure) -> settlements.incrementAndGet());
+
+        runtime.notifyDisconnectedAll().toCompletableFuture().join();
+        runtime.notifyDisconnectedAll().toCompletableFuture().join();
+
+        assertEquals(
+            ZLinkSessionActorsRuntime.TargetOutboundSettlement.SHUTDOWN,
+            admission.settlement().toCompletableFuture().join());
+        assertEquals(1, settlements.get());
+    }
+
     private static ZLinkServiceM6BWireCodec.RelocationIdentity relocation() {
         return new ZLinkServiceM6BWireCodec.RelocationIdentity(8, 9);
     }
@@ -882,6 +1010,48 @@ final class ZLinkSessionActorBindingContractTest {
             ZLinkStreamCodec.RAW);
     }
 
+    private static ZLinkSessionActorsRuntime runtime(
+        FakeStream stream,
+        int targetOutboundCapacity) {
+        return new ZLinkSessionActorsRuntime(
+            null,
+            stream,
+            SESSION,
+            null,
+            new RawSerializer(),
+            ignored -> true,
+            null,
+            true,
+            ZLinkStreamCodec.RAW,
+            null,
+            targetOutboundCapacity);
+    }
+
+    private static ZLinkServiceM6BWireCodec.BoundSessionSend boundSend(
+        RoutingId nodeRid,
+        long nodeGeneration,
+        long authorityOwnerGeneration,
+        long ownerLeaseGeneration) {
+        return new ZLinkServiceM6BWireCodec.BoundSessionSend(
+            new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                new ZLinkBackendActorRef(nodeRid, "actor-1", 7),
+                nodeGeneration,
+                authorityOwnerGeneration,
+                ownerLeaseGeneration),
+            BINDING_GENERATION);
+    }
+
+    private static systems.zlink.framework.runtime.internal.service
+        .ZLinkServiceM6AWireCodec.ApplicationPayload outboundPayload(
+            String value) {
+        try (Message message = Message.from(
+                value.getBytes(StandardCharsets.UTF_8))) {
+            return systems.zlink.framework.runtime.internal.service
+                .ZLinkServiceM6AWireCodec.encodeFrameworkMultipart(
+                    List.of(message));
+        }
+    }
+
     private static ZLinkInternalSpotNode authoritySpotNode(
         Map<RoutingId, ActorAuthority> authorities) {
         return (ZLinkInternalSpotNode) Proxy.newProxyInstance(
@@ -954,6 +1124,18 @@ final class ZLinkSessionActorBindingContractTest {
         }
     }
 
+    private static void awaitBoundPushes(FakeStream stream, int expected) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (stream.boundPushes.size() < expected) {
+            if (System.nanoTime() > deadline) {
+                assertEquals(expected, stream.boundPushes.size(),
+                    "bound Session FIFO did not drain");
+                return;
+            }
+            Thread.onSpinWait();
+        }
+    }
+
     private static boolean await(CountDownLatch latch) {
         try {
             return latch.await(5, TimeUnit.SECONDS);
@@ -981,6 +1163,10 @@ final class ZLinkSessionActorBindingContractTest {
         private CountDownLatch blockRelayEntered;
         private CountDownLatch blockRelayRelease;
         private int relocationFailuresRemaining;
+        private Runnable relocationEntered;
+        private volatile boolean boundPushAvailable = true;
+        private final List<String> boundPushes =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
         private int disconnectNotifications;
         private long nextIngressSequence = 1;
         private boolean closed;
@@ -1053,6 +1239,9 @@ final class ZLinkSessionActorBindingContractTest {
             long bindingGeneration,
             ZLinkBackendActorRef targetActor,
             Duration timeout) {
+            if (relocationEntered != null) {
+                relocationEntered.run();
+            }
             if (relocationFailuresRemaining > 0) {
                 relocationFailuresRemaining--;
                 return CompletableFuture.failedFuture(
@@ -1068,6 +1257,17 @@ final class ZLinkSessionActorBindingContractTest {
         @Override public boolean sendBoundActor(
             RoutingId sessionRid, String actorId,
             List<Message> parts, SendFlags flags) {
+            return true;
+        }
+        @Override public boolean sendBoundSessionPush(
+            RoutingId sessionRid,
+            List<Message> parts,
+            SendFlags flags) {
+            if (!boundPushAvailable) {
+                return false;
+            }
+            boundPushes.add(new String(
+                parts.getFirst().toByteArray(), StandardCharsets.UTF_8));
             return true;
         }
         @Override public boolean relayBoundActor(

@@ -145,7 +145,7 @@ Framework가 자동 발급하며 고정 RID를 설정하지 않는다.
 |---|---|---|
 | ZoneId로 현재 zone owner를 찾는다. | global Spot message | global SpotId authority를 Framework가 resolve한다. [상호작용 모델 §2](../../spec/03-interaction-model.ko.md#2-공통-모델) |
 | PlayerId로 actor를 찾는다. | global Actor message | Actor location과 current owner를 application route로 노출하지 않는다. [Actor model](../../spec/14-actor-model.ko.md) |
-| zone join을 cross-node 이동으로 사용한다. | Actor Join + relocation | target owner가 다르면 Framework relocation unit이 actor를 이동시킨다. [Graceful drain §8](../../spec/28-graceful-drain-handoff.ko.md#8-unit-하나를-이전하는-순서) |
+| zone join을 cross-node 이동으로 사용한다. | Actor Join + relocation | target owner가 다르면 Framework relocation unit이 actor를 이동시킨다. [Graceful drain §8](../../spec/30-host-relocation-flow.ko.md#8-unit-하나를-이전하는-순서) |
 | 이동 중 이전 owner message를 전달한다. | Message Follow | committed target route를 사용하며 실패한 operation을 다른 owner에 재제출하지 않는다. [Object routing §2.4](../../spec/18-object-routing.ko.md#24-이전-owner-route에-도착한-message) |
 | 인접 zone에 snapshot을 전달한다. | Logical Multicast | topic과 target subscription으로 경계를 표현한다. [상호작용 모델 §5](../../spec/03-interaction-model.ko.md#5-spot-logical-multicast) |
 | 전 node 공지·점검을 보낸다. | classic fanout | publisher가 node 목록을 관리하지 않는다. [상호작용 모델 §6](../../spec/03-interaction-model.ko.md#6-classic-fanout) |
@@ -343,7 +343,7 @@ message ZoneBorderEvent {
   players: PlayerView[]
 }
 
-message EnterZoneMsg {
+message EnterZoneReq {
   playerId: string
   x: int32
   y: int32
@@ -397,7 +397,7 @@ sequenceDiagram
 
     C->>G: JoinWorldReq
     G->>A: create or get Player Actor
-    A->>Z: EnterZoneMsg(zone-nw)
+    A->>Z: EnterZoneReq(zone-nw)
     Z-->>A: EnterZoneRes
     A-->>G: JoinWorldRes(25,25)
     G-->>C: JoinWorldRes
@@ -414,7 +414,7 @@ sequenceDiagram
 
 target zone owner가 같으면 membership만 바뀌고, 다르면 같은 Player Actor가 target owner에서
 materialize되는 relocation이 발생한다. Application은 두 경우를 NodeId로 구분하지 않는다.
-두 경우 모두 EnterZoneMsg를 사용한다.
+두 경우 모두 request/reply인 `EnterZoneReq`와 `EnterZoneRes`를 사용한다.
 
 ```mermaid
 sequenceDiagram
@@ -428,7 +428,7 @@ sequenceDiagram
     C->>G: MoveMsg(target coordinate)
     G->>A: MoveMsg
     A->>A: validate adjacent zone
-    A->>T: EnterZoneMsg
+    A->>T: EnterZoneReq
     T->>N: relocation admission when owner differs
     N->>N: Capture and Restore actor state
     N-->>A: target owner ready

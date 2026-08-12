@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package systems.zlink.e2e.registrationcodec.shared.protobuf;
+
+option java_multiple_files = true;
+option java_package = "systems.zlink.e2e.registrationcodec.shared.protobuf";
+option java_outer_classname = "ProtobufEchoContracts";
+
+message ProtobufEchoReq {
+  string value = 1;
+}
+
+message ProtobufEchoRes {
+  string value = 1;
+}
+
+message ProtobufEchoMsg {
+  string value = 1;
+}

@@ -1,3 +1,4 @@
+// Verifies queued instance Spot requests fail consistently when the owner is lost.
 using SpotService.Client.Support;
 using SpotService.Shared;
 using Zlink.Framework.Contracts.Errors;
@@ -15,8 +16,8 @@ internal static class InstanceSpotQueueOwnerLossScenario
     {
         var spotId = $"instance-is-e2e-35-{Guid.NewGuid():N}";
         var initial = (await playA.Post("/instance/cold-request")
-            .Body(new InstanceColdRequestReq(spotId, "ready"))
-            .Async<InstanceColdRequestRes>()).Body;
+            .Body(new InstanceColdProbeReq(spotId, "ready"))
+            .Async<InstanceColdProbeRes>()).Body;
         ZlinkStreamAssert.Ensure(initial.Succeeded, "IS-E2E-35 initial request failed.");
         var owner = OwnerRole(initial.NodeRid);
         var ownerClient = owner == "play-a" ? playA : playB;
@@ -64,13 +65,13 @@ internal static class InstanceSpotQueueOwnerLossScenario
             + $"|first={terminals[0].ErrorKind}|followUp={terminals[1].ErrorKind}");
     }
 
-    private static async Task<InstanceColdRequestRes> RequestAsync(
+    private static async Task<InstanceColdProbeRes> RequestAsync(
         ZLinkHttpClient client,
         string spotId,
         string operationId) =>
         (await client.Post("/instance/cold-request")
-            .Body(new InstanceColdRequestReq(spotId, operationId))
-            .Async<InstanceColdRequestRes>()).Body;
+            .Body(new InstanceColdProbeReq(spotId, operationId))
+            .Async<InstanceColdProbeRes>()).Body;
 
     private static string OwnerRole(string nodeRid)
     {

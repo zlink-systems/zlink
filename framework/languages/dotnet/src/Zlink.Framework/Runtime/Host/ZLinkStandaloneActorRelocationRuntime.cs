@@ -963,6 +963,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 sessionNode,
                 ZLinkSessionRelocationWire.CreateSeal(
                     actorState.ActorId,
+                    sourceRef.NodeRid,
                     normalized,
                     wireContext),
                 cancellationToken)

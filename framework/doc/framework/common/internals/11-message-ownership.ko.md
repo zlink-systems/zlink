@@ -69,6 +69,28 @@ handler가 사용하던 view가 무효가 된다.
 버퍼를 유지하면 그 버퍼를, 관리 메모리로 옮기면 그 사본을 해제한다. 어느 쪽이든
 **해제 시점은 handler 완료 이후**다.
 
+소유권 전이는 다음 한 방향으로만 진행한다. Binding receive callback이 끝난 뒤에도
+payload를 보관해야 하면 그 경계에서 한 번만 복사하거나 소유권을 옮긴다. Queue에 넣은 뒤에는
+encoded payload를 Framework가 소유하며, handler가 받는 decoded value는 native storage의
+소유권이나 해제 책임을 포함하지 않는다.
+
+```mermaid
+stateDiagram-v2
+    [*] --> bindingStorage: binding receive 성공
+    bindingStorage --> frameworkStorage: 경계에서 copy 또는 ownership transfer
+    frameworkStorage --> handlerValue: admission 성공 · turn 획득 · decode
+    bindingStorage --> released: validation 또는 경계 변환 실패
+    frameworkStorage --> released: admission 거부 · timeout · cancellation · shutdown
+    handlerValue --> released: handler 성공 또는 실패
+    released --> [*]
+```
+
+모든 terminal 경로는 같은 release 지점으로 모인다. Handler exception, timeout,
+cancellation, shutdown과 relocation 정리에서도 release를 건너뛰거나 두 번 실행하지 않는다.
+C++과 .NET은 이 전이가 `close`·`Dispose` 호출로 드러난다. JVM의 managed object와 Node의
+`Buffer`처럼 실제 해제가 garbage collection에 맡겨지는 mapping도 queue와 handler가 더는
+그 storage를 참조하지 않는 같은 논리적 release 지점을 유지한다.
+
 ## 5. Handler에 무엇을 넘기는가
 
 **결정 — handler에는 역직렬화된 소유 객체를 넘긴다. native 저장소나 해제 책임을 넘기지
@@ -246,6 +268,8 @@ runtime 중 쓰기와 그에 따른 race가 없어진다.
 - 이동이 시작되지 않은 message에 대해 이동 기록을 만들지 않는다.
 - 대기 중인 payload를 전송 계층이나 application이 만지지 않는다.
 - payload 해제가 handler 완료 이후에 일어난다.
+- 성공·거부·예외·timeout·cancellation·shutdown의 모든 terminal 경로가 payload release를
+  정확히 한 번 실행한다.
 - handler가 native 저장소나 해제 책임을 받지 않는다.
 - 대기열 가득참이나 owner 불일치로 거절된 message가 역직렬화되지 않는다.
 - 이동 중 보류한 message가 commit replay 또는 abort 재개 뒤 실행 권한을 얻기 전에는

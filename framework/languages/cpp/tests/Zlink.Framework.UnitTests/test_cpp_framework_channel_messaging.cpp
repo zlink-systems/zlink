@@ -17,11 +17,11 @@
 #include "runtime/channels/route_internal_packet_dispatcher.hpp"
 #include "runtime/channels/route_packet_dispatcher.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
-#include "runtime/actors/actor_route_internal_dispatcher.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
+#include "runtime/spots/spot_route_internal_dispatcher.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/streams/stream_runtime.hpp"
@@ -2542,8 +2542,6 @@ int main ()
     }
 
     local_internal_dispatcher_t internal_a;
-    zlink::framework::detail::composite_route_internal_packet_dispatcher_t composite_internal;
-    composite_internal.add (internal_a);
     zlink::framework::runtime::messaging::envelope_header_t internal_header;
     internal_header.kind = zlink::framework::runtime::messaging::message_kind_t::request;
     internal_header.channel_name = "game.route";
@@ -2552,7 +2550,7 @@ int main ()
     auto internal_parts = envelope_codec.encode_raw_body_parts (
       internal_header, zlink::message_t::from (std::string ("{}")));
     test_route_receive_pump_t internal_pump{zlink::framework::detail::route_packet_dispatcher_t (
-      "game.route", provider, serializers, route_handlers, composite_internal)};
+      "game.route", provider, serializers, route_handlers, internal_a)};
     internal_pump.enqueue (zlink::framework::detail::route_received_packet_t{
       zlink::routing_id_t::from (std::string ("source-node")), 79, internal_parts});
     const auto internal_receive = internal_pump.drain ();
@@ -2595,12 +2593,19 @@ int main ()
     internal_send_header.message_name = "internal.send";
     auto internal_send_parts = envelope_codec.encode_raw_body_parts (
       internal_send_header, zlink::message_t::from (std::string ("{}")));
-    if (!composite_internal.can_handle_send ("internal.send")
-        || !composite_internal.dispatch_send (
+    const auto dispatch_internal_packet =
+      [&] (const zlink::framework::detail::route_received_packet_t &received) {
+          return zlink::framework::detail::route_packet_dispatcher_t (
+            "game.route", provider, serializers, route_handlers, internal_a)
+            .dispatch (received);
+      };
+    const auto supported_internal_send = dispatch_internal_packet (
           zlink::framework::detail::route_received_packet_t{
             zlink::routing_id_t::from (std::string ("source-node")), std::nullopt,
-            internal_send_parts},
-          provider)
+            internal_send_parts});
+    if (!internal_a.can_handle_send ("internal.send")
+        || !supported_internal_send
+        || supported_internal_send.value ().has_value ()
         || internal_a.send_count != 1
         || provider.get_required<local_handler_t> ().internal_dispatch_provider_seen != 1) {
         return 68;
@@ -2612,33 +2617,46 @@ int main ()
     unsupported_internal_header.message_name = "internal.unsupported";
     auto unsupported_internal_parts = envelope_codec.encode_raw_body_parts (
       unsupported_internal_header, zlink::message_t::from (std::string ("{}")));
-    const auto unsupported_internal_send = composite_internal.dispatch_send (
+    const auto unsupported_internal_send = dispatch_internal_packet (
       zlink::framework::detail::route_received_packet_t{
         zlink::routing_id_t::from (std::string ("source-node")), std::nullopt,
-        unsupported_internal_parts},
-      provider);
-    if (unsupported_internal_send
-        || unsupported_internal_send.error_kind ()
-             != zlink::framework::framework_error_kind_t::not_found) {
+        unsupported_internal_parts});
+    if (internal_a.can_handle_send ("internal.unsupported")
+        || !unsupported_internal_send
+        || unsupported_internal_send.value ().has_value ()
+        || internal_a.send_count != 1) {
         return 69;
     }
     unsupported_internal_header.kind =
       zlink::framework::runtime::messaging::message_kind_t::request;
-    const auto unsupported_internal_request = composite_internal.dispatch_request (
+    auto unsupported_internal_request_parts =
+      envelope_codec.encode_raw_body_parts (
+        unsupported_internal_header,
+        zlink::message_t::from (std::string ("{}")));
+    const auto unsupported_internal_request = dispatch_internal_packet (
       zlink::framework::detail::route_received_packet_t{
-        zlink::routing_id_t::from (std::string ("source-node")), 82, unsupported_internal_parts},
-      unsupported_internal_header, provider);
-    if (unsupported_internal_request
-        || unsupported_internal_request.error_kind ()
-             != zlink::framework::framework_error_kind_t::not_found) {
+        zlink::routing_id_t::from (std::string ("source-node")), 82,
+        unsupported_internal_request_parts});
+    if (!unsupported_internal_request
+        || !unsupported_internal_request.value ()) {
         return 70;
     }
-    const auto invalid_internal_send = composite_internal.dispatch_send (
+    const auto unsupported_internal_request_header =
+      envelope_codec.decode_header (
+        unsupported_internal_request.value ()->parts);
+    if (internal_a.can_handle_request ("internal.unsupported")
+        || !unsupported_internal_request_header
+        || unsupported_internal_request_header.value ().kind
+             != zlink::framework::runtime::messaging::message_kind_t::error
+        || unsupported_internal_request_header.value ().error_code
+             != std::optional<std::string> ("not_found")) {
+        return 70;
+    }
+    const auto invalid_internal_send = dispatch_internal_packet (
       zlink::framework::detail::route_received_packet_t{
         zlink::routing_id_t::from (std::string ("source-node")), std::nullopt,
         zlink::framework::runtime::messaging::message_parts_t (
-          std::vector<zlink::message_t>{zlink::message_t::from (std::string ("not-json"))})},
-      provider);
+          std::vector<zlink::message_t>{zlink::message_t::from (std::string ("not-json"))})});
     if (invalid_internal_send
         || invalid_internal_send.error_kind ()
              != zlink::framework::framework_error_kind_t::protocol_error) {
@@ -3367,8 +3385,13 @@ int main ()
         return 66;
     }
     actor_gateway.bind_session_stream ("observer", stream, zlink::framework::stream_codec_t::json);
-    zlink::framework::detail::actor_route_internal_dispatcher_t actor_dispatcher (actor_gateway,
-                                                                                  serializers);
+    zlink::framework::spot_node_builder_t actor_route_spot_builder;
+    auto actor_route_spot_runtime =
+      zlink::framework::detail::spot_node_runtime_t::from (
+        actor_route_spot_builder);
+    zlink::framework::detail::spot_route_internal_dispatcher_t actor_dispatcher (
+      actor_route_spot_runtime, actor_gateway,
+      zlink::framework::route_client_t{}, serializers);
     if (!actor_dispatcher.can_handle_request (
           zlink::framework::detail::actor_bound_session_route_request_t::packet_name)
         || !actor_dispatcher.can_handle_send (
@@ -3423,7 +3446,6 @@ int main ()
         || routed_send_headers[1].packet_name () != "BingoRewardAnnouncedNotify") {
         return 73;
     }
-
     std::atomic_int route_submit_attempts{0};
     zlink::framework::route_send_call_t one_shot_route (
       "one-shot",

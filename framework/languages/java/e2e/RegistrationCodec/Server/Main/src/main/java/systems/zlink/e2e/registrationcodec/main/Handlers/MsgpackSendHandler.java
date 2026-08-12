@@ -1,6 +1,4 @@
-package Handlers;
-import systems.zlink.e2e.registrationcodec.main.Handlers;
-import systems.zlink.e2e.registrationcodec.main.Infrastructure;
+package systems.zlink.e2e.registrationcodec.main.Handlers;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -21,8 +19,8 @@ public final class MsgpackSendHandler
     public CompletionStage<Void> handle(
         Contracts.PackedEchoMsg message,
         ZLinkMessageContext context) {
-        state.record("Send", "MsgpackEcho", message.value());
-        state.record("ContentType", "MsgpackEcho", context.contentType().orElse(""));
+        state.record("Send", "PackedEchoMsg", message.value());
+        state.record("ContentType", "PackedEchoMsg", context.contentType().orElse(""));
         return CompletableFuture.completedFuture(null);
     }
 }

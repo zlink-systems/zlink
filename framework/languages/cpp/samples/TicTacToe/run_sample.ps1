@@ -26,30 +26,7 @@ foreach ($Binary in @($PlayBin, $ApiBin, $ClientBin)) {
 }
 
 function Reserve-Ports([int]$Count) {
-    if ($env:TICTACTOE_CPP_BASE_PORT) {
-        $ports = New-Object System.Collections.Generic.List[int]
-        $basePort = [int]$env:TICTACTOE_CPP_BASE_PORT
-        for ($i = 1; $i -le $Count; $i++) {
-            $ports.Add($basePort + $i)
-        }
-        return $ports.ToArray()
-    }
-
-    $listeners = New-Object System.Collections.Generic.List[System.Net.Sockets.TcpListener]
-    $ports = New-Object System.Collections.Generic.List[int]
-    try {
-        while ($ports.Count -lt $Count) {
-            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse("127.0.0.1"), 0)
-            $listener.Start()
-            $listeners.Add($listener)
-            $ports.Add([int]$listener.LocalEndpoint.Port)
-        }
-        return $ports.ToArray()
-    } finally {
-        foreach ($listener in $listeners) {
-            $listener.Stop()
-        }
-    }
+    return @(Get-ZlinkSamplePorts -Count $Count)
 }
 
 function Get-EndpointParts([string]$Endpoint) {
@@ -147,7 +124,7 @@ function Cleanup([int]$Status) {
         }
     }
     if ($RedisContainer) {
-        & docker rm -fv $RedisContainer 2>$null | Out-Null
+        Remove-ZlinkSampleRedis $RedisContainer
     }
     if ($Status -ne 0) {
         Print-Logs
@@ -165,7 +142,7 @@ function Cleanup([int]$Status) {
     --output-on-failure
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-$ports = Reserve-Ports 17
+$ports = Reserve-Ports 16
 $ApiAEndpoint = "tcp://127.0.0.1:$($ports[0])"
 $ApiBEndpoint = "tcp://127.0.0.1:$($ports[1])"
 $ApiAHttpEndpoint = "http://127.0.0.1:$($ports[2])"
@@ -182,8 +159,6 @@ $PlayARouteEndpoint = "tcp://127.0.0.1:$($ports[12])"
 $PlayBRouteEndpoint = "tcp://127.0.0.1:$($ports[13])"
 $ApiARouteEndpoint = "tcp://127.0.0.1:$($ports[14])"
 $ApiBRouteEndpoint = "tcp://127.0.0.1:$($ports[15])"
-$RedisPort = $ports[16]
-
 $LogDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
 New-Item -ItemType Directory -Path $LogDir | Out-Null
 $Processes = New-Object System.Collections.Generic.List[System.Diagnostics.Process]

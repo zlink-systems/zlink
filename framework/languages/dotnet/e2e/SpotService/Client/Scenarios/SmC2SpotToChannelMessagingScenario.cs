@@ -33,7 +33,7 @@ internal static class SmC2SpotToChannelMessagingScenario
             "channel-echo|value=sm-c2",
             "channel-notify|marker=notify-sm-c2",
             "dispatch-error|surface=Channel|reason=HandlerMissing|action=ReplyError|packet=MissingChannelReq",
-            "dispatch-error|surface=Channel|reason=HandlerMissing|action=Drop|packet=MissingChannelNotify"
+            "dispatch-error|surface=Channel|reason=HandlerMissing|action=Drop|packet=MissingChannelMsg"
         };
         await WaitForEvidenceAsync(
             playA,

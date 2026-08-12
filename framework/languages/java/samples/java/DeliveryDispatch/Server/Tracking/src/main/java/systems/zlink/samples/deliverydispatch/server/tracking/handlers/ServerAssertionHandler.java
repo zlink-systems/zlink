@@ -10,7 +10,7 @@ import java.util.concurrent.CompletionStage;
 
 @ZLinkHandlerGroup("tracking")
 public final class ServerAssertionHandler
-    implements ZLinkRequestHandler<Messages.ServerAssertionRequest, Messages.ServerAssertionResponse> {
+    implements ZLinkRequestHandler<Messages.ServerAssertionReq, Messages.ServerAssertionRes> {
     private final EvidenceStore evidenceStore;
 
     public ServerAssertionHandler(EvidenceStore evidenceStore) {
@@ -18,8 +18,8 @@ public final class ServerAssertionHandler
     }
 
     @Override
-    public CompletionStage<Messages.ServerAssertionResponse> handle(
-        Messages.ServerAssertionRequest request,
+    public CompletionStage<Messages.ServerAssertionRes> handle(
+        Messages.ServerAssertionReq request,
         ZLinkMessageContext context) {
         return CompletableFuture.completedFuture(evidenceStore.assertSequences(
             request.successfulDeliveryId(),

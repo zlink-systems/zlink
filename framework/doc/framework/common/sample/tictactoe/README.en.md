@@ -2,34 +2,43 @@
 
 [Sample List](../README.en.md)
 
-> TicTacToe shows that in an environment where two APIs and two Play servers are connected by a
-> manual endpoint, the Framework provides room Spot routing, a stream session, and Logical
-> Multicast, letting the Application focus on board and turn rules.
+> TicTacToe shows an environment where two APIs and two Play servers connect through manual
+> endpoints. The Framework delivers messages to Room Spots and manages stream sessions. It
+> preserves application state when moving a Player Actor to another Play and delivers milestones
+> through Logical Multicast, so the Application can focus on board and turn rules.
 
 ## 1. Purpose And Scope
 
 This sample covers a scale-out game where the Play server provides the stream session, player
 Actor, and room User Spot together, with no separate Session process. API A/B provide HTTP room
-creation and authentication, and Play A/B are connected as manual RouteMesh peers. The client
-chooses the stream endpoint received in the room-creation response to build a host, guest, and
-observer connection.
+creation and authentication, and Play A/B are connected as manual RouteMesh peers. The client uses
+the stream endpoints from the room-creation response: the host connects to Play A, while the guest
+and observer connect to Play B.
 
-The Framework's responsibility is User Spot creation and global RoomId routing, Actor lifecycle,
-stream binding, Logical Multicast, and Location-Store-based current-owner resolution. The
-Application owns level admission, board, turn, win/draw judgment, and the actor-destroy policy.
+The Framework creates User Spots, finds the current owner of a global RoomId, and manages Actor
+lifecycle and stream binding. When a Player Actor joins a Room Spot on another Play, the Framework
+moves it to the new owner while preserving its application state. It also delivers milestones with
+Logical Multicast. The Location Store records current owners, while the Relocation Store holds the
+payload needed to restore an Actor during a move. The Application owns level admission, board,
+turn, win/draw judgment, and the actor-destroy policy.
 
-The scope runs from room creation to the point where the host/guest complete a game, the observer
-confirms the Wins 100 milestone, and it sends `LeaveGameMsg`. The following features are excluded.
+The scope starts with room creation. It ends after the host and guest complete a game, the observer
+confirms the Wins 100 milestone, the two players each send `LeaveGameMsg`, and the runner confirms
+that both Actors were destroyed at their Entry Spots. The following features are excluded.
 
 - An actual account provider, ranking, and persistent match history
 - Automatic peer discovery and a service registry
 - A feature that lets a spectator change game state
 - Automatic crash failover after a room owner failure
-- Planned relocation of the Player Actor and Room Spot
+- A separate scenario where an operator starts planned relocation during host maintenance
 - A global leaderboard across multiple rooms
 
-Both the Player Actor and Room Spot factories select `DisableRelocation`. Planned relocation isn't
-a completion criterion, so no Relocation Store is registered.
+This exclusion doesn't include Actor relocation required by a remote Room join. When the Player
+Actor and Room Spot have different owners, the Framework moves the Player Actor within the join
+operation. The Player Actor factory uses `PreserveStateWith` and a relocation adapter to preserve
+application state. The Room Spot factory uses `DisableRelocation`. The Play runtime registers one
+Relocation Store for Player Actor movement payloads. The relocation adapter isn't called when the
+Actor and Room Spot are on the same node.
 
 The manual endpoint isn't a value that decides object placement. The API doesn't choose a specific
 Play process or NodeRid — the Framework resolves the RoomId's current owner from the Location
@@ -47,13 +56,17 @@ endpoint and RID, using generation `0` or treating the RID as the security ident
 - Api A and Api B provide the same HTTP room-creation and authentication contract.
 - Play A and Play B connect as manual RouteMesh peers, and both Plays provide the same object
   capability.
-- `CreateGameHttpReq` returns the RoomId, RequiredLevel, and the list of Play stream endpoints.
-- The host and guest authenticate at different Play ingresses and join the same RoomId.
+- `CreateGameHttpRes` returns RoomId, RequiredLevel, PlayEndpoints, PlayNodes, and GameName.
+- The host authenticates through Play A, while the guest and observer authenticate through Play B.
+  The host and guest join the same RoomId.
+- When the Player Actor and Room Spot have different owners, the Framework preserves the Player
+  Actor state while moving it to the room owner.
 - The room Spot judges level admission, board, turn, win, and draw.
 - The requesting client receives `PlaceMarkRes`, and the other client receives `GameStateNotify`
   with the same state.
 - Once the host's win brings Wins to 100, the observer receives `WinMilestoneNotify`.
-- After the game ends, `LeaveGameMsg` moves the actor to the Entry Spot, leaving destroy evidence.
+- After the game ends, the host and guest each send `LeaveGameMsg`. The Framework moves each Actor
+  to an Entry Spot and destroys it, and the runner verifies the result for both Actors.
 
 ### 2.2 Operational/Quality Requirements
 
@@ -61,10 +74,11 @@ endpoint and RID, using generation `0` or treating the RID as the security ident
 |---|---|---|
 | topology | Separates the Object Client/Server peer and the ClientServer API channel. | Framework configuration |
 | placement | Uses only the RoomId and global ActorId, without exposing the owner NodeRid to the client. | Framework contract |
+| relocation | A cross-node join preserves Player Actor state and doesn't move the Room Spot. | Framework + Sample configuration |
 | join | The room owner judges whether the join payload's `PlayerInfo.Level` is at least `RequiredLevel`. | Sample policy |
 | multicast | The milestone is a publish, and publish completion isn't used as the game result. | Framework + Sample |
-| disconnect | A stream disconnect is binding cleanup, separated from actor destroy. | Framework lifecycle |
-| verification | Directly asserts response, notify, milestone, and destroy evidence. | Sample self-check |
+| disconnect | On a physical stream disconnect, the Framework runs the disconnected lifecycle callback at each bound Actor's current Spot and cleans up the binding. It doesn't start leave, change membership, or destroy the Actor. | Framework lifecycle |
+| verification | The client checks response, notification, and milestone payloads, while the runner confirms that each Actor was destroyed. | Sample self-check |
 
 ### 2.3 Choice Criteria Versus Bingo
 
@@ -73,7 +87,8 @@ Both samples gather game state in a Spot, but the connection boundary differs.
 | Axis | TicTacToe | Bingo |
 |---|---|---|
 | Client edge | The client directly chooses API HTTP and Play STREAM | A single Session STREAM |
-| Topology | Manual endpoint RouteMesh and a Redis Location Store | Location-Store-based automatic discovery |
+| Topology | Manual endpoint RouteMesh and Redis Location/Relocation Stores | Location-Store-based automatic discovery |
+| Handler registration | Every language registers explicitly through public builders and handler registries | Managed languages register automatically; C++ registers explicitly |
 | Server separation | Play owns the stream and room together | Session, API, Matchmaking, and Play separated |
 | Event usage | Logical Multicast milestone | A room-state and reward observer |
 | Selection condition | When confirming manual peer and room routing | When confirming session gateway and matchmaking |
@@ -81,8 +96,8 @@ Both samples gather game state in a Spot, but the connection boundary differs.
 ## 3. System Composition And Topology
 
 The basic topology shows only the structural connections of the Client and server components. The
-Redis Location Store is explained in the resource table, and the time order of HTTP, stream, join,
-and publish is placed in the §7 sequence diagrams.
+Redis Location Store and Relocation Store are explained in the resource table, and the time order
+of HTTP, stream, join, and publish is placed in the §7 sequence diagrams.
 
 ```mermaid
 flowchart LR
@@ -96,6 +111,8 @@ flowchart LR
         A2[Api B]
         P1[Play A]
         P2[Play B]
+        AC1["Play A tictactoe.api<br/>select one Api"]
+        AC2["Play B tictactoe.api<br/>select one Api"]
     end
     H ---|HTTP| A1
     G ---|HTTP| A2
@@ -108,24 +125,33 @@ flowchart LR
     A2 ---|tictactoe RouteMesh| P1
     A2 ---|tictactoe RouteMesh| P2
     P1 ---|tictactoe RouteMesh| P2
-    P1 ---|tictactoe.api ClientServer| A1
-    P2 ---|tictactoe.api ClientServer| A2
+    P1 --- AC1
+    AC1 -.-> A1
+    AC1 -.-> A2
+    P2 --- AC2
+    AC2 -.-> A1
+    AC2 -.-> A2
 ```
 
 - Api A/B are object clients, sending the room-create request to a Play object server.
 - Play A/B are object servers, providing the same object type, Entry Spot, and Logical Multicast
   membership.
-- A Play→Api authentication request uses an independent `tictactoe.api` ClientServer.
+- Each Play has an independent `tictactoe.api` ClientServer channel. The channel receives the Api A
+  and Api B endpoints and selects one Api when it sends an authentication request.
 - No object peer is created between Api A and Api B. The peer direction between Play A/B and Api is
   configured through the manual endpoint setting the runner provides.
 - `CreateGameHttpRes`'s `PlayEndpoints` is for ingress selection — it's not room placement or owner
   evidence.
 - The Location Store records the current owner of the RoomId and ActorId. The Application doesn't
   put a NodeRid, ActorRef, or private route into an API response.
+- The Relocation Store holds application state and Framework restoration payloads when a Player
+  Actor joins a Room Spot on another node. It doesn't provide room-state persistence or crash
+  failover.
 
 | Resource | Responsibility | Preparation |
 |---|---|---|
-| Redis Location Store | Peer descriptors and global RoomId/ActorId authority | dedicated Redis per run |
+| Redis Location Store | Peer descriptors and global RoomId/ActorId authority | per-run Redis and location key namespace |
+| Redis Relocation Store | Player Actor state and Framework restoration payloads | a separate relocation key namespace in the same Redis |
 | Fake user source | Access token, PlayerInfo, and Wins | Api application seed |
 | Room state | Board, turn, player membership | room Spot domain |
 | Milestone topic | Observer subscription and publish target | Play Entry Spot |
@@ -141,6 +167,7 @@ flowchart LR
 | Entry Spot | 1 per Play | Player Actor admission and the observer milestone handler | Provides the actor's initial logical location. |
 | Room Spot | 1 per RoomId | PlayerInfo admission, board, turn, win/draw | The single owner of game state. |
 | Location Store | 1 logical | Peer discovery and global object authority | Hides physical owner selection. |
+| Relocation Store | 1 logical | Holds the payload needed to restore a Player Actor at its new owner. | Doesn't decide object authority. |
 
 The observer isn't a room member. The observer's local Entry Spot handler subscribes to the
 milestone topic and sends `WinMilestoneNotify` to the current observer session. No separate
@@ -153,9 +180,10 @@ observer Spot type is added.
 | Build the object route with a manual peer. | RouteMesh manual endpoint | Shows a topology distinct from automatic discovery. [Channel Topology](../../spec/07-channel-topology.en.md) |
 | Create a new room. | The User Spot manager's Create | The Framework issues the global RoomId and chooses the owner. [Interaction Model §2.1](../../spec/03-interaction-model.en.md#21-the-public-interface-that-starts-an-interaction) |
 | Join a remote room. | A global Spot/Actor message | The caller specifies the RoomId/ActorId, and the Framework resolves the current owner. [Spot Address Messaging](../../spec/16-spot-address-messaging.en.md) |
+| Join a Player Actor to a room on another node. | `PreserveStateWith`, an Actor relocation adapter, and the Relocation Store | The Framework preserves Actor state while moving it to the room owner. [Relocation Policy §5](../../spec/15-spot-actor.en.md#5-relocation-policy-shared-by-every-move-path), [Store Registration §10](../../spec/06-framework-api.en.md#10-location-store-and-relocation-store) |
 | Connect the client connection to an actor. | STREAM session binding | Sends a server push to the current session. [STREAM Session](../../spec/19-stream-session.en.md) |
 | Notify multiple Play ingresses of a milestone. | Logical Multicast | The publisher doesn't manage a subscriber node list. [Interaction Model §5](../../spec/03-interaction-model.en.md#5-spot-logical-multicast) |
-| Clean up the actor after the game ends. | Public leave and Entry Spot destroy | Separates disconnect cleanup from explicit destroy. [Spot/Actor Membership](../../spec/15-spot-actor.en.md) |
+| Clean up the actor after the game ends. | Public leave and Entry Spot destroy | Separates disconnect cleanup from explicit destroy. [Spot/Actor Membership §3](../../spec/15-spot-actor.en.md#3-actor-membership-for-entry-spot-and-user-spot) |
 | Express an owner failure. | Failure/failover policy | A Ready owner failure is not automatic replacement. [Failover Policy](../../spec/31-failure-failover-policy.en.md#42-an-existing-actor-and-spot) |
 
 Room creation's Create call can pass initial room settings and, if needed, the first placement Mesh,
@@ -175,6 +203,10 @@ message PlayerInfo {
   displayName: string
   level: int32
   wins: int32
+}
+
+message PlayerActorCreateReq {
+  player: PlayerInfo
 }
 
 message PlayNodeInfo {
@@ -218,6 +250,11 @@ message AuthenticateRes {
 `PlayEndpoints` and `PlayNodes` are information for choosing a stream ingress. They don't include
 the owner NodeRid or an object location snapshot.
 
+The Play Session puts the authenticated `PlayerInfo` in `PlayerActorCreateReq` and sends it as the
+Actor manager's `GetOrCreate` request. The Actor factory uses this payload to initialize a new
+Player Actor. If the Actor already exists, the Framework returns its existing ActorRef without
+applying the create payload again.
+
 ### 6.2 Room Request And Publish Event
 
 ```text
@@ -230,11 +267,11 @@ message TicTacToeGameJoinRes {
   state: GameState
 }
 
-message JoinGameReq {
+message JoinGameMsg {
   roomId: string
 }
 
-message JoinGameRes {
+message JoinGameNotify {
   state: GameState
 }
 
@@ -269,31 +306,38 @@ message PlayerWinMilestoneEvent {
 }
 ```
 
-`TicTacToeGameJoinReq` is a request/reply the Play Actor sends to the Room Spot. `LeaveGameMsg` is a
-one-way send the actor uses to start its return to the Entry Spot and destroy — it doesn't wait for
-a response. `PlayerWinMilestoneEvent` uses the `Event` suffix since it's a Logical Multicast publish
-payload. `ObserveMilestoneReq/Res` confirms the observer's local Entry Spot subscription completion.
+The Player Actor sends `TicTacToeGameJoinReq` to the Room Spot as a request. The Room Spot decides
+admission and replies with `TicTacToeGameJoinRes`. The client sends `JoinGameMsg` to its bound Actor
+as a one-way send. When an Actor in the Entry Spot receives it for the first time, it starts a Room
+join. After the join completes, the Player Actor pushes `JoinGameNotify` to its current session. A
+failed join pushes `JoinGameFailedNotify`. When a reconnected client sends `JoinGameMsg` to an Actor
+that is already in the same Room Spot, the Room Spot handler pushes `JoinGameNotify` with the
+current `GameState` to the current session without creating membership again. This path doesn't
+send another `PlayerJoinedNotify`.
 
-Player Actor cleanup after the game ends runs in a separate order.
+The client sends `LeaveGameMsg` to its bound Actor as a one-way send and doesn't wait for a
+response. The Room Spot handler starts that Actor's return to the Entry Spot and its destruction.
+The Room Spot publishes `PlayerWinMilestoneEvent`, and a subscribed Entry Spot receives the event.
+When the observer client sends `ObserveMilestoneReq` to its bound Actor as a request, the local
+Entry Spot handler completes the subscription and replies with `ObserveMilestoneRes`.
 
-1. Once the actor object's creation finishes, the framework calls `onCreateActor` exactly once with
-   the create payload.
-2. The room Spot has a guard so termination cleanup starts only once.
-3. The room Spot marks each player actor with "destroy once it returns to the Entry Spot."
-4. The room Spot removes the actor from the room with `leaveActor`.
-5. The framework calls the room's `onLeaveActor`, then moves the actor to the Entry Spot and calls
+After the game ends, each `LeaveGameMsg` starts cleanup for the player that sent it.
+
+1. The Room Spot handler verifies the RoomId, terminal game state, and that Actor's membership.
+2. The Room Spot marks only that Actor with "destroy once it returns to the Entry Spot," then calls
+   public leave.
+3. The Framework calls the Room Spot's `onLeaveActor`, moves the Actor to the Entry Spot, and calls
    the Entry Spot's `onJoinedActor`.
-6. The Entry Spot's `onJoinedActor` or an Entry Spot handler confirms the actor's destroy marker and
-   calls `destroyActor` on the Entry Spot context.
-7. `destroyActor` doesn't call `onLeaveActor` or another lifecycle callback — it cleans up the actor
-   object, the native actor ref, the framework registry, and the bound session binding.
-8. A duplicate destroy on the same actor, or re-entry during destroy, must be a successful no-op —
-   the lifecycle callback must not be called again.
+4. The Entry Spot checks the Actor's destroy marker and calls `destroyActor` on the Entry Spot
+   context.
+5. The runner verifies that the Room leave callback ran and Entry Spot destruction completed for
+   each Actor.
 
-- No additional Entry Spot `onLeaveActor` or other lifecycle callback runs during the Entry Spot
-  destroy process.
-- Disconnect cleanup alone doesn't run actor destroy.
-- A stream disconnect cleans up the bound session but doesn't immediately destroy the actor.
+Completion of the `LeaveGameMsg` send doesn't include a destroy result. The client therefore
+doesn't wait for a response to the one-way send; the runner separately checks server lifecycle
+evidence. On a physical STREAM disconnect, the Framework runs the disconnected lifecycle callback
+at the current Spot of every Actor in the current binding snapshot, then cleans up the binding. The
+callback doesn't start Actor leave, change membership, or destroy the Actor.
 
 ### 6.3 Push And State
 
@@ -349,34 +393,45 @@ member.
 ### 7.1 Room Creation And Authentication/Entry
 
 The starting state is Api A/B and Play A/B having completed manual peer readiness, with the Redis
-Location Store ready. The API issues the RoomId and returns it with the list of Play endpoints. No
-matter which Play ingress the client chooses, the room owner doesn't change.
+Location Store and Relocation Store ready. When the client sends `CreateGameHttpReq`, the Api asks
+the Framework Spot manager to create a Room Spot. The Spot manager issues the RoomId and chooses
+the owner. The Api returns RoomId, RequiredLevel, PlayEndpoints, PlayNodes, and GameName in
+`CreateGameHttpRes`. The room owner doesn't change based on the Play ingress the client uses.
 
 ```mermaid
 sequenceDiagram
     participant C as Client
-    participant API as Api
-    participant P as Play Session
+    participant API as Api A or Api B
+    participant M as Framework Spot Manager
+    participant P as Play A or Play B Session
+    participant A as Player Actor
     participant R as Room Spot
 
     C->>API: CreateGameHttpReq
-    API->>R: TicTacToeGameCreateReq
-    R-->>API: framework result (RoomId)
-    API-->>C: CreateGameHttpRes(RoomId, PlayEndpoints)
+    API->>M: request Room Spot creation with TicTacToeGameCreateReq
+    M->>R: create and initialize Room Spot
+    R-->>M: accept creation
+    M-->>API: creation result (RoomId)
+    API-->>C: CreateGameHttpRes(RoomId, RequiredLevel, PlayEndpoints, PlayNodes, GameName)
+    Note over C,P: host uses Play A<br/>guest and observer use Play B
     C->>P: AuthenticateReq
-    P->>API: AuthenticatePlayerReq
+    P->>API: select one Api through tictactoe.api and send AuthenticatePlayerReq
     API-->>P: AuthenticatePlayerRes(PlayerInfo)
+    P->>A: GetOrCreate with PlayerActorCreateReq(PlayerInfo)
+    A-->>P: current ActorRef
     P-->>C: AuthenticateRes(PlayerInfo)
-    C->>P: JoinGameReq(RoomId)
-    P->>R: TicTacToeGameJoinReq(PlayerInfo)
+    C->>P: JoinGameMsg(RoomId)
+    P->>A: dispatch JoinGameMsg to bound Actor
+    A->>R: TicTacToeGameJoinReq(PlayerInfo)
     R->>R: check Level >= RequiredLevel
-    R-->>P: TicTacToeGameJoinRes
-    P-->>C: JoinGameRes
-    R-->>P: PlayerJoinedNotify for existing member
+    R-->>A: TicTacToeGameJoinRes
+    A-->>P: push JoinGameNotify to current session
+    P-->>C: JoinGameNotify
+    R-->>P: send PlayerJoinedNotify to existing member's session
 ```
 
-A join failure ends in `JoinGameFailedNotify` or a typed error response. Sending `JoinGameReq` or
-`PlaceMarkReq` before authentication doesn't create an actor — it ends in an error.
+A join failure is reported by `JoinGameFailedNotify` on the current session. Sending `JoinGameMsg`
+or `PlaceMarkReq` before authentication doesn't create an Actor; the call ends in an error.
 
 ### 7.2 Making A Move And The Final State
 
@@ -393,13 +448,13 @@ sequenceDiagram
     participant G as Guest Client
 
     H->>P1: PlaceMarkReq(cell)
-    P1->>R: request mark
+    P1->>R: dispatch request to bound Actor's Room handler
     R-->>P1: PlaceMarkRes(GameState)
     P1-->>H: PlaceMarkRes
     R-->>P2: GameStateNotify
     P2-->>G: GameStateNotify
     G->>P2: PlaceMarkReq(cell)
-    P2->>R: request mark
+    P2->>R: dispatch request to bound Actor's Room handler
     R-->>P2: PlaceMarkRes(GameState)
     P2-->>G: PlaceMarkRes
     R-->>P1: GameStateNotify
@@ -416,16 +471,22 @@ at the local Entry Spot of a Play ingress different from the host's, then waits 
 ```mermaid
 sequenceDiagram
     participant O as Observer Client
+    participant OP as Observer Play Session
     participant E as Play Entry Spot
     participant R as Room Spot
+    participant HP as Host Play Session
     participant H as Host Client
 
-    O->>E: ObserveMilestoneReq
-    E-->>O: ObserveMilestoneRes(subscribed=true)
-    H->>R: final PlaceMarkReq
+    O->>OP: ObserveMilestoneReq
+    OP->>E: dispatch request to bound Actor's Entry handler
+    E-->>OP: ObserveMilestoneRes(subscribed=true)
+    OP-->>O: ObserveMilestoneRes
+    H->>HP: final PlaceMarkReq
+    HP->>R: dispatch request to bound Actor's Room handler
     R->>R: compute Wins=100
     R-->>E: PlayerWinMilestoneEvent
-    E-->>O: WinMilestoneNotify
+    E-->>OP: send WinMilestoneNotify to observer's current session
+    OP-->>O: WinMilestoneNotify
 ```
 
 Multicast publish completion doesn't mean the subscriber handler finished processing, or that the
@@ -434,33 +495,51 @@ announcing an already-decided value.
 
 ### 7.4 Disconnect And Destroy
 
-A STREAM disconnect cleans up the current binding but doesn't immediately destroy the Actor and Room
-membership. The client opens a new STREAM connection, authenticates, looks up the existing Actor,
-binds its exact ActorRef, and confirms the existing GameState. It then sends `LeaveGameMsg`; the Room Spot
-moves the actor to the Entry Spot and calls `destroyActor` on the Entry Spot context. This call
-leaves destroy evidence. `destroyActor` doesn't call `onLeaveActor` or another lifecycle callback —
-it cleans up the native actor ref, framework registry, and bound session binding. Destroy is
-idempotent, returning a typed error if it's already a different generation.
+On a physical STREAM disconnect, the Framework fixes the current binding snapshot, runs the
+disconnected lifecycle callback at the bound Actor's current Room Spot, and then cleans up the
+binding. This doesn't destroy the Actor or change its Room membership. When the client opens a new
+STREAM connection and authenticates, the Play Session finds the existing Actor with the same
+ActorId and binds its exact ActorRef. The authentication result doesn't include room state, so the
+client sends `JoinGameMsg` again with the same RoomId. Because the Actor is already a member of that
+Room Spot, the Room Spot handler pushes `JoinGameNotify` with the current `GameState` to the current
+session without changing membership.
+
+After checking the state, the host and guest each send `LeaveGameMsg`. The Room Spot marks the Actor
+that sent the message and calls public leave. Once the Framework moves that Actor to the Entry Spot,
+the Entry Spot calls `destroyActor`. `LeaveGameMsg` is one-way, so client-side send completion alone
+doesn't prove destroy completion. For each Actor, the runner separately checks that the Room leave
+callback ran and destruction at the Entry Spot completed.
 
 ```mermaid
 sequenceDiagram
     participant C as Client
     participant P as Play Session
+    participant F as Framework Session Runtime
     participant R as Room Spot
     participant E as Entry Spot
 
-    C->>P: STREAM disconnect
-    P->>P: framework binding cleanup
+    C-xP: STREAM connection ends
+    F->>F: fix current binding snapshot
+    F->>R: notify bound Actor's disconnected lifecycle callback
+    R->>R: run disconnected lifecycle callback
+    F->>F: clean up binding after all notifications finish
     C->>P: new STREAM connection
-    C->>P: authenticate
-    P->>P: lookup existing Actor
-    P->>P: bind exact ActorRef
-    P-->>C: confirm existing GameState
+    C->>P: AuthenticateReq
+    P->>P: resolve Existing Actor and bind exact ActorRef
+    P-->>C: AuthenticateRes
+    C->>P: JoinGameMsg(RoomId)
+    P->>R: dispatch to existing room member's handler
+    R-->>P: JoinGameNotify(current GameState)
+    P-->>C: JoinGameNotify
     C->>P: LeaveGameMsg
-    P->>R: leave actor
-    R->>E: actor joins Entry Spot
-    E->>E: destroy actor
+    P->>R: dispatch to bound Actor's Room handler
+    R->>R: mark Actor and request public leave
+    R->>E: Framework moves Actor to Entry Spot
+    E->>E: destroy Actor
 ```
+
+This diagram shows one Player's reconnect and subsequent leave path. The host and guest each run
+the same leave path, and the runner checks evidence for the two Actors separately.
 
 ## 8. Implementation Structure
 
@@ -487,6 +566,7 @@ TicTacToe
     |       +-- HttpHandlers
     |       +-- UserSourceAdapter
     |       +-- SpotManagerAdapter
+    |       +-- HandlerRegistration
     +-- Play
         +-- Program
         +-- Domain
@@ -501,27 +581,31 @@ TicTacToe
         +-- Infrastructure
             +-- StreamSession
             +-- EntrySpot
-            +-- PlayerActorAdapter
+            +-- PlayerActorRelocationAdapter
             +-- RoomSpot
             +-- MulticastHandlers
+            +-- StoreProviders
+            +-- HandlerRegistration
 ```
 
 | Logical Component | Responsibility Kept In Every Language | Dependency Direction And Forbidden Boundary |
 |---|---|---|
 | `Client/Program` | Configures the HTTP client and stream connector, and starts the scenario. | Doesn't configure a Play owner or private route. |
-| `Client/Scenario` | Runs HTTP create, auth, join, move, observe, leave, and the §9 assertions. | Doesn't interpret a Play endpoint as owner identity. |
+| `Client/Scenario` | Creates the room over HTTP, authenticates streams, joins the room, makes moves, observes the milestone, leaves, and checks the §9 results. | Doesn't interpret a Play endpoint as owner identity. |
 | `Shared/Configuration` | Fixes the Api/Play role, manual endpoint, Channel, and runner marker. | Doesn't fix a NodeRid or ActorRef as a configuration value. |
 | `Shared/JSON Contracts` | Owns the HTTP, stream, room, milestone message, and state values. | Doesn't use a language-specific DTO instead of the common wire declaration. |
+| `HandlerRegistration` | Explicitly registers every handler through the Api/Play public builders and Session/Spot handler registries. | Doesn't delegate registration to assembly scanning or annotation, attribute, or decorator discovery. |
 | `Server/Api/Application` | Coordinates the business result of room creation and player authentication. | Doesn't change board, turn, or room membership. |
 | `Server/Api/Infrastructure` | Wires the HTTP handler, User Source, and Spot Manager adapter. | Doesn't choose a Play endpoint as the room owner. |
 | `Server/Play/Domain` | Computes board, turn, player membership, and win/draw rules. | Doesn't reference ZLink types, the stream connector, or a Redis client. |
 | `Server/Play/Application` | Coordinates the order of join, mark, leave, and milestone publish. | Doesn't own HTTP lifecycle or the user source. |
-| `Server/Play/Infrastructure` | Wires STREAM, Entry Spot, Player Actor, Room Spot, and Logical Multicast. | Doesn't use raw frames, private runtime APIs, or a separate codec registry. |
+| `Server/Play/Infrastructure` | Wires STREAM, Entry Spot, Player Actor, Room Spot, the relocation adapter, both Stores, and Logical Multicast. | Doesn't use raw frames, private runtime APIs, or a separate codec registry. |
 
 The client scenario builds a connector with the Play endpoint received from the HTTP response,
 without pre-loading a Play endpoint into a configuration file. Domain judges board and winner and
 doesn't depend on ZLink types or transport. Infrastructure owns the stream, actor, Spot, timer, and
-Logical Multicast adapter. The Redis client is placed inside the Location Store provider.
+Logical Multicast adapter. It also owns the Player Actor relocation adapter and Store wiring. Redis
+access stays inside the Location Store and Relocation Store providers.
 
 A per-language implementation doesn't merge Api and Play into one process module, or duplicate
 board/turn state into the Client or Api. The same logical component can be placed in one file, but
@@ -529,20 +613,53 @@ the component and dependency direction must be findable from the package/namespa
 What can vary per language is the HTTP host, DI/async configuration, and connector wrapper — the
 manual topology, room owner rules, milestone order, and self-check must match the common document.
 
-.NET's attributes, Java/Kotlin's annotations, and Node.js's decorators automatically register
-handlers through declarative metadata scanning. Since C++ has no runtime reflection scanner, it
-explicitly registers the same handler set with compile-time types and a public builder. This
-difference applies only to the registration method — it doesn't change the message or processing
-responsibility.
+TicTacToe is the only sample that demonstrates both manual endpoint connections and manual handler
+registration in every language. Api and Play configuration uses each language's public builder,
+while Session and Spot configuration uses the public handler registry to register every handler
+explicitly. Even if an attribute, annotation, or decorator describes type metadata, registration
+isn't delegated to assembly/module scanning or decorator discovery.
+
+The C++ STREAM-session public surface provides the
+`packet_stream_session_t::on_packet` callback instead of a scanner or a separate session registry.
+C++ therefore dispatches packet types explicitly from that callback and registers Channel and Spot
+handlers directly in compile-time registries. This is the manual handler surface exposed by the
+C++ API, not a workaround that parses raw frames.
+
+The following pseudocode shows the registration shape every language keeps; the names aren't
+literal API calls. Each implementation uses the public surface from its language guide.
+
+```text
+// send: handles JoinGameMsg and later pushes JoinGameNotify.
+entrySpotRegistry.register(JoinGameHandler)
+// request: replies to ObserveMilestoneReq with ObserveMilestoneRes.
+entrySpotRegistry.register(ObserveMilestoneHandler)
+// subscribe: receives PlayerWinMilestoneEvent.
+entrySpotRegistry.register(PlayerWinMilestoneHandler)
+```
+
+For the exact registration locations and APIs, see the
+[C++ guide](../../../cpp/guide/server/14-samples.en.md),
+[.NET guide](../../../dotnet/guide/server/14-samples.en.md),
+[Java guide](../../../java/guide/server/14-samples.en.md),
+[Kotlin guide](../../../kotlin/guide/server/14-samples.en.md), and
+[Node.js guide](../../../node/guide/server/14-samples.en.md).
+
+For managed languages, this manual handler-registration rule applies only to TicTacToe. Other
+samples use automatic connections and automatic handler registration. C++ has no runtime scanner,
+so it registers handlers explicitly in every sample; its connections are still manual only in
+TicTacToe, just like the other languages.
 
 ## 9. Client Self-Check
 
-1. Send `CreateGameHttpReq` to Api A or B and confirm the RoomId, RequiredLevel, and
-   `PlayEndpoints`.
-2. Have the host, guest, and observer each choose a different Play endpoint from the response and
-   authenticate.
+1. Send `CreateGameHttpReq` to Api A or B. Confirm that the Framework Spot manager issued the
+   RoomId and that `CreateGameHttpRes` contains RoomId, RequiredLevel, PlayEndpoints, PlayNodes, and
+   GameName.
+2. Connect the host to Play A and connect the guest and observer to Play B, then authenticate each
+   connection.
 3. Confirm the observer's `ObserveMilestoneRes.subscribed=true`.
-4. Confirm the host and guest join with the same RoomId and pass the RequiredLevel admission.
+4. Confirm the host and guest join with the same RoomId and pass the RequiredLevel admission. If
+   the Actor and Room Spot have different owners, confirm the result remains the same after
+   state-preserving Actor relocation.
 5. After the second join, confirm the existing member receives `PlayerJoinedNotify` and doesn't
    receive a self-join notify.
 6. Alternate sending `PlaceMarkReq` and confirm the requesting client's `PlaceMarkRes` and the other
@@ -550,19 +667,25 @@ responsibility.
 7. After the host wins at Wins=99, confirm the observer's `WinMilestoneNotify` has Wins=100, RoomId,
    and ActorId.
 8. Confirm a wrong turn, an occupied cell, and a request to a finished room end in an error.
-9. Confirm the actor isn't immediately destroyed after a stream disconnect.
-10. Open a new STREAM connection, authenticate, bind the existing Actor's exact ActorRef, and confirm
-    the same GameState. Then send `LeaveGameMsg` and confirm Entry Spot destroy evidence.
-11. Confirm the response and push contain no NodeRid, ActorRef, or endpoint route.
-12. Waiting for a push uses the connector's public wait interface and a bounded timeout.
+9. After a physical stream disconnect, confirm the bound Actor's current Spot ran the disconnected
+   lifecycle callback. Its Room membership must remain, and the Actor must not be
+   destroyed.
+10. Open a new STREAM connection and authenticate again. After the Play Session finds the existing
+    Actor and binds its exact ActorRef, send `JoinGameMsg` again with the same RoomId. Confirm the
+    `GameState` in `JoinGameNotify` pushed to the current session matches the previous final state.
+11. Have the host and guest each send one-way `LeaveGameMsg`. Confirm through the runner that each
+    Actor left the Room, moved to an Entry Spot, and was then destroyed.
+12. Confirm the response and push contain no NodeRid, ActorRef, or endpoint route.
+13. Waiting for a push uses the connector's public wait interface and a bounded timeout.
 
 ## 10. Running The Smoke Test
 
-1. Prepare a per-run Docker Redis and key prefix.
+1. Prepare a per-run Docker Redis and key prefixes separating the Location and Relocation Stores.
 2. Start Api A/B and Play A/B with manual endpoint configuration.
 3. Confirm each process's public readiness and RouteMesh peer readiness.
-4. Have the client run room create, three-way authentication, join, move, milestone, disconnect,
-   and destroy.
+4. Have the client create the room and authenticate three connections. It then joins, makes moves,
+   and verifies the milestone. After disconnecting, it reconnects and checks the current game
+   state, then makes each player leave and verifies both destroy results.
 5. Confirm the server evidence and completion marker.
 6. Clean up the Redis and process resources this run created, on both success and failure.
 
@@ -570,23 +693,38 @@ responsibility.
 tictactoe=completed
 ```
 
-The runner confirms the leave/destroy, observer subscription, and milestone verification results
-together with the completion marker. This result is judged via a self-check assertion or runner log
-evidence, and a step marker that doesn't exist per language isn't added to the common contract.
+Together with the completion marker, the runner checks the game state returned after reconnect,
+both players' leave and destroy results, the observer subscription, and the milestone result. A
+self-check assertion or runner log evidence decides the result. A step marker that doesn't exist
+per language isn't added to the common contract.
 
 ## 11. Completion Criteria
 
 - The 2 Apis and 2 Plays provide the same public contract and object capability.
-- It uses a manual RouteMesh endpoint and an independent `tictactoe.api` channel, not automatic
-  discovery.
+- It uses manual RouteMesh endpoints rather than automatic discovery. Each Play's independent
+  `tictactoe.api` channel selects either Api A or Api B for an authentication request.
 - The basic topology shows only the Client, server components, and their structural connections.
 - The Redis Location Store manages the current owner of the RoomId and ActorId.
-- The client uses the Play endpoint from the API response, without receiving the owner NodeRid.
+- The Player Actor uses `PreserveStateWith` and a relocation adapter, and the Redis Relocation Store
+  holds restoration payloads for a cross-node join. The Room Spot uses `DisableRelocation`.
+- The client uses endpoints from the API response to connect the host to Play A and the guest and
+  observer to Play B, without receiving the owner NodeRid.
 - The room Spot judges level admission, board, turn, win, and draw as a single state owner.
-- Remote join works by global RoomId, with no private runtime or raw-frame bypass.
+- Remote join works by global RoomId, with no private runtime or raw-frame bypass even when it
+  requires cross-node Actor relocation.
+- When a reconnected client sends `JoinGameMsg` with the same RoomId to the existing Actor, the Room
+  Spot handler sends the current state to the current session without creating membership again.
 - The milestone is published via public Logical Multicast, and the observer push verifies the
   payload.
-- Disconnect cleanup and actor destroy after `LeaveGameMsg` are distinguished.
+- A physical disconnect runs the disconnected lifecycle callback at the bound Actor's current Spot
+  and cleans up the binding, but doesn't start leave, change membership, or destroy the Actor.
+  Explicit leave and destroy run only after each player sends one-way `LeaveGameMsg`, and the runner
+  checks the result for each Actor.
+- Every language registers the TicTacToe handlers explicitly through public builders and handler
+  registries. A comment beside each registration identifies whether its message is a request,
+  send, or subscription, and no automatic scan is used. Only TicTacToe combines manual connections
+  and manual registration; C++ also registers handlers explicitly in other samples.
 - Only the Framework public API and typed JSON codec are used, without adding a per-message codec
   registry.
-- The runner performs build, readiness, self-check, evidence, and cleanup.
+- The runner builds the servers and client, waits until every process is ready, checks the
+  self-check and server evidence, and cleans up resources created during the run.

@@ -20,10 +20,9 @@
 | `RM-B3` | `Client/Scenarios/RmB3ProviderCrashFailoverScenario.cs` | `Client/Scenarios/rm-b3-provider-crash-failover-scenario.ts` | done | SIGKILL, lease 만료, 남은 provider failover, targeted 오류 종류 |
 | `RM-C1` | `Client/Scenarios/RmC1RequestSendScenario.cs` | `Client/Scenarios/rm-c1-request-send-scenario.ts` | done | request/send happy path |
 | `RM-C2` | `Client/Scenarios/RmC2TargetedRouteScenario.cs` | `Client/Scenarios/rm-c2-targeted-route-scenario.ts` | done | target 정확성과 `RequestTargetNotFound`; known disconnected는 RM-B3에서 `RouteNotConnected` 검증 |
-| `RM-C3` | `Client/Scenarios/RmC3MultiProviderDistributionScenario.cs` | `Client/Scenarios/rm-c3-multi-provider-distribution-scenario.ts` | done | 수동 multi-endpoint 분산 |
 | `RM-C4` | `Client/Scenarios/RmC4TimeoutIsolationScenario.cs` | `Client/Scenarios/rm-c4-timeout-isolation-scenario.ts` | done | timeout 뒤 late reply 비오염 |
 | `RM-C5` | `Client/Scenarios/RmC5MissingPacketScenario.cs` | `Client/Scenarios/rm-c5-missing-packet-scenario.ts` | done | missing request/send dispatch error |
-| `RM-C7` | `Client/Scenarios/RmC7WeightedProviderScenario.cs` | `Client/Scenarios/rm-c7-weighted-provider-scenario.ts` | done | build-time provider weight 75/25 분산 검증 |
+| `RM-C7` | `Client/Scenarios/RmC7WeightedProviderScenario.cs` | `Client/Scenarios/rm-c7-weighted-provider-scenario.ts` | partial | weighted profile은 구현했다. equal-weight와 exact 순서 검증을 같은 scenario에 추가해야 한다. |
 | `RM-C8` | `Client/Scenarios/RmC8PayloadRoundTripScenario.cs` | `Client/Scenarios/rm-c8-payload-round-trip-scenario.ts` | done | RouteMesh SS payload length/hash 왕복과 이후 정상 request 회복을 검증한다. StreamNode inbound 상한은 별도 runtime·unit contract다. |
 | `RM-C9` | `Client/Scenarios/RmC9BackpressureScenario.cs` | `Client/Scenarios/rm-c9-backpressure-scenario.ts` | 10.0.0 전환 대상 | 현재 one-way send pressure 제출과 recovery를 검증한다. `submit()`의 최초 시도, bounded wait와 timeout 검증은 남아 있다. |
 
@@ -47,7 +46,6 @@
 | `Client/Scenarios/RmB2ScaleInScenario.cs` | `Client/Scenarios/rm-b2-scale-in-scenario.ts` | scenario | done | `RM-B2` |
 | `Client/Scenarios/RmC1RequestSendScenario.cs` | `Client/Scenarios/rm-c1-request-send-scenario.ts` | scenario | done | `RM-C1` |
 | `Client/Scenarios/RmC2TargetedRouteScenario.cs` | `Client/Scenarios/rm-c2-targeted-route-scenario.ts` | scenario | done | `RM-C2` |
-| `Client/Scenarios/RmC3MultiProviderDistributionScenario.cs` | `Client/Scenarios/rm-c3-multi-provider-distribution-scenario.ts` | scenario | done | `RM-C3` |
 | `Client/Scenarios/RmC4TimeoutIsolationScenario.cs` | `Client/Scenarios/rm-c4-timeout-isolation-scenario.ts` | scenario | done | `RM-C4` |
 | `Client/Scenarios/RmC5MissingPacketScenario.cs` | `Client/Scenarios/rm-c5-missing-packet-scenario.ts` | scenario | done | `RM-C5` |
 | `Client/Scenarios/RmC7WeightedProviderScenario.cs` | `Client/Scenarios/rm-c7-weighted-provider-scenario.ts` | scenario | done | `RM-C7`, public `addRouteMesh(...).channel(...).server().setWeight(...)` 사용 |

@@ -42,11 +42,11 @@ should_run_sample() {
   return 1
 }
 
-./gradlew --no-daemon --no-parallel \
+zlink_sample_gradle_locked ./gradlew --no-daemon --no-parallel \
   :zlink-framework-testkit:contractTest \
   --tests '*SampleReleaseGateContractTest*'
 
-./gradlew --no-daemon --no-parallel \
+zlink_sample_gradle_locked ./gradlew --no-daemon --no-parallel \
   :zlink-framework-testkit:fakeBackendTest \
   --tests 'systems.zlink.framework.testkit.CurrentManagerFakeBackendTest.actorAndSpotManagersExposeCurrentFluentCallsAgainstFakeBackend'
 echo "java fake-backend public-manager gate completed"
@@ -57,7 +57,7 @@ run_sample_with_retry() {
   local output
   output="$(mktemp)"
   for attempt in 1 2 3; do
-    if "$script" >"$output" 2>&1; then
+    if bash "$script" >"$output" 2>&1; then
       cat "$output"
       rm -f "$output"
       return 0

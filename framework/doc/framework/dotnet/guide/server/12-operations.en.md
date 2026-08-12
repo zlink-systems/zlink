@@ -20,7 +20,7 @@ View in another language — **C#/.NET** · [C++](../../../cpp/guide/server/12-o
 > **The documents that own this chapter's contract** — owned by the common spec
 > [Runtime state query and operational diagnostics](../../../common/spec/24-runtime-monitoring.en.md),
 > [Runtime metrics](../../../common/spec/25-runtime-metrics.en.md), and
-> [Graceful Drain & Handoff](../../../common/spec/28-graceful-drain-handoff.en.md). The
+> [Graceful Drain & Handoff](../../../common/spec/30-host-relocation-flow.en.md). The
 > formal definition of each language's surface is owned by the
 > [per-language topology/monitoring public contract](../../../common/spec/server/languages/README.en.md).
 > This chapter focuses on usage — what you actually wire up and declare in an operational
@@ -76,7 +76,7 @@ The instrument catalog is below. The labels, units, and kinds of the MeshNode,
 object/STREAM, and location/fanout instruments are set by
 [Runtime Metrics §§3-5](../../../common/spec/25-runtime-metrics.en.md), and the drain
 instruments by
-[Host Relocate and Shutdown §13](../../../common/spec/28-graceful-drain-handoff.en.md#13-observability-information).
+[Complete Host Relocation Flow §13](../../../common/spec/30-host-relocation-flow.en.md#13-observability-information).
 
 | Instrument | What it measures |
 |---|---|
@@ -402,7 +402,7 @@ the `zlink.host.*` instruments from §1.
 - Runnable verification examples for this chapter's contract: `13. Interface Catalog`
   chapter §7 — the verification class `FrameworkRuntimeContracts`
 - The formal contract:
-  [Host Relocate and Shutdown](../../../common/spec/28-graceful-drain-handoff.en.md) ·
+  [Complete Host Relocation Flow](../../../common/spec/30-host-relocation-flow.en.md) ·
   [Runtime Metrics](../../../common/spec/25-runtime-metrics.en.md)
 - Status observation and diagnostics: the [11. Monitoring](11-monitoring.en.md)
 - The Spot where the application decides the relocation boundary:

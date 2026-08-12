@@ -24,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -31,7 +32,10 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.zip.CRC32C;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
@@ -39,6 +43,9 @@ import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
+import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkAggregateRelocationCoordinator;
 import systems.zlink.framework.runtime.internal.locations
@@ -52,15 +59,16 @@ final class ZLinkDeferredJoinCompletionAuthorityTest {
     private static final ZLinkStoreCancellation NEVER = () -> false;
 
     @Test
-    void completedEvidenceSurvivesCrashBeforeCommand44AndAckReleasesIt() {
+    void relocationPublishesReadyBeforeCleanupAndRoutesCallbackPushExactlyOnce() {
         MemoryLocationStore locations = new MemoryLocationStore();
         MemoryRelocationStore roots = new MemoryRelocationStore();
+        List<String> trace = new ArrayList<>();
         String actorId = "actor-a";
         String authorityKey = ZLinkAuthorityKeyCodec.actor(actorId);
         UUID relocationId = new UUID(17, 29);
         var operation = new ZLinkActorJoinOperationId(41, 73);
-        byte[] steady = new ZLinkActorAuthorityPayloadCodec().encode(
-            ZLinkActorAuthorityPayloadCodec.State.READY,
+        byte[] creating = new ZLinkActorAuthorityPayloadCodec().encode(
+            ZLinkActorAuthorityPayloadCodec.State.CREATING,
             "Player",
             actorId,
             "entry-a",
@@ -122,7 +130,7 @@ final class ZLinkDeferredJoinCompletionAuthorityTest {
             9,
             "source-v1",
             ZLinkAuthorityGenerationTransition.NEW_OWNER,
-            steady,
+            creating,
             new byte[] {1});
         var request = new ZLinkAggregateRelocationCoordinator.Request(
             relocationId,
@@ -137,10 +145,19 @@ final class ZLinkDeferredJoinCompletionAuthorityTest {
         locations.source = source;
         var aggregate = new ZLinkAggregateRelocationCoordinator(
             locations, roots);
+        trace.add("requested");
         aggregate.commit(
                 aggregate.prepare(request, NEVER).toCompletableFuture().join(),
                 NEVER)
             .toCompletableFuture().join();
+
+        assertEquals(
+            ZLinkActorAuthorityPayloadCodec.State.CREATING,
+            new ZLinkActorAuthorityPayloadCodec()
+                .decode(locations.rows.get(authorityKey).payload())
+                .orElseThrow()
+                .state(),
+            "aggregate commit keeps the public authority Creating");
 
         var journal = new ZLinkDeferredJoinCompletionAuthority(
             locations, roots);
@@ -154,17 +171,97 @@ final class ZLinkDeferredJoinCompletionAuthorityTest {
                 Duration.ofSeconds(1))
             .toCompletableFuture().join();
 
+        Runnable lifecycleCallback = () ->
+            trace.add("targetLifecycleCompleted");
+
         var prepared = journal.prepare(operation, actor, reply)
             .toCompletableFuture().join();
         assertEquals(1, prepared.cursor());
         assertPublished(
             journal, locations, roots, authorityKey, operation, actor, 1);
 
-        var committed = journal.advance(prepared, actor, 2)
-            .toCompletableFuture().join();
-        assertEquals(2, committed.cursor());
-        assertPublished(
-            journal, locations, roots, authorityKey, operation, actor, 2);
+        AtomicBoolean routePending = new AtomicBoolean(true);
+        AtomicInteger callbackPushes = new AtomicInteger();
+        AtomicInteger callbackCleanups = new AtomicInteger();
+        AtomicReference<Supplier<Boolean>> retainedPush =
+            new AtomicReference<>();
+        AtomicReference<Runnable> retainedCleanup = new AtomicReference<>();
+        ZLinkOneWayCalls.Admission admission = new ZLinkOneWayCalls.Admission() {
+            @Override
+            public CompletionStage<Void> submit(
+                ZLinkBackendObject backend,
+                ZLinkBackendAdmissionKey key,
+                Supplier<Boolean> submission,
+                Runnable cleanup,
+                Duration timeout) {
+                return CompletableFuture.failedFuture(
+                    new AssertionError(
+                        "RoutePending callback push used ordinary admission"));
+            }
+
+            @Override
+            public CompletionStage<Void> submitDetached(
+                ZLinkBackendObject backend,
+                ZLinkBackendAdmissionKey key,
+                Supplier<Boolean> submission,
+                Runnable cleanup,
+                Duration timeout) {
+                if (submission.get()) {
+                    cleanup.run();
+                } else {
+                    retainedPush.set(submission);
+                    retainedCleanup.set(cleanup);
+                }
+                return CompletableFuture.completedFuture(null);
+            }
+
+            @Override
+            public void releaseDetached(
+                ZLinkBackendObject backend,
+                ZLinkBackendAdmissionKey key) {
+                Supplier<Boolean> pending = retainedPush.getAndSet(null);
+                Runnable cleanup = retainedCleanup.getAndSet(null);
+                if (pending != null && pending.get() && cleanup != null) {
+                    cleanup.run();
+                }
+            }
+        };
+        ZLinkOneWayCalls oneWayCalls = new ZLinkOneWayCalls(admission);
+        ZLinkBackendObject backend = new ZLinkBackendObject() {
+            @Override public String name() { return "route-pending"; }
+            @Override public void close() { }
+        };
+        ZLinkBackendAdmissionKey callbackKey =
+            ZLinkBackendAdmissionKey.boundSession(
+                actor.nodeRid(), actor.actorId(), actor.generation());
+        Runnable joinCompletionCallback = () -> {
+            trace.add("publicJoinCompleted");
+            oneWayCalls.submitDetachedOneWay(
+                    backend,
+                    callbackKey,
+                    () -> {
+                        if (routePending.get()) {
+                            return false;
+                        }
+                        callbackPushes.incrementAndGet();
+                        return true;
+                    },
+                    callbackCleanups::incrementAndGet,
+                    Duration.ofMillis(10))
+                .toCompletableFuture()
+                .join();
+        };
+        assertThrows(
+            CompletionException.class,
+            () -> journal.publishTargetReady(operation, actor)
+                .toCompletableFuture().join(),
+            "Ready cannot precede durable Join completion");
+
+        assertThrows(
+            CompletionException.class,
+            () -> journal.markSourceCleanup(operation, actor)
+                .toCompletableFuture().join(),
+            "source cleanup cannot precede Ready publication");
 
         assertThrows(
             CompletionException.class,
@@ -176,8 +273,64 @@ final class ZLinkDeferredJoinCompletionAuthorityTest {
                     Duration.ofMillis(20))
                 .toCompletableFuture().join());
 
+        AtomicReference<
+            ZLinkDeferredJoinCompletionAuthority.Published> deliveredRef =
+                new AtomicReference<>();
+        List<String> replayResult = ZLinkActorSpotAdmission
+            .completeTargetBeforeReady(
+                () -> {
+                    lifecycleCallback.run();
+                    return journal.markTargetLifecycleCompleted(operation, actor)
+                        .thenRun(() -> trace.add(
+                            "sourceMembershipLeaveSubmitted"))
+                        .thenCompose(ignored -> journal
+                            .markSourceLeaveSubmitted(operation, actor));
+                },
+                () -> {
+                    joinCompletionCallback.run();
+                    return journal.recover(operation, actor)
+                        .thenCompose(sourceLeft -> journal.advance(
+                            sourceLeft,
+                            actor,
+                            3))
+                        .thenAccept(deliveredRef::set);
+                },
+                () -> {
+                    trace.add("savedWorkRestored");
+                    trace.add("temporaryWorkReplayed");
+                    return CompletableFuture.completedFuture(
+                        List.of("replayed"));
+                },
+                () -> trace.add("dispatchSwitched"),
+                () -> journal.publishTargetReady(operation, actor)
+                    .thenRun(() -> trace.add("targetReady")))
+            .toCompletableFuture().join();
+        assertEquals(List.of("replayed"), replayResult);
+        var delivered = deliveredRef.get();
+        assertEquals(3, delivered.cursor());
+        assertPublished(
+            journal, locations, roots, authorityKey, operation, actor, 3);
+        assertEquals(0, callbackPushes.get(),
+            "callback push stays retained while the route is pending");
+        assertEquals(0, callbackCleanups.get());
+        assertEquals(
+            ZLinkActorAuthorityPayloadCodec.State.READY,
+            new ZLinkActorAuthorityPayloadCodec()
+                .decode(locations.rows.get(authorityKey).payload())
+                .orElseThrow()
+                .state());
+        journal.awaitTargetCompletion(
+                relocationId,
+                1,
+                operation,
+                actor,
+                Duration.ofSeconds(1))
+            .toCompletableFuture().join();
+
+        trace.add("sourceCleanupCompleted");
         journal.markSourceCleanup(operation, actor)
             .toCompletableFuture().join();
+        trace.add("authorityCompleted");
         journal.awaitSourceCleanup(
                 relocationId,
                 1,
@@ -212,18 +365,6 @@ final class ZLinkDeferredJoinCompletionAuthorityTest {
                 .decodeSessionRelocationRouteIntent(retainedRoutes.getFirst()),
             "startup scan reads the exact command 44 from the durable completion");
 
-        var delivered = journal.advance(committed, actor, 3)
-            .toCompletableFuture().join();
-        assertEquals(3, delivered.cursor());
-        assertPublished(
-            journal, locations, roots, authorityKey, operation, actor, 3);
-        journal.awaitTargetCompletion(
-                relocationId,
-                1,
-                operation,
-                actor,
-                Duration.ofSeconds(1))
-            .toCompletableFuture().join();
         String terminalPendingReference = locations.reference(
             locations.rows.get(authorityKey).payload());
         assertTrue(roots.values.containsKey(terminalPendingReference),
@@ -236,10 +377,38 @@ final class ZLinkDeferredJoinCompletionAuthorityTest {
         assertTrue(roots.renewals.get() > renewalsBeforeCommand44,
             "pending command 45 extends every durable root component");
 
+        assertEquals(0, callbackPushes.get(),
+            "command 44 does not release a callback push before its ACK");
+
         //  Simulate the target's valid command 45 observer. Only this step may
         //  restore the steady authority payload and delete the recovery root.
+        routePending.set(false);
+        trace.add("routeConverged");
+        oneWayCalls.releaseDetachedOneWay(backend, callbackKey);
+        oneWayCalls.releaseDetachedOneWay(backend, callbackKey);
+        trace.add("applicationOperationDelivered");
         journal.completeSourceCleanupAndRelease(delivered, actor)
             .toCompletableFuture().join();
+        trace.add("terminal");
+
+        assertEquals(1, callbackPushes.get());
+        assertEquals(1, callbackCleanups.get());
+        assertEquals(
+            List.of(
+                "requested",
+                "targetLifecycleCompleted",
+                "sourceMembershipLeaveSubmitted",
+                "publicJoinCompleted",
+                "savedWorkRestored",
+                "temporaryWorkReplayed",
+                "dispatchSwitched",
+                "targetReady",
+                "sourceCleanupCompleted",
+                "authorityCompleted",
+                "routeConverged",
+                "applicationOperationDelivered",
+                "terminal"),
+            trace);
 
         var released = new ZLinkActorAuthorityPayloadCodec()
             .decode(locations.rows.get(authorityKey).payload())

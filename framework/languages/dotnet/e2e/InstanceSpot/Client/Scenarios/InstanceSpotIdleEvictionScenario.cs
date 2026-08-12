@@ -12,8 +12,8 @@ internal static class InstanceSpotIdleEvictionScenario
         var spotId = $"instance-idle-{Guid.NewGuid():N}";
         var firstOperation = $"idle-first-{Guid.NewGuid():N}";
         var first = (await playA.Post("/instance/cold-request")
-                .Body(new InstanceColdRequestReq(spotId, firstOperation))
-                .Async<InstanceColdRequestRes>())
+                .Body(new InstanceColdProbeReq(spotId, firstOperation))
+                .Async<InstanceColdProbeRes>())
             .Body;
         ZlinkStreamAssert.Ensure(
             first.Succeeded,
@@ -36,8 +36,8 @@ internal static class InstanceSpotIdleEvictionScenario
 
         var secondOperation = $"idle-second-{Guid.NewGuid():N}";
         var second = (await playA.Post("/instance/cold-request")
-                .Body(new InstanceColdRequestReq(spotId, secondOperation))
-                .Async<InstanceColdRequestRes>())
+                .Body(new InstanceColdProbeReq(spotId, secondOperation))
+                .Async<InstanceColdProbeRes>())
             .Body;
         ZlinkStreamAssert.Ensure(
             second.Succeeded,

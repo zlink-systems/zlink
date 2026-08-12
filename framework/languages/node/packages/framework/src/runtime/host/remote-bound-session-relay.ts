@@ -10,6 +10,11 @@ import type {
   ZLinkRemoteBoundSessionPort,
   ZLinkStreamActorLookupPort
 } from '../streams/stream-binding-runtime-ports';
+import type { ZLinkActorSessionRelocationSnapshot } from '../streams/actor-session-binding-registry';
+import {
+  actorSessionBindingRuntimeOwner,
+  actorSessionBindingRuntimeOwnerIfRegistered
+} from '../streams/actor-session-binding-runtime-owner';
 import { ZLinkSubmitStatus } from '../messaging/submission-result';
 import type { DefaultZLinkBoundSession } from '../streams/session-context';
 import type { ZLinkActorResponseOptions } from '../spots/spot-actor-packet-dispatch';
@@ -35,6 +40,7 @@ import {
 import type { MeshRouterResolver } from './mesh-router-resolver';
 import {
   encodeSessionRelocationRoute,
+  encodeSessionRelocationRouted,
   encodeSessionRelocationSeal,
   type ServiceSessionRelocationRoute,
   type ServiceSessionRelocationRouted,
@@ -42,6 +48,7 @@ import {
   type ServiceSessionRelocationSealed
 } from '../foundation/service-stateful-wire-codec';
 import { ServiceWireProtocolError } from '../foundation/service-wire-m6a-codec';
+import { BoundedReplayMap } from './bounded-replay-map';
 
 export interface ZLinkRemoteBoundSessionRelayOptions {
   readonly requestTimeoutMs?: number;
@@ -61,12 +68,16 @@ export interface ZLinkRemoteBoundSessionRelayOptions {
 }
 
 const SERVICE_CONTROL_TERMINAL_CAPACITY = 4096;
+const SERVICE_CONTROL_ACTIVE_CAPACITY = 4096;
+const SERVICE_CONTROL_ACTIVE_PER_ACTOR = 2;
 
 interface ActiveServiceWireSessionRelocation {
   readonly actorId: string;
   readonly sealFingerprint: string;
   readonly sealPromise: Promise<ServiceSessionRelocationSealed>;
   sealed?: ServiceSessionRelocationSealed;
+  routeRequestFingerprint?: string;
+  targetOwnerLeaseGeneration?: bigint;
   routeFingerprint?: string;
   routePromise?: Promise<ServiceSessionRelocationRouted>;
 }
@@ -75,21 +86,22 @@ interface TerminalServiceWireSessionRelocation {
   readonly actorId: string;
   readonly sealFingerprint: string;
   readonly sealed: ServiceSessionRelocationSealed;
+  readonly routeRequestFingerprint: string;
+  readonly targetOwnerLeaseGeneration?: bigint;
   readonly routeFingerprint: string;
   readonly routed: ServiceSessionRelocationRouted;
 }
 
+type RemoteBoundSessionSend = ReturnType<typeof decodeRemoteBoundSessionSendPayload>;
+
 export class ZLinkRemoteBoundSessionRelay {
   private readonly actorOwnershipGenerations = new Map<string, bigint>();
-  private readonly routeSeals = new Map<string, {
-    readonly sealId: string;
-    readonly acceptedHighWater: bigint;
-    readonly released: boolean;
-  }>();
   private readonly activeServiceWireRelocations =
     new Map<string, ActiveServiceWireSessionRelocation>();
   private readonly terminalServiceWireRelocations =
-    new Map<string, TerminalServiceWireSessionRelocation>();
+    new BoundedReplayMap<string, TerminalServiceWireSessionRelocation>(
+      SERVICE_CONTROL_TERMINAL_CAPACITY
+    );
 
   constructor(private readonly options: ZLinkRemoteBoundSessionRelayOptions) {
   }
@@ -173,6 +185,19 @@ export class ZLinkRemoteBoundSessionRelay {
   async receiveRemoteBoundSessionSend(payload: unknown): Promise<{ readonly ok: boolean }> {
     const send = decodeRemoteBoundSessionSendPayload(payload);
     this.options.updateRemoteActorPacketTarget(send.actorId, send.actorPacketTarget);
+    const owner = actorSessionBindingRuntimeOwnerIfRegistered(
+      this.options.streamBindingRuntime()
+    );
+    const retained = owner?.retainRelocationOutbound(send.actorId, {
+      deliver: async () => await this.deliverRemoteBoundSessionSend(send),
+      fail: error => this.options.reportOwnershipRefreshError?.(send.actorId, error)
+    });
+    if (retained === 'retained') return { ok: true };
+    if (retained === 'rejected') return { ok: false };
+    return { ok: await this.deliverRemoteBoundSessionSend(send) };
+  }
+
+  private async deliverRemoteBoundSessionSend(send: RemoteBoundSessionSend): Promise<boolean> {
     const metadata = new Map(Object.entries(send.metadata ?? {}));
     if (this.options.streamBindingRuntime().sendLocalBoundSession(
       send.actorId,
@@ -180,10 +205,10 @@ export class ZLinkRemoteBoundSessionRelay {
       send.boundPacketName,
       metadata
     )) {
-      return { ok: true };
+      return true;
     }
     if (this.options.actorManager()?.getState(send.actorId)?.remoteBoundSessionTarget === undefined) {
-      return { ok: false };
+      return false;
     }
     const call = this.options.boundSessionFactory(send.actorId).send(send.message);
     if (send.boundPacketName !== undefined) {
@@ -193,7 +218,7 @@ export class ZLinkRemoteBoundSessionRelay {
       call.metadata(key, value);
     }
     await call.submit();
-    return { ok: true };
+    return true;
   }
 
   async receiveRemoteBoundSessionResponse(payload: unknown): Promise<{ readonly ok: boolean }> {
@@ -225,7 +250,10 @@ export class ZLinkRemoteBoundSessionRelay {
 
   async receiveRemoteBoundSessionOwnership(
     payload: unknown,
-    releaseMatchingSeal = false
+    releaseMatchingSeal = false,
+    sessionIdentity?: string,
+    deferTerminalReceipt = false,
+    targetNodeGeneration?: bigint
   ): Promise<{
     readonly actorId: string;
     readonly actorGeneration: string;
@@ -252,15 +280,99 @@ export class ZLinkRemoteBoundSessionRelay {
     ) {
       throw new Error(`Actor '${value.actorId}' bound-session ownership fence is invalid.`);
     }
+    const runtime = this.options.streamBindingRuntime();
+    const owner = actorSessionBindingRuntimeOwner(runtime);
+    const rememberedSeal = owner.relocationSnapshot(value.actorId, value.sealId);
+    if (rememberedSeal !== undefined) {
+      assertRemoteBoundSessionOwnershipClaim(
+        rememberedSeal,
+        value,
+        sessionIdentity,
+        !releaseMatchingSeal
+      );
+    }
+    if (releaseMatchingSeal) {
+      if (rememberedSeal === undefined) {
+        throw new ZLinkRemoteBoundSessionFenceError(
+          `Actor '${value.actorId}' command 44 did not match its command 42 Session seal.`
+        );
+      }
+      const applyFingerprint = remoteBoundSessionOwnershipTerminalFingerprint(value);
+      await owner.applyRelocation(
+        value.actorId,
+        value.sealId,
+        acceptedHighWater,
+        applyFingerprint,
+        'commit',
+        async () => await this.applyRemoteBoundSessionOwnership(
+          value,
+          true,
+          targetNodeGeneration
+        ),
+        targetNodeGeneration === undefined || sessionIdentity === undefined
+          ? undefined
+          : {
+              actorId: value.actorId,
+              objectGeneration: BigInt(value.actorGeneration),
+              actorNodeRid: String(decodeWireRoutingId(
+                value.actorNodeRid,
+                value.actorNodeRidHex
+              )),
+              actorNodeGeneration: targetNodeGeneration,
+              authorityOwnerGeneration: ownershipGeneration,
+              ownerLeaseGeneration: targetOwnerLeaseGeneration,
+              sessionIdentity,
+              bindingGeneration
+            }
+      );
+      if (!deferTerminalReceipt) {
+        owner.observeRelocationTerminal(
+          value.actorId,
+          value.sealId,
+          acceptedHighWater,
+          applyFingerprint
+        );
+      }
+    } else {
+      await this.applyRemoteBoundSessionOwnership(value, false);
+      if (rememberedSeal?.phase === 'sealed') {
+        owner.advanceRelocationOwner(
+          value.actorId,
+          value.sealId,
+          previousOwnershipGeneration,
+          previousOwnerLeaseGeneration,
+          ownershipGeneration,
+          targetOwnerLeaseGeneration
+        );
+      }
+    }
+    return encodeRemoteBoundSessionOwnershipAck(value);
+  }
+
+  private async applyRemoteBoundSessionOwnership(
+    value: ReturnType<typeof decodeRemoteBoundSessionOwnershipPayload>,
+    releaseMatchingSeal: boolean,
+    targetNodeGeneration?: bigint
+  ): Promise<void> {
+    const previousOwnershipGeneration = BigInt(value.previousActorOwnershipGeneration);
+    const ownershipGeneration = BigInt(value.actorOwnershipGeneration);
+    const bindingGeneration = BigInt(value.bindingGeneration);
+    const previousOwnerLeaseGeneration = BigInt(value.previousOwnerLeaseGeneration);
+    const targetOwnerLeaseGeneration = BigInt(value.targetOwnerLeaseGeneration);
+    const acceptedHighWater = BigInt(value.acceptedHighWater);
     const activeSeal = this.options.streamBindingRuntime().validateActorRouteSeal(
       value.actorId,
       value.sealId,
       acceptedHighWater
     );
-    const rememberedSeal = this.routeSeals.get(value.actorId);
-    const releasedSeal = rememberedSeal?.sealId === value.sealId
-      && rememberedSeal.acceptedHighWater === acceptedHighWater
-      && rememberedSeal.released;
+    const rememberedSeal = actorSessionBindingRuntimeOwner(
+      this.options.streamBindingRuntime()
+    ).relocationSnapshot(
+      value.actorId,
+      value.sealId
+    );
+    const releasedSeal = rememberedSeal?.acceptedHighWater === acceptedHighWater
+      && (rememberedSeal.phase === 'applied' || rememberedSeal.phase === 'terminal');
     if (!activeSeal && !releasedSeal) {
       throw new ZLinkRemoteBoundSessionFenceError(
         `Actor '${value.actorId}' command 44 did not match its command 42 Session seal.`
@@ -275,6 +387,9 @@ export class ZLinkRemoteBoundSessionRelay {
       bindingGeneration,
       ownershipGeneration,
       ownerLeaseGeneration: targetOwnerLeaseGeneration,
+      ...(targetNodeGeneration === undefined
+        ? {}
+        : { ownerNodeGeneration: targetNodeGeneration }),
       acceptedHighWater
     } as ActorRef;
     Object.defineProperty(actorRef, 'generation', {
@@ -299,8 +414,7 @@ export class ZLinkRemoteBoundSessionRelay {
       ?? currentFence.ownershipGeneration;
     const currentOwnerLeaseGeneration = authorityFence?.ownerLeaseGeneration
       ?? currentFence.ownerLeaseGeneration;
-    const rememberedHighWaterMatches = rememberedSeal?.sealId === value.sealId
-      && rememberedSeal.acceptedHighWater === acceptedHighWater;
+    const rememberedHighWaterMatches = rememberedSeal?.acceptedHighWater === acceptedHighWater;
     const targetAlreadyPublished =
       routingIdsEqual(current.nodeRid, actorRef.nodeRid) &&
       currentOwnershipGeneration === ownershipGeneration &&
@@ -318,7 +432,7 @@ export class ZLinkRemoteBoundSessionRelay {
         );
       }
       this.options.updateRemoteActorPacketTarget(value.actorId, value.actorPacketTarget);
-      return encodeRemoteBoundSessionOwnershipAck(value);
+      return;
     }
     if (!activeSeal) {
       throw new ZLinkRemoteBoundSessionFenceError(
@@ -355,47 +469,87 @@ export class ZLinkRemoteBoundSessionRelay {
     }
     this.options.updateRemoteActorPacketTarget(value.actorId, value.actorPacketTarget);
     this.actorOwnershipGenerations.set(value.actorId, ownershipGeneration);
-    return encodeRemoteBoundSessionOwnershipAck(value);
   }
 
-  async receiveRemoteBoundSessionSeal(payload: unknown): Promise<{
+  async receiveRemoteBoundSessionSeal(
+    payload: unknown,
+    sessionIdentity?: string,
+    deferTerminalReceipt = false,
+    actorNodeRid?: string,
+    actorNodeGeneration?: bigint
+  ): Promise<{
     readonly actorId: string;
     readonly sealId: string;
     readonly acceptedHighWater: string;
   }> {
     const value = decodeRemoteBoundSessionSealPayload(payload);
+    const runtime = this.options.streamBindingRuntime();
+    const owner = actorSessionBindingRuntimeOwner(runtime);
     if (value.abort) {
-      const remembered = this.routeSeals.get(value.actorId);
-      if (this.options.streamBindingRuntime().abortActorRouteSeal(value.actorId, value.sealId)) {
-        const currentHighWater = (this.options.streamBindingRuntime().find(value.actorId)?.ref as
-          (ActorRef & { readonly acceptedHighWater?: bigint }) | undefined)?.acceptedHighWater;
-        this.routeSeals.set(value.actorId, {
-          sealId: value.sealId,
-          acceptedHighWater: remembered?.sealId === value.sealId
-            ? remembered.acceptedHighWater
-            : currentHighWater ?? 0n,
-          released: true
-        });
-      } else if (remembered?.sealId !== value.sealId || !remembered.released) {
-        throw new ZLinkRemoteBoundSessionFenceError(
-          `Actor '${value.actorId}' session route seal abort was fenced.`
+      const remembered = owner.relocationSnapshot(
+        value.actorId,
+        value.sealId
+      );
+      if (remembered === undefined) {
+        if (!runtime.abortActorRouteSeal(value.actorId, value.sealId)) {
+          throw new ZLinkRemoteBoundSessionFenceError(
+            `Actor '${value.actorId}' session route seal abort was fenced.`
+          );
+        }
+        return { actorId: value.actorId, sealId: value.sealId, acceptedHighWater: '0' };
+      }
+      assertRemoteBoundSessionAbortClaim(remembered, value, sessionIdentity);
+      const applyFingerprint = remoteBoundSessionAbortTerminalFingerprint(value);
+      await owner.applyRelocation(
+        value.actorId,
+        value.sealId,
+        remembered.acceptedHighWater,
+        applyFingerprint,
+        'abort',
+        async () => {
+          if (!runtime.abortActorRouteSeal(
+            value.actorId,
+            value.sealId
+          )) {
+            throw new ZLinkRemoteBoundSessionFenceError(
+              `Actor '${value.actorId}' session route seal abort was fenced.`
+            );
+          }
+        }
+      );
+      if (!deferTerminalReceipt) {
+        owner.observeRelocationTerminal(
+          value.actorId,
+          value.sealId,
+          remembered.acceptedHighWater,
+          applyFingerprint
         );
       }
       return { actorId: value.actorId, sealId: value.sealId, acceptedHighWater: '0' };
     }
-    const acceptedHighWater = this.options.streamBindingRuntime().sealActorRoute({
-      actorId: value.actorId,
-      actorGeneration: BigInt(value.actorGeneration),
-      actorOwnershipGeneration: BigInt(value.actorOwnershipGeneration),
-      bindingGeneration: BigInt(value.bindingGeneration),
-      ownerLeaseGeneration: BigInt(value.ownerLeaseGeneration),
-      sealId: value.sealId
-    });
-    this.routeSeals.set(value.actorId, {
-      sealId: value.sealId,
-      acceptedHighWater,
-      released: false
-    });
+    const actorGeneration = BigInt(value.actorGeneration);
+    const actorOwnershipGeneration = BigInt(value.actorOwnershipGeneration);
+    const bindingGeneration = BigInt(value.bindingGeneration);
+    const ownerLeaseGeneration = BigInt(value.ownerLeaseGeneration);
+    const acceptedHighWater = await owner.sealRelocation(
+      {
+        actorId: value.actorId,
+        actorGeneration,
+        actorOwnershipGeneration,
+        bindingGeneration,
+        ownerLeaseGeneration,
+        sealId: value.sealId,
+        sessionIdentity,
+        ...(actorNodeRid === undefined ? {} : { actorNodeRid }),
+        ...(actorNodeGeneration === undefined ? {} : { actorNodeGeneration })
+      },
+      {
+        objectGeneration: actorGeneration,
+        authorityOwnerGeneration: actorOwnershipGeneration,
+        bindingGeneration,
+        ownerLeaseGeneration
+      }
+    );
     return {
       actorId: value.actorId,
       sealId: value.sealId,
@@ -415,7 +569,7 @@ export class ZLinkRemoteBoundSessionRelay {
           `Session relocation '${key}' repeated command 42 with different bytes.`
         );
       }
-      this.touchServiceWireTerminal(key, terminal);
+      this.terminalServiceWireRelocations.touch(key);
       return terminal.sealed;
     }
     const active = this.activeServiceWireRelocations.get(key);
@@ -426,6 +580,21 @@ export class ZLinkRemoteBoundSessionRelay {
         );
       }
       return await active.sealPromise;
+    }
+    const actorId = value.actor.actor.actorId;
+    let activeForActor = 0;
+    for (const relocation of this.activeServiceWireRelocations.values()) {
+      if (relocation.actorId === actorId) activeForActor += 1;
+    }
+    if (activeForActor >= SERVICE_CONTROL_ACTIVE_PER_ACTOR) {
+      throw new ServiceWireProtocolError(
+        `Actor '${actorId}' Session relocation successor capacity was exhausted.`
+      );
+    }
+    if (this.activeServiceWireRelocations.size >= SERVICE_CONTROL_ACTIVE_CAPACITY) {
+      throw new ServiceWireProtocolError(
+        'Session relocation active control capacity was exhausted.'
+      );
     }
 
     // Register the identity before the first asynchronous owner operation.
@@ -441,7 +610,7 @@ export class ZLinkRemoteBoundSessionRelay {
         bindingGeneration: value.session.bindingGeneration.toString(),
         ownerLeaseGeneration: value.actor.ownerLeaseGeneration.toString(),
         sealId: key
-      });
+      }, value.session.sessionRid, false, value.actor.actor.nodeRid, value.actor.targetNodeGeneration);
       return {
         relocation: value.relocation,
         coordinator: value.coordinator,
@@ -451,7 +620,7 @@ export class ZLinkRemoteBoundSessionRelay {
       } satisfies ServiceSessionRelocationSealed;
     });
     const state: ActiveServiceWireSessionRelocation = {
-      actorId: value.actor.actor.actorId,
+      actorId,
       sealFingerprint: fingerprint,
       sealPromise
     };
@@ -473,21 +642,32 @@ export class ZLinkRemoteBoundSessionRelay {
     targetOwnerLeaseGeneration?: bigint
   ): Promise<ServiceSessionRelocationRouted> {
     const key = serviceWireBarrierKey(value);
-    const fingerprint = encodeSessionRelocationRoute(value).toString('base64');
+    const routeRequestFingerprint = encodeSessionRelocationRoute(value).toString('base64');
+    const fingerprint = JSON.stringify([
+      routeRequestFingerprint,
+      targetOwnerLeaseGeneration?.toString() ?? null
+    ]);
     const terminal = this.terminalServiceWireRelocations.get(key);
     if (terminal !== undefined) {
       if (terminal.routeFingerprint !== fingerprint) {
         throw new ServiceWireProtocolError(
-          `Session relocation '${key}' repeated command 44 with different bytes.`
+          `Session relocation '${key}' repeated command 44 with different bytes or target proof.`
         );
       }
-      this.touchServiceWireTerminal(key, terminal);
+      this.terminalServiceWireRelocations.touch(key);
       return { ...terminal.routed, result: 'alreadyApplied' };
     }
     const state = this.activeServiceWireRelocations.get(key);
     if (state === undefined) {
       const current = this.options.streamBindingRuntime().sessionRouteFence(
         value.actor.actorId
+      );
+      actorSessionBindingRuntimeOwner(this.options.streamBindingRuntime()).discardRelocationOutbound(
+        value.actor.actorId,
+        key,
+        new ZLinkRemoteBoundSessionFenceError(
+          `Actor '${value.actor.actorId}' command 44 did not match an active command 42.`
+        )
       );
       return {
         relocation: value.relocation,
@@ -505,15 +685,28 @@ export class ZLinkRemoteBoundSessionRelay {
         lastAcceptedSessionSequence: current?.acceptedHighWater ?? 0n
       };
     }
+    if (
+      state.routeRequestFingerprint !== undefined
+      && (
+        state.routeRequestFingerprint !== routeRequestFingerprint
+        || state.targetOwnerLeaseGeneration !== targetOwnerLeaseGeneration
+      )
+    ) {
+      throw new ServiceWireProtocolError(
+        `Session relocation '${key}' repeated command 44 with different bytes or target proof.`
+      );
+    }
     if (state.routeFingerprint !== undefined) {
       if (state.routeFingerprint !== fingerprint || state.routePromise === undefined) {
         throw new ServiceWireProtocolError(
-          `Session relocation '${key}' repeated command 44 with different bytes.`
+          `Session relocation '${key}' repeated command 44 with different bytes or target proof.`
         );
       }
       const routed = await state.routePromise;
       return { ...routed, result: 'alreadyApplied' };
     }
+    state.routeRequestFingerprint = routeRequestFingerprint;
+    state.targetOwnerLeaseGeneration = targetOwnerLeaseGeneration;
     state.routeFingerprint = fingerprint;
     const routePromise = state.sealPromise.then(async sealed => {
       validateSessionRelocationRouteAgainstSeal(value, sealed);
@@ -526,20 +719,7 @@ export class ZLinkRemoteBoundSessionRelay {
     });
     state.routePromise = routePromise;
     try {
-      const routed = await routePromise;
-      const sealed = state.sealed ?? await state.sealPromise;
-      const completed: TerminalServiceWireSessionRelocation = {
-        actorId: state.actorId,
-        sealFingerprint: state.sealFingerprint,
-        sealed,
-        routeFingerprint: fingerprint,
-        routed
-      };
-      if (this.activeServiceWireRelocations.get(key) === state) {
-        this.activeServiceWireRelocations.delete(key);
-      }
-      this.rememberServiceWireTerminal(key, completed);
-      return routed;
+      return await routePromise;
     } catch (error) {
       if (state.routePromise === routePromise) {
         state.routeFingerprint = undefined;
@@ -547,6 +727,92 @@ export class ZLinkRemoteBoundSessionRelay {
       }
       throw error;
     }
+  }
+
+  serviceWireSessionRelocationRouteProof(
+    value: ServiceSessionRelocationRoute
+  ): bigint | undefined {
+    const key = serviceWireBarrierKey(value);
+    const routeRequestFingerprint = encodeSessionRelocationRoute(value).toString('base64');
+    const active = this.activeServiceWireRelocations.get(key);
+    if (
+      active?.routeRequestFingerprint === routeRequestFingerprint
+      && active.targetOwnerLeaseGeneration !== undefined
+    ) {
+      return active.targetOwnerLeaseGeneration;
+    }
+    const terminal = this.terminalServiceWireRelocations.get(key);
+    if (
+      terminal?.routeRequestFingerprint === routeRequestFingerprint
+      && terminal.targetOwnerLeaseGeneration !== undefined
+    ) {
+      this.terminalServiceWireRelocations.touch(key);
+      return terminal.targetOwnerLeaseGeneration;
+    }
+    return undefined;
+  }
+
+  async receiveServiceWireSessionRelocationRoutedReceipt(
+    value: ServiceSessionRelocationRouted
+  ): Promise<void> {
+    const key = serviceWireBarrierKey(value);
+    const terminal = this.terminalServiceWireRelocations.get(key);
+    if (terminal !== undefined) {
+      assertServiceWireRoutedReceipt(terminal.routed, value);
+      this.terminalServiceWireRelocations.touch(key);
+      return;
+    }
+    const state = this.activeServiceWireRelocations.get(key);
+    if (state === undefined) {
+      if (value.result === 'stale' || value.result === 'sessionOrBindingClosed') return;
+      throw new ServiceWireProtocolError(
+        `Session relocation '${key}' command 45 did not match an active command 44.`
+      );
+    }
+    if (
+      state.routePromise === undefined
+      || state.routeFingerprint === undefined
+      || state.routeRequestFingerprint === undefined
+    ) {
+      throw new ServiceWireProtocolError(
+        `Session relocation '${key}' command 45 arrived before command 44 apply.`
+      );
+    }
+    const routeRequestFingerprint = state.routeRequestFingerprint;
+    const routed = await state.routePromise;
+    assertServiceWireRoutedReceipt(routed, value);
+    const sealed = state.sealed ?? await state.sealPromise;
+    const owner = actorSessionBindingRuntimeOwner(this.options.streamBindingRuntime());
+    const relocation = owner.relocationSnapshot(state.actorId, key);
+    if (relocation?.applyFingerprint === undefined) {
+      throw new ZLinkRemoteBoundSessionFenceError(
+        `Actor '${state.actorId}' command 45 did not match its command 44 route apply.`
+      );
+    }
+    owner.observeRelocationTerminal(
+      state.actorId,
+      key,
+      sealed.lastAcceptedSessionSequence,
+      relocation.applyFingerprint
+    );
+    const completed: TerminalServiceWireSessionRelocation = {
+      actorId: state.actorId,
+      sealFingerprint: state.sealFingerprint,
+      sealed,
+      routeRequestFingerprint,
+      targetOwnerLeaseGeneration: state.targetOwnerLeaseGeneration,
+      routeFingerprint: state.routeFingerprint,
+      routed
+    };
+    if (this.activeServiceWireRelocations.get(key) === state) {
+      this.activeServiceWireRelocations.delete(key);
+    }
+    this.terminalServiceWireRelocations.remember(key, completed);
+  }
+
+  clearServiceWireSessionRelocations(): void {
+    this.activeServiceWireRelocations.clear();
+    this.terminalServiceWireRelocations.clear();
   }
 
   private async applyServiceWireSessionRelocationRoute(
@@ -565,7 +831,7 @@ export class ZLinkRemoteBoundSessionRelay {
         bindingGeneration: value.session.bindingGeneration.toString(),
         ownerLeaseGeneration: sealed.actor.ownerLeaseGeneration.toString(),
         sealId: key
-      });
+      }, value.session.sessionRid, true);
       currentAuthorityOwnerGeneration = value.route.currentAuthorityOwnerGeneration;
     } else {
       if (targetOwnerLeaseGeneration === undefined || targetOwnerLeaseGeneration <= 0n) {
@@ -590,12 +856,7 @@ export class ZLinkRemoteBoundSessionRelay {
         sealId: key,
         acceptedJournalReference: '',
         acceptedJournalChecksumCrc32c: 0
-      }, true);
-      this.routeSeals.set(value.actor.actorId, {
-        sealId: key,
-        acceptedHighWater: value.route.replayedHighWater,
-        released: true
-      });
+      }, true, value.session.sessionRid, true, value.route.targetNodeGeneration);
       currentAuthorityOwnerGeneration = value.route.targetAuthorityOwnerGeneration;
     }
     const routed: ServiceSessionRelocationRouted = {
@@ -609,27 +870,6 @@ export class ZLinkRemoteBoundSessionRelay {
       lastAcceptedSessionSequence: sealed.lastAcceptedSessionSequence
     };
     return routed;
-  }
-
-  private rememberServiceWireTerminal(
-    key: string,
-    value: TerminalServiceWireSessionRelocation
-  ): void {
-    this.terminalServiceWireRelocations.delete(key);
-    this.terminalServiceWireRelocations.set(key, value);
-    while (this.terminalServiceWireRelocations.size > SERVICE_CONTROL_TERMINAL_CAPACITY) {
-      const oldest = this.terminalServiceWireRelocations.keys().next().value as string | undefined;
-      if (oldest === undefined) break;
-      this.terminalServiceWireRelocations.delete(oldest);
-    }
-  }
-
-  private touchServiceWireTerminal(
-    key: string,
-    value: TerminalServiceWireSessionRelocation
-  ): void {
-    this.terminalServiceWireRelocations.delete(key);
-    this.terminalServiceWireRelocations.set(key, value);
   }
 
   private validateServiceWireSessionRoute(value: ServiceSessionRelocationSeal): void {
@@ -671,7 +911,9 @@ export class ZLinkRemoteBoundSessionRelay {
 
   clearOwnership(actorId: string): void {
     this.actorOwnershipGenerations.delete(actorId);
-    this.routeSeals.delete(actorId);
+    actorSessionBindingRuntimeOwnerIfRegistered(
+      this.options.streamBindingRuntime()
+    )?.clearRelocation(actorId, new Error(`Actor '${actorId}' ownership state was cleared.`));
     for (const [key, value] of this.activeServiceWireRelocations) {
       if (value.actorId === actorId) this.activeServiceWireRelocations.delete(key);
     }
@@ -874,6 +1116,7 @@ function currentActorRef(
     readonly meshName?: string;
     readonly boundSessionBindingGeneration: bigint;
     readonly locationGeneration?: bigint;
+    readonly ownerLeaseGeneration?: bigint;
   } | undefined,
   fallback: ActorRef | undefined
 ): ActorRef | undefined {
@@ -890,12 +1133,13 @@ function currentActorRef(
     meshName,
     nodeRid: native.nodeRid,
     ownershipGeneration: state?.locationGeneration,
+    ownerLeaseGeneration: state?.ownerLeaseGeneration,
     bindingGeneration: state?.boundSessionBindingGeneration
   } as ActorRef;
 }
 
 function serviceWireBarrierKey(
-  value: ServiceSessionRelocationSeal | ServiceSessionRelocationRoute
+  value: ServiceSessionRelocationSeal | ServiceSessionRelocationRoute | ServiceSessionRelocationRouted
 ): string {
   const actor = 'targetNodeGeneration' in value.actor
     ? value.actor.actor
@@ -908,6 +1152,99 @@ function serviceWireBarrierKey(
     value.session.sessionRid,
     value.session.bindingGeneration.toString()
   ].join(':');
+}
+
+function assertServiceWireRoutedReceipt(
+  expected: ServiceSessionRelocationRouted,
+  actual: ServiceSessionRelocationRouted
+): void {
+  const acceptedResult = actual.result === 'applied' || actual.result === 'alreadyApplied';
+  const expectedBytes = encodeSessionRelocationRouted({ ...expected, result: 'applied' });
+  const actualBytes = encodeSessionRelocationRouted({ ...actual, result: 'applied' });
+  if (!acceptedResult || !expectedBytes.equals(actualBytes)) {
+    throw new ServiceWireProtocolError(
+      `Session relocation '${serviceWireBarrierKey(actual)}' command 45 changed its exact route result.`
+    );
+  }
+}
+
+function assertRemoteBoundSessionOwnershipClaim(
+  claim: ZLinkActorSessionRelocationSnapshot,
+  value: ReturnType<typeof decodeRemoteBoundSessionOwnershipPayload>,
+  sessionIdentity: string | undefined,
+  allowAdvancedOwner: boolean
+): void {
+  const previousOwnerMatches = claim.actorOwnershipGeneration
+      === BigInt(value.previousActorOwnershipGeneration)
+    && claim.ownerLeaseGeneration === BigInt(value.previousOwnerLeaseGeneration);
+  const targetOwnerMatches = allowAdvancedOwner
+    && claim.actorOwnershipGeneration === BigInt(value.actorOwnershipGeneration)
+    && claim.ownerLeaseGeneration === BigInt(value.targetOwnerLeaseGeneration);
+  if (
+    claim.actorGeneration !== BigInt(value.actorGeneration)
+    || claim.bindingGeneration !== BigInt(value.bindingGeneration)
+    || claim.acceptedHighWater !== BigInt(value.acceptedHighWater)
+    || claim.sessionIdentity !== sessionIdentity
+    || (!previousOwnerMatches && !targetOwnerMatches)
+  ) {
+    throw new ZLinkRemoteBoundSessionFenceError(
+      `Actor '${value.actorId}' bound-session ownership update was fenced by its binding identity.`
+    );
+  }
+}
+
+function assertRemoteBoundSessionAbortClaim(
+  claim: ZLinkActorSessionRelocationSnapshot,
+  value: ReturnType<typeof decodeRemoteBoundSessionSealPayload>,
+  sessionIdentity: string | undefined
+): void {
+  if (
+    claim.actorGeneration !== BigInt(value.actorGeneration)
+    || claim.actorOwnershipGeneration !== BigInt(value.actorOwnershipGeneration)
+    || claim.bindingGeneration !== BigInt(value.bindingGeneration)
+    || claim.ownerLeaseGeneration !== BigInt(value.ownerLeaseGeneration)
+    || claim.sessionIdentity !== sessionIdentity
+  ) {
+    throw new ZLinkRemoteBoundSessionFenceError(
+      `Actor '${value.actorId}' session route seal abort was fenced by its exact identity.`
+    );
+  }
+}
+
+function remoteBoundSessionOwnershipTerminalFingerprint(
+  value: ReturnType<typeof decodeRemoteBoundSessionOwnershipPayload>
+): string {
+  return JSON.stringify([
+    'ownership',
+    value.actorId,
+    value.actorGeneration,
+    value.previousActorOwnershipGeneration,
+    value.actorOwnershipGeneration,
+    value.bindingGeneration,
+    value.previousOwnerLeaseGeneration,
+    value.targetOwnerLeaseGeneration,
+    value.acceptedHighWater,
+    value.sealId,
+    value.actorNodeRid,
+    value.actorNodeRidHex ?? '',
+    value.acceptedJournalReference,
+    value.acceptedJournalChecksumCrc32c,
+    value.actorPacketTarget ?? null
+  ]);
+}
+
+function remoteBoundSessionAbortTerminalFingerprint(
+  value: ReturnType<typeof decodeRemoteBoundSessionSealPayload>
+): string {
+  return JSON.stringify([
+    'abort',
+    value.actorId,
+    value.actorGeneration,
+    value.actorOwnershipGeneration,
+    value.bindingGeneration,
+    value.ownerLeaseGeneration,
+    value.sealId
+  ]);
 }
 
 function validateSessionRelocationRouteAgainstSeal(

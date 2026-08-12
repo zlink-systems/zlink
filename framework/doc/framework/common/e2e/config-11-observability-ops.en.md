@@ -291,7 +291,7 @@ together reflect the `Serving→Relocating→Relocated` transition?
   process health endpoint is kept alive. The Host state metric also
   reflects the same closed state.
 - Detailed behavior: verifies
-  [Host Maintenance §13](../spec/28-graceful-drain-handoff.en.md#13-observability-information).
+  [Host Maintenance §13](../spec/30-host-relocation-flow.en.md#13-observability-information).
 
 #### OBS-C2 Keep A Bound Session Push After Actor Handoff
 
@@ -313,7 +313,7 @@ relay get handled at the new owner with the same Session binding?
   request handler evidence is also at B. The client receives the push
   once, and binding count and Actor identity are kept.
 - Detailed behavior: verifies
-  [The Common Handoff Order For Every Actor And Spot](../spec/28-graceful-drain-handoff.en.md#82-the-common-order-every-actor-and-spot-follows)
+  [The Common Handoff Order For Every Actor And Spot](../spec/30-host-relocation-flow.en.md#82-the-common-order-every-actor-and-spot-follows)
   and [The Session Actor Relocation Route Barrier](../spec/20-session-actor-dispatch.en.md#5-actor-relocation-route-barrier).
 
 #### OBS-C3 Move A User Spot Aggregate Together With Its Member Actors
@@ -338,7 +338,7 @@ processed at the target with identity/generation/state kept?
   `OnClosing(RelocationOut)` and target restore application callbacks
   are also recorded the formal number of times per operation.
 - Detailed behavior: verifies
-  [Host Maintenance §8.5](../spec/28-graceful-drain-handoff.en.md#85-spotwide-user-spot).
+  [Host Maintenance §8.5](../spec/30-host-relocation-flow.en.md#85-spotwide-user-spot).
 
 #### OBS-C4 Shutdown Performs Closing Callback And Session Close Without Relocation
 
@@ -361,7 +361,7 @@ and the client close reason observed exactly once during Shutdown?
   Host result is `Stopped/None`. No new object is created on the
   target node.
 - Detailed behavior: verifies
-  [The Race Between Shutdown And Relocate](../spec/28-graceful-drain-handoff.en.md#11-the-race-between-shutdown-and-relocate).
+  [The Race Between Shutdown And Relocate](../spec/30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate).
 
 #### OBS-C5 Keep The Source When There's No Eligible Target
 
@@ -383,8 +383,8 @@ requests?
   generation are kept, and the follow-up request succeeds. It doesn't
   auto-start Shutdown.
 - Detailed behavior: verifies
-  [Conditions Checked Before Selecting A Target](../spec/28-graceful-drain-handoff.en.md#4-conditions-checked-before-selecting-a-target)
-  and [Selecting A Target Matching The Mode](../spec/28-graceful-drain-handoff.en.md#5-selecting-a-target-matching-the-mode).
+  [Conditions Checked Before Selecting A Target](../spec/30-host-relocation-flow.en.md#4-conditions-checked-before-selecting-a-target)
+  and [Selecting A Target Matching The Mode](../spec/30-host-relocation-flow.en.md#5-selecting-a-target-matching-the-mode).
 
 #### OBS-C6 Move To The Exact New Version Via Rolling Update
 
@@ -407,7 +407,7 @@ Relocate, is every current object processed at the N+1 target?
   source process stays Relocated, and a subsequent explicit Shutdown
   ends in Stopped.
 - Detailed behavior: verifies
-  [Host Maintenance §5](../spec/28-graceful-drain-handoff.en.md#5-selecting-a-target-matching-the-mode).
+  [Host Maintenance §5](../spec/30-host-relocation-flow.en.md#5-selecting-a-target-matching-the-mode).
 
 #### OBS-C7 Planned Maintenance Uses A Same-Version Target
 
@@ -428,7 +428,7 @@ workload to a different version-N target?
   current object location and follow-up handler evidence point at the
   target, with state and generation kept.
 - Detailed behavior: verifies
-  [Host Maintenance §5](../spec/28-graceful-drain-handoff.en.md#5-selecting-a-target-matching-the-mode).
+  [Host Maintenance §5](../spec/30-host-relocation-flow.en.md#5-selecting-a-target-matching-the-mode).
 
 #### OBS-C8 Perform A Bounded Forced Teardown At The Shutdown Deadline
 
@@ -450,7 +450,7 @@ application gate, does Shutdown end in
   and the forced-shutdown metric delta is 1. A late callback
   completion doesn't change the Host terminal.
 - Detailed behavior: verifies
-  [The Race Between Shutdown And Relocate](../spec/28-graceful-drain-handoff.en.md#11-the-race-between-shutdown-and-relocate).
+  [The Race Between Shutdown And Relocate](../spec/30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate).
 
 #### OBS-C9A Automatic Topology Starts Relocation Only After The Target Is Ready
 
@@ -473,8 +473,8 @@ not-ready, and complete relocation once ready?
   the target is ready, Relocate succeeds and follow-up requests are
   processed at the target.
 - Detailed behavior: verifies
-  [Conditions Checked Before Selecting A Target](../spec/28-graceful-drain-handoff.en.md#4-conditions-checked-before-selecting-a-target)
-  and [Selecting A Target Matching The Mode](../spec/28-graceful-drain-handoff.en.md#5-selecting-a-target-matching-the-mode).
+  [Conditions Checked Before Selecting A Target](../spec/30-host-relocation-flow.en.md#4-conditions-checked-before-selecting-a-target)
+  and [Selecting A Target Matching The Mode](../spec/30-host-relocation-flow.en.md#5-selecting-a-target-matching-the-mode).
 
 
 #### OBS-C10 Select Only The Exact Version The Relocation Mode Defines
@@ -496,7 +496,7 @@ target?
   target, and the second is the N+1 target. There's no handler
   evidence on the N+2 or wrong-version target.
 - Detailed behavior: verifies
-  [Host Maintenance §5](../spec/28-graceful-drain-handoff.en.md#5-selecting-a-target-matching-the-mode).
+  [Host Maintenance §5](../spec/30-host-relocation-flow.en.md#5-selecting-a-target-matching-the-mode).
 
 #### OBS-C11 Handle Concurrent Relocate Option Conflicts
 
@@ -520,7 +520,7 @@ terminal, while a different-option caller gets
   `Blocked/OperationInProgress`, and don't change the first
   operation's effective version or deadline.
 - Detailed behavior: verifies
-  [Concurrent Calls And Cancellation](../spec/28-graceful-drain-handoff.en.md#6-concurrent-calls-and-cancellation).
+  [Concurrent Calls And Cancellation](../spec/30-host-relocation-flow.en.md#6-concurrent-calls-and-cancellation).
 
 #### OBS-C12 Distinguish Relocate Waiters From Shutdown Contention
 
@@ -543,7 +543,7 @@ Shutdown variant preserve the shared operation and terminal-once behavior?
   shared operation continues; the first receives `ShutdownRequested` or an already-fixed relocation
   result. Repeated status queries do not change the Shutdown terminal.
 - Detailed behavior: verifies
-  [Host Maintenance §11](../spec/28-graceful-drain-handoff.en.md#11-the-race-between-shutdown-and-relocate).
+  [Host Maintenance §11](../spec/30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate).
 
 ## 5. Completion Criteria
 

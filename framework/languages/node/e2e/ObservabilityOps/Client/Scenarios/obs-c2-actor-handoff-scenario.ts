@@ -14,7 +14,7 @@ import {
   unique
 } from '../Support/scenario-support.js';
 import { retireCompleted, startDrain, waitFor, waitForDrain } from '../Support/observability-support.js';
-import { SessionKeepAlive } from '../../Shared/messages.js';
+import { SessionKeepAliveMsg } from '../../Shared/messages.js';
 import type { ActorRefSnapshotRes } from '../../Shared/messages.js';
 
 export async function runObsC2(): Promise<void> {
@@ -58,7 +58,7 @@ export async function runObsC2(): Promise<void> {
   // Keep this bound Session active while the relocation barrier is running; the
   // scenario must verify route handoff, not an unrelated idle disconnect.
   const keepAlive = setInterval(() => {
-    void connector.send(new SessionKeepAlive('OBS-C2'))
+    void connector.send(new SessionKeepAliveMsg('OBS-C2'))
       .packetName(ObservabilityOpsNames.packetSessionKeepAlive)
       .submit()
       .catch(() => undefined);

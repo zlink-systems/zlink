@@ -212,7 +212,7 @@ public sealed class RelocationProbeClient(IZlinkStreamConnector connector) : IAs
         string actorId,
         string probeId,
         byte[] payload) =>
-        connector.Send(new MessageFollowProbeReq(actorId, probeId, payload)).Async();
+        connector.Send(new MessageFollowProbeMsg(actorId, probeId, payload)).Async();
 
     public ValueTask<MessageFollowProbeRes> RequestMessageFollowProbeAsync(
         string actorId,

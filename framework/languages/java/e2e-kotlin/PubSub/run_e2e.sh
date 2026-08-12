@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/e2e-redis-common.sh"
+zlink_e2e_initialize kotlin "$0" "$@"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${ROOT_DIR}"
@@ -51,22 +52,12 @@ cleanup() {
     kill -9 "${pids[$i]}" >/dev/null 2>&1 || true
   done
   if [[ -n "${REDIS_CONTAINER}" ]]; then
-    docker rm -fv "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "${REDIS_CONTAINER}" || true
   fi
   wait >/dev/null 2>&1 || true
   exit "${status}"
 }
 trap cleanup EXIT
-
-pick_port() {
-  python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
-}
 
 port_of() {
   echo "${1##*:}"
@@ -154,7 +145,8 @@ start_redis_container() {
 }
 
 gradle_run() {
-  ../../gradlew --project-cache-dir "${ZLINK_KOTLIN_E2E_GRADLE_CACHE}" --no-daemon "$@" --quiet
+  zlink_e2e_gradle_build_locked ../../gradlew \
+    --project-cache-dir "${ZLINK_KOTLIN_E2E_GRADLE_CACHE}" --no-daemon "$@" --quiet
 }
 
 bin_path() {
@@ -337,17 +329,19 @@ run_client_mode() {
   cat "${log_dir}/client-${suffix}.stdout.log"
 }
 
-PUBLISHER_ENDPOINT="tcp://127.0.0.1:$(pick_port)"
-PUBLISHER_HTTP="http://127.0.0.1:$(pick_port)"
-PUBLISHER2_ENDPOINT="tcp://127.0.0.1:$(pick_port)"
-PUBLISHER2_HTTP="http://127.0.0.1:$(pick_port)"
-AUDIT_ENDPOINT="tcp://127.0.0.1:$(pick_port)"
-AUDIT_HTTP="http://127.0.0.1:$(pick_port)"
-SUB1_HTTP="http://127.0.0.1:$(pick_port)"
-SUB2_HTTP="http://127.0.0.1:$(pick_port)"
-SUB3_HTTP="http://127.0.0.1:$(pick_port)"
-SUB4_HTTP="http://127.0.0.1:$(pick_port)"
-RECONNECT_HTTP="http://127.0.0.1:$(pick_port)"
+assigned_ports=()
+zlink_e2e_assign_unique_ports assigned_ports 11
+PUBLISHER_ENDPOINT="tcp://127.0.0.1:${assigned_ports[0]}"
+PUBLISHER_HTTP="http://127.0.0.1:${assigned_ports[1]}"
+PUBLISHER2_ENDPOINT="tcp://127.0.0.1:${assigned_ports[2]}"
+PUBLISHER2_HTTP="http://127.0.0.1:${assigned_ports[3]}"
+AUDIT_ENDPOINT="tcp://127.0.0.1:${assigned_ports[4]}"
+AUDIT_HTTP="http://127.0.0.1:${assigned_ports[5]}"
+SUB1_HTTP="http://127.0.0.1:${assigned_ports[6]}"
+SUB2_HTTP="http://127.0.0.1:${assigned_ports[7]}"
+SUB3_HTTP="http://127.0.0.1:${assigned_ports[8]}"
+SUB4_HTTP="http://127.0.0.1:${assigned_ports[9]}"
+RECONNECT_HTTP="http://127.0.0.1:${assigned_ports[10]}"
 PUBLISHER2_RID="publisher-b"
 PUBLISHER2_NO_STORE="false"
 PUBLISHER2_ADVERTISE_HOST=""
@@ -365,7 +359,7 @@ if [[ "${SCENARIO}" == "all" ]]; then
   )
   for selector in "${selectors[@]}"; do
     echo "=== Kotlin PubSub ${selector} ==="
-    ZLINK_KOTLIN_E2E_SKIP_BUILD=true "${ROOT_DIR}/run_e2e.sh" "${selector}"
+    ZLINK_KOTLIN_E2E_SKIP_BUILD=true bash "${ROOT_DIR}/run_e2e.sh" "${selector}"
   done
   echo "pub-sub kotlin all result=passed selectors=${#selectors[@]}"
   exit 0
@@ -499,12 +493,12 @@ case "${SCENARIO}" in
   PS-D5)
     start_subscriber sub-1 all "${SUB1_HTTP}"
     wait_fanout_status_ready "${SUB1_HTTP}" sub-1
-    docker pause "${REDIS_CONTAINER}" >/dev/null
+    timeout -k 2s 10s docker pause "${REDIS_CONTAINER}" >/dev/null
     if ! run_client_mode PS-D5 ps-d5-outage; then
-      docker unpause "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+      timeout -k 2s 10s docker unpause "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
       exit 1
     fi
-    docker unpause "${REDIS_CONTAINER}" >/dev/null
+    timeout -k 2s 10s docker unpause "${REDIS_CONTAINER}" >/dev/null
     run_client_mode PS-D5-RECOVERY ps-d5-recovery
     grep -q "scenario PS-D5 passed" "${log_dir}/client-ps-d5-outage.stdout.log"
     grep -q "scenario PS-D5-RECOVERY passed" "${log_dir}/client-ps-d5-recovery.stdout.log"
@@ -645,4 +639,4 @@ with urllib.request.urlopen(sys.argv[1], timeout=5) as response:
 PY
 
 grep -Rq "message flow" "${log_dir}"/*.stdout.log
-grep -q "HANDLER_MISSING/DROP/MissingEventMsg" "${log_dir}/sub-2-evidence.json"
+grep -q "HANDLER_MISSING/DROP/MissingEvent" "${log_dir}/sub-2-evidence.json"

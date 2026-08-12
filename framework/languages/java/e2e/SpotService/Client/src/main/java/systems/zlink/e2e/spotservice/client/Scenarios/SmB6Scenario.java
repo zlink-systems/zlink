@@ -1,6 +1,5 @@
-package Scenarios;
+package systems.zlink.e2e.spotservice.client.Scenarios;
 
-import systems.zlink.e2e.spotservice.client.Scenarios;
 import java.util.List;
 import java.util.UUID;
 import systems.zlink.e2e.spotservice.shared.Contracts;
@@ -35,10 +34,12 @@ public final class SmB6Scenario extends SpotServiceScenarioContext {
                         .metadata("actor-id", leaveActorId)
                         .submit(Contracts.ActorJoinRes.class).toCompletableFuture().join();
                     ensure(leaveActorId.equals(joined.actorId()), "SM-B6 leave join actor mismatch");
-                    leaveClient
-                        .send(new Contracts.LeaveActorReq(leaveActorId))
+                    Contracts.LeaveActorRes left = leaveClient
+                        .request(new Contracts.LeaveActorReq(leaveActorId))
                         .metadata("actor-id", leaveActorId)
-                        .submit();
+                        .submit(Contracts.LeaveActorRes.class).toCompletableFuture().join();
+                    ensure(left.accepted() && leaveActorId.equals(left.actorId()),
+                        "SM-B6 leave reply mismatch");
                 } finally {
                     closeQuietly(leaveClient);
                 }

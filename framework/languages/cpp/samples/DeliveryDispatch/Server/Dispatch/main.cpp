@@ -545,12 +545,6 @@ int main (int argc, char **argv)
         courier_mesh.listen (topology.dispatch_spot_router_endpoint)
           .channel_name (sample_names_t::courier_actor_discovery)
           .client ();
-        courier_mesh.peer_connections ().connect (
-          zlink::routing_id_t::from (sample_names_t::courier_actor_instance_1),
-          topology.courier_actor_node_1_router_endpoint);
-        courier_mesh.peer_connections ().connect (
-          zlink::routing_id_t::from (sample_names_t::courier_actor_instance_2),
-          topology.courier_actor_node_2_router_endpoint);
         options.handlers ()
           .group ("dispatch")
           .add_send<assign_delivery_handler_t> ()

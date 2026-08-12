@@ -62,11 +62,12 @@ export function createDiscoveredOptions(
 ): ZLinkFrameworkRegistrationOptions {
   const registrationOptions = createRegistrationOptions(options);
   const channels: Record<string, ZLinkChannelOptions> = { ...(registrationOptions.channels ?? {}) };
-  const providerRefs = discoverProviderRefs(discovery, moduleRef);
-  const spotActorProviderRefs = discoverSpotActorProviderRefs(discovery, moduleRef);
-  const spotProviderRefs = discoverSpotProviderRefs(discovery, moduleRef);
-  const spotTimerProviderRefs = discoverSpotTimerProviderRefs(discovery, moduleRef);
-  const sessionProviderRefs = discoverSessionProviderRefs(discovery, moduleRef);
+  const useImplicitHandlers = options.implicitHandlerAutoRegistration !== false;
+  const providerRefs = useImplicitHandlers ? discoverProviderRefs(discovery, moduleRef) : [];
+  const spotActorProviderRefs = useImplicitHandlers ? discoverSpotActorProviderRefs(discovery, moduleRef) : [];
+  const spotProviderRefs = useImplicitHandlers ? discoverSpotProviderRefs(discovery, moduleRef) : [];
+  const spotTimerProviderRefs = useImplicitHandlers ? discoverSpotTimerProviderRefs(discovery, moduleRef) : [];
+  const sessionProviderRefs = useImplicitHandlers ? discoverSessionProviderRefs(discovery, moduleRef) : [];
   const spotNodes = createDiscoveredMeshChannelOptions(createDiscoveredSpotNodeOptions(
     registrationOptions.spotNodes,
     spotActorProviderRefs,

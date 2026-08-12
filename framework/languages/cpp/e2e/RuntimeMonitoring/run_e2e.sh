@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRAMEWORK_DIR="$(cd "$ROOT_DIR/../.." && pwd)"
 source "$ROOT_DIR/../redis-common.sh"
+zlink_cpp_e2e_acquire_run_lock "${BASH_SOURCE[0]}" "$@"
+zlink_cpp_e2e_install_cleanup_trap
 BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-$FRAMEWORK_DIR/build-redis-vcpkg}"
 SCENARIO="${1:-all}"
 SCENARIO_LOWER="$(printf '%s' "$SCENARIO" | tr '[:upper:]' '[:lower:]')"
@@ -35,21 +37,13 @@ mkdir -p "$CONFIG_DIR"
 
 echo "log_dir=$LOG_DIR"
 
-read -r CHANNEL CHANNEL_FILTERED CHANNEL_THROW SPOT_ROUTER_SERVICE SPOT_ROUTER_FILTERED SPOT_ROUTER_THROW SPOT_PUB_SERVICE SPOT_PUB_FILTERED SPOT_PUB_THROW CHANNEL_REMAP SPOT_ROUTER_REMAP SPOT_PUB_REMAP MESH_SERVICE MESH_FILTERED MESH_THROW HTTP_SERVICE HTTP_FILTERED HTTP_THROW HTTP_TRIGGER HTTP_SERVICE_REMAP <<<"$(python3 - <<'PY'
-import socket
-sockets = []
-ports = []
-for _ in range(20):
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    sockets.append(s)
-    ports.append(s.getsockname()[1])
-print(" ".join(f"tcp://127.0.0.1:{p}" for p in ports[:15]), end=" ")
-print(" ".join(f"http://127.0.0.1:{p}" for p in ports[15:20]))
-for s in sockets:
-    s.close()
-PY
-)"
+read -r CHANNEL CHANNEL_FILTERED CHANNEL_THROW SPOT_ROUTER_SERVICE \
+  SPOT_ROUTER_FILTERED SPOT_ROUTER_THROW SPOT_PUB_SERVICE SPOT_PUB_FILTERED \
+  SPOT_PUB_THROW CHANNEL_REMAP SPOT_ROUTER_REMAP SPOT_PUB_REMAP MESH_SERVICE \
+  MESH_FILTERED MESH_THROW HTTP_SERVICE HTTP_FILTERED HTTP_THROW HTTP_TRIGGER \
+  HTTP_SERVICE_REMAP <<<"$(zlink_cpp_e2e_allocate_endpoints \
+    tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp \
+    http http http http http)"
 
 cmake -S "$FRAMEWORK_DIR" -B "$BUILD_DIR" >/dev/null
 cmake --build "$BUILD_DIR" --target \
@@ -106,7 +100,7 @@ cleanup() {
       cleanup_failed=1
     fi
   done
-  docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+  zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   rm -rf "$CONFIG_DIR"
   if [[ $code -ne 0 ]]; then
     echo "E2E failed. Logs: $LOG_DIR" >&2
@@ -445,7 +439,7 @@ while time.monotonic() < deadline:
 else:
     raise RuntimeError("location runtime did not become ready before Redis pause")
 PY
-  docker pause "$REDIS_CONTAINER" >/dev/null
+  timeout -k 2s 10s docker pause "$REDIS_CONTAINER" >/dev/null
   python3 - "$HTTP_SERVICE" <<'PY'
 import json
 import sys
@@ -472,7 +466,7 @@ else:
     raise RuntimeError("location runtime did not become degraded during Redis pause")
 PY
   request_profile mon-a5-store-degraded
-  docker unpause "$REDIS_CONTAINER" >/dev/null
+  timeout -k 2s 10s docker unpause "$REDIS_CONTAINER" >/dev/null
   python3 - "$HTTP_SERVICE" <<'PY'
 import json
 import sys

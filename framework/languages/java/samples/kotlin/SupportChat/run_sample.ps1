@@ -51,25 +51,6 @@ function Cleanup {
     }
 }
 
-function Reserve-Ports {
-    param([int]$Count)
-    $listeners = New-Object System.Collections.Generic.List[System.Net.Sockets.TcpListener]
-    $ports = New-Object System.Collections.Generic.List[int]
-    try {
-        while ($ports.Count -lt $Count) {
-            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse("127.0.0.1"), 0)
-            $listener.Start()
-            $listeners.Add($listener)
-            $ports.Add($listener.LocalEndpoint.Port)
-        }
-        return $ports.ToArray()
-    } finally {
-        foreach ($listener in $listeners) {
-            $listener.Stop()
-        }
-    }
-}
-
 function Wait-Port {
     param([string]$Name, [string]$Endpoint, [int]$TimeoutSeconds = 60)
     $address = $Endpoint -replace '^tcp://', ''
@@ -114,7 +95,7 @@ function Start-Role {
 }
 
 try {
-    $ports = Reserve-Ports 6
+    $ports = @(Get-ZlinkSampleApplicationPorts -Language Kotlin -Count 6)
     $ApiChannelEndpoint = "tcp://127.0.0.1:$($ports[0])"
     $ApiHttpEndpoint = "http://127.0.0.1:$($ports[1])"
     $SupportChannelEndpoint = "tcp://127.0.0.1:$($ports[2])"
@@ -122,7 +103,7 @@ try {
     $SupportRouterEndpoint = "tcp://127.0.0.1:$($ports[4])"
     $StreamEndpoint = "tcp://127.0.0.1:$($ports[5])"
 
-    $redis = Start-ZlinkSampleRedis "zlink-redis-kotlin-sample-supportchat"
+    $redis = Start-ZlinkSampleRedis "zlink-redis-kotlin-sample-supportchat" -Language Kotlin
     $RedisContainer = $redis.ContainerId
     $RedisEndpoint = $redis.Endpoint
     Wait-Port "redis" "tcp://$RedisEndpoint"
@@ -152,14 +133,16 @@ try {
         "sample.supportSpotRouterEndpoint=$SupportRouterEndpoint"
     ) | Set-Content -Path $SupportConfig -Encoding UTF8
 
-    & $Gradle --settings-file standalone.settings.gradle.kts --no-daemon --no-parallel --max-workers=1 `
-        :Server:Api:installDist `
-        :Server:Session:installDist `
-        :Server:Support:installDist `
-        :Client:installDist *> $BuildLog
-    if ($LASTEXITCODE -ne 0) {
-        throw "Gradle installDist failed."
-    }
+    Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments @(
+        "--settings-file",
+        "standalone.settings.gradle.kts",
+        "--no-daemon",
+        "--no-parallel",
+        "--max-workers=1",
+        ":Server:Api:installDist",
+        ":Server:Session:installDist",
+        ":Server:Support:installDist",
+        ":Client:installDist") *> $BuildLog
 
     Start-Role "support" (Join-Path $SampleDir "Server/Support/build/install/Support/bin/Support") $SupportConfig
     Wait-Port "support-channel" $SupportChannelEndpoint

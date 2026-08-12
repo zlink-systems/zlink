@@ -13,7 +13,7 @@ internal static class ObsA2ErrorFlowScenario
             async cancellationToken =>
                 _ = await connector
                     .Request(new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, new byte[] { 0xff, 0x00 }))
-                    .PacketName("ObservabilityMissingPacket")
+                    .PacketName("ObservabilityMissingReq")
                     .Async(cancellationToken),
             nameof(ZlinkStreamErrorCode.RemoteError));
         await connector.Close.Async();

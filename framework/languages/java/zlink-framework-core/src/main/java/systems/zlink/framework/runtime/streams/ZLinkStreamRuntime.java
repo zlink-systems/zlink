@@ -60,6 +60,8 @@ import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
@@ -445,6 +447,73 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         return matches.getFirst().context()
             .applyRelocationSealCommand(command)
             .thenApply(codec::encodeSessionRelocationSealed);
+    }
+
+    public boolean handleBoundSessionSend(
+        RoutingId sourceNodeRid,
+        long sourceNodeGeneration,
+        ZLinkServiceM6BWireCodec.BoundSessionSend command,
+        ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
+        List<? extends BoundSessionSendOwner> owners;
+        synchronized (sessions) {
+            owners = sessions.values().stream()
+                .map(SessionState::actorRuntime)
+                .filter(Objects::nonNull)
+                .map(SessionBoundSessionSendOwner::new)
+                .toList();
+        }
+        return dispatchBoundSessionSend(
+            owners, sourceNodeRid, sourceNodeGeneration, command, payload);
+    }
+
+    static boolean dispatchBoundSessionSend(
+        List<? extends BoundSessionSendOwner> owners,
+        RoutingId sourceNodeRid,
+        long sourceNodeGeneration,
+        ZLinkServiceM6BWireCodec.BoundSessionSend command,
+        ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
+        List<? extends BoundSessionSendOwner> matches = owners.stream()
+            .filter(owner -> owner.matches(
+                sourceNodeRid, sourceNodeGeneration, command))
+            .toList();
+        return matches.size() == 1
+            && matches.getFirst().accept(
+                sourceNodeRid, sourceNodeGeneration, command, payload);
+    }
+
+    interface BoundSessionSendOwner {
+        boolean matches(
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            ZLinkServiceM6BWireCodec.BoundSessionSend command);
+
+        boolean accept(
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            ZLinkServiceM6BWireCodec.BoundSessionSend command,
+            ZLinkServiceM6AWireCodec.ApplicationPayload payload);
+    }
+
+    private record SessionBoundSessionSendOwner(
+        ZLinkSessionActorsRuntime runtime) implements BoundSessionSendOwner {
+        @Override
+        public boolean matches(
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            ZLinkServiceM6BWireCodec.BoundSessionSend command) {
+            return runtime.matchesBoundSessionSend(
+                sourceNodeRid, sourceNodeGeneration, command);
+        }
+
+        @Override
+        public boolean accept(
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            ZLinkServiceM6BWireCodec.BoundSessionSend command,
+            ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
+            return runtime.acceptBoundSessionSend(
+                sourceNodeRid, sourceNodeGeneration, command, payload);
+        }
     }
 
     /**

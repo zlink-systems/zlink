@@ -2,7 +2,9 @@ package systems.zlink.e2e.kotlin.registrationcodec.main.endpoints
 
 import com.sun.net.httpserver.HttpServer
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.google.protobuf.StringValue
+import systems.zlink.e2e.kotlin.registrationcodec.protobuf.ProtobufEchoMsg
+import systems.zlink.e2e.kotlin.registrationcodec.protobuf.ProtobufEchoReq
+import systems.zlink.e2e.kotlin.registrationcodec.protobuf.ProtobufEchoRes
 import com.sun.net.httpserver.HttpExchange
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
@@ -75,8 +77,14 @@ class RegistrationScenarioEndpoints(
             })
         }
         httpServer.createContext("/codec/protobuf") { exchange ->
-            exchange.writeJson(request(StringValue.of("protobuf-request"), StringValue::class.java).thenApply { reply ->
-                client.sendToChannel(Contracts.CHANNEL, StringValue.of("protobuf-send")).submit()
+            exchange.writeJson(request(
+                ProtobufEchoReq.newBuilder().setValue("protobuf-request").build(),
+                ProtobufEchoRes::class.java,
+            ).thenApply { reply ->
+                client.sendToChannel(
+                    Contracts.CHANNEL,
+                    ProtobufEchoMsg.newBuilder().setValue("protobuf-send").build(),
+                ).submit()
                 mapOf("value" to reply.value)
             })
         }
@@ -89,7 +97,10 @@ class RegistrationScenarioEndpoints(
         httpServer.createContext("/codec/roundtrip") { exchange ->
             val response = request(JsonEchoReq("json-request"), JsonEchoRes::class.java)
                 .thenCompose { jsonReply ->
-                    request(StringValue.of("protobuf-request"), StringValue::class.java)
+                    request(
+                        ProtobufEchoReq.newBuilder().setValue("protobuf-request").build(),
+                        ProtobufEchoRes::class.java,
+                    )
                         .thenApply { protobufReply -> jsonReply to protobufReply }
                 }
                 .thenCompose { (jsonReply, protobufReply) ->

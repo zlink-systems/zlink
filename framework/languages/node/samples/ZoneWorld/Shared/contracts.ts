@@ -41,6 +41,9 @@ class ActorLocationProbeRes {
 class MessageFollowProbeReq {
   constructor(readonly actorId: string, readonly probeId: string, readonly payload: string) {}
 }
+class MessageFollowProbeMsg {
+  constructor(readonly actorId: string, readonly probeId: string, readonly payload: string) {}
+}
 class MessageFollowProbeRes {
   constructor(readonly probeId: string, readonly payload: string, readonly error: string | null = null) {}
 }
@@ -131,7 +134,7 @@ class ReportNodeStatusMsg {
 class ZoneBorderEvent {
   constructor(readonly fromZoneId: string, readonly toZoneId: string, readonly tick: number, readonly players: PlayerView[]) {}
 }
-class EnterZoneMsg {
+class EnterZoneReq {
   constructor(
     readonly playerId: string,
     readonly x: number,
@@ -147,6 +150,7 @@ class EnterZoneRes {
 const PacketNames = {
   actorLocationProbeReq: 'ActorLocationProbeReq', actorLocationProbeRes: 'ActorLocationProbeRes',
   messageFollowProbeReq: 'MessageFollowProbeReq', messageFollowProbeRes: 'MessageFollowProbeRes',
+  messageFollowProbeMsg: 'MessageFollowProbeMsg',
   joinWorldReq: 'JoinWorldReq', joinWorldRes: 'JoinWorldRes', moveMsg: 'MoveMsg', zoneStateNotify: 'ZoneStateNotify',
   zoneChangedNotify: 'ZoneChangedNotify', worldAnnounceNotify: 'WorldAnnounceNotify',
   moveRejectedNotify: 'MoveRejectedNotify', watchNodesReq: 'WatchNodesReq', watchNodesRes: 'WatchNodesRes',
@@ -161,15 +165,15 @@ const PacketNames = {
   applyNodeMaintenanceReq: 'ApplyNodeMaintenanceReq', applyNodeMaintenanceRes: 'ApplyNodeMaintenanceRes',
   getNodeDiagnosticsReq: 'GetNodeDiagnosticsReq', getNodeDiagnosticsRes: 'GetNodeDiagnosticsRes',
   reportSpotEventMsg: 'ReportSpotEventMsg', reportNodeStatusMsg: 'ReportNodeStatusMsg',
-  zoneBorderEvent: 'ZoneBorderEvent', enterZoneMsg: 'EnterZoneMsg', enterZoneRes: 'EnterZoneRes'
+  zoneBorderEvent: 'ZoneBorderEvent', enterZoneReq: 'EnterZoneReq', enterZoneRes: 'EnterZoneRes'
 } as const;
 
 export {
   ActorLocationProbeReq, ActorLocationProbeRes,
   AnnounceWorldReq, AnnounceWorldRes, ApplyNodeMaintenanceReq, ApplyNodeMaintenanceRes, BotTickMsg,
   DeliverAnnounceMsg, PlayerActorCreateReq, EnterWorldReq, EnterWorldRes,
-  EnterZoneMsg, EnterZoneRes, GetNodeDiagnosticsReq, GetNodeDiagnosticsRes, JoinWorldReq, JoinWorldRes,
-  MessageFollowProbeReq, MessageFollowProbeRes,
+  EnterZoneReq, EnterZoneRes, GetNodeDiagnosticsReq, GetNodeDiagnosticsRes, JoinWorldReq, JoinWorldRes,
+  MessageFollowProbeMsg, MessageFollowProbeReq, MessageFollowProbeRes,
   MoveMsg, MoveRejectedNotify, NodeAlertNotify, NodeDiagnosticsReq, NodeDiagnosticsRes,
   NodeMaintenanceChangedEvent, NodeStatusNotify, PacketNames, ReportNodeStatusMsg, ReportSpotEventMsg,
   SetMaintenanceReq, SetMaintenanceRes, WatchNodesReq, WatchNodesRes, WorldAnnounceEvent,

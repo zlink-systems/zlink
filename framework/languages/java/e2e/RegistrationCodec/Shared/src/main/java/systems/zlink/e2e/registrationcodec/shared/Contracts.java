@@ -11,31 +11,31 @@ public final class Contracts {
     private Contracts() {
     }
 
-    @ZLinkPacket("EchoAuto")
+    @ZLinkPacket("EchoAutoReq")
     public record EchoAutoReq(String value) {
     }
 
-    @ZLinkPacket("EchoAuto")
+    @ZLinkPacket("EchoAutoMsg")
     public record EchoAutoMsg(String value) {
     }
 
-    @ZLinkPacket("EchoAttr")
+    @ZLinkPacket("EchoAttrReq")
     public record EchoAttrReq(String value) {
     }
 
-    @ZLinkPacket("EchoAttr")
+    @ZLinkPacket("EchoAttrMsg")
     public record EchoAttrMsg(String value) {
     }
 
-    @ZLinkPacket("EchoManual")
+    @ZLinkPacket("EchoManualReq")
     public record EchoManualReq(String value) {
     }
 
-    @ZLinkPacket("EchoManual")
+    @ZLinkPacket("EchoManualMsg")
     public record EchoManualMsg(String value) {
     }
 
-    @ZLinkPacket("DiLifecycle")
+    @ZLinkPacket("DiLifecycleReq")
     public record DiLifecycleReq(String value) {
     }
 
@@ -46,15 +46,15 @@ public final class Contracts {
         int disposedCount) {
     }
 
-    @ZLinkPacket("JsonEcho")
+    @ZLinkPacket("JsonEchoReq")
     public record JsonEchoReq(String value) {
     }
 
-    @ZLinkPacket("JsonEcho")
+    @ZLinkPacket("JsonEchoMsg")
     public record JsonEchoMsg(String value) {
     }
 
-    @ZLinkPacket("JsonGolden")
+    @ZLinkPacket("JsonGoldenReq")
     public record JsonGoldenReq(String value) {
     }
 
@@ -69,14 +69,14 @@ public final class Contracts {
         String contentType) {
     }
 
-    @ZLinkPacket("MsgpackEcho")
+    @ZLinkPacket("PackedEchoReq")
     public record PackedEchoReq(String value) {
     }
 
     public record PackedEchoRes(String value) {
     }
 
-    @ZLinkPacket("MsgpackEcho")
+    @ZLinkPacket("PackedEchoMsg")
     public record PackedEchoMsg(String value) {
     }
 

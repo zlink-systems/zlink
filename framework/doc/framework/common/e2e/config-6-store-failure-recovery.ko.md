@@ -169,7 +169,7 @@ Provider가 descriptor를 지우지 못하고 종료되어도 owner lease가 만
   follow-up requests를 보낸다.
 - 검증: B는 신규 target에서 빠지고 이미 accepted work만 bounded하게 끝낸다. Shutdown terminal 뒤 A가 모든
   follow-up request를 처리한다.
-- 세부 동작: [Host maintenance §10](../spec/28-graceful-drain-handoff.ko.md)을 검증한다.
+- 세부 동작: [Host maintenance §10](../spec/30-host-relocation-flow.ko.md)을 검증한다.
 
 #### SF-C3 이전 owner lifecycle이 replacement를 바꾸지 못한다
 
@@ -422,7 +422,7 @@ Framework는 participant별 encoded state가 64 MiB 이하일 때 payload를 보
   oversize fixture는 maximum을 넘긴다.
 - 검증: 64 MiB state는 target에서 checksum·logical length가 같고 request를 처리한다. 한 byte 초과
   operation은 source authority를 유지한 채 `Blocked/StateIncompatible` terminal 하나로 끝난다.
-- 세부 동작: [Relocation unit과 실행량 제한](../spec/28-graceful-drain-handoff.ko.md#7-relocation-unit과-실행량-제한)을 검증한다.
+- 세부 동작: [Relocation unit과 실행량 제한](../spec/30-host-relocation-flow.ko.md#7-relocation-unit과-실행량-제한)을 검증한다.
 
 #### SF-F8 Target owner lease가 만료되면 source를 유지한다
 
@@ -472,7 +472,7 @@ Accepted request가 많은 object를 이동해도 각 request의 reply와 reloca
   뒤 follow-up request를 보낸다.
 - 검증: 각 accepted request는 reply, timeout 또는 relocation failure 중 하나로 한 번 끝난다. Relocate
   terminal도 하나이며 follow-up은 current target에서 한 번 처리된다.
-- 세부 동작: [Host maintenance §7](../spec/28-graceful-drain-handoff.ko.md)을
+- 세부 동작: [Host maintenance §7](../spec/30-host-relocation-flow.ko.md)을
   검증한다.
 
 #### SF-F11 Waiter 종료와 response loss 뒤 payload 값을 보존한다

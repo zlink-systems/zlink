@@ -1,6 +1,5 @@
-package Support;
+package systems.zlink.e2e.pubsub.client.Support;
 
-import systems.zlink.e2e.pubsub.client.Support;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;

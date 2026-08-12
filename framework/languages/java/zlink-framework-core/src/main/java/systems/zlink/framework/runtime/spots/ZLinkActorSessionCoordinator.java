@@ -305,6 +305,58 @@ final class ZLinkActorSessionCoordinator {
             .thenCompose(ignored -> result);
     }
 
+    CompletionStage<Optional<LocalActorReply>> dispatchMessageFollow(
+        ZLinkBackendActorRef actorRef,
+        ZLinkStreamHeader header,
+        Message payload,
+        byte[] acceptedJournalRecord,
+        Function<LocalDispatch,
+            CompletionStage<Optional<LocalActorReply>>> localDispatch) {
+        ZLinkActorAcceptedJournal.Record accepted =
+            ZLinkActorAcceptedJournal.decode(acceptedJournalRecord);
+        boolean request = header.requestSequence().isPresent();
+        if (!accepted.actorId().equals(actorRef.actorId())
+            || accepted.objectGeneration() != actorRef.generation()
+            || !accepted.header().packetName().equals(header.packetName())
+            || !accepted.header().requestSequence().equals(
+                header.requestSequence())
+            || accepted.header().codec() != header.codec()
+            || !accepted.header().metadata().equals(header.metadata())
+            || request != accepted.replyRouteId().isPresent()
+            || !Arrays.equals(accepted.payload(), payload.toByteArray())) {
+            return CompletableFuture.failedFuture(
+                new ZLinkConfigurationException(
+                    "Message Follow record does not match its original operation"));
+        }
+        ZLinkActorRuntime runtime = requireActors();
+        Optional<ZLinkActor> localActor = runtime.localActor(actorRef.actorId());
+        if (localActor.isEmpty()
+            || !runtime.currentRef(localActor.orElseThrow()).equals(actorRef)) {
+            return CompletableFuture.failedFuture(
+                new ZLinkConfigurationException(
+                    "Message Follow target actor is not current: "
+                        + actorRef.actorId()));
+        }
+        ZLinkActor actor = localActor.orElseThrow();
+        if (!runtime.claimAcceptedHandoffOperation(
+            actor,
+            accepted.operationHigh(),
+            accepted.operationLow())) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+        Optional<String> joinedSpotId = runtime.spotId(actor);
+        CompletableFuture<Optional<LocalActorReply>> result =
+            new CompletableFuture<>();
+        return runtime.submitActorDispatch(
+                actor.context().actorId(),
+                acceptedJournalRecord,
+                () -> invokeLocalDispatch(
+                    localDispatch,
+                    new LocalDispatch(actor, joinedSpotId),
+                    result))
+            .thenCompose(ignored -> result);
+    }
+
     private CompletionStage<Optional<LocalActorReply>> dispatchLocalSession(
         ZLinkBackendActorRef actorRef,
         long acceptedSessionSequence,
@@ -425,7 +477,7 @@ final class ZLinkActorSessionCoordinator {
                 actor,
                 headerPart.sourceNodeRid(),
                 headerPart.sourceSessionRid())) {
-            runtime.bindNativeSession(
+            bindNativeSession(
                 actor,
                 primaryNode,
                 headerPart.actor(),
@@ -469,12 +521,23 @@ final class ZLinkActorSessionCoordinator {
         ZLinkBackendActorRef actorRef,
         RoutingId sourceNodeRid,
         RoutingId sourceSessionRid) {
+        ZLinkInternalSpotNode.BoundSessionRoute route = node
+            .boundSessionRoute(actorRef)
+            .filter(candidate ->
+                candidate.sessionOwnerNodeRid().equals(sourceNodeRid)
+                    && candidate.sessionRid().equals(sourceSessionRid)
+                    && candidate.bindingGeneration() > 0)
+            .orElseThrow(() -> new ZLinkConfigurationException(
+                "bound Session runtime route is unavailable or stale: "
+                    + actorRef.actorId()));
         requireActors().bindNativeSession(
             actor,
             node,
             actorRef,
             sourceNodeRid,
-            sourceSessionRid);
+            sourceSessionRid,
+            route.bindingGeneration(),
+            route.lastAcceptedSessionSequence());
     }
 
     boolean isJoinedTo(

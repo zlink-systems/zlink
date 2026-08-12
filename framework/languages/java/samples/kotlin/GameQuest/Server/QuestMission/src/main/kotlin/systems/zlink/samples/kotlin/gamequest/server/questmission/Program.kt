@@ -43,7 +43,7 @@ import systems.zlink.samples.kotlin.gamequest.shared.contracts.GetQuestProgressR
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.QuestCompletedEvent
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.QuestCompletedNotify
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.QuestIds
-import systems.zlink.samples.kotlin.gamequest.shared.contracts.QuestProcessingRes
+import systems.zlink.samples.kotlin.gamequest.shared.contracts.QuestProcessingMsg
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.QuestProgress
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.QuestProgressNotify
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.QuestProgressReconciledEvent
@@ -176,7 +176,7 @@ class PlayerQuestSpot(
         }
     }
 
-    fun apply(request: GameplayMsg): QuestProcessingRes {
+    fun apply(request: GameplayMsg): QuestProcessingMsg {
         requirePlayer(request.playerId)
         return store.apply(request)
     }
@@ -263,11 +263,11 @@ class QuestStore(topology: SampleTopology) : AutoCloseable {
     private val loadedPlayers = mutableSetOf<String>()
 
     @Synchronized
-    fun apply(event: GameplayMsg): QuestProcessingRes {
+    fun apply(event: GameplayMsg): QuestProcessingMsg {
         restorePlayer(event.playerId)
         val key = "${event.playerId}:${event.decodePayload().idempotencyKey}"
         eventIdsByIdempotency[key]?.let {
-            return QuestProcessingRes(
+            return QuestProcessingMsg(
                 it,
                 event.playerId,
                 copyProjection(event.playerId),
@@ -282,7 +282,7 @@ class QuestStore(topology: SampleTopology) : AutoCloseable {
         events += decision.storedEvents
         shared.writeProjection(event.playerId, decision.projection)
         shared.appendQuestEvents(decision.storedEvents)
-        return QuestProcessingRes(
+        return QuestProcessingMsg(
             event.eventId,
             event.playerId,
             copyProjection(event.playerId),

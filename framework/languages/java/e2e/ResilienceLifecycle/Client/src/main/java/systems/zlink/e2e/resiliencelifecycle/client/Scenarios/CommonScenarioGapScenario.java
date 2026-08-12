@@ -1,6 +1,4 @@
-package Scenarios;
-import systems.zlink.e2e.resiliencelifecycle.client.Scenarios;
-import systems.zlink.e2e.resiliencelifecycle.client.Support;
+package systems.zlink.e2e.resiliencelifecycle.client.Scenarios;
 import java.util.ArrayList;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -16,7 +14,7 @@ import systems.zlink.e2e.resiliencelifecycle.shared.Contracts;
 public final class CommonScenarioGapScenario {
     private static final List<String> SCENARIOS = List.of(
         "RL-E1", "RL-E2", "RL-E3", "RL-E4", "RL-E5",
-        "RL-F1", "RL-F2", "RL-F3", "RL-F4", "RL-F5", "RL-F6", "RL-F7",
+        "RL-F1", "RL-F3", "RL-F5", "RL-F6", "RL-F7",
         "RL-F8", "RL-F9", "RL-F10", "RL-F11", "RL-F12", "RL-F13", "RL-F14");
 
     private CommonScenarioGapScenario() {

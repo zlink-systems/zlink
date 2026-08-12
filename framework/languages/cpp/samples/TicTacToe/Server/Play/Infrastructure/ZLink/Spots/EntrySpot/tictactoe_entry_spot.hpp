@@ -41,7 +41,7 @@ class tictactoe_entry_spot_t : public entry_spot_t<player_actor_t>
 
     task_t<void> join_game (player_actor_t &actor,
                             message_context_t &,
-                            const join_game_req_t &request);
+                            const join_game_msg_t &request);
 
     observe_milestone_res_t observe_milestone (const player_actor_t &actor,
                                                message_context_t &,
@@ -54,7 +54,8 @@ class tictactoe_entry_spot_t : public entry_spot_t<player_actor_t>
       player_actor_t &actor,
       const message_t &create_request) override
     {
-        actor.apply_player (create_request.decode<player_info_t> ());
+        actor.apply_player (
+          create_request.decode<player_actor_create_req_t> ().player);
         created_actor_ids.push_back (actor.actor_id);
         co_return actor_create_response_t::accept ();
     }

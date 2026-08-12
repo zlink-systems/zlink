@@ -181,6 +181,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
             targetActorRef,
             targetAddress,
             null,
+            null,
             duration,
             removal);
     }
@@ -190,16 +191,19 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         ZLinkBackendActorRef sourceActorRef,
         ZLinkBackendActorRef targetActorRef,
         SpotTransportAddress targetAddress,
+        ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute,
         ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute,
         Duration duration,
         Consumer<MessageFollowSource> removal) {
         requireOpen();
-        if (targetAddress != null && targetRoute == null) {
+        if (targetAddress != null
+            && (sourceRoute == null || targetRoute == null)) {
             throw new IllegalArgumentException(
-                "targetRoute is required when a Message Follow target address is set");
+                "exact source and target routes are required when a Message Follow target address is set");
         }
         MessageFollowSource source = new MessageFollowSource(
-            sourceActorRef, targetActorRef, targetAddress, targetRoute,
+            sourceActorRef, targetActorRef, targetAddress,
+            sourceRoute, targetRoute,
             messageFollowToken.incrementAndGet(), messageFollowSuppression);
         MessageFollowSource replaced = messageFollowSources.put(actorId, source);
         if (replaced != null) {
@@ -377,6 +381,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         private final ZLinkBackendActorRef sourceActorRef;
         private final ZLinkBackendActorRef targetActorRef;
         private final SpotTransportAddress targetAddress;
+        private final ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute;
         private final ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute;
         private final long token;
         private final ZLinkMessageFollowSuppressionRegistry suppression;
@@ -390,6 +395,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
             ZLinkBackendActorRef sourceActorRef,
             ZLinkBackendActorRef targetActorRef,
             SpotTransportAddress targetAddress,
+            ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute,
             ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute,
             long token,
             ZLinkMessageFollowSuppressionRegistry suppression) {
@@ -398,6 +404,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
             this.targetActorRef = Objects.requireNonNull(
                 targetActorRef, "targetActorRef");
             this.targetAddress = targetAddress;
+            this.sourceRoute = sourceRoute;
             this.targetRoute = targetRoute;
             this.token = token;
             this.suppression = Objects.requireNonNull(suppression, "suppression");
@@ -406,15 +413,25 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         ZLinkBackendActorRef sourceActorRef() { return sourceActorRef; }
         ZLinkBackendActorRef targetActorRef() { return targetActorRef; }
         SpotTransportAddress targetAddress() { return targetAddress; }
+        ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute() {
+            return sourceRoute;
+        }
         ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute() {
             return targetRoute;
         }
         long token() { return token; }
 
+        boolean matchesSourceRoute(
+            ZLinkServiceMessageFollowWireCodec.ActorRoute candidate) {
+            return sourceRoute != null && sourceRoute.equals(candidate);
+        }
+
         synchronized Optional<ZLinkMessageFollowSuppressionRegistry.Claim>
             beginMessageFollowNotice(
                 ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute) {
-            if (targetRoute == null || suppressionExpired) {
+            if (!matchesSourceRoute(sourceRoute)
+                || targetRoute == null
+                || suppressionExpired) {
                 return Optional.empty();
             }
             ZLinkMessageFollowSuppressionRegistry.Key key =

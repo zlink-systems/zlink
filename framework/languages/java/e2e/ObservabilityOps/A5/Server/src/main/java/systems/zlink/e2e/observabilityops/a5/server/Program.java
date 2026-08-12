@@ -96,8 +96,8 @@ public final class Program {
                 .listen(endpoint.getPort())
                 .addRequestHandler(
                 ProbeHandler.class,
-                Contracts.ProbeRequest.class,
-                Contracts.ProbeReply.class);
+                Contracts.ProbeReq.class,
+                Contracts.ProbeRes.class);
             channel.client().connect(config.routeEndpoint());
         };
     }

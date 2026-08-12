@@ -8,7 +8,7 @@ import {
   AuthenticatePlayerReq,
   AuthenticateReq,
   AuthenticateRes,
-  EnsurePlayerActorReq
+  PlayerActorCreateReq
 } from '../../../../Shared/Contracts/bingo-messages.generated';
 import { PacketNames } from '../../../../Shared/Contracts/messages';
 import {
@@ -59,7 +59,7 @@ class SessionAuthenticator {
     const ensured = await this.actors
       .getOrCreate(authenticated.actorId, SampleNames.playerActorType)
       .inMesh(SampleNames.roomSpotNode)
-      .request(new EnsurePlayerActorReq({
+      .request(new PlayerActorCreateReq({
         actorId: authenticated.actorId,
         displayName: authenticated.displayName
       }))

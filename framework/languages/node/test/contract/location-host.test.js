@@ -4,7 +4,36 @@ const test = require('node:test');
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
 const flowContext = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
+const { BoundedReplayMap } = require('../../packages/framework/dist/runtime/host/bounded-replay-map');
 const nestjs = require('../../packages/nestjs/dist');
+
+test('bounded terminal replay refreshes recency and evicts only the oldest record', () => {
+  assert.throws(() => new BoundedReplayMap(0), /positive safe integer/u);
+  assert.throws(() => new BoundedReplayMap(1.5), /positive safe integer/u);
+
+  const replay = new BoundedReplayMap(2);
+  replay.remember('first', { terminal: 'accepted-1' });
+  replay.remember('second', { terminal: 'accepted-2' });
+  replay.touch('first');
+  replay.remember('third', { terminal: 'accepted-3' });
+
+  assert.equal(replay.get('second'), undefined);
+  assert.deepEqual(
+    [...replay].map(([key, value]) => [key, value.terminal]),
+    [['first', 'accepted-1'], ['third', 'accepted-3']]
+  );
+
+  replay.remember('first', { terminal: 'accepted-1-replayed' });
+  replay.touch('missing');
+  assert.deepEqual(
+    [...replay].map(([key, value]) => [key, value.terminal]),
+    [['third', 'accepted-3'], ['first', 'accepted-1-replayed']]
+  );
+  assert.equal(replay.delete('missing'), false);
+  assert.equal(replay.delete('third'), true);
+  replay.clear();
+  assert.deepEqual([...replay], []);
+});
 
 test('framework and NestJS builders register separate location and relocation stores', async () => {
   const store = new framework.ZLinkInMemoryProviderLocationStore();
@@ -52,6 +81,71 @@ test('framework runtime host uses the explicit location store for Actor lifecycl
   assert.equal(typeof actorOptions.locationLifecycle, 'object');
   assert.equal(spotOptions.locationLifecycle, undefined);
   assert.equal(typeof spotOptions.spotRouteResolver?.resolve, 'function');
+});
+
+test('actor handoff source fence uses the Actor mesh node and rejects a cross-mesh RID', () => {
+  const host = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration()
+  });
+  const primaryStatus = {
+    routingId: rid('primary-node'),
+    lifecycleGeneration: 11n
+  };
+  const actorStatus = {
+    routingId: rid('mesh-b-node'),
+    lifecycleGeneration: 22n
+  };
+  const states = new Map([
+    ['actor-b', {
+      meshName: 'mesh-b',
+      nativeActorRef: {
+        actorId: 'actor-b',
+        nodeRid: rid('mesh-b-node'),
+        generation: 7n
+      },
+      locationGeneration: 13n,
+      ownerLeaseGeneration: 5n
+    }],
+    ['actor-mismatch', {
+      meshName: 'mesh-b',
+      nativeActorRef: {
+        actorId: 'actor-mismatch',
+        nodeRid: rid('primary-node'),
+        generation: 8n
+      },
+      locationGeneration: 14n,
+      ownerLeaseGeneration: 5n
+    }]
+  ]);
+  host.locationOwner = {
+    currentRuntime: {
+      currentOwnerToken: { ownerId: 'owner-b', leaseGeneration: 5n }
+    }
+  };
+  host.spotNodeRuntime = {
+    primaryMeshNode: { status: () => primaryStatus },
+    meshNode(meshName) {
+      return meshName === 'mesh-b' ? { status: () => actorStatus } : undefined;
+    }
+  };
+  host.actorManager = { getState: actorId => states.get(actorId) };
+
+  host.actorHandoff.begin('actor-b', 7n);
+  assert.deepEqual(host.actorHandoff.activeSourceOwner('actor-b'), {
+    ownerId: 'owner-b',
+    ownerLeaseGeneration: '5',
+    nodeRid: 'mesh-b-node',
+    nodeRidHex: Buffer.from('mesh-b-node').toString('hex'),
+    nodeGeneration: '22',
+    authorityOwnerGeneration: '13'
+  });
+  host.actorHandoff.cancel('actor-b');
+
+  assert.throws(
+    () => host.actorHandoff.begin('actor-mismatch', 8n),
+    /committed source owner fence/u
+  );
+  assert.equal(host.actorHandoff.isActive('actor-mismatch'), false);
 });
 
 test('framework host republishes the current lifecycle state after owner lease recovery', async () => {

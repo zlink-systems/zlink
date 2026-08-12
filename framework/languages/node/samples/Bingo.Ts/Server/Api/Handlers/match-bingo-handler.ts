@@ -1,7 +1,11 @@
 import { Inject } from '@nestjs/common';
 import { ZLINK_SPOT_MANAGER, ZLINK_SPOT_OUTBOUND, zlinkRequestHandler } from '@zlink-systems/nestjs';
 import { PacketNames } from '../../../Shared/Contracts/messages';
-import { MatchBingoApiRes, ReserveBingoRoomReq } from '../../../Shared/Contracts/bingo-messages.generated';
+import {
+  BingoRoomCreateReq,
+  MatchBingoApiRes,
+  ReserveBingoRoomReq
+} from '../../../Shared/Contracts/bingo-messages.generated';
 import { SampleNames } from '../../Configuration/sample-names';
 import type {
   ZLinkSpotManager,
@@ -34,7 +38,7 @@ class MatchBingoHandler implements ZLinkRequestHandler<MatchBingoApiReq, MatchBi
     await this.spots
       .getOrCreate(allocated.roomId, SampleNames.roomSpotType)
       .inMesh(SampleNames.playMeshName)
-      .request(allocated.settings)
+      .request(new BingoRoomCreateReq({ settings: allocated.settings }))
       .submit();
     return new MatchBingoApiRes({ roomId: allocated.roomId });
   }

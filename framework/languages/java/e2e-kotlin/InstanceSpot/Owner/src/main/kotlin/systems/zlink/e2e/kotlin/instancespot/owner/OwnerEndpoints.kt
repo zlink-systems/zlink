@@ -27,10 +27,10 @@ class OwnerEndpoints(
         }
         http.createContext("/evidence") { exchange -> HttpSupport.write(exchange, json, evidence.snapshot()) }
         http.createContext("/evidence/wait") { exchange ->
-            HttpSupport.write(exchange, json, evidence.waitFor(HttpSupport.read(exchange, json, Contracts.EvidenceWaitRequest::class.java)))
+            HttpSupport.write(exchange, json, evidence.waitFor(HttpSupport.read(exchange, json, Contracts.EvidenceWaitReq::class.java)))
         }
         http.createContext("/gate") { exchange ->
-            val request = HttpSupport.read(exchange, json, Contracts.GateRequest::class.java)
+            val request = HttpSupport.read(exchange, json, Contracts.GateReq::class.java)
             gates.set(request.gateId, request.open)
             HttpSupport.write(exchange, json, request)
         }

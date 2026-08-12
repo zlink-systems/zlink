@@ -10,7 +10,7 @@ import {
   waitFor
 } from '../Support/relocation-fixture';
 
-interface ObjectReply {
+interface ObjectRes {
   readonly spotId: string;
   readonly operationId: string;
   readonly payload: string;
@@ -65,8 +65,8 @@ async function request(
   spotId: string,
   operationId: string,
   payload: string
-): Promise<ObjectReply> {
-  return await postJson<ObjectReply>(options.consumerUrl, '/object/request', {
+): Promise<ObjectRes> {
+  return await postJson<ObjectRes>(options.consumerUrl, '/object/request', {
     spotId,
     operationId,
     payload

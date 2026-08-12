@@ -82,9 +82,9 @@ public final class Program {
             waitUntilReady(callerUrl, "TA-A4-ready", actorRef.actorId());
             ZLinkStreamConnector connector = connectAndBind(sessionAStream, actorRef);
             assertBoundPush(connector, actorUrl, "TA-A4-before-disconnect", "ta-a4", "BeforeDisconnect");
-            Contracts.UnbindActorReply unbound = ToActorHttpClient.postJson(
-                actorUrl + "/unbind", new Contracts.UnbindActorRequest("TA-A4-unbind", "ta-a4"),
-                Contracts.UnbindActorReply.class);
+            Contracts.UnbindActorRes unbound = ToActorHttpClient.postJson(
+                actorUrl + "/unbind", new Contracts.UnbindActorReq("TA-A4-unbind", "ta-a4"),
+                Contracts.UnbindActorRes.class);
             require(unbound.unbound(), "TA-A4 unbind was not acknowledged");
             assertSessionEvidence(sessionAUrl, "ta-a4", "actor-bound", "TA-A4 bind evidence missing");
             assertBoundPushFailure(actorUrl, "TA-A4-after-disconnect-push", "ta-a4", "AfterDisconnect",
@@ -92,9 +92,9 @@ public final class Program {
             assertCall(callerUrl, "TA-A4-disconnected-send", "ta-a4", "a4-send", "sent", true);
             assertCall(callerUrl, "TA-A4-disconnected-request", "ta-a4", "a4-request", "reply:a4-request", false);
             close(connector);
-            Contracts.DestroyActorReply destroyed = ToActorHttpClient.postJson(
-                actorUrl + "/destroy", new Contracts.DestroyActorRequest("TA-A4-destroy", "ta-a4"),
-                Contracts.DestroyActorReply.class);
+            Contracts.DestroyActorRes destroyed = ToActorHttpClient.postJson(
+                actorUrl + "/destroy", new Contracts.DestroyActorReq("TA-A4-destroy", "ta-a4"),
+                Contracts.DestroyActorRes.class);
             require(destroyed.destroyed(), "TA-A4 destroy was not acknowledged");
             waitUntilMissing(callerUrl, "TA-A4-destroyed", "ta-a4");
         }
@@ -108,10 +108,10 @@ public final class Program {
             Contracts.ActorRefWire first = ensureRef(actorUrl, "TA-B2-first", "actor-recreated");
             waitUntilReady(callerUrl, "TA-B2-first-ready", first.actorId());
 
-            Contracts.DestroyActorRefReply firstDestroyed = ToActorHttpClient.postJson(
+            Contracts.DestroyActorRefRes firstDestroyed = ToActorHttpClient.postJson(
                 actorUrl + "/destroy-ref",
-                new Contracts.DestroyActorRefRequest("TA-B2-first-destroy", first),
-                Contracts.DestroyActorRefReply.class);
+                new Contracts.DestroyActorRefReq("TA-B2-first-destroy", first),
+                Contracts.DestroyActorRefRes.class);
             require(firstDestroyed.destroyed() && firstDestroyed.errorKind() == null,
                 "TA-B2 first exact destroy was not acknowledged: " + firstDestroyed.errorKind());
             waitUntilMissing(callerUrl, "TA-B2-first-missing", first.actorId());
@@ -124,10 +124,10 @@ public final class Program {
             assertCall(callerUrl, "TA-B2-request", second.actorId(), "recreated-request",
                 "reply:recreated-request", false);
 
-            Contracts.DestroyActorRefReply staleDestroy = ToActorHttpClient.postJson(
+            Contracts.DestroyActorRefRes staleDestroy = ToActorHttpClient.postJson(
                 actorUrl + "/destroy-ref",
-                new Contracts.DestroyActorRefRequest("TA-B2-stale-destroy", first),
-                Contracts.DestroyActorRefReply.class);
+                new Contracts.DestroyActorRefReq("TA-B2-stale-destroy", first),
+                Contracts.DestroyActorRefRes.class);
             require(!staleDestroy.destroyed(), "TA-B2 stale ActorRef destroyed the new actor");
             require("INVALID_OPERATION".equals(staleDestroy.errorKind()),
                 "TA-B2 stale ActorRef expected INVALID_OPERATION, got " + staleDestroy.errorKind());
@@ -178,8 +178,8 @@ public final class Program {
             null));
         try {
             connector.connect().submit().toCompletableFuture().join();
-            Contracts.BindActorReply reply = connector.request(new Contracts.BindActorRequest(actorRef))
-                .submit(Contracts.BindActorReply.class).toCompletableFuture().join();
+            Contracts.BindActorRes reply = connector.request(new Contracts.BindActorReq(actorRef))
+                .submit(Contracts.BindActorRes.class).toCompletableFuture().join();
             require(actorRef.actorId().equals(reply.actorId()), "bound actor id mismatch");
             require(actorRef.generation() == reply.generation(), "bound actor generation mismatch");
             return connector;
@@ -198,9 +198,9 @@ public final class Program {
         var waiting = connector.waitFor(Contracts.BoundPushNotify.class)
             .timeout(Duration.ofSeconds(8))
             .submit(Contracts.BoundPushNotify.class);
-        Contracts.BoundPushReply reply = ToActorHttpClient.postJson(
-            actorUrl + "/push", new Contracts.BoundPushRequest(scenario, actorId, value),
-            Contracts.BoundPushReply.class);
+        Contracts.BoundPushRes reply = ToActorHttpClient.postJson(
+            actorUrl + "/push", new Contracts.BoundPushReq(scenario, actorId, value),
+            Contracts.BoundPushRes.class);
         require(reply.submitted(), scenario + " push failed " + reply.errorKind());
         Contracts.BoundPushNotify notify = waiting.toCompletableFuture().join().payload();
         require(actorId.equals(notify.actorId()), scenario + " push actor mismatch");
@@ -213,9 +213,9 @@ public final class Program {
         String actorId,
         String value,
         String expectedKind) {
-        Contracts.BoundPushReply reply = ToActorHttpClient.postJson(
-            actorUrl + "/push", new Contracts.BoundPushRequest(scenario, actorId, value),
-            Contracts.BoundPushReply.class);
+        Contracts.BoundPushRes reply = ToActorHttpClient.postJson(
+            actorUrl + "/push", new Contracts.BoundPushReq(scenario, actorId, value),
+            Contracts.BoundPushRes.class);
         require(!reply.submitted(), scenario + " push unexpectedly succeeded");
         require(expectedKind.equals(reply.errorKind()),
             scenario + " expected " + expectedKind + " got " + reply.errorKind());
@@ -254,14 +254,14 @@ public final class Program {
     private static void ensure(String actorUrl, String scenario, String actorId) {
         ToActorHttpClient.postJson(
             actorUrl + "/ensure",
-            new Contracts.ActorCallRequest(scenario, actorId, "ensure"),
-            Contracts.ActorCallResponse.class);
+            new Contracts.ActorCallReq(scenario, actorId, "ensure"),
+            Contracts.ActorCallRes.class);
     }
 
     private static Contracts.ActorRefWire ensureRef(String actorUrl, String scenario, String actorId) {
         return ToActorHttpClient.postJson(
             actorUrl + "/ensure-ref",
-            new Contracts.ActorCallRequest(scenario, actorId, "ensure"),
+            new Contracts.ActorCallReq(scenario, actorId, "ensure"),
             Contracts.ActorRefWire.class);
     }
 
@@ -272,7 +272,7 @@ public final class Program {
 
     private static void waitUntilReady(String callerUrl, String scenario, String actorId) {
         long deadline = System.nanoTime() + 5_000_000_000L;
-        Contracts.ActorCallResponse response = null;
+        Contracts.ActorCallRes response = null;
         while (System.nanoTime() < deadline) {
             response = call(callerUrl, scenario, actorId, "ready", false);
             if (response.errorKind() == null && "reply:ready".equals(response.result())) {
@@ -289,7 +289,7 @@ public final class Program {
 
     private static void waitUntilMissing(String callerUrl, String scenario, String actorId) {
         long deadline = System.nanoTime() + 8_000_000_000L;
-        Contracts.ActorCallResponse response = null;
+        Contracts.ActorCallRes response = null;
         while (System.nanoTime() < deadline) {
             response = call(callerUrl, scenario, actorId, "after-destroy", false);
             if ("NOT_FOUND".equals(response.errorKind())) {
@@ -314,9 +314,9 @@ public final class Program {
 
     private static void waitForRoute(String callerUrl, String scenario, boolean expectedReady) {
         long deadline = System.nanoTime() + 20_000_000_000L;
-        Contracts.RouteStatus status = null;
+        Contracts.RouteStatusRes status = null;
         while (System.nanoTime() < deadline) {
-            status = ToActorHttpClient.getJson(callerUrl + "/route-status", Contracts.RouteStatus.class);
+            status = ToActorHttpClient.getJson(callerUrl + "/route-status", Contracts.RouteStatusRes.class);
             if (status.ready() == expectedReady) {
                 return;
             }
@@ -346,7 +346,7 @@ public final class Program {
         String value,
         String expected,
         boolean send) {
-        Contracts.ActorCallResponse response = call(callerUrl, scenario, actorId, value, send);
+        Contracts.ActorCallRes response = call(callerUrl, scenario, actorId, value, send);
         require(response.errorKind() == null, scenario + " unexpected error " + response.errorKind());
         require(expected.equals(response.result()), scenario + " expected " + expected + " got " + response.result());
     }
@@ -358,15 +358,15 @@ public final class Program {
         String expectedKind,
         boolean send) {
         String endpoint = send ? "/send" : "/request";
-        Contracts.ActorCallResponse response = ToActorHttpClient.postJson(
+        Contracts.ActorCallRes response = ToActorHttpClient.postJson(
             callerUrl + endpoint,
-            new Contracts.ActorCallRequest(scenario, actorId, "missing"),
-            Contracts.ActorCallResponse.class);
+            new Contracts.ActorCallReq(scenario, actorId, "missing"),
+            Contracts.ActorCallRes.class);
         require(expectedKind.equals(response.errorKind()),
             scenario + " expected " + expectedKind + " got " + response.errorKind());
     }
 
-    private static Contracts.ActorCallResponse call(
+    private static Contracts.ActorCallRes call(
         String callerUrl,
         String scenario,
         String actorId,
@@ -375,8 +375,8 @@ public final class Program {
         String endpoint = send ? "/send" : "/request";
         return ToActorHttpClient.postJson(
             callerUrl + endpoint,
-            new Contracts.ActorCallRequest(scenario, actorId, value),
-            Contracts.ActorCallResponse.class);
+            new Contracts.ActorCallReq(scenario, actorId, value),
+            Contracts.ActorCallRes.class);
     }
 
     private static void assertActorEvidence(String actorUrl, String actorBUrl, String selector) {

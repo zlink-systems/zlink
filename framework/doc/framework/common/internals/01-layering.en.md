@@ -10,7 +10,7 @@ title: "1. Layer Boundary And Identifier"
 > into, and which value must not be merged into one.
 >
 > **Contract ownership** — the shutdown procedure and order is owned
-> by [Host Relocate And Shutdown](../spec/28-graceful-drain-handoff.en.md),
+> by [Complete Host Relocation Flow](../spec/30-host-relocation-flow.en.md),
 > and the identifier's format and lifetime is owned by the
 > [glossary](../spec/01-glossary.en.md).
 > This chapter covers the **structure** that satisfies that contract and
@@ -234,23 +234,23 @@ into one makes even an urgent shutdown wait for a move to finish.
 already confirmed; if the conditions differ, reject.** If the mode or
 target version matches, join the in-progress procedure. If different,
 don't wait — end with `Blocked/OperationInProgress`
-([Host Relocate And Shutdown 「6. Concurrent Calls And
-Cancellation」](../spec/28-graceful-drain-handoff.en.md#6-concurrent-calls-and-cancellation)).
+([Complete Host Relocation Flow 「6. Concurrent Calls And
+Cancellation」](../spec/30-host-relocation-flow.en.md#6-concurrent-calls-and-cancellation)).
 If two procedures of the same kind run overlapped with different
 conditions, which result is final can't be decided.
 
 **A Relocate and Shutdown overlap is handled differently.** Here it's
 not a rejection — shutdown wins, and the side waiting for relocation
 ends with `Blocked/ShutdownRequested`
-([Host Relocate And Shutdown 「11. The Race Between Shutdown And
-Relocate」](../spec/28-graceful-drain-handoff.en.md#11-the-race-between-shutdown-and-relocate)).
+([Complete Host Relocation Flow 「11. The Race Between Shutdown And
+Relocate」](../spec/30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate)).
 Since shutdown cleans up everything of this host anyway, there's no
 reason to finish the relocation.
 
 **Decision — a shutdown-after-relocation checks the whole host at once
 before changing state**
-([Host Relocate And Shutdown 「4. Conditions Checked Before Selecting A
-Target」](../spec/28-graceful-drain-handoff.en.md#4-conditions-checked-before-selecting-a-target)).
+([Complete Host Relocation Flow 「4. Conditions Checked Before Selecting A
+Target」](../spec/30-host-relocation-flow.en.md#4-conditions-checked-before-selecting-a-target)).
 If new work is blocked before this check, that node would have been
 stopped for no reason once it learns it can't move
 ([5. Message Continuity During A Move 「1. The Four
@@ -259,26 +259,26 @@ Boundaries」](05-relocation-continuity.en.md#1-four-boundaries)).
 It doesn't immediately reject just because there's no node to receive
 it right now. **After waiting for target information to spread up to
 a set time,** it ends with `Blocked/TargetUnavailable`
-([Host Relocate And Shutdown 「5.1 When There's No Target
-Yet」](../spec/28-graceful-drain-handoff.en.md#51-when-theres-no-target-yet)).
+([Complete Host Relocation Flow 「5.1 When There's No Target
+Yet」](../spec/30-host-relocation-flow.en.md#51-when-theres-no-target-yet)).
 Since the rejected result isn't stored, requesting again checks from
 the start
-([Host Relocate And Shutdown 「6. Concurrent Calls And
-Cancellation」](../spec/28-graceful-drain-handoff.en.md#6-concurrent-calls-and-cancellation)).
+([Complete Host Relocation Flow 「6. Concurrent Calls And
+Cancellation」](../spec/30-host-relocation-flow.en.md#6-concurrent-calls-and-cancellation)).
 
 If there's **not a single** target to move, it succeeds even with no
 node to receive it. Here too, the host state transition and new work
 blocking is the same as any other relocation
-([Host Relocate And Shutdown 「5.1 When There's No Target
-Yet」](../spec/28-graceful-drain-handoff.en.md#51-when-theres-no-target-yet)).
+([Complete Host Relocation Flow 「5.1 When There's No Target
+Yet」](../spec/30-host-relocation-flow.en.md#51-when-theres-no-target-yet)).
 
 **Decision — failure handling differs before and after confirmation,
 but neither ends the host.** A failure before the first relocation is
 confirmed returns to the original state. A failure after confirmation
 **leaves what's already moved on the receiving node**, reprocesses
 only the not-yet-moved work, and **returns to `Serving`**
-([Host Relocate And Shutdown 「10. Relocate Completion And
-Failure」](../spec/28-graceful-drain-handoff.en.md#10-relocate-completion-and-failure)).
+([Complete Host Relocation Flow 「10. Relocate Completion And
+Failure」](../spec/30-host-relocation-flow.en.md#10-relocate-completion-and-failure)).
 Shutdown only happens if the caller separately requests it.
 
 **Decision — an observation subscriber can't hold up shutdown
@@ -364,8 +364,8 @@ flowchart TB
 **Step 4 coming before step 5 is the key.** The callback receiving the
 shutdown reason must run while that object's membership and local
 instance are still valid
-([Host Relocate And Shutdown 「11. The Race Between Shutdown And
-Relocate」](../spec/28-graceful-drain-handoff.en.md#11-the-race-between-shutdown-and-relocate)).
+([Complete Host Relocation Flow 「11. The Race Between Shutdown And
+Relocate」](../spec/30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate)).
 If the timer and session are stopped first, what the callback needs is
 already gone.
 

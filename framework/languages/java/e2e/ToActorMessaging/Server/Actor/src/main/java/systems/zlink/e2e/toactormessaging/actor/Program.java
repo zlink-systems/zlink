@@ -77,39 +77,39 @@ public final class Program {
         boot("http route evidence");
         http.get("/evidence", evidence::all);
         boot("http route ensure");
-        http.postAsync("/ensure", Contracts.ActorCallRequest.class, request ->
+        http.postAsync("/ensure", Contracts.ActorCallReq.class, request ->
             actors.getOrCreate(request.actorId(), Contracts.ACTOR_TYPE)
-                .request(ZLinkMessage.of("create"))
+                .request(ZLinkMessage.of(new Contracts.ActorCreateReq("create")))
                 .submit()
                 .thenApply(result -> {
                     requireActor(result);
-                    return Contracts.ActorCallResponse.ok(
+                    return Contracts.ActorCallRes.ok(
                         request.scenario(), request.actorId(), "ensured");
                 }));
-        http.postAsync("/ensure-ref", Contracts.ActorCallRequest.class, request ->
+        http.postAsync("/ensure-ref", Contracts.ActorCallReq.class, request ->
             actors.getOrCreate(request.actorId(), Contracts.ACTOR_TYPE)
-                .request(ZLinkMessage.of("create"))
+                .request(ZLinkMessage.of(new Contracts.ActorCreateReq("create")))
                 .submit()
                 .thenApply(result -> {
                     ActorRef actor = requireActor(result);
                     return new Contracts.ActorRefWire(
                         actor.nodeRid().toHex(), actor.actorId(), actor.objectGeneration());
                 }));
-        http.postAsync("/push", Contracts.BoundPushRequest.class, request ->
+        http.postAsync("/push", Contracts.BoundPushReq.class, request ->
             actors.find(request.actorId()).thenCompose(found -> actorClient.requestToActor(
                     found.orElseThrow(() -> new IllegalStateException(
                         "actor was not found: " + request.actorId())).actorId(),
                     request)
-                .submit(Contracts.BoundPushReply.class))
-                .exceptionally(error -> Contracts.BoundPushReply.failed(
+                .submit(Contracts.BoundPushRes.class))
+                .exceptionally(error -> Contracts.BoundPushRes.failed(
                     request.actorId(), request.value(), errorKind(error))));
-        http.postAsync("/destroy", Contracts.DestroyActorRequest.class, request ->
+        http.postAsync("/destroy", Contracts.DestroyActorReq.class, request ->
             actors.find(request.actorId()).thenCompose(found -> actorClient.requestToActor(
                     found.orElseThrow(() -> new IllegalStateException(
                         "actor was not found: " + request.actorId())).actorId(),
                     request)
-                .submit(Contracts.DestroyActorReply.class)));
-        http.postAsync("/destroy-ref", Contracts.DestroyActorRefRequest.class, request -> {
+                .submit(Contracts.DestroyActorRes.class)));
+        http.postAsync("/destroy-ref", Contracts.DestroyActorRefReq.class, request -> {
             Contracts.ActorRefWire wire = request.actorRef();
             ActorRef actor = new ActorRef(
                 wire.actorId(),
@@ -118,22 +118,22 @@ public final class Program {
                 RoutingId.fromHex(wire.nodeRidHex()));
             return actors.destroy(actor).handle((destroyed, failure) -> {
                 if (failure != null) {
-                    return Contracts.DestroyActorRefReply.failed(
+                    return Contracts.DestroyActorRefRes.failed(
                         actor.actorId(), errorKind(failure));
                 }
                 if (destroyed) {
                     evidence.append(new Contracts.ActorEvidence(
                         request.scenario(), actor.actorId(), "destroy-ref", "destroyed"));
                 }
-                return Contracts.DestroyActorRefReply.completed(actor.actorId(), destroyed);
+                return Contracts.DestroyActorRefRes.completed(actor.actorId(), destroyed);
             });
         });
-        http.postAsync("/unbind", Contracts.UnbindActorRequest.class, request ->
+        http.postAsync("/unbind", Contracts.UnbindActorReq.class, request ->
             actors.find(request.actorId()).thenCompose(found -> actorClient.requestToActor(
                     found.orElseThrow(() -> new IllegalStateException(
                         "actor was not found: " + request.actorId())).actorId(),
                     request)
-                .submit(Contracts.UnbindActorReply.class)));
+                .submit(Contracts.UnbindActorRes.class)));
         boot("http start");
         http.start();
         boot("http start done");
@@ -193,7 +193,7 @@ public final class Program {
                 sequence = sequence.thenCompose(ignoredResult -> {
                     boot("baselineActors getOrCreate actorId=" + actorId);
                     return actors.getOrCreate(actorId, Contracts.ACTOR_TYPE)
-                        .request(ZLinkMessage.of("create"))
+                        .request(ZLinkMessage.of(new Contracts.ActorCreateReq("create")))
                         .submit()
                         .thenAccept(result -> {
                             requireActor(result);
@@ -285,7 +285,7 @@ public final class Program {
     }
 
     public static final class NotifyHandler
-        implements ZLinkEntrySpotActorSendHandler<TestEntrySpot, TestActor, Contracts.ActorNotify> {
+        implements ZLinkEntrySpotActorSendHandler<TestEntrySpot, TestActor, Contracts.ActorMsg> {
         private final EvidenceStore evidence;
 
         public NotifyHandler(EvidenceStore evidence) {
@@ -297,7 +297,7 @@ public final class Program {
             TestEntrySpot entrySpot,
             TestActor actor,
             ZLinkMessageContext context,
-            Contracts.ActorNotify message) {
+            Contracts.ActorMsg message) {
             evidence.append(new Contracts.ActorEvidence(message.scenario(), actor.actorId(), "send", message.value()));
             return CompletableFuture.completedFuture(null);
         }
@@ -307,8 +307,8 @@ public final class Program {
         implements ZLinkEntrySpotActorRequestHandler<
             TestEntrySpot,
             TestActor,
-            Contracts.ActorAsk,
-            Contracts.ActorReply> {
+            Contracts.ActorReq,
+            Contracts.ActorRes> {
         private final EvidenceStore evidence;
 
         public AskHandler(EvidenceStore evidence) {
@@ -316,13 +316,13 @@ public final class Program {
         }
 
         @Override
-        public CompletionStage<Contracts.ActorReply> handle(
+        public CompletionStage<Contracts.ActorRes> handle(
             TestEntrySpot entrySpot,
             TestActor actor,
             ZLinkMessageContext context,
-            Contracts.ActorAsk request) {
+            Contracts.ActorReq request) {
             evidence.append(new Contracts.ActorEvidence(request.scenario(), actor.actorId(), "request", request.value()));
-            return CompletableFuture.completedFuture(new Contracts.ActorReply(
+            return CompletableFuture.completedFuture(new Contracts.ActorRes(
                 request.scenario(), actor.actorId(), "reply:" + request.value()));
         }
     }
@@ -330,8 +330,8 @@ public final class Program {
     public static final class BoundPushHandler implements ZLinkEntrySpotActorRequestHandler<
         TestEntrySpot,
         TestActor,
-        Contracts.BoundPushRequest,
-        Contracts.BoundPushReply> {
+        Contracts.BoundPushReq,
+        Contracts.BoundPushRes> {
         private final EvidenceStore evidence;
 
         public BoundPushHandler(EvidenceStore evidence) {
@@ -339,25 +339,25 @@ public final class Program {
         }
 
         @Override
-        public CompletionStage<Contracts.BoundPushReply> handle(
+        public CompletionStage<Contracts.BoundPushRes> handle(
             TestEntrySpot entrySpot,
             TestActor actor,
             ZLinkMessageContext context,
-            Contracts.BoundPushRequest request) {
+            Contracts.BoundPushReq request) {
             actor.context().boundSession().send(new Contracts.BoundPushNotify(
                 request.scenario(), actor.actorId(), request.value())).submit();
             evidence.append(new Contracts.ActorEvidence(
                 request.scenario(), actor.actorId(), "bound-push", request.value()));
             return CompletableFuture.completedFuture(
-                Contracts.BoundPushReply.submitted(actor.actorId(), request.value()));
+                Contracts.BoundPushRes.submitted(actor.actorId(), request.value()));
         }
     }
 
     public static final class DestroyHandler implements ZLinkEntrySpotActorRequestHandler<
         TestEntrySpot,
         TestActor,
-        Contracts.DestroyActorRequest,
-        Contracts.DestroyActorReply> {
+        Contracts.DestroyActorReq,
+        Contracts.DestroyActorRes> {
         private final EvidenceStore evidence;
 
         public DestroyHandler(EvidenceStore evidence) {
@@ -365,11 +365,11 @@ public final class Program {
         }
 
         @Override
-        public CompletionStage<Contracts.DestroyActorReply> handle(
+        public CompletionStage<Contracts.DestroyActorRes> handle(
             TestEntrySpot entrySpot,
             TestActor actor,
             ZLinkMessageContext context,
-            Contracts.DestroyActorRequest request) {
+            Contracts.DestroyActorReq request) {
             if (!actor.actorId().equals(request.actorId())) {
                 return CompletableFuture.failedFuture(
                     new IllegalArgumentException("destroy request actor id mismatch"));
@@ -377,7 +377,7 @@ public final class Program {
             return entrySpot.context().destroyActor(actor).thenApply(ignored -> {
                 evidence.append(new Contracts.ActorEvidence(
                     request.scenario(), actor.actorId(), "destroy", "destroyed"));
-                return new Contracts.DestroyActorReply(actor.actorId(), true);
+                return new Contracts.DestroyActorRes(actor.actorId(), true);
             });
         }
     }
@@ -385,8 +385,8 @@ public final class Program {
     public static final class UnbindHandler implements ZLinkEntrySpotActorRequestHandler<
         TestEntrySpot,
         TestActor,
-        Contracts.UnbindActorRequest,
-        Contracts.UnbindActorReply> {
+        Contracts.UnbindActorReq,
+        Contracts.UnbindActorRes> {
         private final EvidenceStore evidence;
 
         public UnbindHandler(EvidenceStore evidence) {
@@ -394,15 +394,15 @@ public final class Program {
         }
 
         @Override
-        public CompletionStage<Contracts.UnbindActorReply> handle(
+        public CompletionStage<Contracts.UnbindActorRes> handle(
             TestEntrySpot entrySpot,
             TestActor actor,
             ZLinkMessageContext context,
-            Contracts.UnbindActorRequest request) {
+            Contracts.UnbindActorReq request) {
             return actor.context().boundSession().disconnect().thenApply(ignored -> {
                 evidence.append(new Contracts.ActorEvidence(
                     request.scenario(), actor.actorId(), "session-unbound", "disconnected"));
-                return new Contracts.UnbindActorReply(actor.actorId(), true);
+                return new Contracts.UnbindActorRes(actor.actorId(), true);
             });
         }
     }

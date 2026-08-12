@@ -25,6 +25,13 @@ class OpenConversationApiReq {
   constructor(readonly customerActorId: string, readonly customerDisplayName: string, readonly subject: string) {}
 }
 type OpenConversationApiRes = { conversationId: string; status: ConversationStatus };
+class ConversationCreateReq {
+  constructor(
+    readonly customerActorId: string,
+    readonly customerDisplayName: string,
+    readonly subject: string
+  ) {}
+}
 class OpenConversationReq { constructor(readonly subject: string) {} }
 type OpenConversationRes = { conversationId: string; state: ConversationState };
 class SetAgentAvailableReq { constructor(readonly isAvailable: boolean) {} }
@@ -124,6 +131,7 @@ export {
   AuthenticateUserReq,
   SupportUserActorCreateReq,
   OpenConversationApiReq,
+  ConversationCreateReq,
   OpenConversationReq,
   SetAgentAvailableReq,
   JoinConversationReq,

@@ -1,6 +1,5 @@
-package Infrastructure;
+package systems.zlink.e2e.pubsub.subscriber.Infrastructure;
 
-import systems.zlink.e2e.pubsub.subscriber.Infrastructure;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;

@@ -29,7 +29,7 @@ inline constexpr const char *conversation_id_metadata_key = "ConversationId";
 
 struct schedule_conversation_join_req_t
 {
-    static constexpr const char *packet_name = "ScheduleConversationJoin";
+    static constexpr const char *packet_name = "ScheduleConversationJoinReq";
     std::string conversation_id;
 };
 
@@ -729,7 +729,7 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
         if (request.conversation_id.empty ()) {
             throw framework_exception_t (
               framework_error_kind_t::protocol_error,
-              "ScheduleConversationJoin is missing ConversationId");
+              "ScheduleConversationJoinReq is missing ConversationId");
         }
         return actor.schedule_conversation_join (
           request.conversation_id, actor.role == role_t::agent);

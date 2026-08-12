@@ -7,7 +7,7 @@ import {
 } from '@zlink-systems/nestjs';
 import {
   EnterWorldRes,
-  EnterZoneMsg,
+  EnterZoneReq,
   JoinWorldRes,
   MessageFollowProbeRes,
   MoveRejectedNotify,
@@ -23,6 +23,7 @@ import type {
   EnterWorldReq,
   JoinWorldReq,
   MessageFollowProbeReq,
+  MessageFollowProbeMsg,
   MoveMsg
 } from '../../../../../Shared/contracts';
 import type {
@@ -54,7 +55,7 @@ class EntryEnterWorldHandler {
     try {
       actor.context.joinSpot(
         targetZone,
-        new EnterZoneMsg(actor.actorId, request.x, request.y, request.isBot, null)
+        new EnterZoneReq(actor.actorId, request.x, request.y, request.isBot, null)
       ).timeout(10_000).defer();
     } catch (error) {
       actor.completePendingJoin();
@@ -112,7 +113,7 @@ class EntryJoinWorldHandler {
     try {
       actor.context.joinSpot(
         targetZone,
-        new EnterZoneMsg(actor.actorId, actor.x, actor.y, false, null)
+        new EnterZoneReq(actor.actorId, actor.x, actor.y, false, null)
       ).timeout(10_000).defer();
     } catch (error) {
       actor.completePendingJoin();
@@ -153,7 +154,7 @@ class PlayerMovement {
     try {
       actor.context.joinSpot(
         targetZone,
-        new EnterZoneMsg(actor.actorId, x, y, actor.isBot, nodeOf(previousZone))
+        new EnterZoneReq(actor.actorId, x, y, actor.isBot, nodeOf(previousZone))
       ).timeout(10_000).defer();
     } catch (error) {
       actor.completePendingJoin();
@@ -234,14 +235,14 @@ class PlayerMessageFollowProbeHandler {
 @zlinkSpotActorSendHandler({
   spot: () => ZoneSpot,
   actor: () => PlayerActor,
-  packetName: PacketNames.messageFollowProbeReq
+  packetName: PacketNames.messageFollowProbeMsg
 })
 class PlayerMessageFollowProbeSendHandler {
   async handle(
     _spot: ZoneSpot,
     actor: PlayerActor,
     _context: ZLinkMessageContext,
-    message: MessageFollowProbeReq
+    message: MessageFollowProbeMsg
   ): Promise<void> {
     console.log(
       `message-follow probe one-way handled actor=${actor.actorId} probe=${message.probeId} payload=${message.payload}`

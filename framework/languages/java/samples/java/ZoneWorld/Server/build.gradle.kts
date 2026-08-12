@@ -19,6 +19,9 @@ dependencies {
     implementation("com.fasterxml.jackson.core:jackson-databind:2.17.2")
     implementation("io.lettuce:lettuce-core:6.3.2.RELEASE")
     implementation("org.springframework.boot:spring-boot-starter:3.5.14")
+    testImplementation(platform("org.junit:junit-bom:5.11.4"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 java {
@@ -30,4 +33,8 @@ java {
 application {
     mainClass.set("systems.zlink.samples.zoneworld.server.Program")
     applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
+}
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
 }

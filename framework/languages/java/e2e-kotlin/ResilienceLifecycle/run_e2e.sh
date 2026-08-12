@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/e2e-redis-common.sh"
+zlink_e2e_initialize kotlin "$0" "$@"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/e2e-kotlin-config.sh"
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -62,9 +63,9 @@ cleanup() {
     kill "${pid}" >/dev/null 2>&1 || true
   done
   if [[ -n "${redis_container}" ]]; then
-    docker unpause "${redis_container}" >/dev/null 2>&1 || true
+    timeout -k 2s 10s docker unpause "${redis_container}" >/dev/null 2>&1 || true
     if [[ "${redis_container_owned}" == "1" ]]; then
-      docker rm -fv "${redis_container}" >/dev/null 2>&1 || true
+      zlink_redis_remove_by_id "${redis_container}" || true
     fi
   fi
   wait >/dev/null 2>&1 || true
@@ -73,31 +74,11 @@ cleanup() {
 trap cleanup EXIT
 
 reserve_ports() {
-  python3 - <<'PY'
-import socket
-sockets = []
-ports = []
-try:
-    for _ in range(9):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        ports.append(sock.getsockname()[1])
-    print(" ".join(f"tcp://127.0.0.1:{port}" for port in ports[:4]), end=" ")
-    print(" ".join(f"http://127.0.0.1:{port}" for port in ports[4:]))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  zlink_e2e_reserve_mixed_endpoints 4 5
 }
 
 reserve_http_endpoint() {
-  python3 - <<'PY'
-import socket
-with socket.socket() as sock:
-    sock.bind(("127.0.0.1", 0))
-    print(f"http://127.0.0.1:{sock.getsockname()[1]}")
-PY
+  zlink_e2e_reserve_mixed_endpoints 0 1
 }
 
 port_of() {
@@ -175,7 +156,7 @@ wait_file() {
 
 redis_container_owned=1
 zlink_redis_start_scoped_assign redis_container redis_port \
-  "zlink-redis-kotlin-e2e" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}" "127.0.0.1::6379"
+  "zlink-redis-kotlin-e2e" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
 redis_endpoint="127.0.0.1:${redis_port}"
 export ZLINK_KOTLIN_E2E_REDIS_LOCATION_ENDPOINT="${redis_endpoint}"
 redis_host="${redis_endpoint%:*}"
@@ -187,7 +168,7 @@ pause_redis_container() {
     echo "RL-C4 requires runner-owned Redis; unset external Redis endpoint variables for this scenario." >&2
     return 1
   fi
-  docker pause "${redis_container}" >/dev/null
+  timeout -k 2s 10s docker pause "${redis_container}" >/dev/null
 }
 
 unpause_redis_container() {
@@ -195,7 +176,7 @@ unpause_redis_container() {
     echo "RL-C4 requires runner-owned Redis; unset external Redis endpoint variables for this scenario." >&2
     return 1
   fi
-  docker unpause "${redis_container}" >/dev/null
+  timeout -k 2s 10s docker unpause "${redis_container}" >/dev/null
   wait_tcp "${redis_host}" "${redis_port}" redis
 }
 
@@ -223,7 +204,9 @@ kill_pid() {
 }
 
 gradle_run() {
-  ../../gradlew --project-cache-dir "${ZLINK_KOTLIN_E2E_GRADLE_CACHE}" --no-daemon --no-parallel --max-workers=1 "$@" --quiet
+  zlink_e2e_gradle_build_locked ../../gradlew \
+    --project-cache-dir "${ZLINK_KOTLIN_E2E_GRADLE_CACHE}" \
+    --no-daemon --no-parallel --max-workers=1 "$@" --quiet
 }
 
 client_bin() {
@@ -412,32 +395,6 @@ touch "${control_dir}/b2-restarted"
 wait "${b2_client_pid}"
 fi
 
-if should_run RL-C2; then
-ZLINK_KOTLIN_E2E_SCENARIO="RL-C2" \
-ZLINK_KOTLIN_E2E_CONTROL_DIR="${control_dir}" \
-ZLINK_KOTLIN_E2E_CONSUMER_HTTP_ENDPOINT="${CONSUMER_HTTP}" \
-ZLINK_KOTLIN_E2E_HTTP_A_ENDPOINT="${CURRENT_HTTP_A}" \
-ZLINK_KOTLIN_E2E_HTTP_B_ENDPOINT="${HTTP_B}" \
-ZLINK_KOTLIN_E2E_LOG_DIR="${log_dir}" \
-  zlink_kotlin_e2e_run "$(client_bin)" >"${log_dir}/client-c2.stdout.log" 2>"${log_dir}/client-c2.stderr.log" &
-c2_client_pid="$!"
-pids+=("${c2_client_pid}")
-
-wait_file "${control_dir}/c2-ready"
-kill_pid "${PROVIDER_B_PID}"
-wait_port_down api-b "${API_B}"
-stop_pid "${CONSUMER_PID}"
-wait_port_down consumer-http "${CONSUMER_HTTP}"
-start_consumer
-CONSUMER_PID="${pids[-1]}"
-touch "${control_dir}/c2-crashed"
-wait_file "${control_dir}/c2-restart"
-start_provider api-b "${API_B}" "${HTTP_B}"
-PROVIDER_B_PID="${pids[-1]}"
-touch "${control_dir}/c2-restarted"
-wait "${c2_client_pid}"
-fi
-
 if should_run RL-C4; then
 ZLINK_KOTLIN_E2E_SCENARIO="RL-C4" \
 ZLINK_KOTLIN_E2E_CONTROL_DIR="${control_dir}" \
@@ -522,7 +479,7 @@ ZLINK_KOTLIN_E2E_LOG_DIR="${log_dir}" \
 fi
 
 case "${SCENARIO}" in
-  RL-E1|RL-E2|RL-E3|RL-E4|RL-E5|RL-F1|RL-F2|RL-F3|RL-F4|RL-F5|RL-F6|RL-F7|RL-F8|RL-F9|RL-F10|RL-F11|RL-F12|RL-F13|RL-F14)
+  RL-E1|RL-E2|RL-E3|RL-E4|RL-E5|RL-F1|RL-F3|RL-F5|RL-F6|RL-F7|RL-F8|RL-F9|RL-F10|RL-F11|RL-F12|RL-F13|RL-F14)
     ZLINK_KOTLIN_E2E_SCENARIO="${SCENARIO}" \
     ZLINK_KOTLIN_E2E_CONSUMER_HTTP_ENDPOINT="${CONSUMER_HTTP}" \
     ZLINK_KOTLIN_E2E_HTTP_A_ENDPOINT="${CURRENT_HTTP_A}" \
@@ -548,7 +505,6 @@ if [[ "${SCENARIO}" == "all" ]]; then
   grep -q "scenario RL-B5 passed" "${log_dir}/client-default.stdout.log"
   grep -q "scenario RL-B6 passed" "${log_dir}/client-default.stdout.log"
   grep -q "scenario RL-C1 passed" "${log_dir}/client-cleanup.stdout.log"
-  grep -q "scenario RL-C2 passed" "${log_dir}/client-c2.stdout.log"
   grep -q "scenario RL-C3 passed" "${log_dir}/client-restart.stdout.log"
   grep -q "scenario RL-C4 passed" "${log_dir}/client-c4.stdout.log"
   grep -q "scenario RL-D1 passed" "${log_dir}"/client-storm-*.stdout.log

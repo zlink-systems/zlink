@@ -15,7 +15,7 @@ public final class OutboundMsgHandler
             spot.context().outbound().publish(
                 Contracts.ROUTE_CHANNEL,
                 "spot.events",
-                new Contracts.MeshMsg("publish:sm-c6-marker"))
+                new Contracts.MeshEvent("publish:sm-c6-marker"))
                 .submit();
         }
         return CompletableFuture.completedFuture(null);

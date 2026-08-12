@@ -24,30 +24,28 @@ Every language must produce the same result for the canonical and malformed byte
 session-owner lifecycle rejection in `runtime/protocol/golden/bound-session-replaced-v1.json`. An
 idempotent bind from the same physical session neither self-notifies nor closes that connection.
 
-## Session relocation route high-water verification
+## Session Relocation Route And Target-Only Cutover
 
-Spec 20 §5 step 7 requires the session owner to verify, alongside the ObjectGeneration, the previous
-and target AuthorityOwnerGeneration, the binding generation, and the session owner lease, that the
-high-water in command 44 **equals** the value recorded on the current binding. That equality holds
-because the `sessionRelocationSeal(42)` / `sessionRelocationSealed(43)` handshake freezes the
-source's captured high-water and the owner's recorded high-water to the same number. Delivery of
-messages that arrive on the previous route after the owner change is guaranteed by Message Follow,
-not by this verification.
+Spec 30 and Spec 20 §5 require every language to use the same simple boundary. The Session
+owner seals the exact binding with commands 42/43 and holds later Session messages. Message
+order between source and target comes from relay and one-way cutover on the same TCP
+connection, not a numeric high-water. Only target runs the Location Store CAS. After queue
+opening it sends command 44 to the Session owner as `[send]`. Command 44 has no reply and the
+normal flow doesn't use command 45. Without an exact update before
+`SessionRelocationSealTimeout`, the Session owner cleans the physical Session and related
+state.
 
 | Language | Current implementation difference | Closing condition |
 |---|---|---|
-| C++ | None. Frames commands 42/43 on the service wire. | Closed |
-| Node.js | None. Implements the seal semantics in its in-process binding registry and correlates a route publish with its seal. | Closed |
-| .NET | None. Implements the seal semantics over an internal relay and separates an exact-fence commit from an idempotent retransmit. | Closed |
-| Java/Kotlin | None. Command 42 installs the ingress barrier at the same Session-owner transition that freezes the accepted high-water. Command 43 returns that value to the source. Post-seal ingress does not execute on the previous route; it remains in order until command 44 or 45 reaches a terminal result. Command 44 applies only when its high-water exactly equals the seal associated with the relocation id. Restart recovery uses the exact seal and route stored in the durable root and does not substitute a monotonic comparison. | Closed |
+| C++ | Remove the previous command 45 ACK and high-water route application, then converge on target one-way command 44 and Session-timeout cleanup. | Open |
+| Node.js | Remove aggregate high-water/route-ACK state, then converge on ordered relay, target one-way command 44, and Session-timeout cleanup. | Open |
+| .NET | Remove exact-high-water and ACK-retry paths, then apply one-way command 44 after target-only CAS. | Open |
+| Java/Kotlin | Keep commands 42/43 only as binding seal, remove high-water and command 45 terminal, and add target one-way command 44 plus Session-timeout cleanup. | Open |
 
-Java/Kotlin validates ObjectGeneration, AuthorityOwnerGeneration, binding generation, and the exact
-high-water together. Command 44 without a matching seal does not change the route; it returns
-`stale` or `sessionOrBindingClosed` with high-water zero. Restart recovery fails the relocation
-explicitly when it cannot restore the exact seal instead of estimating another high-water value.
-
-Command 45 carries a `session-relocation-route-result` field (applied / alreadyApplied / stale /
-sessionOrBindingClosed). Spec 20 §5 requires the target to stop retransmitting once it receives any
-of the four results, so a refused command 44 is answered with the reason instead of being left
-unanswered. C++ and Java/Kotlin both encode and decode the field and answer `stale` or
-`sessionOrBindingClosed` on their refusal paths.
+The closing condition is identical for all four languages. Commands 42/43 only install
+the current-binding seal, and command 44 is sent one-way after target CAS and queue opening.
+The Session owner validates only exact Session, binding, and relocation identity; it
+doesn't re-read Store or Actor authority. Timeout and route update are serialized so only
+the first takes effect, while a late or duplicate update records a Warning. The gap is
+closed only when command 45 and relocation-specific high-water disappear from production,
+codec expectations, and the normal path of contract tests.

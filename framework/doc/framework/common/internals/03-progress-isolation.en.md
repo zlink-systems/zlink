@@ -266,7 +266,7 @@ Why the bound is measured in bytes rather than count is covered by
 [8. Object Kind And Activation 「6. Which Unit Memory Accounting Uses」](08-object-lifecycle.en.md#6-which-unit-memory-accounting-uses).
 
 The basis for not giving pending-during-a-move a separate bound is
-[Host Relocate And Shutdown 「9. Moving Pending Messages, Timers, And Sessions」](../spec/28-graceful-drain-handoff.en.md#9-moving-pending-messages-timers-and-sessions),
+[Complete Host Relocation Flow 「9. Moving Pending Messages, Timers, And Sessions」](../spec/30-host-relocation-flow.en.md#9-moving-pending-messages-timers-and-sessions),
 and its hold, restore, and relay order is covered by
 [5. Continuity During A Move](05-relocation-continuity.en.md).
 
@@ -282,11 +282,36 @@ combination **ends in failure without waiting**. Treating it as a wait
 would deadlock, and letting it pass would break the separation, so
 failure is correct.
 
-**Per-language discretion.** Whether to build the regions as two
-queues or as a single priority, and how to mark the context, is free.
-There's one observation standard — with an application handler
-artificially kept waiting, do the call timeout, the shutdown
-procedure, and peer connection handling still progress.
+Each owner keeps the two regions in physically separate FIFOs. The application FIFO and
+lifecycle FIFO do not share count/byte reservations or admission state. Already-accepted
+lifecycle work must still be enqueued and run when the application FIFO is full. The
+priority and starvation-prevention rule between the FIFOs is described in
+[2. Spot And Actor Execution Serialization](02-serialization.en.md).
+
+Increasing the number of owners does not create one execution thread or executor per owner.
+The owner holds its FIFOs and execution state, while the resources that run work are shared
+by the process. The path that puts the first item into an empty FIFO immediately signals or
+calls back into the shared execution resource. Starting the next turn therefore does not
+depend on periodically scanning owners.
+
+```mermaid
+flowchart LR
+    subgraph O["state owned by one owner"]
+        A["application FIFO<br/>independent count · byte reservation"]
+        L["lifecycle FIFO<br/>independent count · byte reservation"]
+        G["serial execution state<br/>current turn and fairness"]
+    end
+    A --> G
+    L --> G
+    G -- "work to run" --> E["process-shared execution resources"]
+    A -. "signal immediately on empty → non-empty" .-> E
+    L -. "signal immediately on empty → non-empty" .-> E
+```
+
+An execution-context marker distinguishes the active region. Tying this marker only to a
+thread kind cannot represent Node's single event loop or a .NET path running over a thread
+pool. The execution mechanism may differ by language, but a call from the wrong region must
+fail without waiting in every runtime.
 
 ## 8. Result To Confirm
 
@@ -308,6 +333,10 @@ procedure, and peer connection handling still progress.
   without waiting.
 - Infrastructure execution resources don't grow with topology count or
   Spot count.
+- Each owner has separate application/lifecycle FIFOs and admission
+  reservations.
+- The first work entering an empty FIFO wakes execution resources
+  without waiting for a periodic scan.
 - Work waiting for send space doesn't hold execution authority.
 - When the send-wait slot is full, it fails without waiting.
 

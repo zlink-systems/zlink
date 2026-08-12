@@ -187,17 +187,20 @@ application lane이 ready인 한 application turn을 한 번 실행할 때까지
 일부로** 실행되어 대기열에 있던 다른 작업보다 먼저 끝난다. 재진입 규칙이 하나로 고정되지
 않으면 같은 코드가 교착되거나 다른 순서로 실행된다.
 
-**결정 — 재진입을 허용하지 않는다.** 이것은 선택이 아니라 spec 규정이다 — 같은 gate가
-필요한 요청을 기다리거나 자신에게 보낸 요청을 기다리는 호출은 **제출 전에
-`InvalidOperation`으로 거부한다**
+**결정 — 재진입을 허용하지 않는다.** 이것은 선택이 아니라 spec 규정이다. 현재 turn을
+유지한 채 같은 gate가 필요한 결과를 기다리거나 같은 Actor가 자신에게 보낸 요청을
+기다리는 호출은 **제출 전에 `InvalidOperation`으로 거부한다**
 ([Stage wrapper on Spot 「5. Timer」](../spec/17-stage-wrapper-on-spot.ko.md#5-timer)).
+허용된 `SpotWide` User Spot 또는 Instance Spot에서 `Yield`를 선택한 call은 현재 shared gate를
+먼저 반납하므로 재진입이 아니다. 완료 continuation은 원래 queue 뒤에 새 turn으로 들어간다.
 
 **금지 대상은 public operation이다.** 무엇이 금지인지 정확히 나누면 이렇다.
 
 | 호출 | 판정 |
 |---|---|
-| handler가 자기 Spot·Actor에 public request를 보내고 결과를 기다린다 | **금지.** 제출 전에 `InvalidOperation` |
-| handler가 같은 gate를 요구하는 다른 대상을 기다린다 | **금지.** 같은 판정 |
+| handler가 자기 Actor에 public request를 보내고 결과를 기다린다 | **금지.** `Yield` 뒤에도 Actor queue claim을 유지하므로 제출 전에 `InvalidOperation` |
+| handler가 현재 turn을 유지하는 terminal로 자기 Spot이나 같은 gate가 필요한 대상을 기다린다 | **금지.** 제출 전에 `InvalidOperation` |
+| 허용된 `SpotWide`·Instance 문맥에서 request 또는 Actor·Spot create/get-or-create를 `Yield`로 기다린다 | 허용. Shared gate를 반납하고 완료 뒤 queue 뒤의 새 turn에서 재개한다 |
 | runtime이 handler를 실행하려고 내부적으로 실행 문맥을 합성한다 | 허용. 이것은 새 작업의 제출이 아니다 |
 | handler가 결과를 기다리지 않고 자기 대상에 작업을 제출한다 | 허용. 대기열 뒤에 추가한다 |
 
@@ -284,7 +287,7 @@ sequenceDiagram
 재개하지 않고 실패로 끝난다. 이동이 *시작*되는 것만으로는 멈추지 않는다 — 봉인 전까지는
 기존 message와 timer를 계속 처리한다
 ([Stage wrapper on Spot 「5. Timer」](../spec/17-stage-wrapper-on-spot.ko.md#5-timer),
-[Host Relocate와 Shutdown 「12. State별 admission」](../spec/28-graceful-drain-handoff.ko.md#12-state별-admission)).
+[Host relocation 전체 흐름 「12. State별 admission」](../spec/30-host-relocation-flow.ko.md#12-state별-admission)).
 
 ### 여기서 나오는 설계 제약
 

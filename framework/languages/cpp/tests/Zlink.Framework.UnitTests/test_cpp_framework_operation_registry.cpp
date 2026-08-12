@@ -350,5 +350,28 @@ int main ()
     assert (wait_until ([&] {
         return probe_drained.load (std::memory_order_acquire);
     }));
+
+    foundation::operation_registry_t expiry_batch_registry (
+      foundation::default_operation_capacity);
+    std::atomic_size_t expired_batch_callbacks{0};
+    for (std::size_t index = 1;
+         index <= foundation::default_operation_capacity; ++index) {
+        assert (expiry_batch_registry.register_operation (
+          foundation::call_id_t{13, index}, now,
+          [&] (foundation::operation_terminal_t terminal,
+               std::vector<std::uint8_t>) {
+              assert (terminal
+                      == foundation::operation_terminal_t::timed_out);
+              expired_batch_callbacks.fetch_add (1,
+                                                   std::memory_order_release);
+          }));
+    }
+    assert (expiry_batch_registry.expire (now)
+            == foundation::default_operation_capacity);
+    assert (expiry_batch_registry.size () == 0);
+    assert (wait_until ([&] {
+        return expired_batch_callbacks.load (std::memory_order_acquire)
+               == foundation::default_operation_capacity;
+    }));
     return 0;
 }

@@ -41,7 +41,7 @@ private suspend fun missingPacket(endpoint: String) {
     try {
         connector.connect().await()
         try {
-            connector.request(raw("ObservabilityMissingPacket", byteArrayOf(0xff.toByte(), 0)))
+            connector.request(raw("ObservabilityMissingReq", byteArrayOf(0xff.toByte(), 0)))
                 .timeout(Duration.ofSeconds(5))
                 .await()
             error("missing packet unexpectedly succeeded")
@@ -91,7 +91,7 @@ private suspend fun metricsB1(endpoint: String, output: Path) {
 
 private suspend fun probeLifecycle(connector: ZLinkKotlinStreamConnector) {
     try {
-        connector.request(raw("MetricsLifecycleProbe", byteArrayOf(1)))
+        connector.request(raw("MetricsLifecycleProbeReq", byteArrayOf(1)))
             .timeout(Duration.ofSeconds(5))
             .await()
     } catch (_: Exception) {
@@ -106,11 +106,11 @@ private suspend fun readerFreeB4(endpoint: String, output: Path) {
     try {
         connector.connect().await()
         repeat(8192) { index ->
-            connector.send(raw("ReaderFreeTraffic", byteArrayOf((index and 0xff).toByte()))).await()
+            connector.send(raw("ReaderFreeTrafficMsg", byteArrayOf((index and 0xff).toByte()))).await()
             trafficEvents++
         }
         try {
-            connector.request(raw("ReaderFreeProbe", byteArrayOf(1)))
+            connector.request(raw("ReaderFreeProbeReq", byteArrayOf(1)))
                 .timeout(Duration.ofSeconds(20))
                 .await()
         } catch (_: Exception) {

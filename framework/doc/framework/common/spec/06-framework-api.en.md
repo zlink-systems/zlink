@@ -60,7 +60,7 @@ moves to an exact version, greater than the source's, that the caller specifies.
 provide a drain operation per MeshName, ChannelName, or node RID.
 State, per-mode target selection, terminal result, default deadline, repeated calls, and
 cancellation contract are owned by
-[54 Host Relocate, Shutdown & Handoff](28-graceful-drain-handoff.en.md).
+[54 Host Relocate, Shutdown & Handoff](30-host-relocation-flow.en.md).
 
 The framework builder doesn't expose the service liveness interval and
 [deadline](01-glossary.en.md#deadline). The service runtime applies a common profile
@@ -863,9 +863,9 @@ An Actor factory builds the Actor lifecycle, and Actor handlers are registered o
 context's handler registry. Actor messages dispatch directly to the Actor mailbox. Actor
 messages aren't re-classified by a Node callback or Spot packet handler.
 
-The `Yield` terminator is provided only for Channel request, Spot request, Actor request,
-and CPU/I/O worker calls. It isn't provided for Actor join, Actor/Spot create/get-or-create,
-send, publish, timer registration, close, or destroy. `Yield` is valid only in a context
+The `Yield` terminator is provided for Channel requests, Spot requests, Actor requests,
+CPU/I/O worker calls, and Actor/Spot create/get-or-create calls. It isn't provided for
+Actor join, send, publish, timer registration, close, or destroy. `Yield` is valid only in a context
 where the shared execution gate of a `SpotWide` User Spot or Instance Spot can be briefly
 given back. A language that uses a common call type callable from Entry Spot, `PerActor`
 User Spot, Node/Channel handlers, and a client outside an owner turn checks the context

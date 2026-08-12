@@ -116,6 +116,7 @@ process가 각각 조회하고 기록한다. 한 묶음 안에 넣으면 그 pro
 | [10. Liveness와 상태 공개](10-liveness-and-state.ko.md) | peer와 계속 통신할 수 있는지 어떻게 판단하는가. 그 판정이 authority를 변경하지 않게 하는 방법 |
 | [11. Payload 소유권과 복사](11-message-ownership.ko.md) | socket에서 handler까지 byte를 몇 번 복사하는가. 역직렬화는 언제 하는가 |
 | [12. Service wire protocol](12-service-wire-protocol.ko.md) | node 사이에 오가는 byte 형식과 command |
+| [13. Relocation handoff 상태 전이](13-relocation-handoff.ko.md) | 네 runtime이 같은 source·target·Session 상태 전이와 queue 순서를 구현하는 방법 |
 
 성능에 직결되는 결정은 [11](11-message-ownership.ko.md)의 복사 횟수, [6](06-routing-and-cache.ko.md)의
 위치 캐시, [7](07-dispatch-loop.ko.md)의 모아서 처리하기·깨우는 방식·timer 자원,

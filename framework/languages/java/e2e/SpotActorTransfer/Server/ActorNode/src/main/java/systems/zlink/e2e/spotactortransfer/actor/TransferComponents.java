@@ -499,7 +499,7 @@ public final class TransferComponents {
     public static final class MessageFollowSendHandler implements ZLinkSpotActorSendHandler<
         TransferUserSpot,
         TransferActor,
-        Contracts.MessageFollowSendReq> {
+        Contracts.MessageFollowMsg> {
         private final EvidenceStore evidence;
 
         public MessageFollowSendHandler(EvidenceStore evidence) {
@@ -511,7 +511,7 @@ public final class TransferComponents {
             TransferUserSpot spot,
             TransferActor actor,
             ZLinkMessageContext context,
-            Contracts.MessageFollowSendReq request) {
+            Contracts.MessageFollowMsg request) {
             evidence.add(
                 request.scenario(), actor.actorId(), "message_follow_send", request.marker());
             return CompletableFuture.completedFuture(null);

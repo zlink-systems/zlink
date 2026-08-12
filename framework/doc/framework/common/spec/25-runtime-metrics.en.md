@@ -22,7 +22,7 @@ The current complete state of runtime and topology is owned by
 progress record of one message is owned by
 [Message Flow Tracing](26-message-flow-tracing.en.md); individual host operation
 results are owned by
-[Host Relocation And Shutdown](28-graceful-drain-handoff.en.md).
+[Complete Host Relocation Flow](30-host-relocation-flow.en.md).
 
 | Actor | Responsibility |
 |---|---|
@@ -227,7 +227,7 @@ finishes this cleanup and terminates the runtime and infrastructure.
 `state` is `preparing|serving|relocating|relocated|draining|stopped|error`.
 Relocation `outcome` is `relocated|blocked`. Shutdown `outcome` is
 `stopped|force_stopped`. Reason uses the identifiers from
-[Host Relocation And Shutdown](28-graceful-drain-handoff.en.md).
+[Complete Host Relocation Flow](30-host-relocation-flow.en.md).
 
 ## 6. Location And Telemetry
 
@@ -293,7 +293,7 @@ exporter, reader, storage, or histogram bucket.
 - Telemetry queue overflow and provider failure don't change dispatch or host
   lifecycle results.
 - Host instruments and labels match the results in
-  [Host Relocation And Shutdown](28-graceful-drain-handoff.en.md).
+  [Complete Host Relocation Flow](30-host-relocation-flow.en.md).
 - Instance activation is observed per registered type, excluding Spot ID/owner ID/
   generation from labels.
 - An Instance one-way activation failure is a `surface=instance_spot` drop, and

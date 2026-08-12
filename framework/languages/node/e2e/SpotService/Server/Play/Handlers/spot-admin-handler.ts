@@ -6,7 +6,7 @@ import {
   type ZLinkSpotRequestHandler
 } from '@zlink-systems/framework';
 import {
-  SpotMsg,
+  SpotEvent,
   SpotServiceNames,
   spotServicePacket,
   type SpotAdminReq,
@@ -28,7 +28,7 @@ export class SpotAdminHandler implements ZLinkSpotRequestHandler<ScenarioUserSpo
         spot.context.outbound.publish(
           SpotServiceNames.spotChannel,
           SpotServiceNames.spotEventTopic,
-          spotServicePacket(SpotMsg, { marker: request.marker ?? '' })
+          spotServicePacket(SpotEvent, { marker: request.marker ?? '' })
         ).submit();
         this.evidence.add(`spot-publish|rid=${this.evidence.rid}|spot=${spot.context.spotId}|marker=${request.marker}`);
         break;

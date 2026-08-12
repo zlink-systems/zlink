@@ -1,6 +1,4 @@
-package Scenarios;
-import systems.zlink.e2e.runtimemonitoring.client.Scenarios;
-import systems.zlink.e2e.runtimemonitoring.client.Support;
+package systems.zlink.e2e.runtimemonitoring.client.Scenarios;
 import java.util.Locale;
 
 import java.io.IOException;

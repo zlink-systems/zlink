@@ -213,7 +213,7 @@ public final class Program {
                 return;
             }
             spots.getOrCreate(Contracts.TARGET_SPOT, Contracts.TARGET_SPOT)
-                .request(ZLinkMessage.of("bootstrap"))
+                .request(ZLinkMessage.of(new Contracts.SpotCreateReq("bootstrap")))
                 .submit()
                 .whenComplete((created, failure) -> {
                     if (failure != null) {

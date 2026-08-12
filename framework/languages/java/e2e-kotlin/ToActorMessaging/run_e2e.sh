@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/e2e-redis-common.sh"
+zlink_e2e_initialize kotlin "$0" "$@"
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -8,101 +9,7 @@ pids=()
 redis_container=""
 run_id="$(date +%Y%m%d-%H%M%S)-$$"
 log_dir="$(pwd)/logs/${run_id}"
-repo_root="$(cd ../../../../.. && pwd)"
-default_core_lib="${repo_root}/core/build/lib/libzlink.so"
-mkdir -p "${log_dir}"
-echo "log_dir=${log_dir}"
-E2E_START_ORDER="${E2E_START_ORDER:-forward}"
-echo "start_order=${E2E_START_ORDER}"
-
-if [[ -z "${ZLINK_LIBRARY_PATH:-}" && -f "${default_core_lib}" ]]; then
-  export ZLINK_LIBRARY_PATH="${default_core_lib}"
-fi
-
-location_key_prefix="zlink:e2e:toactor:${run_id}"
-config_dir="$(mktemp -d)"
-chmod 0700 "${config_dir}"
-
-reserve_ports() {
-  python3 - <<'PY'
-import socket
-sockets = []
-ports = []
-try:
-    for _ in range(4):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        ports.append(sock.getsockname()[1])
-    print(" ".join(str(port) for port in ports))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
-}
-
-wait_tcp() {
-  local host="$1"
-  local port="$2"
-  local name="$3"
-  if python3 - "$host" "$port" <<'PY'
-import socket
-import sys
-import time
-
-host = sys.argv[1]
-port = int(sys.argv[2])
-deadline = time.monotonic() + 30
-while time.monotonic() < deadline:
-    try:
-        with socket.create_connection((host, port), timeout=1):
-            sys.exit(0)
-    except OSError:
-        time.sleep(0.2)
-sys.exit(1)
-PY
-  then
-    return 0
-  fi
-  echo "Timed out waiting for ${name} at ${host}:${port}" >&2
-  return 1
-}
-
-zlink_redis_start_scoped_assign redis_container redis_port \
-  "zlink-redis-kotlin-e2e" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}" "127.0.0.1::6379"
-redis_endpoint="127.0.0.1:${redis_port}"
-redis_host="${redis_endpoint%:*}"
-redis_port="${redis_endpoint##*:}"
-wait_tcp "${redis_host}" "${redis_port}" redis
-
-read -r actor_http caller_http actor_spot caller_spot < <(reserve_ports)
-actor_http_endpoint="http://127.0.0.1:${actor_http}"
-caller_http_endpoint="http://127.0.0.1:${caller_http}"
-actor_config="${config_dir}/actor.properties"
-caller_config="${config_dir}/caller.properties"
-client_config="${config_dir}/client.properties"
-write_config() {
-  local path="$1"
-  shift
-  {
-    printf 'redisLocationEndpoint=%s\n' "${redis_endpoint}"
-    printf 'locationKeyPrefix=%s\n' "${location_key_prefix}"
-    printf 'logDirectory=%s\n' "${log_dir}"
-    printf '%s\n' "$@"
-  } >"${path}"
-  chmod 0600 "${path}"
-}
-write_config "${actor_config}" \
-  "actorHttpEndpoint=${actor_http_endpoint}" \
-  "actorSpotEndpoint=tcp://127.0.0.1:${actor_spot}" \
-  "actorRid=actor-a"
-write_config "${caller_config}" \
-  "callerHttpEndpoint=${caller_http_endpoint}" \
-  "callerSpotEndpoint=tcp://127.0.0.1:${caller_spot}" \
-  "callerRid=caller"
-write_config "${client_config}" \
-  "actorHttpEndpoint=${actor_http_endpoint}" \
-  "callerHttpEndpoint=${caller_http_endpoint}"
+config_dir=""
 
 print_logs() {
   local status="$1"
@@ -138,13 +45,95 @@ cleanup() {
     kill -9 "${pids[$i]}" >/dev/null 2>&1 || true
   done
   if [[ -n "${redis_container}" ]]; then
-    docker rm -fv "${redis_container}" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "${redis_container}" || true
   fi
-  rm -rf "${config_dir}"
+  [[ -z "${config_dir}" ]] || rm -rf "${config_dir}"
   wait >/dev/null 2>&1 || true
   exit "${status}"
 }
 trap cleanup EXIT
+
+repo_root="$(cd ../../../../.. && pwd)"
+default_core_lib="${repo_root}/core/build/lib/libzlink.so"
+mkdir -p "${log_dir}"
+echo "log_dir=${log_dir}"
+E2E_START_ORDER="${E2E_START_ORDER:-forward}"
+echo "start_order=${E2E_START_ORDER}"
+
+if [[ -z "${ZLINK_LIBRARY_PATH:-}" && -f "${default_core_lib}" ]]; then
+  export ZLINK_LIBRARY_PATH="${default_core_lib}"
+fi
+
+location_key_prefix="zlink:e2e:toactor:${run_id}"
+config_dir="$(mktemp -d)"
+chmod 0700 "${config_dir}"
+
+reserve_ports() {
+  zlink_e2e_reserve_ports 4
+}
+
+wait_tcp() {
+  local host="$1"
+  local port="$2"
+  local name="$3"
+  if python3 - "$host" "$port" <<'PY'
+import socket
+import sys
+import time
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+deadline = time.monotonic() + 30
+while time.monotonic() < deadline:
+    try:
+        with socket.create_connection((host, port), timeout=1):
+            sys.exit(0)
+    except OSError:
+        time.sleep(0.2)
+sys.exit(1)
+PY
+  then
+    return 0
+  fi
+  echo "Timed out waiting for ${name} at ${host}:${port}" >&2
+  return 1
+}
+
+zlink_redis_start_scoped_assign redis_container redis_port \
+  "zlink-redis-kotlin-e2e" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
+redis_endpoint="127.0.0.1:${redis_port}"
+redis_host="${redis_endpoint%:*}"
+redis_port="${redis_endpoint##*:}"
+wait_tcp "${redis_host}" "${redis_port}" redis
+
+read -r actor_http caller_http actor_spot caller_spot < <(reserve_ports)
+actor_http_endpoint="http://127.0.0.1:${actor_http}"
+caller_http_endpoint="http://127.0.0.1:${caller_http}"
+actor_config="${config_dir}/actor.properties"
+caller_config="${config_dir}/caller.properties"
+client_config="${config_dir}/client.properties"
+write_config() {
+  local path="$1"
+  shift
+  {
+    printf 'redisLocationEndpoint=%s\n' "${redis_endpoint}"
+    printf 'locationKeyPrefix=%s\n' "${location_key_prefix}"
+    printf 'logDirectory=%s\n' "${log_dir}"
+    printf '%s\n' "$@"
+  } >"${path}"
+  chmod 0600 "${path}"
+}
+write_config "${actor_config}" \
+  "actorHttpEndpoint=${actor_http_endpoint}" \
+  "actorSpotEndpoint=tcp://127.0.0.1:${actor_spot}" \
+  "actorRid=actor-a"
+write_config "${caller_config}" \
+  "callerHttpEndpoint=${caller_http_endpoint}" \
+  "callerSpotEndpoint=tcp://127.0.0.1:${caller_spot}" \
+  "callerRid=caller"
+write_config "${client_config}" \
+  "actorHttpEndpoint=${actor_http_endpoint}" \
+  "callerHttpEndpoint=${caller_http_endpoint}"
 
 wait_http() {
   local endpoint="$1"
@@ -233,7 +222,9 @@ wait_role_ready() {
   esac
 }
 
-../../gradlew --no-daemon --gradle-user-home "${ZLINK_KOTLIN_E2E_GRADLE_CACHE:-${HOME}/.cache/zlink/java-e2e/toactor-gradle}" -p . installDist
+zlink_e2e_gradle_build_locked ../../gradlew --no-daemon \
+  --gradle-user-home "${ZLINK_KOTLIN_E2E_GRADLE_CACHE:-${HOME}/.cache/zlink/java-e2e/toactor-gradle}" \
+  -p . installDist
 
 SERVER_ROLES=(actor caller)
 mapfile -t ORDERED_SERVER_ROLES < <(ordered_roles "${SERVER_ROLES[@]}")

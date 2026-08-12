@@ -477,7 +477,10 @@ function requestTimeoutError(): ZLinkFrameworkException {
   );
 }
 
-export { ZLinkMeshSubmitterRegistry } from './mesh-submitters';
+export {
+  createStandaloneMeshSubmitterRegistry,
+  ZLinkMeshSubmitterRegistry
+} from './mesh-submitters';
 
 function discardBeforePending(error: unknown, onDiscard: (() => void) | undefined): unknown {
   if (onDiscard === undefined) return error;

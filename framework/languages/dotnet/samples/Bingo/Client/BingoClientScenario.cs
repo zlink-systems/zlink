@@ -61,18 +61,24 @@ internal sealed class BingoClientScenario
         ZlinkStreamAssert.Ensure(client2Auth.ActorId == BingoSamplePlayers.Player2, "Assertion failed: client2Auth.ActorId == BingoSamplePlayers.Player2");
         ZlinkStreamAssert.Ensure(client2Auth.ActorId != client1Auth.ActorId, "Assertion failed: client2Auth.ActorId != client1Auth.ActorId");
 
+        // Register every server-push wait before the second match request can complete
+        // the deferred room join and start the game.
+        var client1SawClient2JoinTask = client1.WaitFor<PlayerJoinedNotify>()
+            .Where(message => message.Payload.ActorId == client2Auth.ActorId)
+            .Async(cancellationToken).AsTask();
+        var client1StartedTask = client1.WaitFor<BingoGameStartedNotify>().Async(cancellationToken).AsTask();
+        var client2StartedTask = client2.WaitFor<BingoGameStartedNotify>().Async(cancellationToken).AsTask();
+
         var client2MatchRes = await MatchAsync(
             client2,
             BingoSampleModes.TwoPlayer,
             cancellationToken);
 
         ZlinkStreamAssert.Ensure(client2MatchRes.RoomId == client1MatchRes.RoomId, "Assertion failed: client2MatchRes.RoomId == client1MatchRes.RoomId");
-        ZlinkStreamAssert.Ensure(client2MatchRes.State.Status == BingoRoomStatuses.Running, "Assertion failed: client2MatchRes.State.Status == BingoRoomStatuses.Running");
+        ZlinkStreamAssert.Ensure(client2MatchRes.State.Status == BingoRoomStatuses.WaitingForPlayers, "Assertion failed: client2MatchRes.State.Status == BingoRoomStatuses.WaitingForPlayers");
 
         // Joining another player is delivered as a push to existing room members.
-        var client1SawClient2Join = await client1.WaitFor<PlayerJoinedNotify>()
-            .Where(message => message.Payload.ActorId == client2Auth.ActorId)
-            .Async(cancellationToken);
+        var client1SawClient2Join = await client1SawClient2JoinTask;
 
         ZlinkStreamAssert.Ensure(client1SawClient2Join.Payload.ActorId == client2Auth.ActorId, "Assertion failed: client1SawClient2Join.Payload.ActorId == client2Auth.ActorId");
         ZlinkStreamAssert.Ensure(
@@ -82,9 +88,8 @@ internal sealed class BingoClientScenario
             .Within(TimeSpan.FromMilliseconds(250))
             .Async(cancellationToken);
 
-        // The room starts automatically after both players have joined.
-        var client1StartedTask = client1.WaitFor<BingoGameStartedNotify>().Async(cancellationToken).AsTask();
-        var client2StartedTask = client2.WaitFor<BingoGameStartedNotify>().Async(cancellationToken).AsTask();
+        // The request response only confirms that the deferred join was scheduled.
+        // These pushes are the authoritative evidence that the room is now running.
         await Task.WhenAll(client1StartedTask, client2StartedTask);
 
         var client1Started = await client1StartedTask;
@@ -188,28 +193,22 @@ internal sealed class BingoClientScenario
         ZlinkStreamAssert.Ensure(stopped.Stopped, "Assertion failed: stopped.Stopped");
     }
 
-    private static async ValueTask<MatchBingoRes> MatchAsync(
+    private static ValueTask<MatchBingoRes> MatchAsync(
         IZlinkStreamConnector connector,
         string mode,
         CancellationToken cancellationToken)
     {
-        var completion = connector.WaitFor<MatchBingoRes>()
-            .Async(cancellationToken);
-        await connector.Send(new MatchBingoReq { Mode = mode })
-            .Async(cancellationToken);
-        return (await completion).Payload;
+        return connector.Request(new MatchBingoReq { Mode = mode })
+            .Async<MatchBingoRes>(cancellationToken);
     }
 
-    private static async ValueTask<ObserveBingoEventsRes> ObserveAsync(
+    private static ValueTask<ObserveBingoEventsRes> ObserveAsync(
         IZlinkStreamConnector connector,
         string roomId,
         CancellationToken cancellationToken)
     {
-        var completion = connector.WaitFor<ObserveBingoEventsRes>()
-            .Async(cancellationToken);
-        await connector.Send(new ObserveBingoEventsReq { RoomId = roomId })
-            .Async(cancellationToken);
-        return (await completion).Payload;
+        return connector.Request(new ObserveBingoEventsReq { RoomId = roomId })
+            .Async<ObserveBingoEventsRes>(cancellationToken);
     }
 }
 

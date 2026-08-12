@@ -1,6 +1,10 @@
 import { Injectable, Scope } from '@nestjs/common';
 import { SampleTimings } from '../../../../../Configuration/sample-names';
-import { JoinConversationReq, SupportChatRoles } from '../../../../../../Shared/Contracts/messages';
+import {
+  ConversationCreateReq,
+  JoinConversationReq,
+  SupportChatRoles
+} from '../../../../../../Shared/Contracts/messages';
 import { Conversation } from '../../../../Domain/SupportChat/conversation';
 import { ConversationIdleTimerHandler } from './Handlers/conversation-idle-timer-handler';
 import { SupportNotificationPublisher } from './Notifications/support-notification-publisher';
@@ -19,7 +23,6 @@ import type {
   ConversationState,
   SupportRole
 } from '../../../../../../Shared/Contracts/messages';
-import type { ConversationCreateRequest } from './conversation-create-request';
 import type { ConversationEvent } from '../../../../Domain/SupportChat/conversation-events';
 import type { SupportUserActor } from '../../Actors/support-user-actor';
 
@@ -47,7 +50,7 @@ class ConversationSpot implements ZLinkSpot<SupportUserActor> {
   ) {}
 
   async onCreate(request: ZLinkMessage): Promise<ZLinkSpotCreateResponse> {
-    const value = request.decode<ConversationCreateRequest>(Object as never);
+    const value = request.decode(ConversationCreateReq);
     this.conversation = new Conversation(
       String(this.context.spotId),
       value.customerActorId,

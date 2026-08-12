@@ -4,7 +4,9 @@ import java.net.URI;
 import systems.zlink.framework.channels.ZLinkClient;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.protobuf.StringValue;
+import systems.zlink.e2e.registrationcodec.shared.protobuf.ProtobufEchoMsg;
+import systems.zlink.e2e.registrationcodec.shared.protobuf.ProtobufEchoReq;
+import systems.zlink.e2e.registrationcodec.shared.protobuf.ProtobufEchoRes;
 import java.nio.file.Path;
 import java.util.Set;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
@@ -123,11 +125,11 @@ public final class RegistrationCodecServerApplication {
                 Contracts.JsonEchoMsg.class);
             server.addRequestHandler(
                 ProtobufRequestHandler.class,
-                StringValue.class,
-                StringValue.class);
+                ProtobufEchoReq.class,
+                ProtobufEchoRes.class);
             server.addSendHandler(
                 ProtobufSendHandler.class,
-                StringValue.class);
+                ProtobufEchoMsg.class);
             server.addRequestHandler(
                 MsgpackRequestHandler.class,
                 Contracts.PackedEchoReq.class,

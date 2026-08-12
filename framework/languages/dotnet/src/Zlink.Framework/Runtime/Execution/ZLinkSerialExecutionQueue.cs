@@ -32,8 +32,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     private readonly Func<ZLinkSerialTurn, Action, ZLinkSerialPostAdmission> _postResume;
     private readonly Func<Func<CancellationToken, ValueTask>, bool> _tryPostCallback;
     private readonly Action<Exception> _reportHandlerException;
-    private readonly Queue<ZLinkSerialWorkItem> _applicationQueue = new();
-    private readonly Queue<ZLinkSerialWorkItem> _lifecycleQueue = new();
+    private readonly ZLinkSerialWorkQueue _applicationQueue = new();
+    private readonly ZLinkSerialWorkQueue _lifecycleQueue = new();
     private readonly ZLinkRuntimeTaskRunner _taskRunner;
     private ZLinkSerialWorkItem? _active;
     private int _completed;
@@ -489,8 +489,6 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 return false;
             }
 
-            _lifecycleQueue.EnsureCapacity(_lifecycleQueue.Count + 1);
-            EnsureAbortRelocationCapacityUnderLock();
             AbortRelocationUnderLock();
             _lifecycleQueue.Enqueue(candidate);
             CommitReservationUnderLock(
@@ -661,9 +659,9 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             if (!Matches(seal))
                 return false;
             var relocation = _relocation!;
+            var direct = new ZLinkSerialWorkQueue();
             while (relocation.Captured.TryDequeue(out var item))
                 _applicationQueue.Enqueue(item);
-            var direct = new Queue<ZLinkSerialWorkItem>();
             while (relocation.Held.TryDequeue(out var item))
             {
                 if (item.PreviousOwnerMessageFollow)
@@ -687,15 +685,6 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         while (_relocation.Held.TryDequeue(out var item))
             _applicationQueue.Enqueue(item);
         _relocation = null;
-    }
-
-    private void EnsureAbortRelocationCapacityUnderLock()
-    {
-        if (_relocation is null) return;
-        _applicationQueue.EnsureCapacity(checked(
-            _applicationQueue.Count
-            + _relocation.Captured.Count
-            + _relocation.Held.Count));
     }
 
     public bool TryCommitRelocation(
@@ -759,7 +748,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     }
 
     private bool TryCommitWorkItemUnderLock(
-        Queue<ZLinkSerialWorkItem> destination,
+        ZLinkSerialWorkQueue destination,
         ZLinkSerialWorkItem item,
         ZLinkSerialWorkLane lane,
         long accountingBytes,
@@ -773,10 +762,9 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 byteLimit))
             return false;
 
-        // Queue<T>.Enqueue can allocate. Append before changing count, byte,
-        // or sequence authority so an allocation failure leaves admission
-        // state untouched. The gate keeps the appended item invisible to the
-        // dispatcher until the accounting commit below is complete.
+        // The intrusive FIFO appends with reference assignments only. Append
+        // still precedes accounting publication so queue visibility and
+        // reservation state change in the same admission-gate critical section.
         var applicationDrained = NewApplicationDrainedSignalUnderLock(lane);
         destination.Enqueue(item);
         CommitReservationUnderLock(
@@ -787,7 +775,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     }
 
     private void CommitWorkItemWithoutConfiguredLimitUnderLock(
-        Queue<ZLinkSerialWorkItem> destination,
+        ZLinkSerialWorkQueue destination,
         ZLinkSerialWorkItem item,
         ZLinkSerialWorkLane lane,
         long accountingBytes)
@@ -1173,8 +1161,9 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             throw new InvalidOperationException(
                 "ZLink accepted-work sequence is exhausted.");
 
-        var captured = new Queue<ZLinkSerialWorkItem>();
-        var retainedApplication = new Queue<ZLinkSerialWorkItem>();
+        var captured = new ZLinkSerialWorkQueue();
+        var held = new ZLinkSerialWorkQueue();
+        var retainedApplication = new ZLinkSerialWorkQueue();
         while (_applicationQueue.TryDequeue(out var item))
         {
             if (!item.IsAccepted)
@@ -1192,6 +1181,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         _relocation = new ZLinkRelocationQueueState(
             serial,
             captured,
+            held,
             firstReservedSequence,
             reservedAcceptedSequences);
         return new ZLinkSerialRelocationSeal(
@@ -1305,13 +1295,14 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
     private sealed class ZLinkRelocationQueueState(
         ulong serial,
-        Queue<ZLinkSerialWorkItem> captured,
+        ZLinkSerialWorkQueue captured,
+        ZLinkSerialWorkQueue held,
         ulong firstReservedSequence,
         int reservedAcceptedSequences)
     {
         public ulong Serial { get; } = serial;
 
-        public Queue<ZLinkSerialWorkItem> Captured { get; } = captured;
+        public ZLinkSerialWorkQueue Captured { get; } = captured;
 
         public ulong FirstReservedSequence { get; } =
             firstReservedSequence;
@@ -1319,7 +1310,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         public int ReservedAcceptedSequences { get; } =
             reservedAcceptedSequences;
 
-        public Queue<ZLinkSerialWorkItem> Held { get; } = new();
+        public ZLinkSerialWorkQueue Held { get; } = held;
 
         public long HeldBytes { get; set; }
 

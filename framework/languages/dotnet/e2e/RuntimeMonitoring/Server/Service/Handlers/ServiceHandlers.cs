@@ -154,11 +154,11 @@ internal sealed class MonitoringSubjectSpot(IZLinkSpotContext context)
 internal sealed class MonitoringSubjectHandler(
     EvidenceStore evidence,
     ApplicationDispatchGate gate)
-    : IZLinkSpotSubscriptionHandler<MonitoringSubjectSpot, ProfileReq>
+    : IZLinkSpotSubscriptionHandler<MonitoringSubjectSpot, ProfileEvent>
 {
     public async ValueTask HandleAsync(
         MonitoringSubjectSpot spot,
-        ProfileReq message,
+        ProfileEvent message,
         ZLinkPublishMessageContext context,
         CancellationToken cancellationToken)
     {

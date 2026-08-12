@@ -115,8 +115,8 @@ public sealed record NodeMaintenanceChangedEvent(string NodeId, bool Enabled);
 public sealed record DeliverAnnounceMsg(string AnnouncementId, string Text);
 
 /// <summary>
-/// Zone spot -> bot actor. Drives one patrol step (§2.7). This is a request so the periodic
-/// producer cannot build an unbounded movement backlog while the actor is relocating.
+/// Zone spot -> bot actor. Drives one patrol step (§2.7). This is a one-way message;
+/// the periodic producer waits only for local admission and does not expect an application reply.
 /// </summary>
 public sealed record BotTickMsg();
 
@@ -160,7 +160,7 @@ public sealed record ZoneBorderEvent(
 /// player to move between zones already hosted by the same node, but rejects a new or
 /// cross-node arrival.
 /// </summary>
-public sealed record EnterZoneMsg(
+public sealed record EnterZoneReq(
     string PlayerId,
     int X,
     int Y,
@@ -204,3 +204,9 @@ public sealed record DeliverWorldAnnounceMsg(string AnnouncementId, string Text)
 public sealed record MessageFollowProbeReq(string ActorId, string ProbeId, byte[] Payload);
 
 public sealed record MessageFollowProbeRes(string ProbeId, byte[] Payload);
+
+/// <summary>
+/// Runner-only one-way Actor message used after relocation to verify that Message Follow
+/// preserves the original payload without relying on a reply route.
+/// </summary>
+public sealed record MessageFollowProbeMsg(string ActorId, string ProbeId, byte[] Payload);

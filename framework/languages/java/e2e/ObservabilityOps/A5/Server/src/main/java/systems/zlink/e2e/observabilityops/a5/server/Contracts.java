@@ -7,9 +7,9 @@ public final class Contracts {
     private Contracts() {
     }
 
-    public record ProbeRequest(String value, boolean fail) {
+    public record ProbeReq(String value, boolean fail) {
     }
 
-    public record ProbeReply(String value) {
+    public record ProbeRes(String value) {
     }
 }

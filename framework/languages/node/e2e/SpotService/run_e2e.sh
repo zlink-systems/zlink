@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
 source "$NODE_ROOT/e2e/redis-container.sh"
 source "$NODE_ROOT/e2e/runner-common.sh"
+serialize_node_e2e_run "$0" "$@"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="$ROOT_DIR/log/$RUN_ID"
 CONFIG_DIR=""
@@ -16,7 +17,6 @@ LOCAL_READINESS_ATTEMPTS=30
 ROUTE_SETTLE_TIMEOUT_SECONDS=5
 SCENARIO_SETTLE_TIMEOUT_SECONDS=3
 HTTP_PROBE_TIMEOUT_SECONDS=3
-mkdir -p "$LOG_DIR"
 
 used_ports=()
 
@@ -101,6 +101,7 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+mkdir -p "$LOG_DIR"
 CONFIG_DIR="$(mktemp -d)"
 chmod 700 "$CONFIG_DIR"
 
@@ -113,7 +114,7 @@ if [[ "$SCENARIO" != "all" && "${ZLINK_SPOT_SERVICE_RETRY_CHILD:-0}" != "1" && "
   for attempt in 1 2 3; do
     : >"${output}"
     set +e
-    timeout 420s env ZLINK_SPOT_SERVICE_RETRY_CHILD=1 "$0" "$SCENARIO" 2>&1 | tee "${output}"
+    timeout 420s env ZLINK_SPOT_SERVICE_RETRY_CHILD=1 bash "$0" "$SCENARIO" 2>&1 | tee "${output}"
     status="${PIPESTATUS[0]}"
     set -e
     if [[ "${status}" == "0" ]]; then
@@ -145,7 +146,7 @@ if [[ "$SCENARIO" == "all" && "${ZLINK_SPOT_SERVICE_ALL_CHILD:-0}" != "1" ]]; th
     for attempt in 1 2 3; do
       : >"${output}"
       set +e
-      timeout 420s env ZLINK_SPOT_SERVICE_ALL_CHILD=1 "$0" "$child_group" 2>&1 | tee "${output}"
+      timeout 420s env ZLINK_SPOT_SERVICE_ALL_CHILD=1 bash "$0" "$child_group" 2>&1 | tee "${output}"
       status="${PIPESTATUS[0]}"
       set -e
       if [[ "${status}" == "0" ]]; then
@@ -175,7 +176,7 @@ if ! command -v docker >/dev/null 2>&1; then
   echo "Docker is required for SpotService location-store scenarios." >&2
   exit 1
 fi
-start_redis_container "zlink-redis-node-e2e-${RANDOM}-$$" -p "127.0.0.1::6379" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
+start_redis_container "zlink-redis-node-e2e-${RANDOM}-$$" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
 REDIS_ENDPOINT="$(redis_container_endpoint "$REDIS_CONTAINER_ID")"
 REDIS_KEY_PREFIX="spot-service:node:${RUN_ID}:location"
 wait_port redis "tcp://$REDIS_ENDPOINT"
@@ -527,11 +528,10 @@ elif [[ "$SCENARIO" == "default-batch" ]]; then
   run_client SM-B2
   run_client SM-B1
   run_client SM-B3
-  run_client SM-B5
   run_client SM-B9
   run_client sm-b6
   run_client sm-b8
-  run_client sm-d1-d6
+  run_client sm-d2-d6
   run_client sm-d3
   run_client sm-d4
   run_client sm-d5

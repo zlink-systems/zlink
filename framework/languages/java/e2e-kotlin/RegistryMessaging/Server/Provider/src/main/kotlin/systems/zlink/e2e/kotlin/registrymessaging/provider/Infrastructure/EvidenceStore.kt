@@ -1,7 +1,6 @@
-package Infrastructure
+package systems.zlink.e2e.kotlin.registrymessaging.provider.Infrastructure
 
 
-import systems.zlink.e2e.kotlin.registrymessaging.provider.Infrastructure
 import java.util.concurrent.TimeUnit
 import java.nio.file.Files
 import java.nio.file.Path

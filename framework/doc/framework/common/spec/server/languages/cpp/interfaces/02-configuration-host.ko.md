@@ -1092,7 +1092,7 @@ configuration 등록 표면이 소유한다.
 - RouteMesh ChannelName과 classic fanout channel은 서로 다른 namespace와 socket 계약이다.
 - Spot·Actor 등록은 owner `mesh_node_builder_t`에 둔다.
 
-drain 중 claim 진행의 의미는 [Graceful Drain §5](../../../../28-graceful-drain-handoff.ko.md)가 소유한다.
+drain 중 claim 진행의 의미는 [Graceful Drain §5](../../../../30-host-relocation-flow.ko.md)가 소유한다.
 
 ## 9. Configuration 조회
 

@@ -1,5 +1,11 @@
 import type { ZLinkClientServerServerDescriptor } from '../../contracts/Locations';
 import { ZLinkFrameworkRuntimeState } from '../../contracts/Locations';
+import {
+  decodeCanonicalServiceWireText,
+  decodeServiceWireRoutingId,
+  encodeCanonicalServiceWireText,
+  encodeServiceWireRoutingId
+} from '../foundation/service-wire-binary-primitives';
 
 const MAGIC_0 = 0x5a;
 const MAGIC_1 = 0x4d;
@@ -157,10 +163,11 @@ function encodeServerAdmission(
   descriptor: ZLinkClientServerServerDescriptor,
   normalizedEffectiveMaxMessageBytes: number
 ): Buffer {
+  const serverRid = encodeServiceWireRoutingId(descriptor.serverRid, 'serverRid', 0xff, fail);
   const roleBody = concat(
     encodeText8(descriptor.channelName, 'channelName'),
     Buffer.of(DIRECTION_CLIENT_TO_SERVER),
-    encodeBytes8(Buffer.from(String(descriptor.serverRid), 'utf8'), 'serverRid'),
+    concat(Buffer.of(serverRid.byteLength), serverRid),
     encodeNonZeroU64(descriptor.lifecycleGeneration, 'lifecycleGeneration'),
     encodeNonZeroU64(descriptor.descriptorRevision, 'descriptorRevision'),
     encodeU32(descriptor.weight),
@@ -207,10 +214,7 @@ function decodeServerAdmission(reader: Reader): ZLinkClientServerAdmission {
   if (reader.u8('direction') !== DIRECTION_CLIENT_TO_SERVER) {
     fail('ClientServer direction is invalid.');
   }
-  const serverRid = reader.bytes8('serverRid').toString('utf8');
-  if (Buffer.byteLength(serverRid, 'utf8') === 0 || serverRid.includes('\0')) {
-    fail('ClientServer serverRid is invalid.');
-  }
+  const serverRid = decodeServiceWireRoutingId(reader.bytes8('serverRid'), 'serverRid', 0xff, fail);
   const lifecycleGeneration = reader.nonZeroU64('lifecycleGeneration');
   const descriptorRevision = reader.nonZeroU64('descriptorRevision');
   const weight = reader.u32('weight');
@@ -262,23 +266,12 @@ function encodeNonZeroU64(value: bigint, field: string): Buffer {
 }
 
 function encodeText8(value: string, field: string): Buffer {
-  return encodeBytes8(Buffer.from(value, 'utf8'), field, value);
-}
-
-function encodeBytes8(bytes: Buffer, field: string, text?: string): Buffer {
-  if (bytes.byteLength < 1
-    || bytes.byteLength > 0xff
-    || (text !== undefined && text.includes('\0'))) {
-    fail(`${field} must be bounded non-empty bytes without NUL.`);
-  }
+  const bytes = encodeCanonicalServiceWireText(value, field, 0xff, fail);
   return concat(Buffer.of(bytes.byteLength), bytes);
 }
 
 function encodeText16(value: string, field: string): Buffer {
-  const bytes = Buffer.from(value, 'utf8');
-  if (bytes.byteLength < 1 || bytes.byteLength > 4096 || value.includes('\0')) {
-    fail(`${field} must be bounded non-empty UTF-8 without NUL.`);
-  }
+  const bytes = encodeCanonicalServiceWireText(value, field, 4096, fail);
   return concat(encodeU16(bytes.byteLength), bytes);
 }
 
@@ -392,9 +385,5 @@ class Reader {
 }
 
 function decodeText(bytes: Buffer, field: string): string {
-  const value = bytes.toString('utf8');
-  if (value.includes('\0') || !Buffer.from(value, 'utf8').equals(bytes)) {
-    fail(`${field} is not valid UTF-8 text.`);
-  }
-  return value;
+  return decodeCanonicalServiceWireText(bytes, field, fail);
 }

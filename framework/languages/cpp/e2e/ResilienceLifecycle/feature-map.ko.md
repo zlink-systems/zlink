@@ -4,9 +4,9 @@
 
 현재 C++ `ResilienceLifecycle`은 Redis location store를 공유하는 Provider, Consumer, Client target으로 recovery 흐름을 실행한다. 10.0.0에서는 Consumer/Provider의 MeshNode와 ChannelName client로 같은 scenario를 다시 연결한다. Client target은 HTTP-only dispatcher이며 Provider admin endpoint는 drain/restore/weight/wait marker를 보존한다.
 
-최신 full runner proof는 `logs/20260708-133049-101113`이다. 이 실행은 `RL-B2`의 `kill -9`와
-`RL-C2`의 SIGABRT crash처럼 시나리오가 의도한 failure injection만 허용하고, 그 외 provider
-비정상 종료는 runner 실패로 드러내도록 보강한 뒤 통과했다.
+최신 full runner proof는 `logs/20260708-133049-101113`이다. 이 실행은 `RL-B2`의 `kill -9` 같은
+시나리오가 의도한 failure injection만 허용하고, 그 외 provider 비정상 종료는 runner 실패로
+드러내도록 보강한 뒤 통과했다. 병합 전 `RL-C2` 실행 증거는 과거 provenance로만 보존한다.
 
 | 시나리오 | 상태 | 근거 |
 |----------|------|------|
@@ -22,7 +22,6 @@
 | `RL-B5` | 구현 | `rl_b5_drain_inflight_scenario.hpp`가 Consumer HTTP slow request를 열고 실제 slow provider를 evidence file로 찾은 뒤 해당 provider를 `/admin/drain`한다. 신규 request가 healthy provider로 가는지, in-flight reply가 drained provider에서 끝나는지, drained provider evidence가 새 request를 받지 않는지, restore 뒤 evidence가 회복되는지 `.NET`처럼 검증한다. |
 | `RL-B6` | 구현 | provider B의 gray fault mode를 켠 뒤 gray request의 `RequestFailed`와 healthy provider 성공을 함께 관찰하고, fault mode 해제 뒤 follow-up request가 정상화되는지 검증한다. |
 | `RL-C1` | 구현 | `rl_c1_client_host_lifecycle_scenario.hpp`가 Consumer HTTP `/profile/request/new-client`로 요청마다 새 client host를 만들고, 반복 request와 cleanup follow-up marker가 provider evidence에 남는지 검증한다. 이어서 같은 MeshName과 RID를 유지한 RouteMesh host를 12번 순차 재생성한다. 각 host는 `tcp://127.0.0.1:0`에서 새 실제 endpoint와 generation을 얻고, Redis reciprocal auto-connect로 기존 `api-a`를 ready peer로 확인한 뒤 공개 targeted request를 완료한다. 최신 일반 실행은 12회 요청과 전체 cleanup이 통과했다(`logs/20260720-022259-1836671`). |
-| `RL-C2` | 구현 | provider B의 `/admin/crash`를 호출한 뒤 Consumer `/topology/wait`가 `api-b` Ready 0개로 수렴하는지 확인하고, Consumer HTTP `/profile/request/new-client`가 정상 provider `api-a`로 수렴하는지 확인한다. provider B 재기동 뒤 일반 request가 `api-b` evidence까지 회복되는지도 검증한다. |
 | `RL-C3` | 구현 | `rl_c3_node_pause_recovery_scenario.hpp`가 provider B `/shutdown`, Consumer HTTP `/profile/request`의 `api-a` 수렴, provider B 재기동 뒤 Consumer `/topology/wait` Ready 1, recovered request evidence를 `.NET`처럼 검증한다. |
 | `RL-C4` | 구현 | `rl_c4_location_store_outage_scenario.hpp`가 Redis location store outage 전 Consumer `/profile/request/manual`을 호출하고, runner가 Redis container를 pause한 상태에서도 Consumer role의 established manual channel request가 성공하고 provider evidence가 남는지 검증한다. Redis 복구와 provider A 재기동 뒤 Consumer `/profile/request/new-client`가 `rl-c4-after-restart` request와 provider evidence를 성공시키는지 확인한다. |
 | `RL-D1` | 구현 | runner가 Consumer HTTP `/profile/request`로 120개 request burst를 만들고 provider evidence에서 `rl-d1-` marker가 남는지 검증한다. |

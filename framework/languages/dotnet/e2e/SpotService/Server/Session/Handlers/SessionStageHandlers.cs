@@ -9,11 +9,11 @@ namespace SpotService.Server.Session.Handlers;
 
 [ZLinkSpotSubscriptionHandler(SpotServiceNames.SpotChannel, SpotServiceNames.SpotMsgTopic)]
 internal sealed class SpotMsgHandler(EvidenceStore evidence)
-    : IZLinkSpotSubscriptionHandler<ScenarioUserSpot, SpotMsg>
+    : IZLinkSpotSubscriptionHandler<ScenarioUserSpot, SpotEvent>
 {
     public ValueTask HandleAsync(
         ScenarioUserSpot spot,
-        SpotMsg message,
+        SpotEvent message,
         ZLinkPublishMessageContext context,
         CancellationToken cancellationToken)
     {

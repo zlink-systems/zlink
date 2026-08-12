@@ -3,10 +3,10 @@ package systems.zlink.e2e.kotlin.pubsub.shared
 object Contracts {
     const val EVENT_CHANNEL = "pubsub.kotlin.events"
     const val HANDLER_GROUP = "pubsub-kotlin"
-    const val EVENT_PACKET = "EventMsg"
+    const val EVENT_PACKET = "Event"
 }
 
-class EventMsg() {
+class Event() {
     var scenario: String = ""
     var sequence: Int = 0
     var value: String = ""
@@ -22,7 +22,7 @@ class EventMsg() {
     }
 }
 
-class MissingEventMsg(
+class MissingEvent(
     var scenario: String = "",
     var sequence: Int = 0,
     var value: String = "",

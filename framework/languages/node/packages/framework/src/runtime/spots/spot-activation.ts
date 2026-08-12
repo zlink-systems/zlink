@@ -202,18 +202,15 @@ export class ZLinkSpotActivationLifecycle {
       undefined,
       this.options.statefulExecutionAllowed
     );
-    const outbound = new DefaultZLinkSpotOutbound(
+    const outbound = new DefaultZLinkSpotOutbound({
       serial,
-      this.options.channelClient,
-      this.options.fanoutClient,
-      this.options.spotPublisherClient,
-      this.options.routedTransport,
-      this.options.spotRouterChannelIdForMesh ?? ((selectedMesh) => selectedMesh),
-      undefined,
+      channelClient: this.options.channelClient,
+      spotPublisherClient: this.options.spotPublisherClient,
+      routedTransport: this.options.routedTransport,
+      spotRouterChannelIdForMesh: this.options.spotRouterChannelIdForMesh,
       meshName,
-      undefined,
-      this.options.addressTransport
-    );
+      addressTransport: this.options.addressTransport
+    });
     const nativeSpot = this.options.createNativeSpot?.(meshName, spotId, {
       objectKind,
       stableType,
@@ -342,18 +339,15 @@ export class ZLinkSpotActivationLifecycle {
       undefined,
       this.options.statefulExecutionAllowed
     );
-    const outbound = new DefaultZLinkSpotOutbound(
+    const outbound = new DefaultZLinkSpotOutbound({
       serial,
-      this.options.channelClient,
-      this.options.fanoutClient,
-      this.options.spotPublisherClient,
-      this.options.routedTransport,
-      this.options.spotRouterChannelIdForMesh ?? ((selectedMesh) => selectedMesh),
-      undefined,
+      channelClient: this.options.channelClient,
+      spotPublisherClient: this.options.spotPublisherClient,
+      routedTransport: this.options.routedTransport,
+      spotRouterChannelIdForMesh: this.options.spotRouterChannelIdForMesh,
       meshName,
-      undefined,
-      this.options.addressTransport
-    );
+      addressTransport: this.options.addressTransport
+    });
     let instance: TSpot | undefined;
     const context = createInstanceSpotContext({
         meshName,
@@ -499,18 +493,16 @@ export class ZLinkSpotActivationLifecycle {
       this.options.statefulExecutionAllowed
     );
     let nativeSpot: ZLinkBackendSpot | undefined;
-    const outbound = new DefaultZLinkSpotOutbound(
+    const outbound = new DefaultZLinkSpotOutbound({
       serial,
-      this.options.channelClient,
-      this.options.fanoutClient,
-      this.options.spotPublisherClient,
-      this.options.routedTransport,
-      this.options.spotRouterChannelIdForMesh ?? ((meshName) => meshName),
-      () => nativeSpot,
+      channelClient: this.options.channelClient,
+      spotPublisherClient: this.options.spotPublisherClient,
+      routedTransport: this.options.routedTransport,
+      spotRouterChannelIdForMesh: this.options.spotRouterChannelIdForMesh,
+      sourceSpotProvider: () => nativeSpot,
       meshName,
-      this.options.channelMeshNameForChannel,
-      this.options.addressTransport
-    );
+      addressTransport: this.options.addressTransport
+    });
     // Core owns the lifecycle generation. Publish the location only after the
     // formal Spot exists, so no synthetic generation can escape into routing.
     nativeSpot = this.options.createNativeSpot?.(meshName, spotId, authority);

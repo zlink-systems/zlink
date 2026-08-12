@@ -45,9 +45,42 @@ public final class ZLinkDeferredJoinCompletionAuthority {
         "application/vnd.zlink.deferred-join-relocation-v1";
     private static final int RELOCATION_COMPLETION_MAGIC = 0x5A4C444A;
     private static final int RELOCATION_COMPLETION_VERSION = 1;
+    private static final int COMPLETION_PREPARED = 1;
+    private static final int TARGET_LIFECYCLE_COMPLETED = 2;
+    private static final int COMPLETION_DELIVERED = 3;
+    private static final String SOURCE_LEAVE_PACKET =
+        "ZLinkActorSourceLeaveSubmitted";
+    private static final long SOURCE_LEAVE_OPERATION_HIGH_MASK =
+        0x5352434C45415645L;
+    private static final long SOURCE_LEAVE_OPERATION_LOW_MASK =
+        0x5355424D49545445L;
+    private static final String SOURCE_CLEANUP_PACKET =
+        "ZLinkActorSourceCleanupCompleted";
+    private static final long SOURCE_CLEANUP_OPERATION_HIGH_MASK =
+        0x534F55524345434CL;
+    private static final long SOURCE_CLEANUP_OPERATION_LOW_MASK =
+        0x45414E5550434F4DL;
 
     private final ZLinkLocationRepository authority;
     private final ZLinkRelocationStore relocation;
+
+    /** Immutable Actor tenure accepted from the committed Location row. */
+    public record CommittedActorTenure(
+        ZLinkBackendActorRef actor,
+        long targetNodeGeneration,
+        long authorityOwnerGeneration,
+        long ownerLeaseGeneration) {
+        public CommittedActorTenure {
+            Objects.requireNonNull(actor, "actor");
+            if (actor.generation() <= 0
+                || targetNodeGeneration <= 0
+                || authorityOwnerGeneration <= 0
+                || ownerLeaseGeneration <= 0) {
+                throw new IllegalArgumentException(
+                    "committed Actor tenure generations must be positive");
+            }
+        }
+    }
 
     public ZLinkDeferredJoinCompletionAuthority(
         ZLinkLocationRepository authority,
@@ -189,7 +222,7 @@ public final class ZLinkDeferredJoinCompletionAuthority {
                     sessionRouteCommand44).canonicalBytes();
                 byte[] targetAuthority =
                     new ZLinkActorAuthorityPayloadCodec().encode(
-                        ZLinkActorAuthorityPayloadCodec.State.READY,
+                        ZLinkActorAuthorityPayloadCodec.State.CREATING,
                         actorType,
                         actor.actorId(),
                         targetSpotId,
@@ -268,7 +301,7 @@ public final class ZLinkDeferredJoinCompletionAuthority {
         });
     }
 
-    public CompletionStage<Long> commitPrepared(
+    public CompletionStage<CommittedActorTenure> commitPrepared(
         UUID aggregateId,
         long aggregateGeneration,
         ZLinkBackendActorRef actor) {
@@ -281,7 +314,7 @@ public final class ZLinkDeferredJoinCompletionAuthority {
             .thenCompose(result ->
                 result == ZLinkAggregateCommitResult.COMMITTED
                     || result == ZLinkAggregateCommitResult.ALREADY_COMMITTED
-                    ? readCommittedOwnerGeneration(
+                    ? readCommittedTenure(
                         aggregateId,
                         aggregateGeneration,
                         actor)
@@ -291,7 +324,7 @@ public final class ZLinkDeferredJoinCompletionAuthority {
                                 + result)));
     }
 
-    private CompletionStage<Long> readCommittedOwnerGeneration(
+    private CompletionStage<CommittedActorTenure> readCommittedTenure(
         UUID aggregateId,
         long aggregateGeneration,
         ZLinkBackendActorRef actor) {
@@ -358,15 +391,23 @@ public final class ZLinkDeferredJoinCompletionAuthority {
                             throw new IllegalStateException(
                                 "direct Join canonical root identity differs after commit");
                         }
-                        return snapshot.authorityOwnerGeneration();
+                        return new CommittedActorTenure(
+                            new ZLinkBackendActorRef(
+                                snapshot.allocation().descriptor().rid(),
+                                actor.actorId(),
+                                snapshot.objectGeneration()),
+                            snapshot.allocation()
+                                .descriptorLifecycleGeneration(),
+                            snapshot.authorityOwnerGeneration(),
+                            snapshot.ownerLeaseGeneration());
                     });
             });
     }
 
     /**
      * Waits until the aggregate commit has transferred the Actor authority to
-     * the target owner. The source uses this infrastructure-side observation
-     * before releasing its local Actor resources.
+     * the target owner. This is an infrastructure fence while the public
+     * authority remains Creating; it is not the Ready boundary.
      */
     public CompletionStage<Void> awaitTargetCommit(
         UUID aggregateId,
@@ -409,9 +450,234 @@ public final class ZLinkDeferredJoinCompletionAuthority {
     }
 
     /**
-     * Waits until the target has completed the durable Join completion
-     * callback.  Source cleanup is allowed only after this point; the target
-     * callback itself must not wait for source cleanup.
+     * Waits for the target lifecycle callback boundary that authorizes the
+     * source runtime to submit its one-way leave notification.
+     */
+    public CompletionStage<Void> awaitTargetLifecycleCompleted(
+        UUID aggregateId,
+        long aggregateGeneration,
+        ZLinkActorJoinOperationId operationId,
+        ZLinkBackendActorRef actor,
+        Duration timeout) {
+        return awaitRelocationCompletionState(
+            aggregateId,
+            aggregateGeneration,
+            operationId,
+            actor,
+            timeout,
+            TARGET_LIFECYCLE_COMPLETED,
+            "deferred Join target lifecycle");
+    }
+
+    /**
+     * Waits until the source has submitted its one-way leave notification.
+     * The notification's own completion or failure is deliberately outside
+     * this fence.
+     */
+    public CompletionStage<Void> awaitSourceLeaveSubmitted(
+        UUID aggregateId,
+        long aggregateGeneration,
+        ZLinkActorJoinOperationId operationId,
+        ZLinkBackendActorRef actor,
+        Duration timeout) {
+        Objects.requireNonNull(aggregateId, "aggregateId");
+        Objects.requireNonNull(operationId, "operationId");
+        Objects.requireNonNull(actor, "actor");
+        Objects.requireNonNull(timeout, "timeout");
+        if (aggregateGeneration <= 0
+            || timeout.isZero()
+            || timeout.isNegative()) {
+            return CompletableFuture.failedFuture(
+                new IllegalArgumentException(
+                    "deferred Join source-leave wait is invalid"));
+        }
+        return await(
+            () -> read(actor.actorId()).thenApply(current ->
+                current.publication().aggregateId().equals(aggregateId)
+                    && current.publication().aggregateGeneration()
+                        == aggregateGeneration
+                    && current.snapshot().ownerId().equals(
+                        current.publication().targetOwnerId())
+                    && current.snapshot().ownerLeaseGeneration()
+                        == current.publication()
+                            .targetOwnerLeaseGeneration()
+                    && findSourceLeaveMarker(
+                        current.root().terminalCompletions(),
+                        operationId) != null),
+            timeout,
+            "deferred Join source leave submission");
+    }
+
+    private CompletionStage<Void> awaitRelocationCompletionState(
+        UUID aggregateId,
+        long aggregateGeneration,
+        ZLinkActorJoinOperationId operationId,
+        ZLinkBackendActorRef actor,
+        Duration timeout,
+        int state,
+        String description) {
+        Objects.requireNonNull(aggregateId, "aggregateId");
+        Objects.requireNonNull(operationId, "operationId");
+        Objects.requireNonNull(actor, "actor");
+        Objects.requireNonNull(timeout, "timeout");
+        if (aggregateGeneration <= 0
+            || timeout.isZero()
+            || timeout.isNegative()) {
+            return CompletableFuture.failedFuture(
+                new IllegalArgumentException(
+                    "deferred Join lifecycle wait is invalid"));
+        }
+        return await(
+            () -> readRelocationCompletion(
+                aggregateId,
+                aggregateGeneration,
+                operationId,
+                actor)
+                .thenApply(completion -> completion != null
+                    && completion.deliveryState() >= state),
+            timeout,
+            description);
+    }
+
+    /** Publishes the target lifecycle boundary exactly once. */
+    public CompletionStage<Void> markTargetLifecycleCompleted(
+        ZLinkActorJoinOperationId operationId,
+        ZLinkBackendActorRef actor) {
+        return advanceRelocationState(
+            operationId,
+            actor,
+            TARGET_LIFECYCLE_COMPLETED,
+            COMPLETION_PREPARED,
+            "target lifecycle");
+    }
+
+    /** Publishes that the source leave notification was submitted. */
+    public CompletionStage<Void> markSourceLeaveSubmitted(
+        ZLinkActorJoinOperationId operationId,
+        ZLinkBackendActorRef actor) {
+        Objects.requireNonNull(operationId, "operationId");
+        Objects.requireNonNull(actor, "actor");
+        return read(actor.actorId()).thenCompose(current -> {
+            validateActor(current.root(), actor);
+            if (findSourceLeaveMarker(
+                    current.root().terminalCompletions(),
+                    operationId) != null) {
+                return CompletableFuture.completedFuture(null);
+            }
+            var completion = find(
+                current.root().terminalCompletions(), operationId);
+            if (completion == null
+                || !isRelocationCompletion(completion)
+                || completion.deliveryState()
+                    != TARGET_LIFECYCLE_COMPLETED) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                        "deferred Join source leave precedes target lifecycle"));
+            }
+            long sequence = current.root().terminalCompletions().stream()
+                .filter(value -> value.participantId()
+                    == completion.participantId())
+                .mapToLong(
+                    ZLinkServiceRelocationEnvelopeCodec.Completion::sequence)
+                .reduce(0L, (left, right) ->
+                    Long.compareUnsigned(left, right) >= 0 ? left : right);
+            if (sequence == -1L) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                        "deferred Join source-leave sequence is exhausted"));
+            }
+            var marker = new ZLinkServiceRelocationEnvelopeCodec.Completion(
+                operationId.high() ^ SOURCE_LEAVE_OPERATION_HIGH_MASK,
+                operationId.low() ^ SOURCE_LEAVE_OPERATION_LOW_MASK,
+                completion.sourceOwnerId(),
+                completion.sourceOwnerLeaseGeneration(),
+                completion.sourceNodeRid(),
+                completion.sourceNodeGeneration(),
+                completion.participantId(),
+                sequence + 1,
+                0,
+                0,
+                COMPLETION_DELIVERED,
+                new ZLinkServiceRelocationEnvelopeCodec.Payload(
+                    SOURCE_LEAVE_PACKET,
+                    CONTENT_TYPE,
+                    new byte[0]));
+            var successor =
+                ZLinkServiceRelocationEnvelopeCodec.putTerminalCompletion(
+                    current.root(), marker);
+            return publish(current, successor).thenApply(ignored -> null);
+        });
+    }
+
+    private CompletionStage<Void> advanceRelocationState(
+        ZLinkActorJoinOperationId operationId,
+        ZLinkBackendActorRef actor,
+        int nextState,
+        int requiredState,
+        String description) {
+        Objects.requireNonNull(operationId, "operationId");
+        Objects.requireNonNull(actor, "actor");
+        return recover(operationId, actor).thenCompose(current -> {
+            if (current.cursor() >= nextState) {
+                return CompletableFuture.completedFuture(null);
+            }
+            if (current.cursor() != requiredState) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                        "deferred Join " + description
+                            + " has an invalid predecessor"));
+            }
+            return advance(current, actor, nextState).thenApply(ignored -> null);
+        });
+    }
+
+    private CompletionStage<
+        ZLinkServiceRelocationEnvelopeCodec.Completion>
+        readRelocationCompletion(
+            UUID aggregateId,
+            long aggregateGeneration,
+            ZLinkActorJoinOperationId operationId,
+            ZLinkBackendActorRef actor) {
+        return authority.read(
+                ZLinkAuthorityKeyCodec.actor(actor.actorId()),
+                NEVER)
+            .thenCompose(result -> {
+                if (!(result instanceof ZLinkAuthoritySnapshot snapshot)
+                    || snapshot.objectGeneration() != actor.generation()) {
+                    return CompletableFuture.completedFuture(null);
+                }
+                var publication =
+                    ZLinkCanonicalRelocationAuthorityStateCodec.decode(
+                        snapshot.payload());
+                if (publication == null
+                    || !publication.aggregateId().equals(aggregateId)
+                    || publication.aggregateGeneration()
+                        != aggregateGeneration
+                    || !snapshot.ownerId().equals(
+                        publication.targetOwnerId())
+                    || snapshot.ownerLeaseGeneration()
+                        != publication.targetOwnerLeaseGeneration()) {
+                    return CompletableFuture.completedFuture(null);
+                }
+                return load(
+                        publication.reference(),
+                        publication.checksumCrc32c())
+                    .thenApply(loaded -> {
+                        var completion = find(
+                            loaded.root().terminalCompletions(),
+                            operationId);
+                        return completion != null
+                                && isRelocationCompletion(completion)
+                            ? completion
+                            : null;
+                    });
+            });
+    }
+
+    /**
+     * Waits until the target has completed lifecycle callbacks, temporary
+     * replay and the durable Ready publication. Source cleanup starts only
+     * after this boundary.
      */
     public CompletionStage<Void> awaitTargetCompletion(
         UUID aggregateId,
@@ -452,6 +718,15 @@ public final class ZLinkDeferredJoinCompletionAuthority {
                             != publication.targetOwnerLeaseGeneration()) {
                         return CompletableFuture.completedFuture(false);
                     }
+                    var actorAuthority =
+                        new ZLinkActorAuthorityPayloadCodec()
+                            .decode(snapshot.payload())
+                            .orElse(null);
+                    if (actorAuthority == null
+                        || actorAuthority.state()
+                            != ZLinkActorAuthorityPayloadCodec.State.READY) {
+                        return CompletableFuture.completedFuture(false);
+                    }
                     return load(
                             publication.reference(),
                             publication.checksumCrc32c())
@@ -460,11 +735,86 @@ public final class ZLinkDeferredJoinCompletionAuthority {
                                 loaded.root().terminalCompletions(),
                                 operationId);
                             return completion != null
-                                && completion.deliveryState() >= 3;
+                                && completion.deliveryState()
+                                    >= COMPLETION_DELIVERED;
                         });
                 }),
             timeout,
             "deferred Join target completion");
+    }
+
+    /**
+     * Publishes Ready after target callbacks and temporary replay have ended.
+     * The canonical relocation slot remains attached for source cleanup and
+     * command 44/45 recovery.
+     */
+    public CompletionStage<Void> publishTargetReady(
+        ZLinkActorJoinOperationId operationId,
+        ZLinkBackendActorRef actor) {
+        Objects.requireNonNull(operationId, "operationId");
+        Objects.requireNonNull(actor, "actor");
+        return read(actor.actorId()).thenCompose(current -> {
+            validateActor(current.root(), actor);
+            var completion = find(
+                current.root().terminalCompletions(), operationId);
+            if (completion == null
+                || completion.deliveryState() < COMPLETION_DELIVERED) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                        "deferred Join callback is incomplete before Ready"));
+            }
+            var codec = new ZLinkActorAuthorityPayloadCodec();
+            var authorityPayload = codec.decode(current.snapshot().payload())
+                .orElseThrow(() -> new IllegalStateException(
+                    "deferred Join Actor authority payload is invalid"));
+            if (authorityPayload.state()
+                    == ZLinkActorAuthorityPayloadCodec.State.READY) {
+                return CompletableFuture.completedFuture(null);
+            }
+            if (authorityPayload.state()
+                    != ZLinkActorAuthorityPayloadCodec.State.CREATING
+                || !authorityPayload.actorId().equals(actor.actorId())
+                || !authorityPayload.nodeRid().equals(actor.nodeRid())
+                || !authorityPayload.ownerId().equals(
+                    current.publication().targetOwnerId())
+                || authorityPayload.ownerLeaseGeneration()
+                    != current.publication().targetOwnerLeaseGeneration()) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                        "deferred Join target authority changed before Ready"));
+            }
+            byte[] ready = codec.encode(
+                ZLinkActorAuthorityPayloadCodec.State.READY,
+                authorityPayload.stableType(),
+                authorityPayload.actorId(),
+                authorityPayload.currentSpotId(),
+                authorityPayload.currentSpotGeneration(),
+                authorityPayload.currentSpotKind(),
+                authorityPayload.ownerId(),
+                authorityPayload.ownerLeaseGeneration(),
+                authorityPayload.meshName(),
+                authorityPayload.nodeRid(),
+                authorityPayload.nodeGeneration());
+            byte[] published =
+                ZLinkCanonicalRelocationAuthorityStateCodec
+                    .replaceApplicationPayload(
+                        current.snapshot().payload(), ready);
+            return authority.compareExchange(
+                    current.authorityKey(),
+                    new ZLinkAuthorityExpectFound(
+                        current.snapshot().storeVersion()),
+                    new ZLinkAuthorityPut(
+                        published,
+                        ZLinkAuthorityGenerationTransition.PRESERVE,
+                        Optional.empty(),
+                        Optional.empty()),
+                    NEVER)
+                .thenCompose(result -> result instanceof ZLinkAuthorityStored
+                    ? CompletableFuture.completedFuture(null)
+                    : CompletableFuture.failedFuture(
+                        new IllegalStateException(
+                            "deferred Join Ready CAS conflicted")));
+        });
     }
 
     /**
@@ -532,9 +882,66 @@ public final class ZLinkDeferredJoinCompletionAuthority {
                     new IllegalStateException(
                         "deferred Join source-cleanup operation is missing"));
             }
+            var actorAuthority = new ZLinkActorAuthorityPayloadCodec()
+                .decode(current.snapshot().payload())
+                .orElse(null);
+            if (completion.deliveryState() < COMPLETION_DELIVERED
+                || actorAuthority == null
+                || actorAuthority.state()
+                    != ZLinkActorAuthorityPayloadCodec.State.READY) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                        "deferred Join source cleanup precedes target Ready"));
+            }
             if (current.publication().sourceCleanupCompleted()) {
                 return CompletableFuture.completedFuture(null);
             }
+            CompletionStage<Current> cleanupMarked;
+            if (findSourceCleanupMarker(
+                    current.root().terminalCompletions(), operationId) != null) {
+                cleanupMarked = CompletableFuture.completedFuture(current);
+            } else {
+                long sequence = current.root().terminalCompletions().stream()
+                    .filter(value -> value.participantId()
+                        == completion.participantId())
+                    .mapToLong(
+                        ZLinkServiceRelocationEnvelopeCodec.Completion::sequence)
+                    .reduce(0L, (left, right) ->
+                        Long.compareUnsigned(left, right) >= 0 ? left : right);
+                if (sequence == -1L) {
+                    return CompletableFuture.failedFuture(
+                        new IllegalStateException(
+                            "deferred Join source-cleanup sequence is exhausted"));
+                }
+                var marker = new ZLinkServiceRelocationEnvelopeCodec.Completion(
+                    operationId.high() ^ SOURCE_CLEANUP_OPERATION_HIGH_MASK,
+                    operationId.low() ^ SOURCE_CLEANUP_OPERATION_LOW_MASK,
+                    completion.sourceOwnerId(),
+                    completion.sourceOwnerLeaseGeneration(),
+                    completion.sourceNodeRid(),
+                    completion.sourceNodeGeneration(),
+                    completion.participantId(),
+                    sequence + 1,
+                    0,
+                    0,
+                    COMPLETION_DELIVERED,
+                    new ZLinkServiceRelocationEnvelopeCodec.Payload(
+                        SOURCE_CLEANUP_PACKET,
+                        CONTENT_TYPE,
+                        new byte[0]));
+                cleanupMarked = publish(
+                    current,
+                    ZLinkServiceRelocationEnvelopeCodec.putTerminalCompletion(
+                        current.root(), marker));
+            }
+            return cleanupMarked.thenCompose(this::completeAuthority);
+        });
+    }
+
+    private CompletionStage<Void> completeAuthority(Current current) {
+        if (current.publication().sourceCleanupCompleted()) {
+            return CompletableFuture.completedFuture(null);
+        }
             var stored = new ZLinkRelocationStored(
                 current.publication().reference(),
                 current.publication().checksumCrc32c(),
@@ -561,7 +968,6 @@ public final class ZLinkDeferredJoinCompletionAuthority {
                     : CompletableFuture.failedFuture(
                         new IllegalStateException(
                             "deferred Join source-cleanup CAS conflicted")));
-        });
     }
 
     public CompletionStage<Void> abortPrepared(
@@ -727,7 +1133,7 @@ public final class ZLinkDeferredJoinCompletionAuthority {
         Published expected,
         ZLinkBackendActorRef actor,
         int cursor) {
-        if (cursor < 1 || cursor > 3
+        if (cursor < 1
             || cursor > expected.cursor() + 1) {
             return CompletableFuture.failedFuture(
                 new IllegalArgumentException(
@@ -745,6 +1151,11 @@ public final class ZLinkDeferredJoinCompletionAuthority {
             }
             validateCompletion(
                 completion, actor, expected.rawReply());
+            if (cursor > COMPLETION_DELIVERED) {
+                return CompletableFuture.failedFuture(
+                    new IllegalArgumentException(
+                        "invalid deferred Join completion cursor"));
+            }
             if (completion.deliveryState() >= cursor) {
                 return CompletableFuture.completedFuture(
                     published(current, completion));
@@ -774,7 +1185,7 @@ public final class ZLinkDeferredJoinCompletionAuthority {
     public CompletionStage<Void> release(
         Published delivered,
         ZLinkBackendActorRef actor) {
-        if (delivered.cursor() != 3) {
+        if (delivered.cursor() != COMPLETION_DELIVERED) {
             return CompletableFuture.failedFuture(
                 new IllegalArgumentException(
                     "deferred Join completion must be Delivered before release"));
@@ -818,7 +1229,7 @@ public final class ZLinkDeferredJoinCompletionAuthority {
             if (completion == null) {
                 return CompletableFuture.completedFuture(null);
             }
-            if (completion.deliveryState() != 3) {
+            if (completion.deliveryState() != COMPLETION_DELIVERED) {
                 return CompletableFuture.failedFuture(
                     new IllegalStateException(
                         "Actor authority completion is not Delivered"));
@@ -856,7 +1267,8 @@ public final class ZLinkDeferredJoinCompletionAuthority {
             var completion = find(
                 current.root().terminalCompletions(),
                 delivered.operationId());
-            if (completion == null || completion.deliveryState() != 3) {
+            if (completion == null
+                || completion.deliveryState() != COMPLETION_DELIVERED) {
                 return CompletableFuture.failedFuture(
                     new IllegalStateException(
                         "deferred Join completion is not durably Delivered"));
@@ -1260,7 +1672,45 @@ public final class ZLinkDeferredJoinCompletionAuthority {
         return completions.stream()
             .filter(value ->
                 value.operationHigh() == operationId.high()
-                    && value.operationLow() == operationId.low())
+                    && value.operationLow() == operationId.low()
+                    && value.payload() != null
+                    && PACKET.equals(value.payload().packetName()))
+            .findFirst()
+            .orElse(null);
+    }
+
+    private static ZLinkServiceRelocationEnvelopeCodec.Completion
+        findSourceLeaveMarker(
+            List<ZLinkServiceRelocationEnvelopeCodec.Completion> completions,
+            ZLinkActorJoinOperationId operationId) {
+        long operationHigh = operationId.high()
+            ^ SOURCE_LEAVE_OPERATION_HIGH_MASK;
+        long operationLow = operationId.low()
+            ^ SOURCE_LEAVE_OPERATION_LOW_MASK;
+        return completions.stream()
+            .filter(value -> value.operationHigh() == operationHigh
+                && value.operationLow() == operationLow
+                && value.payload() != null
+                && SOURCE_LEAVE_PACKET.equals(
+                    value.payload().packetName()))
+            .findFirst()
+            .orElse(null);
+    }
+
+    private static ZLinkServiceRelocationEnvelopeCodec.Completion
+        findSourceCleanupMarker(
+            List<ZLinkServiceRelocationEnvelopeCodec.Completion> completions,
+            ZLinkActorJoinOperationId operationId) {
+        long operationHigh = operationId.high()
+            ^ SOURCE_CLEANUP_OPERATION_HIGH_MASK;
+        long operationLow = operationId.low()
+            ^ SOURCE_CLEANUP_OPERATION_LOW_MASK;
+        return completions.stream()
+            .filter(value -> value.operationHigh() == operationHigh
+                && value.operationLow() == operationLow
+                && value.payload() != null
+                && SOURCE_CLEANUP_PACKET.equals(
+                    value.payload().packetName()))
             .findFirst()
             .orElse(null);
     }
@@ -1290,6 +1740,13 @@ public final class ZLinkDeferredJoinCompletionAuthority {
             throw new IllegalStateException(
                 "deferred Join completion conflicts with the published operation");
         }
+    }
+
+    private static boolean isRelocationCompletion(
+        ZLinkServiceRelocationEnvelopeCodec.Completion completion) {
+        return completion.payload() != null
+            && RELOCATION_CONTENT_TYPE.equals(
+                completion.payload().contentType());
     }
 
     private static byte[] encodeRelocationCompletion(

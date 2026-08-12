@@ -237,18 +237,12 @@ export function createIntegrationSpotManager(
 export function createIntegrationSpotOutbound(runtime: ZLinkNestIntegrationRuntimeHost): ZLinkSpotOutbound {
   const host = runtimeHost(runtime);
   const runtimeOptions = host.createSpotManagerOptions();
-  return new DefaultZLinkSpotOutbound(
-    new ZLinkSpotSerialExecutor(),
-    undefined,
-    undefined,
-    undefined,
-    host.routeTransport,
-    runtimeOptions.spotRouterChannelIdForMesh,
-    undefined,
-    undefined,
-    undefined,
-    host.spotAddressTransport
-  );
+  return new DefaultZLinkSpotOutbound({
+    serial: new ZLinkSpotSerialExecutor(),
+    routedTransport: host.routeTransport,
+    spotRouterChannelIdForMesh: runtimeOptions.spotRouterChannelIdForMesh,
+    addressTransport: host.spotAddressTransport
+  });
 }
 
 export function createIntegrationHttpExecutionScheduler(runtime: ZLinkNestIntegrationRuntimeHost) {

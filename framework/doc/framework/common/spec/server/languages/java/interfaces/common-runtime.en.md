@@ -1,6 +1,6 @@
 # Java Common Runtime Public Interface
 
-[Interface table of contents](README.en.md) · [Host Relocation And Termination Contract](../../../../28-graceful-drain-handoff.en.md)
+[Interface table of contents](README.en.md) · [Host Relocation And Termination Contract](../../../../30-host-relocation-flow.en.md)
 
 This document fixes the public types expressing host execution state,
 object relocation, termination request, and common async operations in

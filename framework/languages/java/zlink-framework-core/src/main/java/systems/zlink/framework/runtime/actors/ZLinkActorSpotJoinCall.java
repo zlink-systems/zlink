@@ -324,10 +324,35 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         ZLinkActorJoinOperationId operationId,
         long deadlineNanos) {
         rejectSameGateWait();
+        Duration remaining = remainingTimeout(deadlineNanos);
+        if (remaining == null) {
+            return CompletableFuture.failedFuture(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    "Actor join deadline elapsed before admission"));
+        }
+        return services.actors().awaitDirectJoinPredecessor(
+                context.actorRef(), remaining)
+            .thenCompose(ignored -> executeAfterPredecessor(
+                operationId, deadlineNanos));
+    }
+
+    private CompletionStage<ZLinkActorJoinOutcome> executeAfterPredecessor(
+        ZLinkActorJoinOperationId operationId,
+        long deadlineNanos) {
+        Duration remaining = remainingTimeout(deadlineNanos);
+        if (remaining == null) {
+            return CompletableFuture.failedFuture(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    "Actor join deadline elapsed at predecessor gate"));
+        }
         traceJoinSent();
         Message requestPart = Message.from(request);
         ZLinkSpot<?> localSpot = services.spotResolver().apply(spotId);
-        if (localSpot == null && services.routedTransport() != null
+        if (localSpot == null
+            && (services.routedTransport() != null
+                || services.transferTransport() != null)
             && (internalRouteChannel != null || services.remoteAddressResolver() != null)) {
             return manage(joinRemoteRoutedSpot(requestPart, operationId, deadlineNanos)
                 .whenComplete((ignored, error) -> requestPart.close())
@@ -351,7 +376,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                         spotId,
                         address.spotGeneration(),
                         List.of(requestPart),
-                        timeout)
+                        remaining)
                         .whenComplete((ignored, joinError) ->
                             requestPart.close());
                 } catch (RuntimeException dispatchError) {
@@ -1112,8 +1137,11 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
             address.targetNodeRid(),
             sourceActorRef.actorId(),
             sourceActorRef.generation());
+        // The lifecycle boundary permits one-way source leave submission. Its
+        // completion or failure is not part of Join completion. Durable source
+        // cleanup still follows the target's explicit Ready publication.
         return services.actors()
-            .awaitDeferredJoinTargetCompletion(
+            .awaitDeferredJoinTargetLifecycleCompleted(
                 manifest,
                 targetActorRef,
                 timeout)
@@ -1121,6 +1149,15 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                 context.actor(),
                 sourceLeft,
                 transferId))
+            .thenCompose(ignored -> services.actors()
+                .markDeferredJoinSourceLeaveSubmitted(
+                    manifest,
+                    targetActorRef))
+            .thenCompose(ignored -> services.actors()
+                .awaitDeferredJoinTargetCompletion(
+                    manifest,
+                    targetActorRef,
+                    timeout))
             .thenCompose(ignored ->
                 ZLinkActorRetryScheduler.retryRouteUntil(
                     timeout,
@@ -1248,6 +1285,13 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
     private CompletionStage<List<Message>> requestTransfer(
         SpotTransportAddress address,
         List<Message> parts) {
+        if (services.transferTransport() != null) {
+            return services.transferTransport().request(
+                address,
+                parts,
+                timeout,
+                internalRouteChannel != null);
+        }
         if (internalRouteChannel == null) {
             Message packetName = Message.from(parts.getFirst());
             Message envelope = ZLinkActorEntryTransferEnvelope.encode(parts);
@@ -1801,11 +1845,21 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         CompletionStage<Void> renew(ZLinkActor actor, String spotId);
     }
 
+    @FunctionalInterface
+    interface TransferTransport {
+        CompletionStage<List<Message>> request(
+            SpotTransportAddress address,
+            List<Message> parts,
+            Duration timeout,
+            boolean internalRoute);
+    }
+
     record Services(
         ZLinkInternalSpotNode spotNode,
         Function<String, ZLinkSpot<?>> spotResolver,
         SpotTransportAddressResolver remoteAddressResolver,
         ZLinkChannelRuntime routedTransport,
+        TransferTransport transferTransport,
         Function<String, String> actorTypes,
         ZLinkMessageSerializer serializer,
         ZLinkMessageFlowTracer flow,

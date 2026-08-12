@@ -92,7 +92,7 @@ export interface ZLinkActorRuntimeOptionsFactoryOptions {
 export class ZLinkActorRuntimeOptionsFactory {
   constructor(private readonly options: ZLinkActorRuntimeOptionsFactoryOptions) {}
 
-  createActorManagerOptions(_spotRouteResolver?: ZLinkSpotRouteResolver): Pick<
+  createActorManagerOptions(): Pick<
     ZLinkActorManagerOptions,
     | 'joinCoordinator'
     | 'actorMeshNameProvider'
@@ -174,6 +174,7 @@ export class ZLinkActorRuntimeOptionsFactory {
                 meshName: meshName ?? this.options.primaryMeshName() ?? '',
                 nodeRid: actorRef.nodeRid,
                 ownershipGeneration: state?.locationGeneration,
+                ownerLeaseGeneration: state?.ownerLeaseGeneration,
                 bindingGeneration: state?.boundSessionBindingGeneration
               } as ActorRef;
         },

@@ -10,9 +10,13 @@ using Zlink.Framework.Contracts.Spots;
 namespace Bingo.Server.Play.Infrastructure.ZLink.Spots.EntrySpot.Handlers;
 
 internal sealed class ObserveBingoEventsHandler(IZLinkSpotManager spots)
-    : IZLinkEntrySpotActorSendHandler<BingoEntrySpot, PlayerActor, ObserveBingoEventsReq>
+    : IZLinkEntrySpotActorRequestHandler<
+        BingoEntrySpot,
+        PlayerActor,
+        ObserveBingoEventsReq,
+        ObserveBingoEventsRes>
 {
-    public async ValueTask HandleAsync(
+    public async ValueTask<ObserveBingoEventsRes> HandleAsync(
         BingoEntrySpot entrySpot,
         PlayerActor actor,
         IZLinkMessageContext context,
@@ -24,7 +28,7 @@ internal sealed class ObserveBingoEventsHandler(IZLinkSpotManager spots)
         _ = await spots
             .GetOrCreate(observerSpotId, SampleNames.RoomSpotType)
             .InMesh(SampleNames.PlayMeshName)
-            .Request(BingoRoomSettingsPayloadMapper.ToPayload(settings))
+            .Request(BingoRoomSettingsPayloadMapper.ToCreateRequest(settings))
             .Async(cancellationToken);
 
         actor.TrackDeferredJoin(observerSpotId, observeOnly: true);
@@ -38,6 +42,7 @@ internal sealed class ObserveBingoEventsHandler(IZLinkSpotManager spots)
                     ObserveOnly = true
                 })
             .Defer();
+        return new ObserveBingoEventsRes { Subscribed = true };
     }
 
     private static string ObserverSpotId(string roomId, string observerActorId)

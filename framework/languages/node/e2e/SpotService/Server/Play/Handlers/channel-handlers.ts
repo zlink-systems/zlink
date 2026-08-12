@@ -6,7 +6,7 @@ import type {
   ZLinkRouteRequestHandler,
   ZLinkSendHandler
 } from '@zlink-systems/framework';
-import type { ChannelEchoRes, ChannelEchoReq, ChannelNotify } from '../../../Shared/messages';
+import type { ChannelEchoRes, ChannelEchoReq, ChannelMsg } from '../../../Shared/messages';
 import { EvidenceStore } from '../Infrastructure/evidence-store';
 
 @Injectable()
@@ -32,10 +32,10 @@ export class NodeEchoHandler implements ZLinkRouteRequestHandler<ChannelEchoReq,
 }
 
 @Injectable()
-export class ChannelNotifyHandler implements ZLinkSendHandler<ChannelNotify> {
+export class ChannelMsgHandler implements ZLinkSendHandler<ChannelMsg> {
   constructor(private readonly evidence: EvidenceStore) {}
 
-  async handle(message: ChannelNotify, context: ZLinkMessageContext): Promise<void> {
+  async handle(message: ChannelMsg, context: ZLinkMessageContext): Promise<void> {
     void context;
     this.evidence.add(`channel-notify|marker=${message.marker}`);
   }

@@ -5,13 +5,15 @@ const PacketNames = Object.freeze({
   authenticatePlayerRes: 'AuthenticatePlayerRes',
   createGameHttpReq: 'CreateGameHttpReq',
   createGameHttpRes: 'CreateGameHttpRes',
-  joinGameReq: 'JoinGameReq',
-  joinGameRes: 'JoinGameRes',
+  joinGameMsg: 'JoinGameMsg',
+  joinGameNotify: 'JoinGameNotify',
+  joinGameFailedNotify: 'JoinGameFailedNotify',
   observeMilestoneReq: 'ObserveMilestoneReq',
   observeMilestoneRes: 'ObserveMilestoneRes',
   placeMarkReq: 'PlaceMarkReq',
   placeMarkRes: 'PlaceMarkRes',
   leaveGameMsg: 'LeaveGameMsg',
+  deliverPlayNotificationMsg: 'DeliverPlayNotificationMsg',
   playerJoinedNotify: 'PlayerJoinedNotify',
   gameStateNotify: 'GameStateNotify',
   winMilestoneNotify: 'WinMilestoneNotify',
@@ -90,24 +92,24 @@ export interface PlayerInfo {
   wins: number;
 }
 
+export class PlayerActorCreateReq {
+  constructor(readonly player: PlayerInfo) {}
+}
+
 export interface PlayNodeInfo {
   streamEndpoint: string;
 }
 
-export interface JoinGameReq {
-  roomId: string;
+export class JoinGameMsg {
+  constructor(readonly roomId: string) {}
 }
 
-export class JoinGameReq {
-  roomId: string;
-
-  constructor(roomId: string) {
-    this.roomId = roomId;
-  }
+export class JoinGameNotify {
+  constructor(readonly state: GameState) {}
 }
 
-export interface JoinGameRes {
-  state: GameState;
+export class JoinGameFailedNotify {
+  constructor(readonly roomId: string, readonly error: string) {}
 }
 
 export interface TicTacToeGameJoinReq {
@@ -202,7 +204,14 @@ export interface TicTacToeActor {
   level: number;
   wins: number;
   roomId?: string;
-  push(payload: PlayerJoinedNotify | GameStateNotify | WinMilestoneNotify): Promise<void>;
+  push(
+    payload:
+      | JoinGameNotify
+      | JoinGameFailedNotify
+      | PlayerJoinedNotify
+      | GameStateNotify
+      | WinMilestoneNotify
+  ): Promise<void>;
 }
 
 function actorDisplayName(actorId: string): string {
@@ -246,12 +255,8 @@ function authenticateRes(player: PlayerInfo): AuthenticateRes {
   return { player };
 }
 
-function joinGameReq(roomId: string): JoinGameReq {
-  return new JoinGameReq(roomId);
-}
-
-function joinGameRes(state: GameState): JoinGameRes {
-  return { state };
+function joinGameNotify(state: GameState): JoinGameNotify {
+  return new JoinGameNotify(state);
 }
 
 function observeMilestoneRes(subscribed: boolean): ObserveMilestoneRes {
@@ -308,8 +313,7 @@ export {
   authenticateRes,
   createGameHttpReq,
   gameStateNotify,
-  joinGameReq,
-  joinGameRes,
+  joinGameNotify,
   observeMilestoneRes,
   placeMarkRes,
   placeMarkStreamReq,

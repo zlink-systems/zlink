@@ -106,6 +106,7 @@ final class ZLinkClientServerRuntimeView implements ZLinkClientServerRuntime {
                 status.isReady(),
                 status.readyTargetCount(),
                 status.targets()),
+            ZLinkClientServerStatus::channelName,
             capacity,
             status -> status.state() == ZLinkTopologyState.STOPPED
                 || status.state() == ZLinkTopologyState.FAILED,
@@ -226,6 +227,7 @@ final class ZLinkFanoutRuntimeView implements ZLinkFanoutRuntime {
                 status.isReady(),
                 status.readyPublisherCount(),
                 status.publishers()),
+            ZLinkFanoutStatus::channelName,
             capacity,
             status -> status.state() == ZLinkTopologyState.STOPPED
                 || status.state() == ZLinkTopologyState.FAILED,

@@ -164,16 +164,16 @@ class user_spot_t : public zlink::framework::spot_t<scenario_actor_t>
     {
         if (!request.empty ()) {
             try {
-                const auto command = request.decode<e2e::overrun_timer_msg_t> ();
+                const auto command = request.decode<e2e::overrun_timer_create_req_t> ();
                 if (!command.name.empty () && command.period_ms > 0) {
                     start_overrun_timer (command);
                 }
             }
             catch (const std::exception &) {
                 try {
-                    const auto command = request.decode<e2e::idle_close_msg_t> ();
+                    const auto command = request.decode<e2e::idle_close_create_req_t> ();
                     if (!command.name.empty () && command.period_ms > 0) {
-                        start_idle_close (command);
+                        start_idle_close_timer (command.name, command.period_ms);
                     }
                 }
                 catch (const std::exception &) {
@@ -361,11 +361,16 @@ class user_spot_t : public zlink::framework::spot_t<scenario_actor_t>
 
     void start_idle_close (const e2e::idle_close_msg_t &request)
     {
-        _idle_close_timer = _context.add_timer<user_spot_idle_close_timer_handler_t> (
-          request.name, std::chrono::milliseconds (request.period_ms));
+        start_idle_close_timer (request.name, request.period_ms);
     }
 
-    void start_overrun_timer (const e2e::overrun_timer_msg_t &request)
+    void start_idle_close_timer (const std::string &name, int period_ms)
+    {
+        _idle_close_timer = _context.add_timer<user_spot_idle_close_timer_handler_t> (
+          name, std::chrono::milliseconds (period_ms));
+    }
+
+    void start_overrun_timer (const e2e::overrun_timer_create_req_t &request)
     {
         zlink::framework::timer_options_t options;
         options.overrun_policy = overrun_policy_from_name (request.policy);

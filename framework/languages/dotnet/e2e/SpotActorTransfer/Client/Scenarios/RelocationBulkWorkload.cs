@@ -1160,7 +1160,7 @@ internal static class RelocationBulkWorkloadVerification
             .Where(item =>
                 item.Surface == "spot"
                 && item.MessageKind == "request"
-                && item.PacketName == nameof(RelocationWorkloadRequest)
+                && item.PacketName == nameof(RelocationWorkloadReq)
                 && item.SpotId is not null
                 && targets.Contains(item.SpotId)
                 && item.CorrelationId is { Length: > 0 }

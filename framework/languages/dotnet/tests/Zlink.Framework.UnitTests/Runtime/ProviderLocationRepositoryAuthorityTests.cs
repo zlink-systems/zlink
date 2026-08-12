@@ -694,6 +694,69 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     }
 
     [Fact]
+    public async Task SharedOpaqueProvider_AbortsPreparedRelocationCapacity()
+    {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var sourceOwner = await ClaimAsync(repository, "source-owner");
+        var targetOwner = await ClaimAsync(repository, "target-owner");
+        var sourceDescriptor = Descriptor("source", sourceOwner);
+        var targetDescriptor = Descriptor("target", targetOwner);
+        _ = await repository.UpdateMeshNodeAsync(
+            sourceDescriptor,
+            ZLinkLocationWriteIntent.NewClaim);
+        _ = await repository.UpdateMeshNodeAsync(
+            targetDescriptor,
+            ZLinkLocationWriteIntent.NewClaim);
+        var create = Reservation(
+            "actor:prepared-capacity-abort",
+            sourceDescriptor,
+            sourceOwner);
+        var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(create));
+        var created = Assert.IsType<ZLinkObjectCommitResult.Committed>(
+            await repository.CommitAsync(
+                reserved.Reservation,
+                new byte[] { 0x42 })).Snapshot;
+        var capacity = Assert.IsType<
+            ZLinkRelocationCapacityReserveResult.Reserved>(
+            await repository.ReserveRelocationCapacityAsync(
+                new ZLinkRelocationCapacityReservationRequest(
+                    Guid.NewGuid(),
+                    create.Key,
+                    created.StoreVersion,
+                    ZLinkPlacementObjectKind.Actor,
+                    "player",
+                    new ZLinkMeshNodeDescriptorKey(
+                        "play",
+                        sourceDescriptor.Rid),
+                    sourceDescriptor.LifecycleGeneration,
+                    sourceOwner,
+                    new ZLinkMeshNodeDescriptorKey(
+                        "play",
+                        targetDescriptor.Rid),
+                    targetDescriptor.LifecycleGeneration,
+                    targetOwner,
+                    new ZLinkCapacityVector(1, 0, null))));
+        _ = Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
+            await repository.CompareExchangeAuthorityAsync(
+                create.Key,
+                created.StoreVersion,
+                new ZLinkAuthorityMutation.Put(
+                    new byte[] { 0x43 },
+                    ZLinkAuthorityGenerationTransition.Preserve,
+                    null,
+                    capacity.Fence)));
+
+        Assert.Equal(
+            ZLinkRelocationCapacityAbortResult.Aborted,
+            await repository.AbortRelocationCapacityAsync(capacity.Fence));
+        Assert.Equal(
+            ZLinkRelocationCapacityAbortResult.AlreadyAborted,
+            await repository.AbortRelocationCapacityAsync(capacity.Fence));
+    }
+
+    [Fact]
     public async Task SharedOpaqueProvider_ReconcilesAppliedReservationAfterReplyLoss()
     {
         var inner = new ZLinkInMemoryProviderLocationStore();

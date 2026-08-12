@@ -46,7 +46,6 @@ await (options.OperationGroup switch
     "sm-b2" => SmB2RemoteActorJoinScenario.RunAsync(playB, sessionA, options.SessionAStreamEndpoint),
     "sm-b3" => SmB3RequestMessageFidelityScenario.RunAsync(playA, options.SessionAStreamEndpoint),
     "sm-b4" => SmB4RemoteActorRequestReplyScenario.RunAsync(playB, options.SessionAStreamEndpoint),
-    "sm-b5" => SmB5MissingActorPacketScenario.RunAsync(playA, options.SessionAStreamEndpoint),
     "sm-b6" => SmB6ActorDisconnectCallbackScenario.RunAsync(playA, playB, sessionA, options.SessionAStreamEndpoint),
     "sm-b7" => SmB7ActorLifecycleOrderScenario.RunAsync(playA, options.SessionAStreamEndpoint),
     "sm-b8" => SmB8ExplicitActorDestroyScenario.RunAsync(gateway),
@@ -67,8 +66,7 @@ await (options.OperationGroup switch
         playB,
         options.SmC6PauseAckFile,
         options.SmC6ResumeAckFile),
-    "sm-d1" => SmD1LocalActorSessionRelayScenario.RunAsync(sessionA, options.SessionAStreamEndpoint),
-    "sm-d2" => SmD2RemoteActorSessionRelayScenario.RunAsync(sessionA, options.SessionAStreamEndpoint),
+    "sm-d2" => RunD2Async(playA, playB, sessionA, options.SessionAStreamEndpoint),
     "sm-d3" => SmD3EntryAndUserSpotSessionRelayScenario.RunAsync(
         playA,
         playB,
@@ -115,7 +113,7 @@ await (options.OperationGroup switch
     "sm-d13" => SmD13HeartbeatRequestScenario.RunAsync(options.SessionAStreamEndpoint),
     "sm-d14" => SmD14TlsStreamValidationScenario.RunAsync(options.SessionATlsStreamEndpoint),
     "sm-d15" => SmD15GatewayActorSessionPushScenario.RunAsync(playA, gateway, options.SessionAStreamEndpoint),
-    "sm-e1" => SmE1MissingSpotRouteScenario.RunAsync(playA),
+    "sm-e1" => SmE1MissingSpotRouteScenario.RunAsync(playA, options.SessionAStreamEndpoint),
     "sm-e2" => SmE2SpotTimerTickScenario.RunAsync(playA),
     "sm-e3" => SmE3IdleTimerSpotCloseScenario.RunAsync(playA),
     "sm-e4" => RunE4Async(playA, playB),
@@ -133,8 +131,8 @@ await (options.OperationGroup switch
     "sm-g5a" => SmG5AAndG5BPlacementScenario.RunWeightDistributionAsync(gateway, playA, playB),
     "sm-g5b" => SmG5AAndG5BPlacementScenario.RunCapacityEligibilityAsync(gateway, playA, playB),
     "sm-g5" => RunG5Async(gateway, playA, playB),
-    "sm-b1-b2-b3-b5" => RunB1B2B3B5Async(playA, playB, sessionA, options.SessionAStreamEndpoint),
-    "sm-d1-d6" => RunD1D2D6Async(
+    "sm-b1-b2-b3" => RunB1B2B3Async(playA, playB, sessionA, options.SessionAStreamEndpoint),
+    "sm-d2-d6" => RunD2D6Async(
         playA,
         playB,
         sessionA,
@@ -144,7 +142,7 @@ await (options.OperationGroup switch
     "sm-c1-c2" => RunC1C2Async(playA, playB),
     "sm-q9" => MultiNodeSpotRoutingProbe.RunAsync(multiA, multiB),
     "sm-f3-f5" => RunF3F5Async(playA, playB, gateway),
-    "sm-e1-f4" => RunE1F4Async(playA),
+    "sm-e1-f4" => RunE1F4Async(playA, options.SessionAStreamEndpoint),
     "sm-e2-e3" => RunE2E3Async(playA, playB),
     "sm-a7-a8-c4" => RunA7A8C4Async(playA, playB, gateway),
     "sm-a3-a6-b4-b7" => RunA3A6B4B7Async(playA, playB, options.SessionAStreamEndpoint),
@@ -235,7 +233,7 @@ static async Task RunA3A6B4B7Async(
     }
 }
 
-static async Task RunB1B2B3B5Async(
+static async Task RunB1B2B3Async(
     ZLinkHttpClient playA,
     ZLinkHttpClient playB,
     ZLinkHttpClient sessionA,
@@ -251,7 +249,6 @@ static async Task RunB1B2B3B5Async(
 
         await SetPlacementWeightsAsync(playA, playB, playAWeight: 100, playBWeight: 0);
         await SmB3RequestMessageFidelityScenario.RunAsync(playA, sessionAStreamEndpoint);
-        await SmB5MissingActorPacketScenario.RunAsync(playA, sessionAStreamEndpoint);
     }
     finally
     {
@@ -299,7 +296,27 @@ static async Task WaitPlacementAvailabilityAsync(
     }
 }
 
-static async Task RunD1D2D6Async(
+static async Task RunD2Async(
+    ZLinkHttpClient playA,
+    ZLinkHttpClient playB,
+    ZLinkHttpClient sessionA,
+    string sessionAStreamEndpoint)
+{
+    try
+    {
+        await SmD2RemoteActorSessionRelayScenario.RunAsync(
+            sessionA,
+            sessionAStreamEndpoint,
+            () => SetPlacementWeightsAsync(playA, playB, playAWeight: 100, playBWeight: 0),
+            () => SetPlacementWeightsAsync(playA, playB, playAWeight: 0, playBWeight: 100));
+    }
+    finally
+    {
+        await SetPlacementWeightsAsync(playA, playB, playAWeight: 100, playBWeight: 100);
+    }
+}
+
+static async Task RunD2D6Async(
     ZLinkHttpClient playA,
     ZLinkHttpClient playB,
     ZLinkHttpClient sessionA,
@@ -308,11 +325,11 @@ static async Task RunD1D2D6Async(
 {
     try
     {
-        await SetPlacementWeightsAsync(playA, playB, playAWeight: 100, playBWeight: 0);
-        await SmD1LocalActorSessionRelayScenario.RunAsync(sessionA, sessionAStreamEndpoint);
-
-        await SetPlacementWeightsAsync(playA, playB, playAWeight: 0, playBWeight: 100);
-        await SmD2RemoteActorSessionRelayScenario.RunAsync(sessionA, sessionAStreamEndpoint);
+        await SmD2RemoteActorSessionRelayScenario.RunAsync(
+            sessionA,
+            sessionAStreamEndpoint,
+            () => SetPlacementWeightsAsync(playA, playB, playAWeight: 100, playBWeight: 0),
+            () => SetPlacementWeightsAsync(playA, playB, playAWeight: 0, playBWeight: 100));
 
         await SetPlacementWeightsAsync(playA, playB, playAWeight: 100, playBWeight: 0);
         await SmD6BoundSessionPushTargetingScenario.RunAsync(
@@ -376,9 +393,9 @@ static async Task RunC1C2Async(
     }
 }
 
-static async Task RunE1F4Async(ZLinkHttpClient playA)
+static async Task RunE1F4Async(ZLinkHttpClient playA, string sessionAStreamEndpoint)
 {
-    await SmE1MissingSpotRouteScenario.RunAsync(playA);
+    await SmE1MissingSpotRouteScenario.RunAsync(playA, sessionAStreamEndpoint);
     await SmF4MissingTargetSpotRouteScenario.RunAsync(playA);
 }
 

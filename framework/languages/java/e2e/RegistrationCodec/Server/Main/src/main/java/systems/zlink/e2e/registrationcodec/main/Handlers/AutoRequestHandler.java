@@ -1,6 +1,4 @@
-package Handlers;
-import systems.zlink.e2e.registrationcodec.main.Handlers;
-import systems.zlink.e2e.registrationcodec.main.Infrastructure;
+package systems.zlink.e2e.registrationcodec.main.Handlers;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -23,7 +21,7 @@ public final class AutoRequestHandler
     public CompletionStage<Contracts.EchoRes> handle(
         Contracts.EchoAutoReq request,
         ZLinkMessageContext context) {
-        state.record("Request", "EchoAuto", request.value());
+        state.record("Request", "EchoAutoReq", request.value());
         return CompletableFuture.completedFuture(
             new Contracts.EchoRes("echo:" + request.value(), "auto"));
     }

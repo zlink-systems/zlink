@@ -476,7 +476,8 @@ class spot_idle_close_route_handler_t
           nlohmann::json::parse (http.body).get<e2e::spot_idle_close_req_t> ();
         const auto created = create_route_spot (
           _spots, (request.spot_id), e2e::user_spot,
-          e2e::idle_close_msg_t{.name = request.name, .period_ms = request.period_ms});
+          e2e::idle_close_create_req_t{
+            .name = request.name, .period_ms = request.period_ms});
         if (created.state != zlink::framework::spot_create_state_t::created) {
             throw std::runtime_error ("idle close spot already exists");
         }
@@ -545,7 +546,7 @@ class spot_overrun_start_route_handler_t
           nlohmann::json::parse (http.body).get<e2e::spot_overrun_start_req_t> ();
         const auto created = create_route_spot (
           _spots, (request.spot_id), e2e::user_spot,
-          e2e::overrun_timer_msg_t{
+          e2e::overrun_timer_create_req_t{
             .name = request.name, .policy = request.policy, .period_ms = request.period_ms});
         if (created.state != zlink::framework::spot_create_state_t::created) {
             throw std::runtime_error ("overrun timer spot already exists");

@@ -4,10 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
-import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
@@ -16,6 +17,7 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkMeshApplicationReceiver;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 
@@ -120,6 +122,45 @@ class ZLinkMeshNodeRuntimeTest {
         }
     }
 
+    @Test
+    void startInstallsIngressOwnersBeforeTheBackendCanReceive() {
+        MeshNodeRegistration registration = new MeshNodeRegistration("game");
+        registration.listen("inproc://game-ingress-owner");
+        registration.channelName("orders").server();
+        RecordingMeshNode node = new RecordingMeshNode();
+        AtomicInteger immediateDispatches = new AtomicInteger();
+        ZLinkMeshApplicationReceiver receiver = new ZLinkMeshApplicationReceiver() {
+            @Override
+            public void accept(ZLinkMeshDispatchRecord record) {
+                try (record) {
+                    immediateDispatches.incrementAndGet();
+                }
+            }
+
+            @Override
+            public int submitLocalNodeSend(
+                RoutingId sourceNodeRid,
+                byte[] metadata,
+                List<systems.zlink.contracts.messaging.Message> parts) {
+                return 0;
+            }
+        };
+
+        try (ZLinkMeshNodeRuntime ignored = ZLinkMeshNodeRuntime.start(
+            registration,
+            (context, meshName) -> node,
+            new RecordingContext(),
+            new ZLinkInboundDispatchBudget(1024),
+            true,
+            receiver)) {
+            assertTrue(node.calls.indexOf("application-receiver")
+                < node.calls.indexOf("spot-node"));
+            assertTrue(node.calls.indexOf("dispatch")
+                < node.calls.indexOf("start"));
+            assertEquals(1, immediateDispatches.get());
+        }
+    }
+
     private static final class RecordingContext implements ZLinkBackendContext {
         @Override public String name() { return "context"; }
         @Override public void shutdown() { }
@@ -135,6 +176,7 @@ class ZLinkMeshNodeRuntimeTest {
         private int pendingAdmissionCapacity;
         private Duration routerSendTimeout;
         private ZLinkInboundDispatchBudget applicationDispatchBudget;
+        private Consumer<ZLinkMeshDispatchRecord> dispatchReceiver;
 
         @Override public String name() { return "mesh-node"; }
         @Override public void setBind(String endpoint) { calls.add("bind:" + endpoint); }
@@ -170,6 +212,10 @@ class ZLinkMeshNodeRuntimeTest {
             applicationDispatchBudget = value;
             calls.add("application-budget");
         }
+        @Override public void setApplicationReceiver(
+            ZLinkMeshApplicationReceiver value) {
+            calls.add("application-receiver");
+        }
         @Override public void setRoutingId(RoutingId routingId) {
             calls.add("routing-id:" + routingId);
         }
@@ -177,7 +223,15 @@ class ZLinkMeshNodeRuntimeTest {
             calls.add("spot-node");
             return null;
         }
-        @Override public void start() { calls.add("start"); }
+        @Override public void start() {
+            calls.add("start");
+            if (dispatchReceiver != null) {
+                dispatchReceiver.accept(new ZLinkMeshDispatchRecord(
+                    null,
+                    null,
+                    List.of()));
+            }
+        }
         @Override public long connectPeer(String endpoint) {
             calls.add("peer:" + endpoint);
             return 1L;
@@ -208,6 +262,7 @@ class ZLinkMeshNodeRuntimeTest {
         @Override public List<Long> connectionIntentIds() { return List.of(1L); }
         @Override public void startDispatch(Consumer<ZLinkMeshDispatchRecord> receiver) {
             calls.add("dispatch");
+            dispatchReceiver = receiver;
         }
         @Override public void close() { calls.add("close"); }
     }

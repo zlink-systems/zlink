@@ -199,7 +199,7 @@ internal static class RmB3ProviderCrashFailoverScenario
         string targetRid,
         string value) =>
         (await provider.Post("/profile/route/target")
-            .Body(new TargetedRoutePing(targetRid, value))
+            .Body(new TargetedRouteReq(targetRid, value))
             .Async<ExpectedFailureRes>()).Body;
 
     private static async Task<string> ReadActualRouteRidAsync(

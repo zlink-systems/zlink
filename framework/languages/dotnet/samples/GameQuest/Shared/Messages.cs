@@ -6,9 +6,9 @@ public sealed record KillMonsterReq(string PlayerId, string MonsterId, string Ar
 
 public sealed record KillMonsterRes(string EventId);
 
-public sealed record CollectItemReq(string PlayerId, string ItemId, int Count, string IdempotencyKey);
+public sealed record CollectItemMsg(string PlayerId, string ItemId, int Count, string IdempotencyKey);
 
-public sealed record EnterAreaReq(string PlayerId, string AreaId, string IdempotencyKey);
+public sealed record EnterAreaMsg(string PlayerId, string AreaId, string IdempotencyKey);
 
 public sealed record JoinSessionReq(string PlayerId);
 
@@ -21,6 +21,13 @@ public sealed record GetQuestProgressRes(QuestProgress[] ActiveQuests);
 public sealed record SyncQuestProgressReq(string PlayerId);
 
 public sealed record SyncQuestProgressRes(QuestProgress[] UpdatedQuests);
+
+public sealed record QuestProgressMsg(string PlayerId, QuestProgress Progress);
+
+public sealed record QuestCompletedMsg(
+    string PlayerId,
+    QuestProgress Progress,
+    bool RewardGranted);
 
 public sealed record QuestProgressNotify(string PlayerId, QuestProgress Progress);
 

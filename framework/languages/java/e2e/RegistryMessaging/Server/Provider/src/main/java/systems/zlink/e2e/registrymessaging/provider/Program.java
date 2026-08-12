@@ -22,6 +22,7 @@ import systems.zlink.e2e.registrymessaging.provider.Handlers.PayloadReqHandler;
 import systems.zlink.e2e.registrymessaging.provider.Handlers.ProfileMsgHandler;
 import systems.zlink.e2e.registrymessaging.provider.Handlers.ProfileReqHandler;
 import systems.zlink.e2e.registrymessaging.provider.Handlers.RouteReqHandler;
+import systems.zlink.e2e.registrymessaging.provider.Handlers.RoutePayloadReqHandler;
 import systems.zlink.e2e.registrymessaging.provider.Infrastructure.ScenarioState;
 import systems.zlink.e2e.registrymessaging.provider.Infrastructure.ProfileGate;
 import systems.zlink.e2e.registrymessaging.shared.IdentityObjects;
@@ -129,7 +130,7 @@ public final class Program {
                     Contracts.RouteReq.class,
                     Contracts.RouteRes.class);
                 route.addRouteRequestHandler(
-                    Handlers.RoutePayloadReqHandler.class,
+                    RoutePayloadReqHandler.class,
                     Contracts.PayloadReq.class,
                     Contracts.PayloadRes.class);
                 String[] peers = server.routePeers().split(",");

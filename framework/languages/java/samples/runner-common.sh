@@ -1,22 +1,100 @@
 #!/usr/bin/env bash
 
-zlink_sample_reserve_ports() {
+zlink_sample_configure_port_pool() {
+  local language="$1"
+  case "${language}" in
+    java)
+      ZLINK_SAMPLE_REDIS_PORT_MIN=24000
+      ZLINK_SAMPLE_REDIS_PORT_MAX=24099
+      ZLINK_SAMPLE_APP_PORT_MIN=24100
+      ZLINK_SAMPLE_APP_PORT_MAX=25999
+      ;;
+    kotlin)
+      ZLINK_SAMPLE_REDIS_PORT_MIN=26000
+      ZLINK_SAMPLE_REDIS_PORT_MAX=26099
+      ZLINK_SAMPLE_APP_PORT_MIN=26100
+      ZLINK_SAMPLE_APP_PORT_MAX=27999
+      ;;
+    *)
+      printf 'Unsupported JVM sample language for port allocation: %s\n' "${language}" >&2
+      return 1
+      ;;
+  esac
+}
+
+zlink_sample_require_port_pool() {
+  if [[ -z "${ZLINK_SAMPLE_REDIS_PORT_MIN:-}" \
+      || -z "${ZLINK_SAMPLE_REDIS_PORT_MAX:-}" \
+      || -z "${ZLINK_SAMPLE_APP_PORT_MIN:-}" \
+      || -z "${ZLINK_SAMPLE_APP_PORT_MAX:-}" ]]; then
+    echo 'JVM sample port pool is not configured.' >&2
+    return 1
+  fi
+}
+
+zlink_sample_reserve_ports_in_range() {
   local count="$1"
-  python3 - "${count}" <<'PY'
+  local minimum="$2"
+  local maximum="$3"
+  python3 - "${count}" "${minimum}" "${maximum}" <<'PY'
+import random
 import socket
 import sys
 
+count = int(sys.argv[1])
+minimum = int(sys.argv[2])
+maximum = int(sys.argv[3])
+if count < 1 or minimum < 1 or maximum > 65535 or minimum > maximum:
+    print("invalid JVM sample port allocation request", file=sys.stderr)
+    sys.exit(1)
+if count > maximum - minimum + 1:
+    print("JVM sample port pool is smaller than the requested allocation", file=sys.stderr)
+    sys.exit(1)
+
 sockets = []
 try:
-    for _ in range(int(sys.argv[1])):
+    candidates = list(range(minimum, maximum + 1))
+    random.SystemRandom().shuffle(candidates)
+    for port in candidates:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(("127.0.0.1", 0))
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError:
+            sock.close()
+            continue
         sockets.append(sock)
+        if len(sockets) == count:
+            break
+    if len(sockets) != count:
+        print(
+            f"unable to bind-check {count} ports in {minimum}-{maximum}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
 finally:
     for sock in sockets:
         sock.close()
 PY
+}
+
+zlink_sample_reserve_ports() {
+  local count="$1"
+  zlink_sample_require_port_pool || return 1
+  zlink_sample_reserve_ports_in_range \
+    "${count}" "${ZLINK_SAMPLE_APP_PORT_MIN}" "${ZLINK_SAMPLE_APP_PORT_MAX}"
+}
+
+zlink_sample_reserve_endpoints() {
+  local count="$1"
+  local ports=()
+  local port
+
+  read -r -a ports <<<"$(zlink_sample_reserve_ports "${count}")"
+  for port in "${ports[@]}"; do
+    printf '127.0.0.1:%s ' "${port}"
+  done
+  printf '\n'
 }
 
 zlink_sample_descendants() {
@@ -95,6 +173,7 @@ cleanup() {
   local status="$?"
   local cleanup_status=0
   local force_killed=0
+  local zlink_sample_log_dir="${log_dir:-${LOG_DIR:-}}"
   set +e
   zlink_sample_print_logs "${status}"
   local pid_list_name=""
@@ -165,12 +244,12 @@ cleanup() {
       cleanup_status=1
     fi
     if [[ "${status}" == "0" && "${cleanup_status}" == "0" ]]; then
-      if ! zlink_sample_verify_framework_termination "${log_dir:-}"; then
+      if ! zlink_sample_verify_framework_termination "${zlink_sample_log_dir}"; then
         cleanup_status=1
       fi
     fi
     if [[ "${status}" != "0" || "${cleanup_status}" != "0" ]]; then
-      zlink_sample_preserve_logs "${log_dir:-}"
+      zlink_sample_preserve_logs "${zlink_sample_log_dir}"
     fi
   fi
   if [[ -n "${redis_container_id:-}" ]]; then
@@ -329,14 +408,24 @@ wait_framework_peer_ready_counts() {
   return 1
 }
 
-gradle_run() {
-  if declare -p ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS >/dev/null 2>&1; then
-    ../../gradlew "${ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS[@]}" \
-      --no-daemon --no-parallel --max-workers=1 "$@" --quiet
-  else
-    ../../gradlew --settings-file standalone.settings.gradle.kts \
-      --no-daemon --no-parallel --max-workers=1 "$@" --quiet
+zlink_sample_gradle_locked() {
+  local lock_path="/tmp/zlink-framework-java-kotlin-sample-gradle.lock"
+  if ! command -v flock >/dev/null 2>&1; then
+    echo 'flock is required to serialize Java and Kotlin sample builds.' >&2
+    return 1
   fi
+  flock --exclusive --close "${lock_path}" "$@"
+}
+
+gradle_run() {
+  local -a command=(../../gradlew)
+  if declare -p ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS >/dev/null 2>&1; then
+    command+=("${ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS[@]}")
+  else
+    command+=(--settings-file standalone.settings.gradle.kts)
+  fi
+  command+=(--no-daemon --no-parallel --max-workers=1 "$@" --quiet)
+  zlink_sample_gradle_locked "${command[@]}"
 }
 
 app_bin() {
@@ -364,47 +453,94 @@ zlink_redis_wait_ready() {
 zlink_redis_remove_by_id() {
   local container_id="$1"
   local docker_timeout_seconds="${ZLINK_REDIS_DOCKER_TIMEOUT_SECONDS:-10}"
+
+  [[ "${container_id}" =~ ^[0-9a-f]{12,64}$ ]] || return 1
   timeout -k 2s "${docker_timeout_seconds}s" docker rm -fv "${container_id}" \
     >/dev/null 2>&1
+}
+
+zlink_redis_remove_attempt() {
+  local container_id="$1"
+  local name="$2"
+  if [[ ! "${container_id}" =~ ^[0-9a-f]{12,64}$ ]]; then
+    container_id="$(timeout -k 2s 5s docker inspect --type container \
+      -f '{{.Id}}' "${name}" 2>/dev/null || true)"
+  fi
+  if [[ "${container_id}" =~ ^[0-9a-f]{12,64}$ ]]; then
+    zlink_redis_remove_by_id "${container_id}" || true
+  fi
 }
 
 zlink_redis_start_scoped() {
   local scope="$1"
   local image="${2:-${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}}"
-  local port_mapping="${3:-127.0.0.1::6379}"
   local docker_timeout_seconds="${ZLINK_REDIS_DOCKER_TIMEOUT_SECONDS:-10}"
   local run_id="${ZLINK_REDIS_RUN_ID:-$$}"
-  local name="${scope}-${run_id}-${BASHPID}-${RANDOM}"
+  zlink_sample_require_port_pool || return 1
 
-  local create_output create_status container_id start_output start_status running
-  set +e
-  create_output="$(timeout -k 2s "${docker_timeout_seconds}s" docker create \
-    --name "${name}" \
-    --tmpfs /data \
-    -p "${port_mapping}" \
-    "${image}" 2>&1)"
-  create_status="$?"
-  set -e
-  container_id="$(printf '%s\n' "${create_output}" | awk '/^[0-9a-f]{12,64}$/ { print; exit }')"
-  if [[ "${create_status}" != "0" || -z "${container_id}" ]]; then
-    printf 'Failed to create Redis container %s (docker status %s)\n%s\n' "${name}" "${create_status}" "${create_output}" >&2
-    return 1
-  fi
-  set +e
-  start_output="$(timeout -k 2s "${docker_timeout_seconds}s" docker start "${container_id}" 2>&1)"
-  start_status="$?"
-  set -e
-  running="$(timeout -k 2s 5s docker inspect -f '{{.State.Running}}' "${container_id}" 2>/dev/null || true)"
-  if [[ "${running}" != "true" ]]; then
-    zlink_redis_remove_by_id "${container_id}" || true
-    printf 'Failed to start Redis container %s (docker status %s)\n%s\n' "${name}" "${start_status}" "${start_output}" >&2
-    return 1
-  fi
-  if ! zlink_redis_wait_ready "${container_id}"; then
-    zlink_redis_remove_by_id "${container_id}" || true
-    return 1
-  fi
-  printf '%s' "${container_id}"
+  local range_size=$((ZLINK_SAMPLE_REDIS_PORT_MAX - ZLINK_SAMPLE_REDIS_PORT_MIN + 1))
+  local start_offset=$((RANDOM % range_size))
+  local offset host_port name create_output create_status container_id
+  local start_output start_status running published_port
+  for ((offset=0; offset<range_size; offset++)); do
+    host_port=$((ZLINK_SAMPLE_REDIS_PORT_MIN + (start_offset + offset) % range_size))
+    if ! zlink_sample_reserve_ports_in_range 1 "${host_port}" "${host_port}" \
+        >/dev/null 2>&1; then
+      continue
+    fi
+    name="${scope}-${run_id}-${BASHPID}-${RANDOM}-${host_port}"
+
+    set +e
+    create_output="$(timeout -k 2s "${docker_timeout_seconds}s" docker create \
+      --name "${name}" \
+      --tmpfs /data \
+      -p "127.0.0.1:${host_port}:6379" \
+      "${image}" 2>&1)"
+    create_status="$?"
+    set -e
+    container_id="$(printf '%s\n' "${create_output}" | awk '/^[0-9a-f]{12,64}$/ { print; exit }')"
+    if [[ "${create_status}" != "0" || -z "${container_id}" ]]; then
+      zlink_redis_remove_attempt "${container_id}" "${name}"
+      if grep -Eqi 'address already in use|port is already allocated|failed to bind host port' \
+          <<<"${create_output}"; then
+        continue
+      fi
+      printf 'Failed to create Redis container %s (docker status %s)\n%s\n' \
+        "${name}" "${create_status}" "${create_output}" >&2
+      return 1
+    fi
+
+    set +e
+    start_output="$(timeout -k 2s "${docker_timeout_seconds}s" docker start "${container_id}" 2>&1)"
+    start_status="$?"
+    set -e
+    running="$(timeout -k 2s 5s docker inspect -f '{{.State.Running}}' "${container_id}" 2>/dev/null || true)"
+    published_port="$(timeout -k 2s 5s docker inspect \
+      -f '{{(index (index .NetworkSettings.Ports "6379/tcp") 0).HostPort}}' \
+      "${container_id}" 2>/dev/null || true)"
+    if [[ "${running}" != "true" || "${published_port}" != "${host_port}" ]]; then
+      zlink_redis_remove_by_id "${container_id}" || true
+      if [[ "${running}" != "true" ]] \
+          && grep -Eqi 'address already in use|port is already allocated|failed to bind host port' \
+          <<<"${start_output}"; then
+        continue
+      fi
+      printf 'Failed to verify Redis container %s (docker status %s, running=%s, published=%s, expected=%s)\n%s\n' \
+        "${name}" "${start_status}" "${running}" "${published_port}" "${host_port}" \
+        "${start_output}" >&2
+      return 1
+    fi
+    if ! zlink_redis_wait_ready "${container_id}"; then
+      zlink_redis_remove_by_id "${container_id}" || true
+      return 1
+    fi
+    printf '%s' "${container_id}"
+    return 0
+  done
+
+  printf 'No bindable Redis host port remained in %s-%s for %s.\n' \
+    "${ZLINK_SAMPLE_REDIS_PORT_MIN}" "${ZLINK_SAMPLE_REDIS_PORT_MAX}" "${scope}" >&2
+  return 1
 }
 
 zlink_redis_host_port() {

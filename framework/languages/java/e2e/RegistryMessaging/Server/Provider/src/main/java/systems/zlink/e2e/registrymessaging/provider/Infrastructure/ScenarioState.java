@@ -1,5 +1,4 @@
-package Infrastructure;
-import systems.zlink.e2e.registrymessaging.provider.Infrastructure;
+package systems.zlink.e2e.registrymessaging.provider.Infrastructure;
 import java.util.concurrent.TimeUnit;
 
 import java.util.ArrayList;

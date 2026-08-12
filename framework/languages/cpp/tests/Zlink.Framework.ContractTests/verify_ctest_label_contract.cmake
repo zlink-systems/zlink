@@ -60,7 +60,9 @@ set(sample_labels
   framework-sample-deliverydispatch
   framework-sample-dispatch
   framework-sample-gamequest
+  framework-sample-gateway
   framework-sample-mission
+  framework-sample-ops
   framework-sample-play
   framework-sample-registry
   framework-sample-session
@@ -70,7 +72,9 @@ set(sample_labels
   framework-sample-supportchat
   framework-sample-tictactoe
   framework-sample-tracking
-  framework-sample-workflow)
+  framework-sample-workflow
+  framework-sample-zone-node
+  framework-sample-zoneworld)
 
 file(READ "${ZLINK_FRAMEWORK_CPP_BUILD_DIR}/CMakeCache.txt" build_cache)
 if(build_cache MATCHES "ZLINK_FRAMEWORK_CPP_REQUIRE_HTTP_PERF_REPORT:BOOL=ON")

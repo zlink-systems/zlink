@@ -295,7 +295,7 @@ process 단위 회계가 이미 byte로 되어 있다(§6 첫 문단). 같은 �
 
 이동 중 보류에는 relocation 전용 건수·byte 상한이 없다. 이미 work를 소유한 실행 lane의
 reservation과 transport·deadline·cancellation 제한을 relocation hold의 별도 상한으로 재사용하지 않는다. 정식 spec이 정한 규칙이므로 그대로 따른다
-([Host Relocate와 Shutdown 「9. 대기 중인 message, timer와 session을 옮긴다」](../spec/28-graceful-drain-handoff.ko.md#9-대기-중인-message-timer와-session을-옮긴다)).
+([Host relocation 전체 흐름 「9. 대기 중인 message, timer와 session을 옮긴다」](../spec/30-host-relocation-flow.ko.md#9-대기-중인-message-timer와-session을-옮긴다)).
 
 ## 7. 확인할 결과
 

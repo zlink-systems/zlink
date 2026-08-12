@@ -47,14 +47,12 @@ import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleLocatio
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleTimings
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleTopology
-import systems.zlink.samples.kotlin.gamequest.shared.contracts.CollectItemReq
-import systems.zlink.samples.kotlin.gamequest.shared.contracts.CollectItemRes
+import systems.zlink.samples.kotlin.gamequest.shared.contracts.CollectItemMsg
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.CompleteMissionReq
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.CompleteMissionRes
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.DeleteQuestProjectionReq
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.DeleteQuestProjectionRes
-import systems.zlink.samples.kotlin.gamequest.shared.contracts.EnterAreaReq
-import systems.zlink.samples.kotlin.gamequest.shared.contracts.EnterAreaRes
+import systems.zlink.samples.kotlin.gamequest.shared.contracts.EnterAreaMsg
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.GameQuestServerAssertRes
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.GameplayMsg
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.GetGameplaySnapshotReq
@@ -69,7 +67,7 @@ import systems.zlink.samples.kotlin.gamequest.shared.contracts.KillMonsterReq
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.KillMonsterRes
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.QuestCompletedEvent
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.QuestIds
-import systems.zlink.samples.kotlin.gamequest.shared.contracts.QuestProcessingRes
+import systems.zlink.samples.kotlin.gamequest.shared.contracts.QuestProcessingMsg
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.QuestProgress
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.QuestProgressReconciledEvent
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.QuestProgressedEvent
@@ -190,9 +188,9 @@ class GameQuestSession(
             "GetQuestProgressReq" -> handleGetProgress(payload.decode(GetQuestProgressReq::class.java))
             "SyncQuestProgressReq" -> handleSync(payload.decode(SyncQuestProgressReq::class.java))
             "KillMonsterReq" -> handleKill(payload.decode(KillMonsterReq::class.java))
-            "CollectItemReq" -> handleCollect(payload.decode(CollectItemReq::class.java))
+            "CollectItemMsg" -> handleCollect(payload.decode(CollectItemMsg::class.java))
             "CompleteMissionReq" -> handleMission(payload.decode(CompleteMissionReq::class.java))
-            "EnterAreaReq" -> handleArea(payload.decode(EnterAreaReq::class.java))
+            "EnterAreaMsg" -> handleArea(payload.decode(EnterAreaMsg::class.java))
             "UnlockFeatureReq" -> handleFeature(payload.decode(UnlockFeatureReq::class.java))
             else -> error("Unknown GameQuest packet: ${dispatch.packetName()}")
         }
@@ -244,9 +242,8 @@ class GameQuestSession(
         context.client().reply(KillMonsterRes(processed.eventId)).submit()
     }
 
-    private suspend fun handleCollect(request: CollectItemReq) {
-        val processed = process(event(request.playerId, request.idempotencyKey, "collect", request.itemId, request.count, true))
-        context.client().reply(CollectItemRes(processed.eventId)).submit()
+    private suspend fun handleCollect(message: CollectItemMsg) {
+        process(event(message.playerId, message.idempotencyKey, "collect", message.itemId, message.count, true))
     }
 
     private suspend fun handleMission(request: CompleteMissionReq) {
@@ -254,9 +251,8 @@ class GameQuestSession(
         context.client().reply(CompleteMissionRes(processed.eventId)).submit()
     }
 
-    private suspend fun handleArea(request: EnterAreaReq) {
-        val processed = process(event(request.playerId, request.idempotencyKey, "area", request.areaId, 1, true))
-        context.client().reply(EnterAreaRes(processed.eventId)).submit()
+    private suspend fun handleArea(message: EnterAreaMsg) {
+        process(event(message.playerId, message.idempotencyKey, "area", message.areaId, 1, true))
     }
 
     private suspend fun handleFeature(request: UnlockFeatureReq) {
@@ -306,7 +302,7 @@ class GameQuestPlayerActor(
 ) : ZLinkActor {
     override fun context(): ZLinkActorContext = actorContext
 
-    fun push(message: QuestProcessingRes) {
+    fun push(message: QuestProcessingMsg) {
         message.progressNotifications.forEach { actorContext.boundSession().send(it).submit() }
         message.completedNotifications.forEach { actorContext.boundSession().send(it).submit() }
     }
@@ -332,13 +328,13 @@ class QuestProcessingActorHandler(
 ) : ZLinkSuspendingEntrySpotActorSendHandler<
     GameQuestEntrySpot,
     GameQuestPlayerActor,
-    QuestProcessingRes,
+    QuestProcessingMsg,
     > {
     override suspend fun handle(
         entrySpot: GameQuestEntrySpot,
         actor: GameQuestPlayerActor,
         context: ZLinkMessageContext,
-        message: QuestProcessingRes,
+        message: QuestProcessingMsg,
     ) {
         store.mergeProjection(message.playerId, message.projection)
         actor.push(message)

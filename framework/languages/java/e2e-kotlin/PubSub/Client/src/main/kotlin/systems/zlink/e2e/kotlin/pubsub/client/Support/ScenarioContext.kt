@@ -1,7 +1,5 @@
-package Support
+package systems.zlink.e2e.kotlin.pubsub.client.Support
 
-import systems.zlink.e2e.kotlin.pubsub.client.Scenarios
-import systems.zlink.e2e.kotlin.pubsub.client.Support
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
@@ -21,7 +19,7 @@ import systems.zlink.e2e.kotlin.pubsub.client.Scenarios.PublisherRestartScenario
 import systems.zlink.e2e.kotlin.pubsub.client.Scenarios.SlowSubscriberScenario
 import systems.zlink.e2e.kotlin.pubsub.client.Scenarios.SubscriberReconnectScenario
 import systems.zlink.e2e.kotlin.pubsub.client.Scenarios.TopicFilterScenario
-import systems.zlink.e2e.kotlin.pubsub.shared.EventMsg
+import systems.zlink.e2e.kotlin.pubsub.shared.Event
 import systems.zlink.e2e.kotlin.pubsub.shared.EvidenceSnapshot
 
 class ScenarioContext(
@@ -65,7 +63,7 @@ class ScenarioContext(
 
     private fun runAutomaticDiscovery() {
         waitForFanoutReady(options.sub1Http, 1)
-        publish("all", EventMsg("ps-d1", 1, "automatic-discovery"))
+        publish("all", Event("ps-d1", 1, "automatic-discovery"))
         waitForEvent("sub-1", "ps-d1", 1)
         ensure(publisherIds(options.sub1Http).isNotEmpty(), "PS-D1 status did not expose a publisher")
         println("scenario PS-D1 passed")
@@ -74,10 +72,10 @@ class ScenarioContext(
     private fun runChannelIsolation() {
         val audit = required(options.auditPublisherHttp, "audit-publisher-http")
         waitForFanoutReady(options.sub1Http, 1)
-        publishAt(audit, "all", EventMsg("ps-d2-audit", 1, "audit-channel"))
+        publishAt(audit, "all", Event("ps-d2-audit", 1, "audit-channel"))
         sleep(500)
         ensure(!hasEvent(snapshot("sub-1"), "ps-d2-audit", 1), "PS-D2 received an event from another ChannelName")
-        publish("all", EventMsg("ps-d2", 1, "events-channel"))
+        publish("all", Event("ps-d2", 1, "events-channel"))
         waitForEvent("sub-1", "ps-d2", 1)
         ensure(publisherIds(options.sub1Http).none { it == "audit-publisher" }, "PS-D2 status included another ChannelName")
         println("scenario PS-D2 passed")
@@ -88,13 +86,13 @@ class ScenarioContext(
         publisher2.use {
             waitHealthy(required(options.publisher2Http, "publisher2-http"))
             waitForFanoutReady(options.sub1Http, 2)
-            publish("all", EventMsg("ps-d3-a", 1, "publisher-a"))
-            publishAt(required(options.publisher2Http, "publisher2-http"), "all", EventMsg("ps-d3-b", 1, "publisher-b"))
+            publish("all", Event("ps-d3-a", 1, "publisher-a"))
+            publishAt(required(options.publisher2Http, "publisher2-http"), "all", Event("ps-d3-b", 1, "publisher-b"))
             waitForEvent("sub-1", "ps-d3-a", 1)
             waitForEvent("sub-1", "ps-d3-b", 1)
             postPublisherControl("/shutdown")
             waitForFanoutReady(options.sub1Http, 1)
-            publishAt(required(options.publisher2Http, "publisher2-http"), "all", EventMsg("ps-d3-after", 1, "publisher-b-after"))
+            publishAt(required(options.publisher2Http, "publisher2-http"), "all", Event("ps-d3-after", 1, "publisher-b-after"))
             waitForEvent("sub-1", "ps-d3-after", 1)
         }
         println("scenario PS-D3 passed")
@@ -109,7 +107,7 @@ class ScenarioContext(
         replacement.use {
             waitHealthy(required(options.publisher2Http, "publisher2-http"))
             waitForFanoutReady(options.sub1Http, 1)
-            publishAt(required(options.publisher2Http, "publisher2-http"), "all", EventMsg("ps-d4", 1, "replacement"))
+            publishAt(required(options.publisher2Http, "publisher2-http"), "all", Event("ps-d4", 1, "replacement"))
             waitForEvent("sub-1", "ps-d4", 1)
         }
         println("scenario PS-D4 passed")
@@ -120,7 +118,7 @@ class ScenarioContext(
             waitForFanoutReady(options.sub1Http, 1)
         }
         val sequence = if (recovery) 2 else 1
-        publish("all", EventMsg("ps-d5", sequence, if (recovery) "store-recovered" else "store-paused"))
+        publish("all", Event("ps-d5", sequence, if (recovery) "store-recovered" else "store-paused"))
         waitForEvent("sub-1", "ps-d5", sequence)
         if (recovery) {
             ensure(statusAt(options.sub1Http).path("isReady").asBoolean(false), "PS-D5 status did not recover after Store unpause")
@@ -131,7 +129,7 @@ class ScenarioContext(
     private fun runPortZeroRestart() {
         waitForFanoutReady(options.sub1Http, 1)
         val firstEndpoint = listenerEndpoint(options.publisherHttp)
-        publish("all", EventMsg("ps-d6", 1, "port-zero-first"))
+        publish("all", Event("ps-d6", 1, "port-zero-first"))
         waitForEvent("sub-1", "ps-d6", 1)
         postPublisherControl("/shutdown")
         waitDown(publisherUrl)
@@ -143,7 +141,7 @@ class ScenarioContext(
             ensure(firstEndpoint != secondEndpoint, "PS-D6 port 0 restart reused the listener endpoint")
             ensure(!firstEndpoint.endsWith(":0") && !secondEndpoint.endsWith(":0"), "PS-D6 public listener status returned port 0")
             waitForFanoutReady(options.sub1Http, 1)
-            publishAt(required(options.publisher2Http, "publisher2-http"), "all", EventMsg("ps-d6", 2, "port-zero-replacement"))
+            publishAt(required(options.publisher2Http, "publisher2-http"), "all", Event("ps-d6", 2, "port-zero-replacement"))
             waitForEvent("sub-1", "ps-d6", 2)
         }
         println("scenario PS-D6 passed")
@@ -166,7 +164,7 @@ class ScenarioContext(
                     .path("readyPublisherCount").asInt(-1) == 2,
                 "PS-D7A normal observer did not receive the current publisher set",
             )
-            publishAt(required(options.publisher2Http, "publisher2-http"), "all", EventMsg("ps-d7a", 1, "observer-isolation"))
+            publishAt(required(options.publisher2Http, "publisher2-http"), "all", Event("ps-d7a", 1, "observer-isolation"))
             waitForEvent("sub-1", "ps-d7a", 1)
             val slowCount = observerEvidence(subscriber).count { it.path("observer").asText() == "slow" }
             ensure(slowCount == 1, "PS-D7A slow observer was not bounded")
@@ -186,9 +184,9 @@ class ScenarioContext(
             val before = publisherIds(options.sub1Http)
             post("$manual/connections?operation=connect&endpoint=${encode(required(options.publisher2Endpoint, "publisher2-endpoint"))}")
             post("$manual/connections?operation=disconnect&endpoint=${encode(required(options.publisher2Endpoint, "publisher2-endpoint"))}")
-            publish("all", EventMsg("ps-d7b", 1, "automatic-before"))
+            publish("all", Event("ps-d7b", 1, "automatic-before"))
             waitForEvent("sub-1", "ps-d7b", 1)
-            publishAt(required(options.publisher2Http, "publisher2-http"), "all", EventMsg("ps-d7b", 2, "automatic-after"))
+            publishAt(required(options.publisher2Http, "publisher2-http"), "all", Event("ps-d7b", 2, "automatic-after"))
             waitForEvent("sub-1", "ps-d7b", 2)
             val after = publisherIds(options.sub1Http)
             ensure(before == after, "PS-D7B manual endpoint mutation changed automatic status: before=$before after=$after")
@@ -198,8 +196,8 @@ class ScenarioContext(
 
     private fun runManualSubscriberWithoutStore() {
         val manual = required(options.sub4Http, "sub4-http")
-        publish("all", EventMsg("ps-e1", 1, "manual-without-store"))
-        waitForEvidenceAt(manual, "EventMsg", "ps-e1", 1)
+        publish("all", Event("ps-e1", 1, "manual-without-store"))
+        waitForEvidenceAt(manual, "Event", "ps-e1", 1)
         ensure(hasEvent(snapshotAt(manual), "ps-e1", 1), "PS-E1 manual subscriber did not receive the event")
         println("scenario PS-E1 passed")
     }
@@ -211,9 +209,9 @@ class ScenarioContext(
         publisher2.use {
             waitHealthy(required(options.publisher2Http, "publisher2-http"))
             waitForFanoutReady(manual, 1)
-            publishAt(required(options.publisher2Http, "publisher2-http"), "all", EventMsg("ps-f1", 1, "manual-publisher"))
-            waitForEvidenceAt(manual, "EventMsg", "ps-f1", 1)
-            publish("all", EventMsg("ps-f1", 2, "automatic-publisher"))
+            publishAt(required(options.publisher2Http, "publisher2-http"), "all", Event("ps-f1", 1, "manual-publisher"))
+            waitForEvidenceAt(manual, "Event", "ps-f1", 1)
+            publish("all", Event("ps-f1", 2, "automatic-publisher"))
             waitForEvent("sub-1", "ps-f1", 2)
         }
         println("scenario PS-F1 passed")
@@ -229,11 +227,11 @@ class ScenarioContext(
             waitForFanoutReady(options.sub1Http, 2)
             fault.block()
             waitUntil { publisherIds(options.sub1Http) == setOf("publisher-a") }
-            publish("all", EventMsg("ps-f2", 1, "publisher-a-during-b-failure"))
+            publish("all", Event("ps-f2", 1, "publisher-a-during-b-failure"))
             waitForEvent("sub-1", "ps-f2", 1)
             fault.unblock()
             waitForFanoutReady(options.sub1Http, 2)
-            publishAt(required(options.publisher2Http, "publisher2-http"), "all", EventMsg("ps-f2", 2, "publisher-b-after-recovery"))
+            publishAt(required(options.publisher2Http, "publisher2-http"), "all", Event("ps-f2", 2, "publisher-b-after-recovery"))
             waitForEvent("sub-1", "ps-f2", 2)
           }
         }
@@ -255,7 +253,7 @@ class ScenarioContext(
             waitForFanoutReady(options.sub1Http, 2)
             postPublisherControl("/shutdown")
             waitForFanoutReady(options.sub1Http, 1)
-            publishAt(required(options.publisher2Http, "publisher2-http"), "all", EventMsg("ps-f4", 1, "remaining-publisher"))
+            publishAt(required(options.publisher2Http, "publisher2-http"), "all", Event("ps-f4", 1, "remaining-publisher"))
             waitForEvent("sub-1", "ps-f4", 1)
         }
         println("scenario PS-F4 passed")
@@ -266,12 +264,12 @@ class ScenarioContext(
         val deadline = System.nanoTime() + Duration.ofSeconds(17).toNanos()
         var sequence = 1
         while (System.nanoTime() < deadline) {
-            publish("events.a", EventMsg("ps-f5-a", sequence++, "unsubscribed"))
+            publish("events.a", Event("ps-f5-a", sequence++, "unsubscribed"))
             sleep(1_000)
         }
         ensure(!hasEvent(snapshot("sub-1"), "ps-f5-a", 1), "PS-F5 subscriber handled an unsubscribed topic")
         ensure(statusAt(options.sub1Http).path("isReady").asBoolean(false), "PS-F5 liveness status became not-ready")
-        publish("events.b", EventMsg("ps-f5-b", 1, "subscribed"))
+        publish("events.b", Event("ps-f5-b", 1, "subscribed"))
         waitForEvent("sub-1", "ps-f5-b", 1)
         println("scenario PS-F5 passed")
     }
@@ -291,7 +289,7 @@ class ScenarioContext(
         touch(options.publisherReadyFile)
         waitForFile(options.prelateContinueFile)
 
-        publish("all", EventMsg("prelate", 0, "before-late"))
+        publish("all", Event("prelate", 0, "before-late"))
         waitForEvent("sub-1", "prelate", 0)
         waitForEvent("sub-2", "prelate", 0)
         touch(options.lateReadyFile)
@@ -307,7 +305,7 @@ class ScenarioContext(
         touch(options.publisherReadyFile)
         waitForFile(options.prelateContinueFile)
 
-        publish("all", EventMsg("prelate", 0, "before-late"))
+        publish("all", Event("prelate", 0, "before-late"))
         waitForEvent("sub-1", "prelate", 0)
         waitForEvent("sub-2", "prelate", 0)
         touch(options.lateReadyFile)
@@ -320,14 +318,14 @@ class ScenarioContext(
         val reconnectHttp = required(options.reconnectHttp, "reconnect-http")
         processes.startSubscriber("sub-reconnect", "alpha", reconnectHttp).use { subscriber ->
             waitHealthy(reconnectHttp)
-            publish("all", EventMsg("ps-a4", 1, "before-disconnect"))
+            publish("all", Event("ps-a4", 1, "before-disconnect"))
             waitForEventAt(reconnectHttp, "ps-a4", 1)
             subscriber.stop()
         }
 
         waitDown(reconnectHttp)
         for (sequence in 2..4) {
-            publish("all", EventMsg("ps-a4", sequence, "gap-$sequence"))
+            publish("all", Event("ps-a4", sequence, "gap-$sequence"))
         }
         waitForEvent("sub-1", "ps-a4", 4)
         waitForEvent("sub-2", "ps-a4", 4)
@@ -335,7 +333,7 @@ class ScenarioContext(
         processes.startSubscriber("sub-reconnect", "alpha", reconnectHttp).use {
             waitHealthy(reconnectHttp)
             for (sequence in 5..8) {
-                publish("all", EventMsg("ps-a4", sequence, "after-reconnect-$sequence"))
+                publish("all", Event("ps-a4", sequence, "after-reconnect-$sequence"))
             }
             waitForEventAt(reconnectHttp, "ps-a4", 8)
             val restarted = snapshotAt(reconnectHttp)
@@ -349,7 +347,7 @@ class ScenarioContext(
 
     fun runSlowSubscriberIsolation() {
         for (sequence in 0 until 8) {
-            publish("all", EventMsg("ps-b1", sequence, "slow-isolation-$sequence"))
+            publish("all", Event("ps-b1", sequence, "slow-isolation-$sequence"))
         }
         waitForEvent("sub-2", "ps-b1", 7)
         waitForEvent("sub-3", "ps-b1", 7)
@@ -357,7 +355,7 @@ class ScenarioContext(
     }
 
     fun runPublisherRestartRecovery() {
-        publish("all", EventMsg("ps-b2", 1, "before-publisher-restart"))
+        publish("all", Event("ps-b2", 1, "before-publisher-restart"))
         for (rid in listOf("sub-1", "sub-2", "sub-3")) {
             waitForEvent(rid, "ps-b2", 1)
         }
@@ -370,7 +368,7 @@ class ScenarioContext(
             waitHealthy(publisherUrl)
             sleep(500)
             for (sequence in 3..42) {
-                publish("all", EventMsg("ps-b2", sequence, "after-publisher-restart-$sequence"))
+                publish("all", Event("ps-b2", sequence, "after-publisher-restart-$sequence"))
                 sleep(100)
             }
             for (rid in listOf("sub-1", "sub-2", "sub-3")) {
@@ -382,14 +380,14 @@ class ScenarioContext(
 
     fun runFanoutBasicDelivery() {
         for (index in 0 until 20) {
-            publish("all", EventMsg("warmup", index, "warmup-$index"))
+            publish("all", Event("warmup", index, "warmup-$index"))
         }
         for (rid in listOf("sub-1", "sub-2", "sub-3")) {
             waitForAnyEvent(rid, "warmup")
         }
 
         for (sequence in 0 until 12) {
-            publish("all", EventMsg("ps-a1", sequence, "fanout-$sequence"))
+            publish("all", Event("ps-a1", sequence, "fanout-$sequence"))
         }
         for (rid in listOf("sub-1", "sub-2", "sub-3")) {
             for (sequence in 0 until 4) {
@@ -400,9 +398,9 @@ class ScenarioContext(
     }
 
     fun runTopicFilter() {
-        publish("alpha", EventMsg("ps-a2", 1, "alpha-only"))
-        publish("beta", EventMsg("ps-a2", 2, "beta-only"))
-        publish("gamma", EventMsg("ps-a2", 3, "gamma-only"))
+        publish("alpha", Event("ps-a2", 1, "alpha-only"))
+        publish("beta", Event("ps-a2", 2, "beta-only"))
+        publish("gamma", Event("ps-a2", 3, "gamma-only"))
 
         waitForEvent("sub-1", "ps-a2", 1)
         waitForEvent("sub-2", "ps-a2", 2)
@@ -433,26 +431,26 @@ class ScenarioContext(
     fun runLateSubscriber() {
         val late = snapshot("sub-3")
         ensure(!hasEvent(late, "prelate", 0), "PS-A3 late subscriber received replayed pre-late event")
-        publish("all", EventMsg("ps-a3", 1, "after-late"))
+        publish("all", Event("ps-a3", 1, "after-late"))
         waitForEvent("sub-3", "ps-a3", 1)
         println("scenario PS-A3 passed")
     }
 
     fun runMissingPacket() {
-        publishMissing("all", EventMsg("ps-c1", 1, "missing-packet"))
-        waitForDispatchError("sub-1", "MissingEventMsg")
-        publish("all", EventMsg("ps-c1", 2, "normal-after-missing"))
+        publishMissing("all", Event("ps-c1", 1, "missing-packet"))
+        waitForDispatchError("sub-1", "MissingEvent")
+        publish("all", Event("ps-c1", 2, "normal-after-missing"))
         waitForEvent("sub-1", "ps-c1", 2)
         waitForEvent("sub-2", "ps-c1", 2)
         waitForEvent("sub-3", "ps-c1", 2)
         println("scenario PS-C1 passed")
     }
 
-    private fun publish(topic: String, message: EventMsg) {
+    private fun publish(topic: String, message: Event) {
         publishAt(publisherUrl, topic, message)
     }
 
-    private fun publishMissing(topic: String, message: EventMsg) {
+    private fun publishMissing(topic: String, message: Event) {
         postPublisherAt(publisherUrl, "/publish-missing", PublishReq(topic, message))
     }
 
@@ -460,7 +458,7 @@ class ScenarioContext(
         postPublisherAt(publisherUrl, path, body)
     }
 
-    private fun publishAt(endpoint: String, topic: String, message: EventMsg) {
+    private fun publishAt(endpoint: String, topic: String, message: Event) {
         postPublisherAt(endpoint, "/publish", PublishReq(topic, message))
     }
 
@@ -506,7 +504,7 @@ class ScenarioContext(
 
     private fun ensurePublishFailsWhilePublisherDown() {
         try {
-            publish("all", EventMsg("ps-b2", 2, "during-publisher-down"))
+            publish("all", Event("ps-b2", 2, "during-publisher-down"))
             throw IllegalStateException("PS-B2 expected publish attempt to fail while publisher is down.")
         } catch (error: Exception) {
             if (!isConnectionFailure(error)) {
@@ -516,7 +514,7 @@ class ScenarioContext(
     }
 
     private fun waitForAnyEvent(subscriberRid: String, scenario: String) {
-        waitForEvidence(subscriberRid, marker = "EventMsg", scenario = scenario)
+        waitForEvidence(subscriberRid, marker = "Event", scenario = scenario)
     }
 
     private fun waitForAnyEventInRange(
@@ -535,7 +533,7 @@ class ScenarioContext(
         scenario: String,
         sequence: Int,
     ) {
-        waitForEvidence(subscriberRid, marker = "EventMsg", scenario = scenario, sequence = sequence)
+        waitForEvidence(subscriberRid, marker = "Event", scenario = scenario, sequence = sequence)
     }
 
     private fun waitForDispatchError(subscriberRid: String, packetName: String) {
@@ -578,7 +576,7 @@ class ScenarioContext(
         scenario: String,
         sequence: Int,
     ): EvidenceSnapshot =
-        waitForEvidenceAt(endpoint, marker = "EventMsg", scenario = scenario, sequence = sequence)
+        waitForEvidenceAt(endpoint, marker = "Event", scenario = scenario, sequence = sequence)
 
     private fun waitForEvidenceAt(
         endpoint: String,
@@ -697,7 +695,7 @@ class ScenarioContext(
         sequence: Int,
     ): Boolean =
         snapshot.entries.any {
-            it.marker == "EventMsg" &&
+            it.marker == "Event" &&
                 it.scenario == scenario &&
                 it.sequence == sequence
         }
@@ -802,9 +800,9 @@ class ScenarioContext(
 
     private class PublishReq() {
         var topic: String = ""
-        var message: EventMsg = EventMsg()
+        var message: Event = Event()
 
-        constructor(topic: String, message: EventMsg) : this() {
+        constructor(topic: String, message: Event) : this() {
             this.topic = topic
             this.message = message
         }

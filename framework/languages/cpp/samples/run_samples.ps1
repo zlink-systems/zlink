@@ -8,7 +8,8 @@ $SampleRunners = @(
     "DeliveryDispatch/run_sample.sh",
     "SupportChat/run_sample.sh",
     "GameQuest/run_sample.sh",
-    "ShoppingMall/run_sample.sh"
+    "ShoppingMall/run_sample.sh",
+    "ZoneWorld/run_sample.sh"
 )
 
 foreach ($Runner in $SampleRunners) {

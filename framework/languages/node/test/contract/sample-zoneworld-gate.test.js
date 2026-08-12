@@ -49,6 +49,8 @@ test('ZoneWorld roles use one physical MeshNode with automatic logical handlers'
 
 test('ZoneWorld runner proves the canonical scenario with generated routing identities', () => {
   const runner = read('samples/ZoneWorld/Runner/sample-runner.mjs');
+  const client = read('samples/ZoneWorld/Client/main.ts');
+  const joinReadiness = read('samples/ZoneWorld/Client/join-readiness.ts');
   const specialClient = read('samples/ZoneWorld/Client/special.ts');
   const contracts = read('samples/ZoneWorld/Shared/contracts.ts');
   const playerHandlers = read('samples/ZoneWorld/Server/ZoneNode/Infrastructure/ZLink/Handlers/player-handlers.ts');
@@ -94,6 +96,26 @@ test('ZoneWorld runner proves the canonical scenario with generated routing iden
   assert.match(specialClient, /representatives = \[BotIds\.northEastX, BotIds\.southWestY\]/);
   assert.doesNotMatch(specialClient, /moved\.size < bots\.size/);
   assert.match(zoneSpot, /if \(!this\.nodeState\.canTickBots\(\)\) return;/);
+  const borderPublish = zoneSpot.indexOf('new ZoneBorderEvent(');
+  const boundClientPush = zoneSpot.indexOf('new ZoneStateNotify(');
+  assert.ok(borderPublish >= 0 && borderPublish < boundClientPush,
+    'border synchronization must be admitted before a bound client push');
+  const borderObserverReady = client.indexOf('const adjacentViewTask = westObserver');
+  const crossNodeMove = client.indexOf('new MoveMsg(52, 25)');
+  assert.ok(borderObserverReady >= 0 && borderObserverReady < crossNodeMove,
+    'the adjacent-zone observer must be ready before the cross-node move publishes its border event');
+  const ownedStateWait = joinReadiness.indexOf('.waitFor<ZoneStateNotify>');
+  const joinRequest = joinReadiness.indexOf('.request(new JoinWorldReq(playerId))');
+  assert.ok(ownedStateWait >= 0 && ownedStateWait < joinRequest,
+    'accepted joins must arm the owned-state wait before submitting JoinWorldReq');
+  for (const playerId of ['player-a1', 'player-a3', 'player-b1-west']) {
+    assert.match(client, new RegExp(`joinAndWaitForOwnedState\\([^\\n]+['"]${playerId}['"]`));
+  }
+  for (const playerId of ['player-b4-west', 'player-b4-east', 'player-e1', 'player-e2', 'player-e3', 'player-f']) {
+    assert.match(specialClient, new RegExp(`joinAndWaitForOwnedState\\([^\\n]+['"]${playerId}['"]`));
+  }
+  assert.match(specialClient, /join\(newcomer, 'player-e6'\)/);
+  assert.match(client, /player\.playerId === joined\.playerId && player\.zoneId === ZoneIds\.northEast/);
   assert.match(zoneNodeMain, /await spawnBots\(app, zones\);[\s\S]*?state\.enableBotTicks\(\);/);
   assert.match(
     zoneNodeMain,
@@ -146,7 +168,7 @@ test('ZoneWorld human state pushes cross the ActorRef boundary before the bound 
   assert.match(actor, /push\(payload: unknown\): void/);
   assert.match(actor, /this\.context\.boundSession\.send\(payload\)\.submit\(\)/);
   assert.doesNotMatch(actor, /await[\s\S]*?boundSession\.send/);
-  assert.match(spot, /sendToActor\(actorId, new DeliverZoneNotification\(payload\)\)/);
+  assert.match(spot, /sendToActor\(actorId, new DeliverZoneNotificationMsg\(payload\)\)/);
   assert.doesNotMatch(spot, /Map<string, PlayerActor>/);
   assert.doesNotMatch(spot, /actor\.push\(/);
 });

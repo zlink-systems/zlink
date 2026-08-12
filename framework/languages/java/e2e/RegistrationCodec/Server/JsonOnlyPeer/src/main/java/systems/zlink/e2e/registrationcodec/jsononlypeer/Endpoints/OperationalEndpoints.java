@@ -1,7 +1,5 @@
-package Endpoints;
+package systems.zlink.e2e.registrationcodec.jsononlypeer.Endpoints;
 
-import systems.zlink.e2e.registrationcodec.jsononlypeer.Endpoints;
-import systems.zlink.e2e.registrationcodec.jsononlypeer.Infrastructure;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;

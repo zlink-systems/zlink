@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Configuration;
 
-using Google.Protobuf.WellKnownTypes;
 using Systems.Zlink;
 using RegistrationCodec.Server.Main.Endpoints;
 using RegistrationCodec.Server.Main.Handlers;
@@ -72,21 +71,22 @@ public static class RegistrationCodecServerHostFactory
             var channel = mesh.Channel(RegistrationCodecNames.Channel).Server();
             channel.AddRequestHandler<EchoAutoRequestHandler, EchoAutoReq, EchoRes>();
             channel.AddSendHandler<EchoAutoCommandHandler, EchoAutoMsg>();
-            channel.AddRequestHandler<AttributeHandlers, EchoAttrReq, EchoRes>("EchoAttr");
+            channel.AddRequestHandler<AttributeHandlers, EchoAttrReq, EchoRes>("EchoAttrReq");
             channel.AddSendHandler<AttributeHandlers, EchoAttrMsg>("EchoAttrMsg");
-            channel.AddRequestHandler<EchoManualRequestHandler, EchoManualReq, EchoRes>("EchoManual");
+            channel.AddRequestHandler<EchoManualRequestHandler, EchoManualReq, EchoRes>("EchoManualReq");
             channel.AddSendHandler<EchoManualCommandHandler, EchoManualMsg>("EchoManualMsg");
-            channel.AddRequestHandler<JsonEchoRequestHandler, JsonEchoReq, EchoRes>("EchoJson");
-            channel.AddSendHandler<JsonEchoCommandHandler, JsonEchoMsg>("EchoJsonMsg");
-            channel.AddRequestHandler<ProtobufEchoRequestHandler, StringValue, StringValue>();
-            channel.AddSendHandler<ProtobufEchoCommandHandler, StringValue>();
-            channel.AddRequestHandler<MessagePackEchoRequestHandler, PackedEchoReq, PackedEchoReq>("EchoMessagePack");
-            channel.AddSendHandler<MessagePackEchoCommandHandler, PackedEchoMsg>("EchoMessagePackMsg");
+            channel.AddRequestHandler<JsonEchoRequestHandler, JsonEchoReq, EchoRes>("JsonEchoReq");
+            channel.AddSendHandler<JsonEchoCommandHandler, JsonEchoMsg>("JsonEchoMsg");
+            channel.AddRequestHandler<ProtobufEchoRequestHandler, ProtobufEchoReq, ProtobufEchoRes>(
+                "ProtobufEchoReq");
+            channel.AddSendHandler<ProtobufEchoCommandHandler, ProtobufEchoMsg>("ProtobufEchoMsg");
+            channel.AddRequestHandler<MessagePackEchoRequestHandler, PackedEchoReq, PackedEchoRes>("PackedEchoReq");
+            channel.AddSendHandler<MessagePackEchoCommandHandler, PackedEchoMsg>("PackedEchoMsg");
             channel.AddRequestHandler<JsonGoldenRequestHandler, JsonGoldenReq, JsonGoldenRes>();
-            channel.AddRequestHandler<DiEchoRequestHandler, EchoDiReq, EchoRes>("EchoDi");
+            channel.AddRequestHandler<DiEchoRequestHandler, EchoDiReq, EchoRes>("EchoDiReq");
 
             if (options.InvalidMode == "duplicate")
-                channel.AddRequestHandler<DuplicateEchoRequestHandler, EchoManualReq, EchoRes>("EchoManual");
+                channel.AddRequestHandler<DuplicateEchoRequestHandler, EchoManualReq, EchoRes>("EchoManualReq");
         });
 
         var app = builder.Build();

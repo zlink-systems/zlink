@@ -20847,6 +20847,21 @@
       "finalGate": "V11-M9-PKG-DN"
     },
     {
+      "id": "file:framework/languages/dotnet/src/Zlink.Framework/Runtime/Host/ZLinkNativeActorJoinOperation.cs",
+      "file": "framework/languages/dotnet/src/Zlink.Framework/Runtime/Host/ZLinkNativeActorJoinOperation.cs",
+      "scope": "framework-consumer",
+      "language": "dotnet",
+      "category": "framework-service-consumer-source",
+      "disposition": "target-contract",
+      "action": "retain-framework-owned-service-runtime",
+      "targetOwners": [
+        "framework/doc/framework/common/spec/server/languages/dotnet/interfaces/README.ko.md",
+        "framework/doc/framework/common/internals/README.ko.md"
+      ],
+      "removalGate": "V11-M8-CLEAN-DN",
+      "finalGate": "V11-M9-PKG-DN"
+    },
+    {
       "id": "file:framework/languages/dotnet/src/Zlink.Framework/Runtime/Host/ZLinkRouteMeshRuntimeService.cs",
       "file": "framework/languages/dotnet/src/Zlink.Framework/Runtime/Host/ZLinkRouteMeshRuntimeService.cs",
       "scope": "framework-consumer",
@@ -20924,6 +20939,21 @@
     {
       "id": "file:framework/languages/dotnet/src/Zlink.Framework/Runtime/Locations/ZLinkAggregateRelocationCoordinator.cs",
       "file": "framework/languages/dotnet/src/Zlink.Framework/Runtime/Locations/ZLinkAggregateRelocationCoordinator.cs",
+      "scope": "framework-consumer",
+      "language": "dotnet",
+      "category": "framework-service-consumer-source",
+      "disposition": "target-contract",
+      "action": "retain-framework-owned-service-runtime",
+      "targetOwners": [
+        "framework/doc/framework/common/spec/server/languages/dotnet/interfaces/README.ko.md",
+        "framework/doc/framework/common/internals/README.ko.md"
+      ],
+      "removalGate": "V11-M8-CLEAN-DN",
+      "finalGate": "V11-M9-PKG-DN"
+    },
+    {
+      "id": "file:framework/languages/dotnet/src/Zlink.Framework/Runtime/Locations/ZLinkAuthorityKeyCodec.cs",
+      "file": "framework/languages/dotnet/src/Zlink.Framework/Runtime/Locations/ZLinkAuthorityKeyCodec.cs",
       "scope": "framework-consumer",
       "language": "dotnet",
       "category": "framework-service-consumer-source",
@@ -21794,21 +21824,6 @@
     {
       "id": "file:framework/languages/dotnet/tests/Zlink.Framework.ContractTests/Spots/SpotContracts.cs",
       "file": "framework/languages/dotnet/tests/Zlink.Framework.ContractTests/Spots/SpotContracts.cs",
-      "scope": "framework-consumer",
-      "language": "dotnet",
-      "category": "framework-service-consumer-test",
-      "disposition": "target-contract",
-      "action": "retain-framework-owned-service-runtime",
-      "targetOwners": [
-        "framework/doc/framework/common/spec/server/languages/dotnet/interfaces/README.ko.md",
-        "framework/doc/framework/common/internals/README.ko.md"
-      ],
-      "removalGate": "V11-M8-CLEAN-DN",
-      "finalGate": "V11-M9-PKG-DN"
-    },
-    {
-      "id": "file:framework/languages/dotnet/tests/Zlink.Framework.M5FoundationTests/Zlink.Framework.M5FoundationTests.csproj",
-      "file": "framework/languages/dotnet/tests/Zlink.Framework.M5FoundationTests/Zlink.Framework.M5FoundationTests.csproj",
       "scope": "framework-consumer",
       "language": "dotnet",
       "category": "framework-service-consumer-test",
@@ -23504,22 +23519,6 @@
       "finalGate": "V11-M9-PKG-JVM"
     },
     {
-      "id": "file:framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaMeshOperationTracker.java",
-      "file": "framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaMeshOperationTracker.java",
-      "scope": "framework-consumer",
-      "language": "java",
-      "category": "framework-service-consumer-source",
-      "disposition": "target-contract",
-      "action": "retain-framework-owned-service-runtime",
-      "targetOwners": [
-        "framework/doc/framework/common/spec/server/languages/java/interfaces/README.ko.md",
-        "framework/doc/framework/common/spec/server/languages/kotlin/interfaces/README.ko.md",
-        "framework/doc/framework/common/internals/README.ko.md"
-      ],
-      "removalGate": "V11-M8-CLEAN-JVM",
-      "finalGate": "V11-M9-PKG-JVM"
-    },
-    {
       "id": "file:framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshMonitor.java",
       "file": "framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshMonitor.java",
       "scope": "framework-consumer",
@@ -23842,6 +23841,22 @@
     {
       "id": "file:framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/internal/locations/ZLinkMeshNodeDescriptor.java",
       "file": "framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/internal/locations/ZLinkMeshNodeDescriptor.java",
+      "scope": "framework-consumer",
+      "language": "java",
+      "category": "framework-service-consumer-source",
+      "disposition": "target-contract",
+      "action": "retain-framework-owned-service-runtime",
+      "targetOwners": [
+        "framework/doc/framework/common/spec/server/languages/java/interfaces/README.ko.md",
+        "framework/doc/framework/common/spec/server/languages/kotlin/interfaces/README.ko.md",
+        "framework/doc/framework/common/internals/README.ko.md"
+      ],
+      "removalGate": "V11-M8-CLEAN-JVM",
+      "finalGate": "V11-M9-PKG-JVM"
+    },
+    {
+      "id": "file:framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/internal/service/ZLinkServiceCompletionDispatcher.java",
+      "file": "framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/internal/service/ZLinkServiceCompletionDispatcher.java",
       "scope": "framework-consumer",
       "language": "java",
       "category": "framework-service-consumer-source",
@@ -25836,6 +25851,21 @@
       "finalGate": "V11-M9-PKG-NODE"
     },
     {
+      "id": "file:framework/languages/node/packages/framework/src/runtime/foundation/service-wire-binary-primitives.ts",
+      "file": "framework/languages/node/packages/framework/src/runtime/foundation/service-wire-binary-primitives.ts",
+      "scope": "framework-consumer",
+      "language": "node",
+      "category": "framework-service-consumer-source",
+      "disposition": "target-contract",
+      "action": "retain-framework-owned-service-runtime",
+      "targetOwners": [
+        "framework/doc/framework/common/spec/server/languages/node/interfaces/README.ko.md",
+        "framework/doc/framework/common/internals/README.ko.md"
+      ],
+      "removalGate": "V11-M8-CLEAN-NODE",
+      "finalGate": "V11-M9-PKG-NODE"
+    },
+    {
       "id": "file:framework/languages/node/packages/framework/src/runtime/host/actor-packet-relay.ts",
       "file": "framework/languages/node/packages/framework/src/runtime/host/actor-packet-relay.ts",
       "scope": "framework-consumer",
@@ -25883,6 +25913,21 @@
     {
       "id": "file:framework/languages/node/packages/framework/src/runtime/host/actor-transfer-runtime.ts",
       "file": "framework/languages/node/packages/framework/src/runtime/host/actor-transfer-runtime.ts",
+      "scope": "framework-consumer",
+      "language": "node",
+      "category": "framework-service-consumer-source",
+      "disposition": "target-contract",
+      "action": "retain-framework-owned-service-runtime",
+      "targetOwners": [
+        "framework/doc/framework/common/spec/server/languages/node/interfaces/README.ko.md",
+        "framework/doc/framework/common/internals/README.ko.md"
+      ],
+      "removalGate": "V11-M8-CLEAN-NODE",
+      "finalGate": "V11-M9-PKG-NODE"
+    },
+    {
+      "id": "file:framework/languages/node/packages/framework/src/runtime/host/bounded-replay-map.ts",
+      "file": "framework/languages/node/packages/framework/src/runtime/host/bounded-replay-map.ts",
       "scope": "framework-consumer",
       "language": "node",
       "category": "framework-service-consumer-source",

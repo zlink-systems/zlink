@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/e2e-redis-common.sh"
+zlink_e2e_initialize java "$0" "$@"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/start-order-common.sh"
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -104,15 +105,15 @@ cleanup() {
     kill -9 "${pid}" >/dev/null 2>&1 || true
   done
   if [[ -n "${REDIS_CONTAINER}" ]]; then
-    docker unpause "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
-    docker rm -fv "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+    timeout -k 2s 10s docker unpause "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "${REDIS_CONTAINER}" || true
   fi
   if [[ -n "${REDIS_PROXY_PID}" ]]; then
     kill -CONT "${REDIS_PROXY_PID}" >/dev/null 2>&1 || true
     kill "${REDIS_PROXY_PID}" >/dev/null 2>&1 || true
   fi
   if [[ -n "${BASE_REDIS_CONTAINER}" ]]; then
-    docker rm -fv "${BASE_REDIS_CONTAINER}" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "${BASE_REDIS_CONTAINER}" || true
   fi
   rm -rf "${config_dir}"
   wait >/dev/null 2>&1 || true
@@ -122,30 +123,12 @@ trap cleanup EXIT
 
 reserve_ports() {
   local count="$1"
-  python3 - "${count}" <<'PY'
-import socket
-import sys
-count = int(sys.argv[1])
-sockets = []
-ports = []
-try:
-    for _ in range(count):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        ports.append(sock.getsockname()[1])
-    print(" ".join(str(port) for port in ports))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  zlink_e2e_reserve_ports "${count}"
 }
 
-redis_port="$(reserve_ports 1)"
 zlink_redis_start_scoped_assign BASE_REDIS_CONTAINER redis_port \
   "zlink-redis-java-e2e" \
-  "redis:7.2-alpine" \
-  "127.0.0.1:${redis_port}:6379"
+  "redis:7.2-alpine"
 redis_location_endpoint="127.0.0.1:${redis_port}"
 base_redis_location_endpoint="${redis_location_endpoint}"
 
@@ -249,7 +232,7 @@ pause_redis_container() {
   if [[ -n "${REDIS_PROXY_PID}" ]]; then
     kill -STOP "${REDIS_PROXY_PID}"
   else
-    docker pause "${REDIS_CONTAINER}" >/dev/null
+    timeout -k 2s 10s docker pause "${REDIS_CONTAINER}" >/dev/null
   fi
 }
 
@@ -257,24 +240,24 @@ unpause_redis_container() {
   if [[ -n "${REDIS_PROXY_PID}" ]]; then
     kill -CONT "${REDIS_PROXY_PID}"
   else
-    docker unpause "${REDIS_CONTAINER}" >/dev/null
+    timeout -k 2s 10s docker unpause "${REDIS_CONTAINER}" >/dev/null
   fi
 }
 
 stop_redis_process() {
-  docker stop -t 1 "${BASE_REDIS_CONTAINER}" >/dev/null
+  timeout -k 2s 10s docker stop -t 1 "${BASE_REDIS_CONTAINER}" >/dev/null
 }
 
 restart_redis_process() {
-  docker start "${BASE_REDIS_CONTAINER}" >/dev/null
+  timeout -k 2s 10s docker start "${BASE_REDIS_CONTAINER}" >/dev/null
   zlink_redis_wait_ready "${BASE_REDIS_CONTAINER}"
   wait_port redis-base "${base_redis_location_endpoint}"
 }
 
 stop_redis_container() {
   if [[ -n "${REDIS_CONTAINER}" ]]; then
-    docker unpause "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
-    docker rm -fv "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+    timeout -k 2s 10s docker unpause "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "${REDIS_CONTAINER}" || true
     REDIS_CONTAINER=""
   fi
   if [[ -n "${REDIS_PROXY_PID}" ]]; then
@@ -315,7 +298,7 @@ wait_for_log_marker() {
 }
 
 gradle_run() {
-  ../../gradlew -PzlinkE2eBuildDir="${e2e_build_dir}" \
+  zlink_e2e_gradle_build_locked ../../gradlew -PzlinkE2eBuildDir="${e2e_build_dir}" \
     --project-cache-dir "${gradle_cache_dir}" --no-daemon --no-parallel \
     --max-workers=1 "$@" --quiet
 }
@@ -923,7 +906,7 @@ run_client "SF-D2" "api-a" "SF-D2" "" "api-b" "true"
 SF_D2_CLIENT_PID="${LAST_CLIENT_PID}"
 sleep 0.5
 stop_redis_process
-if [[ "$(docker inspect -f '{{.State.Running}}' "${BASE_REDIS_CONTAINER}")" != "false" ]]; then
+if [[ "$(timeout -k 2s 5s docker inspect -f '{{.State.Running}}' "${BASE_REDIS_CONTAINER}")" != "false" ]]; then
   echo "SF-D2 Redis process did not stop" >&2
   exit 1
 fi

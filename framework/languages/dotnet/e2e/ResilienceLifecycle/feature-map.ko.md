@@ -16,10 +16,8 @@
 | RL-B5 | 구현 | weight 제외 전 수락된 요청의 완료와 신규 요청 제외를 확인했다(`logs/20260720-033453-1978850`). |
 | RL-B6 | 구현 | gray fault 동안 생존 provider 선택과 복구를 확인했다(`logs/20260720-033507-1980090`). |
 | RL-C1 | 구현 | 12개 ephemeral client request 정리와 follow-up 요청을 확인했다(`logs/20260720-033520-1980718`). |
-| RL-C2 | 구현 | provider crash 뒤 topology 제거·생존 provider 선택·replacement 복구를 확인했다(`logs/20260720-033651-1984623`). |
 | RL-C3 | 구현 | 정상 프로세스 종료와 재기동한 owner endpoint 수렴을 확인했다(`logs/20260720-033732-1985803`). |
 | RL-C4 | 구현 | Redis 중단 동안 기존 연결 유지와 store 복구 뒤 정상 수렴을 확인했다(`logs/20260720-033756-1986684`). |
-| RL-D1 | 구현 | high-fanout request burst의 전량 완료를 확인했다(`logs/20260720-033826-1987586`). |
 | RL-D2 | 구현 | observer fault 격리와 public runtime-error sink의 `zlink.runtime_error`·`observer_failed`·`message_flow_observer` event 단일 관측을 확인했다(`logs/20260720-033838-1988265`). |
 | RL-D3 | 구현 | dispatch-error evidence의 `failed`·`no_handler`·`reply_error`·packet 값을 확인했다(`logs/20260720-033851-1989147`). |
 | RL-D4 | 구현 | missing handler의 wire Error와 client request 예외, 정상 follow-up Response를 확인했다(`logs/20260720-033905-1990307`). |
@@ -36,9 +34,7 @@
 | RL-E4 | 구현 | admission 전, handler 진입 직후, reply 직전의 세 connection-loss race variant에서 public terminal이 정확히 하나이고 같은 marker의 handler completion이 한 번 이하임을 확인했다(`logs/20260806-155645-473165`). |
 | RL-E5 | 구현 | Redis pause 뒤 provider B의 RouteMesh 양방향 connection을 차단하고 affected target의 public not-ready 전환을 확인했다. Store가 pause된 상태에서도 consumer shutdown이 terminal로 완료되었고 shutdown 뒤 새 provider handler evidence가 생성되지 않았다(`logs/20260806-171802-1911880`). 구현 세부는 `framework/doc/framework/dotnet/internals/resilience-e5-store-liveness-e2e.ko.md`에 기록했다. |
 | RL-F1 | 미구현 | Preflight·admission seal capacity 경쟁 |
-| RL-F2 | 미구현 | Actor owner ABA fence |
 | RL-F3 | 미구현 | 언어 간 terminal failure 해석 |
-| RL-F4 | 구현 | Server-only process의 ClientServer outbound 호출이 `NotFound`로 끝나고 handler evidence가 변하지 않는지 확인한 뒤, 별도 Client role process의 정상 호출이 선택된 provider에서 한 번 처리되는지 확인했다(`logs/20260806-172727-3192643`). 구현 세부는 `framework/doc/framework/dotnet/internals/resilience-f4-client-server-role-e2e.ko.md`에 기록했다. |
 | RL-F5 | 미구현 | Activated seal과 Completed 공개 경계 |
 | RL-F6 | 미구현 | Admitted descriptor update fence |
 | RL-F7 | 미구현 | Relocated request reply ACK barrier |

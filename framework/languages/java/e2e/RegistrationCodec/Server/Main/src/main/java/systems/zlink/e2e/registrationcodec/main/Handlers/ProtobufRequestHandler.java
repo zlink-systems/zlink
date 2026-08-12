@@ -1,16 +1,15 @@
-package Handlers;
-import systems.zlink.e2e.registrationcodec.main.Handlers;
-import systems.zlink.e2e.registrationcodec.main.Infrastructure;
+package systems.zlink.e2e.registrationcodec.main.Handlers;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
-import com.google.protobuf.StringValue;
+import systems.zlink.e2e.registrationcodec.shared.protobuf.ProtobufEchoReq;
+import systems.zlink.e2e.registrationcodec.shared.protobuf.ProtobufEchoRes;
 import systems.zlink.e2e.registrationcodec.main.Infrastructure.EvidenceStore;
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
 
 public final class ProtobufRequestHandler
-    implements ZLinkRequestHandler<StringValue, StringValue> {
+    implements ZLinkRequestHandler<ProtobufEchoReq, ProtobufEchoRes> {
     private final EvidenceStore state;
 
     public ProtobufRequestHandler(EvidenceStore state) {
@@ -18,12 +17,14 @@ public final class ProtobufRequestHandler
     }
 
     @Override
-    public CompletionStage<StringValue> handle(
-        StringValue request,
+    public CompletionStage<ProtobufEchoRes> handle(
+        ProtobufEchoReq request,
         ZLinkMessageContext context) {
-        state.record("Request", "ProtobufEcho", request.getValue());
-        state.record("ContentType", "ProtobufEcho", context.contentType().orElse(""));
+        state.record("Request", "ProtobufEchoReq", request.getValue());
+        state.record("ContentType", "ProtobufEchoReq", context.contentType().orElse(""));
         return CompletableFuture.completedFuture(
-            StringValue.of("echo:" + request.getValue()));
+            ProtobufEchoRes.newBuilder()
+                .setValue("echo:" + request.getValue())
+                .build());
     }
 }

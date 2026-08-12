@@ -6,7 +6,7 @@ import {
 } from '@zlink-systems/nestjs';
 import { ZoneWorldNames, ZoneWorldSpec } from '../../../../../Shared/spec';
 import type { ZoneId } from '../../../../../Shared/spec';
-import { BotTickMsg, EnterZoneMsg, ZoneChangedNotify, ZoneBorderEvent, ZoneStateNotify } from '../../../../../Shared/contracts';
+import { BotTickMsg, EnterZoneReq, ZoneChangedNotify, ZoneBorderEvent, ZoneStateNotify } from '../../../../../Shared/contracts';
 import type {
   ZLinkActorClient,
   ZLinkMessage,
@@ -17,7 +17,7 @@ import type {
   ZLinkTimer
 } from '@zlink-systems/framework';
 import type { PlayerActor } from '../Actors/player-actor';
-import { DeliverZoneNotification } from '../Actors/player-actor';
+import { DeliverZoneNotificationMsg } from '../Actors/player-actor';
 import { adjacentZones } from '../../../Domain/world';
 import {
   BotTickHandler,
@@ -38,7 +38,7 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
   readonly context!: ZLinkSpotContext<PlayerActor, ZoneSpot>;
   private state?: ZoneState;
   private readonly actors = new Map<string, ZoneParticipant>();
-  private readonly pendingJoins = new Map<string, EnterZoneMsg>();
+  private readonly pendingJoins = new Map<string, EnterZoneReq>();
   private timer?: ZLinkTimer;
   private botTimer?: ZLinkTimer;
   private botTickTask?: Promise<void>;
@@ -75,7 +75,7 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
   }
 
   async onActorJoin(actorId: string, request: ZLinkMessage): Promise<ZLinkSpotActorJoinResult> {
-    const enter = request.decode(EnterZoneMsg);
+    const enter = request.decode(EnterZoneReq);
     if (enter.playerId !== actorId) {
       console.log(`zone admission rejected zone=${String(this.context.spotId)} player=${actorId} reason=player-id`);
       return { accepted: false };
@@ -149,11 +149,9 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
     const state = this.requireState();
     const tick = state.nextTick();
     const visible = state.visiblePlayers();
-    await Promise.allSettled(
-      [...this.actors.values()]
-        .filter((actor) => !actor.isBot)
-        .map((actor) => this.notifyActor(actor.actorId, new ZoneStateNotify(state.zoneId, tick, visible)))
-    );
+    // The Zone Spot owns border synchronization. Admit those events before
+    // client pushes so a slow bound session cannot delay state shared with an
+    // adjacent Zone Spot.
     for (const adjacent of adjacentZones(state.zoneId)) {
       await this.publisher.publish(
         ZoneWorldNames.zoneMesh,
@@ -162,6 +160,11 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
         new ZoneBorderEvent(state.zoneId, adjacent, tick, state.borderBandFor(adjacent))
       ).submit();
     }
+    await Promise.allSettled(
+      [...this.actors.values()]
+        .filter((actor) => !actor.isBot)
+        .map((actor) => this.notifyActor(actor.actorId, new ZoneStateNotify(state.zoneId, tick, visible)))
+    );
     for (const zoneId of state.expireStaleSnapshots()) {
       console.log(`border snapshot expired zone=${state.zoneId} source=${zoneId} tick=${tick}`);
     }
@@ -207,7 +210,7 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
   private async notifyActor(actorId: string, payload: unknown): Promise<void> {
     try {
       await this.actorClient
-        .sendToActor(actorId, new DeliverZoneNotification(payload))
+        .sendToActor(actorId, new DeliverZoneNotificationMsg(payload))
         .submit();
     } catch (error) {
       // A repeated relocation that returns an actor to this node (ZW-B7) can
@@ -219,7 +222,7 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
       if (!isStaleRouteError(error)) throw error;
       console.log(`actor notify re-resolved after stale route zone=${String(this.context.spotId)} player=${actorId}`);
       await this.actorClient
-        .sendToActor(actorId, new DeliverZoneNotification(payload))
+        .sendToActor(actorId, new DeliverZoneNotificationMsg(payload))
         .submit();
     }
   }

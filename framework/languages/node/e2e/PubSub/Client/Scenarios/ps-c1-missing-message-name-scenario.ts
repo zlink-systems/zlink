@@ -14,7 +14,7 @@ export async function runPsC1(publisher: string, subscribers: readonly string[])
   });
 
   await waitForAll(subscribers, {
-    containsAllLineGroups: [['dispatch-error|', `packet=${PacketNames.missingEventMsg}`, `topic=${PubSubNames.mainTopic}`]],
+    containsAllLineGroups: [['dispatch-error|', `packet=${PacketNames.missingPubSubEvent}`, `topic=${PubSubNames.mainTopic}`]],
     timeoutMilliseconds: 10_000
   });
 

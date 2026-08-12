@@ -8,13 +8,15 @@ export interface ZLinkFormalRemoteActorTransfer {
   readonly transferId: string;
   readonly handoffBacklog: readonly ZLinkActorHandoffPacket[];
   readonly deferredJoinRoot?: ZLinkDeferredJoinAcceptedRoot;
-  readonly sourceLeaveTerminal: Promise<boolean>;
+  readonly targetLifecycleCompleted: Promise<void>;
+  readonly sourceLeaveSubmitted: Promise<boolean>;
 }
 
 /** Keeps the source-leave fence attached to one admitted formal transfer. */
 export class ZLinkFormalRemoteActorTransferRegistry {
   private readonly transfers = new Map<string, {
     readonly transfer: ZLinkFormalRemoteActorTransfer;
+    readonly resolveTargetLifecycleCompleted: () => void;
     readonly resolveSourceLeaveTerminal: (succeeded: boolean) => void;
   }>();
   private readonly transfersById = new Map<string, ZLinkFormalRemoteActorTransfer>();
@@ -55,15 +57,21 @@ export class ZLinkFormalRemoteActorTransferRegistry {
       return existingById;
     }
     let resolveSourceLeaveTerminal!: (succeeded: boolean) => void;
-    const sourceLeaveTerminal = new Promise<boolean>((resolve) => {
+    let resolveTargetLifecycleCompleted!: () => void;
+    const targetLifecycleCompleted = new Promise<void>((resolve) => {
+      resolveTargetLifecycleCompleted = resolve;
+    });
+    const sourceLeaveSubmitted = new Promise<boolean>((resolve) => {
       resolveSourceLeaveTerminal = resolve;
     });
     const transfer: ZLinkFormalRemoteActorTransfer = {
       ...input,
-      sourceLeaveTerminal
+      targetLifecycleCompleted,
+      sourceLeaveSubmitted
     };
     this.transfers.set(input.actor.context.actorId, {
       transfer,
+      resolveTargetLifecycleCompleted,
       resolveSourceLeaveTerminal
     });
     this.transfersById.set(input.transferId, transfer);
@@ -78,15 +86,26 @@ export class ZLinkFormalRemoteActorTransferRegistry {
     }
   }
 
-  completeSourceLeaveTerminal(
-    actorId: string,
-    transferId: string,
-    succeeded: boolean
-  ): boolean {
+  completeTargetLifecycle(actorId: string, transferId: string): boolean {
     const pending = this.transfers.get(actorId);
     if (pending === undefined || pending.transfer.transferId !== transferId) {
       return false;
     }
+    pending.resolveTargetLifecycleCompleted();
+    return true;
+  }
+
+  async completeSourceLeaveTerminal(
+    actorId: string,
+    transferId: string,
+    succeeded: boolean
+  ): Promise<boolean> {
+    const pending = this.transfers.get(actorId);
+    if (pending === undefined || pending.transfer.transferId !== transferId) {
+      return false;
+    }
+    await pending.transfer.targetLifecycleCompleted;
+    if (this.transfers.get(actorId) !== pending) return false;
     pending.resolveSourceLeaveTerminal(succeeded);
     return true;
   }

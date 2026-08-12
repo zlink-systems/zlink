@@ -15,6 +15,7 @@ import systems.zlink.framework.spots.ZLinkTimer
 import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.tictactoe.server.play.domain.tictactoe.TicTacToeMatch
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.actors.PlayActor
+import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.spots.tictactoegamespot.handlers.PlayActorGetCurrentGameStateHandler
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.spots.tictactoegamespot.handlers.PlayActorLeaveGameHandler
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.spots.tictactoegamespot.handlers.PlayActorPlaceMarkHandler
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.spots.tictactoegamespot.handlers.TicTacToeGameCreatedHandler
@@ -24,7 +25,8 @@ import systems.zlink.samples.kotlin.tictactoe.shared.contracts.GameStateNotify
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.PlaceMarkRes
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.PlayerInfo
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.PlayerJoinedNotify
-import systems.zlink.samples.kotlin.tictactoe.shared.contracts.PlayerWinMilestoneMsg
+import systems.zlink.samples.kotlin.tictactoe.shared.contracts.PlayerWinMilestoneEvent
+import systems.zlink.samples.kotlin.tictactoe.shared.contracts.TicTacToeGameCreateReq
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.TicTacToeGameJoinReq
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.TicTacToeGameJoinRes
 
@@ -39,7 +41,16 @@ class TicTacToeGame(
     private val players = mutableListOf<PlayerSlot>()
     private val pendingJoins = mutableMapOf<String, TicTacToeGameJoinReq>()
     private var gameTick: ZLinkTimer? = null
-    private var created = false
+    private var definition: TicTacToeGameCreateReq? = null
+
+    init {
+        // send: reconnect JoinGameMsg에 current session push로 응답한다.
+        context.handlers().addHandler<PlayActorGetCurrentGameStateHandler>()
+        // request: PlaceMarkReq에 갱신된 GameState를 반환한다.
+        context.handlers().addHandler<PlayActorPlaceMarkHandler>()
+        // send: LeaveGameMsg를 처리하고 terminal game의 Actor를 Entry Spot으로 보낸다.
+        context.handlers().addHandler<PlayActorLeaveGameHandler>()
+    }
 
     override suspend fun onCreateSuspending(request: ZLinkMessage): ZLinkSpotCreateResponse {
         createdHandler.handle(this, request)
@@ -75,6 +86,7 @@ class TicTacToeGame(
     }
 
     override suspend fun onInitializeSuspending() {
+        // timer: TicTacToeGameTimerHandler가 turn timeout을 주기적으로 확인한다.
         gameTick = context.addTimer(
             "game-tick",
             gameTickPeriod,
@@ -87,9 +99,10 @@ class TicTacToeGame(
         gameTick?.cancel()?.await()
     }
 
-    fun markCreated(request: ZLinkMessage) {
-        require(request.isEmpty()) { "tic-tac-toe game creation does not accept payload parts" }
-        created = true
+    fun markCreated(request: TicTacToeGameCreateReq) {
+        require(request.gameName.isNotBlank()) { "game name is required" }
+        require(request.requiredLevel >= 0) { "required level must not be negative" }
+        definition = request
     }
 
     fun join(actor: PlayActor, roomId: String, player: PlayerInfo): TicTacToeGameJoinRes {
@@ -115,7 +128,9 @@ class TicTacToeGame(
     private fun validateJoin(roomId: String, player: PlayerInfo) {
         ensureCreated()
         check(roomId == this.roomId) { "join request room id does not match game room" }
-        check(player.level >= SampleNames.RequiredLevel) { "player level does not satisfy room requirement" }
+        check(player.level >= requireDefinition().requiredLevel) {
+            "player level does not satisfy room requirement"
+        }
     }
 
     suspend fun placeMark(actor: PlayActor, cell: Int): PlaceMarkRes {
@@ -132,6 +147,17 @@ class TicTacToeGame(
 
     fun hasPlayer(actorId: String): Boolean =
         players.any { it.actor.actorId == actorId }
+
+    fun currentState(actor: PlayActor, requestedRoomId: String): GameState {
+        val joinedRoomId = actor.requireJoinedGame()
+        check(joinedRoomId == requestedRoomId) {
+            "actor is joined to '$joinedRoomId', not '$requestedRoomId'"
+        }
+        check(hasPlayer(actor.actorId)) {
+            "actor '${actor.actorId}' is not a member of room '$requestedRoomId'"
+        }
+        return snapshot()
+    }
 
     private fun snapshot(): GameState {
         ensureCreated()
@@ -150,8 +176,11 @@ class TicTacToeGame(
     }
 
     private fun ensureCreated() {
-        check(created) { "tic-tac-toe game has not completed creation" }
+        requireDefinition()
     }
+
+    private fun requireDefinition(): TicTacToeGameCreateReq =
+        definition ?: error("tic-tac-toe game has not completed creation")
 
     private fun broadcast(state: GameState, excludedActorId: String?) {
         players
@@ -223,7 +252,7 @@ class TicTacToeGame(
             .publish(
                 SampleNames.PlayNode,
                 SampleNames.PlayerMilestoneTopic,
-                PlayerWinMilestoneMsg(
+                PlayerWinMilestoneEvent(
                     roomId = after.roomId,
                     actorId = actor.actorId,
                     displayName = player.displayName,

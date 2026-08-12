@@ -7,6 +7,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRAMEWORK_DIR="$(cd "$ROOT_DIR/../.." && pwd)"
 source "$ROOT_DIR/../redis-common.sh"
+zlink_cpp_e2e_acquire_run_lock "${BASH_SOURCE[0]}" "$@"
+zlink_cpp_e2e_install_cleanup_trap
 BUILD_DIR="$FRAMEWORK_DIR/build"
 SCENARIO="${1:-all}"
 LOCAL_READINESS_TIMEOUT_SECONDS=3
@@ -30,36 +32,9 @@ assign_ports() {
     WORKFLOW_A_SPOT_ROUTER WORKFLOW_B_SPOT_ROUTER \
     PLAY_A_SPOT_PUB PLAY_B_SPOT_PUB SESSION_SPOT_PUB \
     WORKFLOW_A_SPOT_PUB WORKFLOW_B_SPOT_PUB \
-    STREAM_ENDPOINT <<<"$(python3 - <<'PY'
-import socket
-import secrets
-sockets = []
-ports = []
-# Do not ask the kernel's port-0 allocator for listener candidates. The same
-# allocator immediately chooses outbound local ports while roles start
-# sequentially, which can reclaim a later role's not-yet-bound candidate.
-candidates = list(range(10000, 30000))
-secrets.SystemRandom().shuffle(candidates)
-for port in candidates:
-    try:
-        s = socket.socket()
-        s.bind(("127.0.0.1", port))
-    except OSError:
-        s.close()
-        continue
-    sockets.append(s)
-    ports.append(port)
-    if len(ports) == 21:
-        break
-if len(ports) != 21:
-    raise SystemExit("cannot reserve 21 listener ports")
-values = [f"http://127.0.0.1:{p}" for p in ports[:5]]
-values += [f"tcp://127.0.0.1:{p}" for p in ports[5:21]]
-print(" ".join(values))
-for s in sockets:
-    s.close()
-PY
-)"
+    STREAM_ENDPOINT <<<"$(zlink_cpp_e2e_allocate_endpoints \
+      http http http http http tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp \
+      tcp tcp tcp tcp tcp tcp)"
 }
 assign_ports
 
@@ -87,7 +62,7 @@ cleanup() {
     if kill -0 "$pid" >/dev/null 2>&1; then kill "$pid" >/dev/null 2>&1 || true; fi
   done
   for pid in "${PIDS[@]:-}"; do wait "$pid" 2>/dev/null || true; done
-  docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+  zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   rm -rf "$CONFIG_DIR"
   if [[ "$code" -ne 0 ]]; then echo "ObservabilityOps failed. Logs: $LOG_DIR" >&2; fi
 }
@@ -310,8 +285,9 @@ if [[ "$SCENARIO" == "all" || "$SCENARIO" == "fanout" ]]; then
   verify_scenario OBS-A4 publisherLog "$LOG_DIR/workflow-b-flow.log" \
     subscriberLogs "$LOG_DIR/workflow-a-flow.log;$LOG_DIR/workflow-b-flow.log" \
     timerLog "$LOG_DIR/play-a-flow.log"
-  docker exec "$REDIS_CONTAINER" redis-cli CLIENT PAUSE 11000 ALL >/dev/null
-  docker exec "$REDIS_CONTAINER" redis-cli PING >/dev/null
+  timeout -k 2s 15s docker exec "$REDIS_CONTAINER" \
+    redis-cli CLIENT PAUSE 11000 ALL >/dev/null
+  timeout -k 2s 15s docker exec "$REDIS_CONTAINER" redis-cli PING >/dev/null
   for _ in $(seq 1 100); do
     curl_local -fsS "$WORKFLOW_B_HTTP/evidence" >"$LOG_DIR/workflow-b.fanout.evidence.json"
     curl_local -fsS "$WORKFLOW_A_HTTP/evidence" >"$LOG_DIR/workflow-a.fanout.evidence.json"

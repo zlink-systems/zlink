@@ -18,7 +18,7 @@ import type {
 import { ActorPushNotify } from '../../../Shared/messages';
 import { SpotServiceNames } from '../../../Shared/messages';
 import { EvidenceStore } from '../Infrastructure/evidence-store';
-import { SpotMsgHandler, SpotOutboundHandler, SpotOutboundNegativeHandler } from '../Handlers/spot-outbound-handlers';
+import { SpotEventHandler, SpotOutboundHandler, SpotOutboundNegativeHandler } from '../Handlers/spot-outbound-handlers';
 import { SpotToSpotHandler, SpotToSpotNegativeHandler, SpotToSpotTimeoutHandler } from '../Handlers/spot-to-spot-handlers';
 import { StageProbeHandler, StageTimerStartHandler } from '../Handlers/stage-handlers';
 import { SlowSpotHandler, StateCommandHandler, StateReqHandler } from '../Handlers/state-req-handler';
@@ -47,7 +47,7 @@ export class ScenarioUserSpot implements ZLinkSpot<ScenarioActor> {
     this.context.handlers.addPacket(SpotToSpotNegativeHandler);
     this.context.handlers.addPacket(SpotAdminHandler);
     this.context.handlers.addSubscribe(
-      SpotMsgHandler,
+      SpotEventHandler,
       SpotServiceNames.spotChannel,
       SpotServiceNames.spotEventTopic
     );

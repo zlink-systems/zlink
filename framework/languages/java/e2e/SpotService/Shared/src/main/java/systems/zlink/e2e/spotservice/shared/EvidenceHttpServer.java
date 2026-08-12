@@ -135,7 +135,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                     exchange.getRequestBody(), Contracts.GatedSpotCreateReq.class);
                 state.armGate(request.spotRid());
                 spots.getOrCreate(request.spotRid(), "user")
-                    .request("a9")
+                    .request(new Contracts.SpotCreateReq("a9"))
                     .submit();
                 write(exchange, 202, "{\"started\":true}\n");
             });
@@ -194,7 +194,8 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 int count = request.count() <= 0 ? 200 : request.count();
                 var creates = IntStream.range(0, count)
                     .mapToObj(index -> CompletableFuture.supplyAsync(() ->
-                        spots.create("user").request("automatic-" + index)
+                        spots.create("user")
+                            .request(new Contracts.SpotCreateReq("automatic-" + index))
                             .submit().toCompletableFuture().join()))
                     .toList();
                 var results = creates.stream().map(CompletableFuture::join).toList();
@@ -379,10 +380,12 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 // after that placement, the local node is the only candidate
                 // with remaining stable-type capacity.
                 meshOptions.mesh(Contracts.SPOT_MESH).setPlacementWeight(0);
-                var firstResult = spots.getOrCreate(first, "capacity").request("capacity")
+                var firstResult = spots.getOrCreate(first, "capacity")
+                    .request(new Contracts.SpotCreateReq("capacity"))
                     .submit().toCompletableFuture().join();
                 meshOptions.mesh(Contracts.SPOT_MESH).setPlacementWeight(10_000);
-                var secondResult = spots.getOrCreate(second, "capacity").request("capacity")
+                var secondResult = spots.getOrCreate(second, "capacity")
+                    .request(new Contracts.SpotCreateReq("capacity"))
                     .submit().toCompletableFuture().join();
                 write(exchange, 200, json.writeValueAsString(new Contracts.CapacityPlacementRes(
                     firstResult.spot().nodeRid().toString(), secondResult.spot().nodeRid().toString())));
@@ -515,7 +518,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 }
                 try {
                     spots.getOrCreate(rid, localSpotType("timer"))
-                        .request("e2e")
+                        .request(new Contracts.SpotCreateReq("e2e"))
                         .submit()
                         .toCompletableFuture()
                         .get(5, TimeUnit.SECONDS);
@@ -536,6 +539,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 }
                 try {
                     spots.getOrCreate(rid, localSpotType("mismatched"))
+                        .request(new Contracts.SpotCreateReq("type-mismatch"))
                         .submit()
                         .toCompletableFuture()
                         .get(5, TimeUnit.SECONDS);
@@ -553,6 +557,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 }
                 try {
                     spots.getOrCreate(rid, localSpotType("user"))
+                        .request(new Contracts.SpotCreateReq("type-mismatch-follow-up"))
                         .submit()
                         .toCompletableFuture()
                         .get(5, TimeUnit.SECONDS);
@@ -580,7 +585,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
     private ZLinkSpotCreateResult getOrCreateUserSpot(String spotRid) {
         try {
             return spots.getOrCreate(spotRid, localSpotType("user"))
-                .request("e2e")
+                .request(new Contracts.SpotCreateReq("e2e"))
                 .submit()
                 .toCompletableFuture()
                 .get(5, TimeUnit.SECONDS);

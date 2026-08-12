@@ -29,7 +29,8 @@
 두 쌍은 서로 대비하도록 만들어져 있어 함께 보면 선택 기준이 분명해진다.
 
 - **TicTacToe ↔ Bingo** — 같은 실시간 게임을 수동 연결·수동 등록과 자동 연결·자동 등록으로,
-  session을 Play가 직접 소유하는 구성과 별도 gateway로 나눈 구성으로 각각 보여 준다.
+  session을 Play가 직접 소유하는 구성과 별도 gateway로 나눈 구성으로 각각 보여 준다. C++은
+  handler scanner가 없으므로 두 sample 모두 handler를 직접 등록하지만, 연결 방식은 같은 기준을 따른다.
 - **ShoppingMall ↔ GameQuest** — 같은 owner Spot·event sourcing을 무손실이 필요한 도메인과
   유실을 허용하고 보정하는 도메인으로 나눠 보여 준다.
 
@@ -38,8 +39,8 @@
 `Api` 2개와 `Play` 2개로 2인 대국을 처리하는 **가장 작은 실시간 게임 서버 구성**이다.
 **peer 연결을 location store에 맡기지 않고 endpoint를 직접 적는 유일한 샘플**이기도 하다. 다만 room과 actor가 지금 어느 node에 있는지는
 여기서도 Location Store가 해석한다 — 수동인 것은 **node 사이의 연결**이고, **object 위치
-조회**는 아니다. handler도 스캔 없이 구성 코드에서 직접 등록하는 유일한 샘플이라, framework가
-자동으로 해 주던 부분을 걷어낸 상태에서 나머지가 어떻게 맞물리는지 보기 좋다.
+조회**는 아니다. Managed language에서는 handler도 scan 없이 구성 코드에서 직접 등록하는 유일한
+sample이다. C++은 모든 sample에서 handler를 직접 등록하지만, 수동 연결은 TicTacToe에서만 사용한다.
 
 ```mermaid
 %%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
@@ -305,10 +306,8 @@ ShoppingMall과 나란히 놓으면 선택 기준이 드러난다. 게임 진행
 
 ## 8. ZoneWorld — zone 분할 MMORPG와 운영 관제 구축
 
-> ZoneWorld는 모든 framework 언어가 도달해야 하는 공통 sample target이다. 현재 server
-> implementation은 `.NET`과 Node.js에 있고, C++, Java, Kotlin은 implementation gap으로
-> 남아 있다. 다른 언어에서 같은 주제를 보려면 이 장의 설명과 공통 시나리오 문서를
-> 기준으로 삼고, 구현된 언어의 코드를 참고한다.
+> ZoneWorld는 다섯 framework 언어에 모두 구현된 공통 sample이다. 각 구현은 이 장과 공통
+> 시나리오가 정한 topology, actor relocation, 운영 fanout과 browser 검증 기준을 따른다.
 
 월드를 구역으로 나눠 `ZoneNode` 여러 대가 나눠 맡고, 어느 노드가 어느 구역을 맡는지는
 Location Store와 framework가 정한다. 플레이어가 경계를 넘으면 actor가 인접 zone Spot에
@@ -356,9 +355,8 @@ flowchart TD
 - 짝이 되는 장: [07-actor-spot](07-actor-spot.ko.md)(relocation),
   `11. Monitoring` 장, [12-operations](12-operations.ko.md)
 - 시나리오: [ZoneWorld](../../../common/sample/zoneworld/README.ko.md) · payload JSON
-- server와 runner는 언어별 구현 범위에 따라 제공하고 브라우저 client 하나를 공유한다. 공통
-  sample target에는 ZoneWorld도 포함되며, 현재 ZoneWorld server는 .NET과 Node.js에 구현되어 있다.
-  C++와 Java/Kotlin은 ZoneWorld implementation gap으로 남아 있다.
+- server와 runner는 다섯 언어에 제공되며 업무 동작과 검증 기준을 공유한다. .NET과 Node.js의
+  browser smoke는 같은 TypeScript client를 사용한다.
 
 ## 9. 실행
 
@@ -415,10 +413,9 @@ flowchart TD
     framework/languages/node/samples/run_samples.sh TicTacToe Bingo
     ```
 
-공통 sample target에는 브라우저 UI를 포함한 ZoneWorld도 포함된다. .NET과 Node.js의
-`run_samples.sh`는 ZoneWorld를 포함한 7개 샘플을 다루고, C++는 현재 구현된 6개를 다룬다.
-Java/Kotlin은 ZoneWorld implementation gap이므로 해당 언어의 통합 runner 결과에 포함하지 않는다.
-ZoneWorld만 실행하려면 구현된 언어에서 `ZoneWorld/run_sample.sh`를 호출한다.
+공통 sample target에는 브라우저 UI를 포함한 ZoneWorld도 포함된다. 다섯 언어의
+`run_samples.sh`는 ZoneWorld를 포함한 7개 샘플을 모두 실행한다. ZoneWorld만 실행하려면
+해당 언어의 sample root에서 `ZoneWorld/run_sample.sh`를 호출한다.
 
 ## 10. 관련 문서
 

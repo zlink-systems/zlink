@@ -1,7 +1,5 @@
-package Scenarios
+package systems.zlink.e2e.kotlin.registrymessaging.client.Scenarios
 
-import systems.zlink.e2e.kotlin.registrymessaging.client.Scenarios
-import systems.zlink.e2e.kotlin.registrymessaging.client.Support
 import systems.zlink.e2e.kotlin.registrymessaging.client.Support.HttpJson
 import systems.zlink.e2e.kotlin.registrymessaging.client.Support.ScenarioAssert
 import systems.zlink.e2e.kotlin.registrymessaging.shared.EvidenceWaitReq

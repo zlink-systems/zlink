@@ -31,7 +31,7 @@ internal sealed class AuthenticateBingoSessionHandler(
         var actor = (await actors
                 .GetOrCreate(authenticated.ActorId, SampleNames.PlayerActorType)
                 .InMesh(SampleNames.PlayMeshName)
-                .Request(new EnsurePlayerActorReq
+                .Request(new PlayerActorCreateReq
                 {
                     ActorId = authenticated.ActorId,
                     DisplayName = authenticated.DisplayName

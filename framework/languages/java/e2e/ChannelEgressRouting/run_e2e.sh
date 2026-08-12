@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JAVA_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 source "${JAVA_ROOT}/e2e-redis-common.sh"
+zlink_e2e_initialize java "$0" "$@"
 source "${JAVA_ROOT}/e2e/start-order-common.sh"
 
 cd "${SCRIPT_DIR}"
@@ -77,7 +78,7 @@ cleanup() {
   print_failure_logs "${status}"
   cleanup_processes
   if [[ -n "${REDIS_CONTAINER}" ]]; then
-    docker rm -fv "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "${REDIS_CONTAINER}" || true
   fi
   rm -rf "${CONFIG_DIR}"
   exit "${status}"
@@ -100,11 +101,11 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
-  "zlink-redis-java-e2e-channel-egress" "redis:7.2-alpine" "127.0.0.1::6379"
+  "zlink-redis-java-e2e-channel-egress" "redis:7.2-alpine"
 REDIS_ENDPOINT="127.0.0.1:${redis_port}"
 
 gradle_run() {
-  "${JAVA_ROOT}/gradlew" -p "${SCRIPT_DIR}" \
+  zlink_e2e_gradle_build_locked "${JAVA_ROOT}/gradlew" -p "${SCRIPT_DIR}" \
     -PzlinkE2eBuildDir="${BUILD_DIR}" \
     --project-cache-dir "${GRADLE_CACHE_DIR}" \
     --no-daemon --no-parallel --max-workers=1 "$@" --quiet
@@ -116,23 +117,16 @@ fi
 ROLE_BIN="${BUILD_DIR}/Role/install/channel-egress-role/bin/channel-egress-role"
 CLIENT_BIN="${BUILD_DIR}/Client/install/channel-egress-client/bin/channel-egress-client"
 
-free_port() {
-  python3 - <<'PY'
-import socket
-with socket.socket() as sock:
-    sock.bind(("127.0.0.1", 0))
-    print(sock.getsockname()[1])
-PY
-}
-
 allocate_role() {
   local role="$1"
-  ROLE_HTTP["${role}"]="http://127.0.0.1:$(free_port)"
-  ROLE_GAME["${role}"]="tcp://127.0.0.1:$(free_port)"
-  ROLE_AUDIT["${role}"]="tcp://127.0.0.1:$(free_port)"
-  ROLE_WORKFLOW["${role}"]="$(free_port)"
-  ROLE_FANOUT["${role}"]="$(free_port)"
-  ROLE_STREAM["${role}"]="$(free_port)"
+  local -a ports=()
+  zlink_e2e_assign_unique_ports ports 6
+  ROLE_HTTP["${role}"]="http://127.0.0.1:${ports[0]}"
+  ROLE_GAME["${role}"]="tcp://127.0.0.1:${ports[1]}"
+  ROLE_AUDIT["${role}"]="tcp://127.0.0.1:${ports[2]}"
+  ROLE_WORKFLOW["${role}"]="${ports[3]}"
+  ROLE_FANOUT["${role}"]="${ports[4]}"
+  ROLE_STREAM["${role}"]="${ports[5]}"
   mkdir -p "${LOG_DIR}/${CURRENT_SCENARIO}/${role}"
 }
 
@@ -562,18 +556,15 @@ run_one() {
       ;;
     CH-E2E-09)
       allocate_role session; allocate_role api-a; allocate_role caller; allocate_role workflow-a
-      ROLE_GAME[api-a]="tcp://0.0.0.0:0"
+      ROLE_GAME[api-a]="tcp://0.0.0.0:${ROLE_GAME[api-a]##*:}"
       ROLE_GAME_BIND_HOST[api-a]="0.0.0.0"
       ROLE_GAME_ADVERTISE_HOST[api-a]="127.0.0.1"
-      ROLE_WORKFLOW[workflow-a]=0
       ROLE_WORKFLOW_BIND_HOST[workflow-a]="0.0.0.0"
       ROLE_WORKFLOW_ADVERTISE_HOST[workflow-a]="127.0.0.1"
-      ROLE_FANOUT[api-a]=0
       ROLE_FANOUT_BIND_HOST[api-a]="0.0.0.0"
       ROLE_FANOUT_ADVERTISE_HOST[api-a]="127.0.0.1"
       ROLE_FANOUT_PUBLISHER[api-a]=true
       ROLE_FANOUT_SUBSCRIBER[caller]=true
-      ROLE_STREAM[api-a]=0
       ROLE_STREAM_BIND_HOST[api-a]="0.0.0.0"
       ROLE_STREAM_ADVERTISE_HOST[api-a]="127.0.0.1"
       ROLE_STREAM_SERVER[api-a]=true

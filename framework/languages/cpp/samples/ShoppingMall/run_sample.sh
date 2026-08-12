@@ -13,9 +13,8 @@ fi
 RUN_DIR="$(mktemp -d)"
 RUN_ID="$(basename "$RUN_DIR")-$$-${RANDOM}"
 LOG_DIR="$RUN_DIR/logs"
-FLOW_LOG_DIR="$SCRIPT_DIR/logs"
+FLOW_LOG_DIR="$RUN_DIR/flow-logs"
 mkdir -p "$LOG_DIR" "$FLOW_LOG_DIR"
-rm -f "$FLOW_LOG_DIR"/*.log
 
 PIDS=()
 REDIS_CONTAINER_NAME=""
@@ -60,7 +59,7 @@ cleanup() {
     fi
   done
   if [[ -n "$REDIS_CONTAINER_NAME" ]]; then
-    docker rm -fv "$REDIS_CONTAINER_NAME" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER_NAME" || true
   fi
   rm -rf "$RUN_DIR"
   if [[ "$cleanup_failed" -ne 0 && "$code" -eq 0 ]]; then
@@ -70,37 +69,24 @@ cleanup() {
 }
 trap 'cleanup; status=$?; exit "$status"' EXIT
 
-PORT_ALLOCATION_OUTPUT="$(python3 - <<'PY'
-import socket
-sockets = []
-try:
-    for _ in range(17):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-    ports = [sock.getsockname()[1] for sock in sockets]
-    print(
-        f"{ports[0]} {ports[1]} {ports[2]} "
-        f"tcp://127.0.0.1:{ports[3]} tcp://127.0.0.1:{ports[4]} "
-        f"{ports[5]} {ports[6]} "
-        f"tcp://127.0.0.1:{ports[7]} tcp://127.0.0.1:{ports[8]} "
-        f"tcp://127.0.0.1:{ports[9]} tcp://127.0.0.1:{ports[10]} "
-        f"tcp://127.0.0.1:{ports[11]} tcp://127.0.0.1:{ports[12]} "
-        f"tcp://127.0.0.1:{ports[13]} tcp://127.0.0.1:{ports[14]} "
-        f"tcp://127.0.0.1:{ports[15]} tcp://127.0.0.1:{ports[16]}"
-    )
-except OSError as error:
-    print(f"SOCKETLESS {error.errno}:{error.strerror}")
-finally:
-    for sock in sockets:
-        sock.close()
-PY
-)"
-if [[ "$PORT_ALLOCATION_OUTPUT" == SOCKETLESS* ]]; then
-  echo "ShoppingMall runner requires local TCP sockets; allocation failed: ${PORT_ALLOCATION_OUTPUT#SOCKETLESS }" >&2
-  exit 1
-fi
-read -r SHOPPINGMALL_RESERVED_PORT SHOPPINGMALL_API_A_PORT SHOPPINGMALL_API_B_PORT SHOPPINGMALL_API_A_ROUTE SHOPPINGMALL_API_B_ROUTE SHOPPINGMALL_WORKFLOW_A_PORT SHOPPINGMALL_WORKFLOW_B_PORT SHOPPINGMALL_WORKFLOW_A_ROUTE SHOPPINGMALL_WORKFLOW_B_ROUTE SHOPPINGMALL_WORKFLOW_A_SPOT_ROUTE SHOPPINGMALL_WORKFLOW_B_SPOT_ROUTE SHOPPINGMALL_WORKFLOW_A_SPOT SHOPPINGMALL_WORKFLOW_A_SPOT_ROUTER SHOPPINGMALL_WORKFLOW_B_SPOT SHOPPINGMALL_WORKFLOW_B_SPOT_ROUTER SHOPPINGMALL_API_A_SPOT_ROUTER SHOPPINGMALL_API_B_SPOT_ROUTER <<<"$PORT_ALLOCATION_OUTPUT"
+read -r -a SHOPPINGMALL_PORTS <<<"$(zlink_sample_allocate_ports 17)"
+SHOPPINGMALL_RESERVED_PORT="${SHOPPINGMALL_PORTS[0]}"
+SHOPPINGMALL_API_A_PORT="${SHOPPINGMALL_PORTS[1]}"
+SHOPPINGMALL_API_B_PORT="${SHOPPINGMALL_PORTS[2]}"
+SHOPPINGMALL_API_A_ROUTE="tcp://127.0.0.1:${SHOPPINGMALL_PORTS[3]}"
+SHOPPINGMALL_API_B_ROUTE="tcp://127.0.0.1:${SHOPPINGMALL_PORTS[4]}"
+SHOPPINGMALL_WORKFLOW_A_PORT="${SHOPPINGMALL_PORTS[5]}"
+SHOPPINGMALL_WORKFLOW_B_PORT="${SHOPPINGMALL_PORTS[6]}"
+SHOPPINGMALL_WORKFLOW_A_ROUTE="tcp://127.0.0.1:${SHOPPINGMALL_PORTS[7]}"
+SHOPPINGMALL_WORKFLOW_B_ROUTE="tcp://127.0.0.1:${SHOPPINGMALL_PORTS[8]}"
+SHOPPINGMALL_WORKFLOW_A_SPOT_ROUTE="tcp://127.0.0.1:${SHOPPINGMALL_PORTS[9]}"
+SHOPPINGMALL_WORKFLOW_B_SPOT_ROUTE="tcp://127.0.0.1:${SHOPPINGMALL_PORTS[10]}"
+SHOPPINGMALL_WORKFLOW_A_SPOT="tcp://127.0.0.1:${SHOPPINGMALL_PORTS[11]}"
+SHOPPINGMALL_WORKFLOW_A_SPOT_ROUTER="tcp://127.0.0.1:${SHOPPINGMALL_PORTS[12]}"
+SHOPPINGMALL_WORKFLOW_B_SPOT="tcp://127.0.0.1:${SHOPPINGMALL_PORTS[13]}"
+SHOPPINGMALL_WORKFLOW_B_SPOT_ROUTER="tcp://127.0.0.1:${SHOPPINGMALL_PORTS[14]}"
+SHOPPINGMALL_API_A_SPOT_ROUTER="tcp://127.0.0.1:${SHOPPINGMALL_PORTS[15]}"
+SHOPPINGMALL_API_B_SPOT_ROUTER="tcp://127.0.0.1:${SHOPPINGMALL_PORTS[16]}"
 
 cmake --build "$BUILD_DIR" --parallel 2 --target \
   sample_cpp_framework_shoppingmall_commerce_api \

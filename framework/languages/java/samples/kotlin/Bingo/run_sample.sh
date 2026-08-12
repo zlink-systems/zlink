@@ -19,6 +19,7 @@ for assertion in \
 done
 
 source "../../runner-common.sh"
+zlink_sample_configure_port_pool kotlin
 ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kts)
 
 pids=()
@@ -46,19 +47,10 @@ print_logs() {
 
 trap cleanup EXIT
 
-reserve_ports() {
-  local base=$((48000 + ((RANDOM + $$) % 1000) * 15 % 12000))
-  local endpoints=()
-  for offset in $(seq 0 12); do
-    endpoints+=("127.0.0.1:$((base + offset))")
-  done
-  echo "${endpoints[*]}"
-}
-
 build_framework_jars() {
   (
     cd ../../..
-    ./gradlew --no-daemon --no-parallel --max-workers=1 \
+    zlink_sample_gradle_locked ./gradlew --no-daemon --no-parallel --max-workers=1 \
       :zlink-framework-core:jar \
       :zlink-framework-spring-boot-starter:jar \
       :zlink-framework-kotlin:jar \
@@ -69,7 +61,8 @@ build_framework_jars() {
   )
 }
 
-read -r api_a_channel api_a_mesh session_a_router play_a_router session_a_stream api_b_channel api_b_mesh session_b_router play_b_router session_b_stream api_a_matchmaking api_b_matchmaking matchmaking_router < <(reserve_ports)
+read -r api_a_channel api_a_mesh session_a_router play_a_router session_a_stream api_b_channel api_b_mesh session_b_router play_b_router session_b_stream api_a_matchmaking api_b_matchmaking matchmaking_router \
+  <<<"$(zlink_sample_reserve_endpoints 13)"
 api_a_host="${api_a_channel%:*}"
 api_a_port="${api_a_channel##*:}"
 api_b_host="${api_b_channel%:*}"

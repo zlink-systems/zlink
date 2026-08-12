@@ -51,8 +51,15 @@ export class ZLinkBoundActorRelaySender {
     // A relocation seal can hold this request until the target route is
     // published. Wait before entering the actor lifecycle lane: route
     // publication uses the same lane and must be able to release the seal.
-    await this.routes.acceptWhenReady(actor.actorId, actor.bindingToken, signal);
-    return await this.lifecycle.run(actor.actorId, () => this.relayInsideLifecycle(actor, payload, signal));
+    return await this.routes.runAcceptedFrameWhenReady(
+      actor.actorId,
+      actor.bindingToken,
+      async () => await this.lifecycle.run(
+        actor.actorId,
+        () => this.relayInsideLifecycle(actor, payload, signal)
+      ),
+      signal
+    );
   }
 
   private async relayInsideLifecycle(

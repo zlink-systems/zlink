@@ -5,22 +5,19 @@ const test = require('node:test');
 
 const root = path.resolve(__dirname, '../../e2e/ResilienceLifecycle');
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
+const pubSubRoot = path.resolve(__dirname, '../../e2e/PubSub');
+const readPubSub = (relative) => fs.readFileSync(path.join(pubSubRoot, relative), 'utf8');
 
-test('RL-D1 drives actual fanout through many subscribers', () => {
-  const scenario = read('Client/Scenarios/rl-d1-high-fanout-scenario.ts');
-  const provider = read('Server/Provider/provider-host-factory.ts');
-  const consumer = read('Server/Consumer/consumer-host-factory.ts');
-  const runner = read('run_e2e.sh');
+test('PS-B1 keeps the implemented slow-subscriber isolation and records the deferred scale profile', () => {
+  const scenario = readPubSub('Client/Scenarios/ps-b1-slow-subscriber-scenario.ts');
+  const featureMap = readPubSub('feature-map.ko.md');
 
-  assert.match(provider, /addFanoutChannel\(ResilienceNames\.fanoutChannel\)/);
-  assert.match(provider, /enablePublisher\(options\.fanoutEndpoint\)/);
-  assert.match(consumer, /enableSubscriber\(\)/);
-  assert.match(consumer, /addPublishHandler\(PacketNames\.loadEvent, LoadEventHandler\)/);
-  assert.match(runner, /RESILIENCE_CONSUMER_COUNT/);
-  assert.match(runner, /--consumer-urls/);
-  assert.match(scenario, /options\.consumerUrls/);
-  assert.match(scenario, /\/fanout\/publish/);
-  assert.doesNotMatch(scenario, /\/profile\/request/);
+  assert.match(scenario, /fastSubscribers\.map/);
+  assert.match(scenario, /publishEvent\(/);
+  assert.match(scenario, /['"]seq=8['"]/);
+  assert.match(scenario, /delay-start\|/);
+  assert.match(featureMap, /\| `PS-B1` \| 부분 구현 \|/);
+  assert.match(featureMap, /통합된 scale profile은 E2E 구현 단계에서 같은 scenario에 추가한다/);
 });
 
 test('RL-D4 channel replies preserve the canonical Error and Response wire headers', () => {

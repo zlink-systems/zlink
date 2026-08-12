@@ -78,7 +78,7 @@ internal sealed class PlayActor(
             case ZLinkActorJoinCompletion.Accepted { Reply: { } reply }:
                 JoinRoom(roomId);
                 await Context.BoundSession
-                    .Send(new JoinGameRes(reply.Decode<TicTacToeGameJoinRes>().State))
+                    .Send(new JoinGameNotify(reply.Decode<TicTacToeGameJoinRes>().State))
                     .Async(cancellationToken);
                 break;
 

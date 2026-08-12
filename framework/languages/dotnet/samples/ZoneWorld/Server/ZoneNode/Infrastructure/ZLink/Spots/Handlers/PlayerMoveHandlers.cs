@@ -176,16 +176,16 @@ internal sealed class PlayerMessageFollowProbeHandler(
 /// Handles the one-way half of the runner-only Message Follow probe. The application records
 /// the operation because a one-way send has no reply that could prove target execution.
 /// </summary>
-[ZLinkSpotActorSendHandler(nameof(MessageFollowProbeReq))]
+[ZLinkSpotActorSendHandler(nameof(MessageFollowProbeMsg))]
 internal sealed class PlayerMessageFollowProbeSendHandler(
     ILogger<PlayerMessageFollowProbeSendHandler> logger)
-    : IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, MessageFollowProbeReq>
+    : IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, MessageFollowProbeMsg>
 {
     public ValueTask HandleAsync(
         ZoneSpot spot,
         PlayerActor actor,
         IZLinkMessageContext context,
-        MessageFollowProbeReq message,
+        MessageFollowProbeMsg message,
         CancellationToken cancellationToken)
     {
         logger.LogInformation(
@@ -256,7 +256,7 @@ internal sealed class PlayerMovement(
         actor.Context
             .JoinSpot(
                 to.ZoneId,
-                new EnterZoneMsg(
+                new EnterZoneReq(
                     actor.ActorId,
                     to.X,
                     to.Y,

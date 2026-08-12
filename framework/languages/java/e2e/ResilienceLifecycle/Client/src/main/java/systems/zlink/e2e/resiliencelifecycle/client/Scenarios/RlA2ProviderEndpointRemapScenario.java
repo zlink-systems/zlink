@@ -1,6 +1,4 @@
-package Scenarios;
-import systems.zlink.e2e.resiliencelifecycle.client.Scenarios;
-import systems.zlink.e2e.resiliencelifecycle.client.Support;
+package systems.zlink.e2e.resiliencelifecycle.client.Scenarios;
 import java.util.concurrent.ExecutionException;
 
 import systems.zlink.e2e.resiliencelifecycle.client.Support.ResilienceScenarioContext;

@@ -260,6 +260,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         sessionRelocationRouteHandler;
     private volatile ZLinkInternalMeshNode.SessionRelocationSealHandler
         sessionRelocationSealHandler;
+    private volatile ZLinkInternalMeshNode.BoundSessionSendHandler
+        boundSessionSendHandler;
     private volatile ZLinkInternalMeshNode.BoundSessionReplacedHandler
         boundSessionReplacedHandler;
     private final Map<UserSpotOperationKey, UserSpotTerminalSlot>
@@ -2979,6 +2981,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     @Override
+    public void setBoundSessionSendHandler(
+        ZLinkInternalMeshNode.BoundSessionSendHandler handler) {
+        boundSessionSendHandler = Objects.requireNonNull(handler, "handler");
+    }
+
+    @Override
     public CompletionStage<byte[]> requestSessionRelocationSeal(
         RoutingId sessionOwnerNodeRid,
         byte[] command42,
@@ -3779,19 +3787,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             topology == null
                 ? Optional.empty()
                 : topology.peer(binding.sessionOwnerNodeRid());
-        long ownerLeaseGeneration = ((ZLinkJavaRawSpotNode) spotNode())
-            .actorAuthorityOwnerLeaseGeneration(binding.actor());
         if (peer.isEmpty()
             || peer.orElseThrow().descriptor().lifecycleGeneration()
                 != binding.sessionOwnerNodeGeneration()
-            || !isReadyPeer(binding.sessionOwnerNodeRid())
-            || localDescriptor == null
-            || !((ZLinkJavaRawSpotNode) spotNode())
-                .isCurrentBoundActor(binding.actor())
-            || ((ZLinkJavaRawSpotNode) spotNode())
-                .actorAuthorityOwnerGeneration(binding.actor())
-                != binding.authorityOwnerGeneration()
-            || ownerLeaseGeneration <= 0) {
+            || !isReadyPeer(binding.sessionOwnerNodeRid())) {
             streamTrace("send bound session rejected actor="
                 + actorSummary(binding.actor())
                 + " session=" + binding.sessionRid()
@@ -3802,23 +3801,16 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     value.descriptor().lifecycleGeneration()).orElse(-1L)
                 + " expectedOwnerGeneration="
                 + binding.sessionOwnerNodeGeneration()
-                + " ready=" + isReadyPeer(binding.sessionOwnerNodeRid())
-                + " localDescriptor=" + (localDescriptor != null)
-                + " currentBoundActor=" + ((ZLinkJavaRawSpotNode) spotNode())
-                    .isCurrentBoundActor(binding.actor())
-                + " localAuthority=" + ((ZLinkJavaRawSpotNode) spotNode())
-                    .actorAuthorityOwnerGeneration(binding.actor())
-                + " bindingAuthority=" + binding.authorityOwnerGeneration()
-                + " ownerLease=" + ownerLeaseGeneration);
+                + " ready=" + isReadyPeer(binding.sessionOwnerNodeRid()));
             return false;
         }
         List<byte[]> frames = List.of(
             statefulWire.encodeBoundSessionSendHeader(
                 new ZLinkServiceM6BWireCodec.ActorRouteFence(
                     binding.actor(),
-                    localDescriptor.lifecycleGeneration(),
+                    binding.targetNodeGeneration(),
                     binding.authorityOwnerGeneration(),
-                    ownerLeaseGeneration),
+                    binding.actorOwnerLeaseGeneration()),
                 binding.bindingGeneration()),
             wire.encodeApplicationPayload(applicationPayload(parts)));
         boolean accepted = port.send(
@@ -5963,20 +5955,22 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         if (source.isEmpty()) {
             return;
         }
-        List<Message> parts = List.of();
         try {
             ZLinkServiceM6BWireCodec.BoundSessionSend send =
                 statefulWire.decodeBoundSessionSendHeader(
                     frames.getFirst());
             ZLinkServiceM6AWireCodec.ApplicationPayload payload =
                 wire.decodeApplicationPayload(frames.get(1));
-            parts = decodeApplicationMessages(payload);
-            boolean accepted = ((ZLinkJavaRawSpotNode) spotNode()).acceptBoundSessionPush(
+            var handler = boundSessionSendHandler;
+            if (handler == null) {
+                return;
+            }
+            boolean accepted = handler.handle(
                 inbound.source(),
                 source.orElseThrow().descriptor()
                     .lifecycleGeneration(),
                 send,
-                parts);
+                payload);
             streamTrace("bound session receive "
                 + (accepted ? "accepted" : "rejected")
                 + " actor=" + actorSummary(send.actor().actor())
@@ -5984,8 +5978,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 + " binding=" + send.expectedBindingGeneration());
         } catch (RuntimeException invalid) {
             // A malformed or stale one-way record has no terminal route.
-        } finally {
-            parts.forEach(Message::close);
         }
     }
 

@@ -1,7 +1,6 @@
-package Support
+package systems.zlink.e2e.kotlin.registrymessaging.client.Support
 
 
-import systems.zlink.e2e.kotlin.registrymessaging.client.Support
 import java.util.concurrent.TimeUnit
 import java.io.File
 import java.net.ServerSocket

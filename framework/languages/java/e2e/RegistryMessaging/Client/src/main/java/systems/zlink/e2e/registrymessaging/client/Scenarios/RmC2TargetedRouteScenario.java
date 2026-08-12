@@ -1,7 +1,5 @@
-package Scenarios;
+package systems.zlink.e2e.registrymessaging.client.Scenarios;
 
-import systems.zlink.e2e.registrymessaging.client.Scenarios;
-import systems.zlink.e2e.registrymessaging.client.Support;
 import systems.zlink.e2e.registrymessaging.client.Support.ScenarioAssert;
 import systems.zlink.e2e.registrymessaging.shared.Contracts;
 import systems.zlink.httpclient.ZLinkHttpClient;

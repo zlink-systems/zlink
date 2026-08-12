@@ -10,11 +10,89 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.Test;
 import systems.zlink.framework.monitoring.ZLinkObservedStatus;
 
 final class ZLinkStatusPublisherTest {
+    @Test
+    void intermediateSnapshotsCoalesceOnlyWithinTheSameSource()
+        throws Exception {
+        AtomicReference<SourceStatus> state = new AtomicReference<>(
+            new SourceStatus("A", 0, false));
+        ZLinkStatusPublisher<SourceStatus> publisher = ZLinkStatusPublisher.create(
+            state::get,
+            SourceStatus::sequence,
+            SourceStatus::source,
+            2,
+            SourceStatus::terminal,
+            ignored -> false,
+            Runnable::run);
+        CompletableFuture<Flow.Subscription> subscribed =
+            new CompletableFuture<>();
+        CopyOnWriteArrayList<ZLinkObservedStatus<SourceStatus>> received =
+            new CopyOnWriteArrayList<>();
+        publisher.subscribe(statusSubscriber(received, subscribed));
+
+        state.set(new SourceStatus("A", 1, false));
+        publisher.signal();
+        state.set(new SourceStatus("B", 1, false));
+        publisher.signal();
+        state.set(new SourceStatus("A", 2, false));
+        publisher.signal();
+        subscribed.get(1, TimeUnit.SECONDS).request(2);
+
+        assertEquals(2, received.size());
+        assertTrue(received.stream().anyMatch(item ->
+            item.status().source().equals("A")
+                && item.status().sequence() == 2));
+        assertTrue(received.stream().anyMatch(item ->
+            item.status().source().equals("B")
+                && item.status().sequence() == 1));
+        assertEquals(2, received.get(0).loss().coalescedCount());
+        assertEquals(0, received.get(0).loss().discardedTerminalCount());
+    }
+
+    @Test
+    void terminalCapacityDiscardsOnlyTheOldestTerminalAndReleasesItsSource()
+        throws Exception {
+        AtomicReference<SourceStatus> state = new AtomicReference<>(
+            new SourceStatus("A", 0, false));
+        ZLinkStatusPublisher<SourceStatus> publisher = ZLinkStatusPublisher.create(
+            state::get,
+            SourceStatus::sequence,
+            SourceStatus::source,
+            2,
+            SourceStatus::terminal,
+            ignored -> false,
+            Runnable::run);
+        CompletableFuture<Flow.Subscription> subscribed =
+            new CompletableFuture<>();
+        CopyOnWriteArrayList<ZLinkObservedStatus<SourceStatus>> received =
+            new CopyOnWriteArrayList<>();
+        publisher.subscribe(statusSubscriber(received, subscribed));
+
+        state.set(new SourceStatus("A", 1, true));
+        publisher.signal();
+        state.set(new SourceStatus("B", 1, true));
+        publisher.signal();
+        state.set(new SourceStatus("C", 1, true));
+        publisher.signal();
+        subscribed.get(1, TimeUnit.SECONDS).request(2);
+
+        assertEquals(List.of("B", "C"), received.stream()
+            .map(item -> item.status().source())
+            .toList());
+        assertEquals(1, received.get(0).loss().discardedTerminalCount());
+
+        state.set(new SourceStatus("B", 0, false));
+        publisher.signal();
+        subscribed.get(1, TimeUnit.SECONDS).request(1);
+        assertEquals(new SourceStatus("B", 0, false), received.get(2).status(),
+            "delivering a terminal removes the source key for a new lifecycle");
+    }
+
     @Test
     void preservedMilestoneIsDeliveredBeforeLaterTerminalSnapshot()
         throws Exception {
@@ -187,5 +265,28 @@ final class ZLinkStatusPublisherTest {
 
             @Override public void onComplete() { }
         };
+    }
+
+    private static <T> Flow.Subscriber<ZLinkObservedStatus<T>> statusSubscriber(
+        CopyOnWriteArrayList<ZLinkObservedStatus<T>> received,
+        CompletableFuture<Flow.Subscription> subscribed) {
+        return new Flow.Subscriber<>() {
+            @Override public void onSubscribe(Flow.Subscription subscription) {
+                subscribed.complete(subscription);
+            }
+
+            @Override public void onNext(ZLinkObservedStatus<T> item) {
+                received.add(item);
+            }
+
+            @Override public void onError(Throwable failure) {
+                throw new AssertionError(failure);
+            }
+
+            @Override public void onComplete() { }
+        };
+    }
+
+    private record SourceStatus(String source, long sequence, boolean terminal) {
     }
 }

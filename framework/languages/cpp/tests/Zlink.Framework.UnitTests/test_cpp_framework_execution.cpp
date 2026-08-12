@@ -773,6 +773,587 @@ bool verify_serial_queue_owner_time_budget ()
            && expiring_queue.pending_count () == 0;
 }
 
+bool verify_cancellable_serial_submission_lifecycle ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+
+    // If the executor rejects the drain job, enqueue rollback removes exactly
+    // one item and restores both capacity counters for the next admission.
+    {
+        offload_executor_t executor (1);
+        executor.drain ();
+        serial_execution_queue_options_t options;
+        options.application_message_capacity = 1;
+        options.application_byte_capacity =
+          serial_execution_queue_t::fixed_work_byte_cost + 37;
+        serial_execution_queue_t queue (executor, options);
+        const serial_work_options_t work_options{
+          serial_work_lane_t::application,
+          serial_execution_queue_t::fixed_work_byte_cost + 37};
+        std::atomic_int work_runs = 0;
+        std::atomic_int cancel_calls = 0;
+
+        const bool first_accepted = queue.try_post (
+          "rejected-drain-job", [&] { ++work_runs; }, work_options);
+        const bool first_rollback_clean =
+          queue.pending_count (serial_work_lane_t::application) == 0
+          && queue.pending_bytes () == 0;
+        const auto second = queue.try_post_cancellable_async (
+          "rejected-drain-job-after-rollback",
+          [&] (auto complete) {
+              ++work_runs;
+              complete ([] {});
+          },
+          [&] { ++cancel_calls; }, work_options);
+        const bool second_rollback_clean =
+          queue.pending_count (serial_work_lane_t::application) == 0
+          && queue.pending_bytes () == 0;
+        queue.drain ();
+        if (first_accepted || !first_rollback_clean || second
+            || second.error_kind () != framework_error_kind_t::shutting_down
+            || !second_rollback_clean || work_runs.load () != 0
+            || cancel_calls.load () != 0) {
+            return false;
+        }
+    }
+
+    // A queued cancellation removes its reservation before the stop callback
+    // runs, so a capacity-one lane can accept its replacement immediately.
+    {
+        offload_executor_t executor (1);
+        std::mutex worker_gate;
+        std::condition_variable worker_changed;
+        bool worker_entered = false;
+        bool release_worker = false;
+        if (!executor.try_submit_internal ([&] {
+                std::unique_lock lock (worker_gate);
+                worker_entered = true;
+                worker_changed.notify_all ();
+                worker_changed.wait (lock, [&] { return release_worker; });
+            })) {
+            return false;
+        }
+        {
+            std::unique_lock lock (worker_gate);
+            if (!worker_changed.wait_for (
+                  lock, std::chrono::seconds (1),
+                  [&] { return worker_entered; })) {
+                release_worker = true;
+                worker_changed.notify_all ();
+                return false;
+            }
+        }
+
+        serial_execution_queue_options_t options;
+        options.application_message_capacity = 1;
+        options.application_byte_capacity =
+          serial_execution_queue_t::fixed_work_byte_cost;
+        serial_execution_queue_t queue (executor, options);
+        std::atomic_int cancelled = 0;
+        std::atomic_int cancelled_work_runs = 0;
+        std::atomic_int replacement_runs = 0;
+        const auto submission = queue.try_post_cancellable_async (
+          "queued-cancellable",
+          [&] (auto complete) {
+              ++cancelled_work_runs;
+              complete ([] {});
+          },
+          [&] { ++cancelled; });
+        const bool accepted = submission.has_value ();
+        const auto outcome = accepted
+          ? queue.cancel_submission (submission.value ())
+          : serial_cancel_submission_outcome_t::already_terminal;
+        const bool replacement_accepted = queue.try_post (
+          "replacement-after-unlink", [&] { ++replacement_runs; });
+
+        {
+            std::lock_guard lock (worker_gate);
+            release_worker = true;
+        }
+        worker_changed.notify_all ();
+        queue.drain ();
+        if (!accepted
+            || outcome
+                 != serial_cancel_submission_outcome_t::queued_cancelled
+            || !replacement_accepted || cancelled.load () != 1
+            || cancelled_work_runs.load () != 0
+            || replacement_runs.load () != 1
+            || queue.pending_count () != 0) {
+            return false;
+        }
+    }
+
+    // An active cancellation requests cooperative stop. The active turn and
+    // its capacity reservation remain until work acknowledges completion.
+    {
+        offload_executor_t executor (1);
+        serial_execution_queue_options_t options;
+        options.application_message_capacity = 2;
+        options.application_byte_capacity =
+          2 * serial_execution_queue_t::fixed_work_byte_cost;
+        serial_execution_queue_t queue (executor, options);
+        std::mutex gate;
+        std::condition_variable changed;
+        std::optional<serial_execution_queue_t::async_completion_t> acknowledge;
+        bool entered = false;
+        bool follower_ran = false;
+        std::atomic_int stop_requests = 0;
+        const auto submission = queue.try_post_cancellable_async (
+          "active-cancellable",
+          [&] (auto complete) {
+              std::lock_guard lock (gate);
+              entered = true;
+              acknowledge.emplace (std::move (complete));
+              changed.notify_all ();
+          },
+          [&] {
+              ++stop_requests;
+              changed.notify_all ();
+          });
+        if (!submission) {
+            return false;
+        }
+        {
+            std::unique_lock lock (gate);
+            if (!changed.wait_for (
+                  lock, std::chrono::seconds (1), [&] { return entered; })) {
+                queue.cancel_pending ();
+                return false;
+            }
+        }
+        if (!queue.try_post ("follower-after-cancel", [&] {
+                std::lock_guard lock (gate);
+                follower_ran = true;
+                changed.notify_all ();
+            })) {
+            serial_execution_queue_t::async_completion_t finish;
+            {
+                std::lock_guard lock (gate);
+                finish = std::move (*acknowledge);
+            }
+            finish ([] {});
+            queue.drain ();
+            return false;
+        }
+
+        const auto first_cancel = queue.cancel_submission (submission.value ());
+        const auto repeated_cancel = queue.cancel_submission (submission.value ());
+        bool follower_ran_before_ack = false;
+        {
+            std::unique_lock lock (gate);
+            follower_ran_before_ack = changed.wait_for (
+              lock, std::chrono::milliseconds (50),
+              [&] { return follower_ran; });
+        }
+        serial_execution_queue_t::async_completion_t finish;
+        {
+            std::lock_guard lock (gate);
+            finish = std::move (*acknowledge);
+        }
+        finish ([] {});
+        queue.drain ();
+        if (first_cancel
+              != serial_cancel_submission_outcome_t::active_cancel_requested
+            || repeated_cancel
+                 != serial_cancel_submission_outcome_t::active_cancel_requested
+            || follower_ran_before_ack || !follower_ran
+            || stop_requests.load () != 1
+            || queue.cancel_submission (submission.value ())
+                 != serial_cancel_submission_outcome_t::already_terminal) {
+            return false;
+        }
+    }
+
+    // Shutdown removes queued followers but does not consume a generic async
+    // turn's completion. The original work remains the only owner that can
+    // acknowledge and release its active reservation.
+    {
+        offload_executor_t executor (1);
+        serial_execution_queue_t queue (executor, 2);
+        std::mutex gate;
+        std::condition_variable changed;
+        std::optional<serial_execution_queue_t::async_completion_t> acknowledge;
+        bool entered = false;
+        std::atomic_int follower_runs = 0;
+        std::atomic_int acknowledged_completions = 0;
+        if (!queue.try_post_async (
+              "generic-active-during-cancel-pending",
+              [&] (auto complete) {
+                  std::lock_guard lock (gate);
+                  acknowledge.emplace (std::move (complete));
+                  entered = true;
+                  changed.notify_all ();
+              })) {
+            return false;
+        }
+        {
+            std::unique_lock lock (gate);
+            if (!changed.wait_for (
+                  lock, std::chrono::seconds (1), [&] { return entered; })) {
+                return false;
+            }
+        }
+        if (!queue.try_post (
+              "generic-follower-during-cancel-pending",
+              [&] { ++follower_runs; })) {
+            serial_execution_queue_t::async_completion_t finish;
+            {
+                std::lock_guard lock (gate);
+                finish = std::move (*acknowledge);
+            }
+            finish ([] {});
+            queue.drain ();
+            return false;
+        }
+
+        queue.cancel_pending ();
+        const bool active_reservation_retained = queue.pending_count () == 1;
+        serial_execution_queue_t::async_completion_t finish;
+        {
+            std::lock_guard lock (gate);
+            finish = std::move (*acknowledge);
+        }
+        finish ([&] { ++acknowledged_completions; });
+        queue.drain ();
+        if (!active_reservation_retained || !queue.closed ()
+            || follower_runs.load () != 0
+            || acknowledged_completions.load () != 1
+            || queue.pending_count () != 0) {
+            return false;
+        }
+    }
+
+    // Queue shutdown cancels queued cancellable submissions and makes their
+    // identifiers terminal without running their work.
+    {
+        offload_executor_t executor (1);
+        std::mutex worker_gate;
+        std::condition_variable worker_changed;
+        bool worker_entered = false;
+        bool release_worker = false;
+        if (!executor.try_submit_internal ([&] {
+                std::unique_lock lock (worker_gate);
+                worker_entered = true;
+                worker_changed.notify_all ();
+                worker_changed.wait (lock, [&] { return release_worker; });
+            })) {
+            return false;
+        }
+        {
+            std::unique_lock lock (worker_gate);
+            if (!worker_changed.wait_for (
+                  lock, std::chrono::seconds (1),
+                  [&] { return worker_entered; })) {
+                release_worker = true;
+                worker_changed.notify_all ();
+                return false;
+            }
+        }
+
+        serial_execution_queue_t queue (executor, 1);
+        std::atomic_int cancelled = 0;
+        std::atomic_int work_runs = 0;
+        const auto submission = queue.try_post_cancellable_async (
+          "cancelled-by-shutdown",
+          [&] (auto complete) {
+              ++work_runs;
+              complete ([] {});
+          },
+          [&] { ++cancelled; });
+        if (!submission) {
+            {
+                std::lock_guard lock (worker_gate);
+                release_worker = true;
+            }
+            worker_changed.notify_all ();
+            return false;
+        }
+        queue.cancel_pending ();
+        const auto terminal = queue.cancel_submission (submission.value ());
+        const bool rejected_after_close = !queue.try_post ("closed", [] {});
+        {
+            std::lock_guard lock (worker_gate);
+            release_worker = true;
+        }
+        worker_changed.notify_all ();
+        queue.drain ();
+        if (!queue.closed () || !rejected_after_close
+            || terminal
+                 != serial_cancel_submission_outcome_t::already_terminal
+            || cancelled.load () != 1 || work_runs.load () != 0) {
+            return false;
+        }
+    }
+
+    // Queued deferred barriers receive cancellation before shutdown removes
+    // their work, so activation becomes terminal and drain still converges.
+    {
+        offload_executor_t executor (1);
+        std::mutex worker_gate;
+        std::condition_variable worker_changed;
+        bool worker_entered = false;
+        bool release_worker = false;
+        if (!executor.try_submit_internal ([&] {
+                std::unique_lock lock (worker_gate);
+                worker_entered = true;
+                worker_changed.notify_all ();
+                worker_changed.wait (lock, [&] { return release_worker; });
+            })) {
+            return false;
+        }
+        {
+            std::unique_lock lock (worker_gate);
+            if (!worker_changed.wait_for (
+                  lock, std::chrono::seconds (1),
+                  [&] { return worker_entered; })) {
+                release_worker = true;
+                worker_changed.notify_all ();
+                return false;
+            }
+        }
+
+        serial_execution_queue_t queue (executor, 2);
+        auto join_barrier = queue.reserve_barrier_next (
+          "queued-join-barrier-cancellation");
+        auto handoff_barrier = queue.reserve_handoff_barrier (
+          "queued-handoff-barrier-cancellation");
+        queue.cancel_pending ();
+        const auto join_activation = join_barrier
+          ? join_barrier.value ()->activate ([] {})
+          : result_t<void>::success ();
+        const auto handoff_activation = handoff_barrier
+          ? handoff_barrier.value ()->activate ([] {})
+          : result_t<void>::success ();
+        {
+            std::lock_guard lock (worker_gate);
+            release_worker = true;
+        }
+        worker_changed.notify_all ();
+        queue.drain ();
+        if (!join_barrier || !handoff_barrier || join_activation
+            || handoff_activation
+            || join_activation.error_kind ()
+                 != framework_error_kind_t::invalid_operation
+            || handoff_activation.error_kind ()
+                 != framework_error_kind_t::invalid_operation
+            || queue.pending_count () != 0) {
+            return false;
+        }
+    }
+
+    // Completing and then throwing reports the late exception without a
+    // second queue release. Each work callback receives only its own turn.
+    {
+        offload_executor_t executor (1);
+        std::atomic_int errors = 0;
+        std::atomic_int completions = 0;
+        std::atomic_int followers = 0;
+        std::atomic_bool first_had_turn = false;
+        std::atomic_bool completion_had_turn = false;
+        std::atomic_bool follower_had_turn = false;
+        serial_execution_queue_t queue (
+          executor, 2,
+          [&] (const std::string &name, const std::exception_ptr &error) {
+              if (name != "throw-after-complete" || !error)
+                  return;
+              try {
+                  std::rethrow_exception (error);
+              }
+              catch (const std::runtime_error &failure) {
+                  if (std::string_view (failure.what ())
+                      == "throw-after-complete") {
+                      ++errors;
+                  }
+              }
+          });
+        if (!queue.try_post_async (
+              "throw-after-complete",
+              [&] (auto complete) {
+                  first_had_turn = static_cast<bool> (
+                    detail::capture_current_serial_turn ());
+                  complete ([&] {
+                      completion_had_turn = static_cast<bool> (
+                        detail::capture_current_serial_turn ());
+                      ++completions;
+                  });
+                  throw std::runtime_error ("throw-after-complete");
+              })
+            || !queue.try_post ("after-throw", [&] {
+                   follower_had_turn = static_cast<bool> (
+                     detail::capture_current_serial_turn ());
+                   ++followers;
+               })) {
+            queue.cancel_pending ();
+            return false;
+        }
+        queue.drain ();
+        if (errors.load () != 1 || completions.load () != 1
+            || followers.load () != 1 || !first_had_turn.load ()
+            || completion_had_turn.load () || !follower_had_turn.load ()
+            || detail::capture_current_serial_turn ()
+            || queue.pending_count () != 0) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool verify_spot_serial_task_async_shutdown_settlement ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    // A queued lifecycle callback is removed by shutdown and settles its
+    // observer exactly once without invoking application work.
+    {
+        auto executor = std::make_shared<runtime::offload_executor_t> (
+          1, 8, "spot-serial-queued-cancel");
+        std::mutex worker_mutex;
+        std::condition_variable worker_changed;
+        bool worker_entered = false;
+        bool release_worker = false;
+        if (!executor->try_submit_internal ([&] {
+                std::unique_lock lock (worker_mutex);
+                worker_entered = true;
+                worker_changed.notify_all ();
+                worker_changed.wait (lock, [&] { return release_worker; });
+            })) {
+            return false;
+        }
+        {
+            std::unique_lock lock (worker_mutex);
+            if (!worker_changed.wait_for (
+                  lock, std::chrono::seconds (1),
+                  [&] { return worker_entered; })) {
+                return false;
+            }
+        }
+        auto owner = std::make_shared<spot_context_state_t> ();
+        owner->serial_executor = executor;
+        owner->serial_queue =
+          std::make_shared<runtime::serial_execution_queue_t> (
+            *executor, runtime::serial_execution_queue_options_t{});
+        auto queue = owner->serial_queue;
+        std::mutex result_mutex;
+        std::condition_variable result_changed;
+        std::optional<result_t<void>> result;
+        std::atomic_int work_calls = 0;
+        std::atomic_int completion_calls = 0;
+        owner->run_serial_task_async (
+          "queued-spot-lifecycle-cancel",
+          [&] () -> task_t<void> {
+              ++work_calls;
+              co_return;
+          },
+          [&] (result_t<void> value) {
+              ++completion_calls;
+              {
+                  std::lock_guard lock (result_mutex);
+                  result.emplace (std::move (value));
+              }
+              result_changed.notify_all ();
+          });
+        queue->cancel_pending ();
+        {
+            std::unique_lock lock (result_mutex);
+            if (!result_changed.wait_for (
+                  lock, std::chrono::seconds (1),
+                  [&] { return result.has_value (); })) {
+                return false;
+            }
+        }
+        {
+            std::lock_guard lock (worker_mutex);
+            release_worker = true;
+        }
+        worker_changed.notify_all ();
+        queue->drain ();
+        if (*result || result->error_kind ()
+                         != framework_error_kind_t::shutting_down
+            || work_calls.load () != 0 || completion_calls.load () != 1) {
+            return false;
+        }
+    }
+
+    // Active cancellation is cooperative: the owner remains valid and the
+    // observer remains pending until the callback task acknowledges terminal.
+    {
+        auto executor = std::make_shared<runtime::offload_executor_t> (
+          1, 8, "spot-serial-active-cancel");
+        auto owner = std::make_shared<spot_context_state_t> ();
+        owner->serial_executor = executor;
+        owner->serial_queue =
+          std::make_shared<runtime::serial_execution_queue_t> (
+            *executor, runtime::serial_execution_queue_options_t{});
+        auto queue = owner->serial_queue;
+        auto callback_terminal =
+          std::make_shared<task_completion_source_t<void>> ();
+        std::mutex gate;
+        std::condition_variable changed;
+        bool entered = false;
+        std::optional<result_t<void>> result;
+        std::atomic_int completion_calls = 0;
+        owner->run_serial_task_async (
+          "active-spot-lifecycle-cancel",
+          [callback_terminal, &gate, &changed,
+           &entered] () -> task_t<void> {
+              {
+                  std::lock_guard lock (gate);
+                  entered = true;
+              }
+              changed.notify_all ();
+              co_await callback_terminal->task ();
+          },
+          [&] (result_t<void> value) {
+              ++completion_calls;
+              {
+                  std::lock_guard lock (gate);
+                  result.emplace (std::move (value));
+              }
+              changed.notify_all ();
+          });
+        {
+            std::unique_lock lock (gate);
+            if (!changed.wait_for (
+                  lock, std::chrono::seconds (1), [&] { return entered; })) {
+                return false;
+            }
+        }
+        std::weak_ptr<spot_context_state_t> weak_owner = owner;
+        queue->cancel_pending ();
+        owner.reset ();
+        {
+            std::unique_lock lock (gate);
+            if (changed.wait_for (
+                  lock, std::chrono::milliseconds (50),
+                  [&] { return result.has_value (); })
+                || weak_owner.expired ()) {
+                return false;
+            }
+        }
+        callback_terminal->complete (result_t<void>::success ());
+        {
+            std::unique_lock lock (gate);
+            if (!changed.wait_for (
+                  lock, std::chrono::seconds (1),
+                  [&] { return result.has_value (); })) {
+                return false;
+            }
+        }
+        queue->drain ();
+        queue.reset ();
+        if (*result || result->error_kind ()
+                         != framework_error_kind_t::shutting_down
+            || completion_calls.load () != 1 || !weak_owner.expired ()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool verify_inbound_budget_atomic_pending_and_observations ()
 {
     zlink::framework::runtime::inbound_dispatch_budget_t budget (100);
@@ -1682,6 +2263,94 @@ bool verify_idle_instance_spot_eviction_closes_local_context ()
     return result;
 }
 
+bool verify_explicit_instance_spot_close_releases_authority_after_callback ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace service = zlink::framework::runtime::host;
+
+    auto node = std::make_shared<spot_node_builder_state_t> (
+      "instance-explicit-close-node");
+    auto context = std::make_shared<spot_context_state_t> ();
+    context->node = node;
+    context->spot_id = "instance-explicit-close";
+    context->spot_name = "instance-player";
+    context->lifecycle_domain = spot_lifecycle_domain_t::instance ();
+    context->object_generation = 13;
+    context->authority_owner_generation = 17;
+    context->spot_instance = std::make_shared<int> (1);
+
+    std::vector<std::string> order;
+    int begin_calls = 0;
+    int completion_calls = 0;
+    context->lifecycle.on_closing = [&] (
+      void *, const spot_closing_context_t &closing, std::stop_token) {
+        if (closing.reason != spot_close_reason_t::explicit_close
+            || !node->spot_contexts_by_id.contains (context->spot_id)) {
+            order.push_back ("invalid-local-cleanup");
+            return;
+        }
+        order.push_back ("local-cleanup");
+    };
+    node->begin_instance_spot_close = [&] (
+      const spot_id_t &spot_id,
+      std::string_view stable_type,
+      std::uint64_t object_generation,
+      std::uint64_t authority_owner_generation)
+      -> std::optional<service::instance_spot_close_completion_t> {
+        ++begin_calls;
+        if (spot_id != context->spot_id
+            || stable_type != context->spot_name
+            || object_generation != context->object_generation
+            || authority_owner_generation
+                 != context->authority_owner_generation) {
+            return std::nullopt;
+        }
+        order.push_back ("authority-closing");
+        return service::instance_spot_close_completion_t{
+          [&] (bool local_closed) {
+              ++completion_calls;
+              order.push_back (
+                local_closed ? "authority-released" : "authority-restored");
+              return local_closed;
+          }};
+    };
+
+    node->spot_ids_by_name.emplace (context->spot_name, context->spot_id);
+    node->spot_names_by_id.emplace (context->spot_id, context->spot_name);
+    node->spot_contexts_by_id.emplace (
+      context->spot_id, spot_context_access_t::create (context));
+
+    if (!context->enter_callback ()) {
+        return false;
+    }
+    auto public_context = spot_context_access_t::create (context);
+    const auto close_result = public_context.close ().result ();
+    if (!close_result || !close_result.value ()) {
+        context->leave_callback ();
+        return false;
+    }
+
+    const bool deferred = begin_calls == 1 && completion_calls == 0
+                          && context->close_requested
+                          && context->callback_admission_closed
+                          && !context->closed && context->spot_instance
+                          && context->node == node
+                          && !context->enter_callback ();
+    context->leave_callback ();
+    context->leave_callback ();
+
+    return deferred && completion_calls == 1 && context->closed
+           && !context->node && !context->spot_instance
+           && node->spot_contexts_by_id.empty ()
+           && node->spot_ids_by_name.empty ()
+           && node->spot_names_by_id.empty ()
+           && order
+                == std::vector<std::string>{
+                  "authority-closing", "local-cleanup",
+                  "authority-released"};
+}
+
 bool verify_remote_actor_prepare_is_idempotent ()
 {
     using namespace zlink::framework;
@@ -1763,75 +2432,7 @@ bool verify_remote_actor_prepare_is_idempotent ()
            && admission_calls == 1;
 }
 
-class scripted_authority_port_t final
-    : public zlink::framework::runtime::stateful::authority_relocation_port_t
-{
-  public:
-    using authority_publish_result_t =
-      zlink::framework::runtime::stateful::authority_publish_result_t;
-    using authority_publish_status_t =
-      zlink::framework::runtime::stateful::authority_publish_status_t;
-    using authority_relocation_reference_t =
-      zlink::framework::runtime::stateful::authority_relocation_reference_t;
-    using object_kind_t = zlink::framework::runtime::stateful::object_kind_t;
-    using object_ref_t = zlink::framework::runtime::stateful::object_ref_t;
-
-    authority_publish_result_t publish (
-      const object_ref_t &,
-      const object_ref_t &,
-      zlink::framework::location_owner_token_t,
-      zlink::framework::relocation_capacity_fence_t,
-      std::string,
-      std::uint32_t,
-      zlink::framework::runtime::stateful::inventory_digest_t,
-      std::vector<std::byte>) override
-    {
-        return {};
-    }
-
-    std::optional<authority_relocation_reference_t>
-    read (object_kind_t, const std::string &) override
-    {
-        std::lock_guard lock (mutex);
-        if (throw_on_read) {
-            throw std::runtime_error ("authority store is unavailable");
-        }
-        return current;
-    }
-
-    authority_publish_result_t replace_completion (object_kind_t,
-                                                   const std::string &,
-                                                   std::uint64_t,
-                                                   const std::string &old_reference,
-                                                   std::uint32_t,
-                                                   std::string new_reference,
-                                                   std::uint32_t new_checksum) override
-    {
-        std::lock_guard lock (mutex);
-        if (!current || current->relocation_reference != old_reference) {
-            return {authority_publish_status_t::failed, current};
-        }
-        current->relocation_reference = std::move (new_reference);
-        current->checksum_crc32c = new_checksum;
-        return {authority_publish_status_t::published, current};
-    }
-
-    bool release_completion (object_kind_t,
-                             const std::string &,
-                             std::uint64_t,
-                             const std::string &reference,
-                             std::uint32_t) override
-    {
-        std::lock_guard lock (mutex);
-        return current && current->relocation_reference == reference;
-    }
-
-    std::mutex mutex;
-    bool throw_on_read = false;
-    std::optional<authority_relocation_reference_t> current;
-};
-
-bool verify_deferred_actor_join_completion_converges_from_durable_state ()
+bool verify_deferred_actor_join_completion_converges_in_process ()
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
@@ -1840,10 +2441,12 @@ bool verify_deferred_actor_join_completion_converges_from_durable_state ()
     serializer_registry_t serializers;
     auto node = std::make_shared<spot_node_builder_state_t> (
       "deferred-completion-node");
+    node->worker_executor = std::make_shared<runtime::offload_executor_t> (
+      1, 64, "deferred-completion");
     node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
     // The join window: the completion-only leg must arrive within it before
-    // the target converges from the durable owner state.
+    // the target finishes its retained process-local completion.
     node->channel_runtime->default_request_timeout = std::chrono::milliseconds (200);
     auto target = std::make_shared<spot_context_state_t> ();
     target->node = node;
@@ -1853,10 +2456,9 @@ bool verify_deferred_actor_join_completion_converges_from_durable_state ()
     target->spot_instance = std::make_shared<int> (1);
     target->channel_runtime = std::make_shared<channel_runtime_state_t> ();
     target->channel_runtime->serializers = &serializers;
-    target->serial_executor = std::make_shared<runtime::offload_executor_t> (
-      2, 64, "deferred-completion");
+    target->serial_executor = node->worker_executor;
     target->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
-      *target->serial_executor, 64,
+      *target->serial_executor, 1,
       runtime::serial_execution_queue_t::error_handler_t{},
       runtime::serial_lane_policy_t::spot_wide ());
     node->spot_contexts_by_id.emplace (
@@ -1866,42 +2468,104 @@ bool verify_deferred_actor_join_completion_converges_from_durable_state ()
     factory.actor_type = std::type_index (typeid (int));
     factory.create_instance = [] (std::string) { return std::make_shared<int> (7); };
     factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
+    auto join_completion =
+      std::make_shared<detail::task_completion_source_t<void>> ();
+    std::atomic_bool join_completion_entered{false};
+    std::atomic_int join_completion_calls{0};
+    factory.on_join_completed =
+      [join_completion, &join_completion_entered, &join_completion_calls] (
+        void *, actor_join_completion_outcome_t outcome,
+        std::uint64_t, std::uint64_t, const actor_ref_t *,
+        const std::optional<message_t> &, framework_error_kind_t, bool)
+        -> task_t<void> {
+          if (outcome != actor_join_completion_outcome_t::accepted)
+              throw std::runtime_error ("deferred completion was not accepted");
+          ++join_completion_calls;
+          join_completion_entered.store (true, std::memory_order_release);
+          co_await join_completion->task ();
+      };
     node->actor_factories.emplace ("player", std::move (factory));
     spot_actor_admission_callbacks_t callbacks;
+    std::atomic_int actor_joined_calls{0};
+    std::atomic_bool replay_before_joined{false};
     callbacks.join = [] (void *, std::string_view, const zlink::message_t &,
                          serializer_registry_t &) {
         return spot_actor_join_result_t::accept (
           message_t::from (std::string ("accepted")));
     };
+    callbacks.on_actor_joined = [&actor_joined_calls] (void *, void *) -> task_t<void> {
+        ++actor_joined_calls;
+        co_return;
+    };
     target->actor_admissions.emplace (std::type_index (typeid (int)), std::move (callbacks));
 
+    spot_node_runtime_t owner (node);
+    const auto actor = actor_ref_access_t::make (
+      node_rid_t::from_string ("source-node"), "player", "actor-c2", 7);
+    actor_gateway_runtime_t gateway;
+    auto session = gateway.manager ();
+    session_actor_manager_access_t::attach (session, stream_t{});
+    if (!session.bind (actor).submit ().result ()) {
+        return false;
+    }
     std::atomic_int replayed{0};
+    std::atomic_bool successor_join_reserved{false};
+    auto first_replay =
+      std::make_shared<detail::task_completion_source_t<void>> ();
+    std::atomic_bool first_replay_entered{false};
+    std::mutex delivery_order_mutex;
+    std::vector<std::string> delivery_order;
     target->handlers.push_back (spot_handler_descriptor_t{
       spot_handler_kind_t::actor_send, "BacklogPacket", "",
       std::type_index (typeid (int)), std::type_index (typeid (int)),
       std::type_index (typeid (int)), std::type_index (typeid (void))});
     target->handler_invokers.push_back (
-      [&replayed] (void *, void *, service_provider_t &, serializer_registry_t &,
-                   const zlink::message_t &, const spot_inbound_message_t &)
+      [&owner, actor, &replayed, &successor_join_reserved,
+       &actor_joined_calls, &replay_before_joined,
+       first_replay, &first_replay_entered,
+       &delivery_order_mutex, &delivery_order] (
+        void *, void *, service_provider_t &, serializer_registry_t &,
+        const zlink::message_t &, const spot_inbound_message_t &metadata)
         -> task_t<zlink::message_t> {
+          const auto sequence = metadata.find ("sequence");
+          if (!sequence)
+              throw std::runtime_error ("handoff replay sequence is missing");
+          if (actor_joined_calls.load (std::memory_order_acquire) == 0)
+              replay_before_joined.store (true, std::memory_order_release);
+          if (*sequence == "1") {
+              first_replay_entered.store (true, std::memory_order_release);
+              co_await first_replay->task ();
+          }
           ++replayed;
+          {
+              std::lock_guard lock (delivery_order_mutex);
+              delivery_order.push_back ("backlog-" + std::string (*sequence));
+          }
+          if (*sequence == "1") {
+              auto reserved = owner.reserve_actor_join_barrier (actor);
+              successor_join_reserved.store (
+                static_cast<bool> (reserved), std::memory_order_release);
+              if (reserved)
+                  reserved.value ()->cancel ();
+          }
+          co_return zlink::message_t{};
+      });
+    target->handlers.push_back (spot_handler_descriptor_t{
+      spot_handler_kind_t::actor_send, "DirectPacket", "",
+      std::type_index (typeid (int)), std::type_index (typeid (int)),
+      std::type_index (typeid (int)), std::type_index (typeid (void))});
+    target->handler_invokers.push_back (
+      [&delivery_order_mutex, &delivery_order] (
+        void *, void *, service_provider_t &, serializer_registry_t &,
+        const zlink::message_t &, const spot_inbound_message_t &)
+        -> task_t<zlink::message_t> {
+          {
+              std::lock_guard lock (delivery_order_mutex);
+              delivery_order.push_back ("direct");
+          }
           co_return zlink::message_t{};
       });
 
-    spot_node_runtime_t owner (node);
-    const auto relocation_store =
-      std::make_shared<runtime::in_memory_relocation_store_t> ();
-    const auto relocation_repository =
-      std::make_shared<runtime::provider_relocation_repository_t> (*relocation_store);
-    const auto relocation_port =
-      std::make_shared<runtime::stateful::public_relocation_store_adapter_t> (
-        relocation_repository);
-    owner.bind_relocation_store (relocation_port);
-    const auto authority = std::make_shared<scripted_authority_port_t> ();
-    owner.bind_relocation_authority (authority);
-
-    const auto actor = actor_ref_access_t::make (
-      node_rid_t::from_string ("source-node"), "player", "actor-c2", 7);
     const std::string transfer_id = "transfer-c2";
     const std::string key = "player:actor-c2";
     const auto admitted = owner.admit_remote_actor_to_spot (
@@ -1912,50 +2576,55 @@ bool verify_deferred_actor_join_completion_converges_from_durable_state ()
     }
     const auto prepared = owner.prepare_remote_actor_to_spot (
       transfer_id, actor, target->spot_id, zlink::message_t{},
-      actor_gateway_runtime_t{}.actor_context (actor), true);
+      gateway.actor_context (actor), true);
     if (!prepared) {
         return false;
-    }
-
-    // Simulate the durable effects of the finalize leg's authority commit:
-    // the completion root moves to the committed cursor and the durable owner
-    // row carries it for this target.
-    const auto prepared_root = owner.pending_join_completion_root (transfer_id);
-    if (!prepared_root) {
-        return false;
-    }
-    runtime::stateful::durable_join_completion_store_t completion_store (relocation_port);
-    const auto committed_root = completion_store.commit (*prepared_root, false);
-    const auto committed_record = completion_store.recover (committed_root);
-    if (!committed_record
-        || committed_record->cursor != runtime::stateful::join_completion_cursor_t::committed) {
-        return false;
-    }
-    if (!node->actor_transfer_coordinator.update_completion_root (
-          transfer_id, committed_root.reference, committed_root.checksum_crc32c)) {
-        return false;
-    }
-    {
-        auto source_ref = committed_record->actor;
-        source_ref.authority_owner_generation = 19;
-        source_ref.node_id = "source-node";
-        std::lock_guard lock (authority->mutex);
-        authority->current = runtime::stateful::authority_relocation_reference_t{
-          source_ref, committed_record->actor, committed_root.reference,
-          committed_root.checksum_crc32c, {}, location_owner_token_t{"owner-1", 3}, {}};
     }
 
     service_collection_t services;
     auto provider = services.build_provider ();
     std::vector<handoff_packet_t> backlog;
-    backlog.push_back (handoff_packet_t{
-      "BacklogPacket", {1, 2, 3}, "application/x-test", {}, false});
-    // The deferred finalize commits and stages the backlog; the
-    // completion-only leg is withheld (the source died after the commit).
-    const auto finalized = owner.finalize_remote_actor_to_spot (
-      transfer_id, actor, target->spot_id, std::move (backlog), provider, nullptr,
-      std::nullopt, true, false);
-    if (!finalized || !node->actor_transfer_coordinator.blocks_dispatch (key)) {
+    for (int sequence = 1; sequence <= 3; ++sequence) {
+        backlog.push_back (handoff_packet_t{
+          "BacklogPacket", {static_cast<std::uint8_t> (sequence)},
+          "application/x-test",
+          {{"sequence", std::to_string (sequence)}}, false});
+    }
+    // The deferred finalize stages the backlog while its completion-only leg
+    // is withheld. Completion state remains owned by this target process.
+    std::mutex finalize_mutex;
+    std::condition_variable finalize_changed;
+    std::optional<result_t<actor_join_reply_t>> finalized;
+    std::atomic_bool finalize_submission_returned{false};
+    if (!node->worker_executor->try_submit_internal (
+          [&] {
+              owner.finalize_remote_actor_to_spot_async (
+                transfer_id, actor, target->spot_id, std::move (backlog), provider,
+                &gateway, std::nullopt, true, false,
+                [&] (result_t<actor_join_reply_t> result) {
+                    {
+                        std::lock_guard lock (finalize_mutex);
+                        finalized.emplace (std::move (result));
+                    }
+                    finalize_changed.notify_all ();
+                });
+              finalize_submission_returned.store (
+                true, std::memory_order_release);
+          })) {
+        return false;
+    }
+    {
+        std::unique_lock lock (finalize_mutex);
+        if (!finalize_changed.wait_for (
+              lock, std::chrono::seconds (2),
+              [&] { return finalized.has_value (); })) {
+            return false;
+        }
+    }
+    if (!finalize_submission_returned.load (std::memory_order_acquire)
+        || !*finalized
+        || actor_joined_calls.load (std::memory_order_acquire) != 1
+        || !node->actor_transfer_coordinator.blocks_dispatch (key)) {
         return false;
     }
 
@@ -1966,21 +2635,49 @@ bool verify_deferred_actor_join_completion_converges_from_durable_state ()
     }
 
     std::this_thread::sleep_for (std::chrono::milliseconds (250));
-    // Fail closed: an unreadable authority store keeps admission closed.
-    {
-        std::lock_guard lock (authority->mutex);
-        authority->throw_on_read = true;
-    }
-    if (owner.poll_deferred_actor_join_completions (provider) != 0
-        || !node->actor_transfer_coordinator.blocks_dispatch (key)) {
-        return false;
-    }
-    {
-        std::lock_guard lock (authority->mutex);
-        authority->throw_on_read = false;
-    }
-    // The re-poll converges from the durable owner state once it proves the
-    // commit: admission opens and the staged backlog drains exactly once.
+    std::atomic_bool direct_submitter_ready{false};
+    std::atomic_bool direct_submit_succeeded{false};
+    const auto committed_actor = actor_ref_access_t::make (
+      node_rid_t::from_string ("deferred-completion-node"), "player", "actor-c2", 7);
+    std::jthread direct_submitter (
+      [&] (std::stop_token stop) {
+          direct_submitter_ready.store (true, std::memory_order_release);
+          while (node->actor_transfer_coordinator.blocks_dispatch (key)
+                 && !stop.stop_requested ()) {
+              std::this_thread::yield ();
+          }
+          if (stop.stop_requested ())
+              return;
+          auto direct = owner.relay_actor_packet (
+            committed_actor, actor_gateway_runtime_t{}.actor_context (committed_actor),
+            stream_message_kind_t::send, "DirectPacket", zlink::message_t{}, provider,
+            serializers, {});
+          direct_submit_succeeded.store (
+            static_cast<bool> (direct), std::memory_order_release);
+      });
+    while (!direct_submitter_ready.load (std::memory_order_acquire))
+        std::this_thread::yield ();
+    std::jthread async_releaser ([&] (std::stop_token stop) {
+        while (!stop.stop_requested ()
+               && !join_completion_entered.load (std::memory_order_acquire)) {
+            std::this_thread::yield ();
+        }
+        if (!stop.stop_requested ()) {
+            // The Actor turn has already won the commit race. Let the caller's
+            // bounded wait expire before the callback completes; replay must
+            // still settle all retained packets before finalize returns.
+            std::this_thread::sleep_for (std::chrono::milliseconds (225));
+            join_completion->complete (result_t<void>::success ());
+        }
+        while (!stop.stop_requested ()
+               && !first_replay_entered.load (std::memory_order_acquire)) {
+            std::this_thread::yield ();
+        }
+        if (!stop.stop_requested ())
+            first_replay->complete (result_t<void>::success ());
+    });
+    // The same target process finishes the retained completion: admission
+    // opens and the staged backlog drains exactly once without Store replay.
     std::size_t converged = 0;
     for (int attempt = 0; attempt < 100 && converged == 0; ++attempt) {
         converged = owner.poll_deferred_actor_join_completions (provider);
@@ -1988,8 +2685,24 @@ bool verify_deferred_actor_join_completion_converges_from_durable_state ()
             std::this_thread::sleep_for (std::chrono::milliseconds (10));
         }
     }
+    direct_submitter.join ();
+    std::vector<std::string> observed_delivery_order;
+    {
+        std::lock_guard lock (delivery_order_mutex);
+        observed_delivery_order = delivery_order;
+    }
     if (converged != 1 || node->actor_transfer_coordinator.blocks_dispatch (key)
-        || replayed.load () != 1) {
+        || replayed.load () != 3
+        || replay_before_joined.load (std::memory_order_acquire)
+        || !join_completion_entered.load (std::memory_order_acquire)
+        || join_completion_calls.load () != 1
+        || actor_joined_calls.load (std::memory_order_acquire) != 1
+        || !first_replay_entered.load (std::memory_order_acquire)
+        || !successor_join_reserved.load (std::memory_order_acquire)
+        || !direct_submit_succeeded.load (std::memory_order_acquire)
+        || observed_delivery_order
+             != std::vector<std::string>{"backlog-1", "backlog-2",
+                                         "backlog-3", "direct"}) {
         return false;
     }
     if (!owner.completed_remote_actor_commit (transfer_id, actor, target->spot_id)) {
@@ -2001,10 +2714,505 @@ bool verify_deferred_actor_join_completion_converges_from_durable_state ()
       transfer_id, actor, target->spot_id, {}, provider, nullptr,
       std::nullopt, false, true);
     if (duplicate || node->actor_transfer_coordinator.blocks_dispatch (key)
-        || replayed.load () != 1
+        || replayed.load () != 3
         || !owner.completed_remote_actor_commit (transfer_id, actor, target->spot_id)) {
         return false;
     }
+
+    // If the deadline wins while the replay owner is still queued, no Join
+    // completion, location publication or completed admission may escape.
+    const auto queued_actor = actor_ref_access_t::make (
+      node_rid_t::from_string ("source-node"), "player", "actor-c3", 7);
+    const std::string queued_transfer_id = "transfer-c3";
+    const std::string queued_key = "player:actor-c3";
+    const auto queued_admitted = owner.admit_remote_actor_to_spot (
+      queued_transfer_id, queued_actor, spot_id_t ("source-spot"),
+      target->spot_id, zlink::message_t::from (std::string ("prepare")),
+      21, 23, 29);
+    const auto queued_prepared = owner.prepare_remote_actor_to_spot (
+      queued_transfer_id, queued_actor, target->spot_id, zlink::message_t{},
+      actor_gateway_runtime_t{}.actor_context (queued_actor), true);
+    if (!queued_admitted || !queued_admitted.value ().accepted
+        || !queued_prepared) {
+        return false;
+    }
+
+    runtime::serial_execution_queue_options_t queued_options;
+    queued_options.application_message_capacity = 2;
+    queued_options.application_byte_capacity =
+      2 * runtime::serial_execution_queue_t::fixed_work_byte_cost;
+    auto queued_actor_queue =
+      std::make_shared<runtime::serial_execution_queue_t> (
+        *node->worker_executor, queued_options,
+        runtime::serial_execution_queue_t::error_handler_t{},
+        runtime::serial_lane_policy_t::actor_delivery ());
+    node->actor_execution_queues[queued_key] = queued_actor_queue;
+    publish_actor_execution_queue_snapshot_unlocked (*node);
+    std::mutex queued_gate;
+    std::condition_variable queued_changed;
+    std::optional<runtime::serial_execution_queue_t::async_completion_t>
+      release_predecessor;
+    if (!queued_actor_queue->try_post_async (
+          "deadline-predecessor",
+          [&] (auto complete) {
+              {
+                  std::lock_guard lock (queued_gate);
+                  release_predecessor.emplace (std::move (complete));
+              }
+              queued_changed.notify_all ();
+          })) {
+        return false;
+    }
+    {
+        std::unique_lock lock (queued_gate);
+        if (!queued_changed.wait_for (
+              lock, std::chrono::seconds (1),
+              [&] { return release_predecessor.has_value (); })) {
+            queued_actor_queue->cancel_pending ();
+            return false;
+        }
+    }
+    const auto completion_calls_before_cancel = join_completion_calls.load ();
+    std::mutex cancelled_mutex;
+    std::condition_variable cancelled_changed;
+    std::optional<result_t<actor_join_reply_t>> cancelled;
+    owner.finalize_remote_actor_to_spot_async (
+      queued_transfer_id, queued_actor, target->spot_id, {}, provider, nullptr,
+      std::chrono::steady_clock::now () + std::chrono::milliseconds (10),
+      false, false,
+      [&] (result_t<actor_join_reply_t> result) {
+          {
+              std::lock_guard lock (cancelled_mutex);
+              cancelled.emplace (std::move (result));
+          }
+          cancelled_changed.notify_all ();
+      });
+    {
+        std::unique_lock lock (cancelled_mutex);
+        if (!cancelled_changed.wait_for (
+              lock, std::chrono::seconds (1),
+              [&] { return cancelled.has_value (); })) {
+            return false;
+        }
+    }
+    runtime::serial_execution_queue_t::async_completion_t finish_predecessor;
+    {
+        std::lock_guard lock (queued_gate);
+        finish_predecessor = std::move (*release_predecessor);
+    }
+    finish_predecessor ([] {});
+    queued_actor_queue->drain ();
+    if (*cancelled
+        || cancelled->error_kind ()
+             != framework_error_kind_t::deadline_exceeded
+        || node->actor_transfer_coordinator.phase (queued_key)
+             != std::make_optional (actor_move_phase_t::reconcile)
+        || owner.completed_remote_actor_commit (
+             queued_transfer_id, queued_actor, target->spot_id)
+        || join_completion_calls.load () != completion_calls_before_cancel) {
+        return false;
+    }
+    std::weak_ptr<runtime::serial_execution_queue_t> cancelled_queue_owner =
+      queued_actor_queue;
+    node->actor_execution_queues.erase (queued_key);
+    publish_actor_execution_queue_snapshot_unlocked (*node);
+    queued_actor_queue.reset ();
+    if (!cancelled_queue_owner.expired ()) {
+        return false;
+    }
+
+    // Destroying the deadline owner must happen after the native timer callback
+    // returns. A second timer proves the shared scheduler remains available.
+    std::mutex probe_mutex;
+    std::condition_variable probe_changed;
+    bool probe_fired = false;
+    zlink::timer_t probe_timer;
+    probe_timer.on_fire ([&] (std::uint64_t) {
+        {
+            std::lock_guard lock (probe_mutex);
+            probe_fired = true;
+        }
+        probe_changed.notify_all ();
+    });
+    probe_timer.start (std::chrono::milliseconds (1), 1);
+    {
+        std::unique_lock lock (probe_mutex);
+        if (!probe_changed.wait_for (
+              lock, std::chrono::seconds (1), [&] { return probe_fired; })) {
+            return false;
+        }
+    }
+    probe_timer.close ();
+
+    // A deadline that expires while on_actor_joined is queued removes that
+    // lifecycle submission. The failed transfer must not run the callback
+    // later when the predecessor releases the Spot queue.
+    const auto lifecycle_actor = actor_ref_access_t::make (
+      node_rid_t::from_string ("source-node"), "player", "actor-c4", 7);
+    const std::string lifecycle_transfer_id = "transfer-c4";
+    const std::string lifecycle_key = "player:actor-c4";
+    const auto lifecycle_admitted = owner.admit_remote_actor_to_spot (
+      lifecycle_transfer_id, lifecycle_actor, spot_id_t ("source-spot"),
+      target->spot_id, zlink::message_t::from (std::string ("prepare")),
+      31, 37, 41);
+    const auto lifecycle_prepared = owner.prepare_remote_actor_to_spot (
+      lifecycle_transfer_id, lifecycle_actor, target->spot_id,
+      zlink::message_t{}, gateway.actor_context (lifecycle_actor), true);
+    if (!lifecycle_admitted || !lifecycle_admitted.value ().accepted
+        || !lifecycle_prepared) {
+        return false;
+    }
+    std::mutex lifecycle_gate;
+    std::condition_variable lifecycle_gate_changed;
+    std::optional<runtime::serial_execution_queue_t::async_completion_t>
+      release_lifecycle_predecessor;
+    if (!target->serial_queue->try_post_async (
+          "deadline-lifecycle-predecessor",
+          [&] (auto complete) {
+              {
+                  std::lock_guard lock (lifecycle_gate);
+                  release_lifecycle_predecessor.emplace (std::move (complete));
+              }
+              lifecycle_gate_changed.notify_all ();
+          },
+          runtime::serial_work_options_t{
+            runtime::serial_work_lane_t::lifecycle,
+            runtime::serial_execution_queue_t::fixed_work_byte_cost})) {
+        return false;
+    }
+    {
+        std::unique_lock lock (lifecycle_gate);
+        if (!lifecycle_gate_changed.wait_for (
+              lock, std::chrono::seconds (1),
+              [&] { return release_lifecycle_predecessor.has_value (); })) {
+            return false;
+        }
+    }
+    const auto joined_calls_before_lifecycle_cancel =
+      actor_joined_calls.load (std::memory_order_acquire);
+    std::mutex lifecycle_cancel_mutex;
+    std::condition_variable lifecycle_cancel_changed;
+    std::optional<result_t<actor_join_reply_t>> lifecycle_cancelled;
+    owner.finalize_remote_actor_to_spot_async (
+      lifecycle_transfer_id, lifecycle_actor, target->spot_id, {}, provider,
+      &gateway,
+      std::chrono::steady_clock::now () + std::chrono::milliseconds (10),
+      false, false,
+      [&] (result_t<actor_join_reply_t> result) {
+          {
+              std::lock_guard lock (lifecycle_cancel_mutex);
+              lifecycle_cancelled.emplace (std::move (result));
+          }
+          lifecycle_cancel_changed.notify_all ();
+      });
+    {
+        std::unique_lock lock (lifecycle_cancel_mutex);
+        if (!lifecycle_cancel_changed.wait_for (
+              lock, std::chrono::seconds (1),
+              [&] { return lifecycle_cancelled.has_value (); })) {
+            return false;
+        }
+    }
+    runtime::serial_execution_queue_t::async_completion_t
+      finish_lifecycle_predecessor;
+    {
+        std::lock_guard lock (lifecycle_gate);
+        finish_lifecycle_predecessor =
+          std::move (*release_lifecycle_predecessor);
+    }
+    finish_lifecycle_predecessor ([] {});
+    target->serial_queue->drain ();
+    if (*lifecycle_cancelled
+        || lifecycle_cancelled->error_kind ()
+             != framework_error_kind_t::deadline_exceeded
+        || actor_joined_calls.load (std::memory_order_acquire)
+             != joined_calls_before_lifecycle_cancel
+        || node->actor_transfer_coordinator.phase (lifecycle_key)
+             != std::make_optional (actor_move_phase_t::reconcile)
+        || owner.completed_remote_actor_commit (
+             lifecycle_transfer_id, lifecycle_actor, target->spot_id)) {
+        return false;
+    }
+
+    // If the deadline expires after on_actor_joined has started, the transfer
+    // keeps its terminal owner until that callback settles. The callback's
+    // terminal is converted into the admitted Join failure completion before
+    // the transfer enters reconciliation.
+    auto active_lifecycle =
+      std::make_shared<detail::task_completion_source_t<void>> ();
+    std::atomic_bool active_lifecycle_entered{false};
+    std::atomic_int active_lifecycle_failure_calls{0};
+    node->actor_factories.at ("player").on_join_completed =
+      [&active_lifecycle_failure_calls] (
+        void *, actor_join_completion_outcome_t outcome,
+        std::uint64_t operation_high, std::uint64_t operation_low,
+        const actor_ref_t *, const std::optional<message_t> &,
+        framework_error_kind_t error_kind, bool) -> task_t<void> {
+          if (outcome != actor_join_completion_outcome_t::failed
+              || operation_high != 59 || operation_low != 61
+              || error_kind != framework_error_kind_t::deadline_exceeded) {
+              throw std::runtime_error (
+                "active lifecycle deadline completion lost its OperationId");
+          }
+          ++active_lifecycle_failure_calls;
+          co_return;
+      };
+    target->actor_admissions.at (std::type_index (typeid (int))).on_actor_joined =
+      [active_lifecycle,
+       &active_lifecycle_entered] (void *, void *) -> task_t<void> {
+          active_lifecycle_entered.store (true, std::memory_order_release);
+          co_await active_lifecycle->task ();
+      };
+    const auto active_lifecycle_actor = actor_ref_access_t::make (
+      node_rid_t::from_string ("source-node"), "player", "actor-c4-active", 7);
+    const std::string active_lifecycle_transfer_id = "transfer-c4-active";
+    const std::string active_lifecycle_key = "player:actor-c4-active";
+    const auto active_lifecycle_admitted = owner.admit_remote_actor_to_spot (
+      active_lifecycle_transfer_id, active_lifecycle_actor,
+      spot_id_t ("source-spot"), target->spot_id,
+      zlink::message_t::from (std::string ("prepare")), 59, 61, 67);
+    const auto active_lifecycle_prepared = owner.prepare_remote_actor_to_spot (
+      active_lifecycle_transfer_id, active_lifecycle_actor, target->spot_id,
+      zlink::message_t{}, gateway.actor_context (active_lifecycle_actor), true);
+    if (!active_lifecycle_admitted
+        || !active_lifecycle_admitted.value ().accepted
+        || !active_lifecycle_prepared) {
+        return false;
+    }
+    std::mutex active_lifecycle_mutex;
+    std::condition_variable active_lifecycle_changed;
+    std::optional<result_t<actor_join_reply_t>> active_lifecycle_result;
+    owner.finalize_remote_actor_to_spot_async (
+      active_lifecycle_transfer_id, active_lifecycle_actor, target->spot_id,
+      {}, provider, &gateway,
+      std::chrono::steady_clock::now () + std::chrono::milliseconds (20),
+      false, false,
+      [&] (result_t<actor_join_reply_t> result) {
+          {
+              std::lock_guard lock (active_lifecycle_mutex);
+              active_lifecycle_result.emplace (std::move (result));
+          }
+          active_lifecycle_changed.notify_all ();
+      });
+    const auto active_lifecycle_start_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (1);
+    while (!active_lifecycle_entered.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < active_lifecycle_start_deadline) {
+        std::this_thread::yield ();
+    }
+    if (!active_lifecycle_entered.load (std::memory_order_acquire))
+        return false;
+    {
+        std::unique_lock lock (active_lifecycle_mutex);
+        if (active_lifecycle_changed.wait_for (
+              lock, std::chrono::milliseconds (80),
+              [&] { return active_lifecycle_result.has_value (); })) {
+            return false;
+        }
+    }
+    if (active_lifecycle_failure_calls.load (std::memory_order_acquire) != 0)
+        return false;
+    active_lifecycle->complete (result_t<void>::success ());
+    {
+        std::unique_lock lock (active_lifecycle_mutex);
+        if (!active_lifecycle_changed.wait_for (
+              lock, std::chrono::seconds (1),
+              [&] { return active_lifecycle_result.has_value (); })) {
+            return false;
+        }
+    }
+    if (*active_lifecycle_result
+        || active_lifecycle_result->error_kind ()
+             != framework_error_kind_t::deadline_exceeded
+        || active_lifecycle_failure_calls.load (std::memory_order_acquire) != 1
+        || node->actor_transfer_coordinator.phase (active_lifecycle_key)
+             != std::make_optional (actor_move_phase_t::reconcile)
+        || owner.completed_remote_actor_commit (
+             active_lifecycle_transfer_id, active_lifecycle_actor,
+             target->spot_id)) {
+        return false;
+    }
+
+    // Host shutdown uses the same cooperative lifecycle cancellation seam but
+    // keeps its own terminal reason. It must not be rewritten as a deadline,
+    // and the terminal owner remains held until the active callback settles.
+    auto shutdown_lifecycle =
+      std::make_shared<detail::task_completion_source_t<void>> ();
+    std::atomic_bool shutdown_lifecycle_entered{false};
+    std::atomic_int shutdown_lifecycle_failure_calls{0};
+    node->actor_factories.at ("player").on_join_completed =
+      [&shutdown_lifecycle_failure_calls] (
+        void *, actor_join_completion_outcome_t outcome,
+        std::uint64_t operation_high, std::uint64_t operation_low,
+        const actor_ref_t *, const std::optional<message_t> &,
+        framework_error_kind_t error_kind, bool) -> task_t<void> {
+          if (outcome != actor_join_completion_outcome_t::failed
+              || operation_high != 71 || operation_low != 73
+              || error_kind != framework_error_kind_t::shutting_down) {
+              throw std::runtime_error (
+                "active lifecycle shutdown completion lost its terminal reason");
+          }
+          ++shutdown_lifecycle_failure_calls;
+          co_return;
+      };
+    target->actor_admissions.at (std::type_index (typeid (int))).on_actor_joined =
+      [shutdown_lifecycle,
+       &shutdown_lifecycle_entered] (void *, void *) -> task_t<void> {
+          shutdown_lifecycle_entered.store (true, std::memory_order_release);
+          co_await shutdown_lifecycle->task ();
+      };
+    const auto shutdown_lifecycle_actor = actor_ref_access_t::make (
+      node_rid_t::from_string ("source-node"), "player", "actor-c4-shutdown", 7);
+    const std::string shutdown_lifecycle_transfer_id = "transfer-c4-shutdown";
+    const std::string shutdown_lifecycle_key = "player:actor-c4-shutdown";
+    const auto shutdown_lifecycle_admitted = owner.admit_remote_actor_to_spot (
+      shutdown_lifecycle_transfer_id, shutdown_lifecycle_actor,
+      spot_id_t ("source-spot"), target->spot_id,
+      zlink::message_t::from (std::string ("prepare")), 71, 73, 79);
+    const auto shutdown_lifecycle_prepared = owner.prepare_remote_actor_to_spot (
+      shutdown_lifecycle_transfer_id, shutdown_lifecycle_actor,
+      target->spot_id, zlink::message_t{},
+      gateway.actor_context (shutdown_lifecycle_actor), true);
+    if (!shutdown_lifecycle_admitted
+        || !shutdown_lifecycle_admitted.value ().accepted
+        || !shutdown_lifecycle_prepared) {
+        return false;
+    }
+    std::mutex shutdown_lifecycle_mutex;
+    std::condition_variable shutdown_lifecycle_changed;
+    std::optional<result_t<actor_join_reply_t>> shutdown_lifecycle_result;
+    owner.finalize_remote_actor_to_spot_async (
+      shutdown_lifecycle_transfer_id, shutdown_lifecycle_actor,
+      target->spot_id, {}, provider, &gateway,
+      std::chrono::steady_clock::now () + std::chrono::seconds (1),
+      false, false,
+      [&] (result_t<actor_join_reply_t> result) {
+          {
+              std::lock_guard lock (shutdown_lifecycle_mutex);
+              shutdown_lifecycle_result.emplace (std::move (result));
+          }
+          shutdown_lifecycle_changed.notify_all ();
+      });
+    const auto shutdown_lifecycle_start_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (1);
+    while (!shutdown_lifecycle_entered.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now ()
+                < shutdown_lifecycle_start_deadline) {
+        std::this_thread::yield ();
+    }
+    if (!shutdown_lifecycle_entered.load (std::memory_order_acquire))
+        return false;
+    target->serial_queue->cancel_pending ();
+    {
+        std::unique_lock lock (shutdown_lifecycle_mutex);
+        if (shutdown_lifecycle_changed.wait_for (
+              lock, std::chrono::milliseconds (40),
+              [&] { return shutdown_lifecycle_result.has_value (); })) {
+            return false;
+        }
+    }
+    shutdown_lifecycle->complete (result_t<void>::success ());
+    {
+        std::unique_lock lock (shutdown_lifecycle_mutex);
+        if (!shutdown_lifecycle_changed.wait_for (
+              lock, std::chrono::seconds (1),
+              [&] { return shutdown_lifecycle_result.has_value (); })) {
+            return false;
+        }
+    }
+    if (*shutdown_lifecycle_result
+        || shutdown_lifecycle_result->error_kind ()
+             != framework_error_kind_t::shutting_down
+        || shutdown_lifecycle_failure_calls.load (
+             std::memory_order_acquire) != 1
+        || node->actor_transfer_coordinator.phase (shutdown_lifecycle_key)
+             != std::make_optional (actor_move_phase_t::reconcile)
+        || owner.completed_remote_actor_commit (
+             shutdown_lifecycle_transfer_id, shutdown_lifecycle_actor,
+             target->spot_id)) {
+        return false;
+    }
+    target->serial_queue->drain ();
+    target->serial_queue =
+      std::make_shared<runtime::serial_execution_queue_t> (
+        *target->serial_executor, 1,
+        runtime::serial_execution_queue_t::error_handler_t{},
+        runtime::serial_lane_policy_t::spot_wide ());
+
+    // An admitted lifecycle failure still owns a Join completion terminal.
+    // The source OperationId must observe exactly one failed completion before
+    // the target transfer enters reconciliation.
+    std::atomic_int failed_join_completion_calls{0};
+    node->actor_factories.at ("player").on_join_completed =
+      [&failed_join_completion_calls] (
+        void *, actor_join_completion_outcome_t outcome,
+        std::uint64_t operation_high, std::uint64_t operation_low,
+        const actor_ref_t *, const std::optional<message_t> &,
+        framework_error_kind_t error_kind, bool) -> task_t<void> {
+          if (outcome != actor_join_completion_outcome_t::failed
+              || operation_high != 43 || operation_low != 47
+              || error_kind != framework_error_kind_t::internal_failure) {
+              throw std::runtime_error (
+                "lifecycle failure completion did not preserve its OperationId");
+          }
+          ++failed_join_completion_calls;
+          co_return;
+      };
+    target->actor_admissions.at (std::type_index (typeid (int))).on_actor_joined =
+      [] (void *, void *) -> task_t<void> {
+          throw framework_exception_t (
+            framework_error_kind_t::internal_failure,
+            "deterministic lifecycle failure");
+          co_return;
+      };
+    const auto failed_actor = actor_ref_access_t::make (
+      node_rid_t::from_string ("source-node"), "player", "actor-c5", 7);
+    const std::string failed_transfer_id = "transfer-c5";
+    const std::string failed_key = "player:actor-c5";
+    const auto failed_admitted = owner.admit_remote_actor_to_spot (
+      failed_transfer_id, failed_actor, spot_id_t ("source-spot"),
+      target->spot_id, zlink::message_t::from (std::string ("prepare")),
+      43, 47, 53);
+    const auto failed_prepared = owner.prepare_remote_actor_to_spot (
+      failed_transfer_id, failed_actor, target->spot_id, zlink::message_t{},
+      gateway.actor_context (failed_actor), true);
+    if (!failed_admitted || !failed_admitted.value ().accepted
+        || !failed_prepared) {
+        return false;
+    }
+    std::mutex failed_mutex;
+    std::condition_variable failed_changed;
+    std::optional<result_t<actor_join_reply_t>> failed_result;
+    owner.finalize_remote_actor_to_spot_async (
+      failed_transfer_id, failed_actor, target->spot_id, {}, provider,
+      &gateway, std::chrono::steady_clock::now () + std::chrono::seconds (1),
+      false, false,
+      [&] (result_t<actor_join_reply_t> result) {
+          {
+              std::lock_guard lock (failed_mutex);
+              failed_result.emplace (std::move (result));
+          }
+          failed_changed.notify_all ();
+      });
+    {
+        std::unique_lock lock (failed_mutex);
+        if (!failed_changed.wait_for (
+              lock, std::chrono::seconds (1),
+              [&] { return failed_result.has_value (); })) {
+            return false;
+        }
+    }
+    if (*failed_result
+        || failed_result->error_kind ()
+             != framework_error_kind_t::internal_failure
+        || failed_join_completion_calls.load (std::memory_order_acquire) != 1
+        || node->actor_transfer_coordinator.phase (failed_key)
+             != std::make_optional (actor_move_phase_t::reconcile)
+        || owner.completed_remote_actor_commit (
+             failed_transfer_id, failed_actor, target->spot_id)) {
+        return false;
+    }
+
     std::this_thread::sleep_for (std::chrono::milliseconds (300));
     if (owner.poll_deferred_actor_join_completions (provider) != 0) {
         return false;
@@ -2014,6 +3222,55 @@ bool verify_deferred_actor_join_completion_converges_from_durable_state ()
     target->serial_queue->drain ();
     target->serial_executor->drain ();
     return true;
+}
+
+bool verify_remote_actor_completion_keeps_session_ref_until_route_ack ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    auto node = std::make_shared<spot_node_builder_state_t> (
+      "remote-source-publication-node");
+    spot_node_runtime_t spots (node);
+    actor_gateway_runtime_t gateway;
+    auto session = gateway.manager ();
+    session_actor_manager_access_t::attach (session, stream_t{});
+    const auto source = actor_ref_access_t::make (
+      node_rid_t::from_string ("source-node"), "player",
+      "remote-source-actor", 7);
+    const auto target = actor_ref_access_t::make (
+      node_rid_t::from_string ("target-node"), "player",
+      "remote-source-actor", 7);
+    if (!session.bind (source).submit ().result ())
+        return false;
+
+    int publications = 0;
+    spots.on_actor_ref_updated ([&] (const actor_ref_t &actor) {
+        ++publications;
+        return gateway.update_actor_ref (actor);
+    });
+    const auto source_fence = runtime::protocol::actor_route_fence_t{
+      "remote-source-actor", 7,
+      zlink::routing_id_t::from ("source-node").to_bytes (), 11, 13, 17};
+    const auto target_fence = runtime::protocol::actor_route_fence_t{
+      "remote-source-actor", 7,
+      zlink::routing_id_t::from ("target-node").to_bytes (), 12, 14, 18};
+    const auto completed = spots.complete_remote_actor_transfer (
+      source, target,
+      spot_route_t{node_rid_t::from_string ("target-node"),
+                   spot_id_t ("target-spot"), "game"},
+      source_fence, target_fence, "remote-source-transfer");
+    const auto current = session.find ("remote-source-actor");
+    if (!completed || publications != 0 || !current
+        || current->ref ().node_rid ().value () != "source-node") {
+        return false;
+    }
+    const std::lock_guard<std::recursive_mutex> lock (node->mutex);
+    const auto route = node->actor_routes.find ("player:remote-source-actor");
+    return route != node->actor_routes.end ()
+           && route->second.node_rid.value () == "target-node"
+           && route->second.spot_id == "target-spot";
 }
 
 } // namespace
@@ -2165,6 +3422,12 @@ int main ()
     if (!verify_serial_queue_owner_time_budget ()) {
         return 56;
     }
+    if (!verify_cancellable_serial_submission_lifecycle ()) {
+        return 92;
+    }
+    if (!verify_spot_serial_task_async_shutdown_settlement ()) {
+        return 93;
+    }
     if (!verify_inbound_budget_atomic_pending_and_observations ()) {
         return 51;
     }
@@ -2186,11 +3449,17 @@ int main ()
     if (!verify_idle_instance_spot_eviction_closes_local_context ()) {
         return 53;
     }
+    if (!verify_explicit_instance_spot_close_releases_authority_after_callback ()) {
+        return 91;
+    }
     if (!verify_remote_actor_prepare_is_idempotent ()) {
         return 58;
     }
-    if (!verify_deferred_actor_join_completion_converges_from_durable_state ()) {
+    if (!verify_deferred_actor_join_completion_converges_in_process ()) {
         return 59;
+    }
+    if (!verify_remote_actor_completion_keeps_session_ref_until_route_ack ()) {
+        return 62;
     }
 
     std::atomic_int unsupported_submit_count = 0;
@@ -2984,6 +4253,82 @@ int main ()
                       << " live=" << bounded_executor.live_worker_count ()
                       << '\n';
             return 53;
+        }
+    }
+
+    {
+        zlink::framework::runtime::offload_executor_t fixed_min_executor (
+          2, 4, 8, std::chrono::milliseconds (5));
+        std::mutex state_mutex;
+        std::condition_variable state_changed;
+        int primed = 0;
+        bool release_priming = false;
+        std::atomic_int priming_completed{0};
+        for (int index = 0; index < 2; ++index) {
+            if (!fixed_min_executor.try_submit ([&] {
+                    {
+                        std::unique_lock lock (state_mutex);
+                        ++primed;
+                        state_changed.notify_all ();
+                        state_changed.wait (
+                          lock, [&] { return release_priming; });
+                    }
+                    priming_completed.fetch_add (
+                      1, std::memory_order_release);
+                    state_changed.notify_all ();
+                })) {
+                return 62;
+            }
+        }
+        {
+            std::unique_lock lock (state_mutex);
+            if (!state_changed.wait_for (
+                  lock, std::chrono::seconds (1), [&] { return primed == 2; })) {
+                return 63;
+            }
+            release_priming = true;
+        }
+        state_changed.notify_all ();
+        {
+            std::unique_lock lock (state_mutex);
+            if (!state_changed.wait_for (
+                  lock, std::chrono::seconds (1), [&] {
+                      return priming_completed.load (
+                               std::memory_order_acquire)
+                             == 2;
+                  })) {
+                return 64;
+            }
+        }
+
+        std::this_thread::sleep_for (std::chrono::milliseconds (30));
+        if (fixed_min_executor.live_worker_count () != 2
+            || !fixed_min_executor.drained ()) {
+            return 65;
+        }
+
+        std::atomic_int post_timeout_completed{0};
+        for (int index = 0; index < 4; ++index) {
+            if (!fixed_min_executor.try_submit ([&] {
+                    post_timeout_completed.fetch_add (
+                      1, std::memory_order_release);
+                })) {
+                return 66;
+            }
+        }
+        for (int attempt = 0;
+             attempt < 100
+             && post_timeout_completed.load (std::memory_order_acquire) != 4;
+             ++attempt) {
+            std::this_thread::sleep_for (std::chrono::milliseconds (2));
+        }
+        if (post_timeout_completed.load (std::memory_order_acquire) != 4) {
+            return 67;
+        }
+        fixed_min_executor.drain ();
+        if (!fixed_min_executor.drained ()
+            || fixed_min_executor.live_worker_count () != 0) {
+            return 68;
         }
     }
 

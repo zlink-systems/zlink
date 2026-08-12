@@ -627,7 +627,6 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
         if (!commit)
             return;
-        actorState.CompleteRelocationSessionRoute(handoffId);
     }
 
     internal static async ValueTask PublishCatalogBeforeNormalizationAsync(

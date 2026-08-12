@@ -18,15 +18,6 @@ internal sealed class ZLinkActorDirectory(
         ? null
         : new ZLinkSpotMeshLocationResolver(registration, locations);
 
-    public async ValueTask<ActorRef?> FindAsync(
-        string actorId,
-        CancellationToken cancellationToken = default)
-    {
-        var (actorRef, _) = await FindWithPresenceAsync(actorId, cancellationToken)
-            .ConfigureAwait(false);
-        return actorRef;
-    }
-
     /// <summary>Find plus the raw-row presence: a null ref with a present row
     /// is a transient resolve window (claimed-but-unpublished generation-0,
     /// lagging replica) worth retrying; a null ref without a row is a

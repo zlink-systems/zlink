@@ -22,7 +22,7 @@ public final class EvidenceStore {
         return List.copyOf(deliveries.getOrDefault(deliveryId, List.of()));
     }
 
-    public Messages.ServerAssertionResponse assertSequences(String successfulDeliveryId, String reassignedDeliveryId) {
+    public Messages.ServerAssertionRes assertSequences(String successfulDeliveryId, String reassignedDeliveryId) {
         List<String> evidence = new ArrayList<>();
         boolean successful = matches(
             statuses(successfulDeliveryId),
@@ -43,7 +43,7 @@ public final class EvidenceStore {
                 expected(Messages.DeliveryStatus.Delivered, "courier-b")),
             evidence,
             reassignedDeliveryId);
-        return new Messages.ServerAssertionResponse(successful && reassigned, evidence.toArray(String[]::new));
+        return new Messages.ServerAssertionRes(successful && reassigned, evidence.toArray(String[]::new));
     }
 
     private static ExpectedStatus expected(Messages.DeliveryStatus status, String courierId) {

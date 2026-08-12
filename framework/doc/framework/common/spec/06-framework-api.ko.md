@@ -55,7 +55,7 @@ mode를 필수로 받는 `Relocate`와 별도의 `Shutdown`을 수행한다. `Pl
 application version으로 이전하고, `RollingUpdate`는 caller가 지정한 source보다 큰 exact version으로
 이전한다. MeshName, ChannelName이나 node RID별 drain operation은 제공하지 않는다.
 State, mode별 target 선택, terminal result, 기본 deadline, 반복 호출과 cancellation 계약은
-[54 Host Relocate, Shutdown & Handoff](28-graceful-drain-handoff.ko.md)가 소유한다.
+[54 Host Relocate, Shutdown & Handoff](30-host-relocation-flow.ko.md)가 소유한다.
 
 Framework builder는 service liveness interval과 [deadline](01-glossary.ko.md#deadline)을 공개하지 않는다. Service runtime은 공통 profile을
 내부에서 적용하며 orderly disconnect와 half-open 장애를 구분한다. 고정값, service liveness message와 reconnect
@@ -731,8 +731,9 @@ Actor factory는 Actor lifecycle을 만들고 Actor handler는 Actor context의 
 Actor message는 Actor mailbox로 직접 dispatch한다. Actor message를 Node callback이나 Spot packet handler가
 다시 분류하지 않는다.
 
-`Yield` terminator는 Channel request, Spot request, Actor request와 CPU·I/O worker call에만 제공한다.
-Actor join, Actor·Spot create·get-or-create, send, publish, timer 등록, close와 destroy에는 제공하지 않는다.
+`Yield` terminator는 Channel request, Spot request, Actor request, CPU·I/O worker call과
+Actor·Spot create·get-or-create call에 제공한다. Actor join, send, publish, timer 등록, close와
+destroy에는 제공하지 않는다.
 `Yield`는 `SpotWide` User Spot 또는 Instance Spot의 shared execution gate를 잠시 반납할 수 있는 문맥에서만
 유효하다. Entry Spot, `PerActor` User Spot, Node·Channel handler와 owner turn 밖의 client에서 호출할 수 있는
 공통 call type을 사용하는 언어는 operation 제출 전에 문맥을 검사하고, 지원하지 않는 문맥이면 outbound

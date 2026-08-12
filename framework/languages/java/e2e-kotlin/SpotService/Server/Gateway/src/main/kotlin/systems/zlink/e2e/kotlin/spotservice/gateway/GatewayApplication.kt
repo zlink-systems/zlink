@@ -129,7 +129,7 @@ class GatewayHttpServer(
             publisher.publish(
                 Contracts.ROUTE_CHANNEL,
                 "spot.events",
-                Contracts.MeshMsg(request.marker)
+                Contracts.MeshEvent(request.marker)
             )
                 .submit()
             evidence.add("spot-publish|rid=${options.rid}|spot=${request.spotRid}|marker=${request.marker}")

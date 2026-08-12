@@ -66,25 +66,6 @@ function Cleanup {
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $RunDir
 }
 
-function Reserve-Endpoints {
-    param([int]$Count)
-    $listeners = New-Object System.Collections.Generic.List[System.Net.Sockets.TcpListener]
-    $endpoints = New-Object System.Collections.Generic.List[string]
-    try {
-        while ($endpoints.Count -lt $Count) {
-            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse("127.0.0.1"), 0)
-            $listener.Start()
-            $listeners.Add($listener)
-            $endpoints.Add("127.0.0.1:$($listener.LocalEndpoint.Port)")
-        }
-        return $endpoints.ToArray()
-    } finally {
-        foreach ($listener in $listeners) {
-            $listener.Stop()
-        }
-    }
-}
-
 function Split-Endpoint {
     param([string]$Endpoint)
     $parts = $Endpoint.Split(":")
@@ -113,10 +94,7 @@ function Wait-Port {
 
 function Invoke-Gradle {
     param([string[]]$Arguments)
-    & $Gradle @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Gradle failed: $($Arguments -join ' ')"
-    }
+    Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments $Arguments
 }
 
 function Protect-ConfigFile {
@@ -158,7 +136,7 @@ function App-Bin {
 
 $Status = 1
 try {
-    $endpoints = Reserve-Endpoints 10
+    $endpoints = @(Get-ZlinkSampleApplicationEndpoints -Language Java -Count 10)
     $apiAHttp = Split-Endpoint $endpoints[0]
     $apiBHttp = Split-Endpoint $endpoints[1]
     $workflowAHttp = Split-Endpoint $endpoints[2]
@@ -170,7 +148,7 @@ try {
     $workflowARouter = Split-Endpoint $endpoints[8]
     $workflowBRouter = Split-Endpoint $endpoints[9]
 
-    $redis = Start-ZlinkSampleRedis "zlink-redis-java-sample-shoppingmall"
+    $redis = Start-ZlinkSampleRedis "zlink-redis-java-sample-shoppingmall" -Language Java
     $RedisContainer = $redis.ContainerId
     $redisEndpoint = $redis.Endpoint
     $redis = Split-Endpoint $redisEndpoint

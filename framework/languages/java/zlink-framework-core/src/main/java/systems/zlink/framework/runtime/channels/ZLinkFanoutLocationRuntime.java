@@ -17,8 +17,10 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.Executors;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
@@ -69,18 +71,15 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         new ConcurrentHashMap<>();
     private final Set<String> automaticChannels =
         ConcurrentHashMap.newKeySet();
-    private final ScheduledExecutorService executor =
-        Executors.newSingleThreadScheduledExecutor(task -> {
-            Thread thread = new Thread(
-                task, "zlink-java-fanout-location");
-            thread.setDaemon(true);
-            return thread;
-        });
+    private final ScheduledExecutorService scheduler;
+    private final Executor infrastructureExecutor;
+    private ScheduledFuture<?> tickTask;
     private volatile boolean running;
     private volatile long nextReconcileNanos;
     private long receiveCursor;
     private volatile long lifecycleEpoch;
-    private volatile boolean reconciling;
+    private CompletableFuture<Void> admittedTick;
+    private CompletableFuture<Void> stopCompletion;
 
     ZLinkFanoutLocationRuntime(
         ZLinkLocationRepository store,
@@ -89,6 +88,8 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         ZLinkMonitoringBackendAdapter monitoring,
         ZLinkBackendContext context,
         ZLinkChannelSocketRegistry sockets,
+        ScheduledExecutorService scheduler,
+        Executor infrastructureExecutor,
         Duration pollingInterval,
         int pageSize,
         BiConsumer<String, ZLinkBackendTopicMessage> dispatch) {
@@ -98,6 +99,9 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         this.monitoring = Objects.requireNonNull(monitoring, "monitoring");
         this.context = Objects.requireNonNull(context, "context");
         this.sockets = Objects.requireNonNull(sockets, "sockets");
+        this.scheduler = Objects.requireNonNull(scheduler, "scheduler");
+        this.infrastructureExecutor = Objects.requireNonNull(
+            infrastructureExecutor, "infrastructureExecutor");
         this.pollingInterval = Objects.requireNonNull(
             pollingInterval, "pollingInterval");
         this.pageSize = Math.max(1, Math.min(pageSize, 1000));
@@ -110,17 +114,24 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
             if (running) {
                 return CompletableFuture.completedFuture(null);
             }
+            if (stopCompletion != null && !stopCompletion.isDone()) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                        "fanout location runtime is stopping"));
+            }
             initialize(surfaces);
             lifecycleEpoch = Math.addExact(lifecycleEpoch, 1);
             running = true;
+            stopCompletion = null;
             long now = System.nanoTime();
             nextReconcileNanos = now;
+            long epoch = lifecycleEpoch;
+            tickTask = scheduler.scheduleAtFixedRate(
+                () -> signalTick(epoch),
+                0,
+                10,
+                TimeUnit.MILLISECONDS);
         }
-        executor.scheduleAtFixedRate(
-            this::tickSafely,
-            0,
-            10,
-            TimeUnit.MILLISECONDS);
         return publishAll(ZLinkFrameworkRuntimeState.SERVING);
     }
 
@@ -130,14 +141,41 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
 
     CompletionStage<Void> stop() {
         List<Published> servers;
+        CompletableFuture<Void> pendingTick;
+        CompletableFuture<Void> completion;
         synchronized (this) {
+            if (!running) {
+                return stopCompletion == null
+                    ? CompletableFuture.completedFuture(null)
+                    : stopCompletion;
+            }
+            cancelTickTask();
             running = false;
             lifecycleEpoch = Math.addExact(lifecycleEpoch, 1);
             servers = List.copyOf(published.values());
             published.clear();
+            pendingTick = admittedTick;
+            completion = new CompletableFuture<>();
+            stopCompletion = completion;
         }
+        CompletionStage<Void> settled = pendingTick == null
+            ? CompletableFuture.completedFuture(null)
+            : pendingTick.handle((ignored, failure) -> null);
+        settled.thenCompose(ignored -> removePublished(servers))
+            .whenComplete((ignored, failure) -> {
+                closeConnections();
+                if (failure == null) {
+                    completion.complete(null);
+                } else {
+                    completion.completeExceptionally(failure);
+                }
+            });
+        return completion;
+    }
+
+    private CompletionStage<Void> removePublished(
+        List<Published> servers) {
         if (servers.isEmpty()) {
-            closeConnections();
             return CompletableFuture.completedFuture(null);
         }
         List<CompletionStage<?>> removals = new ArrayList<>();
@@ -149,7 +187,6 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                     value.publisherRid),
                 token));
         }
-        closeConnections();
         return CompletableFuture.allOf(removals.stream()
             .map(stage -> stage.toCompletableFuture())
             .toArray(CompletableFuture[]::new));
@@ -227,33 +264,65 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
             .toArray(CompletableFuture[]::new));
     }
 
-    private void tickSafely() {
-        if (!running) {
-            return;
+    private void signalTick(long epoch) {
+        CompletableFuture<Void> settlement;
+        synchronized (this) {
+            if (!running || lifecycleEpoch != epoch || admittedTick != null) {
+                return;
+            }
+            settlement = new CompletableFuture<>();
+            admittedTick = settlement;
         }
         try {
+            infrastructureExecutor.execute(
+                () -> runAdmittedTick(epoch, settlement));
+        } catch (RejectedExecutionException closing) {
+            settleTick(settlement, closing);
+        }
+    }
+
+    private void runAdmittedTick(
+        long epoch,
+        CompletableFuture<Void> settlement) {
+        CompletionStage<Void> work;
+        try {
+            if (!running || lifecycleEpoch != epoch) {
+                settleTick(settlement, null);
+                return;
+            }
             long now = System.nanoTime();
             receiveAvailable(now);
             expireConnections(now);
-            if (now >= nextReconcileNanos && !reconciling) {
-                reconciling = true;
-                nextReconcileNanos = now + pollingInterval.toNanos();
-                long epoch = lifecycleEpoch;
-                reconcile(epoch).whenComplete((ignored, failure) -> {
-                    reconciling = false;
-                    if (failure != null) {
-                        LOGGER.log(
-                            Level.WARNING,
-                            "fanout location reconcile failed",
-                            failure);
-                    }
-                });
+            if (now < nextReconcileNanos) {
+                settleTick(settlement, null);
+                return;
             }
-        } catch (RuntimeException failure) {
+            nextReconcileNanos = now + pollingInterval.toNanos();
+            work = reconcile(epoch);
+        } catch (Throwable failure) {
+            settleTick(settlement, failure);
+            return;
+        }
+        work.whenComplete((ignored, failure) ->
+            settleTick(settlement, failure));
+    }
+
+    private void settleTick(
+        CompletableFuture<Void> settlement,
+        Throwable failure) {
+        synchronized (this) {
+            if (admittedTick == settlement) {
+                admittedTick = null;
+            }
+        }
+        if (failure != null) {
             LOGGER.log(
                 Level.WARNING,
                 "fanout location tick failed; the next bounded tick retries",
                 failure);
+            settlement.completeExceptionally(failure);
+        } else {
+            settlement.complete(null);
         }
     }
 
@@ -299,12 +368,6 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                     page.continuationToken(),
                     rows);
             });
-    }
-
-    private void reconcileChannel(
-        String channelName,
-        List<ZLinkFanoutPublisherDescriptor> rows) {
-        reconcileChannel(channelName, rows, lifecycleEpoch);
     }
 
     private void reconcileChannel(
@@ -591,12 +654,14 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
 
     @Override
     public void close() {
-        synchronized (this) {
-            running = false;
-            lifecycleEpoch = Math.addExact(lifecycleEpoch, 1);
+        stop().toCompletableFuture().join();
+    }
+
+    private void cancelTickTask() {
+        if (tickTask != null) {
+            tickTask.cancel(false);
+            tickTask = null;
         }
-        closeConnections();
-        executor.shutdown();
     }
 
     List<FanoutPublisherSnapshot> publisherSnapshots(String channelName) {

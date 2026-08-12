@@ -64,7 +64,7 @@ internal sealed class GameQuestClientScenario(GameQuestTopology topology)
             "Assertion failed: rehydratedAfterClose.UpdatedQuests contains rewarded first-hunt");
 
         var ruinsCompleted = apiAStream.WaitFor<QuestCompletedNotify>().Async(cancellationToken);
-        await apiAStream.Send(new EnterAreaReq("player-alice", "ruins", "enter-ruins"))
+        await apiAStream.Send(new EnterAreaMsg("player-alice", "ruins", "enter-ruins"))
             .Async(cancellationToken);
         var ruinsCompletedPush = await ruinsCompleted;
         ZlinkStreamAssert.Ensure(ruinsCompletedPush.Payload.PlayerId == "player-alice", "Assertion failed: ruinsCompletedPush.Payload.PlayerId == \"player-alice\"");
@@ -90,7 +90,7 @@ internal sealed class GameQuestClientScenario(GameQuestTopology topology)
                 cancellationToken);
         ZlinkStreamAssert.Ensure(bobProgress.Any(p => p is { QuestId: QuestIds.HerbGathering, CurrentCount: 1 }), "Assertion failed: bobProgress.Any(p => p is { QuestId: QuestIds.HerbGathering, CurrentCount: 1 })");
         var herbCompletedOnReconnectedStream = apiBStream.WaitFor<QuestCompletedNotify>().Async(cancellationToken);
-        await apiBStream.Send(new CollectItemReq("player-bob", "healing-herb", 4, "herb-2"))
+        await apiBStream.Send(new CollectItemMsg("player-bob", "healing-herb", 4, "herb-2"))
             .Async(cancellationToken);
         var herbCompletedOnReconnectedStreamPush = await herbCompletedOnReconnectedStream;
         ZlinkStreamAssert.Ensure(herbCompletedOnReconnectedStreamPush.Payload.PlayerId == "player-bob", "Assertion failed: herbCompletedOnReconnectedStreamPush.Payload.PlayerId == \"player-bob\"");

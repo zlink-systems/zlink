@@ -23,6 +23,7 @@ import java.util.Optional;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
@@ -524,6 +525,8 @@ final class ZLinkClientServerM6ARuntimeTest {
                     default -> throw new UnsupportedOperationException(
                         method.getName());
                 });
+        var scheduler = Executors.newSingleThreadScheduledExecutor();
+        var infrastructure = Executors.newVirtualThreadPerTaskExecutor();
         ZLinkClientServerLocationRuntime runtime =
             new ZLinkClientServerLocationRuntime(
                 store,
@@ -532,6 +535,8 @@ final class ZLinkClientServerM6ARuntimeTest {
                 context,
                 new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)),
                 sockets,
+                scheduler,
+                infrastructure,
                 Duration.ofHours(1),
                 100);
         ZLinkChannelRuntime.AutoConnectSurface client =
@@ -557,10 +562,97 @@ final class ZLinkClientServerM6ARuntimeTest {
                 null,
                 List.of());
 
-        runtime.start(List.of(client, server)).toCompletableFuture().join();
+        try {
+            runtime.start(List.of(client, server)).toCompletableFuture().join();
 
-        assertSame(dealer, sockets.clientForOutbound("orders"));
-        runtime.stop().toCompletableFuture().join();
+            assertSame(dealer, sockets.clientForOutbound("orders"));
+            runtime.stop().toCompletableFuture().join();
+        } finally {
+            runtime.close();
+            scheduler.shutdownNow();
+            infrastructure.shutdownNow();
+        }
+    }
+
+    @Test
+    void stopWaitsForAdmittedPublicationBeforeRemovingDescriptor()
+        throws Exception {
+        BlockingUpdateStore store = new BlockingUpdateStore();
+        ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
+        ZLinkChannelBackendAdapter adapter =
+            (ZLinkChannelBackendAdapter) Proxy.newProxyInstance(
+                ZLinkChannelBackendAdapter.class.getClassLoader(),
+                new Class<?>[] {ZLinkChannelBackendAdapter.class},
+                (proxy, method, arguments) -> switch (method.getName()) {
+                    case "name" -> "location-test";
+                    default -> throw new UnsupportedOperationException(
+                        method.getName());
+                });
+        ZLinkBackendAdapterProvider provider =
+            (ZLinkBackendAdapterProvider) Proxy.newProxyInstance(
+                ZLinkBackendAdapterProvider.class.getClassLoader(),
+                new Class<?>[] {ZLinkBackendAdapterProvider.class},
+                (proxy, method, arguments) -> switch (method.getName()) {
+                    case "createChannelAdapter" -> adapter;
+                    default -> throw new UnsupportedOperationException(
+                        method.getName());
+                });
+        ZLinkBackendContext context =
+            (ZLinkBackendContext) Proxy.newProxyInstance(
+                ZLinkBackendContext.class.getClassLoader(),
+                new Class<?>[] {ZLinkBackendContext.class},
+                (proxy, method, arguments) -> switch (method.getName()) {
+                    case "name" -> "context";
+                    case "close", "shutdown" -> null;
+                    default -> throw new UnsupportedOperationException(
+                        method.getName());
+                });
+        var scheduler = Executors.newSingleThreadScheduledExecutor();
+        var infrastructure = Executors.newVirtualThreadPerTaskExecutor();
+        ZLinkClientServerLocationRuntime runtime =
+            new ZLinkClientServerLocationRuntime(
+                store,
+                () -> new ZLinkLocationOwnerToken("owner", 1),
+                provider,
+                context,
+                new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)),
+                sockets,
+                scheduler,
+                infrastructure,
+                Duration.ofHours(1),
+                100);
+        ZLinkChannelRuntime.AutoConnectSurface server =
+            new ZLinkChannelRuntime.AutoConnectSurface(
+                systems.zlink.framework.runtime.internal.locations
+                    .ZLinkAutoConnectType.CLIENT_SERVER,
+                "orders",
+                ZLinkLocationRole.ROUTER,
+                RoutingId.from("server"),
+                "tcp://127.0.0.1:7010",
+                100,
+                null,
+                List.of());
+
+        try {
+            CompletionStage<Void> started = runtime.start(List.of(server));
+            store.updateAdmitted.get(1, TimeUnit.SECONDS);
+            assertTrue(store.hasCapturedUpdate());
+
+            CompletionStage<Void> stopped = runtime.stop();
+            assertFalse(stopped.toCompletableFuture().isDone());
+            assertEquals(List.of(), store.operations());
+
+            store.releaseUpdate();
+            started.toCompletableFuture().get(1, TimeUnit.SECONDS);
+            stopped.toCompletableFuture().get(1, TimeUnit.SECONDS);
+
+            assertEquals(List.of("update", "remove"), store.operations());
+            assertNull(store.current());
+        } finally {
+            runtime.close();
+            scheduler.shutdownNow();
+            infrastructure.shutdownNow();
+        }
     }
 
     private static ZLinkClientServerServerDescriptor descriptor(
@@ -670,6 +762,65 @@ final class ZLinkClientServerM6ARuntimeTest {
                 ZLinkPageRequest page) {
             return CompletableFuture.completedFuture(
                 new ZLinkLocationPage<>(List.of(descriptor), null));
+        }
+    }
+
+    private static final class BlockingUpdateStore
+        extends ZLinkLocationStoreTestAdapter {
+        private final CompletableFuture<Void> updateAdmitted =
+            new CompletableFuture<>();
+        private final CompletableFuture<ZLinkLocationWriteResult> update =
+            new CompletableFuture<>();
+        private final List<String> operations = new ArrayList<>();
+        private ZLinkClientServerServerDescriptor captured;
+        private ZLinkClientServerServerDescriptor current;
+
+        @Override
+        public synchronized CompletionStage<ZLinkLocationWriteResult>
+            updateClientServer(
+                ZLinkClientServerServerDescriptor descriptor,
+                ZLinkLocationWriteIntent intent) {
+            captured = descriptor;
+            updateAdmitted.complete(null);
+            return update;
+        }
+
+        synchronized boolean hasCapturedUpdate() {
+            return captured != null;
+        }
+
+        synchronized void releaseUpdate() {
+            current = captured;
+            operations.add("update");
+            update.complete(ZLinkLocationWriteResult.stored(
+                captured.leaseGeneration(), Instant.now()));
+        }
+
+        @Override
+        public synchronized CompletionStage<ZLinkLocationWriteStatus>
+            removeClientServer(
+                ZLinkClientServerServerDescriptorKey key,
+                ZLinkLocationOwnerToken owner) {
+            current = null;
+            operations.add("remove");
+            return CompletableFuture.completedFuture(
+                ZLinkLocationWriteStatus.STORED);
+        }
+
+        @Override
+        public CompletionStage<
+            ZLinkLocationPage<ZLinkClientServerServerDescriptor>>
+            listClientServers(String channelName, ZLinkPageRequest page) {
+            return CompletableFuture.completedFuture(
+                new ZLinkLocationPage<>(List.of(), null));
+        }
+
+        synchronized List<String> operations() {
+            return List.copyOf(operations);
+        }
+
+        synchronized ZLinkClientServerServerDescriptor current() {
+            return current;
         }
     }
 

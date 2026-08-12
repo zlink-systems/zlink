@@ -187,26 +187,26 @@ internal sealed class ChannelRoomRelocationAdapter
     }
 }
 
-[ZLinkSpotActorRequestHandler(nameof(ChannelObjectProbeRequest))]
+[ZLinkSpotActorRequestHandler(nameof(ChannelObjectProbeReq))]
 internal sealed class ChannelEntryActorProbeHandler
     : IZLinkEntrySpotActorRequestHandler<
         ChannelEntrySpot,
         ChannelActor,
-        ChannelObjectProbeRequest,
-        ChannelObjectProbeReply>
+        ChannelObjectProbeReq,
+        ChannelObjectProbeRes>
 {
-    public ValueTask<ChannelObjectProbeReply> HandleAsync(
+    public ValueTask<ChannelObjectProbeRes> HandleAsync(
         ChannelEntrySpot spot,
         ChannelActor actor,
         IZLinkMessageContext context,
-        ChannelObjectProbeRequest request,
+        ChannelObjectProbeReq request,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         return ValueTask.FromResult(Reply(spot.Context, actor, request.Id));
     }
 
-    internal static ChannelObjectProbeReply Reply(
+    internal static ChannelObjectProbeRes Reply(
         IZLinkSpotCommonContext spot,
         ChannelActor actor,
         string id) =>
@@ -218,19 +218,19 @@ internal sealed class ChannelEntryActorProbeHandler
             spot.NodeRid.ToString());
 }
 
-[ZLinkSpotActorRequestHandler(nameof(ChannelObjectProbeRequest))]
+[ZLinkSpotActorRequestHandler(nameof(ChannelObjectProbeReq))]
 internal sealed class ChannelRoomActorProbeHandler
     : IZLinkSpotActorRequestHandler<
         ChannelRoomSpot,
         ChannelActor,
-        ChannelObjectProbeRequest,
-        ChannelObjectProbeReply>
+        ChannelObjectProbeReq,
+        ChannelObjectProbeRes>
 {
-    public ValueTask<ChannelObjectProbeReply> HandleAsync(
+    public ValueTask<ChannelObjectProbeRes> HandleAsync(
         ChannelRoomSpot spot,
         ChannelActor actor,
         IZLinkMessageContext context,
-        ChannelObjectProbeRequest request,
+        ChannelObjectProbeReq request,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -242,20 +242,20 @@ internal sealed class ChannelRoomActorProbeHandler
     }
 }
 
-[ZLinkSpotRequestHandler(nameof(ChannelObjectProbeRequest))]
+[ZLinkSpotRequestHandler(nameof(ChannelObjectProbeReq))]
 internal sealed class ChannelRoomProbeHandler
     : IZLinkSpotRequestHandler<
         ChannelRoomSpot,
-        ChannelObjectProbeRequest,
-        ChannelObjectProbeReply>
+        ChannelObjectProbeReq,
+        ChannelObjectProbeRes>
 {
-    public ValueTask<ChannelObjectProbeReply> HandleAsync(
+    public ValueTask<ChannelObjectProbeRes> HandleAsync(
         ChannelRoomSpot spot,
-        ChannelObjectProbeRequest request,
+        ChannelObjectProbeReq request,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.FromResult(new ChannelObjectProbeReply(
+        return ValueTask.FromResult(new ChannelObjectProbeRes(
             request.Id,
             string.Empty,
             spot.Context.SpotId,
@@ -264,29 +264,29 @@ internal sealed class ChannelRoomProbeHandler
     }
 }
 
-[ZLinkSpotActorRequestHandler(nameof(ChannelSpotWorkflowRequest))]
+[ZLinkSpotActorRequestHandler(nameof(ChannelSpotWorkflowReq))]
 internal sealed class ChannelEntryWorkflowHandler(
     IZLinkRouteClient routes,
     EvidenceStore evidence)
     : IZLinkEntrySpotActorRequestHandler<
         ChannelEntrySpot,
         ChannelActor,
-        ChannelSpotWorkflowRequest,
-        ChannelSpotWorkflowReply>
+        ChannelSpotWorkflowReq,
+        ChannelSpotWorkflowRes>
 {
-    public async ValueTask<ChannelSpotWorkflowReply> HandleAsync(
+    public async ValueTask<ChannelSpotWorkflowRes> HandleAsync(
         ChannelEntrySpot spot,
         ChannelActor actor,
         IZLinkMessageContext context,
-        ChannelSpotWorkflowRequest request,
+        ChannelSpotWorkflowReq request,
         CancellationToken cancellationToken)
     {
         evidence.Add($"spot-workflow|phase=started|id={request.Id}|version={actor.StateVersion}");
         var reply = await routes
             .RequestToChannel(
                 ChannelEgressNames.Workflow,
-                new ChannelProbeRequest($"{request.Id}-handler"))
-            .Async<ChannelProbeReply>(cancellationToken);
+                new ChannelProbeReq($"{request.Id}-handler"))
+            .Async<ChannelProbeRes>(cancellationToken);
         actor.StateVersion++;
         evidence.Add($"spot-workflow|phase=resumed|id={request.Id}|version={actor.StateVersion}");
         await spot.Context.AddTimer<ChannelEntryTimerHandler>(
@@ -298,33 +298,33 @@ internal sealed class ChannelEntryWorkflowHandler(
                 StopOnUnhandledException = true
             },
             cancellationToken);
-        return new ChannelSpotWorkflowReply(
+        return new ChannelSpotWorkflowRes(
             request.Id,
             actor.StateVersion,
             reply.Role);
     }
 }
 
-[ZLinkSpotActorRequestHandler(nameof(ChannelActorJoinRequest))]
+[ZLinkSpotActorRequestHandler(nameof(ChannelActorJoinReq))]
 internal sealed class ChannelActorJoinHandler
     : IZLinkEntrySpotActorRequestHandler<
         ChannelEntrySpot,
         ChannelActor,
-        ChannelActorJoinRequest,
-        ChannelActorJoinReply>
+        ChannelActorJoinReq,
+        ChannelActorJoinRes>
 {
-    public ValueTask<ChannelActorJoinReply> HandleAsync(
+    public ValueTask<ChannelActorJoinRes> HandleAsync(
         ChannelEntrySpot spot,
         ChannelActor actor,
         IZLinkMessageContext context,
-        ChannelActorJoinRequest request,
+        ChannelActorJoinReq request,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         actor.Context.JoinSpot(request.TargetSpotId, request)
             .Timeout(TimeSpan.FromSeconds(10))
             .Defer();
-        return ValueTask.FromResult(new ChannelActorJoinReply(
+        return ValueTask.FromResult(new ChannelActorJoinRes(
             request.Id,
             actor.ActorId,
             request.TargetSpotId,
@@ -332,33 +332,33 @@ internal sealed class ChannelActorJoinHandler
     }
 }
 
-[ZLinkSpotActorRequestHandler(nameof(ChannelBoundPushRequest))]
+[ZLinkSpotActorRequestHandler(nameof(ChannelBoundPushReq))]
 internal sealed class ChannelEntryBoundPushHandler
     : IZLinkEntrySpotActorRequestHandler<
         ChannelEntrySpot,
         ChannelActor,
-        ChannelBoundPushRequest,
-        ChannelBoundPushReply>
+        ChannelBoundPushReq,
+        ChannelBoundPushRes>
 {
-    public async ValueTask<ChannelBoundPushReply> HandleAsync(
+    public async ValueTask<ChannelBoundPushRes> HandleAsync(
         ChannelEntrySpot spot,
         ChannelActor actor,
         IZLinkMessageContext context,
-        ChannelBoundPushRequest request,
+        ChannelBoundPushReq request,
         CancellationToken cancellationToken)
     {
         await SendAsync(spot.Context, actor, request, cancellationToken);
-        return new ChannelBoundPushReply(request.Id, true);
+        return new ChannelBoundPushRes(request.Id, true);
     }
 
     internal static async ValueTask SendAsync(
         IZLinkSpotCommonContext spot,
         ChannelActor actor,
-        ChannelBoundPushRequest request,
+        ChannelBoundPushReq request,
         CancellationToken cancellationToken)
     {
         await actor.Context.BoundSession.Send(
-                new ChannelBoundPushNotification(
+                new ChannelBoundPushNotify(
                     request.Id,
                     actor.ActorId,
                     spot.SpotId,
@@ -367,19 +367,19 @@ internal sealed class ChannelEntryBoundPushHandler
     }
 }
 
-[ZLinkSpotActorRequestHandler(nameof(ChannelBoundPushRequest))]
+[ZLinkSpotActorRequestHandler(nameof(ChannelBoundPushReq))]
 internal sealed class ChannelRoomBoundPushHandler
     : IZLinkSpotActorRequestHandler<
         ChannelRoomSpot,
         ChannelActor,
-        ChannelBoundPushRequest,
-        ChannelBoundPushReply>
+        ChannelBoundPushReq,
+        ChannelBoundPushRes>
 {
-    public async ValueTask<ChannelBoundPushReply> HandleAsync(
+    public async ValueTask<ChannelBoundPushRes> HandleAsync(
         ChannelRoomSpot spot,
         ChannelActor actor,
         IZLinkMessageContext context,
-        ChannelBoundPushRequest request,
+        ChannelBoundPushReq request,
         CancellationToken cancellationToken)
     {
         await ChannelEntryBoundPushHandler.SendAsync(
@@ -387,7 +387,7 @@ internal sealed class ChannelRoomBoundPushHandler
             actor,
             request,
             cancellationToken);
-        return new ChannelBoundPushReply(request.Id, true);
+        return new ChannelBoundPushRes(request.Id, true);
     }
 }
 
@@ -407,9 +407,9 @@ internal sealed class ChannelEntryTimerHandler(
         var reply = await routes
             .RequestToChannel(
                 ChannelEgressNames.Workflow,
-                new ChannelProbeRequest($"timer-{tick.DeliveryIndex}"))
+                new ChannelProbeReq($"timer-{tick.DeliveryIndex}"))
             .Timeout(TimeSpan.FromSeconds(3))
-            .Async<ChannelProbeReply>(cancellationToken);
+            .Async<ChannelProbeRes>(cancellationToken);
         evidence.Add(
             $"spot-timer|phase=resumed|tick={tick.DeliveryIndex}|role={reply.Role}");
     }
@@ -419,18 +419,18 @@ internal sealed class ChannelNodeProbeHandler(
     RoleOptions options,
     EvidenceStore evidence)
     : IZLinkRouteRequestHandler<
-        ChannelObjectProbeRequest,
-        ChannelProbeReply>
+        ChannelObjectProbeReq,
+        ChannelProbeRes>
 {
-    public ValueTask<ChannelProbeReply> HandleAsync(
-        ChannelObjectProbeRequest request,
+    public ValueTask<ChannelProbeRes> HandleAsync(
+        ChannelObjectProbeReq request,
         ZLinkRouteMessageContext context,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         evidence.Add(
             $"node-direct|role={options.Role}|mesh={context.MeshName}|id={request.Id}");
-        return ValueTask.FromResult(new ChannelProbeReply(
+        return ValueTask.FromResult(new ChannelProbeRes(
             request.Id,
             options.Role,
             context.MeshName ?? string.Empty,

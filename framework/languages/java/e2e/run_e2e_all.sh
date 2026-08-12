@@ -84,7 +84,7 @@ validate_selected_suites() {
       echo "[java-e2e] aggregate_incomplete reason=missing_suite suite=$scenario" >&2
       return 1
     fi
-    if [[ ! -x "$runner" ]]; then
+    if [[ ! -f "$runner" ]]; then
       echo "[java-e2e] aggregate_incomplete reason=missing_runner suite=$scenario runner=$runner" >&2
       return 1
     fi
@@ -107,7 +107,7 @@ run_scenario_with_retry() {
     (
       cd "$SCRIPT_DIR/$scenario" &&
         exec nice -n 10 timeout "${SCENARIO_TIMEOUT_SECONDS}s" \
-          ./run_e2e.sh "${selector}" --start-order "${start_order}"
+          bash ./run_e2e.sh "${selector}" --start-order "${start_order}"
     ) > >(tee "${output}") 2>&1 &
     active_scenario_pid="$!"
     wait "${active_scenario_pid}"

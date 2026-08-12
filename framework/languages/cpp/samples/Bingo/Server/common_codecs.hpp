@@ -34,7 +34,9 @@ struct bingo_protobuf_codecs_t
         ZLINK_BINGO_REGISTER_PROTOBUF (match_bingo_api_res_t, MatchBingoApiRes);
         ZLINK_BINGO_REGISTER_PROTOBUF (reserve_bingo_room_req_t, ReserveBingoRoomReq);
         ZLINK_BINGO_REGISTER_PROTOBUF (reserve_bingo_room_res_t, ReserveBingoRoomRes);
-        ZLINK_BINGO_REGISTER_PROTOBUF (bingo_room_settings_payload_t, BingoRoomSettingsPayload);
+        ZLINK_BINGO_REGISTER_PROTOBUF (bingo_room_settings_payload_t,
+                                       BingoRoomSettingsPayload);
+        ZLINK_BINGO_REGISTER_PROTOBUF (bingo_room_create_req_t, BingoRoomCreateReq);
         ZLINK_BINGO_REGISTER_PROTOBUF (bingo_room_join_req_t, BingoRoomJoinReq);
         ZLINK_BINGO_REGISTER_PROTOBUF (bingo_room_join_res_t, BingoRoomJoinRes);
         ZLINK_BINGO_REGISTER_PROTOBUF (submit_bingo_card_req_t, SubmitBingoCardReq);

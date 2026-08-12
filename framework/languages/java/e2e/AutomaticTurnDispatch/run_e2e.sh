@@ -2,6 +2,7 @@
 set -euo pipefail
 # Config 8 AutomaticTurnDispatch deployment runner.
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/e2e-redis-common.sh"
+zlink_e2e_initialize java "$0" "$@"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/start-order-common.sh"
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -10,35 +11,7 @@ pids=()
 REDIS_CONTAINER=""
 run_id="$(date +%Y%m%d-%H%M%S)-$$"
 log_dir="$(pwd)/logs/${run_id}"
-repo_root="$(cd ../../../../.. && pwd)"
-default_core_lib="${repo_root}/core/build/lib/libzlink.so"
-mkdir -p "${log_dir}"
-echo "log_dir=${log_dir}"
-SCENARIO="${1:-all}"
-e2e_start_order="$(zlink_e2e_start_order_mode "$@")"
-echo "start_order=${e2e_start_order}"
-# Inventory blocker: TD-F5A. The existing ATD-E3 flow is related but does not
-# provide the TD-F5A new-request rejection assertion.
-if [[ -z "${ZLINK_LIBRARY_PATH:-}" && -f "${default_core_lib}" ]]; then
-  export ZLINK_LIBRARY_PATH="${default_core_lib}"
-fi
-readonly e2e_build_dir="${HOME}/.cache/zlink/java-e2e/AutomaticTurnDispatch"
-readonly gradle_cache_dir="${HOME}/.cache/zlink/java-e2e/AutomaticTurnDispatch-gradle-cache"
-zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
-  "zlink-redis-java-e2e" "redis:7.2-alpine"
-redis_location_endpoint="127.0.0.1:${redis_port}"
-location_key_prefix="zlink:e2e:automaticturn:${run_id}"
-config_dir="$(mktemp -d)"
-chmod 0700 "${config_dir}"
-control_dir="${log_dir}/control"
-mkdir -p "${control_dir}"
-LOCAL_READINESS_TIMEOUT_SECONDS=3
-LOCAL_READINESS_POLL_SECONDS=0.1
-LOCAL_READINESS_ATTEMPTS=30
-if rg -n 'java\.net\.http\.HttpClient|HttpClient\.new' Client/src/main/java --glob '*.java'; then
-  echo "AutomaticTurnDispatch client must use ZLinkHttpClient" >&2
-  exit 1
-fi
+config_dir=""
 
 print_logs() {
   local status="$1"
@@ -91,30 +64,46 @@ cleanup() {
     kill -9 "${pid}" >/dev/null 2>&1 || true
   done
   if [[ -n "${REDIS_CONTAINER}" ]]; then
-    docker rm -fv "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "${REDIS_CONTAINER}" || true
   fi
-  rm -rf "${config_dir}"
+  [[ -z "${config_dir}" ]] || rm -rf "${config_dir}"
   wait >/dev/null 2>&1 || true
   exit "${status}"
 }
 trap cleanup EXIT
 
+repo_root="$(cd ../../../../.. && pwd)"
+default_core_lib="${repo_root}/core/build/lib/libzlink.so"
+mkdir -p "${log_dir}"
+echo "log_dir=${log_dir}"
+SCENARIO="${1:-all}"
+e2e_start_order="$(zlink_e2e_start_order_mode "$@")"
+echo "start_order=${e2e_start_order}"
+# Inventory blocker: TD-F5A. The existing ATD-E3 flow is related but does not
+# provide the TD-F5A new-request rejection assertion.
+if [[ -z "${ZLINK_LIBRARY_PATH:-}" && -f "${default_core_lib}" ]]; then
+  export ZLINK_LIBRARY_PATH="${default_core_lib}"
+fi
+readonly e2e_build_dir="${HOME}/.cache/zlink/java-e2e/AutomaticTurnDispatch"
+readonly gradle_cache_dir="${HOME}/.cache/zlink/java-e2e/AutomaticTurnDispatch-gradle-cache"
+zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
+  "zlink-redis-java-e2e" "redis:7.2-alpine"
+redis_location_endpoint="127.0.0.1:${redis_port}"
+location_key_prefix="zlink:e2e:automaticturn:${run_id}"
+config_dir="$(mktemp -d)"
+chmod 0700 "${config_dir}"
+control_dir="${log_dir}/control"
+mkdir -p "${control_dir}"
+LOCAL_READINESS_TIMEOUT_SECONDS=3
+LOCAL_READINESS_POLL_SECONDS=0.1
+LOCAL_READINESS_ATTEMPTS=30
+if rg -n 'java\.net\.http\.HttpClient|HttpClient\.new' Client/src/main/java --glob '*.java'; then
+  echo "AutomaticTurnDispatch client must use ZLinkHttpClient" >&2
+  exit 1
+fi
+
 reserve_ports() {
-  python3 - <<'PY'
-import socket
-sockets = []
-ports = []
-try:
-    for _ in range(13):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        ports.append(sock.getsockname()[1])
-    print(" ".join(str(port) for port in ports))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  zlink_e2e_reserve_ports 13
 }
 
 tcp() {
@@ -435,7 +424,7 @@ assert_readiness() {
 }
 
 gradle_run() {
-  ../../gradlew -PzlinkE2eBuildDir="${e2e_build_dir}" \
+  zlink_e2e_gradle_build_locked ../../gradlew -PzlinkE2eBuildDir="${e2e_build_dir}" \
     --project-cache-dir "${gradle_cache_dir}" --no-daemon --no-parallel --max-workers=1 "$@" --quiet
 }
 
@@ -643,7 +632,6 @@ ATD-E1
 ATD-E2
 ATD-E4
 ATD-E5
-TD-A1
 TD-A2
 TD-A3
 TD-A4

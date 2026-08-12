@@ -1,7 +1,4 @@
-package Scenarios;
-
-import systems.zlink.e2e.resiliencelifecycle.client.Scenarios;
-import systems.zlink.e2e.resiliencelifecycle.client.Support;
+package systems.zlink.e2e.resiliencelifecycle.client.Scenarios;
 import systems.zlink.e2e.resiliencelifecycle.client.Support.ResilienceScenarioContext;
 
 public final class RlD1HighFanoutScenario {

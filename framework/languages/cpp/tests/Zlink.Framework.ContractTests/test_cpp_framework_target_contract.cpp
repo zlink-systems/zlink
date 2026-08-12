@@ -1413,7 +1413,7 @@ int main ()
                     != std::string::npos,
                   "E2E-CP-48", "PubSub PS-C1 has no failing publisher dispatch assertion");
 
-    /* E2E-CP-31 — runner-owned RL-C2/RL-D1 scenarios have no dead client duplicates. */
+    /* E2E-CP-31 — historical runner-owned scenarios have no dead client duplicates. */
     gate.require (
       resilience_client.find ("rl_c2_topology_recovery_scenario.hpp") == std::string::npos,
       "E2E-CP-31", "ResilienceLifecycle client still includes the dead RL-C2 wrapper");

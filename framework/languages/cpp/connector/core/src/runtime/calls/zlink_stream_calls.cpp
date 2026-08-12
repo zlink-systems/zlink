@@ -1289,24 +1289,46 @@ void submit_request_async (std::shared_ptr<void> state_handle,
 
 result_t<void> submit_send (std::shared_ptr<connector_state_t> state, packet_t packet)
 {
-    std::lock_guard<std::mutex> lock (state->transport_mutex);
-    if (state->close_requested.load ()) {
-        return result_t<void>::failure (error_code_t::closed, "stream connector is closed");
+    std::vector<std::uint8_t> frame;
+    {
+        std::lock_guard<std::mutex> lock (state->transport_mutex);
+        if (state->close_requested.load ()) {
+            return result_t<void>::failure (error_code_t::closed, "stream connector is closed");
+        }
+        if (!is_transport_connected (*state)) {
+            return result_t<void>::failure (error_code_t::disconnected,
+                                            "stream connector is not connected");
+        }
+        if (auto validation = validate_packet_limits (*state, packet); !validation) {
+            publish_error (*state, *validation.error ());
+            return validation;
+        }
+        auto encoded = encode_packet_frame (*state, message_kind_t::send, packet, std::nullopt);
+        if (!encoded) {
+            publish_error (*state, *encoded.error ());
+            return result_t<void>::failure (encoded.error_code (), encoded.error ()->message);
+        }
+        frame = std::move (encoded.value ());
     }
-    if (!is_transport_connected (*state)) {
-        return result_t<void>::failure (error_code_t::disconnected,
-                                        "stream connector is not connected");
-    }
-    if (auto validation = validate_packet_limits (*state, packet); !validation) {
-        publish_error (*state, *validation.error ());
-        return validation;
-    }
-    if (auto written = write_packet_frame (*state, message_kind_t::send, packet, std::nullopt);
-        !written) {
-        publish_error (*state, *written.error ());
-        return written;
-    }
-    state->sent_packets.push_back (std::move (packet));
+
+    trace_request ("send-submit", std::nullopt, packet.name, "kind=send");
+    enqueue_async_write (
+      state, std::move (frame),
+      [state, packet = std::move (packet)] (result_t<void> result) mutable {
+          trace_request (
+            "send-write-completion", std::nullopt, packet.name,
+            result ? "result=success"
+                   : "result=failure error="
+                       + std::to_string (static_cast<int> (result.error_code ())));
+          if (!result) {
+              if (result.error ()) {
+                  publish_error (*state, *result.error ());
+              }
+              return;
+          }
+          std::lock_guard<std::mutex> lock (state->transport_mutex);
+          state->sent_packets.push_back (std::move (packet));
+      });
     return result_t<void>::success ();
 }
 

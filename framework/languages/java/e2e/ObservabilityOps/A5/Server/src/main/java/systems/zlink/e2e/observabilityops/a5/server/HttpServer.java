@@ -66,13 +66,13 @@ public final class HttpServer implements SmartLifecycle {
 
     private void request(HttpExchange exchange) throws IOException {
         try {
-            Contracts.ProbeReply reply = routes.requestToChannel(
+            Contracts.ProbeRes reply = routes.requestToChannel(
                     Contracts.CHANNEL,
-                    new Contracts.ProbeRequest(
+                    new Contracts.ProbeReq(
                         query(exchange, "value"),
                         Boolean.parseBoolean(query(exchange, "fail"))))
                 .timeout(Duration.ofSeconds(5))
-                .submit(Contracts.ProbeReply.class)
+                .submit(Contracts.ProbeRes.class)
                 .toCompletableFuture()
                 .join();
             write(exchange, json.writeValueAsString(reply));

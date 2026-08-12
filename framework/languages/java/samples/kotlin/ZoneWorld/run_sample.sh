@@ -4,6 +4,7 @@ set +m
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/../../runner-common.sh"
+zlink_sample_configure_port_pool kotlin
 ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kts)
 cd "$ROOT_DIR"
 
@@ -96,7 +97,7 @@ write_client_config "$CONFIG_DIR/client-replacement.properties" replacement
 
 (
   cd ../../..
-  ./gradlew --no-daemon --no-parallel --max-workers=1 \
+  zlink_sample_gradle_locked ./gradlew --no-daemon --no-parallel --max-workers=1 \
     :zlink-framework-core:jar \
     :zlink-framework-spring-boot-starter:jar \
     :zlink-framework-locations-redis:jar \

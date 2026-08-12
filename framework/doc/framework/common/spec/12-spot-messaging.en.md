@@ -604,9 +604,9 @@ Calling `Yield` from Entry Spot, `PerActor` User Spot, an Entry Spot Actor, a No
 Channel handler, or a client outside an owner turn completes with
 `InvalidOperation`, without submitting the operation or returning the turn.
 
-`Yield` is only provided for Channel/Spot/Actor requests and CPU/I/O worker calls.
-It isn't provided for Actor join, Actor/Spot create/get-or-create, send, publish,
-timer registration, close, or destroy.
+`Yield` is provided for Channel/Spot/Actor requests, CPU/I/O worker calls, and
+Actor/Spot create/get-or-create calls. It isn't provided for Actor join, send,
+publish, timer registration, close, or destroy.
 
 A reply isn't re-delivered as a new Spot message.
 
@@ -1028,7 +1028,7 @@ to deliver a message to on the current node.
 The conditions under which one-way and request complete are defined by
 [04 Async Execution Policy](05-async-execution-policy.en.md).
 The whole processing order when terminating a Spot is defined by
-[54 Graceful Drain](28-graceful-drain-handoff.en.md).
+[54 Graceful Drain](30-host-relocation-flow.en.md).
 
 ## 7. Metadata And Observability
 

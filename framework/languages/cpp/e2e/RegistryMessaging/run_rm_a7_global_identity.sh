@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CPP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-$CPP_DIR/build}"
 source "$SCRIPT_DIR/../redis-common.sh"
+zlink_cpp_e2e_acquire_run_lock "${BASH_SOURCE[0]}" "$@"
+zlink_cpp_e2e_install_cleanup_trap
 
 REDIS_CONTAINER=""
 PIDS=()
@@ -17,7 +19,7 @@ cleanup () {
     wait "$pid" >/dev/null 2>&1 || true
   done
   if [[ -n "$REDIS_CONTAINER" ]]; then
-    zlink_redis_stop_scoped "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   if [[ -n "$LOG_DIR" ]]; then
     rm -rf -- "$LOG_DIR"
@@ -37,14 +39,8 @@ KEY_PREFIX="zlink:cpp:e2e:rm-a7:$(date +%s)-$$"
 LOG_DIR="$SCRIPT_DIR/logs/$(date +%Y%m%d-%H%M%S)-$$"
 mkdir -p "$LOG_DIR"
 
-read -r ROUTE_A ROUTE_B BRIDGE_A BRIDGE_B HTTP_A HTTP_B <<<"$(python3 - <<'PY'
-import socket
-values=[]
-for _ in range(6):
-    s=socket.socket(); s.bind(("127.0.0.1", 0)); values.append(s.getsockname()[1]); s.close()
-print(*[f"tcp://127.0.0.1:{p}" for p in values[:4]], *[f"http://127.0.0.1:{p}" for p in values[4:]])
-PY
-)"
+read -r ROUTE_A ROUTE_B BRIDGE_A BRIDGE_B HTTP_A HTTP_B \
+  <<<"$(zlink_cpp_e2e_allocate_endpoints tcp tcp tcp tcp http http)"
 
 write_config () {
   local path="$1" rid="$2" mesh="$3" route="$4" bridge_route="$5" bridge_mesh="$6" bridge_peer="$7" http="$8" peer="$9"

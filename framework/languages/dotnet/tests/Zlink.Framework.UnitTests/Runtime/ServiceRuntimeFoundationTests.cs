@@ -1528,6 +1528,80 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
+    public async Task RawRouterPort_EnforcesLifecycleAndPreservesMultipartOwnership()
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        var suffix = Guid.NewGuid().ToString("N");
+        var endpoint = $"inproc://raw-port-{suffix}";
+        var senderRid = RoutingId.From("raw-sender");
+        var receiverRid = RoutingId.From("raw-receiver");
+        using var sender = new ZLinkRawRouterServicePort(
+            context,
+            senderRid,
+            endpoint + "-sender");
+        using var receiver = new ZLinkRawRouterServicePort(
+            context,
+            receiverRid,
+            endpoint);
+
+        Assert.Throws<InvalidOperationException>(() => sender.TrySend(
+            receiverRid,
+            new ReadOnlyMemory<byte>[] { new byte[] { 1 } }));
+
+        receiver.Start();
+        sender.Start();
+        sender.Connect(endpoint, receiverRid);
+
+        var payload = new ReadOnlyMemory<byte>[]
+        {
+            new byte[] { 1, 2, 3 },
+            new byte[] { 4, 5 }
+        };
+        Assert.True(SpinWait.SpinUntil(
+            () => sender.TrySend(receiverRid, payload, SendFlags.DontWait),
+            TimeSpan.FromSeconds(3)));
+
+        ZLinkRawRouterEnvelope? envelope = null;
+        Assert.True(SpinWait.SpinUntil(
+            () => receiver.TryReceive(out envelope),
+            TimeSpan.FromSeconds(5)));
+        var receivedEnvelope = Assert.IsType<ZLinkRawRouterEnvelope>(envelope);
+        using (receivedEnvelope)
+        {
+            Assert.Equal(senderRid, receivedEnvelope.SourceRoutingId);
+            Assert.Equal(2, receivedEnvelope.Parts.Count);
+            Assert.Equal(
+                new byte[] { 1, 2, 3 },
+                receivedEnvelope.Parts[0].ToArray());
+            Assert.Equal(
+                new byte[] { 4, 5 },
+                receivedEnvelope.Parts[1].ToArray());
+        }
+
+        var requestTask = sender.RequestAsync(
+            receiverRid,
+            new ReadOnlyMemory<byte>[] { new byte[] { 9, 8 } },
+            TimeSpan.FromSeconds(3));
+        envelope = null;
+        Assert.True(SpinWait.SpinUntil(
+            () => receiver.TryReceive(out envelope),
+            TimeSpan.FromSeconds(5)));
+        var requestEnvelope = Assert.IsType<ZLinkRawRouterEnvelope>(envelope);
+        using (requestEnvelope)
+        {
+            Assert.True(requestEnvelope.CanReply);
+            requestEnvelope.Reply(
+                new ReadOnlyMemory<byte>[] { new byte[] { 7, 6, 5 } });
+        }
+        using var reply = await requestTask;
+        Assert.Equal(new byte[] { 7, 6, 5 },
+            Assert.Single(reply.Parts).ToArray());
+
+        sender.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => sender.TryReceive(out _));
+    }
+
+    [Fact]
     public async Task Manual_Object_Client_Pair_Without_Server_Channel_Ends_As_NotRequired()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();

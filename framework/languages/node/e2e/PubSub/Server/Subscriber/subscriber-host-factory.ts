@@ -13,7 +13,7 @@ import { createRedisLocationStore, locationMessagingOptions } from '../../Shared
 import { validateSubscriberOptions, SUBSCRIBER_OPTIONS, type SubscriberOptions } from './Configuration/subscriber-options';
 import { PUBSUB_OPTIONS, createPubSubConfigurationModule } from '../../configuration';
 import { createSubscriberEndpoints } from './Endpoints/operational-endpoints';
-import { captureDispatchErrors, EventMsgHandler } from './Handlers/event-msg-handler';
+import { captureDispatchErrors, PubSubEventHandler } from './Handlers/pub-sub-event-handler';
 import { EvidenceStore } from './Infrastructure/evidence-store';
 import { closeHttpServer, startHttpServer } from './Support/http-server';
 import { FanoutStatusObserverProbe } from './Support/fanout-status-observer';
@@ -79,7 +79,7 @@ function createSubscriberModule(): Function {
           const fanout = builder.addFanoutChannel(options.channelName ?? PubSubNames.channel)
             .enableSubscriber(options.publisherEndpoint)
             .routingId(options.rid)
-            .addPublishHandler(PacketNames.eventMsg, EventMsgHandler);
+            .addPublishHandler(PacketNames.pubSubEvent, PubSubEventHandler);
           if (options.subscriberMode === 'mixed') {
             fanout.enableSubscriber();
           }
@@ -99,7 +99,7 @@ function createSubscriberModule(): Function {
         }
       },
       { provide: SUBSCRIBER_OPTIONS, useExisting: PUBSUB_OPTIONS },
-      EventMsgHandler
+      PubSubEventHandler
     ]
   })(SubscriberModule);
   return SubscriberModule;

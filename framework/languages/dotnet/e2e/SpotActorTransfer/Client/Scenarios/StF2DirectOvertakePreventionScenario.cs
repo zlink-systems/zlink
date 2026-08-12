@@ -19,7 +19,7 @@ internal static class StF2DirectOvertakePreventionScenario
             await context.SendFromNodeAsync(
                 context.NodeA,
                 actorId,
-                new HandoffPacket("ST-F2", marker));
+                new HandoffMsg("ST-F2", marker));
         // The authority is committed before this call, so the global Actor
         // ID send arrives at target ingress and must wait behind the imported
         // backlog. The source only performs Message Follow relay.
@@ -30,7 +30,7 @@ internal static class StF2DirectOvertakePreventionScenario
         await context.SendFromNodeAsync(
             context.NodeB,
             actorId,
-            new HandoffPacket("ST-F2", "D1"));
+            new HandoffMsg("ST-F2", "D1"));
         await context.AssertEvidenceOrderAsync(context.NodeB, actorId, "handoff_packet", ["B1", "B2", "D1"]);
     }
 }

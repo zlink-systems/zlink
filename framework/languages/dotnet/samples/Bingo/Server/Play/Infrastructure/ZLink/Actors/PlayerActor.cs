@@ -69,7 +69,7 @@ internal sealed class PlayerActor(
             _pendingJoins.Enqueue(pending);
     }
 
-    public async ValueTask OnJoinCompletedAsync(
+    public ValueTask OnJoinCompletedAsync(
         ZLinkActorJoinCompletion completion,
         CancellationToken cancellationToken)
     {
@@ -87,7 +87,7 @@ internal sealed class PlayerActor(
                 "actor join duplicate ignored. actor={ActorId}, operation={OperationId}",
                 ActorId,
                 operationId);
-            return;
+            return ValueTask.CompletedTask;
         }
         logger.LogInformation(
             "actor join completed. actor={ActorId}, outcome={Outcome}",
@@ -103,27 +103,10 @@ internal sealed class PlayerActor(
                 when accepted.Reply is { } reply:
                 CurrentRef = accepted.Actor;
                 JoinRoom(pending.RoomId);
-                if (pending.ObserveOnly)
-                {
-                    await Context.BoundSession.Send(new ObserveBingoEventsRes
-                        {
-                            Subscribed = true
-                        })
-                        .Async(cancellationToken);
-                }
-                else
-                {
-                    var joined = reply.Decode<BingoRoomJoinRes>();
-                    await Context.BoundSession.Send(new MatchBingoRes
-                        {
-                            RoomId = pending.RoomId,
-                            State = joined.State
-                        })
-                        .Async(cancellationToken);
-                }
+                _ = reply.Decode<BingoRoomJoinRes>();
                 if (_pendingJoins.Count > 0) _pendingJoins.Dequeue();
                 RememberJoinCompletion(operationId, "Accepted");
-                return;
+                return ValueTask.CompletedTask;
 
             case ZLinkActorJoinCompletion.Rejected:
                 logger.LogWarning(
@@ -132,7 +115,7 @@ internal sealed class PlayerActor(
                     pending.RoomId);
                 if (_pendingJoins.Count > 0) _pendingJoins.Dequeue();
                 RememberJoinCompletion(operationId, "Rejected");
-                return;
+                return ValueTask.CompletedTask;
 
             case ZLinkActorJoinCompletion.Failed failed:
                 logger.LogWarning(
@@ -142,8 +125,10 @@ internal sealed class PlayerActor(
                     failed.Kind);
                 if (_pendingJoins.Count > 0) _pendingJoins.Dequeue();
                 RememberJoinCompletion(operationId, failed.Kind.ToString());
-                return;
+                return ValueTask.CompletedTask;
         }
+
+        return ValueTask.CompletedTask;
     }
 
     public void RestoreJoinCompletion(

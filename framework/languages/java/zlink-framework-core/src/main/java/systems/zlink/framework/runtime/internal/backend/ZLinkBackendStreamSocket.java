@@ -52,6 +52,14 @@ public interface ZLinkBackendStreamSocket
 
     boolean send(RoutingId routingId, List<Message> parts, SendFlags flags);
 
+    /** Delivers an Actor-to-Session frame without adding another STREAM header. */
+    default boolean sendBoundSessionPush(
+        RoutingId routingId,
+        List<Message> parts,
+        SendFlags flags) {
+        return send(routingId, parts, flags);
+    }
+
     boolean send(RoutingId routingId, String packetName, List<Message> parts, SendFlags flags);
 
     boolean send(RoutingId routingId, ZLinkStreamHeader header, List<Message> parts, SendFlags flags);

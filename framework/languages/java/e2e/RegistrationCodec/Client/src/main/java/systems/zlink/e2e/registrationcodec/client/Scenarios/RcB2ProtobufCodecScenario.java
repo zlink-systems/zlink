@@ -1,7 +1,5 @@
-package Scenarios;
+package systems.zlink.e2e.registrationcodec.client.Scenarios;
 
-import systems.zlink.e2e.registrationcodec.client.Scenarios;
-import systems.zlink.e2e.registrationcodec.client.Support;
 import systems.zlink.e2e.registrationcodec.client.Support.ScenarioAssert;
 import systems.zlink.e2e.registrationcodec.client.Support.ScenarioContext;
 import systems.zlink.e2e.registrationcodec.shared.Contracts;
@@ -20,9 +18,10 @@ public final class RcB2ProtobufCodecScenario {
         ScenarioAssert.waitForEvidence(
             context.evidence(),
             "ContentType",
-            "ProtobufEcho",
+            "ProtobufEchoReq",
             "application/x-protobuf");
-        ScenarioAssert.waitForEvidence(context.evidence(), "Send", "ProtobufEcho", "protobuf-send");
+        ScenarioAssert.waitForEvidence(
+            context.evidence(), "Send", "ProtobufEchoMsg", "protobuf-send");
         System.out.println("scenario RC-B2 passed");
     }
 }

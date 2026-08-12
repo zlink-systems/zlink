@@ -9,9 +9,9 @@ public static class PubSubNames
     public const string OtherTopic = "billing";
 }
 
-public sealed record EventMsg(string RunId, int Sequence, string Value);
+public sealed record PublishedValueEvent(string RunId, int Sequence, string Value);
 
-public sealed record MissingEventMsg(string RunId, int Sequence, string Value);
+public sealed record MissingTopicEvent(string RunId, int Sequence, string Value);
 
 public sealed record DrainResultRes(string Result, string? Reason = null);
 

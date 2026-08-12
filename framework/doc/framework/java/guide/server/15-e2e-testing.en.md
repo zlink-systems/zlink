@@ -242,7 +242,7 @@ public void run(TicTacToeClientOptions options) {
     client1.connect().submit().toCompletableFuture().join();
     client1.request(new AuthenticateReq(options.xActorId()))
         .submit(AuthenticateRes.class).toCompletableFuture().join();
-    JoinGameRes join1 = joinGame(client1, room.roomId()); // Register wait -> send -> receive (see §3)
+    JoinGameNotify join1 = joinGame(client1, room.roomId()); // Register wait -> send -> receive (see §3)
     ZLinkStreamAssert.ensure(
         join1.state().status() == TicTacToeGameStatuses.WaitingForPlayers,
         "room should wait for the second player.");
@@ -255,7 +255,7 @@ public void run(TicTacToeClientOptions options) {
     client2.connect().submit().toCompletableFuture().join();
     client2.request(new AuthenticateReq(options.oActorId()))
         .submit(AuthenticateRes.class).toCompletableFuture().join();
-    JoinGameRes join2 = joinGame(client2, room.roomId());
+    JoinGameNotify join2 = joinGame(client2, room.roomId());
     ZLinkStreamAssert.ensure(
         join2.state().status() == TicTacToeGameStatuses.InProgress,
         "room should start with two players.");
@@ -288,10 +288,10 @@ client can't confirm.
   nodes actually work
 
 ```java
-// The join response arrives as a push, not the request's reply -- register the wait first, then send.
-private static JoinGameRes joinGame(ZLinkStreamConnector connector, String roomId) {
-    var completion = connector.waitFor(JoinGameRes.class).submit(JoinGameRes.class);
-    connector.send(new JoinGameReq(roomId)).submit().toCompletableFuture().join();
+// The join completion arrives as a client push -- register the wait before the one-way send.
+private static JoinGameNotify joinGame(ZLinkStreamConnector connector, String roomId) {
+    var completion = connector.waitFor(JoinGameNotify.class).submit(JoinGameNotify.class);
+    connector.send(new JoinGameMsg(roomId)).submit().toCompletableFuture().join();
     return completion.toCompletableFuture().join().payload();
 }
 ```

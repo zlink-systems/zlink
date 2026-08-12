@@ -139,7 +139,7 @@ public final class Program {
             ingressServer.addRequestHandler(
                 NoopIngressHandler.class,
                 Contracts.StateReq.class,
-                String.class);
+                Contracts.StateRes.class);
             // Spot callbacks use the same public ChannelName as a client.  The
             // process also owns the local server, so its client role loops back
             // to the advertised server endpoint.

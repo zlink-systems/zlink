@@ -177,9 +177,7 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
         actors.put(actor.actorId(), actor);
         BingoRoomGame.Change change = game.join(
             actor.actorId(), request.getDisplayName(), wins, losses);
-        publishEvents(
-            change.events(),
-            actorId -> actorId.equals(actor.actorId()) ? null : actors.get(actorId));
+        publishEvents(change.events(), actors::get);
         return BingoMessages.bingoRoomJoinRes(change.state());
     }
 

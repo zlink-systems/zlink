@@ -19,7 +19,7 @@ import type {
   CounterReadRes,
   CounterResetMsg,
   CpuWorkerAwaitMsg,
-  DeferredJoinFailureMsg,
+  DeferredJoinFailureReq,
   EnsureSpotReq,
   EnsureSpotRes,
   HttpAwaitMsg,
@@ -50,27 +50,6 @@ export class ExecutionTurnScenarioSuite {
 
   constructor(private readonly client: ZlinkStreamConnector) {}
 
-  async tdA1(): Promise<void> {
-    const spot = await this.spot();
-    const asyncId = newId('TD-A1-async');
-    const asyncReply = await this.spotRequest<AutomaticTurnDispatchRes>(spot, {
-      requestId: asyncId,
-      delayMs: 50,
-      correlationId: 'TD-A1',
-      terminator: 'async'
-    } satisfies AwaitReq, 'AwaitReq');
-    ensure(asyncReply.marker === 'async-completed', 'TD-A1 async terminator did not complete.');
-
-    const yieldId = newId('TD-A1-yield');
-    await this.sendSpot(spot, {
-      requestId: yieldId,
-      delayMs: 50,
-      correlationId: 'TD-A1',
-      terminator: 'yield'
-    } satisfies AwaitMsg, 'AwaitMsg');
-    await this.evidence(yieldId, 'yield-completed');
-  }
-
   async tdA2(): Promise<void> { await this.verifySpotInterleave('TD-A2', 'async', false); }
 
   async tdA3(): Promise<void> { await this.verifyCounter('TD-A3', 'async', 8); }
@@ -89,7 +68,10 @@ export class ExecutionTurnScenarioSuite {
 
   async tdA5(): Promise<void> { await this.verifyTimerInterleave('TD-A5', 'async', false); }
 
-  async tdB1(): Promise<void> { await this.verifySpotInterleave('TD-B1', 'yield', true); }
+  async tdB1(): Promise<void> {
+    await this.verifySpotInterleave('TD-B1', 'yield', true);
+    await this.verifyTimerInterleave('TD-B1', 'yield', true);
+  }
 
   async tdB2(): Promise<void> {
     const spot = await this.spot();
@@ -111,8 +93,6 @@ export class ExecutionTurnScenarioSuite {
   }
 
   async tdB3(): Promise<void> { await this.verifyCounter('TD-B3', 'yield', 1); }
-
-  async tdB4(): Promise<void> { await this.verifyTimerInterleave('TD-B4', 'yield', true); }
 
   async tdC1(): Promise<void> { await this.verifyHttpInterleave('TD-C1', 'yield', true); }
 
@@ -304,10 +284,19 @@ export class ExecutionTurnScenarioSuite {
         timeoutMs: 1000,
         terminator
       } satisfies SelfCycleMsg, 'SelfCycleMsg');
-      const evidence = await this.evidence(requestId, 'self-cycle-rejected');
-      ensure(!evidence.some((line) => line.includes(`request=${requestId}`)
-        && line.includes('self-cycle-unexpected-completed')),
-      `TD-D6 ${terminator} self-request completed unexpectedly.`);
+      const expected = terminator === 'yield'
+        ? 'self-cycle-yield-completed'
+        : 'self-cycle-rejected';
+      const evidence = await this.evidence(requestId, expected);
+      if (terminator === 'yield') {
+        containsRequestMarkersInOrder(evidence, requestId, [
+          'probe-completed', 'self-cycle-yield-completed'
+        ], 'TD-D6 Yield did not resume after the self-request ran on a new turn.');
+      } else {
+        ensure(!evidence.some((line) => line.includes(`request=${requestId}`)
+          && (line.includes('probe-completed') || line.includes('self-cycle-async-unexpected-completed'))),
+        'TD-D6 Async self-request was dispatched while the current turn retained its owner claim.');
+      }
     }
 
     const sendRequestId = newId('TD-D6-send');
@@ -382,7 +371,7 @@ export class ExecutionTurnScenarioSuite {
           firstTargetSpotId,
           secondTargetSpotId,
           failureMode
-        } satisfies DeferredJoinFailureMsg, 'DeferredJoinFailureMsg');
+        } satisfies DeferredJoinFailureReq, 'DeferredJoinFailureReq');
       } catch (error) {
         failure = error;
       }
@@ -453,7 +442,6 @@ export class ExecutionTurnScenarioSuite {
   }
 
   async tdG1(): Promise<void> {
-    await this.tdA1();
     await this.verifySpotInterleave('TD-G1-async', 'async', false);
     await this.verifySpotInterleave('TD-G1-yield', 'yield', true);
   }

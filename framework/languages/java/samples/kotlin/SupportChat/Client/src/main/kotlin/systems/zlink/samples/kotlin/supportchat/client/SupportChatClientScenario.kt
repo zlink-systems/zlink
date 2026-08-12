@@ -28,7 +28,7 @@ import systems.zlink.samples.kotlin.supportchat.shared.contracts.SendChatMessage
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.SendChatMessageRes
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.SetAgentAvailableReq
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.SetAgentAvailableRes
-import systems.zlink.samples.kotlin.supportchat.shared.contracts.SetTypingReq
+import systems.zlink.samples.kotlin.supportchat.shared.contracts.SetTypingMsg
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.TypingChangedNotify
 import systems.zlink.stream.connector.ZLinkStreamConnector
 
@@ -220,7 +220,7 @@ class SupportChatClientScenario {
                 .await()
 
         fun sendTyping(isTyping: Boolean) {
-            connector.send(SetTypingReq(isTyping = isTyping))
+            connector.send(SetTypingMsg(isTyping = isTyping))
                 .metadata(SampleNames.ConversationIdMetadataKey, conversationId)
                 .submit()
         }

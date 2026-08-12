@@ -6,7 +6,7 @@ import type { ChildProcess } from 'node:child_process';
 import type { ClientOptions } from './client-options';
 import { getJson, getStatus, postJsonWithin, postStatus } from '../../../http-client';
 
-interface RelocationResult {
+interface RelocationRes {
   readonly outcome: number;
   readonly reason: number;
 }
@@ -145,8 +145,8 @@ export class DynamicClusterLauncher {
     }
   }
 
-  async drain(provider: DynamicProvider): Promise<RelocationResult> {
-    const result = await postJsonWithin<RelocationResult>(
+  async drain(provider: DynamicProvider): Promise<RelocationRes> {
+    const result = await postJsonWithin<RelocationRes>(
       provider.httpUrl,
       '/drain',
       {},

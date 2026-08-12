@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
 source "$NODE_ROOT/e2e/redis-container.sh"
+source "$NODE_ROOT/e2e/runner-common.sh"
+serialize_node_e2e_run "$0" "$@"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="$ROOT_DIR/log/$RUN_ID"
 CONFIG_DIR=""
@@ -16,11 +18,6 @@ SCENARIO_SETTLE_TIMEOUT_SECONDS=3
 HTTP_PROBE_TIMEOUT_SECONDS=3
 RESILIENCE_CONSUMER_COUNT="${RESILIENCE_CONSUMER_COUNT:-8}"
 RL_D5_DURATION_SECONDS="${RL_D5_DURATION_SECONDS:-120}"
-mkdir -p "$LOG_DIR"
-
-pick_port() {
-  node "$NODE_ROOT/e2e/port-picker.js"
-}
 
 build_package() {
   local dir="$1"
@@ -51,7 +48,7 @@ cleanup() {
   done
   wait "${pids[@]:-}" 2>/dev/null || true
   if [[ -n "$REDIS_CONTAINER_ID" ]]; then
-    docker rm -fv "$REDIS_CONTAINER_ID" >/dev/null 2>&1 || true
+    remove_redis_container_by_id "$REDIS_CONTAINER_ID" || true
   fi
   [[ -z "$CONFIG_DIR" ]] || rm -rf "$CONFIG_DIR"
   if [[ "$code" -ne 0 ]]; then
@@ -65,6 +62,7 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+mkdir -p "$LOG_DIR"
 CONFIG_DIR="$(mktemp -d)"
 chmod 700 "$CONFIG_DIR"
 
@@ -122,7 +120,7 @@ API_B_REMAP="tcp://127.0.0.1:$API_B_REMAP_PORT"
 API_B_GREEN="tcp://127.0.0.1:$API_B_GREEN_PORT"
 FANOUT_ENDPOINT="tcp://127.0.0.1:$FANOUT_PORT"
 
-start_redis_container "zlink-redis-node-e2e-${RANDOM}-$$" -p "127.0.0.1::6379" "redis:7.2-alpine"
+start_redis_container "zlink-redis-node-e2e-${RANDOM}-$$" "redis:7.2-alpine"
 REDIS_ENDPOINT="$(redis_container_endpoint "$REDIS_CONTAINER_ID")"
 REDIS_KEY_PREFIX="resilience-lifecycle:node:$RUN_ID"
 wait_tcp redis "tcp://$REDIS_ENDPOINT"

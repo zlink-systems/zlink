@@ -67,7 +67,7 @@ public final class EnsureSpotHandler
             Contracts.EnsureSpotReq request,
             int attempt) {
             return spots.getOrCreate(request.spotRid(), Contracts.TARGET_SPOT)
-                .request(ZLinkMessage.of("ensure"))
+                .request(ZLinkMessage.of(new Contracts.SpotCreateReq("ensure")))
                 .submit()
                 .thenCompose(created -> {
                     String actualNode = created.spot().nodeRid().toString();

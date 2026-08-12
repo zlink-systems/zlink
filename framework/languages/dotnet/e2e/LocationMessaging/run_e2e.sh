@@ -4,6 +4,7 @@ umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/../redis-common.sh"
+zlink_dotnet_e2e_acquire_run_lock "$0" "$@"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="$ROOT_DIR/logs/$RUN_ID"
 mkdir -p "$LOG_DIR"
@@ -32,13 +33,7 @@ CONSUMER_PROJECT="$ROOT_DIR/Server/Consumer/LocationMessaging.Consumer.csproj"
 CLIENT_PROJECT="$ROOT_DIR/Client/LocationMessaging.Client.csproj"
 
 pick_port() {
-  python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
+  zlink_dotnet_e2e_allocate_ports 1
 }
 
 wait_tcp() {
@@ -72,11 +67,7 @@ REDIS_HOST=""
 REDIS_TCP_PORT=""
 cleanup_redis() {
   if [[ -n "$REDIS_CONTAINER" ]]; then
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
-  elif [[ -n "$REDIS_HOST" ]] && command -v redis-cli >/dev/null 2>&1; then
-    # External instance: delete only this run's keys under its unique prefix.
-    redis-cli -h "$REDIS_HOST" -p "$REDIS_TCP_PORT" --scan --pattern "$REDIS_KEY_PREFIX*" 2>/dev/null \
-      | xargs -r redis-cli -h "$REDIS_HOST" -p "$REDIS_TCP_PORT" DEL >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
 }
 
@@ -104,8 +95,7 @@ cleanup() {
 trap cleanup EXIT
 
 # --- Redis provisioning (doc §3 실행 모델) ---------------------------------
-# Honor an externally provided instance; otherwise start a disposable
-# container. Every run is isolated by a run-unique key prefix.
+# Start a disposable container and use a run-unique key prefix.
 REDIS_KEY_PREFIX="zlink:e2e:cfg1:$(date +%s)-$$"
 zlink_redis_start_scoped_assign \
   REDIS_CONTAINER \

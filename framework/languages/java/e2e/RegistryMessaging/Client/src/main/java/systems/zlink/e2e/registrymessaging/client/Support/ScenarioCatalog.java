@@ -1,7 +1,5 @@
-package Support;
+package systems.zlink.e2e.registrymessaging.client.Support;
 
-import systems.zlink.e2e.registrymessaging.client.Scenarios;
-import systems.zlink.e2e.registrymessaging.client.Support;
 import systems.zlink.e2e.registrymessaging.client.Scenarios.RmA1DiscoveryRequestScenario;
 import systems.zlink.e2e.registrymessaging.client.Scenarios.RmA2ManualEndpointScenario;
 import systems.zlink.e2e.registrymessaging.client.Scenarios.RmA4SameRidReplacementScenario;

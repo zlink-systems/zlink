@@ -86,9 +86,10 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
     on_create (const message_t &request) override
     {
         if (!request.empty ()) {
-            auto settings = request.decode<bingo_room_settings_payload_t> ();
+            const auto create = request.decode<bingo_room_create_req_t> ();
+            const auto &settings = create.settings;
             _is_observer = settings.purpose == "Observer";
-        _observed_room_id = settings.observed_room_id.value_or ("");
+            _observed_room_id = settings.observed_room_id.value_or ("");
         }
         co_return spot_create_response_t::accept ();
     }

@@ -62,6 +62,10 @@ export class ScenarioRouteReq {
   constructor(readonly value: string) {}
 }
 
+export class ScenarioRouteMsg {
+  constructor(readonly value: string) {}
+}
+
 export interface ScenarioRouteRes {
   readonly value: string;
   readonly providerRid: string;

@@ -17,9 +17,13 @@ import {
 import {
   ZLinkExecutionBarrier
 } from '../../packages/framework/src/runtime/execution';
+import { createStandaloneMeshSubmitterRegistry } from '../../packages/framework/src/runtime/messaging/mesh-submitters';
 import {
   ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS,
+  ZLinkSerialAdmissionLane,
+  ZLinkSerialAdmissionLedger,
   ZLinkBoundedSerialScheduler,
+  type ZLinkSerialAdmissionRecord,
   type ZLinkSerialSchedulerOptions,
   type ZLinkSerialWorkLane,
   type ZLinkSerialWorkRecord
@@ -244,71 +248,86 @@ test('fixture lanes admit independently and an empty queue schedules without pol
   await immediatelyScheduled;
 });
 
-test('append failure rolls back reservation and accepted sequence without a test bypass', async () => {
+test('admission commit failure rolls back reservation and accepted sequence without a test bypass', () => {
   assert.equal(fixture.admissionInvariants.enqueueFailureRestoresReservation, true);
   const sequences: bigint[] = [];
-  const serial = scheduler(sequences);
   const rejectedOperation = () => 'not-visible';
-  const arrayPrototype = Array.prototype as unknown as {
-    push(this: unknown[], ...items: unknown[]): number;
-  };
-  const originalPush = arrayPrototype.push;
-  arrayPrototype.push = function push(this: unknown[], ...items: unknown[]): number {
-    if (items.some((item) =>
-      typeof item === 'object'
-      && item !== null
-      && (item as Partial<ZLinkSerialWorkRecord<unknown>>).operation === rejectedOperation)) {
-      throw new Error('injected FIFO append failure');
-    }
-    return originalPush.apply(this, items);
-  };
-  try {
-    await assert.rejects(serial.submit(rejectedOperation), /injected FIFO append failure/u);
-  } finally {
-    arrayPrototype.push = originalPush;
-  }
-  assert.deepEqual(serial.snapshot(), {
-    applicationMessages: 0,
-    applicationBytes: 0,
-    lifecycleMessages: 0,
-    lifecycleBytes: 0
-  });
+  class AppendThenThrowOnceRecordSink extends Array<ZLinkSerialAdmissionRecord | undefined> {
+    private failNextAppend = true;
 
-  await serial.submit(() => undefined);
-  await serial.submit(() => undefined);
+    override push(...records: Array<ZLinkSerialAdmissionRecord | undefined>): number {
+      const length = super.push(...records);
+      if (this.failNextAppend) {
+        this.failNextAppend = false;
+        throw new Error('record sink failed after append');
+      }
+      return length;
+    }
+  }
+  const records = new AppendThenThrowOnceRecordSink();
+  const lane = new ZLinkSerialAdmissionLane(4, 4_096, records);
+  const ledger = new ZLinkSerialAdmissionLedger(() => new Error('capacity exceeded'));
+  const record = (operation: () => unknown): ZLinkSerialWorkRecord<unknown> & {
+    acceptedSequence: bigint;
+  } => ({
+    acceptedSequence: 0n,
+    lane: 'application',
+    byteCost: 256,
+    operation,
+    resolve() {},
+    reject() {},
+    release() {},
+    fail() {}
+  });
+  const rejected = record(rejectedOperation);
+  assert.throws(
+    () => ledger.commit(lane, rejected),
+    /record sink failed after append/u
+  );
+  assert.equal(records.includes(rejected), false);
+  assert.equal(rejected.acceptedSequence, 0n);
+  assert.equal(lane.messageCount, 0);
+  assert.equal(lane.byteCount, 0);
+  assert.equal(lane.records.length, 0);
+
+  for (const operation of [() => undefined, () => undefined]) {
+    const accepted = record(operation);
+    ledger.commit(lane, accepted);
+    sequences.push(accepted.acceptedSequence);
+  }
   assert.deepEqual(sequences, [1n, 2n]);
+  assert.deepEqual(
+    Array.from(records, value => value?.acceptedSequence),
+    [1n, 2n]
+  );
 });
 
-test('append failure releases the production execution-barrier authority claim', async () => {
+test('scheduler admission failure releases the production execution-barrier authority claim', async () => {
   const barrier = new ZLinkExecutionBarrier();
-  const serial = new ZLinkSpotSerialExecutor(true);
+  const serial = new ZLinkSpotSerialExecutor(true, undefined, {
+    applicationMessageCapacity: 1
+  });
   serial.setExecutionBarrier(barrier);
-  const rejectedOperation = () => undefined;
-  const arrayPrototype = Array.prototype as unknown as {
-    push(this: unknown[], ...items: unknown[]): number;
-  };
-  const originalPush = arrayPrototype.push;
-  arrayPrototype.push = function push(this: unknown[], ...items: unknown[]): number {
-    if (items.some((item) =>
-      typeof item === 'object'
-      && item !== null
-      && (item as Partial<ZLinkSerialWorkRecord<unknown>>).operation === rejectedOperation)) {
-      throw new Error('injected FIFO append failure');
-    }
-    return originalPush.apply(this, items);
-  };
-  try {
-    await assert.rejects(serial.post(rejectedOperation), /injected FIFO append failure/u);
-  } finally {
-    arrayPrototype.push = originalPush;
-  }
+  const started = deferred<void>();
+  const release = deferred<void>();
+  const owner = serial.post(async () => {
+    started.resolve();
+    await release.promise;
+  });
+  await started.promise;
+  await assert.rejects(
+    serial.post(() => undefined),
+    /Spot execution queue capacity was exceeded/u
+  );
+  release.resolve();
+  await owner;
 
   const seal = barrier.seal();
   await barrier.waitForQuiescence(seal);
   assert.equal(barrier.abort(seal), true);
 });
 
-test('Actor self waits reject and same-Spot member Yield resumes on a new turn', async () => {
+test('Actor self waits reject and same-Spot member Yield resumes on a new turn', async (t) => {
   assert.equal(fixture.dispatchInvariants.implicitInlineExecution, false);
   assert.equal(fixture.dispatchInvariants.resumeAfterYieldUsesNewTurn, true);
   const byTarget = new Map(fixture.sameOwnerCalls.map(value => [value.target, value]));
@@ -342,6 +361,8 @@ test('Actor self waits reject and same-Spot member Yield resumes on a new turn',
   class TargetRequest {}
   const invalidOperation = (error: unknown) => error instanceof ZLinkFrameworkException
     && error.kind === ZLinkFrameworkErrorKind.InvalidOperation;
+  const meshSubmitters = createStandaloneMeshSubmitterRegistry();
+  t.after(() => meshSubmitters.dispose());
 
   const client = new DefaultZLinkActorClient({
     nodeProvider: () => undefined,
@@ -385,7 +406,8 @@ test('Actor self waits reject and same-Spot member Yield resumes on a new turn',
         ? actorClaims.submit('actor-b', () =>
             dispatcher.dispatchRequest(targetActor, 'TargetRequest', {}))
         : undefined;
-    }
+    },
+    meshSubmitters
   });
 
   class SourceHandler {

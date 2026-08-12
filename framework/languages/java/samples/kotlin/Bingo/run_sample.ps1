@@ -40,25 +40,6 @@ function Cleanup {
     }
 }
 
-function Reserve-Endpoints {
-    param([int]$Count)
-    $listeners = New-Object System.Collections.Generic.List[System.Net.Sockets.TcpListener]
-    $endpoints = New-Object System.Collections.Generic.List[string]
-    try {
-        while ($endpoints.Count -lt $Count) {
-            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse("127.0.0.1"), 0)
-            $listener.Start()
-            $listeners.Add($listener)
-            $endpoints.Add("127.0.0.1:$($listener.LocalEndpoint.Port)")
-        }
-        return $endpoints.ToArray()
-    } finally {
-        foreach ($listener in $listeners) {
-            $listener.Stop()
-        }
-    }
-}
-
 function Wait-Port {
     param([string]$HostName, [int]$Port, [int]$TimeoutSeconds = 60)
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
@@ -87,10 +68,7 @@ function Split-Endpoint {
 
 function Invoke-Gradle {
     param([string[]]$Arguments)
-    & $Gradle @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Gradle failed: $($Arguments -join ' ')"
-    }
+    Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments $Arguments
 }
 
 function Start-GradleRole {
@@ -110,7 +88,7 @@ function Start-GradleRole {
 $Status = 1
 $oldJavaToolOptions = $env:JAVA_TOOL_OPTIONS
 try {
-    $endpoints = Reserve-Endpoints 15
+    $endpoints = @(Get-ZlinkSampleApplicationEndpoints -Language Kotlin -Count 15)
     $apiAChannel = Split-Endpoint $endpoints[0]
     $playAChannel = Split-Endpoint $endpoints[1]
     $sessionASpot = Split-Endpoint $endpoints[2]
@@ -126,7 +104,7 @@ try {
     $playBRouter = Split-Endpoint $endpoints[12]
     $sessionBStream = Split-Endpoint $endpoints[13]
 
-    $redis = Start-ZlinkSampleRedis "zlink-redis-kotlin-sample-bingo"
+    $redis = Start-ZlinkSampleRedis "zlink-redis-kotlin-sample-bingo" -Language Kotlin
     $RedisContainer = $redis.ContainerId
     $redisEndpoint = $redis.Endpoint
     $redis = Split-Endpoint $redisEndpoint
@@ -137,8 +115,15 @@ try {
 
     Push-Location "../../.."
     try {
-        & ./gradlew --no-daemon :zlink-framework-core:jar :zlink-framework-spring-boot-starter:jar :zlink-framework-kotlin:jar :zlink-framework-locations-redis:jar :zlink-framework-codec-protobuf:jar :zlink-stream-connector:jar --quiet
-        if ($LASTEXITCODE -ne 0) { throw "Framework jar build failed" }
+        Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments @(
+            "--no-daemon",
+            ":zlink-framework-core:jar",
+            ":zlink-framework-spring-boot-starter:jar",
+            ":zlink-framework-kotlin:jar",
+            ":zlink-framework-locations-redis:jar",
+            ":zlink-framework-codec-protobuf:jar",
+            ":zlink-stream-connector:jar",
+            "--quiet")
     } finally {
         Pop-Location
     }

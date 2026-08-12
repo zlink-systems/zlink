@@ -15,9 +15,9 @@ class OutboundRequestHandler {
     ): Contracts.OutboundRes {
         val channelReply = spot.context()
             .outbound()
-            .requestToChannel(Contracts.INGRESS_CHANNEL, request.value)
+            .requestToChannel(Contracts.INGRESS_CHANNEL, Contracts.StateReq(request.value))
             .timeout(Duration.ofSeconds(5))
-            .submit(String::class.java).await()
+            .submit(Contracts.StateRes::class.java).await()
         spot.context()
             .outbound()
             .sendToChannel(
@@ -30,14 +30,14 @@ class OutboundRequestHandler {
             .publish(
                 Contracts.ROUTE_CHANNEL,
                 "spot.events",
-                Contracts.MeshMsg("publish:${request.value}"),
+                Contracts.MeshEvent("publish:${request.value}"),
             )
             .submit()
-        spot.record("SpotOutbound", "${request.value}/$channelReply")
+        spot.record("SpotOutbound", "${request.value}/${channelReply.value}")
         return Contracts.OutboundRes(
             spot.context().spotId(),
             spot.context().nodeRid().toString(),
-            channelReply,
+            channelReply.value,
         )
     }
 }

@@ -12,6 +12,7 @@ import systems.zlink.samples.kotlin.bingo.server.play.domain.bingo.BingoRoomSett
 import systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.spots.bingoroomspot.BingoRoomSpot
 import systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.actors.PlayerActor
 import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomSettingsPayload
+import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomCreateReq
 import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomJoinReq
 import systems.zlink.samples.kotlin.bingo.shared.contracts.EnsurePlayerActorReq
 import systems.zlink.samples.kotlin.bingo.shared.contracts.ObserveBingoEventsReq
@@ -62,7 +63,7 @@ class BingoEntrySpot(
         )
         spots.getOrCreate(observerSpotId, SampleNames.RoomSpotType)
             .inMesh(SampleNames.Mesh)
-            .request(settingsPayload)
+            .request(BingoRoomCreateReq(settingsPayload))
             .submit()
             .await()
         actor.context().joinSpot(

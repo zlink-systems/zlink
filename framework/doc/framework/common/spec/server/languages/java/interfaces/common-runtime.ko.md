@@ -1,6 +1,6 @@
 # Java 공통 runtime 공개 인터페이스
 
-[인터페이스 목차](README.ko.md) · [Host relocation과 종료 계약](../../../../28-graceful-drain-handoff.ko.md)
+[인터페이스 목차](README.ko.md) · [Host relocation과 종료 계약](../../../../30-host-relocation-flow.ko.md)
 
 이 문서는 Java에서 host의 실행 상태, object relocation, 종료 요청과 공통 비동기 operation을 표현하는 공개 타입을
 고정한다. 공통 문서가 동작을 정의하며, 아래 선언은 Java에서 사용하는 타입과 member의 정확한 형태를

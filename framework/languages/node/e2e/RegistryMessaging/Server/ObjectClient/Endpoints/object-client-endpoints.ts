@@ -5,7 +5,7 @@ import {
   type ZLinkRouteClient,
   type ZLinkRouteMeshRuntime
 } from '@zlink-systems/framework';
-import { ScenarioRouteReq, type ScenarioRouteRes } from '../../../Shared/messages';
+import { ScenarioRouteMsg, ScenarioRouteReq, type ScenarioRouteRes } from '../../../Shared/messages';
 import type { HttpRoute } from '../../Provider/Support/http-server';
 
 const meshName = 'registry.messaging.rm-a3';
@@ -53,7 +53,7 @@ export function createObjectClientEndpoints(
         const targetRid = String((body as { targetRid?: unknown }).targetRid ?? '');
         const send = await nodeDirectOutcome(async () => {
           await route
-            .sendToNode(meshName, targetRid, new ScenarioRouteReq('rm-a3-send'))
+            .sendToNode(meshName, targetRid, new ScenarioRouteMsg('rm-a3-send'))
             .submit();
         });
         const request = await nodeDirectOutcome(async () => {

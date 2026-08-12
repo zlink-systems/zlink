@@ -19,7 +19,7 @@ processing and request correlation — and the Actor runtime, in ZLink Framework
 Core raw transport doesn't interpret Actor identity, the binding token distinguishing a
 previous session's work, `AuthorityOwnerGeneration` — indicating the order in which the
 [owner](01-glossary.en.md#owner) changed within the same object incarnation — the
-sequence barrier, or the Actor route.
+binding generation, or the Actor route.
 
 `EnableActorDispatch()` doesn't take a `MeshName` — it enables global object dispatch
 capability. Startup confirms that at least an Object `Client` or `Server` role and a
@@ -338,200 +338,146 @@ sequenceDiagram
 
 ## 5. Actor Relocation Route Barrier
 
-Even if an Actor moves to a different MeshNode, the physical STREAM connection and
-session scope are kept on the session owner process. The socket, transport handle, and
-session callback state aren't moved or duplicated to the target Actor process.
+The single source for changing source/target queues and Location Store owner is
+[Complete Actor And Spot Relocation Flow](28-relocation-flow.en.md). This section defines
+only the binding seal, held messages, and route transition owned by the Session owner
+within that flow.
 
-Even during relocation, the session owner does not query the Location Store and guess the
-Actor route. Instead, the source runtime and session owner exchange commands 42 and 43 to
-fix the last session sequence accepted by the previous binding. This operation is the
-admission seal.
+Even when an Actor moves to another MeshNode, the physical STREAM connection and Session
+scope remain in the Session owner process. The socket, transport handle, and Session
+callback state aren't moved or copied to the target Actor process.
 
-A request that arrives after the seal does not fail immediately. The session owner keeps
-its payload and reply context without advancing the previous binding's last accepted
-sequence. It processes the retained request again after the matching relocation switches
-the route or aborts.
+The Session's responsibility is to keep the binding closed during the move, change its
+route once according to the relocation result, and reopen it. The Session doesn't choose
+the relocation target, judge Actor or Spot readiness, or read or change the Location
+Store. The relocation runtime owns ordinary server-to-server message relay and Actor or
+Spot queue cutover order.
 
-The session-owner ingress retained after the seal has no relocation-specific message-count
-or stored-byte bound. Payload relay also has no separate message-count or stored-byte bound
-when Message Follow delivers a message that arrived on the previous route. Per-message wire
-representation bounds, downstream transport limits, deadlines, and cancellation still apply.
+### Values Validated Only By The Session
 
-The relocation ingress hold, which stores messages arriving on the source object route,
-and the target temporary queue, which stores messages during Restore, are separate from
-the session-owner admission seal. The complete order is as follows.
+All Session-binding validation is performed in one place, by the Session owner. It only
+validates these values:
 
-1. The source runtime sends command 42 `sessionRelocationSeal` to the session owner. The
-   command contains values that identify the current binding, fences that verify the
-   current authority of the Actor and session owner, and a non-zero seal identity.
-2. If every requested fence matches the current value, the session owner installs the
-   seal and fixes the last accepted session sequence in the same atomic transition. The
-   transition therefore appears to occur at one point even under concurrency. A
-   byte-identical duplicate command 42 reuses the first result. Different values for the
-   same identity are a `ProtocolError`.
-3. The session owner returns command 43 `sessionRelocationSealed` with the seal identity
-   and the accepted high-water, which is the last accepted sequence. The source captures
-   work only through the high-water in this ACK. It does not estimate the value from a
-   local counter.
-4. The source Actor blocks application dispatch after the current handler ends. It stores
-   requests and one-way packets accepted before the seal in the Relocation Store, preserving
-   their reply routes and acceptance order. Messages that later arrive on the source object
-   route go into the ingress hold. Relocation adds no record-count or byte bound of its own
-   to this hold.
-5. Before Restore starts, the target registers an Actor relocation temporary queue. After
-   Restore, the owner/membership commit, and lifecycle callbacks finish, it puts saved work
-   into the real Actor queue first and temporary work behind it. It then removes the
-   temporary registration, finishes the dispatch switch atomically, opens application
-   admission, and publishes `Ready`.
-6. After publishing `Ready`, the runtime asynchronously removes the original records from
-   the source hold and performs durable cleanup. It changes authority to `Completed` after
-   cleanup finishes. This follow-up work does not block `Ready`. Message Follow delivers a
-   message that arrives on the previous route after the owner change to the target Actor
-   queue.
-7. After observing `Completed`, the target sends command 44 `sessionRelocationRoute`. The
-   session owner verifies the binding and authority fences, seal identity, and last sequence
-   replayed by the target. If all values match, it changes the route and the bound session's
-   current Actor location snapshot in one step, then resumes the retained ingress.
-8. The session owner replies with command 45 `sessionRelocationRouted`, carrying `Applied`,
-   `AlreadyApplied`, `Stale`, or `SessionOrBindingClosed`. Resending command 44 or waiting for
-   its ACK does not delay target Actor processing, Join completion, or publication of
-   `Ready`.
-9. If relocation aborts, it releases only the seal installed with the same seal identity.
-   The session owner resumes retained ingress on the restored source route. It does not
-   release a newer binding or a seal from another relocation.
-10. If no durable evidence can restore the seal and accepted high-water, relocation aborts
-    as `RelocationFailed`. If the peer does not support commands 42-45 and the `Ready` order
-    above, relocation ends as `Blocked/StateIncompatible` before it starts. Every supported
-    path uses the seal.
+- current physical Session identity and SessionRid
+- current binding generation and the ActorId/ObjectGeneration referenced by the binding
+- relocation identity distinguishing the same relocation
+- whether the binding being routed is the binding on which the seal was installed
 
-Route updates are only allowed for an Actor relocation matching the `ObjectGeneration`
-the binding points to. Even under the same ActorId, if a new incarnation was created,
-the framework doesn't switch the existing binding to that new Actor — the application
-must start an explicit bind with the new `ActorRef`. A different Actor on the same
-Session not included in the relocation keeps its route, location snapshot, token, and
-generation.
+Transport validates the authenticated peer, node generation, and frame shape at the
+transport boundary. After preparation, the target relocation runtime performs the
+Location Store CAS using the expected source owner and generation. Actor join, host
+relocation, Message Follow, and the Session owner don't repeat these checks or reconsider
+one another's result. Session route change doesn't use a numeric high-water, per-message
+ACK journal, or relocation-specific capacity condition.
+
+The complete order is:
+
+1. Before stopping application dispatch, the relocation coordinator sends command 42,
+   `sessionRelocationSeal`, to the Session owner.
+2. If the current Session and binding match, the Session owner installs the seal and
+   sends command 43, `sessionRelocationSealed`. Requests and pushes arriving for that
+   binding after the seal are held by the Session owner. Other bindings on the same
+   Session aren't affected.
+3. Source and target perform the common procedure in
+   [Complete Actor And Spot Relocation Flow §4](28-relocation-flow.en.md#4-normal-processing-order).
+   Once target replies that the temporary queue and Restore are ready, source relays its
+   cached queue and ingress hold, then sends cutover one-way.
+4. Target runs the Location Store CAS on cutover. If cutover doesn't arrive for 1,000ms
+   after the relay-ready reply, it records a Warning and proceeds with CAS and queue
+   opening. A late or duplicate cutover records only a Warning and is ignored.
+5. A target whose CAS succeeds puts existing and relayed work into the target queue and
+   opens application dispatch. Target runtime then sends command 44,
+   `sessionRelocationRoute`, one-way to tell the Session owner to change the binding route
+   and current `ActorRef` location snapshot to target.
+6. If current Session, binding, and relocation identity match, Session owner changes the
+   route once, submits messages held during the seal, and releases the seal. It sends no
+   application result.
+7. A duplicate route update doesn't mutate state. An update after seal timeout or for a
+   different relocation records only a Warning and is ignored.
+8. Session owner applies `SessionRelocationSealTimeout` from seal installation. Its
+   default is 3,000ms and server configuration can change it. Without an exact route
+   update by timeout, it closes the physical Session and cleans bindings, held messages,
+   and seal state.
+9. If the target explicitly fails before cutover, only the matching seal is released and
+   held Session messages are resubmitted to the source route. After cutover, failure
+   doesn't reopen the source route; seal timeout cleans the physical Session and held
+   state.
+
+Cutover and command 44 are one-way, so there is no response-loss state for them.
+Server-to-server delivery
+during the short handoff relies on TCP ordering and retransmission. A `send` adds no
+application ACK; a `request` keeps the existing correlation, deadline, and caller-retry
+contract.
 
 <a id="51-session-actor-location-update-message"></a>
 ### 5.1 Session Relocation Route Message
 
-The target runtime tells the session owner where the relocated Actor is and resends the
-same request until it receives a result. This complete operation is called
-`sessionRelocationRouteUpdate`. The target Actor continues running without waiting for the
-operation to finish.
+Commands 42 and 43 carry the Session-seal request and reply. Command 44 is a one-way
+target-route update sent by target runtime. They are internal messages used to
+coordinate relocation, not the protocol that decides the Location Store owner.
 
-Command 44 `sessionRelocationRoute` and command 45 `sessionRelocationRouted` aren't a
-synchronous transport request/reply. The target runtime sends command 44, and the session
-owner sends command 45 separately. `sessionActorLocationUpdateReqMsg` and
-`sessionActorLocationUpdateResMsg` in other public documents refer to the request and
-response behavior provided by these two commands, respectively.
+`sessionRelocationRoute` carries relocation identity, ActorId, ObjectGeneration, target
+MeshName/NodeRid, Session identity, SessionRid, and binding generation. The Session owner
+compares only values needed for its current Session and binding. Target authority has
+already been decided by the target-only Location Store CAS, so the Session owner doesn't
+re-read the Store or an Actor authority mirror.
 
-`sessionRelocationRoute` carries the values needed to verify that it describes the same
-Actor relocation as the current binding. These values are the relocation ID, ActorId,
-ObjectGeneration, previous and target AuthorityOwnerGeneration, target MeshName/NodeRid,
-session owner identity, SessionRid, binding generation, and last accepted session
-sequence. After verifying all of them, the session owner changes the binding route and
-current `ActorRef` location snapshot together, in one step.
+When applying `sessionRelocationRoute`, the Session owner changes the route and current
+`ActorRef` location snapshot together, submits messages held during the seal to the
+target route, and then releases the seal. It sends no response. A duplicate update is a
+no-op.
 
-`sessionRelocationRouted` carries the same relocation ID as the request,
-SessionRid, ActorId, ObjectGeneration, binding generation, and one of the following
-processing results.
-
-| Value | Result | Meaning |
-|---:|---|---|
-| 0 | `Applied` | The requested route and location snapshot were updated this time. |
-| 1 | `AlreadyApplied` | An update for the same relocation was already applied. |
-| 2 | `Stale` | A more recent binding generation, owner generation, or Actor location is already applied. |
-| 3 | `SessionOrBindingClosed` | The target Session or binding has ended, so it can't be updated. |
-
-If the session owner can process the request, it responds with a result. Once the
-target runtime receives one of the four results, it stops resending that request. The
-source Message Follow route is also removed once it receives this response, or once
-`MessageFollowDuration` ends. `Stale` and `SessionOrBindingClosed` mean the previous
-location wasn't re-applied.
-
-Without a response, the target runtime resends a request with the same relocation ID
-and binding generation at fixed intervals. The first resend happens 1 second after the
-first send. If there's still no response, it resends at intervals of 1, 2, 4, 5
-seconds, then keeps a 5-second interval afterward. Even if the session owner receives
-the same request multiple times, it must keep the result the same as having updated the
-route and snapshot once, and must respond with the same processing result every time.
-Before the location update is confirmed, the source Message Follow route delivers a
-message arriving on the previous route to the target Actor, within
-`MessageFollowDuration`. Once the route expires, a request on the previous route ends
-with `Unavailable`, but location-update resends continue on the running target runtime.
-If the target runtime terminates, a different runtime doesn't automatically continue
-sending the same request. Resending doesn't delay Join completion, the target Actor's
-message processing, or the source host's Shutdown.
+Without an exact update within `SessionRelocationSealTimeout`, the Session owner closes
+the physical STREAM connection and cleans Session state. Timeout and update run in the
+same serialized span; the one processed first wins. An update after timeout records only
+a Warning and is ignored.
 
 ```mermaid
 sequenceDiagram
-    participant SourceRuntime as Source runtime
-    participant SourceActor as Source Actor
-    participant RelocationStore as Relocation Store
-    participant LocationStore as Location Store
-    participant TargetRuntime as Target runtime
-    participant TargetTemp as Actor temporary queue
-    participant TargetQueue as Target Actor queue
-    participant TargetActor as Target Actor
-    participant SessionOwner as Session owner
+    participant C as Relocation coordinator
+    participant S as Session owner
+    participant A as Source runtime
+    participant B as Target runtime
+    participant L as Location Store
 
-    SourceRuntime->>SourceActor: stop application dispatch after the current handler ends
-    SourceRuntime->>RelocationStore: record Actor state and saved existing work
-    SourceRuntime->>TargetRuntime: Actor Restore request
-    TargetRuntime->>TargetTemp: register the Actor temporary queue
-    TargetRuntime->>RelocationStore: read Actor state and the stored queue
-    TargetRuntime->>TargetActor: create the Actor and Restore state
-    SourceRuntime->>TargetRuntime: relay ingress hold messages
-    TargetRuntime->>TargetTemp: hold messages in the temporary queue
-    TargetRuntime->>LocationStore: commit target owner and membership
-    TargetRuntime->>TargetActor: lifecycle/Join completion callback
-    TargetRuntime->>TargetQueue: add saved existing work first
-    TargetRuntime->>TargetQueue: move temporary queue work
-    TargetRuntime->>TargetTemp: remove registration, switch to existing dispatch
-    TargetQueue->>TargetActor: start message processing
-    SourceRuntime->>RelocationStore: complete durable source cleanup
-    SourceRuntime->>LocationStore: publish Completed authority
-    LocationStore-->>TargetRuntime: observe exact Completed authority
-    TargetRuntime-)SessionOwner: send sessionRelocationRoute(44)
-    SessionOwner->>SessionOwner: verify generation, then swap route and current ActorRef snapshot
-    SessionOwner-)TargetRuntime: send sessionRelocationRouted(45)
-    Note over TargetRuntime,SessionOwner: without an ACK, resend command 44 at 1s, 1s, 2s, 4s, then 5s intervals
+    C->>S: [request] command 42 · freeze exact route and hold later messages
+    S-->>C: [reply] command 43 · exact binding seal installed
+    A->>B: [request] install temporary queue, Restore, prepare relay without dispatch
+    B-->>A: [reply] temporary queue and Restore ready · source still owner
+    A->>B: [send/request relay] cached queue and ingress hold
+    alt cutover arrives within 1,000ms
+        A->>B: [send] cutover · pre-boundary relay sent
+    else no cutover for 1,000ms after relay-ready reply
+        B->>B: [local] cutover_timeout Warning · proceed by fallback
+    end
+    B->>L: [request] CAS owner to target if source fence still matches
+    L-->>B: [reply] target owner CAS result
+    B->>B: [local] open target queue
+    B->>S: [send] command 44 · apply exact target route, submit held, release seal
+    alt exact update within SessionRelocationSealTimeout
+        S->>S: [local] switch route · submit held Session messages · unseal
+    else seal timeout
+        S->>S: [local] close physical Session and clean binding, held, seal state
+    end
 ```
-
-This diagram shows the normal path that runs after source cleanup is recorded in durable
-storage and the authority value is verified as exactly `Completed`. It switches the
-session route to the target Actor. The physical STREAM connection stays on the session
-owner.
-The target Actor processes messages without waiting for the location update response,
-and messages arriving on the previous route are received via the source Message Follow
-route.
-
-Session Actor location update state doesn't control the target Actor's message
-processing. Packets/replies/pushes/close from a previous owner, a stale authority owner
-generation, or a binding token and sequence, aren't applied to the current connection.
 
 ## 6. Failure Handling
 
-On a failure before commit, a Session Actor location update isn't sent. The session
-owner's binding route and current `ActorRef` location snapshot keep pointing at the
-source. The framework confirms in the Location Store that the source remains owner,
-discards the target temporary queue, then restores the source Actor queue and ingress.
-It doesn't restart the source Actor's message processing before confirming the owner.
+If target fails before cutover, source remains owner. The relocation coordinator releases
+the matching Session seal and resubmits held Session messages to the source route. The
+target temporary queue isn't executed. If CAS fails after cutover, source route doesn't
+reopen. Target removes the prepared object and queue, while
+`SessionRelocationSealTimeout` cleans the connection and held state.
 
-After commit, it doesn't roll back to the source route or location snapshot. Only the
-running current target continues resending `sessionRelocationRoute`. Even if
-the session owner can't confirm the location update, the source Message Follow route
-only delivers a message arriving on the previous route to the target up to
-`MessageFollowDuration`.
-If the session owner process terminates, the connection is closed instead of being
-recovered by a different process, and client reconnect creates a new session.
+After target CAS, the move isn't rolled back to source. Target runtime sends command 44;
+Session owner applies the route and releases the seal on an exact update. Without one by
+timeout, it closes the physical Session and cleans state. A late update records only a
+Warning and doesn't change current route again.
 
-A physical disconnect isn't evidence of accepted-participant high-water, request
-terminal completion, or relocation cleanup. A request delivered from session to Actor
-follows the same rules as any other Actor request. A request the Actor queue accepted
-before the seal is included in the saved existing work; a request arriving at the
-source after the seal but before owner commit is relayed from the ingress hold to the
-target temporary queue.
+Message Follow sends server messages arriving at the old address to the target after the
+owner change. Global order across different connections isn't guaranteed. Physical
+Session disconnect isn't evidence of relocation success or failure; if the Session owner
+process terminates, the connection is closed rather than recovered in another process.
 
 ## 7. Execution And Lifecycle
 
@@ -591,9 +537,7 @@ The physical connection isn't moved to a different process.
   snapshot are updated via an async send message.
 - A bound-session request is included, depending on when it was accepted, in either
   saved existing work or ingress-hold relay.
-- Even without a location update response, Join completion and target Actor message
-  processing aren't delayed, and the defined resend interval applies. The Message
-  Follow route is removed after `MessageFollowDuration`, and only the running target
-  runtime keeps resending the location update.
-- A failure before commit restores the source route. After commit, it doesn't roll back
-  to the source or have a different runtime automatically recover it.
+- Command 44 has no response and isn't retried as a request. Message Follow is removed
+  after `MessageFollowDuration`; a late Session update after timeout is only logged.
+- A failure before cutover restores the source route. A failure after cutover doesn't
+  reopen source route; target state and the Session are cleaned by their own deadlines.

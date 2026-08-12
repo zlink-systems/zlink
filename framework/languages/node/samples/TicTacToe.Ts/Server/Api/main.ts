@@ -48,6 +48,7 @@ async function main(): Promise<void> {
   process.stdout.write(`${JSON.stringify({
     event: 'ready',
     endpoint: config.apiEndpoints[config.apiIndex],
+    spotEndpoint: config.apiSpotEndpoint,
     httpEndpoint: config.apiHttpEndpoint
   })}\n`);
   await waitForShutdown();

@@ -1,5 +1,4 @@
-package Support;
-import systems.zlink.e2e.resiliencelifecycle.client.Support;
+package systems.zlink.e2e.resiliencelifecycle.client.Support;
 import java.nio.file.FileAlreadyExistsException;
 
 import java.io.IOException;

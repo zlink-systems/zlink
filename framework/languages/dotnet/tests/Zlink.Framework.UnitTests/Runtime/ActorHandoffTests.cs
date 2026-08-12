@@ -1597,7 +1597,7 @@ public sealed class ActorHandoffTests
     }
 
     [Fact]
-    public async Task TargetAuthorityCommit_ReturnsPreparationBeforeJoinedNotification()
+    public async Task TargetAuthorityCommit_DoesNotReturnPreparationBeforeJoinedNotification()
     {
         var state = new ZLinkActorRuntimeState("actor-1");
         var commit = CommitRequest("handoff-commit-boundary", []);
@@ -1607,14 +1607,20 @@ public sealed class ActorHandoffTests
         var reply = ZLinkRemoteActorJoinPackets.CreateJoinReply(
             true,
             ActorRef("node-b", 7));
+        Assert.Throws<InvalidOperationException>(() =>
+            state.Handoff.AcceptCommittedPreparation(
+                "handoff-commit-boundary",
+                reply));
+
+        Assert.False(preparation.IsCompleted);
+        Assert.True(state.Handoff.IsAuthorityCommitted("handoff-commit-boundary"));
+        Assert.True(state.Handoff.TryBeginJoinedNotification("handoff-commit-boundary"));
+        state.Handoff.CompleteJoinedNotification("handoff-commit-boundary");
         state.Handoff.AcceptCommittedPreparation(
             "handoff-commit-boundary",
             reply);
 
         Assert.Same(reply, await preparation);
-        Assert.True(state.Handoff.IsAuthorityCommitted("handoff-commit-boundary"));
-        Assert.True(state.Handoff.TryBeginJoinedNotification("handoff-commit-boundary"));
-        state.Handoff.CompleteJoinedNotification("handoff-commit-boundary");
     }
 
     [Fact]

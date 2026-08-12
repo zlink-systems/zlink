@@ -716,12 +716,12 @@ move, in that order.
         ZlinkStreamAssert.Ensure(sawMove.Payload.State.Board == move.State.Board, "board state mismatch.");
     }
 
-    // The join response arrives as a push, not the request's reply -- register the wait first, then send.
-    private static async ValueTask<JoinGameRes> JoinGameAsync(
+    // The join completion arrives as a client push -- register the wait before the one-way send.
+    private static async ValueTask<JoinGameNotify> JoinGameAsync(
         IZlinkStreamConnector connector, string roomId, CancellationToken ct)
     {
-        var completion = connector.WaitFor<JoinGameRes>().Async(ct);
-        await connector.Send(new JoinGameReq(roomId)).Async(ct);
+        var completion = connector.WaitFor<JoinGameNotify>().Async(ct);
+        await connector.Send(new JoinGameMsg(roomId)).Async(ct);
         return (await completion).Payload;
     }
     ```
@@ -792,7 +792,7 @@ move, in that order.
         client1.connect().submit().toCompletableFuture().join();
         client1.request(new AuthenticateReq(options.xActorId()))
             .submit(AuthenticateRes.class).toCompletableFuture().join();
-        JoinGameRes join1 = joinGame(client1, room.roomId()); // Register wait -> send -> receive (see §3)
+        JoinGameNotify join1 = joinGame(client1, room.roomId()); // Register wait -> send -> receive (see §3)
         ZLinkStreamAssert.ensure(
             join1.state().status() == TicTacToeGameStatuses.WaitingForPlayers,
             "room should wait for the second player.");
@@ -805,7 +805,7 @@ move, in that order.
         client2.connect().submit().toCompletableFuture().join();
         client2.request(new AuthenticateReq(options.oActorId()))
             .submit(AuthenticateRes.class).toCompletableFuture().join();
-        JoinGameRes join2 = joinGame(client2, room.roomId());
+        JoinGameNotify join2 = joinGame(client2, room.roomId());
         ZLinkStreamAssert.ensure(
             join2.state().status() == TicTacToeGameStatuses.InProgress,
             "room should start with two players.");
@@ -934,11 +934,11 @@ client can't confirm.
 === "C++"
 
     ```cpp
-    // The join response arrives as a push, not the request's reply -- register the wait first, then send.
-    task_t<join_game_res_t> join_game (auto &connector, const std::string &room_id)
+    // The join completion arrives as a client push -- register the wait before the one-way send.
+    task_t<join_game_notify_t> join_game (auto &connector, const std::string &room_id)
     {
-        auto completion = connector.wait_for<join_game_res_t> ().async ();
-        co_await connector.send (join_game_req_t{room_id}).submit ();
+        auto completion = connector.wait_for<join_game_notify_t> ().async ();
+        co_await connector.send (join_game_msg_t{room_id}).submit ();
         co_return (co_await std::move (completion)).payload;
     }
     ```
@@ -946,10 +946,10 @@ client can't confirm.
 === "Java"
 
     ```java
-    // The join response arrives as a push, not the request's reply -- register the wait first, then send.
-    private static JoinGameRes joinGame(ZLinkStreamConnector connector, String roomId) {
-        var completion = connector.waitFor(JoinGameRes.class).submit(JoinGameRes.class);
-        connector.send(new JoinGameReq(roomId)).submit().toCompletableFuture().join();
+    // The join completion arrives as a client push -- register the wait before the one-way send.
+    private static JoinGameNotify joinGame(ZLinkStreamConnector connector, String roomId) {
+        var completion = connector.waitFor(JoinGameNotify.class).submit(JoinGameNotify.class);
+        connector.send(new JoinGameMsg(roomId)).submit().toCompletableFuture().join();
         return completion.toCompletableFuture().join().payload();
     }
     ```
@@ -957,10 +957,10 @@ client can't confirm.
 === "Kotlin"
 
     ```kotlin
-    // The join response arrives as a push, not the request's reply -- register the wait first, then send.
-    private suspend fun joinGame(connector: ZLinkStreamConnector, roomId: String): JoinGameRes {
-        val completion = connector.waitFor(JoinGameRes::class.java).submit(JoinGameRes::class.java)
-        connector.send(JoinGameReq(roomId)).submit().await()
+    // The join completion arrives as a client push -- register the wait before the one-way send.
+    private suspend fun joinGame(connector: ZLinkStreamConnector, roomId: String): JoinGameNotify {
+        val completion = connector.waitFor(JoinGameNotify::class.java).submit(JoinGameNotify::class.java)
+        connector.send(JoinGameMsg(roomId)).submit().await()
         return completion.await().payload()
     }
     ```
@@ -968,11 +968,11 @@ client can't confirm.
 === "Node/TypeScript"
 
     ```typescript
-    // The join response arrives as a push, not the request's reply -- register the wait first, then send.
+    // The join completion arrives as a client push -- register the wait before the one-way send.
     async function joinGame(
-      connector: ZlinkStreamConnector, roomId: string, signal: AbortSignal): Promise<JoinGameRes> {
-      const completion = connector.waitFor<JoinGameRes>(PacketNames.joinGameRes).submit(signal);
-      await connector.send(joinGameReq(roomId)).submit();
+      connector: ZlinkStreamConnector, roomId: string, signal: AbortSignal): Promise<JoinGameNotify> {
+      const completion = connector.waitFor<JoinGameNotify>(PacketNames.joinGameNotify).submit(signal);
+      await connector.send(joinGameMsg(roomId)).submit();
       return (await completion).payload;
     }
     ```

@@ -3,8 +3,8 @@
 
 const net = require('node:net');
 
-const MIN_PORT = 20000;
-const MAX_PORT = 60999;
+const MIN_PORT = 38100;
+const MAX_PORT = 39999;
 const MAX_ATTEMPTS = 200;
 const blocked = new Set([
   1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102, 103, 104,

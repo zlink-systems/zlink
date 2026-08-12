@@ -32,11 +32,11 @@ public final class JvmSessionReplacementScenario {
         ScenarioAssert.that(actorB.equals(bind.actorB()),
             "JVM-SESSION-001 actor B bind mismatch");
 
-        CompletionStage<ZLinkStreamMessage<Contracts.ActorBindingReplacedNotice>> notice =
+        CompletionStage<ZLinkStreamMessage<Contracts.ActorBindingReplacedNotify>> notice =
             retiredSession
-                .waitFor(Contracts.ActorBindingReplacedNotice.class)
+                .waitFor(Contracts.ActorBindingReplacedNotify.class)
                 .timeout(Duration.ofSeconds(5))
-                .submit(Contracts.ActorBindingReplacedNotice.class);
+                .submit(Contracts.ActorBindingReplacedNotify.class);
         CompletableFuture<ZLinkStreamDisconnected> disconnected =
             new CompletableFuture<>();
         AutoCloseable disconnectSubscription = currentDisconnect(
@@ -49,7 +49,7 @@ public final class JvmSessionReplacementScenario {
             ScenarioAssert.that(actorB.equals(authenticated.actorId()),
                 "JVM-SESSION-001 current session bind mismatch");
 
-            Contracts.ActorBindingReplacedNotice callback =
+            Contracts.ActorBindingReplacedNotify callback =
                 notice.toCompletableFuture().join().payload();
             ScenarioAssert.that(actorB.equals(callback.actorId()),
                 "JVM-SESSION-001 callback actor mismatch");

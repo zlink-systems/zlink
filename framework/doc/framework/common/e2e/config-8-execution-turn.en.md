@@ -575,7 +575,7 @@ await end in exactly one terminal?
 - Verification: The new request is `ShuttingDown`. The existing await ends exactly once, in either a
   reply or a shutdown-deadline result, and the host reaches a bounded terminal state.
 - Detailed behavior: verifies [Cancellation And Shutdown](../spec/05-async-execution-policy.en.md#4-cancellation-and-shutdown)
-  and [The Race Between Shutdown And Relocate](../spec/28-graceful-drain-handoff.en.md#11-the-race-between-shutdown-and-relocate).
+  and [The Race Between Shutdown And Relocate](../spec/30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate).
 
 #### TD-F6 Reject A Wait-For Cycle Before The Timeout
 

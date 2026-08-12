@@ -1,5 +1,4 @@
-package Support;
-import systems.zlink.e2e.pubsub.client.Support;
+package systems.zlink.e2e.pubsub.client.Support;
 import java.nio.file.FileAlreadyExistsException;
 
 import java.nio.file.Files;
@@ -72,7 +71,7 @@ public final class ScenarioAssert {
         String scenario,
         int sequence) {
         return snapshot.entries().stream()
-            .anyMatch(entry -> "EventMsg".equals(entry.marker())
+            .anyMatch(entry -> "Event".equals(entry.marker())
                 && scenario.equals(entry.scenario())
                 && entry.sequence() == sequence);
     }

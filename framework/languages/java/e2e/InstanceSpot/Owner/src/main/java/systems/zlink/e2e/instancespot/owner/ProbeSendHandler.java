@@ -6,11 +6,11 @@ import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 
 public final class ProbeSendHandler implements ZLinkSpotPacketHandler<
     ProbeSpot,
-    Contracts.InstanceSend> {
+    Contracts.InstanceMsg> {
     @Override
     public CompletionStage<Void> handle(
         ProbeSpot spot,
-        Contracts.InstanceSend message) {
+        Contracts.InstanceMsg message) {
         return spot.gates().awaitPayload(message.payload()).thenRun(() ->
             spot.evidence().record(
                 "SEND_HANDLER",

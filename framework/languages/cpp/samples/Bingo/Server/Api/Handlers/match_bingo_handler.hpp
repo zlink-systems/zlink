@@ -19,7 +19,7 @@ class match_bingo_api_handler_t
     using request_type = match_bingo_api_req_t;
     using reply_type = match_bingo_api_res_t;
     using dependency_types = dependency_list_t<route_client_t, spot_manager_t>;
-    static constexpr const char *topic_name = "MatchBingo";
+    static constexpr const char *topic_name = "MatchBingoApiReq";
 
     match_bingo_api_handler_t (route_client_t &routes,
                                spot_manager_t &spots,
@@ -43,7 +43,7 @@ class match_bingo_api_handler_t
           .get_or_create (
             spot_id_t (allocated.room_id), sample_names_t::room_spot)
           .in_mesh (sample_names_t::room_spot_mesh)
-          .creation_request (allocated.settings)
+          .creation_request (bingo_room_create_req_t{allocated.settings})
           .submit ();
         _logger.info (
           "match bingo room",

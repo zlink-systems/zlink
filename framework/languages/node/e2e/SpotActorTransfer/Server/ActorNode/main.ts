@@ -56,7 +56,7 @@ import {
 import {
   BoundPushNotify,
   BoundPushReq,
-  HandoffProbe,
+  HandoffProbeMsg,
   JoinTargetReq,
   ProbeReq,
   SpotActorTransferNames,
@@ -193,7 +193,7 @@ class TransportDeliveryGate implements ZLinkInternalActorTransportDeliveryGate {
   }
 }
 
-class ApplyActorLifecycleState {
+class ApplyActorLifecycleStateMsg {
   constructor(readonly actorType: string, readonly stateVersion: number) {}
 }
 
@@ -246,20 +246,20 @@ class TransferActor implements ZLinkActor {
 @zlinkSpotActorSendHandler({
   actor: () => TransferActor,
   spot: () => TransferUserSpot,
-  packetName: 'ApplyActorLifecycleState'
+  packetName: 'ApplyActorLifecycleStateMsg'
 })
 @zlinkEntrySpotActorSendHandler({
   actor: () => TransferActor,
   entrySpot: () => TransferEntrySpot,
-  packetName: 'ApplyActorLifecycleState'
+  packetName: 'ApplyActorLifecycleStateMsg'
 })
 class ApplyActorLifecycleStateHandler {
-  @ZLinkSpotActorSend('ApplyActorLifecycleState')
+  @ZLinkSpotActorSend('ApplyActorLifecycleStateMsg')
   async handle(
     _spot: TransferUserSpot | TransferRecoveryUserSpot | TransferEntrySpot,
     actor: TransferActor,
     context: ZLinkMessageContext,
-    message: ApplyActorLifecycleState
+    message: ApplyActorLifecycleStateMsg
   ): Promise<void> {
     actor.actorType = message.actorType;
     actor.stateVersion = message.stateVersion;
@@ -471,7 +471,7 @@ class TransferUserSpot implements ZLinkSpot<TransferActor> {
       await this.actors
         .sendToActor(
           actor.actorId,
-          new ApplyActorLifecycleState(actor.actorType, stateVersion)
+          new ApplyActorLifecycleStateMsg(actor.actorType, stateVersion)
         )
         .submit();
       evidence.add('transfer', actorId, 'domain_state_loaded', actorId);
@@ -614,13 +614,13 @@ class ProbeHandler implements
   packetName: SpotActorTransferNames.packetHandoff
 })
 class HandoffHandler implements
-  ZLinkSpotActorSendHandler<TransferUserSpot, TransferActor, HandoffProbe> {
+  ZLinkSpotActorSendHandler<TransferUserSpot, TransferActor, HandoffProbeMsg> {
   @ZLinkSpotActorSend(SpotActorTransferNames.packetHandoff)
   async handle(
     _spot: TransferUserSpot,
     actor: TransferActor,
     context: ZLinkMessageContext,
-    message: HandoffProbe
+    message: HandoffProbeMsg
   ): Promise<void> {
     evidence.add(
       message.scenario,
@@ -648,13 +648,13 @@ class HandoffHandler implements
   packetName: SpotActorTransferNames.packetHandoff
 })
 class EntryHandoffHandler implements
-  ZLinkEntrySpotActorSendHandler<TransferEntrySpot, TransferActor, HandoffProbe> {
+  ZLinkEntrySpotActorSendHandler<TransferEntrySpot, TransferActor, HandoffProbeMsg> {
   @ZLinkSpotActorSend(SpotActorTransferNames.packetHandoff)
   async handle(
     _spot: TransferEntrySpot,
     actor: TransferActor,
     context: ZLinkMessageContext,
-    message: HandoffProbe
+    message: HandoffProbeMsg
   ): Promise<void> {
     evidence.add(message.scenario, actor.actorId, 'entry_packet_handler', message.marker);
     if (message.scenario === 'ST-H5') {
@@ -1112,10 +1112,10 @@ async function main(): Promise<void> {
     },
     {
       method: 'POST', path: /^\/actors\/([^/]+)\/handoff$/, handle: async (body, match) => {
-        const input = body as HandoffProbe & { metadata?: Record<string, string> };
+        const input = body as HandoffProbeMsg & { metadata?: Record<string, string> };
         const call = actorClient.sendToActor(
           match![1],
-          new HandoffProbe(input.scenario, input.marker, input.delayMs, input.requestTimeoutMs)
+          new HandoffProbeMsg(input.scenario, input.marker, input.delayMs, input.requestTimeoutMs)
         );
         for (const [key, value] of Object.entries(input.metadata ?? {})) {
           call.metadata(key, value);

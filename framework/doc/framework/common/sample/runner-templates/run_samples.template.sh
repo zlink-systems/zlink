@@ -47,7 +47,7 @@ run_sample_with_retry() {
   for attempt in $(seq 1 "${MAX_ATTEMPTS}"); do
     : >"${output}"
     set +e
-    "${SCRIPT_DIR}/${runner}" 2>&1 | tee "${output}"
+    bash "${SCRIPT_DIR}/${runner}" 2>&1 | tee "${output}"
     status="${PIPESTATUS[0]}"
     set -e
 

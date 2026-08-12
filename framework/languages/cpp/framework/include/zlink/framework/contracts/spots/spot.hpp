@@ -1001,10 +1001,10 @@ class spot_context_t
                                        "spot publish requires a serializer registry"));
         }
         try {
-            auto payload =
-              detail::encoded_payload_to_raw (serializers->get<TEvent> ().serialize (event));
+            const auto serializer = serializers->get<TEvent> ();
+            auto payload = detail::encoded_payload_to_raw (serializer.serialize (event));
             return publish_erased (std::move (topic), detail::message_name<TEvent> (),
-                                   std::move (payload));
+                                   serializer.content_type (), std::move (payload));
         }
         catch (const framework_exception_t &error) {
             return send_call_t (
@@ -1301,7 +1301,10 @@ class spot_context_t
     submission_preflight () const;
 
     send_call_t
-    publish_erased (std::string topic, std::string packet_name, zlink::message_t payload);
+    publish_erased (std::string topic,
+                    std::string packet_name,
+                    std::string content_type,
+                    zlink::message_t payload);
     serializer_registry_t *serializer_registry () const noexcept;
     route_client_t spot_route_client () const;
     send_call_t send_to_erased (node_rid_t node_rid,
@@ -1685,6 +1688,12 @@ class spot_handler_registry_t
     }
 
   private:
+    enum class actor_queue_dispatch_t
+    {
+        acquire,
+        current_turn
+    };
+
     friend class spot_context_t;
     friend class detail::spot_node_runtime_t;
     friend class detail::spot_route_internal_dispatcher_t;
@@ -1761,7 +1770,9 @@ class spot_handler_registry_t
                                             std::function<std::optional<result_t<zlink::message_t>> (
                                               const zlink::message_t &,
                                               const spot_inbound_message_t &)>
-                                              before_invoke = {}) const;
+                                              before_invoke = {},
+                                            actor_queue_dispatch_t actor_queue_dispatch =
+                                              actor_queue_dispatch_t::acquire) const;
 
     void register_actor_admission_erased (std::type_index actor_type,
                                           detail::spot_actor_admission_callbacks_t callbacks);
@@ -1905,10 +1916,11 @@ class spot_publisher_client_t
                 "logical multicast has no serializer registry"));
         }
         try {
-            auto payload =
-              detail::encoded_payload_to_raw (_serializers->get<TEvent> ().serialize (event));
+            const auto serializer = _serializers->get<TEvent> ();
+            auto payload = detail::encoded_payload_to_raw (serializer.serialize (event));
             return publish_raw (std::move (channel_name), std::move (topic),
-                                detail::message_name<TEvent> (), std::move (payload));
+                                detail::message_name<TEvent> (), serializer.content_type (),
+                                std::move (payload));
         }
         catch (const framework_exception_t &error) {
             return publish_call_t (
@@ -1921,6 +1933,7 @@ class spot_publisher_client_t
     publish_raw (std::string channel_name,
                  std::string topic,
                  std::string packet_name,
+                 std::string content_type,
                  zlink::message_t payload) const;
 
     spot_manager_t _manager;

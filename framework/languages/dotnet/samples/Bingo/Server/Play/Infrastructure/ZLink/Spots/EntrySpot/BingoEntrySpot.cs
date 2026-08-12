@@ -17,7 +17,7 @@ internal sealed class BingoEntrySpot(
         ZLinkMessage createRequest,
         CancellationToken cancellationToken)
     {
-        var request = createRequest.Decode<EnsurePlayerActorReq>();
+        var request = createRequest.Decode<PlayerActorCreateReq>();
         actor.SetDisplayName(request.DisplayName);
         logger.LogInformation(
             "entry spot: actor created. actor={ActorId}, displayName={DisplayName}",

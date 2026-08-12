@@ -368,7 +368,7 @@ An execution-lane reservation for already owned work and limits owned by transpo
 deadline, and cancellation are not reused as a separate relocation-hold ceiling. This is
 a rule the formal spec fixed, so it's
 followed as-is
-([Host Relocate And Shutdown 「9. Moving Pending Messages, Timers, And Sessions」](../spec/28-graceful-drain-handoff.en.md#9-moving-pending-messages-timers-and-sessions)).
+([Complete Host Relocation Flow 「9. Moving Pending Messages, Timers, And Sessions」](../spec/30-host-relocation-flow.en.md#9-moving-pending-messages-timers-and-sessions)).
 
 ## 7. Result To Confirm
 

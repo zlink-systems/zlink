@@ -4,6 +4,8 @@ umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JAVA_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+source "${JAVA_ROOT}/e2e-runner-common.sh"
+zlink_e2e_initialize kotlin "$0" "$@"
 SCENARIO="${1:-all}"
 STAMP="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="$SCRIPT_DIR/logs/$STAMP"
@@ -95,21 +97,11 @@ cleanup() {
 trap cleanup EXIT
 
 allocate_ports() {
-  python3 - <<'PY'
-import socket
-
-ports = []
-for _ in range(7):
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    ports.append(sock.getsockname()[1])
-    sock.close()
-print(*ports)
-PY
+  zlink_e2e_reserve_ports 7
 }
 
 build_role() {
-  "$JAVA_ROOT/gradlew" --no-daemon --no-parallel \
+  zlink_e2e_gradle_build_locked "$JAVA_ROOT/gradlew" --no-daemon --no-parallel \
     -p "$SCRIPT_DIR" :Role:installDist
   ROLE_BIN="$SCRIPT_DIR/Role/build/install/submit-admission-kotlin-role/bin/submit-admission-kotlin-role"
 }

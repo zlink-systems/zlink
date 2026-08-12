@@ -1,6 +1,5 @@
-package Support
+package systems.zlink.e2e.kotlin.registrymessaging.client.Support
 
-import systems.zlink.e2e.kotlin.registrymessaging.client.Support
 data class ClientOptions(
     val providerAUrl: String,
     val providerBUrl: String,

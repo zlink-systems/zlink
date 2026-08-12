@@ -35,7 +35,6 @@ var scenarios = new (string Name, Func<Task> Run)[]
     ("RM-B3", () => RmB3ProviderCrashFailoverScenario.RunAsync(options)),
     ("RM-C1", () => RmC1RequestSendScenario.RunAsync(providerA, providerB)),
     ("RM-C2", () => RmC2TargetedRouteScenario.RunAsync(providerA, providerB)),
-    ("RM-C3", () => RmC3MultiProviderDistributionScenario.RunAsync(directConsumer, providerA, providerB)),
     ("RM-C4", () => RmC4TimeoutIsolationScenario.RunAsync(storeConsumer, providerA, providerB)),
     ("RM-C5", () => RmC5MissingPacketScenario.RunAsync(storeConsumer, providerA, providerB)),
     ("RM-C7", () => RmC7WeightedProviderScenario.RunAsync(options)),

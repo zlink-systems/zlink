@@ -227,6 +227,7 @@ class MultiNodeHttpServer(
     private fun createLocalSpot(request: Contracts.MultiNodeCreateSpotReq): Contracts.MultiNodeCreateSpotRes {
         val node = MultiNodeKind.fromRid(options.rid)
         spots.getOrCreate(request.spotRid, "multi-node")
+            .request(Contracts.SpotOnlyMeshReq(request.spotRid, "", "create"))
             .submit()
             .toCompletableFuture()
             .join()

@@ -25,12 +25,12 @@ internal class SpotHttpDriver(
         spotRid: String,
         value: String,
         packetName: String = "StateMsg"
-    ): Contracts.AckRes {
+    ): Contracts.CommandSubmitRes {
         return postJson(
             endpointFor(spotRid),
             "/spot/state/command",
             Contracts.SpotStateCommandReq(spotRid, value, packetName),
-            Contracts.AckRes::class.java
+            Contracts.CommandSubmitRes::class.java
         )
     }
 
@@ -84,12 +84,12 @@ internal class SpotHttpDriver(
         spotRid: String,
         value: String,
         packetName: String = "OutboundMsg"
-    ): Contracts.AckRes {
+    ): Contracts.CommandSubmitRes {
         return postJson(
             endpointFor(spotRid),
             "/spot/outbound/command",
             Contracts.SpotOutboundCommandReq(spotRid, value, packetName),
-            Contracts.AckRes::class.java
+            Contracts.CommandSubmitRes::class.java
         )
     }
 

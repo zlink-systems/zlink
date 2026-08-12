@@ -870,7 +870,7 @@ public final class Program implements AutoCloseable {
             new Contracts.SendAtRefReq(
                 actorRef.path("nodeRid").asText(),
                 actorRef.path("generation").asLong(),
-                new Contracts.MessageFollowSendReq(scenario, marker)),
+                new Contracts.MessageFollowMsg(scenario, marker)),
             JsonNode.class);
     }
 

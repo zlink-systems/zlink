@@ -2022,6 +2022,7 @@ test('ZLinkActorNativeJoinCoordinator keeps remote joins on the formal Core surf
               framework.ZLinkEncodedPayload.from(Buffer.alloc(0))
             ),
             handoffBacklog: [],
+            onSourceLeaveSubmitted() {},
             commit() {
               events.push(`leave:${joinedActor.actorId}`);
             },
@@ -2145,6 +2146,7 @@ test('remote transfer failures before commit preserve source ownership and never
               return {
                 ...transfer,
                 handoffBacklog: [],
+                onSourceLeaveSubmitted() {},
                 commit() {},
                 async rollback() {
                   events.push('move:cancel');
@@ -2260,6 +2262,7 @@ test('formal remote join rejection rolls back prepared source movement and prese
           return {
             state: framework.ZLinkMessage.from({ version: 1 }),
             handoffBacklog: [],
+            onSourceLeaveSubmitted() {},
             async reserveTarget() {},
             commit() { committed = true; },
             async rollback() {
@@ -2644,6 +2647,92 @@ test('source command 42 seal publishes a durable accepted journal and rollback a
   assert.equal(moving, false);
 });
 
+test('Core source leave submission releases the target fence before its callback result', async () => {
+  const actor = { context: { actorId: 'actor-source-leave-order' } };
+  let moving = false;
+  const state = {
+    actorType: 'player',
+    nativeActorRef: {
+      nodeRid: rid('source-node'),
+      actorId: actor.context.actorId,
+      generation: 9n
+    },
+    beginMove() { moving = true; },
+    endMove() { moving = false; }
+  };
+  const runtime = new ZLinkActorTransferRuntime({
+    routeTransport: {},
+    spotManager: () => undefined,
+    actorManager: () => ({ getState: () => state }),
+    primaryMeshNode: () => ({}),
+    async notifyEntrySpotActorLeft() {},
+    async restoreEntrySpotActorJoined() {},
+    locationLifecycle: () => undefined,
+    actorHandoff: {
+      isActive() { return false; },
+      begin() {},
+      snapshotCoreBacklog() { return []; },
+      cancel() {}
+    },
+    actorTransferRegistry: {
+      async transferOut() { return { state: encodedMessage('state') }; }
+    },
+    authorityStore: () => undefined,
+    relocationStore: () => undefined,
+    clearRemoteActorPacketTarget() {}
+  });
+  const prepared = await runtime.prepareSource(actor, state, undefined, 'core');
+  const events = [];
+  let observeSubmission;
+  const submissionObserved = new Promise((resolve) => {
+    observeSubmission = resolve;
+  });
+  let finishCallback;
+  const callbackResult = new Promise((resolve) => {
+    finishCallback = resolve;
+  });
+  let sourceLeaveCompleted = false;
+  let sourceLeaveSubmitted = false;
+  assert.ok(prepared.sourceLeaveSubmitted instanceof Promise);
+  void prepared.sourceLeaveSubmitted.then(() => {
+    sourceLeaveSubmitted = true;
+  });
+  void prepared.sourceLeaveCompletion.then(() => {
+    sourceLeaveCompleted = true;
+  });
+  prepared.onSourceLeaveSubmitted(async () => {
+    events.push('source-leave-submitted');
+    observeSubmission();
+  });
+
+  const notification = runtime.notifyCoreSourceLeave(actor, async () => {
+    events.push('source-leave-callback-invoked');
+    await callbackResult;
+    events.push('source-leave-callback-completed');
+  });
+  await submissionObserved;
+
+  assert.deepEqual(events, [
+    'source-leave-callback-invoked',
+    'source-leave-submitted'
+  ]);
+  await prepared.sourceLeaveSubmitted;
+  assert.equal(sourceLeaveSubmitted, true);
+  assert.equal(sourceLeaveCompleted, false);
+
+  finishCallback();
+  await notification;
+  await prepared.sourceLeaveCompletion;
+  assert.deepEqual(events, [
+    'source-leave-callback-invoked',
+    'source-leave-submitted',
+    'source-leave-callback-completed'
+  ]);
+  assert.equal(sourceLeaveCompleted, true);
+  await prepared.rollback();
+  assert.equal(moving, false);
+});
+
 test('precommit abort reopens source admission before the command 42 abort ACK and replays the held backlog in order', async () => {
   const actor = { context: { actorId: 'actor-abort-reopen' } };
   const events = [];
@@ -2673,11 +2762,15 @@ test('precommit abort reopens source admission before the command 42 abort ACK a
       async requestToSpot() { return { ok: true }; }
     },
     requestSource: () => ({
+      meshName: 'mesh',
+      objectGeneration: 9n,
       ownerId: 'owner-source',
       ownerLeaseGeneration: 5n,
       nodeRid: 'source-node',
-      nodeGeneration: 1n
-    })
+      nodeGeneration: 1n,
+      authorityOwnerGeneration: 3n
+    }),
+    validateReplySource: () => true
   });
   const stored = new Map();
   const relocationStore = {
@@ -3304,6 +3397,23 @@ test('ZLinkActorNativeJoinCoordinator uses formal transfer when replacement proc
     }
   });
   const sourceTerminalOperation = { high: 0n, low: 900n };
+  let submitSourceLeave;
+  let resolveSourceLeaveSubmitted;
+  const sourceLeaveSubmitted = new Promise((resolve) => {
+    resolveSourceLeaveSubmitted = resolve;
+  });
+  let resolveSourceLeaveCompletion;
+  const sourceLeaveCompletion = new Promise((resolve) => {
+    resolveSourceLeaveCompletion = resolve;
+  });
+  let sourceLeaveResultCompleted = false;
+  void sourceLeaveCompletion.then(() => {
+    sourceLeaveResultCompleted = true;
+  });
+  let observeAuthorityCommitted;
+  const authorityCommitted = new Promise((resolve) => {
+    observeAuthorityCommitted = resolve;
+  });
   const originalSubmit = node.completionTable.submit.bind(node.completionTable);
   node.requestToNode = (_targetNodeRid, payload) => {
     const terminal = JSON.parse(Buffer.from(payload).toString());
@@ -3347,11 +3457,22 @@ test('ZLinkActorNativeJoinCoordinator uses formal transfer when replacement proc
           return {
             state: framework.ZLinkMessage.from({ version: 1 }),
             handoffBacklog: [],
+            sourceLeaveSubmitted,
+            sourceLeaveCompletion,
+            onSourceLeaveSubmitted(notify) {
+              events.push('sourceLeaveSubmission:registered');
+              submitSourceLeave = async () => {
+                await notify();
+                events.push('sourceLeaveSubmission:acknowledged');
+                resolveSourceLeaveSubmitted();
+              };
+            },
             async reserveTarget() {
               events.push('reserveTarget');
             },
             async commitAuthority() {
               events.push('commitAuthority');
+              observeAuthorityCommitted();
             },
             commit() {
               events.push('commit');
@@ -3378,21 +3499,45 @@ test('ZLinkActorNativeJoinCoordinator uses formal transfer when replacement proc
   // resolver must win over the old node passed by the lifecycle bridge.
   manager.getState('alice').setEntryNodeRid(rid('stale-entry'));
 
-  const accepted = await actor.context[framework.ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME](
+  let publicJoinCompleted = false;
+  const publicJoin = actor.context[framework.ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME](
     rid('stale-entry'),
     encodedMessage('entry')
   );
+  void publicJoin.then(() => {
+    publicJoinCompleted = true;
+  });
 
+  await authorityCommitted;
+  assert.equal(typeof submitSourceLeave, 'function');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    publicJoinCompleted,
+    false,
+    'public Join must remain pending until the source leave submission is acknowledged'
+  );
+  assert.equal(events.includes('sourceTerminal:true'), false);
+  await submitSourceLeave();
+  const accepted = await publicJoin;
   assert.equal(accepted, true);
+  assert.equal(
+    sourceLeaveResultCompleted,
+    false,
+    'public Join must not await the source leave callback result'
+  );
+  resolveSourceLeaveCompletion();
+  await sourceLeaveCompletion;
   assert.deepEqual(events, [
     'resolve:node-entry',
     'joinEntry:node-entry:admission:room-1',
     'prepare:core',
+    'sourceLeaveSubmission:registered',
     'reserveTarget',
     'joinEntry:node-entry:commit:room-1',
     'commitAuthority',
-    'sourceTerminal:true',
     'commit',
+    'sourceTerminal:true',
+    'sourceLeaveSubmission:acknowledged',
     'bind:node-entry'
   ]);
   assert.equal(manager.getState('alice').isMoving, false);

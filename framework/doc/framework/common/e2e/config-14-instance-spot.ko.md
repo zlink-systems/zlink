@@ -154,7 +154,7 @@ stale owner와 섞이지 않는가.
 - 절차: Target 인자 없는 public host relocation을 시작하고 terminal success를 기다린 뒤 state request를 보낸다.
 - 검증: 후속 handler는 B에서만 실행되고 Spot identity와 state version이 유지된다. Relocation 전 수락된 operation ID도 전체 evidence에서 한 번만 처리된다.
 - 계약 근거: [Location runtime](../spec/21-location-runtime.ko.md)과
-  [Graceful drain과 handoff](../spec/28-graceful-drain-handoff.ko.md)
+  [Graceful drain과 handoff](../spec/30-host-relocation-flow.ko.md)
 
 #### IS-E2E-08 Close and reactivate
 
@@ -454,7 +454,7 @@ Close가 시작된 Spot은 새 업무를 기존 instance queue에 수락해서�
 - 절차: Target 인자 없는 host Relocate를 시작하고 동시에 고유 operation ID request를 보낸다.
 - 검증: Relocate와 request가 각각 terminal 하나로 끝나며 request handler는 A 또는 B 한 곳에서만 한 번 실행된다.
 - 계약 근거: [Location runtime](../spec/21-location-runtime.ko.md)과
-  [Graceful drain과 handoff](../spec/28-graceful-drain-handoff.ko.md)
+  [Graceful drain과 handoff](../spec/30-host-relocation-flow.ko.md)
 
 #### IS-E2E-30 Multi-Mesh concurrent Relocate
 
@@ -472,7 +472,7 @@ Close가 시작된 Spot은 새 업무를 기존 instance queue에 수락해서�
 - 검증: Variant A callers는 shared operation에 join하여 같은 terminal을 받는다. Variant B의 incompatible
   call은 `Blocked/OperationInProgress`로 한 번 끝나며 first option을 바꾸지 않는다. 두 variant 모두 최종
   public 조회는 Ready owner 하나이고 후속 request handler도 그 owner에서만 실행된다.
-- 계약 근거: [Graceful drain — concurrent 호출과 cancellation](../spec/28-graceful-drain-handoff.ko.md#6-concurrent-호출과-cancellation)
+- 계약 근거: [Graceful drain — concurrent 호출과 cancellation](../spec/30-host-relocation-flow.ko.md#6-concurrent-호출과-cancellation)
 
 #### IS-E2E-31 Remote selection loser
 

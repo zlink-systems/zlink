@@ -1,5 +1,4 @@
-package Endpoints;
-import systems.zlink.e2e.registrymessaging.consumer.Endpoints;
+package systems.zlink.e2e.registrymessaging.consumer.Endpoints;
 import java.util.Locale;
 import java.util.Map;
 
@@ -58,12 +57,12 @@ public final class ConsumerEndpoints {
     }
 
     @PostMapping("/profile/request/outcome")
-    public CompletionStage<Contracts.RequestOutcome> profileRequestOutcome(
+    public CompletionStage<Contracts.ProfileCallRes> profileRequestOutcome(
         @RequestBody Contracts.ProfileReq request) {
         return requestProfile(request, Duration.ofSeconds(5))
             .handle((reply, error) -> error == null
-                ? new Contracts.RequestOutcome(request.value(), reply.providerRid(), false, "")
-                : new Contracts.RequestOutcome(
+                ? new Contracts.ProfileCallRes(request.value(), reply.providerRid(), false, "")
+                : new Contracts.ProfileCallRes(
                     request.value(), "", true, FailureEvidence.from(error).errorKind()));
     }
 

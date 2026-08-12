@@ -481,22 +481,28 @@ class actor_client_impl_t final : public actor_client_t
         _actor_locations (std::move (actor_locations)),
         _location_options (std::move (options)), _route_runtime (route_runtime)
     {
-        for (const auto &mesh_node : _mesh_nodes) {
-            if (!mesh_node)
-                continue;
-            mesh_node->set_message_follow_invalidation_handler (
-              [this] (const auto &notice) {
-                  invalidate_cached_route_on_message_follow (notice);
-              });
+        _message_follow_subscriptions.reserve (_mesh_nodes.size ());
+        try {
+            for (const auto &mesh_node : _mesh_nodes) {
+                if (!mesh_node)
+                    continue;
+                const auto subscription_id =
+                  mesh_node->subscribe_message_follow_invalidation (
+                    [this] (const auto &notice) {
+                        invalidate_cached_route_on_message_follow (notice);
+                    });
+                _message_follow_subscriptions.emplace_back (mesh_node, subscription_id);
+            }
+        }
+        catch (...) {
+            release_message_follow_subscriptions ();
+            throw;
         }
     }
 
     ~actor_client_impl_t () override
     {
-        for (const auto &mesh_node : _mesh_nodes) {
-            if (mesh_node)
-                mesh_node->set_message_follow_invalidation_handler ({});
-        }
+        release_message_follow_subscriptions ();
     }
 
     task_t<void> send_to_ref (actor_ref_t actor,
@@ -681,6 +687,14 @@ class actor_client_impl_t final : public actor_client_t
     serializer_registry_t &actor_client_serializers () override { return *_serializers; }
 
   private:
+    void release_message_follow_subscriptions () noexcept
+    {
+        for (const auto &[mesh_node, subscription_id] : _message_follow_subscriptions) {
+            mesh_node->unsubscribe_message_follow_invalidation (subscription_id);
+        }
+        _message_follow_subscriptions.clear ();
+    }
+
     enum class stale_policy_t
     {
         route_not_found,
@@ -1132,6 +1146,9 @@ class actor_client_impl_t final : public actor_client_t
     std::shared_ptr<actor_location_observer_t> _actor_locations;
     location_options_t _location_options;
     route_mesh_runtime_t *_route_runtime = nullptr;
+    std::vector<std::pair<std::shared_ptr<detail::mesh_node_runtime_t>,
+                          detail::mesh_node_runtime_t::message_follow_subscription_id_t>>
+      _message_follow_subscriptions;
     struct cached_actor_t
     {
         resolved_actor_t actor;

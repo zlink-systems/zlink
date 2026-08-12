@@ -138,7 +138,6 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
     {
         var state = RegisterSpot(spotId);
         state.DispatchHandler = handler;
-        EnsureStarted();
     }
 
     public void SetInboundDispatchBudget(ZLinkInboundDispatchBudget budget)
@@ -163,13 +162,11 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
     public void SetNodeRouteHandler(Action<ZLinkBackendRouteReceived> handler)
     {
         _nodeRouteHandler = handler;
-        EnsureStarted();
     }
 
     public void SetNodeSendReadyHandler(Action handler)
     {
         _nodeSendReadyHandler = handler;
-        EnsureStarted();
     }
 
     private MeshReadyDomains OnReady(MeshReadyDomains readyDomains)

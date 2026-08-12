@@ -275,11 +275,11 @@ task_t<void> run (const tictactoe_client_options_t &options)
 - **서로 다른 node에 연결한 둘** — node 사이 라우팅과 위치 해석이 실제로 동작하는지
 
 ```cpp
-// join 응답은 request의 reply가 아니라 push로 온다 — 대기를 먼저 등록하고 send한다.
-task_t<join_game_res_t> join_game (auto &connector, const std::string &room_id)
+// join 완료 알림은 client push로 온다 — 대기를 먼저 등록하고 one-way send한다.
+task_t<join_game_notify_t> join_game (auto &connector, const std::string &room_id)
 {
-    auto completion = connector.wait_for<join_game_res_t> ().async ();
-    co_await connector.send (join_game_req_t{room_id}).submit ();
+    auto completion = connector.wait_for<join_game_notify_t> ().async ();
+    co_await connector.send (join_game_msg_t{room_id}).submit ();
     co_return (co_await std::move (completion)).payload;
 }
 ```

@@ -1,6 +1,5 @@
-package Support;
+package systems.zlink.e2e.pubsub.client.Support;
 
-import systems.zlink.e2e.pubsub.client.Support;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;

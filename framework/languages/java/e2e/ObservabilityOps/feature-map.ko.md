@@ -23,7 +23,6 @@ framework 프로세스가 남긴 증거만 읽으며, 런타임 증거를 임의
 | OBS-C7 | 같은 version planned maintenance relocation 뒤 별도 Shutdown | BLOCKED — C6와 같은 automatic topology actor push handoff 경로가 해결되지 않아 유효한 C7 public evidence를 만들 수 없음 |
 | OBS-C8 | Shutdown deadline과 bounded teardown | PASS — `logs/20260806-043305-1411221-obs-c8/`; public status에서 `FORCE_STOPPED/DEADLINE_EXCEEDED`, callback deadline 일치, forced metric delta 1, terminal 안정성을 verifier가 확인 |
 | OBS-C9A | Automatic peer Ready 선행 조건과 target not-ready relocation | BLOCKED — C6와 같은 automatic topology actor relocation/handoff 경로가 해결되지 않아 유효한 C9A evidence를 만들 수 없음 |
-| OBS-C9B | Manual topology blocker와 bounded Shutdown | BLOCKED — `logs/20260806-043350-1434214-obs-c9b/relocation.json`의 `MANUAL_TOPOLOGY_UNSUPPORTED`와 `shutdown.json`의 `STOPPED/NONE`은 public evidence로 확인했지만 `source-before.json`의 `spot=null` 때문에 strict verifier가 실패함 |
 | OBS-C10 | relocation mode의 exact application version 선택 | BLOCKED — C6와 같은 automatic topology actor relocation/handoff 경로가 해결되지 않아 exact version 선택 evidence를 검증할 수 없음 |
 | OBS-C11 | concurrent Relocate option의 합류와 충돌 | BLOCKED — C6와 같은 automatic topology actor relocation/handoff 경로가 해결되지 않아 concurrent relocation evidence를 검증할 수 없음 |
 | OBS-C12 | second waiter cancellation이 shared relocation을 취소하지 않으며 concurrent shutdown 결과가 계약과 일치 | BLOCKED — C6와 같은 automatic topology actor relocation/handoff 경로가 해결되지 않아 concurrent shutdown evidence를 검증할 수 없음 |

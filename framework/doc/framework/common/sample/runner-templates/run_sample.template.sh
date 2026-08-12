@@ -33,6 +33,21 @@ LANGUAGE="java"
 SAMPLE_NAME="ExampleSample"
 REDIS_IMAGE="redis:7-alpine"
 REDIS_READINESS_TIMEOUT_SECONDS=60
+REDIS_MIN_PORT=24000
+REDIS_MAX_PORT=24099
+APPLICATION_MIN_PORT=24100
+APPLICATION_MAX_PORT=25999
+
+# Java and Kotlin share Gradle output. Their sample and E2E runners use this
+# build-only lock and release it before any role process starts.
+run_build() {
+  if [[ "${LANGUAGE}" == "java" || "${LANGUAGE}" == "kotlin" ]]; then
+    flock --exclusive --close \
+      "/tmp/zlink-framework-java-kotlin-sample-gradle.lock" "$@"
+    return
+  fi
+  "$@"
+}
 
 REDIS_SCOPE="zlink-redis-${LANGUAGE}-sample"
 REDIS_KEY_PREFIX="${SAMPLE_NAME}:${LANGUAGE}:$$:${RANDOM}:"
@@ -49,7 +64,7 @@ cleanup() {
   # kill "${SERVER_PID}" >/dev/null 2>&1 || true
   # Stop only the Redis container started by this script.
   if [[ -n "${REDIS_CONTAINER_ID}" ]]; then
-    docker rm -fv "${REDIS_CONTAINER_ID}" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "${REDIS_CONTAINER_ID}" || true
   fi
   # Remove generated role config files (they may carry secrets).
   rm -rf "${CONF_DIR}"
@@ -63,8 +78,11 @@ mkdir -p "${CONF_DIR}"
 chmod 700 "${CONF_DIR}"
 echo "log_dir=${LOG_DIR}"
 
-# Reserve per-run ports here (language-specific helper).
-# API_PORT="$(reserve_free_port)"
+# Reserve application ports inside this language's assigned range. The helper
+# verifies every candidate by binding to loopback; it does not derive an
+# unchecked consecutive port block.
+# API_PORT="$(reserve_verified_loopback_port \
+#   "${APPLICATION_MIN_PORT}" "${APPLICATION_MAX_PORT}")"
 
 # 2. Redis
 zlink_redis_start_scoped_assign \
@@ -72,7 +90,8 @@ zlink_redis_start_scoped_assign \
   redis_host_port \
   "${REDIS_SCOPE}" \
   "${REDIS_IMAGE}" \
-  "127.0.0.1::6379"
+  "${REDIS_MIN_PORT}" \
+  "${REDIS_MAX_PORT}"
 REDIS_ENDPOINT="127.0.0.1:${redis_host_port}"
 zlink_redis_wait_ready "${REDIS_CONTAINER_ID}" "${REDIS_READINESS_TIMEOUT_SECONDS}"
 
@@ -122,7 +141,7 @@ write_role_config() {
 #      unless it actually succeeded (`set -e` already aborts on a non-zero exit,
 #      so reaching the echo means every step above passed).
 #
-# build_sample >"${LOG_DIR}/build.log" 2>&1
+# run_build build_sample >"${LOG_DIR}/build.log" 2>&1
 # start_api_server --config "${API_CONFIG}" >"${LOG_DIR}/api.log" 2>&1 &
 # SERVER_PID="$!"
 # wait_for_readiness

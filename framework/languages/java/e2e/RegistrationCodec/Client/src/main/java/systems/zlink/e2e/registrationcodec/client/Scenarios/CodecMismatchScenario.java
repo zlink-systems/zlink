@@ -1,7 +1,5 @@
-package Scenarios;
+package systems.zlink.e2e.registrationcodec.client.Scenarios;
 
-import systems.zlink.e2e.registrationcodec.client.Scenarios;
-import systems.zlink.e2e.registrationcodec.client.Support;
 import systems.zlink.e2e.registrationcodec.client.Support.ScenarioAssert;
 import systems.zlink.e2e.registrationcodec.client.Support.ScenarioContext;
 import systems.zlink.e2e.registrationcodec.shared.Contracts;

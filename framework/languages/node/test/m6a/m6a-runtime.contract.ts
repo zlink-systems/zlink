@@ -214,6 +214,23 @@ test('RouteMesh admission preserves an optional maintenance wave across updates'
   assert.equal(created.maintenanceWave, 'rolling-a');
 });
 
+test('RouteMesh admission rejects malformed UTF-8 instead of replacing bytes', () => {
+  const meshName = 'canonical-utf8-mesh';
+  const frame = Buffer.from(encodeRouteMeshAdmission(
+    M6aServiceWireCommand.update,
+    { ...descriptor('utf8-peer'), meshName }
+  ));
+  const meshOffset = frame.indexOf(Buffer.from(meshName, 'utf8'));
+  assert.ok(meshOffset > 0);
+  frame[meshOffset] = 0xff;
+  assert.throws(
+    () => decodeRouteMeshAdmission(frame, M6aServiceWireCommand.update, 'utf8-peer'),
+    error => error instanceof Error
+      && error.name === 'ServiceWireProtocolError'
+      && /meshName/.test(error.message)
+  );
+});
+
 test('reply header preserves the schema tail length field', () => {
   const empty = encodeReplyHeader(7n);
   assert.equal(empty.byteLength, 23);

@@ -9,6 +9,7 @@ import java.util.Optional;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
@@ -17,6 +18,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
@@ -111,6 +113,76 @@ final class ZLinkBoundActorRouteContractTest {
 
         assertEquals(ZLinkStreamCodec.PROTOBUF, sentHeader.get().codec());
         assertEquals("custom-reply", sentPayload.get());
+    }
+
+    @Test
+    void remoteRelayKeepsTheStrictHeaderAndPayloadActorPacket() {
+        AtomicReference<ZLinkStreamCodec> sentCodec = new AtomicReference<>();
+        AtomicReference<Integer> sentPayloadPartCount = new AtomicReference<>();
+        ZLinkBackendStreamSocket stream = (ZLinkBackendStreamSocket)
+            Proxy.newProxyInstance(
+                ZLinkBackendStreamSocket.class.getClassLoader(),
+                new Class<?>[] {ZLinkBackendStreamSocket.class},
+                (proxy, method, arguments) -> {
+                    if (method.getName().equals("relayBoundActor")
+                        && arguments.length == 6
+                        && arguments[3] instanceof ZLinkStreamHeader header) {
+                        @SuppressWarnings("unchecked")
+                        var payloadParts = (List<Message>) arguments[4];
+                        sentCodec.set(header.codec());
+                        sentPayloadPartCount.set(payloadParts.size());
+                        return true;
+                    }
+                    throw new UnsupportedOperationException(method.getName());
+                });
+        ZLinkCodecRegistration codecs = new ZLinkCodecRegistration();
+        codecs.addSerializer("application/x-protobuf", new RawSerializer());
+        codecs.addStreamCodec(
+            "application/x-protobuf", ZLinkStreamCodec.PROTOBUF);
+        codecs.freeze();
+        ZLinkMessageSerializer serializer =
+            codecs.serializerWithFallback(new RawSerializer());
+        ZLinkSessionRelayHeaders relayHeaders = new ZLinkSessionRelayHeaders();
+        ZLinkBoundActor actor = new ZLinkBoundActor(
+            stream,
+            RoutingId.from("session"),
+            new ZLinkBackendActorRef(
+                RoutingId.from("actor-node-a"), "actor-1", 7),
+            "game",
+            Optional.empty(),
+            null,
+            serializer,
+            0,
+            1,
+            ignored -> true,
+            null,
+            true,
+            ZLinkStreamCodec.PROTOBUF,
+            relayHeaders,
+            null,
+            () -> true,
+            operation -> operation.apply(1),
+            ZLinkRelayMetadataPolicy.EMPTY);
+        relayHeaders.enter(new ZLinkStreamHeader(
+            ZLinkStreamMessageKind.REQUEST,
+            ZLinkStreamCodec.PROTOBUF,
+            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+            Optional.of(2L),
+            "MatchBingoReq",
+            Map.of()));
+        try {
+            actor.relay(ZLinkMessage.fromEncoded(
+                    ZLinkEncodedPayload.from(
+                        "protobuf".getBytes(StandardCharsets.UTF_8)),
+                    serializer))
+                .toCompletableFuture()
+                .join();
+        } finally {
+            relayHeaders.exit();
+        }
+
+        assertEquals(ZLinkStreamCodec.PROTOBUF, sentCodec.get());
+        assertEquals(1, sentPayloadPartCount.get());
     }
 
     private static ZLinkBoundActor actor(boolean currentBinding) {

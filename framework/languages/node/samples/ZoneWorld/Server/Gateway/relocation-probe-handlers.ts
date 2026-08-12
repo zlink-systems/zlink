@@ -4,6 +4,7 @@ import { ZLinkPacket } from '@zlink-systems/framework';
 import {
   ActorLocationProbeReq,
   ActorLocationProbeRes,
+  MessageFollowProbeMsg,
   MessageFollowProbeReq,
   MessageFollowProbeRes,
   PacketNames
@@ -50,38 +51,63 @@ class ActorLocationProbeHandler {
  */
 @Injectable()
 @ZLinkPacket(PacketNames.messageFollowProbeReq)
-class MessageFollowProbeSessionHandler {
+class MessageFollowProbeRequestSessionHandler {
   constructor(@Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient) {}
 
   async handle(
     context: ZLinkSessionContext,
-    dispatch: ZLinkSessionDispatchContext,
+    _dispatch: ZLinkSessionDispatchContext,
     payload: ZLinkMessage
   ): Promise<void> {
     const request = payload.decode(MessageFollowProbeReq);
-    const probe = new MessageFollowProbeReq(request.actorId, request.probeId, request.payload);
     try {
-      if (dispatch.canReply) {
-        const reply = await this.actors
-          .requestToActor(request.actorId, probe)
-          .timeout(10_000)
-          .submit<MessageFollowProbeRes>();
-        context.client.reply(new MessageFollowProbeRes(reply.probeId, reply.payload)).submit();
-        return;
-      }
-      await this.actors.sendToActor(request.actorId, probe).submit();
+      const reply = await this.actors
+        .requestToActor(
+          request.actorId,
+          new MessageFollowProbeReq(request.actorId, request.probeId, request.payload)
+        )
+        .timeout(10_000)
+        .submit<MessageFollowProbeRes>();
+      context.client.reply(new MessageFollowProbeRes(reply.probeId, reply.payload)).submit();
     } catch (error) {
       console.error(
         `message-follow probe terminal actor=${request.actorId} probe=${request.probeId}`,
         error instanceof Error ? error.message : String(error)
       );
-      if (dispatch.canReply) {
-        context.client.reply(
-          new MessageFollowProbeRes(request.probeId, '', ZoneWorldErrors.actorUnavailable)
-        ).submit();
-      }
+      context.client.reply(
+        new MessageFollowProbeRes(request.probeId, '', ZoneWorldErrors.actorUnavailable)
+      ).submit();
     }
   }
 }
 
-export { ActorLocationProbeHandler, MessageFollowProbeSessionHandler };
+@Injectable()
+@ZLinkPacket(PacketNames.messageFollowProbeMsg)
+class MessageFollowProbeSendSessionHandler {
+  constructor(@Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient) {}
+
+  async handle(
+    _context: ZLinkSessionContext,
+    _dispatch: ZLinkSessionDispatchContext,
+    payload: ZLinkMessage
+  ): Promise<void> {
+    const message = payload.decode(MessageFollowProbeMsg);
+    try {
+      await this.actors.sendToActor(
+        message.actorId,
+        new MessageFollowProbeMsg(message.actorId, message.probeId, message.payload)
+      ).submit();
+    } catch (error) {
+      console.error(
+        `message-follow probe terminal actor=${message.actorId} probe=${message.probeId}`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }
+}
+
+export {
+  ActorLocationProbeHandler,
+  MessageFollowProbeRequestSessionHandler,
+  MessageFollowProbeSendSessionHandler
+};

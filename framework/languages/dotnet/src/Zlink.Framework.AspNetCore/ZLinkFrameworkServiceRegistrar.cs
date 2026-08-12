@@ -341,10 +341,7 @@ internal static class ZLinkFrameworkServiceRegistrar
         }
         else if (locations.UseInMemoryStores)
         {
-            services.AddSingleton(
-                (ZLinkInMemoryLocationStore)locations.ResolveStore()!);
-            services.AddSingleton<IZLinkLocationRepository>(
-                static provider => provider.GetRequiredService<ZLinkInMemoryLocationStore>());
+            services.AddSingleton(locations.ResolveStore()!);
         }
         else if (locations.ResolveStore() is { } repository)
         {

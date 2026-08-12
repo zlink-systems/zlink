@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JAVA_E2E_DIR="$(cd "${SCRIPT_DIR}/../../e2e" && pwd)"
 ATD_DIR="${JAVA_E2E_DIR}/AutomaticTurnDispatch"
 source "${JAVA_E2E_DIR}/../e2e-redis-common.sh"
+zlink_e2e_initialize kotlin "$0" "$@"
 
 SELECTOR="${1:-all}"
 # OBS-A5 has its own Kotlin server/client process topology.
@@ -14,18 +15,18 @@ if [[ "${SELECTOR}" == "OBS-A5" ]]; then
   exec bash "${SCRIPT_DIR}/run_a5_e2e.sh"
 fi
 case "${SELECTOR}" in
-  OBS-C6|OBS-C7|OBS-C8|OBS-C9A|OBS-C9B|OBS-C10|OBS-C11|OBS-C12)
+  OBS-C6|OBS-C7|OBS-C8|OBS-C9A|OBS-C10|OBS-C11|OBS-C12)
     echo "scenario ${SELECTOR} blocked: Kotlin maintenance role host is not implemented" >&2
     exit 3
     ;;
 esac
 case "${SELECTOR}" in
-  all|OBS-A1|OBS-A2|OBS-A3|OBS-A4|OBS-A5|OBS-B1|OBS-B2|OBS-B3|OBS-B4|OBS-C1|OBS-C2|OBS-C3|OBS-C4|OBS-C5|OBS-C6|OBS-C7|OBS-C8|OBS-C9A|OBS-C9B|OBS-C10|OBS-C11|OBS-C12) ;;
+  all|OBS-A1|OBS-A2|OBS-A3|OBS-A4|OBS-A5|OBS-B1|OBS-B2|OBS-B3|OBS-B4|OBS-C1|OBS-C2|OBS-C3|OBS-C4|OBS-C5|OBS-C6|OBS-C7|OBS-C8|OBS-C9A|OBS-C10|OBS-C11|OBS-C12) ;;
   *) echo "Unknown ObservabilityOps selector." >&2; exit 2 ;;
 esac
 
 if [[ "${SELECTOR}" == all ]]; then
-  echo "Kotlin ObservabilityOps all is incomplete; maintenance selectors are not implemented: OBS-C6 OBS-C7 OBS-C8 OBS-C9A OBS-C9B OBS-C10 OBS-C11 OBS-C12" >&2
+  echo "Kotlin ObservabilityOps all is incomplete; maintenance selectors are not implemented: OBS-C6 OBS-C7 OBS-C8 OBS-C9A OBS-C10 OBS-C11 OBS-C12" >&2
   exit 3
 fi
 
@@ -39,27 +40,7 @@ obs_build="${ZLINK_KOTLIN_OBSERVABILITY_BUILD_DIR:-${HOME}/.cache/zlink/kotlin-e
 gradle_cache="${ZLINK_KOTLIN_OBSERVABILITY_GRADLE_CACHE:-${HOME}/.cache/zlink/kotlin-e2e/ObservabilityOps-gradle-cache}"
 pids=()
 REDIS_CONTAINER=""
-mkdir -p "${log_dir}" "${evidence_dir}"
-echo "log_dir=${log_dir}"
-
-# The shared AutomaticTurnDispatch binaries remove the process environment
-# before Spring configuration, so every role must receive an explicit config
-# file. Keep these files private and remove them with the rest of the run.
-config_dir="$(mktemp -d "${TMPDIR:-/tmp}/zlink-kotlin-observability-config.XXXXXX")"
-chmod 0700 "${config_dir}"
-delay_config="${config_dir}/delay.properties"
-play_a_config="${config_dir}/play-a.properties"
-play_b_config="${config_dir}/play-b.properties"
-session_config="${config_dir}/session.properties"
-client_config="${config_dir}/client.properties"
-
-if [[ -z "${ZLINK_LIBRARY_PATH:-}" && -f "${default_core_lib}" ]]; then
-  export ZLINK_LIBRARY_PATH="${default_core_lib}"
-fi
-zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
-  "zlink-redis-kotlin-e2e-observability" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
-export ZLINK_JAVA_E2E_REDIS_LOCATION_ENDPOINT="127.0.0.1:${redis_port}"
-export ZLINK_JAVA_E2E_LOCATION_KEY_PREFIX="${ZLINK_KOTLIN_OBSERVABILITY_LOCATION_KEY_PREFIX:-zlink:e2e:kotlin-observability:${run_id}}"
+config_dir=""
 
 descendants() {
   local pid="$1" child
@@ -86,8 +67,8 @@ cleanup() {
     for child in $(descendants "${pids[$i]}"); do kill -9 "${child}" >/dev/null 2>&1 || true; done
     kill -9 "${pids[$i]}" >/dev/null 2>&1 || true
   done
-  [[ -z "${REDIS_CONTAINER}" ]] || docker rm -fv "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
-  rm -rf -- "${config_dir}" >/dev/null 2>&1 || true
+  [[ -z "${REDIS_CONTAINER}" ]] || zlink_redis_remove_by_id "${REDIS_CONTAINER}" || true
+  [[ -z "${config_dir}" ]] || rm -rf -- "${config_dir}" >/dev/null 2>&1 || true
   wait >/dev/null 2>&1 || true
   if [[ "${status}" != 0 ]]; then
     for log in "${log_dir}"/*.log; do [[ -f "${log}" ]] && { echo "===== ${log} =====" >&2; tail -n 120 "${log}" >&2; }; done
@@ -95,6 +76,28 @@ cleanup() {
   exit "${status}"
 }
 trap cleanup EXIT
+
+mkdir -p "${log_dir}" "${evidence_dir}"
+echo "log_dir=${log_dir}"
+
+# The shared AutomaticTurnDispatch binaries remove the process environment
+# before Spring configuration, so every role must receive an explicit config
+# file. Keep these files private and remove them with the rest of the run.
+config_dir="$(mktemp -d "${TMPDIR:-/tmp}/zlink-kotlin-observability-config.XXXXXX")"
+chmod 0700 "${config_dir}"
+delay_config="${config_dir}/delay.properties"
+play_a_config="${config_dir}/play-a.properties"
+play_b_config="${config_dir}/play-b.properties"
+session_config="${config_dir}/session.properties"
+client_config="${config_dir}/client.properties"
+
+if [[ -z "${ZLINK_LIBRARY_PATH:-}" && -f "${default_core_lib}" ]]; then
+  export ZLINK_LIBRARY_PATH="${default_core_lib}"
+fi
+zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
+  "zlink-redis-kotlin-e2e-observability" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
+export ZLINK_JAVA_E2E_REDIS_LOCATION_ENDPOINT="127.0.0.1:${redis_port}"
+export ZLINK_JAVA_E2E_LOCATION_KEY_PREFIX="${ZLINK_KOTLIN_OBSERVABILITY_LOCATION_KEY_PREFIX:-zlink:e2e:kotlin-observability:${run_id}}"
 
 write_config() {
   local path="$1"
@@ -154,16 +157,7 @@ write_client_config() {
 }
 
 reserve_ports() {
-  python3 - <<'PY'
-import socket
-socks=[]
-try:
-    for _ in range(11):
-        sock=socket.socket(); sock.bind(("127.0.0.1", 0)); socks.append(sock)
-    print(" ".join(str(sock.getsockname()[1]) for sock in socks))
-finally:
-    for sock in socks: sock.close()
-PY
+  zlink_e2e_reserve_ports 12
 }
 tcp() { echo "tcp://127.0.0.1:$1"; }
 http() { echo "http://127.0.0.1:$1"; }
@@ -263,7 +257,9 @@ PY
   return 1
 }
 
-read -r DELAY_PORT ROUTE_A_PORT SPOT_A_PORT ROUTE_B_PORT SPOT_B_PORT STREAM_PORT PLAY_A_HTTP_PORT PLAY_B_HTTP_PORT SESSION_HTTP_PORT SESSION_ROUTE_PORT FANOUT_PORT <<<"$(reserve_ports)"
+read -r DELAY_PORT ROUTE_A_PORT SPOT_A_PORT ROUTE_B_PORT SPOT_B_PORT \
+  STREAM_PORT PLAY_A_HTTP_PORT PLAY_B_HTTP_PORT SESSION_HTTP_PORT \
+  SESSION_ROUTE_PORT FANOUT_PORT SESSION_SPOT_PORT <<<"$(reserve_ports)"
 DELAY_ENDPOINT="$(tcp "${DELAY_PORT}")"
 ROUTE_A_ENDPOINT="$(tcp "${ROUTE_A_PORT}")"
 SPOT_A_ENDPOINT="$(tcp "${SPOT_A_PORT}")"
@@ -275,16 +271,14 @@ PLAY_B_HTTP="$(http "${PLAY_B_HTTP_PORT}")"
 SESSION_HTTP="$(http "${SESSION_HTTP_PORT}")"
 SESSION_ROUTE_ENDPOINT="$(tcp "${SESSION_ROUTE_PORT}")"
 FANOUT_ENDPOINT="$(tcp "${FANOUT_PORT}")"
-SESSION_SPOT_ENDPOINT="$(tcp "$(python3 - <<'PY'
-import socket
-s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()
-PY
-)")"
+SESSION_SPOT_ENDPOINT="$(tcp "${SESSION_SPOT_PORT}")"
 
-(cd "${ATD_DIR}" && ../../gradlew -PzlinkE2eBuildDir="${atd_build}" \
+(cd "${ATD_DIR}" && zlink_e2e_gradle_build_locked ../../gradlew \
+  -PzlinkE2eBuildDir="${atd_build}" \
   --project-cache-dir "${gradle_cache}" --no-daemon --no-parallel --max-workers=1 --quiet \
   clean installDist)
-ZLINK_KOTLIN_E2E_BUILD_DIR="${obs_build}" "${SCRIPT_DIR}/gradlew" \
+zlink_e2e_gradle_build_locked env ZLINK_KOTLIN_E2E_BUILD_DIR="${obs_build}" \
+  "${SCRIPT_DIR}/gradlew" \
   --project-cache-dir "${gradle_cache}" --no-daemon --no-parallel --max-workers=1 --quiet installDist
 
 delay_bin="${atd_build}/Server-Delay/install/automatic-turn-dispatch-delay/bin/automatic-turn-dispatch-delay"

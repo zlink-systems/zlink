@@ -1,6 +1,5 @@
-package Support
+package systems.zlink.e2e.kotlin.pubsub.client.Support
 
-import systems.zlink.e2e.kotlin.pubsub.client.Support
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket

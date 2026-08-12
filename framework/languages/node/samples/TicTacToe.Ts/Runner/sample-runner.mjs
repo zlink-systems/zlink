@@ -7,6 +7,7 @@ export async function runSample(ctx) {
   const endpoints = {
     apiHttp: [`http://127.0.0.1:${await ctx.port()}`, `http://127.0.0.1:${await ctx.port()}`],
     api: [`tcp://127.0.0.1:${await ctx.port()}`, `tcp://127.0.0.1:${await ctx.port()}`],
+    apiSpot: [`tcp://127.0.0.1:${await ctx.port()}`, `tcp://127.0.0.1:${await ctx.port()}`],
     playStream: [`ws://127.0.0.1:${await ctx.port()}`, `ws://127.0.0.1:${await ctx.port()}`],
     playSpot: [`tcp://127.0.0.1:${await ctx.port()}`, `tcp://127.0.0.1:${await ctx.port()}`]
   };
@@ -17,6 +18,7 @@ export async function runSample(ctx) {
     playIndex,
     apiHttpEndpoint: endpoints.apiHttp[apiIndex],
     apiEndpoints: endpoints.api,
+    apiSpotEndpoint: endpoints.apiSpot[apiIndex],
     apiHttpEndpoints: endpoints.apiHttp,
     playEndpoints: endpoints.playStream,
     playSpotEndpoint: endpoints.playSpot[playIndex],
@@ -34,12 +36,12 @@ export async function runSample(ctx) {
   const apiA = config('api-a', 0, 0, 1);
   const apiB = config('api-b', 1, 0, 1);
   const playKeys = [
-    'apiEndpoints', 'playSpotEndpoint', 'playStreamEndpoint', 'playEndpoints',
+    'apiEndpoints', 'playIndex', 'playSpotEndpoint', 'playStreamEndpoint', 'playEndpoints',
     'redisEndpoint', 'redisKeyPrefix', 'peerPlaySpotEndpoint', 'instanceName',
     'logDir'
   ];
   const apiKeys = [
-    'apiHttpEndpoint', 'apiEndpoints', 'apiIndex', 'playSpotEndpoints', 'playEndpoints',
+    'apiHttpEndpoint', 'apiEndpoints', 'apiSpotEndpoint', 'apiIndex', 'playSpotEndpoints', 'playEndpoints',
     'redisEndpoint', 'redisKeyPrefix', 'logDir'
   ];
   const configs = {
@@ -59,9 +61,27 @@ export async function runSample(ctx) {
   await ctx.waitTcp(endpoints.apiHttp[0]);
   await ctx.start('api-b', 'dist/Server/Api/main.js', ['--config', configs.apiB]);
   await ctx.waitTcp(endpoints.apiHttp[1]);
-  ctx.runBrowser({
+  const browser = ctx.startBrowser({
     timeoutMs: 90_000,
-    config: { apiHttpEndpoint: '/api/tictactoe' },
+    config: {
+      apiHttpEndpoint: '/api/tictactoe',
+      lifecycleCompletionPath: '/runner/lifecycle-complete'
+    },
     proxies: [{ prefix: '/api/tictactoe', target: endpoints.apiHttp[0] }]
   });
+  await waitPlayLog(ctx, 'tictactoe-auth existing-actor-bound actor=player-x ');
+  for (const actorId of ['player-x', 'player-o']) {
+    await waitPlayLog(ctx, `actor: LeaveGameMsg completed. actor=${actorId}`);
+    await waitPlayLog(ctx, `entry spot: actor destroyed. actor=${actorId}`);
+  }
+  await browser.complete();
+  console.log('tictactoe=completed');
+  console.log('PASS TicTacToe.Ts');
+}
+
+async function waitPlayLog(ctx, marker) {
+  await ctx.waitAnyLog([
+    { name: 'play-a', marker },
+    { name: 'play-b', marker }
+  ]);
 }

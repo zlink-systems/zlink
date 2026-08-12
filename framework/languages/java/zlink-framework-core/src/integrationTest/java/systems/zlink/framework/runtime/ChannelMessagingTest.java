@@ -9,6 +9,7 @@ import systems.zlink.framework.spots.SpotHandle;
 
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
+import systems.zlink.framework.configuration.ZLinkLogLevel;
 
 import systems.zlink.framework.runtime.internal.backend.*;
 
@@ -328,14 +329,22 @@ final class ChannelMessagingTest {
     @Test
     @DisplayName("DERR-002 manual client-server missing send handler records diagnostics and keeps request path alive")
     void manualClientServer_missingSendHandlerRecordsDiagnosticsAndKeepsRequestPathAlive()
-        throws InterruptedException {
+        throws Exception {
         String endpoint = "inproc://zlink-java-dispatch-send-error-" + UUID.randomUUID();
         CopyOnWriteArrayList<String> logMessages = new CopyOnWriteArrayList<>();
+        CompletableFuture<Void> missingSendLogged = new CompletableFuture<>();
         Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
         Handler logHandler = new Handler() {
             @Override
             public void publish(LogRecord record) {
-                logMessages.add(record.getMessage());
+                String message = record.getMessage();
+                logMessages.add(message);
+                if (message.contains("reason=HANDLER_MISSING")
+                    && message.contains("action=DROP")
+                    && message.contains("packet=MissingCommand")
+                    && message.contains("channel=profile")) {
+                    missingSendLogged.complete(null);
+                }
             }
 
             @Override
@@ -366,6 +375,7 @@ final class ChannelMessagingTest {
                 .sendToChannel("profile", new MissingCommand("missing-send"))
                 .submit();
 
+            missingSendLogged.get(2, TimeUnit.SECONDS);
             assertTrue(logMessages.stream().anyMatch(message ->
                 message.contains("reason=HANDLER_MISSING")
                     && message.contains("action=DROP")
@@ -611,7 +621,7 @@ final class ChannelMessagingTest {
             assertTrue(logText.contains("packet=DecodeReq"));
             assertTrue(logText.contains("packet=ThrowReq"));
             assertTrue(logText.contains("channel=profile"));
-            assertTrue(logText.contains("corr="));
+            assertTrue(logText.contains("flow="));
         } finally {
             DecodeProbeHandler.invocations.set(0);
             logger.removeHandler(fileHandler);
@@ -666,8 +676,34 @@ final class ChannelMessagingTest {
         CountDownLatch sendLatch = new CountDownLatch(1);
         CountDownLatch publishLatch = new CountDownLatch(1);
         CopyOnWriteArrayList<String> observedErrors = new CopyOnWriteArrayList<>();
+        CompletableFuture<Void> missingSendLogged = new CompletableFuture<>();
+        CompletableFuture<Void> missingPublishLogged = new CompletableFuture<>();
         Logger diagnosticsLogger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
-        Handler diagnosticsHandler = capturingHandler(observedErrors);
+        Handler diagnosticsHandler = new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                String message = record.getMessage();
+                observedErrors.add(message);
+                if (message.contains("kind=PUBLISH")
+                    && message.contains("reason=HANDLER_MISSING")
+                    && message.contains("packet=ManualMissingEvent")) {
+                    missingPublishLogged.complete(null);
+                }
+                if (message.contains("kind=SEND")
+                    && message.contains("reason=HANDLER_MISSING")
+                    && message.contains("packet=ManualMissingCommand")) {
+                    missingSendLogged.complete(null);
+                }
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
         diagnosticsLogger.addHandler(diagnosticsHandler);
         MANUAL_REG_SEND_LATCH.set(sendLatch);
         MANUAL_REG_SEND_MESSAGE.set(null);
@@ -693,6 +729,9 @@ final class ChannelMessagingTest {
         { var channel = publisherOptions.addFanoutChannel("manual-events").enablePublisher(fanoutEndpoint); };
 
         DefaultZLinkFrameworkOptions subscriberOptions = new DefaultZLinkFrameworkOptions();
+        subscriberOptions.configureDispatch()
+            .unhandled()
+            .setPublishLogLevel(ZLinkLogLevel.WARN);
         { var channel = subscriberOptions.addFanoutChannel("manual-events");
             channel.connect(fanoutEndpoint);
             channel.addPublishHandler(
@@ -742,11 +781,9 @@ final class ChannelMessagingTest {
 
             publishManualRegistrationUntilObserved(
                 publisher,
-                observedErrors,
-                "ManualMissingEvent");
+                missingPublishLogged);
 
-            assertTrue(waitForManualRegistrationErrors(observedErrors),
-                "manual registration request, send, and publish errors were not all reported");
+            missingSendLogged.get(2, TimeUnit.SECONDS);
             assertTrue(hasDispatchError(
                 observedErrors,
                 ZLinkDispatchMessageKind.REQUEST,
@@ -1305,30 +1342,36 @@ final class ChannelMessagingTest {
     private static void publishManualRegistrationUntilDelivered(
         ZLinkFrameworkRuntime publisher,
         String packetName,
-        String value) {
+        String value) throws InterruptedException {
         long deadline = System.nanoTime() + Duration.ofSeconds(3).toNanos();
         while (System.nanoTime() < deadline && MANUAL_REG_PUBLISH_LATCH.get().getCount() > 0) {
             publisher.fanout()
                 .publish("manual-events", "manual", new ManualEvent(value))
-                .submit();
-            Thread.onSpinWait();
+                .submit()
+                .toCompletableFuture()
+                .join();
+            MANUAL_REG_PUBLISH_LATCH.get().await(25, TimeUnit.MILLISECONDS);
         }
     }
 
     private static void publishManualRegistrationUntilObserved(
         ZLinkFrameworkRuntime publisher,
-        List<String> observedErrors,
-        String packetName) {
+        CompletableFuture<Void> missingPublishLogged) throws Exception {
         long deadline = System.nanoTime() + Duration.ofSeconds(3).toNanos();
-        while (System.nanoTime() < deadline && observedErrors.stream().noneMatch(error ->
-            error.contains("kind=PUBLISH")
-                && error.contains("reason=HANDLER_MISSING")
-                && error.contains("packet=" + packetName))) {
+        while (System.nanoTime() < deadline && !missingPublishLogged.isDone()) {
             publisher.fanout()
                 .publish("manual-events", "manual", new ManualMissingEvent("missing-event"))
-                .submit();
-            Thread.onSpinWait();
+                .submit()
+                .toCompletableFuture()
+                .join();
+            try {
+                missingPublishLogged.get(25, TimeUnit.MILLISECONDS);
+            } catch (java.util.concurrent.TimeoutException retry) {
+                // A fanout subscriber may still be settling; the bounded retry
+                // avoids building an unbounded publish backlog.
+            }
         }
+        missingPublishLogged.get(0, TimeUnit.MILLISECONDS);
     }
 
     private static void sendUntilDelivered(ZLinkFrameworkRuntime runtime) {
@@ -1541,39 +1584,6 @@ final class ChannelMessagingTest {
                 && error.contains("action=" + action)
                 && error.contains("packet=" + packetName)
                 && error.contains("channel=" + channelName));
-    }
-
-    private static boolean waitForManualRegistrationErrors(
-        List<String> errors)
-        throws InterruptedException {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
-        while (System.nanoTime() < deadline) {
-            if (hasDispatchError(
-                    errors,
-                    ZLinkDispatchMessageKind.REQUEST,
-                    ZLinkDispatchErrorReason.HANDLER_MISSING,
-                    ZLinkDispatchErrorAction.REPLY_ERROR,
-                    "ManualMissingReq",
-                    "manual-reg")
-                && hasDispatchError(
-                    errors,
-                    ZLinkDispatchMessageKind.SEND,
-                    ZLinkDispatchErrorReason.HANDLER_MISSING,
-                    ZLinkDispatchErrorAction.DROP,
-                    "ManualMissingCommand",
-                    "manual-reg")
-                && hasDispatchError(
-                    errors,
-                    ZLinkDispatchMessageKind.PUBLISH,
-                    ZLinkDispatchErrorReason.HANDLER_MISSING,
-                    ZLinkDispatchErrorAction.DROP,
-                    "ManualMissingEvent",
-                    "manual-events")) {
-                return true;
-            }
-            Thread.sleep(25);
-        }
-        return false;
     }
 
     private static int countOccurrences(String text, String marker) {

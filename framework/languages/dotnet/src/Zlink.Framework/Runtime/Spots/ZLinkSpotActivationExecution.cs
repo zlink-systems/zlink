@@ -1283,6 +1283,7 @@ internal abstract partial class ZLinkSpotActivation
                 routeNodeRid,
                 ZLinkSessionRelocationWire.CreateSeal(
                     actorId,
+                    NodeRid,
                     route,
                     wireContext),
                 cancellationToken)

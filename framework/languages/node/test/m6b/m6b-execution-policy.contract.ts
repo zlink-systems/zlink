@@ -5,6 +5,10 @@ import {
   ZLinkSpotRelocationReadinessMode,
   ZLinkUserSpotExecutionMode
 } from '../../packages/framework/src/contracts/Configuration/ObjectRoles';
+import {
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkException
+} from '../../packages/framework/src/contracts/Errors/ZLinkFrameworkException';
 import { ZLinkConfigurationException } from '../../packages/framework/src/runtime/configuration';
 import { ZLinkSpotActivation } from '../../packages/framework/src/runtime/spots/spot-activation-state';
 import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';
@@ -61,6 +65,24 @@ test('128-bit operation identity retries zero entropy and has one canonical key'
   assert.equal(calls, 2);
   assert.deepEqual(operationId, { high: 0n, low: 1n });
   assert.equal(operationIdentityKey(operationId), '0:1');
+});
+
+test('same-owner nested execute rejects instead of running inside the active turn', async () => {
+  const serial = new ZLinkSpotSerialExecutor(true, 'spot-1' as never);
+  const events: string[] = [];
+
+  await serial.execute(() => {
+    events.push('outer');
+    assert.throws(
+      () => serial.execute(() => events.push('nested')),
+      (error) => error instanceof ZLinkFrameworkException
+        && error.kind === ZLinkFrameworkErrorKind.InvalidOperation
+    );
+    events.push('rejected');
+  });
+  await serial.post(() => events.push('next-turn'));
+
+  assert.deepEqual(events, ['outer', 'rejected', 'next-turn']);
 });
 
 test('SpotWide Yield releases the Spot gate but retains the Actor claim', async () => {

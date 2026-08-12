@@ -46,7 +46,7 @@ public final class OrderWorkflowService {
         }
         spot.context().outbound().sendToSpot(
             spot.context().spotId(),
-            new Messages.RunOrderWorkflowCommand(request.orderId())).submit();
+            new Messages.RunOrderWorkflowMsg(request.orderId())).submit();
         return CompletableFuture.completedFuture(
             store.findProjection(request.orderId()));
     }

@@ -34,6 +34,62 @@ class zlink_builder_t;
 
 namespace zlink::framework::detail
 {
+
+enum class application_actor_session_bind_outcome_t : std::uint8_t
+{
+    bound,
+    stale_route,
+    actor_not_ready
+};
+
+enum class application_actor_session_bind_attempt_t : std::uint8_t
+{
+    initial,
+    retry
+};
+
+constexpr bool can_retry_application_actor_session_bind (
+  application_actor_session_bind_outcome_t outcome,
+  application_actor_session_bind_attempt_t attempt) noexcept
+{
+    return attempt
+             == application_actor_session_bind_attempt_t::initial
+           && (outcome
+                 == application_actor_session_bind_outcome_t::stale_route
+               || outcome
+                    == application_actor_session_bind_outcome_t::
+                      actor_not_ready);
+}
+
+inline result_t<runtime::stateful::object_ref_t>
+make_local_application_actor_session_ref (
+  const runtime::stateful::object_ref_t &materialized,
+  const actor_ref_t &actor,
+  const runtime::spot_address_t &route)
+{
+    if (materialized.kind
+          != runtime::stateful::object_kind_t::actor
+        || materialized.key != actor.actor_id ().value ()
+        || materialized.object_generation != actor.object_generation ()
+        || route.object_generation != actor.object_generation ()
+        || route.authority_owner_generation == 0
+        || route.mesh_name.empty ()
+        || route.node_generation == 0
+        || route.owner.lease_generation <= 0) {
+        return result_t<runtime::stateful::object_ref_t>::failure (
+          framework_error_kind_t::unavailable,
+          "Local Actor materialization does not match its Location route");
+    }
+    return result_t<runtime::stateful::object_ref_t>::success (
+      runtime::stateful::object_ref_t{
+        runtime::stateful::object_kind_t::actor,
+        std::string (actor.actor_id ().value ()),
+        actor.object_generation (),
+        route.authority_owner_generation,
+        route.mesh_name,
+        route.node_rid.to_string ()});
+}
+
 namespace host = zlink::framework::runtime::host;
 
 struct framework_options_state_t;
@@ -104,6 +160,8 @@ struct bound_session_relocation_route_t
 class mesh_node_runtime_t
 {
   public:
+    using message_follow_subscription_id_t = std::uint64_t;
+
     struct operation_completion_t
     {
         host::receive_record_t record;
@@ -165,8 +223,10 @@ class mesh_node_runtime_t
     void
     configure_stateful_dispatch (runtime::stateful::accepted_record_authority_resolver_t resolver);
     void configure_bound_session_operations (host::bound_session_operations_t operations);
-    void set_message_follow_invalidation_handler (
+    message_follow_subscription_id_t subscribe_message_follow_invalidation (
       std::function<void (const runtime::protocol::message_follow_notice_t &)> handler);
+    void unsubscribe_message_follow_invalidation (
+      message_follow_subscription_id_t subscription_id) noexcept;
     bool activate_instance_spot_remote (
       const zlink::routing_id_t &target_node,
       zlink::framework::runtime::protocol::instance_spot_activation_header_t request,
@@ -327,13 +387,19 @@ class mesh_node_runtime_t
                              bool await_remote_admission = false,
                              std::optional<bound_session_relay_source_t>
                                bound_session_source = std::nullopt);
-    result_t<void> bind_application_actor_session (const actor_ref_t &actor,
-                                                   const zlink::routing_id_t &session_rid,
-                                                   std::uint64_t binding_generation,
-                                                   const runtime::spot_address_t &actor_route,
-                                                   std::chrono::milliseconds timeout);
+    result_t<application_actor_session_bind_outcome_t>
+    bind_application_actor_session (const actor_ref_t &actor,
+                                    const zlink::routing_id_t &session_rid,
+                                    std::uint64_t binding_generation,
+                                    const runtime::spot_address_t &actor_route,
+                                    std::chrono::milliseconds timeout);
     std::optional<runtime::spot_address_t>
     resolve_application_actor_route (const actor_ref_t &actor) const;
+    std::optional<runtime::spot_address_t>
+    wait_for_application_actor_route_change (
+      const actor_ref_t &actor,
+      const runtime::spot_address_t &stale_route,
+      std::chrono::milliseconds timeout) const;
     result_t<void> notify_application_actor_disconnected (const actor_ref_t &actor,
                                                           const node_rid_t &target_node,
                                                           std::chrono::milliseconds timeout);
@@ -373,6 +439,8 @@ class mesh_node_runtime_t
     void local_application_work_finished () noexcept;
     std::uint64_t pending_application_callbacks () const noexcept;
     std::uint64_t active_application_callbacks () const noexcept;
+    std::size_t pending_transport_operations () const noexcept;
+    std::uint64_t active_completion_waiters () const noexcept;
 
     static std::shared_ptr<mesh_node_runtime_t> from (zlink_builder_t &builder,
                                                       const std::string &mesh_name);
@@ -401,6 +469,12 @@ class mesh_node_runtime_t
       const runtime::protocol::relocation_id_t &relocation,
       const runtime::protocol::relocation_coordinator_fence_t &coordinator,
       std::chrono::milliseconds timeout);
+    runtime::protocol::session_relocation_route_t
+    make_session_relocation_route (
+      const session_relocation_checkpoint_t &checkpoint,
+      const zlink::routing_id_t &target_node,
+      std::uint64_t target_node_generation,
+      runtime::protocol::session_relocation_route_action_t action) const;
     bool route_bound_sessions (
       const std::vector<session_relocation_checkpoint_t> &checkpoints,
       const mesh_node_descriptor_t &target,
@@ -414,6 +488,8 @@ class mesh_node_runtime_t
         bool stopping = false;
         std::size_t active = 0;
     };
+
+    struct message_follow_subscription_state_t;
 
     result_t<actor_join_reply_t>
     actor_join_reply_from_completion (const host::receive_record_t &record,
@@ -455,13 +531,16 @@ class mesh_node_runtime_t
     std::shared_ptr<peer_callback_gate_t> _peer_callback_gate =
       std::make_shared<peer_callback_gate_t> ();
     std::mutex _message_follow_mutex;
-    std::function<void (const runtime::protocol::message_follow_notice_t &)>
-      _message_follow_handler;
+    message_follow_subscription_id_t _next_message_follow_subscription_id = 1;
+    std::map<message_follow_subscription_id_t,
+             std::shared_ptr<message_follow_subscription_state_t>>
+      _message_follow_subscriptions;
     std::map<std::string, host::spot_handle_t> _spots;
     std::map<std::string, host::actor_handle_t> _actors;
     std::mutex _peer_mutex;
     std::atomic_uint64_t _pending_application_callbacks{0};
     std::atomic_uint64_t _active_application_callbacks{0};
+    std::atomic_uint64_t _active_completion_waiters{0};
     std::map<std::string, std::uint64_t> _peer_connection_intents;
     std::mutex _completion_mutex;
     std::condition_variable _completion_ready;

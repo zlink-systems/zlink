@@ -37,6 +37,9 @@ public final class MultiNodeSpot implements ZLinkSpot<ScenarioActor> {
         evidence.record("MultiNodeSpotCreated", context.spotId(), request.isEmpty() ? "" : "request");
         if (!request.isEmpty()) {
             Contracts.SpotOnlyMeshReq command = request.decode(Contracts.SpotOnlyMeshReq.class);
+            if (command.targetSpotRid() == null || command.targetSpotRid().isBlank()) {
+                return CompletableFuture.completedFuture(ZLinkSpotCreateResponse.accept());
+            }
             return context.outbound()
                     .requestToSpot(command.targetSpotRid(), new Contracts.MultiNodeStateReq(7))
                     .timeout(Duration.ofSeconds(5))

@@ -3,6 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
+source "$NODE_ROOT/e2e/redis-container.sh"
+source "$NODE_ROOT/e2e/runner-common.sh"
+serialize_node_e2e_run "$0" "$@"
 REPO_ROOT="$(git -C "$ROOT_DIR" rev-parse --show-toplevel)"
 PACKAGE_ROOT="${ZLINK_NODE_FRAMEWORK_PACKAGE_ROOT:-$NODE_ROOT}"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
@@ -14,10 +17,6 @@ LOCAL_READINESS_TIMEOUT_SECONDS=3
 ROUTE_SETTLE_TIMEOUT_SECONDS=5
 SCENARIO_SETTLE_TIMEOUT_SECONDS=3
 HTTP_PROBE_TIMEOUT_SECONDS=3
-mkdir -p "$LOG_DIR"
-
-source "$NODE_ROOT/e2e/redis-container.sh"
-source "$NODE_ROOT/e2e/runner-common.sh"
 
 scenario="${1:-all}"
 KNOWN_SCENARIOS=()
@@ -73,17 +72,11 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+mkdir -p "$LOG_DIR"
 
-if [[ -n "${ZLINK_TEST_REDIS_ENDPOINT:-}" ]]; then
-  REDIS_ENDPOINT="$ZLINK_TEST_REDIS_ENDPOINT"
-elif command -v docker >/dev/null 2>&1; then
-  start_redis_container "zlink-redis-instance-spot-${RANDOM}-$$" \
-    -p "127.0.0.1::6379" "redis:7.2-alpine"
-  REDIS_ENDPOINT="redis://$(redis_container_endpoint "$REDIS_CONTAINER_ID")"
-else
-  echo "InstanceSpot requires Docker Redis or ZLINK_TEST_REDIS_ENDPOINT." >&2
-  exit 2
-fi
+start_redis_container "zlink-redis-instance-spot-${RANDOM}-$$" \
+  "redis:7.2-alpine"
+REDIS_ENDPOINT="redis://$(redis_container_endpoint "$REDIS_CONTAINER_ID")"
 wait_tcp redis "${REDIS_ENDPOINT#redis://}"
 
 if [[ "$(realpath "$PACKAGE_ROOT")" != "$(realpath "$NODE_ROOT")" ]]; then
@@ -139,7 +132,7 @@ for name, value in values.items():
 PY
 
 ROLE_MAIN="$PACKAGE_ROOT/e2e/InstanceSpot/Role/dist/main.js"
-CLIENT_MAIN="$PACKAGE_ROOT/e2e/InstanceSpot/Client/dist/main.js"
+CLIENT_MAIN="$PACKAGE_ROOT/e2e/InstanceSpot/Client/dist/InstanceSpot/Client/main.js"
 start_server owner "$ROLE_MAIN" --config="$TEMP_DIR/owner.json"
 OWNER_PID="$LAST_STARTED_PID"
 start_server caller "$ROLE_MAIN" --config="$TEMP_DIR/caller.json"

@@ -1,5 +1,4 @@
-package Configuration;
-import systems.zlink.e2e.registrationcodec.jsononlypeer.Configuration;
+package systems.zlink.e2e.registrationcodec.jsononlypeer.Configuration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties("e2e")

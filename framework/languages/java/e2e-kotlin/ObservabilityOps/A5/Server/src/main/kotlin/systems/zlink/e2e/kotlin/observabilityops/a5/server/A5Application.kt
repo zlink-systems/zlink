@@ -62,8 +62,8 @@ class A5Application {
                 .listen(endpoint.port)
                 .addRequestHandler(
                     ProbeHandler::class.java,
-                    Contracts.ProbeRequest::class.java,
-                    Contracts.ProbeReply::class.java,
+                    Contracts.ProbeReq::class.java,
+                    Contracts.ProbeRes::class.java,
                 )
             channel.client().connect(Env.get("e2e.route.endpoint"))
         }

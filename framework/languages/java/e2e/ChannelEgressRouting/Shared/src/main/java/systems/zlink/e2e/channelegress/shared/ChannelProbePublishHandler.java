@@ -8,7 +8,7 @@ import systems.zlink.framework.handlers.ZLinkHandlerGroup;
 
 @ZLinkHandlerGroup(Contracts.FANOUT_HANDLER_GROUP)
 public final class ChannelProbePublishHandler
-    implements ZLinkFanoutHandler<Contracts.FanoutProbe> {
+    implements ZLinkFanoutHandler<Contracts.FanoutProbeEvent> {
     private final EvidenceState evidence;
 
     public ChannelProbePublishHandler(EvidenceState evidence) {
@@ -17,7 +17,7 @@ public final class ChannelProbePublishHandler
 
     @Override
     public CompletionStage<Void> handle(
-        Contracts.FanoutProbe message,
+        Contracts.FanoutProbeEvent message,
         ZLinkPublishMessageContext context) {
         evidence.add("fanout", message.id());
         return CompletableFuture.completedFuture(null);

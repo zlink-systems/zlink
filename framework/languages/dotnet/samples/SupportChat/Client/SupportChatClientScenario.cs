@@ -241,15 +241,12 @@ internal sealed class SupportChatClientScenario
             return JoinCoreAsync(cancellationToken);
         }
 
-        private async ValueTask<JoinConversationRes> JoinCoreAsync(
+        private ValueTask<JoinConversationRes> JoinCoreAsync(
             CancellationToken cancellationToken)
         {
-            var completion = connector.WaitFor<JoinConversationRes>()
-                .Async(cancellationToken);
-            await connector.Send(new JoinConversationReq())
+            return connector.Request(new JoinConversationReq())
                 .Metadata(Cid, conversationId)
-                .Async(cancellationToken);
-            return (await completion).Payload;
+                .Async<JoinConversationRes>(cancellationToken);
         }
 
         public ValueTask<SendChatMessageRes> SendChatAsync(string text, CancellationToken cancellationToken)

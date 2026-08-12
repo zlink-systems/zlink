@@ -21,7 +21,9 @@ test('MON-A4A and MON-A4B keep replacement and crash failover as separate scenar
   assert.match(client, /await previous\?\.stop\(\)/);
   assert.match(client, /'MON-A4A': \(\) => replaceServiceBProcess\(\(\) => runMonA4A\(options\)\)/);
   assert.match(client, /'MON-A4B': async \(\) => \{ serviceBProcess = await runMonA4B\(options\); \}/);
-  assert.match(runner, /RESERVED_PORTS/);
+  assert.match(runner, /source "\$NODE_ROOT\/e2e\/runner-common\.sh"/);
+  assert.match(runner, /printf -v "\$variable_name" '%s' "\$\(allocate_port\)"/);
+  assert.doesNotMatch(runner, /RESERVED_PORTS/);
   assert.match(replacementScenario, /runMonA4A/);
   assert.match(crashScenario, /runMonA4B/);
   assert.match(support, /startReplacementService\(options/);
@@ -39,6 +41,16 @@ test('MON-A4A and MON-A4B keep replacement and crash failover as separate scenar
   assert.doesNotMatch(support, /service drain evidence/);
   assert.match(publicStatus, /readyPeerCount/);
   assert.match(publicStatus, /readyTargetCount/);
+});
+
+test('MON-D1B keeps the registered repeated crash recovery implementation', () => {
+  const client = read('e2e/RuntimeMonitoring/Client/main.ts');
+  const repeatedRestartScenario = read('e2e/RuntimeMonitoring/Client/Scenarios/mon-d1b-repeated-restart-scenario.ts');
+
+  assert.match(client, /'MON-D1B': async \(\) => \{ serviceBProcess = await runMonD1B\(options\); \}/);
+  assert.match(repeatedRestartScenario, /export async function runMonD1B/);
+  assert.match(repeatedRestartScenario, /for \(let cycle = 1; cycle <= 3; cycle \+= 1\)/);
+  assert.match(repeatedRestartScenario, /BigInt\(restored\.sequence\) > BigInt\(before\.sequence\)/);
 });
 
 function read(relativePath) {

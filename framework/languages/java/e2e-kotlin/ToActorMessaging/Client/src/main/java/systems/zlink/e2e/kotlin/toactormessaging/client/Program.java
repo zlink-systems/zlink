@@ -52,15 +52,15 @@ public final class Program {
     private static void ensure(String actorUrl, String scenario, String actorId) {
         JsonHttp.postJson(
             actorUrl + "/ensure",
-            new Contracts.ActorCallRequest(scenario, actorId, "ensure"),
-            Contracts.ActorCallResponse.class);
+            new Contracts.ActorCallReq(scenario, actorId, "ensure"),
+            Contracts.ActorCallRes.class);
     }
 
     private static void postFault(String actorUrl, String path, String scenario, String actorId) {
         JsonHttp.postJson(
             actorUrl + path,
-            new Contracts.ActorFaultRequest(scenario, actorId),
-            Contracts.ActorCallResponse.class);
+            new Contracts.ActorFaultReq(scenario, actorId),
+            Contracts.ActorCallRes.class);
     }
 
     private static void ensureReady(String actorUrl, String callerUrl, String scenario, String actorId) {
@@ -70,7 +70,7 @@ public final class Program {
 
     private static void waitUntilReady(String callerUrl, String scenario, String actorId) {
         long deadline = System.nanoTime() + 5_000_000_000L;
-        Contracts.ActorCallResponse response = null;
+        Contracts.ActorCallRes response = null;
         while (System.nanoTime() < deadline) {
             response = call(callerUrl, scenario, actorId, "ready", false);
             if (response.errorKind() == null && "reply:ready".equals(response.result())) {
@@ -105,7 +105,7 @@ public final class Program {
         String value,
         String expected,
         boolean send) {
-        Contracts.ActorCallResponse response = call(callerUrl, scenario, actorId, value, send);
+        Contracts.ActorCallRes response = call(callerUrl, scenario, actorId, value, send);
         require(response.errorKind() == null, scenario + " unexpected error " + response.errorKind());
         require(expected.equals(response.result()), scenario + " expected " + expected + " got " + response.result());
     }
@@ -117,15 +117,15 @@ public final class Program {
         String expectedKind,
         boolean send) {
         String endpoint = send ? "/send" : "/request";
-        Contracts.ActorCallResponse response = JsonHttp.postJson(
+        Contracts.ActorCallRes response = JsonHttp.postJson(
             callerUrl + endpoint,
-            new Contracts.ActorCallRequest(scenario, actorId, "missing"),
-            Contracts.ActorCallResponse.class);
+            new Contracts.ActorCallReq(scenario, actorId, "missing"),
+            Contracts.ActorCallRes.class);
         require(expectedKind.equals(response.errorKind()),
             scenario + " expected " + expectedKind + " got " + response.errorKind());
     }
 
-    private static Contracts.ActorCallResponse call(
+    private static Contracts.ActorCallRes call(
         String callerUrl,
         String scenario,
         String actorId,
@@ -134,8 +134,8 @@ public final class Program {
         String endpoint = send ? "/send" : "/request";
         return JsonHttp.postJson(
             callerUrl + endpoint,
-            new Contracts.ActorCallRequest(scenario, actorId, value),
-            Contracts.ActorCallResponse.class);
+            new Contracts.ActorCallReq(scenario, actorId, value),
+            Contracts.ActorCallRes.class);
     }
 
     private static void assertNoEvidence(String actorUrl, String scenario) {

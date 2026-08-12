@@ -1,6 +1,4 @@
-package Scenarios;
-import systems.zlink.e2e.registrymessaging.client.Scenarios;
-import systems.zlink.e2e.registrymessaging.client.Support;
+package systems.zlink.e2e.registrymessaging.client.Scenarios;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;

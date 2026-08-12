@@ -9,6 +9,7 @@ import type { Message } from '../../contracts/Common/Message';
 import { throwIfAborted } from '../abort';
 import type {
   ZLinkBackendActorRef,
+  ZLinkBackendActorSessionSendFence,
   ZLinkBackendActorSessionNode
 } from '../backend/contracts';
 import {
@@ -35,11 +36,9 @@ import {
 import {
   ZLinkManagedStream
 } from './managed-stream';
-import { ZLinkMeshSubmitterRegistry } from '../messaging';
+import type { ZLinkMeshSubmitterRegistry } from '../messaging';
 
 const ZLINK_SEND_DONT_WAIT = 1;
-const LEGACY_BOUND_SESSION_SEND_TIMEOUT_MS = 1000;
-const LEGACY_BOUND_SESSION_SEND_CAPACITY = 4096;
 
 type ZLinkStreamActorSessionRoute = ZLinkActorSessionRoute<DefaultZLinkSessionContext, DefaultZLinkSessionActor>;
 
@@ -63,9 +62,7 @@ export interface ZLinkBoundSessionDisconnectOptions {
 export interface ZLinkBoundSessionServiceOptions {
   readonly transport?: ZLinkBoundSessionTransport;
   readonly actorBindTimeoutMs?: number;
-  readonly meshSubmitters?: ZLinkMeshSubmitterRegistry;
-  readonly sendTimeoutMs?: number;
-  readonly sendHighWaterMark?: number;
+  readonly meshSubmitters: ZLinkMeshSubmitterRegistry;
   readonly nativeActorMeshNameProvider?: () => string | undefined;
 }
 
@@ -75,12 +72,9 @@ export class ZLinkBoundSessionService {
   constructor(
     private readonly routes: ZLinkActorSessionBindingRegistry<DefaultZLinkSessionContext, DefaultZLinkSessionActor>,
     private readonly frameMessages: ZLinkStreamFrameMessageFactory,
-    private readonly options: ZLinkBoundSessionServiceOptions = {}
+    private readonly options: ZLinkBoundSessionServiceOptions
   ) {
-    this.meshSubmitters = options.meshSubmitters ?? new ZLinkMeshSubmitterRegistry(
-      options.sendTimeoutMs ?? LEGACY_BOUND_SESSION_SEND_TIMEOUT_MS,
-      Math.max(1, options.sendHighWaterMark ?? LEGACY_BOUND_SESSION_SEND_CAPACITY)
-    );
+    this.meshSubmitters = options.meshSubmitters;
   }
 
   async sendBoundSession(
@@ -436,7 +430,8 @@ export class ZLinkBoundSessionService {
           backendActorRef,
           requireBoundSessionGeneration(actorRef),
           [frame],
-          ZLINK_SEND_DONT_WAIT
+          ZLINK_SEND_DONT_WAIT,
+          boundSessionSendFence(node, backendActorRef, actorRef)
       ), signal);
   }
 
@@ -470,4 +465,33 @@ function toBoundSessionSendActorRef(actor: ActorRef): ZLinkBackendActorRef {
     actorId: actor.actorId,
     generation: actor.objectGeneration
   };
+}
+
+function boundSessionSendFence(
+  node: ZLinkBackendActorSessionNode,
+  backendActor: ZLinkBackendActorRef,
+  actor: ActorRef
+): ZLinkBackendActorSessionSendFence | undefined {
+  const internal = actor as ActorRef & {
+    readonly ownershipGeneration?: bigint;
+    readonly ownerLeaseGeneration?: bigint;
+    readonly ownerNodeGeneration?: bigint;
+  };
+  const ownerNodeGeneration = internal.ownerNodeGeneration
+    ?? node.actorNodeGeneration?.(backendActor);
+  if (
+    internal.ownershipGeneration === undefined
+    || internal.ownershipGeneration <= 0n
+    || internal.ownerLeaseGeneration === undefined
+    || internal.ownerLeaseGeneration <= 0n
+    || ownerNodeGeneration === undefined
+    || ownerNodeGeneration <= 0n
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    targetNodeGeneration: ownerNodeGeneration,
+    authorityOwnerGeneration: internal.ownershipGeneration,
+    ownerLeaseGeneration: internal.ownerLeaseGeneration
+  });
 }

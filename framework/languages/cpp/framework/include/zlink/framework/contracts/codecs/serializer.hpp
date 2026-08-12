@@ -22,6 +22,7 @@ namespace zlink::framework
 {
 
 class encoded_payload_t;
+class codec_registration_context_t;
 
 namespace detail
 {
@@ -247,15 +248,9 @@ class serializer_registry_t
                                 typename serializer_t<T>::deserialize_fn_t deserialize,
                                 std::string content_type = "application/octet-stream")
     {
-        return add_erased (
-          std::type_index (typeid (T)),
-          [serialize = std::move (serialize)] (const void *value) {
-              return serialize (*static_cast<const T *> (value));
-          },
-          [deserialize = std::move (deserialize)] (const encoded_payload_t &payload, void *out) {
-              *static_cast<T *> (out) = deserialize (payload);
-          },
-          std::move (content_type));
+        return add_for_registration<T> (
+          std::move (serialize), std::move (deserialize),
+          std::move (content_type), std::nullopt);
     }
 
     /// Gets the serializer for T. If no custom serializer is registered and T can be converted
@@ -332,6 +327,25 @@ class serializer_registry_t
 
   private:
     friend struct detail::serializer_registry_access_t;
+    friend class codec_registration_context_t;
+
+    template <typename T>
+    serializer_registry_t &add_for_registration (
+      typename serializer_t<T>::serialize_fn_t serialize,
+      typename serializer_t<T>::deserialize_fn_t deserialize,
+      std::string content_type,
+      std::optional<std::size_t> registration)
+    {
+        return add_erased (
+          std::type_index (typeid (T)),
+          [serialize = std::move (serialize)] (const void *value) {
+              return serialize (*static_cast<const T *> (value));
+          },
+          [deserialize = std::move (deserialize)] (const encoded_payload_t &payload, void *out) {
+              *static_cast<T *> (out) = deserialize (payload);
+          },
+          std::move (content_type), registration);
+    }
 
     struct erased_serializer_t
     {
@@ -349,11 +363,13 @@ class serializer_registry_t
                       std::shared_ptr<const void> serializer) const;
     void invalidate_cached_serializer (std::type_index type) noexcept;
     void freeze () noexcept;
+    std::size_t begin_registration ();
 
     serializer_registry_t &add_erased (std::type_index type,
                                        serialize_any_fn_t serialize,
                                        deserialize_any_fn_t deserialize,
-                                       std::string content_type);
+                                       std::string content_type,
+                                       std::optional<std::size_t> registration);
 
     std::unique_ptr<detail::serializer_registry_state_t> _state;
 };

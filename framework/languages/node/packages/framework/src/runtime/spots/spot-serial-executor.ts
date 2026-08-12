@@ -88,20 +88,18 @@ export class ZLinkSpotSerialExecutor {
     this.executionBarrier = barrier;
   }
 
-  /**
-   * Runs `operation` in serial order, one turn at a time. A call made from
-   * within the currently active turn of this executor is re-entrant and runs
-   * as part of that turn instead of queueing (which would deadlock a turn
-   * that awaits the nested result).
-   */
+  /** Runs `operation` in serial order, one turn at a time. */
   execute<T>(
     operation: () => Promise<T> | T,
     workOptions?: ZLinkSerialWorkOptions
   ): Promise<T> {
     if (this.isCurrentTurn) {
-      return Promise.resolve().then(operation);
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.InvalidOperation,
+        'A Spot serial turn cannot implicitly execute another turn for the same owner.'
+      );
     }
-    return this.enqueue(operation, false, workOptions);
+    return this.enqueueApplicationTurn(operation, workOptions);
   }
 
   /**
@@ -113,7 +111,7 @@ export class ZLinkSpotSerialExecutor {
     operation: () => Promise<T> | T,
     workOptions?: ZLinkSerialWorkOptions
   ): Promise<T> {
-    return this.enqueue(operation, false, workOptions);
+    return this.enqueueApplicationTurn(operation, workOptions);
   }
 
   /**
@@ -167,41 +165,45 @@ export class ZLinkSpotSerialExecutor {
     operation: () => Promise<T> | T,
     workOptions?: ZLinkSerialWorkOptions
   ): Promise<T> {
-    return this.enqueue(operation, true, workOptions);
+    return this.enqueueFrameworkTurn(operation, workOptions);
   }
 
-  private enqueue<T>(
+  private async enqueueApplicationTurn<T>(
     operation: () => Promise<T> | T,
-    bypassBarrierAdmission: boolean,
     workOptions: ZLinkSerialWorkOptions = {}
-  ): Promise<T> {
-    return this.scheduleQueuedTurn(operation, bypassBarrierAdmission, workOptions);
-  }
-
-  private async scheduleQueuedTurn<T>(
-    operation: () => Promise<T> | T,
-    bypassBarrierAdmission: boolean,
-    workOptions: ZLinkSerialWorkOptions
   ): Promise<T> {
     this.lastActivityAtMs = Date.now();
     let barrierClaim: ZLinkExecutionBarrierClaim | undefined;
     try {
-      if (!bypassBarrierAdmission) {
-        barrierClaim = await this.executionBarrier?.enter();
-      } else {
-        // Normal application admission crosses the async barrier boundary
-        // before it reaches the scheduler. Give already-admitted records that
-        // same boundary so a framework-owned turn cannot overtake them.
-        await Promise.resolve();
-      }
-      return await this.scheduler.submit(operation, {
-        ...workOptions,
-        lane: workOptions.lane ?? 'application'
-      }, barrierClaim);
+      barrierClaim = await this.executionBarrier?.enter();
+      return await this.submitQueuedTurn(operation, workOptions, barrierClaim);
     } catch (error) {
       barrierClaim?.release();
       throw error;
     }
+  }
+
+  private async enqueueFrameworkTurn<T>(
+    operation: () => Promise<T> | T,
+    workOptions: ZLinkSerialWorkOptions = {}
+  ): Promise<T> {
+    this.lastActivityAtMs = Date.now();
+    // Application admission crosses the async barrier boundary before it
+    // reaches the scheduler. Give an already-authorized framework turn that
+    // same boundary so it cannot overtake admitted application records.
+    await Promise.resolve();
+    return await this.submitQueuedTurn(operation, workOptions);
+  }
+
+  private submitQueuedTurn<T>(
+    operation: () => Promise<T> | T,
+    workOptions: ZLinkSerialWorkOptions,
+    barrierClaim?: ZLinkExecutionBarrierClaim
+  ): Promise<T> {
+    return this.scheduler.submit(operation, {
+      ...workOptions,
+      lane: workOptions.lane ?? 'application'
+    }, barrierClaim);
   }
 
   private runQueuedRecord(record: ZLinkSerialWorkRecord<unknown>): Promise<void> {
@@ -281,7 +283,7 @@ export class ZLinkSpotSerialExecutor {
       return true;
     }
     turn.bindExecutionClaim(resumeClaim);
-    void this.enqueue(async () => {
+    void this.enqueueFrameworkTurn(async () => {
       this.resumedOwnerTurn = turn;
       try {
         turn.resetSuspension();
@@ -290,7 +292,7 @@ export class ZLinkSpotSerialExecutor {
       } finally {
         if (this.resumedOwnerTurn === turn) this.resumedOwnerTurn = undefined;
       }
-    }, true).catch((error) => {
+    }).catch((error) => {
       turn.releaseBoundExecutionClaim();
       reject(error);
     });

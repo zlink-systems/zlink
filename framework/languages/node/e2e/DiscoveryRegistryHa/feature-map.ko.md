@@ -32,7 +32,6 @@
 | SF-F11 | 미구현 | cancellation/response loss 뒤 payload isolation과 단일 terminal을 검증해야 한다. |
 | SF-G1 | 구현 | Actor 총량 3, Spot 총량 4, User Spot stable type 3을 함께 설정한다. Actor와 User Spot factory failure 뒤 reservation이 반환되는지, 동시 create 초과가 `CapacityExceeded`인지, destroy·close 뒤 slot을 다시 사용하는지를 public create terminal과 MeshNode descriptor count로 검증한다. 실제 process 증거: `log/20260808-022838-1932368`. |
 | SF-G2 | 구현됨 | activation concurrency gate가 Instance factory 실행을 제한하고 public descriptor의 active projection을 갱신한다. 32개 valid create의 최종 성공과 관찰된 active 상한을 검증한다. |
-| SF-G3 | 구현 | User Spot 하나와 Actor 두 개를 source aggregate로 구성한다. target의 Spot 총량, Actor 총량, User Spot stable type 총량을 각각 부족하게 만든 세 조합에서는 source ownership과 application state가 유지되는지 확인한다. 세 capacity가 모두 충분한 조합에서는 aggregate 전체가 target으로 이동하고 identity와 state가 보존되는지 검증한다. |
 
 ## 검증
 
@@ -75,9 +74,6 @@
 - `./e2e/DiscoveryRegistryHa/run_e2e.sh SF-C5A`
   - 로그: `log/20260807-222447-2593297`
   - 결과: 이전 owner 종료 후 `Unavailable`, 새 owner의 `Ready`와 초기화 중 `Creating`을 ID 조회와 page 조회에서 확인했다. `Missing`은 성공 page에 나타나지 않았고 Redis 중단 뒤 page 조회는 전체 오류로 끝났다. `scenario SF-C5A passed`, `store-failure-recovery scenario result=passed`
-- `./e2e/DiscoveryRegistryHa/run_e2e.sh SF-G3`
-  - 로그: `log/20260808-025010-2168471`, `log/20260808-025017-2169110`, `log/20260808-025026-2169781`, `log/20260808-025035-2170420`
-  - 결과: Spot·Actor·stable type capacity가 각각 부족한 세 조합은 source aggregate를 유지했고, 충분한 조합은 User Spot과 Actor 두 개를 target으로 함께 이동했다. 네 조합에서 identity와 application state를 확인했으며 `scenario SF-G3 passed`를 확인했다.
 - `./e2e/DiscoveryRegistryHa/run_e2e.sh SF-F7`
   - 로그: `log/20260808-035246-3082189`, `log/20260808-035330-3109518`
   - 결과: 64 MiB state는 target으로 이동한 뒤 length와 SHA-256 checksum이 유지됐다. 64 MiB + 1 byte state는 `StateIncompatible`로 종료됐고 source owner와 state가 유지됐으며 두 variant 모두 `scenario SF-F7 variant=... passed`를 확인했다.

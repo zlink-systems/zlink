@@ -4,18 +4,18 @@ import { getJson, postJson } from '../../../http-client';
 import { readRouteStatus, waitForHostStatus } from '../Support/public-status';
 import { ensure } from '../Support/scenario-assert';
 
-interface SpotResult {
+interface SpotCreateRes {
   readonly state: string;
   readonly spotId?: string;
   readonly nodeRid?: string;
 }
 
 export async function runMonB1(options: ClientOptions): Promise<void> {
-  const created: SpotResult[] = [];
+  const created: SpotCreateRes[] = [];
   try {
-    const remoteByRid = new Map<string, SpotResult>();
+    const remoteByRid = new Map<string, SpotCreateRes>();
     for (let attempt = 0; attempt < 6 && remoteByRid.size < 2; attempt += 1) {
-      const spot = await postJson<SpotResult>(options.serviceUrl, '/spot/create', {});
+      const spot = await postJson<SpotCreateRes>(options.serviceUrl, '/spot/create', {});
       if (spot.state === 'created' && spot.spotId !== undefined && spot.nodeRid !== undefined) {
         created.push(spot);
         if (spot.nodeRid !== 'svc-a') remoteByRid.set(spot.nodeRid, spot);

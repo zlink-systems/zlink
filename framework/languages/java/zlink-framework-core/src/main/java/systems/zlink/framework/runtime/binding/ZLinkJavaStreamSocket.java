@@ -143,7 +143,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     @Override public synchronized boolean send(RoutingId routingId, List<Message> parts, SendFlags flags) {
         return ZLinkJavaStreamFraming.submit(socket.send(routingId), 1, null, null, parts, flags);
     }
-    synchronized boolean sendBoundSessionPush(
+    @Override public synchronized boolean sendBoundSessionPush(
         RoutingId routingId,
         List<Message> parts,
         SendFlags flags) {

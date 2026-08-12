@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/../redis-common.sh"
+zlink_cpp_e2e_acquire_run_lock "${BASH_SOURCE[0]}" "$@"
+zlink_cpp_e2e_install_cleanup_trap
 CPP_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-$CPP_ROOT/build}"
 
@@ -31,31 +33,7 @@ HTTP_PROBE_TIMEOUT_SECONDS=3
 SHUTDOWN_GRACE_SECONDS=0.5
 
 pick_ports() {
-  python3 - "$1" <<'PY'
-import socket
-import secrets
-import sys
-sockets = []
-ports = []
-candidates = list(range(10000, 30000))
-secrets.SystemRandom().shuffle(candidates)
-for port in candidates:
-    try:
-        current = socket.socket()
-        current.bind(("127.0.0.1", port))
-    except OSError:
-        current.close()
-        continue
-    sockets.append(current)
-    ports.append(port)
-    if len(ports) == int(sys.argv[1]):
-        break
-if len(ports) != int(sys.argv[1]):
-    raise SystemExit(f"cannot reserve {sys.argv[1]} listener ports")
-print(" ".join(str(port) for port in ports))
-for current in sockets:
-    current.close()
-PY
+  zlink_cpp_e2e_allocate_ports "$1"
 }
 
 pids=()
@@ -72,7 +50,7 @@ cleanup() {
   done
   wait "${pids[@]:-}" >/dev/null 2>&1 || true
   if [[ -n "$REDIS_CONTAINER" ]]; then
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   rm -rf "$CONFIG_DIR"
   if [[ "$code" -ne 0 ]]; then

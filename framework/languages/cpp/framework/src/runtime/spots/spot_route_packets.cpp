@@ -7,7 +7,6 @@
 #include <nlohmann/json.hpp>
 #include <service_wire_constants.hpp>
 
-#include <limits>
 #include <stdexcept>
 #include <string_view>
 #include <typeindex>
@@ -172,25 +171,14 @@ result_t<zlink::message_t> encode_actor_bound_session_frame (
     const stream_header_t header (stream_message_kind_t::send, codec,
                                   stream_header_flags_t::none, std::nullopt,
                                   std::move (packet_name));
-    auto encoded_header = stream_runtime.encode_header (header);
-    if (!encoded_header) {
+    auto encoded_frame = stream_runtime.encode_frame (header, payload);
+    if (!encoded_frame) {
         return result_t<zlink::message_t>::failure (
-          encoded_header.error_kind (), encoded_header.error () ? encoded_header.error ()->what ()
-                                                                : "STREAM header encode failed");
+          encoded_frame.error_kind (), encoded_frame.error () ? encoded_frame.error ()->what ()
+                                                              : "STREAM frame encode failed");
     }
-    const auto payload_bytes = payload.to_bytes ();
-    const auto header_size = encoded_header.value ().size ();
-    std::vector<std::uint8_t> frame;
-    frame.reserve (6 + header_size + payload_bytes.size ());
-    frame.push_back (static_cast<std::uint8_t> ((header_size >> 8) & 0xff));
-    frame.push_back (static_cast<std::uint8_t> (header_size & 0xff));
-    frame.push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 24) & 0xff));
-    frame.push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 16) & 0xff));
-    frame.push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 8) & 0xff));
-    frame.push_back (static_cast<std::uint8_t> (payload_bytes.size () & 0xff));
-    frame.insert (frame.end (), encoded_header.value ().begin (), encoded_header.value ().end ());
-    frame.insert (frame.end (), payload_bytes.begin (), payload_bytes.end ());
-    return result_t<zlink::message_t>::success (zlink::message_t::from (std::move (frame)));
+    return result_t<zlink::message_t>::success (
+      zlink::message_t::from (std::move (encoded_frame.value ())));
 }
 
 void to_json (nlohmann::json &json, const spot_actor_admission_route_request_t &value)
@@ -290,8 +278,11 @@ void to_json (nlohmann::json &json, const spot_actor_commit_route_request_t &val
                            value.target_owner_lease_generation},
                           {"relocationCapacityFence",
                            value.relocation_capacity_fence},
+                          {"sourceSpotId", value.source_spot_id},
                           {"boundSessionNodeRid", value.bound_session_node_rid},
                           {"boundSessionRid", value.bound_session_rid},
+                          {"sessionRelocationRoute",
+                           encode_base64 (value.session_relocation_route)},
                           {"transferState", encode_base64 (value.transfer_state)},
                           {"handoffBacklog", value.handoff_backlog},
                           {"coreTransfer", value.core_transfer},
@@ -333,8 +324,13 @@ void from_json (const nlohmann::json &json, spot_actor_commit_route_request_t &v
       json.value ("targetOwnerLeaseGeneration", std::uint64_t{0});
     value.relocation_capacity_fence =
       json.value ("relocationCapacityFence", "");
+    value.source_spot_id = json.value ("sourceSpotId", "");
     value.bound_session_node_rid = json.value ("boundSessionNodeRid", "");
     value.bound_session_rid = json.value ("boundSessionRid", "");
+    value.session_relocation_route =
+      json.contains ("sessionRelocationRoute")
+        ? decode_base64_field (json, "sessionRelocationRoute")
+        : std::vector<std::uint8_t>{};
     value.transfer_state = decode_base64_field (json, "transferState");
     const auto handoff_backlog = json.find ("handoffBacklog");
     if (handoff_backlog != json.end ()) {

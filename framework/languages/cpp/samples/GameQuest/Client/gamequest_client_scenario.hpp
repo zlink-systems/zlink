@@ -225,7 +225,24 @@ class gamequest_client_scenario_t
                                 .result ();
             ensure (deactivated && deactivated.value ().ok,
                     "player-alice owner deactivation failed");
-            std::this_thread::sleep_for (std::chrono::milliseconds (500));
+
+            /* A call that already resolved the retired Ready owner terminates
+             * as stale. The Framework invalidates that route, but does not
+             * resubmit the same application request to a new owner. */
+            auto stale_owner = alice_b.request (
+                                    get_quest_progress_req_t{"player-alice"})
+                               .packet_name (
+                                 get_quest_progress_req_t::packet_name)
+                               .async<get_quest_progress_res_t> ()
+                               .result ();
+            ensure (!stale_owner
+                      && stale_owner.error_code ()
+                           == zlink::stream_connector::error_code_t::remote_error,
+                    "retired owner call did not end with a stale terminal");
+
+            /* The next call carries Instance intent on the server route. It
+             * resolves Missing after invalidation, creates the next owner and
+             * verifies that initialization replayed the durable event stream. */
             auto rehydrated = alice_b.request (get_quest_progress_req_t{"player-alice"})
                                 .packet_name (get_quest_progress_req_t::packet_name)
                                 .async<get_quest_progress_res_t> ()

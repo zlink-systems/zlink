@@ -26,7 +26,7 @@ import type {
   SelfCycleMsg,
   SelfSendMsg
 } from '../../../Shared/messages';
-import { ProbeReq } from '../../../Shared/messages';
+import { ProbeMsg, ProbeReq } from '../../../Shared/messages';
 import { EvidenceStore } from '../Support/evidence-store';
 import type { AwaitProbeSpot } from '../Spots/await-probe-spot';
 
@@ -211,10 +211,15 @@ export class SelfCycleHandler implements ZLinkSpotPacketHandler<AwaitProbeSpot, 
         .timeout(request.timeoutMs);
       if (request.terminator === 'yield') {
         await call.yield();
+        this.evidence.add(
+          `self-cycle-yield-completed|rid=${this.evidence.rid}|spot=${spot.context.spotId}`
+          + `|request=${request.requestId}`
+        );
+        return;
       } else {
         await call.submit();
       }
-      this.evidence.add(`self-cycle-unexpected-completed|request=${request.requestId}`);
+      this.evidence.add(`self-cycle-async-unexpected-completed|request=${request.requestId}`);
     } catch (error) {
       if (error instanceof ZLinkFrameworkException
         && error.kind === ZLinkFrameworkErrorKind.InvalidOperation) {
@@ -243,7 +248,7 @@ export class SelfSendHandler implements ZLinkSpotPacketHandler<AwaitProbeSpot, S
     this.evidence.add(
       `self-send-started|rid=${this.evidence.rid}|spot=${spot.context.spotId}|request=${request.requestId}`
     );
-    await spot.context.outbound.sendToSpot(spot.context.spotId, Object.assign(new ProbeReq(), {
+    await spot.context.outbound.sendToSpot(spot.context.spotId, Object.assign(new ProbeMsg(), {
       requestId: request.requestId,
       marker: request.marker
     })).submit();

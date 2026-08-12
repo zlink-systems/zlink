@@ -19,6 +19,7 @@ class EnsureActorHandler(
     ): Contracts.EnsureActorRes {
         val actor = when (val result = actors.kotlin()
             .getOrCreate(request.actorId, "scenario")
+            .request(request)
             .await()
         ) {
             is ZLinkActorCreateResult.Existing -> result.actor

@@ -49,6 +49,10 @@ export class ProtobufEchoReq {
   constructor(readonly value: string) {}
 }
 
+export class ProtobufEchoRes {
+  constructor(readonly value: string) {}
+}
+
 @ZLinkPacket(PacketNames.echoProtobufMsg)
 export class ProtobufEchoMsg {
   constructor(readonly value: string) {}
@@ -56,6 +60,10 @@ export class ProtobufEchoMsg {
 
 @ZLinkPacket(PacketNames.echoMessagePackReq)
 export class MessagePackEchoReq {
+  constructor(readonly value: string) {}
+}
+
+export class MessagePackEchoRes {
   constructor(readonly value: string) {}
 }
 

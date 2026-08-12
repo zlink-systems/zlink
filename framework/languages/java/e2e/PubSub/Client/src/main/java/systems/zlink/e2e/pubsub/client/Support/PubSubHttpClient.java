@@ -1,6 +1,5 @@
-package Support;
+package systems.zlink.e2e.pubsub.client.Support;
 
-import systems.zlink.e2e.pubsub.client.Support;
 import java.net.URI;
 import java.time.Duration;
 import java.util.LinkedHashMap;

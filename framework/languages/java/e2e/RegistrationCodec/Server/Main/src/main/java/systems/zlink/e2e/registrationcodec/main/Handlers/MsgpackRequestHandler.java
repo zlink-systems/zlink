@@ -1,6 +1,4 @@
-package Handlers;
-import systems.zlink.e2e.registrationcodec.main.Handlers;
-import systems.zlink.e2e.registrationcodec.main.Infrastructure;
+package systems.zlink.e2e.registrationcodec.main.Handlers;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -21,8 +19,8 @@ public final class MsgpackRequestHandler
     public CompletionStage<Contracts.PackedEchoRes> handle(
         Contracts.PackedEchoReq request,
         ZLinkMessageContext context) {
-        state.record("Request", "MsgpackEcho", request.value());
-        state.record("ContentType", "MsgpackEcho", context.contentType().orElse(""));
+        state.record("Request", "PackedEchoReq", request.value());
+        state.record("ContentType", "PackedEchoReq", context.contentType().orElse(""));
         return CompletableFuture.completedFuture(
             new Contracts.PackedEchoRes("echo:" + request.value()));
     }

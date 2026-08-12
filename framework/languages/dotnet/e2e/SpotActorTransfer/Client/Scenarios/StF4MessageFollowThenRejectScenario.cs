@@ -31,7 +31,7 @@ internal static class StF4MessageFollowThenRejectScenario
         var g1Delivery = context.SendFromNodeAsync(
             caller,
             actorId,
-            new HandoffPacket(scenario, g1Marker));
+            new HandoffMsg(scenario, g1Marker));
         var g2Delivery = context.ProbeFromNodeAsync(
             caller,
             actorId,

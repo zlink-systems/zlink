@@ -3,6 +3,8 @@ set -euo pipefail
 umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$ROOT_DIR/../redis-common.sh"
+zlink_dotnet_e2e_acquire_run_lock "$0" "$@"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="$ROOT_DIR/logs/$RUN_ID"
 if [[ "$#" -eq 0 ]]; then
@@ -26,13 +28,7 @@ SUBSCRIBER_PROJECT="$ROOT_DIR/Server/Subscriber/PubSub.Subscriber.csproj"
 CLIENT_PROJECT="$ROOT_DIR/Client/PubSub.Client.csproj"
 
 pick_port() {
-  python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
+  zlink_dotnet_e2e_allocate_ports 1
 }
 
 PUB_HTTP_PORT="$(pick_port)"

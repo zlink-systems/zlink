@@ -269,6 +269,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         std::uint64_t lifecycle_generation = 0;
         std::string security_identity;
         bool initiates_connection = true;
+        bool accepting_work = true;
     };
 
     struct loop_t
@@ -419,8 +420,12 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         }
 
         auto desired = compute_desired (loop, descriptors);
-        loop.last_desired = desired;
-        _runtime->observe_discovered_peers (desired.size ());
+        loop.last_desired.clear ();
+        for (const auto &[key, target] : desired) {
+            if (target.accepting_work)
+                loop.last_desired.emplace (key, target);
+        }
+        _runtime->observe_discovered_peers (loop.last_desired.size ());
         for (auto it = loop.active.begin (); it != loop.active.end ();) {
             if (!desired.contains (it->first)) {
                 disconnect (loop, it->second);
@@ -432,6 +437,12 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         for (const auto &[key, target] : desired) {
             const auto current = loop.active.find (key);
             if (current == loop.active.end ()) {
+                /* Draining removes a descriptor from new-work selection, but
+                 * an existing pipe remains the owner of requests admitted
+                 * before that transition. A host that observes only the
+                 * draining row must not create a new connection. */
+                if (!target.accepting_work)
+                    continue;
                 connect (loop, target);
                 loop.active[key] = target;
             } else if (current->second.endpoint != target.endpoint
@@ -471,7 +482,6 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                     && descriptor.rid.to_hex () == loop.local_rid->to_hex ())
                 || descriptor.state == framework_runtime_state_t::relocating
                 || descriptor.state == framework_runtime_state_t::relocated
-                || descriptor.state == framework_runtime_state_t::draining
                 || descriptor.state == framework_runtime_state_t::stopped
                 || descriptor.state == framework_runtime_state_t::error)
                 continue;
@@ -497,7 +507,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             desired.emplace (
               key, target_t{key, descriptor.rid, descriptor.endpoint,
                             descriptor.owner_id, descriptor.lifecycle_generation,
-                            descriptor.security_identity, initiates_connection});
+                            descriptor.security_identity, initiates_connection,
+                            descriptor.state
+                              != framework_runtime_state_t::draining});
         }
         return desired;
     }

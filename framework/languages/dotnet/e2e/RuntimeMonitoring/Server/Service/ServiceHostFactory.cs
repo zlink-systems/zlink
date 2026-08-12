@@ -204,14 +204,14 @@ internal static class ServiceHostFactory
         });
         app.MapPost("/spot/publish/{topic}", async (
             string topic,
-            ProfileReq request,
+            ProfileEvent message,
             [FromServices] IZLinkSpotPublisherClient publisher,
             CancellationToken cancellationToken) =>
         {
             await publisher.Publish(
                     RuntimeMonitoringNames.SpotChannel,
                     topic,
-                    request)
+                    message)
                 .Async(cancellationToken);
             return Results.Ok();
         });

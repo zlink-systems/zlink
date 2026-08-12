@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.host;
 import java.nio.charset.StandardCharsets;
+import java.lang.reflect.Proxy;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -13,13 +14,18 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.ZLinkEncodedPayload;
+import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorFactory;
@@ -30,6 +36,9 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
+import systems.zlink.framework.runtime.actors.ZLinkActorRuntimeTestAccess;
+import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinEntrySpotResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinRequest;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinResult;
@@ -44,6 +53,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendPublisherSoc
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestCallback;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchEvent;
@@ -56,9 +66,16 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscriberSo
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMonitoringBackendAdapter;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkSpotBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkStreamBackendAdapter;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
+import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
@@ -68,12 +85,16 @@ import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
+import systems.zlink.framework.handlers.ZLinkSpotActorSend;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
+import systems.zlink.framework.spots.ZLinkSpotKind;
 
 final class EntrySpotActorDispatchTests {
     private static final int NO_BIND = 1;
     private static final ZLinkJsonMessageSerializer SERIALIZER = new ZLinkJsonMessageSerializer();
+    private static final ZLinkMessageSerializer PROTOBUF_SERIALIZER =
+        new ProbeProtobufSerializer();
 
     @Test
     void entrySpotActorDispatchNoBindRequestRepliesViaNoBindAndDoesNotBindSession() throws Exception {
@@ -111,6 +132,229 @@ final class EntrySpotActorDispatchTests {
     }
 
     @Test
+    void consecutiveProtobufActorRequestsEachProduceOneDecodableReply()
+        throws Exception {
+        TestBackend backend = startBackend();
+        try (ZLinkFrameworkRuntime runtime = startRuntime(backend, true)) {
+            runtime.actorManager().create("actor-a", "probe").submit()
+                .toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+            backend.entrySpot.raiseActorReadable(actorRequestParts(
+                "actor-a", "request", "first", 51, NO_BIND,
+                ZLinkStreamCodec.PROTOBUF, PROTOBUF_SERIALIZER));
+            ReplyRecord first = awaitReplyCount(backend.node.noBindReplies, 1)
+                .getFirst();
+            DecodedFrame firstFrame = decodeFrame(first.parts().getFirst());
+            assertEquals(ZLinkStreamMessageKind.RESPONSE, firstFrame.header().kind());
+            assertEquals(ZLinkStreamCodec.PROTOBUF, firstFrame.header().codec());
+            assertEquals(
+                new ProbeReply("first:actor-a:application/x-protobuf"),
+                PROTOBUF_SERIALIZER.deserialize(
+                    ZLinkEncodedPayload.from(firstFrame.body()), ProbeReply.class));
+
+            backend.entrySpot.raiseActorReadable(actorRequestParts(
+                "actor-a", "request", "second", 52, NO_BIND,
+                ZLinkStreamCodec.PROTOBUF, PROTOBUF_SERIALIZER));
+            List<ReplyRecord> replies =
+                awaitReplyCount(backend.node.noBindReplies, 2);
+            DecodedFrame secondFrame = decodeFrame(
+                replies.get(1).parts().getFirst());
+            assertEquals(ZLinkStreamMessageKind.RESPONSE, secondFrame.header().kind());
+            assertEquals(ZLinkStreamCodec.PROTOBUF, secondFrame.header().codec());
+            assertEquals(
+                new ProbeReply("second:actor-a:application/x-protobuf"),
+                PROTOBUF_SERIALIZER.deserialize(
+                    ZLinkEncodedPayload.from(secondFrame.body()), ProbeReply.class));
+            Thread.sleep(25);
+            assertEquals(2, backend.node.noBindReplies.size());
+        }
+    }
+
+    @Test
+    void messageFollowRelayKeepsTheOriginalOperationExactlyOnceAtTheTarget()
+        throws Exception {
+        TestBackend backend = startBackend();
+        ZLinkActorRuntime sourceRuntime = messageFollowSourceRuntime();
+        try (ZLinkFrameworkRuntime targetRuntime = startRuntime(backend)) {
+            ZLinkActorRuntime targetActors =
+                (ZLinkActorRuntime) targetRuntime.actorManager();
+            targetRuntime.actorManager().create("follow-send-actor", "probe")
+                .submit().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            targetRuntime.actorManager().create("follow-request-actor", "probe")
+                .submit().toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+            ProbeActor targetSendActor = (ProbeActor) targetActors
+                .localActor("follow-send-actor").orElseThrow();
+            ProbeActor targetRequestActor = (ProbeActor) targetActors
+                .localActor("follow-request-actor").orElseThrow();
+            ZLinkActor sourceSendActor = sourceRuntime
+                .getOrCreateLocalActor("follow-send-actor", ProbeActor.class)
+                .toCompletableFuture().get(5, TimeUnit.SECONDS)
+                .orElseThrow();
+            ZLinkActor sourceRequestActor = sourceRuntime
+                .getOrCreateLocalActor("follow-request-actor", ProbeActor.class)
+                .toCompletableFuture().get(5, TimeUnit.SECONDS)
+                .orElseThrow();
+
+            sourceRuntime.setRoutedTransport(
+                (ZLinkChannelRuntime) targetRuntime.route(),
+                () -> "message-follow-source-spot");
+            retainMessageFollow(
+                sourceRuntime,
+                sourceSendActor,
+                targetActors.currentRef(targetSendActor),
+                backend.entrySpot.spotId());
+            retainMessageFollow(
+                sourceRuntime,
+                sourceRequestActor,
+                targetActors.currentRef(targetRequestActor),
+                backend.entrySpot.spotId());
+            sourceRuntime.setMessageFollowNoticeSender(
+                (target, notice) -> CompletableFuture.completedFuture(null));
+
+            byte[] sendPayload = SERIALIZER.serialize(
+                new ProbeRequest("follow-send")).bytes();
+            byte[] sendRecord = acceptedActorRecord(
+                "follow-send-actor",
+                false,
+                0,
+                101,
+                201,
+                "follow-send",
+                sendPayload);
+            AtomicInteger sendFailures = new AtomicInteger();
+            AtomicReference<Throwable> sendFailure = new AtomicReference<>();
+            assertTrue(relayMessageFollow(
+                sourceRuntime,
+                sourceRuntime.currentRef(sourceSendActor),
+                false,
+                0,
+                101,
+                201,
+                "follow-send",
+                sendPayload,
+                sendRecord,
+                new AtomicInteger(),
+                sendFailures,
+                sendFailure));
+            assertTrue(relayMessageFollow(
+                sourceRuntime,
+                sourceRuntime.currentRef(sourceSendActor),
+                false,
+                0,
+                101,
+                201,
+                "follow-send",
+                sendPayload,
+                sendRecord,
+                new AtomicInteger(),
+                sendFailures,
+                sendFailure));
+            byte[] requestPayload = SERIALIZER.serialize(
+                new ProbeRequest("follow-request")).bytes();
+            byte[] requestRecord = acceptedActorRecord(
+                "follow-request-actor",
+                true,
+                77,
+                102,
+                202,
+                "request",
+                requestPayload);
+            AtomicInteger requestReplies = new AtomicInteger();
+            AtomicInteger requestFailures = new AtomicInteger();
+            AtomicReference<Throwable> requestFailure = new AtomicReference<>();
+            AtomicInteger staleFenceReplies = new AtomicInteger();
+            AtomicInteger staleFenceFailures = new AtomicInteger();
+            assertTrue(relayMessageFollow(
+                sourceRuntime,
+                sourceRuntime.currentRef(sourceRequestActor),
+                true,
+                77,
+                102,
+                202,
+                4,
+                "request",
+                requestPayload,
+                requestRecord,
+                staleFenceReplies,
+                staleFenceFailures,
+                new AtomicReference<>()));
+            assertEquals(0, staleFenceReplies.get());
+            assertEquals(1, staleFenceFailures.get());
+            assertEquals(0, targetRequestActor.handled());
+            assertTrue(relayMessageFollow(
+                sourceRuntime,
+                sourceRuntime.currentRef(sourceRequestActor),
+                true,
+                77,
+                102,
+                202,
+                "request",
+                requestPayload,
+                requestRecord,
+                requestReplies,
+                requestFailures,
+                requestFailure));
+            assertTrue(relayMessageFollow(
+                sourceRuntime,
+                sourceRuntime.currentRef(sourceRequestActor),
+                true,
+                77,
+                102,
+                202,
+                "request",
+                requestPayload,
+                requestRecord,
+                requestReplies,
+                requestFailures,
+                requestFailure));
+            awaitHandled(
+                targetRequestActor,
+                1,
+                requestFailure);
+            awaitCount(requestReplies, 1);
+            assertEquals(0, requestFailures.get());
+            awaitHandled(
+                targetSendActor,
+                1,
+                sendFailure);
+
+            sourceRuntime.setMessageFollowNoticeSender(null);
+            byte[] noNoticeRecord = acceptedActorRecord(
+                "follow-send-actor",
+                false,
+                0,
+                103,
+                203,
+                "follow-send",
+                sendPayload);
+            AtomicInteger noNoticeFailures = new AtomicInteger();
+            AtomicReference<Throwable> noNoticeFailure =
+                new AtomicReference<>();
+            assertTrue(relayMessageFollow(
+                sourceRuntime,
+                sourceRuntime.currentRef(sourceSendActor),
+                false,
+                0,
+                103,
+                203,
+                "follow-send",
+                sendPayload,
+                noNoticeRecord,
+                new AtomicInteger(),
+                noNoticeFailures,
+                noNoticeFailure));
+            awaitHandled(
+                targetSendActor,
+                2,
+                noNoticeFailure);
+            assertEquals(0, noNoticeFailures.get());
+        } finally {
+            sourceRuntime.close();
+        }
+    }
+
+    @Test
     void entrySpotActorDispatchBoundRequestUsesBoundSessionAndBindsSession() throws Exception {
         TestBackend backend = startBackend();
         try (ZLinkFrameworkRuntime runtime = startRuntime(backend)) {
@@ -129,6 +373,37 @@ final class EntrySpotActorDispatchTests {
             assertEquals("", frame.header().packetName());
             assertEquals(ZLinkStreamCodec.JSON, frame.header().codec());
             assertEquals("bound:actor-a", deserializeReply(frame).value());
+        }
+    }
+
+    @Test
+    void boundRequestKeepsTheSessionOwnerBindingGenerationFromTheRuntimePort()
+        throws Exception {
+        TestBackend backend = startBackend();
+        long sessionOwnerBindingGeneration = 4_325_711_503_797_842_283L;
+        backend.node.canonicalBoundSessionRoute = Optional.of(
+            new ZLinkInternalSpotNode.BoundSessionRoute(
+                RoutingId.from("source-node"),
+                17,
+                RoutingId.from("source-session"),
+                sessionOwnerBindingGeneration,
+                0));
+        try (ZLinkFrameworkRuntime runtime = startRuntime(backend)) {
+            runtime.actorManager().create("actor-a", "probe").submit()
+                .toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+            backend.entrySpot.raiseActorReadable(actorRequestParts(
+                "actor-a", "request", "bound", 0, 0));
+            awaitSingle(backend.node.boundSessionReplies);
+
+            ZLinkActorRuntime actors = (ZLinkActorRuntime) runtime.actorManager();
+            ZLinkActor actor = actors.localActor("actor-a").orElseThrow();
+            assertEquals(
+                sessionOwnerBindingGeneration,
+                actors.boundSessionRoute(actor).orElseThrow()
+                    .bindingGeneration(),
+                "the Actor relocation fence must retain the generation "
+                    + "accepted by the Session owner runtime port");
         }
     }
 
@@ -194,9 +469,26 @@ final class EntrySpotActorDispatchTests {
     }
 
     private static ZLinkFrameworkRuntime startRuntime(TestBackend backend) {
+        return startRuntime(backend, false);
+    }
+
+    private static ZLinkFrameworkRuntime startRuntime(
+        TestBackend backend,
+        boolean protobuf) {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofSeconds(1));
         options.addHandlersFromPackageOf(EntrySpotActorDispatchTests.class);
+        if (protobuf) {
+            options.codecs().use(codecs -> {
+                codecs.addSerializer(
+                    "application/x-protobuf",
+                    PROTOBUF_SERIALIZER,
+                    type -> type == ProbeRequest.class
+                        || type == ProbeReply.class);
+                codecs.addStreamCodec(
+                    "application/x-protobuf", ZLinkStreamCodec.PROTOBUF);
+            });
+        }
         var node = systems.zlink.framework.runtime.internal.configuration
             .ZLinkLegacyTopology.addSpotMesh(options, "entry");
         node.setRoutingId(RoutingId.from("entry-node"));
@@ -210,6 +502,233 @@ final class EntrySpotActorDispatchTests {
                 ProbeActorFactory.class,
                 factory -> factory.disableRelocation());
         return ZLinkFrameworkRuntimeTestAccess.start(options, backend);
+    }
+
+    private static ZLinkActorRuntime messageFollowSourceRuntime() {
+        RoutingId sourceRid = RoutingId.from("message-follow-source");
+        ZLinkInternalSpotNode node = (ZLinkInternalSpotNode)
+            Proxy.newProxyInstance(
+                ZLinkInternalSpotNode.class.getClassLoader(),
+                new Class<?>[] {ZLinkInternalSpotNode.class},
+                (proxy, method, arguments) -> switch (method.getName()) {
+                    case "routingId" -> sourceRid;
+                    case "createActor" -> {
+                        ((Message) arguments[1]).close();
+                        yield new ZLinkBackendActorRef(
+                            sourceRid, (String) arguments[0], 1);
+                    }
+                    case "actorNodeGeneration" -> 5L;
+                    case "actorAuthorityOwnerGeneration" -> 11L;
+                    case "actorAuthorityOwnerLeaseGeneration" -> 3L;
+                    case "close" -> null;
+                    default -> defaultValue(method.getReturnType());
+                });
+        return new ZLinkActorRuntime(
+            node,
+            Map.of("probe", ProbeActorFactory.class),
+            Map.of(),
+            Duration.ofSeconds(1),
+            Duration.ofSeconds(5),
+            SERIALIZER,
+            ZLinkHandlerActivator.reflection(),
+            ZLinkStreamCodec.JSON);
+    }
+
+    private static void retainMessageFollow(
+        ZLinkActorRuntime sourceRuntime,
+        ZLinkActor sourceActor,
+        ZLinkBackendActorRef targetActorRef,
+        String targetSpotId) {
+        var address = new SpotTransportAddress(
+            "entry",
+            targetActorRef.nodeRid(),
+            targetSpotId,
+            0,
+            1,
+            11,
+            3,
+            ZLinkSpotKind.ENTRY);
+        var targetRoute = new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+            targetActorRef.actorId(),
+            targetActorRef.generation(),
+            targetActorRef.nodeRid(),
+            1,
+            11,
+            3);
+        ZLinkActorRuntimeTestAccess.retainMessageFollowSource(
+            sourceRuntime,
+            sourceActor,
+            sourceRuntime.currentRef(sourceActor),
+            targetActorRef,
+            address,
+            targetRoute);
+    }
+
+    private static byte[] acceptedActorRecord(
+        String actorId,
+        boolean request,
+        long requestId,
+        long operationHigh,
+        long operationLow,
+        String packetName,
+        byte[] payload) {
+        RoutingId sourceRid = RoutingId.from("message-follow-source");
+        var owner = new ZLinkInternalMeshNode.PeerAuthorityFence(
+            sourceRid, 5, "message-follow-owner", 1);
+        var operation = new ZLinkServiceM6BWireCodec.ActorMessage(
+            request,
+            0,
+            request ? requestId : null,
+            operationHigh,
+            operationLow,
+            0,
+            null,
+            new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                new ZLinkBackendActorRef(sourceRid, actorId, 1),
+                5,
+                11,
+                3));
+        var wire = new ZLinkServiceM6AWireCodec();
+        return ZLinkServiceFrozenRecordCodec.encodeActor(
+            owner,
+            owner,
+            operation,
+            new byte[0],
+            wire.encodeApplicationPayload(
+                new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                    packetName,
+                    "application/zlink-framework-json-v1",
+                    payload)));
+    }
+
+    private static boolean relayMessageFollow(
+        ZLinkActorRuntime sourceRuntime,
+        ZLinkBackendActorRef sourceActorRef,
+        boolean request,
+        long requestId,
+        long operationHigh,
+        long operationLow,
+        String packetName,
+        byte[] payload,
+        byte[] acceptedJournalRecord,
+        AtomicInteger replies,
+        AtomicInteger failures,
+        AtomicReference<Throwable> lastFailure) {
+        return relayMessageFollow(
+            sourceRuntime,
+            sourceActorRef,
+            request,
+            requestId,
+            operationHigh,
+            operationLow,
+            3,
+            packetName,
+            payload,
+            acceptedJournalRecord,
+            replies,
+            failures,
+            lastFailure);
+    }
+
+    private static boolean relayMessageFollow(
+        ZLinkActorRuntime sourceRuntime,
+        ZLinkBackendActorRef sourceActorRef,
+        boolean request,
+        long requestId,
+        long operationHigh,
+        long operationLow,
+        long ownerLeaseGeneration,
+        String packetName,
+        byte[] payload,
+        byte[] acceptedJournalRecord,
+        AtomicInteger replies,
+        AtomicInteger failures,
+        AtomicReference<Throwable> lastFailure) {
+        ZLinkStreamHeader streamHeader = new ZLinkStreamHeader(
+            request ? ZLinkStreamMessageKind.REQUEST
+                : ZLinkStreamMessageKind.SEND,
+            ZLinkStreamCodec.JSON,
+            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+            request ? Optional.of(requestId) : Optional.empty(),
+            packetName,
+            Map.of());
+        var wireHeader = new ZLinkServiceM6BWireCodec.ActorMessage(
+            request,
+            0,
+            request ? requestId : null,
+            operationHigh,
+            operationLow,
+            0,
+            null,
+            new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                sourceActorRef,
+                5,
+                11,
+                ownerLeaseGeneration));
+        List<Message> parts = List.of(
+            Message.from(ZLinkStreamHeaderCodec.encode(streamHeader)),
+            Message.from(payload));
+        boolean owned = sourceRuntime.relayMessageFollow(
+            RoutingId.from("message-follow-client"),
+            7,
+            wireHeader,
+            acceptedJournalRecord,
+            parts,
+            "application/zlink-framework-json-v1",
+            null,
+            replyParts -> {
+                replies.incrementAndGet();
+                replyParts.forEach(Message::close);
+            },
+            failure -> {
+                failures.incrementAndGet();
+                lastFailure.compareAndSet(null, failure);
+            });
+        if (!owned) {
+            parts.forEach(Message::close);
+        }
+        return owned;
+    }
+
+    private static void awaitHandled(
+        ProbeActor actor,
+        int expected,
+        AtomicReference<Throwable> failure)
+        throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (actor.handled() != expected
+            && failure.get() == null
+            && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        if (failure.get() != null) {
+            throw new AssertionError("Message Follow relay failed", failure.get());
+        }
+        assertEquals(expected, actor.handled());
+    }
+
+    private static void awaitCount(AtomicInteger count, int expected)
+        throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (count.get() != expected && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertEquals(expected, count.get());
+    }
+
+    private static Object defaultValue(Class<?> type) {
+        if (!type.isPrimitive()) {
+            return null;
+        }
+        if (type == boolean.class) return false;
+        if (type == byte.class) return (byte) 0;
+        if (type == short.class) return (short) 0;
+        if (type == int.class) return 0;
+        if (type == long.class) return 0L;
+        if (type == float.class) return 0F;
+        if (type == double.class) return 0D;
+        if (type == char.class) return '\0';
+        return null;
     }
 
     private static List<ZLinkBackendActorReceived> actorRequestParts(
@@ -226,6 +745,45 @@ final class EntrySpotActorDispatchTests {
             flags,
             EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
             Map.of());
+    }
+
+    private static List<ZLinkBackendActorReceived> actorRequestParts(
+        String actorId,
+        String packetName,
+        String value,
+        long requestId,
+        int flags,
+        ZLinkStreamCodec codec,
+        ZLinkMessageSerializer serializer) {
+        ZLinkBackendActorRef actorRef =
+            new ZLinkBackendActorRef(RoutingId.from("entry-node"), actorId, 1);
+        ZLinkStreamHeader header = new ZLinkStreamHeader(
+            ZLinkStreamMessageKind.REQUEST,
+            codec,
+            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+            Optional.of(requestId),
+            packetName,
+            Map.of());
+        return List.of(
+            new ZLinkBackendActorReceived(
+                actorRef,
+                RoutingId.from("source-node"),
+                RoutingId.from("source-session"),
+                Optional.empty(),
+                requestId,
+                flags,
+                Message.from(ZLinkStreamHeaderCodec.encode(header)),
+                true),
+            new ZLinkBackendActorReceived(
+                actorRef,
+                RoutingId.from("source-node"),
+                RoutingId.from("source-session"),
+                Optional.empty(),
+                0,
+                0,
+                Message.from(serializer.serialize(
+                    new ProbeRequest(value)).bytes()),
+                false));
     }
 
     private static List<ZLinkBackendActorReceived> actorRequestParts(
@@ -318,6 +876,20 @@ final class EntrySpotActorDispatchTests {
         return replies.get(0);
     }
 
+    private static List<ReplyRecord> awaitReplyCount(
+        List<ReplyRecord> replies,
+        int expected) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            if (replies.size() == expected) {
+                return replies;
+            }
+            Thread.sleep(10);
+        }
+        assertEquals(expected, replies.size());
+        return replies;
+    }
+
     private static DecodedFrame decodeFrame(Message message) {
         ZLinkStreamFrameCodec.DecodedFrame frame = ZLinkStreamFrameCodec
             .tryDecode(message.toByteArray())
@@ -357,6 +929,7 @@ final class EntrySpotActorDispatchTests {
     public static final class ProbeActor implements ZLinkActor {
         private final String actorId;
         private final ZLinkActorContext context;
+        private final AtomicInteger handled = new AtomicInteger();
 
         ProbeActor(String actorId, ZLinkActorContext context) {
             this.actorId = actorId;
@@ -366,6 +939,14 @@ final class EntrySpotActorDispatchTests {
         @Override
         public ZLinkActorContext context() {
             return context;
+        }
+
+        void recordHandled() {
+            handled.incrementAndGet();
+        }
+
+        int handled() {
+            return handled.get();
         }
     }
 
@@ -379,9 +960,31 @@ final class EntrySpotActorDispatchTests {
 
     public static final class ProbeActorRequestHandler {
         @ZLinkSpotActorRequest(packetName = "request")
-        public CompletionStage<ProbeReply> handle(ProbeActor actor, ProbeRequest request) {
+        public CompletionStage<ProbeReply> handle(
+            ProbeEntrySpot spot,
+            ProbeActor actor,
+            systems.zlink.framework.ZLinkMessageContext context,
+            ProbeRequest request) {
+            actor.recordHandled();
+            String contentType = context.contentType()
+                .filter("application/x-protobuf"::equals)
+                .map(value -> ":" + value)
+                .orElse("");
             return CompletableFuture.completedFuture(
-                new ProbeReply(request.value() + ":" + actor.context().actorId()));
+                new ProbeReply(request.value() + ":"
+                    + actor.context().actorId() + contentType));
+        }
+    }
+
+    public static final class ProbeActorSendHandler {
+        @ZLinkSpotActorSend(packetName = "follow-send")
+        public CompletionStage<Void> handle(
+            ProbeEntrySpot spot,
+            ProbeActor actor,
+            systems.zlink.framework.ZLinkMessageContext context,
+            ProbeRequest request) {
+            actor.recordHandled();
+            return CompletableFuture.completedFuture(null);
         }
     }
 
@@ -396,6 +999,34 @@ final class EntrySpotActorDispatchTests {
     }
 
     public record ProbeReply(String value) {
+    }
+
+    private static final class ProbeProtobufSerializer
+        implements ZLinkMessageSerializer {
+        @Override
+        public <T> ZLinkEncodedPayload serialize(T value) {
+            String encoded = switch (value) {
+                case ProbeRequest request -> "request:" + request.value();
+                case ProbeReply reply -> "reply:" + reply.value();
+                default -> throw new IllegalArgumentException(
+                    "unsupported protobuf probe: " + value.getClass().getName());
+            };
+            return ZLinkEncodedPayload.from(
+                encoded.getBytes(StandardCharsets.UTF_8));
+        }
+
+        @Override
+        public <T> T deserialize(ZLinkEncodedPayload payload, Class<T> type) {
+            String encoded = new String(payload.bytes(), StandardCharsets.UTF_8);
+            if (type == ProbeRequest.class && encoded.startsWith("request:")) {
+                return type.cast(new ProbeRequest(encoded.substring(8)));
+            }
+            if (type == ProbeReply.class && encoded.startsWith("reply:")) {
+                return type.cast(new ProbeReply(encoded.substring(6)));
+            }
+            throw new IllegalArgumentException(
+                "invalid protobuf probe payload for " + type.getName());
+        }
     }
 
     private record DecodedFrame(ZLinkStreamHeader header, byte[] body) {
@@ -445,6 +1076,14 @@ final class EntrySpotActorDispatchTests {
         private final List<ReplyRecord> noBindReplies = new CopyOnWriteArrayList<>();
         private final List<ReplyRecord> boundSessionReplies = new CopyOnWriteArrayList<>();
         private final List<RemoteBind> remoteSessionBinds = new CopyOnWriteArrayList<>();
+        private Optional<ZLinkInternalSpotNode.BoundSessionRoute>
+            canonicalBoundSessionRoute = Optional.of(
+                new ZLinkInternalSpotNode.BoundSessionRoute(
+                    RoutingId.from("source-node"),
+                    1,
+                    RoutingId.from("source-session"),
+                    7,
+                    0));
 
         @Override public RoutingId routingId() { return routingId; }
         @Override public void setRoutingId(RoutingId routingId) {
@@ -509,6 +1148,12 @@ final class EntrySpotActorDispatchTests {
             remoteSessionBinds.add(new RemoteBind(actor, sourceNodeRid, sourceSessionRid));
         }
 
+        @Override
+        public Optional<ZLinkInternalSpotNode.BoundSessionRoute>
+            boundSessionRoute(ZLinkBackendActorRef actor) {
+            return canonicalBoundSessionRoute;
+        }
+
         @Override public void closeActorBoundSession(ZLinkBackendActorRef actor, Duration timeout) { }
         @Override public String name() { return "test-node"; }
         @Override public void close() { }
@@ -517,6 +1162,9 @@ final class EntrySpotActorDispatchTests {
     private static final class TestSpot implements ZLinkBackendSpot {
         private String routingId = "entry-spot";
         private ZLinkBackendSpotDispatchHandler handler;
+        private final ConcurrentLinkedQueue<ZLinkBackendReceived> routes =
+            new ConcurrentLinkedQueue<>();
+        private final AtomicLong routeRequestSequence = new AtomicLong(1);
 
         void raiseActorReadable(List<ZLinkBackendActorReceived> actorMessages) {
             handler.handle(new ZLinkBackendSpotDispatchInfo(
@@ -528,10 +1176,61 @@ final class EntrySpotActorDispatchTests {
         @Override public void setRoutingId(String spotId) { this.routingId = spotId; }
         @Override public void setSubscription(String topic) { }
         @Override public ZLinkBackendTopicMessage subscribe(ZLinkBackendRecvMode mode) { return null; }
-        @Override public ZLinkBackendReceived recvRoute(ZLinkBackendRecvMode mode) { return null; }
+        @Override public ZLinkBackendReceived recvRoute(ZLinkBackendRecvMode mode) {
+            return routes.poll();
+        }
         @Override public boolean publish(String channelName, String topic, List<Message> parts, SendFlags flags) { throw new UnsupportedOperationException(); }
-        @Override public boolean sendToSpot(RoutingId targetNodeRid, String spotId, long spotGeneration, List<Message> parts, SendFlags flags) { throw new UnsupportedOperationException(); }
-        @Override public boolean requestToSpot(RoutingId targetNodeRid, String spotId, long spotGeneration, List<Message> parts, ZLinkBackendRequestCallback callback, SendFlags flags, Duration timeout) { throw new UnsupportedOperationException(); }
+        @Override
+        public boolean sendToSpot(
+            RoutingId targetNodeRid,
+            String spotId,
+            long spotGeneration,
+            List<Message> parts,
+            SendFlags flags) {
+            routes.add(new ZLinkBackendReceived(
+                ZLinkBackendRequestResult.OK,
+                Optional.of(RoutingId.from("message-follow-source")),
+                Optional.of("message-follow-source-spot"),
+                Optional.empty(),
+                new byte[0],
+                copyParts(parts),
+                null,
+                () -> { }));
+            handler.handle(new ZLinkBackendSpotDispatchInfo(
+                ZLinkBackendSpotDispatchEvent.ROUTED_READABLE,
+                List.of()));
+            return true;
+        }
+
+        @Override
+        public boolean requestToSpot(
+            RoutingId targetNodeRid,
+            String spotId,
+            long spotGeneration,
+            List<Message> parts,
+            ZLinkBackendRequestCallback callback,
+            SendFlags flags,
+            Duration timeout) {
+            long requestSequence = routeRequestSequence.getAndIncrement();
+            routes.add(new ZLinkBackendReceived(
+                ZLinkBackendRequestResult.OK,
+                Optional.of(RoutingId.from("message-follow-source")),
+                Optional.of("message-follow-source-spot"),
+                Optional.of(requestSequence),
+                new byte[0],
+                copyParts(parts),
+                replyParts -> callback.handle(new ZLinkBackendReceived(
+                    ZLinkBackendRequestResult.OK,
+                    Optional.of(RoutingId.from("entry-node")),
+                    Optional.of(routingId),
+                    Optional.of(requestSequence),
+                    copyParts(replyParts))),
+                () -> { }));
+            handler.handle(new ZLinkBackendSpotDispatchInfo(
+                ZLinkBackendSpotDispatchEvent.ROUTED_READABLE,
+                List.of()));
+            return true;
+        }
         @Override public void onDispatchEvent(ZLinkBackendSpotDispatchHandler handler) { this.handler = handler; }
         @Override public ZLinkBackendActorJoinRequest recvActorJoin(ZLinkBackendRecvMode mode) { return null; }
         @Override public void replyActorJoin(ZLinkBackendActorJoinRequest request, int joinResultCode, List<Message> parts) { throw new UnsupportedOperationException(); }

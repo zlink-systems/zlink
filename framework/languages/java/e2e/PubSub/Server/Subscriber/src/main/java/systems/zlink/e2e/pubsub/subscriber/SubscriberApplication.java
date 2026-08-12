@@ -13,7 +13,7 @@ import java.nio.file.Path;
 import systems.zlink.e2e.pubsub.shared.Contracts;
 import systems.zlink.e2e.pubsub.subscriber.Configuration.SubscriberOptions;
 import systems.zlink.e2e.pubsub.subscriber.Endpoints.OperationalEndpoints;
-import systems.zlink.e2e.pubsub.subscriber.Handlers.EventMsgHandler;
+import systems.zlink.e2e.pubsub.subscriber.Handlers.EventHandler;
 import systems.zlink.e2e.pubsub.subscriber.Handlers.EvidenceDispatchErrorObserver;
 import systems.zlink.e2e.pubsub.subscriber.Infrastructure.EvidenceStore;
 import systems.zlink.e2e.pubsub.subscriber.Infrastructure.FanoutObserverController;
@@ -91,7 +91,7 @@ public final class SubscriberApplication {
             observer.install();
             framework.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
-            framework.addHandlersFromPackageOf(EventMsgHandler.class);
+            framework.addHandlersFromPackageOf(EventHandler.class);
             var channel = framework.addFanoutChannel(Contracts.EVENT_CHANNEL);
             if (options.mixedMode()) {
                 channel.enableSubscriber().subscriberConnections()
@@ -108,8 +108,8 @@ public final class SubscriberApplication {
     }
 
     @Bean
-    EventMsgHandler eventMsgHandler(EvidenceStore evidence) {
-        return new EventMsgHandler(evidence);
+    EventHandler eventHandler(EvidenceStore evidence) {
+        return new EventHandler(evidence);
     }
 
     @Bean

@@ -5,19 +5,19 @@ import java.util.List;
 public final class Contracts {
     public static final String EVENT_CHANNEL = "pubsub.events";
     public static final String HANDLER_GROUP = "pubsub";
-    public static final String EVENT_PACKET = "EventMsg";
-    public static final String MISSING_PACKET = "MissingEventMsg";
+    public static final String EVENT_PACKET = "Event";
+    public static final String MISSING_PACKET = "MissingEvent";
 
     private Contracts() {
     }
 
-    public record EventMsg(
+    public record Event(
         String scenario,
         int sequence,
         String value) {
     }
 
-    public record MissingEventMsg(
+    public record MissingEvent(
         String scenario,
         int sequence,
         String value) {

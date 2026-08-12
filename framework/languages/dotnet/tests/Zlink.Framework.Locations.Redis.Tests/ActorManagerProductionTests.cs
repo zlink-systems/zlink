@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
-using System.Reflection;
+using System.Globalization;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Zlink.Framework.AspNetCore;
@@ -23,27 +24,28 @@ public sealed class ActorManagerProductionTests
     public async Task CapacityRaceReleasesLosingReservationAndRunsOnlyFinalFactory()
     {
         TestActorFactory.Reset();
-        var inner = new ZLinkInMemoryLocationStore();
-        var (store, capacityRace) = CapacityRaceLocationStore.Create(inner);
+        var inner = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(inner);
+        var capacityRace = new CapacityRaceLocationStore(inner);
         var suffix = Guid.NewGuid().ToString("N");
         var firstEndpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
         var secondEndpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
         var sourceEndpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
 
         await using var firstProvider = BuildServer(
-            store,
+            capacityRace,
             firstEndpoint,
             "z-high",
             placementWeight: 300,
             actorLimit: 1);
         await using var secondProvider = BuildServer(
-            store,
+            capacityRace,
             secondEndpoint,
             "a-low",
             placementWeight: 100,
             actorLimit: 1);
         await using var sourceProvider = BuildClient(
-            store,
+            capacityRace,
             sourceEndpoint);
         var first = firstProvider.GetRequiredService<ZLinkFrameworkRuntime>();
         var second = secondProvider.GetRequiredService<ZLinkFrameworkRuntime>();
@@ -59,12 +61,12 @@ public sealed class ActorManagerProductionTests
             var firstRid = first.GetSpotNodeRuntime("objects").Node.RoutingId;
             var secondRid = second.GetSpotNodeRuntime("objects").Node.RoutingId;
             await PublishServerDescriptorAsync(
-                inner,
+                repository,
                 first,
                 firstRid,
                 firstEndpoint);
             await PublishServerDescriptorAsync(
-                inner,
+                repository,
                 second,
                 secondRid,
                 secondEndpoint);
@@ -87,31 +89,27 @@ public sealed class ActorManagerProductionTests
             Assert.Equal(1, TestEntrySpot.CreateCount);
             Assert.Equal(
                 (1L, 0L),
-                inner.GetPlacementCapacityUsage(
+                await ReadActorCapacityUsageAsync(
+                    inner,
                     new ZLinkMeshNodeDescriptorKey("objects", firstRid),
                     first.GetSpotNodeRuntime("objects").Node.MeshStatus()
-                        .LifecycleGeneration,
-                    ZLinkPlacementObjectKind.Actor,
-                    "player"));
+                        .LifecycleGeneration));
             Assert.Equal(
                 (0L, 1L),
-                inner.GetPlacementCapacityUsage(
+                await ReadActorCapacityUsageAsync(
+                    inner,
                     new ZLinkMeshNodeDescriptorKey("objects", secondRid),
                     second.GetSpotNodeRuntime("objects").Node.MeshStatus()
-                        .LifecycleGeneration,
-                    ZLinkPlacementObjectKind.Actor,
-                    "player"));
+                        .LifecycleGeneration));
 
-            Assert.IsType<ZLinkObjectAbortResult.Aborted>(
-                await capacityRace.ReleaseCompetingReservationAsync());
+            Assert.True(await capacityRace.ReleaseCompetingCapacityAsync());
             Assert.Equal(
                 (0L, 0L),
-                inner.GetPlacementCapacityUsage(
+                await ReadActorCapacityUsageAsync(
+                    inner,
                     new ZLinkMeshNodeDescriptorKey("objects", firstRid),
                     first.GetSpotNodeRuntime("objects").Node.MeshStatus()
-                        .LifecycleGeneration,
-                    ZLinkPlacementObjectKind.Actor,
-                    "player"));
+                        .LifecycleGeneration));
         }
         finally
         {
@@ -122,10 +120,11 @@ public sealed class ActorManagerProductionTests
     }
 
     [Fact]
-    public async Task ReservationConflictRefreshesDescriptorWithinCreationDeadline()
+    public async Task ReservationWriteConflictRetriesWithinCreationDeadline()
     {
         TestActorFactory.Reset();
-        var inner = new ZLinkInMemoryLocationStore();
+        var inner = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(inner);
         var (store, reservationRace) =
             ReservationConflictLocationStore.Create(inner, conflictsBeforeSuccess: 1);
         var suffix = Guid.NewGuid().ToString("N");
@@ -137,7 +136,7 @@ public sealed class ActorManagerProductionTests
         try
         {
             var rid = runtime.GetSpotNodeRuntime("objects").Node.RoutingId;
-            await PublishServerDescriptorAsync(inner, runtime, rid, endpoint);
+            await PublishServerDescriptorAsync(repository, runtime, rid, endpoint);
             var actors = provider.GetRequiredService<IZLinkActorManager>();
             var actorId = $"reservation-race-{suffix}";
 
@@ -151,13 +150,16 @@ public sealed class ActorManagerProductionTests
                     .Async());
 
             Assert.Equal(created.Actor, existing.Actor);
-            Assert.Equal(3, reservationRace.ActorReserveAttempts);
+            Assert.Equal(2, reservationRace.ActorReserveAttempts);
             Assert.Equal(1, TestActorFactory.CreateCount);
             Assert.Equal(1, TestEntrySpot.CreateCount);
-            var descriptor = Assert.Single(
-                (await inner.ListMeshNodesAsync("objects", default)).Items);
-            Assert.Equal(1, descriptor.Capacity.Actors.Active);
-            Assert.Equal(0, descriptor.Capacity.Actors.Reserved);
+            Assert.Equal(
+                (0L, 1L),
+                await ReadActorCapacityUsageAsync(
+                    inner,
+                    new ZLinkMeshNodeDescriptorKey("objects", rid),
+                    runtime.GetSpotNodeRuntime("objects").Node.MeshStatus()
+                        .LifecycleGeneration));
         }
         finally
         {
@@ -172,7 +174,8 @@ public sealed class ActorManagerProductionTests
         bool callerCancels)
     {
         TestActorFactory.Reset();
-        var inner = new ZLinkInMemoryLocationStore();
+        var inner = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(inner);
         var (store, _) = ReservationConflictLocationStore.Create(
             inner,
             conflictsBeforeSuccess: int.MaxValue);
@@ -184,7 +187,7 @@ public sealed class ActorManagerProductionTests
         try
         {
             var rid = runtime.GetSpotNodeRuntime("objects").Node.RoutingId;
-            await PublishServerDescriptorAsync(inner, runtime, rid, endpoint);
+            await PublishServerDescriptorAsync(repository, runtime, rid, endpoint);
             using var cancellation = callerCancels
                 ? new CancellationTokenSource(TimeSpan.FromMilliseconds(50))
                 : new CancellationTokenSource();
@@ -210,10 +213,13 @@ public sealed class ActorManagerProductionTests
 
             Assert.Equal(0, TestActorFactory.CreateCount);
             Assert.Equal(0, TestEntrySpot.CreateCount);
-            var descriptor = Assert.Single(
-                (await inner.ListMeshNodesAsync("objects", default)).Items);
-            Assert.Equal(0, descriptor.Capacity.Actors.Active);
-            Assert.Equal(0, descriptor.Capacity.Actors.Reserved);
+            Assert.Equal(
+                (0L, 0L),
+                await ReadActorCapacityUsageAsync(
+                    inner,
+                    new ZLinkMeshNodeDescriptorKey("objects", rid),
+                    runtime.GetSpotNodeRuntime("objects").Node.MeshStatus()
+                        .LifecycleGeneration));
         }
         finally
         {
@@ -225,7 +231,8 @@ public sealed class ActorManagerProductionTests
     public async Task SameProcessServerExecutesLocalProductionActorTarget()
     {
         TestActorFactory.Reset();
-        var store = new ZLinkInMemoryLocationStore();
+        var store = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(store);
         var suffix = Guid.NewGuid().ToString("N");
         var endpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
         await using var provider = BuildServer(store, endpoint);
@@ -237,7 +244,7 @@ public sealed class ActorManagerProductionTests
         {
             var rid = runtime.GetSpotNodeRuntime("objects").Node.RoutingId;
             await PublishServerDescriptorAsync(
-                store,
+                repository,
                 runtime,
                 rid,
                 endpoint);
@@ -264,7 +271,7 @@ public sealed class ActorManagerProductionTests
             service.GetType().Name == "ZLinkFrameworkHostedService");
 
     private static ServiceProvider BuildServer(
-        IZLinkLocationRepository store,
+        IZLinkLocationStore store,
         string endpoint,
         string? routingIdPrefix = null,
         int placementWeight = 100,
@@ -292,7 +299,7 @@ public sealed class ActorManagerProductionTests
     }
 
     private static ServiceProvider BuildClient(
-        IZLinkLocationRepository store,
+        IZLinkLocationStore store,
         string endpoint)
     {
         var services = new ServiceCollection();
@@ -338,6 +345,87 @@ public sealed class ActorManagerProductionTests
         Assert.Equal(generation, published!.LifecycleGeneration);
         Assert.False(string.IsNullOrEmpty(published.EntrySpotId));
         Assert.True(published.PlacementWeight > 0);
+    }
+
+    private static async ValueTask<(long Pending, long Active)>
+        ReadActorCapacityUsageAsync(
+            IZLinkLocationStore store,
+            ZLinkMeshNodeDescriptorKey descriptor,
+            ulong lifecycleGeneration)
+    {
+        var key = CapacityKey(descriptor, lifecycleGeneration);
+        var read = await store.ReadAsync(key);
+        if (read is ZLinkStoreReadResult.Missing)
+            return (0L, 0L);
+
+        var found = Assert.IsType<ZLinkStoreReadResult.Found>(read);
+        using var document = JsonDocument.Parse(found.Value.Bytes);
+        var root = document.RootElement;
+        return (
+            root.GetProperty("actorsPending").GetInt64(),
+            root.GetProperty("actorsActive").GetInt64());
+    }
+
+    private static ZLinkStoreKey CapacityKey(
+        ZLinkMeshNodeDescriptorKey descriptor,
+        ulong lifecycleGeneration) =>
+        new("zlink:v11:capacity:"
+            + EncodeSegment(descriptor.MeshName)
+            + EncodeSegment(descriptor.Rid.ToHex())
+            + lifecycleGeneration.ToString(CultureInfo.InvariantCulture));
+
+    private static string EncodeSegment(string value) =>
+        System.Text.Encoding.UTF8.GetByteCount(value).ToString(
+            CultureInfo.InvariantCulture) + ":" + value + ":";
+
+    private static bool TryGetActorReservationTransaction(
+        ZLinkStoreWriteRequest request,
+        out ZLinkStoreMutation.Put capacity,
+        out ZLinkStoreCondition capacityCondition,
+        out RoutingId targetRid)
+    {
+        capacity = null!;
+        capacityCondition = null!;
+        targetRid = default;
+
+        var reservation = request.Mutations
+            .OfType<ZLinkStoreMutation.Put>()
+            .SingleOrDefault(mutation => mutation.Key.Value.StartsWith(
+                "zlink:v11:creation-reservation:",
+                StringComparison.Ordinal));
+        if (reservation is null)
+            return false;
+
+        capacity = request.Mutations
+            .OfType<ZLinkStoreMutation.Put>()
+            .Single(mutation => mutation.Key.Value.StartsWith(
+                "zlink:v11:capacity:",
+                StringComparison.Ordinal));
+        using (var capacityDocument = JsonDocument.Parse(capacity.Bytes))
+        {
+            if (capacityDocument.RootElement
+                    .GetProperty("actorsPending")
+                    .GetInt32() == 0)
+                return false;
+        }
+
+        var capacityKey = capacity.Key;
+        capacityCondition = request.Conditions.Single(condition =>
+            condition switch
+            {
+                ZLinkStoreCondition.Missing missing =>
+                    missing.Key == capacityKey,
+                ZLinkStoreCondition.Version version =>
+                    version.Key == capacityKey,
+                _ => false
+            });
+        using var reservationDocument = JsonDocument.Parse(reservation.Bytes);
+        targetRid = RoutingId.FromHex(
+            reservationDocument.RootElement
+                .GetProperty("targetDescriptor")
+                .GetProperty("rid")
+                .GetString()!);
+        return true;
     }
 
     private static async Task WaitUntilAsync(
@@ -419,13 +507,13 @@ public sealed class ActorManagerProductionTests
             ValueTask.CompletedTask;
     }
 
-    private class CapacityRaceLocationStore : DispatchProxy
+    private sealed class CapacityRaceLocationStore(
+        IZLinkLocationStore inner) : IZLinkLocationStore
     {
-        private IZLinkLocationRepository _inner = null!;
         private int _actorReserveAttempts;
         private readonly object _gate = new();
         private readonly List<RoutingId> _actorReserveTargets = [];
-        private ZLinkObjectReservation? _competingReservation;
+        private ZLinkStoreKey? _competingCapacityKey;
 
         public int ActorReserveAttempts => Volatile.Read(
             ref _actorReserveAttempts);
@@ -439,89 +527,64 @@ public sealed class ActorManagerProductionTests
             }
         }
 
-        public static (
-            IZLinkLocationRepository Store,
-            CapacityRaceLocationStore Control) Create(
-            IZLinkLocationRepository inner)
-        {
-            var contract = DispatchProxy.Create<
-                IZLinkLocationRepository,
-                CapacityRaceLocationStore>();
-            var proxy = (CapacityRaceLocationStore)(object)contract;
-            proxy._inner = inner;
-            return (contract, proxy);
-        }
+        public ValueTask<ZLinkStoreReadResult> ReadAsync(
+            ZLinkStoreKey key,
+            CancellationToken cancellationToken = default) =>
+            inner.ReadAsync(key, cancellationToken);
 
-        protected override object? Invoke(
-            MethodInfo? targetMethod,
-            object?[]? args)
+        public async ValueTask<ZLinkStoreWriteResult> WriteAsync(
+            ZLinkStoreWriteRequest request,
+            CancellationToken cancellationToken = default)
         {
-            ArgumentNullException.ThrowIfNull(targetMethod);
-            if (targetMethod.Name == nameof(IZLinkLocationRepository.ReserveAsync)
-                && args is { Length: > 0 }
-                && args[0] is ZLinkObjectReservationRequest
-                {
-                    ObjectKind: ZLinkPlacementObjectKind.Actor
-                } request)
-            {
-                var attempt = Interlocked.Increment(ref _actorReserveAttempts);
-                lock (_gate)
-                    _actorReserveTargets.Add(request.TargetDescriptor.Rid);
-                if (attempt == 1)
-                    return ReserveAfterCompetingReservationAsync(
-                        request,
-                        args.Length > 1 && args[1] is CancellationToken token
-                            ? token
-                            : CancellationToken.None);
-            }
+            if (!TryGetActorReservationTransaction(
+                    request,
+                    out var capacity,
+                    out var capacityCondition,
+                    out var targetRid))
+                return await inner.WriteAsync(request, cancellationToken);
 
-            try
-            {
-                return targetMethod.Invoke(_inner, args);
-            }
-            catch (TargetInvocationException exception)
-                when (exception.InnerException is not null)
-            {
-                throw exception.InnerException;
-            }
-        }
-
-        public async ValueTask<ZLinkObjectAbortResult>
-            ReleaseCompetingReservationAsync()
-        {
-            ZLinkObjectReservation reservation;
+            var attempt = Interlocked.Increment(ref _actorReserveAttempts);
             lock (_gate)
-                reservation = _competingReservation
-                    ?? throw new InvalidOperationException(
-                        "The competing reservation was not created.");
-            return await _inner.AbortAsync(reservation);
-        }
+                _actorReserveTargets.Add(targetRid);
+            if (attempt != 1)
+                return await inner.WriteAsync(request, cancellationToken);
 
-        private async ValueTask<ZLinkObjectReserveResult>
-            ReserveAfterCompetingReservationAsync(
-                ZLinkObjectReservationRequest request,
-                CancellationToken cancellationToken)
-        {
-            var competing = await _inner.ReserveAsync(
-                request with
-                {
-                    Key = new ZLinkAuthorityKey(
-                        $"{request.Key.Value}:capacity-race"),
-                    CreationIntentReference =
-                        $"{request.CreationIntentReference}:capacity-race"
-                },
+            var competing = await inner.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [capacityCondition],
+                    [capacity]),
                 cancellationToken);
-            var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
-                competing);
+            var applied = Assert.IsType<ZLinkStoreWriteResult.Applied>(competing);
             lock (_gate)
-                _competingReservation = reserved.Reservation;
-            return await _inner.ReserveAsync(request, cancellationToken);
+                _competingCapacityKey = capacity.Key;
+            return new ZLinkStoreWriteResult.Conflict(applied.StoreNow);
+        }
+
+        public ValueTask<ZLinkStoreScanResult> ScanAsync(
+            ZLinkStoreScanRequest request,
+            CancellationToken cancellationToken = default) =>
+            inner.ScanAsync(request, cancellationToken);
+
+        public async ValueTask<bool> ReleaseCompetingCapacityAsync()
+        {
+            ZLinkStoreKey key;
+            lock (_gate)
+                key = _competingCapacityKey
+                    ?? throw new InvalidOperationException(
+                        "The competing capacity claim was not created.");
+            var read = Assert.IsType<ZLinkStoreReadResult.Found>(
+                await inner.ReadAsync(key));
+            var release = await inner.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [new ZLinkStoreCondition.Version(key, read.Value.Version)],
+                    [new ZLinkStoreMutation.Delete(key)]));
+            return release is ZLinkStoreWriteResult.Applied;
         }
     }
 
-    private class ReservationConflictLocationStore : DispatchProxy
+    private sealed class ReservationConflictLocationStore(
+        IZLinkLocationStore inner) : IZLinkLocationStore
     {
-        private IZLinkLocationRepository _inner = null!;
         private int _actorReserveAttempts;
         private int _conflictsBeforeSuccess;
 
@@ -529,47 +592,41 @@ public sealed class ActorManagerProductionTests
             ref _actorReserveAttempts);
 
         public static (
-            IZLinkLocationRepository Store,
+            IZLinkLocationStore Store,
             ReservationConflictLocationStore Control) Create(
-            IZLinkLocationRepository inner,
+            IZLinkLocationStore inner,
             int conflictsBeforeSuccess)
         {
-            var contract = DispatchProxy.Create<
-                IZLinkLocationRepository,
-                ReservationConflictLocationStore>();
-            var proxy = (ReservationConflictLocationStore)(object)contract;
-            proxy._inner = inner;
+            var proxy = new ReservationConflictLocationStore(inner);
             proxy._conflictsBeforeSuccess = conflictsBeforeSuccess;
-            return (contract, proxy);
+            return (proxy, proxy);
         }
 
-        protected override object? Invoke(
-            MethodInfo? targetMethod,
-            object?[]? args)
+        public ValueTask<ZLinkStoreReadResult> ReadAsync(
+            ZLinkStoreKey key,
+            CancellationToken cancellationToken = default) =>
+            inner.ReadAsync(key, cancellationToken);
+
+        public ValueTask<ZLinkStoreWriteResult> WriteAsync(
+            ZLinkStoreWriteRequest request,
+            CancellationToken cancellationToken = default)
         {
-            ArgumentNullException.ThrowIfNull(targetMethod);
-            if (targetMethod.Name == nameof(IZLinkLocationRepository.ReserveAsync)
-                && args is { Length: > 0 }
-                && args[0] is ZLinkObjectReservationRequest
-                {
-                    ObjectKind: ZLinkPlacementObjectKind.Actor
-                }
+            if (TryGetActorReservationTransaction(
+                    request,
+                    out _,
+                    out _,
+                    out _)
                 && Interlocked.Increment(ref _actorReserveAttempts)
                 <= _conflictsBeforeSuccess)
-                return ValueTask.FromResult<ZLinkObjectReserveResult>(
-                    new ZLinkObjectReserveResult.Conflict(
-                        new ZLinkAuthorityReadResult.Missing(
-                            DateTimeOffset.UtcNow)));
+                return ValueTask.FromResult<ZLinkStoreWriteResult>(
+                    new ZLinkStoreWriteResult.Conflict(DateTimeOffset.UtcNow));
 
-            try
-            {
-                return targetMethod.Invoke(_inner, args);
-            }
-            catch (TargetInvocationException exception)
-                when (exception.InnerException is not null)
-            {
-                throw exception.InnerException;
-            }
+            return inner.WriteAsync(request, cancellationToken);
         }
+
+        public ValueTask<ZLinkStoreScanResult> ScanAsync(
+            ZLinkStoreScanRequest request,
+            CancellationToken cancellationToken = default) =>
+            inner.ScanAsync(request, cancellationToken);
     }
 }

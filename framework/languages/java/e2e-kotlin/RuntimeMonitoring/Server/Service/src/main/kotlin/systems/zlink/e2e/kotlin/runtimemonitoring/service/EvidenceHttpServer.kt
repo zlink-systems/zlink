@@ -225,7 +225,7 @@ class EvidenceHttpServer @JvmOverloads constructor(
             val current = runtime?.ifAvailable ?: error("runtime monitoring is not configured")
             val result = current.spotManager().getOrCreate(id, "monitoring")
                 .inMesh(Contracts.SPOT_MESH)
-                .request(ZLinkMessage.of("placement-spot"))
+                .request(ZLinkMessage.of(Contracts.SpotCreateReq("placement-spot")))
                 .submit().toCompletableFuture().join()
             write(exchange, 200, json.writeValueAsString(mapOf("accepted" to true, "state" to result.state().name)))
         } catch (error: Throwable) {

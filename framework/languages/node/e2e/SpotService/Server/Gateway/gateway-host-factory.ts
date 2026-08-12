@@ -10,7 +10,7 @@ import {
   zlinkFramework
 } from '@zlink-systems/nestjs';
 import type { SpotPublishReq } from '../../Shared/messages';
-import { SpotMsg, SpotServiceNames, spotServicePacket } from '../../Shared/messages';
+import { SpotEvent, SpotServiceNames, spotServicePacket } from '../../Shared/messages';
 import { createSpotServiceConfigurationModule, objectValues, optionalString, requiredString } from '../../configuration';
 import { EvidenceStore } from '../Play/Infrastructure/evidence-store';
 import { closeHttpServer, startHttpServer, type HttpRoute } from '../Play/Support/http-server';
@@ -119,7 +119,7 @@ function createGatewayEndpoints(
             SpotServiceNames.spotChannel,
             SpotServiceNames.spotChannel,
             SpotServiceNames.spotEventTopic,
-            spotServicePacket(SpotMsg, { marker: request.marker }))
+            spotServicePacket(SpotEvent, { marker: request.marker }))
           .submit();
         evidence.add(`spot-publish|rid=${options.rid}|spot=${request.spotId}|marker=${request.marker}`);
         return {

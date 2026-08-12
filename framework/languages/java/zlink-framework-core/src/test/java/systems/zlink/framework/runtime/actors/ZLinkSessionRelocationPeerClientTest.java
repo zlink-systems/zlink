@@ -317,13 +317,16 @@ final class ZLinkSessionRelocationPeerClientTest {
         var codec = new ZLinkServiceM6BWireCodec();
         var command = command();
         List<String> terminals = new CopyOnWriteArrayList<>();
+        List<String> ownerTerminals = new CopyOnWriteArrayList<>();
         ZLinkInternalMeshNode node = node((target, encoded) -> {
             throw new CompletionException(new ZLinkConfigurationException(
                 "Session relocation route command has a stale binding fence"));
         });
 
-        new ZLinkSessionRelocationPeerClient(node, codec)
-            .switchRouteUntilTerminal(
+        var peer = new ZLinkSessionRelocationPeerClient(node, codec);
+        peer.setRouteTerminalObserver((observed, routed) ->
+            ownerTerminals.add(routed == null ? "superseded" : "ack"));
+        peer.switchRouteUntilTerminal(
                 command,
                 Duration.ofSeconds(1),
                 () -> CompletableFuture.completedFuture(true),
@@ -332,6 +335,8 @@ final class ZLinkSessionRelocationPeerClientTest {
             .toCompletableFuture().join();
 
         Thread.sleep(120);
+        assertEquals(List.of("superseded"), ownerTerminals,
+            "the retained route owner sees supersession exactly once");
         assertEquals(List.of("failed"), terminals);
     }
 

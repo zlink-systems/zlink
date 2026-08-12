@@ -278,7 +278,7 @@ public sealed class InMemoryLocationStoreTests
         new($"test:actor:{objectId}");
 
     private static async ValueTask<ZLinkObjectReserveResult> ReserveAuthorityAsync(
-        ZLinkInMemoryLocationStore store,
+        IZLinkLocationRepository store,
         string ownerId,
         string objectId)
     {
@@ -325,7 +325,7 @@ public sealed class InMemoryLocationStoreTests
     }
 
     private static async ValueTask<ZLinkAuthoritySnapshot> CreateAuthorityAsync(
-        ZLinkInMemoryLocationStore store,
+        IZLinkLocationRepository store,
         string ownerId,
         string objectId)
     {
@@ -392,7 +392,7 @@ public sealed class InMemoryLocationStoreTests
 internal static class AuthorityLocationTestFixture
 {
     internal static async ValueTask<ZLinkAuthoritySnapshot?> PublishActorAsync(
-        ZLinkInMemoryLocationStore store,
+        IZLinkLocationRepository store,
         ZLinkResolvedActorLocation row,
         bool replace = false)
     {
@@ -446,7 +446,7 @@ internal static class AuthorityLocationTestFixture
     }
 
     internal static async ValueTask<ZLinkAuthoritySnapshot?> PublishSpotAsync(
-        ZLinkInMemoryLocationStore store,
+        IZLinkLocationRepository store,
         ZLinkResolvedSpotLocation row,
         bool replace = false)
     {
@@ -504,19 +504,19 @@ internal static class AuthorityLocationTestFixture
     }
 
     internal static ValueTask<ZLinkAuthorityReadResult> ReadActorAsync(
-        ZLinkInMemoryLocationStore store,
+        IZLinkLocationRepository store,
         string actorId) =>
         store.ReadAuthorityAsync(
             ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId));
 
     internal static ValueTask<ZLinkAuthorityReadResult> ReadSpotAsync(
-        ZLinkInMemoryLocationStore store,
+        IZLinkLocationRepository store,
         string spotId) =>
         store.ReadAuthorityAsync(
             ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId));
 
     private static async ValueTask<ZLinkLocationOwnerToken> RequireOwnerAsync(
-        ZLinkInMemoryLocationStore store,
+        IZLinkLocationRepository store,
         string ownerId)
     {
         return Assert.IsType<ZLinkOwnerLeaseReadResult.Found>(
@@ -524,7 +524,7 @@ internal static class AuthorityLocationTestFixture
     }
 
     private static async ValueTask PublishDescriptorAsync(
-        ZLinkInMemoryLocationStore store,
+        IZLinkLocationRepository store,
         string meshName,
         RoutingId nodeRid,
         ulong nodeGeneration,
@@ -623,7 +623,7 @@ internal static class AuthorityLocationTestFixture
     }
 
     private static async ValueTask<ZLinkAuthoritySnapshot> ReserveAndCommitAsync(
-        ZLinkInMemoryLocationStore store,
+        IZLinkLocationRepository store,
         ZLinkAuthorityKey key,
         ZLinkPlacementObjectKind objectKind,
         string stableType,

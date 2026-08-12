@@ -48,6 +48,7 @@ internal static class ZLinkSessionRelocationWire
 {
     internal static ZLinkServiceWireCodec.SessionRelocationSealRecord CreateSeal(
         string actorId,
+        RoutingId actorNodeRid,
         ZLinkActorBoundSession session,
         ZLinkSessionRelocationContext context)
     {
@@ -65,15 +66,21 @@ internal static class ZLinkSessionRelocationWire
             session.AcceptedHighWater,
             session.SessionOwnerId,
             session.SessionOwnerLeaseGeneration);
-        return CreateSeal(actorId, route, context);
+        return CreateSeal(actorId, actorNodeRid, route, context);
     }
 
     internal static ZLinkServiceWireCodec.SessionRelocationSealRecord CreateSeal(
         string actorId,
+        RoutingId actorNodeRid,
         ZLinkRemoteActorBoundSessionRoute route,
         ZLinkSessionRelocationContext context)
     {
         RequireExact(route, context);
+        if (actorNodeRid.IsEmpty)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InvalidOperation,
+                "Session relocation requires the exact Actor owner node.",
+                ZLinkRetryAdvice.DoNotRetry);
         return new ZLinkServiceWireCodec.SessionRelocationSealRecord(
             context.RelocationId,
             context.Coordinator,
@@ -82,7 +89,9 @@ internal static class ZLinkSessionRelocationWire
                 new ZLinkServiceWireCodec.SessionActorIdentityRecord(
                     actorId,
                     route.ObjectGeneration),
-                route.NodeRid!.Value,
+                // A bound Session route stores the Session owner's node. The
+                // Actor fence names the independent current Actor owner.
+                actorNodeRid,
                 route.TargetNodeGeneration,
                 route.AuthorityOwnerGeneration,
                 route.OwnerLeaseGeneration),

@@ -3,7 +3,6 @@ package systems.zlink.e2e.kotlin.registrationcodec.jsononlypeer
 
 import java.net.URI
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.google.protobuf.StringValue
 import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.config.ConfigurableBeanFactory
 import org.springframework.boot.ApplicationArguments

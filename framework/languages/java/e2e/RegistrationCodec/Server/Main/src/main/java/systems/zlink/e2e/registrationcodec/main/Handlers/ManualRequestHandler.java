@@ -1,6 +1,4 @@
-package Handlers;
-import systems.zlink.e2e.registrationcodec.main.Handlers;
-import systems.zlink.e2e.registrationcodec.main.Infrastructure;
+package systems.zlink.e2e.registrationcodec.main.Handlers;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 

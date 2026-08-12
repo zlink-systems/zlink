@@ -80,105 +80,44 @@ path. The dispatcher uses a process-shared lane instead of creating a thread per
 and shutdown drains every accepted callback. An exception from one callback does not stop
 later callbacks from running.
 
-## 3. Create The Call Identifier First, Register It, Then Send
+## 3. Separate Operation Identity From The Reply Route
 
-### The Problem
+A service-wire request preserves two different values. Both are Framework-internal values
+and are not exposed to the application.
 
-If a mesh node surface returns the call identifier only as
-**submit's output,** it forces the following order.
+| Value | Form | Responsibility |
+|---|---|---|
+| `OperationId` | `{ high: u64, low: u64 }` | Terminal-deduplication identity for one operation. It stays unchanged through relocation and reply relay |
+| `ReplyRouteId` | non-zero `u64` | Connects a terminal reply to a pending entry within the source lifecycle. It does not replace operation identity |
 
-```text
-Send SubmitResult(..., out call identifier, ...)
-```
+An operation that expects a terminal result cannot have an `OperationId` with both words
+zero. Registries and durable completion records preserve both words. Using only the `low`
+word as a key can make two different operations appear to be the same entry. A
+`ReplyRouteId` is also unique among requests pending in one source-owner lifecycle, but it
+does not by itself decide terminal deduplication after relocation.
 
-Since submit returns the identifier, **wait registration can't happen
-before submit.** In the gap between sending and receiving the
-identifier back to register it, if the target is within the same
-process, the response may get processed first. If an unregistered
-response is treated as "a response to an unknown call" and dropped,
-that call hangs until timeout.
-
-This problem isn't Core's making. Core explicitly states it doesn't
-provide request-response correlation
-([Core Runtime Boundary 「2」](https://zlink-systems.github.io/zlink/spec/core/09-runtime-boundary/)),
-and the call identifier and completion table are entirely owned by
-Framework. So this order is something Framework can decide.
-
-### The Decision
-
-**The sending side creates the value to match the response first, and
-submits only after finishing wait registration.**
-
-The value referred to here is the **response correlation value.** It's
-different from the identifier pointing at the operation itself, and
-what's registered in the completion table is the former. Treating the
-two as one breaks the rule that a new correlation value is created at
-every hop
-([Request Correlation 「2. The Role Of The Two Identifiers」](../spec/27-flow-correlation.en.md#2-the-role-of-the-two-identifiers)).
+The sending runtime first creates `OperationId` and, when a reply route is required,
+`ReplyRouteId`. It then registers a pending completion entry keyed by the full `OperationId`,
+reserves a dispatcher slot, and fixes the reply route addressed by `ReplyRouteId`. Only then
+does it submit to transport. The wire request preserves the two values in separate fields;
+neither value is used as an alias for the other.
 
 ```mermaid
-flowchart LR
-    A["① create the response correlation value"] --> B["② register it in the completion table"]
-    B --> C["③ submit to transport"]
-    C --> D["④ response arrives"]
-    D --> E["registration already exists,<br/>so 'arrives first' can't happen"]
+sequenceDiagram
+    participant S as Source runtime
+    participant P as Completion and reply-route registry
+    participant T as Transport
+    S->>S: create OperationId and ReplyRouteId
+    S->>P: register full OperationId, reply route, and dispatcher slot
+    S->>T: submit the registered request
+    T-->>P: terminal reply arrives
+    P->>P: atomically take the exact entry
+    P-->>S: deliver completion in a new execution turn
 ```
 
-With this order, no matter how fast the response is, **it can't arrive
-before registration.** A response is only produced after the request
-goes out, and the request only goes out after registration.
-
-The mesh node surface receives the response correlation value as
-submit's **input**, not its output. The operation identifier doesn't
-appear on this surface.
-
-<a id="what-disappears-together"></a>
-### Additional State Not Needed With Input Correlation
-
-Receiving the response correlation value as input makes "arrives first"
-impossible, so the following state is unnecessary.
-
-| Unnecessary state | Additional cost |
-|---|---|
-| A slot to hold an early-arrived response | One more map lookup per completion |
-| Contention handling between that slot and the wait table | Code that cross-checks both sides |
-| The slot's bound and overflow handling | Bound management and its overflow path |
-
-Completion is a hot path. Removing one map lookup here is a rare kind
-of improvement — it simplifies the structure and speeds it up at the
-same time.
-
-<a id="the-rule-until-then"></a>
-### Rules Required By An Output-Only Surface
-
-A surface that only returns the response correlation value as output
-needs a slot for an early-arriving response. Using that shape requires
-all of the following rules, which makes it more complex than the
-canonical input form.
-
-- The holding slot **has a bound.**
-- Exceeding the bound **ends in an observable failure.** Since the
-  holding slot is a **bounded resource** owned by the source runtime,
-  the error kind is `CapacityExceeded`
-  ([Framework Error Model 「5. `Request` Completion And Failure」](../spec/32-framework-error-model.en.md#5-request-completion-and-failure)).
-  Silently dropping the response makes the waiting caller observe a
-  timeout instead of the actual cause.
-- Since there are two places — the holding slot and the wait table —
-  **the path that observes both is responsible for delivery.** Without
-  this rule, a response disappears between the two slots — the side
-  putting it in reasons "it's not in the table, so let's hold it,"
-  while the side registering reasons "it's not in the holding slot, so
-  let's wait," and both hold true at once.
-
-The response-holding slot and the pending-during-a-move slot are different resources.
-The pending-during-a-move slot has no record-count or byte bound defined by relocation
-itself
-([Host Relocate And Shutdown 「9. Moving Pending Messages, Timers, And Sessions」](../spec/28-graceful-drain-handoff.en.md#9-moving-pending-messages-timers-and-sessions)).
-
-The **runtime that started the call** owns the response-holding slot as its resource. The
-**peer currently moving** manages the pending-during-a-move slot to preserve message
-continuity. These resources and their errors remain distinct so that the caller can decide
-which target to retry.
+With this order, even an immediate in-process response cannot be processed before
+registration. No separate early-response map, or race-handling that cross-checks such a map
+with the pending table, is needed.
 
 ## 4. Don't Resend After Acceptance
 
@@ -239,10 +178,10 @@ message string is for humans to read, not a branch condition.
   callbacks doesn't exceed 4,096.
 - The dispatcher is a process-shared lane that doesn't create a thread
   per callback, and shutdown drains every accepted callback.
-- The call identifier is submit's input, and registration happens
-  before submit.
-- While the holding slot is kept, a response arriving when it's full
-  doesn't silently disappear, and the caller observes a result.
+- The completion table keys by both `u64` words of the wire `OperationId`, while
+  `ReplyRouteId` remains a separate reply-route identity.
+- The full operation identity, reply route, and dispatcher slot are registered before the
+  request is submitted.
 - Even if the connection drops after transport accepted, the runtime
   doesn't resend to a different target.
 - There's one completion-confirmation approach within the runtime.

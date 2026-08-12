@@ -1,6 +1,5 @@
-package Scenarios;
+package systems.zlink.e2e.spotservice.client.Scenarios;
 
-import systems.zlink.e2e.spotservice.client.Scenarios;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;

@@ -35,7 +35,7 @@
 | `.NET: Server/Play/Infrastructure/ZLink/Spots/EntrySpot/PlayEntrySpot.cs` | `Server/src/main/kotlin/.../spots/entryspot/PlayEntrySpot.kt` | spot-adapter | done | actor join, milestone observe, pub/sub event 수신 흐름. |
 | `.NET: Server/Play/Infrastructure/ZLink/Spots/EntrySpot/Handlers/PlayActorJoinGameHandler.cs` | `Server/src/main/kotlin/.../entryspot/handlers/PlayActorJoinGameHandler.kt` | spot-handler | done | actor를 game Spot에 join한다. |
 | `.NET: Server/Play/Infrastructure/ZLink/Spots/EntrySpot/Handlers/PlayActorObserveMilestoneHandler.cs` | `Server/src/main/kotlin/.../entryspot/handlers/PlayActorObserveMilestoneHandler.kt` | spot-handler | done | observer actor를 milestone event 구독 흐름에 연결한다. |
-| `.NET: Server/Play/Infrastructure/ZLink/Spots/EntrySpot/Handlers/PlayerWinMilestoneEventHandler.cs` | `Server/src/main/kotlin/.../entryspot/handlers/PlayerWinMilestoneMsgHandler.kt` | pubsub-handler | done | winner milestone event를 observer bound session으로 push한다. |
+| `.NET: Server/Play/Infrastructure/ZLink/Spots/EntrySpot/Handlers/PlayerWinMilestoneEventHandler.cs` | `Server/src/main/kotlin/.../entryspot/handlers/PlayerWinMilestoneEventHandler.kt` | pubsub-handler | done | winner milestone event를 observer bound session으로 push한다. |
 | `.NET: Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/TicTacToeGame.cs` | `Server/src/main/kotlin/.../spots/tictactoegamespot/TicTacToeGame.kt` | spot-adapter | done | game Spot lifecycle, player state, move 처리, push, milestone publish를 맡는다. |
 | `.NET: Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/PlayActorLeaveGameHandler.cs` | `Server/src/main/kotlin/.../tictactoegamespot/handlers/PlayActorLeaveGameHandler.kt` | spot-handler | done | actor leave 처리를 맡는다. |
 | `.NET: Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/PlayActorPlaceMarkHandler.cs` | `Server/src/main/kotlin/.../tictactoegamespot/handlers/PlayActorPlaceMarkHandler.kt` | spot-handler | done | mark placement request를 game state operation으로 연결한다. |
@@ -49,7 +49,9 @@
 
 | 기준 | Kotlin 대응 | 분류 | 상태 | 비고 |
 |------|-------------|------|------|------|
-| common: 자동 discovery 없이 수동 endpoint 연결 | `run_sample.sh`, `run_sample.ps1`, `SampleSettings.kt` | topology | done | runner가 API/Play endpoint 목록을 properties로 전달한다. |
+| common: 자동 discovery 없이 수동 endpoint 연결 | `run_sample.sh`, `run_sample.ps1`, `SampleSettings.kt` | topology | done | runner가 API A/B endpoint를 두 Play에 모두 전달하고 각 Play가 두 endpoint를 직접 연결한다. Object route는 Redis Location Store에서 조회한다. |
+| common: 수동 handler 등록 | `ApiServer.kt`, `PlayServer.kt`, `PlayEntrySpot.kt`, `TicTacToeGame.kt` | framework-configuration | done | channel·session handler는 public builder에, Entry·Room handler는 각 Spot의 public registry에 직접 등록한다. |
+| common: join wire suffix | `Contracts.kt`, `TicTacToeClientScenario.kt`, `PlayActor.kt` | shared-contract | done | Actor에는 `JoinGameMsg`를 one-way send하고 current session은 성공 시 `JoinGameNotify`, 실패 시 `JoinGameFailedNotify`를 push한다. `JoinGameReq`와 `JoinGameRes` alias는 두지 않는다. |
 | common: Api 2개, Play 2개 실행 | `run_sample.sh`, `run_sample.ps1` | runner | done | 실제 process 경계로 role을 실행한다. |
 | common: Redis-backed location store | `SampleLocationStore.kt`, `PlayServerApplication.kt` | runtime-config | done | Play role은 `ZLinkRedisLocationStore` bean을 등록하고 framework 기본 resolver가 spot 위치를 조회한다. |
 | common: 실행별 전용 Redis 사용 | `run_sample.sh`, `run_sample.ps1` | runner | done | runner가 pinned image로 전용 Docker Redis를 만들고 외부 endpoint를 재사용하지 않는다. |
@@ -57,8 +59,8 @@
 | common: 실행별 Redis key prefix 사용 | `run_sample.sh`, `run_sample.ps1` | runner | done | `TICTACTOE_REDIS_KEY_PREFIX`가 없으면 실행별 prefix를 만들고 location store key에 적용한다. |
 | common: Redis client dependency는 framework extension 안에 둠 | `zlink-framework-locations-redis`, `SampleLocationStore.kt` | design | done | handler, actor, Spot, Domain에 Redis client 타입을 노출하지 않는다. |
 | common: actor가 public Spot API로 room에 join | `PlayEntrySpot.kt`, `PlayActorJoinGameHandler.kt` | spot-flow | done | internal runtime 우회 없이 Spot handler 경로를 사용한다. |
-| common: Spot pub/sub milestone fan-out | `PlayEntrySpot.kt`, `PlayerWinMilestoneMsgHandler.kt`, `TicTacToeGame.kt` | pubsub | done | winner milestone event를 pub/sub로 전달하고 observer에게 push한다. |
-| common: push 대기는 connector public wait API 사용 | `TicTacToeClientScenario.kt` | validation | done | game start, move, win, milestone notify를 typed wait로 검증한다. |
+| common: Spot pub/sub milestone fan-out | `PlayEntrySpot.kt`, `PlayerWinMilestoneEventHandler.kt`, `TicTacToeGame.kt` | pubsub | done | winner milestone event를 pub/sub로 전달하고 observer에게 push한다. |
+| common: push 대기는 connector public wait API 사용 | `TicTacToeClientScenario.kt` | validation | done | join, game start, move, win, milestone notify를 typed wait로 검증한다. |
 | common: inbound observer는 connect 전에 등록 | `TicTacToeClientScenario.kt` | validation | done | stream connector 생성 직후 inbound observation을 등록한다. |
 | common: inbound observer 로그 확인 | `run_sample.sh`, `run_sample.ps1` | runner | done | observer connection, subscription, milestone marker와 role stdout을 확인한다. |
 | common: sample-local polling으로 push 대기를 숨기지 않음 | `TicTacToeClientScenario.kt` | validation | done | push 대기는 scenario 코드에 직접 드러난다. |
@@ -73,10 +75,7 @@
 
 ## 검증 기록
 
-- Java aggregate 완료 후 `cd framework/languages/java/samples && ZLINK_SAMPLE_LANGUAGES=kotlin timeout 1800s ./run_samples.sh`를 실행했다.
-- runner 출력에서 `PASS TicTacToe.Kotlin`을 확인했고, Bingo, DeliveryDispatch, GameQuest,
-  ShoppingMall, SupportChat을 포함한 Kotlin 6개 실제 process self-check가 모두 완료됐다.
-- Kotlin `Bingo` 단독 runner도 수정 후 두 번 반복해 각각 exit `0`으로 완료했다. event 대기 등록이
-  event 도착보다 늦어지지 않도록 사전 등록 wait를 `CoroutineStart.UNDISPATCHED`로 시작한다.
-- runner는 각 실행의 임시 role log에서 `message flow`와 observer/milestone marker를 확인한
-  뒤 자신이 만든 process와 Redis를 정리한다.
+- standalone Gradle 설정으로 `Server:compileKotlin`과 `Client:compileKotlin`이 통과했다.
+- `SampleReleaseGateContractTest`는 17개 모두 통과했다.
+- `run_sample.sh`는 `bash -n`, `run_sample.ps1`은 PowerShell parser 검사를 통과했다.
+- 실제 process sample과 전체 sample gate는 이 변경에서 실행하지 않았다.

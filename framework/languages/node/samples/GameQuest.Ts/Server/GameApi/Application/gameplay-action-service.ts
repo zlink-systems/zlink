@@ -4,12 +4,10 @@ import { GameplayEventPublisher } from '../Infrastructure/ZLink/gameplay-event-p
 import { GameplayStateStore } from '../../Shared/Store/quest-progress-store';
 import { GAMEQUEST_INSTANCE_ID } from '../../Configuration/tokens';
 import type {
-  CollectItemReq,
-  CollectItemRes,
+  CollectItemMsg,
   CompleteMissionReq,
   CompleteMissionRes,
-  EnterAreaReq,
-  EnterAreaRes,
+  EnterAreaMsg,
   GameplayEventEnvelope,
   KillMonsterReq,
   KillMonsterRes,
@@ -36,12 +34,12 @@ class GameplayActionService {
     ));
   }
 
-  async collectItem(request: CollectItemReq): Promise<{ response: CollectItemRes; projection: QuestProgress[]; completedQuestId?: string }> {
-    return await this.publishAndNotify(GameplayDomain.itemCollected(
-      request.playerId,
-      request.itemId,
-      request.count,
-      request.idempotencyKey,
+  async collectItem(message: CollectItemMsg): Promise<void> {
+    await this.publishAndNotify(GameplayDomain.itemCollected(
+      message.playerId,
+      message.itemId,
+      message.count,
+      message.idempotencyKey,
       this.apiName
     ));
   }
@@ -55,11 +53,11 @@ class GameplayActionService {
     ));
   }
 
-  async enterArea(request: EnterAreaReq): Promise<{ response: EnterAreaRes; projection: QuestProgress[]; completedQuestId?: string }> {
-    return await this.publishAndNotify(GameplayDomain.areaEntered(
-      request.playerId,
-      request.areaId,
-      request.idempotencyKey,
+  async enterArea(message: EnterAreaMsg): Promise<void> {
+    await this.publishAndNotify(GameplayDomain.areaEntered(
+      message.playerId,
+      message.areaId,
+      message.idempotencyKey,
       this.apiName
     ));
   }

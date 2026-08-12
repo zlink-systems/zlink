@@ -1,5 +1,4 @@
-package Configuration;
-import systems.zlink.e2e.pubsub.publisher.Configuration;
+package systems.zlink.e2e.pubsub.publisher.Configuration;
 import systems.zlink.e2e.pubsub.shared.Contracts;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;

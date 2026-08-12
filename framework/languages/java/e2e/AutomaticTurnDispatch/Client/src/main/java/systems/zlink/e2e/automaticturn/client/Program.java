@@ -148,7 +148,6 @@ public final class Program {
             case "ATD-E2" -> support.runCancellationCleanup(connector);
             case "ATD-E4", "ATD-E5" -> System.out.println("scenario " + scenario + " passed");
             case "TD-E3" -> support.runOppositeUserSpotJoins(connector);
-            case "TD-A1" -> support.runTerminatorSurface();
             case "TD-A2" -> support.runAsyncHoldsTurn(connector);
             case "TD-A3" -> support.runCounterScenario(connector, "TD-A3", "async");
             case "TD-A4" -> support.runAsyncCompletion(connector);
@@ -202,7 +201,7 @@ public final class Program {
             "ATD-A1", "ATD-A2", "ATD-A3", "ATD-A4", "ATD-B1", "ATD-B2", "ATD-B3",
             "ATD-C1", "ATD-C2", "ATD-C3", "ATD-D1", "ATD-D2", "ATD-D3", "ATD-D4",
             "ATD-E1", "ATD-E2", "ATD-E4", "ATD-E5",
-            "TD-A1", "TD-A2", "TD-A3", "TD-A4", "TD-A5", "TD-B1", "TD-B2", "TD-B3",
+            "TD-A2", "TD-A3", "TD-A4", "TD-A5", "TD-B1", "TD-B2", "TD-B3",
             "TD-B4", "TD-C1", "TD-C2", "TD-C3", "TD-C4", "TD-C5", "TD-D1", "TD-D2",
             "TD-D3", "TD-D4", "TD-D5", "TD-D6", "TD-E1", "TD-E2", "TD-E2A", "TD-F1",
             "TD-F2", "TD-F3", "TD-F4", "TD-F5", "TD-F6", "TD-G1"

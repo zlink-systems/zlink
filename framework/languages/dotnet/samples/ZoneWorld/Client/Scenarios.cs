@@ -947,7 +947,6 @@ public static class Scenarios
     {
         await using var ops = await OpsClient.ConnectAsync(options.OpsEndpoint, ct);
         var observed = await ops.WatchNodesAsync(ct);
-        var sourceNodeId = observed.Nodes.Single(node => node.Zones.Contains(ZoneIds.NorthWest)).NodeId;
         foreach (var nodeId in observed.Nodes.Where(node => node.Registered).Select(node => node.NodeId))
         {
             var resetObserved = ops.Connector.WaitFor<NodeStatusNotify>()
@@ -959,34 +958,51 @@ public static class Scenarios
             ZlinkStreamAssert.Ensure(!reset.Enabled, $"{nodeId} starts outside maintenance");
         }
         await using var player = await GameClient.ConnectAsync(options, Unique("e3"), ct);
+        var initialMembership = player.Connector.WaitFor<ZoneStateNotify>()
+            .Where(message => message.Payload.Players.Any(candidate =>
+                candidate.PlayerId == player.PlayerId))
+            .Timeout(TimeSpan.FromSeconds(15))
+            .Async(ct);
         await player.JoinWorldAsync(ct);
-        foreach (var step in player.PlanWalkWithinZone(48, 25))
-        {
-            var arrived = player.Connector.WaitFor<ZoneStateNotify>()
-                .Where(message => message.Payload.Players.Any(p =>
-                    p.PlayerId == player.PlayerId && p.X == step.X && p.Y == step.Y))
-                .Timeout(TimeSpan.FromSeconds(15))
-                .Async(ct);
-            await player.MoveAsync(step.X, step.Y);
-            await arrived;
-            player.Position = step;
-        }
+        await initialMembership;
+
+        await using var probes = await RelocationProbeClient.ConnectAsync(
+            options.GatewayEndpoint,
+            ct);
+        var pair = await probes.SelectPairAsync(ct);
+        ZlinkStreamAssert.Ensure(
+            pair.Error is null,
+            "maintained-source departure requires adjacent zones with different current owners");
+        observed = await ops.WatchNodesAsync(ct);
+        var sourceNodeId = observed.Nodes
+            .Single(node => node.Zones.Contains(pair.SourceZoneId, StringComparer.Ordinal))
+            .NodeId;
+        var targetNodeId = observed.Nodes
+            .Single(node => node.Zones.Contains(pair.TargetZoneId, StringComparer.Ordinal))
+            .NodeId;
+        ZlinkStreamAssert.Ensure(
+            !string.Equals(sourceNodeId, targetNodeId, StringComparison.Ordinal),
+            "the observed relocation pair has different application owners");
+        var source = ZoneCenter(pair.SourceZoneId);
+        await MoveToAsync(player, source.X, source.Y, ct);
 
         var enabledObserved = ops.Connector.WaitFor<NodeStatusNotify>()
             .Where(message => message.Payload.NodeId == sourceNodeId && message.Payload.Maintenance)
             .Timeout(TimeSpan.FromSeconds(10))
             .Async(ct);
         var enabled = await ops.SetMaintenanceAsync(sourceNodeId, enabled: true, ct);
-        if (enabled.Error is null) await enabledObserved;
+        ZlinkStreamAssert.Ensure(
+            enabled.Error is null && enabled.Enabled,
+            "the observed source owner enters maintenance");
+        await enabledObserved;
         try
         {
-            var changedWait = player.Connector.WaitFor<ZoneChangedNotify>()
-                .Timeout(TimeSpan.FromSeconds(15))
-                .Async(ct);
-            await player.MoveAsync(52, 25);
-            var changed = (await changedWait).Payload;
-            player.Position = (52, 25);
-            ZlinkStreamAssert.Ensure(object.Equals(ZoneIds.NorthEast, changed.ZoneId), "the logical zone change completed");
+            var target = ZoneCenter(pair.TargetZoneId);
+            var changed = await MoveToAsync(player, target.X, target.Y, ct);
+            ZlinkStreamAssert.Ensure(
+                changed is not null
+                && string.Equals(changed.ZoneId, pair.TargetZoneId, StringComparison.Ordinal),
+                "the player leaves the maintained source for the healthy observed owner");
         }
         finally
         {
@@ -995,7 +1011,10 @@ public static class Scenarios
                 .Timeout(TimeSpan.FromSeconds(10))
                 .Async(ct);
             var disabled = await ops.SetMaintenanceAsync(sourceNodeId, enabled: false, ct);
-            if (disabled.Error is null) await disabledObserved;
+            ZlinkStreamAssert.Ensure(
+                disabled.Error is null && !disabled.Enabled,
+                "the observed source owner leaves maintenance");
+            await disabledObserved;
         }
     }
 

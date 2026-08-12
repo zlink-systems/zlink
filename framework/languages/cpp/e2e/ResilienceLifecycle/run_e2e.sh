@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CPP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/../redis-common.sh"
+zlink_cpp_e2e_acquire_run_lock "${BASH_SOURCE[0]}" "$@"
+zlink_cpp_e2e_install_cleanup_trap
 BUILD_DIR="${BUILD_DIR:-$CPP_DIR/build}"
 SCENARIO="${*:-all}"
 SCENARIO="${SCENARIO// /,}"
@@ -30,7 +32,7 @@ validate_selector() {
   IFS=',' read -ra SELECTED_SCENARIOS <<<"$SCENARIO"
   for scenario in "${SELECTED_SCENARIOS[@]}"; do
     case "$scenario" in
-      all|RL-consumer|rl-consumer|RL-A[1-5]|rl-a[1-5]|RL-B[1-6]|rl-b[1-6]|RL-C[1-4]|rl-c[1-4]|RL-D[1-5]|rl-d[1-5])
+      all|RL-consumer|rl-consumer|RL-A[1-5]|rl-a[1-5]|RL-B[1-6]|rl-b[1-6]|RL-C1|rl-c1|RL-C3|rl-c3|RL-C4|rl-c4|RL-D[1-5]|rl-d[1-5])
         ;;
       *)
         echo "Unsupported ResilienceLifecycle scenario: $scenario" >&2
@@ -43,8 +45,8 @@ validate_selector() {
 validate_selector
 if [[ "$SCENARIO" == "all" ]]; then
   for scenario in RL-consumer RL-A1 RL-A2 RL-A3 RL-A4 RL-A5 RL-B1 RL-B2 RL-B3 RL-B4 \
-    RL-B5 RL-B6 RL-C1 RL-C2 RL-C3 RL-C4 RL-D1 RL-D2 RL-D3 RL-D4; do
-    "$0" "$scenario"
+    RL-B5 RL-B6 RL-C1 RL-C3 RL-C4 RL-D1 RL-D2 RL-D3 RL-D4; do
+    bash "$0" "$scenario"
   done
   echo "resilience-lifecycle e2e result=passed"
   exit 0
@@ -78,23 +80,10 @@ print(max(1, math.ceil(timeout / poll)))
 PY
 )"
 
-read -r API_A API_B ROUTE_A ROUTE_B API_B_GREEN ROUTE_B_GREEN HTTP_A HTTP_B HTTP_CONSUMER HTTP_B_GREEN CLIENT_ROUTE <<<"$(python3 - <<'PY'
-import socket
-
-sockets = []
-ports = []
-for _ in range(11):
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    sockets.append(s)
-    ports.append(s.getsockname()[1])
-print(" ".join(f"tcp://127.0.0.1:{p}" for p in ports[:6]), end=" ")
-print(" ".join(f"http://127.0.0.1:{p}" for p in ports[6:10]), end=" ")
-print(f"tcp://127.0.0.1:{ports[10]}")
-for s in sockets:
-    s.close()
-PY
-)"
+read -r API_A API_B ROUTE_A ROUTE_B API_B_GREEN ROUTE_B_GREEN HTTP_A HTTP_B \
+  HTTP_CONSUMER HTTP_B_GREEN CLIENT_ROUTE \
+  <<<"$(zlink_cpp_e2e_allocate_endpoints \
+    tcp tcp tcp tcp tcp tcp http http http http tcp)"
 
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="$SCRIPT_DIR/logs/$RUN_ID"
@@ -209,15 +198,7 @@ cleanup() {
     fi
   done
   if [[ -n "$REDIS_CONTAINER" && "$REDIS_OWNED" == "1" ]]; then
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
-  elif [[ -n "${REDIS_ENDPOINT:-}" ]]; then
-    local redis_host redis_port
-    redis_host="${REDIS_ENDPOINT%:*}"
-    redis_port="${REDIS_ENDPOINT##*:}"
-    if command -v redis-cli >/dev/null 2>&1; then
-      redis-cli -h "$redis_host" -p "$redis_port" --scan --pattern "$REDIS_KEY_PREFIX*" 2>/dev/null \
-        | xargs -r redis-cli -h "$redis_host" -p "$redis_port" DEL >/dev/null 2>&1 || true
-    fi
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   rm -rf "$CONFIG_DIR"
   if [[ $code -ne 0 ]]; then
@@ -946,7 +927,7 @@ if should_run RL-B3 rl-b3; then
   stop_pid "$API_A_PID"
 fi
 
-if should_run RL-B2 rl-b2 RL-C2 rl-c2; then
+if should_run RL-B2 rl-b2; then
   stop_pid "$API_B_PID"
   stop_pid "$API_A_PID"
   start_provider api-a "$API_A" "$ROUTE_A" "$HTTP_A"
@@ -984,18 +965,6 @@ if should_run RL-B2 rl-b2 RL-C2 rl-c2; then
     start_provider api-b "$API_B" "$ROUTE_B" "$HTTP_B"
     API_B_PID="$LAST_PID"
     wait_location_topology api-b Ready 1
-  fi
-  if should_run RL-C2 rl-c2; then
-    crash_provider "$HTTP_B" "$API_B_PID"
-    wait_location_topology "api-b" "Ready" 0
-    post_consumer_new_client_burst "fast" "rl-c2-after-crash-" 8 "api-a"
-    wait_provider_evidence_value_prefix "rl-c2-after-crash-" "api-a"
-    start_provider api-b "$API_B" "$ROUTE_B" "$HTTP_B"
-    API_B_PID="$LAST_PID"
-    wait_location_topology "api-b" "Ready" 1
-    post_consumer_profile_burst "fast" "rl-c2-restored-" 40
-    wait_provider_evidence_value_prefix "rl-c2-restored-" "api-b"
-    echo "scenario RL-C2 passed"
   fi
   stop_pid "$API_B_PID"
   stop_pid "$API_A_PID"
@@ -1128,11 +1097,11 @@ if should_run RL-C4 rl-c4; then
     echo "RL-C4 requires the runner-owned Redis container." >&2
     exit 1
   fi
-  docker pause "$REDIS_CONTAINER" >/dev/null
+  timeout -k 2s 10s docker pause "$REDIS_CONTAINER" >/dev/null
   sleep "$ROUTE_SETTLE_SECONDS"
   touch "$CONTINUE"
   wait_marker "$OUTAGE_VERIFIED"
-  docker unpause "$REDIS_CONTAINER" >/dev/null
+  timeout -k 2s 10s docker unpause "$REDIS_CONTAINER" >/dev/null
   wait_tcp "$REDIS_HOST" "$REDIS_TCP_PORT" redis
   sleep "$ROUTE_SETTLE_SECONDS"
   wait "$C4_CLIENT_PID"

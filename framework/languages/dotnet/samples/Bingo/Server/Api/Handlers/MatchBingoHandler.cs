@@ -38,7 +38,7 @@ internal sealed class MatchBingoHandler(
         var created = await spots
             .GetOrCreate(allocated.RoomId, SampleNames.RoomSpotType)
             .InMesh(SampleNames.PlayMeshName)
-            .Request(allocated.Settings)
+            .Request(new BingoRoomCreateReq { Settings = allocated.Settings })
             .Async(cancellationToken);
         logger.LogInformation(
             "api match: room Spot ready. room={RoomId}, state={State}",

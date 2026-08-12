@@ -12,7 +12,7 @@ export async function runObsA4(): Promise<void> {
       (entries) => entries.some((entry) => entry.scenario === 'projection' && entry.actorId === orderId),
       `OBS-A4 projection was not received by ${client === workflowA ? 'workflow-a' : 'workflow-b'}`);
   }
-  await waitForFlow([workflowA, workflowB], 'WorkflowProjected');
+  await waitForFlow([workflowA, workflowB], 'WorkflowProjectedEvent');
   const timerRecord = await waitFor(async () => (await readFlowRecords(workflowA))
     .find((record) => record.flow_origin === 'Timer'),
   (value) => value !== undefined, 'OBS-A4 timer did not originate a new flow');

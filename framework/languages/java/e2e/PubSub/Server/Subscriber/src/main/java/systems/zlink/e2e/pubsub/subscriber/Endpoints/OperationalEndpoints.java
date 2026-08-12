@@ -1,9 +1,6 @@
-package Endpoints;
+package systems.zlink.e2e.pubsub.subscriber.Endpoints;
 
 import com.sun.net.httpserver.HttpExchange;
-import systems.zlink.e2e.pubsub.subscriber.Configuration;
-import systems.zlink.e2e.pubsub.subscriber.Endpoints;
-import systems.zlink.e2e.pubsub.subscriber.Infrastructure;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
@@ -146,16 +143,16 @@ public final class OperationalEndpoints implements SmartLifecycle {
                     long timeoutMillis = longQuery(query, "timeoutMillis", 15_000L);
                     var snapshot = switch (query.getOrDefault("kind", "event")) {
                         case "any-event" -> evidence.waitFor(
-                            entry -> "EventMsg".equals(entry.marker())
+                            entry -> "Event".equals(entry.marker())
                                 && query.getOrDefault("scenario", "").equals(entry.scenario()),
                             timeoutMillis);
                         case "event" -> evidence.waitFor(
-                            entry -> "EventMsg".equals(entry.marker())
+                            entry -> "Event".equals(entry.marker())
                                 && query.getOrDefault("scenario", "").equals(entry.scenario())
                                 && entry.sequence() == intQuery(query, "sequence", Integer.MIN_VALUE),
                             timeoutMillis);
                         case "sequence-at-least" -> evidence.waitFor(
-                            entry -> "EventMsg".equals(entry.marker())
+                            entry -> "Event".equals(entry.marker())
                                 && query.getOrDefault("scenario", "").equals(entry.scenario())
                                 && entry.sequence() >= intQuery(query, "minSequence", Integer.MAX_VALUE),
                             timeoutMillis);

@@ -675,7 +675,7 @@ class ChannelEgressHttpServer(
     }
 
     private fun publish(exchange: HttpExchange) {
-        val request = read<Contracts.FanoutProbe>(exchange)
+        val request = read<Contracts.FanoutProbeEvent>(exchange)
         runBlocking { fanout.publish(Contracts.FANOUT_CHANNEL, "probe", request).await() }
         write(exchange, mapOf("published" to true, "id" to request.id))
     }

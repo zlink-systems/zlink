@@ -7,26 +7,28 @@ public static class SubmitAdmissionNames
     public const string Fanout = "submit-admission.fanout";
 }
 
-public sealed record AdmissionMessage(string OperationId, int Sequence, string Payload);
+public sealed record AdmissionMsg(string OperationId, int Sequence, string Payload);
 
-public sealed record RouteReadyRequest(string Marker);
+public sealed record AdmissionEvent(string OperationId, int Sequence, string Payload);
 
-public sealed record RouteReadyReply(string Rid, string Marker);
+public sealed record RouteReadyReq(string Marker);
 
-public sealed record SubmitResponse(
+public sealed record RouteReadyRes(string Rid, string Marker);
+
+public sealed record SubmitRes(
     string OperationId,
     string Family,
     string Status,
     int PublicInvocationCount,
     int TerminalCount);
 
-public sealed record FillResponse(
+public sealed record FillRes(
     string OperationId,
     bool Pending,
     int StartedCount,
     string? TerminalStatus);
 
-public sealed record CancellationResponse(
+public sealed record CancellationRes(
     string OperationId,
     string Outcome,
     string ExceptionType,
@@ -34,7 +36,7 @@ public sealed record CancellationResponse(
     int InvalidInvocationCount,
     int TerminalCount);
 
-public sealed record NodeTargetOutcome(
+public sealed record NodeTargetOutcomeRes(
     string Send,
     string Request,
     int PeerCountBefore,
@@ -42,9 +44,9 @@ public sealed record NodeTargetOutcome(
     int ReadyPeerCountBefore,
     int ReadyPeerCountAfter);
 
-public sealed record ObjectClientIdentity(string Rid, string Endpoint);
+public sealed record ObjectClientIdentityRes(string Rid, string Endpoint);
 
-public sealed record OperationEvidence(
+public sealed record OperationEvidenceRes(
     string OperationId,
     string Family,
     string TargetId,

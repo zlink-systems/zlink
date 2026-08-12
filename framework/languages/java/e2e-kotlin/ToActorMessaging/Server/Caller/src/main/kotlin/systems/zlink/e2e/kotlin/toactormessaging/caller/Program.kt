@@ -47,33 +47,33 @@ class Program {
         boot("http route health")
         http.get("/health") { mapOf("status" to "ok") }
         boot("http route send")
-        http.post("/send", Contracts.ActorCallRequest::class.java) { request ->
+        http.post("/send", Contracts.ActorCallReq::class.java) { request ->
             runBlocking {
                 try {
                     val actorRef = findActorOrThrow(directory, request.actorId())
                     actors.sendToActor(
-                        actorRef,
-                        Contracts.ActorNotify(request.scenario(), request.actorId(), request.value()),
+                        actorRef.actorId(),
+                        Contracts.ActorMsg(request.scenario(), request.actorId(), request.value()),
                     )
                         .submit()
-                    Contracts.ActorCallResponse.ok(request.scenario(), request.actorId(), "sent")
+                    Contracts.ActorCallRes.ok(request.scenario(), request.actorId(), "sent")
                 } catch (ex: RuntimeException) {
                     failed(request, ex)
                 }
             }
         }
         boot("http route request")
-        http.post("/request", Contracts.ActorCallRequest::class.java) { request ->
+        http.post("/request", Contracts.ActorCallReq::class.java) { request ->
             runBlocking {
                 try {
                     val actorRef = findActorOrThrow(directory, request.actorId())
                     val reply = actors.requestToActor(
-                        actorRef,
-                        Contracts.ActorAsk(request.scenario(), request.actorId(), request.value()),
+                        actorRef.actorId(),
+                        Contracts.ActorReq(request.scenario(), request.actorId(), request.value()),
                     )
                         .timeout(Duration.ofSeconds(5))
-                        .awaitReply(Contracts.ActorReply::class.java)
-                    Contracts.ActorCallResponse.ok(request.scenario(), request.actorId(), reply.value())
+                        .awaitReply(Contracts.ActorRes::class.java)
+                    Contracts.ActorCallRes.ok(request.scenario(), request.actorId(), reply.value())
                 } catch (ex: RuntimeException) {
                     failed(request, ex)
                 }
@@ -134,13 +134,13 @@ private fun findActorOrThrow(
 }
 
 private fun failed(
-    request: Contracts.ActorCallRequest,
+    request: Contracts.ActorCallReq,
     ex: RuntimeException,
-): Contracts.ActorCallResponse {
+): Contracts.ActorCallRes {
     var current: Throwable = ex
     while (current.cause != null) {
         if (current is ZLinkFrameworkException) {
-            return Contracts.ActorCallResponse.failed(
+            return Contracts.ActorCallRes.failed(
                 request.scenario(),
                 request.actorId(),
                 current.kind().name,
@@ -149,11 +149,11 @@ private fun failed(
         current = current.cause!!
     }
     if (current is ZLinkFrameworkException) {
-        return Contracts.ActorCallResponse.failed(
+        return Contracts.ActorCallRes.failed(
             request.scenario(),
             request.actorId(),
             current.kind().name,
         )
     }
-    return Contracts.ActorCallResponse.failed(request.scenario(), request.actorId(), current.javaClass.simpleName)
+    return Contracts.ActorCallRes.failed(request.scenario(), request.actorId(), current.javaClass.simpleName)
 }

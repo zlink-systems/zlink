@@ -2115,24 +2115,19 @@ relocation are kept. The Location Store and Relocation Store don't store or upda
 binding route.
 
 <a id="binding-route-ack"></a>
-### Session Actor Location Update Acknowledgement
+### Session Actor Location Update
 
-Command 45 `sessionRelocationRouted` tells the target runtime that the session owner
-stored the new binding route and changed the saved location to the target. The location
-snapshot contains the existing ActorId/ObjectGeneration and the target MeshName/NodeRid.
-Before replying, the session owner verifies that late packets and pushes from a previous
-owner generation cannot be applied to the current binding.
+After Location Store CAS and target queue opening, the target runtime sends command 44
+route update to the Session owner as `[send]`. The saved location snapshot contains the
+existing ActorId/ObjectGeneration and the target MeshName/NodeRid. The Session owner
+validates exact Session identity, binding generation, and relocation identity, changes
+the route, submits held messages, and releases the seal.
 
-The target runtime stops resending the location update after this response.
-The response is not a signal that lets the target Actor start message processing or
-complete a Join. `sessionActorLocationUpdateResMsg` in other public documents refers to
-the location-update acknowledgement provided by this command.
-
-The response result is `Applied`, `AlreadyApplied`, `Stale`, or
-`SessionOrBindingClosed`. The first two mean the requested location was applied. The
-latter two mean a more recent location exists, or the Session/binding closed, so the
-previous location wasn't applied. The exact wire values and the conditions for
-removing a Message Follow route are defined by
+The update has no reply, and the normal flow doesn't use command 45
+`sessionRelocationRouted`. `SessionRelocationSealTimeout` defaults to 3,000 ms. Without
+an exact update in time, the Session owner closes the physical Session and cleans
+binding and held state. A late or duplicate update after timeout only records a Warning
+and is ignored. The exact order and Message Follow conditions are defined by
 [Session-Actor dispatch §5.1](20-session-actor-dispatch.en.md#51-session-actor-location-update-message).
 
 <a id="binding-generation"></a>
@@ -2184,8 +2179,9 @@ identity, from being accepted as current work after a restart.
 ### Session Sequence
 
 A value representing the order of ingress messages accepted on one STREAM session.
-In Actor handoff, the last accepted sequence is used as a barrier so the previous
-owner and the new owner don't process the same message together.
+Actor handoff doesn't use it as a cutover high-water. The Session owner holds messages
+arriving after seal, while ordered TCP relay provides pre-cutover order between source
+and target.
 
 | Item | Content |
 |---|---|
@@ -2193,7 +2189,7 @@ owner and the new owner don't process the same message together.
 | .NET notation | A `ulong` contract value not exposed directly to the application |
 | Public composition | A single ingress-order value in the range `1..long.MaxValue`. A separate axis from binding generation. |
 | Creation/management | Incremented by the session owner in the order ingress messages are accepted. |
-| Lifetime | Compared only within one STREAM session. The Actor handoff barrier fixes the last accepted sequence as the high-water mark. |
+| Lifetime | Compared only within one STREAM session. It isn't owner-transition evidence for relocation. |
 
 ## 11. Stream Connector
 

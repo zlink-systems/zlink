@@ -274,11 +274,11 @@ client can't confirm.
   nodes actually work
 
 ```typescript
-// The join response arrives as a push, not the request's reply -- register the wait first, then send.
+// The join completion arrives as a client push -- register the wait before the one-way send.
 async function joinGame(
-  connector: ZlinkStreamConnector, roomId: string, signal: AbortSignal): Promise<JoinGameRes> {
-  const completion = connector.waitFor<JoinGameRes>(PacketNames.joinGameRes).submit(signal);
-  await connector.send(joinGameReq(roomId)).submit();
+  connector: ZlinkStreamConnector, roomId: string, signal: AbortSignal): Promise<JoinGameNotify> {
+  const completion = connector.waitFor<JoinGameNotify>(PacketNames.joinGameNotify).submit(signal);
+  await connector.send(joinGameMsg(roomId)).submit();
   return (await completion).payload;
 }
 ```

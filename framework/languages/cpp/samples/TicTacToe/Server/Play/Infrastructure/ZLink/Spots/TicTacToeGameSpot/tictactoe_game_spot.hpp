@@ -52,6 +52,7 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
     void configure () override
     {
         _context.handlers ().add_actor_request<&tictactoe_game_spot_t::place_mark> ();
+        _context.handlers ().add_actor_send<&tictactoe_game_spot_t::confirm_joined_game> ();
         _context.handlers ().add_actor_send<&tictactoe_game_spot_t::leave_game> ();
     }
 
@@ -101,6 +102,10 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
                                          const message_context_t &context,
                                          const place_mark_req_t &request);
 
+    void confirm_joined_game (const player_actor_t &actor,
+                              const message_context_t &,
+                              const join_game_msg_t &request);
+
     void leave_game (const player_actor_t &actor,
                      const message_context_t &,
                      const leave_game_msg_t &request);
@@ -128,7 +133,7 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
         };
         co_await publisher.publish (notify, actor.actor_id);
 
-        game_state_notify_t state_notify{state.room_id, state.next_turn, state};
+        game_state_notify_t state_notify{state};
         co_await publisher.publish (state_notify, actor.actor_id);
         co_return;
     }
@@ -200,4 +205,5 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
 
 #include "Handlers/play_actor_leave_game_handler.hpp"
 #include "Handlers/play_actor_place_mark_handler.hpp"
+#include "Handlers/play_actor_rejoin_game_handler.hpp"
 #include "Handlers/tictactoe_game_timer_handler.hpp"

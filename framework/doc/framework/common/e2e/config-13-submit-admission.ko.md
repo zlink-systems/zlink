@@ -157,8 +157,8 @@ Host가 신규 작업 수락을 닫은 뒤 시작한 send는 queue에 들어가�
   받지 않는 상태가 된 뒤 send를 한 번 시작한다.
 - 검증: Relocate variant는 해당 operation 계약의 rejection result, Shutdown variant는 `ShuttingDown`으로
   끝나며 target handler evidence가 없다.
-- 세부 동작: [Host state와 완료 결과](../spec/28-graceful-drain-handoff.ko.md#3-host-state와-완료-결과)와
-  [State별 admission](../spec/28-graceful-drain-handoff.ko.md#12-state별-admission)을 검증한다.
+- 세부 동작: [Host state와 완료 결과](../spec/30-host-relocation-flow.ko.md#3-host-state와-완료-결과)와
+  [State별 admission](../spec/30-host-relocation-flow.ko.md#12-state별-admission)을 검증한다.
 
 #### SA-E2E-07 Admission terminal과 publish commit을 구분한다
 

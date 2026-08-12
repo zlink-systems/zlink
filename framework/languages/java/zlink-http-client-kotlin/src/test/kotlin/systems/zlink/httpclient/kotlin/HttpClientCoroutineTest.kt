@@ -85,6 +85,25 @@ class HttpClientCoroutineTest {
     }
 
     @Test
+    fun `await bridge unwraps nested completion failures`() {
+        val expected = IllegalStateException("request failed")
+        val submitted = CompletableFuture<String>()
+        submitted.completeExceptionally(
+            java.util.concurrent.CompletionException(
+                java.util.concurrent.ExecutionException(expected),
+            ),
+        )
+
+        val thrown = Assertions.assertThrows(IllegalStateException::class.java) {
+            runBlocking {
+                submitted.awaitWithoutCancellingOperation()
+            }
+        }
+
+        assertEquals(expected.message, thrown.message)
+    }
+
+    @Test
     fun `cancelling after request admission leaves the HTTP operation and client lease intact`() = runBlocking {
         val requestStarted = CountDownLatch(1)
         val releaseResponse = CountDownLatch(1)

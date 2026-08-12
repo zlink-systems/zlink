@@ -229,18 +229,23 @@ before other work already in the queue. Without one fixed reentrancy
 rule, the same code either deadlocks or runs in a different order.
 
 **Decision — don't allow reentrancy.** This isn't a choice but a spec
-rule — a call that waits for a request requiring the same gate, or
-waits for a request sent to itself, is **rejected with
-`InvalidOperation` before submission**
+rule. A call that keeps the current turn while waiting for a result that
+requires the same gate, or an Actor waiting for a request it sent to
+itself, is **rejected with `InvalidOperation` before submission**
 ([Stage Wrapper On Spot 「5. Timer」](../spec/17-stage-wrapper-on-spot.en.md#5-timer)).
+When an eligible `SpotWide` User Spot or Instance Spot call selects
+`Yield`, it first releases the current shared gate, so this isn't
+reentrancy. Its completion continuation enters at the back of the
+original queue as a new turn.
 
 **What's prohibited is the public operation.** Split out exactly what's
 prohibited as follows.
 
 | Call | Verdict |
 |---|---|
-| A handler sends a public request to its own Spot · Actor and waits for the result | **Prohibited.** `InvalidOperation` before submission |
-| A handler waits on a different target that requires the same gate | **Prohibited.** Same verdict |
+| A handler sends a public request to its own Actor and waits for the result | **Prohibited.** The Actor queue claim remains held even after `Yield`, so `InvalidOperation` before submission |
+| A handler uses a terminal that keeps the current turn while waiting on its own Spot or another target that requires the same gate | **Prohibited.** `InvalidOperation` before submission |
+| An eligible `SpotWide`/Instance context waits with `Yield` on a request or Actor/Spot create/get-or-create call | Allowed. Releases the shared gate and resumes in a new turn at the back of the queue |
 | The runtime internally composes an execution context to run a handler | Allowed. This isn't a submission of new work |
 | A handler submits work to its own target without waiting for the result | Allowed. It's appended to the back of the queue |
 
@@ -347,7 +352,7 @@ resume, or **the unit gets sealed for a move**, it ends in failure
 instead of resuming. A move merely *starting* isn't enough to stop it
 — existing messages and timers keep being processed until sealing
 ([Stage Wrapper On Spot 「5. Timer」](../spec/17-stage-wrapper-on-spot.en.md#5-timer),
-[Host Relocate And Shutdown 「12. Admission Per State」](../spec/28-graceful-drain-handoff.en.md#12-admission-per-state)).
+[Complete Host Relocation Flow 「12. Admission Per State」](../spec/30-host-relocation-flow.en.md#12-admission-per-state)).
 
 ### The Design Constraint This Produces
 

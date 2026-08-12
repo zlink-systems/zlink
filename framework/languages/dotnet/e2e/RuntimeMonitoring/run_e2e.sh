@@ -4,6 +4,7 @@ umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/../redis-common.sh"
+zlink_dotnet_e2e_acquire_run_lock "$0" "$@"
 if [[ "$#" -eq 0 ]]; then
   SCENARIO="all"
 else
@@ -13,7 +14,7 @@ fi
 if [[ "$SCENARIO" == "all" ]]; then
   for scenario in \
     MON-A1 MON-A2 MON-A3 MON-A4A MON-A4B MON-A5 MON-B1 MON-B2 MON-C1 MON-D1A MON-D1B; do
-    "$0" "$scenario"
+    bash "$0" "$scenario"
   done
   echo "runtime-monitoring all scenarios passed"
   exit 0
@@ -44,13 +45,7 @@ CLIENT_PROJECT="$ROOT_DIR/Client/RuntimeMonitoring.Client.csproj"
 VALIDATION_HOST_PROJECT="$ROOT_DIR/Server/ValidationHost/RuntimeMonitoring.ValidationHost.csproj"
 
 pick_port() {
-  python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
+  zlink_dotnet_e2e_allocate_ports 1
 }
 
 SVC_HTTP_PORT="$(pick_port)"
@@ -104,8 +99,8 @@ cleanup() {
   done
   wait "${pids[@]:-}" 2>/dev/null || true
   if [[ -n "${REDIS_CONTAINER:-}" ]]; then
-    docker unpause "$REDIS_CONTAINER" >/dev/null 2>&1 || true
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    timeout -k 2s 10s docker unpause "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   if [[ "$code" -ne 0 ]]; then
     echo "E2E failed. Logs: $LOG_DIR" >&2

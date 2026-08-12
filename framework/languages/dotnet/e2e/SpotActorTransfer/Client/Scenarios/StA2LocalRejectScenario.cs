@@ -54,7 +54,7 @@ internal static class StA2LocalRejectScenario
         await context.SendFromNodeAsync(
             context.NodeD,
             actorId,
-            new HandoffPacket(scenario, marker));
+            new HandoffMsg(scenario, marker));
         evidence = await context.WaitEvidenceAsync(
             source,
             [

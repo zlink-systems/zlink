@@ -595,12 +595,12 @@ export class ZLinkSpotNodeRuntimeManager {
   }
 
   sendMessageFollowNotification(
-    sourceNodeRid: string,
-    targetNodeRid: string,
+    sourceNodeRid: RoutingId,
+    targetNodeRid: RoutingId,
     record: Omit<ServiceMessageFollowRecord, 'kind'>
   ): boolean {
     for (const node of this.meshNodes.values()) {
-      if (String(node.status().routingId) !== sourceNodeRid) continue;
+      if (!routingIdsEqual(node.status().routingId, sourceNodeRid)) continue;
       if (node.sendMessageFollowNotification === undefined) return false;
       return node.sendMessageFollowNotification(targetNodeRid, record);
     }
@@ -1043,7 +1043,7 @@ export class ZLinkSpotNodeRuntimeManager {
     if (activation === undefined) {
       throw new ZLinkConfigurationException('Entry Spot actor packet dispatch requires an Entry Spot.');
     }
-    return await activation.dispatchActorPacket(
+    return await activation.dispatchActorPacket({
       actorId,
       parts,
       returnResponse,
@@ -1051,7 +1051,7 @@ export class ZLinkSpotNodeRuntimeManager {
       fallbackActorRef,
       requestTerminal,
       messageFollowOrigin
-    );
+    });
   }
 
   async dispatchEntryActorJoin(

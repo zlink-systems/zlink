@@ -47,7 +47,7 @@ builder.Services.AddZLinkFramework(framework =>
 var app = builder.Build();
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 app.MapPost("/send", async (
-    ActorCallRequest request,
+    ActorCallReq request,
     IZLinkActorManager actorDirectory,
     IZLinkActorClient actors,
     CancellationToken ct) =>
@@ -55,17 +55,17 @@ app.MapPost("/send", async (
     try
     {
         var actor = await ResolveActorAsync(request, actorDirectory, ct);
-        await actors.SendToActor(actor.ActorId, new ActorNotify(request.Scenario, request.ActorId, request.Value))
+        await actors.SendToActor(actor.ActorId, new ActorMsg(request.Scenario, request.ActorId, request.Value))
             .Async(ct);
-        return Results.Ok(new ActorCallResponse(request.Scenario, request.ActorId, "sent"));
+        return Results.Ok(new ActorCallRes(request.Scenario, request.ActorId, "sent"));
     }
     catch (ZLinkFrameworkException error)
     {
-        return Results.Ok(new ActorCallResponse(request.Scenario, request.ActorId, "failed", error.Kind.ToString()));
+        return Results.Ok(new ActorCallRes(request.Scenario, request.ActorId, "failed", error.Kind.ToString()));
     }
 });
 app.MapPost("/request", async (
-    ActorCallRequest request,
+    ActorCallReq request,
     IZLinkActorManager actorDirectory,
     IZLinkActorClient actors,
     CancellationToken ct) =>
@@ -74,14 +74,14 @@ app.MapPost("/request", async (
     {
         var actor = await ResolveActorAsync(request, actorDirectory, ct);
         var reply = await actors.RequestToActor(
-                actor.ActorId, new ActorAsk(request.Scenario, request.ActorId, request.Value))
+                actor.ActorId, new ActorReq(request.Scenario, request.ActorId, request.Value))
             .Timeout(TimeSpan.FromSeconds(5))
-            .Async<ActorReply>(ct);
-        return Results.Ok(new ActorCallResponse(request.Scenario, request.ActorId, reply.Value));
+            .Async<ActorRes>(ct);
+        return Results.Ok(new ActorCallRes(request.Scenario, request.ActorId, reply.Value));
     }
     catch (ZLinkFrameworkException error)
     {
-        return Results.Ok(new ActorCallResponse(request.Scenario, request.ActorId, "failed", error.Kind.ToString()));
+        return Results.Ok(new ActorCallRes(request.Scenario, request.ActorId, "failed", error.Kind.ToString()));
     }
 });
 app.MapPost("/refs/{actorId}/capture", async (
@@ -104,7 +104,7 @@ app.MapGet("/directory/{actorId}", async (
     return Results.Ok(new ActorRouteStatus(actorId, actor is not null));
 });
 app.MapPost("/cached/request", async (
-    ActorCallRequest request,
+    ActorCallReq request,
     IZLinkActorClient actors,
     CancellationToken ct) =>
 {
@@ -113,14 +113,14 @@ app.MapPost("/cached/request", async (
         if (!cachedActors.TryGetValue(request.ActorId, out var actor))
             throw new InvalidOperationException($"Actor ref '{request.ActorId}' was not captured.");
         var reply = await actors.RequestToActor(
-                actor.ActorId, new ActorAsk(request.Scenario, request.ActorId, request.Value))
+                actor.ActorId, new ActorReq(request.Scenario, request.ActorId, request.Value))
             .Timeout(TimeSpan.FromSeconds(2))
-            .Async<ActorReply>(ct);
-        return Results.Ok(new ActorCallResponse(request.Scenario, request.ActorId, reply.Value));
+            .Async<ActorRes>(ct);
+        return Results.Ok(new ActorCallRes(request.Scenario, request.ActorId, reply.Value));
     }
     catch (ZLinkFrameworkException error)
     {
-        return Results.Ok(new ActorCallResponse(request.Scenario, request.ActorId, "failed", error.Kind.ToString()));
+        return Results.Ok(new ActorCallRes(request.Scenario, request.ActorId, "failed", error.Kind.ToString()));
     }
 });
 app.MapPost("/route/disconnect", () =>
@@ -148,7 +148,7 @@ app.MapPost("/shutdown", async (IHostApplicationLifetime lifetime) =>
 await app.RunAsync();
 
 static async ValueTask<ActorRef> ResolveActorAsync(
-    ActorCallRequest request,
+    ActorCallReq request,
     IZLinkActorManager actorDirectory,
     CancellationToken cancellationToken)
 {

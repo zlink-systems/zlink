@@ -28,4 +28,20 @@ inline void add_sample_location_store (framework::zlink_framework_options_t &opt
           .key_prefix = topology.redis_key_prefix + "location:"}));
 }
 
+inline void add_sample_relocation_store (framework::zlink_framework_options_t &options,
+                                         const sample_topology_t &topology)
+{
+    if (topology.redis_endpoint.empty ()) {
+        throw std::runtime_error ("TicTacToe sample requires redisEndpoint");
+    }
+    if (topology.redis_key_prefix.empty ()) {
+        throw std::runtime_error ("TicTacToe sample requires redisKeyPrefix");
+    }
+    options.add_relocation_store (
+      std::make_shared<framework::redis::redis_relocation_store_t> (
+        framework::redis::redis_relocation_options_t{
+          .connection_string = topology.redis_endpoint,
+          .key_prefix = topology.redis_key_prefix + "relocation:"}));
+}
+
 } // namespace zlink::samples::tictactoe

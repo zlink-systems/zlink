@@ -49,7 +49,7 @@ public final class TriggerOperations {
             connector.connect().submit().toCompletableFuture().get();
             try {
                 connector.request(new ZLinkStreamEncodedPayload(
-                        "ObservabilityMissingPacket",
+                        "ObservabilityMissingReq",
                         Message.from(new byte[] {(byte) 0xff, 0x00}),
                         Map.of(),
                         ZLinkStreamCodec.RAW))
@@ -137,7 +137,7 @@ public final class TriggerOperations {
     private static void probeLifecycle(ZLinkStreamConnector connector) {
         try {
             connector.request(new ZLinkStreamEncodedPayload(
-                    "MetricsLifecycleProbe",
+                    "MetricsLifecycleProbeReq",
                     Message.from(new byte[] {1}),
                     Map.of(),
                     ZLinkStreamCodec.RAW))
@@ -157,7 +157,7 @@ public final class TriggerOperations {
             connector.connect().submit().toCompletableFuture().join();
             for (int i = 0; i < 8192; i++) {
                 connector.send(new ZLinkStreamEncodedPayload(
-                    "ReaderFreeTraffic",
+                    "ReaderFreeTrafficMsg",
                     Message.from(new byte[] {(byte) (i & 0xff)}),
                     Map.of(),
                     ZLinkStreamCodec.RAW)).submit();
@@ -165,7 +165,7 @@ public final class TriggerOperations {
             }
             try {
                 connector.request(new ZLinkStreamEncodedPayload(
-                        "ReaderFreeProbe",
+                        "ReaderFreeProbeReq",
                         Message.from(new byte[] {1}),
                         Map.of(),
                         ZLinkStreamCodec.RAW))

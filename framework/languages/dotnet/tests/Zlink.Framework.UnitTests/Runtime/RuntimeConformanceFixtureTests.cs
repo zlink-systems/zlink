@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Reflection;
 using System.Text.Json;
 
 namespace Zlink.Framework.UnitTests;
@@ -36,6 +35,76 @@ public sealed class RuntimeConformanceFixtureTests
         Assert.Equal(
             ZLinkSerialExecutionQueue.WorkItemFixedCostBytes,
             limits.GetProperty("fixedWorkByteCost").GetInt64());
+    }
+
+    [Fact]
+    public void Serial_work_fifo_preserves_order_and_detaches_items_for_reappend()
+    {
+        var first = new ZLinkSerialWorkItem(
+            static _ => ValueTask.CompletedTask);
+        var second = new ZLinkSerialWorkItem(
+            static _ => ValueTask.CompletedTask);
+        var third = new ZLinkSerialWorkItem(
+            static _ => ValueTask.CompletedTask);
+        var source = new ZLinkSerialWorkQueue();
+        var target = new ZLinkSerialWorkQueue();
+
+        source.Enqueue(first);
+        source.Enqueue(second);
+        source.Enqueue(third);
+
+        Assert.Equal(3, source.Count);
+        Assert.Equal([first, second, third], source.ToArray());
+        Assert.Throws<InvalidOperationException>(() => target.Enqueue(second));
+
+        Assert.True(source.TryDequeue(out var dequeued));
+        Assert.Same(first, dequeued);
+        Assert.Null(first.Next);
+        target.Enqueue(first);
+
+        source.Clear();
+        Assert.Equal(0, source.Count);
+        Assert.Null(second.Next);
+        Assert.Null(third.Next);
+        target.Enqueue(second);
+        target.Enqueue(third);
+
+        Assert.Equal([first, second, third], target.ToArray());
+        target.Clear();
+        Assert.Null(first.Next);
+        Assert.Null(second.Next);
+        Assert.Null(third.Next);
+
+        source.Enqueue(third);
+        Assert.True(source.TryDequeue(out var reappended));
+        Assert.Same(third, reappended);
+        Assert.False(source.TryDequeue(out _));
+    }
+
+    [Fact]
+    public void Serial_work_fifo_append_allocates_no_storage()
+    {
+        var warmup = new ZLinkSerialWorkQueue();
+        var warmupItem = new ZLinkSerialWorkItem(
+            static _ => ValueTask.CompletedTask);
+        warmup.Enqueue(warmupItem);
+        Assert.True(warmup.TryDequeue(out _));
+
+        var queue = new ZLinkSerialWorkQueue();
+        var first = new ZLinkSerialWorkItem(
+            static _ => ValueTask.CompletedTask);
+        var second = new ZLinkSerialWorkItem(
+            static _ => ValueTask.CompletedTask);
+        var third = new ZLinkSerialWorkItem(
+            static _ => ValueTask.CompletedTask);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+
+        queue.Enqueue(first);
+        queue.Enqueue(second);
+        queue.Enqueue(third);
+
+        var after = GC.GetAllocatedBytesForCurrentThread();
+        Assert.Equal(before, after);
     }
 
     [Fact]
@@ -153,8 +222,13 @@ public sealed class RuntimeConformanceFixtureTests
     }
 
     [Fact]
-    public async Task Rejected_or_failed_preparation_does_not_advance_admission_authority()
+    public async Task Rejected_or_failed_preparation_preserves_count_bytes_and_sequence()
     {
+        using var document = Load("serial-execution-v1.json");
+        Assert.True(document.RootElement
+            .GetProperty("admissionInvariants")
+            .GetProperty("enqueueFailureRestoresReservation")
+            .GetBoolean());
         using var errorSink = new ZLinkRuntimeErrorSink();
         await using var queue = new ZLinkSerialExecutionQueue(
             new ZLinkRuntimeTaskRunner(errorSink, CancellationToken.None),
@@ -162,94 +236,54 @@ public sealed class RuntimeConformanceFixtureTests
             CancellationToken.None,
             capacity: 1);
         var release = Signal();
-
-        Assert.Equal(
-            ZLinkAcceptedWorkAdmission.Accepted,
-            queue.TryPostAccepted(
-                ReadOnlyMemory<byte>.Empty,
-                async _ => await release.Task.ConfigureAwait(false),
-                static () => { },
-                out var first));
-        Assert.Equal(1UL, first.AcceptedSequence);
-        Assert.Equal(
-            ZLinkAcceptedWorkAdmission.QueueFull,
-            queue.TryPostAccepted(
-                ReadOnlyMemory<byte>.Empty,
-                static _ => ValueTask.CompletedTask,
-                static () => { },
-                out _));
-        Assert.Throws<OverflowException>(() =>
-            queue.TryPostApplicationWithAdmission(
-                long.MaxValue,
-                static _ => ValueTask.CompletedTask,
-                out _));
-        Assert.Equal(1, queue.ApplicationPendingCount);
-
-        release.TrySetResult();
-        await first.Completion.WaitAsync(TimeSpan.FromSeconds(5));
-        await queue.ApplicationDrained.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(
-            ZLinkAcceptedWorkAdmission.Accepted,
-            queue.TryPostAccepted(
-                ReadOnlyMemory<byte>.Empty,
-                static _ => ValueTask.CompletedTask,
-                static () => { },
-                out var second));
-        Assert.Equal(2UL, second.AcceptedSequence);
-        await second.Completion.WaitAsync(TimeSpan.FromSeconds(5));
-    }
-
-    [Fact]
-    public async Task Failed_fifo_append_does_not_reserve_or_advance_sequence()
-    {
-        using var errorSink = new ZLinkRuntimeErrorSink();
-        await using var queue = CreateQueue(errorSink);
-        var applicationQueue = Assert.IsType<Queue<ZLinkSerialWorkItem>>(
-            RequireField(
-                    typeof(ZLinkSerialExecutionQueue),
-                    "_applicationQueue")
-                .GetValue(queue));
-        applicationQueue.EnsureCapacity(4);
-        var tail = RequireField(
-            typeof(Queue<ZLinkSerialWorkItem>),
-            "_tail");
-        var array = RequireField(
-            typeof(Queue<ZLinkSerialWorkItem>),
-            "_array");
-        var originalTail = Assert.IsType<int>(tail.GetValue(applicationQueue));
-        var storage = Assert.IsType<ZLinkSerialWorkItem[]>(
-            array.GetValue(applicationQueue));
-
-        Exception? appendFailure;
         try
         {
-            // The invalid tail makes Queue<T>.Enqueue fail at its append step,
-            // after the serial aggregate has completed admission validation.
-            tail.SetValue(applicationQueue, storage.Length);
-            appendFailure = Record.Exception(() =>
+            Assert.Equal(
+                ZLinkAcceptedWorkAdmission.Accepted,
                 queue.TryPostAccepted(
-                    ReadOnlyMemory<byte>.Empty,
+                    new byte[5],
+                    async _ => await release.Task.ConfigureAwait(false),
+                    static () => { },
+                    out var first));
+            Assert.Equal(1UL, first.AcceptedSequence);
+            Assert.Equal(1, queue.ApplicationPendingCount);
+            Assert.Equal(5, queue.ApplicationPendingRetainedBytes);
+            Assert.Equal(
+                ZLinkAcceptedWorkAdmission.QueueFull,
+                queue.TryPostAccepted(
+                    new byte[13],
                     static _ => ValueTask.CompletedTask,
                     static () => { },
                     out _));
+            Assert.Throws<OverflowException>(() =>
+                queue.TryPostApplicationWithAdmission(
+                    long.MaxValue,
+                    static _ => ValueTask.CompletedTask,
+                    out _));
+            Assert.Equal(1, queue.ApplicationPendingCount);
+            Assert.Equal(5, queue.ApplicationPendingRetainedBytes);
+
+            release.TrySetResult();
+            await first.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+            await queue.ApplicationDrained.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(0, queue.ApplicationPendingCount);
+            Assert.Equal(0, queue.ApplicationPendingRetainedBytes);
+            Assert.Equal(
+                ZLinkAcceptedWorkAdmission.Accepted,
+                queue.TryPostAccepted(
+                    new byte[7],
+                    static _ => ValueTask.CompletedTask,
+                    static () => { },
+                    out var second));
+            Assert.Equal(2UL, second.AcceptedSequence);
+            Assert.Equal(1, queue.ApplicationPendingCount);
+            Assert.Equal(7, queue.ApplicationPendingRetainedBytes);
+            await second.Completion.WaitAsync(TimeSpan.FromSeconds(5));
         }
         finally
         {
-            tail.SetValue(applicationQueue, originalTail);
+            release.TrySetResult();
         }
-
-        Assert.NotNull(appendFailure);
-        Assert.Equal(0, queue.ApplicationPendingCount);
-        Assert.Equal(0L, queue.ApplicationPendingRetainedBytes);
-        Assert.Equal(
-            ZLinkAcceptedWorkAdmission.Accepted,
-            queue.TryPostAccepted(
-                ReadOnlyMemory<byte>.Empty,
-                static _ => ValueTask.CompletedTask,
-                static () => { },
-                out var accepted));
-        Assert.Equal(1UL, accepted.AcceptedSequence);
-        await accepted.Completion.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     [Fact]
@@ -499,11 +533,6 @@ public sealed class RuntimeConformanceFixtureTests
     private static JsonElement Scenario(JsonElement scenarios, string name) =>
         scenarios.EnumerateArray().Single(item =>
             item.GetProperty("name").GetString() == name);
-
-    private static FieldInfo RequireField(Type owner, string name) =>
-        owner.GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)
-        ?? throw new InvalidOperationException(
-            $"Required white-box field '{owner.FullName}.{name}' is missing.");
 
     private static ZLinkSerialExecutionQueue CreateQueue(
         ZLinkRuntimeErrorSink errorSink) =>

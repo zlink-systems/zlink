@@ -184,7 +184,7 @@ test('deferred Actor Join barrier keeps the next Actor mailbox turn behind compl
   ]);
 });
 
-test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait policy', async () => {
+test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait policy', async (t) => {
   const events = [];
   const { actor, context } = actorHarness(events);
   const serial = new ZLinkSpotSerialExecutor(true, 'spot-a');
@@ -197,6 +197,8 @@ test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait 
   const invalidOperation = (error) =>
     error instanceof framework.ZLinkFrameworkException
     && error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation;
+  const meshSubmitters = framework.createStandaloneMeshSubmitterRegistry();
+  t.after(() => meshSubmitters.dispose());
   const client = new framework.DefaultZLinkActorClient({
     nodeProvider: () => undefined,
     completionTableProvider: () => undefined,
@@ -241,7 +243,8 @@ test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait 
             return 'pong';
           }))
         : undefined;
-    }
+    },
+    meshSubmitters
   });
 
   actor.onJoinCompleted = async (completion) => {

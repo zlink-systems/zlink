@@ -38,7 +38,7 @@ title: "14. 샘플 고르기 — 내 문제에 가까운 예제부터 · Node/Ty
 | 배차 시스템 | [DeliveryDispatch](#5-deliverydispatch--배차-시스템-구축) | 요청 생성 → 수행자 선택 → 무응답 시 재배정 → 당사자에게 전달 |
 | 주문 처리 시스템 | [ShoppingMall](#6-shoppingmall--주문-처리-시스템-구축) | 조율 계층 없이 순차 코드로 쓰는 무손실 event sourcing |
 | 퀘스트·미션 진행 시스템 | [GameQuest](#7-gamequest--퀘스트-진행-시스템-구축) | 유실을 허용하는 대신 실시간성을 얻는 owner 처리 |
-| zone 분할 MMORPG와 운영 관제 | [ZoneWorld](#8-zoneworld--zone-분할-mmorpg와-운영-관제-구축) — `.NET`과 Node.js만 제공한다 | 여러 노드에 무언가를 할 때 어떤 표면을 고르는가 |
+| zone 분할 MMORPG와 운영 관제 | [ZoneWorld](#8-zoneworld--zone-분할-mmorpg와-운영-관제-구축) — 모든 언어의 공통 목표 sample | 여러 노드에 무언가를 할 때 어떤 표면을 고르는가 |
 
 기능 쪽에서 거꾸로 고르려면 [01. Overview](01-overview.ko.md)의 도입 순서를
 먼저 본다.
@@ -46,7 +46,8 @@ title: "14. 샘플 고르기 — 내 문제에 가까운 예제부터 · Node/Ty
 두 쌍은 서로 대비하도록 만들어져 있어 함께 보면 선택 기준이 분명해진다.
 
 - **TicTacToe ↔ Bingo** — 같은 실시간 게임을 수동 연결·수동 등록과 자동 연결·자동 등록으로,
-  session을 Play가 직접 소유하는 구성과 별도 gateway로 나눈 구성으로 각각 보여 준다.
+  session을 Play가 직접 소유하는 구성과 별도 gateway로 나눈 구성으로 각각 보여 준다. C++은
+  handler scanner가 없으므로 두 sample 모두 handler를 직접 등록하지만, 연결 방식은 같은 기준을 따른다.
 - **ShoppingMall ↔ GameQuest** — 같은 owner Spot·event sourcing을 무손실이 필요한 도메인과
   유실을 허용하고 보정하는 도메인으로 나눠 보여 준다.
 
@@ -55,8 +56,8 @@ title: "14. 샘플 고르기 — 내 문제에 가까운 예제부터 · Node/Ty
 `Api` 2개와 `Play` 2개로 2인 대국을 처리하는 **가장 작은 실시간 게임 서버 구성**이다.
 **peer 연결을 location store에 맡기지 않고 endpoint를 직접 적는 유일한 샘플**이기도 하다. 다만 room과 actor가 지금 어느 node에 있는지는
 여기서도 Location Store가 해석한다 — 수동인 것은 **node 사이의 연결**이고, **object 위치
-조회**는 아니다. handler도 스캔 없이 구성 코드에서 직접 등록하는 유일한 샘플이라, framework가
-자동으로 해 주던 부분을 걷어낸 상태에서 나머지가 어떻게 맞물리는지 보기 좋다.
+조회**는 아니다. Managed language에서는 handler도 scan 없이 구성 코드에서 직접 등록하는 유일한
+sample이다. C++은 모든 sample에서 handler를 직접 등록하지만, 수동 연결은 TicTacToe에서만 사용한다.
 
 ```mermaid
 %%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
@@ -322,9 +323,8 @@ ShoppingMall과 나란히 놓으면 선택 기준이 드러난다. 게임 진행
 
 ## 8. ZoneWorld — zone 분할 MMORPG와 운영 관제 구축
 
-> 앞의 일곱 샘플과 달리 ZoneWorld는 `.NET`과 Node.js에만 있다. 나머지 여섯은 다섯 언어
-> 공통이다. 다른 언어에서 같은 주제를 보려면 이 장의 설명과 공통 시나리오 문서를 읽고
-> 코드는 두 언어 중 하나를 참고한다.
+> ZoneWorld는 다섯 framework 언어에 모두 구현된 공통 sample이다. 각 구현은 이 장과 공통
+> 시나리오가 정한 topology, actor relocation, 운영 fanout과 browser 검증 기준을 따른다.
 
 월드를 구역으로 나눠 `ZoneNode` 여러 대가 나눠 맡고, 어느 노드가 어느 구역을 맡는지는
 Location Store와 framework가 정한다. 플레이어가 경계를 넘으면 actor가 인접 zone Spot에
@@ -372,7 +372,8 @@ flowchart TD
 - 짝이 되는 장: [07-actor-spot](07-actor-spot.ko.md)(relocation),
   [11. Monitoring](11-monitoring.ko.md), [12-operations](12-operations.ko.md)
 - 시나리오: [ZoneWorld](../../../common/sample/zoneworld/README.ko.md) · payload JSON
-- server는 여러 언어가 제공하고 브라우저 client 하나를 공유한다.
+- server와 runner는 다섯 언어에 제공되며 업무 동작과 검증 기준을 공유한다. .NET과 Node.js의
+  browser smoke는 같은 TypeScript client를 사용한다.
 
 ## 9. 실행
 
@@ -388,8 +389,9 @@ framework/languages/node/samples/Bingo.Ts/run_sample.sh
 framework/languages/node/samples/run_samples.sh TicTacToe Bingo
 ```
 
-`run_samples.sh`는 서버 샘플 6개를 다룬다. 브라우저 UI가 필요한 ZoneWorld는
-`ZoneWorld/run_sample.sh`로 따로 실행한다.
+공통 sample target에는 브라우저 UI를 포함한 ZoneWorld도 포함된다. 다섯 언어의
+`run_samples.sh`는 ZoneWorld를 포함한 7개 샘플을 모두 실행한다. ZoneWorld만 실행하려면
+해당 언어의 sample root에서 `ZoneWorld/run_sample.sh`를 호출한다.
 
 ## 10. 관련 문서
 

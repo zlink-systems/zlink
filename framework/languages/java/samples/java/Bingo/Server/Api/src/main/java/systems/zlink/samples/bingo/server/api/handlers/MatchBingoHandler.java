@@ -40,7 +40,7 @@ public final class MatchBingoHandler
             .thenCompose(allocated -> spots
                 .getOrCreate(allocated.getRoomId(), SampleNames.RoomSpotType)
                 .inMesh(SampleNames.Mesh)
-                .request(allocated.getSettings())
+                .request(BingoMessages.bingoRoomCreateReq(allocated.getSettings()))
                 .timeout(SampleTimings.RequestTimeout)
                 .submit()
                 .thenApply(ignored ->

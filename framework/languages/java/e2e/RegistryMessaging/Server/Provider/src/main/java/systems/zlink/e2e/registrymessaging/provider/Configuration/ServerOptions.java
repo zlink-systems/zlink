@@ -1,6 +1,5 @@
-package Configuration;
+package systems.zlink.e2e.registrymessaging.provider.Configuration;
 
-import systems.zlink.e2e.registrymessaging.provider.Configuration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties("e2e")

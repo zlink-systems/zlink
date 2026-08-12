@@ -1,7 +1,7 @@
 // TA-B3: Current owner에 연결할 수 없으면 Unavailable로 끝난다 시나리오를 검증한다.
 import type { ClientOptions } from '../Support/client-options';
 import { getJson, postJson } from '../../../http-client';
-import type { ActorCallResponse, ActorRefPayload } from '../../Shared/messages';
+import type { ActorCallRes, ActorRefPayload } from '../../Shared/messages';
 import {
   type ActorEvidence, assertCall, assertFailure, ensureActor, requireEvidence, requireNoEvidence
 } from '../Support/actor-scenario-support';
@@ -29,7 +29,7 @@ async function waitForRouteState(
   expected: 'connected' | 'disconnected'
 ): Promise<void> {
   await waitUntil(async () => {
-    const response = await postJson<ActorCallResponse>(`${options.callerUrl}/request`, {
+    const response = await postJson<ActorCallRes>(`${options.callerUrl}/request`, {
       scenario: 'TA-B3-route-probe',
       actorId: actor.actorId,
       actor,

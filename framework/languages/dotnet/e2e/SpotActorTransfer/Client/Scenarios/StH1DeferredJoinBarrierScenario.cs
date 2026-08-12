@@ -39,7 +39,7 @@ internal static class StH1DeferredJoinBarrierScenario
         await context.SendFromNodeAsync(
             context.NodeD,
             actorId,
-            new HandoffPacket(scenario, marker));
+            new HandoffMsg(scenario, marker));
 
         await Task.Delay(TimeSpan.FromMilliseconds(100));
         ZlinkStreamAssert.Ensure(

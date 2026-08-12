@@ -174,6 +174,18 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         return replaceRoot(authorityPayload, stored, root, false);
     }
 
+    /** Replaces the public authority projection without changing relocation state. */
+    static byte[] replaceApplicationPayload(
+        byte[] authorityPayload,
+        byte[] applicationPayload) {
+        Slot current = slot(authorityPayload);
+        Slot replacement = slot(applicationPayload);
+        if (!current.present() || replacement.present()) {
+            throw invalid();
+        }
+        return replace(replacement, current.state());
+    }
+
     static byte[] completeSourceCleanup(
         byte[] authorityPayload,
         ZLinkRelocationStored stored,

@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Configuration;
 
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
@@ -77,9 +76,9 @@ internal static class CodecRequesterHostFactory
             try
             {
                 var reply = await channel.RequestToChannel(RegistrationCodecNames.Channel,
-                        new StringValue { Value = "rc-b5" })
+                        new ProtobufEchoReq { Value = "rc-b5" })
                     .Timeout(TimeSpan.FromSeconds(2))
-                    .Async<StringValue>(cancellationToken);
+                    .Async<ProtobufEchoRes>(cancellationToken);
                 return Results.Ok(new CodecMismatchProbeRes(false, null, reply.Value));
             }
             catch (Exception ex)
@@ -167,16 +166,16 @@ internal static class CodecRequesterHostFactory
                 .Async(cancellationToken);
             var protobuf = await channel.RequestToChannel(
                     RegistrationCodecNames.Channel,
-                    new Google.Protobuf.WellKnownTypes.StringValue { Value = "rc-b2" })
-                .Async<Google.Protobuf.WellKnownTypes.StringValue>(cancellationToken);
+                    new ProtobufEchoReq { Value = "rc-b2" })
+                .Async<ProtobufEchoRes>(cancellationToken);
             await channel.SendToChannel(
                     RegistrationCodecNames.Channel,
-                    new Google.Protobuf.WellKnownTypes.StringValue { Value = "rc-b2-send" })
+                    new ProtobufEchoMsg { Value = "rc-b2-send" })
                 .Async(cancellationToken);
             var packed = await channel.RequestToChannel(
                     RegistrationCodecNames.Channel,
                     new PackedEchoReq { Value = "rc-b3" })
-                .Async<PackedEchoReq>(cancellationToken);
+                .Async<PackedEchoRes>(cancellationToken);
             await channel.SendToChannel(
                     RegistrationCodecNames.Channel,
                     new PackedEchoMsg { CommandId = "cmd-rc-b3", Value = "rc-b3-send" })

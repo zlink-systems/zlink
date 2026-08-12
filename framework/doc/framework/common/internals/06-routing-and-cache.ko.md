@@ -125,18 +125,30 @@ Schema는 record 형식만 고정한다. 각 runtime은 record를 relay하고 �
 object generation, authority generation과 target node를 검증해야 한다. 현재 cache 항목이 이
 값과 일치할 때만 무효화하여, 이미 저장된 더 새로운 route를 지우지 않는다.
 
-**중복 억제 구현 예시 — 공통 완료 조건이 아니다.**
+중복 억제는 전용 registry가 맡는다. Key는 source와 target route fence의 모든 field를
+포함한다. Object kind와 논리 ID뿐 아니라 object generation, target node RID·generation,
+authority owner generation과 owner lease generation도 source와 target 양쪽 값으로
+비교한다. 일부 generation만 key로 쓰면 이전 route에서 남은 표식이 새 target으로 보내야
+할 통지까지 막을 수 있다.
 
-- `(보낸 runtime, 객체, owner 세대)` 조합마다 처음 한 번만 보낸다. 이동 직후 트래픽이
-  몰리는 객체에서 message마다 통지를 보내면 통지 record가 업무 message만큼 늘어난다.
-- 같은 통지가 전송 중이면 추가 통지는 합친다.
-- 통지는 유실되어도 캐시 수명이 끝나면 만료되므로 재전송을 보장하지 않는다.
-- 중복 억제 표식은 별도 집합이 아니라 기존 캐시 항목에 넣고, 캐시 항목이 사라질 때 함께
-  없앤다. 별도 집합을 두면 이동한 객체 수만큼 상태가 계속 늘어난다.
+```mermaid
+stateDiagram-v2
+    [*] --> idle: exact route fence를 보관한다
+    idle --> inFlight: 통지 전송 권한을 얻는다
+    inFlight --> sentUntilExpiry: 전송 성공
+    inFlight --> idle: 전송 실패
+    sentUntilExpiry --> [*]: route cache 만료 또는 교체
+    idle --> [*]: route cache 만료 또는 교체
+```
 
-구현은 이 예시와 다른 suppression 구조를 사용할 수 있다. 공통 조건은 같은 object·authority generation과
-target node를 가리키는 cache만 무효화하고 더 새로운 route를 지우지 않으며, 알림이 유실되어도 cache
-lifetime 뒤 stale route를 만료시키고, 중복 상태가 원래 operation의 terminal 결과를 바꾸지 않는 것이다.
+`inFlight`에서는 같은 key의 추가 전송을 시작하지 않는다. 전송에 성공하면 cache route가
+만료될 때까지 `sentUntilExpiry`를 유지하고, 실패하면 다시 시도할 수 있도록 `idle`로
+전이한다. Registry는 자체 expiry timer를 만들지 않고 route cache가 만료·교체되는 시점에
+같은 key를 제거한다.
+
+이 registry는 통지 중복만 관리한다. 원래 operation의 payload, reply route와 terminal
+completion은 각각의 기존 owner가 계속 관리한다. 따라서 suppression 상태가 원래
+operation의 terminal 결과를 만들거나 바꾸지 않는다.
 
 ## 3. 후보 목록을 호출마다 만들지 않는다
 

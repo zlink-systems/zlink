@@ -31,11 +31,11 @@ internal sealed class LocationStoreReadProbe(IZLinkLocationStore inner)
         }
     }
 
-    public LocationStoreReadProbeSnapshot Snapshot()
+    public LocationStoreReadProbeRes Snapshot()
     {
         lock (_gate)
         {
-            return new LocationStoreReadProbeSnapshot(
+            return new LocationStoreReadProbeRes(
                 Interlocked.Read(ref _matchingReads),
                 _blocked,
                 _actorIds);

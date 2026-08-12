@@ -8,7 +8,7 @@ export const SpotActorTransferNames = {
   actorTypeFailTransferIn: 'transfer-fail-in',
   packetJoin: 'JoinTargetReq',
   packetProbe: 'ProbeReq',
-  packetHandoff: 'HandoffProbe',
+  packetHandoff: 'HandoffProbeMsg',
   packetBoundPush: 'BoundPushReq',
   packetBoundNotify: 'BoundPushNotify',
   packetBindActor: 'BindActorSessionReq'
@@ -55,7 +55,14 @@ export class ProbeReq {
     readonly requestTimeoutMs?: number
   ) {}
 }
-export class HandoffProbe extends ProbeReq {}
+export class HandoffProbeMsg {
+  constructor(
+    readonly scenario: string,
+    readonly marker: string,
+    readonly delayMs?: number,
+    readonly requestTimeoutMs?: number
+  ) {}
+}
 export interface ProbeRes {
   scenario: string;
   actorId: string;

@@ -114,7 +114,7 @@ Pod replacement는 endpoint와 Node RID가 모두 바뀔 수 있다. Consumer는
   순서대로 종료한다.
 - 검증: 각 request는 terminal 하나를 받고 serving target count가 0이 되지 않는다. 완료 뒤 신규 requests는
   N+1 handler evidence에만 기록된다. Descriptor 발견만으로 ready를 판정하지 않는다.
-- 세부 동작: [Host maintenance §5](../spec/28-graceful-drain-handoff.ko.md)을 검증한다.
+- 세부 동작: [Host maintenance §5](../spec/30-host-relocation-flow.ko.md)을 검증한다.
 
 #### RL-A5 Provider lifecycle을 반복해도 current target에 수렴한다
 
@@ -180,7 +180,7 @@ provider에 자동 재제출하지 않는다.
 - 절차: B Shutdown을 시작하고 새 requests를 보낸 뒤 slow handler gate를 해제한다.
 - 검증: Accepted request는 B reply로 한 번 완료한다. Seal 뒤 신규 requests는 A가 처리하고 B terminal 뒤
   public status에는 B가 ready target으로 남지 않는다.
-- 세부 동작: [Shutdown과 Relocate의 경쟁](../spec/28-graceful-drain-handoff.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
+- 세부 동작: [Shutdown과 Relocate의 경쟁](../spec/30-host-relocation-flow.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
 
 #### RL-B4 Runtime weight 0으로 신규 selection에서 제외하고 복원한다
 
@@ -244,7 +244,7 @@ Resource cleanup 내부 count는 E2E public contract가 아니다. E2E에서는 
 - 절차: Clients와 server를 public close·Shutdown으로 종료한다. Process exit 뒤 같은 ports로 replacement를
   시작한다.
 - 검증: Pending public operations가 없고 old process가 종료되며 replacement listeners가 ready가 된다.
-- 세부 동작: [Shutdown과 Relocate의 경쟁](../spec/28-graceful-drain-handoff.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
+- 세부 동작: [Shutdown과 Relocate의 경쟁](../spec/30-host-relocation-flow.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
 
 #### RL-C3 정상 restart 뒤 새 lifecycle로 수렴한다
 
@@ -443,8 +443,8 @@ Preflight 뒤 target capacity가 부족해지거나 target이 unavailable이면 
   availability variant를 실행한다.
 - 검증: Relocate가 성공한 경우 state는 target에 한 번 존재한다. Blocked variant는 source location과 state를
   유지하고 follow-up request가 성공하며 다른 target으로 자동 전환하지 않는다.
-- 세부 동작: [Mode에 맞는 target 선택](../spec/28-graceful-drain-handoff.ko.md#5-mode에-맞는-target을-선택한다)과
-  [Relocation unit과 실행량 제한](../spec/28-graceful-drain-handoff.ko.md#7-relocation-unit과-실행량-제한)을 검증한다.
+- 세부 동작: [Mode에 맞는 target 선택](../spec/30-host-relocation-flow.ko.md#5-mode에-맞는-target을-선택한다)과
+  [Relocation unit과 실행량 제한](../spec/30-host-relocation-flow.ko.md#7-relocation-unit과-실행량-제한)을 검증한다.
 
 #### RL-F3 Cross-language terminal failure를 같게 해석한다
 
@@ -476,7 +476,7 @@ Target restore가 진행 중이면 incoming messages를 application handler에 �
 - 검증: Target handler evidence는 `Q1,Q2,H1,H2` 순서이고 각 marker가 한 번만 나타난다. Restore-held
   구간에는 application handler evidence가 없다.
 - 세부 동작: [Target이 새 message를 받기 시작하는 시점](../spec/21-location-runtime.ko.md#74-target이-새-message를-받기-시작하는-시점)과
-  [Unit 하나를 이전하는 순서](../spec/28-graceful-drain-handoff.ko.md#8-unit-하나를-이전하는-순서)를 검증한다.
+  [Unit 하나를 이전하는 순서](../spec/30-host-relocation-flow.ko.md#8-unit-하나를-이전하는-순서)를 검증한다.
 
 #### RL-F6 Runtime mutable update와 invalid mutation을 구분한다
 
@@ -528,8 +528,8 @@ source의 accepted work와 Host admission을 바꾸지 않는다.
 - 검증: Relocate는 `Blocked/ManualTopologyUnsupported`이고 Host는 `Serving`을 유지한다. Accepted request와
   follow-up request는 source에서 한 번씩 처리되며 target restore·factory evidence는 없다. Shutdown은
   manual topology를 blocker로 사용하지 않고 bounded terminal로 끝난다.
-- 세부 동작: [Host maintenance §4](../spec/28-graceful-drain-handoff.ko.md)와
-  [§10](../spec/28-graceful-drain-handoff.ko.md)을 검증한다.
+- 세부 동작: [Host maintenance §4](../spec/30-host-relocation-flow.ko.md)와
+  [§10](../spec/30-host-relocation-flow.ko.md)을 검증한다.
 
 #### RL-F9 Preflight timeout과 post-seal deadline을 구분한다
 
@@ -546,8 +546,8 @@ Admission seal 전에 끝난 timeout은 source를 변경하지 않는다. Seal �
 - 검증: First는 `Blocked/DeadlineExceeded`이고 Host는 Serving이다. Second는
   `ForceStopped/DeadlineExceeded` 또는 spec의 post-seal forced outcome이며 source를 다시 Serving으로
   오인하지 않는다.
-- 세부 동작: [Relocate 완료와 실패](../spec/28-graceful-drain-handoff.ko.md#10-relocate-완료와-실패)와
-  [Shutdown과 Relocate의 경쟁](../spec/28-graceful-drain-handoff.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
+- 세부 동작: [Relocate 완료와 실패](../spec/30-host-relocation-flow.ko.md#10-relocate-완료와-실패)와
+  [Shutdown과 Relocate의 경쟁](../spec/30-host-relocation-flow.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
 
 #### RL-F10 Entry Actor와 SpotWide aggregate를 Host Relocate한다
 
@@ -562,7 +562,7 @@ Actor Join·Leave callbacks를 호출하지 않는다.
 - 절차: Host Relocate를 완료하고 current refs, state와 callbacks를 조회한다.
 - 검증: Objects는 generation과 state를 유지해 target에서 request를 처리한다. Join·Leave callback counters는
   0이고 source Spot closing reason은 RelocationOut이다.
-- 세부 동작: [Host maintenance §8](../spec/28-graceful-drain-handoff.ko.md)을
+- 세부 동작: [Host maintenance §8](../spec/30-host-relocation-flow.ko.md)을
   검증한다.
 
 #### RL-F11 Ready relocation units를 느린 units보다 먼저 완료한다
@@ -578,7 +578,7 @@ Actor Join·Leave callbacks를 호출하지 않는다.
 - 절차: Host Relocate를 시작하고 ready object의 public locations를 관찰한 뒤 slow gates를 해제한다.
 - 검증: 적어도 하나의 ready object가 slow gate 해제 전에 target location과 정상 handler result를 가진다.
   Slow objects도 해제 뒤 terminal에 도달하고 aggregate members는 함께 이동한다.
-- 세부 동작: [Host maintenance §7](../spec/28-graceful-drain-handoff.ko.md)을
+- 세부 동작: [Host maintenance §7](../spec/30-host-relocation-flow.ko.md)을
   검증한다.
 
 #### RL-F12 User Spot queue와 timer를 relocation 뒤 복원한다
@@ -595,7 +595,7 @@ SpotWide User Spot 또는 Instance Spot relocation은 queued messages와 logical
 - 절차: Relocate를 시작하고 R0를 해제한다. Completion 뒤 target evidence와 timer callback을 기다린다.
 - 검증: R0 뒤 Q1·Q2와 A1·A2가 각 target queue와 Actor lane 순서를 유지해 한 번 처리된다. Timer callback도 target에서 한 번
   실행되고 Application이 timer registration을 반복하지 않는다.
-- 세부 동작: [Graceful drain — 대기 중인 message, timer와 session을 옮긴다](../spec/28-graceful-drain-handoff.ko.md#9-대기-중인-message-timer와-session을-옮긴다)를 검증한다.
+- 세부 동작: [Graceful drain — 대기 중인 message, timer와 session을 옮긴다](../spec/30-host-relocation-flow.ko.md#9-대기-중인-message-timer와-session을-옮긴다)를 검증한다.
 
 #### RL-F13 많은 large-state units의 relocation을 bounded terminal로 끝낸다
 
@@ -613,7 +613,7 @@ bounded하게 끝나고 source admission을 너무 일찍 막지 않는지 확�
 - 검증: 64 MiB 이하 units는 target에서 checksum과 logical length를 보존하고, 한 byte 초과 unit은 source
   authority를 유지한 채
   `StateIncompatible`이다. 모든 units와 Host operation은 bounded terminal을 가진다.
-- 세부 동작: [Host maintenance §7](../spec/28-graceful-drain-handoff.ko.md)을
+- 세부 동작: [Host maintenance §7](../spec/30-host-relocation-flow.ko.md)을
   검증한다.
 
 #### RL-F14 Precommit abort 뒤 source queue 순서를 복원한다
@@ -631,7 +631,7 @@ Target reservation 또는 restore가 commit 전에 실패하면 frozen work와 s
   variants를 fresh objects에서 실행한다.
 - 검증: Relocate는 blocked 또는 failed terminal이고 public current location은 source다. Source handler
   evidence는 `Q1,Q2,H1,H2` 순서이며 중복이 없다. Follow-up timer도 source에서 정상 실행된다.
-- 세부 동작: [Host maintenance §9](../spec/28-graceful-drain-handoff.ko.md)을
+- 세부 동작: [Host maintenance §9](../spec/30-host-relocation-flow.ko.md)을
   검증한다.
 
 ## 5. 완료 기준

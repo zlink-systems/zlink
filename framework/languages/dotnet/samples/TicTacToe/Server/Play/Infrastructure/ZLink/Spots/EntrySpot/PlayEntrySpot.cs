@@ -1,4 +1,5 @@
 using TicTacToe.Server.Play.Infrastructure.ZLink.Actors;
+using TicTacToe.Server.Play.Infrastructure.ZLink.Spots.EntrySpot.Handlers;
 using TicTacToe.Server.Configuration;
 using TicTacToe.Shared.Contracts;
 using Zlink.Framework.Contracts.Messaging;
@@ -15,14 +16,24 @@ internal sealed class PlayEntrySpot(
 
     public IZLinkEntrySpotContext Context { get; } = context;
 
-    public void Configure() { }
+    public void Configure()
+    {
+        // send: schedules the actor's room join.
+        Context.Handlers.AddHandler<PlayActorJoinGameHandler>(nameof(JoinGameMsg));
+        // request: enables milestone notifications for the actor.
+        Context.Handlers.AddHandler<PlayActorObserveMilestoneHandler>(nameof(ObserveMilestoneReq));
+        // subscribe: forwards milestone publications to observing actors.
+        Context.Handlers.AddSubscribe<PlayerWinMilestoneEventHandler>(
+            SampleTopics.PlayerMilestoneChannel,
+            SampleTopics.PlayerMilestone);
+    }
 
     public ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
         PlayActor actor,
         ZLinkMessage createRequest,
         CancellationToken cancellationToken)
     {
-        actor.ApplyPlayer(createRequest.Decode<PlayerInfo>());
+        actor.ApplyPlayer(createRequest.Decode<PlayerActorCreateReq>().Player);
         logger.LogInformation(
             "entry spot: actor created. actor={ActorId}",
             actor.ActorId);

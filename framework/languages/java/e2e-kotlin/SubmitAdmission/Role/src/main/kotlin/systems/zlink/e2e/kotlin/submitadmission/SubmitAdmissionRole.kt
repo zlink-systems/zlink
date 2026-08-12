@@ -93,11 +93,11 @@ class SubmitAdmissionApplication {
                     .listen(config.meshEndpoint)
                     .setRoutingId(RoutingId.from(config.rid))
                     .setDefaultRequestTimeout(Duration.ofSeconds(1))
-                mesh.addRouteSendHandler(RouteHandler::class.java, Probe::class.java)
+                mesh.addRouteSendHandler(RouteHandler::class.java, RouteProbeMsg::class.java)
                 mesh.channelName(CHANNEL)
                     .server()
                     .setWeight(if (config.role == "target") 100 else 0)
-                    .addSendHandler(ChannelHandler::class.java, Probe::class.java)
+                    .addSendHandler(ChannelHandler::class.java, ChannelProbeMsg::class.java)
                 if (config.peerEndpoint.isNotBlank()) {
                     mesh.peerConnections().connect(
                         RoutingId.from(config.peerRid),
@@ -117,7 +117,7 @@ class SubmitAdmissionApplication {
                     .setBindHost("127.0.0.1")
                     .setAdvertiseHost("127.0.0.1")
                     .setWeight(100)
-                    .addSendHandler(ChannelHandler::class.java, Probe::class.java)
+                    .addSendHandler(ChannelHandler::class.java, ChannelProbeMsg::class.java)
                 if (config.clientServerPort > 0) {
                     server.listen(config.clientServerPort)
                 } else {
@@ -134,7 +134,7 @@ class SubmitAdmissionApplication {
                 options.addHandlersFromPackageOf(FanoutHandler::class.java)
                 options.addFanoutChannel(FANOUT)
                     .connect(config.fanoutEndpoint)
-                    .addPublishHandler(FanoutHandler::class.java, Probe::class.java)
+                    .addPublishHandler(FanoutHandler::class.java, FanoutProbeEvent::class.java)
             }
         }
 
@@ -149,25 +149,37 @@ class SubmitAdmissionApplication {
     ): RoleHttpServer = RoleHttpServer(state, routes, client, fanout, meshRuntime, runtime)
 }
 
-data class Probe(
+data class RouteProbeMsg(
     val operationId: String,
     val sequence: Int,
     val payload: String = "",
 )
 
-class RouteHandler(private val state: RoleState) : ZLinkRouteSendHandler<Probe> {
-    override fun handle(message: Probe, context: ZLinkRouteMessageContext): CompletionStage<Void> =
-        state.handle("route", message)
+data class ChannelProbeMsg(
+    val operationId: String,
+    val sequence: Int,
+    val payload: String = "",
+)
+
+data class FanoutProbeEvent(
+    val operationId: String,
+    val sequence: Int,
+    val payload: String = "",
+)
+
+class RouteHandler(private val state: RoleState) : ZLinkRouteSendHandler<RouteProbeMsg> {
+    override fun handle(message: RouteProbeMsg, context: ZLinkRouteMessageContext): CompletionStage<Void> =
+        state.handle("route", message.operationId, message.sequence)
 }
 
-class FanoutHandler(private val state: RoleState) : ZLinkFanoutHandler<Probe> {
-    override fun handle(message: Probe, context: ZLinkPublishMessageContext): CompletionStage<Void> =
-        state.handle("fanout", message)
+class FanoutHandler(private val state: RoleState) : ZLinkFanoutHandler<FanoutProbeEvent> {
+    override fun handle(message: FanoutProbeEvent, context: ZLinkPublishMessageContext): CompletionStage<Void> =
+        state.handle("fanout", message.operationId, message.sequence)
 }
 
-class ChannelHandler(private val state: RoleState) : ZLinkSendHandler<Probe> {
-    override fun handle(message: Probe, context: ZLinkMessageContext): CompletionStage<Void> =
-        state.handle("channel", message)
+class ChannelHandler(private val state: RoleState) : ZLinkSendHandler<ChannelProbeMsg> {
+    override fun handle(message: ChannelProbeMsg, context: ZLinkMessageContext): CompletionStage<Void> =
+        state.handle("channel", message.operationId, message.sequence)
 }
 
 class RoleState(val config: RoleConfig) {
@@ -179,24 +191,24 @@ class RoleState(val config: RoleConfig) {
     private val operationJobs = ConcurrentHashMap<String, Job>()
     private val operationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    fun handle(family: String, message: Probe): CompletionStage<Void> {
+    fun handle(family: String, operationId: String, sequence: Int): CompletionStage<Void> {
         val started = handlerStarted.incrementAndGet()
         handlerStartedByOperation
-            .computeIfAbsent(message.operationId) { AtomicInteger() }
+            .computeIfAbsent(operationId) { AtomicInteger() }
             .incrementAndGet()
         record(
             "handler_started",
             mapOf(
                 "family" to family,
-                "operationId" to message.operationId,
-                "sequence" to message.sequence.toString(),
+                "operationId" to operationId,
+                "sequence" to sequence.toString(),
                 "handlerStarted" to started.toString(),
             ),
         )
         val completion = CompletableFuture<Void>()
         Thread.ofVirtual().start {
             try {
-                if (config.gateFile.isNotBlank() && message.operationId.startsWith("handler-gate")) {
+                if (config.gateFile.isNotBlank() && operationId.startsWith("handler-gate")) {
                     val gate = Path.of(config.gateFile)
                     while (!Files.exists(gate)) {
                         Thread.sleep(10L)
@@ -204,14 +216,14 @@ class RoleState(val config: RoleConfig) {
                 }
                 val completed = handlerCompleted.incrementAndGet()
                 handlerCompletedByOperation
-                    .computeIfAbsent(message.operationId) { AtomicInteger() }
+                    .computeIfAbsent(operationId) { AtomicInteger() }
                     .incrementAndGet()
                 record(
                     "handler_completed",
                     mapOf(
                         "family" to family,
-                        "operationId" to message.operationId,
-                        "sequence" to message.sequence.toString(),
+                        "operationId" to operationId,
+                        "sequence" to sequence.toString(),
                         "handlerCompleted" to completed.toString(),
                     ),
                 )
@@ -378,7 +390,8 @@ class RoleHttpServer(
         val sequence = values["sequence"]?.toIntOrNull() ?: 0
         submit(exchange, "node", operationId) {
             routes.kotlin()
-                .sendToNode(MESH, RoutingId.from(targetRid), Probe(operationId, sequence, values["payload"].orEmpty()))
+                .sendToNode(MESH, RoutingId.from(targetRid), RouteProbeMsg(
+                    operationId, sequence, values["payload"].orEmpty()))
                 .await()
         }
     }
@@ -388,7 +401,8 @@ class RoleHttpServer(
         val operationId = values["operationId"] ?: "missing-operation"
         val sequence = values["sequence"]?.toIntOrNull() ?: 0
         submit(exchange, "channel", operationId) {
-            routes.kotlin().sendToChannel(CHANNEL, Probe(operationId, sequence, values["payload"].orEmpty())).await()
+            routes.kotlin().sendToChannel(CHANNEL, ChannelProbeMsg(
+                operationId, sequence, values["payload"].orEmpty())).await()
         }
     }
 
@@ -398,7 +412,8 @@ class RoleHttpServer(
         val sequence = values["sequence"]?.toIntOrNull() ?: 0
         submit(exchange, "clientserver", operationId) {
             client.kotlin()
-                .sendToChannel(CLIENT_SERVER_CHANNEL, Probe(operationId, sequence, values["payload"].orEmpty()))
+                .sendToChannel(CLIENT_SERVER_CHANNEL, ChannelProbeMsg(
+                    operationId, sequence, values["payload"].orEmpty()))
                 .await()
         }
     }
@@ -408,7 +423,8 @@ class RoleHttpServer(
         val operationId = values["operationId"] ?: "missing-operation"
         val sequence = values["sequence"]?.toIntOrNull() ?: 0
         submit(exchange, "fanout", operationId) {
-            fanout.kotlin().publish(FANOUT, Probe(operationId, sequence, values["payload"].orEmpty())).await()
+            fanout.kotlin().publish(FANOUT, FanoutProbeEvent(
+                operationId, sequence, values["payload"].orEmpty())).await()
         }
     }
 
@@ -420,7 +436,7 @@ class RoleHttpServer(
         val payload = values["payload"].orEmpty()
         state.startOperation(operationId) {
             routes.kotlin()
-                .sendToNode(MESH, RoutingId.from(targetRid), Probe(operationId, sequence, payload))
+                .sendToNode(MESH, RoutingId.from(targetRid), RouteProbeMsg(operationId, sequence, payload))
                 .await()
         }
         respond(exchange, 202, operationId)
@@ -432,7 +448,7 @@ class RoleHttpServer(
         val sequence = values["sequence"]?.toIntOrNull() ?: 0
         val payload = values["payload"].orEmpty()
         state.startOperation(operationId) {
-            routes.kotlin().sendToChannel(CHANNEL, Probe(operationId, sequence, payload)).await()
+            routes.kotlin().sendToChannel(CHANNEL, ChannelProbeMsg(operationId, sequence, payload)).await()
         }
         respond(exchange, 202, operationId)
     }
@@ -444,7 +460,7 @@ class RoleHttpServer(
         val payload = values["payload"].orEmpty()
         state.startOperation(operationId) {
             client.kotlin()
-                .sendToChannel(CLIENT_SERVER_CHANNEL, Probe(operationId, sequence, payload))
+                .sendToChannel(CLIENT_SERVER_CHANNEL, ChannelProbeMsg(operationId, sequence, payload))
                 .await()
         }
         respond(exchange, 202, operationId)
@@ -456,7 +472,7 @@ class RoleHttpServer(
         val sequence = values["sequence"]?.toIntOrNull() ?: 0
         val payload = values["payload"].orEmpty()
         state.startOperation(operationId) {
-            fanout.kotlin().publish(FANOUT, Probe(operationId, sequence, payload)).await()
+            fanout.kotlin().publish(FANOUT, FanoutProbeEvent(operationId, sequence, payload)).await()
         }
         respond(exchange, 202, operationId)
     }

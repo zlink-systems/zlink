@@ -1,6 +1,5 @@
-package Support;
+package systems.zlink.e2e.registrationcodec.client.Support;
 
-import systems.zlink.e2e.registrationcodec.client.Support;
 import java.time.Duration;
 import systems.zlink.e2e.registrationcodec.shared.Contracts;
 import systems.zlink.httpclient.ZLinkHttpClient;

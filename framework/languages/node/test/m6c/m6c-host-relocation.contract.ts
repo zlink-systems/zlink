@@ -244,10 +244,10 @@ test('production host dispatches binary commands 42 and 44 and sends canonical 4
   assert.equal(sent[1]?.target, 'target');
   assert.equal(decodeSessionRelocationRouted(sent[1]!.bytes).result, 'applied');
   targetDescriptorLeaseGeneration = 15n;
-  await assert.rejects(
-    dispatch('target', encodeSessionRelocationRoute(route)),
-    /current target authority/
-  );
+  await dispatch('target', encodeSessionRelocationRoute(route));
+  assert.deepEqual(received, ['seal', 'route', 'route']);
+  assert.equal(sent[2]?.target, 'target');
+  assert.equal(decodeSessionRelocationRouted(sent[2]!.bytes).result, 'applied');
   await runtime.dispose();
 });
 

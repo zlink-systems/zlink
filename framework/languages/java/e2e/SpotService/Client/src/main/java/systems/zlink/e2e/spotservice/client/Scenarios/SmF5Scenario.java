@@ -1,6 +1,5 @@
-package Scenarios;
+package systems.zlink.e2e.spotservice.client.Scenarios;
 
-import systems.zlink.e2e.spotservice.client.Scenarios;
 import java.util.List;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.e2e.spotservice.shared.Contracts;

@@ -1,5 +1,23 @@
 #!/usr/bin/env bash
 
+NODE_E2E_APPLICATION_PORT_MIN=38100
+NODE_E2E_APPLICATION_PORT_MAX=39999
+NODE_E2E_LANGUAGE_LOCK_FILE="/tmp/zlink-framework-node-e2e.lock"
+
+serialize_node_e2e_run() {
+  local runner_path="$1"
+  shift
+  if [[ "${ZLINK_NODE_E2E_LANGUAGE_LOCK_HELD:-0}" == "1" ]]; then
+    return 0
+  fi
+  if ! command -v flock >/dev/null 2>&1; then
+    echo "flock is required to serialize Node.js E2E runs." >&2
+    return 1
+  fi
+  exec flock --exclusive --close "$NODE_E2E_LANGUAGE_LOCK_FILE" \
+    env ZLINK_NODE_E2E_LANGUAGE_LOCK_HELD=1 bash "$runner_path" "$@"
+}
+
 ordered_e2e_roles() {
   local mode="$1"
   shift
@@ -25,21 +43,25 @@ for role in roles:
 PY
 }
 
-pick_port() {
+pick_available_port() {
   node "$NODE_ROOT/e2e/port-picker.js"
 }
 
-allocate_port() {
+pick_port() {
   local port
   local registry="${PORT_REGISTRY_FILE:-${LOG_DIR:-/tmp/zlink-e2e-ports-$$}.allocated-ports}"
   while true; do
-    port="$(pick_port)"
+    port="$(pick_available_port)"
     if [[ ! -f "$registry" ]] || ! grep -Fxq "$port" "$registry"; then
       printf '%s\n' "$port" >>"$registry"
       printf '%s\n' "$port"
       return 0
     fi
   done
+}
+
+allocate_port() {
+  pick_port
 }
 
 build_package() {
@@ -125,9 +147,18 @@ wait_all_pids_ignoring_status() {
   wait "${pids[@]:-}" 2>/dev/null || true
 }
 
+remove_redis_container_by_id() {
+  local container_id="$1"
+  local docker_timeout_seconds="${ZLINK_REDIS_DOCKER_TIMEOUT_SECONDS:-10}"
+
+  [[ "$container_id" =~ ^[0-9a-f]{12,64}$ ]] || return 1
+  timeout -k 2s "${docker_timeout_seconds}s" docker rm -fv "$container_id" \
+    >/dev/null 2>&1
+}
+
 remove_redis_container() {
   if [[ -n "${REDIS_CONTAINER_ID:-}" ]]; then
-    docker rm -fv "$REDIS_CONTAINER_ID" >/dev/null 2>&1 || true
+    remove_redis_container_by_id "$REDIS_CONTAINER_ID" || true
   fi
 }
 

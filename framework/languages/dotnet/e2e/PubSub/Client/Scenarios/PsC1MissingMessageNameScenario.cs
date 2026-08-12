@@ -26,7 +26,7 @@ internal static class PsC1MissingMessageNameScenario
         {
             ContainsAllLineGroups =
             [
-                ["dispatch-error|", "packet=MissingEventMsg", $"topic={PubSubNames.MainTopic}"]
+                ["dispatch-error|", "packet=MissingTopicEvent", $"topic={PubSubNames.MainTopic}"]
             ]
         });
 

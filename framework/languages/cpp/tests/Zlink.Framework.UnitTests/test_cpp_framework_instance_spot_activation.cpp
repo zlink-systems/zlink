@@ -2,6 +2,7 @@
 
 #include <zlink/framework.hpp>
 
+#include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
@@ -334,6 +335,78 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
 
     EXPECT_EQ (2, resolver.reads.load ());
     EXPECT_EQ (2, activations.load ());
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation,
+      RetiredOwnerRequestCompletesWithUnavailableTerminal)
+{
+    namespace host = zlink::framework::runtime::host;
+    namespace messaging = zlink::framework::runtime::messaging;
+
+    zlink::framework::serializer_registry_t serializers;
+    zlink::framework::zlink_builder_t builder;
+    auto mesh = builder.add_route_mesh ("retired-owner");
+    auto runtime = zlink::framework::detail::spot_node_runtime_t::from (
+      builder, "retired-owner");
+    ASSERT_TRUE (runtime);
+    zlink::framework::detail::channel_runtime_t::from (
+      builder.message_bus ())
+      .bind_serializers (serializers);
+    runtime->set_route_client (builder.route_client (serializers));
+
+    zlink::framework::service_collection_t services;
+    services.add_singleton<
+      zlink::framework::detail::actor_gateway_runtime_t> ();
+    auto provider = services.build_provider ();
+
+    const auto reply_host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{
+        .mesh = {
+          .descriptor = {
+            .mesh_name = "retired-owner",
+            .node_routing_id =
+              zlink::routing_id_t::from ("retired-owner-reply").to_bytes (),
+            .lifecycle_generation = 1,
+            .descriptor_revision = 1,
+            .advertised_endpoint = "tcp://127.0.0.1:0"}}});
+    std::vector<zlink::message_t> reply_parts;
+    host::receive_record_t record{
+      .kind = host::record_kind_t::spot_request,
+      .domain = host::ready_domain_t::application,
+      .spot_route = zlink::framework::runtime::protocol::spot_route_fence_t{
+        "retired-spot", 1, {}, 1, 1, 1}};
+    record.reply_token.host = reply_host;
+    record.reply_token.local_reply =
+      [&reply_parts] (const std::vector<zlink::message_t> &parts) {
+          reply_parts = parts;
+          return true;
+      };
+    const host::ready_record_t owner{
+      .owner_kind = host::owner_kind_t::spot,
+      .domain = host::ready_domain_t::application,
+      .spot_id = "retired-spot"};
+    messaging::envelope_codec_t codec;
+    auto encoded = codec.encode_parts (
+      messaging::envelope_header_t{
+        .kind = messaging::message_kind_t::request,
+        .channel_name = "retired-owner",
+        .message_name = traced_request_t::packet_name,
+        .correlation_id = "retired-request"},
+      traced_request_t{7}, serializers);
+    auto request_parts = std::move (encoded).take_items ();
+
+    EXPECT_TRUE (runtime->dispatch_mesh_record (
+      owner, record, request_parts, provider, serializers));
+    ASSERT_EQ (2u, reply_parts.size ());
+    const auto reply_header = codec.decode_header (
+      messaging::message_parts_t (reply_parts));
+    ASSERT_TRUE (reply_header);
+    EXPECT_EQ (messaging::message_kind_t::error,
+               reply_header.value ().kind);
+    EXPECT_EQ ("unavailable",
+               reply_header.value ().error_code.value_or (""));
+    EXPECT_EQ ("Spot route owner is no longer registered",
+               reply_header.value ().error_message.value_or (""));
 }
 
 TEST (ZLinkFrameworkInstanceSpotActivation,

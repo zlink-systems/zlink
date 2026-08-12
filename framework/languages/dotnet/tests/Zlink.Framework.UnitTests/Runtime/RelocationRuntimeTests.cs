@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
+using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
@@ -4016,7 +4017,11 @@ public sealed class RelocationRuntimeTests
 
         options.AddRelocationStore(relocation);
 
-        Assert.Same(relocation, registration.Locations.ResolveRelocationStore());
+        Assert.Same(
+            relocation,
+            registration.Locations.RelocationStoreInstance);
+        Assert.IsType<ZLinkProviderRelocationRepository>(
+            registration.Locations.ResolveRelocationStore());
         Assert.Null(registration.Locations.StoreInstance);
         Assert.Throws<ZLinkConfigurationException>(
             () => options.AddRelocationStore(new RecordingRelocationStore()));
@@ -5870,7 +5875,9 @@ public sealed class RelocationRuntimeTests
         }
     }
 
-    private sealed class RecordingRelocationStore : IZLinkRelocationRepository
+    private sealed class RecordingRelocationStore :
+        IZLinkRelocationRepository,
+        IZLinkRelocationStore
     {
         internal Dictionary<string, byte[]> Payloads { get; } =
             new(StringComparer.Ordinal);
@@ -5879,6 +5886,69 @@ public sealed class RelocationRuntimeTests
 
         internal void Seed(string reference, byte[] payload) =>
             Payloads.Add(reference, payload);
+
+        public ValueTask<ZLinkBlobPutResult> PutAsync(
+            ZLinkBlobReference reference,
+            ReadOnlyMemory<byte> payload,
+            TimeSpan retention,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var now = DateTimeOffset.UtcNow;
+            var expiresAt = now + retention;
+            Events.Add((EventClock.Next(), "put"));
+            if (Payloads.TryGetValue(reference.Value, out var current))
+            {
+                return ValueTask.FromResult<ZLinkBlobPutResult>(
+                    current.AsSpan().SequenceEqual(payload.Span)
+                        ? new ZLinkBlobPutResult.AlreadyStored(expiresAt, now)
+                        : new ZLinkBlobPutResult.Conflict(now));
+            }
+            Payloads.Add(reference.Value, payload.ToArray());
+            return ValueTask.FromResult<ZLinkBlobPutResult>(
+                new ZLinkBlobPutResult.Stored(expiresAt, now));
+        }
+
+        public ValueTask<ZLinkBlobReadResult> ReadAsync(
+            ZLinkBlobReference reference,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Events.Add((EventClock.Next(), "get"));
+            var now = DateTimeOffset.UtcNow;
+            return ValueTask.FromResult<ZLinkBlobReadResult>(
+                Payloads.TryGetValue(reference.Value, out var payload)
+                    ? new ZLinkBlobReadResult.Found(
+                        payload,
+                        now + TimeSpan.FromHours(24),
+                        now)
+                    : new ZLinkBlobReadResult.Missing(now));
+        }
+
+        public ValueTask<ZLinkBlobRenewResult> RenewAsync(
+            ZLinkBlobReference reference,
+            TimeSpan retention,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var now = DateTimeOffset.UtcNow;
+            return ValueTask.FromResult<ZLinkBlobRenewResult>(
+                Payloads.ContainsKey(reference.Value)
+                    ? new ZLinkBlobRenewResult.Renewed(
+                        now + retention,
+                        now)
+                    : new ZLinkBlobRenewResult.Missing(now));
+        }
+
+        public ValueTask DeleteAsync(
+            ZLinkBlobReference reference,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Events.Add((EventClock.Next(), "delete"));
+            Payloads.Remove(reference.Value);
+            return ValueTask.CompletedTask;
+        }
 
         public ValueTask<ZLinkRelocationStored> PutRelocationAsync(
             ReadOnlyMemory<byte> payload,

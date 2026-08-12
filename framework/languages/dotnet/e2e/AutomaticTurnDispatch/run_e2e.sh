@@ -4,6 +4,7 @@ umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../redis-common.sh"
+zlink_dotnet_e2e_acquire_run_lock "$0" "$@"
 DELAY_PROJECT="$SCRIPT_DIR/Server/Delay/AutomaticTurnDispatch.Delay.csproj"
 EXTERNAL_API_PROJECT="$SCRIPT_DIR/Server/ExternalApi/AutomaticTurnDispatch.ExternalApi.csproj"
 PLAY_PROJECT="$SCRIPT_DIR/Server/Play/AutomaticTurnDispatch.Play.csproj"
@@ -19,8 +20,8 @@ LOG_DIR="$SCRIPT_DIR/logs/$STAMP"
 SKIP_BUILD=0
 SCENARIO_ARGS=()
 CANONICAL_SCENARIOS=(
-  TD-A1 TD-A2 TD-A3 TD-A4 TD-A5
-  TD-B1 TD-B2 TD-B3 TD-B4
+  TD-A2 TD-A3 TD-A4 TD-A5
+  TD-B1 TD-B2 TD-B3
   TD-C1 TD-C2 TD-C3 TD-C4 TD-C5
   TD-D1 TD-D2 TD-D3 TD-D4 TD-D5 TD-D6
   TD-E1 TD-E2 TD-E3 TD-E2A
@@ -28,8 +29,8 @@ CANONICAL_SCENARIOS=(
   TD-G1 TD-F5A
 )
 CLIENT_CANONICAL_SCENARIOS=(
-  TD-A1 TD-A2 TD-A3 TD-A4 TD-A5
-  TD-B1 TD-B2 TD-B3 TD-B4
+  TD-A2 TD-A3 TD-A4 TD-A5
+  TD-B1 TD-B2 TD-B3
   TD-C1 TD-C2 TD-C3 TD-C4 TD-C5
   TD-D1 TD-D2 TD-D3 TD-D4 TD-D5 TD-D6
   TD-E1 TD-E2 TD-E3 TD-E2A
@@ -256,7 +257,7 @@ cleanup() {
   set +e
   rm -rf "$CONFIG_DIR"
   if [[ -n "${REDIS_CONTAINER:-}" ]]; then
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   for pid in "${PIDS[@]}"; do
     if kill -0 "$pid" 2>/dev/null; then
@@ -288,33 +289,7 @@ trap cleanup EXIT
 trap 'cleanup; exit 143' TERM INT
 
 allocate_ports() {
-  local count="$1"
-  python3 - "$count" <<'PY'
-import random
-import socket
-import sys
-
-count = int(sys.argv[1])
-sockets = []
-try:
-    chosen = set()
-    while len(sockets) < count:
-        port = random.randint(20000, 32767)
-        if port in chosen:
-            continue
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            sock.bind(("127.0.0.1", port))
-        except OSError:
-            sock.close()
-            continue
-        chosen.add(port)
-        sockets.append(sock)
-    print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  zlink_dotnet_e2e_allocate_ports "$1"
 }
 
 endpoint_port() {

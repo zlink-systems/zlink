@@ -4,13 +4,13 @@ import { postJson } from '../../../http-client';
 import { waitForRouteStatusAt } from '../Support/public-status';
 import { ensure } from '../Support/scenario-assert';
 
-interface SpotResult {
+interface SpotCreateRes {
   readonly state: string;
   readonly spotId?: string;
   readonly errorKind?: string;
 }
 
-interface ActorResult {
+interface ActorCreateRes {
   readonly state: string;
   readonly actorId?: string;
   readonly errorKind?: string;
@@ -40,7 +40,7 @@ export async function runMonA6(options: ClientOptions): Promise<void> {
     ensure(firstSpot.state === 'created' && firstSpot.spotId !== undefined, 'MON-A6 first User Spot was not created.');
 
     const actorId = `monitor-actor-${Date.now()}`;
-    const actor = await postJson<ActorResult>(options.serviceUrl, '/actor/create', { actorId });
+    const actor = await postJson<ActorCreateRes>(options.serviceUrl, '/actor/create', { actorId });
     ensure(actor.state === 'created' && actor.actorId === actorId, 'MON-A6 Actor was not created.');
 
     await waitForRouteStatusAt(
@@ -94,6 +94,6 @@ export async function runMonA6(options: ClientOptions): Promise<void> {
   }
 }
 
-async function createSpot(options: ClientOptions): Promise<SpotResult> {
-  return await postJson<SpotResult>(options.serviceUrl, '/spot/create', {});
+async function createSpot(options: ClientOptions): Promise<SpotCreateRes> {
+  return await postJson<SpotCreateRes>(options.serviceUrl, '/spot/create', {});
 }

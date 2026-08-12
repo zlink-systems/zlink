@@ -9,10 +9,10 @@ import { createSpotServiceConfigurationModule } from '../../configuration';
 import { validatePlayOptions } from './Configuration/play-options';
 import type { PlayOptions } from './Configuration/play-options';
 import { createPlayEndpoints } from './Endpoints/play-endpoints';
-import { ChannelEchoHandler, ChannelNotifyHandler, NodeEchoHandler } from './Handlers/channel-handlers';
+import { ChannelEchoHandler, ChannelMsgHandler, NodeEchoHandler } from './Handlers/channel-handlers';
 import { ControlPingHandler, CreateSpotHandler, CrossRoleActorPushHandler, EnsureActorHandler } from './Handlers/control-handlers';
 import { captureDispatchErrors } from './Handlers/dispatch-error-observer';
-import { SpotMsgHandler, SpotOutboundHandler, SpotOutboundNegativeHandler } from './Handlers/spot-outbound-handlers';
+import { SpotEventHandler, SpotOutboundHandler, SpotOutboundNegativeHandler } from './Handlers/spot-outbound-handlers';
 import { SpotToSpotHandler, SpotToSpotNegativeHandler, SpotToSpotTimeoutHandler } from './Handlers/spot-to-spot-handlers';
 import { StageProbeHandler, StageTimerHandler, StageTimerStartHandler } from './Handlers/stage-handlers';
 import { SlowSpotHandler, StateCommandHandler, StateReqHandler } from './Handlers/state-req-handler';
@@ -142,7 +142,7 @@ export async function startPlayHost(): Promise<void> {
             external.channel(SpotServiceNames.externalClientChannel)
               .server()
               .addRequestHandler('ChannelEchoReq', ChannelEchoHandler)
-              .addSendHandler('ChannelNotify', ChannelNotifyHandler);
+              .addSendHandler('ChannelMsg', ChannelMsgHandler);
           }
 
           return builder.build();
@@ -153,7 +153,7 @@ export async function startPlayHost(): Promise<void> {
       { provide: EvidenceStore, inject: [PLAY_OPTIONS], useFactory: createEvidence },
       ChannelEchoHandler,
       NodeEchoHandler,
-      ChannelNotifyHandler,
+      ChannelMsgHandler,
       ControlPingHandler,
       CrossRoleActorPushHandler,
       CreateSpotHandler,
@@ -181,7 +181,7 @@ export async function startPlayHost(): Promise<void> {
       SpotToSpotHandler,
       SpotToSpotTimeoutHandler,
       SpotToSpotNegativeHandler,
-      SpotMsgHandler,
+      SpotEventHandler,
       UserActorLeaveHandler,
       UserActorPingHandler,
       UserActorPushHandler,

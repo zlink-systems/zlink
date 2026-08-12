@@ -7,11 +7,11 @@ import systems.zlink.framework.spots.ZLinkSpotSubscriptionHandler;
 
 @ZLinkSpotSubscription(topic = "spot.events")
 public final class SpotEventHandler
-    implements ZLinkSpotSubscriptionHandler<UserSpot, Contracts.MeshMsg> {
+    implements ZLinkSpotSubscriptionHandler<UserSpot, Contracts.MeshEvent> {
     @Override
     public CompletionStage<Void> handle(
         UserSpot spot,
-        Contracts.MeshMsg message) {
+        Contracts.MeshEvent message) {
         if (message.value().equals("publish:sm-c6-marker")) {
             String gateKey = "c6-delivery:" + spot.context().spotId();
             if (spot.context().spotId().startsWith("sm-c6-blocked-")) {

@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -28,6 +29,7 @@ final class ZLinkSpotRouteBridgeDispatcher {
         List<byte[]> payloads,
         Duration timeout,
         ScheduledExecutorService scheduler,
+        Executor infrastructureExecutor,
         CompletableFuture<Void> result) {
         long timeoutNanos = timeout.toNanos();
         long deadline = System.nanoTime() + timeoutNanos;
@@ -51,17 +53,49 @@ final class ZLinkSpotRouteBridgeDispatcher {
                         result.complete(null);
                         return;
                     }
+                    if (result.isDone()) {
+                        return;
+                    }
                     if (System.nanoTime() >= deadline) {
                         result.completeExceptionally(new TimeoutException(
                             "routed SPOT route mesh send was not ready before timeout"));
                         return;
                     }
-                    scheduler.schedule(this, RETRY_DELAY.toMillis(), TimeUnit.MILLISECONDS);
+                    // This attempt owns a single successor; the timer only
+                    // signals the infrastructure lane.
+                    scheduleRetry();
                 } catch (RuntimeException ex) {
                     result.completeExceptionally(ex);
                 } finally {
                     attemptParts.forEach(Message::close);
                 }
+            }
+
+            private void scheduleRetry() {
+                try {
+                    scheduler.schedule(
+                        () -> handoffRetry(this),
+                        RETRY_DELAY.toMillis(),
+                        TimeUnit.MILLISECONDS);
+                } catch (RejectedExecutionException rejection) {
+                    completeShutdown(rejection);
+                }
+            }
+
+            private void handoffRetry(Runnable retry) {
+                if (result.isDone()) {
+                    return;
+                }
+                try {
+                    infrastructureExecutor.execute(retry);
+                } catch (RejectedExecutionException rejection) {
+                    completeShutdown(rejection);
+                }
+            }
+
+            private void completeShutdown(RejectedExecutionException rejection) {
+                result.completeExceptionally(
+                    ZLinkChannelCallRuntime.shuttingDownFailure(rejection));
             }
         }
         new Attempt().run();

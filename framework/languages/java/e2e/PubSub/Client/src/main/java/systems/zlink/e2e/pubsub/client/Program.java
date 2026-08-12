@@ -57,7 +57,7 @@ public final class Program {
         ScenarioAssert.touch(context.options().publisherReadyFile());
         ScenarioAssert.waitForFile(context.options().prelateContinueFile());
 
-        context.publisher().publish("all", new Contracts.EventMsg("prelate", 0, "before-late"));
+        context.publisher().publish("all", new Contracts.Event("prelate", 0, "before-late"));
         ScenarioAssert.waitForEvent(context.evidence(), "sub-1", "prelate", 0);
         ScenarioAssert.waitForEvent(context.evidence(), "sub-2", "prelate", 0);
         ScenarioAssert.touch(context.options().lateReadyFile());
@@ -73,7 +73,7 @@ public final class Program {
         ScenarioAssert.touch(context.options().publisherReadyFile());
         ScenarioAssert.waitForFile(context.options().prelateContinueFile());
 
-        context.publisher().publish("all", new Contracts.EventMsg("prelate", 0, "before-late"));
+        context.publisher().publish("all", new Contracts.Event("prelate", 0, "before-late"));
         ScenarioAssert.waitForEvent(context.evidence(), "sub-1", "prelate", 0);
         ScenarioAssert.waitForEvent(context.evidence(), "sub-2", "prelate", 0);
         ScenarioAssert.touch(context.options().lateReadyFile());

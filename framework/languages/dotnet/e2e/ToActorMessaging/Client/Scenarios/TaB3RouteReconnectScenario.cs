@@ -23,7 +23,7 @@ internal static class TaB3RouteReconnectScenario
             Scenario: "TA-B3-recovered-request",
             Kind: "request",
             NodeRid: "actor-a",
-            PacketName: nameof(ActorAsk)
+            PacketName: nameof(ActorReq)
         } && item.ActorId == actorId), "TA-B3 recovered request actor-owner evidence missing.");
     }
 }

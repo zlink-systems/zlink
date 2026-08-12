@@ -3,6 +3,9 @@ set -euo pipefail
 umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../redis-common.sh"
+zlink_cpp_e2e_acquire_run_lock "${BASH_SOURCE[0]}" "$@"
+zlink_cpp_e2e_install_cleanup_trap
 CPP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 REPO_ROOT="$(cd "$CPP_DIR/../../.." && pwd)"
 STAMP="$(date +%Y%m%d-%H%M%S)-$$"
@@ -57,6 +60,8 @@ for selector in "${SELECTORS[@]}"; do
 done
 
 PIDS=()
+REDIS_CONTAINER=""
+REDIS_OWNED=0
 cleanup() {
   local code=$?
   for pid in "${PIDS[@]:-}"; do
@@ -74,6 +79,9 @@ cleanup() {
     if kill -0 "$pid" >/dev/null 2>&1; then kill -KILL "$pid" >/dev/null 2>&1 || true; fi
   done
   wait "${PIDS[@]:-}" >/dev/null 2>&1 || true
+  if [[ "$REDIS_OWNED" == "1" && -n "$REDIS_CONTAINER" ]]; then
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
+  fi
   rm -rf "$TEMP_DIR"
   if [[ "$code" != 0 ]]; then echo "SubmitAdmission failed; logs=$LOG_DIR" >&2; fi
 }
@@ -247,6 +255,13 @@ for selector in "${SELECTORS[@]}"; do
 done
 
 if [[ "${#PROCESS_SELECTORS[@]}" -gt 0 ]]; then
+  zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
+    "zlink-redis-cpp-e2e-submit-admission" "redis:7-alpine"
+  REDIS_OWNED=1
+  REDIS_ENDPOINT="127.0.0.1:${redis_port}"
+  REDIS_KEY_PREFIX="zlink:cpp:e2e:submit-admission:${STAMP}:"
+  zlink_redis_wait_ready "$REDIS_CONTAINER" 30
+
   read -r CALLER_HTTP TARGET_HTTP OBJECT_CLIENT_HTTP PUBLISHER_HTTP CS_CALLER_HTTP \
     CS_TARGET_A_HTTP CS_TARGET_B_HTTP STREAM_GATEWAY_HTTP STREAM_PEER_HTTP ACTOR_TARGET_HTTP \
     SATURATION_CALLER_0_HTTP SATURATION_CALLER_1_HTTP SATURATION_CALLER_2_HTTP \
@@ -259,25 +274,10 @@ if [[ "${#PROCESS_SELECTORS[@]}" -gt 0 ]]; then
     SATURATION_CALLER_3_MESH SATURATION_CALLER_4_MESH SATURATION_TARGET_MESH \
     OWNER_ISOLATION_CALLER_MESH OWNER_ISOLATION_TARGET_MESH \
     GATE_CONTROL COLLECTOR_HTTP \
-    STREAM_GATE_CONTROL < <(
-    python3 - <<'PY'
-import socket
-sockets = []
-ports = []
-try:
-    for _ in range(40):
-        value = socket.socket()
-        value.bind(("127.0.0.1", 0))
-        sockets.append(value)
-        ports.append(value.getsockname()[1])
-    print(*(f"http://127.0.0.1:{port}" for port in ports[:18]),
-          *(f"tcp://127.0.0.1:{port}" for port in ports[18:37]),
-          *(f"http://127.0.0.1:{port}" for port in ports[37:]))
-finally:
-    for value in sockets:
-        value.close()
-PY
-  )
+    STREAM_GATE_CONTROL < <(zlink_cpp_e2e_allocate_endpoints \
+      http http http http http http http http http http http http http http \
+      http http http http tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp \
+      tcp tcp tcp tcp tcp tcp tcp http http http)
   CALLER_RID=submit-caller
   TARGET_RID=submit-target
   OBJECT_CLIENT_RID=submit-object-client
@@ -290,14 +290,15 @@ PY
     local output="$1" role="$2" rid="$3" http="$4" mesh="$5" peer_rid="$6" peer="$7" fanout="$8"
     local client_server="$9" client_server_peer="${10}" stream="${11}"
     python3 - "$output" "$role" "$rid" "$http" "$mesh" "$peer_rid" "$peer" "$fanout" \
-      "$client_server" "$client_server_peer" "$stream" "$LOG_DIR" <<'PY'
+      "$client_server" "$client_server_peer" "$stream" "$REDIS_ENDPOINT" \
+      "$REDIS_KEY_PREFIX" "$LOG_DIR" <<'PY'
 import json
 import os
 import pathlib
 import stat
 import sys
 
-path, role, rid, http, mesh, peer_rid, peer, fanout, client_server, client_server_peer, stream, log_dir = sys.argv[1:]
+path, role, rid, http, mesh, peer_rid, peer, fanout, client_server, client_server_peer, stream, redis_endpoint, redis_key_prefix, log_dir = sys.argv[1:]
 config = {"e2e": {
     "role": role, "rid": rid, "httpEndpoint": http, "meshEndpoint": mesh,
     "peerRid": peer_rid, "peerEndpoint": peer, "fanoutEndpoint": fanout,
@@ -305,8 +306,8 @@ config = {"e2e": {
     "clientServerPeerEndpoint": client_server_peer,
     "streamEndpoint": stream,
     "redis": {
-        "endpoint": "127.0.0.1:6379",
-        "keyPrefix": f"zlink:e2e:submit-admission:{pathlib.Path(log_dir).name}:",
+        "endpoint": redis_endpoint,
+        "keyPrefix": redis_key_prefix,
     },
     "logDir": log_dir
 }}

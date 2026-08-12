@@ -21,6 +21,8 @@ type BindCourierSessionRes = { courierId: string };
 
 class EnsureCourierActorReq { constructor(readonly courierId: string) {} }
 
+class CustomerActorCreateReq { constructor(readonly customerId: string) {} }
+
 
 class AssignDeliveryMsg {
   constructor(
@@ -189,6 +191,7 @@ export {
   SubscribeDeliveryRes,
   BindCourierSessionReq,
   EnsureCourierActorReq,
+  CustomerActorCreateReq,
   AssignDeliveryMsg,
   OfferDeliveryMsg,
   OfferDeliveryResultMsg,

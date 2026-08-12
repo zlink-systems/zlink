@@ -61,7 +61,7 @@ internal static class RcA6InvalidRegistrationScenario
         ZlinkStreamAssert.Ensure(process.ExitCode != 0, "RC-A6 invalid registration server unexpectedly started.");
         ZlinkStreamAssert.Ensure(
             errorText.Contains("duplicate", StringComparison.OrdinalIgnoreCase)
-            || errorText.Contains("EchoManual", StringComparison.Ordinal),
+            || errorText.Contains("EchoManualReq", StringComparison.Ordinal),
             "RC-A6 invalid registration error did not mention duplicate registration.");
 
         Console.WriteLine("scenario RC-A6 passed");

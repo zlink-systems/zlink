@@ -707,12 +707,12 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
         ZlinkStreamAssert.Ensure(sawMove.Payload.State.Board == move.State.Board, "board state mismatch.");
     }
 
-    // join 응답은 request의 reply가 아니라 push로 온다 — 대기를 먼저 등록하고 send한다.
-    private static async ValueTask<JoinGameRes> JoinGameAsync(
+    // join 완료 알림은 client push로 온다 — 대기를 먼저 등록하고 one-way send한다.
+    private static async ValueTask<JoinGameNotify> JoinGameAsync(
         IZlinkStreamConnector connector, string roomId, CancellationToken ct)
     {
-        var completion = connector.WaitFor<JoinGameRes>().Async(ct);
-        await connector.Send(new JoinGameReq(roomId)).Async(ct);
+        var completion = connector.WaitFor<JoinGameNotify>().Async(ct);
+        await connector.Send(new JoinGameMsg(roomId)).Async(ct);
         return (await completion).Payload;
     }
     ```
@@ -783,7 +783,7 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
         client1.connect().submit().toCompletableFuture().join();
         client1.request(new AuthenticateReq(options.xActorId()))
             .submit(AuthenticateRes.class).toCompletableFuture().join();
-        JoinGameRes join1 = joinGame(client1, room.roomId()); // 대기 등록 → send → 수신(§3)
+        JoinGameNotify join1 = joinGame(client1, room.roomId()); // 대기 등록 → send → 수신(§3)
         ZLinkStreamAssert.ensure(
             join1.state().status() == TicTacToeGameStatuses.WaitingForPlayers,
             "room should wait for the second player.");
@@ -796,7 +796,7 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
         client2.connect().submit().toCompletableFuture().join();
         client2.request(new AuthenticateReq(options.oActorId()))
             .submit(AuthenticateRes.class).toCompletableFuture().join();
-        JoinGameRes join2 = joinGame(client2, room.roomId());
+        JoinGameNotify join2 = joinGame(client2, room.roomId());
         ZLinkStreamAssert.ensure(
             join2.state().status() == TicTacToeGameStatuses.InProgress,
             "room should start with two players.");
@@ -923,11 +923,11 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
 === "C++"
 
     ```cpp
-    // join 응답은 request의 reply가 아니라 push로 온다 — 대기를 먼저 등록하고 send한다.
-    task_t<join_game_res_t> join_game (auto &connector, const std::string &room_id)
+    // join 완료 알림은 client push로 온다 — 대기를 먼저 등록하고 one-way send한다.
+    task_t<join_game_notify_t> join_game (auto &connector, const std::string &room_id)
     {
-        auto completion = connector.wait_for<join_game_res_t> ().async ();
-        co_await connector.send (join_game_req_t{room_id}).submit ();
+        auto completion = connector.wait_for<join_game_notify_t> ().async ();
+        co_await connector.send (join_game_msg_t{room_id}).submit ();
         co_return (co_await std::move (completion)).payload;
     }
     ```
@@ -935,10 +935,10 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
 === "Java"
 
     ```java
-    // join 응답은 request의 reply가 아니라 push로 온다 — 대기를 먼저 등록하고 send한다.
-    private static JoinGameRes joinGame(ZLinkStreamConnector connector, String roomId) {
-        var completion = connector.waitFor(JoinGameRes.class).submit(JoinGameRes.class);
-        connector.send(new JoinGameReq(roomId)).submit().toCompletableFuture().join();
+    // join 완료 알림은 client push로 온다 — 대기를 먼저 등록하고 one-way send한다.
+    private static JoinGameNotify joinGame(ZLinkStreamConnector connector, String roomId) {
+        var completion = connector.waitFor(JoinGameNotify.class).submit(JoinGameNotify.class);
+        connector.send(new JoinGameMsg(roomId)).submit().toCompletableFuture().join();
         return completion.toCompletableFuture().join().payload();
     }
     ```
@@ -946,10 +946,10 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
 === "Kotlin"
 
     ```kotlin
-    // join 응답은 request의 reply가 아니라 push로 온다 — 대기를 먼저 등록하고 send한다.
-    private suspend fun joinGame(connector: ZLinkStreamConnector, roomId: String): JoinGameRes {
-        val completion = connector.waitFor(JoinGameRes::class.java).submit(JoinGameRes::class.java)
-        connector.send(JoinGameReq(roomId)).submit().await()
+    // join 완료 알림은 client push로 온다 — 대기를 먼저 등록하고 one-way send한다.
+    private suspend fun joinGame(connector: ZLinkStreamConnector, roomId: String): JoinGameNotify {
+        val completion = connector.waitFor(JoinGameNotify::class.java).submit(JoinGameNotify::class.java)
+        connector.send(JoinGameMsg(roomId)).submit().await()
         return completion.await().payload()
     }
     ```
@@ -957,11 +957,11 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
 === "Node/TypeScript"
 
     ```typescript
-    // join 응답은 request의 reply가 아니라 push로 온다 — 대기를 먼저 등록하고 send한다.
+    // join 완료 알림은 client push로 온다 — 대기를 먼저 등록하고 one-way send한다.
     async function joinGame(
-      connector: ZlinkStreamConnector, roomId: string, signal: AbortSignal): Promise<JoinGameRes> {
-      const completion = connector.waitFor<JoinGameRes>(PacketNames.joinGameRes).submit(signal);
-      await connector.send(joinGameReq(roomId)).submit();
+      connector: ZlinkStreamConnector, roomId: string, signal: AbortSignal): Promise<JoinGameNotify> {
+      const completion = connector.waitFor<JoinGameNotify>(PacketNames.joinGameNotify).submit(signal);
+      await connector.send(joinGameMsg(roomId)).submit();
       return (await completion).payload;
     }
     ```

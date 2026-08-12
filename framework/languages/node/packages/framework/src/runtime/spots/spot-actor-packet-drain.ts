@@ -14,7 +14,7 @@ import type {
   ZLinkBackendActorRef,
   ZLinkBackendActorRecvInfo
 } from '../backend/contracts';
-import type { ZLinkRemoteBoundSessionTarget } from '../actors';
+import type { ZLinkActorPacketDelivery } from './spot-actor-packet-dispatch';
 import { REMOTE_BOUND_SESSION_BIND_PACKET } from './spot-remote-codec';
 import { ZLINK_RECV_DONT_WAIT } from './spot-native-flags';
 import {
@@ -41,13 +41,7 @@ export interface ZLinkActorDispatchPart {
 
 interface ZLinkSpotActorPacketDrainOptions {
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
-  readonly actorPacketHandler?: (
-    actorId: string,
-    parts: readonly Message[],
-    returnResponse?: boolean,
-    remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
-    fallbackActorRef?: ActorRef
-  ) => Promise<unknown>;
+  readonly actorPacketHandler?: (delivery: ZLinkActorPacketDelivery) => Promise<unknown>;
   readonly bindRemoteActorSession?: (
     actor: ZLinkBackendActorRef,
     sourceNodeRid: RoutingId,
@@ -137,13 +131,12 @@ export class ZLinkSpotActorPacketDrain {
       if (noBindInfo !== undefined) {
         await this.dispatchNoBindActorRequest(noBindInfo, actorId, parts, actorRef);
       } else {
-        await this.options.actorPacketHandler(
+        await this.options.actorPacketHandler({
           actorId,
           parts,
-          false,
-          undefined,
-          actorRef as unknown as ActorRef | undefined
-        );
+          returnResponse: false,
+          fallbackActorRef: actorRef as unknown as ActorRef | undefined
+        });
       }
     } finally {
       for (const part of parts) {
@@ -200,13 +193,12 @@ export class ZLinkSpotActorPacketDrain {
     actorRef: ZLinkBackendActorRef | undefined
   ): Promise<void> {
     try {
-      const response = await this.options.actorPacketHandler?.(
+      const response = await this.options.actorPacketHandler?.({
         actorId,
         parts,
-        true,
-        undefined,
-        actorRef as unknown as ActorRef | undefined
-      );
+        returnResponse: true,
+        fallbackActorRef: actorRef as unknown as ActorRef | undefined
+      });
       this.options.replyActorNoBind?.(
         info,
         [this.encodeActorReplyFrame(parts[0], ZLinkStreamMessageKind.Response, response)],

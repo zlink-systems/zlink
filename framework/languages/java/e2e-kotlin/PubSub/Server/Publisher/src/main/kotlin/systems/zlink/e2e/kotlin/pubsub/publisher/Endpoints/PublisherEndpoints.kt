@@ -11,8 +11,8 @@ import org.springframework.beans.factory.ObjectProvider
 import org.springframework.context.ConfigurableApplicationContext
 import org.springframework.context.SmartLifecycle
 import systems.zlink.e2e.kotlin.pubsub.shared.Contracts
-import systems.zlink.e2e.kotlin.pubsub.shared.EventMsg
-import systems.zlink.e2e.kotlin.pubsub.shared.MissingEventMsg
+import systems.zlink.e2e.kotlin.pubsub.shared.Event
+import systems.zlink.e2e.kotlin.pubsub.shared.MissingEvent
 import systems.zlink.framework.channels.ZLinkFanoutClient
 import systems.zlink.framework.monitoring.ZLinkListenerKind
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime
@@ -53,13 +53,13 @@ class PublisherEndpoints(
             fanout.publish(
                 channelName,
                 request.topic,
-                MissingEventMsg(request.message.scenario, request.message.sequence, request.message.value),
+                MissingEvent(request.message.scenario, request.message.sequence, request.message.value),
             ).submit().toCompletableFuture().join()
             exchange.writeJson(mapOf("status" to "published"))
         }
         httpServer.createContext("/publish-reserved") { exchange ->
             try {
-                fanout.publish(channelName, "\u0001ZLF1", EventMsg("ps-f3", 1, "reserved"))
+                fanout.publish(channelName, "\u0001ZLF1", Event("ps-f3", 1, "reserved"))
                     .submit()
                     .toCompletableFuture()
                     .join()
@@ -79,7 +79,7 @@ class PublisherEndpoints(
             }
         }
         httpServer.createContext("/publish-reserved-prefix") { exchange ->
-            fanout.publish(channelName, "\u0001ZLF1.more", EventMsg("ps-f3", 2, "reserved-prefix"))
+            fanout.publish(channelName, "\u0001ZLF1.more", Event("ps-f3", 2, "reserved-prefix"))
                 .submit()
                 .toCompletableFuture()
                 .join()
@@ -143,9 +143,9 @@ class PublisherEndpoints(
 
 class PublishReq() {
     var topic: String = ""
-    var message: EventMsg = EventMsg()
+    var message: Event = Event()
 
-    constructor(topic: String, message: EventMsg) : this() {
+    constructor(topic: String, message: Event) : this() {
         this.topic = topic
         this.message = message
     }

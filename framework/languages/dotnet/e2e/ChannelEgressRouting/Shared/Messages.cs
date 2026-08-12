@@ -13,17 +13,17 @@ public static class ChannelEgressNames
     public const string Workflow = "workflow.command";
 }
 
-[ZLinkPacket("ChannelProbeRequest")]
-public sealed record ChannelProbeRequest(string Id, string Mode = "echo");
+[ZLinkPacket("ChannelProbeReq")]
+public sealed record ChannelProbeReq(string Id, string Mode = "echo");
 
-public sealed record ChannelProbeReply(
+public sealed record ChannelProbeRes(
     string Id,
     string Role,
     string Channel,
     string[] Downstream);
 
-[ZLinkPacket("ChannelProbeCommand")]
-public sealed record ChannelProbeCommand(string Id);
+[ZLinkPacket("ChannelProbeMsg")]
+public sealed record ChannelProbeMsg(string Id);
 
 [ZLinkPacket("FanoutProbeEvent")]
 public sealed record FanoutProbeEvent(string Id);
@@ -31,87 +31,87 @@ public sealed record FanoutProbeEvent(string Id);
 [ZLinkPacket("LogicalMulticastProbeEvent")]
 public sealed record LogicalMulticastProbeEvent(string Id);
 
-public sealed record RouteInvokeRequest(
+public sealed record RouteRequestInvokeReq(
     string Channel,
     string Id,
     string Mode = "echo");
 
-public sealed record RouteInvokeResult(
+public sealed record RouteRequestInvokeRes(
     bool Succeeded,
     string? Error,
-    ChannelProbeReply? Reply,
+    ChannelProbeRes? Reply,
     long ElapsedMilliseconds);
 
-public sealed record SendInvokeResult(
+public sealed record RouteSendInvokeReq(
+    string Channel,
+    string Id);
+
+public sealed record RouteSendInvokeRes(
     bool Succeeded,
     string? Error,
     long ElapsedMilliseconds);
 
-[ZLinkPacket("ChannelObjectProbeRequest")]
-public sealed record ChannelObjectProbeRequest(string Id);
+[ZLinkPacket("ChannelObjectProbeReq")]
+public sealed record ChannelObjectProbeReq(string Id);
 
-public sealed record ChannelObjectProbeReply(
+public sealed record ChannelObjectProbeRes(
     string Id,
     string ActorId,
     string SpotId,
     int StateVersion,
     string NodeRid);
 
-[ZLinkPacket("ChannelSpotWorkflowRequest")]
-public sealed record ChannelSpotWorkflowRequest(string Id);
+[ZLinkPacket("ChannelSpotWorkflowReq")]
+public sealed record ChannelSpotWorkflowReq(string Id);
 
-public sealed record ChannelSpotWorkflowReply(
+public sealed record ChannelSpotWorkflowRes(
     string Id,
     int StateVersion,
     string WorkflowRole);
 
-[ZLinkPacket("ChannelActorJoinRequest")]
-public sealed record ChannelActorJoinRequest(string Id, string TargetSpotId);
+[ZLinkPacket("ChannelActorJoinReq")]
+public sealed record ChannelActorJoinReq(string Id, string TargetSpotId);
 
-public sealed record ChannelActorJoinReply(
+public sealed record ChannelActorJoinRes(
     string Id,
     string ActorId,
     string TargetSpotId,
     bool Submitted);
 
-public sealed record ChannelActorCreateRequest(string ActorId);
+public sealed record ChannelActorCreateReq(string ActorId);
 
-public sealed record ChannelActorCreateReply(
+public sealed record ChannelActorCreateRes(
     string ActorId,
     string NodeRid,
     ulong Generation);
 
-public sealed record ChannelSpotCreateRequest(string SpotId);
+public sealed record ChannelSpotCreateReq(string SpotId);
 
-public sealed record ChannelSpotCreateReply(
+public sealed record ChannelSpotCreateRes(
     string SpotId,
     string NodeRid,
     ulong Generation);
 
-public sealed record ChannelObjectScenarioRequest(
+public sealed record ChannelObjectScenarioReq(
     string ActorId,
     string SpotId,
     string Id);
 
-public sealed record ChannelObjectScenarioReply(
-    ChannelObjectProbeReply Actor,
-    ChannelObjectProbeReply Spot);
+[ZLinkPacket("ChannelBindActorReq")]
+public sealed record ChannelBindActorReq(string ActorId);
 
-[ZLinkPacket("ChannelBindActorRequest")]
-public sealed record ChannelBindActorRequest(string ActorId);
-
-public sealed record ChannelBindActorReply(
+public sealed record ChannelBindActorRes(
     string ActorId,
     string NodeRid,
     ulong Generation);
 
-[ZLinkPacket("ChannelBoundPushRequest")]
-public sealed record ChannelBoundPushRequest(string Id);
+[ZLinkPacket("ChannelBoundPushReq")]
+public sealed record ChannelBoundPushReq(string Id);
 
-public sealed record ChannelBoundPushReply(string Id, bool Submitted);
+public sealed record ChannelBoundPushRes(string Id, bool Submitted);
 
-[ZLinkPacket("ChannelBoundPushNotification")]
-public sealed record ChannelBoundPushNotification(
+[ZLinkPacket("ChannelBoundPushNotify")]
+public sealed record ChannelBoundPushNotify(
     string Id,
     string ActorId,
     string SpotId,

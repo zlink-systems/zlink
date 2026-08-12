@@ -180,7 +180,7 @@ class ZoneEntrySpot(private val context: ZLinkEntrySpotContext) : ZLinkEntrySpot
         val zone = ZoneWorldSpec.zoneOf(request.x, request.y)
         actor.prepareEntry(request.x, request.y, request.isBot, request.dirX, request.dirY)
         if (request.isBot) {
-            actor.context().joinSpot(zone, Messages.EnterZoneMsg(actor.actorId, request.x, request.y,
+            actor.context().joinSpot(zone, Messages.EnterZoneReq(actor.actorId, request.x, request.y,
                 true, true, "")).timeout(Duration.ofSeconds(10)).defer()
         }
         return CompletableFuture.completedFuture(ZLinkActorCreateResponse.accept(
@@ -199,7 +199,7 @@ class ZoneSpot(
 ) : ZLinkSpot<PlayerActor> {
     override fun context(): ZLinkSpotContext = context
     private val residents = mutableMapOf<String, PlayerActor>()
-    private val pending = mutableMapOf<String, Messages.EnterZoneMsg>()
+    private val pending = mutableMapOf<String, Messages.EnterZoneReq>()
     private val borders = mutableMapOf<String, BorderSnapshot>()
     private var tickValue = 0L
     private var tickTimer: ZLinkTimer? = null
@@ -210,7 +210,7 @@ class ZoneSpot(
         CompletableFuture.completedFuture(ZLinkSpotCreateResponse.accept())
 
     override fun onActorJoin(actorId: String, request: ZLinkMessage): CompletionStage<ZLinkSpotActorJoinResult> {
-        val join = request.decode(Messages.EnterZoneMsg::class.java)
+        val join = request.decode(Messages.EnterZoneReq::class.java)
         val zone = context.spotId()
         if (actorId != join.playerId || zone != ZoneWorldSpec.zoneOf(join.x, join.y)) {
             return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.reject(Messages.EnterZoneRes(zone, "InvalidZone")))
@@ -282,7 +282,7 @@ class ZoneSpot(
             else actors.sendToActor(actor.actorId, Messages.DeliverZoneStateMsg(context.spotId(), tickValue, statePlayers())).submit()
         }
         actor.prepareMove(targetX, targetY, targetZone)
-        actor.context().joinSpot(targetZone, Messages.EnterZoneMsg(actor.actorId, targetX, targetY, actor.isBot, false, topology.nodeValue()))
+        actor.context().joinSpot(targetZone, Messages.EnterZoneReq(actor.actorId, targetX, targetY, actor.isBot, false, topology.nodeValue()))
             .timeout(Duration.ofSeconds(10)).defer()
         println("zone transfer requested actor=${actor.actorId} from=${context.spotId()} to=$targetZone node=${topology.nodeValue()}")
         return CompletableFuture.completedFuture(null)
@@ -364,7 +364,7 @@ class EntryZoneJoinHandler : ZLinkEntrySpotActorRequestHandler<
         val zone = ZoneWorldSpec.zoneOf(actor.x, actor.y)
         actor.context().joinSpot(
             zone,
-            Messages.EnterZoneMsg(actor.actorId, actor.x, actor.y, false, true, ""),
+            Messages.EnterZoneReq(actor.actorId, actor.x, actor.y, false, true, ""),
         ).timeout(Duration.ofSeconds(10)).defer()
         return CompletableFuture.completedFuture(
             Messages.JoinWorldRes(

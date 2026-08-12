@@ -1,7 +1,5 @@
-package Infrastructure;
+package systems.zlink.e2e.pubsub.subscriber.Infrastructure;
 
-import systems.zlink.e2e.pubsub.subscriber.Configuration;
-import systems.zlink.e2e.pubsub.subscriber.Infrastructure;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -99,7 +97,7 @@ public final class EvidenceStore {
 
     private boolean hasContiguousRun(String scenario, int minLength) {
         List<Integer> sequences = entries.stream()
-            .filter(entry -> "EventMsg".equals(entry.marker()))
+            .filter(entry -> "Event".equals(entry.marker()))
             .filter(entry -> scenario.equals(entry.scenario()))
             .map(Contracts.EvidenceEntry::sequence)
             .distinct()

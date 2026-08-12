@@ -262,7 +262,7 @@ public final class ScenarioSuite {
             id("ch-09-workflow"), "echo"), "CH-E2E-09 ClientServer port 0 request");
         String fanoutId = id("ch-09-fanout");
         ClientHttp.post(options.apiAEndpoint(), "/fanout/publish",
-            new Contracts.FanoutProbe(fanoutId), Map.class);
+            new Contracts.FanoutProbeEvent(fanoutId), Map.class);
         waitFor(options.fanoutSubscriberEndpoint(), fanoutId);
 
         String streamEndpoint = listenerRows.stream()
@@ -276,14 +276,14 @@ public final class ScenarioSuite {
         try {
             connector.connect().submit().toCompletableFuture().join();
             connector.send(new ZLinkStreamEncodedPayload(
-                    "StreamProbe", Message.from(streamId), Map.of()))
+                    "StreamProbeMsg", Message.from(streamId), Map.of()))
                 .submit()
                 .toCompletableFuture()
                 .join();
         } finally {
             connector.close().submit().toCompletableFuture().join();
         }
-        waitFor(options.apiAEndpoint(), "packet=StreamProbe");
+        waitFor(options.apiAEndpoint(), "packet=StreamProbeMsg");
     }
 
     private static Set<String> difference(Set<String> expected, Set<String> observed) {

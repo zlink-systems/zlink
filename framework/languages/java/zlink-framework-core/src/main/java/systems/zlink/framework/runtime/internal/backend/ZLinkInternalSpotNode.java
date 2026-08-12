@@ -402,6 +402,12 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         RoutingId sourceNodeRid,
         RoutingId sourceSessionRid);
 
+    default void installRelocatingActorBoundSession(
+        ZLinkServiceM6BWireCodec.ActorRouteFence actor,
+        ZLinkServiceM6BWireCodec.SessionOwnerFence session) {
+        // Alternate backends may wait for the ordinary binding announcement.
+    }
+
     default Optional<BoundSessionRoute> boundSessionRoute(
         ZLinkBackendActorRef actor) {
         return Optional.empty();

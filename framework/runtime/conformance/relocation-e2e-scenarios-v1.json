@@ -1,0 +1,178 @@
+{
+  "fixture": "zlink.framework.relocation-e2e-scenarios",
+  "version": 1,
+  "behaviorFixture": "framework/runtime/conformance/relocation-behavior-v1.json",
+  "executionPolicy": "inventoryOnly",
+  "runFromFocusedConformance": false,
+  "requiredLanguages": ["cpp", "dotnet", "java", "kotlin", "node"],
+  "scenarios": [
+    {
+      "name": "actual-redis-aggregate-cas-visibility",
+      "reason": "An in-memory deterministic store cannot observe cross-process Redis CAS visibility or a split aggregate read.",
+      "requiredProfiles": ["spotWideUserSpot", "perActorUserSpot"]
+    },
+    {
+      "name": "public-spot-profile-lifecycle-and-traffic-order",
+      "reason": "The current in-process adapters replace host placement, transport, or profile composition; separate source and target processes are required to prove the public Spot relocation lifecycle without a private runtime shortcut.",
+      "requiredProfiles": ["spotWideUserSpot", "perActorUserSpot", "instanceSpot"],
+      "expectation": {
+        "savedTemporaryDirectOrder": true,
+        "sourceClosingReason": "RelocationOut",
+        "sourceClosingCount": 1,
+        "targetMembershipCallbackCount": 0,
+        "sourceMembershipCallbackCount": 0,
+        "relocationTerminalCount": 1
+      }
+    },
+    {
+      "name": "source-process-death-before-ownership-commit",
+      "reason": "A unit harness cannot prove OS-process loss, durable staging cleanup, and source authority preservation together.",
+      "requiredProfiles": [
+        "actorHostHandoff",
+        "perActorUserSpot",
+        "spotWideUserSpot",
+        "instanceSpot"
+      ]
+    },
+    {
+      "name": "target-process-death-after-ownership-commit",
+      "reason": "A unit harness cannot prove no rollback and stale-source admission rejection after the target process disappears.",
+      "requiredProfiles": [
+        "actorHostHandoff",
+        "perActorUserSpot",
+        "spotWideUserSpot",
+        "instanceSpot"
+      ]
+    },
+    {
+      "name": "physical-stream-continuity-during-bound-actor-relocation",
+      "reason": "Physical STREAM ownership and client-visible continuity require separate session-owner and actor-owner processes.",
+      "requiredProfiles": [
+        "actorJoin",
+        "actorHostHandoff",
+        "perActorUserSpot",
+        "spotWideUserSpot"
+      ]
+    },
+    {
+      "name": "real-old-node-message-follow",
+      "reason": "Message Follow across a stale network route requires independently routed source and target processes.",
+      "requiredProfiles": ["actorJoin", "actorHostHandoff", "perActorUserSpot", "spotWideUserSpot", "instanceSpot"]
+    },
+    {
+      "name": "lost-session-route-ack-retransmission",
+      "reason": "Packet loss, retry timing, target processing independence, and duplicate no-redelivery require a controllable network boundary.",
+      "requiredProfiles": [
+        "actorJoin",
+        "actorHostHandoff",
+        "perActorUserSpot",
+        "spotWideUserSpot"
+      ]
+    },
+    {
+      "name": "restart-without-durable-seal-evidence",
+      "reason": "The abort decision depends on durable evidence surviving an actual process restart.",
+      "requiredProfiles": [
+        "actorJoin",
+        "actorHostHandoff",
+        "perActorUserSpot",
+        "spotWideUserSpot"
+      ]
+    },
+    {
+      "name": "relocation-unit-interruption-one-second-goal",
+      "reason": "The one-second interruption goal requires process scheduling and transport timing evidence that a deterministic logic test cannot provide.",
+      "requiredProfiles": [
+        "actorJoin",
+        "actorHostHandoff",
+        "perActorUserSpot",
+        "spotWideUserSpot",
+        "instanceSpot"
+      ],
+      "expectation": {
+        "measurementStart": "sourceAdmissionSealed",
+        "measurementEnd": "targetReadyPublished",
+        "goalMilliseconds": 1000,
+        "goalExceededIsFailure": false,
+        "goalExceededTriggersRollback": false,
+        "goalExceededTriggersRetry": false
+      }
+    }
+  ],
+  "languageScenarioMatrix": {
+    "allowedStatuses": ["notRun", "pass", "fail", "deferred"],
+    "evidenceRequiredForStatuses": ["pass", "fail", "deferred"],
+    "rows": [
+      {
+        "language": "cpp",
+        "scenarios": {
+          "actual-redis-aggregate-cas-visibility": { "status": "notRun", "evidence": [] },
+          "public-spot-profile-lifecycle-and-traffic-order": { "status": "notRun", "evidence": [] },
+          "source-process-death-before-ownership-commit": { "status": "notRun", "evidence": [] },
+          "target-process-death-after-ownership-commit": { "status": "notRun", "evidence": [] },
+          "physical-stream-continuity-during-bound-actor-relocation": { "status": "notRun", "evidence": [] },
+          "real-old-node-message-follow": { "status": "notRun", "evidence": [] },
+          "lost-session-route-ack-retransmission": { "status": "notRun", "evidence": [] },
+          "restart-without-durable-seal-evidence": { "status": "notRun", "evidence": [] },
+          "relocation-unit-interruption-one-second-goal": { "status": "notRun", "evidence": [] }
+        }
+      },
+      {
+        "language": "dotnet",
+        "scenarios": {
+          "actual-redis-aggregate-cas-visibility": { "status": "notRun", "evidence": [] },
+          "public-spot-profile-lifecycle-and-traffic-order": { "status": "notRun", "evidence": [] },
+          "source-process-death-before-ownership-commit": { "status": "notRun", "evidence": [] },
+          "target-process-death-after-ownership-commit": { "status": "notRun", "evidence": [] },
+          "physical-stream-continuity-during-bound-actor-relocation": { "status": "notRun", "evidence": [] },
+          "real-old-node-message-follow": { "status": "notRun", "evidence": [] },
+          "lost-session-route-ack-retransmission": { "status": "notRun", "evidence": [] },
+          "restart-without-durable-seal-evidence": { "status": "notRun", "evidence": [] },
+          "relocation-unit-interruption-one-second-goal": { "status": "notRun", "evidence": [] }
+        }
+      },
+      {
+        "language": "java",
+        "scenarios": {
+          "actual-redis-aggregate-cas-visibility": { "status": "notRun", "evidence": [] },
+          "public-spot-profile-lifecycle-and-traffic-order": { "status": "notRun", "evidence": [] },
+          "source-process-death-before-ownership-commit": { "status": "notRun", "evidence": [] },
+          "target-process-death-after-ownership-commit": { "status": "notRun", "evidence": [] },
+          "physical-stream-continuity-during-bound-actor-relocation": { "status": "notRun", "evidence": [] },
+          "real-old-node-message-follow": { "status": "notRun", "evidence": [] },
+          "lost-session-route-ack-retransmission": { "status": "notRun", "evidence": [] },
+          "restart-without-durable-seal-evidence": { "status": "notRun", "evidence": [] },
+          "relocation-unit-interruption-one-second-goal": { "status": "notRun", "evidence": [] }
+        }
+      },
+      {
+        "language": "kotlin",
+        "scenarios": {
+          "actual-redis-aggregate-cas-visibility": { "status": "notRun", "evidence": [] },
+          "public-spot-profile-lifecycle-and-traffic-order": { "status": "notRun", "evidence": [] },
+          "source-process-death-before-ownership-commit": { "status": "notRun", "evidence": [] },
+          "target-process-death-after-ownership-commit": { "status": "notRun", "evidence": [] },
+          "physical-stream-continuity-during-bound-actor-relocation": { "status": "notRun", "evidence": [] },
+          "real-old-node-message-follow": { "status": "notRun", "evidence": [] },
+          "lost-session-route-ack-retransmission": { "status": "notRun", "evidence": [] },
+          "restart-without-durable-seal-evidence": { "status": "notRun", "evidence": [] },
+          "relocation-unit-interruption-one-second-goal": { "status": "notRun", "evidence": [] }
+        }
+      },
+      {
+        "language": "node",
+        "scenarios": {
+          "actual-redis-aggregate-cas-visibility": { "status": "notRun", "evidence": [] },
+          "public-spot-profile-lifecycle-and-traffic-order": { "status": "notRun", "evidence": [] },
+          "source-process-death-before-ownership-commit": { "status": "notRun", "evidence": [] },
+          "target-process-death-after-ownership-commit": { "status": "notRun", "evidence": [] },
+          "physical-stream-continuity-during-bound-actor-relocation": { "status": "notRun", "evidence": [] },
+          "real-old-node-message-follow": { "status": "notRun", "evidence": [] },
+          "lost-session-route-ack-retransmission": { "status": "notRun", "evidence": [] },
+          "restart-without-durable-seal-evidence": { "status": "notRun", "evidence": [] },
+          "relocation-unit-interruption-one-second-goal": { "status": "notRun", "evidence": [] }
+        }
+      }
+    ]
+  }
+}

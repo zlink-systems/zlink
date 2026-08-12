@@ -1034,6 +1034,30 @@ bool raw_mesh_node_owner_t::send_session_relocation_route (
   const std::vector<std::uint8_t> &target_routing_id,
   const protocol::session_relocation_route_t &route)
 {
+    const auto local = _topology.local_descriptor ();
+    if (target_routing_id == local.node_routing_id) {
+        if (route.session_owner_node_routing_id
+              != local.node_routing_id
+            || route.session_owner_node_generation
+                 != local.lifecycle_generation
+            || route.sender_role
+                 != protocol::relocation_role_t::target
+            || route.route.target_node_routing_id
+                 != local.node_routing_id
+            || route.route.target_node_generation
+                 != local.lifecycle_generation) {
+            return false;
+        }
+        return _mailbox.try_enqueue (
+          service_mailbox_record_t{
+            owner_key (local.node_routing_id),
+            service_mailbox_domain_t::infrastructure,
+            {protocol::encode_session_relocation_route (route)},
+            local.node_routing_id,
+            std::nullopt,
+            std::nullopt,
+            local.lifecycle_generation});
+    }
     return send_header_only (
       target_routing_id,
       protocol::encode_session_relocation_route (route));
@@ -1108,6 +1132,19 @@ bool raw_mesh_node_owner_t::send_session_relocation_routed (
   const std::vector<std::uint8_t> &target_routing_id,
   const protocol::session_relocation_routed_t &routed)
 {
+    const auto local = _topology.local_descriptor ();
+    if (target_routing_id == local.node_routing_id) {
+        if (routed.session_owner_node_routing_id
+              != local.node_routing_id
+            || routed.session_owner_node_generation
+                 != local.lifecycle_generation) {
+            return false;
+        }
+        return _operations->complete (
+          operation_id (routed.relocation.high,
+                        routed.relocation.low),
+          protocol::encode_session_relocation_routed (routed));
+    }
     return send_header_only (
       target_routing_id,
       protocol::encode_session_relocation_routed (routed));
@@ -1457,10 +1494,14 @@ bool raw_mesh_node_owner_t::request_bound_session_bind (
                 "bound Session bind reply must contain one header");
           const auto reply =
             protocol::decode_reply_header (parts.front ());
-          if (reply.terminal_result != 0)
+          if (!protocol::valid_terminal_failure (
+                reply.terminal_result,
+                static_cast<protocol::framework_error_code> (
+                  reply.failure_code))) {
               throw protocol::service_wire_error_t (
-                "bound Session bind reply is not successful");
-          return pack_infrastructure_reply (parts);
+                "bound Session bind reply terminal is inconsistent");
+          }
+          return parts.front ();
       },
       timeout, std::move (callback));
 }

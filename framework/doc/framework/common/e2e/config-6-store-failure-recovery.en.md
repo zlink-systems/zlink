@@ -180,7 +180,7 @@ continuing to serve?
   polled immediately, and follow-up requests are sent.
 - Verification: B drops out of new targets and only finishes already-accepted work within a bounded
   time. After the shutdown terminal, A processes every follow-up request.
-- Detailed behavior: verifies [Host Maintenance §10](../spec/28-graceful-drain-handoff.en.md#10-relocate-completion-and-failure).
+- Detailed behavior: verifies [Host Maintenance §10](../spec/30-host-relocation-flow.en.md#10-relocate-completion-and-failure).
 
 #### SF-C3 A Previous Owner's Lifecycle Cannot Change The Replacement
 
@@ -459,7 +459,7 @@ The Framework preserves and restores encoded participant state at or below the 6
 - Verification: The 64 MiB state has the same checksum/logical length at the target and processes
   requests. The one-byte-over operation keeps source authority and ends in exactly one
   `Blocked/StateIncompatible` terminal.
-- Detailed behavior: verifies [Relocation Units And Concurrency Limits](../spec/28-graceful-drain-handoff.en.md#7-relocation-units-and-concurrency-limits).
+- Detailed behavior: verifies [Relocation Units And Concurrency Limits](../spec/30-host-relocation-flow.en.md#7-relocation-units-and-concurrency-limits).
 
 #### SF-F8 The Source Is Kept If The Target Owner's Lease Expires
 
@@ -514,7 +514,7 @@ operation get exactly one terminal?
   are released. After completion, a follow-up request is sent.
 - Verification: Each accepted request ends exactly once, in reply, timeout, or relocation failure.
   The Relocate terminal is also single, and the follow-up is processed once at the current target.
-- Detailed behavior: verifies [Host Maintenance §7](../spec/28-graceful-drain-handoff.en.md#7-relocation-units-and-concurrency-limits).
+- Detailed behavior: verifies [Host Maintenance §7](../spec/30-host-relocation-flow.en.md#7-relocation-units-and-concurrency-limits).
 
 #### SF-F11 Preserve Payload Values After Waiter Termination And Response Loss
 

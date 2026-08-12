@@ -1,6 +1,5 @@
-package Scenarios;
+package systems.zlink.e2e.spotservice.client.Scenarios;
 
-import systems.zlink.e2e.spotservice.client.Scenarios;
 public final class SmF4Scenario {
     private SmF4Scenario() {
     }

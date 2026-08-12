@@ -1,5 +1,6 @@
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Handlers;
+using Zlink.Framework.LocationProvider;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -394,35 +395,29 @@ public abstract class RegistrationValidationSupport
         public IZLinkActorContext Context { get; } = context;
     }
 
-    private protected sealed class TestRelocationStore : IZLinkRelocationRepository
+    private protected sealed class TestRelocationStore : IZLinkRelocationStore
     {
-        public ValueTask<ZLinkRelocationStored> PutRelocationAsync(
+        public ValueTask<ZLinkBlobPutResult> PutAsync(
+            ZLinkBlobReference reference,
             ReadOnlyMemory<byte> payload,
             TimeSpan retention,
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public ValueTask<ZLinkRelocationStored> PutRelocationAtAsync(
-            string reference,
-            ReadOnlyMemory<byte> payload,
+        public ValueTask<ZLinkBlobReadResult> ReadAsync(
+            ZLinkBlobReference reference,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public ValueTask<ZLinkBlobRenewResult> RenewAsync(
+            ZLinkBlobReference reference,
             TimeSpan retention,
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public ValueTask<ZLinkRelocationReadResult> GetRelocationAsync(
-            string reference,
+        public ValueTask DeleteAsync(
+            ZLinkBlobReference reference,
             CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public ValueTask<ZLinkRelocationRenewResult> RenewRelocationAsync(
-            string reference,
-            TimeSpan retention,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public ValueTask<ZLinkRelocationDeleteResult> DeleteRelocationAsync(
-            string reference,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+            ValueTask.FromException(new NotSupportedException());
     }
 }

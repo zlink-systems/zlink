@@ -79,9 +79,9 @@ public final class GameQuestSession implements ZLinkSession {
             case "GetQuestProgressReq" -> handleGetProgress(payload.decode(Messages.GetQuestProgressReq.class));
             case "SyncQuestProgressReq" -> handleSync(payload.decode(Messages.SyncQuestProgressReq.class));
             case "KillMonsterReq" -> handleKill(payload.decode(Messages.KillMonsterReq.class));
-            case "CollectItemReq" -> handleCollect(payload.decode(Messages.CollectItemReq.class));
+            case "CollectItemMsg" -> handleCollect(payload.decode(Messages.CollectItemMsg.class));
             case "CompleteMissionReq" -> handleMission(payload.decode(Messages.CompleteMissionReq.class));
-            case "EnterAreaReq" -> handleArea(payload.decode(Messages.EnterAreaReq.class));
+            case "EnterAreaMsg" -> handleArea(payload.decode(Messages.EnterAreaMsg.class));
             case "UnlockFeatureReq" -> handleFeature(payload.decode(Messages.UnlockFeatureReq.class));
             default -> throw new IllegalStateException("Unknown GameQuest packet: " + dispatch.packetName());
         };
@@ -148,17 +148,16 @@ public final class GameQuestSession implements ZLinkSession {
             context.client().reply(new Messages.KillMonsterRes(event.eventId())).submit());
     }
 
-    private CompletionStage<Void> handleCollect(Messages.CollectItemReq request) {
+    private CompletionStage<Void> handleCollect(Messages.CollectItemMsg message) {
         Messages.GameplayMsg event = event(
-            request.playerId(),
-            request.idempotencyKey(),
+            message.playerId(),
+            message.idempotencyKey(),
             "collect",
-            request.itemId(),
-            request.count(),
+            message.itemId(),
+            message.count(),
             true);
         store.recordGameplay(event);
-        return process(event).thenAccept(ignored ->
-            context.client().reply(new Messages.CollectItemRes(event.eventId())).submit());
+        return process(event);
     }
 
     private CompletionStage<Void> handleMission(Messages.CompleteMissionReq request) {
@@ -174,17 +173,16 @@ public final class GameQuestSession implements ZLinkSession {
             context.client().reply(new Messages.CompleteMissionRes(event.eventId())).submit());
     }
 
-    private CompletionStage<Void> handleArea(Messages.EnterAreaReq request) {
+    private CompletionStage<Void> handleArea(Messages.EnterAreaMsg message) {
         Messages.GameplayMsg event = event(
-            request.playerId(),
-            request.idempotencyKey(),
+            message.playerId(),
+            message.idempotencyKey(),
             "area",
-            request.areaId(),
+            message.areaId(),
             1,
             true);
         store.recordGameplay(event);
-        return process(event).thenAccept(ignored ->
-            context.client().reply(new Messages.EnterAreaRes(event.eventId())).submit());
+        return process(event);
     }
 
     private CompletionStage<Void> handleFeature(Messages.UnlockFeatureReq request) {

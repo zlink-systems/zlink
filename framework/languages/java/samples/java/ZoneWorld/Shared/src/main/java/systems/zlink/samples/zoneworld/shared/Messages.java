@@ -115,7 +115,7 @@ public final class Messages {
         List<PlayerView> players) {
     }
 
-    public record EnterZoneMsg(
+    public record EnterZoneReq(
         String playerId,
         int x,
         int y,

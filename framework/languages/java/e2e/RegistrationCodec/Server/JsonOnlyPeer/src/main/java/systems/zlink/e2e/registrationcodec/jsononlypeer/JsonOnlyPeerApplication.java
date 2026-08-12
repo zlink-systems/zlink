@@ -1,5 +1,6 @@
 package systems.zlink.e2e.registrationcodec.jsononlypeer;
-import com.google.protobuf.StringValue;
+import systems.zlink.e2e.registrationcodec.shared.protobuf.ProtobufEchoReq;
+import systems.zlink.e2e.registrationcodec.shared.protobuf.ProtobufEchoRes;
 import java.net.URI;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -65,8 +66,8 @@ public final class JsonOnlyPeerApplication {
                 Contracts.PackedEchoRes.class);
             server.addRequestHandler(
                 UnexpectedProtobufHandler.class,
-                StringValue.class,
-                StringValue.class);
+                ProtobufEchoReq.class,
+                ProtobufEchoRes.class);
         };
     }
 

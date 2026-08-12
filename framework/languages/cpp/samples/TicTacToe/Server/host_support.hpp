@@ -171,7 +171,8 @@ class play_api_channel_readiness_service_t final : public hosted_service_t
                     request, [attempt] (const result_t<authenticate_player_res_t> &result) {
                         {
                             std::lock_guard lock (attempt->mutex);
-                            attempt->accepted = result && result.value ().accepted;
+                            attempt->accepted =
+                              result && !result.value ().player.actor_id.empty ();
                             attempt->completed = true;
                         }
                         attempt->ready.notify_one ();

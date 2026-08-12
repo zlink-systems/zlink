@@ -1,7 +1,7 @@
 package systems.zlink.e2e.kotlin.runtimemonitoring.service
 
 import systems.zlink.e2e.kotlin.runtimemonitoring.Contracts
-import List as JavaList
+import java.util.List as JavaList
 
 class EvidenceState {
     private val entries = ArrayList<Contracts.EvidenceEntry>()

@@ -1,6 +1,6 @@
 import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException, internalFrameworkErrorKind  } from '../framework-errors-internal';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
-import type { ActorRef } from '../../contracts';
+import type { ActorRef, RoutingId } from '../../contracts';
 import {
   ZLinkFrameworkException
 } from '../../contracts';
@@ -11,6 +11,7 @@ import {
   type MessageFollowSuppressionFence
 } from '../foundation/message-follow-suppression-registry';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
+import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import {
   decodeActorRequestDeadlineUnixMs,
   decodeStreamHeader
@@ -30,6 +31,7 @@ import {
   createMessageFollowId,
   messageFollowOwnerFenceKey,
   messageFollowOwnerFencesEqual,
+  messageFollowOwnerNodeRid,
   ownerFence,
   verifyActorMessageFollowPayload,
   type ZLinkActorMessageFollowContext,
@@ -107,14 +109,27 @@ interface PendingPacket {
   readonly reject?: (reason: unknown) => void;
 }
 
+interface ReplySourceEvidence {
+  readonly meshName: string;
+  readonly objectGeneration: bigint;
+  readonly ownerId: string;
+  readonly ownerLeaseGeneration: bigint;
+  readonly nodeRid: string;
+  readonly nodeRidHex: string;
+  readonly nodeGeneration: bigint;
+  readonly authorityOwnerGeneration: bigint;
+}
+
 interface ReplyRoute {
   readonly actorId: string;
   readonly operationId: string;
   readonly source: ZLinkActorHandoffRequestSource;
+  readonly sourceEvidence: ReplySourceEvidence;
+  readonly sourceOwner: ZLinkActorMessageFollowOwnerFence;
   readonly resolve: (value: unknown) => void;
   readonly reject: (reason: unknown) => void;
   deadline?: ReturnType<typeof setTimeout>;
-  targetNodeRid?: string;
+  targetNodeRid?: RoutingId;
   targetAuthorityOwnerGeneration?: bigint;
   delivered: boolean;
 }
@@ -122,6 +137,8 @@ interface ReplyRoute {
 interface ActiveHandoff {
   readonly oldGeneration: bigint;
   readonly oldNodeRid?: string;
+  readonly oldNodeRidHex?: string;
+  readonly sourceEvidence: ReplySourceEvidence;
   readonly sourceOwner: ZLinkActorMessageFollowOwnerFence;
   phase: 'provisional' | 'relocating';
   readonly operationId?: string;
@@ -137,6 +154,7 @@ interface MessageFollowRoute {
   readonly key: string;
   readonly oldGeneration: bigint;
   readonly oldNodeRid?: string;
+  readonly oldNodeRidHex?: string;
   readonly sourceOwner: ZLinkActorMessageFollowOwnerFence;
   readonly targetOwner: ZLinkActorMessageFollowOwnerFence;
   readonly target: ZLinkSpotRouteTarget;
@@ -182,15 +200,34 @@ export interface ZLinkActorHandoffCoordinatorOptions {
   readonly isStaleActorRef?: (actorId: string, actorRef?: ActorRef) => boolean;
   readonly isCurrentHandoffTarget?: (actorId: string, spotId: string) => boolean;
   readonly isCurrentActorRef?: (actorId: string, actorRef: ActorRef) => boolean;
-  readonly requestSource?: () => {
+  readonly requestSource: (actorId: string) => {
+    readonly meshName: string;
+    readonly objectGeneration: bigint;
     readonly ownerId: string;
     readonly ownerLeaseGeneration: bigint;
     readonly nodeRid: string;
+    readonly nodeRidHex?: string;
     readonly nodeGeneration: bigint;
-  } | undefined;
+    readonly authorityOwnerGeneration: bigint;
+  };
+  readonly validateReplySource: (source: ReplySourceEvidence) => boolean;
   readonly currentOwnerFence?: (
     actorId: string
   ) => ZLinkActorMessageFollowOwnerFence | undefined;
+}
+
+function requireExactTargetOwnerFence(
+  actorId: string,
+  fence: ZLinkActorMessageFollowOwnerFence | undefined
+): ZLinkActorMessageFollowOwnerFence {
+  if (fence === undefined) {
+    throw new Error(`Actor '${actorId}' handoff requires a committed target owner fence.`);
+  }
+  try {
+    return ownerFence(fence);
+  } catch {
+    throw new Error(`Actor '${actorId}' handoff requires a committed target owner fence.`);
+  }
 }
 
 /** Owns packet ordering from relocation start through Message Follow removal. */
@@ -216,64 +253,76 @@ export class ZLinkActorHandoffCoordinator {
 
   begin(
     actorId: string,
-    oldGeneration: bigint,
-    oldNodeRid?: string,
-    sourceAuthorityOwnerGeneration = 1n,
-    sourceOwnerLeaseGeneration?: bigint
+    oldGeneration: bigint
   ): void {
-    if (this.active.has(actorId)) {
-      throw new Error(`Actor '${actorId}' already has an active packet handoff.`);
-    }
-    const source = this.options.requestSource?.();
-    const sourceOwner = ownerFence({
-      ownerId: source?.ownerId ?? 'legacy-source-owner',
-      ownerLeaseGeneration: sourceOwnerLeaseGeneration
-        ?? source?.ownerLeaseGeneration
-        ?? 1n,
-      nodeRid: oldNodeRid ?? source?.nodeRid ?? 'legacy-source-node',
-      nodeGeneration: source?.nodeGeneration ?? 1n,
-      authorityOwnerGeneration: sourceAuthorityOwnerGeneration
-    });
-    this.active.set(actorId, {
-      oldGeneration,
-      oldNodeRid,
-      sourceOwner,
-      phase: 'relocating',
-      connectionBoundSealed: false,
-      pending: [],
-      nextIndex: 0,
-      snapshotIndex: -1,
-      pendingBytes: 0
-    });
+    this.startHandoff(actorId, oldGeneration, { phase: 'relocating' });
   }
 
   beginProvisional(
     actorId: string,
     operationId: string,
+    oldGeneration: bigint
+  ): void {
+    this.startHandoff(
+      actorId,
+      oldGeneration,
+      { phase: 'provisional', operationId }
+    );
+  }
+
+  private startHandoff(
+    actorId: string,
     oldGeneration: bigint,
-    oldNodeRid?: string,
-    sourceAuthorityOwnerGeneration = 1n,
-    sourceOwnerLeaseGeneration?: bigint
+    transition: { readonly phase: 'relocating' } | {
+      readonly phase: 'provisional';
+      readonly operationId: string;
+    }
   ): void {
     if (this.active.has(actorId)) {
       throw new Error(`Actor '${actorId}' already has an active packet handoff.`);
     }
-    const source = this.options.requestSource?.();
+    if (oldGeneration <= 0n) {
+      throw new Error(`Actor '${actorId}' handoff requires a positive source ObjectGeneration.`);
+    }
+    const source = this.options.requestSource(actorId);
+    if (source.meshName.length === 0 || source.ownerId.length === 0
+      || source.ownerLeaseGeneration <= 0n
+      || source.nodeRid.length === 0 || source.nodeGeneration <= 0n
+      || source.authorityOwnerGeneration <= 0n) {
+      throw new Error(`Actor '${actorId}' handoff requires an exact source owner fence.`);
+    }
+    if (source.objectGeneration !== oldGeneration) {
+      throw new Error(
+        `Actor '${actorId}' handoff source ObjectGeneration changed from ${oldGeneration} to ${source.objectGeneration}.`
+      );
+    }
     const sourceOwner = ownerFence({
-      ownerId: source?.ownerId ?? 'legacy-source-owner',
-      ownerLeaseGeneration: sourceOwnerLeaseGeneration
-        ?? source?.ownerLeaseGeneration
-        ?? 1n,
-      nodeRid: oldNodeRid ?? source?.nodeRid ?? 'legacy-source-node',
-      nodeGeneration: source?.nodeGeneration ?? 1n,
-      authorityOwnerGeneration: sourceAuthorityOwnerGeneration
+      ownerId: source.ownerId,
+      ownerLeaseGeneration: source.ownerLeaseGeneration,
+      nodeRid: source.nodeRid,
+      nodeRidHex: source.nodeRidHex,
+      nodeGeneration: source.nodeGeneration,
+      authorityOwnerGeneration: source.authorityOwnerGeneration
+    });
+    const sourceEvidence = Object.freeze({
+      meshName: source.meshName,
+      objectGeneration: source.objectGeneration,
+      ownerId: source.ownerId,
+      ownerLeaseGeneration: source.ownerLeaseGeneration,
+      nodeRid: sourceOwner.nodeRid,
+      nodeRidHex: sourceOwner.nodeRidHex
+        ?? encodeRoutingIdStorageHex(sourceOwner.nodeRid),
+      nodeGeneration: source.nodeGeneration,
+      authorityOwnerGeneration: source.authorityOwnerGeneration
     });
     this.active.set(actorId, {
       oldGeneration,
-      oldNodeRid,
+      oldNodeRid: sourceOwner.nodeRid,
+      oldNodeRidHex: sourceEvidence.nodeRidHex,
+      sourceEvidence,
       sourceOwner,
-      phase: 'provisional',
-      operationId,
+      phase: transition.phase,
+      ...(transition.phase === 'provisional' ? { operationId: transition.operationId } : {}),
       connectionBoundSealed: false,
       pending: [],
       nextIndex: 0,
@@ -436,12 +485,17 @@ export class ZLinkActorHandoffCoordinator {
         return Promise.resolve(undefined);
       }
       return new Promise((resolve, reject) => {
-        const source = this.captureRequestSource(context.replyRouteId);
+        const source = this.captureRequestSource(
+          handoff.sourceEvidence,
+          context.replyRouteId
+        );
         const requestPacket = { ...packet, source };
         const route: ReplyRoute = {
           actorId,
           operationId: requestPacket.messageFollowContext.operationId,
           source,
+          sourceEvidence: handoff.sourceEvidence,
+          sourceOwner: handoff.sourceOwner,
           resolve,
           reject,
           delivered: false
@@ -581,10 +635,11 @@ export class ZLinkActorHandoffCoordinator {
     actorId: string,
     target: ZLinkSpotRouteTarget,
     targetActorRef: ActorRef,
-    results: readonly ZLinkActorHandoffResult[] = [],
-    targetOwnerFence?: ZLinkActorMessageFollowOwnerFence
+    results: readonly ZLinkActorHandoffResult[],
+    targetOwnerFence: ZLinkActorMessageFollowOwnerFence
   ): void {
     const handoff = this.requireActive(actorId);
+    const committedTargetOwner = requireExactTargetOwnerFence(actorId, targetOwnerFence);
     this.active.delete(actorId);
     const byIndex = new Map(results.map((result) => [result.index, result]));
     for (let i = 0; i <= handoff.snapshotIndex; i++) {
@@ -604,14 +659,9 @@ export class ZLinkActorHandoffCoordinator {
       actorId,
       handoff.oldGeneration,
       handoff.oldNodeRid,
+      handoff.oldNodeRidHex,
       handoff.sourceOwner,
-      targetOwnerFence ?? ownerFence({
-        ownerId: target.targetOwnerId ?? 'legacy-target-owner',
-        ownerLeaseGeneration: target.ownerLeaseGeneration ?? 1n,
-        nodeRid: String(targetActorRef.nodeRid),
-        nodeGeneration: target.targetNodeGeneration ?? 1n,
-        authorityOwnerGeneration: target.authorityOwnerGeneration ?? 1n
-      }),
+      committedTargetOwner,
       target,
       targetActorRef
     );
@@ -620,8 +670,10 @@ export class ZLinkActorHandoffCoordinator {
       if (source === undefined) continue;
       const route = this.replyRoutes.get(source.replyRouteId);
       if (route !== undefined) {
-        route.targetNodeRid = String(target.targetNodeRid);
-        route.targetAuthorityOwnerGeneration = target.authorityOwnerGeneration;
+        route.targetNodeRid = target.targetNodeRid;
+        route.targetAuthorityOwnerGeneration = BigInt(
+          committedTargetOwner.authorityOwnerGeneration
+        );
       }
     }
     for (let i = handoff.snapshotIndex + 1; i < handoff.pending.length; i++) {
@@ -666,11 +718,21 @@ export class ZLinkActorHandoffCoordinator {
     actorId: string,
     packet: ZLinkActorHandoffPacket,
     result: ZLinkActorHandoffResult,
-    sourceNodeRid: string,
+    sourceNodeRid: RoutingId,
     targetAuthorityOwnerGeneration: bigint | undefined
   ): ZLinkActorHandoffTerminalAck {
     const source = packet.source;
     if (source === undefined || source.replyRouteId.length === 0) return 'notAcknowledged';
+    const route = this.replyRoutes.get(source.replyRouteId);
+    if (route === undefined
+      || packet.messageFollowContext.objectGeneration
+        !== route.sourceEvidence.objectGeneration.toString()
+      || !messageFollowOwnerFencesEqual(
+        packet.messageFollowContext.targetOwner,
+        route.sourceOwner
+      )) {
+      return 'notAcknowledged';
+    }
     return this.acceptRelocatedTerminalRelay(
       packet.messageFollowContext.operationId,
       source.replyRouteId,
@@ -687,27 +749,34 @@ export class ZLinkActorHandoffCoordinator {
     replyRouteId: string,
     source: ZLinkActorHandoffRequestSource | undefined,
     result: ZLinkActorHandoffResult,
-    sourceNodeRid: string,
+    sourceNodeRid: RoutingId,
     targetAuthorityOwnerGeneration: bigint | undefined,
     actorId?: string
   ): ZLinkActorHandoffTerminalAcceptance {
     if (replyRouteId.length === 0) return { status: 'notAcknowledged' };
-    const currentSource = this.options.requestSource?.();
     const route = this.replyRoutes.get(replyRouteId);
-    const exactSource = source ?? route?.source;
-    if (currentSource === undefined || route === undefined || exactSource === undefined
-      || currentSource.ownerId !== exactSource.ownerId
-      || currentSource.ownerLeaseGeneration !== BigInt(exactSource.ownerLeaseGeneration)
-      || currentSource.nodeRid !== exactSource.nodeRid
-      || currentSource.nodeGeneration !== BigInt(exactSource.nodeGeneration)
+    if (route === undefined) return { status: 'notAcknowledged' };
+    const exactSource = source ?? route.source;
+    if (!requestSourcesEqual(route.source, exactSource)
       || (actorId !== undefined && route.actorId !== actorId)
       || route.operationId !== operationId
-      || route.targetNodeRid !== sourceNodeRid
+      || route.targetNodeRid === undefined
+      || !routingIdsEqual(route.targetNodeRid, sourceNodeRid)
+      || route.targetAuthorityOwnerGeneration === undefined
       || (targetAuthorityOwnerGeneration !== undefined
         && route.targetAuthorityOwnerGeneration !== targetAuthorityOwnerGeneration)) {
       return { status: 'notAcknowledged' };
     }
-    if (route.delivered) return { status: 'alreadyTerminal', source: route.source };
+    try {
+      if (this.options.validateReplySource(route.sourceEvidence) !== true) {
+        return { status: 'notAcknowledged' };
+      }
+    } catch {
+      return { status: 'notAcknowledged' };
+    }
+    if (route.delivered) {
+      return { status: 'alreadyTerminal', source: terminalRequestSource(route) };
+    }
     route.delivered = true;
     if (result.ok) {
       route.resolve(result.response);
@@ -716,16 +785,13 @@ export class ZLinkActorHandoffCoordinator {
     } else {
       route.reject(new Error(result.error ?? 'Actor handoff replay failed.'));
     }
-    return { status: 'terminalReceived', source: route.source };
+    return { status: 'terminalReceived', source: terminalRequestSource(route) };
   }
 
-  private captureRequestSource(replyRouteId?: string): ZLinkActorHandoffRequestSource {
-    const source = this.options.requestSource?.();
-    if (source === undefined || source.ownerId.length === 0
-      || source.ownerLeaseGeneration <= 0n || source.nodeRid.length === 0
-      || source.nodeGeneration <= 0n) {
-      throw new Error('Actor handoff request requires an exact source owner fence.');
-    }
+  private captureRequestSource(
+    source: ReplySourceEvidence,
+    replyRouteId?: string
+  ): ZLinkActorHandoffRequestSource {
     if (replyRouteId === undefined) {
       this.nextReplyRouteId += 1n;
       replyRouteId = this.nextReplyRouteId.toString();
@@ -765,6 +831,7 @@ export class ZLinkActorHandoffCoordinator {
     actorId: string,
     oldGeneration: bigint,
     oldNodeRid: string | undefined,
+    oldNodeRidHex: string | undefined,
     sourceOwner: ZLinkActorMessageFollowOwnerFence,
     targetOwner: ZLinkActorMessageFollowOwnerFence,
     target: ZLinkSpotRouteTarget,
@@ -786,10 +853,14 @@ export class ZLinkActorHandoffCoordinator {
         refs = new Map();
         this.staleActorRefs.set(actorId, refs);
       }
-      const refKey = actorRefKey(oldNodeRid, oldGeneration);
-      const recordedRef = refs.get(refKey);
+      const exactRefKey = actorRefEvidenceKey(
+        oldNodeRid,
+        oldNodeRidHex,
+        oldGeneration
+      );
+      const recordedRef = refs.get(exactRefKey);
       if (recordedRef === undefined || recordedRef < departedAuthorityOwnerGeneration) {
-        refs.set(refKey, departedAuthorityOwnerGeneration);
+        refs.set(exactRefKey, departedAuthorityOwnerGeneration);
       }
     }
     const key = messageFollowRouteKey(actorId, oldGeneration, sourceOwner);
@@ -806,6 +877,7 @@ export class ZLinkActorHandoffCoordinator {
       key,
       oldGeneration,
       oldNodeRid,
+      oldNodeRidHex,
       sourceOwner,
       targetOwner,
       target,
@@ -869,7 +941,11 @@ export class ZLinkActorHandoffCoordinator {
     if (entry.oldNodeRid === undefined) return;
     const refs = this.staleActorRefs.get(actorId);
     if (refs === undefined) return;
-    const refKey = actorRefKey(entry.oldNodeRid, entry.oldGeneration);
+    const refKey = actorRefEvidenceKey(
+      entry.oldNodeRid,
+      entry.oldNodeRidHex,
+      entry.oldGeneration
+    );
     const recordedRef = refs.get(refKey);
     if (recordedRef !== undefined && recordedRef <= departedAuthorityOwnerGeneration) {
       refs.delete(refKey);
@@ -895,7 +971,10 @@ export class ZLinkActorHandoffCoordinator {
       && actorRef.objectGeneration === route.oldGeneration
       && (
         route.oldNodeRid === undefined
-        || String(actorRef.nodeRid) === route.oldNodeRid
+        || routingIdsEqual(
+          actorRef.nodeRid,
+          messageFollowOwnerNodeRid(route.sourceOwner)
+        )
       )
     );
   }
@@ -948,7 +1027,7 @@ export class ZLinkActorHandoffCoordinator {
     const physicalRefs = this.staleActorRefs.get(actorId);
     if (physicalRefs !== undefined) {
       const departedAuthorityOwnerGeneration = physicalRefs.get(
-        actorRefKey(String(actor.nodeRid), actor.objectGeneration)
+        actorRefKey(actor.nodeRid, actor.objectGeneration)
       );
       return departedAuthorityOwnerGeneration !== undefined
         && !this.isNewerTenureRef(actorId, actor, departedAuthorityOwnerGeneration);
@@ -1064,6 +1143,7 @@ export class ZLinkActorHandoffCoordinator {
       header: packet.header,
       payload: packet.payload,
       actorNodeRid: String(targetActorRef.nodeRid),
+      actorNodeRidHex: encodeRoutingIdStorageHex(targetActorRef.nodeRid),
       actorGeneration: targetActorRef.objectGeneration.toString(),
       returnResponse: packet.returnResponse,
       messageFollowContext: advanced
@@ -1167,10 +1247,12 @@ function actorMessageFollowSuppressionFence(
     logicalObjectId: actorId,
     objectGeneration: objectGeneration.toString(),
     sourceNodeRid: source.nodeRid,
+    ...(source.nodeRidHex === undefined ? {} : { sourceNodeRidHex: source.nodeRidHex }),
     sourceNodeGeneration: source.nodeGeneration,
     sourceAuthorityOwnerGeneration: source.authorityOwnerGeneration,
     sourceOwnerLeaseGeneration: source.ownerLeaseGeneration,
     targetNodeRid: target.nodeRid,
+    ...(target.nodeRidHex === undefined ? {} : { targetNodeRidHex: target.nodeRidHex }),
     targetNodeGeneration: target.nodeGeneration,
     targetAuthorityOwnerGeneration: target.authorityOwnerGeneration,
     targetOwnerLeaseGeneration: target.ownerLeaseGeneration
@@ -1353,11 +1435,42 @@ function messageFollowRouteKey(
   objectGeneration: bigint,
   sourceOwner: ZLinkActorMessageFollowOwnerFence
 ): string {
-  return `${actorId}\u0000${objectGeneration}\u0000${sourceOwner.authorityOwnerGeneration}`;
+  return `${actorId}\u0000${objectGeneration}\u0000${messageFollowOwnerFenceKey(sourceOwner)}`;
 }
 
-function actorRefKey(nodeRid: string, generation: bigint): string {
-  return `${nodeRid}\u0000${generation}`;
+function actorRefKey(nodeRid: ActorRef['nodeRid'], generation: bigint): string {
+  return `${encodeRoutingIdStorageHex(nodeRid)}\u0000${generation}`;
+}
+
+function actorRefEvidenceKey(
+  nodeRid: string,
+  nodeRidHex: string | undefined,
+  generation: bigint
+): string {
+  return `${nodeRidHex ?? encodeRoutingIdStorageHex(nodeRid)}\u0000${generation}`;
+}
+
+function requestSourcesEqual(
+  expected: ZLinkActorHandoffRequestSource,
+  actual: ZLinkActorHandoffRequestSource
+): boolean {
+  return expected.replyRouteId === actual.replyRouteId
+    && expected.ownerId === actual.ownerId
+    && expected.ownerLeaseGeneration === actual.ownerLeaseGeneration
+    && expected.nodeRid === actual.nodeRid
+    && expected.nodeGeneration === actual.nodeGeneration
+    && /^[1-9][0-9]*$/.test(actual.ownerLeaseGeneration)
+    && /^[1-9][0-9]*$/.test(actual.nodeGeneration);
+}
+
+function terminalRequestSource(route: ReplyRoute): ZLinkActorHandoffRequestSource {
+  return Object.freeze({
+    ...route.source,
+    // The durable packet keeps its legacy text field. The local ACK path can
+    // restore the exact binary RID from the captured owner fence without
+    // changing that packet wire shape.
+    nodeRid: messageFollowOwnerNodeRid(route.sourceOwner)
+  });
 }
 
 function actorLocationStale(actorId: string): ZLinkFrameworkException {

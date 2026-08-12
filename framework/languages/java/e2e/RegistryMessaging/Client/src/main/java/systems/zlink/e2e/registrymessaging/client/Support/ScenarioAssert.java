@@ -1,5 +1,4 @@
-package Support;
-import systems.zlink.e2e.registrymessaging.client.Support;
+package systems.zlink.e2e.registrymessaging.client.Support;
 import java.util.HashSet;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;

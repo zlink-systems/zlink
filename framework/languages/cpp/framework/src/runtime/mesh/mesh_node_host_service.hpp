@@ -16,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -30,6 +31,43 @@ namespace zlink::framework::runtime
 {
 
 class location_runtime_t;
+
+// Owns every resource charged to one admitted application dispatch until its
+// synchronous or deferred terminal settles. This internal value is separate
+// from the host object so a late terminal never needs to retain or dereference
+// the host service itself.
+class application_dispatch_terminal_owner_t final
+{
+  public:
+    application_dispatch_terminal_owner_t (
+      completion_admission_owner_t::permit_t completion_permit,
+      std::shared_ptr<inbound_dispatch_budget_t> inbound_budget,
+      std::uint64_t payload_bytes,
+      bool handler_started,
+      std::shared_ptr<detail::mesh_node_runtime_t> node,
+      std::function<void ()> complete_stateful_dispatch,
+      std::function<void ()> release_mailbox_reservation);
+    ~application_dispatch_terminal_owner_t () noexcept;
+
+    application_dispatch_terminal_owner_t (
+      const application_dispatch_terminal_owner_t &) = delete;
+    application_dispatch_terminal_owner_t &operator= (
+      const application_dispatch_terminal_owner_t &) = delete;
+
+    void settle () noexcept;
+
+  private:
+    static void invoke (const std::function<void ()> &callback) noexcept;
+
+    std::atomic_bool _settled{false};
+    completion_admission_owner_t::permit_t _completion_permit;
+    std::shared_ptr<inbound_dispatch_budget_t> _inbound_budget;
+    std::uint64_t _payload_bytes = 0;
+    bool _handler_started = false;
+    std::weak_ptr<detail::mesh_node_runtime_t> _node;
+    std::function<void ()> _complete_stateful_dispatch;
+    std::function<void ()> _release_mailbox_reservation;
+};
 
 class mesh_node_host_service_t final : public hosted_service_t,
                                        public hosted_service_lifecycle_t

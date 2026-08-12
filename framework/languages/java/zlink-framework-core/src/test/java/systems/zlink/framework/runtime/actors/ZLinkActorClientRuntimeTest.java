@@ -98,6 +98,7 @@ final class ZLinkActorClientRuntimeTest {
             .join();
 
         assertEquals(ZLinkStreamCodec.PROTOBUF, node.sentCodec);
+        assertEquals(2, node.sentPartCount);
         assertEquals("BaseActorMessage", node.sentPacketName);
         assertEquals("BASE", node.sentPayload);
     }
@@ -582,6 +583,7 @@ final class ZLinkActorClientRuntimeTest {
         Map<String, String> sentMetadata = Map.of();
         Map<String, String> requestedMetadata = Map.of();
         ZLinkStreamCodec sentCodec;
+        int sentPartCount;
         String sentPacketName;
         String sentPayload;
         int sendAttempts;
@@ -628,6 +630,7 @@ final class ZLinkActorClientRuntimeTest {
                 ZLinkStreamHeaderCodec.decodeOrPlain(parts.get(0).data());
             sentMetadata = header.metadata();
             sentCodec = header.codec();
+            sentPartCount = parts.size();
             sentPacketName = header.packetName();
             sentPayload = parts.get(1).toUtf8String();
             return true;

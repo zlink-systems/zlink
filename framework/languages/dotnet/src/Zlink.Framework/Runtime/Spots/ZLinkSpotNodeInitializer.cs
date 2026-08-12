@@ -105,8 +105,28 @@ internal sealed class ZLinkSpotNodeInitializer(
 
                 if (hasRouterBind)
                     node.SetRouterBind(routerEndpoint!);
-                if (hasRouterBind)
-                    node.Start();
+
+                nodeRuntime = new ZLinkSpotNodeRuntime(
+                    services,
+                    runtime,
+                    registration,
+                    spotNodeRegistration,
+                    node,
+                    state.CompletionAdmission,
+                    state.TimerScheduler,
+                    meshName,
+                    locationLifecycle,
+                    startupState,
+                    entrySpotId);
+                state.SpotNodes.Add(
+                    spotNodeRegistration.SpotNodeName,
+                    nodeRuntime);
+
+                // Native ingress may begin as soon as Start binds the router.
+                // The runtime above has already installed operation targets and
+                // node-route handlers; application records remain in bounded
+                // mailboxes until ActivateIngress below.
+                node.Start();
 
                 string? actualEndpoint = null;
                 if (hasRouterBind)
@@ -143,30 +163,18 @@ internal sealed class ZLinkSpotNodeInitializer(
                         Descriptor = boundDescriptor,
                         StoreGeneration = renewed.Generation
                     };
+                    nodeRuntime.UpdateStartupState(startupState);
                 }
 
-                nodeRuntime = new ZLinkSpotNodeRuntime(
-                    services,
-                    runtime,
-                    registration,
-                    spotNodeRegistration,
-                    node,
-                    state.CompletionAdmission,
-                    state.TimerScheduler,
-                    meshName,
-                    locationLifecycle,
-                    startupState,
-                    entrySpotId);
-                nodeRuntime.ApplyEntrySpotIdBeforeBind();
-                state.SpotNodes.Add(spotNodeRegistration.SpotNodeName, nodeRuntime);
+                await nodeRuntime.InitializeEntrySpotAsync().ConfigureAwait(false);
+                node.ActivateIngress();
+
                 await ResolveManualPeerRoutingIdsAsync(
                         spotNodeRegistration,
                         meshName,
                         nodeRoutingId)
                     .ConfigureAwait(false);
                 ConnectManualPeers(spotNodeRegistration, nodeRuntime);
-
-                await nodeRuntime.InitializeEntrySpotAsync().ConfigureAwait(false);
             }
             catch (Exception initializationFailure)
             {

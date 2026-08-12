@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CPP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BUILD_DIR="$CPP_DIR/build"
 source "$SCRIPT_DIR/../redis-common.sh"
+zlink_cpp_e2e_acquire_run_lock "${BASH_SOURCE[0]}" "$@"
+zlink_cpp_e2e_install_cleanup_trap
 
 SCENARIO="${1:-all}"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
@@ -30,7 +32,7 @@ cleanup() {
   done
   rm -rf -- "$CONFIG_DIR"
   if [[ -n "$REDIS_CONTAINER" && "$REDIS_CONTAINER_OWNED" == "1" ]]; then
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   if [[ "$code" != "0" ]]; then
     echo "ChannelEgressRouting failed; logs=$LOG_DIR" >&2
@@ -48,6 +50,7 @@ zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
   "zlink-redis-cpp-e2e-channel-egress" "redis:7-alpine"
 REDIS_CONTAINER_OWNED=1
 REDIS_ENDPOINT="127.0.0.1:${redis_port}"
+REDIS_KEY_PREFIX="zlink:cpp:e2e:channel-egress:${RUN_ID}:"
 
 VCPKG_PREFIX="$CPP_DIR/build/linux-ninja-vcpkg-debug/vcpkg_installed/x64-linux"
 if [[ ! -f "$VCPKG_PREFIX/share/protobuf/protobuf-config.cmake" ]]; then
@@ -67,14 +70,7 @@ cmake --build "$BUILD_DIR" --parallel 2 --target \
   zlink_cpp_e2e_channel_egress_client >/dev/null
 
 alloc_port() {
-  python3 - <<'PY'
-import socket
-sock = socket.socket()
-sock.bind(("127.0.0.1", 0))
-port = sock.getsockname()[1]
-sock.close()
-print(port)
-PY
+  zlink_cpp_e2e_allocate_ports 1
 }
 
 wait_http() {
@@ -103,7 +99,7 @@ write_role_config() {
   python3 - "$path" "$role" "$rid" "$http_endpoint" "$game_endpoint" "$audit_endpoint" \
     "$workflow_endpoint" "$game_peers" "$audit_peers" "$game_servers" "$game_clients" \
     "$audit_servers" "$audit_clients" "$workflow_servers" "$workflow_clients" "$invalid_mode" \
-    "$weight" "$hold_timeout_ms" "$REDIS_ENDPOINT" "$LOG_DIR" <<'PY'
+    "$weight" "$hold_timeout_ms" "$REDIS_ENDPOINT" "$REDIS_KEY_PREFIX" "$LOG_DIR" <<'PY'
 import json
 import os
 import stat
@@ -112,7 +108,7 @@ import sys
 (path, role, rid, http_endpoint, game_endpoint, audit_endpoint, workflow_endpoint,
  game_peers, audit_peers, game_servers, game_clients, audit_servers, audit_clients,
  workflow_servers, workflow_clients, invalid_mode, weight, hold_timeout_ms,
- redis_endpoint, log_dir) = sys.argv[1:]
+ redis_endpoint, redis_key_prefix, log_dir) = sys.argv[1:]
 value = {"e2e": {
     "role": role, "rid": rid, "httpEndpoint": http_endpoint,
     "gameEndpoint": game_endpoint, "auditEndpoint": audit_endpoint,
@@ -122,7 +118,7 @@ value = {"e2e": {
     "auditClients": audit_clients, "workflowServers": workflow_servers,
     "workflowClients": workflow_clients, "invalidMode": invalid_mode,
     "workflowWeight": weight, "holdTimeoutMs": hold_timeout_ms, "instanceMarker": rid,
-    "redis": {"endpoint": redis_endpoint, "keyPrefix": "zlink:e2e:channel-egress"},
+    "redis": {"endpoint": redis_endpoint, "keyPrefix": redis_key_prefix},
     "logDir": log_dir, "evidenceFile": os.path.join(log_dir, rid + ".evidence.jsonl")
 }}
 with open(path, "w", encoding="utf-8") as output:

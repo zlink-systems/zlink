@@ -3,6 +3,7 @@ using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Channels;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.LocationProvider;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -26,7 +27,7 @@ public sealed class FanoutAutomaticDiscoveryTests
         var mixedMode = Assert.Throws<ZLinkConfigurationException>(() =>
             mixed.AddZLinkFramework(options =>
             {
-                options.AddLocationStore(new ZLinkInMemoryLocationStore());
+                options.AddLocationStore(new ZLinkInMemoryProviderLocationStore());
                 options.AddFanoutChannel("events")
                     .EnableSubscriber()
                     .Connect("tcp://127.0.0.1:7001")

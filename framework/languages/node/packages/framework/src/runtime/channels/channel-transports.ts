@@ -93,6 +93,10 @@ export interface ZLinkChannelClientTransport {
   getFanoutListenerStatus?(channelName: string): ZLinkFanoutListenerStatus;
 }
 
+export type ZLinkChannelClientTransportSource =
+  | ZLinkChannelClientTransport
+  | (() => ZLinkChannelClientTransport | undefined);
+
 export interface ZLinkSpotPublisherClientTransport {
   tryPublish(
     meshName: string,
@@ -294,73 +298,6 @@ interface ZLinkChannelTransportRuntime {
     timeoutMs: number | undefined,
     signal?: AbortSignal
   ): Promise<readonly Message[]>;
-}
-
-export class ZLinkRuntimeChannelTransport implements ZLinkChannelClientTransport {
-  constructor(private readonly manager: () => ZLinkChannelTransportRuntime | undefined) {}
-
-  trySend(
-    channelName: string,
-    packetName: string | undefined,
-    message: unknown,
-    metadata?: ReadonlyMap<string, string>
-  ): ZLinkSubmitResult {
-    return this.requireManager().trySend(channelName, packetName, message, metadata);
-  }
-
-  send(
-    channelName: string,
-    packetName: string | undefined,
-    message: unknown,
-    signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>
-  ): Promise<ZLinkSubmitResult> {
-    return this.requireManager().send(channelName, packetName, message, signal, metadata);
-  }
-
-  async request<TReply>(
-    channelName: string,
-    packetName: string | undefined,
-    request: unknown,
-    timeoutMs: number | undefined,
-    signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>
-  ): Promise<TReply> {
-    return this.requireManager().request(channelName, packetName, request, timeoutMs, signal, metadata);
-  }
-
-  tryPublish(
-    channelName: string,
-    topic: string,
-    packetName: string | undefined,
-    event: unknown,
-    metadata?: ReadonlyMap<string, string>
-  ): ZLinkSubmitResult {
-    return this.requireManager().tryPublish(channelName, topic, packetName, event, metadata);
-  }
-
-  publish(
-    channelName: string,
-    topic: string,
-    packetName: string | undefined,
-    event: unknown,
-    signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>
-  ): Promise<ZLinkSubmitResult> {
-    return this.requireManager().publish(channelName, topic, packetName, event, signal, metadata);
-  }
-
-  getFanoutListenerStatus(channelName: string): ZLinkFanoutListenerStatus {
-    return this.requireManager().getFanoutListenerStatus(channelName);
-  }
-
-  private requireManager(): ZLinkChannelTransportRuntime {
-    const manager = this.manager();
-    if (manager === undefined) {
-      throw new ZLinkConfigurationException('Channel runtime is not started.');
-    }
-    return manager;
-  }
 }
 
 export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {

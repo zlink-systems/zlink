@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/e2e-redis-common.sh"
+zlink_e2e_initialize java "$0" "$@"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/start-order-common.sh"
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
@@ -11,137 +12,7 @@ declare -A role_pids=()
 REDIS_CONTAINER=""
 run_id="$(date +%Y%m%d-%H%M%S)-$$"
 log_dir="$(pwd)/logs/${run_id}"
-repo_root="$(cd ../../../../.. && pwd)"
-default_core_lib="${repo_root}/core/build/lib/libzlink.so"
-mkdir -p "${log_dir}"
-echo "log_dir=${log_dir}"
-SCENARIO="${1:-all}"
-e2e_start_order="$(zlink_e2e_start_order_mode "$@")"
-BIND_RETRY_PATTERN="ZlinkBindException|BindException|Address already in use|EADDRINUSE|errno=98"
-echo "start_order=${e2e_start_order}"
-if [[ -z "${ZLINK_LIBRARY_PATH:-}" && -f "${default_core_lib}" ]]; then
-  export ZLINK_LIBRARY_PATH="${default_core_lib}"
-fi
-readonly e2e_build_dir="${HOME}/.cache/zlink/java-e2e/SpotService"
-readonly gradle_cache_dir="${HOME}/.cache/zlink/java-e2e/SpotService-gradle-cache"
-if rg -n 'java\.net\.http\.HttpClient|HttpClient\.new' \
-    "$(pwd)/Client/src/main/java" --glob '*.java'; then
-  echo "SpotService client must use ZLinkHttpClient" >&2
-  exit 1
-fi
-if rg -n 'runMode\(|/scenario/|class ClientScenario' \
-    "$(pwd)/Client/src/main/java" "$(pwd)/Shared/src/main/java" --glob '*.java'; then
-  echo "SpotService scenarios must run in Client scenario files" >&2
-  exit 1
-fi
-if rg -n '@EnableZLinkFramework|\bZLink(SpotOutbound|RouteClient|ActorClient|SpotManager)\b' \
-    "$(pwd)/Client/src/main/java" --glob '*.java'; then
-  echo "SpotService Client must not host or call the framework runtime directly" >&2
-  exit 1
-fi
-if rg -n 'receivedCount\([^)]*\)\s*==\s*0' \
-    "$(pwd)/Client/src/main/java" --glob '*.java'; then
-  echo "SpotService negative push assertions must use expectNone" >&2
-  exit 1
-fi
-
-retry_child=0
-all_child=0
-for arg in "$@"; do
-  case "${arg}" in
-    --retry-child) retry_child=1 ;;
-    --all-child) all_child=1 ;;
-  esac
-done
-
-if [[ "${SCENARIO}" != "all" && "${retry_child}" != "1" && "${all_child}" != "1" ]]; then
-  output="$(mktemp)"
-  scenario_passed=0
-  for attempt in 1 2 3; do
-    : >"${output}"
-    set +e
-    timeout 900s "${SCRIPT_PATH}" "${SCENARIO}" --retry-child \
-      --start-order "${e2e_start_order}" 2>&1 | tee "${output}"
-    status="${PIPESTATUS[0]}"
-    set -e
-    if [[ "${status}" == "0" ]]; then
-      scenario_passed=1
-      break
-    fi
-    if ! grep -Eq "${BIND_RETRY_PATTERN}" "${output}"; then
-      break
-    fi
-    if [[ "${attempt}" == "3" ]]; then
-      break
-    fi
-    echo "spot-service transient bind failure; retrying scenario=${SCENARIO} (${attempt}/3)" >&2
-    sleep 1
-  done
-  rm -f "${output}"
-  if [[ "${scenario_passed}" == "1" ]]; then
-    exit 0
-  fi
-  echo "scenario=${SCENARIO} failed" >&2
-  exit 1
-fi
-
-if [[ "${SCENARIO}" == "all" && "${all_child}" != "1" ]]; then
-  for child_group in default-batch SM-F6 SM-G2 SM-G3 SM-G4 SM-G1; do
-    echo "child scenario=${child_group}"
-    output="$(mktemp)"
-    child_passed=0
-    for attempt in 1 2 3; do
-      : >"${output}"
-      set +e
-      timeout 900s "${SCRIPT_PATH}" "${child_group}" --all-child \
-        --start-order "${e2e_start_order}" 2>&1 | tee "${output}"
-      status="${PIPESTATUS[0]}"
-      set -e
-      if [[ "${status}" == "0" ]]; then
-        child_passed=1
-        break
-      fi
-      if ! grep -Eq "${BIND_RETRY_PATTERN}" "${output}"; then
-        break
-      fi
-      if [[ "${attempt}" == "3" ]]; then
-        break
-      fi
-      echo "spot-service transient bind failure; retrying child scenario=${child_group} (${attempt}/3)" >&2
-      sleep 1
-    done
-    rm -f "${output}"
-    if [[ "${child_passed}" != "1" ]]; then
-      echo "child scenario=${child_group} failed" >&2
-      exit 1
-    fi
-  done
-  echo "spot-service e2e result=passed"
-  exit 0
-fi
-
-config_dir="$(mktemp -d)"
-chmod 700 "${config_dir}"
-zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
-  "zlink-redis-java-e2e" "redis:7.2-alpine"
-redis_location_endpoint="127.0.0.1:${redis_port}"
-if [[ "${ZLINK_E2E_REDIS_MONITOR:-0}" == "1" ]]; then
-  docker exec "${REDIS_CONTAINER}" redis-cli --csv monitor \
-    >"${log_dir}/redis-monitor.log" 2>&1 &
-  pids+=("$!")
-fi
-location_key_prefix="zlink:e2e:spot-service:${run_id}"
-location_heartbeat_ms=500
-location_lease_ttl_ms=5000
-LOCATION_LEASE_POLL_MILLISECONDS=100
-LOCAL_READINESS_TIMEOUT_SECONDS=3
-LOCAL_READINESS_POLL_SECONDS=0.1
-LOCAL_READINESS_ATTEMPTS=30
-TOPOLOGY_READINESS_ATTEMPTS=100
-SCENARIO_SETTLE_SECONDS=3
-# Inventory blockers: SM-A9 SM-A10 SM-A11 SM-A12 SM-A13 SM-B0 SM-B0A
-# SM-B10 SM-B11 SM-C6 SM-D4A SM-D4B SM-D5A SM-G5A SM-G5B. The feature map
-# owns the public-fixture reasons; the runner does not claim these as passes.
+config_dir=""
 
 print_logs() {
   local status="$1"
@@ -194,15 +65,147 @@ cleanup() {
     kill -9 "${pid}" >/dev/null 2>&1 || true
   done
   if [[ -n "${REDIS_CONTAINER}" ]]; then
-    docker rm -fv "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "${REDIS_CONTAINER}" || true
   fi
-  rm -rf "${config_dir}"
+  [[ -z "${config_dir}" ]] || rm -rf "${config_dir}"
   wait >/dev/null 2>&1 || true
   exit "${status}"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+repo_root="$(cd ../../../../.. && pwd)"
+default_core_lib="${repo_root}/core/build/lib/libzlink.so"
+mkdir -p "${log_dir}"
+echo "log_dir=${log_dir}"
+SCENARIO="${1:-all}"
+e2e_start_order="$(zlink_e2e_start_order_mode "$@")"
+BIND_RETRY_PATTERN="ZlinkBindException|BindException|Address already in use|EADDRINUSE|errno=98"
+echo "start_order=${e2e_start_order}"
+if [[ -z "${ZLINK_LIBRARY_PATH:-}" && -f "${default_core_lib}" ]]; then
+  export ZLINK_LIBRARY_PATH="${default_core_lib}"
+fi
+readonly e2e_build_dir="${HOME}/.cache/zlink/java-e2e/SpotService"
+readonly gradle_cache_dir="${HOME}/.cache/zlink/java-e2e/SpotService-gradle-cache"
+if rg -n 'java\.net\.http\.HttpClient|HttpClient\.new' \
+    "$(pwd)/Client/src/main/java" --glob '*.java'; then
+  echo "SpotService client must use ZLinkHttpClient" >&2
+  exit 1
+fi
+if rg -n 'runMode\(|/scenario/|class ClientScenario' \
+    "$(pwd)/Client/src/main/java" "$(pwd)/Shared/src/main/java" --glob '*.java'; then
+  echo "SpotService scenarios must run in Client scenario files" >&2
+  exit 1
+fi
+if rg -n '@EnableZLinkFramework|\bZLink(SpotOutbound|RouteClient|ActorClient|SpotManager)\b' \
+    "$(pwd)/Client/src/main/java" --glob '*.java'; then
+  echo "SpotService Client must not host or call the framework runtime directly" >&2
+  exit 1
+fi
+if rg -n 'receivedCount\([^)]*\)\s*==\s*0' \
+    "$(pwd)/Client/src/main/java" --glob '*.java'; then
+  echo "SpotService negative push assertions must use expectNone" >&2
+  exit 1
+fi
+
+retry_child=0
+all_child=0
+for arg in "$@"; do
+  case "${arg}" in
+    --retry-child) retry_child=1 ;;
+    --all-child) all_child=1 ;;
+  esac
+done
+
+if [[ "${SCENARIO}" != "all" && "${retry_child}" != "1" && "${all_child}" != "1" ]]; then
+  output="$(mktemp)"
+  scenario_passed=0
+  for attempt in 1 2 3; do
+    : >"${output}"
+    set +e
+    timeout 900s bash "${SCRIPT_PATH}" "${SCENARIO}" --retry-child \
+      --start-order "${e2e_start_order}" 2>&1 | tee "${output}"
+    status="${PIPESTATUS[0]}"
+    set -e
+    if [[ "${status}" == "0" ]]; then
+      scenario_passed=1
+      break
+    fi
+    if ! grep -Eq "${BIND_RETRY_PATTERN}" "${output}"; then
+      break
+    fi
+    if [[ "${attempt}" == "3" ]]; then
+      break
+    fi
+    echo "spot-service transient bind failure; retrying scenario=${SCENARIO} (${attempt}/3)" >&2
+    sleep 1
+  done
+  rm -f "${output}"
+  if [[ "${scenario_passed}" == "1" ]]; then
+    exit 0
+  fi
+  echo "scenario=${SCENARIO} failed" >&2
+  exit 1
+fi
+
+if [[ "${SCENARIO}" == "all" && "${all_child}" != "1" ]]; then
+  for child_group in default-batch SM-F6 SM-G2 SM-G3 SM-G4 SM-G1; do
+    echo "child scenario=${child_group}"
+    output="$(mktemp)"
+    child_passed=0
+    for attempt in 1 2 3; do
+      : >"${output}"
+      set +e
+      timeout 900s bash "${SCRIPT_PATH}" "${child_group}" --all-child \
+        --start-order "${e2e_start_order}" 2>&1 | tee "${output}"
+      status="${PIPESTATUS[0]}"
+      set -e
+      if [[ "${status}" == "0" ]]; then
+        child_passed=1
+        break
+      fi
+      if ! grep -Eq "${BIND_RETRY_PATTERN}" "${output}"; then
+        break
+      fi
+      if [[ "${attempt}" == "3" ]]; then
+        break
+      fi
+      echo "spot-service transient bind failure; retrying child scenario=${child_group} (${attempt}/3)" >&2
+      sleep 1
+    done
+    rm -f "${output}"
+    if [[ "${child_passed}" != "1" ]]; then
+      echo "child scenario=${child_group} failed" >&2
+      exit 1
+    fi
+  done
+  echo "spot-service e2e result=passed"
+  exit 0
+fi
+
+config_dir="$(mktemp -d)"
+chmod 700 "${config_dir}"
+zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
+  "zlink-redis-java-e2e" "redis:7.2-alpine"
+redis_location_endpoint="127.0.0.1:${redis_port}"
+if [[ "${ZLINK_E2E_REDIS_MONITOR:-0}" == "1" ]]; then
+  docker exec "${REDIS_CONTAINER}" redis-cli --csv monitor \
+    >"${log_dir}/redis-monitor.log" 2>&1 &
+  pids+=("$!")
+fi
+location_key_prefix="zlink:e2e:spot-service:${run_id}"
+location_heartbeat_ms=500
+location_lease_ttl_ms=5000
+LOCATION_LEASE_POLL_MILLISECONDS=100
+LOCAL_READINESS_TIMEOUT_SECONDS=3
+LOCAL_READINESS_POLL_SECONDS=0.1
+LOCAL_READINESS_ATTEMPTS=30
+TOPOLOGY_READINESS_ATTEMPTS=100
+SCENARIO_SETTLE_SECONDS=3
+# Inventory blockers: SM-A9 SM-A10 SM-A11 SM-A12 SM-A13 SM-B0 SM-B0A
+# SM-B10 SM-B11 SM-C6 SM-D4A SM-D4B SM-D5A SM-G5A SM-G5B. The feature map
+# owns the public-fixture reasons; the runner does not claim these as passes.
 
 if [[ "${LOCAL_READINESS_TIMEOUT_SECONDS}" != 3 \
    || "${LOCAL_READINESS_ATTEMPTS}" != 30 \
@@ -212,40 +215,11 @@ if [[ "${LOCAL_READINESS_TIMEOUT_SECONDS}" != 3 \
 fi
 
 reserve_ports() {
-  python3 - <<'PY'
-import socket
-sockets = []
-ports = []
-try:
-    for _ in range(21):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        ports.append(sock.getsockname()[1])
-    print(" ".join(f"tcp://127.0.0.1:{port}" for port in ports[:16]), end=" ")
-    print(" ".join(f"http://127.0.0.1:{port}" for port in ports[16:]))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  zlink_e2e_reserve_mixed_endpoints 16 5
 }
 
 reserve_client_endpoints() {
-  python3 - <<'PY'
-import socket
-sockets = []
-endpoints = []
-try:
-    for _ in range(2):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        endpoints.append(f"tcp://127.0.0.1:{sock.getsockname()[1]}")
-    print(" ".join(endpoints))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  zlink_e2e_reserve_mixed_endpoints 2 0
 }
 
 port_of() {
@@ -268,7 +242,7 @@ wait_port() {
 }
 
 gradle_run() {
-  ../../gradlew -PzlinkE2eBuildDir="${e2e_build_dir}" \
+  zlink_e2e_gradle_build_locked ../../gradlew -PzlinkE2eBuildDir="${e2e_build_dir}" \
     --project-cache-dir "${gradle_cache_dir}" --no-daemon --no-parallel --max-workers=1 "$@" --quiet
 }
 
@@ -559,7 +533,7 @@ wait_owner_lease_expired() {
   local lease_key="${location_key_prefix}:lease:${owner_id}"
   local remaining_ms
   for _ in $(seq 1 "${attempts}"); do
-    remaining_ms="$(docker exec "${REDIS_CONTAINER}" redis-cli --raw PTTL "${lease_key}")"
+    remaining_ms="$(timeout -k 2s 5s docker exec "${REDIS_CONTAINER}" redis-cli --raw PTTL "${lease_key}")"
     if (( remaining_ms < 0 )); then
       echo "owner lease expired owner=${owner_id} evidence=redis-pttl"
       return 0

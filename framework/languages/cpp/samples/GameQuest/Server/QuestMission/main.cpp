@@ -346,26 +346,30 @@ class player_quest_spot_t : public instance_spot_t
         return {_store.projection (request.player_id)};
     }
 
-    void close (const close_player_quest_msg_t &)
+    task_t<void> close (const close_player_quest_msg_t &)
     {
-        _context.close ();
+        (void) co_await _context.close ();
+        co_return;
     }
 
-    projection_admin_res_t admin (const projection_admin_req_t &request)
+    task_t<projection_admin_res_t> admin (const projection_admin_req_t &request)
     {
         if (request.operation == "delete") {
             _store.delete_projection (request.player_id, request.quest_id);
-            return {true, _store.projection (request.player_id)};
+            co_return projection_admin_res_t{
+              true, _store.projection (request.player_id)};
         }
         if (request.operation == "rebuild") {
-            return {true, _store.rebuild_projection (request.player_id)};
+            co_return projection_admin_res_t{
+              true, _store.rebuild_projection (request.player_id)};
         }
         if (request.operation == "deactivate") {
             const auto projection = _store.projection (request.player_id);
-            close (close_player_quest_msg_t{});
-            return {true, projection};
+            (void) co_await _context.close ();
+            co_return projection_admin_res_t{true, projection};
         }
-        return {false, _store.projection (request.player_id)};
+        co_return projection_admin_res_t{
+          false, _store.projection (request.player_id)};
     }
 
   private:

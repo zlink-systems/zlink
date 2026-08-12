@@ -1,6 +1,4 @@
-package Endpoints;
-import systems.zlink.e2e.registrymessaging.workflow.Endpoints;
-import systems.zlink.e2e.registrymessaging.workflow.Infrastructure;
+package systems.zlink.e2e.registrymessaging.workflow.Endpoints;
 import java.util.Map;
 
 import java.time.Duration;

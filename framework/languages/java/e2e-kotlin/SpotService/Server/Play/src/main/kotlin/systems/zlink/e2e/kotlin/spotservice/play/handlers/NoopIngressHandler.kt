@@ -10,9 +10,12 @@ import systems.zlink.framework.handlers.ZLinkHandlerGroup
 @ZLinkHandlerGroup(Contracts.CHANNEL_HANDLER_GROUP)
 class NoopIngressHandler(
     private val state: ScenarioState,
-) : ZLinkSuspendingRequestHandler<String, String> {
-    override suspend fun handle(request: String, context: ZLinkMessageContext): String {
-        state.record("IngressRequest", "channel", request)
-        return request
+) : ZLinkSuspendingRequestHandler<Contracts.StateReq, Contracts.StateRes> {
+    override suspend fun handle(
+        request: Contracts.StateReq,
+        context: ZLinkMessageContext,
+    ): Contracts.StateRes {
+        state.record("IngressRequest", "channel", request.op)
+        return Contracts.StateRes("", state.nodeRid(), request.op)
     }
 }

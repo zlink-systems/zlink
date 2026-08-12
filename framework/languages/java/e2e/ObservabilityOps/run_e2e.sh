@@ -6,6 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JAVA_E2E_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "${JAVA_E2E_DIR}/../e2e-redis-common.sh"
+zlink_e2e_initialize java "$0" "$@"
 source "${JAVA_E2E_DIR}/start-order-common.sh"
 e2e_start_order="$(zlink_e2e_start_order_mode "$@")"
 echo "start_order=${e2e_start_order}"
@@ -27,7 +28,7 @@ fi
 
 SELECTOR="${1:-all}"
 case "${SELECTOR}" in
-  all|OBS-A1|OBS-A2|OBS-A3|OBS-A4|OBS-A5|OBS-B1|OBS-B2|OBS-B3|OBS-B4|OBS-C1|OBS-C2|OBS-C3|OBS-C4|OBS-C5|OBS-C6|OBS-C7|OBS-C8|OBS-C9A|OBS-C9B|OBS-C10|OBS-C11|OBS-C12) ;;
+  all|OBS-A1|OBS-A2|OBS-A3|OBS-A4|OBS-A5|OBS-B1|OBS-B2|OBS-B3|OBS-B4|OBS-C1|OBS-C2|OBS-C3|OBS-C4|OBS-C5|OBS-C6|OBS-C7|OBS-C8|OBS-C9A|OBS-C10|OBS-C11|OBS-C12) ;;
   *) echo "Unknown ObservabilityOps selector." >&2; exit 2 ;;
 esac
 
@@ -36,7 +37,7 @@ if [[ "${SELECTOR}" == OBS-A5 ]]; then
 fi
 
 case "${SELECTOR}" in
-  OBS-C6|OBS-C7|OBS-C8|OBS-C9A|OBS-C9B|OBS-C10|OBS-C11|OBS-C12)
+  OBS-C6|OBS-C7|OBS-C8|OBS-C9A|OBS-C10|OBS-C11|OBS-C12)
     exec bash "${SCRIPT_DIR}/run_c_e2e.sh" "$@"
     ;;
 esac
@@ -47,9 +48,9 @@ if [[ "${SELECTOR}" == all ]]; then
     OBS-A5 \
     OBS-B1 OBS-B2 OBS-B3 OBS-B4 \
     OBS-C1 OBS-C2 OBS-C3 OBS-C4 OBS-C5 \
-    OBS-C6 OBS-C7 OBS-C8 OBS-C9A OBS-C9B OBS-C10 OBS-C11 OBS-C12; do
+    OBS-C6 OBS-C7 OBS-C8 OBS-C9A OBS-C10 OBS-C11 OBS-C12; do
     echo "===== OBSERVABILITY OPS START ${selector} ====="
-    "${BASH_SOURCE[0]}" "${selector}" --start-order "${e2e_start_order}"
+    bash "${BASH_SOURCE[0]}" "${selector}" --start-order "${e2e_start_order}"
     echo "===== OBSERVABILITY OPS PASS ${selector} ====="
   done
   echo "observability-ops all result=passed"
@@ -66,22 +67,6 @@ gradle_cache="${HOME}/.cache/zlink/java-e2e/ObservabilityOps-gradle-cache"
 pids=()
 REDIS_CONTAINER=""
 config_dir="${log_dir}/config"
-mkdir -p -m 0700 "${log_dir}" "${evidence_dir}" "${config_dir}"
-echo "log_dir=${log_dir}"
-
-if [[ -z "${ZLINK_LIBRARY_PATH:-}" && -f "${default_core_lib}" ]]; then
-  export ZLINK_LIBRARY_PATH="${default_core_lib}"
-fi
-# Config 11 OBS-A1 needs the connector's public flow root to correlate the
-# STREAM request with the Session and Actor records.
-export ZLINK_JAVA_STREAM_TRACE=1
-zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
-  "zlink-redis-java-e2e-observability" "redis:7.2-alpine"
-redis_location_endpoint="127.0.0.1:${redis_port}"
-location_key_prefix="zlink:e2e:observability:${run_id}"
-LOCAL_READINESS_TIMEOUT_SECONDS=3
-LOCAL_READINESS_POLL_SECONDS=0.1
-LOCAL_READINESS_ATTEMPTS=30
 
 descendants() {
   local pid="$1" child
@@ -108,7 +93,7 @@ cleanup() {
     for child in $(descendants "${pids[$i]}"); do kill -9 "${child}" >/dev/null 2>&1 || true; done
     kill -9 "${pids[$i]}" >/dev/null 2>&1 || true
   done
-  [[ -z "${REDIS_CONTAINER}" ]] || docker rm -fv "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+  [[ -z "${REDIS_CONTAINER}" ]] || zlink_redis_remove_by_id "${REDIS_CONTAINER}" || true
   wait >/dev/null 2>&1 || true
   rm -rf "${config_dir}"
   if [[ "${status}" != 0 ]]; then
@@ -117,6 +102,23 @@ cleanup() {
   exit "${status}"
 }
 trap cleanup EXIT
+
+mkdir -p -m 0700 "${log_dir}" "${evidence_dir}" "${config_dir}"
+echo "log_dir=${log_dir}"
+
+if [[ -z "${ZLINK_LIBRARY_PATH:-}" && -f "${default_core_lib}" ]]; then
+  export ZLINK_LIBRARY_PATH="${default_core_lib}"
+fi
+# Config 11 OBS-A1 needs the connector's public flow root to correlate the
+# STREAM request with the Session and Actor records.
+export ZLINK_JAVA_STREAM_TRACE=1
+zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
+  "zlink-redis-java-e2e-observability" "redis:7.2-alpine"
+redis_location_endpoint="127.0.0.1:${redis_port}"
+location_key_prefix="zlink:e2e:observability:${run_id}"
+LOCAL_READINESS_TIMEOUT_SECONDS=3
+LOCAL_READINESS_POLL_SECONDS=0.1
+LOCAL_READINESS_ATTEMPTS=30
 
 if [[ "${LOCAL_READINESS_TIMEOUT_SECONDS:-}" != 3 \
    || "${LOCAL_READINESS_ATTEMPTS:-}" != 30 ]]; then
@@ -130,16 +132,7 @@ if rg -n 'java\.net\.http\.HttpClient|HttpClient\.new' \
 fi
 
 reserve_ports() {
-  python3 - <<'PY'
-import socket
-socks=[]
-try:
-    for _ in range(13):
-        sock=socket.socket(); sock.bind(("127.0.0.1", 0)); socks.append(sock)
-    print(" ".join(str(sock.getsockname()[1]) for sock in socks))
-finally:
-    for sock in socks: sock.close()
-PY
+  zlink_e2e_reserve_ports 14
 }
 tcp() { echo "tcp://127.0.0.1:$1"; }
 http() { echo "http://127.0.0.1:$1"; }
@@ -259,7 +252,10 @@ PY
   return 1
 }
 
-read -r DELAY_PORT ROUTE_A_PORT SPOT_A_PORT ROUTE_B_PORT SPOT_B_PORT STREAM_PORT PLAY_A_HTTP_PORT PLAY_B_HTTP_PORT PLAY_A_MAINT_PORT PLAY_B_MAINT_PORT SESSION_HTTP_PORT SESSION_ROUTE_PORT FANOUT_PORT <<<"$(reserve_ports)"
+read -r DELAY_PORT ROUTE_A_PORT SPOT_A_PORT ROUTE_B_PORT SPOT_B_PORT \
+  STREAM_PORT PLAY_A_HTTP_PORT PLAY_B_HTTP_PORT PLAY_A_MAINT_PORT \
+  PLAY_B_MAINT_PORT SESSION_HTTP_PORT SESSION_ROUTE_PORT FANOUT_PORT \
+  SESSION_SPOT_PORT <<<"$(reserve_ports)"
 DELAY_ENDPOINT="$(tcp "${DELAY_PORT}")"
 ROUTE_A_ENDPOINT="$(tcp "${ROUTE_A_PORT}")"
 SPOT_A_ENDPOINT="$(tcp "${SPOT_A_PORT}")"
@@ -273,13 +269,10 @@ PLAY_B_MAINTENANCE="$(http "${PLAY_B_MAINT_PORT}")"
 SESSION_HTTP="$(http "${SESSION_HTTP_PORT}")"
 SESSION_ROUTE_ENDPOINT="$(tcp "${SESSION_ROUTE_PORT}")"
 FANOUT_ENDPOINT="$(tcp "${FANOUT_PORT}")"
-SESSION_SPOT_ENDPOINT="$(tcp "$(python3 - <<'PY'
-import socket
-s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()
-PY
-)")"
+SESSION_SPOT_ENDPOINT="$(tcp "${SESSION_SPOT_PORT}")"
 
-"${SCRIPT_DIR}/gradlew" -PzlinkE2eBuildDir="${obs_build}" \
+zlink_e2e_gradle_build_locked "${SCRIPT_DIR}/gradlew" \
+  -PzlinkE2eBuildDir="${obs_build}" \
   --project-cache-dir "${gradle_cache}" --no-daemon --no-parallel --max-workers=1 --quiet \
   clean installDist
 

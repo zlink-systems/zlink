@@ -385,10 +385,16 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
         }
         CompletionStage<Optional<LocalActorReply>> dispatched =
             packet.handoffArrivalIndex() == null
-                ? host.dispatchLocalSessionActor(
-                    packet.actorRef(),
-                    packet.header(),
-                    packet.payload())
+                ? packet.acceptedJournalRecord().length == 0
+                    ? host.dispatchLocalSessionActor(
+                        packet.actorRef(),
+                        packet.header(),
+                        packet.payload())
+                    : host.dispatchMessageFollow(
+                        packet.actorRef(),
+                        packet.header(),
+                        packet.payload(),
+                        packet.acceptedJournalRecord())
                 : host.dispatchTransferBacklog(
                     packet.actorRef(),
                     packet.header(),

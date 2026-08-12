@@ -1219,7 +1219,8 @@ test('Spot and Actor wire records preserve identity and reject malformed records
     {
       actor: target,
       targetNodeGeneration: 3n,
-      authorityOwnerGeneration: 5n
+      authorityOwnerGeneration: 5n,
+      ownerLeaseGeneration: 6n
     },
     12n,
     source,
@@ -1232,7 +1233,8 @@ test('Spot and Actor wire records preserve identity and reject malformed records
     target: {
       actor: target,
       targetNodeGeneration: 3n,
-      authorityOwnerGeneration: 5n
+      authorityOwnerGeneration: 5n,
+      ownerLeaseGeneration: 6n
     },
     boundSession: {
       sessionRid: 'session-a',
@@ -1319,7 +1321,8 @@ test('outbound stateful routes use resolved authority generations and never obje
   runtime.rememberActorRoute({
     actor,
     targetNodeGeneration: 7n,
-    authorityOwnerGeneration: 11n
+    authorityOwnerGeneration: 11n,
+    ownerLeaseGeneration: 13n
   });
   assert.equal(runtime.sendToActor(actor, 7n, actor.generation, payload), SubmitResult.Ok);
   const actorHeader = decodeStatefulHeader(sent.at(-1)!.parts[0]!);
@@ -1455,7 +1458,8 @@ test('remote Actor request receives CapacityExceeded when mailbox admission fail
       encodeActorHeader('actorRequest', {
         actor: actor.ref,
         targetNodeGeneration: 3n,
-        authorityOwnerGeneration: actor.authorityOwnerGeneration
+        authorityOwnerGeneration: actor.authorityOwnerGeneration,
+        ownerLeaseGeneration: 3n
       }, 91n),
       payload
     ]
@@ -2281,7 +2285,8 @@ test('retained peer routes may submit while endpoint convergence reports not rea
   runtime.rememberActorRoute({
     actor,
     targetNodeGeneration: 7n,
-    authorityOwnerGeneration: 11n
+    authorityOwnerGeneration: 11n,
+    ownerLeaseGeneration: 13n
   });
 
   const result = runtime.sendToActor(actor, 7n, 5n, {
@@ -3896,7 +3901,8 @@ test('bound session transition wire format fences the binding generation', () =>
     {
       actor: { nodeRid: 'node-a', actorId: 'actor-a', generation: 2n },
       targetNodeGeneration: 4n,
-      authorityOwnerGeneration: 6n
+      authorityOwnerGeneration: 6n,
+      ownerLeaseGeneration: 7n
     },
     'session-a',
     { state: 'tombstone', retiredGeneration: 9n }
@@ -3907,7 +3913,8 @@ test('bound session transition wire format fences the binding generation', () =>
     actor: {
       actor: { nodeRid: 'node-a', actorId: 'actor-a', generation: 2n },
       targetNodeGeneration: 4n,
-      authorityOwnerGeneration: 6n
+      authorityOwnerGeneration: 6n,
+      ownerLeaseGeneration: 7n
     },
     sessionRid: 'session-a',
     binding: { state: 'tombstone', retiredGeneration: 9n }
@@ -4032,7 +4039,8 @@ test('bound-session replacement is one-way, retries admission, and fences a late
   const actorRoute = {
     actor,
     targetNodeGeneration: 3n,
-    authorityOwnerGeneration: actorRuntime.actor(actor.actorId)!.authorityOwnerGeneration
+    authorityOwnerGeneration: actorRuntime.actor(actor.actorId)!.authorityOwnerGeneration,
+    ownerLeaseGeneration: 3n
   };
   oldSessionRuntime.rememberActorRoute(actorRoute);
   newSessionRuntime.rememberActorRoute(actorRoute);
@@ -4148,7 +4156,8 @@ test('bound-session replacement is one-way, retries admission, and fences a late
       {
         actor,
         targetNodeGeneration: 3n,
-        authorityOwnerGeneration: actorRuntime.actor(actor.actorId)!.authorityOwnerGeneration
+        authorityOwnerGeneration: actorRuntime.actor(actor.actorId)!.authorityOwnerGeneration,
+        ownerLeaseGeneration: 3n
       },
       'old-rid',
       { state: 'tombstone', retiredGeneration: oldBinding.bindingGeneration }
@@ -4192,7 +4201,8 @@ test('mailbox saturation reports dropped actor binding control records', () => {
     {
       actor: actor.ref,
       targetNodeGeneration: 3n,
-      authorityOwnerGeneration: actor.authorityOwnerGeneration
+      authorityOwnerGeneration: actor.authorityOwnerGeneration,
+      ownerLeaseGeneration: 3n
     },
     'session-a',
     { state: 'active', generation: 9n }
@@ -5104,15 +5114,32 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     assert.deepEqual(bindCompletion.operationId, bindOperation);
     assert.equal(bindCompletion.terminalResult, RequestResult.Ok);
     const binding = sessionService.bindings('session-a')[0]!;
+    const actorFence = {
+      targetNodeGeneration: backend.status().lifecycleGeneration,
+      authorityOwnerGeneration: actor.generation,
+      ownerLeaseGeneration: 37n
+    };
     assert.equal(
-      backend.sendActorBoundSession(actor, binding.bindingGeneration, Buffer.from('session-message')),
+      backend.sendActorBoundSession(
+        actor,
+        binding.bindingGeneration,
+        Buffer.from('session-message'),
+        undefined,
+        actorFence
+      ),
       SubmitResult.Ok
     );
     assert.deepEqual(delivered.map(value => value.toString()), ['session-message']);
     streamState.disconnected = true;
     assert.doesNotThrow(() => {
       assert.equal(
-        backend.sendActorBoundSession(actor, binding.bindingGeneration, Buffer.from('late-session-message')),
+        backend.sendActorBoundSession(
+          actor,
+          binding.bindingGeneration,
+          Buffer.from('late-session-message'),
+          undefined,
+          actorFence
+        ),
         SubmitResult.InvalidState
       );
     });
@@ -5243,18 +5270,11 @@ test('public SpotId call reaches production host Missing Instance placement with
     }) as never,
     defaultRequestTimeoutMs: 5_000
   });
-  const outbound = new DefaultZLinkSpotOutbound(
-    new ZLinkSpotSerialExecutor(),
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    'mesh',
-    undefined,
-    address
-  );
+  const outbound = new DefaultZLinkSpotOutbound({
+    serial: new ZLinkSpotSerialExecutor(),
+    meshName: 'mesh',
+    addressTransport: address
+  });
 
   class Notice {
     readonly text = 'hello';

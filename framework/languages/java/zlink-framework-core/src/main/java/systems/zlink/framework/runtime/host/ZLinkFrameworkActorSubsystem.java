@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.host;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletionStage;
+import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkActorRelocationAdapter;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
@@ -236,10 +237,8 @@ final class ZLinkFrameworkActorSubsystem {
         if (storeLocationResolvers != null) {
             meshNodes.values().forEach(node -> node.setMessageFollowHandler(
                 (sourceNodeRid, notice) -> {
-                    if (!node.status().routingId().equals(
-                        notice.source().targetNodeRid())
-                        || !sourceNodeRid.equals(
-                            notice.target().targetNodeRid())) {
+                    if (!acceptsMessageFollowNotice(
+                        sourceNodeRid, notice)) {
                         return;
                     }
                     storeLocationResolvers.invalidateRouteIfMatches(notice);
@@ -261,5 +260,14 @@ final class ZLinkFrameworkActorSubsystem {
         channels.registerRouteInternalRequestHandler(
             ZLinkActorEntryTransferEnvelope.PACKET_NAME,
             spots::handleEntryActorTransferRoute);
+    }
+
+    static boolean acceptsMessageFollowNotice(
+        RoutingId sourceNodeRid,
+        systems.zlink.framework.runtime.internal.service
+            .ZLinkServiceMessageFollowWireCodec.Notice notice) {
+        return sourceNodeRid != null
+            && notice != null
+            && sourceNodeRid.equals(notice.source().targetNodeRid());
     }
 }

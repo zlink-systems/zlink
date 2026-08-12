@@ -68,84 +68,44 @@ operation의 completion enqueue에는 거부하거나 버리는 경로가 없다
 thread를 만드는 대신 process가 공유하는 lane을 사용하며, shutdown에서는 이미 수락한 callback을
 모두 실행한 뒤 종료한다. 한 callback의 exception은 뒤 callback의 실행을 막지 않는다.
 
-## 3. 호출 식별자를 먼저 만들고 등록한 뒤 보낸다
+## 3. Operation identity와 reply 경로를 분리한다
 
-### 문제
+Service wire의 request는 서로 다른 두 값을 함께 보존한다. 둘 다 Framework 내부 값이며
+application에는 노출하지 않는다.
 
-mesh node 표면이 호출 식별자를 **submit의 출력**으로만 돌려주면 다음 순서가 강제된다.
+| 값 | 형식 | 맡는 일 |
+|---|---|---|
+| `OperationId` | `{ high: u64, low: u64 }` | operation 하나의 terminal deduplication identity다. Relocation과 reply relay를 거쳐도 같은 값을 유지한다 |
+| `ReplyRouteId` | non-zero `u64` | terminal reply를 source lifecycle 안의 대기 항목과 연결한다. Operation identity를 대신하지 않는다 |
 
-```text
-SubmitResult 보내기(..., out 호출식별자, ...)
-```
+Terminal 결과가 필요한 operation의 `OperationId`는 두 word가 모두 0일 수 없다. Registry와
+durable completion record는 두 word 전체를 보존한다. `low` word만 key로 쓰면 서로 다른
+operation을 같은 항목으로 판단할 수 있다. `ReplyRouteId`도 source owner lifecycle 안에서
+대기 중인 request 사이에 중복할 수 없지만, 이 값만으로 relocation 이후의 terminal
+deduplication을 판단하지 않는다.
 
-식별자를 submit이 돌려주므로 **submit 전에 대기 등록을 할 수 없다.** 보내고 나서
-식별자를 받아 등록하는 사이에, 대상이 같은 process 안이면 응답이 먼저 처리될 수 있다.
-등록되지 않은 응답을 "모르는 호출의 응답"으로 보고 버리면 그 호출은 timeout까지
-완료되지 않는다.
-
-이 문제는 Core가 만든 것이 아니다. Core는 요청·응답 상관을 제공하지 않는다고 명시하고
-있으며([Core runtime 경계 「2」](https://zlink-systems.github.io/zlink/ko/spec/core/09-runtime-boundary/)),
-호출 식별자와 완료 표는 전적으로 Framework가 소유한다. 따라서 이 순서는 Framework가
-정할 수 있다.
-
-### 결정
-
-**응답을 맞출 값은 보내는 쪽이 먼저 만들고, 대기 등록을 마친 뒤에 submit한다.**
-
-여기서 말하는 값은 **응답 상관 값**이다. operation 자체를 가리키는 식별자와는 다른
-값이며, 완료 표에 등록하는 것은 전자다. 둘을 하나로 다루면 홉을 거칠 때마다 새 상관
-값을 만드는 규칙([Request correlation 「2. 두 식별자의 역할」](../spec/27-flow-correlation.ko.md#2-두-식별자의-역할))이 깨진다.
+보내는 runtime은 `OperationId`와, reply 경로가 필요한 경우 `ReplyRouteId`를 먼저 만든다.
+그런 다음 full `OperationId`를 key로 pending completion entry와 dispatcher 자리를
+등록하고, `ReplyRouteId`가 가리키는 reply 경로도 확정한다. 그 다음에만 transport에
+submit한다. Wire request는 두 값을 각각의 field로 보존하며 한 값을 다른 값의 별칭으로
+사용하지 않는다.
 
 ```mermaid
-flowchart LR
-    A["① 응답 상관 값을 만든다"] --> B["② 완료 표에 등록한다"]
-    B --> C["③ 전송에 제출한다"]
-    C --> D["④ 응답이 도착한다"]
-    D --> E["등록이 이미 있으므로<br/>먼저 도착이 성립하지 않는다"]
+sequenceDiagram
+    participant S as Source runtime
+    participant P as Completion · reply-route registry
+    participant T as Transport
+    S->>S: OperationId와 ReplyRouteId를 만든다
+    S->>P: full OperationId와 reply route, dispatcher 자리를 등록한다
+    S->>T: 등록이 끝난 request를 submit한다
+    T-->>P: terminal reply가 도착한다
+    P->>P: exact entry를 atomic하게 꺼낸다
+    P-->>S: 새 execution turn에 completion을 전달한다
 ```
 
-이 순서면 응답이 아무리 빨라도 **등록보다 먼저 도착할 수 없다.** 응답은 요청이 나간
-뒤에만 생기고, 요청은 등록 뒤에만 나가기 때문이다.
-
-Mesh node 표면은 응답 상관 값을 submit의 출력이 아니라 **입력**으로 받는다. operation
-식별자는 이 표면에 등장하지 않는다.
-
-<a id="무엇이-함께-사라지는가"></a>
-### 입력 방식에서 필요 없는 추가 상태
-
-응답 상관 값을 입력으로 받으면 먼저 도착이 불가능하므로 다음 상태를 만들 필요가 없다.
-
-| 불필요한 상태 | 추가 비용 |
-|---|---|
-| 먼저 도착한 응답 보관 자리 | 완료마다 map 조회가 하나 더 발생한다 |
-| 보관 자리와 대기 표 사이의 경쟁 처리 | 양쪽을 교차 확인하는 코드 |
-| 보관 자리 한도와 초과 처리 | 한도 관리와 그 초과 경로 |
-
-완료는 hot path다. 여기서 맵 조회 하나를 줄이는 것은 구조를 단순하게 만들면서 동시에
-빨라지는, 드문 종류의 개선이다.
-
-<a id="그때까지의-규칙"></a>
-### 출력 전용 surface가 요구하는 규칙
-
-응답 상관 값을 출력으로만 돌려주는 surface는 먼저 도착한 응답을 보관하는 자리가 필요하다.
-이 구조를 사용하면 다음 규칙을 모두 지켜야 하므로 canonical 입력 방식보다 복잡하다.
-
-- 보관 자리는 **한도를 둔다.**
-- 한도를 넘으면 **관찰 가능한 실패로 끝낸다.** 보관 자리는 source runtime이 소유한
-  **한도 있는 자원**이므로 오류 kind는 `CapacityExceeded`다
-  ([Framework 오류 모델 「5. `Request` 완료와 실패」](../spec/32-framework-error-model.ko.md#5-request-완료와-실패)).
-  응답을 조용히 버리면 기다리던 caller는 실제 원인 대신 timeout만 관찰한다.
-- 보관 자리와 대기 표 두 곳이 있으므로 **양쪽을 다 관찰한 경로가 전달을 책임진다.**
-  이 규칙이 없으면 응답이 두 자리 사이에서 사라진다 — 넣는 쪽은 "표에 없으니 보관하자",
-  등록하는 쪽은 "보관 자리에 없으니 기다리자"가 동시에 성립한다.
-
-응답 보관 자리와 이동 중 보류 자리는 서로 다른 자원이다. 이동 중 보류 자리에는
-relocation 자체가 정하는 record 수나 byte 상한이 없다
-([Host Relocate와 Shutdown 「9. 대기 중인 message, timer와 session을 옮긴다」](../spec/28-graceful-drain-handoff.ko.md#9-대기-중인-message-timer와-session을-옮긴다)).
-
-응답 보관 자리는 **호출을 시작한 runtime**이 자기 자원으로 소유한다. 이동 중 보류 자리는
-**이동 중인 상대 쪽**이 message 연속성을 유지하기 위해 관리한다. 호출자가 어느 대상을
-재시도할지 판단할 수 있도록 두 자원과 그 오류를 구분해야 한다.
+이 순서에서는 대상이 같은 process에 있어 즉시 응답해도 등록보다 reply가 먼저 처리되지
+않는다. 따라서 먼저 도착한 응답을 위한 별도 보관 map과, 그 map을 pending table과
+교차 확인하는 경쟁 처리가 필요하지 않다.
 
 ## 4. 수락한 뒤에는 다시 보내지 않는다
 
@@ -194,9 +154,9 @@ socket의 송신 큐이므로 같은 완료 경계를 가리킨다. 문서와 �
   버리지 않는다. 진행 중 operation과 대기·실행 중 callback의 합은 4,096개를 넘지 않는다.
 - Dispatcher는 callback마다 thread를 만들지 않는 process 공유 lane이며, shutdown에서 수락한
   callback을 모두 실행한다.
-- 호출 식별자가 submit의 입력이며, 등록이 submit보다 먼저 일어난다.
-- 보관 자리를 유지하는 동안에는, 가득 찬 상태에서 도착한 응답이 조용히 사라지지 않고
-  caller가 결과를 관찰한다.
+- Completion table은 wire `OperationId`의 두 `u64` word 전체를 key로 사용하고,
+  `ReplyRouteId`는 별도 reply 경로 identity로 유지한다.
+- Full operation identity, reply route와 dispatcher 자리를 등록한 뒤 request를 submit한다.
 - 전송이 수락한 뒤 연결이 끊겨도 runtime이 다른 대상에 다시 보내지 않는다.
 - 완료 확정 방식이 runtime 안에서 하나다.
 - 취소·시간 초과·종료 분류가 오류 메시지 문자열에 의존하지 않는다.

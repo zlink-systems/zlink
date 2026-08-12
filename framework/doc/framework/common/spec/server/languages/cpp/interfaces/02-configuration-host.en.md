@@ -1247,7 +1247,7 @@ registration surface.
 - Spot/Actor registration is put on the owner `mesh_node_builder_t`.
 
 The meaning of claim progress during drain is owned by
-[Graceful Drain §5](../../../../28-graceful-drain-handoff.en.md).
+[Graceful Drain §5](../../../../30-host-relocation-flow.en.md).
 
 ## 9. Configuration Lookup
 

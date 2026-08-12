@@ -6,12 +6,19 @@ import type {
 import { operationRequiresReply } from './service-runtime-contracts';
 import { ServiceWireProtocolError } from './service-wire-m6a-codec';
 import { isCanonicalWireReplyTerminal } from '../framework-errors-internal';
+import { routingIdsEqual } from '../routing-id';
 import {
   SERVICE_WIRE_MAGIC,
   SERVICE_WIRE_MAJOR,
   ServiceWireCommand,
   ServiceWireFlag
 } from './service-wire-constants.generated';
+import {
+  decodeCanonicalServiceWireText,
+  decodeServiceWireRoutingId,
+  encodeCanonicalServiceWireText,
+  encodeServiceWireRoutingId
+} from './service-wire-binary-primitives';
 
 const PREFIX_SIZE = 5;
 const MAGIC_0 = SERVICE_WIRE_MAGIC[0];
@@ -266,7 +273,7 @@ export interface ServiceActorRouteFence {
   readonly actor: ServiceActorRef;
   readonly targetNodeGeneration: bigint;
   readonly authorityOwnerGeneration: bigint;
-  readonly ownerLeaseGeneration?: bigint;
+  readonly ownerLeaseGeneration: bigint;
 }
 
 /**
@@ -2284,7 +2291,8 @@ function actorFence(value: ServiceActorRouteFence): Buffer {
     actorRef(value.actor),
     rid(value.actor.nodeRid, 'targetNodeRid'),
     u64(value.targetNodeGeneration),
-    u64(value.authorityOwnerGeneration)
+    u64(value.authorityOwnerGeneration),
+    u64(value.ownerLeaseGeneration)
   );
 }
 
@@ -2397,7 +2405,8 @@ function spotRef(value: ServiceSpotRef): Buffer {
 }
 
 function rid(value: string, name: string): Buffer {
-  return sized8(value, name);
+  const bytes = encodeServiceWireRoutingId(value, name, 0xff, outOfRange);
+  return concat(Buffer.of(bytes.byteLength), bytes);
 }
 
 function text8(value: string, name: string): Buffer {
@@ -2405,10 +2414,7 @@ function text8(value: string, name: string): Buffer {
 }
 
 function text16(value: string, name: string): Buffer {
-  const bytes = Buffer.from(value);
-  if (bytes.byteLength < 1 || bytes.byteLength > 0xffff || bytes.includes(0)) {
-    throw new RangeError(`${name} must be 1..65535 UTF-8 bytes without NUL.`);
-  }
+  const bytes = encodeCanonicalServiceWireText(value, name, 0xffff, outOfRange);
   return concat(u16(bytes.byteLength), bytes);
 }
 
@@ -2417,10 +2423,7 @@ function optionalRid(value: string | undefined): Buffer {
 }
 
 function sized8(value: string, name: string): Buffer {
-  const bytes = Buffer.from(value);
-  if (bytes.byteLength < 1 || bytes.byteLength > 255 || bytes.includes(0)) {
-    throw new RangeError(`${name} must be 1..255 UTF-8 bytes without NUL.`);
-  }
+  const bytes = encodeCanonicalServiceWireText(value, name, 0xff, outOfRange);
   return concat(Buffer.of(bytes.byteLength), bytes);
 }
 
@@ -2480,6 +2483,10 @@ function concat(...parts: readonly Uint8Array[]): Buffer {
 
 function fail(message: string): never {
   throw new ServiceWireProtocolError(message);
+}
+
+function outOfRange(message: string): never {
+  throw new RangeError(message);
 }
 
 class Reader {
@@ -2843,10 +2850,9 @@ class Reader {
     const length = this.u16('relocationReference.length');
     if (length < 1 || length > 4096) fail('relocationReference length is invalid.');
     this.need(length, 'relocationReference');
-    const value = this.bytes.subarray(this.offset, this.offset + length).toString();
+    const bytes = this.bytes.subarray(this.offset, this.offset + length);
     this.offset += length;
-    if (value.includes('\0')) fail('relocationReference contains NUL.');
-    return value;
+    return decodeCanonicalServiceWireText(bytes, 'relocationReference', fail);
   }
 
   applicationPayload(): NonNullable<ServiceMaintenanceReplyRelay['payload']> {
@@ -2867,7 +2873,7 @@ class Reader {
   }
 
   rid(name: string): string {
-    return this.sized8(name);
+    return this.opaque8(name);
   }
 
   text8(name: string): string {
@@ -2878,20 +2884,18 @@ class Reader {
     const length = this.u16(`${name}.length`);
     if (length === 0) fail(`${name} must not be empty.`);
     this.need(length, name);
-    const value = this.bytes.subarray(this.offset, this.offset + length).toString();
+    const bytes = this.bytes.subarray(this.offset, this.offset + length);
     this.offset += length;
-    if (value.includes('\0')) fail(`${name} contains NUL.`);
-    return value;
+    return decodeCanonicalServiceWireText(bytes, name, fail);
   }
 
   optionalRid(name: string): string | undefined {
     const length = this.u8(`${name}.length`);
     if (length === 0) return undefined;
     this.need(length, name);
-    const value = this.bytes.subarray(this.offset, this.offset + length).toString();
+    const bytes = this.bytes.subarray(this.offset, this.offset + length);
     this.offset += length;
-    if (value.includes('\0')) fail(`${name} contains NUL.`);
-    return value;
+    return decodeServiceWireRoutingId(bytes, name, 0xff, fail);
   }
 
   actorRef(name: string): ServiceActorRef {
@@ -2906,9 +2910,9 @@ class Reader {
     const length = this.u8('sourceActorId.length');
     if (length === 0) return undefined;
     this.need(length, 'sourceActorId');
-    const actorId = this.bytes.subarray(this.offset, this.offset + length).toString();
+    const bytes = this.bytes.subarray(this.offset, this.offset + length);
     this.offset += length;
-    if (actorId.includes('\0')) fail('sourceActorId contains NUL.');
+    const actorId = decodeCanonicalServiceWireText(bytes, 'sourceActorId', fail);
     return {
       nodeRid: '',
       actorId,
@@ -2929,7 +2933,8 @@ class Reader {
     return {
       actor: { ...actor, nodeRid: targetNodeRid },
       targetNodeGeneration: this.nonZeroU64('targetNodeGeneration'),
-      authorityOwnerGeneration: this.nonZeroU64('authorityOwnerGeneration')
+      authorityOwnerGeneration: this.nonZeroU64('authorityOwnerGeneration'),
+      ownerLeaseGeneration: this.nonZeroU64('ownerLeaseGeneration')
     };
   }
 
@@ -3013,10 +3018,18 @@ class Reader {
     const length = this.u8(`${name}.length`);
     if (length === 0) fail(`${name} must not be empty.`);
     this.need(length, name);
-    const value = this.bytes.subarray(this.offset, this.offset + length).toString();
+    const bytes = this.bytes.subarray(this.offset, this.offset + length);
     this.offset += length;
-    if (value.includes('\0')) fail(`${name} contains NUL.`);
-    return value;
+    return decodeCanonicalServiceWireText(bytes, name, fail);
+  }
+
+  private opaque8(name: string): string {
+    const length = this.u8(`${name}.length`);
+    if (length === 0) fail(`${name} must not be empty.`);
+    this.need(length, name);
+    const bytes = this.bytes.subarray(this.offset, this.offset + length);
+    this.offset += length;
+    return decodeServiceWireRoutingId(bytes, name, 0xff, fail);
   }
 
   private need(count: number, name: string): void {
@@ -3032,7 +3045,7 @@ export function decodeServiceWireFrozenRecord(bytes: Uint8Array): ServiceWireFro
   if (sourceKind < 1 || sourceKind > 4) fail('Invalid frozen source kind.');
   const sourceReader = reader.body16('frozen source');
   const source: ServiceWireRequestSourceFence = {
-    nodeRid: sourceReader.text8('sourceNodeRid'),
+    nodeRid: sourceReader.rid8('sourceNodeRid'),
     nodeGeneration: sourceReader.nonZeroU64('sourceNodeGeneration'),
     ownerId: sourceReader.text8('sourceOwnerId'),
     leaseGeneration: sourceReader.nonZeroU64('sourceOwnerLeaseGeneration')
@@ -3050,7 +3063,7 @@ export function decodeServiceWireFrozenRecord(bytes: Uint8Array): ServiceWireFro
       generation: sourceReader.nonZeroU64('sourceActorGeneration')
     };
     if (sourceKind === 4) {
-      sourceSessionRid = sourceReader.text8('sourceSessionRid');
+      sourceSessionRid = sourceReader.rid8('sourceSessionRid');
       sourceBindingGeneration = sourceReader.nonZeroU64('sourceBindingGeneration');
       sourceSessionSequence = sourceReader.nonZeroU64('sourceSessionSequence');
     }
@@ -3154,7 +3167,7 @@ export function encodeServiceWireFrozenActorApplicationRecord(input: {
 function sameFrozenRecordSummary(left: ServiceWireFrozenRecord, right: ServiceWireFrozenRecord): boolean {
   return left.recordKind === right.recordKind
     && left.sourceKind === right.sourceKind
-    && left.source.nodeRid === right.source.nodeRid
+    && routingIdsEqual(left.source.nodeRid, right.source.nodeRid)
     && left.source.nodeGeneration === right.source.nodeGeneration
     && left.source.ownerId === right.source.ownerId
     && left.source.leaseGeneration === right.source.leaseGeneration
@@ -3255,6 +3268,15 @@ class FrozenReader {
     return this.textBody(length, name);
   }
 
+  rid8(name: string): string {
+    const length = this.u8(`${name}.length`);
+    if (length === 0) fail(`${name} must not be empty.`);
+    this.need(length, name);
+    const bytes = this.bytes.subarray(this.offset, this.offset + length);
+    this.offset += length;
+    return decodeServiceWireRoutingId(bytes, name, 0xff, fail);
+  }
+
   text16(name: string, allowEmpty = false): string {
     const length = this.u16(`${name}.length`);
     if (!allowEmpty && length === 0) fail(`${name} must not be empty.`);
@@ -3339,7 +3361,7 @@ class FrozenReader {
 
   private spotRoute(): void {
     this.spotIdentity();
-    this.text8('targetNodeRid');
+    this.rid8('targetNodeRid');
     this.nonZeroU64('targetNodeGeneration');
     this.nonZeroU64('expectedAuthorityOwnerGeneration');
     this.nonZeroU64('expectedOwnerLeaseGeneration');
@@ -3347,7 +3369,7 @@ class FrozenReader {
 
   private actorRoute(): void {
     this.actorIdentity();
-    this.text8('targetNodeRid');
+    this.rid8('targetNodeRid');
     this.nonZeroU64('targetNodeGeneration');
     this.nonZeroU64('expectedAuthorityOwnerGeneration');
     this.nonZeroU64('expectedOwnerLeaseGeneration');
@@ -3407,7 +3429,7 @@ class FrozenReader {
     const kind = this.u8('instanceRouteKind');
     if (kind < 1 || kind > 2) fail('Invalid Instance route kind.');
     const body = this.body16('Instance route');
-    body.text8('targetNodeRid');
+    body.rid8('targetNodeRid');
     body.nonZeroU64('targetNodeGeneration');
     body.text8('targetSpotId');
     if (kind === 1) {
@@ -3459,10 +3481,9 @@ class FrozenReader {
 
   private textBody(length: number, name: string): string {
     this.need(length, name);
-    const value = Buffer.from(this.bytes.subarray(this.offset, this.offset + length)).toString();
+    const bytes = this.bytes.subarray(this.offset, this.offset + length);
     this.offset += length;
-    if (value.includes('\0')) fail(`${name} contains NUL.`);
-    return value;
+    return decodeCanonicalServiceWireText(bytes, name, fail);
   }
 
   private need(length: number, name: string): void {

@@ -6,7 +6,10 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <PackageReference Include="Google.Protobuf"/>
+        <PackageReference Include="Grpc.Tools" PrivateAssets="all"/>
         <PackageReference Include="MessagePack"/>
+        <Protobuf Include="Contracts\registration_codec.proto" GrpcServices="None"/>
     </ItemGroup>
 
     <ItemGroup>

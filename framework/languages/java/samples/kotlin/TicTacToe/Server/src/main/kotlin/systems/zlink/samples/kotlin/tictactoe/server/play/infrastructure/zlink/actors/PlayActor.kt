@@ -7,7 +7,7 @@ import systems.zlink.framework.actors.ZLinkActorContext
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.JoinGameFailedNotify
-import systems.zlink.samples.kotlin.tictactoe.shared.contracts.JoinGameRes
+import systems.zlink.samples.kotlin.tictactoe.shared.contracts.JoinGameNotify
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.PlayerInfo
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.TicTacToeGameJoinRes
 
@@ -72,11 +72,11 @@ class PlayActor(
                     roomId = reply.state.roomId
                 }
                 joinGame(roomId.orEmpty())
-                context.boundSession().send(JoinGameRes(reply.state)).submit()
+                context.boundSession().send(JoinGameNotify(reply.state)).submit()
             }
             is ZLinkActorJoinCompletion.Rejected ->
                 context.boundSession()
-                    .send(JoinGameFailedNotify(roomId.orEmpty(), "Rejected", false))
+                    .send(JoinGameFailedNotify(roomId.orEmpty(), "Rejected"))
                     .submit()
             is ZLinkActorJoinCompletion.Failed ->
                 context.boundSession()
@@ -84,7 +84,6 @@ class PlayActor(
                         JoinGameFailedNotify(
                             roomId.orEmpty(),
                             completion.kind().name,
-                            false,
                         ),
                     )
                     .submit()

@@ -63,6 +63,7 @@ export interface RawServiceIngressRecord {
   readonly command: number;
   readonly flags: number;
   readonly sourceRoutingId: string;
+  readonly sourceNodeGeneration?: bigint;
   readonly sourceRoute?: Uint8Array;
   readonly requestSequence?: bigint;
   readonly reply?: (parts: readonly Uint8Array[]) => void;
@@ -856,6 +857,7 @@ export class RawServiceMeshRuntime {
         command: header.command,
         flags: header.flags,
         sourceRoutingId: received.sourceRid,
+        sourceNodeGeneration: peer.descriptor.lifecycleGeneration,
         sourceRoute: received.sourceRoute,
         ...(received.reply === undefined ? {} : { reply: received.reply }),
         ...(received.requestSeq === undefined ? {} : { requestSequence: received.requestSeq }),

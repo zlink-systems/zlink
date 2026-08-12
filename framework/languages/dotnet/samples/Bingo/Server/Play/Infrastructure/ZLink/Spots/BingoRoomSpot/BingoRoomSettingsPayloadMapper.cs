@@ -6,11 +6,15 @@ namespace Bingo.Server.Play.Infrastructure.ZLink.Spots.BingoRoomSpot;
 
 internal static class BingoRoomSettingsPayloadMapper
 {
-    public static BingoRoomSettings FromMessage(ZLinkMessage request, BingoRoomSettings defaultSettings)
+    public static BingoRoomSettings FromCreateRequest(
+        ZLinkMessage request,
+        BingoRoomSettings defaultSettings)
     {
         if (request.IsEmpty) return defaultSettings;
 
-        var payload = request.Decode<BingoRoomSettingsPayload>();
+        var payload = request.Decode<BingoRoomCreateReq>().Settings
+                      ?? throw new InvalidOperationException(
+                          "Bingo room create request is missing settings.");
         return new BingoRoomSettings(
             payload.RoomName,
             payload.Mode,
@@ -20,7 +24,10 @@ internal static class BingoRoomSettingsPayloadMapper
             payload.HasObservedRoomId ? payload.ObservedRoomId : null);
     }
 
-    public static BingoRoomSettingsPayload ToPayload(BingoRoomSettings settings)
+    public static BingoRoomCreateReq ToCreateRequest(BingoRoomSettings settings) =>
+        new() { Settings = ToPayload(settings) };
+
+    private static BingoRoomSettingsPayload ToPayload(BingoRoomSettings settings)
     {
         var payload = new BingoRoomSettingsPayload
         {

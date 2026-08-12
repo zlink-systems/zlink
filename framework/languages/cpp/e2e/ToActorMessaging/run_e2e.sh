@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/../redis-common.sh"
+zlink_cpp_e2e_acquire_run_lock "${BASH_SOURCE[0]}" "$@"
+zlink_cpp_e2e_install_cleanup_trap
 BUILD_DIR="$SCRIPT_DIR/../../build"
 SCENARIO="all"
 E2E_START_ORDER="forward"
@@ -66,21 +68,7 @@ SESSION_A_RID="session-a"
 SESSION_B_RID="session-b"
 
 reserve_ports() {
-  python3 - <<'PY'
-import socket
-sockets = []
-ports = []
-try:
-    for _ in range(17):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        ports.append(sock.getsockname()[1])
-    print(" ".join(str(port) for port in ports))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  zlink_cpp_e2e_allocate_ports 17
 }
 
 read -r actor_http caller_http actor_spot caller_spot actor_pub caller_pub \
@@ -266,7 +254,7 @@ cleanup() {
     fi
   done
   if [[ -n "$REDIS_CONTAINER" && "$REDIS_CONTAINER_OWNED" == "1" ]]; then
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   rm -rf "${CONFIG_DIR:-}"
   if [[ "$cleanup_failed" -ne 0 && "$status" -eq 0 ]]; then

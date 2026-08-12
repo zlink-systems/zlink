@@ -3,7 +3,7 @@ import type { ClientOptions } from '../Support/client-options';
 import { getJson, postJson } from '../../../http-client';
 import { ensure } from '../Support/scenario-assert';
 
-interface ObjectReply {
+interface ObjectRes {
   readonly spotId: string;
   readonly operationId: string;
   readonly payload: string;
@@ -24,7 +24,7 @@ export async function runSFC5(options: ClientOptions): Promise<void> {
     try {
       await Promise.all(spotIds.slice(offset, offset + 40).map(async (spotId) => {
       const operationId = `${spotId}-operation`;
-      const reply = await postJson<ObjectReply>(options.consumerUrl, '/object/request', {
+      const reply = await postJson<ObjectRes>(options.consumerUrl, '/object/request', {
         spotId,
         operationId,
         payload: `payload-${spotId}`

@@ -82,6 +82,28 @@ A runtime that keeps the native buffer releases that buffer; one that
 moved it into managed memory releases the copy. In either case,
 **release happens after handler completion.**
 
+Ownership moves in one direction only. If the payload must outlive the binding receive
+callback, the boundary copies it once or transfers ownership. After enqueue, the Framework
+owns the encoded payload. The decoded value passed to a handler carries neither ownership of
+native storage nor responsibility for releasing it.
+
+```mermaid
+stateDiagram-v2
+    [*] --> bindingStorage: binding receive succeeds
+    bindingStorage --> frameworkStorage: copy or transfer ownership at the boundary
+    frameworkStorage --> handlerValue: admitted · turn acquired · decoded
+    bindingStorage --> released: validation or boundary conversion fails
+    frameworkStorage --> released: admission reject · timeout · cancellation · shutdown
+    handlerValue --> released: handler succeeds or fails
+    released --> [*]
+```
+
+Every terminal path converges on the same release point. Handler exceptions, timeout,
+cancellation, shutdown, and relocation cleanup neither skip release nor perform it twice. In
+C++ and .NET this transition is visible as `close`/`Dispose`. A mapping such as a JVM managed
+object or Node `Buffer`, where garbage collection performs the physical release, still keeps
+the same logical release point at which the queue and handler stop retaining the storage.
+
 ## 5. What's Passed To The Handler
 
 **Decision — the handler receives a deserialized owned object. It
@@ -300,6 +322,8 @@ distinguishing a non-JSON payload and suppresses the required
 - A pending payload isn't touched by the transport layer or the
   application.
 - Payload release happens after handler completion.
+- Every terminal path—success, rejection, exception, timeout, cancellation, and shutdown—
+  releases payload ownership exactly once.
 - The handler doesn't receive native storage or release
   responsibility.
 - A message rejected for queue-full or owner mismatch isn't deserialized.

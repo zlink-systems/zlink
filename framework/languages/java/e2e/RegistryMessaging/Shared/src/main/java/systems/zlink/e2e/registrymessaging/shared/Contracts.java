@@ -54,6 +54,10 @@ public final class Contracts {
     public record RouteReq(String value) {
     }
 
+    @ZLinkPacket("ScenarioRouteMsg")
+    public record RouteMsg(String value) {
+    }
+
     public record RouteRes(
         String value,
         String targetRid,
@@ -111,7 +115,7 @@ public final class Contracts {
         IdentityRef spotFound) {
     }
 
-    @ZLinkPacket("RegistryMessagingIdentityActorPing")
+    @ZLinkPacket("IdentityActorPingReq")
     public record IdentityActorPingReq(String marker) {
     }
 
@@ -123,7 +127,7 @@ public final class Contracts {
         String meshName) {
     }
 
-    @ZLinkPacket("RegistryMessagingIdentitySpotPing")
+    @ZLinkPacket("IdentitySpotPingReq")
     public record IdentitySpotPingReq(String marker) {
     }
 
@@ -154,10 +158,16 @@ public final class Contracts {
         IdentitySpotPingRes spot) {
     }
 
-    public record RequestOutcome(
+    public record ProfileCallRes(
         String value,
         String providerRid,
         boolean failed,
         String errorKind) {
+    }
+
+    public record IdentityActorCreateReq(String marker) {
+    }
+
+    public record IdentitySpotCreateReq(String marker) {
     }
 }

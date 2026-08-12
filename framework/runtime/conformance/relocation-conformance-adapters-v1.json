@@ -1,0 +1,268 @@
+{
+  "fixture": "zlink.framework.relocation-conformance-adapters",
+  "version": 1,
+  "behaviorFixture": "framework/runtime/conformance/relocation-behavior-v1.json",
+  "boundSessionFixture": "framework/runtime/conformance/bound-session-relocation-v1.json",
+  "e2eInventory": "framework/runtime/conformance/relocation-e2e-scenarios-v1.json",
+  "requiredLanguages": ["cpp", "dotnet", "java", "kotlin", "node"],
+  "requiredBehaviorGroups": [
+    "commonLifecycle",
+    "actorJoin",
+    "actorJoinMilestones",
+    "actorHostHandoff",
+    "actorBoundSession",
+    "actorMessageFollow",
+    "spotWholeSpot",
+    "spotPerActor",
+    "instanceSpot",
+    "statePolicies",
+    "failureAndIdempotency"
+  ],
+  "evidenceContract": {
+    "testIdentifierMatch": "exactLiteralSubstringInSource",
+    "directFixtureConsumerRequiredFields": ["path", "fixtureReference"],
+    "directFixtureReferenceMatch": "exactLiteralSubstringInSource"
+  },
+  "focusedCommandTimeoutSeconds": 600,
+  "adapters": [
+    {
+      "language": "cpp",
+      "fixtureConnection": "mapped",
+      "coverage": {
+        "commonLifecycle": "partial",
+        "actorJoin": "partial",
+        "actorJoinMilestones": "partial",
+        "actorHostHandoff": "e2eRequired",
+        "actorBoundSession": "partial",
+        "actorMessageFollow": "partial",
+        "spotWholeSpot": "e2eRequired",
+        "spotPerActor": "e2eRequired",
+        "instanceSpot": "e2eRequired",
+        "statePolicies": "pending",
+        "failureAndIdempotency": "partial"
+      },
+      "evidence": [
+        {
+          "path": "framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp",
+          "behaviorGroups": [
+            "actorJoinMilestones",
+            "actorBoundSession",
+            "actorMessageFollow",
+            "failureAndIdempotency"
+          ],
+          "tests": [
+            "verify_remote_session_route_ack_and_atomic_switch",
+            "verify_message_follow_route_admission_and_suppression"
+          ]
+        },
+        {
+          "path": "framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp",
+          "behaviorGroups": [
+            "commonLifecycle",
+            "actorJoin",
+            "failureAndIdempotency"
+          ],
+          "tests": ["verify_deferred_actor_join_completion_converges_in_process"]
+        }
+      ],
+      "focusedCommands": [
+        ["cmake", "--build", "build", "--parallel", "1", "--target", "test_cpp_framework_m6b_runtime", "test_cpp_framework_execution"],
+        ["ctest", "--test-dir", "build", "--output-on-failure", "-R", "^(test_cpp_framework_m6b_runtime|test_cpp_framework_execution)$"]
+      ]
+    },
+    {
+      "language": "dotnet",
+      "fixtureConnection": "direct",
+      "fixtureConsumer": {
+        "path": "framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/RelocationBehaviorConformanceTests.cs",
+        "fixtureReference": "relocation-behavior-v1.json"
+      },
+      "coverage": {
+        "commonLifecycle": "partial",
+        "actorJoin": "partial",
+        "actorJoinMilestones": "partial",
+        "actorHostHandoff": "partial",
+        "actorBoundSession": "partial",
+        "actorMessageFollow": "partial",
+        "spotWholeSpot": "partial",
+        "spotPerActor": "partial",
+        "instanceSpot": "e2eRequired",
+        "statePolicies": "partial",
+        "failureAndIdempotency": "partial"
+      },
+      "evidence": [
+        {
+          "path": "framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/RelocationBehaviorConformanceTests.cs",
+          "behaviorGroups": ["commonLifecycle", "actorJoin"],
+          "tests": ["ActorJoin_runtime_preserves_observable_order_and_exact_callback_counts"]
+        },
+        {
+          "path": "framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/SessionRelocationBarrierTests.cs",
+          "behaviorGroups": ["actorJoinMilestones", "actorBoundSession", "failureAndIdempotency"],
+          "tests": ["Three_Node_Command_44_Unblocks_The_Pending_Target_Push_Exactly_Once"]
+        },
+        {
+          "path": "framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/RelocationRuntimeTests.cs",
+          "behaviorGroups": [
+            "commonLifecycle",
+            "actorJoin",
+            "actorHostHandoff",
+            "actorMessageFollow",
+            "spotWholeSpot",
+            "spotPerActor",
+            "instanceSpot",
+            "statePolicies",
+            "failureAndIdempotency"
+          ],
+          "tests": [
+            "TargetAdmissionOpensOnlyAfterPublicationAndOnlyOnce",
+            "AggregateRelocationPublishesWholeSpotParticipantsWithOneCommit",
+            "ExactActorRelocationAdapterCapturesAndRestoresSameActorInstance",
+            "Aggregate_prepare_is_idempotent_only_for_exact_canonical_request",
+            "PrecommitAbortRestoresSourceBeforeRouteUnseal",
+            "SpotMessageFollowPreservesRemainingDeadlineAndDropsLateReply"
+          ]
+        }
+      ],
+      "focusedCommands": [
+        ["dotnet", "test", "tests/Zlink.Framework.UnitTests/Zlink.Framework.UnitTests.csproj", "--filter", "FullyQualifiedName~RelocationBehaviorConformanceTests|FullyQualifiedName~SessionRelocationBarrierTests|FullyQualifiedName~RelocationRuntimeTests"]
+      ]
+    },
+    {
+      "language": "java",
+      "fixtureConnection": "direct",
+      "fixtureConsumer": {
+        "path": "framework/languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/runtime/actors/ZLinkActorJoinRelocationBehaviorContractTest.java",
+        "fixtureReference": "relocation-behavior-v1.json"
+      },
+      "coverage": {
+        "commonLifecycle": "partial",
+        "actorJoin": "partial",
+        "actorJoinMilestones": "partial",
+        "actorHostHandoff": "e2eRequired",
+        "actorBoundSession": "partial",
+        "actorMessageFollow": "partial",
+        "spotWholeSpot": "e2eRequired",
+        "spotPerActor": "e2eRequired",
+        "instanceSpot": "e2eRequired",
+        "statePolicies": "pending",
+        "failureAndIdempotency": "partial"
+      },
+      "evidence": [
+        {
+          "path": "framework/languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/runtime/actors/ZLinkActorJoinRelocationBehaviorContractTest.java",
+          "behaviorGroups": [
+            "commonLifecycle",
+            "actorJoin",
+            "actorJoinMilestones",
+            "actorBoundSession",
+            "failureAndIdempotency"
+          ],
+          "tests": ["publicDeferredJoinProducesObservableRelocationTraceAndRetainsCallbackPush"]
+        },
+        {
+          "path": "framework/languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/runtime/spots/ZLinkDeferredJoinCompletionAuthorityTest.java",
+          "behaviorGroups": [
+            "commonLifecycle",
+            "actorJoin",
+            "actorBoundSession",
+            "failureAndIdempotency"
+          ],
+          "tests": ["relocationPublishesReadyBeforeCleanupAndRoutesCallbackPushExactlyOnce"]
+        },
+        {
+          "path": "framework/languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/runtime/messaging/ZLinkAdmissionRuntimeTest.java",
+          "behaviorGroups": ["actorBoundSession", "failureAndIdempotency"],
+          "tests": [
+            "detachedAdmissionOutlivesThePublicDeadlineAndRetainsDeliveryOwnership",
+            "supersededRouteTerminatesRetainedPayloadExactlyOnce",
+            "shutdownTerminatesDetachedRoutePayloadExactlyOnce"
+          ]
+        },
+        {
+          "path": "framework/languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/runtime/actors/ZLinkActorSpotJoinCallTest.java",
+          "behaviorGroups": ["actorMessageFollow"],
+          "tests": ["sourceCleanupSkipsTheAlreadyCompletedMessageFollowRouteLookup"]
+        }
+      ],
+      "focusedCommands": [
+        ["./gradlew", "--no-daemon", "--no-parallel", "--max-workers=1", ":zlink-framework-core:test", "--tests", "systems.zlink.framework.runtime.actors.ZLinkActorJoinRelocationBehaviorContractTest", "--tests", "systems.zlink.framework.runtime.spots.ZLinkDeferredJoinCompletionAuthorityTest", "--tests", "systems.zlink.framework.runtime.messaging.ZLinkAdmissionRuntimeTest", "--tests", "systems.zlink.framework.runtime.actors.ZLinkActorSpotJoinCallTest"]
+      ]
+    },
+    {
+      "language": "kotlin",
+      "fixtureConnection": "mapped",
+      "coverage": {
+        "commonLifecycle": "partial",
+        "actorJoin": "partial",
+        "actorJoinMilestones": "pending",
+        "actorHostHandoff": "e2eRequired",
+        "actorBoundSession": "e2eRequired",
+        "actorMessageFollow": "e2eRequired",
+        "spotWholeSpot": "e2eRequired",
+        "spotPerActor": "e2eRequired",
+        "instanceSpot": "e2eRequired",
+        "statePolicies": "pending",
+        "failureAndIdempotency": "partial"
+      },
+      "evidence": [
+        {
+          "path": "framework/languages/java/zlink-framework-kotlin/src/test/kotlin/systems/zlink/framework/kotlin/KotlinDeferredActorJoinCompletionTest.kt",
+          "behaviorGroups": ["commonLifecycle", "actorJoin", "failureAndIdempotency"],
+          "tests": ["suspendingActorReceivesTheDurableAcceptedIdentityAndGeneration"]
+        }
+      ],
+      "focusedCommands": [
+        ["./gradlew", "--no-daemon", "--no-parallel", "--max-workers=1", ":zlink-framework-kotlin:test", "--tests", "systems.zlink.framework.kotlin.KotlinDeferredActorJoinCompletionTest"]
+      ]
+    },
+    {
+      "language": "node",
+      "fixtureConnection": "direct",
+      "fixtureConsumer": {
+        "path": "framework/languages/node/test/contract/spot-manager.test.js",
+        "fixtureReference": "relocation-behavior-v1.json"
+      },
+      "coverage": {
+        "commonLifecycle": "partial",
+        "actorJoin": "partial",
+        "actorJoinMilestones": "partial",
+        "actorHostHandoff": "e2eRequired",
+        "actorBoundSession": "partial",
+        "actorMessageFollow": "e2eRequired",
+        "spotWholeSpot": "e2eRequired",
+        "spotPerActor": "e2eRequired",
+        "instanceSpot": "e2eRequired",
+        "statePolicies": "pending",
+        "failureAndIdempotency": "partial"
+      },
+      "evidence": [
+        {
+          "path": "framework/languages/node/test/contract/spot-manager.test.js",
+          "behaviorGroups": ["commonLifecycle", "actorJoin"],
+          "tests": ["formal Actor Join runtime port preserves fixture order through target Ready before Session route"]
+        },
+        {
+          "path": "framework/languages/node/test/contract/actor-manager.test.js",
+          "behaviorGroups": ["commonLifecycle", "actorJoin"],
+          "tests": ["Core source leave submission releases the target fence before its callback result"]
+        },
+        {
+          "path": "framework/languages/node/test/contract/stream-runtime.test.js",
+          "behaviorGroups": ["actorJoinMilestones", "actorBoundSession", "failureAndIdempotency"],
+          "tests": [
+            "OnJoinedActor public bound-session push waits for route convergence and is delivered exactly once",
+            "late predecessor terminal cannot release a successor bound-session queue",
+            "concurrent identical ownership terminals commit and drain one exact seal once",
+            "concurrent identical abort terminals reopen and drain one exact seal once"
+          ]
+        }
+      ],
+      "focusedCommands": [
+        ["node", "--test", "--test-name-pattern=formal Actor Join runtime port preserves fixture order through target Ready before Session route", "test/contract/spot-manager.test.js"],
+        ["node", "--test", "--test-name-pattern=Core source leave submission releases the target fence before its callback result", "test/contract/actor-manager.test.js"],
+        ["node", "--test", "--test-name-pattern=OnJoinedActor public bound-session push waits for route convergence and is delivered exactly once|late predecessor terminal cannot release a successor bound-session queue|concurrent identical ownership terminals commit and drain one exact seal once|concurrent identical abort terminals reopen and drain one exact seal once", "test/contract/stream-runtime.test.js"]
+      ]
+    }
+  ]
+}

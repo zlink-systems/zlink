@@ -71,6 +71,17 @@ struct custom_payload_codec_extension_t
               return payload_t{std::stoi (text.substr (std::string ("avro:").size ()))};
           },
           "application/avro");
+        registrar.template add_serializer<missing_t> (
+          [] (const missing_t &payload) {
+              return zlink::framework::encoded_payload_t::from_string (
+                "avro-missing:" + std::to_string (payload.value));
+          },
+          [] (const zlink::framework::encoded_payload_t &payload) {
+              const std::string text = payload.to_string ();
+              return missing_t{std::stoi (
+                text.substr (std::string ("avro-missing:").size ()))};
+          },
+          "application/avro");
     }
 };
 
@@ -358,6 +369,17 @@ int main ()
     if (config_serializers.get<payload_t> ().content_type ()
         != "application/avro") {
         return 16;
+    }
+    const auto grouped_encoded =
+      config_serializers.get<missing_t> ().serialize ({10});
+    const auto grouped_decoded =
+      config_serializers.get<missing_t> ().deserialize (grouped_encoded);
+    if (custom_encoded.to_string () != "avro:9"
+        || grouped_encoded.to_string () != "avro-missing:10"
+        || grouped_decoded.value != 10
+        || config_serializers.get<missing_t> ().content_type ()
+             != "application/avro") {
+        return 30;
     }
     if (config_serializers.get<payload_t> ().deserialize (custom_encoded).value != 9) {
         return 9;

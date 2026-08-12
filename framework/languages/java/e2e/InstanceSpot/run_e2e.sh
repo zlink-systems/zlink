@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$(cd "${SCRIPT_DIR}/../.." && pwd)/e2e-redis-common.sh"
+zlink_e2e_initialize java "$0" "$@"
 
 SCENARIO="${1:-all}"
 START_ORDER="forward"
@@ -112,7 +113,7 @@ cleanup() {
     kill -9 "${pid}" >/dev/null 2>&1 || true
   done
   if [[ -n "${REDIS_CONTAINER}" ]]; then
-    docker rm -fv "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "${REDIS_CONTAINER}" || true
   fi
   rm -rf "${config_dir}"
   wait >/dev/null 2>&1 || true
@@ -122,24 +123,7 @@ trap cleanup EXIT
 
 reserve_ports() {
   local count="$1"
-  python3 - "${count}" <<'PY'
-import socket
-import sys
-
-count = int(sys.argv[1])
-sockets = []
-ports = []
-try:
-    for _ in range(count):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        ports.append(sock.getsockname()[1])
-    print(" ".join(str(port) for port in ports))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  zlink_e2e_reserve_ports "${count}"
 }
 
 http_endpoint() {
@@ -155,7 +139,7 @@ port_of() {
 }
 
 gradle_run() {
-  ../../gradlew \
+  zlink_e2e_gradle_build_locked ../../gradlew \
     -PzlinkE2eBuildDir="${e2e_build_dir}" \
     --project-cache-dir "${gradle_cache_dir}" \
     --no-daemon \
@@ -291,11 +275,9 @@ setup_topology() {
     echo "reusing existing fixture distributions owner=$(owner_bin) client=$(client_bin)"
   fi
 
-  redis_port="$(reserve_ports 1)"
   if ! zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
       "zlink-redis-java-e2e-instance-spot" \
-      "redis:7.2-alpine" \
-      "127.0.0.1:${redis_port}:6379"; then
+      "redis:7.2-alpine"; then
     topology_reason="Redis container could not be started"
     return 3
   fi

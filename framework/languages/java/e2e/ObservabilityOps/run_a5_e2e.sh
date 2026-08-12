@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../e2e-redis-common.sh"
+zlink_e2e_initialize java "$0" "$@"
 
 run_id="$(date +%Y%m%d-%H%M%S)-$$"
 log_dir="${SCRIPT_DIR}/logs/${run_id}-obs-a5"
@@ -20,7 +21,7 @@ cleanup() {
   done
   wait >/dev/null 2>&1 || true
   if [[ -n "${redis_container}" ]]; then
-    docker rm -fv "${redis_container}" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "${redis_container}" || true
   fi
   rm -rf "${config_dir}"
   exit "${status}"
@@ -33,20 +34,7 @@ if [[ -z "${ZLINK_LIBRARY_PATH:-}" && -f "${default_core_lib}" ]]; then
   export ZLINK_LIBRARY_PATH="${default_core_lib}"
 fi
 
-read -r route_port http_port <<<"$(python3 - <<'PY'
-import socket
-sockets = []
-try:
-    for _ in range(2):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-    print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
-)"
+read -r route_port http_port <<<"$(zlink_e2e_reserve_ports 2)"
 route_endpoint="tcp://127.0.0.1:${route_port}"
 http_endpoint="http://127.0.0.1:${http_port}"
 location_key_prefix="zlink:e2e:observability-a5:${run_id}"
@@ -54,7 +42,8 @@ location_key_prefix="zlink:e2e:observability-a5:${run_id}"
 zlink_redis_start_scoped_assign redis_container redis_port \
   "zlink-redis-java-e2e-observability-a5" "redis:7.2-alpine"
 
-"${SCRIPT_DIR}/../../gradlew" -p "${SCRIPT_DIR}/A5" \
+zlink_e2e_gradle_build_locked "${SCRIPT_DIR}/../../gradlew" \
+  -p "${SCRIPT_DIR}/A5" \
   -PzlinkE2eBuildDir="${build_dir}" --no-daemon --no-parallel --max-workers=1 \
   :Server:installDist :Client:installDist
 

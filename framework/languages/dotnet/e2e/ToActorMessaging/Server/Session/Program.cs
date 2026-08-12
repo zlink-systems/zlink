@@ -96,12 +96,12 @@ internal sealed class ToActorSession(
 internal sealed class BindActorHandler(
     IZLinkActorManager actorDirectory,
     SessionEvidence evidence)
-    : IZLinkSessionPacketHandler<IZLinkSessionContext, BindActorRequest>
+    : IZLinkSessionPacketHandler<IZLinkSessionContext, BindActorReq>
 {
     public async ValueTask HandleAsync(
         IZLinkSessionContext context,
         ZLinkSessionDispatchContext dispatch,
-        BindActorRequest request,
+        BindActorReq request,
         CancellationToken cancellationToken)
     {
         _ = dispatch;
@@ -112,7 +112,7 @@ internal sealed class BindActorHandler(
         evidence.Add(
             $"actor-bound|session={context.SessionId}|actor={actor.ActorId}"
             + $"|node={actor.NodeRid}|generation={actor.ObjectGeneration}");
-        await context.Client.Reply(new BindActorReply(actor.ActorId, actor.NodeRid.ToString(), actor.ObjectGeneration))
+        await context.Client.Reply(new BindActorRes(actor.ActorId, actor.NodeRid.ToString(), actor.ObjectGeneration))
             .Async(cancellationToken);
     }
 }

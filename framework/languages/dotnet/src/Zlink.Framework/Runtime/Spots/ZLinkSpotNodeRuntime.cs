@@ -157,7 +157,9 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         if (node is IZLinkBackendSessionRelocationBarrier sessionBarrier)
         {
             _sessionRelocationBarrierOwner =
-                new ZLinkSessionRelocationBarrierOwner(runtime);
+                new ZLinkSessionRelocationBarrierOwner(
+                    runtime,
+                    frameworkRegistration.Locations.ResolveStore());
             sessionBarrier.SetSessionRelocationBarrierTarget(
                 _sessionRelocationBarrierOwner);
         }
@@ -247,6 +249,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                 locationLifecycle.OwnerToken);
             node.SetInstanceSpotActivationTarget(_instanceSpotActivationTarget);
         }
+        WireNodeRouteDispatch();
     }
 
     internal ZLinkServiceWireCodec.RequestSourceFence LocalRequestSource =>
@@ -283,7 +286,21 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             .BeginStaging(relocationId, targetAttemptGeneration);
     }
 
-    internal ZLinkMeshNodeStartupState? StartupState { get; }
+    internal ZLinkMeshNodeStartupState? StartupState { get; private set; }
+
+    internal void UpdateStartupState(ZLinkMeshNodeStartupState startupState)
+    {
+        ArgumentNullException.ThrowIfNull(startupState);
+        if (StartupState is not { } current
+            || current.RoutingId != startupState.RoutingId
+            || !string.Equals(
+                current.EntrySpotId,
+                startupState.EntrySpotId,
+                StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "The finalized MeshNode startup state does not match its claim.");
+        StartupState = startupState;
+    }
 
     internal string EntrySpotId { get; }
 
@@ -779,19 +796,12 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         attachment?.Dispose();
     }
 
-    public void ApplyEntrySpotIdBeforeBind()
-    {
-        if (string.IsNullOrEmpty(EntrySpotId)) return;
-
-        _entrySpot = Node.EntrySpot();
-        _entrySpot.SetRoutingId(
-            ZLinkSpotId.ToNativeRoutingId(EntrySpotId));
-    }
-
     public async ValueTask InitializeEntrySpotAsync()
     {
-        WireNodeRouteDispatch();
         _entrySpot ??= Node.EntrySpot();
+        if (!string.IsNullOrEmpty(EntrySpotId))
+            _entrySpot.SetRoutingId(
+                ZLinkSpotId.ToNativeRoutingId(EntrySpotId));
         await TrackEntrySpotLocationAsync().ConfigureAwait(false);
         if (_instanceSpotActivationTarget is not null)
             await _instanceSpotActivationTarget.RecoverAsync(_stopSource.Token)

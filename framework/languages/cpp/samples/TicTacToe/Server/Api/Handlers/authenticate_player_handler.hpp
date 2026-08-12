@@ -4,6 +4,7 @@
 #include "../../Configuration/sample_names.hpp"
 #include "../../../Shared/Contracts/messages.hpp"
 
+#include <stdexcept>
 #include <string>
 
 namespace zlink::samples::tictactoe
@@ -20,12 +21,10 @@ class authenticate_player_handler_t
     authenticate_player_res_t handle (const authenticate_player_req_t &request)
     {
         if (request.access_token.empty ()) {
-            return {false, {}, "actor id must not be empty"};
+            throw std::invalid_argument ("Authentication token is empty.");
         }
         const int wins = request.access_token == sample_names_t::x_actor_id ? 99 : 0;
-        return {true,
-                {request.access_token, request.access_token, sample_names_t::required_level, wins},
-                ""};
+        return {{request.access_token, request.access_token, sample_names_t::required_level, wins}};
     }
 };
 // --8<-- [end:doc-request-handler]

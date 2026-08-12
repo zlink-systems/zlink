@@ -151,6 +151,52 @@ class relocation_ready_adapter_t final
     static inline std::atomic_bool restored{false};
 };
 
+class configuration_actor_t final : public zlink::framework::actor_t
+{
+  public:
+    explicit configuration_actor_t (zlink::framework::actor_context_t context) :
+        _context (std::move (context))
+    {
+    }
+
+    zlink::framework::actor_context_t &context () noexcept override { return _context; }
+    const zlink::framework::actor_context_t &context () const noexcept override { return _context; }
+
+  private:
+    zlink::framework::actor_context_t _context;
+};
+
+class configuration_actor_factory_t final :
+    public zlink::framework::actor_factory_t<configuration_actor_t>
+{
+  public:
+    zlink::framework::task_t<std::shared_ptr<configuration_actor_t>>
+    create (zlink::framework::actor_context_t context, std::stop_token) override
+    {
+        co_return std::make_shared<configuration_actor_t> (std::move (context));
+    }
+};
+
+class configuration_instance_spot_t final : public zlink::framework::instance_spot_t
+{
+  public:
+    explicit configuration_instance_spot_t (
+      zlink::framework::instance_spot_context_t context) :
+        _context (std::move (context))
+    {
+    }
+
+    zlink::framework::instance_spot_context_t &context () noexcept override { return _context; }
+    const zlink::framework::instance_spot_context_t &context () const noexcept override
+    {
+        return _context;
+    }
+    void configure () override {}
+
+  private:
+    zlink::framework::instance_spot_context_t _context;
+};
+
 class relocation_source_service_t final
     : public zlink::framework::hosted_service_t
 {
@@ -261,6 +307,112 @@ bool wait_until (
         std::this_thread::sleep_for (
           std::chrono::milliseconds (1));
     return condition ();
+}
+
+bool expect_not_configured (
+  std::string_view label,
+  std::function<void (zlink::framework::zlink_framework_options_t &)> configure)
+{
+    auto app = zlink::framework::app_t::create ();
+    try {
+        app.add_zlink_framework (std::move (configure));
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        if (error.kind () == zlink::framework::framework_error_kind_t::not_configured)
+            return true;
+        std::cerr << label << " must fail with not_configured\n";
+        return false;
+    }
+    std::cerr << label << " must fail before listener startup\n";
+    return false;
+}
+
+bool verify_object_store_configuration_preflight ()
+{
+    if (!expect_not_configured (
+          "Object Client without Location Store",
+          [] (zlink::framework::zlink_framework_options_t &options) {
+              options.add_route_mesh ("missing-client-location")
+                .set_object_role (zlink::framework::object_role_t::client)
+                .listen ("inproc://missing-client-location");
+          }))
+        return false;
+    if (!expect_not_configured (
+          "Object Server without Location Store",
+          [] (zlink::framework::zlink_framework_options_t &options) {
+              options.add_route_mesh ("missing-server-location")
+                .set_object_role (zlink::framework::object_role_t::server)
+                .listen ("inproc://missing-server-location");
+          }))
+        return false;
+
+    auto location_store = std::make_shared<
+      zlink::framework::runtime::in_memory_location_store_t> ();
+    if (!expect_not_configured (
+          "relocatable Actor without Relocation Store",
+          [location_store] (zlink::framework::zlink_framework_options_t &options) {
+              options.add_location_store (location_store);
+              options.add_route_mesh ("missing-actor-relocation")
+                .listen ("inproc://missing-actor-relocation")
+                .add_actor_factory<configuration_actor_t, configuration_actor_factory_t> (
+                  "configuration-actor", std::make_shared<configuration_actor_factory_t> (),
+                  [] (auto &factory) { factory.recreate_on_relocation (); });
+          }))
+        return false;
+    if (!expect_not_configured (
+          "relocatable User Spot without Relocation Store",
+          [location_store] (zlink::framework::zlink_framework_options_t &options) {
+              options.add_location_store (location_store);
+              options.add_route_mesh ("missing-spot-relocation")
+                .listen ("inproc://missing-spot-relocation")
+                .add_spot_factory<relocation_ready_spot_t> (
+                  "configuration-spot",
+                  [] (zlink::framework::spot_context_t context) {
+                      return std::make_shared<relocation_ready_spot_t> (std::move (context));
+                  },
+                  [] (auto &factory) { factory.recreate_on_relocation (); });
+          }))
+        return false;
+    if (!expect_not_configured (
+          "Instance Spot without Relocation Store",
+          [location_store] (zlink::framework::zlink_framework_options_t &options) {
+              options.add_location_store (location_store);
+              options.add_route_mesh ("missing-instance-relocation")
+                .listen ("inproc://missing-instance-relocation")
+                .add_instance_spot_factory<configuration_instance_spot_t> (
+                  "configuration-instance",
+                  [] (zlink::framework::instance_spot_context_t context) {
+                      return std::make_shared<configuration_instance_spot_t> (
+                        std::move (context));
+                  },
+                  [] (auto &factory) { factory.disable_relocation (); });
+          }))
+        return false;
+
+    auto disabled = zlink::framework::app_t::create ();
+    try {
+        disabled.add_zlink_framework (
+          [location_store] (zlink::framework::zlink_framework_options_t &options) {
+              options.add_location_store (location_store);
+              auto mesh = options.add_route_mesh ("disabled-relocation");
+              mesh.listen ("inproc://disabled-relocation");
+              mesh.add_actor_factory<configuration_actor_t, configuration_actor_factory_t> (
+                "disabled-actor", std::make_shared<configuration_actor_factory_t> (),
+                [] (auto &factory) { factory.disable_relocation (); });
+              mesh.add_spot_factory<relocation_ready_spot_t> (
+                "disabled-spot",
+                [] (zlink::framework::spot_context_t context) {
+                    return std::make_shared<relocation_ready_spot_t> (std::move (context));
+                },
+                [] (auto &factory) { factory.disable_relocation (); });
+          });
+    }
+    catch (const std::exception &error) {
+        std::cerr << "disabled factories must not require a Relocation Store: " << error.what ()
+                  << '\n';
+        return false;
+    }
+    return true;
 }
 
 void configure_relocation_app (
@@ -540,6 +692,121 @@ bool verify_relocation_retry_after_target_unavailable ()
            && target_exit_code == 0 && source_exit_code == 0;
 }
 
+bool verify_relocating_status_closes_admission ()
+{
+    auto location_store = std::make_shared<
+      zlink::framework::runtime::in_memory_location_store_t> ();
+    auto relocation_store = std::make_shared<
+      zlink::framework::runtime::in_memory_relocation_store_t> ();
+    auto submit_ready = std::make_shared<std::atomic_bool> (false);
+
+    auto source = zlink::framework::app_t::create ();
+    configure_relocation_app (
+      source, location_store, relocation_store,
+      "host-status-relocation-source");
+    auto source_service = std::make_unique<relocation_source_service_t> (
+      source, submit_ready);
+    auto *source_service_view = source_service.get ();
+    source.add_hosted_service (std::move (source_service));
+    char source_program[] = "host-status-relocation-source";
+    char *source_arguments[] = {source_program, nullptr};
+    int source_exit_code = -1;
+    std::thread source_thread (
+      [&] { source_exit_code = source.run (1, source_arguments); });
+    if (!wait_until (
+          [&] {
+              return source.is_ready ()
+                     && source_service_view->created_spot.load (
+                       std::memory_order_acquire);
+          },
+          std::chrono::seconds (7))) {
+        source.request_stop ();
+        source_thread.join ();
+        std::cerr << "status source must create its application-signaled Spot\n";
+        return false;
+    }
+
+    auto target = zlink::framework::app_t::create ();
+    configure_relocation_app (
+      target, location_store, relocation_store,
+      "host-status-relocation-target");
+    char target_program[] = "host-status-relocation-target";
+    char *target_arguments[] = {target_program, nullptr};
+    int target_exit_code = -1;
+    std::thread target_thread (
+      [&] { target_exit_code = target.run (1, target_arguments); });
+    if (!wait_until ([&] { return target.is_ready (); },
+                     std::chrono::seconds (2))) {
+        target.request_stop ();
+        source.request_stop ();
+        target_thread.join ();
+        source_thread.join ();
+        std::cerr << "status relocation target must reach Serving\n";
+        return false;
+    }
+
+    auto source_services = source.advanced ().services ().build_provider ();
+    auto target_services = target.advanced ().services ().build_provider ();
+    auto &source_mesh = source_services.get_required<
+      zlink::framework::route_mesh_runtime_t> ();
+    auto &target_mesh = target_services.get_required<
+      zlink::framework::route_mesh_runtime_t> ();
+    const auto peers_ready = wait_until (
+      [&] {
+          return source_mesh.snapshot ("host-relocation-mesh").ready_peer_count > 0
+                 && target_mesh.snapshot ("host-relocation-mesh").ready_peer_count > 0;
+      },
+      std::chrono::seconds (7));
+    auto &runtime = source_services.get_required<
+      zlink::framework::framework_runtime_t> ();
+    auto relocation = source.relocate (
+      {.mode = zlink::framework::relocation_mode_t::planned_maintenance,
+       .deadline = std::chrono::milliseconds (250)});
+    zlink::framework::framework_runtime_status_t relocating_status;
+    const auto observed_relocating = wait_until (
+      [&] {
+          relocating_status = runtime.status ();
+          return relocating_status.state
+                 == zlink::framework::framework_runtime_state_t::relocating;
+      },
+      std::chrono::milliseconds (100));
+    const auto result = relocation.result ().value ();
+    const auto serving_status = runtime.status ();
+    source_services.close ();
+    target_services.close ();
+
+    const auto target_stopped =
+      target.shutdown (std::chrono::seconds (2)).result ().value ();
+    const auto source_stopped =
+      source.shutdown (std::chrono::seconds (2)).result ().value ();
+    target_thread.join ();
+    source_thread.join ();
+
+    const bool passed =
+      peers_ready && observed_relocating
+      && !relocating_status.is_ready
+      && !relocating_status.accepting_work
+      && result.outcome == zlink::framework::relocation_outcome_t::blocked
+      && result.reason == zlink::framework::relocation_reason_t::deadline_exceeded
+      && serving_status.state
+           == zlink::framework::framework_runtime_state_t::serving
+      && serving_status.is_ready && serving_status.accepting_work
+      && target_stopped.outcome
+           == zlink::framework::termination_outcome_t::stopped
+      && source_stopped.outcome
+           == zlink::framework::termination_outcome_t::stopped
+      && target_exit_code == 0 && source_exit_code == 0;
+    if (!passed) {
+        std::cerr << "Relocating status must close admission and restore it only in Serving: "
+                  << "peers=" << peers_ready
+                  << " observed=" << observed_relocating
+                  << " accepting=" << relocating_status.accepting_work
+                  << " outcome=" << static_cast<int> (result.outcome)
+                  << " reason=" << static_cast<int> (result.reason) << '\n';
+    }
+    return passed;
+}
+
 bool verify_application_signaled_relocation ()
 {
     relocation_ready_spot_t::completion_count.store (
@@ -692,7 +959,13 @@ bool verify_application_signaled_relocation ()
 
 int main ()
 {
+    if (!verify_object_store_configuration_preflight ())
+        return EXIT_FAILURE;
+
     if (!verify_relocation_retry_after_target_unavailable ())
+        return EXIT_FAILURE;
+
+    if (!verify_relocating_status_closes_admission ())
         return EXIT_FAILURE;
 
     if (std::getenv (
@@ -714,6 +987,7 @@ int main ()
           "manual RouteMesh topology",
           [] (zlink::framework::zlink_framework_options_t &options) {
               auto node = options.add_route_mesh ("retire-manual-mesh");
+              node.set_object_role (zlink::framework::object_role_t::none);
               node.channel_name ("retire-manual-channel").client ();
               node.set_routing_id (
                     zlink::routing_id_t::from ("retire-manual-node"))
@@ -728,6 +1002,7 @@ int main ()
           "automatic RouteMesh without a replacement",
           [] (zlink::framework::zlink_framework_options_t &options) {
               auto node = options.add_route_mesh ("retire-single-mesh");
+              node.set_object_role (zlink::framework::object_role_t::none);
               node.channel_name ("retire-single-channel").client ();
               node.set_routing_id (
                     zlink::routing_id_t::from ("retire-single-node"))

@@ -85,7 +85,7 @@ public final class BingoEntrySpot implements ZLinkEntrySpot<PlayerActor> {
                 .build();
         return spots.getOrCreate(observerSpotId, SampleNames.RoomSpotType)
             .inMesh(SampleNames.Mesh)
-            .request(settingsPayload)
+            .request(BingoMessages.bingoRoomCreateReq(settingsPayload))
             .submit()
             .thenApply(ignored -> {
                 actor.context().joinSpot(

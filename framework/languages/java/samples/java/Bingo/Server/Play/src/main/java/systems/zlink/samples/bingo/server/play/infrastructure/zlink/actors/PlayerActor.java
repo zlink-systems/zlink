@@ -8,7 +8,6 @@ import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
-import systems.zlink.samples.bingo.shared.contracts.BingoMessages;
 import systems.zlink.samples.bingo.shared.contracts.Messages;
 
 public final class PlayerActor implements ZLinkActor {
@@ -81,9 +80,7 @@ public final class PlayerActor implements ZLinkActor {
             matchedRoomId = joined.getState().getRoomId();
         }
         joinRoom(matchedRoomId);
-        return context.boundSession()
-            .send(BingoMessages.matchBingoRes(matchedRoomId, joined.getState()))
-            .submit();
+        return CompletableFuture.completedFuture(null);
     }
 
     public String roomId() {

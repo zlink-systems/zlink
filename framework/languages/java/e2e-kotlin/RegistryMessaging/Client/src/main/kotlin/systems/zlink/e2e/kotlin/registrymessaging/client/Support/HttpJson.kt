@@ -1,6 +1,5 @@
-package Support
+package systems.zlink.e2e.kotlin.registrymessaging.client.Support
 
-import systems.zlink.e2e.kotlin.registrymessaging.client.Support
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import java.net.URI

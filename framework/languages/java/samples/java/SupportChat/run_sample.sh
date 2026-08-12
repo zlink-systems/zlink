@@ -4,7 +4,30 @@ set +m
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/../../runner-common.sh"
+zlink_sample_configure_port_pool java
 ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kts)
+
+RUN_DIR=""
+LOG_DIR=""
+REDIS_CONTAINER=""
+pids=()
+
+on_exit() {
+  local status="$?"
+  trap - EXIT
+  if [[ "$status" != "0" && -n "${LOG_DIR}" ]]; then
+    for log in "$LOG_DIR"/*.log; do
+      [[ -f "$log" ]] || continue
+      echo "===== $log =====" >&2
+      tail -n 200 "$log" >&2 || true
+    done
+  fi
+  cleanup
+  [[ -z "${RUN_DIR}" ]] || rm -rf "$RUN_DIR"
+  exit "$status"
+}
+trap on_exit EXIT
+
 cd "$ROOT_DIR"
 
 if grep -R --include='*.java' -n '\.connectRouter(' Server; then
@@ -45,27 +68,9 @@ api_http_endpoint="http://127.0.0.1:${api_http_port}"
 support_http_endpoint="http://127.0.0.1:${support_http_port}"
 redis_key_prefix="zlink:supportchat:sample:$(date +%s):$$"
 
-REDIS_CONTAINER=""
 zlink_redis_start_scoped_assign REDIS_CONTAINER REDIS_PORT \
   "zlink-redis-java-sample-supportchat" "redis:7.2-alpine"
 redis_endpoint="127.0.0.1:$REDIS_PORT"
-
-pids=()
-on_exit() {
-  local status="$?"
-  trap - EXIT
-  if [[ "$status" != "0" ]]; then
-    for log in "$LOG_DIR"/*.log; do
-      [[ -f "$log" ]] || continue
-      echo "===== $log =====" >&2
-      tail -n 200 "$log" >&2 || true
-    done
-  fi
-  cleanup
-  rm -rf "$RUN_DIR"
-  exit "$status"
-}
-trap on_exit EXIT
 
 api_config="$RUN_DIR/api.properties"
 session_config="$RUN_DIR/session.properties"
@@ -97,7 +102,7 @@ EOF
 chmod 0600 "$api_config" "$session_config" "$support_config"
 
 cd "$ROOT_DIR"
-../../gradlew --settings-file standalone.settings.gradle.kts \
+zlink_sample_gradle_locked ../../gradlew --settings-file standalone.settings.gradle.kts \
   --no-daemon --no-parallel --max-workers=1 \
   :Server:Api:installDist \
   :Server:Session:installDist \

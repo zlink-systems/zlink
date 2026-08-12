@@ -509,8 +509,8 @@ stay at the source, moving to the target only when every bucket is sufficient?
   and all Actor state remain at the source with the same generations. In the sufficient variant, the
   Spot and every Actor process at the target with the same pre-move state and generations. A partial
   member move is not allowed.
-- Contract basis: [Relocation Units And Concurrency Limits](../spec/28-graceful-drain-handoff.en.md#7-relocation-units-and-concurrency-limits)
-  and [SpotWide User Spot](../spec/28-graceful-drain-handoff.en.md#85-spotwide-user-spot)
+- Contract basis: [Relocation Units And Concurrency Limits](../spec/30-host-relocation-flow.en.md#7-relocation-units-and-concurrency-limits)
+  and [SpotWide User Spot](../spec/30-host-relocation-flow.en.md#85-spotwide-user-spot)
 
 #### ST-G3 Host Relocation With A PerActor Spot
 
@@ -543,8 +543,8 @@ during a Spot move?
   Relocate call, which has no target argument.
 - Verification: The successful sequence order is preserved per Actor, and the same operation ID does
   not duplicate across source and target.
-- Contract basis: [SpotWide User Spot Handoff](../spec/28-graceful-drain-handoff.en.md#85-spotwide-user-spot)
-  and [Moving Pending Messages](../spec/28-graceful-drain-handoff.en.md#9-moving-pending-messages-timers-and-sessions)
+- Contract basis: [SpotWide User Spot Handoff](../spec/30-host-relocation-flow.en.md#85-spotwide-user-spot)
+  and [Moving Pending Messages](../spec/30-host-relocation-flow.en.md#9-moving-pending-messages-timers-and-sessions)
 
 #### ST-G5 Relocation Interruption Measurement
 
@@ -578,7 +578,7 @@ and target?
   gate is opened.
 - Verification: The existing handler finishes at the source, and the follow-up runs exactly once at
   the target. The combined active count never exceeds 1.
-- Contract basis: [SpotWide User Spot Handoff](../spec/28-graceful-drain-handoff.en.md#85-spotwide-user-spot)
+- Contract basis: [SpotWide User Spot Handoff](../spec/30-host-relocation-flow.en.md#85-spotwide-user-spot)
 
 ### Track H — Deferred Join And Handler Context
 

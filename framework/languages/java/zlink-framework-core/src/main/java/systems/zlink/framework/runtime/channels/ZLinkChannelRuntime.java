@@ -37,9 +37,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -151,6 +153,7 @@ public final class ZLinkChannelRuntime
     private final ZLinkChannelRouteDispatcher routeDispatcher;
     private ZLinkFanoutLocationRuntime fanoutLocationRuntime;
     private ZLinkManualFanoutRuntime manualFanoutRuntime;
+    private ZLinkClientServerLocationRuntime clientServerLocationRuntime;
     private volatile Supplier<ZLinkFrameworkRuntimeState> hostState =
         () -> ZLinkFrameworkRuntimeState.SERVING;
     private final ZLinkClientServerRuntime
@@ -180,6 +183,14 @@ public final class ZLinkChannelRuntime
         thread.setDaemon(true);
         return thread;
     });
+    // Provider/backend work can block without occupying the deadline thread.
+    // Each periodic source below owns one admission bit, so this shared
+    // virtual-thread lane receives at most one queued or running task from
+    // that source regardless of timer frequency.
+    private final ExecutorService infrastructureExecutor =
+        Executors.newThreadPerTaskExecutor(Thread.ofVirtual()
+            .name("zlink-java-channel-infrastructure-", 0)
+            .factory());
     private volatile boolean running = true;
 
     public record AutoConnectSurface(
@@ -476,6 +487,7 @@ public final class ZLinkChannelRuntime
         this.callRuntime = new ZLinkChannelCallRuntime(
             dispatchErrors.flow(),
             timeoutExecutor,
+            infrastructureExecutor,
             defaultRequestTimeout,
             replyDecoder,
             this::sendToSpotViaRouterChannel,
@@ -548,7 +560,7 @@ public final class ZLinkChannelRuntime
             }
             attachProcessLocalClientServerAdmissions(
                 registration.channels());
-            timeoutExecutor.scheduleAtFixedRate(
+            scheduleInfrastructureAtFixedRate(
                 () -> sockets.tickClientServerLiveness(System.nanoTime()),
                 100,
                 100,
@@ -563,7 +575,7 @@ public final class ZLinkChannelRuntime
             .map(ChannelRegistration::name)
             .toList();
         if (!fanoutPublishers.isEmpty()) {
-            timeoutExecutor.scheduleAtFixedRate(
+            scheduleInfrastructureAtFixedRate(
                 () -> publishFanoutBeacons(fanoutPublishers),
                 0,
                 ZLinkClassicFanoutLiveness.DEFAULT_BEACON_INTERVAL.toMillis(),
@@ -601,8 +613,11 @@ public final class ZLinkChannelRuntime
                 context,
                 adapterOptions,
                 sockets,
+                timeoutExecutor,
+                infrastructureExecutor,
                 configuration.options().pollingInterval(),
                 1000);
+        clientServerLocationRuntime = runtime;
         List<AutoConnectSurface> surfaces = autoConnectSurfaces();
         configuration.install(
             new ZLinkClientServerRuntimeConfiguration.Lifecycle() {
@@ -681,6 +696,8 @@ public final class ZLinkChannelRuntime
                 monitoring,
                 context,
                 sockets,
+                timeoutExecutor,
+                infrastructureExecutor,
                 configuration.options().pollingInterval(),
                 1000,
                 messageDispatcher::dispatchPublish);
@@ -736,6 +753,8 @@ public final class ZLinkChannelRuntime
             channelBackend,
             fanoutMonitoringBackend,
             context,
+            timeoutExecutor,
+            infrastructureExecutor,
             messageDispatcher::dispatchPublish);
         manualFanoutRuntime = runtime;
         for (ChannelRegistration channel : manualChannels) {
@@ -1399,24 +1418,30 @@ public final class ZLinkChannelRuntime
                 targetSpotGeneration,
                 spotParts);
         }
+        Duration timeout = effectiveRouteTimeout(
+            defaultRequestTimeout(routerChannelId));
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        callRuntime.track(result, timeout);
+        if (result.isDone()) {
+            return result;
+        }
         try {
             ZLinkBackendSpotRouteBridge bridge = requireSpotRouteBridge(routerChannelId);
             List<byte[]> bridgePayloads = spotParts.stream()
                 .map(Message::toByteArray)
                 .toList();
-            CompletableFuture<Void> result = new CompletableFuture<>();
             ZLinkSpotRouteBridgeDispatcher.submitSendWithRetry(
                 bridge,
                 routerChannelId,
                 targetNodeRid,
                 targetSpotId,
                 bridgePayloads,
-                effectiveRouteTimeout(defaultRequestTimeout(routerChannelId)),
+                timeout,
                 timeoutExecutor,
+                infrastructureExecutor,
                 result);
             return result;
         } catch (RuntimeException ex) {
-            CompletableFuture<Void> result = new CompletableFuture<>();
             result.completeExceptionally(ex);
             return result;
         }
@@ -1588,24 +1613,49 @@ public final class ZLinkChannelRuntime
     @Override
     public void close() {
         beginClose();
+        CompletionStage<Void> clientServerStop =
+            CompletableFuture.completedFuture(null);
+        if (clientServerLocationRuntime != null) {
+            clientServerStop = clientServerLocationRuntime.stop();
+        }
+        CompletionStage<Void> fanoutStop =
+            CompletableFuture.completedFuture(null);
         if (fanoutLocationRuntime != null) {
-            fanoutLocationRuntime.close();
+            fanoutStop = fanoutLocationRuntime.stop();
         }
         if (manualFanoutRuntime != null) {
             manualFanoutRuntime.close();
         }
+        timeoutExecutor.shutdownNow();
         receiveLoops.close();
         spotRouteBridgeDrainLoopExecutor.shutdownNow();
         spotRouteBridgeExecutor.shutdown();
-        timeoutExecutor.shutdownNow();
+        awaitInfrastructureSettlement(
+            "ClientServer location", clientServerStop);
+        awaitInfrastructureSettlement("fanout location", fanoutStop);
+        infrastructureExecutor.shutdown();
         receiveLoops.awaitTermination();
         awaitTerminated(spotRouteBridgeDrainLoopExecutor);
         awaitTerminated(spotRouteBridgeExecutor);
         awaitTerminated(timeoutExecutor);
+        awaitTerminated(infrastructureExecutor);
         closeSpotRouteBridges();
         sockets.closeAll();
         if (ownsContext) {
             context.close();
+        }
+    }
+
+    private static void awaitInfrastructureSettlement(
+        String owner,
+        CompletionStage<Void> settlement) {
+        try {
+            settlement.toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            LOGGER.log(
+                Level.WARNING,
+                owner + " cleanup failed while closing the channel runtime",
+                failure.getCause());
         }
     }
 
@@ -1616,6 +1666,43 @@ public final class ZLinkChannelRuntime
     public void beginClose() {
         running = false;
         callRuntime.beginClose();
+    }
+
+    private void scheduleInfrastructureAtFixedRate(
+        Runnable task,
+        long initialDelay,
+        long period,
+        TimeUnit unit) {
+        AtomicBoolean admitted = new AtomicBoolean();
+        timeoutExecutor.scheduleAtFixedRate(
+            () -> signalInfrastructure(admitted, task),
+            initialDelay,
+            period,
+            unit);
+    }
+
+    private void signalInfrastructure(
+        AtomicBoolean admitted,
+        Runnable task) {
+        if (!running || !admitted.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            infrastructureExecutor.execute(() -> {
+                try {
+                    if (running) {
+                        task.run();
+                    }
+                } finally {
+                    admitted.set(false);
+                }
+            });
+        } catch (RejectedExecutionException closing) {
+            admitted.set(false);
+            if (running) {
+                throw closing;
+            }
+        }
     }
 
     static void awaitTerminated(ExecutorService executor) {

@@ -163,7 +163,8 @@ Callback 완료 전에는 보류한 application message와 timer를 실행하지
 ## 2. Handler와 outbound
 
 ```ts
-export interface ZLinkSpotHandlerRegistry {
+export interface ZLinkSpotHandlerRegistry extends ZLinkActorHandlerRegistry {
+    addHandler<THandler>(handlerType: Type<THandler>, packetName?: string): this;
     addPacket<THandler>(handlerType: Type<THandler>): this;
     addSubscribe<THandler>(handlerType: Type<THandler>, channelName: string, topic: string): this;
 }

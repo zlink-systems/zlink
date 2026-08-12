@@ -20,7 +20,7 @@ title: "Runtime 상태 조회와 운영 진단"
 소유한다. 시간에 따라 누적하거나 수집하는 수치의 이름·단위·label은
 [Runtime metrics](25-runtime-metrics.ko.md), message 한 건의 진행 기록은
 [Message flow tracing](26-message-flow-tracing.ko.md), relocation과 shutdown의 상태 전이는
-[Host relocation와 shutdown](28-graceful-drain-handoff.ko.md)이 소유한다.
+[Host relocation와 shutdown](30-host-relocation-flow.ko.md)이 소유한다.
 
 | 주체 | 책임 |
 |---|---|
@@ -105,7 +105,7 @@ Host runtime state는 다음 값으로 닫혀 있다. 표에 없는 값을 추�
 `IsReady`는 `State`가 `serving`일 때만 `true`다. `AcceptingWork`는 현재 host가 새
 application operation을 수락하는지를 나타낸다. 두 값을 별개의 조건처럼 재해석하지
 않는다. Relocation option, deadline과 result의 정확한 의미는
-[Host relocation와 shutdown](28-graceful-drain-handoff.ko.md)이 정한다.
+[Host relocation와 shutdown](30-host-relocation-flow.ko.md)이 정한다.
 
 Host status의 inbound dispatch 항목은 Framework가 수신한 application payload가 현재 얼마나 처리 중인지
 보여 준다. 값은 queue를 조회할 때마다 순회해서 만들지 않고 dispatch accounting에서 유지한 누계를 읽는다.

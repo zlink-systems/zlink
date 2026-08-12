@@ -4,8 +4,7 @@
 
 | ID | 상태 | .NET 구현 |
 |----|------|-----------|
-| TA-A1 | 구현·process 통과 | session-a connector가 actor를 bind하고 Before/After bound push를 받는 사이 caller 서버의 no-bind send/request를 실행한다. 연결만 하고 bind하지 않은 session-b connector에는 push가 도달하지 않음을 함께 확인했다. SIZE-001 변경 뒤 fresh process 증거는 `logs/20260807-183121-3907372/`이다. |
-| TA-A2 | 구현 | `TA-A2-unbound-*`가 session binding을 만들지 않은 actor에 대해 caller 서버의 no-bind send/request와 owner mailbox evidence를 검증한다. |
+| TA-A1 | 구현·process 통과 | session-a connector에 bind한 actor와 session binding이 없는 actor를 각각 검증한다. Bound actor는 Before/After push 사이 caller 서버의 no-bind send/request를 처리하고, 연결만 한 session-b에는 push가 도달하지 않는다. Unbound actor는 no-bind send/request와 owner mailbox evidence를 남기면서 binding snapshot을 만들지 않는다. SIZE-001 변경 뒤 bound variant의 fresh process 증거는 `logs/20260807-183121-3907372/`이다. |
 | TA-A3 | 구현 | actor를 먼저 만든 뒤 bind 전 no-bind send/request를 실행하고, session-b connector bind 뒤 다시 no-bind send/request와 `LateBindNotify` bound push를 검증한다. |
 | TA-A4 | 구현 | session-a connector bind와 push를 확인한 뒤 connector를 종료한다. actor가 유지되는 동안 no-bind send/request가 성공하고, 명시적 actor destroy 뒤 caller가 보관한 동일 ref request가 `ActorRouteNotFound`로 끝나는지 검증한다. |
 | TA-B1 | 구현 | live actor와 일치하지 않는 public `ActorRef`로 request를 보내 caller의 `ActorRouteNotFound`를 검증한다. one-way send는 로컬 submit 뒤 handler·lifecycle evidence와 location row가 생기지 않아 auto-create나 메시지 보관이 없음을 검증한다. |

@@ -18,7 +18,7 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 sourceSets {
-    main {
+    val main by getting {
         java.srcDir("../../../runtime/protocol/generated/jvm")
     }
     test {
@@ -35,7 +35,11 @@ sourceSets {
             "systems/zlink/framework/runtime/internal/service/**",
             "ServiceWireConstants.java"
         )
-        compileClasspath += configurations.compileClasspath.get()
+        // This source set intentionally compiles only the isolated service
+        // foundation, so the main module descriptor would export packages
+        // that are outside this partial compilation.
+        java.exclude("module-info.java")
+        compileClasspath += main.output + configurations.compileClasspath.get()
         runtimeClasspath += output + compileClasspath + configurations.runtimeClasspath.get()
     }
 
@@ -45,8 +49,10 @@ sourceSets {
             "systems/zlink/framework/runtime/binding/ZLinkJavaRawServicePortContractTest.java",
             "systems/zlink/framework/runtime/internal/service/**"
         )
-        compileClasspath += m5Foundation.output + configurations.testCompileClasspath.get()
-        runtimeClasspath += output + compileClasspath + configurations.testRuntimeClasspath.get()
+        compileClasspath += m5Foundation.output + main.output +
+            configurations.testCompileClasspath.get()
+        runtimeClasspath += output + compileClasspath +
+            configurations.testRuntimeClasspath.get()
     }
 
     configurations.named(m5FoundationTest.implementationConfigurationName) {
@@ -63,6 +69,13 @@ tasks.register<Test>("m5FoundationTest") {
         classpath = m5FoundationTest.runtimeClasspath
         useJUnitPlatform()
     }
+}
+
+tasks.named<JavaCompile>("compileM5FoundationJava") {
+    // Gradle otherwise auto-adds the main descriptor even when the partial
+    // source set excludes it.
+    modularity.inferModulePath.set(false)
+    exclude("module-info.java")
 }
 
 val verifyPublicContractModuleBoundary by tasks.registering {

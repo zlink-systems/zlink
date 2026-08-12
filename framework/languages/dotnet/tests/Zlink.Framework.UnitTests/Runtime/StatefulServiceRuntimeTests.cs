@@ -15,6 +15,7 @@ using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Spots;
 using Zlink.Framework.Runtime.Timers;
+using Zlink.Framework.LocationProvider;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -576,6 +577,7 @@ public sealed class StatefulServiceRuntimeTests
                         dispatched.TrySetResult(true);
                 }
             });
+        pump.EnsureStarted();
 
         await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal(2, dispatchCount);
@@ -627,6 +629,7 @@ public sealed class StatefulServiceRuntimeTests
                         dispatched.TrySetResult(true);
                 }
             });
+        pump.EnsureStarted();
 
         await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal([1, 2], receivedValues.ToArray());
@@ -2811,7 +2814,8 @@ public sealed class StatefulServiceRuntimeTests
     {
         ProductionUserSpot.Reset();
         var suffix = Guid.NewGuid().ToString("N");
-        var locationStore = new ZLinkInMemoryLocationStore();
+        var locationProvider = new ZLinkInMemoryProviderLocationStore();
+        var locationStore = new ZLinkProviderLocationRepository(locationProvider);
         var sourceRid = RoutingId.From($"public-source-{suffix}");
         var targetRid = RoutingId.From($"public-target-{suffix}");
         var sourceEndpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
@@ -2826,7 +2830,7 @@ public sealed class StatefulServiceRuntimeTests
             services.AddZLinkFramework(options =>
             {
                 options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
-                options.AddLocationStore(locationStore);
+                options.AddLocationStore(locationProvider);
                 var node = options.AddRouteMesh("objects")
                     .Listen(endpoint)
                     .SetRoutingIdPrefix(rid.ToString())

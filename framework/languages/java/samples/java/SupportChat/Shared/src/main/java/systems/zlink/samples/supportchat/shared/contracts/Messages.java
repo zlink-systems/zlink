@@ -96,7 +96,7 @@ public final class Messages {
     public record SendChatMessageRes(ChatMessage message, ConversationState state) {
     }
 
-    public record SetTypingReq(boolean isTyping) {
+    public record SetTypingMsg(boolean isTyping) {
     }
 
     public record CloseConversationReq(String reason) {

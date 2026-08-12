@@ -35,7 +35,7 @@ import {
   IoWorkerBatchReq,
   IoWorkerBatchRes,
   CpuWorkerAwaitMsg,
-  DeferredJoinFailureMsg,
+  DeferredJoinFailureReq,
   SelfCycleMsg,
   SelfSendMsg,
   ProbeReq
@@ -294,8 +294,8 @@ class AwaitSession implements ZLinkSession {
       return;
     }
 
-    if (dispatch.packetName === 'DeferredJoinFailureMsg') {
-      decodePacket(payload, DeferredJoinFailureMsg);
+    if (dispatch.packetName === 'DeferredJoinFailureReq') {
+      decodePacket(payload, DeferredJoinFailureReq);
       await this.relayToActor(dispatch, payload, signal);
       return;
     }

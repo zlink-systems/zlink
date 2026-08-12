@@ -1,0 +1,940 @@
+{
+  "fixture": "zlink.framework.relocation-behavior",
+  "version": 1,
+  "contractSources": [
+    {
+      "path": "framework/doc/framework/common/spec/15-spot-actor.ko.md",
+      "sections": ["4.2", "5", "6", "7", "8"]
+    },
+    {
+      "path": "framework/doc/framework/common/spec/30-host-relocation-flow.ko.md",
+      "sections": ["7", "8", "14"]
+    },
+    {
+      "path": "framework/doc/framework/common/spec/20-session-actor-dispatch.ko.md",
+      "sections": ["5", "6", "7"]
+    },
+    {
+      "path": "framework/doc/framework/common/spec/21-location-runtime.ko.md",
+      "sections": ["7"]
+    }
+  ],
+  "modelBoundary": {
+    "domain": "actor-and-spot-relocation-behavior",
+    "excludedImplementationDetails": [
+      "wireCommandNumber",
+      "functionName",
+      "lockType",
+      "threadOrEventLoopChoice"
+    ],
+    "partialOrderOnly": true
+  },
+  "eventVocabulary": [
+    "relocationRequested",
+    "sourceAdmissionSealed",
+    "sourceStateCaptured",
+    "targetTemporaryQueueOpened",
+    "targetStateRestored",
+    "ownershipCommitted",
+    "targetLifecycleCompleted",
+    "sourceMembershipLeaveSubmitted",
+    "publicJoinCompleted",
+    "savedWorkAdmitted",
+    "temporaryWorkAdmitted",
+    "targetDispatchActivated",
+    "targetReadyPublished",
+    "sourceCleanupStarted",
+    "sourceClosingCompleted",
+    "sourceCleanupCompleted",
+    "authorityCompleted",
+    "sessionRouteConverged",
+    "sessionRouteTerminalDelivered",
+    "applicationOperationSubmitted",
+    "applicationOperationDelivered",
+    "applicationOperationReplied",
+    "applicationOperationSettled",
+    "messageFollowRelayDelivered",
+    "messageFollowReplyCompleted",
+    "relayNoticeObserved",
+    "nextApplicationOperationSubmitted",
+    "nextApplicationOperationDelivered",
+    "followingApplicationOperationSubmitted",
+    "followingApplicationOperationDelivered",
+    "messageFollowExpired",
+    "firstRelocationStable",
+    "followedRequestReplied",
+    "returnOperationSubmitted",
+    "returnOperationDeliveredAtCurrentOwner",
+    "successorRelocationRequested",
+    "successorRelocationAdmitted",
+    "secondRelocationStable",
+    "roundTripSessionNotificationDelivered",
+    "latePredecessorNoticeObserved",
+    "postRoundTripRequestReplied",
+    "relocationTerminalDelivered"
+  ],
+  "commonLifecycle": {
+    "requiredEvents": [
+      "relocationRequested",
+      "sourceAdmissionSealed",
+      "sourceStateCaptured",
+      "targetTemporaryQueueOpened",
+      "targetStateRestored",
+      "ownershipCommitted",
+      "targetLifecycleCompleted",
+      "savedWorkAdmitted",
+      "temporaryWorkAdmitted",
+      "targetDispatchActivated",
+      "targetReadyPublished",
+      "sourceCleanupStarted",
+      "sourceCleanupCompleted",
+      "authorityCompleted"
+    ],
+    "requiredOrder": [
+      ["relocationRequested", "sourceAdmissionSealed"],
+      ["sourceAdmissionSealed", "sourceStateCaptured"],
+      ["sourceStateCaptured", "targetTemporaryQueueOpened"],
+      ["targetTemporaryQueueOpened", "targetStateRestored"],
+      ["targetStateRestored", "ownershipCommitted"],
+      ["ownershipCommitted", "targetLifecycleCompleted"],
+      ["targetLifecycleCompleted", "savedWorkAdmitted"],
+      ["savedWorkAdmitted", "temporaryWorkAdmitted"],
+      ["temporaryWorkAdmitted", "targetDispatchActivated"],
+      ["targetDispatchActivated", "targetReadyPublished"],
+      ["targetReadyPublished", "sourceCleanupStarted"],
+      ["sourceCleanupStarted", "sourceCleanupCompleted"],
+      ["sourceCleanupCompleted", "authorityCompleted"]
+    ],
+    "readyPredecessors": [
+      "targetLifecycleCompleted",
+      "savedWorkAdmitted",
+      "temporaryWorkAdmitted",
+      "targetDispatchActivated"
+    ],
+    "cleanupPredecessor": "targetReadyPublished",
+    "admissionCheckpoints": [
+      {
+        "name": "beforeOwnershipCommit",
+        "currentOwner": "source",
+        "admittingOwners": ["source"]
+      },
+      {
+        "name": "afterOwnershipCommitBeforeReady",
+        "currentOwner": "target",
+        "admittingOwners": []
+      },
+      {
+        "name": "afterTargetReady",
+        "currentOwner": "target",
+        "admittingOwners": ["target"]
+      }
+    ],
+    "independence": {
+      "publicJoinCompletionWaitsForSessionRouteConvergence": false,
+      "targetReadyWaitsForSessionRouteConvergence": false,
+      "targetMessageProcessingWaitsForSessionRouteConvergence": false,
+      "sourceCleanupStartsBeforeTargetReady": false
+    },
+    "identityAndAuthority": {
+      "objectGenerationStable": true,
+      "targetOwnerGenerationRelation": "strictlyGreaterThanSource",
+      "onlyCurrentOwnerAdmits": true,
+      "originalOperationIdPreserved": true,
+      "originalReplyRoutePreserved": true
+    }
+  },
+  "optionalBranches": [
+    {
+      "name": "boundSessionRoute",
+      "profiles": [
+        "actorJoin",
+        "actorHostHandoff",
+        "perActorUserSpot",
+        "spotWideUserSpot"
+      ],
+      "events": [
+        "sessionRouteConverged",
+        "sessionRouteTerminalDelivered"
+      ],
+      "requiredOrder": [
+        ["authorityCompleted", "sessionRouteConverged"],
+        ["sessionRouteConverged", "sessionRouteTerminalDelivered"]
+      ]
+    }
+  ],
+  "profiles": [
+    {
+      "name": "actorJoin",
+      "requiredEvents": [
+        "sourceMembershipLeaveSubmitted",
+        "publicJoinCompleted"
+      ],
+      "optionalEvents": [
+        "sessionRouteConverged",
+        "sessionRouteTerminalDelivered"
+      ],
+      "forbiddenEvents": [
+        "sourceClosingCompleted",
+        "relocationTerminalDelivered"
+      ],
+      "additionalOrder": [
+        ["targetLifecycleCompleted", "sourceMembershipLeaveSubmitted"],
+        ["sourceMembershipLeaveSubmitted", "publicJoinCompleted"],
+        ["publicJoinCompleted", "savedWorkAdmitted"]
+      ],
+      "callbackCounts": {
+        "targetMembershipJoin": 1,
+        "sourceMembershipLeave": 1,
+        "sourceClosing": 0
+      },
+      "terminalEvent": "publicJoinCompleted",
+      "independence": {
+        "publicJoinCompletionWaitsForSourceMembershipLeaveResult": false
+      }
+    },
+    {
+      "name": "actorHostHandoff",
+      "requiredEvents": ["relocationTerminalDelivered"],
+      "optionalEvents": [
+        "sessionRouteConverged",
+        "sessionRouteTerminalDelivered"
+      ],
+      "forbiddenEvents": [
+        "sourceMembershipLeaveSubmitted",
+        "publicJoinCompleted",
+        "sourceClosingCompleted"
+      ],
+      "additionalOrder": [
+        ["authorityCompleted", "relocationTerminalDelivered"]
+      ],
+      "callbackCounts": {
+        "targetMembershipJoin": 0,
+        "sourceMembershipLeave": 0,
+        "sourceClosing": 0
+      },
+      "terminalEvent": "relocationTerminalDelivered"
+    },
+    {
+      "name": "perActorUserSpot",
+      "requiredEvents": [
+        "sourceClosingCompleted",
+        "relocationTerminalDelivered"
+      ],
+      "optionalEvents": [
+        "sessionRouteConverged",
+        "sessionRouteTerminalDelivered"
+      ],
+      "forbiddenEvents": [
+        "sourceMembershipLeaveSubmitted",
+        "publicJoinCompleted"
+      ],
+      "additionalOrder": [
+        ["targetReadyPublished", "sourceClosingCompleted"],
+        ["sourceCleanupStarted", "sourceClosingCompleted"],
+        ["sourceClosingCompleted", "sourceCleanupCompleted"],
+        ["authorityCompleted", "relocationTerminalDelivered"]
+      ],
+      "callbackCounts": {
+        "targetMembershipJoin": 0,
+        "sourceMembershipLeave": 0,
+        "sourceClosing": 1
+      },
+      "sourceClosingReason": "RelocationOut",
+      "terminalEvent": "relocationTerminalDelivered"
+    },
+    {
+      "name": "spotWideUserSpot",
+      "requiredEvents": [
+        "sourceClosingCompleted",
+        "relocationTerminalDelivered"
+      ],
+      "optionalEvents": [
+        "sessionRouteConverged",
+        "sessionRouteTerminalDelivered"
+      ],
+      "forbiddenEvents": [
+        "sourceMembershipLeaveSubmitted",
+        "publicJoinCompleted"
+      ],
+      "additionalOrder": [
+        ["targetReadyPublished", "sourceClosingCompleted"],
+        ["sourceCleanupStarted", "sourceClosingCompleted"],
+        ["sourceClosingCompleted", "sourceCleanupCompleted"],
+        ["authorityCompleted", "relocationTerminalDelivered"]
+      ],
+      "callbackCounts": {
+        "targetMembershipJoin": 0,
+        "sourceMembershipLeave": 0,
+        "sourceClosing": 1
+      },
+      "sourceClosingReason": "RelocationOut",
+      "terminalEvent": "relocationTerminalDelivered"
+    },
+    {
+      "name": "instanceSpot",
+      "requiredEvents": [
+        "sourceClosingCompleted",
+        "relocationTerminalDelivered"
+      ],
+      "optionalEvents": [],
+      "forbiddenEvents": [
+        "sourceMembershipLeaveSubmitted",
+        "publicJoinCompleted",
+        "sessionRouteConverged",
+        "sessionRouteTerminalDelivered"
+      ],
+      "additionalOrder": [
+        ["targetReadyPublished", "sourceClosingCompleted"],
+        ["sourceCleanupStarted", "sourceClosingCompleted"],
+        ["sourceClosingCompleted", "sourceCleanupCompleted"],
+        ["authorityCompleted", "relocationTerminalDelivered"]
+      ],
+      "callbackCounts": {
+        "targetMembershipJoin": 0,
+        "sourceMembershipLeave": 0,
+        "sourceClosing": 1
+      },
+      "sourceClosingReason": "RelocationOut",
+      "terminalEvent": "relocationTerminalDelivered"
+    }
+  ],
+  "trafficScenarios": [
+    {
+      "name": "accepted-in-flight-request",
+      "origin": "acceptedBeforeSourceSeal",
+      "originalOperationId": "operation-A",
+      "originalReplyRouteId": "reply-A",
+      "deliveredOperationIds": ["operation-A"],
+      "repliedOperationIds": ["operation-A"],
+      "observedReplyRouteIds": ["reply-A"],
+      "deliveryCount": 1,
+      "replyCount": 1,
+      "settlementCount": 1,
+      "lossCount": 0,
+      "duplicateCount": 0,
+      "sameCallResubmitCount": 0
+    },
+    {
+      "name": "target-lifecycle-callback-bound-session-push",
+      "profile": "actorJoin",
+      "origin": "targetLifecycleCallbackWhileBoundSessionSealed",
+      "originalOperationId": "operation-B",
+      "originalReplyRouteId": null,
+      "requiredOrder": [
+        ["ownershipCommitted", "applicationOperationSubmitted"],
+        ["sourceAdmissionSealed", "applicationOperationSubmitted"],
+        ["applicationOperationSubmitted", "targetLifecycleCompleted"],
+        ["targetLifecycleCompleted", "sourceMembershipLeaveSubmitted"],
+        ["sourceMembershipLeaveSubmitted", "publicJoinCompleted"],
+        ["applicationOperationSubmitted", "sessionRouteConverged"],
+        ["sessionRouteConverged", "applicationOperationDelivered"],
+        ["applicationOperationDelivered", "applicationOperationSettled"]
+      ],
+      "checkpoints": [
+        {
+          "name": "afterCallbackSubmit",
+          "deliveryCount": 0,
+          "settlementCount": 0,
+          "payloadReleaseCount": 0
+        },
+        {
+          "name": "beforeSessionRouteConverged",
+          "deliveryCount": 0,
+          "settlementCount": 0,
+          "payloadReleaseCount": 0
+        },
+        {
+          "name": "afterSessionRouteConverged",
+          "deliveryCount": 1,
+          "settlementCount": 1,
+          "payloadReleaseCount": 1
+        },
+        {
+          "name": "afterDuplicateRouteTerminal",
+          "deliveryCount": 1,
+          "settlementCount": 1,
+          "payloadReleaseCount": 1
+        }
+      ],
+      "lossCount": 0,
+      "duplicateCount": 0,
+      "sameCallResubmitCount": 0
+    },
+    {
+      "name": "target-bound-session-push-before-route-convergence",
+      "profiles": [
+        "actorHostHandoff",
+        "perActorUserSpot",
+        "spotWideUserSpot"
+      ],
+      "origin": "targetApplicationWhileBoundSessionRoutePending",
+      "originalOperationId": "operation-D",
+      "originalReplyRouteId": null,
+      "requiredOrder": [
+        ["targetReadyPublished", "applicationOperationSubmitted"],
+        ["applicationOperationSubmitted", "sessionRouteConverged"],
+        ["sessionRouteConverged", "applicationOperationDelivered"],
+        ["applicationOperationDelivered", "applicationOperationSettled"]
+      ],
+      "checkpoints": [
+        {
+          "name": "afterTargetSubmit",
+          "deliveryCount": 0,
+          "settlementCount": 0,
+          "payloadReleaseCount": 0
+        },
+        {
+          "name": "beforeSessionRouteConverged",
+          "deliveryCount": 0,
+          "settlementCount": 0,
+          "payloadReleaseCount": 0
+        },
+        {
+          "name": "afterSessionRouteConverged",
+          "deliveryCount": 1,
+          "settlementCount": 1,
+          "payloadReleaseCount": 1
+        },
+        {
+          "name": "afterDuplicateRouteTerminal",
+          "deliveryCount": 1,
+          "settlementCount": 1,
+          "payloadReleaseCount": 1
+        }
+      ],
+      "lossCount": 0,
+      "duplicateCount": 0,
+      "sameCallResubmitCount": 0
+    },
+    {
+      "name": "message-follow-request",
+      "origin": "staleSourceRouteAfterOwnershipCommit",
+      "originalOperationId": "operation-C",
+      "originalReplyRouteId": "reply-C",
+      "followOperationId": "operation-C",
+      "followReplyRouteId": "reply-C",
+      "deliveryCount": 1,
+      "replyCount": 1,
+      "settlementCount": 1,
+      "lossCount": 0,
+      "duplicateCount": 0,
+      "sameCallResubmitCount": 0
+    },
+    {
+      "name": "message-follow-delayed-notice-next-call",
+      "origin": "positiveSourceRouteCacheWithDelayedRelayNotice",
+      "requiredOrder": [
+        ["messageFollowRelayDelivered", "messageFollowReplyCompleted"],
+        ["messageFollowReplyCompleted", "sessionRouteConverged"],
+        ["sessionRouteConverged", "nextApplicationOperationSubmitted"],
+        ["nextApplicationOperationSubmitted", "nextApplicationOperationDelivered"],
+        ["nextApplicationOperationDelivered", "relayNoticeObserved"],
+        ["relayNoticeObserved", "followingApplicationOperationSubmitted"],
+        ["followingApplicationOperationSubmitted", "followingApplicationOperationDelivered"],
+        ["followingApplicationOperationDelivered", "messageFollowExpired"]
+      ],
+      "checkpoints": [
+        {
+          "name": "afterFirstReplyBeforeNotice",
+          "deliveryCount": 1,
+          "replyCount": 1,
+          "settlementCount": 1,
+          "sourceHandlerCount": 0,
+          "targetHandlerCount": 1
+        },
+        {
+          "name": "afterSessionRouteConvergedBeforeNotice",
+          "deliveryCount": 1,
+          "replyCount": 1,
+          "settlementCount": 1,
+          "sourceHandlerCount": 0,
+          "targetHandlerCount": 1
+        },
+        {
+          "name": "afterImmediateNextOperation",
+          "deliveryCount": 2,
+          "replyCount": 1,
+          "settlementCount": 2,
+          "sourceHandlerCount": 0,
+          "targetHandlerCount": 2
+        },
+        {
+          "name": "afterRelayNotice",
+          "deliveryCount": 2,
+          "replyCount": 1,
+          "settlementCount": 2,
+          "sourceHandlerCount": 0,
+          "targetHandlerCount": 2
+        },
+        {
+          "name": "afterFollowingOperation",
+          "deliveryCount": 3,
+          "replyCount": 1,
+          "settlementCount": 3,
+          "sourceHandlerCount": 0,
+          "targetHandlerCount": 3
+        },
+        {
+          "name": "afterMessageFollowExpiry",
+          "deliveryCount": 3,
+          "replyCount": 1,
+          "settlementCount": 3,
+          "sourceHandlerCount": 0,
+          "targetHandlerCount": 3
+        }
+      ],
+      "lossCount": 0,
+      "duplicateCount": 0,
+      "sameCallResubmitCount": 0
+    }
+  ],
+  "journeyScenarios": [
+    {
+      "name": "bound-actor-round-trip-with-delayed-route-notice",
+      "profile": "actorJoin",
+      "owners": {
+        "initial": "ownerA",
+        "firstTarget": "ownerB",
+        "returnTarget": "ownerA"
+      },
+      "identity": {
+        "actorIdStable": true,
+        "objectGenerationStable": true,
+        "sessionIdentityStable": true,
+        "ownerTenuresDistinct": true
+      },
+      "routeCacheTenures": {
+        "initialSource": "ownerA#0",
+        "firstTarget": "ownerB#1",
+        "returnTarget": "ownerA#2"
+      },
+      "lateNoticePolicy": "compareAndRemoveExactSourceTenureOnly",
+      "requiredOrder": [
+        ["firstRelocationStable", "followedRequestReplied"],
+        ["followedRequestReplied", "returnOperationSubmitted"],
+        ["returnOperationSubmitted", "returnOperationDeliveredAtCurrentOwner"],
+        ["returnOperationDeliveredAtCurrentOwner", "successorRelocationRequested"],
+        ["successorRelocationRequested", "successorRelocationAdmitted"],
+        ["successorRelocationAdmitted", "secondRelocationStable"],
+        ["secondRelocationStable", "roundTripSessionNotificationDelivered"],
+        ["roundTripSessionNotificationDelivered", "latePredecessorNoticeObserved"],
+        ["latePredecessorNoticeObserved", "postRoundTripRequestReplied"]
+      ],
+      "successorPolicy": {
+        "maxActiveRelocationBarriers": 1,
+        "startsBeforePredecessorRouteTerminal": false,
+        "eventuallyAdmittedAfterPredecessorRouteTerminal": true,
+        "parallelTemporaryQueueCount": 0
+      },
+      "checkpoints": [
+        {
+          "name": "afterFirstRelocationStable",
+          "currentOwner": "ownerB",
+          "activeRelocationBarrierCount": 0,
+          "boundSessionRouteOwner": "ownerB",
+          "routeCacheTenure": "ownerA#0"
+        },
+        {
+          "name": "afterFollowedRequestBeforeNotice",
+          "sourceHandlerCount": 0,
+          "currentOwnerHandlerCount": 1,
+          "replyCount": 1
+        },
+        {
+          "name": "afterReturnOperationDelivered",
+          "returnOperationDeliveryCount": 1,
+          "returnOperationOwner": "ownerB",
+          "sourceHandlerCount": 0,
+          "lossCount": 0,
+          "duplicateCount": 0
+        },
+        {
+          "name": "afterSecondRelocationStable",
+          "currentOwner": "ownerA",
+          "activeRelocationBarrierCount": 0,
+          "boundSessionRouteOwner": "ownerA",
+          "routeCacheTenure": "ownerA#2",
+          "actorIdStable": true,
+          "objectGenerationStable": true,
+          "sessionIdentityStable": true
+        },
+        {
+          "name": "afterLatePredecessorNotice",
+          "currentOwner": "ownerA",
+          "boundSessionRouteOwner": "ownerA",
+          "noticeSourceTenure": "ownerA#0",
+          "routeCacheTenureBeforeNotice": "ownerA#2",
+          "routeCacheTenureAfterNotice": "ownerA#2",
+          "exactSourceTenureMatched": false,
+          "additionalCacheMutationCount": 0,
+          "additionalRouteMutationCount": 0,
+          "additionalDeliveryCount": 0
+        },
+        {
+          "name": "afterPostRoundTripRequest",
+          "requestHandlerOwner": "ownerA",
+          "requestHandlerCount": 1,
+          "replyCount": 1,
+          "lossCount": 0,
+          "duplicateCount": 0
+        }
+      ]
+    }
+  ],
+  "routeCacheCompareAndRemoveScenarios": [
+    {
+      "name": "exact-source-tenure-removes-matching-cache-once",
+      "cachedTenure": "ownerA#0",
+      "noticeSourceTenure": "ownerA#0",
+      "expectedCacheTenure": null,
+      "removalCount": 1,
+      "preserveCount": 0
+    },
+    {
+      "name": "aba-source-tenure-does-not-remove-current-cache",
+      "cachedTenure": "ownerA#2",
+      "noticeSourceTenure": "ownerA#0",
+      "expectedCacheTenure": "ownerA#2",
+      "removalCount": 0,
+      "preserveCount": 1
+    }
+  ],
+  "idempotencyScenarios": [
+    {
+      "name": "duplicate-target-attempt-reuses-existing-progress",
+      "profiles": [
+        "actorJoin",
+        "actorHostHandoff",
+        "perActorUserSpot",
+        "spotWideUserSpot",
+        "instanceSpot"
+      ],
+      "duplicateKeyFields": ["relocationId", "targetAttempt"],
+      "duplicateRequestUsesSameKey": true,
+      "duplicateFingerprintFields": [
+        "sourceTenure",
+        "targetTenure",
+        "statePolicy",
+        "capturedPayloadDigest"
+      ],
+      "duplicateRequestUsesIdenticalFingerprint": true,
+      "statePolicyExpectations": {
+        "RecreateOnRelocation": {
+          "afterInitialRequest": {
+            "targetTemporaryQueueOpenedCount": 1,
+            "targetFactoryInvocationCount": 1,
+            "applicationStateRestoreCount": 0
+          },
+          "afterDuplicateRequest": {
+            "targetTemporaryQueueOpenedCount": 1,
+            "targetFactoryInvocationCount": 1,
+            "applicationStateRestoreCount": 0
+          }
+        },
+        "PreserveStateWith": {
+          "afterInitialRequest": {
+            "targetTemporaryQueueOpenedCount": 1,
+            "targetFactoryInvocationCount": 1,
+            "applicationStateRestoreCount": 1
+          },
+          "afterDuplicateRequest": {
+            "targetTemporaryQueueOpenedCount": 1,
+            "targetFactoryInvocationCount": 1,
+            "applicationStateRestoreCount": 1
+          }
+        }
+      },
+      "duplicateAdditionalObservableCounts": {
+        "targetTemporaryQueueOpened": 0,
+        "targetFactoryInvocation": 0,
+        "applicationStateRestore": 0,
+        "targetLifecycleCallback": 0,
+        "sourceMembershipLeaveSubmission": 0,
+        "publicJoinCompletionCallback": 0,
+        "sourceClosingCallback": 0,
+        "relocationTerminal": 0
+      }
+    },
+    {
+      "name": "same-target-attempt-key-with-different-fingerprint-is-rejected",
+      "profiles": ["actorJoin"],
+      "duplicateKeyFields": ["relocationId", "targetAttempt"],
+      "sameKey": true,
+      "sameFingerprint": false,
+      "result": "conflict",
+      "additionalTargetFactoryInvocationCount": 0,
+      "additionalStateRestoreCount": 0,
+      "additionalLifecycleCallbackCount": 0,
+      "additionalAuthorityMutationCount": 0,
+      "additionalTerminalDeliveryCount": 0
+    },
+    {
+      "name": "late-terminal-does-not-cross-successor-relocation-fence",
+      "profiles": [
+        "actorJoin",
+        "actorHostHandoff",
+        "perActorUserSpot",
+        "spotWideUserSpot"
+      ],
+      "sameObjectGeneration": true,
+      "successorFenceFields": [
+        "relocationId",
+        "bindingGeneration",
+        "sessionIdentity"
+      ],
+      "checkpoints": [
+        {
+          "name": "afterSuccessorSubmitBeforeOldTerminal",
+          "deliveryCount": 0,
+          "settlementCount": 0,
+          "payloadReleaseCount": 0,
+          "successorAdmissionCount": 0
+        },
+        {
+          "name": "afterOldTerminal",
+          "deliveryCount": 0,
+          "settlementCount": 0,
+          "payloadReleaseCount": 0
+        },
+        {
+          "name": "afterSuccessorTerminal",
+          "deliveryCount": 1,
+          "settlementCount": 1,
+          "payloadReleaseCount": 1,
+          "successorAdmissionCount": 1
+        },
+        {
+          "name": "afterDuplicateOldAndSuccessorTerminals",
+          "deliveryCount": 1,
+          "settlementCount": 1,
+          "payloadReleaseCount": 1
+        }
+      ],
+      "oldTerminalAdditionalDeliveryCount": 0,
+      "oldTerminalAdditionalSettlementCount": 0,
+      "oldTerminalAdditionalPayloadReleaseCount": 0
+    }
+  ],
+  "terminalScenarios": [
+    {
+      "name": "duplicate-success-terminal",
+      "firstResult": "applied",
+      "duplicateResult": "alreadyApplied",
+      "deliveryCount": 1,
+      "settlementCount": 1,
+      "cleanupCount": 1,
+      "routeMutationCount": 1,
+      "lateTerminalAdditionalDeliveryCount": 0,
+      "lateTerminalAdditionalSettlementCount": 0,
+      "lateTerminalAdditionalCleanupCount": 0,
+      "lateTerminalAdditionalRouteMutationCount": 0
+    },
+    {
+      "name": "precommit-abort",
+      "result": "aborted",
+      "targetApplicationExecutionCount": 0,
+      "sourceAuthorityRetained": true,
+      "sourceHeldTrafficRestored": true,
+      "restoredSourceTrafficDeliveryCount": 1,
+      "settlementCount": 1,
+      "cleanupCount": 1,
+      "routeMutationCount": 0,
+      "lateTerminalAdditionalDeliveryCount": 0,
+      "lateTerminalAdditionalSettlementCount": 0,
+      "lateTerminalAdditionalCleanupCount": 0,
+      "lateTerminalAdditionalRouteMutationCount": 0
+    },
+    {
+      "name": "postcommit-target-failure",
+      "result": "targetUnavailable",
+      "sourceRollbackCount": 0,
+      "sourceAdmissionResumeCount": 0,
+      "settlementCount": 1,
+      "cleanupCount": 1,
+      "routeMutationCount": 0,
+      "lateTerminalAdditionalDeliveryCount": 0,
+      "lateTerminalAdditionalSettlementCount": 0,
+      "lateTerminalAdditionalCleanupCount": 0,
+      "lateTerminalAdditionalRouteMutationCount": 0
+    },
+    {
+      "name": "stale-owner",
+      "result": "stale",
+      "deliveryCount": 0,
+      "settlementCount": 1,
+      "cleanupCount": 1,
+      "routeMutationCount": 0,
+      "lateTerminalAdditionalDeliveryCount": 0,
+      "lateTerminalAdditionalSettlementCount": 0,
+      "lateTerminalAdditionalCleanupCount": 0,
+      "lateTerminalAdditionalRouteMutationCount": 0
+    },
+    {
+      "name": "aba-generation",
+      "result": "stale",
+      "deliveryCount": 0,
+      "settlementCount": 1,
+      "cleanupCount": 1,
+      "routeMutationCount": 0,
+      "lateTerminalAdditionalDeliveryCount": 0,
+      "lateTerminalAdditionalSettlementCount": 0,
+      "lateTerminalAdditionalCleanupCount": 0,
+      "lateTerminalAdditionalRouteMutationCount": 0
+    },
+    {
+      "name": "session-or-binding-closed",
+      "result": "closed",
+      "deliveryCount": 0,
+      "settlementCount": 1,
+      "cleanupCount": 1,
+      "routeMutationCount": 0,
+      "lateTerminalAdditionalDeliveryCount": 0,
+      "lateTerminalAdditionalSettlementCount": 0,
+      "lateTerminalAdditionalCleanupCount": 0,
+      "lateTerminalAdditionalRouteMutationCount": 0
+    },
+    {
+      "name": "operation-timeout",
+      "result": "timedOut",
+      "deliveryCount": 0,
+      "settlementCount": 1,
+      "cleanupCount": 1,
+      "routeMutationCount": 0,
+      "lateTerminalAdditionalDeliveryCount": 0,
+      "lateTerminalAdditionalSettlementCount": 0,
+      "lateTerminalAdditionalCleanupCount": 0,
+      "lateTerminalAdditionalRouteMutationCount": 0
+    },
+    {
+      "name": "runtime-shutdown",
+      "result": "shutdown",
+      "deliveryCount": 0,
+      "settlementCount": 1,
+      "cleanupCount": 1,
+      "routeMutationCount": 0,
+      "lateTerminalAdditionalDeliveryCount": 0,
+      "lateTerminalAdditionalSettlementCount": 0,
+      "lateTerminalAdditionalCleanupCount": 0,
+      "lateTerminalAdditionalRouteMutationCount": 0
+    }
+  ],
+  "actorCapabilities": {
+    "boundSessionBarrier": {
+      "postSealTrafficRetained": true,
+      "acceptedHighWaterComesFromSessionOwner": true,
+      "routeConvergenceReleasesRetainedTraffic": true,
+      "duplicateRouteTerminalRedelivers": false
+    },
+    "messageFollow": {
+      "preservesOriginalOperationId": true,
+      "preservesOriginalReplyRoute": true,
+      "sameCallResubmitsApplicationOperation": false
+    }
+  },
+  "spotCapabilities": {
+    "wholeSpotBoundary": {
+      "frameworkExecutionMode": "SpotWide",
+      "ownerAndChildVisibility": "atomicAggregate",
+      "atomicAggregateOwnerVisibility": true,
+      "noParticipantHandlerBeforeAggregateReady": true,
+      "savedAndTemporaryWorkDeliveredToOriginalParticipant": true,
+      "membershipPreserved": true,
+      "individualChildOwnerPublication": false,
+      "memberMembershipCallbackCount": 0
+    },
+    "perActorBoundary": {
+      "frameworkExecutionMode": "PerActor",
+      "spotShellMovesBeforeChildActors": true,
+      "childActorsMoveAsIndependentUnits": true,
+      "spotDirectTrafficHandlerTargetAfterCommit": "targetSpotShell",
+      "actorTrafficHandlerTargetDuringRelocation": "currentActorOwner",
+      "splitOwnershipAllowedWhileRelocationActive": true,
+      "splitOwnershipAllowedAtSteadyTerminal": false,
+      "steadyTerminalSplitOwnerCount": 0,
+      "spotApplicationStateTransferred": false,
+      "membershipPreserved": true,
+      "memberMembershipCallbackCount": 0
+    },
+    "instanceSpotBoundary": {
+      "sourceExistingInstanceRequired": true,
+      "missingSourceInstanceHiddenTargetCreationCount": 0,
+      "actorMembershipCallbackCount": 0
+    }
+  },
+  "statePolicies": [
+    {
+      "name": "DisableRelocation",
+      "relocationAccepted": false,
+      "sourceAuthorityRetained": true,
+      "sourceAdmissionRetained": true,
+      "targetFactoryInvocationCount": 0,
+      "applicationStateCaptureCount": 0,
+      "applicationStateRestoreCount": 0,
+      "targetApplicationHandlerCount": 0,
+      "frameworkPendingWorkPreserved": true,
+      "frameworkPendingWorkTransferred": false
+    },
+    {
+      "name": "RecreateOnRelocation",
+      "relocationAccepted": true,
+      "sourceAuthorityRetained": false,
+      "sourceAdmissionRetained": false,
+      "targetFactoryInvocationCount": 1,
+      "applicationStateCaptureCount": 0,
+      "applicationStateRestoreCount": 0,
+      "frameworkPendingWorkPreserved": true,
+      "frameworkPendingWorkTransferred": true
+    },
+    {
+      "name": "PreserveStateWith",
+      "relocationAccepted": true,
+      "sourceAuthorityRetained": false,
+      "sourceAdmissionRetained": false,
+      "targetFactoryInvocationCount": 1,
+      "applicationStateCaptureCount": 1,
+      "applicationStateRestoreCount": 1,
+      "frameworkPendingWorkPreserved": true,
+      "frameworkPendingWorkTransferred": true
+    }
+  ],
+  "adapterContract": {
+    "requiredBehaviorGroups": [
+      "commonLifecycle",
+      "actorJoin",
+      "actorJoinMilestones",
+      "actorHostHandoff",
+      "actorBoundSession",
+      "actorMessageFollow",
+      "spotWholeSpot",
+      "spotPerActor",
+      "instanceSpot",
+      "statePolicies",
+      "failureAndIdempotency"
+    ],
+    "observationFields": [
+      "milestone",
+      "profile",
+      "statePolicy",
+      "event",
+      "operationId",
+      "replyRouteId",
+      "objectGeneration",
+      "sourceTenure",
+      "targetTenure",
+      "sourceOwnerGeneration",
+      "targetOwnerGeneration",
+      "currentOwner",
+      "routeTerminalFingerprint",
+      "retainedFifoSequence",
+      "callback",
+      "closingReason",
+      "handlerTarget",
+      "deliveryCount",
+      "successorAdmissionCount",
+      "settlementCount",
+      "cleanupCount"
+    ],
+    "allowedCoverageLayers": ["focused", "e2eRequired"],
+    "additionalImplementationEventsAllowed": true
+  }
+}

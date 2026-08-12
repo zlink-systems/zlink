@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/e2e-redis-common.sh"
+zlink_e2e_initialize kotlin "$0" "$@"
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -83,7 +84,7 @@ cleanup() {
     fi
   done
   if [[ -n "${redis_container}" ]]; then
-    docker rm -fv "${redis_container}" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "${redis_container}" || true
   fi
   rm -rf "${config_dir}"
   wait >/dev/null 2>&1 || true
@@ -92,21 +93,7 @@ cleanup() {
 trap cleanup EXIT
 
 reserve_ports() {
-  python3 - <<'PY'
-import socket
-sockets = []
-ports = []
-try:
-    for _ in range(8):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        ports.append(sock.getsockname()[1])
-    print(" ".join(f"tcp://127.0.0.1:{port}" for port in ports))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  zlink_e2e_reserve_mixed_endpoints 8 0
 }
 
 port_of() {
@@ -177,14 +164,16 @@ start_redis_if_needed() {
   local redis_endpoint
   local redis_port
   zlink_redis_start_scoped_assign redis_container redis_port \
-    "zlink-redis-kotlin-e2e" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}" "127.0.0.1::6379"
+    "zlink-redis-kotlin-e2e" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
   redis_endpoint="127.0.0.1:${redis_port}"
   redis_location_endpoint="${redis_endpoint}"
   wait_port redis "tcp://${redis_endpoint}"
 }
 
 gradle_run() {
-  ../../gradlew --project-cache-dir "${ZLINK_KOTLIN_E2E_GRADLE_CACHE}" --no-daemon --no-parallel --max-workers=1 "$@" --quiet
+  zlink_e2e_gradle_build_locked ../../gradlew \
+    --project-cache-dir "${ZLINK_KOTLIN_E2E_GRADLE_CACHE}" \
+    --no-daemon --no-parallel --max-workers=1 "$@" --quiet
 }
 
 static_checks() {

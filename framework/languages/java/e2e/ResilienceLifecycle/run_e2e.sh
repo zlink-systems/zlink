@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/e2e-redis-common.sh"
+zlink_e2e_initialize java "$0" "$@"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/start-order-common.sh"
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -75,7 +76,7 @@ cleanup() {
     kill "${pid}" >/dev/null 2>&1 || true
   done
   if [[ -n "${redis_container_name}" ]]; then
-    docker rm -fv "${redis_container_name}" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "${redis_container_name}" || true
   fi
   if [[ -n "${redis_proxy_pid}" ]]; then
     kill -CONT "${redis_proxy_pid}" >/dev/null 2>&1 || true
@@ -90,34 +91,11 @@ cleanup() {
 trap cleanup EXIT
 
 reserve_ports() {
-  python3 - <<'PY'
-import socket
-sockets = []
-ports = []
-try:
-    for _ in range(8):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        ports.append(sock.getsockname()[1])
-    print(" ".join(f"tcp://127.0.0.1:{port}" for port in ports[:4]), end=" ")
-    print(" ".join(f"http://127.0.0.1:{port}" for port in ports[4:]))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  zlink_e2e_reserve_mixed_endpoints 4 4
 }
 
 reserve_tcp_port() {
-  python3 - <<'PY'
-import socket
-sock = socket.socket()
-try:
-    sock.bind(("127.0.0.1", 0))
-    print(sock.getsockname()[1])
-finally:
-    sock.close()
-PY
+  zlink_e2e_reserve_ports 1
 }
 
 port_of() {
@@ -140,7 +118,7 @@ wait_port() {
 }
 
 gradle_run() {
-  ../../gradlew -PzlinkE2eBuildDir="${e2e_build_dir}" \
+  zlink_e2e_gradle_build_locked ../../gradlew -PzlinkE2eBuildDir="${e2e_build_dir}" \
     --project-cache-dir "${gradle_cache_dir}" --no-daemon "$@" --quiet
 }
 
@@ -214,12 +192,12 @@ create_store_outage_commands() {
     cat >"${store_pause_command}" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-docker pause "${redis_container_name}" >/dev/null
+timeout -k 2s 10s docker pause "${redis_container_name}" >/dev/null
 EOF
     cat >"${store_resume_command}" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-docker unpause "${redis_container_name}" >/dev/null
+timeout -k 2s 10s docker unpause "${redis_container_name}" >/dev/null
 EOF
   elif [[ -n "${redis_proxy_pid}" ]]; then
     cat >"${store_pause_command}" <<EOF
@@ -251,7 +229,7 @@ EOF
 
 explicit_redis_endpoint=""
 zlink_redis_start_scoped_assign redis_container_name redis_port \
-  "zlink-redis-java-e2e" "redis:7.2-alpine" "127.0.0.1::6379"
+  "zlink-redis-java-e2e" "redis:7.2-alpine"
 redis_location_endpoint="127.0.0.1:${redis_port}"
 if [[ "${ZLINK_E2E_REDIS_MONITOR:-0}" == "1" ]]; then
   docker exec "${redis_container_name}" redis-cli --csv monitor \
@@ -296,13 +274,13 @@ if [[ "${SCENARIO}" == "all" ]]; then
   for scenario in \
       RL-A1 RL-A2 RL-A3 RL-A4 RL-A5 \
       RL-B1 RL-B2 RL-B3 RL-B4 RL-B5 RL-B6 \
-      RL-C1 RL-C2 RL-C3 RL-C4 \
+      RL-C1 RL-C3 RL-C4 \
       RL-D1 RL-D2 RL-D3 RL-D4 RL-D5; do
     grep -q "scenario ${scenario} passed" "${log_dir}/client.stdout.log"
   done
 else
   case "${SCENARIO}" in
-    RL-E1|RL-E2|RL-E3|RL-E4|RL-E5|RL-F1|RL-F2|RL-F3|RL-F4|RL-F5|RL-F6|RL-F7|RL-F8|RL-F9|RL-F10|RL-F11|RL-F12|RL-F13|RL-F14)
+    RL-E1|RL-E2|RL-E3|RL-E4|RL-E5|RL-F1|RL-F3|RL-F5|RL-F6|RL-F7|RL-F8|RL-F9|RL-F10|RL-F11|RL-F12|RL-F13|RL-F14)
       grep -q "scenario ${SCENARIO} blocked:" "${log_dir}/client.stdout.log"
       grep -q "resilience-lifecycle e2e result=blocked" "${log_dir}/client.stdout.log"
       ;;

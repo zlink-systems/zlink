@@ -162,6 +162,7 @@ final class ZLinkRouteMeshRuntimeView
                     status.channels(),
                     status.peers(),
                     status.placement()),
+                ZLinkMeshNodeSnapshot::meshName,
                 capacity,
                 status -> status.state() == ZLinkTopologyState.STOPPED
                     || status.state() == ZLinkTopologyState.FAILED,

@@ -31,7 +31,7 @@ internal static class TaB2StaleActorReferenceScenario
             Scenario: "TA-B2-fresh-request",
             Kind: "request",
             NodeRid: "actor-a",
-            PacketName: nameof(ActorAsk)
+            PacketName: nameof(ActorReq)
         } && item.ActorId == actorId && item.Generation == freshRef.ObjectGeneration),
             "TA-B2 fresh request generation/owner evidence missing.");
     }

@@ -9,7 +9,7 @@ import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
 import systems.zlink.samples.tictactoe.shared.contracts.JoinGameFailedNotify;
-import systems.zlink.samples.tictactoe.shared.contracts.JoinGameRes;
+import systems.zlink.samples.tictactoe.shared.contracts.JoinGameNotify;
 import systems.zlink.samples.tictactoe.shared.contracts.PlayerInfo;
 import systems.zlink.samples.tictactoe.shared.contracts.TicTacToeGameJoinRes;
 
@@ -102,7 +102,7 @@ public final class PlayActor implements ZLinkActor {
             }
             joinGame(roomId);
             return context.boundSession()
-                .send(new JoinGameRes(reply.state()))
+                .send(new JoinGameNotify(reply.state()))
                 .submit();
         }
         if (roomId == null) {
@@ -110,13 +110,13 @@ public final class PlayActor implements ZLinkActor {
         }
         if (completion instanceof ZLinkActorJoinCompletion.Rejected) {
             return context.boundSession()
-                .send(new JoinGameFailedNotify(roomId, "Rejected", false))
+                .send(new JoinGameFailedNotify(roomId, "Rejected"))
                 .submit();
         }
         var failed = (ZLinkActorJoinCompletion.Failed) completion;
         return context.boundSession()
             .send(new JoinGameFailedNotify(
-                roomId, failed.kind().name(), false))
+                roomId, failed.kind().name()))
             .submit();
     }
 

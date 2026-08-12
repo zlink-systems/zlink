@@ -2488,6 +2488,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
 TEST (ZLinkFrameworkStoreLocationResolvers,
       PublicSpotManagerUsesLocationReservationAndMeshCommands)
 {
+    auto store = std::make_shared<in_memory_location_store_t> ();
     auto app = zlink::framework::app_t::create ();
     user_spot_manager_client_t *client = nullptr;
     const auto endpoint =
@@ -2496,6 +2497,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
 
     app.add_zlink_framework ([&] (
                                zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (store);
         auto node = options.add_route_mesh ("spot-mesh");
         node.set_routing_id (
               zlink::routing_id_t::from ("spot-local-node"))
@@ -2521,6 +2523,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
 TEST (ZLinkFrameworkStoreLocationResolvers,
       ContextOnlySpotFactoryReceivesExactFrameworkIdentity)
 {
+    auto store = std::make_shared<in_memory_location_store_t> ();
     auto app = zlink::framework::app_t::create ();
     user_spot_manager_client_t *client = nullptr;
     const auto endpoint =
@@ -2534,6 +2537,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
 
     app.add_zlink_framework ([&] (
                                zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (store);
         auto node = options.add_route_mesh ("context-mesh");
         node.set_routing_id (
               zlink::routing_id_t::from ("context-node"))
@@ -2572,6 +2576,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
       GeneratedUserSpotFirstAuthorityConflictFailsWithoutRetry)
 {
     auto store = std::make_shared<test_location_repository_t> ();
+    auto public_store = std::make_shared<in_memory_location_store_t> ();
     auto app = zlink::framework::app_t::create ();
     generated_user_spot_collision_client_t *client = nullptr;
     const auto endpoint =
@@ -2588,6 +2593,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
       zlink::framework::service_lifetime_t::singleton);
     app.add_zlink_framework ([&] (
                                zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (public_store);
         auto node = options.add_route_mesh ("spot-collision-mesh");
         node.set_routing_id (
               zlink::routing_id_t::from (
@@ -2624,6 +2630,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
       SourceCreatedReservationIsReconciledAfterExactCreateFailure)
 {
     auto store = std::make_shared<test_location_repository_t> ();
+    auto public_store = std::make_shared<in_memory_location_store_t> ();
     auto app = zlink::framework::app_t::create ();
     source_cleanup_client_t *client = nullptr;
     const auto endpoint =
@@ -2640,6 +2647,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
       zlink::framework::service_lifetime_t::singleton);
     app.add_zlink_framework ([&] (
                                zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (public_store);
         auto node =
           options.add_route_mesh ("source-cleanup-mesh");
         node.set_routing_id (
@@ -3035,6 +3043,93 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostReconcilesRouteMeshCo
                      "owner-route-invalid-dealer"))
                  .result ()
                  .value ());
+    runtime->stop ();
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      AutoConnectRetainsExistingDrainingMeshPipeUntilDescriptorRetires)
+{
+    auto store = std::make_shared<in_memory_location_repository_t> ();
+    location_options_t options;
+    options.polling_interval = std::chrono::milliseconds (20);
+    options.owner_lease_renew_interval = std::chrono::milliseconds (50);
+    auto runtime = std::make_shared<location_runtime_t> (
+      *store, options, "owner-route-drain-local");
+    runtime->start (zlink::routing_id_t::from ("route-a-drain-local"));
+    seed_mesh_node (*store, "owner-route-drain-remote", "route.drain",
+                    "route-z-drain-remote", "inproc://route-drain-remote");
+
+    zlink::framework::zlink_builder_t zlink;
+    zlink.route_channel ("route.drain")
+      .bind ("inproc://route-drain-local")
+      .set_routing_id (zlink::routing_id_t::from ("route-a-drain-local"));
+    auto manager =
+      zlink::framework::detail::channel_runtime_manager_t::from (zlink);
+    manager.initialize_route_channels (zlink);
+    auto &route = manager.get_route_channel ("route.drain");
+
+    zlink::framework::service_collection_t services;
+    services.add_factory<zlink::framework::location_repository_t> (
+      [store] (zlink::framework::service_provider_t &) {
+          return std::static_pointer_cast<zlink::framework::location_repository_t> (store);
+      },
+      zlink::framework::service_lifetime_t::singleton);
+    services.add_factory<zlink::framework::runtime::live_location_reader_t> (
+      [store, options] (zlink::framework::service_provider_t &) {
+          return std::make_shared<zlink::framework::runtime::live_location_reader_t> (
+            *store, options);
+      },
+      zlink::framework::service_lifetime_t::singleton);
+    services.add_factory<location_runtime_t> (
+      [runtime] (zlink::framework::service_provider_t &) { return runtime; },
+      zlink::framework::service_lifetime_t::singleton);
+    auto provider = services.build_provider ();
+
+    zlink::framework::handler_registry_t handlers;
+    zlink::framework::serializer_registry_t serializers;
+    location_auto_connect_host_service_t service (
+      zlink.message_bus (),
+      zlink::framework::detail::channel_runtime_t::from (zlink.message_bus ())
+        .channel_snapshots (),
+      handlers, serializers);
+    service.start (provider);
+    ASSERT_TRUE (wait_until ([&] {
+        const auto connections = route.list_connections ();
+        return std::find (connections.begin (), connections.end (),
+                          "inproc://route-drain-remote") != connections.end ();
+    }));
+
+    auto descriptors =
+      store->list_mesh_nodes ("route.drain").result ().value ().items;
+    ASSERT_EQ (1u, descriptors.size ());
+    auto draining = descriptors.front ();
+    ++draining.descriptor_revision;
+    draining.state = zlink::framework::framework_runtime_state_t::draining;
+    ASSERT_EQ (location_write_status_t::stored,
+               store->update_mesh_node (
+                       draining, location_write_intent_t::renew)
+                 .result ()
+                 .value ()
+                 .status);
+
+    std::this_thread::sleep_for (std::chrono::milliseconds (100));
+    const auto during_drain = route.list_connections ();
+    EXPECT_NE (during_drain.end (),
+               std::find (during_drain.begin (), during_drain.end (),
+                          "inproc://route-drain-remote"));
+
+    ASSERT_EQ (1,
+               store->remove_all_by_owner (
+                       live_owner_token (*store, "owner-route-drain-remote"))
+                 .result ()
+                 .value ());
+    EXPECT_TRUE (wait_until ([&] {
+        const auto connections = route.list_connections ();
+        return std::find (connections.begin (), connections.end (),
+                          "inproc://route-drain-remote") == connections.end ();
+    }));
+
+    service.stop ();
     runtime->stop ();
 }
 

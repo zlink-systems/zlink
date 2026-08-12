@@ -279,16 +279,11 @@ test('detached request continuation re-enters the entry spot serial line', async
   class DetachedEntrySpot {}
   const fixture = await createEntryFixture(DetachedEntrySpot);
   const serial = fixture.activation.serialExecutor;
-  const outbound = new framework.DefaultZLinkSpotOutbound(
+  const outbound = new framework.DefaultZLinkSpotOutbound({
     serial,
     channelClient,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    'test-mesh'
-  );
+    meshName: 'test-mesh'
+  });
 
   // Detached path: the continuation is registered outside the handler turn.
   const continuation = outbound.requestToChannel('api', 'ping').submit().then((reply) => {
@@ -342,9 +337,11 @@ test('request submit keeps the entry turn until its reply completes', async () =
   class GatedEntrySpot {}
   const fixture = await createEntryFixture(GatedEntrySpot);
   const serial = fixture.activation.serialExecutor;
-  const outbound = new framework.DefaultZLinkSpotOutbound(
-    serial, channelClient, undefined, undefined, undefined, undefined, undefined, 'test-mesh'
-  );
+  const outbound = new framework.DefaultZLinkSpotOutbound({
+    serial,
+    channelClient,
+    meshName: 'test-mesh'
+  });
 
   const gated = serial.execute(async () => {
     events.push('handler:start');
@@ -375,18 +372,11 @@ test('same-Spot Async rejects while Yield resumes on a new FIFO turn', async () 
     }
   };
   const serial = new framework.ZLinkSpotSerialExecutor(true, 'same-spot');
-  const outbound = new framework.DefaultZLinkSpotOutbound(
+  const outbound = new framework.DefaultZLinkSpotOutbound({
     serial,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    'test-mesh',
-    undefined,
+    meshName: 'test-mesh',
     addressTransport
-  );
+  });
   const isInvalidOperation = (error) => error instanceof framework.ZLinkFrameworkException
     && error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation;
 
@@ -569,9 +559,11 @@ test('yield request from an entry turn is rejected because Entry forbids Yield',
   class YieldEntrySpot {}
   const fixture = await createEntryFixture(YieldEntrySpot);
   const serial = fixture.activation.serialExecutor;
-  const outbound = new framework.DefaultZLinkSpotOutbound(
-    serial, channelClient, undefined, undefined, undefined, undefined, undefined, 'test-mesh'
-  );
+  const outbound = new framework.DefaultZLinkSpotOutbound({
+    serial,
+    channelClient,
+    meshName: 'test-mesh'
+  });
 
   await assert.rejects(
     serial.execute(async () => {
@@ -607,16 +599,11 @@ test('yield from an injected outbound is still gated by the ambient entry turn',
   class YieldEntrySpot {}
   const fixture = await createEntryFixture(YieldEntrySpot);
   const ownerSerial = fixture.activation.serialExecutor;
-  const injectedOutbound = new framework.DefaultZLinkSpotOutbound(
-    new framework.ZLinkSpotSerialExecutor(),
+  const injectedOutbound = new framework.DefaultZLinkSpotOutbound({
+    serial: new framework.ZLinkSpotSerialExecutor(),
     channelClient,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    'test-mesh'
-  );
+    meshName: 'test-mesh'
+  });
 
   await assert.rejects(
     ownerSerial.execute(async () => {
@@ -812,7 +799,7 @@ test('runCpuWorker queue full fails fast with WorkerQueueFull and does not block
   const overflowCallback = cpuWorkerCall(worker, serial, () => 'overflow');
   void overflowCallback.submit().then(
     () => errors.push('completed'),
-    (error) => serial.execute(() => errors.push(`error:${error.kind}:executing=${serial.isExecuting}`))
+    (error) => errors.push(`error:${error.kind}:executing=${serial.isExecuting}`)
   );
   await delay(10);
   assert.deepEqual(errors, [`error:${framework.ZLinkFrameworkErrorKind.CapacityExceeded}:executing=true`]);

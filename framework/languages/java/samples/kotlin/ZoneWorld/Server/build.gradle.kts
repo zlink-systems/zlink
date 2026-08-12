@@ -18,6 +18,9 @@ dependencies {
     implementation("io.lettuce:lettuce-core:6.3.2.RELEASE")
     implementation("org.springframework.boot:spring-boot-starter:3.5.14")
     implementation(kotlin("stdlib"))
+    testImplementation(platform("org.junit:junit-bom:5.11.4"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 kotlin {
@@ -27,4 +30,8 @@ kotlin {
 application {
     mainClass.set("systems.zlink.samples.kotlin.zoneworld.server.ProgramKt")
     applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
+}
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
 }

@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ZLINK_ACTOR_CLIENT } from '@zlink-systems/nestjs';
-import { DeliverSupportNotification } from '../../../Actors/support-user-actor';
+import { DeliverSupportNotificationMsg } from '../../../Actors/support-user-actor';
 import { ConversationEventMapper } from './conversation-event-mapper';
 import type { ConversationEvent } from '../../../../../Domain/SupportChat/conversation-events';
 import type { ZLinkActorClient } from '@zlink-systems/framework';
@@ -17,7 +17,7 @@ class SupportNotificationPublisher {
       await this.actors
         .sendToActor(
           actorId,
-          new DeliverSupportNotification(message, event.state.conversationId)
+          new DeliverSupportNotificationMsg(message, event.state.conversationId)
         )
         .submit();
     }

@@ -1,20 +1,53 @@
-import { zlinkSpotActorRequestHandler } from '@zlink-systems/nestjs';
+import { Injectable } from '@nestjs/common';
+import { ZLinkSpotActorRequest, ZLinkSpotActorSend } from '@zlink-systems/framework';
 import type {
   ZLinkMessageContext,
-  ZLinkSpotActorRequestHandler
+  ZLinkSpotActorRequestHandler,
+  ZLinkSpotActorSendHandler
 } from '@zlink-systems/framework';
 import { PlayActor } from '../../../Actors/play-actor';
-import type { PlaceMarkReq, PlaceMarkRes } from '../../../../../../../Shared/Contracts/messages';
+import type {
+  GameState,
+  JoinGameMsg,
+  PlaceMarkReq,
+  PlaceMarkRes
+} from '../../../../../../../Shared/Contracts/messages';
+import {
+  JoinGameFailedNotify,
+  joinGameNotify,
+  PacketNames
+} from '../../../../../../../Shared/Contracts/messages';
 import { TicTacToeGameSpot } from '../tictactoe-game-spot';
 
-@zlinkSpotActorRequestHandler({
-  actor: () => PlayActor,
-  packetName: 'PlaceMarkReq',
-  spot: () => TicTacToeGameSpot
-})
+@Injectable()
+class PlayActorCurrentGameStateHandler
+  implements ZLinkSpotActorSendHandler<TicTacToeGameSpot, PlayActor, JoinGameMsg> {
+  @ZLinkSpotActorSend(PacketNames.joinGameMsg)
+  async handle(
+    spot: TicTacToeGameSpot,
+    actor: PlayActor,
+    _context: ZLinkMessageContext,
+    message: JoinGameMsg
+  ): Promise<void> {
+    let state: GameState;
+    try {
+      state = spot.currentState(actor.actorId, message.roomId);
+    } catch (error) {
+      await actor.push(new JoinGameFailedNotify(
+        message.roomId,
+        error instanceof Error ? error.message : String(error)
+      ));
+      return;
+    }
+    await actor.push(joinGameNotify(state));
+  }
+}
+
+@Injectable()
 // --8<-- [start:doc-actor-packet-handler]
 class PlayActorPlaceMarkHandler
   implements ZLinkSpotActorRequestHandler<TicTacToeGameSpot, PlayActor, PlaceMarkReq, PlaceMarkRes> {
+  @ZLinkSpotActorRequest(PacketNames.placeMarkReq)
   async handle(
     spot: TicTacToeGameSpot,
     actor: PlayActor,
@@ -29,4 +62,4 @@ class PlayActorPlaceMarkHandler
 }
 // --8<-- [end:doc-actor-packet-handler]
 
-export { PlayActorPlaceMarkHandler };
+export { PlayActorCurrentGameStateHandler, PlayActorPlaceMarkHandler };

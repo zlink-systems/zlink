@@ -1,5 +1,4 @@
-package Scenarios;
-import systems.zlink.e2e.spotservice.client.Scenarios;
+package systems.zlink.e2e.spotservice.client.Scenarios;
 import java.time.Duration;
 
 import java.util.UUID;

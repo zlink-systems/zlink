@@ -96,12 +96,12 @@ public final class PlayApplication {
                 return;
             }
             spots.getOrCreate("room-a", "probe")
-                .request(ZLinkMessage.of("bootstrap"))
+                .request(ZLinkMessage.of(new Contracts.SpotCreateReq("bootstrap")))
                 .submit()
                 .toCompletableFuture()
                 .join();
             spots.getOrCreate("room-b", "probe")
-                .request(ZLinkMessage.of("bootstrap"))
+                .request(ZLinkMessage.of(new Contracts.SpotCreateReq("bootstrap")))
                 .submit()
                 .toCompletableFuture()
                 .join();

@@ -29,6 +29,8 @@
         <Compile Include="CommonSampleContractInventoryRegressionTests.cs"/>
         <Compile Include="DeliveryDispatchRegressionTests.cs"/>
         <Compile Include="GameQuestRegressionTests.cs"/>
+        <Compile Include="E2EIsolationRegressionTests.cs"/>
+        <Compile Include="E2EWireNamingRegressionTests.cs"/>
         <Compile Include="E2ERunnerRegressionTests.cs"/>
         <Compile Include="ExecutionTurnRegressionTests.cs"/>
         <Compile Include="Regression.cs"/>

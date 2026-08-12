@@ -1,6 +1,5 @@
-package Support;
+package systems.zlink.e2e.registrationcodec.client.Support;
 
-import systems.zlink.e2e.registrationcodec.client.Support;
 import java.io.Reader;
 import java.nio.file.Files;
 import java.nio.file.Path;

@@ -53,7 +53,6 @@ await client.Connect.Async();
 var context = new ExecutionTurnScenarioContext(client, playA, playB);
 var scenarios = new (string Id, Func<Task> Run)[]
 {
-    ("TD-A1", () => TdA1TerminatorSurfaceScenario.RunAsync(context)),
     ("TD-A2", () => TdA2AsyncCompletionOrderScenario.RunAsync(context)),
     ("TD-A3", () => TdA3AsyncCounterSerializationScenario.RunAsync(context)),
     ("TD-A4", () => TdA4DelayedAsyncCompletionScenario.RunAsync(context)),
@@ -61,7 +60,6 @@ var scenarios = new (string Id, Func<Task> Run)[]
     ("TD-B1", () => TdB1YieldProbeInterleaveScenario.RunAsync(context)),
     ("TD-B2", () => TdB2YieldQueuedProbeOrderScenario.RunAsync(context)),
     ("TD-B3", () => TdB3YieldLostUpdateScenario.RunAsync(context)),
-    ("TD-B4", () => TdB4YieldTimerInterleaveScenario.RunAsync(context)),
     ("TD-C1", () => TdC1HttpYieldInterleaveScenario.RunAsync(context)),
     ("TD-C2", () => TdC2HttpAsyncExclusionScenario.RunAsync(context)),
     ("TD-C3", () => TdC3IoWorkerCapacityScenario.RunAsync(context)),

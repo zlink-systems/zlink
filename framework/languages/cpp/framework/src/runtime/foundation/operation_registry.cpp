@@ -25,6 +25,28 @@ struct operation_completion_item_t
     std::unique_ptr<operation_completion_item_t> next;
 };
 
+struct operation_completion_chain_t
+{
+    void append (std::unique_ptr<operation_completion_item_t> completion,
+                 operation_terminal_t terminal,
+                 std::vector<std::uint8_t> payload = {}) noexcept
+    {
+        completion->terminal = terminal;
+        completion->payload = std::move (payload);
+        auto *next_tail = completion.get ();
+        if (tail)
+            tail->next = std::move (completion);
+        else
+            head = std::move (completion);
+        tail = next_tail;
+        ++size;
+    }
+
+    std::unique_ptr<operation_completion_item_t> head;
+    operation_completion_item_t *tail = nullptr;
+    std::size_t size = 0;
+};
+
 class operation_completion_dispatcher_t
 {
   public:
@@ -76,16 +98,23 @@ class operation_completion_dispatcher_t
                operation_terminal_t terminal,
                std::vector<std::uint8_t> payload) noexcept
     {
-        completion->terminal = terminal;
-        completion->payload = std::move (payload);
-        auto *tail = completion.get ();
+        operation_completion_chain_t completions;
+        completions.append (
+          std::move (completion), terminal, std::move (payload));
+        post_chain (std::move (completions));
+    }
+
+    void post_chain (operation_completion_chain_t completions) noexcept
+    {
+        if (!completions.head)
+            return;
         {
             std::lock_guard lock (_state->mutex);
             if (_state->tail)
-                _state->tail->next = std::move (completion);
+                _state->tail->next = std::move (completions.head);
             else
-                _state->head = std::move (completion);
-            _state->tail = tail;
+                _state->head = std::move (completions.head);
+            _state->tail = completions.tail;
         }
         _state->ready.notify_one ();
     }
@@ -281,49 +310,45 @@ bool operation_registry_t::fail (
 
 std::size_t operation_registry_t::expire (clock_t::time_point now)
 {
-    std::vector<std::unique_ptr<operation_completion_item_t>> completions;
+    operation_completion_chain_t completions;
     {
         std::lock_guard lock (_mutex);
-        completions.reserve (_pending.size ());
         for (auto entry = _pending.begin (); entry != _pending.end ();) {
             if (entry->second.deadline > now) {
                 ++entry;
                 continue;
             }
-            completions.push_back (
-              std::move (entry->second.completion));
+            completions.append (
+              std::move (entry->second.completion),
+              operation_terminal_t::timed_out);
             entry = _pending.erase (entry);
         }
     }
-    for (auto &completion : completions) {
-        notify (_completion_dispatcher, std::move (completion),
-                operation_terminal_t::timed_out, {});
-    }
-    return completions.size ();
+    const auto expired = completions.size;
+    _completion_dispatcher->post_chain (std::move (completions));
+    return expired;
 }
 
 std::size_t operation_registry_t::shutdown ()
 {
-    std::vector<std::unique_ptr<operation_completion_item_t>> completions;
+    operation_completion_chain_t completions;
     {
         std::lock_guard lock (_mutex);
         if (_closed) {
             return 0;
         }
         _closed = true;
-        completions.reserve (_pending.size ());
         for (auto &[id, pending] : _pending) {
             static_cast<void> (id);
-            completions.push_back (
-              std::move (pending.completion));
+            completions.append (
+              std::move (pending.completion),
+              operation_terminal_t::shutdown);
         }
         _pending.clear ();
     }
-    for (auto &completion : completions) {
-        notify (_completion_dispatcher, std::move (completion),
-                operation_terminal_t::shutdown, {});
-    }
-    return completions.size ();
+    const auto stopped = completions.size;
+    _completion_dispatcher->post_chain (std::move (completions));
+    return stopped;
 }
 
 std::size_t operation_registry_t::size () const

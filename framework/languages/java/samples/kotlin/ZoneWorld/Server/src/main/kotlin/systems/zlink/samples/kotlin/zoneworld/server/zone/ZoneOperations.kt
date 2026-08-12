@@ -7,6 +7,7 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import org.springframework.boot.ApplicationArguments
 import org.springframework.boot.ApplicationRunner
+import org.springframework.context.SmartLifecycle
 import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.actors.ZLinkActorManager
 import systems.zlink.framework.channels.ZLinkRouteClient
@@ -55,12 +56,23 @@ class ZoneStatusReporter(
     private val routes: ZLinkRouteClient,
     private val census: NodeCensus,
     private val maintenance: NodeMaintenanceState,
-) : AutoCloseable {
-    private val scheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { runnable ->
-        Thread(runnable, "zoneworld-status-${topology.nodeValue()}").apply { isDaemon = true }
+) : SmartLifecycle, AutoCloseable {
+    private val lifecycleLock = Any()
+    private var scheduler: ScheduledExecutorService? = null
+    private var running = false
+
+    override fun start() = synchronized(lifecycleLock) {
+        if (running) return@synchronized
+        val createdScheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "zoneworld-status-${topology.nodeValue()}").apply { isDaemon = true }
+        }
+        scheduler = createdScheduler
+        running = true
+        createdScheduler.scheduleAtFixedRate(::report, 0, 1, TimeUnit.SECONDS)
     }
-    init { scheduler.scheduleAtFixedRate(::report, 0, 1, TimeUnit.SECONDS) }
-    private fun report() {
+
+    private fun report() = synchronized(lifecycleLock) {
+        if (!running) return@synchronized
         try {
             routes.sendToChannel(
                 ZoneWorldNames.REPORT_CHANNEL,
@@ -79,7 +91,24 @@ class ZoneStatusReporter(
             println("report failed node=${topology.nodeValue()} detail=${error.message}")
         }
     }
-    override fun close() { scheduler.shutdownNow() }
+
+    override fun stop() = synchronized(lifecycleLock) {
+        running = false
+        scheduler?.shutdownNow()
+        scheduler = null
+    }
+
+    override fun stop(callback: Runnable) {
+        try {
+            stop()
+        } finally {
+            callback.run()
+        }
+    }
+
+    override fun isRunning() = synchronized(lifecycleLock) { running }
+    override fun getPhase() = 1
+    override fun close() = stop()
 }
 
 @ZLinkHandlerGroup(ZoneWorldNames.OPS_HANDLER_GROUP)

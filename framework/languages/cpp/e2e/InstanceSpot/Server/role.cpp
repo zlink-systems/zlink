@@ -185,9 +185,9 @@ class scenario_instance_spot_t final : public fw::instance_spot_t
     {
         _context.handlers ()
           .add_handler<&scenario_instance_spot_t::handle_request> (
-            e2e::probe_request_t::packet_name)
+            e2e::probe_req_t::packet_name)
           .add_handler<&scenario_instance_spot_t::handle_send> (
-            e2e::probe_message_t::packet_name);
+            e2e::probe_msg_t::packet_name);
     }
 
     fw::task_t<void> on_initialize () override
@@ -202,7 +202,7 @@ class scenario_instance_spot_t final : public fw::instance_spot_t
         co_return;
     }
 
-    e2e::probe_reply_t handle_request (const e2e::probe_request_t &request)
+    e2e::probe_res_t handle_request (const e2e::probe_req_t &request)
     {
         _evidence.entered (request.operation_id, request.spot_id);
         _evidence.completed (request.operation_id, request.spot_id);
@@ -212,7 +212,7 @@ class scenario_instance_spot_t final : public fw::instance_spot_t
                 .instance_spot = true};
     }
 
-    void handle_send (const e2e::probe_message_t &message)
+    void handle_send (const e2e::probe_msg_t &message)
     {
         _evidence.entered (message.operation_id, message.spot_id);
         _evidence.completed (message.operation_id, message.spot_id);
@@ -317,14 +317,14 @@ class instance_request_handler_t
 
     fw::task_t<fw::http_response_t> handle (const fw::http_request_t &http)
     {
-        const auto request = nlohmann::json::parse (http.body).get<e2e::probe_request_t> ();
+        const auto request = nlohmann::json::parse (http.body).get<e2e::probe_req_t> ();
         try {
             const auto reply = co_await _routes
                                  .request_to_spot (request.spot_id, request)
                                  .instance_spot (e2e::spot_type)
                                  .in_mesh (e2e::mesh_name)
                                  .timeout (std::chrono::seconds (5))
-                                 .submit<e2e::probe_reply_t> ();
+                                 .submit<e2e::probe_res_t> ();
             co_return json_response (reply);
         }
         catch (const fw::framework_exception_t &error) {
@@ -347,7 +347,7 @@ class instance_send_handler_t
 
     fw::task_t<fw::http_response_t> handle (const fw::http_request_t &http)
     {
-        const auto request = nlohmann::json::parse (http.body).get<e2e::probe_message_t> ();
+        const auto request = nlohmann::json::parse (http.body).get<e2e::probe_msg_t> ();
         try {
             co_await _routes
               .send_to_spot (request.spot_id, request)

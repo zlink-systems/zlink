@@ -326,10 +326,17 @@ final class ZLinkActorTransferHandoffTest {
             ZLinkSpotKind.USER);
         handoff.retain(
             "actor", ref("source", 7), ref("target", 7),
-            targetAddress, targetRoute, Duration.ofMinutes(1), ignored -> { });
+            targetAddress, sourceRoute, targetRoute,
+            Duration.ofMinutes(1), ignored -> { });
 
         ZLinkActorTransferHandoff.MessageFollowSource source =
             handoff.messageFollowSource("actor").orElseThrow();
+        ZLinkServiceMessageFollowWireCodec.ActorRoute newerSourceRoute =
+            new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+                "actor", 7, RoutingId.from("source"), 2, 4, 4);
+        assertTrue(source.matchesSourceRoute(sourceRoute));
+        assertFalse(source.matchesSourceRoute(newerSourceRoute));
+        assertTrue(source.beginMessageFollowNotice(newerSourceRoute).isEmpty());
         ZLinkMessageFollowSuppressionRegistry.Claim first =
             source.beginMessageFollowNotice(sourceRoute).orElseThrow();
         assertTrue(source.beginMessageFollowNotice(sourceRoute).isEmpty());
@@ -368,6 +375,9 @@ final class ZLinkActorTransferHandoffTest {
     @Test
     void messageFollowRetainsTargetRouteFenceAtInstallation() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
+        ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute =
+            new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+                "actor", 7, RoutingId.from("source"), 2, 3, 4);
         ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute =
             new ZLinkServiceMessageFollowWireCodec.ActorRoute(
                 "actor", 7, RoutingId.from("target"), 11, 13, 17);
@@ -376,8 +386,11 @@ final class ZLinkActorTransferHandoffTest {
             ZLinkSpotKind.USER);
         handoff.retain(
             "actor", ref("source", 7), ref("target", 7), targetAddress,
-            targetRoute, Duration.ofMinutes(1), ignored -> { });
+            sourceRoute, targetRoute, Duration.ofMinutes(1), ignored -> { });
 
+        assertEquals(
+            sourceRoute,
+            handoff.messageFollowSource("actor").orElseThrow().sourceRoute());
         assertEquals(
             targetRoute,
             handoff.messageFollowSource("actor").orElseThrow().targetRoute());
@@ -393,7 +406,7 @@ final class ZLinkActorTransferHandoffTest {
 
         assertThrows(IllegalArgumentException.class, () -> handoff.retain(
             "actor", ref("source", 7), ref("target", 7), targetAddress,
-            null, Duration.ofMinutes(1), ignored -> { }));
+            null, null, Duration.ofMinutes(1), ignored -> { }));
         handoff.close();
     }
 

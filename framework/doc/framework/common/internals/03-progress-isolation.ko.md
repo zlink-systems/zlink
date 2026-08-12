@@ -213,7 +213,7 @@ backpressure가 필요한 시점에 신호가 약해진다. `R`은 configuration
 [8. 객체 종류와 활성화 「6. 메모리 회계를 어느 단위로 하는가」](08-object-lifecycle.ko.md#6-메모리-회계를-어느-단위로-하는가)이 다룬다.
 
 이동 중 보류에 별도 상한을 두지 않는 근거는
-[Host Relocate와 Shutdown 「9. 대기 중인 message, timer와 session을 옮긴다」](../spec/28-graceful-drain-handoff.ko.md#9-대기-중인-message-timer와-session을-옮긴다)이며,
+[Host relocation 전체 흐름 「9. 대기 중인 message, timer와 session을 옮긴다」](../spec/30-host-relocation-flow.ko.md#9-대기-중인-message-timer와-session을-옮긴다)이며,
 보관·복원·relay 순서는 [5. 이동 중 연속성](05-relocation-continuity.ko.md)이 다룬다.
 
 ## 7. 이 결정이 만드는 구현 제약
@@ -224,9 +224,33 @@ infrastructure 전용 작업을 부르거나 그 반대가 되면, 나눈 의미
 실행 중인 영역은 문맥 표시로 확인하고, 잘못된 조합이면 **기다리지 않고 실패로 끝낸다.**
 대기로 처리하면 교착이 되고, 통과시키면 분리가 무너지므로 실패가 맞다.
 
-**언어별 재량.** 영역을 대기열 두 개로 만들지 우선순위 하나로 만들지, 문맥을 어떻게
-표시할지는 자유다. 관찰 기준은 하나다 — application handler를 인위적으로 대기시킨
-상태에서 호출 timeout·종료 절차·peer 연결 처리가 진행되는지.
+두 영역은 owner마다 물리적으로 다른 FIFO로 둔다. Application FIFO와 lifecycle FIFO는
+건수·byte reservation과 admission 상태를 서로 공유하지 않는다. Application FIFO가 가득
+차도 이미 수락한 lifecycle 작업을 넣고 실행할 수 있어야 하기 때문이다. 두 FIFO의
+우선순위와 굶주림 방지 규칙은 [2. Spot·Actor 실행 직렬화](02-serialization.ko.md)가 설명한다.
+
+Owner가 늘어날 때 실행 thread나 executor를 owner마다 만들지는 않는다. FIFO와 실행 상태는
+owner가 소유하지만, 실제 작업을 실행하는 자원은 process 단위로 공유한다. 비어 있던 FIFO에
+첫 작업을 넣은 경로가 공유 실행 자원에 즉시 signal 또는 callback을 보낸다. 따라서 다음
+처리를 시작하기 위해 주기적으로 owner들을 훑지 않는다.
+
+```mermaid
+flowchart LR
+    subgraph O["owner 하나가 소유하는 상태"]
+        A["application FIFO<br/>독립 count · byte reservation"]
+        L["lifecycle FIFO<br/>독립 count · byte reservation"]
+        G["직렬 실행 상태<br/>현재 turn과 공정성"]
+    end
+    A --> G
+    L --> G
+    G -- "실행할 작업" --> E["process 공유 실행 자원"]
+    A -. "empty → non-empty에서 즉시 signal" .-> E
+    L -. "empty → non-empty에서 즉시 signal" .-> E
+```
+
+현재 실행 영역은 문맥 표시로 구분한다. 이 표시를 thread 종류에만 연결하면 Node의 단일
+event loop나 thread pool 위에서 실행되는 .NET 경로를 표현할 수 없다. 언어별 실행 수단은
+달라도, 잘못된 영역 호출은 같은 방식으로 기다리지 않고 실패해야 한다.
 
 ## 8. 확인할 결과
 
@@ -241,6 +265,8 @@ infrastructure 전용 작업을 부르거나 그 반대가 되면, 나눈 의미
   결과를 바꾸지 않고 관측에만 남는다.
 - application 문맥에서 infrastructure 전용 작업을 호출하면 기다리지 않고 실패한다.
 - infrastructure 실행 자원이 topology 수나 Spot 수에 따라 늘지 않는다.
+- owner마다 application·lifecycle FIFO와 admission reservation이 분리되어 있다.
+- 비어 있던 FIFO에 첫 작업이 들어오면 주기적 확인을 기다리지 않고 실행 자원을 깨운다.
 - 송신 공간을 기다리는 작업이 실행 권한을 쥐고 있지 않다.
 - 송신 대기 자리가 가득 차면 기다리지 않고 실패한다.
 

@@ -22,13 +22,16 @@ public final class Contracts {
     public record WorkRes(String value, String providerRid) {
     }
 
-    public record PlacementActorDestroyRequest(String actorId) {
+    public record PlacementActorDestroyReq(String actorId) {
     }
 
-    public record PlacementActorDestroyResponse(String actorId, boolean destroyed) {
+    public record PlacementActorDestroyRes(String actorId, boolean destroyed) {
     }
 
-    public record SpotSubjectProbe(String value) {
+    public record SpotCreateReq(String reason) {
+    }
+
+    public record SpotSubjectProbeEvent(String value) {
     }
 
     public record EvidenceEntry(String surface, String sourceName, String event, String detail) {

@@ -1,7 +1,6 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
 import { bingoFrameworkProtobuf } from '../../Shared/Contracts/protobuf-framework-codec';
 import { PlayerActorFactory } from './Infrastructure/ZLink/Actors/player-actor-factory';
-import { PendingBingoActorDestroyRegistry } from './Infrastructure/ZLink/Actors/player-actor-lifecycle-handlers';
 import { PlayerActorRelocationAdapter } from './Infrastructure/ZLink/Actors/player-actor-relocation-adapter';
 import { BingoEntrySpot } from './Infrastructure/ZLink/Spots/EntrySpot/bingo-entry-spot';
 import { BingoRoomSpot } from './Infrastructure/ZLink/Spots/BingoRoomSpot/bingo-room-spot';
@@ -65,7 +64,6 @@ function createBingoPlayModule() {
     providers: [
       PlayerActorFactory,
       PlayerActorRelocationAdapter,
-      PendingBingoActorDestroyRegistry,
       BingoEntrySpot,
       RoomRouterReadinessHandler
     ]

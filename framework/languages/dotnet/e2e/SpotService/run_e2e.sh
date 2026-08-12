@@ -4,6 +4,7 @@ umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../redis-common.sh"
+zlink_dotnet_e2e_acquire_run_lock "$0" "$@"
 PLAY_PROJECT="$SCRIPT_DIR/Server/Play/SpotService.Play.csproj"
 SESSION_PROJECT="$SCRIPT_DIR/Server/Session/SpotService.Session.csproj"
 MULTI_NODE_PROJECT="$SCRIPT_DIR/Server/MultiNode/SpotService.MultiNode.csproj"
@@ -83,11 +84,14 @@ case "$SCENARIO_SET" in
   sm-a7-a8-c4)
     NEED_SESSION_NODES=0
     ;;
-  sm-e1-f4|sm-a5|sm-g2|sm-g5|sm-g5a|sm-g5b)
+  sm-a5|sm-g2|sm-g5|sm-g5a|sm-g5b)
     NEED_SESSION_NODES=0
     if [[ "$SCENARIO_SET" != "sm-g2" && "$SCENARIO_SET" != "sm-g5" && "$SCENARIO_SET" != "sm-g5a" && "$SCENARIO_SET" != "sm-g5b" ]]; then
       NEED_PLAY_B=0
     fi
+    ;;
+  sm-e1-f4)
+    NEED_PLAY_B=0
     ;;
   sm-c6)
     NEED_SESSION_NODES=0
@@ -125,7 +129,7 @@ case "$SCENARIO_SET" in
     NEED_SESSION_NODES=0
     NEED_PLAY_B=0
     ;;
-  sm-d1-d6|sm-d4a|sm-d4b|sm-d10|sm-d12|sm-g1)
+  sm-d2-d6|sm-d4a|sm-d4b|sm-d10|sm-d12|sm-g1)
     NEED_SESSION_B=1
     if [[ "$SCENARIO_SET" == "sm-d4b" ]]; then
       NEED_MESSAGE_FOLLOW_PROXY=1
@@ -140,7 +144,7 @@ case "$SCENARIO_SET" in
     NEED_SESSION_B=1
     ;;
 esac
-if scenario_selector_contains sm-d1-d6 \
+if scenario_selector_contains sm-d2-d6 \
   || scenario_selector_contains sm-d10 \
   || scenario_selector_contains sm-d4a \
   || scenario_selector_contains sm-d4b \
@@ -207,7 +211,7 @@ if [[ "$SCENARIO_SET" == "all" && "$ALL_CHILD" != "1" ]]; then
     child_stderr_log="$LOG_DIR/child-${child_group}.stderr.log"
     child_status=0
     if timeout "${CHILD_PROCESS_TIMEOUT_SECONDS}s" \
-        "$SCRIPT_DIR/run_e2e.sh" --all-child --skip-build --start-order "$E2E_START_ORDER" "$child_group" \
+        bash "$SCRIPT_DIR/run_e2e.sh" --all-child --skip-build --start-order "$E2E_START_ORDER" "$child_group" \
         >"$child_stdout_log" 2>"$child_stderr_log"; then
       child_status=0
     else
@@ -245,7 +249,7 @@ cleanup() {
   fi
   rm -rf "$CONFIG_DIR"
   if [[ -n "${REDIS_CONTAINER:-}" ]]; then
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   for pid in "${PIDS[@]}"; do
     if kill -0 "$pid" 2>/dev/null; then
@@ -284,31 +288,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'cleanup; exit 143' TERM INT
 
-PORT_LIST="$(python3 - <<'PY'
-import random
-import socket
-
-sockets = []
-try:
-    chosen = set()
-    while len(sockets) < 140:
-        port = random.randint(10000, 60999)
-        if port in chosen:
-            continue
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            sock.bind(("127.0.0.1", port))
-        except OSError:
-            sock.close()
-            continue
-        chosen.add(port)
-        sockets.append(sock)
-    print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
-)"
+PORT_LIST="$(zlink_dotnet_e2e_allocate_ports 140)"
 read -r -a PORTS <<<"$PORT_LIST"
 
 PLAY_A_HTTP="http://127.0.0.1:${PORTS[3]}"
@@ -1511,12 +1491,12 @@ if [[ "$SCENARIO_SET" == "track-g" ]]; then
   run_client sm-g5b
   run_client sm-g1
 elif [[ "$SCENARIO_SET" == "all" || "$SCENARIO_SET" == "default-batch" ]]; then
-  run_client sm-b1-b2-b3-b5
+  run_client sm-b1-b2-b3
   run_client sm-b0
   run_client sm-b6
   run_client sm-b8
   run_client sm-b9
-  run_client sm-d1-d6
+  run_client sm-d2-d6
   run_client sm-d3
   run_client sm-d4
   run_client sm-d4a

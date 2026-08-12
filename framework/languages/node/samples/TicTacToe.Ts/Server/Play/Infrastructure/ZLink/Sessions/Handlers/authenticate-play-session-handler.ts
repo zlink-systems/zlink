@@ -1,16 +1,17 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ZLINK_ACTOR_MANAGER, ZLINK_ROUTE_CLIENT } from '@zlink-systems/nestjs';
+import { ZLINK_ACTOR_MANAGER, ZLINK_CHANNEL_CLIENT } from '@zlink-systems/nestjs';
 import { SampleNames } from '../../../../../Configuration/sample-settings';
 import {
   AuthenticateReq,
   PacketNames,
+  PlayerActorCreateReq,
   authenticatePlayerReq,
   authenticateRes
 } from '../../../../../../Shared/Contracts/messages';
 import {
   ZLinkPacket,
   type ZLinkActorManager,
-  type ZLinkRouteClient,
+  type ZLinkChannelClient,
   type ZLinkMessage,
   type ZLinkSessionContext,
   type ZLinkSessionDispatchContext
@@ -23,7 +24,7 @@ import type { AuthenticatePlayerRes } from '../../../../../../Shared/Contracts/m
 class AuthenticatePlaySessionHandler {
   constructor(
     @Inject(ZLINK_ACTOR_MANAGER) private readonly actors: ZLinkActorManager,
-    @Inject(ZLINK_ROUTE_CLIENT) private readonly api: ZLinkRouteClient
+    @Inject(ZLINK_CHANNEL_CLIENT) private readonly api: ZLinkChannelClient
   ) {}
 
   async handle(context: ZLinkSessionContext, _dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
@@ -37,13 +38,21 @@ class AuthenticatePlaySessionHandler {
     const created = await this.actors
       .getOrCreate(authenticated.player.actorId, SampleNames.playerActorType)
       .inMesh(SampleNames.playSpotNode)
-      .request(authenticated.player)
+      .request(new PlayerActorCreateReq(authenticated.player))
       .submit();
     if (created.status === 'rejected') {
       throw new Error(`Player actor '${authenticated.player.actorId}' creation was rejected.`);
     }
     const actorRef = created.actor;
     await context.actors.bindOrGet(actorRef);
+    if (created.status === 'existing') {
+      // Keep the exact ActorRef as server-only evidence. AuthenticateRes exposes
+      // PlayerInfo only, so the client cannot choose or forge an Actor route.
+      console.log(
+        `tictactoe-auth existing-actor-bound actor=${actorRef.actorId} ` +
+        `mesh=${actorRef.meshName} nodeRid=${actorRef.nodeRid} generation=${actorRef.objectGeneration}`
+      );
+    }
     context.client.reply(authenticateRes(authenticated.player)).submit();
   }
 }

@@ -114,7 +114,7 @@ class ServiceApplication {
             spots.getOrCreate(
                 "monitoring-room",
                 "monitoring",
-            ).request(ZLinkMessage.empty())
+            ).request(ZLinkMessage.of(Contracts.SpotCreateReq("bootstrap")))
                 .submit()
                 .toCompletableFuture()
                 .join()

@@ -363,8 +363,8 @@ public final class ChannelEgressHttpServer implements SmartLifecycle {
     }
 
     private void fanoutPublish(HttpExchange exchange) throws Exception {
-        Contracts.FanoutProbe request = HttpSupport.readJson(
-            exchange, json, Contracts.FanoutProbe.class);
+        Contracts.FanoutProbeEvent request = HttpSupport.readJson(
+            exchange, json, Contracts.FanoutProbeEvent.class);
         fanout.publish(Contracts.FANOUT_CHANNEL, request)
             .submit()
             .toCompletableFuture()

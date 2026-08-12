@@ -1,8 +1,6 @@
-package Handlers
+package systems.zlink.e2e.kotlin.registrymessaging.provider.Handlers
 
 
-import systems.zlink.e2e.kotlin.registrymessaging.provider.Handlers
-import systems.zlink.e2e.kotlin.registrymessaging.provider.Infrastructure
 import java.util.logging.Handler
 import java.util.logging.LogRecord
 import java.util.logging.Logger

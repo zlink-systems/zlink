@@ -9,7 +9,6 @@ import type {
   RoutingId,
   ZLinkChannelClient,
   ZLinkChannelRequestCall,
-  ZLinkFanoutClient,
   ZLinkPublishCall,
   ZLinkRequestCall,
   ZLinkSendCall,
@@ -41,19 +40,38 @@ import {
   type ResolvedSpotHandle
 } from './spot-handle';
 
+export interface DefaultZLinkSpotOutboundOptions {
+  readonly serial: ZLinkSpotSerialExecutor;
+  readonly channelClient?: ZLinkChannelClient;
+  readonly spotPublisherClient?: ZLinkSpotPublisherClient;
+  readonly routedTransport?: ZLinkSpotRoutedTransport;
+  readonly spotRouterChannelIdForMesh?: (meshName: string) => string;
+  readonly sourceSpotProvider?: () => ZLinkBackendSpot | undefined;
+  readonly meshName?: string;
+  readonly addressTransport?: ZLinkSpotAddressTransport;
+}
+
 export class DefaultZLinkSpotOutbound implements ZLinkSpotOutbound {
-  constructor(
-    private readonly serial: ZLinkSpotSerialExecutor,
-    private readonly channelClient?: ZLinkChannelClient,
-    _fanoutClient?: ZLinkFanoutClient,
-    private readonly spotPublisherClient?: ZLinkSpotPublisherClient,
-    private readonly routedTransport?: ZLinkSpotRoutedTransport,
-    private readonly spotRouterChannelIdForMesh: (meshName: string) => string = (meshName) => meshName,
-    private readonly sourceSpotProvider?: () => ZLinkBackendSpot | undefined,
-    private readonly meshName?: string,
-    _channelMeshNameForChannel?: (channelName: string) => string | undefined,
-    private readonly addressTransport?: ZLinkSpotAddressTransport
-  ) {}
+  private readonly serial: ZLinkSpotSerialExecutor;
+  private readonly channelClient: ZLinkChannelClient | undefined;
+  private readonly spotPublisherClient: ZLinkSpotPublisherClient | undefined;
+  private readonly routedTransport: ZLinkSpotRoutedTransport | undefined;
+  private readonly spotRouterChannelIdForMesh: (meshName: string) => string;
+  private readonly sourceSpotProvider: (() => ZLinkBackendSpot | undefined) | undefined;
+  private readonly meshName: string | undefined;
+  private readonly addressTransport: ZLinkSpotAddressTransport | undefined;
+
+  constructor(options: DefaultZLinkSpotOutboundOptions) {
+    this.serial = options.serial;
+    this.channelClient = options.channelClient;
+    this.spotPublisherClient = options.spotPublisherClient;
+    this.routedTransport = options.routedTransport;
+    this.spotRouterChannelIdForMesh = options.spotRouterChannelIdForMesh
+      ?? ((meshName) => meshName);
+    this.sourceSpotProvider = options.sourceSpotProvider;
+    this.meshName = options.meshName;
+    this.addressTransport = options.addressTransport;
+  }
 
   sendToSpot(spotId: RoutingId, message: unknown): ZLinkSpotSendCall;
   /** @internal Compatibility path for an already resolved handle. */

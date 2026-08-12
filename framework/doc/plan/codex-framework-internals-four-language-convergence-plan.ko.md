@@ -104,7 +104,7 @@ IC 결정
 | IC-03 | runtime마다 application/lifecycle queue의 물리 분리, 실행 자원 공급과 wakeup 방식이 다르다. | `03-progress-isolation`, `07-dispatch-loop` | owner마다 application/lifecycle 물리 FIFO와 독립 admission state를 두고 process-wide 실행 자원을 주입한다. empty→non-empty는 즉시 signal/callback으로 깨운다. | application 포화가 lifecycle을 막거나 owner 수에 따라 thread/executor가 늘고, polling 주기만큼 처리가 늦어진다. |
 | IC-04 | admission의 state 확인, capacity 예약, sequence 발급과 enqueue가 같은 commit인지 네 call path의 검증이 끝나지 않았다. | `03-progress-isolation`, `07-dispatch-loop` | state 확인, count·byte 예약, sequence 발급, enqueue commit을 한 선형화 지점에서 처리한다. 거부·enqueue 실패는 capacity와 authority를 전진시키지 않는다. | 거부된 작업이 capacity를 소비하거나 sequence·authority를 전진시켜 이후 정상 작업이 실패한다. |
 | IC-05 | .NET/JVM/C++/Node가 중간 상태 합치기, terminal 보존과 subscriber 실행 자원을 서로 다르게 관리한다. | `10-liveness-and-state` | subscriber별 source-latest intermediate와 terminal FIFO 64, shared dispatcher, intermediate/terminal loss counter를 사용한다. | 느린 observer에서 terminal event가 사라지거나 순서와 loss metric이 달라지고 subscriber 수만큼 thread가 증가한다. |
-| IC-06 | relocation 구현의 seal, accepted high-water, ingress 차단, duplicate와 restart 처리가 하나의 공통 상태 기계로 입증되지 않았다. | `05-relocation-continuity`, `09-session-binding`, `12-service-wire-protocol` | command 42/43이 exact fence와 accepted high-water로 capture/replay 장벽을 만든다. Target은 restore·queue merge·dispatch switch 뒤 application admission과 Ready를 먼저 연다. command 44/45 route switch·ACK는 `Completed` 단계의 비동기 수렴이며 Ready를 막지 않는다. | 이동 중 수락한 message가 유실·중복되거나 stale session ingress가 새 owner에 전달되고, route ACK 지연 때문에 정상 target admission까지 멈춘다. |
+| IC-06 | relocation 구현의 seal, accepted high-water, ingress 차단, duplicate와 restart 처리가 하나의 공통 상태 기계로 입증되지 않았다. | `05-relocation-continuity`, `09-session-binding`, `12-service-wire-protocol` | command 42/43이 exact fence와 accepted high-water로 capture/replay 장벽을 만든다. Target은 restore·queue merge·dispatch switch 뒤 application admission과 Ready를 먼저 연다. Commit command 44/45는 `Completed` 단계의 비동기 route 수렴이고, abort command 44/45는 `Aborted` 단계의 source seal 복구다. | 이동 중 수락한 message가 유실·중복되거나 stale session ingress가 새 owner에 전달되고, route ACK 지연 때문에 정상 target admission까지 멈춘다. |
 | IC-07 | Message Follow의 suppression key와 reply/completion 책임이 runtime마다 다른 모듈에 섞여 있다. | `05-relocation-continuity`, `06-routing-and-cache`, `12-service-wire-protocol` | exact route fence 전체를 key로 쓰는 전용 registry에서 `idle/inFlight/sentUntilExpiry`를 관리한다. stale fence, expiry와 target별 multicast identity를 같은 방식으로 처리한다. | 같은 알림이 반복 전송되거나 이전 fence의 억제 기록이 새 target 알림까지 막는다. |
 | IC-08 | reply, timeout, cancellation과 close가 만날 때 terminal winner와 callback dispatch 경계의 call path 검증이 끝나지 않았다. | `04-completion`, `12-service-wire-protocol` | wire `OperationId`의 `{high:u64, low:u64}` identity와 별도 `ReplyRouteId`를 보존한다. 완료 표에서 entry를 원자적으로 가져간 경로만 terminal winner가 되고 callback/promise/coroutine 완료는 lock 밖에서 dispatch한다. | 축소한 ID가 다른 operation과 충돌하거나 한 operation이 두 번 완료되며, lock 안 callback 재진입으로 교착 상태가 생긴다. |
 | IC-09 | Entry/User/Instance의 차이를 일부 runtime이 tag와 조건 분기로 표현해 invalid kind/state 조합을 만들 수 있다. | `08-object-lifecycle` | 세 종류를 invalid 조합을 만들 수 없는 domain variant로 표현한다. activation, relocation, idle close와 destroy 규칙은 종류별 aggregate가 소유한다. | 이동하지 않는 종류가 relocation되거나 유휴 정리 대상이 아닌 객체가 닫히는 등 lifecycle 결과가 달라진다. |
@@ -271,7 +271,7 @@ before/after 의미와 파생 보장, migration을 포함한 별도 변경 승�
 | IC-03 | progress lane | owner마다 `application`/`lifecycle` 두 FIFO와 독립 admission state를 두고 process-wide 실행 자원을 주입하며 즉시 signal/callback으로 깨움 | `DIVERGED` |
 | IC-04 | admission | state check, count·byte reserve, sequence 할당, enqueue를 하나의 선형화 지점에서 처리 | `UNVERIFIED` |
 | IC-05 | observation | subscriber별 source-latest map + terminal FIFO, 기본 64, shared dispatcher, 두 loss counter로 고정하고 push/pull은 소비 표면으로만 허용 | `DIVERGED` |
-| IC-06 | relocation seal | command 42/43 exact seal·high-water 장벽과 Ready 후 command 44/45 route 비동기 수렴, sealed ingress, duplicate idempotency를 단일 상태 기계로 고정 | `DIVERGED` |
+| IC-06 | relocation seal | command 42/43 exact seal·high-water 장벽, Ready 후 target commit 44/45와 source abort 44/45, sealed ingress, duplicate idempotency를 단일 상태 기계로 고정 | `DIVERGED` |
 | IC-07 | Message Follow | exact route-fence key의 전용 suppression registry와 `idle/inFlight/sentUntilExpiry` 상태를 사용 | `DIVERGED` |
 | IC-08 | completion | wire 128-bit `OperationId`와 별도 `ReplyRouteId`, 완료 표 entry의 단일 atomic take와 lock 밖 completion dispatch를 사용 | `UNVERIFIED` |
 | IC-09 | object kind | Entry/User/Instance를 서로 다른 domain variant로 만들고 wire tag는 domain 분기에 사용하지 않음 | `DIVERGED` |
@@ -489,7 +489,8 @@ lock, mutex, CAS, 단일 event-loop turn은 language mapping이다. 다음 결�
 - C++ codec에는 service wire command 42 `sessionRelocationSeal`과 command 43
   `sessionRelocationSealed`가 있고 ACK가 `last_accepted_session_sequence`를 운반한다.
 - Node session binding registry는 binding token, authority fence, accepted high-water,
-  seal identity를 한 route aggregate가 소유하며 sealed 동안 ingress를 거부한다.
+  seal identity를 한 route aggregate가 소유한다. Production relay는 sealed 동안 ingress를
+  즉시 거부하지 않고 `acceptWhenReady()`에서 payload와 reply context를 보관한 채 기다린다.
 - JVM은 42/43 경로와 ACK high-water token을 사용하지만 no-seal/restart fallback의 의미가
   C++의 exact ACK high-water 의미로 정렬해야 한다.
 - .NET은 generic relocation seal과 internal relay가 있으나 session route의 high-water와
@@ -507,7 +508,9 @@ lock, mutex, CAS, 단일 event-loop turn은 language mapping이다. 다음 결�
 #### 확정한 canonical 상태 기계
 
 1. 현재 binding의 정확한 identity와 authority fence가 맞을 때만 owner가 seal을 생성한다.
-2. seal 생성과 ingress 차단은 같은 선형화 지점에서 일어난다.
+2. seal 생성과 ingress 차단은 같은 선형화 지점에서 일어난다. 차단은 이전 binding의
+   accepted high-water를 더 전진시키거나 application dispatch로 보내지 않는다는 뜻이다.
+   Post-seal ingress는 즉시 실패시키지 않고 matching route switch 또는 abort까지 보관한다.
 3. command 43은 owner가 실제로 수락한 마지막 session sequence를 seal token과 함께
    반환한다.
 4. source는 command 43의 high-water까지 session record를 capture해 relocation state에
@@ -522,10 +525,12 @@ lock, mutex, CAS, 단일 event-loop turn은 language mapping이다. 다음 결�
    route를 atomic하게 바꾸고 command 45 `sessionRelocationRouted`로 ACK한다.
 7. 동일 bytes의 duplicate 42/43/44/45는 idempotent하고, 같은 identity에 다른 값이 오면
    `ProtocolError`다. 상태를 두 번 전진시키지 않는다.
-8. 42/43은 capture/replay 장벽의 phase와 deadline을 따르고, 44/45는 `Completed` phase의
-   route 수렴 규칙을 따른다. 44/45의 손실·재전송은 target application admission이나 Ready를
-   되돌리거나 지연시키지 않는다.
-9. abort는 같은 seal identity만 해제한다. 더 새 binding이나 다른 relocation seal을
+8. 42/43은 capture/replay 장벽의 phase와 deadline을 따른다. Commit 44/45는 target이 보내는
+   `Completed` phase의 route 수렴이고, abort 44/45는 source가 보내는 `Aborted` phase의 seal
+   복구다. 44/45의 손실·재전송은 target application admission이나 Ready를 되돌리거나
+   지연시키지 않는다.
+9. Source가 abort action의 command 44를 보내면 session owner는 같은 seal identity만 해제하고
+   command 45로 실제 seal high-water를 반환한다. 더 새 binding이나 다른 relocation seal을
    해제하지 않는다.
 10. no-seal 또는 restart 뒤 seal/high-water를 복원할 durable evidence가 없으면 relocation을
    `RelocationFailed`로 abort한다. 추정한 monotonic 값으로 command 44를 보내는 fallback은

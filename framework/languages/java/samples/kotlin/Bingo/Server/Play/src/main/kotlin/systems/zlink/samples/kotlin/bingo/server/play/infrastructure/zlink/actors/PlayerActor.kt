@@ -7,7 +7,6 @@ import systems.zlink.framework.actors.ZLinkActorJoinOperationId
 import systems.zlink.framework.actors.ZLinkActor
 import systems.zlink.framework.actors.ZLinkActorContext
 import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomJoinRes
-import systems.zlink.samples.kotlin.bingo.shared.contracts.MatchBingoRes
 
 class PlayerActor(
     private val actorId: String,
@@ -62,9 +61,7 @@ class PlayerActor(
             matchedRoomId = joined.state.roomId
         }
         joinRoom(matchedRoomId.orEmpty())
-        return context.boundSession()
-            .send(MatchBingoRes(matchedRoomId.orEmpty(), joined.state))
-            .submit()
+        return CompletableFuture.completedFuture(null)
     }
 
     fun markForDestroyAfterRoomLeave() {

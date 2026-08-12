@@ -183,7 +183,8 @@ import {
   ZLinkPacket,
   type ZLinkLocationRuntimeQuery,
   type ZLinkMessageFlowLogMode,
-  type ZLinkSessionSendCall
+  type ZLinkSessionSendCall,
+  type ZLinkSpotManager
 } from '@zlink-systems/framework';
 
 const diagnosticsLevels: readonly ZLinkMessageFlowLogMode[] = [
@@ -195,10 +196,21 @@ const diagnosticsLevels: readonly ZLinkMessageFlowLogMode[] = [
 declare const locations: ZLinkLocationRuntimeQuery;
 declare const send: ZLinkSessionSendCall;
 
+// A Spot handler that waits for another Spot creation must release its owner
+// turn explicitly. Compile this migration path from the packed public types so
+// the clean consumer cannot fall back to workspace sources.
+async function createFromSpotTurn(spots: ZLinkSpotManager) {
+  return await spots
+    .getOrCreate('packed-room', 'PackedRoomSpot')
+    .inMesh('packed-mesh')
+    .yield();
+}
+
 void diagnosticsLevels;
 void locations.findActorLocation('actor-a');
 void locations.findSpotLocation('spot-a');
 void send.timeout(1);
+void createFromSpotTurn;
 void ZLinkFrameworkErrorKind.NotConfigured;
 void ZLinkPacket('FixturePacket');
 // @ts-expect-error generated schema registration is not a public overload.

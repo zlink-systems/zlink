@@ -37,7 +37,7 @@ public final class ZoneEntrySpot implements ZLinkEntrySpot<PlayerActor> {
         if (request.isBot()) {
             actor.context().joinSpot(
                 zone,
-                new Messages.EnterZoneMsg(
+                new Messages.EnterZoneReq(
                     actor.actorId(),
                     request.x(),
                     request.y(),

@@ -11,7 +11,7 @@ export interface InstanceEvidence {
   readonly instanceCount: number;
 }
 
-interface InstanceReply {
+interface InstanceHttpRes {
   readonly status: string;
   readonly spotId: string;
   readonly operationId: string;
@@ -24,8 +24,8 @@ export async function requestInstance(
   spotId: string,
   operationId: string,
   action: string
-): Promise<InstanceReply> {
-  const reply = await postJson<InstanceReply>(context.callerUrl, '/instance/request', {
+): Promise<InstanceHttpRes> {
+  const reply = await postJson<InstanceHttpRes>(context.callerUrl, '/instance/request', {
     spotId,
     operationId,
     action

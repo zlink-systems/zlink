@@ -14,10 +14,9 @@
 | RM-B3 | done | provider handler-start 뒤 `SIGKILL`, crash 전파 구간의 bounded public 결과, owner lease 만료 뒤 남은 provider 20/20 성공, known/missing target 오류 종류를 검증한다. |
 | RM-C1 | done | request/send happy path를 검증한다. |
 | RM-C2 | done | route mesh target rid 정확성과 missing rid의 `RequestTargetNotFound`를 검증한다. known disconnected target의 `RouteNotConnected`는 RM-B3에서 함께 검증한다. |
-| RM-C3 | done | 수동 multi-endpoint 분산을 검증한다. |
 | RM-C4 | done | timeout 뒤 후속 request 비오염을 검증한다. |
 | RM-C5 | done | 미등록 packet request/send와 dispatch error evidence를 검증한다. |
-| RM-C7 | done | public `addRouteMesh(meshName).channel(channelName).server().setWeight(...)`로 build-time provider weight 75/25를 설정하고 high-weight provider가 더 많이 처리하는지 검증한다. |
+| RM-C7 | partial | build-time weighted profile은 구현했다. 통합된 equal-weight profile과 exact smooth weighted round-robin 순서 검증은 E2E 구현 단계에서 같은 scenario에 추가한다. |
 | RM-C8 | done | RouteMesh SS에 Framework-level `MaxMessageSize`를 설정하지 않고 1 byte, 4KiB, 256KiB, 1MiB payload의 length/hash 왕복과 후속 정상 request를 검증한다. StreamNode의 inbound 상한은 별도 계약이다. |
 | RM-C9 | 10.0.0 전환 대상 | 현재 runner는 다량 one-way send 제출과 backlog 해소 뒤 후속 request 회복을 검증한다. `submit()`의 최초 non-blocking 시도, bounded wait와 timeout 결과를 직접 검증해야 한다. |
 
@@ -30,7 +29,7 @@
 - `timeout 720s framework/languages/node/e2e/RegistryMessaging/run_e2e.sh all`
   - 결과: `registry-messaging e2e result=passed`
   - 최신 확인 로그 디렉터리: `logs/20260703-221206-46409`
-  - 통과 scenario: `RM-A1`, `RM-A2`, `RM-A4`, `RM-A6`, `RM-B1`, `RM-B2`, `RM-C1`, `RM-C2`, `RM-C3`, `RM-C4`, `RM-C5`, `RM-C7`, `RM-C8`, `RM-C9`
+  - 통과 scenario: `RM-A1`, `RM-A2`, `RM-A4`, `RM-A6`, `RM-B1`, `RM-B2`, `RM-C1`, `RM-C2`, `RM-C4`, `RM-C5`, `RM-C8`, `RM-C9`
 - `timeout 420s framework/languages/node/e2e/RegistryMessaging/run_e2e.sh RM-C9`
   - 결과: `scenario RM-C9 passed`, `registry-messaging e2e result=passed`
   - 로그: `logs/20260701-040650-15231`

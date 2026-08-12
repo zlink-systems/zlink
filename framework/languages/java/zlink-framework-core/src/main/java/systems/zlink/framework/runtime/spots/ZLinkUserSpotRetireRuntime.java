@@ -478,7 +478,7 @@ public final class ZLinkUserSpotRetireRuntime {
                 "onPreflightPassed result");
             return admission.thenCompose(admissionIgnored -> {
                 //  Every unit starts here. The spec unit gate of
-                //  28-graceful-drain-handoff §7 (outbound 64, inbound 64,
+                //  30-host-relocation-flow §7 (outbound 64, inbound 64,
                 //  payload 256 MiB, capture and restore 8) belongs to
                 //  ZLinkRelocationPermitPool, which admits at the turn
                 //  boundary where the actual payload is known. Bounding the

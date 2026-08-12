@@ -1,9 +1,7 @@
-package Endpoints;
-import systems.zlink.e2e.registrymessaging.provider.Endpoints;
+package systems.zlink.e2e.registrymessaging.provider.Endpoints;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import systems.zlink.e2e.registrymessaging.provider.Infrastructure;
 
 import java.time.Duration;
 import java.util.List;
@@ -15,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.beans.factory.ObjectProvider;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.e2e.registrymessaging.provider.Infrastructure.ScenarioState;
+import systems.zlink.e2e.registrymessaging.provider.Infrastructure.ProfileGate;
 import systems.zlink.e2e.registrymessaging.shared.Contracts;
 import systems.zlink.e2e.registrymessaging.shared.FailureEvidence;
 import systems.zlink.framework.channels.ZLinkClient;
@@ -120,14 +119,14 @@ public final class ProviderEndpoints {
 
     @PostMapping("/profile/gate/reset")
     public Map<String, String> resetProfileGate(
-        Infrastructure.ProfileGate gate) {
+        ProfileGate gate) {
         gate.reset();
         return Map.of("status", "closed");
     }
 
     @PostMapping("/profile/gate/release")
     public Map<String, String> releaseProfileGate(
-        Infrastructure.ProfileGate gate) {
+        ProfileGate gate) {
         gate.open();
         return Map.of("status", "released");
     }

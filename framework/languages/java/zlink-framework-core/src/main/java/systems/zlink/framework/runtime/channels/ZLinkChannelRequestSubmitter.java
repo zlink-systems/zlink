@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.channels;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -31,12 +32,15 @@ final class ZLinkChannelRequestSubmitter {
     private static final int ERRNO_EHOSTUNREACH_WIN = 10065;
 
     private final ScheduledExecutorService scheduler;
+    private final Executor infrastructureExecutor;
     private final Duration defaultTimeout;
 
     ZLinkChannelRequestSubmitter(
         ScheduledExecutorService scheduler,
+        Executor infrastructureExecutor,
         Duration defaultTimeout) {
         this.scheduler = scheduler;
+        this.infrastructureExecutor = infrastructureExecutor;
         this.defaultTimeout = defaultTimeout;
     }
 
@@ -74,7 +78,13 @@ final class ZLinkChannelRequestSubmitter {
     }
 
     void retry(Runnable attempt) {
-        scheduler.schedule(attempt, RETRY_DELAY_MILLIS, TimeUnit.MILLISECONDS);
+        // An attempt schedules its successor only after it has returned from
+        // the previous submit. Consequently each pending request contributes
+        // at most one retry timer or one infrastructure task.
+        scheduler.schedule(
+            () -> infrastructureExecutor.execute(attempt),
+            RETRY_DELAY_MILLIS,
+            TimeUnit.MILLISECONDS);
     }
 
     private Duration effectiveTimeout(Duration timeout) {

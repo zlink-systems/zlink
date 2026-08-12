@@ -2179,22 +2179,55 @@ export class DefaultZLinkSpotManager {
           // same mailbox turn.
           if (!replyActorJoin()) return;
         } else {
-          // A formal transfer must acknowledge the target admission before
-          // waiting for the source terminal; that terminal is what permits
-          // the detached target commit below to proceed.
           if (!replyActorJoin()) return;
           const commitEntryTransfer = async (): Promise<void> => {
-            const sourceLeaveSucceeded = await pendingTransfer.sourceLeaveTerminal;
-            if (!sourceLeaveSucceeded) {
-              throw new Error(
-                `Actor '${entryActor.context.actorId}' source leave callback failed before Entry Spot commit.`
+            try {
+              await this.options.dispatchEntryActorJoin?.(
+                meshName,
+                entryActor,
+                []
+              );
+            } finally {
+              this.formalRemoteTransfers.completeTargetLifecycle(
+                entryActor.context.actorId,
+                pendingTransfer.transferId
               );
             }
-            await this.options.dispatchEntryActorJoin?.(
-              meshName,
-              entryActor,
-              pendingTransfer.handoffBacklog
+            const sourceLeaveSubmitted = await pendingTransfer.sourceLeaveSubmitted;
+            if (!sourceLeaveSubmitted) {
+              throw new Error(
+                `Actor '${entryActor.context.actorId}' source authority commit failed before leave submission.`
+              );
+            }
+            const handoffResults = await replayActorHandoffBacklog(
+              pendingTransfer.handoffBacklog,
+              async (parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) => {
+                if (this.options.dispatchEntryActorPacket === undefined) {
+                  throw new Error('Entry Spot saved handoff replay requires its Actor packet runtime.');
+                }
+                return await this.options.dispatchEntryActorPacket(
+                  entryActor.context.actorId,
+                  parts,
+                  returnResponse,
+                  remoteBoundSessionTarget,
+                  fallbackActorRef
+                );
+              },
+              index => this.options.runtimeEventPublisher?.publish({
+                sourceName: 'zlink.framework.actor-handoff',
+                timestamp: new Date(),
+                marker: 'backlog_enqueued',
+                actorId: entryActor.context.actorId,
+                index
+              })
             );
+            const failedHandoff = handoffResults.find(result => !result.ok);
+            if (failedHandoff !== undefined) {
+              throw new Error(
+                `Actor '${entryActor.context.actorId}' saved Entry handoff packet `
+                + `${failedHandoff.index} failed: ${failedHandoff.error ?? 'unknown error'}.`
+              );
+            }
             this.formalRemoteTransfers.delete(entryActor.context.actorId);
           };
           this.options.detachedTaskRunner?.runDetached(
@@ -2213,6 +2246,9 @@ export class DefaultZLinkSpotManager {
         await this.options.actorTransferRuntime?.discardDeferredJoinAccepted(
           deferredJoinRoot
         );
+      }
+      if (targetCommitPublished !== true) {
+        this.formalRemoteTransfers.delete(actorId);
       }
       if (materialized && targetCommitPublished !== true) {
         await this.options.actorTransferRuntime?.rollbackRoutedActor(actor!);
@@ -2288,28 +2324,7 @@ export class DefaultZLinkSpotManager {
           );
         }
         this.options.actorTransferRuntime?.commitRoutedActor(actor, spotId, activation.spot);
-        const completeTargetCommit = async (sourceLeaveSucceeded: boolean): Promise<void> => {
-          if (sourceLeaveSucceeded && pendingTransfer !== undefined) {
-            await replayActorHandoffBacklog(
-              pendingTransfer.handoffBacklog,
-              (parts, returnResponse, remoteBoundSessionTarget, _fallbackActorRef) =>
-                this.dispatchActorPacket(
-                  activation,
-                  actor.context.actorId,
-                  parts,
-                  returnResponse,
-                  remoteBoundSessionTarget,
-                  undefined
-                ),
-              (index) => this.options.runtimeEventPublisher?.publish({
-                sourceName: 'zlink.framework.actor-handoff',
-                timestamp: new Date(),
-                marker: 'backlog_enqueued',
-                actorId: actor.context.actorId,
-                index
-              })
-            );
-          }
+        const completeTargetLifecycle = async (): Promise<void> => {
           await this.options.actorTransferRuntime?.claimRoutedActorLocation(
             actor,
             spotId,
@@ -2319,25 +2334,13 @@ export class DefaultZLinkSpotManager {
               membershipEpoch: control.currentMembershipEpoch
             }
           );
-          if (!sourceLeaveSucceeded) {
-            throw new Error(`Actor '${actor.context.actorId}' source leave callback failed after target commit.`);
-          }
+          // Make the Actor resolvable for lifecycle and saved-work dispatch,
+          // while formalRemoteTransfers continues to fence new ingress until
+          // the saved backlog has completed.
           activation.commitActorJoin(actor);
-          const updateBoundSessionRoute = async (): Promise<void> => {
-            await this.options.actorTransferRuntime?.publishRoutedActorOwnership(actor);
-            await this.options.actorTransferRuntime?.openRoutedActorSession(actor);
-          };
-          // Session route publication is post-commit work. The public Join
-          // completion and lifecycle callback must not wait for a Session
-          // owner ACK; the route update retries in its detached runtime task.
-          if (pendingTransfer !== undefined && this.options.detachedTaskRunner !== undefined) {
-            this.options.detachedTaskRunner.runDetached(
-              `actor transfer Session route ${actor.context.actorId}`,
-              updateBoundSessionRoute
-            );
-          } else {
-            await updateBoundSessionRoute();
-          }
+          await activation.spot.onJoinedActor(actor);
+        };
+        const completePublicJoin = async (): Promise<void> => {
           const deferredJoinRoot = pendingTransfer?.deferredJoinRoot
             ?? await this.options.actorTransferRuntime?.recoverDeferredJoinAccepted(actor.context.actorId);
           if (deferredJoinRoot !== undefined) {
@@ -2357,23 +2360,75 @@ export class DefaultZLinkSpotManager {
               )
             );
           }
-          this.formalRemoteTransfers.delete(actor.context.actorId);
-          // A transferred actor must receive its first lifecycle callback only
-          // after ownership and the bound-session route are publishable. The
-          // callback may send to the actor; invoking it before this point
-          // races the formal transfer reconciliation guard.
-          await activation.spot.onJoinedActor(actor);
+        };
+        const completeTargetReady = async (): Promise<void> => {
+          if (pendingTransfer !== undefined) {
+            const handoffResults = await replayActorHandoffBacklog(
+              pendingTransfer.handoffBacklog,
+              (parts, returnResponse, remoteBoundSessionTarget, _fallbackActorRef) =>
+                this.dispatchActorPacket(
+                  activation,
+                  actor.context.actorId,
+                  parts,
+                  returnResponse,
+                  remoteBoundSessionTarget,
+                  undefined
+                ),
+              (index) => this.options.runtimeEventPublisher?.publish({
+                sourceName: 'zlink.framework.actor-handoff',
+                timestamp: new Date(),
+                marker: 'backlog_enqueued',
+                actorId: actor.context.actorId,
+                index
+              })
+            );
+            const failedHandoff = handoffResults.find(result => !result.ok);
+            if (failedHandoff !== undefined) {
+              throw new Error(
+                `Actor '${actor.context.actorId}' saved handoff packet `
+                + `${failedHandoff.index} failed: ${failedHandoff.error ?? 'unknown error'}.`
+              );
+            }
+            // This registry owns target lifecycle and saved backlog
+            // reconciliation only. Session route readiness is enforced by
+            // the Session binding aggregate after this boundary.
+            this.formalRemoteTransfers.delete(actor.context.actorId);
+          }
+          const updateBoundSessionRoute = async (): Promise<void> => {
+            await this.options.actorTransferRuntime?.publishRoutedActorOwnership(actor);
+            await this.options.actorTransferRuntime?.openRoutedActorSession(actor);
+          };
+          // Session routing is an independent post-Ready branch. Callback
+          // sends are retained by the Session owner seal until this converges.
+          if (pendingTransfer !== undefined && this.options.detachedTaskRunner !== undefined) {
+            this.options.detachedTaskRunner.runDetached(
+              `actor transfer Session route ${actor.context.actorId}`,
+              updateBoundSessionRoute
+            );
+          } else {
+            await updateBoundSessionRoute();
+          }
         };
         if (pendingTransfer !== undefined) {
           const resume = async (): Promise<void> => {
-            const sourceLeaveSucceeded = await pendingTransfer.sourceLeaveTerminal;
             try {
-              await activation.serial.execute(() =>
-                completeTargetCommit(sourceLeaveSucceeded)
+              await activation.serial.post(completeTargetLifecycle);
+            } finally {
+              this.formalRemoteTransfers.completeTargetLifecycle(
+                actor.context.actorId,
+                pendingTransfer.transferId
               );
-            } catch (error) {
-              throw error;
             }
+            const sourceLeaveSubmitted = await pendingTransfer.sourceLeaveSubmitted;
+            if (!sourceLeaveSubmitted) {
+              throw new Error(
+                `Actor '${actor.context.actorId}' source authority commit failed before leave submission.`
+              );
+            }
+            await completePublicJoin();
+            // Saved handlers enter the Spot owner on their own turns. Run
+            // them only after the lifecycle turn above has been released.
+            await completeTargetReady();
           };
           this.options.detachedTaskRunner?.runDetached(
             `actor transfer target commit ${actor.context.actorId}`,
@@ -2384,7 +2439,9 @@ export class DefaultZLinkSpotManager {
           }
           return;
         }
-        await completeTargetCommit(true);
+        await completeTargetLifecycle();
+        await completePublicJoin();
+        await completeTargetReady();
         return;
       }
       if (control.lifecycleKind === ActorLifecycleKind.Left) {
@@ -2648,12 +2705,12 @@ export class DefaultZLinkSpotManager {
     }
   }
 
-  completeFormalSourceLeaveTerminal(
+  async completeFormalSourceLeaveTerminal(
     actorId: string,
     transferId: string,
     succeeded: boolean
-  ): boolean {
-    return this.formalRemoteTransfers.completeSourceLeaveTerminal(
+  ): Promise<boolean> {
+    return await this.formalRemoteTransfers.completeSourceLeaveTerminal(
       actorId,
       transferId,
       succeeded

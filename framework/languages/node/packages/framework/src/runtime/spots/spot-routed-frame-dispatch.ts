@@ -8,7 +8,6 @@ import type {
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import type { RoutingId } from '../../contracts';
 import type { ActorRef } from '../../contracts/Common/ActorRef';
-import type { Message } from '../../contracts/Common/Message';
 import type {
   ZLinkRemoteActorPacketTarget,
   ZLinkRemoteBoundSessionTarget
@@ -22,7 +21,10 @@ import type { ZLinkChannelEnvelopeCodecRegistry } from '../channels/channel-enve
 import { decodeRemoteActorPacketRelay } from './spot-remote-route-codec';
 import { ZLINK_RECV_DONT_WAIT } from './spot-native-flags';
 import { ZLinkSpotActorPacketRelayDispatch } from './spot-actor-packet-relay-dispatch';
-import type { ZLinkActorResponseOptions } from './spot-actor-packet-dispatch';
+import type {
+  ZLinkActorPacketDelivery,
+  ZLinkActorResponseOptions
+} from './spot-actor-packet-dispatch';
 import { ZLinkSpotRoutePacketDispatch } from './spot-route-packet-dispatch';
 import { ZLinkSpotRoutedActorAdmission } from './spot-routed-actor-admission';
 import { ZLinkSpotRoutedBoundSessionDispatch } from './spot-routed-bound-session-dispatch';
@@ -49,13 +51,7 @@ interface ZLinkSpotRoutedFrameDispatchOptions {
     actor: ZLinkActor,
     backlog: readonly ZLinkActorHandoffPacket[]
   ) => Promise<readonly ZLinkActorHandoffResult[]>;
-  readonly actorPacketHandler?: (
-    actorId: string,
-    parts: readonly Message[],
-    returnResponse?: boolean,
-    remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
-    fallbackActorRef?: ActorRef
-  ) => Promise<unknown>;
+  readonly actorPacketHandler?: (delivery: ZLinkActorPacketDelivery) => Promise<unknown>;
   readonly routedBoundSessionReceiver?: (
     actorId: string,
     message: unknown,

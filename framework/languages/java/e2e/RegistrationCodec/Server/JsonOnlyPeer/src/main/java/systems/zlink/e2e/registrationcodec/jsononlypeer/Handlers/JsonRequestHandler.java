@@ -1,6 +1,4 @@
-package Handlers;
-import systems.zlink.e2e.registrationcodec.jsononlypeer.Handlers;
-import systems.zlink.e2e.registrationcodec.jsononlypeer.Infrastructure;
+package systems.zlink.e2e.registrationcodec.jsononlypeer.Handlers;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -21,8 +19,8 @@ public final class JsonRequestHandler
     public CompletionStage<Contracts.EchoRes> handle(
         Contracts.JsonEchoReq request,
         ZLinkMessageContext context) {
-        state.record("Request", "JsonEcho", request.value());
-        state.record("ContentType", "JsonEcho", context.contentType().orElse("missing"));
+        state.record("Request", "JsonEchoReq", request.value());
+        state.record("ContentType", "JsonEchoReq", context.contentType().orElse("missing"));
         return CompletableFuture.completedFuture(
             new Contracts.EchoRes("echo:" + request.value(), "json"));
     }

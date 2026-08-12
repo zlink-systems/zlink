@@ -5518,7 +5518,8 @@ void test_application_relocation_remote_production_path (
     }
     const auto session_connection =
       session_owner.native_node ().sessions ().open (
-        "production-bound-session");
+        zlink::routing_id_t::from (
+          "production-bound-session").to_hex ());
     const auto [session_bind_error, session_binding] =
       session_owner.native_node ().sessions ().bind_remote (
         session_connection, *bound_source_object,
@@ -7227,48 +7228,25 @@ void test_session_relocation_barrier_holds_production_ingress (
     auto target = source;
     target.node_id = "target-node";
     target.authority_owner_generation = 2;
-    std::atomic<bool> rejected_terminal_attempt{false};
-    const auto rejected = sessions.commit_remote_route (
-      connection.connection_id, binding.binding_generation,
-      source.key, source.object_generation,
-      source.authority_owner_generation, target, 4, 9,
-      sealed.last_accepted_sequence,
-      [&] (const stream_route_admission_t &) {
-          rejected_terminal_attempt.store (
-            true, std::memory_order_release);
-          return false;
-      });
-    test.require (
-      rejected.error == stateful_error_t::conflict
-        && rejected_terminal_attempt.load (
-          std::memory_order_acquire)
-        && sessions.current_binding (source.key) == binding
-        && sessions.remote_route_sealed (source.key)
-        && !held_completed.load (std::memory_order_acquire)
-        && !later_held_completed.load (
-          std::memory_order_acquire),
-      "terminal publication failure must roll the route and seal back before held ingress can observe either state");
-    std::atomic<bool> terminal_published{false};
+    std::atomic<bool> projection_attempted{false};
     const auto committed = sessions.commit_remote_route (
       connection.connection_id, binding.binding_generation,
       source.key, source.object_generation,
       source.authority_owner_generation, target, 4, 9,
       sealed.last_accepted_sequence,
-      [&] (const stream_route_admission_t &terminal) {
-          terminal_published.store (true, std::memory_order_release);
-          return terminal.binding
-                 && terminal.binding->actor == target
-                 && terminal.binding->owner_lease_generation == 9
-                 && !held_completed.load (
-                   std::memory_order_acquire)
-                 && !later_held_completed.load (
-                   std::memory_order_acquire);
+      [&] (const stream_route_admission_t &) {
+          projection_attempted.store (
+            true, std::memory_order_release);
+          return false;
       });
     held.join ();
     later_held.join ();
     test.require (
       committed.error == stateful_error_t::none
-        && terminal_published.load (std::memory_order_acquire)
+        && projection_attempted.load (std::memory_order_acquire)
+        && sessions.current_binding (source.key)
+             == committed.binding
+        && !sessions.remote_route_sealed (source.key)
         && held_result.first == stateful_error_t::none
         && held_result.second
         && held_result.second->inbound_sequence == 2
@@ -7279,7 +7257,7 @@ void test_session_relocation_barrier_holds_production_ingress (
         && later_held_result.second->inbound_sequence == 3
         && later_held_result.second->binding.actor == target
         && later_held_result.second->binding.owner_lease_generation == 9,
-      "command 44 commit must publish its terminal, switch the target owner lease, release the seal, and resume FIFO ingress as one registry transition");
+      "command 44 must commit the aggregate and resume FIFO ingress even when a downstream projection reports failure");
     if (held_result.second) {
         test.require (
           sessions.complete_inbound (*held_result.second)

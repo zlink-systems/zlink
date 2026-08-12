@@ -35,26 +35,69 @@ cleanup() {
   done
   for pid in "${PIDS[@]}"; do kill -9 "$pid" >/dev/null 2>&1 || true; done
   for pid in "${PIDS[@]}"; do wait "$pid" >/dev/null 2>&1 || true; done
-  [[ -z "$REDIS_CONTAINER_NAME" ]] || docker rm -fv "$REDIS_CONTAINER_NAME" >/dev/null 2>&1 || true
+  [[ -z "$REDIS_CONTAINER_NAME" ]] || zlink_redis_remove_by_id "$REDIS_CONTAINER_NAME" || true
   rm -rf "$RUN_DIR"
   exit "$code"
 }
 trap cleanup EXIT INT TERM
 
-read -r NODE1_MESH NODE2_MESH GATEWAY_MESH OPS_MESH GAME_STREAM OPS_STREAM BROADCAST NODE1_HTTP NODE2_HTTP GATEWAY_HTTP <<<"$(python3 - <<'PY'
-import socket
-sockets=[]
-for _ in range(10):
-    s=socket.socket(); s.bind(('127.0.0.1',0)); sockets.append(s)
-print(' '.join(f'tcp://127.0.0.1:{s.getsockname()[1]}' for s in sockets))
-for s in sockets: s.close()
-PY
-)"
+read -r -a ZONEWORLD_PORTS <<<"$(zlink_sample_allocate_ports 13)"
+NODE1_MESH="tcp://127.0.0.1:${ZONEWORLD_PORTS[0]}"
+NODE2_MESH="tcp://127.0.0.1:${ZONEWORLD_PORTS[1]}"
+GATEWAY_MESH="tcp://127.0.0.1:${ZONEWORLD_PORTS[2]}"
+OPS_MESH="tcp://127.0.0.1:${ZONEWORLD_PORTS[3]}"
+GAME_STREAM="tcp://127.0.0.1:${ZONEWORLD_PORTS[4]}"
+OPS_STREAM="tcp://127.0.0.1:${ZONEWORLD_PORTS[5]}"
+BROADCAST="tcp://127.0.0.1:${ZONEWORLD_PORTS[6]}"
+NODE1_HTTP="tcp://127.0.0.1:${ZONEWORLD_PORTS[7]}"
+NODE2_HTTP="tcp://127.0.0.1:${ZONEWORLD_PORTS[8]}"
+GATEWAY_HTTP="tcp://127.0.0.1:${ZONEWORLD_PORTS[9]}"
+NODE1_STREAM="tcp://127.0.0.1:${ZONEWORLD_PORTS[10]}"
+NODE2_STREAM="tcp://127.0.0.1:${ZONEWORLD_PORTS[11]}"
+OPS_HTTP="tcp://127.0.0.1:${ZONEWORLD_PORTS[12]}"
 zlink_redis_start_scoped_assign REDIS_CONTAINER_NAME redis_port "zlink-redis-cpp-sample-zoneworld" "redis:7-alpine"
-export ZONEWORLD_REDIS_ENDPOINT="tcp://127.0.0.1:${redis_port}"
-export ZONEWORLD_REDIS_KEY_PREFIX="zoneworld:cpp:${RUN_ID}:"
-export ZONEWORLD_BROADCAST_ENDPOINT="$BROADCAST"
-export ZONEWORLD_LOG_DIR="$LOG_DIR"
+
+CONFIG_DIR="$RUN_DIR/config"
+mkdir -p "$CONFIG_DIR"
+write_role_config() {
+  local path="$1" node_id="$2" mesh_endpoint="$3" stream_endpoint="$4" http_endpoint="$5"
+  python3 - "$path" "$node_id" "$mesh_endpoint" "$stream_endpoint" \
+    "$http_endpoint" "tcp://127.0.0.1:${redis_port}" \
+    "zoneworld:cpp:${RUN_ID}:" "$BROADCAST" "$LOG_DIR" <<'CONFIG_PY'
+import json
+import os
+import stat
+import sys
+
+path, node_id, mesh_endpoint, stream_endpoint, http_endpoint, redis_endpoint, redis_key_prefix, broadcast_endpoint, log_dir = sys.argv[1:]
+document = {
+    "sample": {
+        "zoneworld": {
+            "redisEndpoint": redis_endpoint,
+            "redisKeyPrefix": redis_key_prefix,
+            "nodeId": node_id,
+            "meshEndpoint": mesh_endpoint,
+            "streamEndpoint": stream_endpoint,
+            "broadcastEndpoint": broadcast_endpoint,
+            "bootstrapHttpEndpoint": http_endpoint,
+            "logDir": log_dir,
+        }
+    }
+}
+with open(path, "w", encoding="utf-8") as file:
+    json.dump(document, file, indent=2)
+os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+CONFIG_PY
+}
+
+write_role_config "$CONFIG_DIR/zone-node-1.json" zone-node-1 "$NODE1_MESH" \
+  "$NODE1_STREAM" "${NODE1_HTTP/tcp:/http:}"
+write_role_config "$CONFIG_DIR/zone-node-2.json" zone-node-2 "$NODE2_MESH" \
+  "$NODE2_STREAM" "${NODE2_HTTP/tcp:/http:}"
+write_role_config "$CONFIG_DIR/ops.json" ops "$OPS_MESH" "$OPS_STREAM" \
+  "${OPS_HTTP/tcp:/http:}"
+write_role_config "$CONFIG_DIR/gateway.json" gateway "$GATEWAY_MESH" "$GAME_STREAM" \
+  "${GATEWAY_HTTP/tcp:/http:}"
 
 start_role() { local label="$1"; shift; env "$@" >"$LOG_DIR/$label.log" 2>&1 & PIDS+=("$!"); }
 wait_port() {
@@ -68,17 +111,21 @@ wait_port() {
   return 1
 }
 
-start_role zone-node-1 ZONEWORLD_NODE_ID=zone-node-1 ZONEWORLD_MESH_ENDPOINT="$NODE1_MESH" ZONEWORLD_BOOTSTRAP_HTTP_ENDPOINT="${NODE1_HTTP/tcp:/http:}" "$BIN_DIR/sample_cpp_framework_zoneworld_zone_node"
+start_role zone-node-1 "$BIN_DIR/sample_cpp_framework_zoneworld_zone_node" \
+  --config="$CONFIG_DIR/zone-node-1.json"
 wait_port "$NODE1_MESH"
 sleep 1
 curl --max-time 20 -fsS -X POST -H 'content-type: application/json' -d '{}' "${NODE1_HTTP/tcp:/http:}/bootstrap" >/dev/null
-start_role zone-node-2 ZONEWORLD_NODE_ID=zone-node-2 ZONEWORLD_MESH_ENDPOINT="$NODE2_MESH" ZONEWORLD_PEER_ENDPOINT="$NODE1_MESH" ZONEWORLD_BOOTSTRAP_HTTP_ENDPOINT="${NODE2_HTTP/tcp:/http:}" "$BIN_DIR/sample_cpp_framework_zoneworld_zone_node"
+start_role zone-node-2 "$BIN_DIR/sample_cpp_framework_zoneworld_zone_node" \
+  --config="$CONFIG_DIR/zone-node-2.json"
 wait_port "$NODE2_MESH"
 sleep 1
 curl --max-time 20 -fsS -X POST -H 'content-type: application/json' -d '{}' "${NODE2_HTTP/tcp:/http:}/bootstrap" >/dev/null
-start_role ops ZONEWORLD_MESH_ENDPOINT="$OPS_MESH" ZONEWORLD_PEER_ENDPOINT="$NODE1_MESH" ZONEWORLD_PEER_ENDPOINT_2="$NODE2_MESH" ZONEWORLD_STREAM_ENDPOINT="$OPS_STREAM" "$BIN_DIR/sample_cpp_framework_zoneworld_ops"
+start_role ops "$BIN_DIR/sample_cpp_framework_zoneworld_ops" \
+  --config="$CONFIG_DIR/ops.json"
 wait_port "$OPS_STREAM"
-start_role gateway ZONEWORLD_MESH_ENDPOINT="$GATEWAY_MESH" ZONEWORLD_PEER_ENDPOINT="$NODE1_MESH" ZONEWORLD_PEER_ENDPOINT_2="$NODE2_MESH" ZONEWORLD_STREAM_ENDPOINT="$GAME_STREAM" ZONEWORLD_BOOTSTRAP_HTTP_ENDPOINT="${GATEWAY_HTTP/tcp:/http:}" "$BIN_DIR/sample_cpp_framework_zoneworld_gateway"
+start_role gateway "$BIN_DIR/sample_cpp_framework_zoneworld_gateway" \
+  --config="$CONFIG_DIR/gateway.json"
 wait_port "$GAME_STREAM"
 
 sleep 5
@@ -88,8 +135,15 @@ grep -q '^zoneworld=completed$' "$LOG_DIR/client.log"
 grep -q '^zoneworld-relocation=completed$' "$LOG_DIR/client.log"
 grep -q '^zoneworld-border=completed$' "$LOG_DIR/client.log"
 grep -q '^zoneworld-ops=completed$' "$LOG_DIR/client.log"
-for scenario in ZW-A3 ZW-A5 ZW-B2 ZW-B6 ZW-B7 ZW-C1 ZW-D1; do
-  grep -q "^scenario $scenario passed\$" "$LOG_DIR/client.log"
+for evidence in \
+  "scenario ZW-A3 passed" \
+  "scenario ZW-A5 passed" \
+  "scenario ZW-B2 passed" \
+  "scenario ZW-B6 passed" \
+  "scenario ZW-B7 passed" \
+  "scenario ZW-C1 passed" \
+  "scenario ZW-D1 passed"; do
+  grep -q "^${evidence}\$" "$LOG_DIR/client.log"
 done
 curl --max-time 30 -fsS -X POST -H 'content-type: application/json' -d '{}' "${GATEWAY_HTTP/tcp:/http:}/bootstrap-bots" >/dev/null
 sleep 6

@@ -189,7 +189,8 @@ public final class ZLinkFrameworkRuntime
                     status.relocationResult(),
                     status.terminationResult(),
                     status.inboundDispatch()),
-                Flow.defaultBufferSize(),
+                ignored -> runtimeState,
+                64,
                 status -> status.state() == ZLinkFrameworkRuntimeState.STOPPED
                     || status.state() == ZLinkFrameworkRuntimeState.ERROR,
                 status -> status.state()
@@ -441,6 +442,9 @@ public final class ZLinkFrameworkRuntime
             this.meshNodes.nodesByName().values().forEach(node ->
                 node.setSessionRelocationSealHandler(
                     this.streams::handleSessionRelocationSeal));
+            this.meshNodes.nodesByName().values().forEach(node ->
+                node.setBoundSessionSendHandler(
+                    this.streams::handleBoundSessionSend));
             this.meshNodes.nodesByName().values().forEach(node ->
                 node.setBoundSessionReplacedHandler(
                     this.streams::handleBoundSessionReplaced));

@@ -17,6 +17,7 @@ import type {
 } from '../../../../../../../Shared/Contracts/messages';
 import {
   BingoRoomJoinReq,
+  BingoRoomCreateReq,
   BingoRoomSettingsPayload,
   ObserveBingoEventsRes
 } from '../../../../../../../Shared/Contracts/bingo-messages.generated';
@@ -45,10 +46,12 @@ class ObserveBingoEventsHandler
     await this.spots
       .getOrCreate(observerSpotId, SampleNames.roomSpotType)
       .inMesh(SampleNames.roomSpotNode)
-      .request(new BingoRoomSettingsPayload({
-        ...settings,
-        purpose: settings.purpose,
-        observedRoomId: settings.observedRoomId
+      .request(new BingoRoomCreateReq({
+        settings: new BingoRoomSettingsPayload({
+          ...settings,
+          purpose: settings.purpose,
+          observedRoomId: settings.observedRoomId
+        })
       }))
       .submit();
     actor.context

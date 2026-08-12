@@ -147,7 +147,7 @@ class SessionApplication {
         ApplicationRunner {
             val spotRid = if (state.nodeRid() == "session-a") "actor-room-a" else "actor-room-b"
             spots.getOrCreate(spotRid, "user")
-                .request(ZLinkMessage.of("bootstrap"))
+                .request(ZLinkMessage.of(Contracts.SpotCreateReq("bootstrap")))
                 .submit()
                 .toCompletableFuture()
                 .join()

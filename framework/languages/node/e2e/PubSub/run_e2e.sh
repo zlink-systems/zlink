@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
 source "$NODE_ROOT/e2e/redis-container.sh"
+source "$NODE_ROOT/e2e/runner-common.sh"
+serialize_node_e2e_run "$0" "$@"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="$ROOT_DIR/log/$RUN_ID"
 CONFIG_DIR=""
@@ -14,11 +16,6 @@ LOCAL_READINESS_ATTEMPTS=30
 ROUTE_SETTLE_TIMEOUT_SECONDS=5
 SCENARIO_SETTLE_TIMEOUT_SECONDS=3
 HTTP_PROBE_TIMEOUT_SECONDS=3
-mkdir -p "$LOG_DIR"
-
-pick_port() {
-  node "$NODE_ROOT/e2e/port-picker.js"
-}
 
 build_package() {
   local dir="$1"
@@ -49,7 +46,7 @@ cleanup() {
   done
   wait "${pids[@]:-}" 2>/dev/null || true
   if [[ -n "$REDIS_CONTAINER_ID" ]]; then
-    docker rm -fv "$REDIS_CONTAINER_ID" >/dev/null 2>&1 || true
+    remove_redis_container_by_id "$REDIS_CONTAINER_ID" || true
   fi
   [[ -z "$CONFIG_DIR" ]] || rm -rf "$CONFIG_DIR"
   if [[ "$code" -ne 0 ]]; then
@@ -63,6 +60,7 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+mkdir -p "$LOG_DIR"
 CONFIG_DIR="$(mktemp -d)"
 chmod 700 "$CONFIG_DIR"
 
@@ -129,7 +127,7 @@ if [[ "${SCENARIO^^}" == "PS-E2C" ]]; then
     exit 1
   fi
   start_redis_container "zlink-redis-node-pubsub-${RANDOM}-$$" \
-    -p "127.0.0.1::6379" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
+    "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
   REDIS_ENDPOINT="$(redis_container_endpoint "$REDIS_CONTAINER_ID")"
   REDIS_KEY_PREFIX="pubsub:node:$RUN_ID"
   wait_tcp redis "tcp://$REDIS_ENDPOINT"
@@ -168,7 +166,7 @@ if [[ "${SCENARIO^^}" == "PS-D1" ]]; then
     exit 1
   fi
   start_redis_container "zlink-redis-node-pubsub-${RANDOM}-$$" \
-    -p "127.0.0.1::6379" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
+    "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
   REDIS_ENDPOINT="$(redis_container_endpoint "$REDIS_CONTAINER_ID")"
   REDIS_KEY_PREFIX="pubsub:node:$RUN_ID"
   wait_tcp redis "tcp://$REDIS_ENDPOINT"
@@ -222,7 +220,7 @@ if [[ "${SCENARIO^^}" == "PS-D2" ]]; then
     exit 1
   fi
   start_redis_container "zlink-redis-node-pubsub-${RANDOM}-$$" \
-    -p "127.0.0.1::6379" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
+    "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
   REDIS_ENDPOINT="$(redis_container_endpoint "$REDIS_CONTAINER_ID")"
   REDIS_KEY_PREFIX="pubsub:node:$RUN_ID"
   wait_tcp redis "tcp://$REDIS_ENDPOINT"
@@ -291,7 +289,7 @@ if [[ "${SCENARIO^^}" == "PS-D4" ]]; then
     exit 1
   fi
   start_redis_container "zlink-redis-node-pubsub-${RANDOM}-$$" \
-    -p "127.0.0.1::6379" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
+    "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
   REDIS_ENDPOINT="$(redis_container_endpoint "$REDIS_CONTAINER_ID")"
   REDIS_KEY_PREFIX="pubsub:node:$RUN_ID"
   wait_tcp redis "tcp://$REDIS_ENDPOINT"
@@ -328,7 +326,7 @@ if [[ "${SCENARIO^^}" == "PS-D3" || "${SCENARIO^^}" == "PS-F4" || "${SCENARIO^^}
     exit 1
   fi
   start_redis_container "zlink-redis-node-pubsub-${RANDOM}-$$" \
-    -p "127.0.0.1::6379" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
+    "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
   REDIS_ENDPOINT="$(redis_container_endpoint "$REDIS_CONTAINER_ID")"
   REDIS_KEY_PREFIX="pubsub:node:$RUN_ID"
   wait_tcp redis "tcp://$REDIS_ENDPOINT"
@@ -384,7 +382,7 @@ if [[ "${SCENARIO^^}" == "PS-D5" ]]; then
     exit 1
   fi
   start_redis_container "zlink-redis-node-pubsub-${RANDOM}-$$" \
-    -p "127.0.0.1::6379" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
+    "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
   REDIS_ENDPOINT="$(redis_container_endpoint "$REDIS_CONTAINER_ID")"
   REDIS_KEY_PREFIX="pubsub:node:$RUN_ID"
   wait_tcp redis "tcp://$REDIS_ENDPOINT"
@@ -418,7 +416,7 @@ if [[ "${SCENARIO^^}" == "PS-D6" ]]; then
     exit 1
   fi
   start_redis_container "zlink-redis-node-pubsub-${RANDOM}-$$" \
-    -p "127.0.0.1::6379" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
+    "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
   REDIS_ENDPOINT="$(redis_container_endpoint "$REDIS_CONTAINER_ID")"
   REDIS_KEY_PREFIX="pubsub:node:$RUN_ID"
   wait_tcp redis "tcp://$REDIS_ENDPOINT"
@@ -452,7 +450,7 @@ if [[ "${SCENARIO^^}" == "PS-F5" ]]; then
     exit 1
   fi
   start_redis_container "zlink-redis-node-pubsub-${RANDOM}-$$" \
-    -p "127.0.0.1::6379" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
+    "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
   REDIS_ENDPOINT="$(redis_container_endpoint "$REDIS_CONTAINER_ID")"
   REDIS_KEY_PREFIX="pubsub:node:$RUN_ID"
   wait_tcp redis "tcp://$REDIS_ENDPOINT"
@@ -505,7 +503,7 @@ if [[ "${SCENARIO^^}" == "PS-F2" ]]; then
     exit 1
   fi
   start_redis_container "zlink-redis-node-pubsub-${RANDOM}-$$" \
-    -p "127.0.0.1::6379" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
+    "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
   REDIS_ENDPOINT="$(redis_container_endpoint "$REDIS_CONTAINER_ID")"
   REDIS_KEY_PREFIX="pubsub:node:$RUN_ID"
   wait_tcp redis "tcp://$REDIS_ENDPOINT"

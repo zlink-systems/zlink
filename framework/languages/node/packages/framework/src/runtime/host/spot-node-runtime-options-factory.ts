@@ -6,7 +6,7 @@ import {
   DefaultZLinkChannelClient,
   DefaultZLinkFanoutClient,
   DefaultZLinkSpotPublisherClient,
-  type ZLinkChannelClientTransport,
+  type ZLinkChannelClientTransportSource,
   type ZLinkRouteClientTransport,
   type ZLinkSpotPublisherClientTransport
 } from '../channels';
@@ -28,7 +28,7 @@ export interface ZLinkSpotNodeRuntimeOptionsFactoryOptions {
   readonly registration: ZLinkFrameworkRegistration;
   readonly backendAdapterFactory: ZLinkBackendAdapterFactory;
   readonly context: ZLinkBackendContext;
-  readonly channelTransport: ZLinkChannelClientTransport;
+  readonly channelTransport: ZLinkChannelClientTransportSource;
   readonly routeTransport: ZLinkRouteClientTransport & ZLinkSpotRoutedTransport;
   readonly spotPublisherTransport: ZLinkSpotPublisherClientTransport;
   readonly meshRouters: MeshRouterResolver;

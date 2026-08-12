@@ -4,7 +4,7 @@ title: "Failure Handling And Failover Scope"
 
 # Failure Handling And Failover Scope
 
-[Spec table of contents](README.en.md) · [Previous: Transport Connection Liveness](29-transport-liveness.en.md) · [Next: Framework Error Model](32-framework-error-model.en.md)
+[Spec table of contents](README.en.md) · [Previous: Complete Host Relocation Flow](30-host-relocation-flow.en.md) · [Next: Framework Error Model](32-framework-error-model.en.md)
 
 > **What this chapter defines** — the scope in which the framework
 > automatically continues the same work when a failure occurs during a
@@ -227,7 +227,7 @@ operation that hasn't changed owner yet. Continuing on the same target
 after commit also isn't a new target selection. Object failover after
 process termination isn't part of the current contract. The detailed
 stages and result are defined by
-[Host Relocate And Shutdown §1.1](28-graceful-drain-handoff.en.md#11-failure-handling-scope) and
+[Complete Host Relocation Flow §1.1](30-host-relocation-flow.en.md#11-failure-handling-scope) and
 [Spot And Actor Membership §7](15-spot-actor.en.md#7-failure-handling-scope).
 
 ## 6. Session And Binding

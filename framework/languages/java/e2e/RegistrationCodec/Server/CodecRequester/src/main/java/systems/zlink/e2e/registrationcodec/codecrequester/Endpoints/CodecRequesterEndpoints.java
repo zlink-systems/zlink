@@ -1,11 +1,10 @@
-package Endpoints;
+package systems.zlink.e2e.registrationcodec.codecrequester.Endpoints;
 import com.sun.net.httpserver.HttpExchange;
-import systems.zlink.e2e.registrationcodec.codecrequester.Configuration;
-import systems.zlink.e2e.registrationcodec.codecrequester.Endpoints;
 import java.io.IOException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.protobuf.StringValue;
+import systems.zlink.e2e.registrationcodec.shared.protobuf.ProtobufEchoReq;
+import systems.zlink.e2e.registrationcodec.shared.protobuf.ProtobufEchoRes;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -69,9 +68,9 @@ public final class CodecRequesterEndpoints implements SmartLifecycle {
     private CompletionStage<Contracts.CodecMismatchProbeRes> protobufRequest() {
         return client.requestToChannel(
                     Contracts.CHANNEL,
-                    StringValue.of("rc-b5"))
+                    ProtobufEchoReq.newBuilder().setValue("rc-b5").build())
                 .timeout(Duration.ofSeconds(2))
-                .submit(StringValue.class)
+                .submit(ProtobufEchoRes.class)
             .handle((reply, error) -> error == null
                 ? new Contracts.CodecMismatchProbeRes(false, null, reply.getValue())
                 : new Contracts.CodecMismatchProbeRes(

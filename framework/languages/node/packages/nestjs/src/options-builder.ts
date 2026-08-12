@@ -78,6 +78,7 @@ type ZLinkNestBuilderAdditionalOptions = Omit<
 
 interface ZLinkNestBuilderState {
   additionalOptions: ZLinkNestBuilderAdditionalOptions;
+  implicitHandlerAutoRegistration: boolean;
   readonly clientServerChannels: Record<string, InternalZLinkNestClientServerChannelOptions>;
   readonly fanoutChannels: Record<string, InternalZLinkNestFanoutChannelOptions>;
   readonly streams: Record<string, ZLinkStreamNodeOptions>;
@@ -90,6 +91,7 @@ function createBuilderState(): ZLinkNestBuilderState {
   const codecOptions: MutableCodecRegistryOptions = { serializers: [], streamCodecs: [] };
   return {
     additionalOptions: {},
+    implicitHandlerAutoRegistration: true,
     clientServerChannels: {},
     fanoutChannels: {},
     streams: {},
@@ -142,6 +144,11 @@ abstract class ZLinkNestOptionsBuilder implements ZLinkNestFrameworkOptionsBuild
 
   options(options: ZLinkNestFrameworkAdditionalOptions): this {
     this.state.additionalOptions = { ...this.state.additionalOptions, ...options };
+    return this;
+  }
+
+  disableImplicitHandlerAutoRegistration(): this {
+    this.state.implicitHandlerAutoRegistration = false;
     return this;
   }
 
@@ -300,6 +307,7 @@ abstract class ZLinkNestOptionsBuilder implements ZLinkNestFrameworkOptionsBuild
   build(): ZLinkModuleOptions {
     const options: ZLinkNestModuleRegistrationOptions = {
       [ZLINK_MODULE_OPTIONS_BRAND]: true,
+      implicitHandlerAutoRegistration: this.state.implicitHandlerAutoRegistration,
       ...this.state.additionalOptions,
       clientServerChannels: { ...this.state.clientServerChannels },
       fanoutChannels: { ...this.state.fanoutChannels },

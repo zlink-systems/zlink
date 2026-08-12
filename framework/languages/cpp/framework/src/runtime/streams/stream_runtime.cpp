@@ -36,6 +36,32 @@ using detail::stream_message_kind_t;
 namespace detail
 {
 
+std::string_view stream_content_type (stream_codec_t codec) noexcept
+{
+    switch (codec) {
+        case stream_codec_t::json:
+            return "application/json";
+        case stream_codec_t::message_pack:
+            return "application/x-msgpack";
+        case stream_codec_t::protobuf:
+            return "application/x-protobuf";
+        case stream_codec_t::raw:
+            return "application/octet-stream";
+    }
+    return "application/octet-stream";
+}
+
+stream_codec_t stream_codec_from_content_type (std::string_view content_type) noexcept
+{
+    if (content_type == "application/json")
+        return stream_codec_t::json;
+    if (content_type == "application/x-msgpack")
+        return stream_codec_t::message_pack;
+    if (content_type == "application/x-protobuf")
+        return stream_codec_t::protobuf;
+    return stream_codec_t::raw;
+}
+
 std::mutex &stream_dispatch_executor_mutex ()
 {
     static std::mutex mutex;
@@ -1121,7 +1147,67 @@ stream_runtime_t::encode_header (const stream_header_t &header) const
         bytes.insert (bytes.end (), flow->begin (), flow->end ());
         bytes.push_back (static_cast<std::uint8_t> (*header.flow_origin ()));
     }
+    if (bytes.size () > std::numeric_limits<std::uint16_t>::max ()) {
+        return result_t<std::vector<std::uint8_t>>::failure (
+          framework_error_kind_t::protocol_error,
+          "STREAM encoded header exceeds its 16-bit wire length");
+    }
     return result_t<std::vector<std::uint8_t>>::success (std::move (bytes));
+}
+
+result_t<void> stream_runtime_t::validate_frame_representation (
+  std::size_t header_size,
+  std::uint64_t payload_size)
+{
+    if (header_size > std::numeric_limits<std::uint16_t>::max ()) {
+        return result_t<void>::failure (
+          framework_error_kind_t::protocol_error,
+          "STREAM encoded header exceeds its 16-bit wire length");
+    }
+    if (payload_size > std::numeric_limits<std::uint32_t>::max ()) {
+        return result_t<void>::failure (
+          framework_error_kind_t::protocol_error,
+          "STREAM payload exceeds its 32-bit wire length");
+    }
+    return result_t<void>::success ();
+}
+
+result_t<std::vector<std::uint8_t>>
+stream_runtime_t::encode_frame (const stream_header_t &header,
+                                const zlink::message_t &payload) const
+{
+    auto encoded_header = encode_header (header);
+    if (!encoded_header) {
+        return result_t<std::vector<std::uint8_t>>::failure (
+          encoded_header.error_kind (),
+          encoded_header.error () ? encoded_header.error ()->what ()
+                                  : "STREAM header encode failed");
+    }
+
+    const auto payload_size = payload.size ();
+    const auto representable = validate_frame_representation (
+      encoded_header.value ().size (), payload_size);
+    if (!representable) {
+        return result_t<std::vector<std::uint8_t>>::failure (
+          representable.error_kind (),
+          representable.error () ? representable.error ()->what ()
+                                 : "STREAM frame cannot be represented on the wire");
+    }
+
+    auto payload_bytes = payload.to_bytes ();
+    auto header_bytes = std::move (encoded_header.value ());
+    const auto header_size = header_bytes.size ();
+    std::vector<std::uint8_t> frame;
+    frame.reserve (6 + header_size + payload_size);
+    frame.push_back (static_cast<std::uint8_t> ((header_size >> 8) & 0xff));
+    frame.push_back (static_cast<std::uint8_t> (header_size & 0xff));
+    frame.push_back (static_cast<std::uint8_t> ((payload_size >> 24) & 0xff));
+    frame.push_back (static_cast<std::uint8_t> ((payload_size >> 16) & 0xff));
+    frame.push_back (static_cast<std::uint8_t> ((payload_size >> 8) & 0xff));
+    frame.push_back (static_cast<std::uint8_t> (payload_size & 0xff));
+    frame.insert (frame.end (), header_bytes.begin (), header_bytes.end ());
+    frame.insert (frame.end (), payload_bytes.begin (), payload_bytes.end ());
+    return result_t<std::vector<std::uint8_t>>::success (std::move (frame));
 }
 
 result_t<stream_header_t>
@@ -1579,18 +1665,23 @@ result_t<void> stream_runtime_t::dispatch_disconnected_async (
 }
 
 result_t<void> stream_runtime_t::dispatch_actor_binding_replaced_async (
-  packet_stream_session_t &session,
   stream_t &stream,
   std::string actor_id,
+  actor_binding_replaced_dispatch_t dispatch,
   async_dispatch_completion_t completion) const
 {
+    if (!dispatch) {
+        return result_t<void>::failure (
+          framework_error_kind_t::not_configured,
+          "STREAM Actor binding replacement dispatch is empty");
+    }
     auto dispatch_stream = stream;
     return dispatch_serial_async (
       stream, "actor-binding-replaced:" + actor_id,
-      [session = &session, dispatch_stream = std::move (dispatch_stream),
+      [dispatch = std::move (dispatch),
+       dispatch_stream = std::move (dispatch_stream),
        actor_id = std::move (actor_id)] () mutable {
-          return session->on_actor_binding_replaced (
-            dispatch_stream, std::move (actor_id));
+          return dispatch (dispatch_stream, std::move (actor_id));
       },
       std::move (completion));
 }

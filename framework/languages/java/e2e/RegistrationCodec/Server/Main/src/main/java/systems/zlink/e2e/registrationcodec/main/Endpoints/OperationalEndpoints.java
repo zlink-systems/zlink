@@ -1,12 +1,12 @@
-package Endpoints;
+package systems.zlink.e2e.registrationcodec.main.Endpoints;
 import com.sun.net.httpserver.HttpExchange;
-import systems.zlink.e2e.registrationcodec.main.Endpoints;
-import systems.zlink.e2e.registrationcodec.main.Infrastructure;
 import java.io.IOException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
-import com.google.protobuf.StringValue;
+import systems.zlink.e2e.registrationcodec.shared.protobuf.ProtobufEchoMsg;
+import systems.zlink.e2e.registrationcodec.shared.protobuf.ProtobufEchoReq;
+import systems.zlink.e2e.registrationcodec.shared.protobuf.ProtobufEchoRes;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -152,13 +152,17 @@ public final class OperationalEndpoints implements SmartLifecycle {
             .submit(Contracts.EchoRes.class)
             .thenCompose(jsonReply -> {
                 client.sendToChannel(Contracts.CHANNEL, new Contracts.JsonEchoMsg("json-send")).submit();
-                return client.requestToChannel(Contracts.CHANNEL, StringValue.of("protobuf-request"))
+                return client.requestToChannel(
+                        Contracts.CHANNEL,
+                        ProtobufEchoReq.newBuilder().setValue("protobuf-request").build())
                     .timeout(Duration.ofSeconds(5))
-                    .submit(StringValue.class)
+                    .submit(ProtobufEchoRes.class)
                     .thenApply(protobufReply -> new Object[] {jsonReply, protobufReply});
             })
             .thenCompose(replies -> {
-                client.sendToChannel(Contracts.CHANNEL, StringValue.of("protobuf-send")).submit();
+                client.sendToChannel(
+                    Contracts.CHANNEL,
+                    ProtobufEchoMsg.newBuilder().setValue("protobuf-send").build()).submit();
                 return client.requestToChannel(
                         Contracts.CHANNEL,
                         new Contracts.PackedEchoReq("msgpack-request"))
@@ -166,7 +170,7 @@ public final class OperationalEndpoints implements SmartLifecycle {
                     .submit(Contracts.PackedEchoRes.class)
                     .thenApply(packedReply -> new Contracts.CodecScenarioRes(
                         (Contracts.EchoRes) replies[0],
-                        ((StringValue) replies[1]).getValue(),
+                        ((ProtobufEchoRes) replies[1]).getValue(),
                         packedReply.value()));
             })
             .thenApply(reply -> {

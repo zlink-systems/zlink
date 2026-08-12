@@ -16,6 +16,8 @@ class VerifyStopObservingAtSpotReq {
   constructor(readonly actorId: string, readonly roomId: string) {}
 }
 
+type VerifyStopObservingAtSpotRes = { readonly stopped: boolean };
+
 @Injectable()
 @zlinkSpotPacketHandler({ spot: () => BingoRoomSpot, packetName: 'SubmitBingoCardAtSpotReq' })
 class SubmitBingoCardAtSpotHandler
@@ -32,14 +34,12 @@ class SubmitBingoCardAtSpotHandler
 @Injectable()
 @zlinkSpotPacketHandler({ spot: () => BingoRoomSpot, packetName: 'VerifyStopObservingAtSpotReq' })
 class VerifyStopObservingAtSpotHandler
-  implements ZLinkSpotRequestHandler<BingoRoomSpot, VerifyStopObservingAtSpotReq, {
-    readonly stopped: boolean;
-  }> {
+  implements ZLinkSpotRequestHandler<BingoRoomSpot, VerifyStopObservingAtSpotReq, VerifyStopObservingAtSpotRes> {
   async handle(
     spot: BingoRoomSpot,
     message: VerifyStopObservingAtSpotReq,
     _context: ZLinkMessageContext
-  ): Promise<{ readonly stopped: boolean }> {
+  ): Promise<VerifyStopObservingAtSpotRes> {
     return {
       stopped: spot.verifyStopObserving(message.actorId, { roomId: message.roomId })
     };
@@ -52,3 +52,4 @@ export {
   VerifyStopObservingAtSpotHandler,
   VerifyStopObservingAtSpotReq
 };
+export type { VerifyStopObservingAtSpotRes };

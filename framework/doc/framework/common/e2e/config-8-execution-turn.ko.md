@@ -529,7 +529,7 @@ Shutdown은 신규 admission을 닫고 이미 수락한 callback을 host deadlin
 - 검증: 신규 request는 `ShuttingDown`이다. 기존 await는 reply 또는 shutdown deadline 결과 중 하나로 한
   번만 끝나며 Host는 bounded terminal state가 된다.
 - 세부 동작: [Cancellation과 shutdown](../spec/05-async-execution-policy.ko.md#4-cancellation과-shutdown)과
-  [Shutdown과 Relocate의 경쟁](../spec/28-graceful-drain-handoff.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
+  [Shutdown과 Relocate의 경쟁](../spec/30-host-relocation-flow.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
 
 #### TD-F6 Wait-for cycle을 timeout 전에 거부한다
 

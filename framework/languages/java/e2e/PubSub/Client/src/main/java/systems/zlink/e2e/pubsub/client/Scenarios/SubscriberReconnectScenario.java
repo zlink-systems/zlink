@@ -1,7 +1,5 @@
-package Scenarios;
+package systems.zlink.e2e.pubsub.client.Scenarios;
 
-import systems.zlink.e2e.pubsub.client.Scenarios;
-import systems.zlink.e2e.pubsub.client.Support;
 import systems.zlink.e2e.pubsub.client.Support.ScenarioAssert;
 import systems.zlink.e2e.pubsub.client.Support.ScenarioContext;
 import systems.zlink.e2e.pubsub.shared.Contracts;
@@ -15,7 +13,7 @@ public final class SubscriberReconnectScenario {
             "sub-1",
             "alpha",
             context.options().sub1Http())) {
-            context.publisher().publish("all", new Contracts.EventMsg("ps-a4-before", 1, "before-disconnect"));
+            context.publisher().publish("all", new Contracts.Event("ps-a4-before", 1, "before-disconnect"));
             ScenarioAssert.waitForEvent(context.evidence(), "sub-1", "ps-a4-before", 1);
         }
 
@@ -23,7 +21,7 @@ public final class SubscriberReconnectScenario {
         for (int sequence = 2; sequence <= 4; sequence++) {
             context.publisher().publish(
                 "all",
-                new Contracts.EventMsg("ps-a4-gap", sequence, "while-sub-1-down-" + sequence));
+                new Contracts.Event("ps-a4-gap", sequence, "while-sub-1-down-" + sequence));
         }
         ScenarioAssert.waitForSequenceAtLeast(context.evidence(), "sub-2", "ps-a4-gap", 4);
 
@@ -34,7 +32,7 @@ public final class SubscriberReconnectScenario {
             for (int sequence = 5; sequence <= 8; sequence++) {
                 context.publisher().publish(
                     "all",
-                    new Contracts.EventMsg("ps-a4-after", sequence, "after-sub-1-restart-" + sequence));
+                    new Contracts.Event("ps-a4-after", sequence, "after-sub-1-restart-" + sequence));
             }
             ScenarioAssert.waitForSequenceAtLeast(context.evidence(), "sub-1", "ps-a4-after", 8);
             ScenarioAssert.waitForSequenceAtLeast(context.evidence(), "sub-2", "ps-a4-after", 8);

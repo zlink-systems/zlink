@@ -35,6 +35,7 @@ import java.lang.reflect.Method;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -386,6 +387,42 @@ final class ZLinkChannelRuntimeTest {
     }
 
     @Test
+    void routedSpotSendRegistersLifecycleBeforeFirstAttemptAndClosesPayloads() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.setDefaultRequestTimeout(Duration.ofSeconds(1));
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+            .enableServer("inproc://play-route");
+        FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
+        backend.bridge.acceptSends = false;
+        try (ZLinkChannelRuntime runtime = new ZLinkChannelRuntime(
+            backend,
+            options.registration(),
+            new ZLinkJsonMessageSerializer(), handlers());
+            Message payload = Message.from("payload")) {
+            runtime.registerSpotRouteBridgeOwner(() -> backend.spotNode);
+            backend.bridge.onSend = runtime::beginClose;
+
+            CompletableFuture<Void> send = runtime.sendToSpotViaRouterChannel(
+                    "play.route",
+                    RoutingId.from("play-node"),
+                    "room-spot",
+                    List.of(payload))
+                .toCompletableFuture();
+
+            CompletionException completion = assertThrows(
+                CompletionException.class,
+                send::join);
+            ZLinkConfigurationException failure = assertInstanceOf(
+                ZLinkConfigurationException.class,
+                completion.getCause());
+            assertEquals(ZLinkFrameworkErrorKind.NOT_CONFIGURED, failure.kind());
+            assertEquals("channel runtime is closed", failure.getMessage());
+            assertEquals(1, backend.bridge.sendAttempts);
+            assertTrue(backend.bridge.lastAttemptParts.stream().allMatch(Message::empty));
+        }
+    }
+
+    @Test
     void routeReceiveLoopSkipsRouterProbeFrame() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
@@ -447,6 +484,8 @@ final class ZLinkChannelRuntimeTest {
 
             assertEquals("reply", reply.value());
             assertEquals(2, backend.dealer.requestAttempts);
+            assertTrue(backend.dealer.requestThreads.get(1).startsWith(
+                "zlink-java-channel-infrastructure-"));
         }
     }
 
@@ -473,6 +512,8 @@ final class ZLinkChannelRuntimeTest {
 
             assertEquals("reply", reply.value());
             assertEquals(2, backend.router.requestAttempts);
+            assertTrue(backend.router.requestThreads.get(1).startsWith(
+                "zlink-java-channel-infrastructure-"));
         }
     }
 
@@ -487,7 +528,7 @@ final class ZLinkChannelRuntimeTest {
         router.requestResult = terminalResult;
         router.requestReplyParts = List.of(Message.from("same-payload".getBytes()));
         var submitter = new ZLinkChannelRequestSubmitter(
-            scheduler, Duration.ofMillis(300));
+            scheduler, Runnable::run, Duration.ofMillis(300));
         CompletableFuture<ZLinkBackendRequestResult> completion =
             new CompletableFuture<>();
         try {
@@ -518,7 +559,7 @@ final class ZLinkChannelRuntimeTest {
         router.requestResult = ZLinkBackendRequestResult.OK;
         router.requestReplyParts = List.of(Message.from("same-payload".getBytes()));
         var submitter = new ZLinkChannelRequestSubmitter(
-            scheduler, Duration.ofMillis(300));
+            scheduler, Runnable::run, Duration.ofMillis(300));
         CompletableFuture<ZLinkBackendRequestResult> completion =
             new CompletableFuture<>();
         try {
@@ -1856,6 +1897,7 @@ final class ZLinkChannelRuntimeTest {
         ZLinkBackendRequestResult requestResult = ZLinkBackendRequestResult.OK;
         int requestAttempts;
         int requestFailuresRemaining;
+        final List<String> requestThreads = new CopyOnWriteArrayList<>();
         List<Message> requestReplyParts = List.of();
 
         @Override public void setChannelName(String channelName) { }
@@ -1869,6 +1911,7 @@ final class ZLinkChannelRuntimeTest {
         }
         @Override public boolean request(List<Message> parts, ZLinkBackendRequestCallback callback, SendFlags flags, Duration timeout) {
             requestAttempts++;
+            requestThreads.add(Thread.currentThread().getName());
             if (requestFailuresRemaining > 0) {
                 requestFailuresRemaining--;
                 throw new IllegalStateException(
@@ -1911,6 +1954,7 @@ final class ZLinkChannelRuntimeTest {
         int replyCount;
         int requestAttempts;
         int requestFailuresRemaining;
+        final List<String> requestThreads = new CopyOnWriteArrayList<>();
         ZLinkBackendRequestResult requestResult = ZLinkBackendRequestResult.OK;
         RoutingId connectRoutingId;
         List<Message> requestReplyParts = List.of();
@@ -1931,6 +1975,7 @@ final class ZLinkChannelRuntimeTest {
         @Override public boolean send(RoutingId routingId, List<Message> parts, SendFlags flags) { return true; }
         @Override public boolean request(RoutingId routingId, List<Message> parts, ZLinkBackendRequestCallback callback, SendFlags flags, Duration timeout) {
             requestAttempts++;
+            requestThreads.add(Thread.currentThread().getName());
             if (requestFailuresRemaining > 0) {
                 requestFailuresRemaining--;
                 throw new IllegalStateException(
@@ -1966,11 +2011,20 @@ final class ZLinkChannelRuntimeTest {
         int noDataDrainsRemaining;
         CountDownLatch firstDrainFailed;
         CountDownLatch nextDrainAfterFailure;
+        boolean acceptSends = true;
+        int sendAttempts;
+        Runnable onSend;
+        List<Message> lastAttemptParts = List.of();
 
         @Override public void attachRouterChannel(String channelName, ZLinkBackendRouterSocket router) { }
         @Override public boolean send(String channelName, RoutingId targetNodeRid, String targetSpotId, List<Message> parts, SendFlags flags) {
+            sendAttempts++;
+            lastAttemptParts = List.copyOf(parts);
             recordBridgeCall(channelName, targetNodeRid, targetSpotId, parts);
-            return true;
+            if (onSend != null) {
+                onSend.run();
+            }
+            return acceptSends;
         }
         @Override public boolean request(String channelName, RoutingId targetNodeRid, String targetSpotId, List<Message> parts, ZLinkBackendRequestCallback callback, SendFlags flags, Duration timeout) {
             recordBridgeCall(channelName, targetNodeRid, targetSpotId, parts);

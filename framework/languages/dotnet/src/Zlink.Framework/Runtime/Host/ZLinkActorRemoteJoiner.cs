@@ -626,6 +626,7 @@ internal sealed class ZLinkActorRemoteJoiner(
             };
             var sealedHighWater = await SealBoundSessionRouteAsync(
                     actor.Context.ActorId,
+                    actorRef.NodeRid,
                     boundSession,
                     sessionRelocationContext,
                     cancellationToken)
@@ -1348,6 +1349,7 @@ internal sealed class ZLinkActorRemoteJoiner(
 
     private async ValueTask<ulong> SealBoundSessionRouteAsync(
         string actorId,
+        RoutingId actorNodeRid,
         ZLinkActorBoundSession session,
         ZLinkSessionRelocationContext wireContext,
         CancellationToken cancellationToken)
@@ -1365,6 +1367,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                 sessionOwnerNode,
                 ZLinkSessionRelocationWire.CreateSeal(
                     actorId,
+                    actorNodeRid,
                     session,
                     wireContext),
                 cancellationToken)

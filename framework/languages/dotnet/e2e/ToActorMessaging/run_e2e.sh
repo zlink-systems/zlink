@@ -4,6 +4,7 @@ umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/../redis-common.sh"
+zlink_dotnet_e2e_acquire_run_lock "$0" "$@"
 E2E_START_ORDER="forward"
 ACTOR_A_RID="actor-a"
 CALLER_RID="to-actor-caller"
@@ -64,18 +65,7 @@ PY
 )"
 
 allocate_ports() {
-  python3 - "$1" <<'PY'
-import socket
-import sys
-sockets = []
-for _ in range(int(sys.argv[1])):
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    sockets.append(sock)
-print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
-for sock in sockets:
-    sock.close()
-PY
+  zlink_dotnet_e2e_allocate_ports "$1"
 }
 
 pids=()
@@ -92,7 +82,7 @@ cleanup() {
   done
   wait "${pids[@]:-}" >/dev/null 2>&1 || true
   if [[ -n "$REDIS_CONTAINER" ]]; then
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   if [[ "$code" -ne 0 ]]; then
     echo "E2E failed. Logs: $LOG_DIR" >&2

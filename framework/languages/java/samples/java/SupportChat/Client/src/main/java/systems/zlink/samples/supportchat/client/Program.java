@@ -304,7 +304,7 @@ final class SupportChatClientScenario {
         }
 
         private void sendTyping(boolean typing) {
-            connector.send(new Messages.SetTypingReq(typing))
+            connector.send(new Messages.SetTypingMsg(typing))
                 .metadata(SampleNames.ConversationIdMetadataKey, conversationId)
                 .submit();
         }

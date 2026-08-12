@@ -8,7 +8,7 @@ class Contracts private constructor() {
     }
 
     @JvmRecord
-    data class InstanceRequest(
+    data class InstanceReq(
         val spotId: String,
         val operationId: String,
         val payload: String,
@@ -16,24 +16,24 @@ class Contracts private constructor() {
     )
 
     @JvmRecord
-    data class InstanceSend(
+    data class InstanceMsg(
         val spotId: String,
         val operationId: String,
         val payload: String,
     )
 
     @JvmRecord
-    data class CloseRequest(
+    data class CloseMsg(
         val spotId: String,
         val operationId: String,
         val gateId: String,
     )
 
     @JvmRecord
-    data class GateRequest(val gateId: String, val open: Boolean)
+    data class GateReq(val gateId: String, val open: Boolean)
 
     @JvmRecord
-    data class InstanceReply(
+    data class InstanceRes(
         val spotId: String,
         val operationId: String,
         val payload: String,
@@ -44,22 +44,22 @@ class Contracts private constructor() {
     )
 
     @JvmRecord
-    data class RequestOutcome(
+    data class InstanceCallRes(
         val succeeded: Boolean,
-        val reply: InstanceReply?,
+        val reply: InstanceRes?,
         val errorKind: String,
         val errorMessage: String,
     )
 
     @JvmRecord
-    data class SendOutcome(
+    data class SendSubmitRes(
         val succeeded: Boolean,
         val errorKind: String,
         val errorMessage: String,
     )
 
     @JvmRecord
-    data class ConcurrentRequest(
+    data class ConcurrentReq(
         val spotId: String,
         val count: Int,
         val operationPrefix: String,
@@ -67,10 +67,10 @@ class Contracts private constructor() {
     )
 
     @JvmRecord
-    data class ConcurrentOutcome(val outcomes: List<RequestOutcome>)
+    data class ConcurrentRes(val outcomes: List<InstanceCallRes>)
 
     @JvmRecord
-    data class EvidenceEvent(
+    data class EvidenceEntry(
         val sequence: Long,
         val kind: String,
         val spotId: String,
@@ -87,21 +87,21 @@ class Contracts private constructor() {
     data class EvidenceSnapshot(
         val rid: String,
         val lifecycleId: String,
-        val events: List<EvidenceEvent>,
+        val events: List<EvidenceEntry>,
     )
 
     @JvmRecord
-    data class EvidenceWaitRequest(
+    data class EvidenceWaitReq(
         val kind: String,
         val operationId: String,
         val timeoutMilliseconds: Long,
     )
 
     @JvmRecord
-    data class EvidenceWaitResult(val found: Boolean, val snapshot: EvidenceSnapshot)
+    data class EvidenceWaitRes(val found: Boolean, val snapshot: EvidenceSnapshot)
 
     @JvmRecord
-    data class LookupOutcome(
+    data class LookupRes(
         val found: Boolean,
         val spotId: String,
         val objectGeneration: Long,

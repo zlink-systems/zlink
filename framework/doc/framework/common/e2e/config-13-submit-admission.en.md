@@ -209,8 +209,8 @@ ShuttingDown get rejected with the formal terminal?
   rejection result, and the Shutdown variant in `ShuttingDown`, with
   no target handler evidence.
 - Detailed behavior: verifies
-  [Host State And Completion Results](../spec/28-graceful-drain-handoff.en.md#3-host-state-and-completion-results)
-  and [Admission Per State](../spec/28-graceful-drain-handoff.en.md#12-admission-per-state).
+  [Host State And Completion Results](../spec/30-host-relocation-flow.en.md#3-host-state-and-completion-results)
+  and [Admission Per State](../spec/30-host-relocation-flow.en.md#12-admission-per-state).
 
 #### SA-E2E-07 Distinguish An Admission Terminal From A Publish Commit
 

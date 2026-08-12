@@ -37,7 +37,7 @@ struct echo_auto_msg_t
 
 struct echo_attr_req_t
 {
-    static constexpr const char *packet_name = "EchoAttr";
+    static constexpr const char *packet_name = "EchoAttrReq";
     std::string value;
 };
 
@@ -56,7 +56,7 @@ struct echo_attr_msg_t
 
 struct echo_manual_req_t
 {
-    static constexpr const char *packet_name = "EchoManual";
+    static constexpr const char *packet_name = "EchoManualReq";
     std::string value;
 };
 
@@ -151,7 +151,7 @@ struct mismatch_roundtrip_res_t
 
 struct json_golden_req_t
 {
-    static constexpr const char *packet_name = "JsonGolden";
+    static constexpr const char *packet_name = "JsonGoldenReq";
     std::string display_name;
     std::string status;
     std::int64_t balance = 0;

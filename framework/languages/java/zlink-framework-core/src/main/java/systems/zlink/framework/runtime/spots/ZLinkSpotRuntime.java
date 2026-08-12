@@ -2756,6 +2756,23 @@ public final class ZLinkSpotRuntime
                 local).thenApply(reply -> reply.map(LocalActorReply::payload)));
     }
 
+    CompletionStage<Optional<LocalActorReply>> dispatchMessageFollow(
+        ZLinkBackendActorRef actorRef,
+        ZLinkStreamHeader header,
+        Message payload,
+        byte[] acceptedJournalRecord) {
+        return actorSessions.dispatchMessageFollow(
+            actorRef,
+            header,
+            payload,
+            acceptedJournalRecord,
+            local -> dispatchLocalSessionActor(
+                actorRef,
+                header,
+                payload,
+                local));
+    }
+
     CompletionStage<Optional<byte[]>> replayPreparedActor(
         ZLinkSpotLifecycle.PreparedUserSpot preparedSpot,
         ZLinkActorRuntime.PreparedTransferredActor preparedActor,
@@ -3079,14 +3096,14 @@ public final class ZLinkSpotRuntime
                         spotSurface,
                         actor,
                         payload,
-                        headerPart.contentType(),
+                        actorPacketContentType(packetHeader, headerPart),
                         packetHeader.metadata())
                     : invokeActorSendHandler(
                         handler,
                         spotSurface,
                         actor,
                         payload,
-                        headerPart.contentType(),
+                        actorPacketContentType(packetHeader, headerPart),
                         packetHeader.metadata())
                         .thenApply(ignored -> Optional.empty()),
                 relocationReply == null
@@ -3177,6 +3194,14 @@ public final class ZLinkSpotRuntime
                     }
                 });
             });
+    }
+
+    private String actorPacketContentType(
+        ActorPacketFrames.Header packetHeader,
+        ZLinkBackendActorReceived headerPart) {
+        return packetHeader.streamHeader()
+            ? contentTypeFor(ZLinkStreamCodec.fromValue(packetHeader.codec()))
+            : headerPart.contentType();
     }
 
     private CompletionStage<Void> deliverRelocatedActorReply(

@@ -1,4 +1,3 @@
-using Google.Protobuf.WellKnownTypes;
 using RegistrationCodec.Server.Main.Infrastructure;
 using RegistrationCodec.Shared;
 using Zlink.Framework.Contracts.Handlers;
@@ -30,21 +29,25 @@ internal sealed class JsonEchoCommandHandler(EvidenceStore evidence)
 }
 
 internal sealed class ProtobufEchoRequestHandler(EvidenceStore evidence)
-    : IZLinkRequestHandler<StringValue, StringValue>
+    : IZLinkRequestHandler<ProtobufEchoReq, ProtobufEchoRes>
 {
-    public ValueTask<StringValue> HandleAsync(StringValue request, IZLinkMessageContext context,
+    public ValueTask<ProtobufEchoRes> HandleAsync(ProtobufEchoReq request, IZLinkMessageContext context,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         evidence.Add($"codec-request|codec=protobuf|value={request.Value}|content={context.ContentType}");
-        return ValueTask.FromResult(new StringValue { Value = $"echo:{request.Value}|content:{context.ContentType}" });
+        return ValueTask.FromResult(
+            new ProtobufEchoRes { Value = $"echo:{request.Value}|content:{context.ContentType}" });
     }
 }
 
 internal sealed class ProtobufEchoCommandHandler(EvidenceStore evidence)
-    : IZLinkSendHandler<StringValue>
+    : IZLinkSendHandler<ProtobufEchoMsg>
 {
-    public ValueTask HandleAsync(StringValue message, IZLinkMessageContext context, CancellationToken cancellationToken)
+    public ValueTask HandleAsync(
+        ProtobufEchoMsg message,
+        IZLinkMessageContext context,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         evidence.Add($"codec-command|codec=protobuf|value={message.Value}|content={context.ContentType}");
@@ -53,14 +56,14 @@ internal sealed class ProtobufEchoCommandHandler(EvidenceStore evidence)
 }
 
 internal sealed class MessagePackEchoRequestHandler(EvidenceStore evidence)
-    : IZLinkRequestHandler<PackedEchoReq, PackedEchoReq>
+    : IZLinkRequestHandler<PackedEchoReq, PackedEchoRes>
 {
-    public ValueTask<PackedEchoReq> HandleAsync(PackedEchoReq request, IZLinkMessageContext context,
+    public ValueTask<PackedEchoRes> HandleAsync(PackedEchoReq request, IZLinkMessageContext context,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         evidence.Add($"codec-request|codec=msgpack|value={request.Value}|content={context.ContentType}");
-        return ValueTask.FromResult(new PackedEchoReq
+        return ValueTask.FromResult(new PackedEchoRes
             { Value = $"echo:{request.Value}|content:{context.ContentType}" });
     }
 }

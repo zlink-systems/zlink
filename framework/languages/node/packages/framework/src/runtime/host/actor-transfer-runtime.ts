@@ -48,7 +48,7 @@ import {
 } from '../actors';
 import type { ZLinkActorRuntimeState } from '../actors/actor-runtime-state';
 import { ZLinkActorRetryDelay } from '../actors/actor-retry-delay';
-import { encodeRoutingIdStorageHex } from '../routing-id';
+import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import { encodeRemoteActorPacketTarget } from '../actors/actor-packet-relay-wire';
 import {
   decodeRemoteBoundSessionOwnershipAck,
@@ -95,6 +95,57 @@ interface ZLinkSessionRelocationWirePort {
     request: ServiceSessionRelocationRoute,
     signal?: AbortSignal
   ): Promise<ServiceSessionRelocationRouted>;
+}
+
+type ZLinkCommittedActorAuthority = Pick<
+  ZLinkAuthoritySnapshot,
+  | 'objectGeneration'
+  | 'authorityOwnerGeneration'
+  | 'ownerId'
+  | 'ownerLeaseGeneration'
+  | 'allocation'
+>;
+
+/** Converts only committed actor authority evidence into a Message Follow fence. */
+export function committedActorOwnerFence(
+  actorId: string,
+  targetActorRef: ActorRef,
+  authority: ZLinkCommittedActorAuthority
+): ZLinkActorMessageFollowOwnerFence {
+  if (targetActorRef.actorId !== actorId
+    || targetActorRef.objectGeneration <= 0n
+    || authority.objectGeneration !== targetActorRef.objectGeneration
+    || authority.allocation.state !== 'active'
+    || authority.allocation.objectKind !== 'actor'
+    || authority.allocation.descriptor.meshName !== targetActorRef.meshName
+    || !routingIdsEqual(authority.allocation.descriptor.rid, targetActorRef.nodeRid)
+    || authority.ownerId.length === 0
+    || authority.ownerLeaseGeneration <= 0n
+    || authority.allocation.descriptorLifecycleGeneration <= 0n
+    || authority.authorityOwnerGeneration <= 0n) {
+    throw new Error(
+      `Actor '${actorId}' handoff target does not match the committed authority snapshot.`
+    );
+  }
+  return ownerFence({
+    ownerId: authority.ownerId,
+    ownerLeaseGeneration: authority.ownerLeaseGeneration,
+    nodeRid: String(authority.allocation.descriptor.rid),
+    nodeRidHex: encodeRoutingIdStorageHex(authority.allocation.descriptor.rid),
+    nodeGeneration: authority.allocation.descriptorLifecycleGeneration,
+    authorityOwnerGeneration: authority.authorityOwnerGeneration
+  });
+}
+
+function requireSourceObjectGeneration(
+  actorId: string,
+  state: ZLinkActorRuntimeState
+): bigint {
+  const generation = state.nativeActorRef?.generation;
+  if (generation === undefined || generation <= 0n) {
+    throw new Error(`Actor '${actorId}' handoff requires a positive source ObjectGeneration.`);
+  }
+  return generation;
 }
 
 export interface ZLinkActorTransferRuntimeActorManager {
@@ -171,6 +222,10 @@ export class ZLinkActorTransferRuntime {
     readonly promise: Promise<void>;
     readonly resolve: () => void;
     readonly reject: (error: unknown) => void;
+    readonly submitted: Promise<void>;
+    readonly resolveSubmitted: () => void;
+    readonly rejectSubmitted: (error: unknown) => void;
+    notifySubmitted?: () => Promise<void>;
   }>();
 
   constructor(private readonly options: ZLinkActorTransferRuntimeOptions) {}
@@ -184,10 +239,7 @@ export class ZLinkActorTransferRuntime {
     this.options.actorHandoff.beginProvisional(
       actorId,
       operationId,
-      state.nativeActorRef?.generation ?? 0n,
-      state.nativeActorRef === undefined ? undefined : String(state.nativeActorRef.nodeRid),
-      state.locationGeneration ?? 1n,
-      state.ownerLeaseGeneration
+      requireSourceObjectGeneration(actorId, state)
     );
   }
 
@@ -593,10 +645,7 @@ export class ZLinkActorTransferRuntime {
     if (!this.options.actorHandoff.isActive(actor.context.actorId)) {
       this.options.actorHandoff.begin(
         actor.context.actorId,
-        state.nativeActorRef?.generation ?? 0n,
-        state.nativeActorRef === undefined ? undefined : String(state.nativeActorRef.nodeRid),
-        state.locationGeneration ?? 1n,
-        state.ownerLeaseGeneration
+        requireSourceObjectGeneration(actor.context.actorId, state)
       );
     }
     try {
@@ -733,9 +782,10 @@ export class ZLinkActorTransferRuntime {
         sourceLeaveStarted = true;
         await this.prepareSourceActorLeave(actor, sourceSpotId, signal);
       }
-      const sourceLeaveCompletion = lifecycleAuthority === 'core'
+      const coreSourceLeave = lifecycleAuthority === 'core'
         ? this.beginCoreSourceLeave(actor.context.actorId)
         : undefined;
+      const sourceLeaveCompletion = coreSourceLeave?.completion;
       const handoffBacklog = lifecycleAuthority === 'core'
         ? this.options.actorHandoff.snapshotCoreBacklog(actor.context.actorId)
         : this.options.actorHandoff.snapshot(actor.context.actorId);
@@ -761,6 +811,16 @@ export class ZLinkActorTransferRuntime {
         stateChecksumCrc32c: transferStateChecksumCrc32c,
         handoffBacklog,
         sourceLeaveCompletion,
+        sourceLeaveSubmitted: coreSourceLeave?.submitted,
+        onSourceLeaveSubmitted: (notify: () => Promise<void>) => {
+          const pending = this.coreSourceLeaves.get(actor.context.actorId);
+          if (pending === undefined) {
+            throw new Error(
+              `Actor '${actor.context.actorId}' has no pending Core source leave.`
+            );
+          }
+          pending.notifySubmitted = notify;
+        },
         reserveTarget: async (target: ZLinkSpotRouteTarget, reserveSignal?: AbortSignal) => {
           if (authorityReservation !== undefined) return;
           const authority = this.options.authorityStore();
@@ -858,7 +918,7 @@ export class ZLinkActorTransferRuntime {
           );
           if (
             result.kind !== 'stored'
-            || String(result.allocation.descriptor.rid) !== String(target.targetNodeRid)
+            || !routingIdsEqual(result.allocation.descriptor.rid, target.targetNodeRid)
             || result.objectGeneration !== targetActorRef.objectGeneration
           ) {
             const detail = result.kind === 'stored'
@@ -869,13 +929,11 @@ export class ZLinkActorTransferRuntime {
               + `expected node=${String(target.targetNodeRid)} generation=${targetActorRef.objectGeneration}).`
             );
           }
-          committedTargetOwnerFence = ownerFence({
-            ownerId: result.ownerId,
-            ownerLeaseGeneration: result.ownerLeaseGeneration,
-            nodeRid: String(result.allocation.descriptor.rid),
-            nodeGeneration: result.allocation.descriptorLifecycleGeneration,
-            authorityOwnerGeneration: result.authorityOwnerGeneration
-          });
+          committedTargetOwnerFence = committedActorOwnerFence(
+            actor.context.actorId,
+            targetActorRef,
+            result
+          );
         },
         commit: (
           target: Parameters<ZLinkActorHandoffCoordinator['complete']>[1],
@@ -884,6 +942,11 @@ export class ZLinkActorTransferRuntime {
           releaseLocation = true
         ) => {
           if (phase !== 'prepared') return;
+          if (committedTargetOwnerFence === undefined) {
+            throw new Error(
+              `Actor '${actor.context.actorId}' handoff has no committed target authority fence.`
+            );
+          }
           phase = 'committed';
           relocationMetric?.complete('completed');
           try {
@@ -985,7 +1048,11 @@ export class ZLinkActorTransferRuntime {
     readonly target?: ZLinkRemoteBoundSessionTarget;
     readonly handoffBacklog: readonly import('../actors').ZLinkActorHandoffPacket[];
     setReplayResults(results: readonly import('../actors').ZLinkActorHandoffResult[]): void;
-    commit(target: ZLinkSpotRouteTarget, targetActorRef: ActorRef): Promise<void>;
+    commit(
+      target: ZLinkSpotRouteTarget,
+      targetActorRef: ActorRef,
+      targetOwnerFence: ZLinkActorMessageFollowOwnerFence
+    ): Promise<void>;
     rollback(): Promise<void>;
   }> {
     if (manageMembership) {
@@ -994,10 +1061,7 @@ export class ZLinkActorTransferRuntime {
       state.beginMove();
       this.options.actorHandoff.begin(
         actor.context.actorId,
-        state.nativeActorRef?.generation ?? 0n,
-        state.nativeActorRef === undefined ? undefined : String(state.nativeActorRef.nodeRid),
-        state.locationGeneration ?? 1n,
-        state.ownerLeaseGeneration
+        requireSourceObjectGeneration(actor.context.actorId, state)
       );
     }
     let acceptedRoot: ZLinkBoundSessionAcceptedJournalRoot | undefined;
@@ -1034,14 +1098,15 @@ export class ZLinkActorTransferRuntime {
         setReplayResults: results => {
           if (terminal === 'prepared') replayResults = [...results];
         },
-        commit: async (target, targetActorRef) => {
+        commit: async (target, targetActorRef, targetOwnerFence) => {
           if (terminal === 'rolledBack') return;
           if (terminal === 'prepared') {
             this.options.actorHandoff.complete(
               actor.context.actorId,
               target,
               targetActorRef,
-              replayResults
+              replayResults,
+              targetOwnerFence
             );
             if (manageMembership && state.spotId !== undefined) {
               await this.options.spotManager()
@@ -1090,10 +1155,30 @@ export class ZLinkActorTransferRuntime {
 
   async notifyCoreSourceLeave(actor: ZLinkActor, callback: () => Promise<void>): Promise<void> {
     const pending = this.coreSourceLeaves.get(actor.context.actorId);
+    let callbackResult: Promise<void>;
     try {
-      await callback();
+      callbackResult = Promise.resolve(callback());
+    } catch (error) {
+      callbackResult = Promise.reject(error);
+    }
+    // Submission, not the callback result, releases the target Join. Observe
+    // a fast rejection while the submission ACK is in flight without making
+    // that rejection an unhandled promise.
+    void callbackResult.catch(() => {});
+    try {
+      if (pending !== undefined) {
+        if (pending.notifySubmitted === undefined) {
+          throw new Error(
+            `Actor '${actor.context.actorId}' has no Core source leave submission notifier.`
+          );
+        }
+        await pending.notifySubmitted();
+        pending.resolveSubmitted();
+      }
+      await callbackResult;
       pending?.resolve();
     } catch (error) {
+      pending?.rejectSubmitted(error);
       pending?.reject(error);
       throw error;
     } finally {
@@ -1105,7 +1190,7 @@ export class ZLinkActorTransferRuntime {
     actorId: string,
     packet: ZLinkActorHandoffPacket,
     result: ZLinkActorHandoffResult,
-    sourceNodeRid: string,
+    sourceNodeRid: RoutingId,
     targetAuthorityOwnerGeneration?: bigint
   ): ZLinkActorHandoffTerminalAck {
     return this.options.actorHandoff.acceptRelocatedTerminal(
@@ -1121,7 +1206,7 @@ export class ZLinkActorTransferRuntime {
     operationId: string,
     replyRouteId: string,
     result: ZLinkActorHandoffResult,
-    sourceNodeRid: string,
+    sourceNodeRid: RoutingId,
     targetAuthorityOwnerGeneration?: bigint
   ): ZLinkActorHandoffTerminalAcceptance {
     return this.options.actorHandoff.acceptRelocatedTerminalRelay(
@@ -1424,16 +1509,33 @@ export class ZLinkActorTransferRuntime {
     return store === undefined ? undefined : new ZLinkBoundSessionAcceptedJournal(store);
   }
 
-  private beginCoreSourceLeave(actorId: string): Promise<void> {
+  private beginCoreSourceLeave(actorId: string): {
+    readonly completion: Promise<void>;
+    readonly submitted: Promise<void>;
+  } {
     let resolve!: () => void;
     let reject!: (error: unknown) => void;
     const promise = new Promise<void>((accept, fail) => {
       resolve = accept;
       reject = fail;
     });
+    let resolveSubmitted!: () => void;
+    let rejectSubmitted!: (error: unknown) => void;
+    const submitted = new Promise<void>((accept, fail) => {
+      resolveSubmitted = accept;
+      rejectSubmitted = fail;
+    });
     void promise.catch(() => {});
-    this.coreSourceLeaves.set(actorId, { promise, resolve, reject });
-    return promise;
+    void submitted.catch(() => {});
+    this.coreSourceLeaves.set(actorId, {
+      promise,
+      resolve,
+      reject,
+      submitted,
+      resolveSubmitted,
+      rejectSubmitted
+    });
+    return { completion: promise, submitted };
   }
 
   private scheduleSourceDeparture(

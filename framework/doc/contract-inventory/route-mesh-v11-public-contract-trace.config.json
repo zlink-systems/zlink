@@ -6,18 +6,18 @@
   "baseline": {
     "revision": "86258cb9a3ecbc7db2dfd86a8c18de45a562734a",
     "reviewedV11FirstMembers": {
-      "count": 2846,
-      "sha256": "d998ff39dde1979a836e08547ba63e4e2993dd610f6ab9759209959e8c3f2012",
+      "count": 2792,
+      "sha256": "143a107a6544f9892a602ad8634b74e4ac4c42c598a1e864be6c1aa001df2f4d",
       "specReason": "The v11 formal contract and exact interfaces introduce this reviewed member after the frozen 10.x baseline."
     },
     "reviewedV11FirstOwners": {
-      "count": 750,
-      "sha256": "2da19aff96ab84867d3c45196418ab78f0d5ee77557f34c51129e28be869e9c5",
+      "count": 758,
+      "sha256": "779b5e398bc070b8f45db86b1dfdb700abc5d96d5920ef27df9b18d043a876c7",
       "specReason": "The v11 exact interface introduces this reviewed declaration owner after the frozen 10.x baseline."
     },
     "reviewedIntentionalRemovals": {
-      "count": 2102,
-      "sha256": "b2ce64aa05e601d9c5166c0d6c037f0a53755f55864e99b4ba17d31385fa1238",
+      "count": 2134,
+      "sha256": "1e9b50865c69600c3afb29a8d910dfeb7ad7f3927d321f4be8a6ca35c3f526e2",
       "specReason": "The v11 formal contract intentionally omits this exact frozen-baseline member; the target exact-interface absence and POSD removal policies own the change."
     },
     "overrideReasons": {
@@ -357,62 +357,6 @@
         "baselineSignatureSha256": "4c385d29a31cdb83082f0da089651264afc8501240e5c9b159ae20ee79f62483",
         "targetIdentity": "cpp|zlink-framework-cpp|zlink-framework-cpp::mesh_node_builder_t.add_entry_spot#8576cb1f5b6d384f",
         "targetSignatureSha256": "8576cb1f5b6d384fc1e30c1dec4de3618466c51ce7bee821631c34fe829362de",
-        "disposition": "v11-first-implementation",
-        "specReason": "V11-SIGNATURE-CHANGE"
-      },
-      {
-        "baselineIdentity": "cpp|zlink-framework-cpp|zlink-framework-cpp::mesh_node_socket_config_t.max_message_size#7c83af44d244ad5f",
-        "baselineSignatureSha256": "7c83af44d244ad5f6eac54d01f7f5a2f3492ded6f5a40837c4d1ebd3fe75d81b",
-        "targetIdentity": "cpp|zlink-framework-cpp|zlink-framework-cpp::mesh_node_socket_config_t.max_message_size#2698adc8f573b17a",
-        "targetSignatureSha256": "2698adc8f573b17a2fbfa96304b64fd844c0d4fc934df6b9b5b189991f08e1ad",
-        "disposition": "v11-first-implementation",
-        "specReason": "V11-SIGNATURE-CHANGE"
-      },
-      {
-        "baselineIdentity": "cpp|zlink-framework-cpp|zlink-framework-cpp::message_flow_event_t.message_kind#3e696ca840171bea",
-        "baselineSignatureSha256": "3e696ca840171beacaef81f7d79c05c80b301c13966cd02d430e8274295750c5",
-        "targetIdentity": "cpp|zlink-framework-cpp|zlink-framework-cpp::message_flow_event_t.message_kind#799d1d53b9e5b537",
-        "targetSignatureSha256": "799d1d53b9e5b537a0fa82030205117ade7afac88fc9db0d8790a7ceb9ca142d",
-        "disposition": "v11-first-implementation",
-        "specReason": "V11-SIGNATURE-CHANGE"
-      },
-      {
-        "baselineIdentity": "cpp|zlink-framework-cpp|zlink-framework-cpp::message_flow_event_t.outcome#1e2e490e8408138c",
-        "baselineSignatureSha256": "1e2e490e8408138c7ff3f2c44969e111bf7b8a53263c1ca44e2a19edf58ac95a",
-        "targetIdentity": "cpp|zlink-framework-cpp|zlink-framework-cpp::message_flow_event_t.outcome#26a37531039c1346",
-        "targetSignatureSha256": "26a37531039c1346cd85d8568806e7bf94ad2c5d30149648388275ad2e52d8cb",
-        "disposition": "v11-first-implementation",
-        "specReason": "V11-SIGNATURE-CHANGE"
-      },
-      {
-        "baselineIdentity": "cpp|zlink-framework-cpp|zlink-framework-cpp::message_flow_event_t.source_rid#3f1280d9fa1e47d0",
-        "baselineSignatureSha256": "3f1280d9fa1e47d0654f4679a6dbfdfa799f1ad6d4b57dcfe1c0094a6ef2b060",
-        "targetIdentity": "cpp|zlink-framework-cpp|zlink-framework-cpp::message_flow_event_t.source_rid#63349a07ca3eebf5",
-        "targetSignatureSha256": "63349a07ca3eebf5a5dc84897bf5998a758a4c8b165964ad439e3ad943d08b93",
-        "disposition": "v11-first-implementation",
-        "specReason": "V11-SIGNATURE-CHANGE"
-      },
-      {
-        "baselineIdentity": "cpp|zlink-framework-cpp|zlink-framework-cpp::message_flow_event_t.spot_rid#0fd64c1e55c9853b",
-        "baselineSignatureSha256": "0fd64c1e55c9853b51353fea6e5ad9367863a929dd774c4e81010a66279b2750",
-        "targetIdentity": "cpp|zlink-framework-cpp|zlink-framework-cpp::message_flow_event_t.spot_id#b6cfb8d8746a209e",
-        "targetSignatureSha256": "b6cfb8d8746a209e41a370728e50e64c029ca1ec31448f8c93dbd7788f813089",
-        "disposition": "v11-first-implementation",
-        "specReason": "V11-SIGNATURE-CHANGE"
-      },
-      {
-        "baselineIdentity": "cpp|zlink-framework-cpp|zlink-framework-cpp::message_flow_event_t.surface#b3f3de6c713ada4b",
-        "baselineSignatureSha256": "b3f3de6c713ada4b0986c47a128371838ffdfaa385e9bb803a60cee7b6fab70f",
-        "targetIdentity": "cpp|zlink-framework-cpp|zlink-framework-cpp::message_flow_event_t.surface#274e29e102504ca1",
-        "targetSignatureSha256": "274e29e102504ca1ecee3b89a89962ea4f1cef38b472da5679248e0703763dee",
-        "disposition": "v11-first-implementation",
-        "specReason": "V11-SIGNATURE-CHANGE"
-      },
-      {
-        "baselineIdentity": "cpp|zlink-framework-cpp|zlink-framework-cpp::message_flow_observer_t.on_message_flow#e7d25b45e7947edb",
-        "baselineSignatureSha256": "e7d25b45e7947edb710d7218450a383e7cf31dfbaccf9c60aff22255ee314ef5",
-        "targetIdentity": "cpp|zlink-framework-cpp|zlink-framework-cpp::message_flow_observer_t.on_message_flow#db8ef48e6951de53",
-        "targetSignatureSha256": "db8ef48e6951de53498aebaa4446949d2b7f715045a99aa3e04dcb8ab63baf27",
         "disposition": "v11-first-implementation",
         "specReason": "V11-SIGNATURE-CHANGE"
       },
@@ -1441,6 +1385,14 @@
         "specReason": "V11-SIGNATURE-CHANGE"
       },
       {
+        "baselineIdentity": "kotlin|systems.zlink:zlink-framework-kotlin|systems.zlink:zlink-framework-kotlin::<package>.messageOf#cc5b0d81311774e9",
+        "baselineSignatureSha256": "cc5b0d81311774e9e40fe54266e929ecfb86a944b2a2acf9846adb9ad2394fb9",
+        "targetIdentity": "kotlin|systems.zlink:zlink-framework-kotlin|systems.zlink:zlink-framework-kotlin::<package>.messageOf#ac0877f1adc98ae0",
+        "targetSignatureSha256": "ac0877f1adc98ae0b760d6b6e1c17e19dee911551bec672b20f6d038966c8c81",
+        "disposition": "v11-first-implementation",
+        "specReason": "V11-SIGNATURE-CHANGE"
+      },
+      {
         "baselineIdentity": "kotlin|systems.zlink:zlink-framework-kotlin|systems.zlink:zlink-framework-kotlin::<package>.topology#6c138a8005e272b6",
         "baselineSignatureSha256": "6c138a8005e272b6f82a4995535f8da4d7a3395a9889de9992a6ab0ff3949d4c",
         "targetIdentity": "kotlin|systems.zlink:zlink-framework-kotlin|systems.zlink:zlink-framework-kotlin::<package>.topology#232752bc9d969071",
@@ -1729,6 +1681,14 @@
         "specReason": "V11-SIGNATURE-CHANGE"
       },
       {
+        "baselineIdentity": "node|@zlink-systems/framework|@zlink-systems/framework::ZLinkCodecRegistrar.addSerializer#6c2690198a5f0763",
+        "baselineSignatureSha256": "6c2690198a5f0763b80ec92275c24ebd3be5753c29e9789d6edce205b447326c",
+        "targetIdentity": "node|@zlink-systems/framework|@zlink-systems/framework::ZLinkCodecRegistrar.addSerializer#d0105b1209316ff6",
+        "targetSignatureSha256": "d0105b1209316ff6ed423533e5c860bb748282903ecd817754928b58d4e9b5d3",
+        "disposition": "v11-first-implementation",
+        "specReason": "V11-SIGNATURE-CHANGE"
+      },
+      {
         "baselineIdentity": "node|@zlink-systems/framework|@zlink-systems/framework::ZLinkDrainHealthIndicator.constructor#65c60f77cfc5fbb1",
         "baselineSignatureSha256": "65c60f77cfc5fbb12b9441f036d91a57c0591927d49d0ad6d9a1a0eb0e8671e2",
         "targetIdentity": "node|@zlink-systems/framework|@zlink-systems/framework::ZLinkDrainHealthIndicator.constructor#97ef64f73a570ac7",
@@ -1845,6 +1805,14 @@
         "baselineSignatureSha256": "fdc4c0016aaef427e7e5adee9891b1a9c1275b1c993413b22b8ca54e3a88334d",
         "targetIdentity": "node|@zlink-systems/framework|@zlink-systems/framework::ZLinkMeshNodeSocketConfig.sendHighWaterMark#b0d4722ed3cb580b",
         "targetSignatureSha256": "b0d4722ed3cb580b815c2ec734be01cdde0a150bbb80483159d582d4fb642975",
+        "disposition": "v11-first-implementation",
+        "specReason": "V11-SIGNATURE-CHANGE"
+      },
+      {
+        "baselineIdentity": "node|@zlink-systems/framework|@zlink-systems/framework::ZLinkMessage.from#2a00059aeffec079",
+        "baselineSignatureSha256": "2a00059aeffec079d2c91bc6dee013cb280bb868b4476b9fa990508c6483ae7a",
+        "targetIdentity": "node|@zlink-systems/framework|@zlink-systems/framework::ZLinkMessage.from#e8f75ff70b0353c7",
+        "targetSignatureSha256": "e8f75ff70b0353c71a35921634876b24730d3ac52d1d05031cc1877d2f4138da",
         "disposition": "v11-first-implementation",
         "specReason": "V11-SIGNATURE-CHANGE"
       },
@@ -2227,7 +2195,7 @@
     },
     {
       "document": "framework/doc/framework/common/spec/server/languages/cpp/interfaces/02-configuration-host.ko.md",
-      "sha256": "beb09ffc49697afd9b46df980322025f1f3d26db79f9ad7014b3f64a48d603d0",
+      "sha256": "ee2500bcef180c991b244b1dacc37e43f9011b141e7a25435e942cf13edb1014",
       "role": "application-example",
       "reason": "The fenced block demonstrates application use or an application-implemented extension and is not a package-owned declaration."
     },
@@ -2245,12 +2213,6 @@
     },
     {
       "document": "framework/doc/framework/common/spec/server/languages/cpp/interfaces/02-configuration-host.ko.md",
-      "sha256": "33c2e8d8f3585704cf6b5dfb68c8dde32d8bb48f0a58b935f4a119e8b05962e9",
-      "role": "application-example",
-      "reason": "The fenced block demonstrates application use or an application-implemented extension and is not a package-owned declaration."
-    },
-    {
-      "document": "framework/doc/framework/common/spec/server/languages/cpp/interfaces/02-configuration-host.ko.md",
       "sha256": "4f83fb0b37c48e9a6dda8c16035a59ba2bfe06639eb0ebec6862cd2a77956e1a",
       "role": "application-example",
       "reason": "The fenced block demonstrates application use or an application-implemented extension and is not a package-owned declaration."
@@ -2258,12 +2220,6 @@
     {
       "document": "framework/doc/framework/common/spec/server/languages/cpp/interfaces/02-configuration-host.ko.md",
       "sha256": "cd37fa1430109f9003352c88cefdc340b463944deeff970aee78b2acea842391",
-      "role": "application-example",
-      "reason": "The fenced block demonstrates application use or an application-implemented extension and is not a package-owned declaration."
-    },
-    {
-      "document": "framework/doc/framework/common/spec/server/languages/cpp/interfaces/02-configuration-host.ko.md",
-      "sha256": "cf822777470c6bbadb032adf74c871e16df39b36ad53eade7caa947125a28afd",
       "role": "application-example",
       "reason": "The fenced block demonstrates application use or an application-implemented extension and is not a package-owned declaration."
     },
@@ -2774,7 +2730,7 @@
       ],
       "formalSpecOwners": [
         "framework/doc/framework/common/spec/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/28-graceful-drain-handoff.ko.md"
+        "framework/doc/framework/common/spec/30-host-relocation-flow.ko.md"
       ],
       "decisionIds": [
         "POSD-V11-01",
@@ -2983,13 +2939,13 @@
       "id": "actor-relocation",
       "documentPatterns": [
         "/README\\.ko\\.md$",
-        "/(?:[0-9]+-)?(?:actors|spots|bound-stream-session|location-maintenance)\\.ko\\.md$"
+        "/(?:[0-9]+-)?(?:actors|spots|bound-stream-session|location-maintenance|location-objects)\\.ko\\.md$"
       ],
       "formalSpecOwners": [
         "framework/doc/framework/common/spec/14-actor-model.ko.md",
         "framework/doc/framework/common/spec/15-spot-actor.ko.md",
         "framework/doc/framework/common/spec/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/28-graceful-drain-handoff.ko.md"
+        "framework/doc/framework/common/spec/30-host-relocation-flow.ko.md"
       ],
       "decisionIds": [
         "POSD-V11-04",
@@ -3111,13 +3067,13 @@
       "id": "location-authority",
       "documentPatterns": [
         "/README\\.ko\\.md$",
-        "/(?:[0-9]+-)?(?:authority-relocation|location-maintenance|location-provider-redis|location-store|routing-id-allocation|location-observability)\\.ko\\.md$"
+        "/(?:[0-9]+-)?(?:authority-relocation|location-maintenance|location-objects|location-provider-redis|location-store|routing-id-allocation|location-observability)\\.ko\\.md$"
       ],
       "formalSpecOwners": [
         "framework/doc/framework/common/spec/21-location-runtime.ko.md",
         "framework/doc/framework/common/spec/22-location-store-redis.ko.md",
         "framework/doc/framework/common/spec/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/28-graceful-drain-handoff.ko.md"
+        "framework/doc/framework/common/spec/30-host-relocation-flow.ko.md"
       ],
       "decisionIds": [
         "POSD-V11-06",

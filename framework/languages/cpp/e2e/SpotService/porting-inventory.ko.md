@@ -260,7 +260,7 @@
       `SM-F6`, `SM-G2`, `SM-G3`, `SM-G4`, `SM-G1`
     - 실패 child: `SM-Q9`
     - 비고: `multi-a` route readiness는 통과했지만 `multi-b` requester가
-      `MultiNodeRoutePing`을 계속 전송하고 multi-b server가 수신하지 못해 `errno=113`으로
+      `MultiNodeRoutePingReq`를 계속 전송하고 multi-b server가 수신하지 못해 `errno=113`으로
       실패했다. 이는 완료 proof가 아니며, retry나 timeout 확장으로 가릴 대상이 아니다.
   - `nice -n 10 cmake --build framework/languages/cpp/build --target zlink_cpp_e2e_spot_service_multinode zlink_cpp_e2e_spot_service_multinode_requester -j2`
     - 결과: passed
@@ -325,7 +325,7 @@
     - 결과: failed
     - 로그: `framework/languages/cpp/e2e/SpotService/logs/20260708-112213-1078492`
     - 실패 위치: `sm-q9-requester-a-route-ready`
-    - 비고: `multi-a-requester-flow.log`에는 `MultiNodeRoutePing` request가 반복 전송된 기록만
+    - 비고: `multi-a-requester-flow.log`에는 `MultiNodeRoutePingReq` request가 반복 전송된 기록만
       있고 reply가 없다. stderr는 `request_failed`, `errno=113`을 반환했다. 이는 route
       desired set 또는 auto-connect 수렴 문제로 남기며, retry/sleep/timeout 확장으로 완료 처리하지
       않는다. 이 실행 시점의 시스템 load가 20코어를 넘어 추가 재실행은 보류했다.

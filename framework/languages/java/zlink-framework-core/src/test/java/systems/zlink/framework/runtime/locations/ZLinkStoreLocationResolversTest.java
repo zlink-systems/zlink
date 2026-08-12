@@ -209,6 +209,80 @@ final class ZLinkStoreLocationResolversTest {
     }
 
     @Test
+    void actorABARoundTripRejectsDelayedNoticeFromPreviousTenure() {
+        RoutingId nodeB = RoutingId.from("node-b");
+        AtomicInteger reads = new AtomicInteger();
+        AtomicReference<Object> current = new AtomicReference<>(
+            readyActorSnapshot("v1", NODE, 11, 13, "owner-a", 7));
+        ZLinkLocationRepository store = (ZLinkLocationRepository)
+            Proxy.newProxyInstance(
+                getClass().getClassLoader(),
+                new Class<?>[] {ZLinkLocationRepository.class},
+                (proxy, method, arguments) -> switch (method.getName()) {
+                    case "read" -> {
+                        reads.incrementAndGet();
+                        yield CompletableFuture.completedFuture(current.get());
+                    }
+                    case "readOwnerLease" -> {
+                        ZLinkAuthoritySnapshot snapshot =
+                            (ZLinkAuthoritySnapshot) current.get();
+                        yield CompletableFuture.completedFuture(
+                            new ZLinkOwnerLeaseFound(
+                                new ZLinkLocationOwnerToken(
+                                    snapshot.ownerId(),
+                                    snapshot.ownerLeaseGeneration()),
+                                NOW.plusSeconds(30),
+                                NOW));
+                    }
+                    default -> throw new UnsupportedOperationException(
+                        method.getName());
+                });
+        ZLinkLocationOptions options = new ZLinkLocationOptions();
+        options.setRouteCacheMaxAge(Duration.ofSeconds(10));
+        var resolvers = new ZLinkStoreLocationResolvers(
+            ZLinkRegisteredLocationStores.fromUnified(store), options);
+
+        var firstA = resolvers.resolveActor("actor-a")
+            .toCompletableFuture().join();
+        var firstNotice = actorNotice(
+            actorRoute(firstA),
+            new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+                "actor-a", 5, nodeB, 19, 15, 9));
+        assertEquals(1, reads.get());
+
+        current.set(readyActorSnapshot(
+            "v2", nodeB, 19, 15, "owner-b", 9));
+        assertTrue(resolvers.invalidateRouteIfMatches(firstNotice));
+        var atB = resolvers.resolveActor("actor-a")
+            .toCompletableFuture().join();
+        assertEquals(nodeB, atB.nodeRid());
+        assertEquals(2, reads.get());
+
+        var returnNotice = actorNotice(
+            actorRoute(atB),
+            new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+                "actor-a", 5, NODE, 11, 17, 7));
+        current.set(readyActorSnapshot(
+            "v3", NODE, 11, 17, "owner-a", 7));
+        assertTrue(resolvers.invalidateRouteIfMatches(returnNotice));
+        var secondA = resolvers.resolveActor("actor-a")
+            .toCompletableFuture().join();
+        assertEquals(NODE, secondA.nodeRid());
+        assertEquals(17, secondA.authorityOwnerGeneration());
+        assertEquals(3, reads.get());
+
+        // The first A tenure has the same node and lease as the current A
+        // tenure. Its older authority generation must still make the delayed
+        // notice ineligible to mutate the current cached route.
+        assertFalse(resolvers.invalidateRouteIfMatches(firstNotice));
+        assertEquals(
+            17,
+            resolvers.resolveActor("actor-a")
+                .toCompletableFuture().join().authorityOwnerGeneration());
+        assertEquals(3, reads.get());
+    }
+
+    @Test
     void autoConnectPeerDiscoveryExcludesExpiredMeshOwnerLeases() {
         ZLinkMeshNodeDescriptor live = meshNodeDescriptor(
             "mesh", RoutingId.from("live"), "live-owner");
@@ -322,5 +396,66 @@ final class ZLinkStoreLocationResolversTest {
                     1)),
             Optional.empty(),
             NOW);
+    }
+
+    private static ZLinkAuthoritySnapshot readyActorSnapshot(
+        String storeVersion,
+        RoutingId nodeRid,
+        long nodeGeneration,
+        long authorityOwnerGeneration,
+        String ownerId,
+        long ownerLeaseGeneration) {
+        byte[] payload = new ZLinkActorAuthorityPayloadCodec().encode(
+            ZLinkActorAuthorityPayloadCodec.State.READY,
+            "PlayerActor",
+            "actor-a",
+            "room-a",
+            5,
+            2,
+            ownerId,
+            ownerLeaseGeneration,
+            "game",
+            nodeRid,
+            nodeGeneration);
+        return new ZLinkAuthoritySnapshot(
+            storeVersion,
+            payload,
+            5,
+            authorityOwnerGeneration,
+            ownerId,
+            ownerLeaseGeneration,
+            new ZLinkPlacementAllocation(
+                ZLinkPlacementAllocationState.ACTIVE,
+                ZLinkPlacementObjectKind.ACTOR,
+                "PlayerActor",
+                new ZLinkMeshNodeDescriptorKey("game", nodeRid),
+                nodeGeneration,
+                ZLinkPlacementCapacityBundle.actor(1)),
+            NOW);
+    }
+
+    private static ZLinkServiceMessageFollowWireCodec.ActorRoute actorRoute(
+        ZLinkStoreLocationResolvers.ActorRoute route) {
+        return new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+            route.actorRef().actorId(),
+            route.actorRef().objectGeneration(),
+            route.nodeRid(),
+            route.targetNodeGeneration(),
+            route.authorityOwnerGeneration(),
+            route.ownerLeaseGeneration());
+    }
+
+    private static ZLinkServiceMessageFollowWireCodec.Notice actorNotice(
+        ZLinkServiceMessageFollowWireCodec.ActorRoute source,
+        ZLinkServiceMessageFollowWireCodec.ActorRoute target) {
+        return new ZLinkServiceMessageFollowWireCodec.Notice(
+            source,
+            target,
+            1,
+            1,
+            1,
+            31,
+            37,
+            0);
     }
 }

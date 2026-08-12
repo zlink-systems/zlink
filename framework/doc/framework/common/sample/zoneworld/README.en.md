@@ -151,7 +151,7 @@ auto-issued by the Framework as a prefix plus a UUID; no fixed RID is configured
 |---|---|---|
 | Find the current zone owner by ZoneId. | Global Spot message | The Framework resolves the global SpotId authority. [Interaction Model §2](../../spec/03-interaction-model.en.md#2-common-model) |
 | Find an actor by PlayerId. | Global Actor message | Doesn't expose the Actor location or current owner as an application route. [Actor model](../../spec/14-actor-model.en.md) |
-| Use zone join as a cross-node move. | Actor Join + relocation | When the target owner differs, the Framework relocation unit moves the actor. [Graceful drain §8](../../spec/28-graceful-drain-handoff.en.md#8-the-order-for-relocating-one-unit) |
+| Use zone join as a cross-node move. | Actor Join + relocation | When the target owner differs, the Framework relocation unit moves the actor. [Graceful drain §8](../../spec/30-host-relocation-flow.en.md#8-the-order-for-relocating-one-unit) |
 | Deliver a message to the previous owner during a move. | Message Follow | Uses the committed target route and doesn't automatically resubmit a failed operation to a different owner. [Object routing §2.4](../../spec/18-object-routing.en.md#24-a-message-arriving-at-a-previous-owner-route) |
 | Deliver a snapshot to an adjacent zone. | Logical Multicast | Expresses the boundary via topic and target subscription. [Interaction Model §5](../../spec/03-interaction-model.en.md#5-spot-logical-multicast) |
 | Send all-node announcements/maintenance. | Classic fanout | The publisher doesn't manage the node list. [Interaction Model §6](../../spec/03-interaction-model.en.md#6-classic-fanout) |
@@ -350,7 +350,7 @@ message ZoneBorderEvent {
   players: PlayerView[]
 }
 
-message EnterZoneMsg {
+message EnterZoneReq {
   playerId: string
   x: int32
   y: int32
@@ -406,7 +406,7 @@ sequenceDiagram
 
     C->>G: JoinWorldReq
     G->>A: create or get Player Actor
-    A->>Z: EnterZoneMsg(zone-nw)
+    A->>Z: EnterZoneReq(zone-nw)
     Z-->>A: EnterZoneRes
     A-->>G: JoinWorldRes(25,25)
     G-->>C: JoinWorldRes
@@ -423,7 +423,7 @@ sequenceDiagram
 
 If the target zone owner is the same, only membership changes; if different, the same Player Actor
 materializes at the target owner, which is a relocation. The Application doesn't distinguish the
-two cases by NodeId — both use `EnterZoneMsg`.
+two cases by NodeId — both use the `EnterZoneReq`/`EnterZoneRes` request/reply pair.
 
 ```mermaid
 sequenceDiagram
@@ -437,7 +437,7 @@ sequenceDiagram
     C->>G: MoveMsg(target coordinate)
     G->>A: MoveMsg
     A->>A: validate adjacent zone
-    A->>T: EnterZoneMsg
+    A->>T: EnterZoneReq
     T->>N: relocation admission when owner differs
     N->>N: Capture and Restore actor state
     N-->>A: target owner ready

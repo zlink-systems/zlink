@@ -13,11 +13,15 @@ class RcB2ProtobufCodecScenario(
         val value = protobufReply["value"] as String
         assert.that(value == "echo:protobuf-request", "RC-B2 request mismatch")
         assert.that(
-            server.waitForEvidence("Send", "ProtobufEcho", "protobuf-send")
-                .any { it.marker == "Send" && it.packetName == "ProtobufEcho" && it.value == "protobuf-send" },
+            server.waitForEvidence("Send", "ProtobufEchoMsg", "protobuf-send")
+                .any {
+                    it.marker == "Send" &&
+                        it.packetName == "ProtobufEchoMsg" &&
+                        it.value == "protobuf-send"
+                },
             "RC-B2 send evidence missing",
         )
         println("scenario RC-B2 passed")
-        return CodecScenarioResult("RC-B2", "ProtobufEcho", value)
+        return CodecScenarioResult("RC-B2", "ProtobufEchoReq", value)
     }
 }

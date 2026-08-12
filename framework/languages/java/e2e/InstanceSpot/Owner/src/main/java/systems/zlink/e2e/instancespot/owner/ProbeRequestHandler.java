@@ -7,16 +7,16 @@ import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
 
 public final class ProbeRequestHandler implements ZLinkSpotRequestHandler<
     ProbeSpot,
-    Contracts.InstanceRequest,
-    Contracts.InstanceReply> {
+    Contracts.InstanceReq,
+    Contracts.InstanceRes> {
     @Override
-    public CompletionStage<Contracts.InstanceReply> handle(
+    public CompletionStage<Contracts.InstanceRes> handle(
         ProbeSpot spot,
-        Contracts.InstanceRequest request) {
+        Contracts.InstanceReq request) {
         spot.enterHandler(request.operationId(), request.payload());
         return spot.gates().awaitPayload(request.payload()).thenApply(ignored -> {
             long sequence = spot.nextHandlerSequence();
-            Contracts.InstanceReply reply = new Contracts.InstanceReply(
+            Contracts.InstanceRes reply = new Contracts.InstanceRes(
                 spot.context().spotId(),
                 request.operationId(),
                 request.payload(),

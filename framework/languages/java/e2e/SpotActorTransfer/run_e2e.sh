@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JAVA_DIR="$(cd "${ROOT_DIR}/../.." && pwd)"
 source "${JAVA_DIR}/e2e-redis-common.sh"
+zlink_e2e_initialize java "$0" "$@"
 source "${ROOT_DIR}/../start-order-common.sh"
 
 SCENARIO="${1:-all}"
@@ -25,7 +26,7 @@ if [[ "${SCENARIO}" == "all" ]]; then
   for scenario in ST-A1 ST-A2 ST-A3 ST-B1 ST-B2 ST-B3 ST-B4 ST-C1 ST-C2 ST-C3 ST-D1 ST-D2 ST-E1 ST-E2 ST-F1 ST-F2 ST-F3 ST-F4 ST-F5 ST-F6 ST-R1; do
     passed=0
     for attempt in 1 2 3; do
-      if "${BASH_SOURCE[0]}" "${scenario}" --start-order "${e2e_start_order}"; then
+      if bash "${BASH_SOURCE[0]}" "${scenario}" --start-order "${e2e_start_order}"; then
         passed=1
         break
       fi
@@ -67,7 +68,7 @@ cleanup() {
     wait "${pid}" >/dev/null 2>&1 || true
   done
   if [[ -n "${REDIS_CONTAINER}" ]]; then
-    docker rm -fv "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "${REDIS_CONTAINER}" || true
   fi
   rm -rf "${CONFIG_DIR}"
 }
@@ -79,26 +80,13 @@ if [[ "${LOCAL_READINESS_TIMEOUT_SECONDS:-}" != 10 \
   exit 1
 fi
 
-read -r ROUTER_A_PORT ROUTER_B_PORT ROUTER_C_PORT HTTP_A_PORT HTTP_B_PORT HTTP_C_PORT STREAM_A_PORT STREAM_B_PORT STREAM_C_PORT <<<"$(python3 - <<'PY'
-import socket
-sockets=[]
-ports=[]
-for _ in range(9):
-    s=socket.socket()
-    s.bind(('127.0.0.1', 0))
-    sockets.append(s)
-    ports.append(str(s.getsockname()[1]))
-print(' '.join(ports))
-for s in sockets:
-    s.close()
-PY
-)"
+read -r ROUTER_A_PORT ROUTER_B_PORT ROUTER_C_PORT HTTP_A_PORT HTTP_B_PORT HTTP_C_PORT STREAM_A_PORT STREAM_B_PORT STREAM_C_PORT \
+  <<<"$(zlink_e2e_reserve_ports 9)"
 
 zlink_redis_start_scoped_assign \
   REDIS_CONTAINER REDIS_PORT \
   "zlink-redis-java-e2e-spot-transfer" \
-  "redis:7.2-alpine" \
-  "127.0.0.1::6379"
+  "redis:7.2-alpine"
 REDIS_LOCATION_ENDPOINT="127.0.0.1:${REDIS_PORT}"
 if [[ "${ZLINK_E2E_REDIS_MONITOR:-0}" == "1" ]]; then
   docker exec "${REDIS_CONTAINER}" redis-cli --csv monitor \
@@ -110,7 +98,7 @@ LOCATION_PREFIX="zlink:e2e:java:spot-transfer:${RUN_ID}:"
 NODE_BIN="${ZLINK_JAVA_E2E_NODE_BIN:-${ROOT_DIR}/Server/ActorNode/build/install/spot-actor-transfer-actor-node/bin/spot-actor-transfer-actor-node}"
 CLIENT_BIN="${ZLINK_JAVA_E2E_CLIENT_BIN:-${ROOT_DIR}/Client/build/install/spot-actor-transfer-client/bin/spot-actor-transfer-client}"
 
-"${JAVA_DIR}/gradlew" \
+zlink_e2e_gradle_build_locked "${JAVA_DIR}/gradlew" \
   -p "${PROJECT_ROOT}" \
   --no-daemon \
   installDist

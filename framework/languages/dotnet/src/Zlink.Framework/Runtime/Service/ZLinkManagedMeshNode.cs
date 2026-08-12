@@ -5560,21 +5560,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             == ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit
                 ? route.Route.TargetAuthorityOwnerGeneration
                 : route.Route.CurrentAuthorityOwnerGeneration;
-        var hasAuthenticatedAuthority =
-            _observedActorAuthorities.TryGetValue(
-                new ObservedActorAuthorityKey(
-                    sourceNodeRid,
-                    route.Actor.ActorId,
-                    route.Actor.ObjectGeneration),
-                out var authenticatedAuthority);
         var authenticated = target is not null
                             && peer is not null
                             && peer.Admitted
-                            && hasAuthenticatedAuthority
-                            && authenticatedAuthority.TargetNodeGeneration
-                            == expectedNodeGeneration
-                            && authenticatedAuthority.AuthorityOwnerGeneration
-                            == expectedAuthorityOwnerGeneration
                             && route.Session.SessionOwnerNodeRid == _routingId
                             && route.Session.SessionOwnerNodeGeneration
                             == _lifecycleGeneration
@@ -5605,7 +5593,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                             expectedNodeGeneration,
                             _meshName,
                             expectedAuthorityOwnerGeneration,
-                            authenticatedAuthority.OwnerLeaseGeneration),
+                            0),
                         _stop?.Token ?? CancellationToken.None)
                     .ConfigureAwait(false);
                 await SendCanonicalRelocationRecordAsync(

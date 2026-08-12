@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/e2e-redis-common.sh"
+zlink_e2e_initialize java "$0" "$@"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/start-order-common.sh"
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -80,7 +81,7 @@ cleanup() {
     kill -9 "${pid}" >/dev/null 2>&1 || true
   done
   if [[ -n "${REDIS_CONTAINER}" ]]; then
-    docker rm -fv "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "${REDIS_CONTAINER}" || true
   fi
   rm -rf "${config_dir}"
   wait >/dev/null 2>&1 || true
@@ -89,22 +90,7 @@ cleanup() {
 trap cleanup EXIT
 
 reserve_ports() {
-  python3 - <<'PY'
-import socket
-sockets = []
-ports = []
-try:
-    for _ in range(11):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        ports.append(sock.getsockname()[1])
-    print(" ".join(f"tcp://127.0.0.1:{port}" for port in ports[:3]), end=" ")
-    print(" ".join(f"http://127.0.0.1:{port}" for port in ports[3:]))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  zlink_e2e_reserve_mixed_endpoints 3 8
 }
 
 port_of() {
@@ -188,7 +174,7 @@ start_redis_container() {
 }
 
 gradle_run() {
-  ../../gradlew -PzlinkE2eBuildDir="${e2e_build_dir}" \
+  zlink_e2e_gradle_build_locked ../../gradlew -PzlinkE2eBuildDir="${e2e_build_dir}" \
     --project-cache-dir "${gradle_cache_dir}" --no-daemon --no-parallel --max-workers=1 "$@" --quiet
 }
 
@@ -309,7 +295,7 @@ if [[ "${SCENARIO}" == "all" ]]; then
   )
   for selector in "${selectors[@]}"; do
     echo "=== Java PubSub ${selector} ==="
-    ZLINK_JAVA_E2E_SKIP_BUILD=true "$(pwd)/run_e2e.sh" "${selector}"
+    ZLINK_JAVA_E2E_SKIP_BUILD=true bash "$(pwd)/run_e2e.sh" "${selector}"
   done
   echo "pub-sub java all result=passed selectors=${#selectors[@]}"
   exit 0
@@ -457,12 +443,12 @@ case "${SCENARIO}" in
   PS-D5)
     start_publisher publisher
     start_subscriber sub-1 all "${SUB1_HTTP}"
-    docker pause "${REDIS_CONTAINER}" >/dev/null
+    timeout -k 2s 10s docker pause "${REDIS_CONTAINER}" >/dev/null
     if ! run_client_mode PS-D5 PS-D5-outage; then
-      docker unpause "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+      timeout -k 2s 10s docker unpause "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
       exit 1
     fi
-    docker unpause "${REDIS_CONTAINER}" >/dev/null
+    timeout -k 2s 10s docker unpause "${REDIS_CONTAINER}" >/dev/null
     run_client_mode PS-D5-RECOVERY PS-D5-recovery
     grep -q "scenario PS-D5 passed" "${log_dir}/client-PS-D5-outage.stdout.log"
     grep -q "scenario PS-D5-RECOVERY passed" "${log_dir}/client-PS-D5-recovery.stdout.log"
@@ -590,5 +576,5 @@ with urllib.request.urlopen(sys.argv[1], timeout=5) as response:
 PY
 
 grep -Rq "message flow" "${log_dir}"/*.stdout.log
-grep -q "HANDLER_MISSING/DROP/MissingEventMsg" "${log_dir}/sub-2-evidence.json"
+grep -q "HANDLER_MISSING/DROP/MissingEvent" "${log_dir}/sub-2-evidence.json"
 echo "pub-sub e2e result=passed"

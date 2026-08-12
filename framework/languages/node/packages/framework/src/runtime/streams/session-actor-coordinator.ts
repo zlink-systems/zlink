@@ -125,6 +125,7 @@ export class ZLinkSessionActorCoordinator {
     );
     const sessionActor = reuseActor
       ?? new DefaultZLinkSessionActor(this.sessionActorRuntime, boundActorRef, bindingToken);
+    const sessionIdentity = String(this.actorBindingRoutingId(context));
     sessionActor.updateRef(boundActorRef);
     if (previous === undefined) {
       if (releaseSeal !== undefined) {
@@ -134,7 +135,7 @@ export class ZLinkSessionActorCoordinator {
           true
         );
       }
-      this.routes.bind(context, sessionActor, bindingToken, authorityFence);
+      this.routes.bind(context, sessionActor, bindingToken, authorityFence, sessionIdentity);
     } else if (releaseSeal !== undefined) {
       this.routes.replaceAndReleaseSeal(
         previous,
@@ -143,23 +144,37 @@ export class ZLinkSessionActorCoordinator {
         bindingToken,
         releaseSeal.sealId,
         releaseSeal.acceptedHighWater,
-        authorityFence
+        authorityFence,
+        sessionIdentity
       );
     } else {
-      this.routes.replace(previous, context, sessionActor, bindingToken, authorityFence);
+      this.routes.replace(
+        previous,
+        context,
+        sessionActor,
+        bindingToken,
+        authorityFence,
+        sessionIdentity
+      );
     }
     if (confirmRemoteSessionBinding !== false && this.options.confirmRemoteActorSessionBinding !== undefined) {
       const waitForAcknowledgement = previous === undefined
         && confirmRemoteSessionBinding !== 'send';
-      void this.options.confirmRemoteActorSessionBinding(
+      const confirmation = this.options.confirmRemoteActorSessionBinding(
         actorRef,
         this.actorBindingRoutingId(context),
         undefined,
         { waitForAcknowledgement }
-      ).catch(() => {
+      );
+      const ignoreFailure = () => {
         // Confirmation admission is retried independently by the relay. A
         // failed notice cannot roll back the already-current binding.
-      });
+      };
+      if (waitForAcknowledgement) {
+        await confirmation.catch(ignoreFailure);
+      } else {
+        void confirmation.catch(ignoreFailure);
+      }
     }
     return sessionActor;
   }
@@ -168,18 +183,30 @@ export class ZLinkSessionActorCoordinator {
     actorRef: ActorRef,
     signal?: AbortSignal
   ): Promise<ZLinkActorSessionAuthorityFence | undefined> {
-    const resolved = await this.options.actorAuthorityFenceResolver?.(actorRef.actorId, signal);
-    if (resolved !== undefined) return resolved;
     const internal = actorRef as ActorRef & {
       readonly ownershipGeneration?: bigint;
       readonly ownerLeaseGeneration?: bigint;
+      readonly ownerNodeGeneration?: bigint;
     };
-    return internal.ownershipGeneration === undefined || internal.ownerLeaseGeneration === undefined
-      ? undefined
-      : {
-          authorityOwnerGeneration: internal.ownershipGeneration,
-          ownerLeaseGeneration: internal.ownerLeaseGeneration
-        };
+    if (internal.ownershipGeneration !== undefined
+      && internal.ownerLeaseGeneration !== undefined) {
+      const resolved = internal.ownerNodeGeneration === undefined
+        ? await this.options.actorAuthorityFenceResolver?.(actorRef.actorId, signal)
+        : undefined;
+      return {
+        authorityOwnerGeneration: internal.ownershipGeneration,
+        ownerLeaseGeneration: internal.ownerLeaseGeneration,
+        ...((internal.ownerNodeGeneration ?? resolved?.ownerNodeGeneration) === undefined
+          ? {}
+          : { ownerNodeGeneration: internal.ownerNodeGeneration ?? resolved!.ownerNodeGeneration }),
+        ...(resolved?.ownerId === undefined ? {} : { ownerId: resolved.ownerId }),
+        ...(resolved?.authorityStoreVersion === undefined
+          ? {}
+          : { authorityStoreVersion: resolved.authorityStoreVersion }),
+        ...(resolved?.actorType === undefined ? {} : { actorType: resolved.actorType })
+      };
+    }
+    return await this.options.actorAuthorityFenceResolver?.(actorRef.actorId, signal);
   }
 
   async bindOrGet(
@@ -317,7 +344,7 @@ export class ZLinkSessionActorCoordinator {
       if (
         route === undefined
         || !sameActorRef(route.actor.ref, actorRef)
-        || !routingIdsEqual(route.context.routingId, sessionRid)
+        || !routingIdsEqual(route.sessionIdentity, sessionRid)
         || bindingGenerationOf(route.actor.ref) !== bindingGeneration
       ) {
         return false;
@@ -346,7 +373,7 @@ export class ZLinkSessionActorCoordinator {
     readonly acceptedHighWater: bigint;
   } | undefined {
     const route = this.routes.route(actorId);
-    const sessionRid = route?.context.routingId;
+    const sessionRid = route?.sessionIdentity;
     const authority = route?.authorityFence;
     const actor = route?.actor.ref as (ActorRef & { readonly bindingGeneration?: bigint }) | undefined;
     if (

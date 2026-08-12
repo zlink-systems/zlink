@@ -31,20 +31,49 @@ export const ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS: Required<
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 
-interface SerialLaneState {
+export type ZLinkSerialAdmissionRecord = ZLinkSerialWorkRecord<unknown> & {
+  acceptedSequence: bigint;
+};
+
+export class ZLinkSerialAdmissionLane {
   //  Dequeued with a head index instead of shift(): the application lane
   //  admits up to 1024 records, and shift() memmoves the whole backlog on
   //  every turn. Same pattern as the waiter queue below.
-  readonly records: Array<SerialWorkRecord<unknown> | undefined>;
-  readonly waiters: Array<SerialCapacityWaiter | undefined>;
-  readonly messageCapacity: number;
-  readonly byteCapacity: number;
+  readonly records: Array<ZLinkSerialAdmissionRecord | undefined>;
+  readonly waiters: Array<SerialCapacityWaiter | undefined> = [];
   readonly waiterCapacity: number;
-  messageCount: number;
-  byteCount: number;
-  recordHead: number;
-  waiterHead: number;
-  waiterCount: number;
+  messageCount = 0;
+  byteCount = 0;
+  recordHead = 0;
+  waiterHead = 0;
+  waiterCount = 0;
+
+  constructor(
+    readonly messageCapacity: number,
+    readonly byteCapacity: number,
+    records: Array<ZLinkSerialAdmissionRecord | undefined> = []
+  ) {
+    this.records = records;
+    this.waiterCapacity = messageCapacity;
+  }
+
+  /** Commits reservation, sequence, and FIFO visibility as one sync turn. */
+  commit(record: ZLinkSerialAdmissionRecord, acceptedSequence: bigint): boolean {
+    if (!reserve(this, record.byteCost)) return false;
+    const previousLength = this.records.length;
+    let assigned = false;
+    try {
+      record.acceptedSequence = acceptedSequence;
+      assigned = true;
+      this.records.push(record);
+      return true;
+    } catch (error) {
+      if (this.records.length > previousLength) this.records.length = previousLength;
+      if (assigned) record.acceptedSequence = 0n;
+      releaseReservation(this, record.byteCost);
+      throw error;
+    }
+  }
 }
 
 interface SerialCapacityWaiter {
@@ -77,14 +106,27 @@ type SerialWorkRecord<T> = ZLinkSerialWorkRecord<T> & {
   readonly _settled: () => boolean;
 };
 
+export class ZLinkSerialAdmissionLedger {
+  private nextAcceptedSequence = 1n;
+
+  constructor(private readonly capacityError: (lane: ZLinkSerialWorkLane) => unknown) {}
+
+  commit(target: ZLinkSerialAdmissionLane, record: ZLinkSerialAdmissionRecord): void {
+    if (!target.commit(record, this.nextAcceptedSequence)) {
+      throw this.capacityError(record.lane);
+    }
+    this.nextAcceptedSequence += 1n;
+  }
+}
+
 /**
  * One event-loop serial scheduler shared by Spot and Actor execution owners.
  * Reservations include pending and running records until the operation owner
  * explicitly releases the record after handler completion.
  */
 export class ZLinkBoundedSerialScheduler {
-  private readonly application: SerialLaneState;
-  private readonly lifecycle: SerialLaneState;
+  private readonly application: ZLinkSerialAdmissionLane;
+  private readonly lifecycle: ZLinkSerialAdmissionLane;
   private readonly ownerTimeBudgetMs: number;
   private readonly lifecycleBurstLimit: number;
   private readonly fixedWorkByteCost: number;
@@ -93,7 +135,7 @@ export class ZLinkBoundedSerialScheduler {
   private drainScheduled = false;
   private lifecycleStreak = 0;
   private lifecycleDebt = false;
-  private nextAcceptedSequence = 1n;
+  private readonly admission: ZLinkSerialAdmissionLedger;
   private claimStartedAt?: number;
   private readonly idleWaiters: Array<() => void> = [];
 
@@ -125,6 +167,7 @@ export class ZLinkBoundedSerialScheduler {
     this.fixedWorkByteCost = configured.fixedWorkByteCost;
     this.capacityError = options.capacityError ?? ((lane) =>
       new Error(`The ${lane} execution queue is full.`));
+    this.admission = new ZLinkSerialAdmissionLedger(this.capacityError);
   }
 
   submit<T>(
@@ -271,25 +314,12 @@ export class ZLinkBoundedSerialScheduler {
 
   /** Commits reservation, sequence, and FIFO visibility as one sync turn. */
   private commitAccepted(
-    target: SerialLaneState,
+    target: ZLinkSerialAdmissionLane,
     record: SerialWorkRecord<unknown>
   ): void {
-    if (!reserve(target, record.byteCost)) {
-      throw this.capacityError(record.lane);
-    }
-    const previousLength = target.records.length;
-    record.acceptedSequence = this.nextAcceptedSequence;
     try {
-      target.records.push(record);
-      this.nextAcceptedSequence += 1n;
+      this.admission.commit(target, record);
     } catch (error) {
-      // A queue implementation may fail after partially appending. No record
-      // may remain visible when its admission transaction rolls back.
-      if (target.records.length > previousLength) {
-        target.records.length = previousLength;
-      }
-      record.acceptedSequence = 0n;
-      releaseReservation(target, record.byteCost);
       this.promoteCapacityWaiter(target);
       throw error;
     }
@@ -408,7 +438,7 @@ export class ZLinkBoundedSerialScheduler {
     for (const resolve of this.idleWaiters.splice(0)) resolve();
   }
 
-  private promoteCapacityWaiter(lane: SerialLaneState): void {
+  private promoteCapacityWaiter(lane: ZLinkSerialAdmissionLane): void {
     advanceWaiterHead(lane);
     const waiter = lane.waiters[lane.waiterHead];
     if (waiter === undefined || !canReserve(lane, waiter.byteCost)) return;
@@ -421,38 +451,27 @@ export class ZLinkBoundedSerialScheduler {
   }
 }
 
-function createLane(messageCapacity: number, byteCapacity: number): SerialLaneState {
-  return {
-    records: [],
-    waiters: [],
-    messageCapacity,
-    byteCapacity,
-    waiterCapacity: messageCapacity,
-    messageCount: 0,
-    byteCount: 0,
-    recordHead: 0,
-    waiterHead: 0,
-    waiterCount: 0
-  };
+function createLane(messageCapacity: number, byteCapacity: number): ZLinkSerialAdmissionLane {
+  return new ZLinkSerialAdmissionLane(messageCapacity, byteCapacity);
 }
 
-function canReserve(lane: SerialLaneState, byteCost: number): boolean {
+function canReserve(lane: ZLinkSerialAdmissionLane, byteCost: number): boolean {
   return lane.messageCount < lane.messageCapacity
     && byteCost <= lane.byteCapacity - lane.byteCount;
 }
 
-function reserve(lane: SerialLaneState, byteCost: number): boolean {
+function reserve(lane: ZLinkSerialAdmissionLane, byteCost: number): boolean {
   if (!canReserve(lane, byteCost)) return false;
   lane.messageCount += 1;
   lane.byteCount += byteCost;
   return true;
 }
 
-function pendingRecordCount(lane: SerialLaneState): number {
+function pendingRecordCount(lane: ZLinkSerialAdmissionLane): number {
   return lane.records.length - lane.recordHead;
 }
 
-function takeRecord(lane: SerialLaneState): SerialWorkRecord<unknown> | undefined {
+function takeRecord(lane: ZLinkSerialAdmissionLane): SerialWorkRecord<unknown> | undefined {
   if (lane.recordHead >= lane.records.length) return undefined;
   const record = lane.records[lane.recordHead];
   lane.records[lane.recordHead] = undefined;
@@ -464,10 +483,10 @@ function takeRecord(lane: SerialLaneState): SerialWorkRecord<unknown> | undefine
     lane.records.splice(0, lane.recordHead);
     lane.recordHead = 0;
   }
-  return record;
+  return record as SerialWorkRecord<unknown> | undefined;
 }
 
-function advanceWaiterHead(lane: SerialLaneState): void {
+function advanceWaiterHead(lane: ZLinkSerialAdmissionLane): void {
   while (
     lane.waiterHead < lane.waiters.length
     && lane.waiters[lane.waiterHead] === undefined
@@ -476,7 +495,7 @@ function advanceWaiterHead(lane: SerialLaneState): void {
   }
 }
 
-function compactWaiters(lane: SerialLaneState): void {
+function compactWaiters(lane: ZLinkSerialAdmissionLane): void {
   if (lane.waiterCount === 0) {
     lane.waiters.length = 0;
     lane.waiterHead = 0;
@@ -488,7 +507,7 @@ function compactWaiters(lane: SerialLaneState): void {
   }
 }
 
-function releaseReservation(lane: SerialLaneState, byteCost: number): void {
+function releaseReservation(lane: ZLinkSerialAdmissionLane, byteCost: number): void {
   lane.messageCount -= 1;
   lane.byteCount -= byteCost;
 }

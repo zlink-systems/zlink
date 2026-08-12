@@ -6,10 +6,10 @@ import systems.zlink.framework.handlers.ZLinkSpotSubscription
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpotSubscriptionHandler
 
 @ZLinkSpotSubscription(topic = "spot.events")
-class SpotEventHandler : ZLinkSuspendingSpotSubscriptionHandler<UserSpot, Contracts.MeshMsg> {
+class SpotEventHandler : ZLinkSuspendingSpotSubscriptionHandler<UserSpot, Contracts.MeshEvent> {
     override suspend fun handle(
         spot: UserSpot,
-        message: Contracts.MeshMsg
+        message: Contracts.MeshEvent
     ) {
         spot.record("SpotMeshEvent", message.value)
     }

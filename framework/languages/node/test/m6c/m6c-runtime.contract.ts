@@ -96,6 +96,10 @@ import {
   type ServiceMaintenanceRelocationControl,
   type ServiceMaintenanceRelocationControlData
 } from '../../packages/framework/src/runtime/foundation/service-stateful-wire-codec';
+import {
+  decodeRoutingId,
+  encodeRoutingIdStorageHex
+} from '../../packages/framework/src/runtime/routing-id';
 
 test('commands 42-45 match the shared Session relocation barrier golden bytes', () => {
   const fixture = JSON.parse(readFileSync(
@@ -187,6 +191,45 @@ test('commands 42-45 match the shared Session relocation barrier golden bytes', 
       }
     }, `${entry.name} truncated`);
   }
+});
+
+test('stateful service wire separates opaque routing IDs from canonical UTF-8 text', () => {
+  const fixture = JSON.parse(readFileSync(
+    '../../runtime/protocol/golden/session-relocation-barrier-v1.json',
+    'utf8'
+  )) as { readonly canonical: readonly { readonly command: number; readonly hex: string }[] };
+  const sealBytes = Buffer.from(
+    fixture.canonical.find(entry => entry.command === 42)!.hex,
+    'hex'
+  );
+  const seal = decodeSessionRelocationSeal(sealBytes);
+  const opaqueNodeRid = decodeRoutingId('opaque-node', 'ff00fe');
+  const roundTrip = decodeSessionRelocationSeal(encodeSessionRelocationSeal({
+    ...seal,
+    coordinator: {
+      ...seal.coordinator,
+      nodeRid: opaqueNodeRid as never
+    }
+  }));
+  assert.equal(
+    encodeRoutingIdStorageHex(roundTrip.coordinator.nodeRid as never),
+    'ff00fe'
+  );
+
+  const ownerId = 'canonical-utf8-owner';
+  const malformed = Buffer.from(encodeSessionRelocationSeal({
+    ...seal,
+    coordinator: { ...seal.coordinator, ownerId }
+  }));
+  const ownerOffset = malformed.indexOf(Buffer.from(ownerId, 'utf8'));
+  assert.ok(ownerOffset > 0);
+  malformed[ownerOffset] = 0xff;
+  assert.throws(
+    () => decodeSessionRelocationSeal(malformed),
+    error => error instanceof Error
+      && error.name === 'ServiceWireProtocolError'
+      && /coordinatorOwnerId/.test(error.message)
+  );
 });
 
 const relocationControlFixtureValues = (): readonly ServiceMaintenanceRelocationControl[] => {

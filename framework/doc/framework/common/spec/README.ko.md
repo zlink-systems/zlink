@@ -9,6 +9,29 @@ contract test에 필요한 입력, 상태, 정상 흐름, 실패와 완료 조�
 새 공개 동작을 추가하지 않는다. 계약과 구조를 함께 읽을 수 있도록 문서는 연결하되, 구현 상세가
 사용자 보장으로 해석되지 않도록 두 문서 묶음은 분리해 유지한다.
 
+## 검증 runner 격리
+
+같은 계약을 구현한 여러 언어의 sample과 E2E는 한 host에서 동시에 검증할 수 있어야 한다. 이
+조건은 public API 동작이 아니라 contract 검증 환경의 실행 규칙이다. Redis가 필요한 실행은 언어별
+공유 인스턴스나 Redis DB 번호를 나누어 쓰지 않고, 실행마다 별도 Docker Redis container와 key
+prefix를 만든다.
+
+Sample은 [sample runner 격리 기준](../sample/README.ko.md#샘플-실행-스크립트와-redis-격리-기준)의
+언어별 `20000-29999` 구간을 사용한다. E2E는
+[E2E runner 실행 계약](../e2e/README.ko.md#27-run_e2e-실행-계약)의 언어별
+`30000-39999` 구간을 사용한다. 각 문서의 표는 Redis host port와 application listener port를
+겹치지 않게 나눈 정확한 범위를 소유한다.
+
+같은 언어의 standalone config runner와 통합 runner가 호출한 config runner는 language-wide
+whole-run lock을 공유하므로 실제 config E2E process를 순차 실행한다. 통합 runner 자체는 lock을
+획득하지 않으므로 두 통합 실행이 config 경계에서 번갈아 진행될 수 있지만, 실제 config process는
+겹치지 않는다. 서로 다른 언어의 같은 E2E는
+언어별 port 구간, 실행별 Redis endpoint, 임시 설정, log directory와 cleanup 대상을 분리한 상태에서
+병렬 실행할 수 있다. Java와 Kotlin은 Gradle output 일부를 공유하므로 sample과 E2E가 함께 사용하는
+build-only lock으로 Gradle 실행만 직렬화한다. 이 lock은 같은 runner 실행 환경 안에서 공유한다.
+동일 checkout을 WSL Bash와 Windows PowerShell에서 동시에 실행하는 조합은 서로 다른 OS lock
+namespace를 사용하므로 지원하지 않는다.
+
 ## 작성 기준과 공통 용어
 
 - [스펙 문서 작성 가이드](../../../../../doc/principal/documentation/spec-writing-guide.ko.md)
@@ -58,8 +81,9 @@ contract test에 필요한 입력, 상태, 정상 흐름, 실패와 완료 조�
 - [25 Runtime metric 이름과 label](25-runtime-metrics.ko.md) — Metric 이름, 단위와 bounded label만 정의한다.
 - [26 Message flow tracing](26-message-flow-tracing.ko.md) — Message 한 건의 phase, outcome과 trace attribute를 정의한다.
 - [27 Request correlation과 causal flow](27-flow-correlation.ko.md) — Correlation ID와 flow ID의 생성·전파를 정의한다.
-- [28 Host Relocate와 Shutdown](28-graceful-drain-handoff.ko.md) — 두 relocation mode와 종료 lifecycle을 정의한다.
+- [28 Actor와 Spot relocation 전체 흐름](28-relocation-flow.ko.md) — 네 runtime이 공통으로 따르는 owner 전환, queue 병합, Location Store CAS와 Session route 순서를 정의한다.
 - [29 Transport liveness](29-transport-liveness.ko.md)
+- [30 Host relocation 전체 흐름](30-host-relocation-flow.ko.md) — Host가 relocation unit을 확정하고 batch 순서로 이전한 뒤 `Relocated`, Message Follow와 `Shutdown`으로 정리하는 전체 lifecycle을 정의한다.
 - [31 장애 대응과 failover 범위](31-failure-failover-policy.ko.md) — target 재선택, reconnect, 생성 recovery와 stateful relocation의 자동 복구 경계를 정의한다.
 - [32 Framework 오류 모델](32-framework-error-model.ko.md) — 공통 `ErrorKind`, Send·Request 완료 조건과 Application의 재시도 판단 경계를 정의한다.
 

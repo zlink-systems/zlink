@@ -371,7 +371,8 @@ public sealed partial class RegressionTests
 
         var lifecycle = File.ReadAllText(Path.Combine(
             ResolveDotnetRoot(),
-            "src", "Zlink.Framework.AspNetCore", "ZLinkAutoConnectLifecycleCoordinator.cs"));
+            "src", "Zlink.Framework", "Runtime", "Host",
+            "ZLinkAutoConnectLifecycleCoordinator.cs"));
         Assert.Contains("FrameworkReadyAsync", lifecycle, StringComparison.Ordinal);
     }
 
@@ -431,7 +432,7 @@ public sealed partial class RegressionTests
     {
         var root = ResolveE2eRoot();
         AssertScenarioFiles(root, "SpotActorTransfer", "St", 36);
-        AssertScenarioFiles(root, "ToActorMessaging", "Ta", 7);
+        AssertScenarioFiles(root, "ToActorMessaging", "Ta", 6);
     }
 
     [Fact]
@@ -446,7 +447,7 @@ public sealed partial class RegressionTests
             .Order(StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Equal(65, scenarioIds.Length);
+        Assert.Equal(63, scenarioIds.Length);
         foreach (var scenarioId in scenarioIds)
             Assert.Contains($"\"{scenarioId}\" =>", program, StringComparison.Ordinal);
     }

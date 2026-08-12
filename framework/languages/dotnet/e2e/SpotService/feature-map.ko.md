@@ -23,7 +23,6 @@
 | SM-B2 | 구현 | remote actor join marker가 있다. |
 | SM-B3 | 구현 | request message object fidelity marker가 있다. |
 | SM-B4 | 구현 | session-a에서 play-b actor로 request 후 play-b reply marker가 있다. |
-| SM-B5 | 구현 | missing actor packet marker가 있다. |
 | SM-B6 | 구현 | actor leave/disconnect callback marker가 있다. |
 | SM-B7 | 구현 | Created → Joined → actor packet 순서 marker가 있다. |
 | SM-B8 | 구현 | explicit actor destroy marker가 있다. |
@@ -36,8 +35,7 @@
 | SM-C4 | 구현 | spot publisher client marker가 있다. |
 | SM-C5 | 구현 | 10.0.0 MeshNode의 play-a Spot이 발행한 Logical Multicast가 play-b 구독 Spot에 도달하는 evidence를 최신 `default-batch` 실행에서 확인했다. |
 | SM-C6 | 구현 | Gateway의 public publish terminal을 사용해 target별 결과를 읽지 않고 marker를 한 번 제출한다. `play-b` handler 진입과 inbound HWM pause를 확인한 뒤 resume 전 `play-a`만 marker를 1회 처리하는지 검증하고, gate 해제 뒤 `play-b`의 marker 처리 재개와 중복 없는 최종 전달을 확인한다. `./run_e2e.sh sm-c6` 증거는 `logs/20260806-015005-2632637/`에 있다. |
-| SM-D1 | 구현 | local actor session bind/relay marker가 있다. |
-| SM-D2 | 구현 | remote actor session bind/relay marker가 있다. |
+| SM-D2 | 구현 | local·remote actor를 각각 session에 bind하고 relay/push marker를 확인한다. |
 | SM-D3 | 구현 | entry spot bind와 user spot bind를 각각 stream session에 연결하고 relay/push marker를 확인한다. |
 | SM-D4 | 구현 | multiple actor bind marker가 있다. |
 | SM-D4A | 구현 | 같은 generation의 Session A→B rebind, 이전 binding의 typed stale relay, 늦은 disconnect 격리와 두 Session의 다른 Actor binding 유지를 실제 process에서 검증했다. `./run_e2e.sh --skip-build sm-d4a`가 통과했으며 증거는 `logs/20260728-190632-1115028/`에 있다. |
@@ -54,7 +52,7 @@
 | SM-D13 | 구현 | heartbeat-enabled stream이 유지된 뒤 request가 성공하는 marker가 있다. |
 | SM-D14 | 구현 | framework stream node의 `SetTlsServer(...)` public API로 TLS stream endpoint를 열고, TLS connector 성공 경로와 strict certificate validation 실패 경로를 함께 확인한다. |
 | SM-D15 | 구현 | gateway role의 HTTP request가 `IZLinkActorClient.RequestToActor(...)`로 actor handler에 도달하고, actor가 bound stream session으로 push한 notify를 client가 수신하는지 확인한다. |
-| SM-E1 | 구현 | spot route missing request marker가 있다. |
+| SM-E1 | 구현 | handler가 없는 actor request와 spot request/send의 실패 처리 marker를 함께 확인한다. |
 | SM-E2 | 구현 | spot timer tick marker가 있다. |
 | SM-E3 | 구현 | idle timer가 spot close를 수행하고 closed spot request가 실패하는 marker가 있다. |
 | SM-E4 | 구현 | timer overrun policy marker가 있다. |

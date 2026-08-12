@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.host;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -96,6 +100,275 @@ final class ZLinkAdmissionRuntimeTest {
         assertEquals(2, attempts.get());
         assertEquals(0, OneWayTestStatus.status(result));
         assertEquals(1, cleanups.get());
+    }
+
+    @Test
+    void detachedAdmissionOutlivesThePublicDeadlineAndRetainsDeliveryOwnership()
+        throws InterruptedException {
+        FakeSource source = new FakeSource(Duration.ofMillis(10), 1);
+        AtomicInteger attempts = new AtomicInteger();
+        AtomicInteger cleanups = new AtomicInteger();
+        ZLinkBackendAdmissionKey key = ZLinkBackendAdmissionKey.boundSession(
+            RoutingId.from("node-a"), "actor-a", 7L);
+
+        var accepted = submitDetached(
+            source,
+            key,
+            () -> attempts.incrementAndGet() == 2,
+            cleanups::incrementAndGet).toCompletableFuture();
+
+        assertEquals(0, OneWayTestStatus.status(accepted));
+        assertEquals(1, attempts.get());
+        assertEquals(0, cleanups.get(),
+            "the admission owner must retain the payload until transport terminal");
+        assertFalse(accepted.cancel(false),
+            "an operation accepted into the local outbound queue is no longer cancellable");
+
+        Thread.sleep(50);
+        assertEquals(0, cleanups.get(),
+            "the public send deadline ends at local admission, not route readiness");
+        source.ready(key);
+
+        assertEquals(2, attempts.get());
+        assertEquals(1, cleanups.get());
+        releaseDetached(source, key);
+        source.ready(key);
+        assertEquals(2, attempts.get(),
+            "command 45 cannot resubmit an already delivered payload");
+        assertEquals(1, cleanups.get());
+    }
+
+    @Test
+    void supersededRouteTerminatesRetainedPayloadExactlyOnce() {
+        FakeSource source = new FakeSource(Duration.ofMillis(10), 1);
+        AtomicInteger attempts = new AtomicInteger();
+        AtomicInteger cleanups = new AtomicInteger();
+        ZLinkBackendAdmissionKey key = ZLinkBackendAdmissionKey.boundSession(
+            RoutingId.from("node-a"), "actor-a", 7L);
+
+        var accepted = submitDetached(
+            source,
+            key,
+            () -> {
+                attempts.incrementAndGet();
+                return false;
+            },
+            cleanups::incrementAndGet).toCompletableFuture();
+        assertEquals(0, OneWayTestStatus.status(accepted));
+
+        IllegalStateException superseded =
+            new IllegalStateException("route superseded");
+        terminateDetached(source, key, superseded);
+        terminateDetached(source, key, superseded);
+        source.ready(key);
+
+        assertEquals(1, attempts.get(),
+            "a superseded route cannot retry its retained payload");
+        assertEquals(1, cleanups.get());
+    }
+
+    @Test
+    void delayedTerminalSettlesOnlyItsExactRelocationAndSessionFence() {
+        JsonNode scenario = relocationScenario(
+            "late-terminal-does-not-cross-successor-relocation-fence");
+        JsonNode boundSession = fixture(
+            "framework/runtime/conformance/bound-session-relocation-v1.json");
+        assertFalse(boundSession.path("invariants")
+            .path("latePredecessorTerminalAffectsSuccessor").asBoolean(true));
+        assertEquals(
+            java.util.List.of(
+                "relocationId", "bindingGeneration", "sessionIdentity"),
+            java.util.stream.StreamSupport.stream(
+                    boundSession.path("invariants")
+                        .path("successorRelocationFence").spliterator(), false)
+                .map(JsonNode::asText)
+                .toList());
+        FakeSource source = new FakeSource(Duration.ofMillis(10), 4);
+        RoutingId node = RoutingId.from("node-a");
+        RoutingId session = RoutingId.from("session-a");
+        ZLinkBackendAdmissionKey r1 =
+            ZLinkBackendAdmissionKey.relocatingBoundSession(
+                node, "actor-a", 7L, 101L, 201L, session, 31L);
+        ZLinkBackendAdmissionKey r2 =
+            ZLinkBackendAdmissionKey.relocatingBoundSession(
+                node, "actor-a", 7L, 102L, 202L, session, 31L);
+        AtomicInteger r1Attempts = new AtomicInteger();
+        AtomicInteger r2Attempts = new AtomicInteger();
+        AtomicInteger r2Deliveries = new AtomicInteger();
+        AtomicInteger r1Cleanups = new AtomicInteger();
+        AtomicInteger r2Cleanups = new AtomicInteger();
+
+        submitDetached(
+            source, r1,
+            () -> r1Attempts.incrementAndGet() > 1,
+            r1Cleanups::incrementAndGet);
+        submitDetached(
+            source, r2,
+            () -> {
+                if (r2Attempts.incrementAndGet() <= 1) {
+                    return false;
+                }
+                r2Deliveries.incrementAndGet();
+                return true;
+            },
+            r2Cleanups::incrementAndGet);
+
+        assertCheckpoint(
+            scenario, "afterSuccessorSubmitBeforeOldTerminal",
+            r2Deliveries.get(), r2Cleanups.get(), r2Cleanups.get());
+
+        terminateDetached(
+            source, r1, new IllegalStateException("R1 delayed terminal"));
+        terminateDetached(
+            source, r1, new IllegalStateException("R1 duplicate terminal"));
+        assertEquals(1, r1Cleanups.get());
+        assertCheckpoint(
+            scenario, "afterOldTerminal",
+            r2Deliveries.get(), r2Cleanups.get(), r2Cleanups.get());
+
+        releaseDetached(source, r2);
+        source.ready(r2);
+        assertCheckpoint(
+            scenario, "afterSuccessorTerminal",
+            r2Deliveries.get(), r2Cleanups.get(), r2Cleanups.get());
+        releaseDetached(source, r2);
+        terminateDetached(
+            source, r2, new IllegalStateException("R2 duplicate terminal"));
+        source.ready(r2);
+        assertCheckpoint(
+            scenario, "afterDuplicateOldAndSuccessorTerminals",
+            r2Deliveries.get(), r2Cleanups.get(), r2Cleanups.get());
+    }
+
+    private static JsonNode relocationScenario(String name) {
+        JsonNode fixture = fixture(
+            "framework/runtime/conformance/relocation-behavior-v1.json");
+        for (JsonNode scenario : fixture.path("idempotencyScenarios")) {
+            if (name.equals(scenario.path("name").asText())) {
+                return scenario;
+            }
+        }
+        throw new IllegalStateException(
+            "shared relocation scenario is missing: " + name);
+    }
+
+    private static JsonNode fixture(String relativePath) {
+        try {
+            Path current = Path.of(System.getProperty("user.dir"))
+                .toAbsolutePath();
+            while (current != null) {
+                Path candidate = current.resolve(relativePath);
+                if (Files.isRegularFile(candidate)) {
+                    return new ObjectMapper().readTree(
+                        Files.readString(candidate));
+                }
+                current = current.getParent();
+            }
+            throw new IllegalStateException(
+                "shared relocation fixture was not found: " + relativePath);
+        } catch (java.io.IOException error) {
+            throw new IllegalStateException(
+                "shared relocation fixture could not be read", error);
+        }
+    }
+
+    private static void assertCheckpoint(
+        JsonNode scenario,
+        String name,
+        int deliveries,
+        int settlements,
+        int releases) {
+        for (JsonNode checkpoint : scenario.path("checkpoints")) {
+            if (name.equals(checkpoint.path("name").asText())) {
+                assertEquals(
+                    checkpoint.path("deliveryCount").asInt(), deliveries);
+                assertEquals(
+                    checkpoint.path("settlementCount").asInt(), settlements);
+                assertEquals(
+                    checkpoint.path("payloadReleaseCount").asInt(), releases);
+                return;
+            }
+        }
+        throw new AssertionError("missing relocation checkpoint: " + name);
+    }
+
+    @Test
+    void shutdownTerminatesDetachedRoutePayloadExactlyOnce() {
+        FakeSource source = new FakeSource(Duration.ofMillis(10), 1);
+        AtomicInteger attempts = new AtomicInteger();
+        AtomicInteger cleanups = new AtomicInteger();
+        ZLinkBackendAdmissionKey key = ZLinkBackendAdmissionKey.boundSession(
+            RoutingId.from("node-a"), "actor-a", 7L);
+
+        var accepted = submitDetached(
+            source,
+            key,
+            () -> {
+                attempts.incrementAndGet();
+                return false;
+            },
+            cleanups::incrementAndGet).toCompletableFuture();
+        assertEquals(0, OneWayTestStatus.status(accepted));
+
+        source.close();
+        source.close();
+        source.ready(key);
+
+        assertEquals(1, attempts.get());
+        assertEquals(1, cleanups.get());
+    }
+
+    @Test
+    void command45ArmsAPostRouteDeadlineForRemainingBackpressure()
+        throws InterruptedException {
+        FakeSource source = new FakeSource(Duration.ofMillis(10), 1);
+        AtomicInteger cleanups = new AtomicInteger();
+        ZLinkBackendAdmissionKey key = ZLinkBackendAdmissionKey.boundSession(
+            RoutingId.from("node-a"), "actor-a", 7L);
+
+        var accepted = submitDetached(
+            source, key, () -> false, cleanups::incrementAndGet)
+            .toCompletableFuture();
+        assertEquals(0, OneWayTestStatus.status(accepted));
+        Thread.sleep(30);
+        assertEquals(0, cleanups.get(),
+            "route-pending retention outlives the public deadline");
+
+        releaseDetached(source, key);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+        while (cleanups.get() == 0 && System.nanoTime() < deadline) {
+            Thread.sleep(1);
+        }
+        assertEquals(1, cleanups.get(),
+            "command 45 transfers ownership to a bounded delivery deadline");
+        source.ready(key);
+        assertEquals(1, cleanups.get());
+    }
+
+    @Test
+    void detachedAdmissionWaitsForCapacityBeforeCompletingTheCaller() {
+        FakeSource source = new FakeSource(Duration.ofSeconds(1), 1);
+        ZLinkBackendAdmissionKey key = ZLinkBackendAdmissionKey.boundSession(
+            RoutingId.from("node-a"), "actor-a", 7L);
+        AtomicInteger firstAttempts = new AtomicInteger();
+        AtomicInteger secondAttempts = new AtomicInteger();
+
+        var first = submitDetached(
+            source, key, () -> firstAttempts.incrementAndGet() == 2, () -> { })
+            .toCompletableFuture();
+        var second = submitDetached(
+            source, key, () -> secondAttempts.incrementAndGet() == 2, () -> { })
+            .toCompletableFuture();
+
+        assertEquals(0, OneWayTestStatus.status(first));
+        assertFalse(second.isDone(),
+            "a second operation cannot report local admission before capacity exists");
+
+        source.ready(key);
+        assertEquals(0, OneWayTestStatus.status(second));
+        source.ready(key);
+        assertEquals(2, firstAttempts.get());
+        assertEquals(2, secondAttempts.get());
     }
 
     @Test
@@ -528,6 +801,40 @@ final class ZLinkAdmissionRuntimeTest {
             ignored -> source.admissionPendingCapacity(),
             (ignored, handler) -> source.setAdmissionReadyHandler(handler),
             (ignored, handler) -> source.setAdmissionShutdownHandler(handler));
+    }
+
+    private static CompletionStage<Void> submitDetached(
+        FakeSource source,
+        ZLinkBackendAdmissionKey key,
+        Supplier<Boolean> attempt,
+        Runnable cleanup) {
+        return ZLinkAdmissionRuntime.submit(
+            source,
+            key,
+            attempt,
+            cleanup,
+            ignored -> source,
+            ignored -> source.admissionTimeout(),
+            ignored -> source.admissionPendingCapacity(),
+            (ignored, handler) -> source.setAdmissionReadyHandler(handler),
+            (ignored, handler) -> source.setAdmissionShutdownHandler(handler),
+            null,
+            true);
+    }
+
+    private static void releaseDetached(
+        FakeSource source,
+        ZLinkBackendAdmissionKey key) {
+        ZLinkAdmissionRuntime.releaseDetached(
+            source, key, ignored -> source);
+    }
+
+    private static void terminateDetached(
+        FakeSource source,
+        ZLinkBackendAdmissionKey key,
+        Throwable failure) {
+        ZLinkAdmissionRuntime.terminateDetached(
+            source, key, failure, ignored -> source);
     }
 
     private static final class FakeSource implements ZLinkBackendObject {

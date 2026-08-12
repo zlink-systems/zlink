@@ -81,15 +81,28 @@ e2e는 기능을 평면적으로 나열하지 않는다. **실제 배포와 같�
 e2e 메시지 이름도 공통 샘플의 메시지 이름 원칙을 따른다. e2e는 샘플보다 검증 범위가 넓지만,
 client와 server가 주고받는 payload는 사용자가 보는 공개 예시와 같은 기준으로 읽혀야 한다.
 
-request로 호출하고 응답을 기다리는 payload는 `Req`와 `Res`를 쌍으로 사용한다. 이 기준은
-channel request, route request, stream request, HTTP request에 모두 적용한다. 응답이 없는
-단방향 send payload는 `Msg`를 사용하고, server가 client stream/session으로 밀어 주는 payload는
-`Notify`를 사용한다.
+| 호출 방식 | 접미어 | 이름이 나타내는 계약 |
+|---|---|---|
+| request/reply | `Req` / `Res` | 호출자가 처리 결과를 기다린다. Channel, route, stream, HTTP request에 모두 적용한다. |
+| send | `Msg` | 호출자가 응답을 기다리지 않는 단방향 전달이다. |
+| client push | `Notify` | server가 stream/session을 통해 client에 알림을 보낸다. |
+| publish | `Event` | 발행자가 수신자를 지정하지 않는 pub/sub 또는 fanout message다. |
 
 업무 이름이 event처럼 보이더라도 호출 방식이 request/reply이면 `Req`/`Res`가 맞다. 예를 들어
 상태 변경을 요청하고 처리 결과를 기다리는 e2e payload는 `StatusChangedReq`와 `StatusChangedRes`
 처럼 명명한다. 반대로 client가 server push로 받는 상태 변경 알림은 `StatusNotify`처럼
 명명한다.
+
+`Event`는 실제 publish 호출에만 사용한다. Actor나 Spot에 `Send`로 전달하는 payload에는 업무
+내용이 event처럼 보여도 `Msg`를 사용한다. `Command`, `Result`, `Ack`를 새로운 wire message의
+접미어로 사용하지 않는다. 이 이름들은 업무 명령, 처리 결과와 transport 응답을 구분하기 어렵게
+만들기 때문이다.
+
+이 규칙은 ZLink dispatch 경계를 넘는 payload에 적용한다. Event store에 append하는 도메인 event
+record와 같은 process 안에서 application port가 주고받는 DTO는 wire message가 아니므로 예외다.
+반대로 Entry Spot에서 owner Spot으로 보내는 내부 message와 Actor/Spot `Create`·`GetOrCreate`의
+application payload는 RouteMesh를 통과하므로 예외가 아니다. 생성 payload도 raw object 대신
+`PlayerActorCreateReq`처럼 목적이 드러나는 `Req` wrapper를 사용한다.
 
 ### 수명·배치 시나리오 용어
 
@@ -349,7 +362,7 @@ C++처럼 같은 config를 여러 start order로 반복하는 runner는 config �
   subscriber handler evidence를 bounded wait endpoint로 확인한다. 이 예외는 subscriber 역할 server의
   실제 dispatch marker에만 적용되며, 시나리오 실행 전용 driver evidence에는 적용하지 않는다.
 - client scenario는 실제 역할 server endpoint 호출과 검증 흐름을 직접 보여야 한다. driver의
-  `/run` endpoint 하나를 호출하고 "나머지는 server 쪽에서 알아서 검증"하게 만들면 안 된다.
+  `/run` endpoint 하나를 호출하고 나머지 검증을 server-side runner에 위임하면 안 된다.
   evidence 조회도 실제 역할 server에서 가져와야 하며, 시나리오 실행 전용 server의 결과만 읽으면
   안 된다.
 - 시나리오가 여러 개이면 client scenario 파일도 여러 개로 나눈다. 여러 시나리오를 하나의
@@ -389,6 +402,36 @@ Redis endpoint를 공유하거나 fallback으로 사용하면 안 된다. key pr
 인스턴스 공유를 허용하지 않는다. pause, stop, restart, 지연 주입과 cleanup이 다른 실행에 영향을
 주지 않게 하는 것이 이 규칙의 목적이다.
 
+Redis가 필요한 실행은 언어별로 공유하는 인스턴스가 아니라 실행마다 별도 container와 key prefix를
+사용한다. Redis DB 번호만 나누는 방식은 격리로 보지 않는다. 같은 언어의 standalone config runner와 통합
+runner가 호출한 config runner는 언어별 whole-run lock을 공유하므로 실제 config E2E process는 한
+번에 하나만 실행한다. 통합 runner 자체는 lock을 획득하지 않고 config runner를 순서대로 호출하며,
+호출된 config runner가 lock을 유지한다. 재귀 child runner와 다른 config에 위임하는 runner는 상위
+실행이 보유한 lock을 이어서 사용한다. 따라서 두 통합 실행은 config 경계에서 번갈아 진행될 수
+있지만, 같은 언어의 실제 config E2E process는 겹치지 않는다.
+
+서로 다른 언어의 같은 E2E는 동시에 실행할 수 있다. 각 실행의 Redis endpoint, application
+listener, 임시 설정, log directory와 cleanup 대상이 분리되므로 같은 Mesh·Channel·Actor·Spot 이름을
+사용해도 다른 언어의 process를 discovery 대상으로 인식하지 않는다.
+
+| 언어 | Redis host port | Application listener port |
+|------|-----------------|---------------------------|
+| C++ | `30000-30099` | `30100-31999` |
+| .NET | `32000-32099` | `32100-33999` |
+| Java | `34000-34099` | `34100-35999` |
+| Kotlin | `36000-36099` | `36100-37999` |
+| Node.js | `38000-38099` | `38100-39999` |
+
+Runner가 미리 정하는 Redis port와 application port는 해당 언어 구간에서만 고르고 OS bind로 사용
+가능 여부를 확인한다. Runtime이 `port 0`으로 socket을 바로 bind한 뒤 실제 endpoint를 보고하는
+방식은 검사와 실제 bind 사이의 공백이 없으므로 사용할 수 있다. Redis container에는 선택한 host
+port를 명시하며, 시작 뒤 `inspect` 결과가 선택값과 같은지 확인한다. Bind conflict가 발생하면 해당
+시도에서 만든 container만 제거하고 같은 Redis 구간에서 다시 선택한다. Java와 Kotlin은 source와
+Gradle output 일부를 공유하므로 sample과 E2E가 같이 사용하는 build-only lock으로 Gradle 실행만
+직렬화하고 server process 시작 전에는 해제한다. 이 lock은 같은 runner 실행 환경 안에서 공유한다.
+동일 checkout을 WSL Bash와 Windows PowerShell에서 동시에 실행하는 조합은 서로 다른 OS lock
+namespace를 사용하므로 지원하지 않는다.
+
 기준 템플릿은 이 디렉토리의 `runner-templates/` 아래에 둔다.
 
 - `runner-templates/redis-common.template.sh`: Redis helper 기준
@@ -402,9 +445,12 @@ Redis endpoint를 공유하거나 fallback으로 사용하면 안 된다. key pr
   client가 이해하는 하나의 scenario selector로 정규화해서 전달한다.
 - 스크립트는 build → 로그 디렉토리 생성 → 서버 시작 → readiness 확인 → client 실행 → 서버 종료
   순서를 책임진다.
-- 각 언어는 e2e runner들이 공유하는 Redis helper를 둔다. helper는 실행별 Redis container 시작과
-  그 실행이 만든 container id 정리를 공통 함수로 제공하고, 개별 config script가 Docker 명령을
-  직접 조합하지 않게 한다.
+- 각 언어는 e2e runner들이 공유하는 Redis helper를 둔다. helper는 실행별 Redis container 생성,
+  시작, 상태 확인과 그 실행이 만든 exact container ID 정리를 공통 함수로 제공한다. 개별 config
+  script는 이 lifecycle 명령을 다시 조합하지 않는다. 장애 주입 시나리오는 helper가 반환한 exact
+  container ID에 한해 `pause`, `unpause`, `stop`, `start` 또는 짧은 `redis-cli` 조회를 직접 실행할
+  수 있다. 이 제어 명령에도 짧은 timeout을 둔다. 실행 중 Redis 명령을 계속 관찰하는 `monitor`는
+  timeout 예외로 background에서 실행할 수 있지만, runner가 PID를 기록하고 종료 시 정리해야 한다.
 - readiness는 고정 sleep만으로 보지 않는다. 각 role server의 `/health`, 포트 open, 또는 명시 marker로
   확인한다.
 - 실패 시 `log_dir=...`를 출력하고, 각 role server와 client의 stdout/stderr/framework log를 남긴다.
@@ -413,26 +459,28 @@ Redis endpoint를 공유하거나 fallback으로 사용하면 안 된다. key pr
   support process manager가 담당한다. framework request/send/publish 자체는 실제 역할 server endpoint
   내부에서만 수행한다.
 - Redis location store가 필요한 config의 개별 `run_e2e.*`는 실행마다 전용 Docker Redis
-  container를 새로 시작한다. 이미 떠 있는 Redis container나 host Redis endpoint를 재사용하면
+  container를 새로 시작한다. 이미 실행 중인 Redis container나 host Redis endpoint를 재사용하면
   안 된다. Redis key prefix가 달라도 장애 주입, pause/stop/restart, flush, cleanup, latency
   injection이 다른 실행에 영향을 줄 수 있기 때문이다. 실행 종료 시에는 자신이 만든 container
   id만 정리한다. 개별 script가 같은 prefix의 다른 Redis container를 지우면 안 된다.
 - Docker Redis를 만들지 못하면 runner는 즉시 실패한다. host Redis나 다른 실행의 endpoint로
   자동 전환해서 성공 처리하면 안 된다.
 - Redis container 시작은 모든 언어에서 같은 순서를 쓴다.
-  `docker create --name <scoped-name> --tmpfs /data -p 127.0.0.1::6379 <pinned-redis-image>`로 container를
-  만들고, `docker start <container-id>`로 시작한 뒤, `docker inspect`로 실행 상태와 배정된
-  host port를 읽는다. `docker run -d` 출력에 의존해 container id와 port를 동시에 처리하는
-  방식은 쓰지 않는다.
+  언어별 Redis 구간에서 OS bind가 가능한 `<redis-port>`를 고른 뒤
+  `docker create --name <scoped-name> --tmpfs /data -p 127.0.0.1:<redis-port>:6379 <pinned-redis-image>`로
+  container를 만든다. `docker start <container-id>`로 시작한 뒤 `docker inspect`로 실행 상태와
+  publish된 host port가 선택값과 같은지 확인한다. `docker run -d` 출력에 의존해 container id와
+  port를 동시에 처리하는 방식은 쓰지 않는다.
 - E2E Redis 데이터는 실행 중에만 필요하므로 Docker volume을 만들지 않는다. Redis 이미지가
   선언한 `/data` volume은 `--tmpfs /data`로 덮어쓰고, container 정리에는 `docker rm -fv`를
   사용한다. 이렇게 해야 반복 실행 후 anonymous volume이 남지 않는다.
-- Redis container 이름에는 언어와 e2e 실행 범위를 드러내는 prefix를 추가한다. 예를 들어 Java e2e는
-  `zlink-redis-java-e2e...`, Kotlin e2e는 `zlink-redis-kotlin-e2e...`처럼 잡는다. 다른 언어도
-  같은 규칙으로 `<language>-e2e` 범위를 이름에서 확인할 수 있어야 한다.
+- Redis container 이름은 실행마다 고유해야 하며 가능한 경우 언어와 config 범위를 드러낸다.
+  Cleanup의 기준은 이름 prefix 검색이 아니라 helper가 반환한 exact container ID다.
 - 통합 e2e runner는 다른 실행의 Redis를 정리하지 않고 config별 개별 `run_e2e.*`를 순차 호출한다.
-  한 통합 실행 안에서는 config를 병렬 실행하지 않지만, 같은 언어의 다른 개별 실행이나 통합 실행과
-  자원을 공유하거나 제거해서는 안 된다.
+  통합 runner는 language-wide lock을 직접 획득하지 않는다. 각 config runner가 lock을 획득하므로 같은
+  언어의 다른 개별 실행이나 통합 실행은 현재 config가 끝날 때까지 기다린다.
+- 통합 runner는 shell config runner를 `bash ./run_e2e.sh`로 호출하며, 실행을 위해 source file의
+  executable mode를 변경하지 않는다.
 - 통합 e2e runner도 실행 대상을 좁힐 수 있어야 한다. 인자가 없으면 모든 config의 `all`을 실행하고,
   인자가 있으면 지정한 config만 실행한다. config 안의 일부 시나리오만 실행할 때는
   `Config:ScenarioA,ScenarioB` 형식을 사용한다. 예: `./run_e2e_all.sh RegistrationCodec:RC-B2,RC-B4`
@@ -442,14 +490,16 @@ Redis endpoint를 공유하거나 fallback으로 사용하면 안 된다. key pr
 - 통합 e2e runner는 config별 내부 동작을 다시 구현하지 않는다. 선택한 개별 `run_e2e.*`를 호출하고,
   retry 여부와 최종 결과만 관리한다. Redis endpoint 생성, readiness,
   로그 위치, scenario 실행 세부 절차는 개별 config script와 공통 helper가 맡는다.
-- Redis host port는 고정하지 않는다. Docker가 비어 있는 loopback port를 배정하게 하고, runner가
-  inspect 결과로 endpoint를 얻어 각 role server와 client에 전달한다. Redis key prefix, routing id,
-  log directory도 실행마다 고유해야 한다.
+- Redis host port는 언어별 Redis 구간에서 실행할 때마다 선택한다. Runner는 Docker에 그 값을
+  명시하고, `inspect` 결과가 선택값과 같은지 확인한 뒤 각 role server와 client에 전달한다.
+  Redis key prefix, routing id, log directory도 실행마다 고유해야 한다.
 - 같은 host에서 다른 sample/e2e가 Redis를 사용 중이어도 그 endpoint를 빌려 쓰지 않는다. 새
-  Docker Redis container를 만들고 Docker가 할당한 다른 loopback port를 사용해야 테스트 간섭을
-  막을 수 있다.
-- Docker 명령 자체는 짧은 timeout으로 감싸고, Redis readiness는 port/readiness 대기 함수로 따로
-  확인한다. Redis 시작이 늦은 경우와 Docker CLI가 응답하지 않는 경우를 같은 sleep으로 처리하지 않는다.
+  Docker Redis container와 실행별 key prefix를 만들고 해당 언어의 Redis 구간을 사용해야 테스트
+  간섭을 막을 수 있다.
+- Redis lifecycle 명령과 짧은 장애 주입·조회 Docker 명령은 timeout으로 감싸고, Redis readiness는
+  port/readiness 대기 함수로 따로 확인한다. Background `redis-cli monitor`는 runner가 PID와 종료
+  정리를 소유하는 장기 실행 시나리오 제어이므로 이 timeout 규칙에서 제외한다. Redis 시작이 늦은
+  경우와 Docker CLI가 응답하지 않는 경우를 같은 sleep으로 처리하지 않는다.
 - Redis helper가 실패하면 개별 runner도 즉시 실패해야 한다. shell runner에서는
   `read ... < <(redis_start_function)`처럼 process substitution 결과를 읽는 방식으로 container id를
   받지 않는다. 이 방식은 helper가 실패해도 `read` 자체는 성공할 수 있어 Redis 없이 서버를 시작하는

@@ -8,14 +8,14 @@ import systems.zlink.samples.supportchat.server.support.actors.SupportUserActor;
 import systems.zlink.samples.supportchat.shared.contracts.Messages;
 
 public final class SetTypingHandler
-    implements ZLinkSpotActorSendHandler<ConversationSpot, SupportUserActor, Messages.SetTypingReq> {
+    implements ZLinkSpotActorSendHandler<ConversationSpot, SupportUserActor, Messages.SetTypingMsg> {
     @Override
     public CompletionStage<Void> handle(
         ConversationSpot spot,
         SupportUserActor actor,
         ZLinkMessageContext context,
-        Messages.SetTypingReq request) {
-        spot.setTyping(actor, request);
+        Messages.SetTypingMsg message) {
+        spot.setTyping(actor, message);
         return CompletableFuture.completedFuture(null);
     }
 }

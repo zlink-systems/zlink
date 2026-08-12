@@ -4,10 +4,9 @@ import {
   zlinkEntrySpotActorSendHandler
 } from '@zlink-systems/nestjs';
 import { PlayerActor } from '../../Actors/player-actor';
-import { PendingBingoActorDestroyRegistry } from '../../Actors/player-actor-lifecycle-handlers';
 import {
-  DestroyBingoActor,
-  EnsurePlayerActorReq as GeneratedEnsurePlayerActorReq
+  DestroyBingoActorMsg,
+  PlayerActorCreateReq
 } from '../../../../../../Shared/Contracts/bingo-messages.generated';
 import type {
   ZLinkActorClient,
@@ -24,17 +23,16 @@ class BingoEntrySpot implements ZLinkEntrySpot<PlayerActor> {
   readonly context!: ZLinkEntrySpotContext<PlayerActor>;
 
   constructor(
-    private readonly pendingDestroys: PendingBingoActorDestroyRegistry,
     @Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient
   ) {}
 
   async onJoinedActor(actor: PlayerActor): Promise<void> {
-    if (!this.pendingDestroys.consume(actor.actorId)) {
+    if (!actor.consumeDestroyAfterEntrySpotJoin()) {
       console.error(`bingo-lifecycle entry-joined actor=${actor.actorId} destroy=false`);
       return;
     }
     await this.actors
-      .sendToActor(actor.actorId, new DestroyBingoActor({}))
+      .sendToActor(actor.actorId, new DestroyBingoActorMsg({}))
       .submit();
   }
 
@@ -46,12 +44,8 @@ class BingoEntrySpot implements ZLinkEntrySpot<PlayerActor> {
   }
 
   async onCreateActor(actor: PlayerActor, createRequest: ZLinkMessage): Promise<ZLinkActorCreateResponse> {
-    const request = createRequest.decode<GeneratedEnsurePlayerActorReq>();
-    if (typeof request.displayName === 'string') {
-      await this.actors
-        .sendToActor(actor.actorId, request)
-        .submit();
-    }
+    const request = createRequest.decode<PlayerActorCreateReq>();
+    actor.displayName = request.displayName;
     return { accepted: true };
   }
 
@@ -73,19 +67,19 @@ class BingoEntrySpot implements ZLinkEntrySpot<PlayerActor> {
 @zlinkEntrySpotActorSendHandler({
   actor: () => PlayerActor,
   entrySpot: () => BingoEntrySpot,
-  packetName: 'DestroyBingoActor'
+  packetName: 'DestroyBingoActorMsg'
 })
-class DestroyBingoActorHandler {
+class DestroyBingoActorMsgHandler {
   constructor(private readonly entrySpot: BingoEntrySpot) {}
 
   async handle(
     _spot: BingoEntrySpot,
     actor: PlayerActor,
     _context: ZLinkMessageContext,
-    _message: DestroyBingoActor
+    _message: DestroyBingoActorMsg
   ): Promise<void> {
     this.entrySpot.scheduleDestroy(actor);
   }
 }
 
-export { BingoEntrySpot, DestroyBingoActorHandler };
+export { BingoEntrySpot, DestroyBingoActorMsgHandler };

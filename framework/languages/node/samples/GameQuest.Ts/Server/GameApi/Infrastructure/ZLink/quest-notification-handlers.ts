@@ -1,5 +1,6 @@
 import { zlinkEntrySpotActorSendHandler } from '@zlink-systems/nestjs';
 import {
+  DeliverQuestNotificationMsg,
   PacketNames,
   QuestCompletedNotify,
   QuestProgressNotify
@@ -14,35 +15,29 @@ import type {
 @zlinkEntrySpotActorSendHandler({
   actor: () => GameQuestPlayerActor,
   entrySpot: () => GameQuestEntrySpot,
-  packetName: PacketNames.questProgressNotify
+  packetName: PacketNames.deliverQuestNotificationMsg
 })
-class QuestProgressNotificationHandler
-  implements ZLinkEntrySpotActorSendHandler<GameQuestEntrySpot, GameQuestPlayerActor, QuestProgressNotify> {
+class DeliverQuestNotificationHandler
+  implements ZLinkEntrySpotActorSendHandler<GameQuestEntrySpot, GameQuestPlayerActor, DeliverQuestNotificationMsg> {
   async handle(
     _spot: GameQuestEntrySpot,
     actor: GameQuestPlayerActor,
     _context: ZLinkMessageContext,
-    message: QuestProgressNotify
+    message: DeliverQuestNotificationMsg
   ): Promise<void> {
+    if (message.packetName === PacketNames.questCompletedNotify) {
+      await actor.push(new QuestCompletedNotify(
+        message.playerId,
+        message.progress,
+        message.rewardGranted ?? false
+      ));
+      return;
+    }
+    if (message.packetName !== PacketNames.questProgressNotify) {
+      throw new Error(`Unsupported GameQuest notification '${message.packetName}'.`);
+    }
     await actor.push(new QuestProgressNotify(message.playerId, message.progress));
   }
 }
 
-@zlinkEntrySpotActorSendHandler({
-  actor: () => GameQuestPlayerActor,
-  entrySpot: () => GameQuestEntrySpot,
-  packetName: PacketNames.questCompletedNotify
-})
-class QuestCompletedNotificationHandler
-  implements ZLinkEntrySpotActorSendHandler<GameQuestEntrySpot, GameQuestPlayerActor, QuestCompletedNotify> {
-  async handle(
-    _spot: GameQuestEntrySpot,
-    actor: GameQuestPlayerActor,
-    _context: ZLinkMessageContext,
-    message: QuestCompletedNotify
-  ): Promise<void> {
-    await actor.push(new QuestCompletedNotify(message.playerId, message.progress, message.rewardGranted));
-  }
-}
-
-export { QuestCompletedNotificationHandler, QuestProgressNotificationHandler };
+export { DeliverQuestNotificationHandler };

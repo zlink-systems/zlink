@@ -80,14 +80,16 @@ public final class Program {
         boot("http route evidence");
         http.get("/evidence", evidence::all);
         boot("http route ensure");
-        http.post("/ensure", Contracts.ActorCallRequest.class, request -> {
-            actors.getOrCreate(request.actorId(), Contracts.ACTOR_TYPE, ZLinkMessage.of("create"))
+        http.post("/ensure", Contracts.ActorCallReq.class, request -> {
+            actors.getOrCreate(request.actorId(), Contracts.ACTOR_TYPE)
+                .request(ZLinkMessage.of(new Contracts.ActorCreateReq("create")))
+                .submit()
                 .toCompletableFuture()
                 .join();
-            return Contracts.ActorCallResponse.ok(request.scenario(), request.actorId(), "ensured");
+            return Contracts.ActorCallRes.ok(request.scenario(), request.actorId(), "ensured");
         });
         boot("http route fault stale");
-        http.post("/fault/stale", Contracts.ActorFaultRequest.class, request -> {
+        http.post("/fault/stale", Contracts.ActorFaultReq.class, request -> {
             ZLinkAuthoritySnapshot live = ensureLiveAuthority(
                 actors, locations, request.actorId());
             var result = locations.compareExchange(
@@ -104,11 +106,11 @@ public final class Program {
                 throw new IllegalStateException(
                     "stale authority CAS was not rejected actorId=" + request.actorId());
             }
-            return Contracts.ActorCallResponse.ok(
+            return Contracts.ActorCallRes.ok(
                 request.scenario(), request.actorId(), "stale-rejected");
         });
         boot("http route fault route");
-        http.post("/fault/route-disconnected", Contracts.ActorFaultRequest.class, request -> {
+        http.post("/fault/route-disconnected", Contracts.ActorFaultReq.class, request -> {
             ZLinkAuthoritySnapshot live = ensureLiveAuthority(
                 actors, locations, request.actorId());
             var result = locations.compareExchange(
@@ -121,13 +123,13 @@ public final class Program {
                 throw new IllegalStateException(
                     "stale authority delete was not rejected actorId=" + request.actorId());
             }
-            return Contracts.ActorCallResponse.ok(
+            return Contracts.ActorCallRes.ok(
                 request.scenario(), request.actorId(), "route-delete-rejected");
         });
         boot("http route fault restore");
-        http.post("/fault/restore", Contracts.ActorFaultRequest.class, request -> {
+        http.post("/fault/restore", Contracts.ActorFaultReq.class, request -> {
             ensureLiveAuthority(actors, locations, request.actorId());
-            return Contracts.ActorCallResponse.ok(request.scenario(), request.actorId(), "restored");
+            return Contracts.ActorCallRes.ok(request.scenario(), request.actorId(), "restored");
         });
         boot("http start");
         http.start();
@@ -173,7 +175,9 @@ public final class Program {
         ZLinkActorManager actors,
         ZLinkRedisLocationStore locations,
         String actorId) {
-        actors.getOrCreate(actorId, Contracts.ACTOR_TYPE, ZLinkMessage.of("create"))
+        actors.getOrCreate(actorId, Contracts.ACTOR_TYPE)
+            .request(ZLinkMessage.of(new Contracts.ActorCreateReq("create")))
+            .submit()
             .toCompletableFuture()
             .join();
         return waitForActorAuthority(locations, actorId);
@@ -212,7 +216,9 @@ public final class Program {
             boot("baselineActors start");
             for (String actorId : List.of("ta-a1", "ta-a2", "ta-a3", "ta-a4", "ta-b2", "ta-b3")) {
                 boot("baselineActors getOrCreate actorId=" + actorId);
-                actors.getOrCreate(actorId, Contracts.ACTOR_TYPE, ZLinkMessage.of("create"))
+                actors.getOrCreate(actorId, Contracts.ACTOR_TYPE)
+                    .request(ZLinkMessage.of(new Contracts.ActorCreateReq("create")))
+                    .submit()
                     .toCompletableFuture()
                     .join();
                 boot("baselineActors getOrCreate done actorId=" + actorId);
@@ -290,7 +296,7 @@ public final class Program {
     }
 
     public static final class NotifyHandler
-        implements ZLinkEntrySpotActorSendHandler<TestEntrySpot, TestActor, Contracts.ActorNotify> {
+        implements ZLinkEntrySpotActorSendHandler<TestEntrySpot, TestActor, Contracts.ActorMsg> {
         private final EvidenceStore evidence;
 
         public NotifyHandler(EvidenceStore evidence) {
@@ -302,7 +308,7 @@ public final class Program {
             TestEntrySpot entrySpot,
             TestActor actor,
             ZLinkSpotActorSendContext context,
-            Contracts.ActorNotify message) {
+            Contracts.ActorMsg message) {
             evidence.append(new Contracts.ActorEvidence(message.scenario(), actor.actorId(), "send", message.value()));
             return CompletableFuture.completedFuture(null);
         }
@@ -312,8 +318,8 @@ public final class Program {
         implements ZLinkEntrySpotActorRequestHandler<
             TestEntrySpot,
             TestActor,
-            Contracts.ActorAsk,
-            Contracts.ActorReply> {
+            Contracts.ActorReq,
+            Contracts.ActorRes> {
         private final EvidenceStore evidence;
 
         public AskHandler(EvidenceStore evidence) {
@@ -321,13 +327,13 @@ public final class Program {
         }
 
         @Override
-        public CompletionStage<Contracts.ActorReply> handle(
+        public CompletionStage<Contracts.ActorRes> handle(
             TestEntrySpot entrySpot,
             TestActor actor,
             ZLinkSpotActorRequestContext context,
-            Contracts.ActorAsk request) {
+            Contracts.ActorReq request) {
             evidence.append(new Contracts.ActorEvidence(request.scenario(), actor.actorId(), "request", request.value()));
-            return CompletableFuture.completedFuture(new Contracts.ActorReply(
+            return CompletableFuture.completedFuture(new Contracts.ActorRes(
                 request.scenario(), actor.actorId(), "reply:" + request.value()));
         }
     }

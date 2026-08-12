@@ -82,7 +82,7 @@ public final class Messages {
     public record ContinueOrderWorkflowReq(String orderId) {
     }
 
-    public record RunOrderWorkflowCommand(String orderId) {
+    public record RunOrderWorkflowMsg(String orderId) {
     }
 
     public record ContinueOrderWorkflowRes(OrderState state) {

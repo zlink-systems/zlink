@@ -213,13 +213,16 @@ void offload_executor_t::worker_loop ()
                                          [this] { return _stopping || !_queue.empty (); });
             }
             --_idle_workers;
-            if (!ready && _queue.empty () && _live_workers > _min_worker_count) {
-                --_live_workers;
-                if (_queue.empty () && _active == 0) {
-                    _empty.notify_all ();
+            if (!ready && _queue.empty ()) {
+                if (_live_workers > _min_worker_count) {
+                    --_live_workers;
+                    if (_active == 0) {
+                        _empty.notify_all ();
+                    }
+                    trace_exit ();
+                    return;
                 }
-                trace_exit ();
-                return;
+                continue;
             }
             if (_stopping && _queue.empty ()) {
                 --_live_workers;

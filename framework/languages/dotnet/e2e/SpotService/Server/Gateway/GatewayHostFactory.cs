@@ -115,7 +115,7 @@ internal static class GatewayHostFactory
             await publisher.Publish(
                     SpotServiceNames.SpotChannel,
                     SpotServiceNames.SpotMsgTopic,
-                    new SpotMsg(request.Marker))
+                    new SpotEvent(request.Marker))
                 .Async(cancellationToken);
             evidence.Add($"spot-publish|rid={options.Rid}|spot={request.SpotRid}|marker={request.Marker}");
             return Results.Ok(new SpotPublishRes(
@@ -144,7 +144,7 @@ internal static class GatewayHostFactory
                     await publisher.Publish(
                             SpotServiceNames.SpotChannel,
                             SpotServiceNames.SpotMsgTopic,
-                            new SpotBackpressureMsg(
+                            new SpotBackpressureEvent(
                                 request.Marker,
                                 sequence,
                                 payload,

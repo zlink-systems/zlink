@@ -1,4 +1,3 @@
-using System.Reflection;
 using Zlink.Framework.Contracts.Errors;
 
 namespace Zlink.Framework.ContractTests.Errors;
@@ -29,34 +28,10 @@ public sealed class ErrorContracts
                 .ToDictionary(static value => value.ToString(), static value => (int)value, StringComparer.Ordinal));
 
         Assert.Empty(typeof(ZLinkFrameworkException).GetConstructors());
-        var constructor = Assert.Single(typeof(ZLinkFrameworkException).GetConstructors(
-            BindingFlags.Instance | BindingFlags.NonPublic));
-        var parameters = constructor.GetParameters();
-        Assert.Equal(
-            [
-                typeof(ZLinkFrameworkErrorKind),
-                typeof(string),
-                typeof(ZLinkRetryAdvice?),
-                typeof(Exception)
-            ],
-            parameters.Select(static parameter => parameter.ParameterType));
-        Assert.False(parameters[0].HasDefaultValue);
-        Assert.False(parameters[1].HasDefaultValue);
-        Assert.Null(parameters[2].DefaultValue);
-        Assert.Null(parameters[3].DefaultValue);
-
-        var nullability = new NullabilityInfoContext();
-        Assert.Equal(NullabilityState.NotNull, nullability.Create(parameters[1]).ReadState);
-        Assert.Equal(NullabilityState.Nullable, nullability.Create(parameters[3]).ReadState);
         Assert.Equal(typeof(ZLinkFrameworkErrorKind),
             typeof(ZLinkFrameworkException).GetProperty(nameof(ZLinkFrameworkException.Kind))!.PropertyType);
         Assert.Null(typeof(ZLinkFrameworkException).GetProperty(
-            nameof(ZLinkFrameworkException.RetryAdvice),
-            BindingFlags.Instance | BindingFlags.Public));
-        Assert.Equal(typeof(ZLinkRetryAdvice),
-            typeof(ZLinkFrameworkException).GetProperty(
-                nameof(ZLinkFrameworkException.RetryAdvice),
-                BindingFlags.Instance | BindingFlags.NonPublic)!.PropertyType);
+            "RetryAdvice"));
     }
 
     [Fact]

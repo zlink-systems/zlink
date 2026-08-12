@@ -3,6 +3,8 @@ set -euo pipefail
 umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$ROOT_DIR/../redis-common.sh"
+zlink_dotnet_e2e_acquire_run_lock "$0" "$@"
 if [[ "$#" -eq 0 ]]; then
   SCENARIO="all"
 else
@@ -24,13 +26,7 @@ CODEC_REQUESTER_PROJECT="$ROOT_DIR/Server/CodecRequester/RegistrationCodec.Codec
 CLIENT_PROJECT="$ROOT_DIR/Client/RegistrationCodec.Client.csproj"
 
 pick_port() {
-  python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
+  zlink_dotnet_e2e_allocate_ports 1
 }
 
 SERVER_HTTP_PORT="$(pick_port)"

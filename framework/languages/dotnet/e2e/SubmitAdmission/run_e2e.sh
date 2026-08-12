@@ -4,6 +4,7 @@ umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../redis-common.sh"
+zlink_dotnet_e2e_acquire_run_lock "$0" "$@"
 SERVER_PROJECT="$SCRIPT_DIR/Server/SubmitAdmission.Server.csproj"
 CLIENT_PROJECT="$SCRIPT_DIR/Client/SubmitAdmission.Client.csproj"
 GATE_PROJECT="$SCRIPT_DIR/ReceiverGate/SubmitAdmission.ReceiverGate.csproj"
@@ -140,13 +141,7 @@ PY
 }
 
 pick_port() {
-  python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
+  zlink_dotnet_e2e_allocate_ports 1
 }
 
 CALLER_HTTP_PORT="$(pick_port)"
@@ -199,7 +194,7 @@ cleanup() {
   done
   wait "${PIDS[@]:-}" 2>/dev/null || true
   if [[ -n "$REDIS_CONTAINER" ]]; then
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   if [[ "$code" != 0 ]]; then echo "SubmitAdmission failed; logs=$LOG_DIR" >&2; fi
 }

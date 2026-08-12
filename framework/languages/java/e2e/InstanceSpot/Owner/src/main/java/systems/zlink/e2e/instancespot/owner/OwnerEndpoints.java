@@ -45,13 +45,13 @@ public final class OwnerEndpoints implements SmartLifecycle {
             server.createContext("/evidence", exchange -> HttpSupport.writeJson(
                 exchange, json, evidence.snapshot()));
             server.createContext("/evidence/wait", exchange -> {
-                Contracts.EvidenceWaitRequest request = HttpSupport.readJson(
-                    exchange, json, Contracts.EvidenceWaitRequest.class);
+                Contracts.EvidenceWaitReq request = HttpSupport.readJson(
+                    exchange, json, Contracts.EvidenceWaitReq.class);
                 HttpSupport.writeJson(exchange, json, evidence.waitFor(request));
             });
             server.createContext("/gate", exchange -> {
-                Contracts.GateRequest request = HttpSupport.readJson(
-                    exchange, json, Contracts.GateRequest.class);
+                Contracts.GateReq request = HttpSupport.readJson(
+                    exchange, json, Contracts.GateReq.class);
                 gates.set(request.gateId(), request.open());
                 HttpSupport.writeJson(exchange, json, request);
             });

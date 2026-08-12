@@ -60,8 +60,10 @@
         <Compile Include="Runtime/AutoConnectLoopTests.cs"/>
         <Compile Include="Runtime/AutoConnectLifecycleCoordinatorTests.cs"/>
         <Compile Include="Runtime/AutoConnectReconcilerTests.cs"/>
+        <Compile Include="Runtime/AuthorityKeyCodecTests.cs"/>
         <Compile Include="Runtime/ActorRelocationProtocolTests.cs"/>
         <Compile Include="Runtime/ActorRemoteJoinRecoveryCodecBoundaryTests.cs"/>
+        <Compile Include="Runtime/ActorJoinRelocationOwnershipRegressionTests.cs"/>
         <Compile Include="Runtime/ActorHandoffTests.cs"/>
         <Compile Include="Runtime/ActorHandlerActivationTests.cs"/>
         <Compile Include="Runtime/ActorClientTests.cs"/>
@@ -143,6 +145,7 @@
         <Compile Include="Runtime/RemoteRelayFrameAssemblerTests.cs"/>
         <Compile Include="Runtime/ReconciliationRunnerTests.cs"/>
         <Compile Include="Runtime/RelocationRuntimeTests.cs"/>
+        <Compile Include="Runtime/RelocationBehaviorConformanceTests.cs"/>
         <Compile Include="Runtime/RelocationTreeParallelIoTests.cs"/>
         <Compile Include="Runtime/StandaloneActorRelocationRuntimeTests.cs"/>
         <Compile Include="Runtime/StandaloneActorRelocationPrecommitTests.cs"/>

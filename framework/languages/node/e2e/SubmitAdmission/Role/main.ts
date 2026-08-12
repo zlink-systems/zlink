@@ -35,7 +35,7 @@ interface RoleOptions {
   readonly fanoutEndpoint?: string;
 }
 
-interface SubmitRequest {
+interface SubmitReq {
   readonly operationId: string;
   readonly targetRid?: string;
 }
@@ -45,7 +45,11 @@ interface OperationEvidence {
   completed: number;
 }
 
-class AdmissionMessage {
+class AdmissionMsg {
+  constructor(readonly operationId: string) {}
+}
+
+class AdmissionEvent {
   constructor(readonly operationId: string) {}
 }
 
@@ -64,18 +68,18 @@ async function awaitGate(): Promise<void> {
   await new Promise<void>((resolve) => { releaseGate = resolve; });
 }
 
-@ZLinkPacket('AdmissionMessage')
-class RouteAdmissionHandler implements ZLinkRouteSendHandler<AdmissionMessage> {
-  async handle(message: AdmissionMessage, _context: ZLinkRouteMessageContext): Promise<void> {
+@ZLinkPacket('AdmissionMsg')
+class RouteAdmissionHandler implements ZLinkRouteSendHandler<AdmissionMsg> {
+  async handle(message: AdmissionMsg, _context: ZLinkRouteMessageContext): Promise<void> {
     record(message.operationId, 'entered');
     await awaitGate();
     record(message.operationId, 'completed');
   }
 }
 
-@ZLinkPacket('AdmissionMessage')
-class ChannelAdmissionHandler implements ZLinkSendHandler<AdmissionMessage> {
-  async handle(message: AdmissionMessage, _context: ZLinkMessageContext): Promise<void> {
+@ZLinkPacket('AdmissionMsg')
+class ChannelAdmissionHandler implements ZLinkSendHandler<AdmissionMsg> {
+  async handle(message: AdmissionMsg, _context: ZLinkMessageContext): Promise<void> {
     record(message.operationId, 'entered');
     await awaitGate();
     record(message.operationId, 'completed');
@@ -135,10 +139,10 @@ function zlinkOptions(options: RoleOptions) {
   const mesh = builder.addRouteMesh(meshName)
     .listen(requireValue(options.meshEndpoint, 'meshEndpoint'))
     .routingId(options.rid)
-    .addSendHandler('AdmissionMessage', RouteAdmissionHandler);
+    .addSendHandler('AdmissionMsg', RouteAdmissionHandler);
   mesh.channel(channelName).server()
     .setWeight(options.role === 'target' ? 100 : 0)
-    .addSendHandler('AdmissionMessage', ChannelAdmissionHandler);
+    .addSendHandler('AdmissionMsg', ChannelAdmissionHandler);
   if (options.peerEndpoint !== undefined && options.peerRid !== undefined) {
     mesh.peerConnections().connect(options.peerRid, options.peerEndpoint);
   }
@@ -183,21 +187,21 @@ async function handleRequest(
     return { status: 200, body: { stopping: true } };
   }
 
-  const submit = body as SubmitRequest;
+  const submit = body as SubmitReq;
   if (request.method === 'POST' && url.pathname === '/submit/node') {
     await route
-      .sendToNode(meshName, requireValue(submit.targetRid, 'targetRid'), new AdmissionMessage(submit.operationId))
+      .sendToNode(meshName, requireValue(submit.targetRid, 'targetRid'), new AdmissionMsg(submit.operationId))
       .submit();
     return { status: 200, body: terminal(submit.operationId, 'Submitted') };
   }
   if (request.method === 'POST' && url.pathname === '/submit/channel') {
     await route
-      .sendToChannel(channelName, new AdmissionMessage(submit.operationId))
+      .sendToChannel(channelName, new AdmissionMsg(submit.operationId))
       .submit();
     return { status: 200, body: terminal(submit.operationId, 'Submitted') };
   }
   if (request.method === 'POST' && url.pathname === '/submit/fanout') {
-    await fanout.publish(fanoutName, new AdmissionMessage(submit.operationId)).submit();
+    await fanout.publish(fanoutName, new AdmissionEvent(submit.operationId)).submit();
     return { status: 200, body: terminal(submit.operationId, 'Submitted') };
   }
   return { status: 404, body: { error: 'not found' } };

@@ -4,7 +4,6 @@ import {
   type ActorRef,
   type RoutingId
 } from '../../contracts';
-import type { Message } from '../../contracts/Common/Message';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import type { ZLinkBackendReceived as BackendReceived } from '../backend/runtime-values';
 import type {
@@ -27,15 +26,10 @@ import {
   isReplyableRequestSeq,
   submitSpotRouteBridgeReply
 } from './spot-route-replies';
+import type { ZLinkActorPacketDelivery } from './spot-actor-packet-dispatch';
 
 interface ZLinkSpotActorPacketRelayDispatchOptions {
-  readonly actorPacketHandler?: (
-    actorId: string,
-    parts: readonly Message[],
-    returnResponse?: boolean,
-    remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
-    fallbackActorRef?: ActorRef
-  ) => Promise<unknown>;
+  readonly actorPacketHandler?: (delivery: ZLinkActorPacketDelivery) => Promise<unknown>;
   readonly actorPacketTargetProvider?: (actorId: string) => ZLinkRemoteActorPacketTarget | undefined;
   readonly bindRemoteSession?: (
     actor: ActorRef,
@@ -118,13 +112,13 @@ export class ZLinkSpotActorPacketRelayDispatch {
           `Actor request '${actorPacketRelay.actorId}' expired before target handler admission.`
         );
       }
-      const response = await this.options.actorPacketHandler(
-        actorPacketRelay.actorId,
-        [header, payload],
-        true,
+      const response = await this.options.actorPacketHandler({
+        actorId: actorPacketRelay.actorId,
+        parts: [header, payload],
+        returnResponse: true,
         remoteBoundSessionTarget,
-        actorPacketRelay.actorRef
-      );
+        fallbackActorRef: actorPacketRelay.actorRef
+      });
       const actorPacketTarget = this.actorPacketTarget(actorPacketRelay.actorId);
       if (isReplyableRequestSeq(received.requestSeq)) {
         submitSpotRouteBridgeReply(received, actorPacketRelay.envelope, { ok: true, response, actorPacketTarget });

@@ -279,6 +279,22 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
                 + codec + "'");
     }
 
+    public static String contentTypeForReceivedStreamCodec(
+        ZLinkMessageSerializer serializer,
+        ZLinkStreamCodec codec) {
+        Objects.requireNonNull(serializer, "serializer");
+        Objects.requireNonNull(codec, "codec");
+        if (serializer instanceof CompositeSerializer composite) {
+            return composite.registration.contentTypeForReceivedStreamCodec(codec);
+        }
+        if (codec == ZLinkStreamCodec.JSON) {
+            return DEFAULT_JSON_CONTENT_TYPE;
+        }
+        throw protocolError(
+            "No payload content type is registered for received STREAM codec '"
+                + codec + "'");
+    }
+
     public static ZLinkStreamCodec streamCodecForDeclaredType(
         ZLinkMessageSerializer serializer,
         Class<?> declaredType,

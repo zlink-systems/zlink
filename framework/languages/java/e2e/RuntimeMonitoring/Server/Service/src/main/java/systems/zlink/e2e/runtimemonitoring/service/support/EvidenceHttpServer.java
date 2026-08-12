@@ -99,11 +99,11 @@ public final class EvidenceHttpServer implements SmartLifecycle {
             server.createContext("/runtime/placement/actor/destroy", this::destroyPlacementActor);
             server.createContext("/runtime/weight/zero", exchange -> {
                 setMeshWeight(0);
-                write(exchange, json.writeValueAsString(new AdminResult("weight-updated", 0)));
+                write(exchange, json.writeValueAsString(new AdminRes("weight-updated", 0)));
             });
             server.createContext("/runtime/weight/restore", exchange -> {
                 setMeshWeight(100);
-                write(exchange, json.writeValueAsString(new AdminResult("weight-updated", 100)));
+                write(exchange, json.writeValueAsString(new AdminRes("weight-updated", 100)));
             });
             server.createContext("/runtime/request", exchange -> {
                 try {
@@ -128,14 +128,14 @@ public final class EvidenceHttpServer implements SmartLifecycle {
             });
             server.createContext("/admin/drain", exchange -> {
                 setWeight(0, "drain");
-                write(exchange, json.writeValueAsString(new AdminResult("drained", 0)));
+                write(exchange, json.writeValueAsString(new AdminRes("drained", 0)));
             });
             server.createContext("/admin/restore", exchange -> {
                 setWeight(100, "restore");
-                write(exchange, json.writeValueAsString(new AdminResult("restored", 100)));
+                write(exchange, json.writeValueAsString(new AdminRes("restored", 100)));
             });
             server.createContext("/admin/crash", exchange -> {
-                write(exchange, json.writeValueAsString(new AdminResult("crashing", -1)));
+                write(exchange, json.writeValueAsString(new AdminRes("crashing", -1)));
                 Thread crash = new Thread(
                     () -> Runtime.getRuntime().halt(137),
                     "runtime-monitoring-crash");
@@ -159,11 +159,12 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                     manager.getOrCreate(
                             "monitoring-subject-trigger",
                             Contracts.TRIGGERED_MONITORING_SPOT_TYPE)
-                        .request(ZLinkMessage.of("monitoring-subject-trigger"))
+                        .request(ZLinkMessage.of(
+                            new Contracts.SpotCreateReq("monitoring-subject-trigger")))
                         .submit()
                         .toCompletableFuture()
                         .join();
-                    write(exchange, json.writeValueAsString(new AdminResult("subject-created", -1)));
+                    write(exchange, json.writeValueAsString(new AdminRes("subject-created", -1)));
                 } catch (RuntimeException error) {
                     Throwable cause = error.getCause() == null ? error : error.getCause();
                     write(exchange, 500, cause.getClass().getName() + ": " + cause.getMessage());
@@ -181,14 +182,14 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                         Contracts.SPOT_MESH,
                         Contracts.SPOT_CHANNEL,
                         topic,
-                        new Contracts.SpotSubjectProbe(topic))
+                        new Contracts.SpotSubjectProbeEvent(topic))
                     .submit()
                     .toCompletableFuture()
                     .join();
-                write(exchange, json.writeValueAsString(new AdminResult("published", -1)));
+                write(exchange, json.writeValueAsString(new AdminRes("published", -1)));
             });
             server.createContext("/shutdown", exchange -> {
-                write(exchange, json.writeValueAsString(new AdminResult("stopping", -1)));
+                write(exchange, json.writeValueAsString(new AdminRes("stopping", -1)));
                 Thread shutdown = new Thread(applicationContext::close, "runtime-monitoring-shutdown");
                 shutdown.setDaemon(false);
                 shutdown.start();
@@ -260,7 +261,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 .submit()
                 .toCompletableFuture()
                 .join();
-            write(exchange, json.writeValueAsString(new PlacementResult(
+            write(exchange, json.writeValueAsString(new PlacementRes(
                 true,
                 id,
                 "spot",
@@ -279,12 +280,12 @@ public final class EvidenceHttpServer implements SmartLifecycle {
             String id = query(exchange, "id");
             var found = spots.getObject().find(id).toCompletableFuture().join();
             if (found.isEmpty()) {
-                write(exchange, json.writeValueAsString(new PlacementResult(
+                write(exchange, json.writeValueAsString(new PlacementRes(
                     false, id, "spot", "NOT_FOUND", "", 0, "NOT_FOUND")));
                 return;
             }
             boolean closed = spots.getObject().close(found.get()).toCompletableFuture().join();
-            write(exchange, json.writeValueAsString(new PlacementResult(
+            write(exchange, json.writeValueAsString(new PlacementRes(
                 closed,
                 id,
                 "spot",
@@ -312,7 +313,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 .toCompletableFuture()
                 .join();
             if (result instanceof ZLinkActorCreateResult.Existing existing) {
-                write(exchange, json.writeValueAsString(new PlacementResult(
+                write(exchange, json.writeValueAsString(new PlacementRes(
                     true,
                     id,
                     "actor",
@@ -321,7 +322,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                     existing.actor().objectGeneration(),
                     "")));
             } else if (result instanceof ZLinkActorCreateResult.Created created) {
-                write(exchange, json.writeValueAsString(new PlacementResult(
+                write(exchange, json.writeValueAsString(new PlacementRes(
                     true,
                     id,
                     "actor",
@@ -330,7 +331,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                     created.actor().objectGeneration(),
                     "")));
             } else {
-                write(exchange, 409, json.writeValueAsString(new PlacementResult(
+                write(exchange, 409, json.writeValueAsString(new PlacementRes(
                     false, id, "actor", "REJECTED", "", 0, "REJECTED")));
             }
         } catch (Throwable error) {
@@ -342,13 +343,13 @@ public final class EvidenceHttpServer implements SmartLifecycle {
         throws IOException {
         try {
             String id = query(exchange, "id");
-            Contracts.PlacementActorDestroyResponse response = runtimeQuery.getObject()
+            Contracts.PlacementActorDestroyRes response = runtimeQuery.getObject()
                 .actorClient()
                 .requestToActor(
                     id,
-                    new Contracts.PlacementActorDestroyRequest(id))
+                    new Contracts.PlacementActorDestroyReq(id))
                 .timeout(Duration.ofSeconds(5))
-                .submit(Contracts.PlacementActorDestroyResponse.class)
+                .submit(Contracts.PlacementActorDestroyRes.class)
                 .toCompletableFuture()
                 .join();
             write(exchange, json.writeValueAsString(response));
@@ -380,7 +381,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
         return cause.getClass().getName() + ": " + cause.getMessage();
     }
 
-    private record PlacementResult(
+    private record PlacementRes(
         boolean accepted,
         String objectId,
         String objectKind,
@@ -390,7 +391,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
         String errorKind) {
     }
 
-    private record AdminResult(String status, int weight) {
+    private record AdminRes(String status, int weight) {
     }
 
     private static void write(

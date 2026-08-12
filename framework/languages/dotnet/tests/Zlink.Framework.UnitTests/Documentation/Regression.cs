@@ -1020,10 +1020,9 @@ public sealed class RegressionTests
             }
         }
 
-        // The read-only regression matrix still names the two pre-TD Config 8
-        // proofs. Resolve those historical proof labels to their canonical TD
-        // fixtures until that document is revised in its own documentation task.
-        if (scenarios.Contains("TD-A1")) scenarios.Add("ATD-A1");
+        // The read-only regression matrix still names a pre-TD Config 8 proof.
+        // Resolve that historical proof label to its canonical TD fixture until
+        // the document is revised in its own documentation task.
         if (scenarios.Contains("TD-E1")) scenarios.Add("ATD-B3");
 
         return scenarios;

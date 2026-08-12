@@ -48,6 +48,10 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
     // bind and channels are applied (spec 21 §3). Idempotent.
     void Start();
 
+    // Activates pull dispatch only after the framework has installed every
+    // node, spot, Actor, and service-operation ingress owner. Idempotent.
+    void ActivateIngress() { }
+
     void ApplyRoleConfig(
         IZLinkSpotPublisherConfig? publisher,
         IZLinkSpotSubscriberConfig? subscriber);

@@ -40,10 +40,10 @@ public final class Contracts {
     public record ChannelProbeMsg(String id) {
     }
 
-    public record FanoutProbe(String id) {
+    public record FanoutProbeEvent(String id) {
     }
 
-    public record StreamProbe(String id) {
+    public record StreamProbeMsg(String id) {
     }
 
     public record ListenerStatus(

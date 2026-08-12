@@ -80,7 +80,6 @@ import {
   DefaultZLinkChannelRuntimeOptions,
   ZLinkDispatchErrorReporter,
   ZLinkChannelRuntimeManager,
-  ZLinkRuntimeChannelTransport,
   ZLinkRuntimeRouteTransport,
   type ZLinkDispatchErrorSink
 } from '../channels';
@@ -134,7 +133,10 @@ import type {
   DefaultZLinkActorManager,
   ZLinkActorManagerOptions
 } from '../actors';
-import { ownerFence } from '../actors/actor-message-follow-context';
+import {
+  messageFollowOwnerNodeRid,
+  ownerFence
+} from '../actors/actor-message-follow-context';
 import {
   DefaultZLinkActorClient,
   ZLinkActorHandoffCoordinator,
@@ -169,7 +171,11 @@ import { ZLinkEntryActorRuntimeService } from './entry-actor-runtime';
 import { ZLinkLocationRuntimeOwner } from './location-runtime-owner';
 import { MeshRouterResolver } from './mesh-router-resolver';
 import { ZLinkBoundSessionRelay } from './bound-session-relay';
-import { routingIdsEqual } from '../routing-id';
+import {
+  decodeRoutingId,
+  encodeRoutingIdStorageHex,
+  routingIdsEqual
+} from '../routing-id';
 import { encodeAuthorityKey } from '../locations/authority-key-codec';
 import {
   decodeServiceReadySpotAuthority,
@@ -298,7 +304,7 @@ export class ZLinkFrameworkRuntimeHost implements
   };
   private cachedDiagnosticsContext?: ZLinkDiagnosticsContext;
   private readonly preStartErrorSink = new ZLinkRuntimeTaskErrorSink();
-  readonly channelTransport = new ZLinkRuntimeChannelTransport(() => this.channelRuntime);
+  readonly channelTransport = () => this.channelRuntime;
   readonly channelRuntimeOptions = new DefaultZLinkChannelRuntimeOptions(() => this.channelRuntime);
   readonly routeMeshRuntimeOptions =
     new DefaultZLinkRouteMeshRuntimeOptions(() => this.spotNodeRuntime);
@@ -417,7 +423,11 @@ export class ZLinkFrameworkRuntimeHost implements
           ? undefined
           : {
               authorityOwnerGeneration: route.authorityOwnerGeneration,
-              ownerLeaseGeneration: route.ownerLeaseGeneration
+              ownerLeaseGeneration: route.ownerLeaseGeneration,
+              ownerId: route.ownerId,
+              ownerNodeGeneration: route.ownerNodeGeneration,
+              authorityStoreVersion: route.authorityStoreVersion,
+              actorType: route.actorType
             };
       },
       confirmRemoteActorSessionBinding: (actor, sessionRid, signal, options) => {
@@ -441,17 +451,51 @@ export class ZLinkFrameworkRuntimeHost implements
       routedTransport: this.routeTransport,
       messageFollowDurationMs: options.registration.locations.options.messageFollowDurationMs,
       requestTimeoutMs: options.registration.requestTimeoutMs,
-      requestSource: () => {
+      requestSource: (actorId) => {
         const owner = this.locationOwner.currentRuntime?.currentOwnerToken;
-        const node = this.spotNodeRuntime?.primaryMeshNode?.status();
-        return owner === undefined || node === undefined
+        const state = this.actorManager?.getState(actorId);
+        const current = state?.nativeActorRef;
+        const meshName = state?.meshName;
+        const node = meshName === undefined
           ? undefined
-          : {
-              ownerId: owner.ownerId,
-              ownerLeaseGeneration: owner.leaseGeneration,
-              nodeRid: String(node.routingId),
-              nodeGeneration: node.lifecycleGeneration
-            };
+          : this.spotNodeRuntime?.meshNode(meshName)?.status();
+        if (owner === undefined
+          || state === undefined
+          || current === undefined
+          || meshName === undefined
+          || node === undefined
+          || state.locationGeneration === undefined
+          || state.ownerLeaseGeneration === undefined
+          || state.ownerLeaseGeneration !== owner.leaseGeneration
+          || !routingIdsEqual(node.routingId, current.nodeRid)) {
+          throw new ZLinkConfigurationException(
+            `Actor '${actorId}' handoff requires a committed source owner fence.`
+          );
+        }
+        return {
+          meshName,
+          objectGeneration: current.generation,
+          ownerId: owner.ownerId,
+          ownerLeaseGeneration: state.ownerLeaseGeneration,
+          nodeRid: String(current.nodeRid),
+          nodeRidHex: encodeRoutingIdStorageHex(current.nodeRid),
+          nodeGeneration: node.lifecycleGeneration,
+          authorityOwnerGeneration: state.locationGeneration
+        };
+      },
+      validateReplySource: (source) => {
+        const owner = this.locationOwner.currentRuntime?.currentOwnerToken;
+        const node = this.spotNodeRuntime?.meshNode(source.meshName)?.status();
+        if (owner === undefined || node === undefined
+          || owner.ownerId !== source.ownerId
+          || owner.leaseGeneration !== source.ownerLeaseGeneration
+          || node.lifecycleGeneration !== source.nodeGeneration) {
+          return false;
+        }
+        return routingIdsEqual(
+          node.routingId,
+          decodeRoutingId(source.nodeRid, source.nodeRidHex)
+        );
       },
       onMarker: (marker, actorId, index, context) => {
         if (marker === 'message_follow_relay' && context !== undefined) {
@@ -487,17 +531,17 @@ export class ZLinkFrameworkRuntimeHost implements
             );
           }
           const sent = this.spotNodeRuntime?.sendMessageFollowNotification(
-            context.sourceOwner.nodeRid,
-            String(origin.sourceNodeRid),
+            messageFollowOwnerNodeRid(context.sourceOwner),
+            origin.sourceNodeRid,
             {
               source: {
                 kind: 'actor',
                 actor: {
                   actorId,
                   generation: objectGeneration,
-                  nodeRid: context.sourceOwner.nodeRid
+                  nodeRid: messageFollowOwnerNodeRid(context.sourceOwner)
                 },
-                targetNodeRid: context.sourceOwner.nodeRid,
+                targetNodeRid: messageFollowOwnerNodeRid(context.sourceOwner),
                 targetNodeGeneration: BigInt(context.sourceOwner.nodeGeneration),
                 authorityOwnerGeneration: BigInt(
                   context.sourceOwner.authorityOwnerGeneration
@@ -509,9 +553,9 @@ export class ZLinkFrameworkRuntimeHost implements
                 actor: {
                   actorId,
                   generation: objectGeneration,
-                  nodeRid: context.targetOwner.nodeRid
+                  nodeRid: messageFollowOwnerNodeRid(context.targetOwner)
                 },
-                targetNodeRid: context.targetOwner.nodeRid,
+                targetNodeRid: messageFollowOwnerNodeRid(context.targetOwner),
                 targetNodeGeneration: BigInt(context.targetOwner.nodeGeneration),
                 authorityOwnerGeneration: BigInt(
                   context.targetOwner.authorityOwnerGeneration
@@ -562,16 +606,20 @@ export class ZLinkFrameworkRuntimeHost implements
         const state = this.actorManager?.getState(actorId);
         const current = state?.nativeActorRef;
         const owner = this.locationOwner.currentRuntime?.currentOwnerToken;
-        const node = this.spotNodeRuntime?.primaryMeshNode?.status();
+        const node = state?.meshName === undefined
+          ? undefined
+          : this.spotNodeRuntime?.meshNode(state.meshName)?.status();
         if (state === undefined || current === undefined || owner === undefined
             || node === undefined || state.locationGeneration === undefined
-            || state.ownerLeaseGeneration === undefined) {
+            || state.ownerLeaseGeneration === undefined
+            || !routingIdsEqual(node.routingId, current.nodeRid)) {
           return undefined;
         }
         return ownerFence({
           ownerId: owner.ownerId,
           ownerLeaseGeneration: state.ownerLeaseGeneration,
           nodeRid: String(current.nodeRid),
+          nodeRidHex: encodeRoutingIdStorageHex(current.nodeRid),
           nodeGeneration: node.lifecycleGeneration,
           authorityOwnerGeneration: state.locationGeneration
         });
@@ -685,11 +733,18 @@ export class ZLinkFrameworkRuntimeHost implements
       boundSessionRelocation: {
         receiveSeal: value =>
           this.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(value),
+        routeProof: value =>
+          this.boundSessionRelay.boundSessions.serviceWireSessionRelocationRouteProof(value),
         receiveRoute: (value, targetOwnerLeaseGeneration) =>
           this.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(
             value,
             targetOwnerLeaseGeneration
-          )
+          ),
+        receiveRoutedReceipt: value =>
+          this.boundSessionRelay.boundSessions
+            .receiveServiceWireSessionRelocationRoutedReceipt(value),
+        clear: () =>
+          this.boundSessionRelay.boundSessions.clearServiceWireSessionRelocations()
       },
       trackInstanceSpot: (input) =>
         this.locationOwner.currentLifecycle?.trackInstanceSpot(input),
@@ -2058,7 +2113,7 @@ export class ZLinkFrameworkRuntimeHost implements
     }
   }
 
-  createActorManagerOptions(spotRouteResolver?: ZLinkSpotRouteResolver): Pick<
+  createActorManagerOptions(): Pick<
     ZLinkActorManagerOptions,
     | 'joinCoordinator'
     | 'actorMeshNameProvider'
@@ -2078,7 +2133,7 @@ export class ZLinkFrameworkRuntimeHost implements
   > {
     this.ensureLocationRuntime();
     return {
-      ...this.actorRuntimeOptionsFactory().createActorManagerOptions(spotRouteResolver),
+      ...this.actorRuntimeOptionsFactory().createActorManagerOptions(),
       placementCreate: async (actorId, actorType, createOnly, call, signal) => {
         const placement = this.actorPlacement;
         if (placement === undefined) {
@@ -2836,7 +2891,7 @@ export class ZLinkFrameworkRuntimeHost implements
           const terminal = decodeRemoteActorSourceLeaveTerminal(record.parts[0]!.data());
           if (terminal !== undefined) {
             if (
-              this.spotManager?.completeFormalSourceLeaveTerminal(
+              await this.spotManager?.completeFormalSourceLeaveTerminal(
                 terminal.actorId,
                 terminal.transferId,
                 terminal.succeeded

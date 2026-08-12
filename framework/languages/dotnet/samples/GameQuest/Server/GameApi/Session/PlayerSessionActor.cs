@@ -65,38 +65,45 @@ internal sealed class GameQuestEntrySpot(
     }
 }
 
-[ZLinkSpotActorSendHandler(nameof(QuestProgressNotify))]
-internal sealed class QuestProgressNotifyActorHandler
+[ZLinkSpotActorSendHandler(nameof(QuestProgressMsg))]
+internal sealed class QuestProgressMsgActorHandler
     : IZLinkEntrySpotActorSendHandler<
         GameQuestEntrySpot,
         PlayerSessionActor,
-        QuestProgressNotify>
+        QuestProgressMsg>
 {
     public async ValueTask HandleAsync(
         GameQuestEntrySpot entrySpot,
         PlayerSessionActor actor,
         IZLinkMessageContext context,
-        QuestProgressNotify request,
+        QuestProgressMsg message,
         CancellationToken cancellationToken)
     {
-        await actor.Context.BoundSession.Send(request).Async(cancellationToken);
+        await actor.Context.BoundSession
+            .Send(new QuestProgressNotify(message.PlayerId, message.Progress))
+            .Async(cancellationToken);
     }
 }
 
-[ZLinkSpotActorSendHandler(nameof(QuestCompletedNotify))]
-internal sealed class QuestCompletedNotifyActorHandler
+[ZLinkSpotActorSendHandler(nameof(QuestCompletedMsg))]
+internal sealed class QuestCompletedMsgActorHandler
     : IZLinkEntrySpotActorSendHandler<
         GameQuestEntrySpot,
         PlayerSessionActor,
-        QuestCompletedNotify>
+        QuestCompletedMsg>
 {
     public async ValueTask HandleAsync(
         GameQuestEntrySpot entrySpot,
         PlayerSessionActor actor,
         IZLinkMessageContext context,
-        QuestCompletedNotify request,
+        QuestCompletedMsg message,
         CancellationToken cancellationToken)
     {
-        await actor.Context.BoundSession.Send(request).Async(cancellationToken);
+        await actor.Context.BoundSession
+            .Send(new QuestCompletedNotify(
+                message.PlayerId,
+                message.Progress,
+                message.RewardGranted))
+            .Async(cancellationToken);
     }
 }

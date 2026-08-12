@@ -8,6 +8,7 @@ type TicTacToeSampleConfig = {
   playIndex: number;
   apiHttpEndpoint: string;
   apiEndpoints: string[];
+  apiSpotEndpoint: string;
   apiHttpEndpoints: string[];
   playEndpoints: string[];
   playSpotEndpoint: string;

@@ -17,12 +17,12 @@ namespace
 namespace fw = zlink::framework;
 namespace rm = zlink::framework::e2e::registry_messaging;
 
-struct probe_request_t
+struct probe_req_t
 {
     std::string id;
 };
 
-struct probe_response_t
+struct probe_res_t
 {
     std::string id;
     std::string owner;
@@ -34,17 +34,17 @@ struct mesh_name_service_t
     std::string value;
 };
 
-inline void to_json (nlohmann::json &json, const probe_request_t &value)
+inline void to_json (nlohmann::json &json, const probe_req_t &value)
 {
     json = nlohmann::json{{"id", value.id}};
 }
 
-inline void from_json (const nlohmann::json &json, probe_request_t &value)
+inline void from_json (const nlohmann::json &json, probe_req_t &value)
 {
     value.id = json.at ("id").get<std::string> ();
 }
 
-inline void to_json (nlohmann::json &json, const probe_response_t &value)
+inline void to_json (nlohmann::json &json, const probe_res_t &value)
 {
     json = nlohmann::json{{"id", value.id}, {"owner", value.owner}, {"kind", value.kind}};
 }
@@ -84,9 +84,9 @@ class global_entry_spot_t final : public fw::entry_spot_t<global_actor_t>
 
     fw::task_t<fw::message_t> probe (global_actor_t &actor,
                                      fw::message_context_t &,
-                                     const probe_request_t &request) const
+                                     const probe_req_t &request) const
     {
-        co_return fw::message_t::from (probe_response_t{
+        co_return fw::message_t::from (probe_res_t{
           request.id,
           std::string (actor.context ().actor_ref ().node_rid ().value ()),
           "actor"});
@@ -117,9 +117,9 @@ class global_user_spot_t final : public fw::spot_t<global_actor_t>
         _context.handlers ().add_handler<&global_user_spot_t::probe> ();
     }
 
-    fw::task_t<fw::message_t> probe (fw::message_context_t &, const probe_request_t &request) const
+    fw::task_t<fw::message_t> probe (fw::message_context_t &, const probe_req_t &request) const
     {
-        co_return fw::message_t::from (probe_response_t{
+        co_return fw::message_t::from (probe_res_t{
           request.id,
           std::string (_context.node_rid ().value ()),
           "spot"});
@@ -190,7 +190,7 @@ class create_actor_handler_t
             const auto result = co_await _actors
               .get_or_create (fw::actor_id_t (id), type)
               .in_mesh (_mesh.value)
-              .creation_request (fw::message_t::from (probe_request_t{id}))
+              .creation_request (fw::message_t::from (probe_req_t{id}))
               .submit ();
             const auto ref = std::visit ([] (const auto &value) -> fw::actor_ref_t {
                 using result_t = std::decay_t<decltype (value)>;
@@ -265,12 +265,12 @@ class probe_handler_t
         const auto id = body.at ("id").get<std::string> ();
         try {
             if (kind == "actor") {
-                auto result = co_await _actors.request (fw::actor_id_t (id), probe_request_t{id})
-                                 .submit<probe_response_t> ();
+                auto result = co_await _actors.request (fw::actor_id_t (id), probe_req_t{id})
+                                 .submit<probe_res_t> ();
                 co_return fw::http_response_t{.body = nlohmann::json (result).dump ()};
             }
             auto result = co_await _routes.request_to_spot (
-              fw::spot_id_t (id), probe_request_t{id}).submit<probe_response_t> ();
+              fw::spot_id_t (id), probe_req_t{id}).submit<probe_res_t> ();
             co_return fw::http_response_t{.body = nlohmann::json (result).dump ()};
         }
         catch (const fw::framework_exception_t &error) {

@@ -50,9 +50,9 @@ class A5HttpServer(
         try {
             val reply = routes.requestToChannel(
                 Contracts.CHANNEL,
-                Contracts.ProbeRequest(query(exchange, "value"), query(exchange, "fail") == "true"),
+                Contracts.ProbeReq(query(exchange, "value"), query(exchange, "fail") == "true"),
             ).timeout(Duration.ofSeconds(5))
-                .submit(Contracts.ProbeReply::class.java)
+                .submit(Contracts.ProbeRes::class.java)
                 .toCompletableFuture()
                 .join()
             write(exchange, 200, json.writeValueAsString(reply))

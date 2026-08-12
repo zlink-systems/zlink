@@ -153,7 +153,7 @@ public final class Program {
 
     public static final class BindActorHandler implements ZLinkTypedSessionPacketHandler<
         ZLinkSessionContext,
-        Contracts.BindActorRequest> {
+        Contracts.BindActorReq> {
         private final EvidenceStore evidence;
         private final SessionOptions options;
 
@@ -163,15 +163,15 @@ public final class Program {
         }
 
         @Override
-        public Class<Contracts.BindActorRequest> messageType() {
-            return Contracts.BindActorRequest.class;
+        public Class<Contracts.BindActorReq> messageType() {
+            return Contracts.BindActorReq.class;
         }
 
         @Override
         public CompletionStage<Void> handle(
             ZLinkSessionContext context,
             ZLinkSessionDispatchContext dispatch,
-            Contracts.BindActorRequest request) {
+            Contracts.BindActorReq request) {
             Contracts.ActorRefWire wire = request.actorRef();
             ActorRef actor = new ActorRef(
                 wire.actorId(),
@@ -182,7 +182,7 @@ public final class Program {
                 evidence.append(new Contracts.ActorEvidence(
                     "bind", actor.actorId(), "actor-bound",
                     options.sessionRid() + ":" + context.sessionId()));
-                context.client().reply(new Contracts.BindActorReply(
+                context.client().reply(new Contracts.BindActorRes(
                     actor.actorId(), actor.nodeRid().toString(), actor.objectGeneration())).submit();
             });
         }

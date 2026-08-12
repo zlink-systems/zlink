@@ -1,9 +1,7 @@
 package systems.zlink.framework.runtime.internal.service;
 
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -12,7 +10,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.RejectedExecutionException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 
@@ -22,8 +19,14 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
     private final ScheduledExecutorService scheduler;
     private final int maxPendingOperations;
+    private final ZLinkServiceCompletionDispatcher completions =
+        ZLinkServiceCompletionDispatcher.INSTANCE;
     private final Object gate = new Object();
     private final Map<UUID, Entry<?>> entries = new HashMap<>();
+    private final IllegalStateException closeFailure =
+        new IllegalStateException("service runtime is closed");
+    private Entry<?> activeHead;
+    private Entry<?> activeTail;
     private boolean closed;
 
     public ZLinkServiceOperationRegistry(ScheduledExecutorService scheduler) {
@@ -53,37 +56,43 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             timeoutNanos = Long.MAX_VALUE;
         }
         UUID id;
-        Entry<T> entry = new Entry<>();
+        Entry<T> entry;
         synchronized (gate) {
             if (closed) {
                 throw new IllegalStateException("operation registry is closed");
             }
             if (entries.size() >= maxPendingOperations) {
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
-                    "service operation capacity is exhausted");
+                throw capacityExceeded();
+            }
+            entry = new Entry<>();
+            if (!completions.tryReserve(entry)) {
+                throw capacityExceeded();
             }
             do {
                 id = UUID.randomUUID();
             } while (id.getMostSignificantBits() == 0
                 && id.getLeastSignificantBits() == 0
                 || entries.containsKey(id));
+            entry.id = id;
+            entry.completion.cancellation(() -> cancel(entry.id, entry));
             entries.put(id, entry);
+            linkActive(entry);
             try {
                 UUID operationId = id;
                 entry.deadline = scheduler.schedule(
                     () -> completeExceptionally(
                         operationId,
-                        new TimeoutException("service operation timed out")),
+                        entry.timeoutFailure),
                     timeoutNanos,
                     TimeUnit.NANOSECONDS);
             } catch (RuntimeException schedulingFailure) {
                 entries.remove(id, entry);
+                unlinkActive(entry);
+                entry.completion.clearCancellation();
+                completions.releaseWithoutDispatch(entry);
                 throw schedulingFailure;
             }
         }
-        UUID operationId = id;
-        entry.completion.cancellation(() -> cancel(operationId, entry));
         return new Operation<>(id, entry.completion);
     }
 
@@ -94,18 +103,20 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             return false;
         }
         cancelDeadline(entry);
-        dispatchCompletion(() -> entry.completion.complete(value));
+        entry.completeWithValue(value);
+        completions.post(entry);
         return true;
     }
 
     public boolean completeExceptionally(UUID id, Throwable failure) {
+        Throwable terminal = Objects.requireNonNull(failure, "failure");
         Entry<?> entry = take(Objects.requireNonNull(id, "id"));
         if (entry == null) {
             return false;
         }
         cancelDeadline(entry);
-        Throwable terminal = Objects.requireNonNull(failure, "failure");
-        dispatchCompletion(() -> entry.completion.completeExceptionally(terminal));
+        entry.completeWithFailure(terminal);
+        completions.post(entry);
         return true;
     }
 
@@ -119,6 +130,8 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             return false;
         }
         cancelDeadline(entry);
+        entry.completion.clearCancellation();
+        completions.releaseWithoutDispatch(entry);
         return true;
     }
 
@@ -130,25 +143,43 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
     @Override
     public void close() {
-        List<Entry<?>> detached;
+        Entry<?> detachedHead;
+        Entry<?> detachedTail;
         synchronized (gate) {
             if (closed) {
                 return;
             }
             closed = true;
-            detached = new ArrayList<>(entries.values());
+            detachedHead = activeHead;
+            detachedTail = activeTail;
+            Entry<?> current = detachedHead;
+            while (current != null) {
+                Entry<?> next = current.activeNext;
+                current.activePrevious = null;
+                current.activeNext = null;
+                current.dispatchNext(next);
+                current.completeWithFailure(closeFailure);
+                current = next;
+            }
             entries.clear();
+            activeHead = null;
+            activeTail = null;
         }
-        IllegalStateException failure = new IllegalStateException("service runtime is closed");
-        detached.forEach(entry -> {
-            cancelDeadline(entry);
-            dispatchCompletion(() -> entry.completion.completeExceptionally(failure));
-        });
+        Entry<?> current = detachedHead;
+        while (current != null) {
+            cancelDeadline(current);
+            current = current.dispatchNext();
+        }
+        completions.postChain(detachedHead, detachedTail);
     }
 
     private Entry<?> take(UUID id) {
         synchronized (gate) {
-            return entries.remove(id);
+            Entry<?> entry = entries.remove(id);
+            if (entry != null) {
+                unlinkActive(entry);
+            }
+            return entry;
         }
     }
 
@@ -158,24 +189,55 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                 return false;
             }
             entries.remove(id);
+            unlinkActive(expected);
         }
         cancelDeadline(expected);
-        dispatchCompletion(expected.completion::completeCancellation);
+        expected.completeWithCancellation();
+        completions.post(expected);
         return true;
     }
 
-    private void dispatchCompletion(Runnable completion) {
-        try {
-            scheduler.execute(completion);
-        } catch (RejectedExecutionException schedulerClosed) {
-            CompletableFuture.runAsync(completion);
+    private void linkActive(Entry<?> entry) {
+        entry.activePrevious = activeTail;
+        if (activeTail == null) {
+            activeHead = entry;
+        } else {
+            activeTail.activeNext = entry;
         }
+        activeTail = entry;
+    }
+
+    private void unlinkActive(Entry<?> entry) {
+        Entry<?> previous = entry.activePrevious;
+        Entry<?> next = entry.activeNext;
+        if (previous == null) {
+            activeHead = next;
+        } else {
+            previous.activeNext = next;
+        }
+        if (next == null) {
+            activeTail = previous;
+        } else {
+            next.activePrevious = previous;
+        }
+        entry.activePrevious = null;
+        entry.activeNext = null;
+    }
+
+    private static ZLinkFrameworkException capacityExceeded() {
+        return new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
+            "service operation capacity is exhausted");
     }
 
     private static void cancelDeadline(Entry<?> entry) {
         ScheduledFuture<?> deadline = entry.deadline;
         if (deadline != null) {
-            deadline.cancel(false);
+            try {
+                deadline.cancel(false);
+            } catch (RuntimeException ignored) {
+                // A timer implementation cannot revoke an accepted terminal.
+            }
         }
     }
 
@@ -186,16 +248,75 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         }
     }
 
-    private static final class Entry<T> {
+    private static final class Entry<T>
+        extends ZLinkServiceCompletionDispatcher.WorkItem {
+        private static final int VALUE = 1;
+        private static final int FAILURE = 2;
+        private static final int CANCELLATION = 3;
+
         private final OperationFuture<T> completion = new OperationFuture<>();
+        private final TimeoutException timeoutFailure =
+            new TimeoutException("service operation timed out");
+        private UUID id;
         private volatile ScheduledFuture<?> deadline;
+        private Entry<?> activePrevious;
+        private Entry<?> activeNext;
+        private int terminalKind;
+        private Object terminalValue;
+        private Throwable terminalFailure;
+
+        void completeWithValue(Object value) {
+            terminalKind = VALUE;
+            terminalValue = value;
+        }
+
+        void completeWithFailure(Throwable failure) {
+            terminalKind = FAILURE;
+            terminalFailure = failure;
+        }
+
+        void completeWithCancellation() {
+            terminalKind = CANCELLATION;
+        }
+
+        @SuppressWarnings("unchecked")
+        @Override
+        void dispatch() {
+            try {
+                switch (terminalKind) {
+                    case VALUE -> completion.complete((T) terminalValue);
+                    case FAILURE ->
+                        completion.completeExceptionally(terminalFailure);
+                    case CANCELLATION -> completion.completeCancellation();
+                    default -> throw new IllegalStateException(
+                        "completion work item has no terminal outcome");
+                }
+            } finally {
+                completion.clearCancellation();
+                terminalValue = null;
+                terminalFailure = null;
+            }
+        }
+
+        void dispatchNext(Entry<?> value) {
+            setDispatchNext(value);
+        }
+
+        Entry<?> dispatchNext() {
+            return (Entry<?>) getDispatchNext();
+        }
     }
 
     private static final class OperationFuture<T> extends CompletableFuture<T> {
-        private volatile Supplier cancellation = () -> false;
+        private static final Supplier NO_CANCELLATION = () -> false;
+        private volatile Supplier cancellation = NO_CANCELLATION;
 
         void cancellation(Supplier cancellation) {
             this.cancellation = Objects.requireNonNull(cancellation, "cancellation");
+        }
+
+        void clearCancellation() {
+            cancellation = NO_CANCELLATION;
         }
 
         @Override

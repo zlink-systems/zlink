@@ -81,11 +81,11 @@ public final class DispatchWorker {
             .thenCompose(ignored -> offer(offer.request(), courierId, attempt));
     }
 
-    public CompletionStage<Messages.ServerAssertionResponse> assertServerEvidence(
-        Messages.ServerAssertionRequest request) {
+    public CompletionStage<Messages.ServerAssertionRes> assertServerEvidence(
+        Messages.ServerAssertionReq request) {
         return channels
             .requestToChannel(SampleNames.TrackingChannel, request)
-            .submit(Messages.ServerAssertionResponse.class);
+            .submit(Messages.ServerAssertionRes.class);
     }
 
     /** The offer is a one-way send: the turn that sends it ends right there. */

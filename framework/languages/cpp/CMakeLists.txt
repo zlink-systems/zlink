@@ -180,7 +180,6 @@ add_library(zlink_framework STATIC
   framework/src/runtime/channels/route_handler_registry.cpp
   framework/src/runtime/channels/route_internal_packet_dispatcher.cpp
   framework/src/runtime/channels/route_packet_dispatcher.cpp
-  framework/src/runtime/actors/actor_route_internal_dispatcher.cpp
   framework/src/runtime/actors/actor_gateway_runtime.cpp
   framework/src/runtime/actors/actor_client.cpp
   framework/src/runtime/configuration/builders/configuration_builder.cpp
@@ -2334,7 +2333,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES)
   function(add_zlink_framework_sample_runner sample_name labels timeout_seconds)
     add_test(
       NAME sample_smoke_sample_cpp_framework_${sample_name}
-      COMMAND "${ZLINK_FRAMEWORK_CPP_DIR}/samples/${sample_name}/run_sample.sh")
+      COMMAND bash "${ZLINK_FRAMEWORK_CPP_DIR}/samples/${sample_name}/run_sample.sh")
     set_tests_properties(sample_smoke_sample_cpp_framework_${sample_name} PROPERTIES
       LABELS "${labels};framework-sample-smoke"
       RESOURCE_LOCK "zlink-cpp-sample-runtime"

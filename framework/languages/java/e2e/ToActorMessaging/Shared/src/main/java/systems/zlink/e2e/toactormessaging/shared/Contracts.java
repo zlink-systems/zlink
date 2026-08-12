@@ -9,87 +9,90 @@ public final class Contracts {
     private Contracts() {
     }
 
-    @ZLinkPacket("ActorNotify")
-    public record ActorNotify(String scenario, String actorId, String value) {
+    @ZLinkPacket("ActorMsg")
+    public record ActorMsg(String scenario, String actorId, String value) {
     }
 
-    @ZLinkPacket("ActorAsk")
-    public record ActorAsk(String scenario, String actorId, String value) {
+    @ZLinkPacket("ActorReq")
+    public record ActorReq(String scenario, String actorId, String value) {
     }
 
-    public record ActorReply(String scenario, String actorId, String value) {
+    public record ActorRes(String scenario, String actorId, String value) {
     }
 
     public record ActorEvidence(String scenario, String actorId, String kind, String value) {
     }
 
-    public record ActorCallRequest(String scenario, String actorId, String value) {
+    public record ActorCallReq(String scenario, String actorId, String value) {
+    }
+
+    public record ActorCreateReq(String reason) {
     }
 
     public record ActorRefWire(String nodeRidHex, String actorId, long generation) {
     }
 
-    public record ActorCallResponse(
+    public record ActorCallRes(
         String scenario,
         String actorId,
         String result,
         String errorKind) {
-        public static ActorCallResponse ok(String scenario, String actorId, String result) {
-            return new ActorCallResponse(scenario, actorId, result, null);
+        public static ActorCallRes ok(String scenario, String actorId, String result) {
+            return new ActorCallRes(scenario, actorId, result, null);
         }
 
-        public static ActorCallResponse failed(String scenario, String actorId, String kind) {
-            return new ActorCallResponse(scenario, actorId, "failed", kind);
+        public static ActorCallRes failed(String scenario, String actorId, String kind) {
+            return new ActorCallRes(scenario, actorId, "failed", kind);
         }
     }
 
-    public record RouteStatus(boolean ready, String targetRid) {
+    public record RouteStatusRes(boolean ready, String targetRid) {
     }
 
-    public record BindActorRequest(ActorRefWire actorRef) {
+    public record BindActorReq(ActorRefWire actorRef) {
     }
 
-    public record BindActorReply(String actorId, String nodeRid, long generation) {
+    public record BindActorRes(String actorId, String nodeRid, long generation) {
     }
 
-    public record BoundPushRequest(String scenario, String actorId, String value) {
+    public record BoundPushReq(String scenario, String actorId, String value) {
     }
 
-    public record BoundPushReply(String actorId, String value, boolean submitted, String errorKind) {
-        public static BoundPushReply submitted(String actorId, String value) {
-            return new BoundPushReply(actorId, value, true, null);
+    public record BoundPushRes(String actorId, String value, boolean submitted, String errorKind) {
+        public static BoundPushRes submitted(String actorId, String value) {
+            return new BoundPushRes(actorId, value, true, null);
         }
 
-        public static BoundPushReply failed(String actorId, String value, String errorKind) {
-            return new BoundPushReply(actorId, value, false, errorKind);
+        public static BoundPushRes failed(String actorId, String value, String errorKind) {
+            return new BoundPushRes(actorId, value, false, errorKind);
         }
     }
 
     public record BoundPushNotify(String scenario, String actorId, String value) {
     }
 
-    public record DestroyActorRequest(String scenario, String actorId) {
+    public record DestroyActorReq(String scenario, String actorId) {
     }
 
-    public record DestroyActorReply(String actorId, boolean destroyed) {
+    public record DestroyActorRes(String actorId, boolean destroyed) {
     }
 
-    public record DestroyActorRefRequest(String scenario, ActorRefWire actorRef) {
+    public record DestroyActorRefReq(String scenario, ActorRefWire actorRef) {
     }
 
-    public record DestroyActorRefReply(String actorId, boolean destroyed, String errorKind) {
-        public static DestroyActorRefReply completed(String actorId, boolean destroyed) {
-            return new DestroyActorRefReply(actorId, destroyed, null);
+    public record DestroyActorRefRes(String actorId, boolean destroyed, String errorKind) {
+        public static DestroyActorRefRes completed(String actorId, boolean destroyed) {
+            return new DestroyActorRefRes(actorId, destroyed, null);
         }
 
-        public static DestroyActorRefReply failed(String actorId, String errorKind) {
-            return new DestroyActorRefReply(actorId, false, errorKind);
+        public static DestroyActorRefRes failed(String actorId, String errorKind) {
+            return new DestroyActorRefRes(actorId, false, errorKind);
         }
     }
 
-    public record UnbindActorRequest(String scenario, String actorId) {
+    public record UnbindActorReq(String scenario, String actorId) {
     }
 
-    public record UnbindActorReply(String actorId, boolean unbound) {
+    public record UnbindActorRes(String actorId, boolean unbound) {
     }
 }

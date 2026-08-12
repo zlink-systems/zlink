@@ -45,6 +45,7 @@ class play_server_host_factory_t
             options.services ().add_singleton<sample_topology_t> (
               std::make_unique<sample_topology_t> (topology));
             add_sample_location_store (options, topology);
+            add_sample_relocation_store (options, topology);
             /* 수동 endpoint scale-out(공통 sample spec §6/§18): API 두 노드를 직접 연결한다. */
             auto api_peers = options.add_client_server_channel (sample_names_t::api_channel);
             auto api_client = api_peers.client ();

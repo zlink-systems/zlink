@@ -120,11 +120,12 @@ common sample. E2E has a wider verification scope than a sample, but
 the payload exchanged between client and server must read by the same
 standard as the public example the user sees.
 
-For a payload called with request and awaiting a response, use `Req`
-and `Res` as a pair. This standard applies to channel request, route
-request, stream request, and HTTP request all alike. For a
-one-way send payload with no response, use `Msg`, and for a payload
-the server pushes to the client stream/session, use `Notify`.
+| Call method | Suffix | Contract expressed by the name |
+|---|---|---|
+| request/reply | `Req` / `Res` | The caller waits for a processing result. This includes channel, route, stream, and HTTP requests. |
+| send | `Msg` | The caller delivers a one-way message without waiting for a response. |
+| client push | `Notify` | The server pushes a notification through a client stream/session. |
+| publish | `Event` | The publisher does not address a receiver; pub/sub and fanout messages use this form. |
 
 Even if the business name looks like an event, `Req`/`Res` is correct
 if the call method is request/reply. For example, an e2e payload that
@@ -132,6 +133,21 @@ requests a state change and awaits the processing result is named
 like `StatusChangedReq` and `StatusChangedRes`. Conversely, a state-
 change notification the client receives as a server push is named
 like `StatusNotify`.
+
+Use `Event` only for an actual publish call. A payload sent to an Actor
+or Spot uses `Msg`, even when its business meaning looks like an event.
+Do not introduce `Command`, `Result`, or `Ack` as a wire-message suffix.
+Those names make a business command, a processing result, and a
+transport response difficult to distinguish.
+
+This rule applies to payloads that cross a ZLink dispatch boundary.
+A domain-event record appended to an event store and a DTO exchanged by
+application ports in the same process are not wire messages, so they
+are exempt. An internal message sent from an Entry Spot to an owner Spot
+is not exempt. Neither is the application payload of an Actor or Spot
+`Create`/`GetOrCreate` operation, because it crosses RouteMesh. Wrap a
+creation payload in a purpose-specific request such as
+`PlayerActorCreateReq` instead of sending a raw object.
 
 ### Lifetime/Placement Scenario Terminology
 
@@ -550,6 +566,47 @@ a different key prefix doesn't permit instance sharing either. This
 rule's purpose is to keep pause, stop, restart, delay injection, and
 cleanup from affecting a different run.
 
+Every Redis-backed run uses a separate container and key prefix instead
+of sharing one instance per language; separate Redis database numbers
+do not count as isolation. A standalone config runner and every config
+runner invoked by an aggregate run share a language-wide whole-run
+lock, so only one config E2E process runs in that language at a time.
+The aggregate runner doesn't hold that lock itself. It invokes config
+runners in sequence, and the invoked config runner holds the lock.
+Recursive child runners and runners delegating to another config
+inherit the lock already held by the top-level run. Two aggregate runs
+may therefore alternate at config boundaries, but actual config E2E
+processes in one language never overlap.
+
+The same E2E can run concurrently in different languages. Redis
+endpoints, application listeners, temporary configuration, log
+directories, and cleanup targets are separated per run, so identical
+Mesh, Channel, Actor, and Spot names don't discover processes from
+another language run.
+
+| Language | Redis host port | Application listener port |
+|----------|-----------------|---------------------------|
+| C++ | `30000-30099` | `30100-31999` |
+| .NET | `32000-32099` | `32100-33999` |
+| Java | `34000-34099` | `34100-35999` |
+| Kotlin | `36000-36099` | `36100-37999` |
+| Node.js | `38000-38099` | `38100-39999` |
+
+Redis and application ports selected in advance by the runner come
+only from its language's ranges and are checked with an OS bind. A
+runtime may bind a socket atomically with port `0` and report the
+actual endpoint, because that form has no gap between the availability
+check and the real bind. The runner publishes the selected Redis host
+port explicitly and verifies after startup that the inspected value is
+identical. On a bind conflict, it removes only the container created by
+that attempt and selects again within the same Redis range. Java and
+Kotlin share some source and Gradle output, so a build-only lock shared
+by sample and E2E runners serializes Gradle execution and is released
+before server processes start. The lock is shared within one runner
+execution environment. Running WSL Bash and Windows PowerShell against
+the same checkout at the same time is unsupported because they use
+different operating-system lock namespaces.
+
 The reference templates live under this directory's
 `runner-templates/`.
 
@@ -571,9 +628,15 @@ The reference templates live under this directory's
   directory → start server → confirm readiness → run client → stop
   server.
 - Each language keeps a Redis helper shared by its e2e runners. The
-  helper provides per-run Redis container startup and cleanup of the
-  container id that run created as common functions, so individual
-  config scripts don't assemble Docker commands directly.
+  helper provides common functions for per-run Redis container create,
+  start, verification, and cleanup by the exact container ID created by
+  that run. Individual config scripts don't reassemble these lifecycle
+  commands. A fault-injection scenario may directly run `pause`,
+  `unpause`, `stop`, `start`, or a short `redis-cli` query only against
+  the exact container ID returned by the helper. These control commands
+  also use a short timeout. A long-running `monitor` may run in the
+  background without that timeout, but the runner records its PID and
+  cleans it up on exit.
 - Readiness isn't judged by a fixed sleep alone. Confirm via each role
   server's `/health`, port open, or an explicit marker.
 - On failure, print `log_dir=...` and leave each role server's and
@@ -596,27 +659,31 @@ The reference templates live under this directory's
   Don't auto-fall-back to a host Redis or another run's endpoint and
   treat it as success.
 - Redis container startup uses the same order in every language.
-  Create the container with
-  `docker create --name <scoped-name> --tmpfs /data -p 127.0.0.1::6379 <pinned-redis-image>`,
-  start it with `docker start <container-id>`, then read the run state
-  and assigned host port with `docker inspect`. Don't rely on `docker
-  run -d` output to handle container id and port at once.
+  Select a bindable `<redis-port>` from the language-specific Redis
+  range, create the container with `docker create --name <scoped-name>
+  --tmpfs /data -p 127.0.0.1:<redis-port>:6379
+  <pinned-redis-image>`, and start it with `docker start
+  <container-id>`. Then verify with `docker inspect` that the container
+  is running and the published host port equals the selected value.
+  Don't rely on `docker run -d` output to handle container id and port
+  at once.
 - E2E Redis data is only needed during the run, so don't create a
   Docker volume. Override the `/data` volume the Redis image declares
   with `--tmpfs /data`, and use `docker rm -fv` for container cleanup.
   This keeps an anonymous volume from being left behind after repeated
   runs.
-- Add a prefix to the Redis container name revealing the language and
-  the e2e run scope. For example, Java e2e uses
-  `zlink-redis-java-e2e...`, Kotlin e2e uses
-  `zlink-redis-kotlin-e2e...`. Other languages must also be able to
-  identify the `<language>-e2e` scope from the name with the same
-  rule.
+- A Redis container name is unique to its run and identifies the
+  language and config scope when practical. Cleanup uses the exact
+  container ID returned by the helper, never a search by name prefix.
 - The aggregate e2e runner doesn't clean up another run's Redis and
   calls each config's individual `run_e2e.*` in sequence. Configs
-  aren't run in parallel within one aggregate run, but it must not
-  share or remove resources with a different individual run of the
-  same language, or with another aggregate run.
+  aren't run in parallel within one aggregate run. The aggregate
+  runner doesn't acquire the language-wide lock directly; each config
+  runner acquires it, so another individual or aggregate run of the
+  same language waits for the current config to finish.
+- The aggregate runner invokes a shell config runner as
+  `bash ./run_e2e.sh`; it doesn't change the source file's executable mode in
+  order to run it.
 - The aggregate e2e runner must also be able to narrow the run target.
   With no argument, it runs `all` for every config; with an argument,
   it runs only the specified configs. To run only some scenarios
@@ -632,18 +699,22 @@ The reference templates live under this directory's
   manages retry and final result. Redis endpoint creation, readiness,
   log location, and scenario-execution detail are owned by the
   individual config script and common helpers.
-- The Redis host port isn't fixed. Let Docker assign a free loopback
-  port, and have the runner get the endpoint from the inspect result
-  and pass it to each role server and client. Redis key prefix,
-  routing id, and log directory must also be unique per run.
+- The Redis host port is selected per run from the language-specific
+  Redis range. The runner passes it explicitly to Docker, verifies
+  that the inspected result equals the selected value, and then passes
+  it to each role server and client. Redis key prefix, routing id, and
+  log directory must also be unique per run.
 - Even if a different sample/e2e is using Redis on the same host, its
-  endpoint isn't borrowed. Creating a new Docker Redis container and
-  using a different loopback port Docker assigns is what prevents
-  test interference.
-- Wrap the Docker command itself with a short timeout, and confirm
-  Redis readiness separately with a port/readiness wait function.
-  Don't handle a slow Redis start and an unresponsive Docker CLI with
-  the same sleep.
+  endpoint isn't borrowed. A new Docker Redis container and per-run
+  key prefix use that language's Redis range to prevent test
+  interference.
+- Wrap Redis lifecycle commands and short fault-injection or query
+  Docker commands with a timeout, and confirm Redis readiness separately
+  with a port/readiness wait function. A background `redis-cli monitor`
+  is a long-running scenario-control process whose PID and exit cleanup
+  belong to the runner, so it is exempt from this timeout rule. Don't
+  handle a slow Redis start and an unresponsive Docker CLI with the same
+  sleep.
 - If the Redis helper fails, the individual runner must also fail
   immediately. In a shell runner, don't receive the container id by
   reading a process-substitution result like

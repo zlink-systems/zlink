@@ -233,7 +233,7 @@ public void run(TicTacToeClientOptions options) {
     client1.connect().submit().toCompletableFuture().join();
     client1.request(new AuthenticateReq(options.xActorId()))
         .submit(AuthenticateRes.class).toCompletableFuture().join();
-    JoinGameRes join1 = joinGame(client1, room.roomId()); // 대기 등록 → send → 수신(§3)
+    JoinGameNotify join1 = joinGame(client1, room.roomId()); // 대기 등록 → send → 수신(§3)
     ZLinkStreamAssert.ensure(
         join1.state().status() == TicTacToeGameStatuses.WaitingForPlayers,
         "room should wait for the second player.");
@@ -246,7 +246,7 @@ public void run(TicTacToeClientOptions options) {
     client2.connect().submit().toCompletableFuture().join();
     client2.request(new AuthenticateReq(options.oActorId()))
         .submit(AuthenticateRes.class).toCompletableFuture().join();
-    JoinGameRes join2 = joinGame(client2, room.roomId());
+    JoinGameNotify join2 = joinGame(client2, room.roomId());
     ZLinkStreamAssert.ensure(
         join2.state().status() == TicTacToeGameStatuses.InProgress,
         "room should start with two players.");
@@ -277,10 +277,10 @@ public void run(TicTacToeClientOptions options) {
 - **서로 다른 node에 연결한 둘** — node 사이 라우팅과 위치 해석이 실제로 동작하는지
 
 ```java
-// join 응답은 request의 reply가 아니라 push로 온다 — 대기를 먼저 등록하고 send한다.
-private static JoinGameRes joinGame(ZLinkStreamConnector connector, String roomId) {
-    var completion = connector.waitFor(JoinGameRes.class).submit(JoinGameRes.class);
-    connector.send(new JoinGameReq(roomId)).submit().toCompletableFuture().join();
+// join 완료 알림은 client push로 온다 — 대기를 먼저 등록하고 one-way send한다.
+private static JoinGameNotify joinGame(ZLinkStreamConnector connector, String roomId) {
+    var completion = connector.waitFor(JoinGameNotify.class).submit(JoinGameNotify.class);
+    connector.send(new JoinGameMsg(roomId)).submit().toCompletableFuture().join();
     return completion.toCompletableFuture().join().payload();
 }
 ```

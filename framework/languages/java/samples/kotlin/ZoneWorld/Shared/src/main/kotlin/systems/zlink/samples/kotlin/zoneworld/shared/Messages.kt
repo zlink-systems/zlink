@@ -43,7 +43,7 @@ object Messages {
     data class ReportSpotEventMsg(val nodeId: String, val kind: String, val detail: String, val occurredAt: String)
     data class ReportNodeStatusMsg(val nodeId: String, val zones: List<String>, val playerCount: Int, val maintenance: Boolean)
     data class ZoneBorderEvent(val fromZoneId: String, val toZoneId: String, val tick: Long, val players: List<PlayerView>)
-    data class EnterZoneMsg(
+    data class EnterZoneReq(
         val playerId: String,
         val x: Int,
         val y: Int,

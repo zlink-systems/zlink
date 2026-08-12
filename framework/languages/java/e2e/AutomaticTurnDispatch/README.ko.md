@@ -1,6 +1,6 @@
 # Java AutomaticTurnDispatch E2E
 
-이 fixture는 공통 E2E Config 8의 `TD-A1`부터 `TD-G1`까지 검증하기 위한 Java role과 runner를
+이 fixture는 공통 E2E Config 8의 `TD-A2`부터 `TD-G1`까지 검증하기 위한 Java role과 runner를
 제공한다. consumer는 실제 stream connector로 session gateway에 요청을 보내며, gateway는 route
 mesh를 통해 play node의 Spot과 actor로 요청을 전달한다. HTTP endpoint는 readiness와 evidence
 조회에만 사용한다. 각 시나리오의 완료 상태는 `feature-map.ko.md`가 소유하며, 현재 `TD-*` 행은 모두

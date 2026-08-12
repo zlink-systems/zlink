@@ -93,6 +93,7 @@ final class ZLinkMessageFollowSuppressionConformanceTest {
             new ZLinkBackendActorRef(RoutingId.from("source"), "actor-17", 31),
             new ZLinkBackendActorRef(RoutingId.from("target"), "actor-17", 31),
             targetAddress,
+            sourceRoute,
             targetRoute,
             Duration.ofMinutes(1),
             ignored -> { });
@@ -157,6 +158,7 @@ final class ZLinkMessageFollowSuppressionConformanceTest {
             new ZLinkBackendActorRef(RoutingId.from("source"), "actor-17", 31),
             new ZLinkBackendActorRef(target.targetNodeRid(), "actor-17", 31),
             address,
+            route("source", 2, 41, 51),
             target,
             duration,
             ignored -> { });

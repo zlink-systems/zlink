@@ -95,15 +95,12 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
     CompletionStage<Void> sendFrame(byte[] frameBytes) {
         ZLinkBackendActorRef currentActorRef = currentActorRef();
         Message frame = Message.from(frameBytes);
-        return actorRuntime.oneWayCalls().submitOneWay(
+        return submitBoundSessionFrame(
             spotNode,
-            ZLinkBackendAdmissionKey.boundSession(
-                currentActorRef.nodeRid(),
-                currentActorRef.actorId(),
-                currentActorRef.generation()),
-            () -> sendBoundSessionFrame(
-                spotNode, actorRuntime, actor, currentActorRef, frame),
-            frame::close,
+            actorRuntime,
+            actor,
+            currentActorRef,
+            frame,
             timeout).thenApply(ignored -> null);
     }
 
@@ -187,54 +184,46 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
                 payload.close();
             }
             Message frame = Message.from(frameBytes);
-            return actorRuntime.oneWayCalls().submitOneWay(
+            return submitBoundSessionFrame(
                 spotNode,
-                ZLinkBackendAdmissionKey.boundSession(
-                    currentActorRef.nodeRid(),
-                    currentActorRef.actorId(),
-                    currentActorRef.generation()),
-                () -> sendBoundSessionFrame(
-                    spotNode, actorRuntime, actor, currentActorRef, frame),
-                frame::close,
+                actorRuntime,
+                actor,
+                currentActorRef,
+                frame,
                 timeout);
         }
 
     }
 
-    private static boolean sendBoundSessionFrame(
+    private static CompletionStage<Void> submitBoundSessionFrame(
         ZLinkInternalSpotNode spotNode,
         ZLinkActorRuntime actorRuntime,
         ZLinkActor actor,
         ZLinkBackendActorRef actorRef,
+        Message frame,
+        Duration timeout) {
+        java.util.function.Supplier<Boolean> submission =
+            () -> sendBoundSessionFrame(spotNode, actorRef, frame);
+        return actorRuntime.oneWayCalls().submitOneWay(
+            spotNode,
+            ZLinkBackendAdmissionKey.boundSession(
+                actorRef.nodeRid(),
+                actorRef.actorId(),
+                actorRef.generation()),
+            submission,
+            frame::close,
+            timeout);
+    }
+
+    private static boolean sendBoundSessionFrame(
+        ZLinkInternalSpotNode spotNode,
+        ZLinkBackendActorRef actorRef,
         Message frame) {
         if (spotNode.boundSessionRoute(actorRef).isEmpty()) {
-            //  Spec 20 §5 step 6: the target Actor keeps processing while
-            //  `sessionRelocationRouteUpdate` is still in flight, so a push
-            //  can be produced before the Session owner has rebound this
-            //  target (the remote binding is installed by the owner's
-            //  command 38, which it sends while applying command 44). The
-            //  binding this Actor still holds is the proof that a route is
-            //  coming: park the one-way submission in the admission queue
-            //  until the remote binding goes ready instead of failing it.
-            //  A cleared binding leaves nothing to wait for and stays
-            //  `NOT_FOUND`.
-            if (awaitsRelocatedSessionRoute(actorRuntime, actor)) {
-                return false;
-            }
             throw new ZlinkSubmitException(SubmitResult.NOT_FOUND);
         }
         return spotNode.sendActorBoundSession(
             actorRef, List.of(frame), SendFlags.DONT_WAIT);
-    }
-
-    private static boolean awaitsRelocatedSessionRoute(
-        ZLinkActorRuntime actorRuntime,
-        ZLinkActor actor) {
-        try {
-            return actorRuntime.boundSessionRoute(actor).isPresent();
-        } catch (RuntimeException unmanaged) {
-            return false;
-        }
     }
 
 }

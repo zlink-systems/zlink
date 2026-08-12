@@ -10,11 +10,14 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import systems.zlink.contracts.core.RoutingId;
@@ -56,12 +59,14 @@ final class ZLinkChannelCallRuntime {
 
     private final ZLinkMessageFlowTracer flow;
     private final ScheduledExecutorService timeoutExecutor;
+    private final Executor infrastructureExecutor;
     private final ZLinkChannelRequestSubmitter requestSubmitter;
     private final ZLinkChannelReplyDecoder replyDecoder;
     private final SpotSend spotSend;
     private final SpotRequest spotRequest;
     private final ZLinkOneWayCalls oneWayCalls;
     private final Set<CompletableFuture<?>> pendingRequests = ConcurrentHashMap.newKeySet();
+    private final AtomicBoolean closing = new AtomicBoolean();
     private final ExecutorService oneWayExecutor = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "zlink-java-channel-one-way-submit");
         thread.setDaemon(true);
@@ -71,6 +76,7 @@ final class ZLinkChannelCallRuntime {
     ZLinkChannelCallRuntime(
         ZLinkMessageFlowTracer flow,
         ScheduledExecutorService timeoutExecutor,
+        Executor infrastructureExecutor,
         Duration defaultTimeout,
         ZLinkChannelReplyDecoder replyDecoder,
         SpotSend spotSend,
@@ -78,8 +84,10 @@ final class ZLinkChannelCallRuntime {
         ZLinkOneWayCalls oneWayCalls) {
         this.flow = flow;
         this.timeoutExecutor = timeoutExecutor;
+        this.infrastructureExecutor = infrastructureExecutor;
         this.requestSubmitter = new ZLinkChannelRequestSubmitter(
             timeoutExecutor,
+            infrastructureExecutor,
             defaultTimeout);
         this.replyDecoder = replyDecoder;
         this.spotSend = spotSend;
@@ -110,12 +118,28 @@ final class ZLinkChannelCallRuntime {
     }
 
     void track(CompletableFuture<?> result, Duration timeout) {
+        if (closing.get()) {
+            result.completeExceptionally(closedFailure());
+            return;
+        }
         pendingRequests.add(result);
-        var timeoutTask = timeoutExecutor.schedule(
-            () -> result.completeExceptionally(
-                new TimeoutException("request timed out after " + timeout)),
-            timeout.toNanos(),
-            TimeUnit.NANOSECONDS);
+        if (closing.get()) {
+            pendingRequests.remove(result);
+            result.completeExceptionally(closedFailure());
+            return;
+        }
+        final java.util.concurrent.ScheduledFuture<?> timeoutTask;
+        try {
+            timeoutTask = timeoutExecutor.schedule(
+                () -> result.completeExceptionally(
+                    new TimeoutException("request timed out after " + timeout)),
+                timeout.toNanos(),
+                TimeUnit.NANOSECONDS);
+        } catch (RejectedExecutionException rejection) {
+            pendingRequests.remove(result);
+            result.completeExceptionally(shuttingDownFailure(rejection));
+            return;
+        }
         result.whenComplete((ignored, error) -> {
             timeoutTask.cancel(false);
             pendingRequests.remove(result);
@@ -123,8 +147,10 @@ final class ZLinkChannelCallRuntime {
     }
 
     void retryRouteRequest(Runnable attempt) {
+        // Keep the deadline callback limited to handing off the one retry
+        // owned by this pending request.
         timeoutExecutor.schedule(
-            attempt,
+            () -> infrastructureExecutor.execute(attempt),
             ROUTE_RETRY_DELAY_MILLIS,
             TimeUnit.MILLISECONDS);
     }
@@ -228,11 +254,22 @@ final class ZLinkChannelCallRuntime {
     }
 
     void beginClose() {
+        closing.set(true);
         oneWayExecutor.shutdown();
         for (CompletableFuture<?> pending : pendingRequests) {
-            pending.completeExceptionally(new ZLinkConfigurationException(
-                "channel runtime is closed"));
+            pending.completeExceptionally(closedFailure());
         }
+    }
+
+    private static ZLinkConfigurationException closedFailure() {
+        return new ZLinkConfigurationException("channel runtime is closed");
+    }
+
+    static ZLinkFrameworkException shuttingDownFailure(Throwable cause) {
+        return new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+            "channel runtime is closed",
+            cause);
     }
 
     static List<Message> parts(Optional<String> packetName, Message payload) {

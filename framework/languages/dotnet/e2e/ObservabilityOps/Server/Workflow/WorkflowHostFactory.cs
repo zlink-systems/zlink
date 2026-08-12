@@ -141,7 +141,7 @@ internal static class WorkflowHostFactory
             return Results.Ok(response);
         });
         app.MapPost("/workflows/{workflowRid}/signal", async (string workflowRid,
-            WorkflowSignalReq request, IZLinkSpotClient routes,
+            WorkflowSignalMsg request, IZLinkSpotClient routes,
             CancellationToken cancellationToken) =>
         {
             await routes.SendToSpot(workflowRid, request).Async(cancellationToken);

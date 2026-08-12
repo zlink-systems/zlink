@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <condition_variable>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -41,13 +42,13 @@ struct pending_actor_admission_t
     std::uint64_t completion_operation_id_high = 0;
     std::uint64_t completion_operation_id_low = 0;
     std::optional<message_t> admission_reply;
-    std::optional<message_t> completion_reply;
-    std::string completion_root_reference;
-    std::uint32_t completion_root_checksum = 0;
-    // Deferred-commit completion-loss window: the deferred finalize committed
-    // durably while the completion-only leg is still outstanding. Once the
-    // join window elapses without that leg, the target converges from the
-    // durable owner state; next_completion_poll_at paces the re-poll.
+    std::vector<std::uint8_t> session_relocation_route;
+    std::string session_relocation_actor_type;
+    std::uint64_t session_relocation_target_owner_lease_generation = 0;
+    std::uint64_t session_relocation_committed_authority_owner_generation = 0;
+    // Deferred-commit completion-loss window: the target process retains the
+    // admitted OperationId and reply while the completion-only leg is still
+    // outstanding. next_completion_poll_at paces process-local convergence.
     bool commit_finalized = false;
     bool completion_poll_due = false;
     std::chrono::steady_clock::time_point next_completion_poll_at{};
@@ -134,7 +135,7 @@ struct actor_move_completion_t
 };
 
 
-// Deferred-commit completion-loss convergence: the pace of the durable-state
+// Deferred-commit completion-loss convergence: the pace of the process-local
 // re-poll, and how long a converged commit stays visible so a late
 // completion-only leg still terminates idempotently.
 inline constexpr std::chrono::milliseconds
@@ -154,7 +155,11 @@ class actor_transfer_coordinator_t
     // The reservation may carry the transfer ID that the deferred join will
     // use, so packets preserved before transfer-out already emit their
     // handoff markers under the final transfer correlation.
-    bool try_reserve_source (const std::string &actor_key, std::string transfer_id = {});
+    bool try_reserve_source (
+      const std::string &actor_key,
+      std::string transfer_id = {},
+      std::chrono::milliseconds terminal_wait =
+        std::chrono::milliseconds::zero ());
     bool try_begin_local (const std::string &actor_key);
     bool try_begin_source_remote (const std::string &actor_key, std::string transfer_id = {});
     void cancel_move (const std::string &actor_key);
@@ -182,6 +187,11 @@ class actor_transfer_coordinator_t
     // order until the commit path drains them into the commit request.
     handoff_append_result_t try_append_backlog (const std::string &actor_key,
                                                 handoff_packet_t packet);
+    // Stages one source-retained batch without allowing live target traffic to
+    // interleave between its packets. The exact committing transfer owns the
+    // append or the whole batch is rejected.
+    bool stage_commit_backlog (const std::string &transfer_id,
+                               std::vector<handoff_packet_t> backlog);
     std::vector<handoff_packet_t> take_backlog (const std::string &actor_key);
 
     // Message Follow route lifetime (§10.4): each committed source fence keeps
@@ -221,6 +231,11 @@ class actor_transfer_coordinator_t
       bool transport_accepted);
     std::vector<removed_actor_message_follow_t>
     remove_expired_message_follow (std::chrono::steady_clock::time_point now);
+    std::optional<removed_actor_message_follow_t>
+    remove_message_follow (
+      const std::string &actor_key,
+      const runtime::protocol::actor_route_fence_t &source_fence,
+      const runtime::protocol::actor_route_fence_t &target_fence);
 
     bool try_add_admission (std::string transfer_id, pending_actor_admission_t admission);
     std::optional<pending_actor_admission_t> admission (
@@ -236,18 +251,35 @@ class actor_transfer_coordinator_t
       const std::string &transfer_id,
       const actor_ref_t &source_actor,
       const spot_id_t &target_spot_id) const;
-    bool update_completion_root (
+    // Atomically closes the exact target move, publishes its completed
+    // admission, and transfers every retained packet to the active Actor turn.
+    // A missing value means the transfer or generation fence no longer matches.
+    std::optional<std::vector<handoff_packet_t>>
+    complete_commit_and_take_backlog (const std::string &transfer_id,
+                                      const actor_ref_t &source_actor,
+                                      const spot_id_t &target_spot_id);
+    bool stage_session_relocation_route (
       const std::string &transfer_id,
-      std::string reference,
-      std::uint32_t checksum);
+      std::vector<std::uint8_t> route,
+      std::string actor_type,
+      std::uint64_t target_owner_lease_generation);
+    bool commit_session_relocation_route_authority (
+      const std::string &transfer_id,
+      std::uint64_t authority_owner_generation);
+    bool complete_session_relocation_route_terminal (
+      const std::string &transfer_id,
+      const std::string &actor_type,
+      const std::vector<std::uint8_t> &route,
+      std::uint64_t target_owner_lease_generation);
+    std::optional<pending_actor_admission_t>
+    session_relocation_admission (const std::string &transfer_id) const;
     void fail_commit (const std::string &transfer_id, bool reconcile);
     void complete_commit (const std::string &transfer_id);
     // Deferred-commit convergence (completion-loss window): marks a commit
     // whose completion-only leg is still outstanding, and returns the
-    // admissions whose join window elapsed without that leg so the runtime
-    // can re-poll the durable owner state. Each returned attempt re-arms
-    // after the retry interval; the admission deadline is extended so a late
-    // completion leg still finds the completed commit and stays idempotent.
+    // process-local admissions whose join window elapsed without that leg.
+    // Each returned attempt re-arms after the retry interval; the admission
+    // deadline is extended so a late leg stays idempotent.
     bool mark_commit_finalized (const std::string &transfer_id);
     std::vector<deferred_actor_completion_t>
     due_deferred_completions (std::chrono::steady_clock::time_point now);
@@ -278,10 +310,35 @@ class actor_transfer_coordinator_t
         message_follow_suppression_key_t suppression_key;
     };
 
+    struct session_route_terminal_fingerprint_t
+    {
+        std::string actor_key;
+        std::string transfer_id;
+        std::string actor_type;
+        std::vector<std::uint8_t> route;
+        std::uint64_t target_owner_lease_generation = 0;
+        std::chrono::steady_clock::time_point admission_deadline;
+
+        friend bool operator== (
+          const session_route_terminal_fingerprint_t &,
+          const session_route_terminal_fingerprint_t &) = default;
+    };
+
+    void stage_session_route_terminal_gate_unlocked (
+      const std::string &transfer_id,
+      const pending_actor_admission_t &admission);
+    bool has_pending_session_route_terminal_unlocked (
+      const std::string &actor_key) const;
+
     mutable std::mutex _mutex;
+    std::condition_variable _changed;
     std::map<std::string, move_state_t> _moves;
     std::map<std::string, pending_actor_admission_t> _admissions;
     std::map<std::string, pending_actor_admission_t> _completed_admissions;
+    std::map<std::string, session_route_terminal_fingerprint_t>
+      _pending_session_route_terminals;
+    std::map<std::string, session_route_terminal_fingerprint_t>
+      _completed_session_route_terminals;
     std::map<std::string, std::vector<handoff_packet_t>> _backlogs;
     std::map<std::string, std::vector<message_follow_route_t>> _message_follow_routes;
     message_follow_suppression_registry_t _message_follow_suppression;

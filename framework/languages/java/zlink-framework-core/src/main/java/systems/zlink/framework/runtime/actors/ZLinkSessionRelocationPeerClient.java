@@ -200,13 +200,11 @@ public final class ZLinkSessionRelocationPeerClient {
             Throwable> onTerminal,
         ZLinkServiceM6BWireCodec.SessionRelocationRouted ack,
         Throwable failure) {
-        if (ack != null) {
-            try {
-                routeTerminalObserver.accept(command, ack);
-            } catch (RuntimeException ignoredRecovery) {
-                //  The observer owns its durable retry; diagnostics below must
-                //  still receive the terminal command 45.
-            }
+        try {
+            routeTerminalObserver.accept(command, ack);
+        } catch (RuntimeException ignoredRecovery) {
+            // The observer owns its durable retry; diagnostics below must
+            // still receive the terminal command 45 or superseded result.
         }
         try {
             onTerminal.accept(ack, failure);

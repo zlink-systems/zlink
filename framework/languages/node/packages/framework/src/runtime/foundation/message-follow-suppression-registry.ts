@@ -3,10 +3,12 @@ export interface MessageFollowSuppressionFence {
   readonly logicalObjectId: string;
   readonly objectGeneration: string;
   readonly sourceNodeRid: string;
+  readonly sourceNodeRidHex?: string;
   readonly sourceNodeGeneration: string;
   readonly sourceAuthorityOwnerGeneration: string;
   readonly sourceOwnerLeaseGeneration: string;
   readonly targetNodeRid: string;
+  readonly targetNodeRidHex?: string;
   readonly targetNodeGeneration: string;
   readonly targetAuthorityOwnerGeneration: string;
   readonly targetOwnerLeaseGeneration: string;
@@ -112,11 +114,11 @@ export function messageFollowSuppressionKey(
     fence.objectKind,
     fence.logicalObjectId,
     fence.objectGeneration,
-    fence.sourceNodeRid,
+    fence.sourceNodeRidHex ?? Buffer.from(fence.sourceNodeRid, 'utf8').toString('hex'),
     fence.sourceNodeGeneration,
     fence.sourceAuthorityOwnerGeneration,
     fence.sourceOwnerLeaseGeneration,
-    fence.targetNodeRid,
+    fence.targetNodeRidHex ?? Buffer.from(fence.targetNodeRid, 'utf8').toString('hex'),
     fence.targetNodeGeneration,
     fence.targetAuthorityOwnerGeneration,
     fence.targetOwnerLeaseGeneration

@@ -3,8 +3,10 @@
 #include <zlink/framework/contracts/codecs/serializer.hpp>
 
 #include <atomic>
+#include <limits>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string_view>
 #include <utility>
 
@@ -16,6 +18,7 @@ struct serializer_descriptor_t
     serializer_registry_t::serialize_any_fn_t serialize;
     serializer_registry_t::deserialize_any_fn_t deserialize;
     std::string content_type;
+    std::size_t registration = 0;
 };
 
 class serializer_registry_state_t
@@ -25,11 +28,12 @@ class serializer_registry_state_t
       std::map<std::type_index, std::shared_ptr<const void>>;
 
     std::map<std::type_index, serializer_descriptor_t> serializers;
-    std::map<std::string, std::type_index> type_by_content_type;
+    std::map<std::string, std::set<std::type_index>> types_by_content_type;
     std::shared_ptr<const resolved_serializer_cache_t> resolved_serializers =
       std::make_shared<const resolved_serializer_cache_t> ();
     std::mutex resolved_serializers_mutex;
     std::atomic_bool frozen{false};
+    std::size_t next_registration = 1;
 };
 
 } // namespace zlink::framework::detail
@@ -107,7 +111,8 @@ serializer_registry_t::operator= (serializer_registry_t &&) noexcept = default;
 serializer_registry_t &serializer_registry_t::add_erased (std::type_index type,
                                                           serialize_any_fn_t serialize,
                                                           deserialize_any_fn_t deserialize,
-                                                          std::string content_type)
+                                                          std::string content_type,
+                                                          std::optional<std::size_t> registration)
 {
     if (_state->frozen.load (std::memory_order_acquire)) {
         throw framework_exception_t (
@@ -115,33 +120,54 @@ serializer_registry_t &serializer_registry_t::add_erased (std::type_index type,
           "codec registry is immutable after runtime startup");
     }
     auto normalized = normalize_content_type (content_type);
+    const auto registration_id = registration ? *registration
+                                              : begin_registration ();
 
     if (const auto existing = _state->serializers.find (type);
         existing != _state->serializers.end ()) {
-        const auto indexed =
-          _state->type_by_content_type.find (existing->second.content_type);
-        if (indexed != _state->type_by_content_type.end ()
-            && indexed->second == type)
-            _state->type_by_content_type.erase (indexed);
+        const auto indexed = _state->types_by_content_type.find (
+          existing->second.content_type);
+        if (indexed != _state->types_by_content_type.end ()) {
+            indexed->second.erase (type);
+            if (indexed->second.empty ())
+                _state->types_by_content_type.erase (indexed);
+        }
+        _state->serializers.erase (existing);
     }
 
-    if (const auto existing =
-          _state->type_by_content_type.find (normalized);
-        existing != _state->type_by_content_type.end ()
-        && existing->second != type) {
-        const auto replaced_type = existing->second;
-        _state->serializers.erase (replaced_type);
-        invalidate_cached_serializer (replaced_type);
+    if (const auto existing = _state->types_by_content_type.find (normalized);
+        existing != _state->types_by_content_type.end ()) {
+        const auto first = _state->serializers.find (*existing->second.begin ());
+        if (first != _state->serializers.end ()
+            && first->second.registration != registration_id) {
+            const auto replaced_types = existing->second;
+            _state->types_by_content_type.erase (existing);
+            for (const auto &replaced_type : replaced_types) {
+                _state->serializers.erase (replaced_type);
+                invalidate_cached_serializer (replaced_type);
+            }
+        }
     }
 
     _state->serializers.insert_or_assign (
       type,
       detail::serializer_descriptor_t{
-        std::move (serialize), std::move (deserialize), normalized});
-    _state->type_by_content_type.insert_or_assign (
-      std::move (normalized), type);
+        std::move (serialize), std::move (deserialize), normalized,
+        registration_id});
+    _state->types_by_content_type[normalized].insert (type);
     invalidate_cached_serializer (type);
     return *this;
+}
+
+std::size_t serializer_registry_t::begin_registration ()
+{
+    if (_state->next_registration
+        == std::numeric_limits<std::size_t>::max ()) {
+        throw framework_exception_t (
+          framework_error_kind_t::capacity_exceeded,
+          "codec registration identity is exhausted");
+    }
+    return _state->next_registration++;
 }
 
 std::shared_ptr<const void>

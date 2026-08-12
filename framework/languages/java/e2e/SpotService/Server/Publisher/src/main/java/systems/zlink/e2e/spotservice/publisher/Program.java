@@ -39,7 +39,7 @@ public final class Program {
             publisher.publish(
                     Contracts.ROUTE_CHANNEL,
                     "spot.events",
-                    new Contracts.MeshMsg("c4-publisher"))
+                    new Contracts.MeshEvent("c4-publisher"))
                 .submit();
             System.out.println("scenario SM-C4 passed");
         } finally {

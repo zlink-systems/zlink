@@ -14,7 +14,6 @@ role server와 process evidence가 아직 없다. `run_e2e.sh`는 이 상태를
 | IS-E2E-06 | blocked |
 | IS-E2E-07 | blocked |
 | IS-E2E-08 | blocked |
-| IS-E2E-09 | blocked |
 | IS-E2E-10 | blocked |
 | IS-E2E-11 | blocked |
 | IS-E2E-12 | blocked |

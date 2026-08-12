@@ -94,11 +94,11 @@ public class SubmitAdmissionRole {
                     .listen(config.meshEndpoint())
                     .setRoutingId(RoutingId.from(config.rid()))
                     .setDefaultRequestTimeout(Duration.ofSeconds(1));
-                mesh.addRouteSendHandler(RouteHandler.class, Probe.class);
+                mesh.addRouteSendHandler(RouteHandler.class, RouteProbeMsg.class);
                 mesh.channelName(CHANNEL)
                     .server()
                     .setWeight("target".equals(config.role()) ? 100 : 0)
-                    .addSendHandler(ChannelHandler.class, Probe.class);
+                    .addSendHandler(ChannelHandler.class, ChannelProbeMsg.class);
                 if (!config.peerEndpoint().isBlank()) {
                     mesh.peerConnections().connect(
                         RoutingId.from(config.peerRid()), config.peerEndpoint());
@@ -111,7 +111,7 @@ public class SubmitAdmissionRole {
                 options.addHandlersFromPackageOf(FanoutHandler.class);
                 options.addFanoutChannel(FANOUT)
                     .connect(config.fanoutEndpoint())
-                    .addPublishHandler(FanoutHandler.class, Probe.class);
+                    .addPublishHandler(FanoutHandler.class, FanoutProbeEvent.class);
             }
         };
     }
@@ -126,10 +126,16 @@ public class SubmitAdmissionRole {
         return new RoleHttpServer(state, routes, fanout, meshRuntime, runtimeProvider);
     }
 
-    public record Probe(String operationId, int sequence, String payload) {
+    public record RouteProbeMsg(String operationId, int sequence, String payload) {
     }
 
-    public static final class RouteHandler implements ZLinkRouteSendHandler<Probe> {
+    public record ChannelProbeMsg(String operationId, int sequence, String payload) {
+    }
+
+    public record FanoutProbeEvent(String operationId, int sequence, String payload) {
+    }
+
+    public static final class RouteHandler implements ZLinkRouteSendHandler<RouteProbeMsg> {
         private final RoleState state;
 
         public RouteHandler(RoleState state) {
@@ -137,12 +143,12 @@ public class SubmitAdmissionRole {
         }
 
         @Override
-        public CompletionStage<Void> handle(Probe message, ZLinkRouteMessageContext context) {
-            return state.handle("route", message);
+        public CompletionStage<Void> handle(RouteProbeMsg message, ZLinkRouteMessageContext context) {
+            return state.handle("route", message.operationId(), message.sequence());
         }
     }
 
-    public static final class FanoutHandler implements ZLinkFanoutHandler<Probe> {
+    public static final class FanoutHandler implements ZLinkFanoutHandler<FanoutProbeEvent> {
         private final RoleState state;
 
         public FanoutHandler(RoleState state) {
@@ -150,12 +156,12 @@ public class SubmitAdmissionRole {
         }
 
         @Override
-        public CompletionStage<Void> handle(Probe message, ZLinkPublishMessageContext context) {
-            return state.handle("fanout", message);
+        public CompletionStage<Void> handle(FanoutProbeEvent message, ZLinkPublishMessageContext context) {
+            return state.handle("fanout", message.operationId(), message.sequence());
         }
     }
 
-    public static final class ChannelHandler implements ZLinkSendHandler<Probe> {
+    public static final class ChannelHandler implements ZLinkSendHandler<ChannelProbeMsg> {
         private final RoleState state;
 
         public ChannelHandler(RoleState state) {
@@ -163,8 +169,8 @@ public class SubmitAdmissionRole {
         }
 
         @Override
-        public CompletionStage<Void> handle(Probe message, ZLinkMessageContext context) {
-            return state.handle("channel", message);
+        public CompletionStage<Void> handle(ChannelProbeMsg message, ZLinkMessageContext context) {
+            return state.handle("channel", message.operationId(), message.sequence());
         }
     }
 
@@ -215,18 +221,18 @@ public class SubmitAdmissionRole {
             return state == null ? "UNKNOWN" : state.status;
         }
 
-        CompletionStage<Void> handle(String family, Probe message) {
+        CompletionStage<Void> handle(String family, String operationId, int sequence) {
             int started = handlerStarted.incrementAndGet();
             record("handler_started", Map.of(
                 "family", family,
-                "operationId", message.operationId(),
-                "sequence", Integer.toString(message.sequence()),
+                "operationId", operationId,
+                "sequence", Integer.toString(sequence),
                 "handlerStarted", Integer.toString(started)));
             CompletableFuture<Void> completion = new CompletableFuture<>();
             Thread.ofVirtual().start(() -> {
                 try {
                     if (!config.gateFile().isBlank()
-                        && message.operationId().startsWith("handler-gate")) {
+                        && operationId.startsWith("handler-gate")) {
                         Path gate = Path.of(config.gateFile());
                         while (!Files.exists(gate)) {
                             Thread.sleep(10L);
@@ -235,8 +241,8 @@ public class SubmitAdmissionRole {
                     int completed = handlerCompleted.incrementAndGet();
                     record("handler_completed", Map.of(
                         "family", family,
-                        "operationId", message.operationId(),
-                        "sequence", Integer.toString(message.sequence()),
+                        "operationId", operationId,
+                        "sequence", Integer.toString(sequence),
                         "handlerCompleted", Integer.toString(completed)));
                     completion.complete(null);
                 } catch (Throwable failure) {
@@ -351,7 +357,7 @@ public class SubmitAdmissionRole {
             String payload = query.getOrDefault("payload", "");
             try {
                 routes.sendToNode(
-                        MESH, RoutingId.from(targetRid), new Probe(operationId, sequence, payload))
+                        MESH, RoutingId.from(targetRid), new RouteProbeMsg(operationId, sequence, payload))
                     .submit().toCompletableFuture().get(2, TimeUnit.SECONDS);
                 state.record("submit_terminal", Map.of(
                     "family", "node",
@@ -371,7 +377,7 @@ public class SubmitAdmissionRole {
             String payload = query.getOrDefault("payload", "");
             try {
                 state.startOperation(operationId, routes.sendToNode(
-                    MESH, RoutingId.from(targetRid), new Probe(operationId, sequence, payload)).submit());
+                    MESH, RoutingId.from(targetRid), new RouteProbeMsg(operationId, sequence, payload)).submit());
                 respond(exchange, 202, operationId);
             } catch (Exception failure) {
                 respond(exchange, 500, errorKind(failure));
@@ -388,7 +394,8 @@ public class SubmitAdmissionRole {
             String operationId = query.getOrDefault("operationId", "missing-operation");
             int sequence = Integer.parseInt(query.getOrDefault("sequence", "0"));
             try {
-                    routes.sendToChannel(CHANNEL, new Probe(operationId, sequence, query.getOrDefault("payload", "")))
+                    routes.sendToChannel(CHANNEL, new ChannelProbeMsg(
+                        operationId, sequence, query.getOrDefault("payload", "")))
                     .submit().toCompletableFuture().get(2, TimeUnit.SECONDS);
                 state.record("submit_terminal", Map.of(
                     "family", "channel",
@@ -405,7 +412,8 @@ public class SubmitAdmissionRole {
             String operationId = query.getOrDefault("operationId", "missing-operation");
             int sequence = Integer.parseInt(query.getOrDefault("sequence", "0"));
             try {
-                fanout.publish(FANOUT, new Probe(operationId, sequence, query.getOrDefault("payload", "")))
+                fanout.publish(FANOUT, new FanoutProbeEvent(
+                    operationId, sequence, query.getOrDefault("payload", "")))
                     .submit().toCompletableFuture().get(2, TimeUnit.SECONDS);
                 state.record("submit_terminal", Map.of(
                     "family", "fanout",

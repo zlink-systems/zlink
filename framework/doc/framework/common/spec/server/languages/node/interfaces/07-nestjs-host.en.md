@@ -170,6 +170,7 @@ export interface ZLinkLocationOptions {
 
 export interface ZLinkNestFrameworkOptionsBuilder {
     options(options: ZLinkNestFrameworkAdditionalOptions): this;
+    disableImplicitHandlerAutoRegistration(): this;
     codecs(): ZLinkNestCodecRegistryBuilder;
     configureDispatch(): ZLinkDispatchOptionsBuilder;
     addLocationStore(store: ZLinkLocationStore): this;
@@ -212,6 +213,14 @@ export type ZLinkNestProviderDiscoveryRoot = string | {
     readonly options?: ZLinkNestProviderDiscoveryOptions;
 };
 ```
+
+`disableImplicitHandlerAutoRegistration()` disables the scan that turns Nest provider metadata and
+role-root discoveries into handler registrations for the module built by this builder. Automatic
+registration remains the default. Explicit handlers added with `addRequestHandler(...)`,
+`addSendHandler(...)`, a Session's `context.handlers.addHandler(...)`, or a Spot's
+`context.handlers` remain registered and their instances still use Nest dependency injection.
+Apply this option to the whole module only when a sample must distinguish manual registration from
+automatic registration.
 
 ## 5. MeshNode, Channel, Spot, And STREAM Builder
 

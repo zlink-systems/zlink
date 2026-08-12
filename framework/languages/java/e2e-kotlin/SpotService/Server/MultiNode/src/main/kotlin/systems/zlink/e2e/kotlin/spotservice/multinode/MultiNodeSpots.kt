@@ -108,6 +108,9 @@ private suspend fun onCreateMultiNodeSpot(
         return ZLinkSpotCreateResponse.accept()
     }
     val command = request.decode(Contracts.SpotOnlyMeshReq::class.java)
+    if (command.targetSpotRid.isBlank()) {
+        return ZLinkSpotCreateResponse.accept()
+    }
     val reply = context.outbound()
         .requestToSpot(command.targetSpotRid, Contracts.MultiNodeStateReq("add", 7))
         .timeout(Duration.ofSeconds(5))

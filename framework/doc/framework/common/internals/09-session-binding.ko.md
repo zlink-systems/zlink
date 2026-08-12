@@ -12,6 +12,10 @@ title: "9. Session과 Actor 연결"
 > **계약 소유** — binding 계약은 [Session Actor dispatch](../spec/20-session-actor-dispatch.ko.md)가 소유한다.
 > 이 장은 그 계약을 만족시키는 **구조**와, binding 교체에서 나타나는 실패를 다룬다.
 
+Relocation 전체 상태 전이와 Session이 관여하는 정확한 구간은
+[13. Relocation handoff 상태 전이](13-relocation-handoff.ko.md)가 소유한다. 이 장은 physical
+Session과 Actor binding의 일반 구조만 설명한다.
+
 외부 client 연결 하나를 Actor에 연결하는 구조다. 연결을 교체하는 동안에도 Actor owner가
 current binding을 하나만 갖도록 보장해야 한다.
 
@@ -131,23 +135,86 @@ identity가 여전히 일치하는지 다시 확인한 뒤 connection을 닫는�
 ### Relocation seal과 이전 binding 거부의 구분
 
 **결정 — relocation seal과 retired binding 거부는 서로 다른 전이다.** Retired binding 거부는
-current binding을 새 session으로 교체한 뒤 이전 generation의 ingress를 막는다. Relocation
-seal은 같은 binding의 route를 옮기는 동안 ingress를 보관한다.
+current binding을 새 Session으로 교체한 뒤 이전 generation의 ingress를 막는다. Relocation
+seal은 같은 binding의 Actor route를 옮기는 동안 Session message를 보관한다.
 
-Session owner가 command 42를 처리할 때 다음 상태를 하나의 원자적 시점에서 함께 바꾼다.
+Session owner가 seal에서 하는 일은 세 가지뿐이다.
 
-- current binding의 accepted high-water를 고정한다.
-- seal 뒤 ingress가 high-water를 전진시키지 못하게 한다.
-- seal 뒤 ingress가 application dispatch에 들어가지 못하게 한다.
+- current physical Session과 binding generation이 일치하는지 확인한다.
+- 해당 binding의 request와 push를 application route로 제출하지 않고 보관한다.
+- relocation 결과가 정해지면 source 또는 target route로 보관한 message를 제출하고 seal을 푼다.
 
-막힌 ingress를 즉시 실패시키지는 않는다. Payload와 reply context를 matching command 44 route
-switch 또는 abort까지 보관한다. 이 보관 자리에는 relocation 전용 record 수나 byte 상한을
-두지 않는다. 개별 message 크기, transport, deadline과 cancellation 제한은 그대로 적용한다.
+### Session 검증의 단일 소유자
 
-Command 44는 exact binding과 authority fence, seal identity, replayed high-water를 모두
-검증한다. 검증에 성공하면 route를 바꾸고 보관한 ingress를 새 route에서 재개한다. Abort는
-matching seal만 해제하고 source route에서 재개한다. §3의 retired binding 거부 규칙은 그대로
-적용하며 relocation seal의 대기 상태와 합치지 않는다.
+`SessionBindingAggregate`가 Session identity, binding generation, ActorId·ObjectGeneration,
+relocation identity와 route 변경을 같은 직렬 실행 구간에서 다룬다. 이 값은 Session이 실제로
+소유하는 연결 관계만 설명한다. Aggregate는 relocation target을 선택하지 않고 Location Store를
+읽거나 쓰지 않으며 Actor authority를 다시 검증하지 않는다.
+
+검증 책임은 다음과 같이 한 번씩만 둔다.
+
+- Transport adapter는 authenticated peer, node generation과 frame 형식을 확인한다.
+- Target relocation runtime은 temporary queue 설치와 Restore를 끝내고, cutover `[send]`를
+  받거나 Restore 준비 응답을 보낸 뒤 1,000 ms가 지나면 예상 source owner로 Location Store
+  CAS를 실행한다.
+- Session aggregate는 current Session과 binding이 같은 relocation의 route 변경 대상인지 확인한다.
+- Actor join, host relocation, Message Follow와 callback 경로는 위 판정을 반복하지 않는다.
+
+Seal에는 numeric high-water를 사용하지 않는다. Source와 target 사이의 일반 message relay는
+같은 TCP connection의 순서와 재전송에 의존한다. Session seal 중 도착한 message는 aggregate가
+보관하지만 relocation 전용 record 수나 byte 상한을 두지 않는다. 개별 message 크기,
+transport, deadline과 cancellation 제한은 그대로 적용한다.
+
+Target만 Location Store owner CAS를 실행한다. Cutover가 1,000 ms 안에 오지 않으면
+`cutover_timeout` Warning을 기록하고 같은 CAS 절차를 시작한다. CAS가 성공하면 target queue를
+열고 target runtime이 command 44를 Session owner에게 `[send]`로 전달한다. Aggregate는 route와
+current `ActorRef` snapshot을 target으로 바꾸고, 보관한 Session message를 새 route로 제출한 뒤
+seal을 해제한다. Command 44에 대한 reply나 command 45는 사용하지 않는다.
+
+Session owner는 seal 설치 시점부터 설정 가능한 `SessionRelocationSealTimeout`을 적용한다.
+기본값은 3,000 ms다. 그 안에 exact command 44가 오지 않으면 physical Session을 닫고 binding,
+held message와 seal state를 정리한다. Timeout과 command 44 처리는 같은 직렬 실행 구간에서 먼저
+처리된 하나만 유효하다. 뒤늦은 command 44는 `late_session_route_update` Warning만 기록하고
+무시한다.
+
+```mermaid
+sequenceDiagram
+    participant C as Relocation coordinator
+    participant S as Session owner
+    participant A as Source runtime
+    participant B as Target runtime
+    participant L as Location Store
+
+    C->>S: [request] command 42 · exact binding route 고정과 이후 message 보관
+    S-->>C: [reply] command 43 · exact binding seal 설치 완료
+    A->>B: [request] temporary queue 설치·Restore 후 dispatch 없이 relay 준비
+    B-->>A: [reply] temporary queue·Restore 준비 완료 · source owner 유지
+    A->>B: [send/request relay] cached queue와 ingress hold
+    alt cutover arrives within 1,000 ms
+        A->>B: [send] cutover · boundary 전 relay 완료
+    else cutover timeout
+        B->>B: [local] cutover_timeout Warning · fallback 진행
+    end
+    B->>L: [request] source fence가 같으면 owner를 target으로 CAS
+    L-->>B: [reply] target owner CAS 결과
+    B->>B: [local] queue 병합과 dispatch 개방
+    B->>S: [send] command 44 · exact target route 적용·held 제출·seal 해제
+    alt command 44 arrives within SessionRelocationSealTimeout
+        S->>S: [local] route 전환 · held message 제출 · seal 해제
+    else Session seal timeout
+        S->>S: [local] physical Session 종료 · binding과 held state 정리
+    end
+```
+
+CAS 성공 뒤 도착한 late 또는 duplicate cutover는 `late_cutover` Warning만 기록하고 무시한다.
+Late 또는 duplicate command 44도 Warning만 기록하고 state를 다시 변경하지 않는다. Target이
+cutover 전에 명시적으로 실패하면 matching seal만 해제하고 보관한 message를 source route로
+제출한다. Cutover 뒤 failure는 source route를 다시 열지 않고 seal timeout으로 정리한다.
+
+이 구조는 Session binding 검증을 한 곳에 모으지만 relocation 전체를 Session에 맡기지 않는다.
+Actor·Spot 준비, server 간 relay, cutover `[send]`와 Location Store CAS는 공통 relocation runtime의
+책임이다. §3의 retired binding 거부 규칙은 그대로 적용하며 relocation seal의 대기 상태와
+합치지 않는다.
 
 ## 5. 확인할 결과
 
@@ -161,9 +228,15 @@ matching seal만 해제하고 source route에서 재개한다. §3의 retired bi
 - 이전 연결로 늦게 도착한 응답이 교체 순번 비교로 걸러진다.
 - client가 재접속하면 이전 연결 관계가 복원되지 않는다.
 - Actor가 다른 node로 이동한 경우에는 연결을 다시 만들지 않고 경로만 갱신된다.
-- Command 42가 accepted high-water 고정과 seal 뒤 ingress 차단을 한 번에 적용한다.
-- Seal 뒤 보관한 ingress는 별도 relocation 상한 때문에 거부되지 않으며, matching route
-  switch 또는 abort 뒤 정확한 route에서 처리된다.
+- Command 42와 43이 current binding의 seal 설치 결과만 전달한다.
+- `SessionBindingAggregate` 한 곳에서 current Session과 binding route를 검증하며 다른 구성
+  요소가 Store나 local mirror로 재검증하지 않는다.
+- Target만 Restore 뒤 cutover를 받거나 1,000 ms가 지나면 Location Store owner CAS를 수행한다.
+- CAS 성공 뒤 target이 command 44를 `[send]`로 전달하면 Session owner가 route를 바꾸고 held
+  Session message를 target route에 제출한 다음 seal을 해제한다.
+- `SessionRelocationSealTimeout`의 기본값은 3,000 ms이며, timeout이면 physical Session과 관련
+  state를 정리한다.
+- Late 또는 duplicate cutover와 command 44는 Warning만 남기고 state를 다시 변경하지 않는다.
 
 ---
 

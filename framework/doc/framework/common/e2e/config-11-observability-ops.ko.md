@@ -215,7 +215,7 @@ Relocate를 시작한 Host는 기존 accepted work와 infrastructure를 유지�
 - 검증: Held 구간에 source는 `Relocating`, not-ready, not-accepting이며 신규 object는 source에 배치되지
   않는다. 완료 뒤 source status는 `Relocated`이고 process health endpoint는 유지된다. Host state metric도
   같은 닫힌 state를 반영한다.
-- 세부 동작: [Host maintenance §13](../spec/28-graceful-drain-handoff.ko.md)을 검증한다.
+- 세부 동작: [Host maintenance §13](../spec/30-host-relocation-flow.ko.md)을 검증한다.
 
 #### OBS-C2 Actor handoff 뒤 bound Session push를 유지한다
 
@@ -231,7 +231,7 @@ Actor가 다른 node로 이동하면 Framework가 bound Session의 Actor 위치�
   client가 relay request를 보내고 Actor가 post-relocation push를 보낸다.
 - 검증: Public current Actor location은 `play-b`이고 request handler evidence도 B에 있다. Client는 push를
   한 번 받으며 binding count와 Actor identity는 유지된다.
-- 세부 동작: [Actor와 Spot의 공통 handoff 순서](../spec/28-graceful-drain-handoff.ko.md#82-모든-actor와-spot이-따르는-공통-순서)와
+- 세부 동작: [Actor와 Spot의 공통 handoff 순서](../spec/30-host-relocation-flow.ko.md#82-모든-actor와-spot이-따르는-공통-순서)와
   [Session Actor relocation route barrier](../spec/20-session-actor-dispatch.ko.md#5-actor-relocation-route-barrier)를
   검증한다.
 
@@ -252,7 +252,7 @@ global IDs로 message를 보내면 target에서 기존 application state를 이�
 - 검증: 모든 current locations는 `play-b`이며 ObjectGeneration은 이전 ref와 같다. Spot counter와 Actor
   state가 보존되고 각 handler가 target에서 한 번 실행된다. Source `OnClosing(RelocationOut)`과 target
   restore application callbacks도 operation당 정식 횟수로 기록된다.
-- 세부 동작: [Host maintenance §8.5](../spec/28-graceful-drain-handoff.ko.md)를
+- 세부 동작: [Host maintenance §8.5](../spec/30-host-relocation-flow.ko.md)를
   검증한다.
 
 #### OBS-C4 Shutdown은 relocation 없이 closing callback과 Session close를 수행한다
@@ -270,7 +270,7 @@ active Session을 정식 close reason으로 종료한 뒤 Host를 멈춘다.
 - 검증: 각 Spot callback은 `HostShutdown` reason으로 한 번 실행되고 callback 시점에 application state를
   읽을 수 있다. Client는 정식 server-drain close reason을 받고 Host result는 `Stopped/None`이다. Target
   node에 새 object가 생기지 않는다.
-- 세부 동작: [Shutdown과 Relocate의 경쟁](../spec/28-graceful-drain-handoff.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
+- 세부 동작: [Shutdown과 Relocate의 경쟁](../spec/30-host-relocation-flow.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
 
 #### OBS-C5 Eligible target이 없으면 source를 유지한다
 
@@ -288,8 +288,8 @@ Relocation을 받을 compatible target이 없으면 source object를 변경하�
   request를 보낸다.
 - 검증: Relocate는 정식 `Blocked` outcome과 blocker reason으로 끝난다. Source Host는 Serving이고 public
   location과 generation이 유지되며 follow-up request가 성공한다. Shutdown을 자동 시작하지 않는다.
-- 세부 동작: [Target 선택 전 조건](../spec/28-graceful-drain-handoff.ko.md#4-target을-선택하기-전에-확인하는-조건)과
-  [Mode에 맞는 target 선택](../spec/28-graceful-drain-handoff.ko.md#5-mode에-맞는-target을-선택한다)을 검증한다.
+- 세부 동작: [Target 선택 전 조건](../spec/30-host-relocation-flow.ko.md#4-target을-선택하기-전에-확인하는-조건)과
+  [Mode에 맞는 target 선택](../spec/30-host-relocation-flow.ko.md#5-mode에-맞는-target을-선택한다)을 검증한다.
 
 #### OBS-C6 Rolling update로 exact 새 version에 이동한다
 
@@ -308,7 +308,7 @@ Application patch는 새 version target을 먼저 ready로 만든 뒤 source wor
 - 검증: Result는 `Relocated/None`, mode `RollingUpdate`, effective version N+1이다. Current locations와
   handler evidence는 N+1 target을 가리키며 binding과 object generation은 유지된다. Source process는
   Relocated로 유지되고 후속 explicit Shutdown이 Stopped로 끝난다.
-- 세부 동작: [Host maintenance §5](../spec/28-graceful-drain-handoff.ko.md)을 검증한다.
+- 세부 동작: [Host maintenance §5](../spec/30-host-relocation-flow.ko.md)을 검증한다.
 
 #### OBS-C7 Planned maintenance는 같은 version target을 사용한다
 
@@ -322,7 +322,7 @@ Node 점검은 Application version을 바꾸지 않고 같은 version의 compati
 - 절차: Source stateful object에 accepted request가 있는 상태에서 PlannedMaintenance Relocate를 호출한다.
 - 검증: Accepted request는 terminal 결과를 하나 받고 Relocate result의 effective version은 N이다. Current
   object location과 후속 handler evidence는 target을 가리키며 state와 generation이 유지된다.
-- 세부 동작: [Host maintenance §5](../spec/28-graceful-drain-handoff.ko.md)을 검증한다.
+- 세부 동작: [Host maintenance §5](../spec/30-host-relocation-flow.ko.md)을 검증한다.
 
 #### OBS-C8 Shutdown deadline에서 bounded forced teardown을 수행한다
 
@@ -338,7 +338,7 @@ Spot closing callback이 끝나지 않아도 Shutdown은 host deadline을 넘겨
 - 검증: Callback이 받은 absolute deadline은 Host deadline과 같다. Host result는
   `ForceStopped/DeadlineExceeded`이고 forced-shutdown metric delta는 1이다. Late callback completion이 Host
   terminal을 바꾸지 않는다.
-- 세부 동작: [Shutdown과 Relocate의 경쟁](../spec/28-graceful-drain-handoff.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
+- 세부 동작: [Shutdown과 Relocate의 경쟁](../spec/30-host-relocation-flow.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
 
 #### OBS-C9A Automatic topology는 target ready 뒤 relocation을 시작한다
 
@@ -355,8 +355,8 @@ topology status에서 ready가 된 뒤 workload를 이동해야 한다.
   ready를 확인한다.
 - 검증: Not-ready 구간에 source request가 정상 처리되고 current location은 source다. Target ready 뒤
   Relocate가 성공하고 후속 request는 target에서 처리된다.
-- 세부 동작: [Target 선택 전 조건](../spec/28-graceful-drain-handoff.ko.md#4-target을-선택하기-전에-확인하는-조건)과
-  [Mode에 맞는 target 선택](../spec/28-graceful-drain-handoff.ko.md#5-mode에-맞는-target을-선택한다)을 검증한다.
+- 세부 동작: [Target 선택 전 조건](../spec/30-host-relocation-flow.ko.md#4-target을-선택하기-전에-확인하는-조건)과
+  [Mode에 맞는 target 선택](../spec/30-host-relocation-flow.ko.md#5-mode에-맞는-target을-선택한다)을 검증한다.
 
 #### OBS-C10 Relocation mode가 정한 exact version만 선택한다
 
@@ -370,7 +370,7 @@ Weight가 높더라도 mode와 version filter를 통과하지 못한 target은 �
 - 절차: Fresh source에서 PlannedMaintenance와 RollingUpdate N+1을 각각 실행한다.
 - 검증: 첫 result와 current locations는 N target, 두 번째는 N+1 target이다. N+2와 잘못된 version target의
   handler evidence는 없다.
-- 세부 동작: [Host maintenance §5](../spec/28-graceful-drain-handoff.ko.md)을 검증한다.
+- 세부 동작: [Host maintenance §5](../spec/30-host-relocation-flow.ko.md)을 검증한다.
 
 #### OBS-C11 Concurrent Relocate option 충돌을 처리한다
 
@@ -387,7 +387,7 @@ operation의 target이나 deadline을 바꾸면 안 된다.
   시작한다. Target gate를 해제한다.
 - 검증: 같은 option의 두 waiter는 동일한 terminal result를 받고 relocation은 한 번 수행된다. 다른 두
   calls는 `Blocked/OperationInProgress`이며 first operation의 effective version과 deadline을 바꾸지 않는다.
-- 세부 동작: [Concurrent 호출과 cancellation](../spec/28-graceful-drain-handoff.ko.md#6-concurrent-호출과-cancellation)을
+- 세부 동작: [Concurrent 호출과 cancellation](../spec/30-host-relocation-flow.ko.md#6-concurrent-호출과-cancellation)을
   검증한다.
 
 #### OBS-C12 Relocate waiter와 Shutdown 경쟁을 구분한다
@@ -408,7 +408,7 @@ operation과 terminal-once를 유지하는가.
   지원 언어 variant에서는 두 번째 waiter만 cancellation이고 shared operation은 계속된다. 첫 waiter는
   `ShutdownRequested` 경쟁 결과 또는 이미 확정된 relocation result를 받는다. Shutdown terminal은 반복
   status 조회에서도 바뀌지 않는다.
-- 세부 동작: [Host maintenance §11](../spec/28-graceful-drain-handoff.ko.md)을
+- 세부 동작: [Host maintenance §11](../spec/30-host-relocation-flow.ko.md)을
   검증한다.
 
 ## 5. 완료 기준

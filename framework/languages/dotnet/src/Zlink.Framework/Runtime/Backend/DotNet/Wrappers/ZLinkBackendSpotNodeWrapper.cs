@@ -22,7 +22,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
     IZLinkBackendMessageFollowNotifications,
     IZLinkBackendBoundSessionReplacementNotifications
 {
-    private readonly IMeshNode _node;
+    private readonly ZLinkManagedMeshNode _node;
     private readonly ZLinkMeshCompletionTable _completions;
     private readonly ZLinkMeshDispatchPump _pump;
     private readonly ActorMessageFollowIngressAdapter _messageFollowIngress;
@@ -41,18 +41,18 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
     private bool _started;
     private bool _disposed;
 
-    public ZLinkBackendSpotNodeWrapper(IMeshNode node)
+    public ZLinkBackendSpotNodeWrapper(ZLinkManagedMeshNode node)
     {
         _node = node;
         _completions = new ZLinkMeshCompletionTable();
         _pump = new ZLinkMeshDispatchPump(node, _completions);
-        _node.SetCompletionOverflowHandler(
+        _node.SetCompletionOverflowHandlerCore(
             (record, parts) => _completions.Complete(record, parts));
         _messageFollowIngress = new ActorMessageFollowIngressAdapter(_pump);
         _node.SetActorMessageFollowIngressTarget(_messageFollowIngress);
     }
 
-    internal IMeshNode NativeNode => _node;
+    internal ZLinkManagedMeshNode NativeNode => _node;
 
     internal ZLinkMeshDispatchPump Pump => _pump;
 
@@ -61,11 +61,11 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
     public RoutingId RoutingId => _node.RoutingId;
 
     public void SetLocalOwnerLeaseGeneration(ulong ownerLeaseGeneration) =>
-        RequireManagedNode().SetLocalOwnerLeaseGeneration(ownerLeaseGeneration);
+        _node.SetLocalOwnerLeaseGeneration(ownerLeaseGeneration);
 
     public void SetLocalRequestSourceFence(
         ZLinkServiceWireCodec.RequestSourceFence source) =>
-        RequireManagedNode().SetLocalRequestSourceFence(source);
+        _node.SetLocalRequestSourceFence(source);
 
     public void ObserveRequestSourceFence(
         ZLinkServiceWireCodec.RequestSourceFence source) =>
@@ -81,23 +81,23 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
 
     public void SetMessageFollowNotificationHandler(
         Action<RoutingId, ZLinkServiceWireCodec.MessageFollowRecord> handler) =>
-        RequireManagedNode().SetMessageFollowNotificationHandler(handler);
+        _node.SetMessageFollowNotificationHandler(handler);
 
     public bool TrySendMessageFollowNotification(
         RoutingId targetNodeRid,
         ZLinkServiceWireCodec.MessageFollowRecord record) =>
-        RequireManagedNode().TrySendMessageFollowNotification(
+        _node.TrySendMessageFollowNotification(
             targetNodeRid,
             record);
 
     public void SetBoundSessionReplacedNotificationHandler(
         Action<RoutingId, ZLinkServiceWireCodec.BoundSessionReplacedRecord> handler) =>
-        RequireManagedNode().SetBoundSessionReplacedNotificationHandler(handler);
+        _node.SetBoundSessionReplacedNotificationHandler(handler);
 
     public bool TrySendBoundSessionReplacedNotification(
         RoutingId targetNodeRid,
         ZLinkServiceWireCodec.BoundSessionReplacedRecord record) =>
-        RequireManagedNode().TrySendBoundSessionReplacedNotification(
+        _node.TrySendBoundSessionReplacedNotification(
             targetNodeRid,
             record);
 
@@ -107,7 +107,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         ulong authorityOwnerGeneration,
         ulong ownerLeaseGeneration)
     {
-        RequireManagedNode().ObserveActorAuthority(
+        _node.ObserveActorAuthority(
             ToNativeActor(actor),
             targetNodeGeneration,
             authorityOwnerGeneration,
@@ -122,7 +122,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         ulong authorityOwnerGeneration,
         ulong ownerLeaseGeneration)
     {
-        RequireManagedNode().ObserveSpotAuthority(
+        _node.ObserveSpotAuthority(
             nodeRid,
             spotId,
             objectGeneration,
@@ -135,18 +135,13 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         ZLinkBackendActorRef actor,
         out ulong authorityOwnerGeneration,
         out ulong ownerLeaseGeneration) =>
-        RequireManagedNode().TryGetActorAuthority(
+        _node.TryGetActorAuthority(
             ToNativeActor(actor),
             out authorityOwnerGeneration,
             out ownerLeaseGeneration);
 
-    private ZLinkManagedMeshNode RequireManagedNode() =>
-        _node as ZLinkManagedMeshNode
-        ?? throw new InvalidOperationException(
-            "Authority fencing requires the Framework managed MeshNode.");
-
     private ActorRef ToNativeActor(ZLinkBackendActorRef actor) =>
-        actor.ToNative(RequireManagedNode().MeshName);
+        actor.ToNative(_node.MeshName);
 
     public void SetRoutingId(RoutingId routingId)
     {
@@ -250,12 +245,17 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
     }
 
     // Explicit host startup calls Start after routing id, bind, and channels
-    // are configured. Local nodes without a router bind have no native bind
-    // event, so every backend entry point converges on the same idempotent
-    // adapter-owned transition through EnsureStarted.
+    // are configured. Pull dispatch is activated separately after every
+    // framework ingress owner has been installed.
     public void Start()
     {
         EnsureStarted();
+    }
+
+    public void ActivateIngress()
+    {
+        EnsureStarted();
+        _pump.EnsureStarted();
     }
 
     public void ApplyRoleConfig(
@@ -299,7 +299,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
     public ZLinkRelocationReplyCompletion TryCompleteRelocationReply(
         ZLinkServiceWireCodec.ReplyRelayRecord relay,
         IReadOnlyList<Message> payload) =>
-        RequireManagedNode().TryCompleteRelocationReply(relay, payload);
+        _node.TryCompleteRelocationReply(relay, payload);
 
     public void SetCanonicalRelocationReservationTarget(
         ICanonicalRelocationReservationTarget target)
@@ -315,7 +315,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             CancellationToken cancellationToken)
     {
         EnsureStarted();
-        return RequireManagedNode().ReserveCanonicalRelocationAsync(
+        return _node.ReserveCanonicalRelocationAsync(
             targetNodeRid, prepare, timeout, cancellationToken);
     }
 
@@ -327,7 +327,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         CancellationToken cancellationToken)
     {
         EnsureStarted();
-        return RequireManagedNode().StageCanonicalRelocationAsync(
+        return _node.StageCanonicalRelocationAsync(
             targetNodeRid, prepare, data, timeout, cancellationToken);
     }
 
@@ -337,7 +337,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         CancellationToken cancellationToken)
     {
         EnsureStarted();
-        return RequireManagedNode().CompleteCanonicalRelocationAsync(
+        return _node.CompleteCanonicalRelocationAsync(
             targetNodeRid, complete, cancellationToken);
     }
 
@@ -348,7 +348,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         ZLinkServiceWireCodec.RelocationCoordinatorFence coordinator)
     {
         EnsureStarted();
-        RequireManagedNode().CancelCanonicalRelocation(targetNodeRid,
+        _node.CancelCanonicalRelocation(targetNodeRid,
             relocationId, targetAttemptGeneration, coordinator);
     }
 
@@ -366,7 +366,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             CancellationToken cancellationToken)
     {
         EnsureStarted();
-        return RequireManagedNode().SealSessionRelocationAsync(
+        return _node.SealSessionRelocationAsync(
             sessionOwnerNodeRid,
             seal,
             timeout,
@@ -382,7 +382,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             CancellationToken cancellationToken)
     {
         EnsureStarted();
-        return RequireManagedNode().RouteSessionRelocationAsync(
+        return _node.RouteSessionRelocationAsync(
             sessionOwnerNodeRid,
             route,
             expectedSealedHighWater,
@@ -400,7 +400,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             CancellationToken cancellationToken)
     {
         EnsureStarted();
-        return RequireManagedNode().RelayRelocationReplyAsync(
+        return _node.RelayRelocationReplyAsync(
             targetNodeRid,
             relay,
             expectedSource,
@@ -422,7 +422,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         EnsureStarted();
         if (!request)
         {
-            var oneWaySubmit = RequireManagedNode().ActivateInstanceSpot(
+            var oneWaySubmit = _node.ActivateInstanceSpot(
                 target,
                 sourceSpotId,
                 parts,
@@ -458,7 +458,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                         "Remote Instance Spot activation failed."));
                 }
             },
-            id => RequireManagedNode().ActivateInstanceSpot(
+            id => _node.ActivateInstanceSpot(
                 target,
                 sourceSpotId,
                 parts,
@@ -485,7 +485,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         CancellationToken cancellationToken)
     {
         EnsureStarted();
-        return RequireManagedNode().ForwardInstanceSpotActivationAsync(
+        return _node.ForwardInstanceSpotActivationAsync(
             operation,
             parts,
             metadata,
@@ -526,7 +526,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                         "Remote User Spot create failed."));
                 }
             },
-            id => RequireManagedNode().CreateUserSpot(
+            id => _node.CreateUserSpot(
                 targetNodeRid,
                 spotId,
                 stableType,
@@ -613,7 +613,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                     retryAdvice));
             }
         },
-            id => RequireManagedNode().CreateActorRemote(
+            id => _node.CreateActorRemote(
                 targetNodeRid,
                 actorId,
                 stableType,
@@ -665,7 +665,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                     ? ZLinkRetryAdvice.RetryAfterBackoff
                     : ZLinkRetryAdvice.DoNotRetry));
         },
-            id => RequireManagedNode().DestroyActorRemote(
+            id => _node.DestroyActorRemote(
                 ToNativeActor(actor),
                 targetNodeGeneration,
                 authorityOwnerGeneration,
@@ -715,7 +715,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                         ? ZLinkRetryAdvice.RetryAfterBackoff
                         : ZLinkRetryAdvice.DoNotRetry));
         },
-            id => RequireManagedNode().CloseUserSpot(
+            id => _node.CloseUserSpot(
                 targetNodeRid,
                 target,
                 deadlineUnixMs,
@@ -964,8 +964,6 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 _node.Start();
             }
         }
-
-        _pump.EnsureStarted();
     }
 
     public ZLinkBackendActorRef CreateActor(string actorId, Message createRequest)
@@ -1025,7 +1023,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             callback,
             id =>
             {
-                RequireManagedNode().JoinSpot(
+                _node.JoinSpot(
                     ToNativeActor(actor),
                     destNodeRid,
                     destSpotId,
@@ -1053,7 +1051,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 callback(BuildJoinResult(record, actor), replyParts),
             id =>
             {
-                RequireManagedNode().JoinSpot(
+                _node.JoinSpot(
                     ToNativeActor(actor),
                     destNodeRid,
                     destSpotId,
@@ -1080,7 +1078,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 callback(BuildEntrySpotJoinResult(record, actor, destNodeRid), replyParts),
             id =>
             {
-                RequireManagedNode().JoinEntrySpot(
+                _node.JoinEntrySpot(
                     ToNativeActor(actor),
                     destNodeRid,
                     new[] { request },
@@ -1135,7 +1133,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             },
             id =>
             {
-                RequireManagedNode().DestroyActor(ToNativeActor(actor), id, timeout);
+                _node.DestroyActor(ToNativeActor(actor), id, timeout);
                 return SubmitResult.Ok;
             });
         await using (_completions.RegisterCancellation(
@@ -1226,7 +1224,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 completion.TrySetException(
                     new ZlinkRequestException((ZlinkRequestException.ErrorCode)(int)result));
             },
-            id => RequireManagedNode().RequestToActor(
+            id => _node.RequestToActor(
                 ToNativeActor(actor), parts, id, timeout ?? default));
         if (submit != SubmitResult.Ok)
             throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)submit);

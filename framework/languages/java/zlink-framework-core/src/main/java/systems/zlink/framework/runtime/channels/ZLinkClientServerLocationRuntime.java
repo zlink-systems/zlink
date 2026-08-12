@@ -17,8 +17,10 @@ import java.util.Set;
 import java.util.function.Supplier;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.Executors;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 import systems.zlink.contracts.core.RoutingId;
@@ -59,14 +61,13 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
     private final int pageSize;
     private final Map<String, PublishedServer> published = new LinkedHashMap<>();
     private final Map<String, Connection> connections = new HashMap<>();
-    private final ScheduledExecutorService executor =
-        Executors.newSingleThreadScheduledExecutor(task -> {
-            Thread thread = new Thread(
-                task, "zlink-java-client-server-location");
-            thread.setDaemon(true);
-            return thread;
-        });
+    private final ScheduledExecutorService scheduler;
+    private final Executor infrastructureExecutor;
+    private ScheduledFuture<?> scheduledTick;
     private volatile boolean running;
+    private long lifecycleEpoch;
+    private CompletableFuture<Void> admittedTick;
+    private CompletableFuture<Void> stopCompletion;
 
     ZLinkClientServerLocationRuntime(
         ZLinkLocationRepository store,
@@ -75,6 +76,8 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
         ZLinkBackendContext context,
         ZLinkBackendAdapterOptions adapterOptions,
         ZLinkChannelSocketRegistry sockets,
+        ScheduledExecutorService scheduler,
+        Executor infrastructureExecutor,
         Duration pollingInterval,
         int pageSize) {
         this.store = Objects.requireNonNull(store, "store");
@@ -87,6 +90,9 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
         this.adapterOptions = Objects.requireNonNull(
             adapterOptions, "adapterOptions");
         this.sockets = Objects.requireNonNull(sockets, "sockets");
+        this.scheduler = Objects.requireNonNull(scheduler, "scheduler");
+        this.infrastructureExecutor = Objects.requireNonNull(
+            infrastructureExecutor, "infrastructureExecutor");
         this.pollingInterval = Objects.requireNonNull(
             pollingInterval, "pollingInterval");
         this.pageSize = pageSize;
@@ -94,11 +100,20 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
 
     CompletionStage<Void> start(
         List<ZLinkChannelRuntime.AutoConnectSurface> surfaces) {
+        long epoch;
         synchronized (this) {
             if (running) {
                 return CompletableFuture.completedFuture(null);
             }
+            if (stopCompletion != null && !stopCompletion.isDone()) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                        "ClientServer location runtime is stopping"));
+            }
+            lifecycleEpoch = Math.addExact(lifecycleEpoch, 1);
+            epoch = lifecycleEpoch;
             running = true;
+            stopCompletion = null;
             if (surfaces.stream().anyMatch(surface ->
                     surface.type()
                         == ZLinkAutoConnectType.CLIENT_SERVER
@@ -112,11 +127,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
         streamTrace("client-server-location start surfaces=" + surfaces.size()
             + " owner=" + owner.get().ownerId());
         initializePublishedServers(surfaces);
-        return tick(surfaces).whenComplete((ignored, failure) -> {
-            if (failure == null) {
-                schedule(surfaces);
-            }
-        });
+        return admitTick(surfaces, epoch, false);
     }
 
     CompletionStage<Void> markDraining() {
@@ -148,21 +159,43 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
 
     CompletionStage<Void> stop() {
         Map<String, PublishedServer> servers;
+        List<String> connectionIds;
+        CompletableFuture<Void> pendingTick;
+        CompletableFuture<Void> completion;
         synchronized (this) {
             if (!running) {
-                return CompletableFuture.completedFuture(null);
+                return stopCompletion == null
+                    ? CompletableFuture.completedFuture(null)
+                    : stopCompletion;
             }
+            cancelScheduledTick();
             running = false;
+            lifecycleEpoch = Math.addExact(lifecycleEpoch, 1);
             servers = Map.copyOf(published);
-        }
-        List<String> connectionIds;
-        synchronized (this) {
             connectionIds = List.copyOf(connections.keySet());
+            pendingTick = admittedTick;
+            completion = new CompletableFuture<>();
+            stopCompletion = completion;
         }
         for (String connectionId : connectionIds) {
             removeConnection(connectionId);
         }
-        executor.shutdown();
+        CompletionStage<Void> settled = pendingTick == null
+            ? CompletableFuture.completedFuture(null)
+            : pendingTick.handle((ignored, failure) -> null);
+        settled.thenCompose(ignored -> removePublishedServers(servers))
+            .whenComplete((ignored, failure) -> {
+                if (failure == null) {
+                    completion.complete(null);
+                } else {
+                    completion.completeExceptionally(failure);
+                }
+            });
+        return completion;
+    }
+
+    private CompletionStage<Void> removePublishedServers(
+        Map<String, PublishedServer> servers) {
         if (servers.isEmpty()) {
             return CompletableFuture.completedFuture(null);
         }
@@ -228,11 +261,12 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
     }
 
     private CompletionStage<Void> tick(
-        List<ZLinkChannelRuntime.AutoConnectSurface> surfaces) {
+        List<ZLinkChannelRuntime.AutoConnectSurface> surfaces,
+        long epoch) {
         List<CompletionStage<?>> work = new ArrayList<>();
         List<PublishedUpdate> publishes = new ArrayList<>();
         synchronized (this) {
-            if (!running) {
+            if (!running || lifecycleEpoch != epoch) {
                 return CompletableFuture.completedFuture(null);
             }
             for (Map.Entry<String, PublishedServer> entry
@@ -279,7 +313,9 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
                     }
                     synchronized (this) {
                         PublishedServer owned = published.get(channelName);
-                        if (owned != null
+                        if (running
+                            && lifecycleEpoch == epoch
+                            && owned != null
                             && owned.lifecycleGeneration()
                                 == server.lifecycleGeneration()
                             && owned.revision() == server.revision()) {
@@ -293,7 +329,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
         for (String channelName : clientChannels) {
             streamTrace("client-server-location list-start channel=" + channelName);
             work.add(listAll(channelName).thenAccept(
-                descriptors -> reconcile(channelName, descriptors)));
+                descriptors -> reconcile(channelName, descriptors, epoch)));
         }
         return all(work);
     }
@@ -327,10 +363,11 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
 
     private void reconcile(
         String channelName,
-        List<ZLinkClientServerServerDescriptor> descriptors) {
+        List<ZLinkClientServerServerDescriptor> descriptors,
+        long epoch) {
         Map<String, Connection> currentConnections;
         synchronized (this) {
-            if (!running) {
+            if (!running || lifecycleEpoch != epoch) {
                 return;
             }
             currentConnections = Map.copyOf(connections);
@@ -477,7 +514,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
                 });
                 dealer.connect(descriptor.endpoint());
             }
-        } catch (RuntimeException failure) {
+        } catch (Throwable failure) {
             if (connection != null) {
                 removeConnection(connectionId, connection);
             } else {
@@ -684,16 +721,108 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
             Instant.EPOCH);
     }
 
-    private void schedule(
-        List<ZLinkChannelRuntime.AutoConnectSurface> surfaces) {
-        if (!running) {
+    private synchronized void schedule(
+        List<ZLinkChannelRuntime.AutoConnectSurface> surfaces,
+        long epoch) {
+        if (!running || lifecycleEpoch != epoch) {
             return;
         }
-        executor.schedule(
-            () -> tick(surfaces).whenComplete(
-                (ignored, failure) -> schedule(surfaces)),
+        scheduledTick = scheduler.schedule(
+            () -> admitTick(surfaces, epoch, true),
             pollingInterval.toMillis(),
             TimeUnit.MILLISECONDS);
+    }
+
+    private CompletionStage<Void> admitTick(
+        List<ZLinkChannelRuntime.AutoConnectSurface> surfaces,
+        long epoch,
+        boolean retryAfterFailure) {
+        CompletableFuture<Void> settlement;
+        synchronized (this) {
+            if (!running || lifecycleEpoch != epoch) {
+                return CompletableFuture.completedFuture(null);
+            }
+            if (admittedTick != null) {
+                return admittedTick;
+            }
+            settlement = new CompletableFuture<>();
+            admittedTick = settlement;
+        }
+        try {
+            infrastructureExecutor.execute(
+                () -> runAdmittedTick(
+                    surfaces, epoch, retryAfterFailure, settlement));
+        } catch (RejectedExecutionException closing) {
+            settleTick(
+                surfaces,
+                epoch,
+                retryAfterFailure,
+                settlement,
+                closing);
+        }
+        return settlement;
+    }
+
+    private void runAdmittedTick(
+        List<ZLinkChannelRuntime.AutoConnectSurface> surfaces,
+        long epoch,
+        boolean retryAfterFailure,
+        CompletableFuture<Void> settlement) {
+        CompletionStage<Void> work;
+        try {
+            work = tick(surfaces, epoch);
+        } catch (RuntimeException failure) {
+            settleTick(
+                surfaces,
+                epoch,
+                retryAfterFailure,
+                settlement,
+                failure);
+            return;
+        }
+        work.whenComplete((ignored, failure) -> settleTick(
+            surfaces,
+            epoch,
+            retryAfterFailure,
+            settlement,
+            failure));
+    }
+
+    private void settleTick(
+        List<ZLinkChannelRuntime.AutoConnectSurface> surfaces,
+        long epoch,
+        boolean retryAfterFailure,
+        CompletableFuture<Void> settlement,
+        Throwable failure) {
+        boolean scheduleNext;
+        synchronized (this) {
+            if (admittedTick == settlement) {
+                admittedTick = null;
+            }
+            scheduleNext = running
+                && lifecycleEpoch == epoch
+                && (failure == null || retryAfterFailure);
+        }
+        Throwable terminalFailure = failure;
+        if (scheduleNext) {
+            try {
+                schedule(surfaces, epoch);
+            } catch (RuntimeException rejected) {
+                terminalFailure = rejected;
+            }
+        }
+        if (terminalFailure == null) {
+            settlement.complete(null);
+        } else {
+            settlement.completeExceptionally(terminalFailure);
+        }
+    }
+
+    private synchronized void cancelScheduledTick() {
+        if (scheduledTick != null) {
+            scheduledTick.cancel(false);
+            scheduledTick = null;
+        }
     }
 
     private static boolean matches(

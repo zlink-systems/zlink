@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
+source "$NODE_ROOT/e2e/runner-common.sh"
+serialize_node_e2e_run "$0" "$@"
 REPO_ROOT="$(git -C "$ROOT_DIR" rev-parse --show-toplevel)"
 PACKAGE_ROOT="${ZLINK_NODE_FRAMEWORK_PACKAGE_ROOT:-$NODE_ROOT}"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
@@ -15,19 +17,18 @@ LOCAL_READINESS_TIMEOUT_SECONDS=3
 ROUTE_SETTLE_TIMEOUT_SECONDS=5
 SCENARIO_SETTLE_TIMEOUT_SECONDS=3
 HTTP_PROBE_TIMEOUT_SECONDS=3
-mkdir -p "$LOG_DIR"
-
-source "$NODE_ROOT/e2e/runner-common.sh"
 
 IMPLEMENTED_PROCESS=(
   SA-E2E-01 SA-E2E-02 SA-E2E-03 SA-E2E-04 SA-E2E-06 SA-E2E-07
-  SA-E2E-08 SA-E2E-09 SA-E2E-10 SA-E2E-11 SA-E2E-12 SA-E2E-13
+  SA-E2E-08 SA-E2E-09 SA-E2E-11 SA-E2E-12 SA-E2E-13
   SA-E2E-14 SA-E2E-15 SA-E2E-16 SA-E2E-17 SA-E2E-18 SA-E2E-19
   SA-E2E-20 SA-E2E-05
 )
 IMPLEMENTED_REGRESSION=(SA-REG-01 SA-REG-02 SA-REG-03 SA-REG-04)
 ALL_KNOWN=()
-for number in $(seq 1 20); do ALL_KNOWN+=("$(printf 'SA-E2E-%02d' "$number")"); done
+for number in $(seq 1 20); do
+  [[ "$number" -eq 10 ]] || ALL_KNOWN+=("$(printf 'SA-E2E-%02d' "$number")")
+done
 for number in $(seq 1 4); do ALL_KNOWN+=("$(printf 'SA-REG-%02d' "$number")"); done
 
 contains() {
@@ -79,6 +80,7 @@ cleanup() {
   if [[ "$code" -ne 0 ]]; then tail_failure_logs; fi
 }
 trap cleanup EXIT
+mkdir -p "$LOG_DIR"
 
 echo "package_mode_root=$PACKAGE_ROOT" | tee "$LOG_DIR/package-mode.log"
 PACKAGE_VERSION="$(node -p "require('$PACKAGE_ROOT/node_modules/@zlink-systems/zlink/package.json').version")"
@@ -258,7 +260,7 @@ PY
     exit 1
   fi
 
-  node "$PACKAGE_ROOT/e2e/SubmitAdmission/Client/dist/main.js" \
+  node "$PACKAGE_ROOT/e2e/SubmitAdmission/Client/dist/SubmitAdmission/Client/main.js" \
     --config="$TEMP_DIR/client.json" "${PROCESS_SELECTORS[@]}" | tee "$LOG_DIR/client.log"
 fi
 

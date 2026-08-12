@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -134,75 +135,19 @@ internal static class ZLinkUserSpotAuthorityPayloadCodec
         }
     }
 
-    internal static ZLinkAuthorityKey AuthorityKey(string spotId)
-    {
-        var bytes = new UTF8Encoding(false, true).GetBytes(
+    internal static ZLinkAuthorityKey AuthorityKey(string spotId) =>
+        ZLinkAuthorityKeyCodec.EncodeSpot(
             ZLinkSpotId.Require(spotId, nameof(spotId)));
-        if (bytes.Length is 0 or > byte.MaxValue)
-            throw new ArgumentOutOfRangeException(nameof(spotId));
-        var builder = new StringBuilder($"zla1:s:{bytes.Length}:");
-        foreach (var item in bytes)
-        {
-            if (item is >= (byte)'A' and <= (byte)'Z'
-                or >= (byte)'a' and <= (byte)'z'
-                or >= (byte)'0' and <= (byte)'9'
-                or (byte)'-' or (byte)'.' or (byte)'_' or (byte)'~')
-                builder.Append((char)item);
-            else
-                builder.Append('%').Append(item.ToString("X2"));
-        }
-        return new ZLinkAuthorityKey(builder.ToString());
-    }
 
     internal static bool TryGetSpotId(
         ZLinkAuthorityKey key,
         out string spotId)
     {
+        if (ZLinkAuthorityKeyCodec.TryDecodeSpot(key, out spotId)
+            && ZLinkSpotId.IsValid(spotId))
+            return true;
         spotId = string.Empty;
-        const string prefix = "zla1:s:";
-        if (!key.Value.StartsWith(prefix, StringComparison.Ordinal))
-            return false;
-        var lengthEnd = key.Value.IndexOf(':', prefix.Length);
-        if (lengthEnd < 0
-            || !int.TryParse(
-                key.Value.AsSpan(prefix.Length, lengthEnd - prefix.Length),
-                out var expectedLength)
-            || expectedLength is < 1 or > byte.MaxValue)
-            return false;
-
-        var encoded = key.Value.AsSpan(lengthEnd + 1);
-        var bytes = new List<byte>(expectedLength);
-        for (var index = 0; index < encoded.Length;)
-        {
-            if (encoded[index] != '%')
-            {
-                if (encoded[index] > 0x7f)
-                    return false;
-                bytes.Add((byte)encoded[index++]);
-                continue;
-            }
-            if (index + 2 >= encoded.Length
-                || !byte.TryParse(
-                    encoded.Slice(index + 1, 2),
-                    System.Globalization.NumberStyles.HexNumber,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out var value))
-                return false;
-            bytes.Add(value);
-            index += 3;
-        }
-        if (bytes.Count != expectedLength)
-            return false;
-        try
-        {
-            spotId = new UTF8Encoding(false, true).GetString([.. bytes]);
-            return ZLinkSpotId.IsValid(spotId);
-        }
-        catch (DecoderFallbackException)
-        {
-            spotId = string.Empty;
-            return false;
-        }
+        return false;
     }
 
     private sealed class Writer

@@ -28,7 +28,7 @@ import { closeRuntime, waitForShutdown } from '../runtime-support';
 import { ZoneWorldNames, zonesOf } from '../../Shared/spec';
 import { createZoneNodeModule } from './zone-node-module';
 import { ZoneSpot } from './Infrastructure/ZLink/Spots/zone-spot';
-import { EnterWorldReq, ReportNodeStatusMsg } from '../../Shared/contracts';
+import { EnterWorldReq, EnterWorldRes, ReportNodeStatusMsg } from '../../Shared/contracts';
 import { MaintenanceStore } from '../Configuration/maintenance-store';
 import { NodeRuntimeState } from './Domain/node-runtime-state';
 import { botRoutes } from './Domain/bot-patrol';
@@ -208,7 +208,7 @@ async function spawnBots(app: { get<T>(token: unknown, options?: { strict: boole
     const entered = await client.requestToActor(
       actor.actorId,
       new EnterWorldReq(route.x, route.y, true, route.dirX, route.dirY)
-    ).timeout(10_000).submit<{ error: string | null }>();
+    ).timeout(10_000).submit<EnterWorldRes>();
     if (entered.error !== null) throw new Error(`Bot '${route.playerId}' could not enter the world: ${entered.error}.`);
     console.log(`bot spawned bot=${route.playerId} zone=${route.zoneId}`);
   }

@@ -136,12 +136,12 @@ internal sealed class OperationEvidenceStore
         Append($"handler-completed|operation={operationId}|family={family}|target={targetId}");
     }
 
-    public OperationEvidence? Snapshot(string operationId)
+    public OperationEvidenceRes? Snapshot(string operationId)
     {
         if (!_operations.TryGetValue(operationId, out var evidence)) return null;
         lock (evidence.Gate)
         {
-            return new OperationEvidence(
+            return new OperationEvidenceRes(
                 evidence.OperationId,
                 evidence.Family,
                 evidence.TargetId,

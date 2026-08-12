@@ -46,7 +46,7 @@ scenario_selected() {
 # Run the crash replacement in a separate process and Redis scope so its stale descriptor
 # history cannot affect the normal replacement scenario.
 if [[ "$G4_CHILD" == "0" ]] && scenario_selected ZW-G4; then
-  "$0" --g4-child ZW-G4
+  bash "$0" --g4-child ZW-G4
   G4_PROVEN=1
   if [[ "$SCENARIO" == "ZW-G4" ]]; then exit 0; fi
 fi
@@ -72,7 +72,7 @@ cleanup() {
     wait "$pid" 2>/dev/null || true
   done
   if [[ -n "$REDIS_CONTAINER" ]]; then
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   zlink_sample_copy_evidence "$RUN_DIR" "ZoneWorld"
 }
@@ -99,8 +99,8 @@ import socket
 sockets = []
 chosen = set()
 try:
-    while len(sockets) < 10:
-        port = random.randint(41000, 60999)
+    while len(sockets) < 9:
+        port = random.randint(22100, 23999)
         if port in chosen:
             continue
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -118,9 +118,9 @@ finally:
 PY
 )"
 
-GATEWAY_ENDPOINT="ws://127.0.0.1:${PORTS[7]}"
+GATEWAY_ENDPOINT="ws://127.0.0.1:${PORTS[6]}"
 OPS_ENDPOINT="ws://127.0.0.1:${PORTS[4]}"
-BROWSER_PREVIEW_PORT="${PORTS[9]}"
+BROWSER_PREVIEW_PORT="${PORTS[8]}"
 
 python3 - "$CONFIG_DIR" "$REDIS_ENDPOINT" "$RUN_ID" "$LOG_DIR" "${PORTS[@]}" <<'PY'
 import json
@@ -136,7 +136,6 @@ shared = {
     "redisEndpoint": redis,
     "redisKeyPrefix": f"zoneworld-{run_id}:",
     "logDirectory": log_dir,
-    "broadcastEndpoint": f"tcp://127.0.0.1:{ports[5]}",
 }
 
 def write(name, role, value):
@@ -163,12 +162,11 @@ write("zone-node-replacement", "zoneNode", {
 
 write("ops", "ops", {
     "streamEndpoint": f"ws://127.0.0.1:{ports[4]}",
-    "broadcastEndpoint": f"tcp://127.0.0.1:{ports[5]}",
-    "meshEndpoint": f"tcp://127.0.0.1:{ports[6]}",
+    "meshEndpoint": f"tcp://127.0.0.1:{ports[5]}",
 })
 write("gateway", "gateway", {
-    "streamEndpoint": f"ws://127.0.0.1:{ports[7]}",
-    "meshEndpoint": f"tcp://127.0.0.1:{ports[8]}",
+    "streamEndpoint": f"ws://127.0.0.1:{ports[6]}",
+    "meshEndpoint": f"tcp://127.0.0.1:{ports[7]}",
 })
 PY
 

@@ -271,6 +271,9 @@ timeout으로 끝나도 이미 시작된 remote handler의 실행은 취소되�
 
 마지막 줄이 특히 헷갈리는 자리다. **reply에는 호출자가 지정한 request timeout을 쓰지
 않는다.** client가 5초를 기다리기로 했다고 해서 서버의 reply 제출이 5초를 기다리지 않는다.
+STREAM one-way send는 call별 timeout modifier로 이 대기를 더 짧게 제한할 수 있다. Socket timeout을
+연장하지 않고 둘 중 먼저 도달하는 deadline을 사용하며, deadline 뒤에는 late admission이나 replay가 없다.
+이 modifier는 reply에 적용하지 않는다.
 
 지정하지 않으면 각 경로가 1초를 쓴다. 값은 millisecond로 올림해 `1` 이상이어야 하며,
 `0` · 음수 · 무한대는 **host 시작에서 거부한다** — 조용히 기본값으로 바뀌지 않는다.

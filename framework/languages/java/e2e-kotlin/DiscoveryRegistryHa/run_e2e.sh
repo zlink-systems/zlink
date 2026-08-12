@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/e2e-redis-common.sh"
+zlink_e2e_initialize kotlin "$0" "$@"
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -62,9 +63,9 @@ cleanup() {
     kill "${pid}" >/dev/null 2>&1 || true
   done
   if [[ -n "${REDIS_CONTAINER}" ]]; then
-    docker unpause "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+    timeout -k 2s 10s docker unpause "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
     if [[ "${REDIS_CONTAINER_OWNED}" == "1" ]]; then
-      docker rm -fv "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+      zlink_redis_remove_by_id "${REDIS_CONTAINER}" || true
     fi
   fi
   wait >/dev/null 2>&1 || true
@@ -74,23 +75,7 @@ trap cleanup EXIT
 
 reserve_ports() {
   local count="$1"
-  python3 - "${count}" <<'PY'
-import socket
-import sys
-count = int(sys.argv[1])
-sockets = []
-ports = []
-try:
-    for _ in range(count):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        ports.append(sock.getsockname()[1])
-    print(" ".join(str(port) for port in ports))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  zlink_e2e_reserve_ports "${count}"
 }
 
 tcp() {
@@ -120,18 +105,18 @@ start_redis_container() {
 }
 
 pause_redis_container() {
-  docker pause "${REDIS_CONTAINER}" >/dev/null
+  timeout -k 2s 10s docker pause "${REDIS_CONTAINER}" >/dev/null
 }
 
 unpause_redis_container() {
-  docker unpause "${REDIS_CONTAINER}" >/dev/null
+  timeout -k 2s 10s docker unpause "${REDIS_CONTAINER}" >/dev/null
 }
 
 stop_redis_container() {
   if [[ -n "${REDIS_CONTAINER}" ]]; then
-    docker unpause "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+    timeout -k 2s 10s docker unpause "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
     if [[ "${REDIS_CONTAINER_OWNED}" == "1" ]]; then
-      docker rm -fv "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+      zlink_redis_remove_by_id "${REDIS_CONTAINER}" || true
     fi
     REDIS_CONTAINER=""
     REDIS_CONTAINER_OWNED=0
@@ -170,7 +155,8 @@ wait_for_log_marker() {
 }
 
 gradle_run() {
-  ../../gradlew --project-cache-dir "${ZLINK_KOTLIN_E2E_GRADLE_CACHE}" --no-daemon "$@" --quiet
+  zlink_e2e_gradle_build_locked ../../gradlew \
+    --project-cache-dir "${ZLINK_KOTLIN_E2E_GRADLE_CACHE}" --no-daemon "$@" --quiet
 }
 
 bin_path() {

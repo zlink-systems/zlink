@@ -46,7 +46,7 @@ internal static class StB1RemoteStatefulTransferScenario
         await context.SendFromNodeAsync(
             context.NodeD,
             actorId,
-            new HandoffPacket(scenario, queuedMarker));
+            new HandoffMsg(scenario, queuedMarker));
         foreach (var node in new[] { source, target })
         {
             ZlinkStreamAssert.Ensure(

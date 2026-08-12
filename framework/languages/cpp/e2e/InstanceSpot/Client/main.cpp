@@ -139,7 +139,7 @@ void run_request (const client_options_t &options,
 {
     const auto expected_spot_id = spot_id;
     const auto reply = post (options.caller_url, "/instance/request",
-                             e2e::probe_request_t{std::move (spot_id), operation_id,
+                             e2e::probe_req_t{std::move (spot_id), operation_id,
                                                   std::move (action)});
     if (reply.value ("spotId", "") != expected_spot_id
         || reply.value ("operationId", "") != operation_id
@@ -154,7 +154,7 @@ void run_send (const client_options_t &options,
                std::string operation_id,
                std::string action)
 {
-    const auto request = e2e::probe_message_t{spot_id, operation_id, std::move (action)};
+    const auto request = e2e::probe_msg_t{spot_id, operation_id, std::move (action)};
     const auto reply = post (options.caller_url, "/instance/send", request);
     if (reply.value ("status", "") != "accepted"
         || reply.value ("spotId", "") != spot_id
@@ -170,7 +170,7 @@ void run_scenario (const client_options_t &options, const std::string &scenario)
         const auto operation_id = scenario + "-after-crash";
         const auto response = post_raw (
           options.caller_url, "/instance/request",
-          e2e::probe_request_t{scenario + "-spot", operation_id, scenario});
+          e2e::probe_req_t{scenario + "-spot", operation_id, scenario});
         const auto body = nlohmann::json::parse (response.body);
         if (response.status < 400
             || body.value ("errorKind", -1)

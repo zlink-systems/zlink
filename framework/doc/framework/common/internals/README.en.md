@@ -129,6 +129,7 @@ connection easy to miss when reading a chapter separately.
 | [10. Liveness And Status Publication](10-liveness-and-state.en.md) | How to determine whether the peer is still reachable without letting that judgment change authority |
 | [11. Payload Ownership And Copy](11-message-ownership.en.md) | How many times a byte is copied from socket to handler. When deserialization happens |
 | [12. Service Wire Protocol](12-service-wire-protocol.en.md) | The byte format and command exchanged between nodes |
+| [13. Relocation Handoff State Transitions](13-relocation-handoff.en.md) | How all four runtimes implement the same source, target, and Session transitions and queue order |
 
 A performance-critical decision is gathered in
 [11](11-message-ownership.en.md)'s copy count,

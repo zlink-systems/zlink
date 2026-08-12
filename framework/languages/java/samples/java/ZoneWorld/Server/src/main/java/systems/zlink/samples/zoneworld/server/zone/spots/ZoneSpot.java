@@ -30,7 +30,7 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
     private final ZLinkActorClient actorClient;
     private final SampleTopology topology;
     private final Map<String, PlayerActor> residents = new HashMap<>();
-    private final Map<String, Messages.EnterZoneMsg> pendingJoins = new HashMap<>();
+    private final Map<String, Messages.EnterZoneReq> pendingJoins = new HashMap<>();
     private final Map<String, BorderSnapshot> borderSnapshots = new HashMap<>();
     private ZLinkTimer tickTimer;
     private ZLinkTimer botTimer;
@@ -63,7 +63,7 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
     public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
         String actorId,
         ZLinkMessage request) {
-        Messages.EnterZoneMsg join = request.decode(Messages.EnterZoneMsg.class);
+        Messages.EnterZoneReq join = request.decode(Messages.EnterZoneReq.class);
         String zone = context.spotId();
         if (!actorId.equals(join.playerId()) || !zone.equals(ZoneWorldSpec.zoneOf(join.x(), join.y()))) {
             return CompletableFuture.completedFuture(
@@ -82,7 +82,7 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
 
     @Override
     public CompletionStage<Void> onJoinedActor(PlayerActor actor) {
-        Messages.EnterZoneMsg join = pendingJoins.remove(actor.actorId());
+        Messages.EnterZoneReq join = pendingJoins.remove(actor.actorId());
         if (join == null) {
             return CompletableFuture.completedFuture(null);
         }
@@ -200,7 +200,7 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
         actor.prepareMove(targetX, targetY, targetZone);
         actor.context().joinSpot(
                 targetZone,
-                new Messages.EnterZoneMsg(
+                new Messages.EnterZoneReq(
                     actor.actorId(),
                     targetX,
                     targetY,

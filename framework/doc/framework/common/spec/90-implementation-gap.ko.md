@@ -22,29 +22,26 @@ session serial lane·worker 점유로 지연 시간을 만들지 않는다.
 session owner lifecycle 거부를 같은 결과로 검증해야 한다. 같은 physical session의 idempotent bind는 자신에게
 교체 통지를 보내거나 connection을 닫지 않아야 한다.
 
-## Session relocation route high-water 검증
+## Session relocation route와 target-only cutover
 
-Spec 20 §5 7단계는 session owner가 command 44의 ObjectGeneration, 이전·target
-AuthorityOwnerGeneration, binding generation, session owner lease와 함께 high-water가 현재
-binding에 기록된 값과 **같은지** 확인하도록 요구한다. 이 등식은 `sessionRelocationSeal(42)` /
-`sessionRelocationSealed(43)` 핸드셰이크가 source가 포착한 high-water와 owner가 기록한
-high-water를 같은 값으로 고정해 주기 때문에 성립한다. Owner 변경 뒤 이전 route로 도착한
-message의 전달은 이 검증이 아니라 Message Follow가 보장한다.
+Spec 30과 Spec 20 §5는 모든 언어가 같은 단순한 경계를 사용하도록 요구한다. Session owner는
+command 42/43으로 exact binding을 seal하고 이후 Session message를 보관한다. Source와 target의
+message 순서는 같은 TCP connection의 relay와 one-way cutover가 제공하며 numeric high-water를
+사용하지 않는다. Target만 Location Store CAS를 수행하고 queue를 연 뒤 command 44를 Session
+owner에게 `[send]`로 전달한다. Command 44에는 reply가 없고 정상 경로에서 command 45를 사용하지
+않는다. Exact update가 `SessionRelocationSealTimeout` 안에 없으면 Session owner가 physical
+Session과 관련 state를 정리한다.
 
 | 언어 | 현재 구현 차이 | 종결 조건 |
 |---|---|---|
-| C++ | 없음. Command 42/43을 service wire로 주고받는다. | 종결 |
-| Node.js | 없음. Seal 의미를 in-process binding registry로 구현하며 route publish를 seal과 대응시킨다. | 종결 |
-| .NET | 없음. Seal 의미를 내부 relay로 구현하고 commit 시 exact fence와 idempotent 재수신을 구분한다. | 종결 |
-| Java/Kotlin | 없음. Command 42가 Session owner의 accepted high-water를 고정하는 시점에 ingress barrier도 함께 설치한다. Command 43은 그 값을 source에 반환한다. 봉인 뒤 ingress는 이전 route에서 실행되지 않고, command 44 또는 45가 종결될 때까지 순서를 유지한 채 보관된다. Command 44는 relocation id에 연결된 seal 값과 정확히 같은 high-water만 적용한다. 재시작 복구도 durable root에 보관된 exact seal과 route를 사용하며 monotonic 비교로 대체하지 않는다. | 종결 |
+| C++ | 기존 command 45 ACK와 high-water 기반 route 적용을 제거하고 target one-way command 44 및 Session timeout 정리로 수렴해야 한다. | 미종결 |
+| Node.js | 기존 aggregate의 high-water·route ACK 상태를 제거하고 ordered relay, target one-way command 44와 Session timeout 정리로 수렴해야 한다. | 미종결 |
+| .NET | 기존 exact high-water·ACK 재전송 경로를 제거하고 target-only CAS 뒤 one-way command 44를 적용해야 한다. | 미종결 |
+| Java/Kotlin | Command 42/43은 binding seal만 유지하고 high-water와 command 45 terminal을 제거해야 한다. Target one-way command 44와 Session timeout 정리가 필요하다. | 미종결 |
 
-Java/Kotlin도 ObjectGeneration·AuthorityOwnerGeneration·binding generation과 exact
-high-water를 함께 검증한다. 대응하는 seal이 없는 command 44는 route를 변경하지 않고
-`stale` 또는 `sessionOrBindingClosed`와 high-water 0을 반환한다. 재시작 뒤 exact seal을
-복원할 수 없으면 relocation을 명시적으로 실패시키며, 다른 high-water 값으로 추정하지 않는다.
-
-Command 45는 `session-relocation-route-result`(applied / alreadyApplied / stale /
-sessionOrBindingClosed) 필드를 싣는다. Spec 20 §5는 target이 이 네 결과 중 하나를 받으면
-재전송을 멈추도록 요구하므로, 거부된 command 44도 무응답으로 두지 않고 거부 사유를 담아
-답한다. C++와 Java/Kotlin 모두 이 필드를 encode/decode하며 refusal 경로에서 `stale` 또는
-`sessionOrBindingClosed`를 답한다.
+종결 조건은 네 언어 모두 같다. Command 42/43은 current binding seal만 설치하고, command 44는
+target CAS와 queue 개방 뒤 one-way로 한 번 전달한다. Session owner는 exact Session, binding과
+relocation identity만 확인하며 Store나 Actor authority를 다시 읽지 않는다. Timeout과 route
+update를 직렬화하여 먼저 처리한 하나만 유효하게 만들고, late·duplicate update는 Warning만
+기록한다. Command 45와 relocation 전용 high-water가 production, codec expectation과 contract
+test의 정상 경로에서 모두 제거되어야 종결이다.

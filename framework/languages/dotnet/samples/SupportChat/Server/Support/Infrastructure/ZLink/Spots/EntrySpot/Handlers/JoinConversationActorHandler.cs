@@ -7,12 +7,13 @@ using Zlink.Framework.Contracts.Spots;
 namespace SupportChat.Server.Support.Infrastructure.ZLink.Spots.EntrySpot.Handlers;
 
 internal sealed class JoinConversationActorHandler
-    : IZLinkEntrySpotActorSendHandler<
+    : IZLinkEntrySpotActorRequestHandler<
         SupportEntrySpot,
         SupportUserActor,
-        JoinConversationReq>
+        JoinConversationReq,
+        JoinConversationRes>
 {
-    public ValueTask HandleAsync(
+    public ValueTask<JoinConversationRes> HandleAsync(
         SupportEntrySpot entrySpot,
         SupportUserActor actor,
         IZLinkMessageContext context,
@@ -43,19 +44,16 @@ internal sealed class JoinConversationActorHandler
                     actor.Role,
                     actor.DisplayName))
             .Defer();
-        return actor.Context.BoundSession
-            .Send(new JoinConversationRes(
-                true,
-                new ConversationState(
-                    conversationId,
-                    string.Empty,
-                    ConversationStatuses.WaitingForAgent,
-                    string.Empty,
-                    null,
-                    0,
-                    null,
-                    null)))
-            .Metadata(SampleNames.ConversationIdMetadataKey, conversationId)
-            .Async(cancellationToken);
+        return ValueTask.FromResult(new JoinConversationRes(
+            true,
+            new ConversationState(
+                conversationId,
+                string.Empty,
+                ConversationStatuses.WaitingForAgent,
+                string.Empty,
+                null,
+                0,
+                null,
+                null)));
     }
 }

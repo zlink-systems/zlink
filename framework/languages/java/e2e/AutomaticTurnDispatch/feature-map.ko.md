@@ -16,7 +16,7 @@ message, Spot handler, actor/timer/worker 경로를 호출하도록 구성했다
 | `TD-F1`~`TD-F6` | code-ready | remote Spot, route bridge, session relay, timeout/cancel 경로를 기존 public fixture로 실행한다. cycle 자체의 독립 evidence는 후속 보강 대상이다. |
 | `TD-F5A` | blocked | source host의 public drain seal 뒤 pending await는 종료되지만, 같은 session에서 시작한 새 request가 Java runtime의 정식 `ShuttingDown`이 아니라 `TimeoutException`으로 끝난다. 실행 로그 `logs/20260806-045139-1930524/`의 `session-flow.log`와 `client-td-f5a-probe.stderr.log`가 이 결과를 보인다. 이 error mapping을 runner에서 성공으로 분류하지 않는다. |
 | `TD-G1` | partial | Java public terminator surface compile check와 async scenario selector는 있으나 cross-language parity evidence는 Kotlin compile blocker 이후 확정한다. |
-| `TD-A1`, `TD-A2`, `TD-A4`, `TD-B1`, `TD-B2`, `TD-D5` | partial | 기존 selector 또는 public method-reference contract check가 있다. `TD-D5`는 unsupported context를 런타임에 만들 공개 API가 없어 compile-time contract check로 제한된다. |
+| `TD-A2`, `TD-A4`, `TD-B1`, `TD-B2`, `TD-D5` | partial | 기존 selector 또는 public method-reference contract check가 있다. `TD-D5`는 unsupported context를 런타임에 만들 공개 API가 없어 compile-time contract check로 제한된다. |
 
 ## 검증 조건
 

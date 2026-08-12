@@ -70,6 +70,7 @@ import {
   type ServiceUserSpotCloseRecord,
   type ServiceUserSpotCreateRecord
 } from './service-stateful-wire-codec';
+import { routingIdsEqual } from '../routing-id';
 
 import {
   decodeApplicationPayload,
@@ -81,6 +82,7 @@ import type {
   ServiceInstanceActivationRecoveryEnvelope
 } from './service-instance-activation-recovery-codec';
 import { validateServiceMetadataFrame } from './service-metadata-codec';
+import type { ServiceSessionBindingIngressPort } from './service-session-binding-ingress-port';
 import {
   ZLinkFrameworkException
 } from '../../contracts';
@@ -97,6 +99,12 @@ const SESSION_BINDING_REPLACEMENT_RETRY_MAX_DELAY_MS = 1_000;
 export interface ServiceSpotMessageFollowSeal {
   readonly key: string;
   readonly serial: bigint;
+}
+
+export interface ServiceBoundSessionSendFence {
+  readonly targetNodeGeneration: bigint;
+  readonly authorityOwnerGeneration: bigint;
+  readonly ownerLeaseGeneration: bigint;
 }
 
 interface ServiceSpotMessageFollowRecord {
@@ -170,6 +178,7 @@ export interface ServiceStatefulMailboxData {
 
 export interface ServiceSessionDelivery {
   readonly binding: ServiceSessionBinding;
+  readonly bindingIngress?: ServiceSessionBindingIngressPort;
   /**
    * Delivers the retained M6A application frame after the binding fence has
    * been validated. The stream adapter owns multipart decoding at that point.
@@ -958,9 +967,7 @@ export class ServiceStatefulRuntime {
       actor: Object.freeze({ ...route.actor }),
       targetNodeGeneration: route.targetNodeGeneration,
       authorityOwnerGeneration: route.authorityOwnerGeneration,
-      ...(route.ownerLeaseGeneration === undefined
-        ? {}
-        : { ownerLeaseGeneration: route.ownerLeaseGeneration })
+      ownerLeaseGeneration: route.ownerLeaseGeneration
     }));
   }
 
@@ -1573,7 +1580,8 @@ export class ServiceStatefulRuntime {
     actor: ServiceActorRef,
     timeoutMs: number,
     deliver: ServiceSessionDelivery['deliver'],
-    onBindingReplaced?: ServiceSessionDelivery['onBindingReplaced']
+    onBindingReplaced?: ServiceSessionDelivery['onBindingReplaced'],
+    bindingIngress?: ServiceSessionBindingIngressPort
   ): ServiceStatefulPendingOperation {
     const pending = this.operations.reserve(timeoutMs);
     const generation = this.nextSessionSequence++;
@@ -1590,6 +1598,7 @@ export class ServiceStatefulRuntime {
     const delivery: ServiceSessionDelivery = {
       binding: localBinding,
       deliver,
+      ...(bindingIngress === undefined ? {} : { bindingIngress }),
       ...(onBindingReplaced === undefined ? {} : { onBindingReplaced })
     };
     const deliveryKey = actorKey(actor);
@@ -1641,7 +1650,8 @@ export class ServiceStatefulRuntime {
               actor,
               targetNodeGeneration: this.nodeGeneration,
               authorityOwnerGeneration: this.registry.actor(actor.actorId)?.authorityOwnerGeneration
-                ?? actor.generation
+                ?? actor.generation,
+              ownerLeaseGeneration: this.nodeGeneration
             }
           ));
         }
@@ -1769,7 +1779,8 @@ export class ServiceStatefulRuntime {
   sendBoundSession(
     actor: ServiceActorRef,
     expectedBindingGeneration: bigint,
-    payload: ServiceApplicationPayload
+    payload: ServiceApplicationPayload,
+    senderFence?: ServiceBoundSessionSendFence
   ): number {
     let binding: ServiceSessionBinding;
     try {
@@ -1777,8 +1788,10 @@ export class ServiceStatefulRuntime {
     } catch {
       return SubmitResult.InvalidState;
     }
+    const actorFence = this.tryBoundSessionSendFence(actor, senderFence);
+    if (actorFence === undefined) return SubmitResult.InvalidState;
     const header = encodeBoundSessionSendHeader(
-      this.actorFence(actor),
+      actorFence,
       expectedBindingGeneration
     );
     return this.submitOneWay(
@@ -1791,6 +1804,18 @@ export class ServiceStatefulRuntime {
     if (this.closed) return;
     this.closed = true;
     this.operations.close();
+    const clearedActors = new Set<string>();
+    for (const deliveries of [this.sessionDeliveries, this.retiredSessionDeliveries]) {
+      for (const delivery of deliveries.values()) {
+        const actorId = delivery.binding.actor.actorId;
+        if (clearedActors.has(actorId)) continue;
+        clearedActors.add(actorId);
+        delivery.bindingIngress?.clearOutbound(
+          actorId,
+          new Error(`Actor '${actorId}' Session service closed with retained outbound delivery.`)
+        );
+      }
+    }
     this.sessionDeliveries.clear();
     this.retiredSessionDeliveries.clear();
     this.appliedReplacementNotices.clear();
@@ -3162,7 +3187,6 @@ export class ServiceStatefulRuntime {
             actorAuthorityFromRoute({
               ...record.actor,
               ownerLeaseGeneration: record.actor.ownerLeaseGeneration
-                ?? this.nodeGeneration
             })
           );
         }
@@ -3203,8 +3227,7 @@ export class ServiceStatefulRuntime {
       && (
         knownAuthority.targetNodeGeneration !== authority.targetNodeGeneration
         || knownAuthority.authorityOwnerGeneration !== authority.authorityOwnerGeneration
-        || knownAuthority.ownerLeaseGeneration !== undefined
-          && knownAuthority.ownerLeaseGeneration !== authority.ownerLeaseGeneration
+        || knownAuthority.ownerLeaseGeneration !== authority.ownerLeaseGeneration
       )
     ) {
       return 'infrastructure';
@@ -3403,7 +3426,7 @@ export class ServiceStatefulRuntime {
   }
 
   private deliverBoundSession(
-    _ingress: RawServiceIngressRecord,
+    ingress: RawServiceIngressRecord,
     record: Extract<ServiceStatefulWireRecord, { readonly kind: 'boundSessionSend' }>,
     payloadFrame: Uint8Array | undefined
   ): RawServicePumpResult {
@@ -3412,8 +3435,54 @@ export class ServiceStatefulRuntime {
       delivery === undefined
       || delivery.binding.bindingGeneration !== record.expectedBindingGeneration
       || payloadFrame === undefined
-      || !delivery.deliver(delivery.binding.sessionRid, payloadFrame)
+      || ingress.sourceNodeGeneration === undefined
+      || !routingIdsEqual(ingress.sourceRoutingId, record.actor.actor.nodeRid)
+      || ingress.sourceNodeGeneration !== record.actor.targetNodeGeneration
     ) {
+      return 'protocolError';
+    }
+    const sessionRid = delivery.binding.sessionRid;
+    let retainedPayload: Uint8Array | undefined = payloadFrame;
+    let settled = false;
+    const settle = () => {
+      if (settled) return false;
+      settled = true;
+      retainedPayload = undefined;
+      return true;
+    };
+    const operation = {
+      deliver: async () => {
+        if (settled || retainedPayload === undefined) return false;
+        const delivered = delivery.deliver(sessionRid, retainedPayload);
+        if (delivered) settle();
+        return delivered;
+      },
+      fail: (_error: unknown) => {
+        settle();
+      }
+    };
+    const decision = delivery.bindingIngress?.retainOutbound({
+      actorId: record.actor.actor.actorId,
+      objectGeneration: record.actor.actor.generation,
+      actorNodeRid: record.actor.actor.nodeRid,
+      actorNodeGeneration: record.actor.targetNodeGeneration,
+      authorityOwnerGeneration: record.actor.authorityOwnerGeneration,
+      ownerLeaseGeneration: record.actor.ownerLeaseGeneration,
+      producerNodeRid: ingress.sourceRoutingId,
+      producerNodeGeneration: ingress.sourceNodeGeneration,
+      sessionIdentity: sessionRid,
+      bindingGeneration: record.expectedBindingGeneration
+    }, operation);
+    if (decision === 'retained') return 'application';
+    if (decision === 'rejected') {
+      return 'protocolError';
+    }
+    try {
+      const delivered = delivery.deliver(sessionRid, retainedPayload);
+      settle();
+      if (!delivered) return 'protocolError';
+    } catch (error) {
+      operation.fail(error);
       return 'protocolError';
     }
     return 'application';
@@ -3851,6 +3920,7 @@ export class ServiceStatefulRuntime {
         command: parts[0]![3]!,
         flags: parts[0]![4]!,
         sourceRoutingId: this.nodeRid,
+        sourceNodeGeneration: this.nodeGeneration,
         parts
       });
       return result === 'application' || result === 'infrastructure'
@@ -4253,7 +4323,8 @@ export class ServiceStatefulRuntime {
       this.rememberActorRoute({
         actor: resolvedActor,
         targetNodeGeneration: this.peerGeneration(targetNodeRid),
-        authorityOwnerGeneration: tail.authorityOwnerGeneration
+        authorityOwnerGeneration: tail.authorityOwnerGeneration,
+        ownerLeaseGeneration: this.peerGeneration(targetNodeRid)
       });
       kindData = {
         kind: 'actorLookupCompletion',
@@ -4572,6 +4643,34 @@ export class ServiceStatefulRuntime {
     const route = this.tryActorFence(actor);
     if (route === undefined) throw new ServiceStaleGenerationError('actor', actor.actorId);
     return route;
+  }
+
+  private tryBoundSessionSendFence(
+    actor: ServiceActorRef,
+    senderFence: ServiceBoundSessionSendFence | undefined
+  ): ServiceActorRouteFence | undefined {
+    if (
+      senderFence === undefined
+      || senderFence.targetNodeGeneration !== this.nodeGeneration
+      || senderFence.authorityOwnerGeneration <= 0n
+      || senderFence.ownerLeaseGeneration <= 0n
+    ) {
+      return undefined;
+    }
+    const local = actor.nodeRid === this.nodeRid ? this.registry.actor(actor.actorId) : undefined;
+    if (
+      local === undefined
+      || !sameActorRef(local.ref, actor)
+      || local.authorityOwnerGeneration !== senderFence.authorityOwnerGeneration
+    ) {
+      return undefined;
+    }
+    return {
+      actor,
+      targetNodeGeneration: senderFence.targetNodeGeneration,
+      authorityOwnerGeneration: senderFence.authorityOwnerGeneration,
+      ownerLeaseGeneration: senderFence.ownerLeaseGeneration
+    };
   }
 
   private tryActorFence(actor: ServiceActorRef): ServiceActorRouteFence | undefined {
@@ -4936,7 +5035,7 @@ function actorAuthorityFromRoute(route: ServiceActorRouteFence): ServiceBoundSes
     actor: route.actor,
     targetNodeGeneration: route.targetNodeGeneration,
     authorityOwnerGeneration: route.authorityOwnerGeneration,
-    ownerLeaseGeneration: route.ownerLeaseGeneration ?? route.targetNodeGeneration
+    ownerLeaseGeneration: route.ownerLeaseGeneration
   };
 }
 

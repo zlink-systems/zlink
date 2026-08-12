@@ -68,17 +68,27 @@ public sealed class ContractSurfaceCoverage
     [Fact]
     public void Closed_result_and_event_roots_cannot_be_subclassed_outside_the_framework_assembly()
     {
-        Type[] roots = [typeof(ZLinkActorJoinCompletion)];
+        var tree = CSharpSyntaxTree.ParseText(
+            """
+            using Zlink.Framework.Contracts.Actors;
 
-        foreach (var root in roots)
-        {
-            var constructors = root.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic)
-                .Where(constructor => constructor.GetParameters() is not [{ ParameterType: var parameterType }]
-                                      || parameterType != root)
-                .ToArray();
-            Assert.NotEmpty(constructors);
-            Assert.All(constructors, constructor => Assert.True(constructor.IsFamilyAndAssembly));
-        }
+            public sealed record ExternalCompletion : ZLinkActorJoinCompletion;
+            """,
+            new CSharpParseOptions(LanguageVersion.Preview));
+        var compilation = CSharpCompilation.Create(
+            "ExternalFrameworkConsumer",
+            [tree],
+            SemanticBindingContext.MetadataReferences(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        var errors = compilation.GetDiagnostics()
+            .Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+            .ToArray();
+        Assert.Contains(errors, diagnostic =>
+            diagnostic.Id == "CS0122"
+            && diagnostic.GetMessage().Contains(
+                nameof(ZLinkActorJoinCompletion),
+                StringComparison.Ordinal));
     }
 
     [Fact]
@@ -131,7 +141,6 @@ public sealed class ContractSurfaceCoverage
             .SelectMany(type => type.GetMethods(
                 BindingFlags.Instance |
                 BindingFlags.Public |
-                BindingFlags.NonPublic |
                 BindingFlags.Static))
             .Where(method => method.GetCustomAttribute<FactAttribute>() is not null)
             .SelectMany(method => method.GetCustomAttributes<ContractExampleAttribute>())
@@ -1416,7 +1425,7 @@ public sealed class ContractSurfaceCoverage
 
         public SemanticTypeIdentityResolver GetResolver(SyntaxTree tree) => _resolvers[tree];
 
-        private static IEnumerable<MetadataReference> MetadataReferences()
+        internal static IEnumerable<MetadataReference> MetadataReferences()
         {
             var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var assembly in ReferencedAssemblies())

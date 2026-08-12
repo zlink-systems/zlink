@@ -151,7 +151,7 @@ public final class Program {
             String spotRid = config.sessionDrainSpotRid();
             if (!spotRid.isBlank()) {
                 spots.getOrCreate(spotRid, Contracts.TARGET_SPOT)
-                    .request(ZLinkMessage.of("drain-hold"))
+                    .request(ZLinkMessage.of(new Contracts.SpotCreateReq("drain-hold")))
                     .submit()
                     .toCompletableFuture().join();
             }

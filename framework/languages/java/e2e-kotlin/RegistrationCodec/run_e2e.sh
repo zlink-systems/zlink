@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/e2e-redis-common.sh"
+zlink_e2e_initialize kotlin "$0" "$@"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/e2e-kotlin-config.sh"
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -61,23 +62,7 @@ trap cleanup EXIT
 
 reserve_ports() {
   local count="${1:-3}"
-  python3 - "${count}" <<'PY'
-import socket
-import sys
-count = int(sys.argv[1])
-sockets = []
-ports = []
-try:
-    for _ in range(count):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        ports.append(sock.getsockname()[1])
-    print(" ".join(str(port) for port in ports))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  zlink_e2e_reserve_ports "${count}"
 }
 
 tcp() { echo "tcp://127.0.0.1:$1"; }
@@ -100,7 +85,8 @@ wait_port() {
 }
 
 gradle_run() {
-  ../../gradlew --project-cache-dir "${ZLINK_KOTLIN_E2E_GRADLE_CACHE}" --no-daemon "$@" --quiet
+  zlink_e2e_gradle_build_locked ../../gradlew \
+    --project-cache-dir "${ZLINK_KOTLIN_E2E_GRADLE_CACHE}" --no-daemon "$@" --quiet
 }
 
 bin_path() {
@@ -194,7 +180,8 @@ PY
   grep -Rq "message flow" "${log_dir}"/*.stdout.log
   if [[ "${SCENARIO}" == "all" ]]; then
     grep -q "EchoAutoReq" "${log_dir}/server-evidence.json"
-    grep -q "ProtobufEcho" "${log_dir}/server-evidence.json"
+    grep -q "ProtobufEchoReq" "${log_dir}/server-evidence.json"
+    grep -q "ProtobufEchoMsg" "${log_dir}/server-evidence.json"
     grep -q "PackedEchoReq" "${log_dir}/server-evidence.json"
   fi
 fi

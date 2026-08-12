@@ -17,6 +17,7 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeMonitor;
 import systems.zlink.framework.runtime.internal.binding.spot.PeerChannels;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
@@ -350,6 +351,11 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         // Alternate backends may not support command 42/43 dispatch.
     }
 
+    default void setBoundSessionSendHandler(
+        BoundSessionSendHandler handler) {
+        // Alternate backends may not support command 36 dispatch.
+    }
+
     /**
      * Submits one exact command 42 record and returns its command 43 ACK.
      * The Session owner answers with its accepted bound-Session high-water at
@@ -589,6 +595,15 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         CompletionStage<byte[]> handle(
             RoutingId sourceNodeRid,
             byte[] command42);
+    }
+
+    @FunctionalInterface
+    interface BoundSessionSendHandler {
+        boolean handle(
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            ZLinkServiceM6BWireCodec.BoundSessionSend command,
+            ZLinkServiceM6AWireCodec.ApplicationPayload payload);
     }
 
     @FunctionalInterface

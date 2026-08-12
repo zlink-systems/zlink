@@ -1,5 +1,4 @@
-package Support;
-import systems.zlink.e2e.pubsub.client.Support;
+package systems.zlink.e2e.pubsub.client.Support;
 import java.util.Arrays;
 
 import java.io.IOException;

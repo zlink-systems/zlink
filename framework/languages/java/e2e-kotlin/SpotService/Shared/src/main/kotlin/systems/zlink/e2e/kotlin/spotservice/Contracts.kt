@@ -78,7 +78,7 @@ class Contracts private constructor() {
     data class OutboundMsg(val value: String)
 
     @JvmRecord
-    data class MeshMsg(val value: String)
+    data class MeshEvent(val value: String)
 
     @JvmRecord
     data class TimerActivityReq(val value: String)
@@ -164,7 +164,7 @@ class Contracts private constructor() {
     )
 
     @JvmRecord
-    data class SpotToSpotCommandReq(
+    data class SpotToSpotMsg(
         val targetSpotRid: String,
         val value: String
     )
@@ -176,9 +176,12 @@ class Contracts private constructor() {
     )
 
     @JvmRecord
-    data class AckRes(
+    data class CommandSubmitRes(
         val accepted: Boolean
     )
+
+    @JvmRecord
+    data class SpotCreateReq(val reason: String)
 
     @JvmRecord
     data class MultiNodeCreateSpotReq(

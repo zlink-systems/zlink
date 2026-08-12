@@ -63,7 +63,7 @@ raw frame 조작, 샘플 전용 route helper로 공통 계약을 우회하지 �
 
 현재 sample process와 static contract 기준의 pending 항목은 없다. `CreateGameHttpReq.gameName`
 의 nullable 표현, `CreateGameHttpRes`의 `playEndpoints`·`playNodes`, `JoinGameFailedNotify`와
-`LeaveGameMsg`를 확인했다. `CreateGameReq`와 `TicTacToeGameJoin*`는 API와 Play 사이의
+`LeaveGameMsg`를 확인했다. `TicTacToeGameCreateReq`와 `TicTacToeGameJoin*`는 API와 Play 사이의
 internal message이며 public client contract에 추가하지 않는다. 전체 C++ S1 closure와 common
 E2E ID 추적은 이 sample inventory의 범위를 넘으므로 ledger에서 별도로 판정한다.
 

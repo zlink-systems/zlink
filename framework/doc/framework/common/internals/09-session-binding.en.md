@@ -15,6 +15,10 @@ title: "9. Session And Actor Binding"
 > This chapter covers the **structure** that satisfies that contract and
 > the failures that become visible while replacing a binding.
 
+The complete relocation transition and exact span involving the Session are owned by
+[13. Relocation Handoff State Transitions](13-relocation-handoff.en.md). This chapter
+explains only the general structure of a physical Session and Actor binding.
+
 This structure binds one external client connection to an Actor. It
 must ensure that the Actor owner has only one current binding even
 while replacing the connection.
@@ -164,31 +168,97 @@ silently drops.
 
 ### Relocation Seal Versus Retired-Binding Rejection
 
-**Decision — a relocation seal and rejection of a retired binding are
-different transitions.** Retired-binding rejection blocks ingress from
-the previous generation after the current binding is replaced by a new
-session. A relocation seal retains ingress while the route of the same
-binding moves.
+**Decision — a relocation seal and retired-binding rejection are different
+transitions.** Retired-binding rejection blocks ingress of a previous generation after
+replacing the current binding with a new Session. A relocation seal holds Session
+messages while moving the Actor route of the same binding.
 
-While processing command 42, the session owner changes the following
-state together at one atomic state-transition point.
+The Session owner does only three things in the seal.
 
-- It fixes the current binding's accepted high-water.
-- It prevents post-seal ingress from advancing that high-water.
-- It prevents post-seal ingress from entering application dispatch.
+- Confirms the current physical Session and binding generation.
+- Holds requests and pushes for that binding instead of submitting them to the
+  application route.
+- Once relocation has a result, submits held messages to the source or target route and
+  releases the seal.
 
-The blocked ingress does not fail immediately. Its payload and reply
-context remain retained until a matching command 44 route switch or
-abort. This storage has no relocation-specific record-count or byte
-bound. Limits on an individual message, transport, deadline, and
-cancellation remain in force.
+### Single Owner Of Session Validation
 
-Command 44 verifies the exact binding and authority fences, seal
-identity, and replayed high-water. On success, it switches the route
-and resumes retained ingress on the new route. Abort releases only the
-matching seal and resumes ingress on the source route. The retired-
-binding rejection rule in §3 still applies and remains separate from
-the relocation-seal waiting state.
+`SessionBindingAggregate` handles Session identity, binding generation,
+ActorId/ObjectGeneration, relocation identity, and route change in the same serialized
+execution span. These values describe only the connection relationship the Session
+actually owns. The aggregate doesn't select the relocation target, read or write the
+Location Store, or revalidate Actor authority.
+
+Each validation responsibility exists once.
+
+- The transport adapter validates authenticated peer, node generation, and frame shape.
+- The target relocation runtime installs the temporary queue, finishes Restore, and
+  runs the Location Store CAS against the expected source owner after receiving the
+  cutover `[send]` or 1,000 ms after sending the Restore-ready reply.
+- The Session aggregate validates that the current Session and binding are the route
+  target of the same relocation.
+- Actor join, host relocation, Message Follow, and callback paths don't repeat those
+  decisions.
+
+The seal doesn't use a numeric high-water. Ordinary message relay between source and
+target relies on ordering and retransmission of the same TCP connection. The aggregate
+holds messages arriving during the Session seal, but adds no relocation-specific record
+count or byte bound. Per-message size, transport, deadline, and cancellation limits
+still apply.
+
+Only the target runs the Location Store owner CAS. If cutover doesn't arrive within
+1,000 ms, it records a `cutover_timeout` Warning and starts the same CAS procedure. Once
+CAS succeeds, the target opens its queue and sends command 44 to the Session owner. The
+aggregate changes the route and current `ActorRef` snapshot to the target, submits held
+Session messages to the new route, and releases the seal. Command 44 has no reply and
+the normal flow doesn't use command 45.
+
+The Session owner applies configurable `SessionRelocationSealTimeout` from seal
+installation; its default is 3,000 ms. If the exact command 44 doesn't arrive in time,
+it closes the physical Session and cleans binding, held-message, and seal state. Timeout
+and command 44 are serialized, and only the first one takes effect. A late command 44
+only records a `late_session_route_update` Warning and is ignored.
+
+```mermaid
+sequenceDiagram
+    participant C as Relocation coordinator
+    participant S as Session owner
+    participant A as Source runtime
+    participant B as Target runtime
+    participant L as Location Store
+
+    C->>S: [request] command 42 · freeze exact route and hold later messages
+    S-->>C: [reply] command 43 · exact binding seal installed
+    A->>B: [request] install temporary queue, Restore, prepare relay without dispatch
+    B-->>A: [reply] temporary queue and Restore ready · source still owner
+    A->>B: [send/request relay] cached queue and ingress hold
+    alt cutover arrives within 1,000 ms
+        A->>B: [send] cutover · pre-boundary relay complete
+    else cutover timeout
+        B->>B: [local] cutover_timeout Warning · continue fallback
+    end
+    B->>L: [request] CAS owner to target if source fence still matches
+    L-->>B: [reply] target owner CAS result
+    B->>B: [local] merge queues and open dispatch
+    B->>S: [send] command 44 · apply exact target route, submit held, release seal
+    alt command 44 arrives within SessionRelocationSealTimeout
+        S->>S: [local] switch route · submit held messages · release seal
+    else Session seal timeout
+        S->>S: [local] close physical Session · clean binding and held state
+    end
+```
+
+A late or duplicate cutover after CAS only records a `late_cutover` Warning and is
+ignored. A late or duplicate command 44 also only records a Warning and doesn't mutate
+state again. If target explicitly fails before cutover, only the matching seal is
+released and held messages are submitted to the source route. A failure after cutover
+doesn't reopen source route and is cleaned by the seal timeout.
+
+This structure centralizes Session-binding validation without giving the Session control
+of the whole relocation. Actor/Spot preparation, server-to-server relay, the cutover
+`[send]`, and the Location Store CAS belong to the common relocation runtime. The retired
+binding rejection rule in §3 still applies and isn't merged with relocation-seal wait
+state.
 
 ## 5. Result To Confirm
 
@@ -210,11 +280,17 @@ the relocation-seal waiting state.
   restored.
 - When an Actor moves to a different node, the connection isn't
   rebuilt — only the route is refreshed.
-- Command 42 fixes accepted high-water and blocks post-seal ingress in
-  one atomic transition.
-- Post-seal retained ingress is not rejected by a separate relocation
-  bound and runs on the exact route after a matching route switch or
-  abort.
+- Commands 42 and 43 carry only the result of installing a seal on the current binding.
+- Only `SessionBindingAggregate` validates current Session and binding route; other
+  components don't revalidate them through the Store or local mirrors.
+- Only the target performs the Location Store owner CAS after cutover arrives or the
+  1,000 ms fallback expires.
+- After successful CAS, the target sends command 44; the Session owner changes the route,
+  submits held Session messages to the target route, and releases the seal.
+- `SessionRelocationSealTimeout` defaults to 3,000 ms. On timeout, the Session owner
+  closes the physical Session and cleans related state.
+- A late or duplicate cutover or command 44 only records a Warning and doesn't mutate
+  state again.
 
 ---
 

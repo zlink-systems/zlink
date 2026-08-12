@@ -44,7 +44,7 @@ cleanup() {
     wait "${pid}" 2>/dev/null || true
   done
   if [[ -n "${REDIS_CONTAINER}" ]]; then
-    docker rm -fv "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "${REDIS_CONTAINER}" || true
   fi
   zlink_sample_copy_evidence "${RUN_DIR}" "DeliveryDispatch"
   if [[ "${RUN_SUCCEEDED}" == "1" ]]; then
@@ -63,7 +63,7 @@ sockets = []
 chosen = set()
 try:
     while len(sockets) < 9:
-        port = random.randint(41000, 60999)
+        port = random.randint(22100, 23999)
         if port in chosen:
             continue
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

@@ -63,6 +63,8 @@ import type {
   ServiceActorRef,
   ServiceSpotState
 } from '../../foundation/service-stateful-registry';
+import { serviceSessionBindingIngressPortIfRegistered } from
+  '../../foundation/service-session-binding-ingress-port';
 import type {
   ServiceActorCreateRecord,
   ServiceDirectSpotRouteFence,
@@ -91,6 +93,7 @@ import type {
 } from '../../../contracts';
 import type {
   ZLinkBackendActorRef,
+  ZLinkBackendActorSessionSendFence,
   ZLinkBackendObjectPlacement,
   ZLinkBackendMeshNode
 } from '../contracts';
@@ -1241,12 +1244,15 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   sendActorBoundSession(
     actor: ZLinkBackendActorRef,
     expectedBindingGeneration: bigint,
-    parts: MessageLike | readonly MessageLike[]
+    parts: MessageLike | readonly MessageLike[],
+    _flags?: number,
+    actorFence?: ZLinkBackendActorSessionSendFence
   ): SubmitResultValue {
     return this.requireStateful().sendBoundSession(
       actor,
       expectedBindingGeneration,
-      encodeMultipart(parts)
+      encodeMultipart(parts),
+      actorFence
     ) as SubmitResultValue;
   }
 
@@ -1835,7 +1841,8 @@ class RawStreamSessionService implements StreamSessionService {
         actor,
         timeoutMs,
         (targetSessionRid, payloadFrame) => this.deliver(targetSessionRid, payloadFrame),
-        onBindingReplaced
+        onBindingReplaced,
+        serviceSessionBindingIngressPortIfRegistered(this)
       )
     );
   }

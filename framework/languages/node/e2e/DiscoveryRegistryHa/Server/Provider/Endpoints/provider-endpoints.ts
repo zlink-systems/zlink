@@ -10,11 +10,21 @@ import {
   type ZLinkActorClient,
   type ZLinkSpotManager
 } from '@zlink-systems/framework';
-import { ChannelNames, FanoutEvent, type EvidenceWaitReq } from '../../../Shared/messages';
+import {
+  ChannelNames,
+  Config6ActorCreateReq,
+  Config6UserSpotCreateReq,
+  FanoutEvent,
+  type CapacityActorCreateReq,
+  type CapacitySpotCreateReq,
+  type EvidenceWaitReq
+} from '../../../Shared/messages';
 import {
   Config6ActorType,
   Config6LeaveReq,
+  type Config6LeaveRes,
   Config6JoinReq,
+  type Config6JoinRes,
   Config6ProbeReq,
   Config6UserSpotType,
   type Config6ProbeRes
@@ -78,11 +88,11 @@ export function createProviderEndpoints(
       method: 'POST',
       path: '/capacity/actors',
       handle: async (body) => {
-        const request = body as { actorId: string };
+        const request = body as CapacityActorCreateReq;
         try {
           const result = await actors.create(request.actorId, Config6ActorType)
             .inMesh(ChannelNames.profile)
-            .request({ state: (request as { state?: string }).state ?? '' })
+            .request(new Config6ActorCreateReq(request.state ?? ''))
             .timeout(5000)
             .submit();
           if (result.status === 'rejected') {
@@ -115,7 +125,7 @@ export function createProviderEndpoints(
         const request = body as { actorId: string; spotId: string };
         return await actorClient.requestToActor(request.actorId, new Config6JoinReq(request.spotId))
           .timeout(10_000)
-          .submit<{ accepted: true }>();
+          .submit<Config6JoinRes>();
       }
     },
     {
@@ -144,23 +154,23 @@ export function createProviderEndpoints(
         const request = body as { actorId: string };
         return await actorClient.requestToActor(request.actorId, new Config6LeaveReq())
           .timeout(10_000)
-          .submit<{ accepted: true }>();
+          .submit<Config6LeaveRes>();
       }
     },
     {
       method: 'POST',
       path: '/capacity/spots',
       handle: async (body) => {
-        const request = body as { spotId: string; failFactory?: boolean };
+        const request = body as CapacitySpotCreateReq;
         try {
           const result = await spots.getOrCreate(request.spotId, Config6UserSpotType)
             .inMesh(ChannelNames.profile)
-            .request({
-              failFactory: request.failFactory === true,
-              state: (request as { state?: string }).state ?? '',
-              stateLength: (request as { stateLength?: number }).stateLength,
-              fillByte: (request as { fillByte?: number }).fillByte
-            })
+            .request(new Config6UserSpotCreateReq(
+              request.failFactory === true,
+              request.state ?? '',
+              request.stateLength,
+              request.fillByte
+            ))
             .timeout(5000)
             .submit();
           return {

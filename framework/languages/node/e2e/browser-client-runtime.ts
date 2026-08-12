@@ -1,6 +1,6 @@
 type BrowserE2eStatus = 'running' | 'passed' | 'failed';
 
-interface BrowserE2eResult {
+interface BrowserE2eState {
   readonly name: string;
   readonly status: BrowserE2eStatus;
   readonly error?: string;
@@ -9,7 +9,7 @@ interface BrowserE2eResult {
 declare global {
   interface Window {
     __zlinkE2eArgs?: readonly string[];
-    __zlinkE2eResult?: BrowserE2eResult;
+    __zlinkE2eResult?: BrowserE2eState;
   }
 }
 
@@ -41,4 +41,4 @@ export {
   runBrowserE2e
 };
 
-export type { BrowserE2eResult };
+export type { BrowserE2eState };

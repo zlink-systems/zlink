@@ -47,8 +47,8 @@ public final class DispatchHttpServer implements AutoCloseable {
             write(exchange, 405, "");
             return;
         }
-        Messages.ServerAssertionRequest request =
-            json.readValue(exchange.getRequestBody(), Messages.ServerAssertionRequest.class);
+        Messages.ServerAssertionReq request =
+            json.readValue(exchange.getRequestBody(), Messages.ServerAssertionReq.class);
         queue.assertServerEvidence(request).whenComplete((response, error) -> {
             try {
                 if (error != null) {

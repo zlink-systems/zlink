@@ -33,7 +33,6 @@ evidence/admin endpoint, state, dispatch-error observer, request/send handler를
 - `RL-B5`: 느린 handler가 이미 받은 request는 drain 뒤에도 정상 reply하고, drain 이후 새 request는 다른 provider로 가는지 검증한다.
 - `RL-B6`: provider-a에 public admin fault를 주입해 일부 request가 public 실패로 끝나는 동안, provider-b의 정상 reply가 계속 유지되고 follow-up request가 성공하는지 확인한다.
 - `RL-C1`: 다량의 request와 send를 Consumer role을 통해 처리한 뒤 client driver가 정상 종료하고 runner가 프로세스 종료를 확인해 public 경로의 cleanup을 관측한다.
-- `RL-C2`: runner가 provider-b를 `SIGKILL`해 owner lease가 갱신되지 않는 stale descriptor를 만들고 consumer를 새 discovery host로 재시작한다. public MeshNode runtime snapshot에서 provider-b가 live topology에서 빠지는지, 이후 request가 provider-a로만 가는지, provider-b 재시작 뒤 다시 traffic을 받는지 확인한다.
 - `RL-C3`: provider-a 정지 구간의 public 실패와 재기동 후 topology 회복, 후속 request 성공을 같은 restart orchestration에서 확인한다.
 - `RL-C4`: runner-owned Redis location store를 pause/unpause해 store outage를 만들고, 이미 연결된 channel request가 계속 성공하는지, public topology read가 outage 중 infrastructure error로 실패하는지, store 복구 뒤 topology read와 follow-up request가 정상화되는지 확인한다.
 - `RL-D1`: 다수 client 프로세스가 동시에 request를 보내는 high fanout burst에서 정상 reply를 유지하는지 확인한다.

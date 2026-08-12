@@ -4,7 +4,7 @@ title: "Request 연결과 업무 흐름 식별"
 
 # Request 연결과 업무 흐름 식별
 
-[스펙 목차](README.ko.md) · [이전: Message flow tracing](26-message-flow-tracing.ko.md) · [다음: Host Relocate와 Shutdown](28-graceful-drain-handoff.ko.md)
+[스펙 목차](README.ko.md) · [이전: Message flow tracing](26-message-flow-tracing.ko.md) · [다음: Actor와 Spot relocation 전체 흐름](28-relocation-flow.ko.md)
 
 > **이 장이 정의하는 것** — request와 terminal reply를 연결하고, 같은 원인에서 이어진
 > 여러 message를 하나의 업무 흐름으로 식별하는 계약.

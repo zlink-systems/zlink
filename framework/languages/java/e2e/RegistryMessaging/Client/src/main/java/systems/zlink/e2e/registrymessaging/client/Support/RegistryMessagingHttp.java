@@ -1,6 +1,5 @@
-package Support;
+package systems.zlink.e2e.registrymessaging.client.Support;
 
-import systems.zlink.e2e.registrymessaging.client.Support;
 import java.time.Duration;
 import systems.zlink.httpclient.ZLinkHttpClient;
 

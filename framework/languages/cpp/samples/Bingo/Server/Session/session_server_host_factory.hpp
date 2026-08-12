@@ -42,10 +42,7 @@ class session_server_host_factory_t
               std::make_unique<sample_topology_t> (topology));
             use_default_bingo_codecs (options.codecs ());
             add_sample_location_store (options, topology);
-            auto api_channel = options.add_client_server_channel (sample_names_t::api_channel);
-            auto api_client = api_channel.client ();
-            api_client.connect (topology.api_a_channel_endpoint);
-            api_client.connect (topology.api_b_channel_endpoint);
+            options.add_client_server_channel (sample_names_t::api_channel).client ();
             auto room_mesh = options.add_route_mesh (sample_names_t::room_spot_mesh);
             room_mesh
               .set_routing_id (zlink::routing_id_t::from (

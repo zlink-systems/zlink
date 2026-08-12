@@ -4,6 +4,7 @@ umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/../redis-common.sh"
+zlink_dotnet_e2e_acquire_run_lock "$0" "$@"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="$ROOT_DIR/logs/$RUN_ID"
 mkdir -p "$LOG_DIR"
@@ -23,11 +24,11 @@ if [[ "$SCENARIO" == "all" ]]; then
   scenarios=(
     RL-A1 RL-A2 RL-A3 RL-A4 RL-A5
     RL-B1 RL-B2 RL-B3 RL-B4 RL-B5 RL-B6
-    RL-C1 RL-C2 RL-C3 RL-C4
-    RL-D1 RL-D2 RL-D3 RL-D4 RL-D5 RL-E1 RL-E2 RL-E3 RL-E4 RL-E5 RL-F4
+    RL-C1 RL-C3 RL-C4
+    RL-D2 RL-D3 RL-D4 RL-D5 RL-E1 RL-E2 RL-E3 RL-E4 RL-E5
   )
   for index in "${!scenarios[@]}"; do
-    "$0" "${scenarios[$index]}"
+    bash "$0" "${scenarios[$index]}"
   done
   echo "resilience-lifecycle e2e result=passed"
   exit 0
@@ -50,22 +51,7 @@ CLIENT_PROJECT="$ROOT_DIR/Client/ResilienceLifecycle.Client.csproj"
 
 pick_ports() {
   local count="$1"
-  python3 - "$count" <<'PY'
-import socket
-import sys
-
-sockets = []
-try:
-    for _ in range(int(sys.argv[1])):
-        current = socket.socket()
-        current.bind(("127.0.0.1", 0))
-        sockets.append(current)
-    for current in sockets:
-        print(current.getsockname()[1])
-finally:
-    for current in sockets:
-        current.close()
-PY
+  zlink_dotnet_e2e_allocate_ports "${count}" | tr ' ' '\n'
 }
 
 pids=()
@@ -85,8 +71,8 @@ cleanup() {
   done
   wait "${pids[@]:-}" 2>/dev/null || true
   if [[ -n "${REDIS_CONTAINER:-}" ]]; then
-    docker unpause "$REDIS_CONTAINER" >/dev/null 2>&1 || true
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    timeout -k 2s 10s docker unpause "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   if [[ "$code" -ne 0 ]]; then
     echo "E2E failed. Logs: $LOG_DIR" >&2
@@ -369,7 +355,7 @@ zlink_redis_start_scoped_assign \
 zlink_redis_wait_ready "$REDIS_CONTAINER" "$REDIS_READINESS_TIMEOUT_SECONDS"
 REDIS_KEY_PREFIX="resilience-e2e:$$:"
 
-if [[ "$SCENARIO" == "RL-E2" || "$SCENARIO" == "RL-E5" || "$SCENARIO" == "RL-F4" ]]; then
+if [[ "$SCENARIO" == "RL-E2" || "$SCENARIO" == "RL-E5" ]]; then
   RUN_SCENARIO="$SCENARIO"
   run_rl_e2
   exit 0

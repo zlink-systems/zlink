@@ -1,8 +1,5 @@
-package Endpoints;
+package systems.zlink.e2e.pubsub.publisher.Endpoints;
 
-import systems.zlink.e2e.pubsub.publisher.Configuration;
-import systems.zlink.e2e.pubsub.publisher.Endpoints;
-import systems.zlink.e2e.pubsub.publisher.Infrastructure;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -68,7 +65,7 @@ public final class PublisherEndpoints implements SmartLifecycle {
                 try {
                     fanout.publish(
                         options.channelName(), "\u0001ZLF1",
-                        new Contracts.EventMsg("ps-f3", 1, "reserved"));
+                        new Contracts.Event("ps-f3", 1, "reserved"));
                     writeText(exchange, 200, "accepted\n");
                 } catch (ZLinkConfigurationException error) {
                     writeText(exchange, 400, error.getMessage() + "\n");
@@ -77,7 +74,7 @@ public final class PublisherEndpoints implements SmartLifecycle {
             server.createContext("/publish/reserved-prefix", exchange -> {
                 fanout.publish(
                     options.channelName(), "\u0001ZLF1.more",
-                    new Contracts.EventMsg("ps-f3", 2, "reserved-prefix"))
+                    new Contracts.Event("ps-f3", 2, "reserved-prefix"))
                     .submit().toCompletableFuture().join();
                 writeText(exchange, 200, "published\n");
             });
@@ -130,8 +127,8 @@ public final class PublisherEndpoints implements SmartLifecycle {
             int sequence = Integer.parseInt(query.getOrDefault("sequence", "0"));
             String value = query.getOrDefault("value", "");
             Object event = Contracts.MISSING_PACKET.equals(packetName)
-                ? new Contracts.MissingEventMsg(scenario, sequence, value)
-                : new Contracts.EventMsg(scenario, sequence, value);
+                ? new Contracts.MissingEvent(scenario, sequence, value)
+                : new Contracts.Event(scenario, sequence, value);
             fanout.publish(options.channelName(), topic, event)
                 .submit()
                 .toCompletableFuture()

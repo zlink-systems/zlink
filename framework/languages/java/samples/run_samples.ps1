@@ -2,6 +2,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. "$RootDir/redis-common.ps1"
 $JavaRoot = Split-Path -Parent $RootDir
 $CoreLib = Join-Path $JavaRoot "../../../core/build/lib/libzlink.so"
 $ManifestPath = Join-Path $RootDir "sample-manifest.env"
@@ -36,13 +37,6 @@ function Read-SampleManifest {
 
 $Manifest = Read-SampleManifest $ManifestPath
 $SampleFilter = if ($env:ZLINK_SAMPLE_FILTER) { $env:ZLINK_SAMPLE_FILTER } else { "" }
-function Invoke-Checked {
-    param([string]$FilePath, [string[]]$Arguments)
-    & $FilePath @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Command failed: $FilePath $($Arguments -join ' ')"
-    }
-}
 
 function Invoke-SampleWithRetry {
     param([string]$ScriptPath)
@@ -93,13 +87,13 @@ function Invoke-ManifestSamples {
 $Gradle = if ($IsWindows) { Join-Path $JavaRoot "gradlew.bat" } else { Join-Path $JavaRoot "gradlew" }
 Push-Location $JavaRoot
 try {
-    Invoke-Checked $Gradle @(
+    Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments @(
         "--no-daemon",
         ":zlink-framework-testkit:contractTest",
         "--tests",
         "*SampleReleaseGateContractTest*"
     )
-    Invoke-Checked $Gradle @(
+    Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments @(
         "--no-daemon",
         "--no-parallel",
         ":zlink-framework-testkit:fakeBackendTest",

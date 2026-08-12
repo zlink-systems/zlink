@@ -1,4 +1,5 @@
-import { zlinkEntrySpotActorRequestHandler } from '@zlink-systems/nestjs';
+import { Injectable } from '@nestjs/common';
+import { ZLinkSpotActorRequest } from '@zlink-systems/framework';
 import { observeMilestoneRes, PacketNames } from '../../../../../../../Shared/Contracts/messages';
 import type {
   ZLinkEntrySpotActorRequestHandler,
@@ -12,11 +13,7 @@ import { PlayActor } from '../../../Actors/play-actor';
 import { MilestoneObserverRegistry } from '../entry-spot-registries';
 import { PlayEntrySpot } from '../play-entry-spot';
 
-@zlinkEntrySpotActorRequestHandler({
-  actor: () => PlayActor,
-  entrySpot: () => PlayEntrySpot,
-  packetName: PacketNames.observeMilestoneReq
-})
+@Injectable()
 class PlayActorObserveMilestoneHandler
   implements ZLinkEntrySpotActorRequestHandler<
     PlayEntrySpot,
@@ -26,6 +23,7 @@ class PlayActorObserveMilestoneHandler
   > {
   constructor(private readonly observers: MilestoneObserverRegistry) {}
 
+  @ZLinkSpotActorRequest(PacketNames.observeMilestoneReq)
   async handle(
     _spot: PlayEntrySpot,
     actor: PlayActor,

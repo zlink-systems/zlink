@@ -153,8 +153,8 @@ public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
             ConversationContracts.message(message), ConversationContracts.state(change.state()));
     }
 
-    public void setTyping(SupportUserActor actor, Messages.SetTypingReq request) {
-        publish(requireConversation().setTyping(actor.participantId(), request.isTyping()));
+    public void setTyping(SupportUserActor actor, Messages.SetTypingMsg message) {
+        publish(requireConversation().setTyping(actor.participantId(), message.isTyping()));
     }
 
     public Messages.CloseConversationRes close(

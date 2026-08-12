@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
+source "$NODE_ROOT/e2e/runner-common.sh"
+serialize_node_e2e_run "$0" "$@"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="$ROOT_DIR/log/$RUN_ID"
 CONFIG_DIR=""
@@ -13,11 +15,6 @@ LOCAL_READINESS_ATTEMPTS=30
 ROUTE_SETTLE_TIMEOUT_SECONDS=5
 SCENARIO_SETTLE_TIMEOUT_SECONDS=3
 HTTP_PROBE_TIMEOUT_SECONDS=3
-mkdir -p "$LOG_DIR"
-
-pick_port() {
-  node "$NODE_ROOT/e2e/port-picker.js"
-}
 
 build_package() {
   local dir="$1"
@@ -63,6 +60,7 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+mkdir -p "$LOG_DIR"
 CONFIG_DIR="$(mktemp -d)"
 chmod 700 "$CONFIG_DIR"
 

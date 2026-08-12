@@ -113,7 +113,7 @@ public final class MultiNodeHttpServer implements SmartLifecycle {
                 Contracts.SpotOnlyMeshReq request = json.readValue(
                     exchange.getRequestBody(),
                     Contracts.SpotOnlyMeshReq.class);
-                var result = getLocalSpot(request.sourceSpotRid(), ZLinkMessage.of(request));
+                var result = getLocalSpot(request.sourceSpotRid(), request);
                 Contracts.EvidenceSnapshot evidence = state.waitFor(
                     List.of(
                         "SpotOnlyRequest|" + state.nodeRid() + "|" + request.sourceSpotRid()
@@ -173,12 +173,13 @@ public final class MultiNodeHttpServer implements SmartLifecycle {
     }
 
     private ZLinkSpotCreateResult getLocalSpot(String spotRid) {
-        return getLocalSpot(spotRid, ZLinkMessage.empty());
+        return getLocalSpot(spotRid,
+            new Contracts.SpotOnlyMeshReq(spotRid, "", "create"));
     }
 
     private ZLinkSpotCreateResult getLocalSpot(
         String spotRid,
-        ZLinkMessage request) {
+        Contracts.SpotOnlyMeshReq request) {
         try {
             return spots.getOrCreate(spotRid, "multi-node")
                 .request(request)

@@ -1325,8 +1325,6 @@ internal sealed partial class ZLinkProviderLocationRepository
             return ZLinkRelocationCapacityAbortResult.AlreadyAborted;
         if (stored.Record.Status == RelocationStatus.Committed)
             return ZLinkRelocationCapacityAbortResult.AlreadyCommitted;
-        if (stored.Record.Status == RelocationStatus.Prepared)
-            return ZLinkRelocationCapacityAbortResult.Stale;
         var request = stored.Record.Request;
         var capacity = await ReadCapacityAsync(
                 request.TargetDescriptor,

@@ -1,13 +1,14 @@
 import { ZLinkPacket } from '@zlink-systems/framework';
 
 export const PacketNames = {
-  actorNotify: 'ActorNotify',
-  actorAsk: 'ActorAsk',
-  actorPush: 'ActorPush',
-  bindActor: 'BindActor'
+  actorMsg: 'ActorMsg',
+  actorReq: 'ActorReq',
+  actorPushReq: 'ActorPushReq',
+  actorPushNotify: 'ActorPushNotify',
+  bindActorReq: 'BindActorReq'
 } as const;
 
-export class ActorNotify {
+export class ActorMsg {
   constructor(
     readonly scenario: string,
     readonly actorId: string,
@@ -15,7 +16,7 @@ export class ActorNotify {
   ) {}
 }
 
-export class ActorAsk {
+export class ActorReq {
   constructor(
     readonly scenario: string,
     readonly actorId: string,
@@ -23,7 +24,7 @@ export class ActorAsk {
   ) {}
 }
 
-export interface ActorReply {
+export interface ActorRes {
   readonly scenario: string;
   readonly actorId: string;
   readonly value: string;
@@ -37,7 +38,7 @@ export class ActorPushReq {
   ) {}
 }
 
-@ZLinkPacket(PacketNames.actorPush)
+@ZLinkPacket(PacketNames.actorPushNotify)
 export class ActorPushNotify {
   constructor(
     readonly scenario: string,
@@ -60,7 +61,7 @@ export interface ActorRefPayload {
   readonly meshName: string;
 }
 
-export interface ActorEnsureResponse {
+export interface ActorEnsureRes {
   readonly actorId: string;
   readonly actor: ActorRefPayload;
 }
@@ -76,31 +77,31 @@ export interface BindActorRes {
   readonly boundCount: number;
 }
 
-export interface SessionBindingSnapshot {
+export interface SessionBindingRes {
   readonly actorId: string;
   readonly sessionIds: readonly string[];
 }
 
-export interface ActorCallRequest {
+export interface ActorCallReq {
   readonly scenario: string;
   readonly actorId: string;
   readonly actor?: ActorRefPayload;
   readonly value: string;
 }
 
-export interface ActorCallResponse {
+export interface ActorCallRes {
   readonly scenario: string;
   readonly actorId: string;
   readonly result: string;
   readonly errorKind?: string;
 }
 
-export function actorNotify(scenario: string, actorId: string, value: string): ActorNotify {
-  return new ActorNotify(scenario, actorId, value);
+export function actorMsg(scenario: string, actorId: string, value: string): ActorMsg {
+  return new ActorMsg(scenario, actorId, value);
 }
 
-export function actorAsk(scenario: string, actorId: string, value: string): ActorAsk {
-  return new ActorAsk(scenario, actorId, value);
+export function actorReq(scenario: string, actorId: string, value: string): ActorReq {
+  return new ActorReq(scenario, actorId, value);
 }
 
 export function actorPush(scenario: string, actorId: string, value: string): ActorPushReq {

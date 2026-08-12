@@ -9,11 +9,11 @@
 실행 가능한 업무 흐름으로 보여 준다. 언어별 sample은 한 언어 구현을 기준으로
 복사하지 않고 이 공통 시나리오와 해당 언어 spec을 함께 따른다.
 
-Bingo, TicTacToe, SupportChat, DeliveryDispatch, ShoppingMall과 GameQuest는 다섯 framework 언어
-(.NET, Java, Kotlin, Node.js, C++)가 공통으로 제공한다. ZoneWorld는 .NET과 Node.js가 제공하며
-TypeScript 브라우저 client를 공유한다. 지원 언어는 같은 역할 분리, request/response/notify 이름,
-상태 필드와 smoke 검증 순서를 따른다. 언어별 API 표현은 달라도 같은 framework 기능을 같은 순서로
-확인할 수 있어야 한다.
+공통 sample은 다섯 framework 언어(.NET, Java, Kotlin, Node.js, C++)가 제공한다.
+ZoneWorld의 .NET과 Node.js runner는 TypeScript browser client도 공유하고, C++·Java·Kotlin
+runner는 해당 언어 client로 같은 업무 흐름을 검증한다. 모든 구현은 같은 역할 분리,
+request/response/notify 이름, 상태 필드와 smoke 검증 순서를 따른다. 언어별 API 표현은 달라도
+같은 framework 기능을 같은 순서로 확인할 수 있어야 한다.
 
 언어별 guide는 공통 sample의 목적, 서버 구성, 메시지 계약, 상태 전이, 검증 순서를 다시
 정의하지 않는다. 이런 내용을 언어별로 복사하면 공통 문서와 서로 다른 구현 기준이 생길 수
@@ -26,16 +26,20 @@ TypeScript 브라우저 client를 공유한다. 지원 언어는 같은 역할 �
 | 샘플 | 목적 | 서버 구성 | 연결 방식 | Handler 등록 방식 | 기본 payload codec |
 |------|------|-----------|-----------|-------------------|--------------------|
 | [Bingo](bingo/README.ko.md) | 레벨별 matchmaking Instance Spot, session gateway, actor binding, room User Spot, timer와 bound push를 한 흐름으로 보여 준다. | `Session`, `Api`, `Matchmaking`, `Play` 분리 | location store 기반 자동 연결 | **자동 등록** | Protobuf |
-| [TicTacToe](tictactoe/README.ko.md) | 2개 API와 2개 Play로 수동 endpoint scale-out, 공식 Redis Location Store 기반 room routing과 실시간 게임 흐름을 보여 준다. | `Api` 2개, `Play` 2개, 별도 `Session` 서버 없이 `Play`가 stream session을 함께 소유 | **수동 endpoint 연결** | **자동 등록** | JSON |
+| [TicTacToe](tictactoe/README.ko.md) | 2개 API와 2개 Play로 수동 endpoint scale-out, 공식 Redis Location Store 기반 room routing과 실시간 게임 흐름을 보여 준다. | `Api` 2개, `Play` 2개, 별도 `Session` 서버 없이 `Play`가 stream session을 함께 소유 | **수동 endpoint 연결** | **수동 등록** | JSON |
 | [SupportChat](supportchat/README.ko.md) | 고객과 상담원이 같은 conversation Spot에서 대화하고, reconnect, idle timer, close, bound push를 확인한다. | `Session`, `Api`, `Support` 분리 | location store 기반 자동 연결 | **자동 등록** | JSON |
 | [DeliveryDispatch](deliverydispatch/README.ko.md) | 배송 배차, timeout 재배정, 상태 push, 고객 stream push를 확인한다. | `Dispatch`, `CourierSession`, `CourierMeshNode` 2개, `Tracking`, `CustomerGateway` 분리 | location store 기반 자동 연결 | **자동 등록** | JSON |
 | [ShoppingMall](event/shoppingmall.ko.md) | `CommerceApi`(HTTP edge)와 `OrderWorkflow`(주문 owner)를 분리해 event-sourced 주문 처리와 조회 모델을 구성한다. | `CommerceApi`, `OrderWorkflow` 분리 | location store 기반 자동 연결 | **자동 등록** | JSON |
 | [GameQuest](event/gamequest.ko.md) | gameplay event를 player별 owner spot에 모아 event sourced quest aggregate와 조회 모델을 갱신한다. | `Session Server`, `PlayerQuestSpot` owner를 MeshNode로 분산 | location store 기반 자동 연결 | **자동 등록** | JSON |
 | [ZoneWorld](zoneworld/README.ko.md) | zone 분할 MMORPG의 경계 이동(actor relocation)·경계 동기화·봇(bound session 없는 actor)과, 그것을 운영하는 관제 콘솔(runtime event·fanout 공지·노드 지정)을 브라우저 UI로 보여 준다. | `Gateway`, `ZoneNode` 2개, `Ops` 분리 | location store 기반 자동 연결 | **자동 등록** | JSON |
 
-> ZoneWorld는 브라우저 UI로 zone 이동과 노드 관제를 확인한다. .NET과 Node.js server는 wire 계약이
-> 같은 TypeScript client 하나를 공유한다. 실제 Chromium에서 `ws`·`wss`, request/reply, push,
-> reconnect와 명시적 flow 전달을 검증한다.
+표의 자동 handler 등록은 runtime scanner를 지원하는 managed language에 적용한다. C++은 scanner를
+지원하지 않으므로 모든 sample에서 handler를 직접 등록한다. 이 예외는 handler 등록에만 적용하며,
+연결은 C++도 TicTacToe에서만 수동으로 구성한다.
+
+> ZoneWorld는 다섯 언어에서 zone 이동과 노드 관제를 확인한다. .NET과 Node.js runner는 wire
+> 계약이 같은 TypeScript browser client를 공유하며, 실제 Chromium에서 `ws`·`wss`,
+> request/reply, push, reconnect와 명시적 flow 전달을 추가로 검증한다.
 
 ### Sample별 relocation 범위
 
@@ -50,7 +54,7 @@ policy로 고정하고, sample은 아래 범위만 검증한다.
 | GameQuest | Missing Instance Spot의 cold activation과 explicit close 뒤 새 generation만 검증한다. | `PlayerQuestSpot`은 `DisableRelocation`을 사용한다. Instance activation record 때문에 별도 Relocation Store는 필요하다. |
 | DeliveryDispatch | planned relocation을 검증하지 않는다. | 모든 Actor·Spot factory가 `DisableRelocation`을 사용하며 Relocation Store를 등록하지 않는다. |
 | SupportChat | planned relocation을 검증하지 않는다. | Conversation Spot과 Actor factory가 `DisableRelocation`을 사용하며 Relocation Store를 등록하지 않는다. |
-| TicTacToe | planned relocation을 검증하지 않는다. | Room Spot과 Player Actor factory가 `DisableRelocation`을 사용하며 Relocation Store를 등록하지 않는다. |
+| TicTacToe | 다른 node가 소유한 Room Spot에 Player Actor가 참가할 때 발생하는 cross-node relocation을 검증한다. 별도의 planned relocation 시나리오는 실행하지 않는다. | Player Actor는 `PreserveStateWith`, 이동하지 않는 Room Spot은 `DisableRelocation`을 사용한다. Location Store와 별도 Relocation Store가 필요하다. |
 
 Relocation Store와 Location Store에 같은 Redis deployment를 사용할 수는 있지만 provider와 key prefix는
 분리한다. 두 store는 authority 조회와 relocation payload 보존이라는 서로 다른 계약을 소유한다.
@@ -73,9 +77,12 @@ Channel send/request는 ChannelName 하나로 대상을 지정한다. 샘플은 
   불필요한 socket만 유지하기 때문이다.
 - Object Client process가 channel Server도 제공해야 하면 그 channel은 독립 ClientServer topology로
   등록한다. Object Client RouteMesh에 channel Server 역할을 섞지 않는다.
-- 로컬 sample runner는 기본 BindHost `127.0.0.1`과 automatic port 0을 사용한다. Container·Kubernetes
-  배포는 `ConfigureNetwork()`에 Pod 또는 Service에서 remote peer가 연결할 AdvertiseHost를
-  명시한다. Wildcard BindHost를 descriptor의 advertised endpoint로 기록하지 않는다.
+- 로컬 sample runner는 기본 BindHost `127.0.0.1`을 사용한다. Runner가 listener port를 미리
+  배정해야 하면 이 문서의 언어별 application port 구간에서 OS bind로 확인한 값을 사용한다.
+  Runtime이 socket을 원자적으로 bind하고 실제 endpoint를 보고할 수 있는 내부 listener에는 port
+  `0`을 사용할 수 있다. Container·Kubernetes 배포는 `ConfigureNetwork()`에 Pod 또는 Service에서
+  remote peer가 연결할 AdvertiseHost를 명시한다. Wildcard BindHost를 descriptor의 advertised
+  endpoint로 기록하지 않는다.
 - Sample은 특정 MeshNode의 `NodeRid`를 설정값, message field나 업무 상수로 미리 공유하지 않는다.
   Actor·Spot 생성과 direct messaging은 global `ActorId`·`SpotId`와 Location Store 기반 배치를
   사용하며, caller가 owner node를 선택하거나 owner `NodeRid`를 전달하지 않는다. 수동 topology도
@@ -184,7 +191,7 @@ Relocation을 시연하는 샘플은 host 전체 소요 시간이 아니라 appl
 받기 시작했다는 ACK를 보낸 시점까지다. Actor 하나, Instance Spot 하나와 SpotWide User Spot
 aggregate 하나는 각각 기본 1초 이내를 목표로 한다. 1초를 넘겨도 relocation을 취소하거나
 rollback하지 않는다. 자세한 기준은
-[graceful drain과 handoff](../spec/28-graceful-drain-handoff.ko.md#71-relocation-unit별-서비스-중단-시간-목표)를
+[graceful drain과 handoff](../spec/30-host-relocation-flow.ko.md#71-relocation-unit별-서비스-중단-시간-목표)를
 따른다.
 
 SpotWide User Spot은 Spot state와 member Actor state를 하나의 relocation unit으로 옮긴다.
@@ -260,6 +267,11 @@ request로 호출하는 메시지는 업무 이름이 `Changed`, `Accepted`, `Cr
 내부 메시지는 예외가 아니다. 이런 메시지는 호출 방식에 맞춰 `Msg`(one-way send) 또는
 `Req`/`Res`(request/reply)로 명명한다.
 
+Actor manager나 Spot manager의 `Create`/`GetOrCreate`에 넘기는 application payload도 target
+factory까지 RouteMesh를 건너는 request message다. 따라서 raw domain object를 바로 보내지 않고
+`PlayerActorCreateReq`, `BingoRoomCreateReq`처럼 목적이 드러나는 `Req` wrapper에 담는다. Create
+operation의 reply는 Framework가 정의한 생성 결과이므로 sample 전용 `Res` DTO를 별도로 만들지 않는다.
+
 ## Spot 실행 turn과 terminator 샘플 기준
 
 **모든 샘플은 세 terminator를 같은 기준으로 고른다**([04 §1.1](../spec/05-async-execution-policy.ko.md)).
@@ -329,16 +341,18 @@ scale-out 흐름을 보여 준다.
   자동 연결이 실패하면 샘플에 수동 연결을 추가하지 말고 location store 등록·조회·연결
   lifecycle이 끊긴 framework 구현을 수정한다. 이 금지는 언어별 sample 전체에 적용하며,
   위반이 하나라도 있으면 해당 샘플 변경은 완료된 것으로 판단하지 않는다.
-- **자동 등록이 기본이다.** framework가 handler를 스캔하고 등록할 수 있는 언어에서는 별도 등록
-  호출 없이 handler를 자동 등록한다([05 §8](../spec/06-framework-api.ko.md#8-handler-등록과-dispatch)). 샘플마다 handler
-  목록을 반복해서 적으면 public 사용 예시가 장황해지고, handler 추가 누락을 client 시나리오가
-  늦게 발견하게 된다.
-- **수동 topology와 handler 등록은 별개다.** TicTacToe도 handler를
-  annotation·attribute·decorator로 선언하고 assembly·module scan으로 자동 등록한다. 수동 endpoint
-  연결을 보여 주기 위해 handler 목록까지 구성 코드에 반복해서 적지 않는다.
-- C++은 runtime reflection scanner를 사용하지 않으므로 compile-time 타입으로 handler를 명시
+- **Managed language는 TicTacToe를 제외한 sample에서 handler 자동 등록을 사용한다.** Framework가
+  annotation·attribute·decorator metadata를 scan해 handler를 등록하므로 sample 구성 코드가 같은
+  목록을 반복하지 않는다([Handler 등록과 dispatch §8](../spec/06-framework-api.ko.md#8-handler-등록과-dispatch)).
+- **TicTacToe만 모든 언어에서 연결과 handler 등록을 모두 수동으로 구성한다.** 각 public
+  builder·handler registry가 handler를 직접 등록한다. 이 sample은 자동 연결과 자동 handler 등록을
+  사용하는 Bingo와 구성 방법을 비교할 수 있어야 한다. 이 규칙을 다른 sample의 수동 연결이나 수동
+  handler 등록 근거로 사용하지 않는다.
+- **C++은 handler 등록에만 별도 예외가 있다.** Runtime reflection scanner를 지원하지 않으므로
+  TicTacToe뿐 아니라 모든 C++ sample이 compile-time type과 public registry로 handler를 직접
   등록한다. 정확한 표면은 [C++ handler 공개 계약](../spec/server/languages/cpp/interfaces/03-channel-messaging.ko.md)을
-  따른다. 등록 방법만 다르며 메시지·역할·codec·검증 기준은 바꾸지 않는다.
+  따른다. C++의 연결 규칙은 다른 언어와 같아서 TicTacToe만 수동이고 나머지 sample은 location
+  store를 사용해 자동으로 연결한다.
 
 ## Dispatch 오류 로그 기준
 
@@ -403,6 +417,32 @@ Redis endpoint를 공유하거나 fallback으로 사용하면 안 된다. key pr
 인스턴스 공유를 허용하지 않는다. cleanup 시점과 저장 데이터가 다른 실행에 영향을 주지 않게 하는
 것이 이 규칙의 목적이다.
 
+이 격리 규칙은 같은 언어의 반복 실행뿐 아니라, 서로 다른 언어에서 같은 sample을 동시에 실행할
+때도 적용한다. 언어별 구현이 같은 Mesh·Channel·Actor·Spot 이름을 사용해도 Redis endpoint와 직접
+연결 endpoint가 실행별로 분리되어야 하며, 다른 언어의 node를 discovery 대상으로 인식하면 안 된다.
+Redis DB 번호를 나누는 방식이 아니라 실행마다 별도 Redis container와 key prefix를 사용한다. Docker가
+host port를 임의로 정하게 두지 않고, 아래 언어별 Redis 구간에서 bind 가능한 port를 골라 명시적으로
+publish한다. Docker bind가 실패하면 해당 시도에서 만든 container만 제거한 뒤 같은 구간의 다른 port로
+재시도한다.
+
+| 언어 | Redis host port | Application listener port |
+|------|-----------------|---------------------------|
+| C++ | `20000-20099` | `20100-21999` |
+| .NET | `22000-22099` | `22100-23999` |
+| Java | `24000-24099` | `24100-25999` |
+| Kotlin | `26000-26099` | `26100-27999` |
+| Node.js | `28000-28099` | `28100-29999` |
+
+Runner가 미리 정하는 application listener port도 해당 언어 구간 안에서 OS bind로 사용 가능 여부를
+확인해 배정한다. Runtime이 `port 0`으로 socket을 바로 bind한 뒤 실제 endpoint를 보고하는 방식은
+검사와 실제 bind 사이의 공백이 없으므로 사용할 수 있다. 고정 port나 bind 확인 없이 계산한 연속
+port block은 사용하지 않는다. Java와 Kotlin runner는 같은 Gradle
+output을 사용하므로 build 구간만 공통 file lock으로 직렬화하고, 서버 process를 시작하기 전에 lock을
+해제한다. 이 lock은 같은 runner 실행 환경 안에서 공유한다. 동일 checkout을 WSL Bash와 Windows
+PowerShell에서 동시에 실행하는 조합은 서로 다른 OS lock namespace를 사용하므로 지원하지 않는다.
+임시 설정은 실행별로 만들고, cleanup은 그 실행이 시작한 PID 또는 process handle과 정확한 Redis
+container ID만 대상으로 삼는다. Runtime log root는 다른 언어 구현과 공유하지 않는다.
+
 기준 템플릿은 이 디렉토리의 `runner-templates/` 아래에 둔다.
 
 - `runner-templates/redis-common.template.sh`: Redis helper 기준
@@ -415,17 +455,19 @@ Redis endpoint를 공유하거나 fallback으로 사용하면 안 된다. key pr
   시작과 그 실행이 만든 container id 정리를 공통 함수로 제공하고, 개별 sample script가 Docker
   명령을 직접 조합하지 않게 한다.
 - Redis가 필요한 sample은 runner가 실행마다 전용 Docker Redis container를 직접 시작한다.
-  이미 떠 있는 Redis container나 host Redis endpoint를 재사용하면 안 된다. Redis key prefix가
+  이미 실행 중인 Redis container나 host Redis endpoint를 재사용하면 안 된다. Redis key prefix가
   달라도 cleanup, 장애 주입, latency injection, sample 간 데이터 정리 시점이 섞이면 테스트
   간섭이 발생할 수 있기 때문이다. 샘플 애플리케이션 코드가 Docker를 호출하거나 Redis container
   생명주기를 소유하면 안 된다.
 - Docker Redis를 만들지 못하면 runner는 즉시 실패한다. host Redis나 다른 실행의 endpoint로
   자동 전환해서 성공 처리하면 안 된다.
 - Redis container 시작은 모든 언어에서 같은 순서를 쓴다.
-  `docker create --name <scoped-name> --tmpfs /data -p 127.0.0.1::6379 <pinned-redis-image>`로 container를
-  만들고, `docker start <container-id>`로 시작한 뒤, `docker inspect`로 실행 상태와 배정된
-  host port를 읽는다. `docker run -d` 출력에 의존해 container id와 port를 동시에 처리하는
-  방식은 쓰지 않는다.
+  언어별 Redis 구간에서 OS bind가 가능한 `<redis-port>`를 고른 뒤
+  `docker create --name <scoped-name> --tmpfs /data -p 127.0.0.1:<redis-port>:6379 <pinned-redis-image>`로
+  container를 만든다. `docker start <container-id>`로 시작한 뒤 `docker inspect`로 실행 상태와
+  publish된 host port가 선택값과 같은지 확인한다. Bind conflict가 발생하면 해당 시도의
+  container만 제거하고 같은 구간의 다른 port로 재시도한다. `docker run -d` 출력에 의존해
+  container id와 port를 동시에 처리하는 방식은 쓰지 않는다.
 - sample Redis 데이터는 실행 중에만 필요하므로 Docker volume을 만들지 않는다. Redis 이미지가
   선언한 `/data` volume은 `--tmpfs /data`로 덮어쓰고, container 정리에는 `docker rm -fv`를
   사용한다. 이렇게 해야 반복 실행 후 anonymous volume이 남지 않는다.
@@ -440,19 +482,21 @@ Redis endpoint를 공유하거나 fallback으로 사용하면 안 된다. key pr
   정리한다. prefix로 넓게 지우는 cleanup을 개별 script의 exit trap에 넣지 않는다.
 - 통합 sample runner는 다른 실행의 Redis를 정리하지 않고 각 개별 `run_sample.*`를 순차 호출한다.
   이 runner도 한 실행 안에서는 sample을 병렬 실행하지 않는다.
+- 통합 runner는 shell runner를 `bash <path>/run_sample.sh`로 호출하며, 실행을 위해 source file의
+  executable mode를 변경하지 않는다.
 - 통합 sample runner는 특정 sample 리스트만 실행할 수 있어야 한다. 인자가 없으면 모든 sample을
   실행하고, 인자가 있으면 지정한 sample runner만 순차 실행한다. 예:
   `./run_samples.sh Bingo SupportChat` 또는 언어별 경로를 구분해야 하는 runner에서는
   `./run_samples.sh java/Bingo kotlin/SupportChat`처럼 쓴다. 통합 runner는 sample 내부 절차를
   재구현하지 않고 선택한 개별 `run_sample.*`만 호출한다.
-- 통합 sample runner는 sample별 내부 동작을 다시 구현하지 않는다. 선택한 개별 `run_sample.*`를
-  한 번 호출하고 최종 결과만 관리한다. Redis endpoint 생성,
+- 통합 sample runner는 sample별 내부 동작을 다시 구현하지 않는다. 각 시도에서는 선택한 개별
+  `run_sample.*`를 호출하고 최종 결과만 관리한다. Redis endpoint 생성,
   readiness, 로그 위치, self-check 세부 절차는 개별 script와 공통 helper가 맡는다.
-- Redis host port는 고정값을 쓰지 않고 Docker가 비어 있는 loopback port를 배정하게 한다.
-  runner는 배정된 port를 inspect로 읽어 애플리케이션 설정에 전달한다. Redis key prefix도
-  실행마다 고유하게 만든다.
+- Redis host port는 언어별 Redis 구간 안에서 실행할 때마다 선택한다. Runner는 OS bind로
+  사용 가능 여부를 확인한 뒤 그 port를 Docker에 명시하고, `inspect` 결과가 선택값과 같은지
+  확인해서 애플리케이션 설정에 전달한다. Redis key prefix도 실행마다 고유하게 만든다.
 - 같은 host에서 다른 sample/e2e가 Redis를 사용 중이어도 그 endpoint를 빌려 쓰지 않는다. 새
-  Docker Redis container를 만들고 Docker가 할당한 다른 loopback port를 사용해야 테스트 간섭을
+  Docker Redis container를 만들고 해당 실행에 배정된 언어별 Redis port를 사용해야 테스트 간섭을
   막을 수 있다.
 - Redis container 생성은 오래 걸릴 수 있으므로 Docker 명령 자체에는 짧은 timeout을 두고,
   실제 Redis readiness는 별도의 port/readiness 대기 함수로 확인한다. Docker 명령이
@@ -462,8 +506,9 @@ Redis endpoint를 공유하거나 fallback으로 사용하면 안 된다. key pr
   받지 않는다. 이 방식은 helper가 실패해도 `read` 자체는 성공할 수 있어 Redis 없이 서버를 시작하는
   잘못된 실행으로 이어진다. helper는 `zlink_redis_start_scoped_assign`처럼 호출부 변수에 값을
   대입하는 함수로 제공하고, 함수 실패가 그대로 runner 실패가 되게 한다.
-- 통합 sample runner는 bind 실패를 포함한 개별 sample 실패를 재시도하지 않는다. 실행별 port를
-  미리 확보했는데도 bind가 실패했다면 같은 실행을 반복해 숨기지 않고 즉시 실패해야 원인을 확인할 수 있다.
+- 통합 sample runner는 개별 sample 실패를 임의로 재시도하지 않는다. 다만 보존한 출력이 transient
+  bind conflict임을 명확히 보여 주는 경우에만 정해진 작은 횟수로 전체 sample을 다시 실행할 수 있다.
+  다른 오류나 원인이 불분명한 실패는 즉시 반환한다.
 - 실패 시 runner는 `log_dir=...` 또는 sample별 로그 위치를 출력하고, 각 프로세스의
   stdout/stderr와 framework log를 `logs/*.log`에 남긴다.
 

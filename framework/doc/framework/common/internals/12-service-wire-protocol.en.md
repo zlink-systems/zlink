@@ -4,7 +4,7 @@ title: "12. Service wire protocol"
 
 # 12. Service wire protocol
 
-[Internals index](README.en.md) · [Previous: 11. Payload Ownership and Copying](11-message-ownership.en.md)
+[Internals index](README.en.md) · [Previous: 11. Payload Ownership and Copying](11-message-ownership.en.md) · [Next: 13. Relocation Handoff State Transitions](13-relocation-handoff.en.md)
 
 > **What this chapter answers** — the byte format and command list exchanged between nodes.
 >
@@ -16,7 +16,8 @@ title: "12. Service wire protocol"
 > **Related contracts** — [Layer Boundaries and Identifiers](01-layering.en.md) ·
 > [Location runtime](../spec/21-location-runtime.en.md) ·
 > [Redis Relocation Store](../spec/23-relocation-store-redis.en.md) ·
-> [Transport liveness](../spec/29-transport-liveness.en.md)
+> [Transport liveness](../spec/29-transport-liveness.en.md) ·
+> [Relocation Handoff State Transitions](13-relocation-handoff.en.md)
 
 | Section | Covers |
 |---|---|
@@ -178,7 +179,7 @@ and never reused for a different meaning.
 | 29 | `actorLeft` | Actor leave commit |
 | 30 | `relocationReady` | Capacity offer and inventory accept |
 | 31 | `relocationData` | Frozen record transfer |
-| 32 | `relocationAck` | Participant high-water ACK |
+| 32 | `relocationAck` | Relocation progress response |
 | 33 | `replyRelay` | Terminal completion relay |
 | 34 | `relocationSeal` | Participant terminal seal |
 | 35 | `relocationComplete` | Target finalization notice |
@@ -189,9 +190,9 @@ and never reused for a different meaning.
 | 40 | `relocationPrepare` | Seals and proposes the list of targets to move, along with the required count and bytes |
 | 41 | `relocationReserved` | Target reservation ACK |
 | 42 | `sessionRelocationSeal` | Session ingress seal request |
-| 43 | `sessionRelocationSealed` | Session high-water response |
-| 44 | `sessionRelocationRoute` | Session route replacement request |
-| 45 | `sessionRelocationRouted` | Session route replacement ACK |
+| 43 | `sessionRelocationSealed` | Session seal response |
+| 44 | `sessionRelocationRoute` | One-way Session route update sent by target runtime |
+| 45 | `sessionRelocationRouted` | Reserved previous response command; normal relocation neither sends nor awaits it |
 | 46 | `replyRelayAck` | Relayed terminal result ACK |
 | 47 | `userSpotCreate` | Creates a remote User Spot in an already-reserved slot |
 | 48 | `userSpotClose` | Closes only the specified generation's remote User Spot |
@@ -228,18 +229,17 @@ least that value; the snapshot never controls payload admission.
 
 #### Suppressing duplicate notifications
 
-A runtime that completed a relay may send `messageFollow` to the source
-runtime. The source runtime invalidates its current cache entry only if it
-points at the same object identity, object/authority generation, and target
-node as the source route. It does not erase a newer route. Even if the
-notification is lost, the cache lifetime must eventually expire the stale
-route. Receiving or suppressing a duplicate notification does not change the
-original message operation's terminal result.
+A runtime that completed a relay may send `messageFollow` to the source runtime. The source
+runtime invalidates its current cache entry only when it points at the same exact route fence
+as the source route. It does not erase a newer route. Even if the notification is lost, the
+cache lifetime must eventually expire the stale route.
 
-Sending only once within the same generation, merging an in-flight
-notification, and choosing where to store a suppression marker are
-implementation choices. They cannot change the wire body, the invalidation
-fence above, cache expiry, or the terminal-result invariant.
+The sender's dedicated suppression registry uses the complete source and target route fences
+as its key. Its state moves through `idle → inFlight → sentUntilExpiry`, and only a send
+failure returns it from `inFlight` to `idle`. Route-cache expiry or replacement also removes
+the marker. The registry does not own the original operation's payload, reply route, or
+terminal completion. [6. Target Selection And Route Cache](06-routing-and-cache.en.md#2-where-a-move-meets-the-cache--a-performance-cliff)
+shows the state flow.
 
 ### 3.2 Bound Session Replacement Notification
 
@@ -458,184 +458,129 @@ Both operations return their results in the command 20 reply envelope.
 - The source operation table guarantees terminal-once by source RID/lifecycle and operation ID.
 - Neither Location row polling nor a control message built from an application packet substitutes for a reply.
 
-## 9. Maintenance capture and relocation envelope
+## 9. Maintenance Capture And Relocation Envelope
 
-### `Retiring` seal and byte reservation
+### Session Seal And Source Relay
 
-- A host's `Retiring` publication schedules a local infrastructure intent notification on the unit queue, not a wire callback.
-- At a queue turn boundary, only a unit that has obtained the outbound/inbound unit, the needed `Capture`/`Restore` callbacks, and an encoded byte permit is sealed, fixing the accepted boundary.
-- The byte reservation is 64 MiB per `PreserveStateWith` participant, plus the deterministic encoded upper bound of the queue/journal/timer/manifest/metadata the Framework already owns.
-- After `Capture`, the permit shrinks to just the actual encoded size.
-- A permit failure returns every provisional permit and reschedules only the notification, without sending a wire command or sealing the queue.
-- The default gate is `64/64`, `8/8`, 256 MiB, and an oversized User Spot aggregate is exclusive within the empty-payload window.
-- A standalone Actor or Instance Spot unit is admitted only within the gate.
+- Before stopping source application dispatch, the relocation coordinator seals a bound
+  Session binding with command 42. Command 43 reports the seal result.
+- The Session owner validates only current Session identity, binding generation,
+  ActorId/ObjectGeneration, and relocation identity. It doesn't create a numeric
+  high-water or re-read Actor authority.
+- Requests and pushes arriving after the seal are held by the Session owner until route
+  change or abort. No relocation-specific record-count or byte bound is added.
+- Ordinary server messages arriving on the source object route keep being relayed to the
+  target temporary queue. This uses ordering and retransmission of the same TCP
+  connection, without a per-message ACK or durable journal.
 
-### Preconditions before drain
+### Relocation Envelope And Cutover
 
-- Accepted send/request with `connectionBound` source lifetime drain to a terminal state before `Captured`. This work is not recorded in the frozen journal.
-- A bound-session request follows the same rule as any other Actor request. A request accepted before the seal is stored in the frozen journal preserving its source fence, operation identity, and reply route; a request arriving after the seal is relayed from the ingress hold to the target.
-- The moment by which a call must finish is called the [Deadline](../spec/01-glossary.en.md#deadline). If it doesn't finish in time, relocation is aborted pre-Captured, ends as `Blocked`/`DeadlineExceeded`, and source admission is restored.
+- The source stores application state, queue work not yet executed before relocation,
+  and timer information in the relocation envelope. Native timer handles and callback
+  continuations aren't encoded.
+- The target registers a temporary queue, then runs factory and Restore. It doesn't run
+  application handlers until this work finishes.
+- After relaying every message received before cutover, the source sends cutover as a
+  `[send]` on the same ordered connection. It is the boundary proving that every earlier
+  relay on that connection reached the target. It has no reply.
+- Ordinary server-to-server `send` adds no relocation-specific application ACK. A
+  `request` keeps its existing operation identity, correlation, deadline, and caller
+  retry.
 
-### Session Seal, Source Hold, And Target Temporary Queue
+### Store CAS And Manifest
 
-- The session owner verifies command 42's exact binding fence,
-  authority fence, and seal identity as one set. Installing the seal and
-  fixing accepted high-water occur at the same atomic state-transition point.
-- Session ingress that arrives after the seal neither advances the
-  previous binding's accepted high-water nor enters application
-  dispatch. Instead of failing it immediately, the session owner
-  retains its payload and reply context until a matching route switch
-  or abort.
-- The source-object ingress hold, target temporary queue, and session
-  owner's seal wait are separate boundaries. None of these three
-  boundaries has a relocation-specific record-count or stored-byte
-  limit.
-- Work reservations already owned by an ordinary application execution
-  lane still apply. Transport, deadline, and cancellation limits also
-  remain in force, but are not treated as relocation-specific limits.
+- After Restore and temporary queue registration finish, receipt of cutover starts the
+  target CAS of Location Store owner and membership from source to target. If cutover
+  doesn't arrive within 1,000 ms after the Restore-ready reply, the target records a
+  `cutover_timeout` Warning and starts the same CAS. Only the target performs this CAS.
+- Neither the source nor the Session owner changes the Location Store based on a timeout,
+  local mirror, or Session route result.
+- The Relocation Store manifest is a projection used to find application state and saved
+  queue work; it isn't owner or membership authority. The two Stores don't use a
+  distributed transaction or 2PC.
+- If CAS fails, the target doesn't open its queue and retries the same CAS until the
+  Restore operation's validity deadline. After an indeterminate response, it first reads
+  the Store to determine whether the exact target is already owner. A different valid
+  owner or generation makes the relocation stale immediately.
+- If the target owner isn't confirmed before Restore validity expires, the target records
+  a `location_update_failed` Error and removes the prepared Actor or Spot, temporary
+  queue, and relocation state. It doesn't update the Session route. A late Store response
+  cannot reactivate the terminal `RelocationId`.
+- After successful CAS, the move isn't rolled back to the source.
 
-### Durable frozen record
-
-A durable frozen record is only permitted for a `leaseBacked` source. Each
-record includes the lifecycle and `OwnerId`/`OwnerLeaseGeneration` of the
-source node that created it, and is compared against the current authority
-before replay. Putting a record that's only tied to a connection's lifetime
-into a relocation envelope is a protocol error.
-
-### Relocation envelope encoding
-
-- At seal time, the Framework encodes the not-yet-executed message queue, the accepted journal, timer logical registration/pending ticks, optional application state, manifest, and metadata into a deterministic `relocation-envelope-v1` stream.
-- Native timer handles and callback continuations are not encoded.
-- It writes every unchanged chunk, writes the top-level record that lists those chunks, then links the root via the authority's `Captured` CAS — that CAS is the durability boundary.
-- If the source terminates before `Captured`, relocation is aborted and continuity replay is not guaranteed.
-- A chunk or manifest not linked to the CAS is an orphan.
-
-### Store CAS and manifest
-
-- The Location Store authority atomically CASes the phase, `RelocationId`, source/target fence, the value and checksum pointing at the top-level record, the size-bounded participant set/mutation/aggregate generation/inventory digest, and the replay/completion count.
-- The Relocation Store manifest is a projection of the same inventory digest, used to locate per-participant payloads — it is not owner or membership authority.
-- Neither store uses a distributed transaction or 2PC.
-
-### Top-level record retention and verification
-
-- The top-level record is kept for 24 hours and renewed once 12 hours have passed.
-- Right before the `Captured` and `Prepared` CAS, the runtime checks whether the complete tree has been kept longer than the threshold, or renews it.
-- A reader reads only the root the current authority points to, and verifies the chunk checksums and the overall checksum while streaming.
-
-## 10. Relocation, Actor membership, and Ready
+## 10. Relocation, Actor Membership, And Ready
 
 ### `RelocationId`
 
-`RelocationId` is a non-zero 128-bit value the runtime generates with a
-CSPRNG. If it collides with an active relocation or a retained relocation
-root's ID, it is regenerated, and is never exposed to the application. When
-the same target process prepares again, the stable `RelocationId` and
-relocation root are kept, and only the target attempt number and the
-preparation information are replaced. `TargetAttemptGeneration` distinguishes
-duplicate or earlier Restore requests sent to the same target; it is not used
-to select a different target.
+`RelocationId` is a non-zero 128-bit value made by the runtime. It distinguishes
+repeated control messages for the same relocation and isn't exposed to the application.
 
-### Authority phase
+### Authority And Target-Only CAS
 
-The authority phase follows this order and a closed owner rule.
+Before CAS, the source is owner. The target has only a prepared instance after Restore
+while waiting for cutover or the 1,000 ms fallback, and doesn't run application messages. The target
+becomes owner when the target-only CAS succeeds. The Actor or Spot's
+`ObjectGeneration` stays the same while owner generation increases.
 
-```mermaid
-stateDiagram-v2
-    [*] --> Preparing
-    Preparing --> Captured
-    Captured --> Prepared
-    Prepared --> Committed
-    Committed --> Activating
-    Activating --> Activated
-    Activated --> Cleaning
-    Cleaning --> Completed
-    Preparing --> Aborted
-    Captured --> Aborted
-    Prepared --> Aborted
-```
+One Actor, a `PerActor` Spot authority, a `SpotWide` aggregate, and an Instance Spot
+follow the same rule. When several owners and memberships must change together, the
+target changes all or none in one conditional batch. Relocation adds no separate runtime
+capacity gate for participant count, relay record count, or bytes. Existing Store
+provider and transport frame/page size limits still apply.
 
-- The main owner of `Preparing` and `Captured` is the source, with no target reservation yet.
-- `Prepared` preserves the source owner together with the exact target attempt/reservation.
-- From `Committed` through `Completed`, the main owner is the current target.
-- Each transition is an expected-`StoreVersion` CAS.
-- A retry on the same target changes only the target attempt number and
-  the preparation information — it never changes the stable identity or
-  the relocation root. A transition that swaps in a different target
-  process is not permitted.
+### Post-Commit Queue And Ready
 
-### Aggregate relocation commit
+After CAS succeeds, the target opens queue and lifecycle in this order.
 
-- User Spot and member Actor relocation use a `non-zero 128-bit aggregate ID`, and the participant list must match exactly.
-- There is no 1,024 cap on the total participant count. The Location Store stores the inventory tree as up to 1,024 immutable leaf chunks of 1 MiB encoded each, plus whatever index chunks are needed.
-- The target offer fixes the tree root, total count, digest, and the capacity reservation for the Spot and its member Actors.
-- The `Committed` CAS atomically flips membership visibility by changing the aggregate owner, generation, and inventory root.
-- The target finishes factory/restore and journal validation/staging before commit.
+1. Put saved existing work and timers into the target execution queue.
+2. Put work relayed before cutover behind it.
+3. Add further work from the temporary queue and switch the dispatch route.
+4. Finish required lifecycle callbacks and open application dispatch.
+5. Send command 44 route update from the target runtime to the Session owner.
 
-### Membership and replay after commit
+There's no global ordering promise between messages arriving over different TCP
+connections. Only order accepted into the target queue is preserved. After owner change,
+Message Follow sends messages arriving at the old address to the target.
 
-- A User Spot aggregate preserves membership as-is, so it does not invoke member Actors' joined/leave callbacks.
-- After commit, frozen message/journal replay and automatic Framework timer restoration continue to run.
-- After the seal, the source ingress hold returns to the source queue on a pre-commit abort, and after commit it preserves the original operation identity and fence to relay to the target.
-- After replay, the source durably finishes the old membership and the rest of its resource cleanup.
+The source sends cutover and doesn't wait for a target completion response. An explicit
+target failure before cutover aborts and restores source queue and Session seal. A late
+or duplicate cutover only records a `late_cutover` Warning and doesn't mutate state
+again. When the 1,000 ms fallback opens the queue, the contract doesn't guarantee that
+late relay runs before new direct target messages.
 
-### The moment of Ready
+### Session Route
 
-`Committed` and `Activating` are not Ready. The target opens application
-admission only after completing all of the following work.
+- Session route is validated only against the Session owner's current Session and
+  binding.
+- Command 42 seals the current binding; command 43 returns the seal result.
+- The target runtime sends command 44 with relocation identity, current binding
+  generation, ActorId/ObjectGeneration, and target route. The Session owner doesn't
+  re-read the Location Store or Actor authority mirror.
+- The Session owner changes the route and current `ActorRef` snapshot to the target,
+  submits messages held during the seal to the target route, and releases the seal.
+- Command 44 has no reply and the normal flow doesn't use command 45.
+- `SessionRelocationSealTimeout` defaults to 3,000 ms. If exact command 44 doesn't arrive
+  in time, the Session owner closes the physical Session and cleans binding,
+  held-message, and seal state.
+- A late command 44 or exact duplicate after timeout only records a Warning and doesn't
+  change route, seal, or authority again.
+- If target explicitly fails before cutover, only the matching seal is released and held
+  Session messages are submitted to the source route. A failure after cutover doesn't
+  reopen source route.
 
-1. Change the owner and membership.
-2. Run lifecycle callbacks and restore unfinished work and timers.
-3. Put stored existing work and temporary-queue work into the execution
-   queue in their original order.
-4. Remove the temporary-queue registration while atomically switching
-   to the existing dispatch path.
-
-The following cleanup doesn't block Ready admission. The running source
-and target runtimes continue it as follow-up work.
-
-- Remove the original source ingress hold.
-- Change the location record to `Completed`.
-- Send the Session Actor location-update acknowledgement.
-- Normalize the maintenance authority to its steady state.
-
-An abort before the owner change sent no Session route update, so it
-waits for neither a route-cancellation message nor its acknowledgement.
-Source admission is restored only after all of this cleanup finishes.
-
-- Record `Aborted`.
-- Discard temporary-queue work and return stored work to the source queue
-  in its original order.
-- Clean up reserved target space and any payload not referenced by a
-  location record.
-- Remove the relocation progress information.
-
-### Session route
-
-- At Bind, the session owner stores each Actor's route and lease fence exactly as they were at that moment.
-- Relay/request relay and disconnect do not query the Location Store per message.
-- A physical disconnect is announced only once the entire current binding snapshot is settled, and each binding's callback runs at most once.
-- A route update applies only within the same ObjectGeneration.
-- Command 42 installs the seal. Command 43 returns the last session
-  sequence the owner actually accepted; a locally estimated source
-  counter cannot substitute for it.
-- Commands 44 and 45 are used only for a route switch and ACK after
-  `Completed`.
-- A route switch applies only when the exact binding fence, authority
-  fence, seal identity, and replayed high-water all match.
-- Byte-identical duplicates of commands 42–45 return the same result
-  without advancing state twice. Different values for the same identity
-  are a `ProtocolError`.
-- Only a matching abort releases the seal. Without durable evidence that
-  can restore the seal and high-water, relocation ends as
-  `RelocationFailed`. There is no fallback that omits the seal or uses an
-  estimated high-water.
+Authenticated peer/node-generation/frame validation in the transport adapter, owner CAS
+on the target, and binding-route validation on the Session owner each run once. Actor
+join, host relocation, Message Follow, and callback paths don't repeat these decisions.
 
 ## 11. Request terminal identity
 
 ### `OperationId` and `ReplyRouteId`
 
-- `OperationId` and `ReplyRouteId` are each unique, non-zero values within the source owner's lifecycle. Wrapping or reusing them is a terminal runtime error.
+- `OperationId` is a non-zero identity made of two `u64` words (`high`, `low`).
+  `ReplyRouteId` is a separate non-zero `u64`. Both are unique within the source owner's
+  lifecycle; wrapping or reusing either is a terminal runtime error.
 - The operation ID is a deduplication identity and does not substitute for the reply route.
+  Registries and durable records do not reduce `OperationId` to one word.
 - Durable terminal identity is the combination of the unchanging `RelocationId`, the fence of the side that started the request, and the `OperationId`.
 
 ### Terminal completion tracking

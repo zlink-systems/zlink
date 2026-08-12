@@ -19,7 +19,7 @@ import {
   zlinkEntrySpotSubscriptionHandler,
   zlinkSpotTimerHandler
 } from '@zlink-systems/nestjs';
-import { RuntimeMonitoringNames, type MonitoringPublish, type ProfileReq, type ProfileRes } from '../../../Shared/messages';
+import { RuntimeMonitoringNames, type MonitoringEvent, type ProfileReq, type ProfileRes } from '../../../Shared/messages';
 import { EvidenceStore } from '../Infrastructure/evidence-store';
 
 @Injectable()
@@ -85,7 +85,7 @@ export class MonitoringActorFactory {
   topic: RuntimeMonitoringNames.publishTopic
 })
 export class MonitoringEntryPublishHandler
-  implements ZLinkSpotSubscriptionHandler<MonitoringEntrySpot, MonitoringPublish> {
+  implements ZLinkSpotSubscriptionHandler<MonitoringEntrySpot, MonitoringEvent> {
   constructor(
     private readonly evidence: EvidenceStore,
     private readonly gate: MonitoringPublishGate
@@ -93,7 +93,7 @@ export class MonitoringEntryPublishHandler
 
   async handle(
     spot: MonitoringEntrySpot,
-    event: MonitoringPublish,
+    event: MonitoringEvent,
     context: ZLinkPublishMessageContext
   ): Promise<void> {
     void context;
@@ -148,7 +148,7 @@ export class MonitoringUserSpot implements ZLinkSpot<MonitoringActor> {
 
 @Injectable()
 export class MonitoringUserSpotPublishHandler
-  implements ZLinkSpotSubscriptionHandler<MonitoringUserSpot, MonitoringPublish> {
+  implements ZLinkSpotSubscriptionHandler<MonitoringUserSpot, MonitoringEvent> {
   constructor(
     private readonly evidence: EvidenceStore,
     private readonly gate: MonitoringPublishGate
@@ -156,7 +156,7 @@ export class MonitoringUserSpotPublishHandler
 
   async handle(
     spot: MonitoringUserSpot,
-    event: MonitoringPublish,
+    event: MonitoringEvent,
     context: ZLinkPublishMessageContext
   ): Promise<void> {
     void context;

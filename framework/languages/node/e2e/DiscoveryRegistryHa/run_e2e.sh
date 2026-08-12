@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
 source "$NODE_ROOT/e2e/redis-container.sh"
 source "$NODE_ROOT/e2e/runner-common.sh"
+serialize_node_e2e_run "$0" "$@"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="$ROOT_DIR/log/$RUN_ID"
 CONFIG_DIR=""
@@ -46,9 +47,7 @@ SCENARIOS=(
   SF-F11
   SF-G1
   SF-G2
-  SF-G3
 )
-mkdir -p "$LOG_DIR"
 
 pids=()
 REDIS_CONTAINER_ID=""
@@ -68,7 +67,7 @@ cleanup() {
   stop_live_pids
   wait_all_pids_ignoring_status
   [[ -z "$RELOCATION_REDIS_CONTAINER_ID" ]] \
-    || docker rm -fv "$RELOCATION_REDIS_CONTAINER_ID" >/dev/null 2>&1 \
+    || remove_redis_container_by_id "$RELOCATION_REDIS_CONTAINER_ID" \
     || true
   remove_redis_container
   [[ -z "$CONFIG_DIR" ]] || rm -rf "$CONFIG_DIR"
@@ -77,6 +76,7 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+mkdir -p "$LOG_DIR"
 CONFIG_DIR="$(mktemp -d)"
 chmod 700 "$CONFIG_DIR"
 
@@ -91,7 +91,7 @@ kill_pid() {
 run_all_scenarios() {
   local scenario
   for scenario in "${SCENARIOS[@]}"; do
-    "$0" "$scenario"
+    bash "$0" "$scenario"
   done
   echo "store-failure-recovery e2e result=passed"
 }
@@ -110,26 +110,26 @@ wait_location_unhealthy() {
 }
 
 stop_redis() {
-  docker rm -fv "$REDIS_CONTAINER_ID" >/dev/null
+  remove_redis_container_by_id "$REDIS_CONTAINER_ID"
   REDIS_CONTAINER_ID=""
 }
 
 start_empty_redis() {
   start_redis_container "zlink-redis-node-e2e-${RANDOM}-$$" \
-    -p "127.0.0.1:$REDIS_PORT:6379" "redis:7.2-alpine"
+    "redis:7.2-alpine" "$REDIS_PORT"
   wait_tcp redis "tcp://$REDIS_ENDPOINT"
 }
 
 stop_relocation_redis() {
   [[ -z "$RELOCATION_REDIS_CONTAINER_ID" ]] \
-    || docker rm -fv "$RELOCATION_REDIS_CONTAINER_ID" >/dev/null
+    || remove_redis_container_by_id "$RELOCATION_REDIS_CONTAINER_ID"
   RELOCATION_REDIS_CONTAINER_ID=""
 }
 
 start_empty_relocation_redis() {
   local location_container_id="$REDIS_CONTAINER_ID"
   start_redis_container "zlink-relocation-redis-node-e2e-${RANDOM}-$$" \
-    -p "127.0.0.1:$RELOCATION_REDIS_PORT:6379" "redis:7.2-alpine"
+    "redis:7.2-alpine" "$RELOCATION_REDIS_PORT"
   RELOCATION_REDIS_CONTAINER_ID="$REDIS_CONTAINER_ID"
   REDIS_CONTAINER_ID="$location_container_id"
   wait_tcp relocation-redis "tcp://$RELOCATION_REDIS_ENDPOINT"
@@ -153,14 +153,14 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
-start_redis_container "zlink-redis-node-e2e-${RANDOM}-$$" -p "127.0.0.1::6379" "redis:7.2-alpine"
+start_redis_container "zlink-redis-node-e2e-${RANDOM}-$$" "redis:7.2-alpine"
 REDIS_ENDPOINT="$(redis_container_endpoint "$REDIS_CONTAINER_ID")"
 REDIS_PORT="${REDIS_ENDPOINT##*:}"
 REDIS_KEY_PREFIX="store-failure:node:$RUN_ID"
 wait_tcp redis "tcp://$REDIS_ENDPOINT"
 LOCATION_REDIS_CONTAINER_ID="$REDIS_CONTAINER_ID"
 start_redis_container "zlink-relocation-redis-node-e2e-${RANDOM}-$$" \
-  -p "127.0.0.1::6379" "redis:7.2-alpine"
+  "redis:7.2-alpine"
 RELOCATION_REDIS_CONTAINER_ID="$REDIS_CONTAINER_ID"
 RELOCATION_REDIS_ENDPOINT="$(redis_container_endpoint "$RELOCATION_REDIS_CONTAINER_ID")"
 RELOCATION_REDIS_PORT="${RELOCATION_REDIS_ENDPOINT##*:}"
@@ -414,7 +414,7 @@ run_sf_a2() {
 run_sf_b1() {
   start_topology
   run_warmup
-  docker rm -fv "$REDIS_CONTAINER_ID" >/dev/null
+  remove_redis_container_by_id "$REDIS_CONTAINER_ID"
   REDIS_CONTAINER_ID=""
   run_client SF-B1 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
 }
@@ -590,33 +590,6 @@ run_sf_c3() {
   cat "$LOG_DIR/client-resumed.stdout.log"
 }
 
-run_sf_g3_case() {
-  local client_pid variant="${G3_VARIANT:?G3_VARIANT is required}"
-  start_topology no disabled disabled "sf-g3-$variant"
-  run_client SF-G3 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log" &
-  client_pid="$!"
-  wait_file_contains "$LOG_DIR/client.stdout.log" "scenario-control SF-G3 start-provider-b" \
-    "SF-G3 client did not finish source aggregate setup" "$client_pid" 120
-  local deadline=$((SECONDS + ROUTE_SETTLE_TIMEOUT_SECONDS))
-  while (( SECONDS < deadline )); do
-    if node -e "fetch(process.argv[1] + '/location/mesh').then(async (r) => { const rows=await r.json(); process.exit(rows.find((v) => v.rid === 'api-a')?.placementWeight === 0 ? 0 : 1); }).catch(() => process.exit(1));" "$CONSUMER_URL"; then
-      break
-    fi
-    sleep 0.1
-  done
-  start_provider_b
-  wait "$client_pid"
-  cat "$LOG_DIR/client.stdout.log"
-}
-
-run_sf_g3() {
-  local variant
-  for variant in short-spot short-actor short-type sufficient; do
-    G3_VARIANT="$variant" "$0" SF-G3-CASE
-  done
-  echo "scenario SF-G3 passed"
-}
-
 run_sf_f7_case() {
   local client_pid variant="${F7_VARIANT:?F7_VARIANT is required}"
   start_topology no disabled disabled "sf-f7-$variant"
@@ -639,7 +612,7 @@ run_sf_f7_case() {
 run_sf_f7() {
   local variant
   for variant in boundary oversize; do
-    F7_VARIANT="$variant" "$0" SF-F7-CASE
+    F7_VARIANT="$variant" bash "$0" SF-F7-CASE
   done
   echo "scenario SF-F7 passed"
 }
@@ -684,8 +657,8 @@ run_sf_f2_case() {
 }
 
 run_sf_f2() {
-  "$0" SF-F2-LONG
-  "$0" SF-F2-FAULT
+  bash "$0" SF-F2-LONG
+  bash "$0" SF-F2-FAULT
   echo "scenario SF-F2 passed"
 }
 
@@ -910,12 +883,6 @@ case "$SCENARIO" in
     ;;
   SF-F7-CASE)
     run_sf_f7_case
-    ;;
-  SF-G3)
-    run_sf_g3
-    ;;
-  SF-G3-CASE)
-    run_sf_g3_case
     ;;
   SF-G2)
     start_topology no disabled disabled sf-g2

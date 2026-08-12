@@ -349,13 +349,13 @@ class MessageFollowSendHandler(
 ) : ZLinkSuspendingSpotActorSendHandler<
     TransferUserSpot,
     TransferActor,
-    Contracts.MessageFollowSendReq
+    Contracts.MessageFollowMsg
 > {
     override suspend fun handle(
         spot: TransferUserSpot,
         actor: TransferActor,
         context: ZLinkMessageContext,
-        message: Contracts.MessageFollowSendReq,
+        message: Contracts.MessageFollowMsg,
     ) {
         evidence.add(message.scenario(), actor.actorId(), "message_follow_send", message.marker())
     }

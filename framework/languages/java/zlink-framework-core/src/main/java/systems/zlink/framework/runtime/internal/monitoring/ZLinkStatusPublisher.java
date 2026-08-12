@@ -1,7 +1,12 @@
 package systems.zlink.framework.runtime.internal.monitoring;
 
 import java.util.ArrayDeque;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Flow;
@@ -20,13 +25,17 @@ import systems.zlink.framework.monitoring.ZLinkObservationLoss;
  *
  * <p>The publisher has one dispatcher for all subscribers. A runtime calls
  * {@link #signal()} after a state change; no subscriber owns a polling thread.
- * Intermediate snapshots are coalesced independently for each subscriber,
- * while preserved milestones and terminal snapshots remain observable.</p>
+ * Each subscriber retains one latest intermediate snapshot per source. A
+ * separate bounded FIFO keeps preserved milestones and terminal snapshots, so
+ * a busy source cannot replace another source's latest state and a slow
+ * subscriber cannot grow terminal retention without a limit.</p>
  */
 public final class ZLinkStatusPublisher<T>
     implements Flow.Publisher<ZLinkObservedStatus<T>> {
+    private static final Object SINGLE_SOURCE = new Object();
     private final Supplier<T> snapshot;
     private final Function<T, Object> fingerprint;
+    private final Function<T, Object> sourceKey;
     private final int capacity;
     private final Predicate<T> terminal;
     private final Predicate<T> preserve;
@@ -43,6 +52,7 @@ public final class ZLinkStatusPublisher<T>
     private ZLinkStatusPublisher(
         Supplier<T> snapshot,
         Function<T, Object> fingerprint,
+        Function<T, Object> sourceKey,
         int capacity,
         Predicate<T> terminal,
         Predicate<T> preserve,
@@ -52,6 +62,7 @@ public final class ZLinkStatusPublisher<T>
         }
         this.snapshot = Objects.requireNonNull(snapshot, "snapshot");
         this.fingerprint = Objects.requireNonNull(fingerprint, "fingerprint");
+        this.sourceKey = Objects.requireNonNull(sourceKey, "sourceKey");
         this.capacity = capacity;
         this.terminal = Objects.requireNonNull(terminal, "terminal");
         this.preserve = Objects.requireNonNull(preserve, "preserve");
@@ -65,6 +76,7 @@ public final class ZLinkStatusPublisher<T>
         return create(
             snapshot,
             fingerprint,
+            ignored -> SINGLE_SOURCE,
             capacity,
             ignored -> false,
             ignored -> false,
@@ -79,6 +91,7 @@ public final class ZLinkStatusPublisher<T>
         return create(
             snapshot,
             fingerprint,
+            ignored -> SINGLE_SOURCE,
             capacity,
             terminal,
             ignored -> false,
@@ -94,6 +107,7 @@ public final class ZLinkStatusPublisher<T>
         return create(
             snapshot,
             fingerprint,
+            ignored -> SINGLE_SOURCE,
             capacity,
             terminal,
             preserve,
@@ -103,6 +117,24 @@ public final class ZLinkStatusPublisher<T>
     public static <T> ZLinkStatusPublisher<T> create(
         Supplier<T> snapshot,
         Function<T, Object> fingerprint,
+        Function<T, Object> sourceKey,
+        int capacity,
+        Predicate<T> terminal,
+        Predicate<T> preserve) {
+        return create(
+            snapshot,
+            fingerprint,
+            sourceKey,
+            capacity,
+            terminal,
+            preserve,
+            ForkJoinPool.commonPool());
+    }
+
+    public static <T> ZLinkStatusPublisher<T> create(
+        Supplier<T> snapshot,
+        Function<T, Object> fingerprint,
+        Function<T, Object> sourceKey,
         int capacity,
         Predicate<T> terminal,
         Predicate<T> preserve,
@@ -110,6 +142,24 @@ public final class ZLinkStatusPublisher<T>
         return new ZLinkStatusPublisher<>(
             snapshot,
             fingerprint,
+            sourceKey,
+            capacity,
+            terminal,
+            preserve,
+            dispatcher);
+    }
+
+    public static <T> ZLinkStatusPublisher<T> create(
+        Supplier<T> snapshot,
+        Function<T, Object> fingerprint,
+        int capacity,
+        Predicate<T> terminal,
+        Predicate<T> preserve,
+        Executor dispatcher) {
+        return create(
+            snapshot,
+            fingerprint,
+            ignored -> SINGLE_SOURCE,
             capacity,
             terminal,
             preserve,
@@ -233,10 +283,12 @@ public final class ZLinkStatusPublisher<T>
         private final AtomicBoolean deliveryWorkPending = new AtomicBoolean();
         private final AtomicBoolean deliveryScheduled = new AtomicBoolean();
         private final Object monitor = new Object();
-        private final ArrayDeque<Pending<T>> pending = new ArrayDeque<>();
-        private Object previousFingerprint;
-        private boolean observed;
-        private boolean terminalSeen;
+        private final LinkedHashMap<Object, Pending<T>> latestBySource =
+            new LinkedHashMap<>();
+        private final ArrayDeque<Pending<T>> retained = new ArrayDeque<>();
+        private final Map<Object, Object> previousFingerprints =
+            new HashMap<>();
+        private final Set<Object> pendingTerminals = new HashSet<>();
         private long coalescedCount;
         private long discardedTerminalCount;
 
@@ -269,16 +321,26 @@ public final class ZLinkStatusPublisher<T>
         }
 
         private void observe(T value, Object currentFingerprint) {
+            Object currentSourceKey = Objects.requireNonNull(
+                sourceKey.apply(value),
+                "sourceKey returned null");
             synchronized (monitor) {
                 if (cancelled.get()
-                    || terminalSeen
-                    || (observed
-                        && Objects.equals(previousFingerprint, currentFingerprint))) {
+                    || pendingTerminals.contains(currentSourceKey)
+                    || (previousFingerprints.containsKey(currentSourceKey)
+                        && Objects.equals(
+                            previousFingerprints.get(currentSourceKey),
+                            currentFingerprint))) {
                     return;
                 }
-                observed = true;
-                previousFingerprint = currentFingerprint;
-                enqueue(value, terminal.test(value), preserve.test(value));
+                previousFingerprints.put(
+                    currentSourceKey,
+                    currentFingerprint);
+                enqueue(
+                    currentSourceKey,
+                    value,
+                    terminal.test(value),
+                    preserve.test(value));
             }
         }
 
@@ -311,8 +373,14 @@ public final class ZLinkStatusPublisher<T>
         private void deliverAvailable() {
             while (!cancelled.get() && demand.get() > 0) {
                 ZLinkObservedStatus<T> observedStatus;
+                Pending<T> next;
                 synchronized (monitor) {
-                    Pending<T> next = pending.pollFirst();
+                    next = retained.pollFirst();
+                    if (next == null && !latestBySource.isEmpty()) {
+                        var iterator = latestBySource.entrySet().iterator();
+                        next = iterator.next().getValue();
+                        iterator.remove();
+                    }
                     if (next == null) {
                         return;
                     }
@@ -327,6 +395,11 @@ public final class ZLinkStatusPublisher<T>
                 }
                 try {
                     subscriber.onNext(observedStatus);
+                    if (next.terminal()) {
+                        synchronized (monitor) {
+                            releaseSource(next.sourceKey());
+                        }
+                    }
                 } catch (Throwable failure) {
                     fail(failure);
                     return;
@@ -343,84 +416,47 @@ public final class ZLinkStatusPublisher<T>
             }
         }
 
-        private void enqueue(T value, boolean isTerminal, boolean isPreserved) {
-            if (isTerminal) {
-                terminalSeen = true;
-                if (pending.size() >= capacity) {
-                    int index = firstPreservedIndex();
-                    if (index < 0) {
-                        index = 0;
-                    }
-                    Pending<T> removed = removeAt(index);
-                    if (removed.preserved()) {
-                        discardedTerminalCount = saturatingIncrement(
-                            discardedTerminalCount);
-                    } else {
-                        coalescedCount = saturatingIncrement(coalescedCount);
-                    }
-                }
-                pending.addLast(new Pending<>(value, true));
-                return;
+        private void enqueue(
+            Object currentSourceKey,
+            T value,
+            boolean isTerminal,
+            boolean isPreserved) {
+            if (latestBySource.remove(currentSourceKey) != null) {
+                coalescedCount = saturatingIncrement(coalescedCount);
             }
 
-            int latestNonPreserved = lastNonPreservedIndex();
-            if (latestNonPreserved >= 0) {
-                removeAt(latestNonPreserved);
-                coalescedCount = saturatingIncrement(coalescedCount);
-                pending.addLast(new Pending<>(value, isPreserved));
-                return;
-            }
-            if (pending.size() >= capacity) {
-                Pending<T> removed = removeAt(0);
-                if (removed.preserved()) {
+            if (isTerminal || isPreserved) {
+                if (retained.size() >= capacity) {
+                    Pending<T> discarded = retained.removeFirst();
                     discardedTerminalCount = saturatingIncrement(
                         discardedTerminalCount);
+                    if (discarded.terminal()) {
+                        releaseSource(discarded.sourceKey());
+                    }
                 }
+                retained.addLast(new Pending<>(
+                    currentSourceKey,
+                    value,
+                    isTerminal));
+                if (isTerminal) {
+                    pendingTerminals.add(currentSourceKey);
+                }
+                return;
             }
-            pending.addLast(new Pending<>(value, isPreserved));
+
+            latestBySource.put(
+                currentSourceKey,
+                new Pending<>(currentSourceKey, value, false));
         }
 
-        private int firstPreservedIndex() {
-            int index = 0;
-            for (Pending<T> value : pending) {
-                if (value.preserved()) {
-                    return index;
-                }
-                index++;
-            }
-            return -1;
-        }
-
-        private int lastNonPreservedIndex() {
-            int index = 0;
-            int result = -1;
-            for (Pending<T> value : pending) {
-                if (!value.preserved()) {
-                    result = index;
-                }
-                index++;
-            }
-            return result;
-        }
-
-        private Pending<T> removeAt(int index) {
-            ArrayDeque<Pending<T>> reordered = new ArrayDeque<>();
-            Pending<T> removed = null;
-            int current = 0;
-            while (!pending.isEmpty()) {
-                Pending<T> value = pending.removeFirst();
-                if (current++ == index) {
-                    removed = value;
-                } else {
-                    reordered.addLast(value);
-                }
-            }
-            pending.addAll(reordered);
-            return Objects.requireNonNull(removed, "removed pending observation");
+        private void releaseSource(Object releasedSourceKey) {
+            latestBySource.remove(releasedSourceKey);
+            previousFingerprints.remove(releasedSourceKey);
+            pendingTerminals.remove(releasedSourceKey);
         }
     }
 
-    private record Pending<T>(T value, boolean preserved) {
+    private record Pending<T>(Object sourceKey, T value, boolean terminal) {
     }
 
     private static long saturatingIncrement(long value) {

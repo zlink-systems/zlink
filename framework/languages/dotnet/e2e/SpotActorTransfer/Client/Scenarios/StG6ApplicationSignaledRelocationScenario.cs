@@ -234,7 +234,7 @@ internal static class StG6ApplicationSignaledRelocationScenario
         }
     }
 
-    private static async Task<RelocationWorkloadReply> SubmitProbeAsync(
+    private static async Task<RelocationWorkloadRes> SubmitProbeAsync(
         SpotActorTransferScenarioContext context,
         string spotId,
         string scenario)

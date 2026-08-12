@@ -4,15 +4,13 @@
 
 | 시나리오 | 상태 | 근거 |
 |----------|------|------|
-| TD-A1 | 구현 | request, actor join, worker, framework HTTP client가 `Submit`/`Async`/`Yield`를 공개하고 blocking 완료 API를 노출하지 않는지 확인한다. |
 | TD-A2 | 구현 | `Async` 대기 뒤 continuation과 completion이 끝난 다음 같은 Spot probe가 실행되는 순서를 확인한다. |
 | TD-A3 | 구현 | 같은 Spot에서 여덟 개 read-modify-write를 `Async`로 실행하고 counter가 정확히 8인지 확인한다. |
 | TD-A4 | 구현 | 1초 `Async` 대기의 응답이 별도 completion 경로로 도착해 timeout 없이 재개되는지 확인한다. |
 | TD-A5 | 구현 | `Async` 대기 중 같은 Spot timer가 지연되고 대기 완료 뒤 실행되는지 확인한다. |
-| TD-B1 | 구현 | `Yield` 대기 중 같은 Spot probe가 실행되고 continuation이 이후 재개되는지 확인한다. |
+| TD-B1 | 구현 | `Yield` 대기 중 같은 Spot의 probe와 timer가 각각 실행되고 continuation이 이후 재개되는지 확인한다. |
 | TD-B2 | 구현 | `Yield` continuation 앞에 큐에 들어간 세 probe가 순서대로 실행되는지 확인한다. |
 | TD-B3 | 구현 | 여덟 개 read-modify-write가 `Yield` 구간에서 같은 이전 값을 관측해 lost update가 발생함을 확인한다. |
-| TD-B4 | 구현 | `Yield` 대기 중 같은 Spot timer가 실행되는지 확인한다. |
 | TD-C1 | 구현 | DI로 주입한 framework HTTP client의 `Yield`가 외부 HTTP API 대기 중 Spot probe를 허용하는지 확인한다. |
 | TD-C2 | 구현 | 같은 HTTP 호출의 `Async`가 completion까지 Spot turn을 유지하는지 확인한다. |
 | TD-C3 | 구현 | CPU worker pool보다 많은 비동기 HTTP 작업을 `RunIoWorker(...).Yield(...)`로 완료하고 `WorkerQueueFull`이 없는지 확인한다. |
@@ -34,7 +32,7 @@
 
 ## Selector 실행 증거
 
-Runner는 `TD-A1`부터 `TD-G1`까지의 canonical ID만 받는다. 알 수 없는 ID는
+Runner는 `TD-A2`부터 `TD-G1`까지의 현재 canonical ID만 받는다. 알 수 없는 ID는
 build와 fixture 시작 전에 종료한다. Client는 실제 실행한 scenario 수를 출력하고,
 runner는 선택한 수와 scenario별 완료 marker 수가 모두 같은지 확인한다.
 

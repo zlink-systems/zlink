@@ -10,6 +10,7 @@ import systems.zlink.samples.kotlin.bingo.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.bingo.server.configuration.SampleTimings
 import systems.zlink.samples.kotlin.bingo.shared.contracts.ReserveBingoRoomReq
 import systems.zlink.samples.kotlin.bingo.shared.contracts.ReserveBingoRoomRes
+import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomCreateReq
 import systems.zlink.samples.kotlin.bingo.shared.contracts.MatchBingoApiReq
 import systems.zlink.samples.kotlin.bingo.shared.contracts.MatchBingoApiRes
 
@@ -40,7 +41,7 @@ class MatchBingoHandler(
 
         spots.getOrCreate(allocated.roomId, SampleNames.RoomSpotType)
             .inMesh(SampleNames.Mesh)
-            .request(allocated.settings)
+            .request(BingoRoomCreateReq(allocated.settings))
             .timeout(SampleTimings.RequestTimeout)
             .submit()
             .await()

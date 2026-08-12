@@ -4,15 +4,16 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 source "../../runner-common.sh"
+zlink_sample_configure_port_pool java
 ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kts)
 
 game_source="Server/src/main/java/systems/zlink/samples/tictactoe/server/play/infrastructure/zlink/spots/tictactoegamespot/TicTacToeGame.java"
 if grep -n 'leaveFinishedActors' "${game_source}"; then
-  echo "TicTacToe actor cleanup must be driven by LeaveGameReq, not by the timer." >&2
+  echo "TicTacToe actor cleanup must be driven by LeaveGameMsg, not by the timer." >&2
   exit 1
 fi
-if ! rg -q 'addHandlersFromPackageOf' Server/src/main/java --glob '*.java'; then
-  echo "TicTacToe must discover handlers automatically" >&2
+if rg -n 'addHandlersFromPackageOf' Server/src/main/java --glob '*.java'; then
+  echo "TicTacToe must register framework handlers manually" >&2
   exit 1
 fi
 if rg -n 'ZLinkMessagePackCodec|zlink-framework-codec-msgpack' \
@@ -106,16 +107,8 @@ wait_log_contains() {
   return 1
 }
 
-reserve_ports() {
-  local base=$((48000 + ((RANDOM + $$) % 1000) * 13 % 12000))
-  local ports=()
-  for offset in $(seq 0 14); do
-    ports+=("$((base + offset))")
-  done
-  echo "${ports[*]}"
-}
-
-read -r api_a_http_port api_b_http_port api_a_channel_port api_b_channel_port play_a_channel_port play_b_channel_port play_a_stream_port play_b_stream_port play_a_spot_port play_b_spot_port play_a_pub_port play_b_pub_port unused_port1 unused_port2 unused_port3 < <(reserve_ports)
+read -r api_a_http_port api_b_http_port api_a_channel_port api_b_channel_port play_a_channel_port play_b_channel_port play_a_stream_port play_b_stream_port play_a_spot_port play_b_spot_port play_a_pub_port play_b_pub_port unused_port1 unused_port2 unused_port3 \
+  <<<"$(zlink_sample_reserve_ports 15)"
 
 zlink_redis_start_scoped_assign redis_container_id redis_port \
   "zlink-redis-java-sample-tictactoe" "redis:7.2-alpine"
@@ -123,6 +116,7 @@ redis_endpoint="127.0.0.1:${redis_port}"
 
 wait_endpoint redis "${redis_endpoint}"
 
+common_api_channels="tcp://127.0.0.1:${api_a_channel_port},tcp://127.0.0.1:${api_b_channel_port}"
 common_play_channels="tcp://127.0.0.1:${play_a_channel_port},tcp://127.0.0.1:${play_b_channel_port}"
 common_play_streams="tcp://127.0.0.1:${play_a_stream_port},tcp://127.0.0.1:${play_b_stream_port}"
 common_spots="tcp://127.0.0.1:${play_a_spot_port},tcp://127.0.0.1:${play_b_spot_port}"
@@ -150,7 +144,7 @@ sed -i \
   "${api_b_config}"
 
 cat >"${play_a_config}" <<EOF
-sample.apiChannelEndpoint=tcp://127.0.0.1:${api_a_channel_port}
+sample.apiChannelEndpoints=${common_api_channels}
 sample.playEndpoint=tcp://127.0.0.1:${play_a_stream_port}
 sample.playEndpoints=${common_play_streams}
 sample.spotEndpoint=tcp://127.0.0.1:${play_a_spot_port}
@@ -163,7 +157,7 @@ sample.logDirectory=${log_dir}
 EOF
 
 cat >"${play_b_config}" <<EOF
-sample.apiChannelEndpoint=tcp://127.0.0.1:${api_a_channel_port}
+sample.apiChannelEndpoints=${common_api_channels}
 sample.playEndpoint=tcp://127.0.0.1:${play_b_stream_port}
 sample.playEndpoints=${common_play_streams}
 sample.spotEndpoint=tcp://127.0.0.1:${play_b_spot_port}
@@ -209,6 +203,8 @@ sleep "${topology_settle_seconds}"
 
 "$(app_bin Client Client)" --api-url "http://127.0.0.1:${api_a_http_port}" >"${log_dir}/client.log" 2>&1
 
+wait_log_contains "${log_dir}/play-a.log" \
+  "play stream: existing actor exact identity verified\\."
 grep -Eq "observer-connected endpoint=tcp://127.0.0.1:${play_b_stream_port}" "${log_dir}/client.log"
 grep -Eq "observer-subscription=verified subscribed=true" "${log_dir}/client.log"
 grep -Eq "observer-win-milestone=verified actor=player-x wins=100" "${log_dir}/client.log"

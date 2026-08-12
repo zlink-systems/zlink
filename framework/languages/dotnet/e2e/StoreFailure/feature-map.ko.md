@@ -39,4 +39,3 @@
 | SF-F11 | 미구현 | Provider cancellation과 buffer lifetime |
 | SF-G1 | 미구현 | Actor·Spot·stable type limit의 atomic reservation |
 | SF-G2 | 미구현 | Unlimited·Entry Spot·activation concurrency 분리 |
-| SF-G3 | 미구현 | User Spot aggregate relocation capacity vector |

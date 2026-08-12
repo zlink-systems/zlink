@@ -94,7 +94,7 @@ class bot_bootstrap_handler_t
     using reply_type = bot_bootstrap_res_t;
     using dependency_types =
       fw::dependency_list_t<fw::actor_manager_t, fw::actor_client_t>;
-    static constexpr const char *topic_name = "ZoneWorldBotBootstrap";
+    static constexpr const char *topic_name = "ZoneWorldBotBootstrapReq";
 
     bot_bootstrap_handler_t (fw::actor_manager_t &directory, fw::actor_client_t &actors) :
         _directory (directory), _actors (actors)
@@ -153,8 +153,8 @@ int main (int argc, char **argv)
 {
     using namespace zlink::samples::zoneworld;
     namespace fw = zlink::framework;
-    configuration_t configuration;
     auto app = fw::app_t::create ();
+    const auto configuration = load_configuration (app, argc, argv);
     app.logging ().use_console ().set_min_level (fw::log_level_t::info);
     app.add_zlink_framework ([&] (fw::zlink_framework_options_t &options) {
         add_stores (options, configuration);
@@ -162,10 +162,6 @@ int main (int argc, char **argv)
         mesh.set_automatic_routing_id_prefix ("gw0").set_object_role (fw::object_role_t::client);
         mesh.channel_name (names_t::zone_channel).client ();
         mesh.listen (configuration.mesh_endpoint);
-        if (!configuration.peer_endpoint.empty ())
-            mesh.peer_connections ().connect (configuration.peer_endpoint);
-        if (!configuration.peer_endpoint_2.empty ())
-            mesh.peer_connections ().connect (configuration.peer_endpoint_2);
         options.add_stream_node (names_t::gateway_stream)
           .bind (configuration.stream_endpoint)
           .enable_actor_dispatch ()

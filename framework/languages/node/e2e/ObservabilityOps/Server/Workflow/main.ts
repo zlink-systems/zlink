@@ -40,7 +40,7 @@ import {
 } from '@zlink-systems/nestjs';
 import {
   WorkflowApplyReq,
-  WorkflowProjected,
+  WorkflowProjectedEvent,
   type WorkflowApplyRes
 } from '../../Shared/messages';
 import {
@@ -123,8 +123,8 @@ class WorkflowApplyHandler implements ZLinkSpotRequestHandler<WorkflowSpot, Work
 }
 
 @Injectable()
-class ProjectionHandler implements ZLinkFanoutHandler<WorkflowProjected> {
-  async handle(message: WorkflowProjected, context: ZLinkPublishMessageContext): Promise<void> {
+class ProjectionHandler implements ZLinkFanoutHandler<WorkflowProjectedEvent> {
+  async handle(message: WorkflowProjectedEvent, context: ZLinkPublishMessageContext): Promise<void> {
     evidence.add('projection', message.orderId, 'received', `${message.value}|source=${message.sourceRid}|topic=${context.topic}`);
   }
 }
@@ -134,7 +134,7 @@ class WorkflowTimerHandler implements ZLinkSpotTimerHandler<WorkflowSpot> {
   async handle(spot: WorkflowSpot, tick: ZLinkTimerTick): Promise<void> {
     evidence.add('workflow', String(spot.context.spotId), 'timer', `tick=${tick.deliveryIndex}`);
     await fanoutClient.publish(WORKFLOW_FANOUT,
-      new WorkflowProjected(String(spot.context.spotId), Number(tick.deliveryIndex), options.rid)).submit();
+      new WorkflowProjectedEvent(String(spot.context.spotId), Number(tick.deliveryIndex), options.rid)).submit();
     await spot.completeTimer();
   }
 }
@@ -171,7 +171,7 @@ Module({
           .enablePublisher(options.fanoutEndpoint)
           .routingId(options.rid)
           .enableSubscriber()
-          .addPublishHandler('WorkflowProjected', ProjectionHandler);
+          .addPublishHandler('WorkflowProjectedEvent', ProjectionHandler);
         const mesh = builder.addRouteMesh(WORKFLOW_MESH)
           .listen(options.routerEndpoint).routingId(options.rid);
         mesh.objects().server().addSpotFactory(
@@ -224,7 +224,7 @@ async function main(): Promise<void> {
         const result = await outbound.requestToSpot(handle.spotId, new WorkflowApplyReq(request.orderId, request.value))
           .timeout(5000).submit<WorkflowApplyRes>();
         await fanout.publish(WORKFLOW_FANOUT,
-          new WorkflowProjected(result.orderId, result.value, result.nodeRid)).submit();
+          new WorkflowProjectedEvent(result.orderId, result.value, result.nodeRid)).submit();
         return result;
       }
     },

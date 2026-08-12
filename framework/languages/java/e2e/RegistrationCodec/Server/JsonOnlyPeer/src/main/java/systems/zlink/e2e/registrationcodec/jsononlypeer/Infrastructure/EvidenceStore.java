@@ -1,6 +1,5 @@
-package Infrastructure;
+package systems.zlink.e2e.registrationcodec.jsononlypeer.Infrastructure;
 
-import systems.zlink.e2e.registrationcodec.jsononlypeer.Infrastructure;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;

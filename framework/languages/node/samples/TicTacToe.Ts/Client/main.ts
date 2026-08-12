@@ -4,7 +4,11 @@ import { runBrowserSample } from '../../browser-client-runtime';
 async function main(): Promise<void> {
   const config = await loadSampleConfig();
 
-  await new TicTacToeClientScenario().run(config.apiHttpEndpoint);
+  await new TicTacToeClientScenario().run(
+    config.apiHttpEndpoint,
+    undefined,
+    config.lifecycleCompletionPath
+  );
 
   console.log('PASS TicTacToe.Ts');
 }

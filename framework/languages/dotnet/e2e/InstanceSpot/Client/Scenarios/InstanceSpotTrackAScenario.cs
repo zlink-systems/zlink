@@ -25,8 +25,8 @@ internal static class InstanceSpotTrackAScenario
         var spotId = $"instance-is-e2e-01-{Guid.NewGuid():N}";
         var operationId = "cold-request";
         var result = (await playA.Post("/instance/cold-request")
-            .Body(new InstanceColdRequestReq(spotId, operationId))
-            .Async<InstanceColdRequestRes>()).Body;
+            .Body(new InstanceColdProbeReq(spotId, operationId))
+            .Async<InstanceColdProbeRes>()).Body;
         ZlinkStreamAssert.Ensure(result.Succeeded, "IS-E2E-01 cold request did not complete.");
         ZlinkStreamAssert.Ensure(result.SpotId == spotId && result.OperationId == operationId,
             "IS-E2E-01 reply identity did not match the request.");
@@ -74,12 +74,12 @@ internal static class InstanceSpotTrackAScenario
         var requests = new[]
         {
             playA.Post("/instance/cold-request")
-                .Body(new InstanceColdRequestReq(spotId, "concurrent-a"))
-                .Async<InstanceColdRequestRes>()
+                .Body(new InstanceColdProbeReq(spotId, "concurrent-a"))
+                .Async<InstanceColdProbeRes>()
                 .AsTask(),
             playB.Post("/instance/cold-request")
-                .Body(new InstanceColdRequestReq(spotId, "concurrent-b"))
-                .Async<InstanceColdRequestRes>()
+                .Body(new InstanceColdProbeReq(spotId, "concurrent-b"))
+                .Async<InstanceColdProbeRes>()
                 .AsTask()
         };
         var results = (await Task.WhenAll(requests)).Select(static response => response.Body).ToArray();

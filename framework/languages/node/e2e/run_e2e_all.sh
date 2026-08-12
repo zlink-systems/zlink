@@ -74,8 +74,8 @@ else
 fi
 
 for config in "${selected_configs[@]}"; do
-  if [[ ! -x "${SCRIPT_DIR}/${config}/run_e2e.sh" ]]; then
-    echo "[node-e2e] ${config} is missing an executable run_e2e.sh; aggregate cannot report PASS." >&2
+  if [[ ! -f "${SCRIPT_DIR}/${config}/run_e2e.sh" ]]; then
+    echo "[node-e2e] ${config} is missing run_e2e.sh; aggregate cannot report PASS." >&2
     exit 2
   fi
 done
@@ -99,7 +99,7 @@ run_config_with_retry() {
     (
       cd "${SCRIPT_DIR}/${config}" &&
         exec env E2E_START_ORDER="${start_order}" nice -n 10 \
-          timeout "${SCENARIO_TIMEOUT_SECONDS}s" ./run_e2e.sh "${scenario}"
+          timeout "${SCENARIO_TIMEOUT_SECONDS}s" bash ./run_e2e.sh "${scenario}"
     ) > >(tee "${output}") 2>&1 &
     active_config_pid="$!"
     wait "${active_config_pid}"

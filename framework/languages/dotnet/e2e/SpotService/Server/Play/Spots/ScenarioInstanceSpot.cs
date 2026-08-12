@@ -54,15 +54,15 @@ internal sealed class ScenarioInstanceStateHandler(EvidenceStore evidence)
     }
 }
 
-[ZLinkSpotRequestHandler("InstanceColdRequest")]
+[ZLinkSpotRequestHandler("InstanceColdReq")]
 internal sealed class ScenarioInstanceColdRequestHandler(
     EvidenceStore evidence,
     InstanceHandlerGate handlerGate)
-    : IZLinkSpotRequestHandler<ScenarioInstanceSpot, InstanceColdRequest, InstanceColdRequestReply>
+    : IZLinkSpotRequestHandler<ScenarioInstanceSpot, InstanceColdReq, InstanceColdRes>
 {
-    public async ValueTask<InstanceColdRequestReply> HandleAsync(
+    public async ValueTask<InstanceColdRes> HandleAsync(
         ScenarioInstanceSpot spot,
-        InstanceColdRequest request,
+        InstanceColdReq request,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -76,20 +76,20 @@ internal sealed class ScenarioInstanceColdRequestHandler(
         evidence.Add(
             $"instance-request|rid={evidence.Rid}|spot={spot.Context.SpotId}"
             + $"|operation={request.OperationId}");
-        return new InstanceColdRequestReply(
+        return new InstanceColdRes(
             spot.Context.SpotId,
             request.OperationId,
             spot.Context.NodeRid.ToString());
     }
 }
 
-[ZLinkSpotPacketHandler("InstanceColdSend")]
+[ZLinkSpotPacketHandler("InstanceColdMsg")]
 internal sealed class ScenarioInstanceColdSendHandler(EvidenceStore evidence)
-    : IZLinkSpotPacketHandler<ScenarioInstanceSpot, InstanceColdSend>
+    : IZLinkSpotPacketHandler<ScenarioInstanceSpot, InstanceColdMsg>
 {
     public ValueTask HandleAsync(
         ScenarioInstanceSpot spot,
-        InstanceColdSend message,
+        InstanceColdMsg message,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -100,7 +100,7 @@ internal sealed class ScenarioInstanceColdSendHandler(EvidenceStore evidence)
     }
 }
 
-internal sealed record InstanceColdRequestReply(
+internal sealed record InstanceColdRes(
     string SpotId,
     string OperationId,
     string NodeRid);

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/e2e-redis-common.sh"
+zlink_e2e_initialize java "$0" "$@"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/start-order-common.sh"
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -9,6 +10,50 @@ pids=()
 redis_container=""
 run_id="$(date +%Y%m%d-%H%M%S)-$$"
 log_dir="$(pwd)/logs/${run_id}"
+config_dir=""
+
+print_logs() {
+  local status="$1"
+  if [[ "${status}" == "0" ]]; then
+    return
+  fi
+  for log in "${log_dir}"/*.log; do
+    [[ -f "${log}" ]] || continue
+    echo "===== ${log} =====" >&2
+    tail -n 200 "${log}" >&2 || true
+  done
+}
+
+cleanup() {
+  local status="$?"
+  set +e
+  print_logs "${status}"
+  for ((i=${#pids[@]}-1; i>=0; i--)); do
+    kill "${pids[$i]}" >/dev/null 2>&1 || true
+  done
+  for _ in $(seq 1 50); do
+    local alive=0
+    for pid in "${pids[@]}"; do
+      if kill -0 "${pid}" >/dev/null 2>&1; then
+        alive=1
+        break
+      fi
+    done
+    [[ "${alive}" == "0" ]] && break
+    sleep 0.1
+  done
+  for ((i=${#pids[@]}-1; i>=0; i--)); do
+    kill -9 "${pids[$i]}" >/dev/null 2>&1 || true
+  done
+  if [[ -n "${redis_container}" ]]; then
+    zlink_redis_remove_by_id "${redis_container}" || true
+  fi
+  [[ -z "${config_dir}" ]] || rm -rf "${config_dir}"
+  wait >/dev/null 2>&1 || true
+  exit "${status}"
+}
+trap cleanup EXIT
+
 repo_root="$(cd ../../../../.. && pwd)"
 default_core_lib="${repo_root}/core/build/lib/libzlink.so"
 mkdir -p "${log_dir}"
@@ -45,21 +90,7 @@ if rg -n 'java\.net\.http\.HttpClient|HttpClient\.new' \
 fi
 
 reserve_ports() {
-  python3 - <<'PY'
-import socket
-sockets = []
-ports = []
-try:
-    for _ in range(12):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        ports.append(sock.getsockname()[1])
-    print(" ".join(str(port) for port in ports))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  zlink_e2e_reserve_ports 12
 }
 
 wait_tcp() {
@@ -90,7 +121,7 @@ PY
 }
 
 zlink_redis_start_scoped_assign redis_container redis_port \
-  "zlink-redis-java-e2e" "redis:7.2-alpine" "127.0.0.1::6379"
+  "zlink-redis-java-e2e" "redis:7.2-alpine"
 redis_endpoint="127.0.0.1:${redis_port}"
 redis_host="${redis_endpoint%:*}"
 redis_port="${redis_endpoint##*:}"
@@ -170,48 +201,6 @@ write_config "${client_config}" \
   "sessionBHttpEndpoint=${session_b_http_endpoint}" \
   "sessionAStreamEndpoint=${session_a_stream_endpoint}" \
   "sessionBStreamEndpoint=${session_b_stream_endpoint}"
-
-print_logs() {
-  local status="$1"
-  if [[ "${status}" == "0" ]]; then
-    return
-  fi
-  for log in "${log_dir}"/*.log; do
-    [[ -f "${log}" ]] || continue
-    echo "===== ${log} =====" >&2
-    tail -n 200 "${log}" >&2 || true
-  done
-}
-
-cleanup() {
-  local status="$?"
-  set +e
-  print_logs "${status}"
-  for ((i=${#pids[@]}-1; i>=0; i--)); do
-    kill "${pids[$i]}" >/dev/null 2>&1 || true
-  done
-  for _ in $(seq 1 50); do
-    local alive=0
-    for pid in "${pids[@]}"; do
-      if kill -0 "${pid}" >/dev/null 2>&1; then
-        alive=1
-        break
-      fi
-    done
-    [[ "${alive}" == "0" ]] && break
-    sleep 0.1
-  done
-  for ((i=${#pids[@]}-1; i>=0; i--)); do
-    kill -9 "${pids[$i]}" >/dev/null 2>&1 || true
-  done
-  if [[ -n "${redis_container}" ]]; then
-    docker rm -fv "${redis_container}" >/dev/null 2>&1 || true
-  fi
-  rm -rf "${config_dir}"
-  wait >/dev/null 2>&1 || true
-  exit "${status}"
-}
-trap cleanup EXIT
 
 wait_http() {
   local endpoint="$1"
@@ -321,7 +310,7 @@ wait_role_ready() {
   esac
 }
 
-../../gradlew --no-daemon --no-parallel --max-workers=1 \
+zlink_e2e_gradle_build_locked ../../gradlew --no-daemon --no-parallel --max-workers=1 \
   --gradle-user-home "${HOME}/.cache/zlink/java-e2e/toactor-gradle" -p . installDist
 
 SERVER_ROLES=(actor-a actor-b caller session-a session-b)

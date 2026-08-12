@@ -1,6 +1,4 @@
-package Handlers;
-import systems.zlink.e2e.registrationcodec.main.Handlers;
-import systems.zlink.e2e.registrationcodec.main.Infrastructure;
+package systems.zlink.e2e.registrationcodec.main.Handlers;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -21,8 +19,8 @@ public final class JsonSendHandler
     public CompletionStage<Void> handle(
         Contracts.JsonEchoMsg message,
         ZLinkMessageContext context) {
-        state.record("Send", "JsonEcho", message.value());
-        state.record("ContentType", "JsonEcho", context.contentType().orElse("missing"));
+        state.record("Send", "JsonEchoMsg", message.value());
+        state.record("ContentType", "JsonEchoMsg", context.contentType().orElse("missing"));
         return CompletableFuture.completedFuture(null);
     }
 }

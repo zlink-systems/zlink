@@ -12,7 +12,7 @@ namespace zlink::framework::e2e::instance_spot
 inline constexpr const char *mesh_name = "instance-spot.mesh";
 inline constexpr const char *spot_type = "ScenarioInstanceSpot";
 
-struct probe_request_t
+struct probe_req_t
 {
     static constexpr const char *packet_name = "InstanceProbeReq";
     std::string spot_id;
@@ -20,7 +20,7 @@ struct probe_request_t
     std::string action;
 };
 
-struct probe_message_t
+struct probe_msg_t
 {
     static constexpr const char *packet_name = "InstanceProbeMsg";
     std::string spot_id;
@@ -28,7 +28,7 @@ struct probe_message_t
     std::string action;
 };
 
-struct probe_reply_t
+struct probe_res_t
 {
     std::string spot_id;
     std::string operation_id;
@@ -51,40 +51,40 @@ struct lifecycle_snapshot_t
     std::uint32_t closed_instances = 0;
 };
 
-inline void to_json (nlohmann::json &json, const probe_request_t &value)
+inline void to_json (nlohmann::json &json, const probe_req_t &value)
 {
     json = {{"spotId", value.spot_id}, {"operationId", value.operation_id},
             {"action", value.action}};
 }
 
-inline void from_json (const nlohmann::json &json, probe_request_t &value)
+inline void from_json (const nlohmann::json &json, probe_req_t &value)
 {
     value.spot_id = json.value ("spotId", "");
     value.operation_id = json.value ("operationId", "");
     value.action = json.value ("action", "");
 }
 
-inline void to_json (nlohmann::json &json, const probe_message_t &value)
+inline void to_json (nlohmann::json &json, const probe_msg_t &value)
 {
     json = {{"spotId", value.spot_id}, {"operationId", value.operation_id},
             {"action", value.action}};
 }
 
-inline void from_json (const nlohmann::json &json, probe_message_t &value)
+inline void from_json (const nlohmann::json &json, probe_msg_t &value)
 {
     value.spot_id = json.value ("spotId", "");
     value.operation_id = json.value ("operationId", "");
     value.action = json.value ("action", "");
 }
 
-inline void to_json (nlohmann::json &json, const probe_reply_t &value)
+inline void to_json (nlohmann::json &json, const probe_res_t &value)
 {
     json = {{"status", "completed"}, {"spotId", value.spot_id},
             {"operationId", value.operation_id}, {"action", value.action},
             {"instanceSpot", value.instance_spot}};
 }
 
-inline void from_json (const nlohmann::json &json, probe_reply_t &value)
+inline void from_json (const nlohmann::json &json, probe_res_t &value)
 {
     value.spot_id = json.value ("spotId", "");
     value.operation_id = json.value ("operationId", "");

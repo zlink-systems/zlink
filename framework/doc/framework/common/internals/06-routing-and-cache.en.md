@@ -144,27 +144,30 @@ The schema fixes only the record form. After relaying and receiving it, each run
 the source route's object generation, authority generation, and target node. It invalidates the
 current cache entry only when those values match, so it cannot clear a newer route already stored.
 
-**Duplicate-suppression implementation examples — not a common completion condition.**
+A dedicated registry owns duplicate suppression. Its key contains every field in both the
+source and target route fences. In addition to object kind and logical ID, it compares object
+generation, target node RID/generation, authority-owner generation, and owner-lease
+generation on both sides. A key that keeps only some generations can let a marker from an
+old route suppress a notification that must be sent to a new target.
 
-- Send only once per `(sending runtime, object, owner generation)`
-  combination. Sending a notification for every message on an object
-  with traffic piling up right after a move would grow the
-  notification record count as much as the business message count.
-- If the same notification is already in flight, merge additional
-  notifications.
-- The notification isn't guaranteed to be resent if lost — it expires
-  naturally once the cache lifetime ends.
-- Put the duplicate-suppression marker into the existing cache entry
-  rather than a separate set, and remove it together when the cache
-  entry disappears. A separate set would keep growing state
-  proportional to the number of moved objects.
+```mermaid
+stateDiagram-v2
+    [*] --> idle: retain exact route fence
+    idle --> inFlight: acquire notification-send authority
+    inFlight --> sentUntilExpiry: send succeeds
+    inFlight --> idle: send fails
+    sentUntilExpiry --> [*]: route cache expires or is replaced
+    idle --> [*]: route cache expires or is replaced
+```
 
-An implementation can use a different suppression structure. The common
-conditions are to invalidate only a cache entry pointing at the same
-object/authority generation and target node, never erase a newer route,
-expire a stale route after the cache lifetime even if the notification is
-lost, and never let duplicate state change the original operation's terminal
-result.
+While a key is `inFlight`, another send for the same key cannot start. A successful send
+keeps `sentUntilExpiry` until the cached route expires; a failed send transitions to `idle` so a
+later relay can try again. The registry creates no expiry timer of its own. Route-cache
+expiry or replacement removes the same key.
+
+This registry owns notification suppression only. Existing owners continue to manage the
+original operation's payload, reply route, and terminal completion. Suppression state
+therefore neither creates nor changes the original operation's terminal result.
 
 ## 3. Don't Build The Candidate List Per Call
 

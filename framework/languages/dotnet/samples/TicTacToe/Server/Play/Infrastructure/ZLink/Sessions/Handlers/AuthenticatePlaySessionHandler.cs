@@ -55,8 +55,9 @@ internal sealed class AuthenticatePlaySessionHandler(
             "play stream: creating actor before dispatch. sessionId={SessionId}, actor={ActorId}",
             context.SessionId,
             player.ActorId);
-        var playerActor = (await actors.GetOrCreate(player.ActorId, SampleTypes.PlayerActor)
-            .Request(player).Async(cancellationToken)) switch
+        var result = await actors.GetOrCreate(player.ActorId, SampleTypes.PlayerActor)
+            .Request(new PlayerActorCreateReq(player)).Async(cancellationToken);
+        var playerActor = result switch
         {
             ZLinkActorCreateResult.Existing value => value.Actor,
             ZLinkActorCreateResult.Created value => value.Actor,
@@ -70,10 +71,24 @@ internal sealed class AuthenticatePlaySessionHandler(
             playerActor,
             cancellationToken);
 
+        // ActorRef equality covers the actor id, object generation, mesh and owner
+        // route. Keep that exact-identity check on the server; AuthenticateRes only
+        // returns the public PlayerInfo payload.
+        if (boundActor.Ref != playerActor)
+            throw new InvalidOperationException(
+                $"Bound ActorRef does not match the resolved ActorRef for '{player.ActorId}'.");
+
         logger.LogInformation(
             "play stream: actor bound to session. sessionId={SessionId}, actor={ActorId}",
             context.SessionId,
             boundActor.ActorId);
+
+        if (result is ZLinkActorCreateResult.Existing)
+            logger.LogInformation(
+                "play stream: existing actor exact identity verified. sessionId={SessionId}, actor={ActorId}, generation={ObjectGeneration}",
+                context.SessionId,
+                boundActor.ActorId,
+                boundActor.Ref.ObjectGeneration);
     }
 }
 // --8<-- [end:doc-session-auth]

@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CPP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/../redis-common.sh"
+zlink_cpp_e2e_acquire_run_lock "${BASH_SOURCE[0]}" "$@"
+zlink_cpp_e2e_install_cleanup_trap
 BUILD_DIR="$CPP_DIR/build"
 SCENARIO="all"
 E2E_START_ORDER="forward"
@@ -49,28 +51,13 @@ print(max(1, math.ceil(timeout / poll)))
 PY
 )"
 
-read -r API_A API_B ROUTE_A ROUTE_B WORKFLOW_A HTTP_A HTTP_B HTTP_WORKFLOW HTTP_DIRECT_CONSUMER HTTP_SINGLE_CONSUMER HTTP_STORE_CONSUMER HTTP_BACKPRESSURE_CONSUMER CLIENT_ROUTE API_A2 ROUTE_A2 HTTP_A2 RM_A3_ROUTE_A RM_A3_ROUTE_B RM_A3_HTTP_A RM_A3_HTTP_B RM_A3_PROXY_A RM_A3_PROXY_B <<<"$(python3 - <<'PY'
-import socket
-
-sockets = []
-ports = []
-for _ in range(22):
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    sockets.append(s)
-    ports.append(s.getsockname()[1])
-print(" ".join(f"tcp://127.0.0.1:{p}" for p in ports[:5]), end=" ")
-print(" ".join(f"http://127.0.0.1:{p}" for p in ports[5:12]), end=" ")
-print(f"tcp://127.0.0.1:{ports[12]}", end=" ")
-print(" ".join(f"tcp://127.0.0.1:{p}" for p in ports[13:15]), end=" ")
-print(f"http://127.0.0.1:{ports[15]}", end=" ")
-print(" ".join(f"tcp://127.0.0.1:{p}" for p in ports[16:18]), end=" ")
-print(" ".join(f"http://127.0.0.1:{p}" for p in ports[18:20]), end=" ")
-print(" ".join(f"tcp://127.0.0.1:{p}" for p in ports[20:22]))
-for s in sockets:
-    s.close()
-PY
-)"
+read -r API_A API_B ROUTE_A ROUTE_B WORKFLOW_A HTTP_A HTTP_B HTTP_WORKFLOW \
+  HTTP_DIRECT_CONSUMER HTTP_SINGLE_CONSUMER HTTP_STORE_CONSUMER \
+  HTTP_BACKPRESSURE_CONSUMER CLIENT_ROUTE API_A2 ROUTE_A2 HTTP_A2 \
+  RM_A3_ROUTE_A RM_A3_ROUTE_B RM_A3_HTTP_A RM_A3_HTTP_B RM_A3_PROXY_A \
+  RM_A3_PROXY_B <<<"$(zlink_cpp_e2e_allocate_endpoints \
+    tcp tcp tcp tcp tcp http http http http http http http tcp tcp tcp http \
+    tcp tcp http http tcp tcp)"
 
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="$SCRIPT_DIR/logs/$RUN_ID"
@@ -222,7 +209,7 @@ cleanup() {
     fi
   done
   if [[ -n "$REDIS_CONTAINER" && "$REDIS_CONTAINER_OWNED" == "1" ]]; then
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   rm -rf "$CONFIG_DIR"
   if [[ $code -ne 0 ]]; then
@@ -684,7 +671,7 @@ if [[ "$SCENARIO" == "all" ]]; then
   for scenario in RM-A1 RM-A2 RM-A3 RM-A4 RM-A6 RM-B1 RM-B2 RM-B3 RM-C1 RM-C2 RM-C3 RM-C4 RM-C5 RM-C7 RM-C8 RM-C9; do
     echo "running $scenario"
     child_output="$LOG_DIR/child-$scenario.output.log"
-    "$0" "$scenario" --redis-endpoint="$REDIS_ENDPOINT" \
+    bash "$0" "$scenario" --redis-endpoint="$REDIS_ENDPOINT" \
       --redis-container="$REDIS_CONTAINER" | tee "$child_output"
     child_log_dir="$(sed -n 's/^log_dir=//p' "$child_output" | tail -1)"
     if [[ -z "$child_log_dir" || ! -d "$child_log_dir" ]]; then

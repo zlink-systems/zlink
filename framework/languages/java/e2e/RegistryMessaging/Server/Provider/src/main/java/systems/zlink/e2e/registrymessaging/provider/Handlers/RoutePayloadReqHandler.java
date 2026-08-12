@@ -1,7 +1,5 @@
-package Handlers;
+package systems.zlink.e2e.registrymessaging.provider.Handlers;
 
-import systems.zlink.e2e.registrymessaging.provider.Handlers;
-import systems.zlink.e2e.registrymessaging.provider.Infrastructure;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;

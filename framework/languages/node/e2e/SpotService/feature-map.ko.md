@@ -3,8 +3,8 @@
 기준 문서: `framework/doc/framework/common/e2e/config-2-spot-service.ko.md`
 
 현재 상태: Node.js `SpotService` config는 `.NET` runner처럼 `all`을 child group으로 나누어 실행한다.
-`default-batch`는 SM-A1, SM-A2, SM-A3, SM-A4, SM-A5, SM-A6, SM-A7, SM-A8, SM-B1, SM-B2, SM-B3, SM-B4, SM-B5,
-SM-B6, SM-B7, SM-B8, SM-B9, SM-C1, SM-C2, SM-C3, SM-C4, SM-C5, SM-D1, SM-D2, SM-D3, SM-D4, SM-D5, SM-D6,
+`default-batch`는 SM-A1, SM-A2, SM-A3, SM-A4, SM-A5, SM-A6, SM-A7, SM-A8, SM-B1, SM-B2, SM-B3, SM-B4,
+SM-B6, SM-B7, SM-B8, SM-B9, SM-C1, SM-C2, SM-C3, SM-C4, SM-C5, SM-D2, SM-D3, SM-D4, SM-D5, SM-D6,
 SM-D7, SM-D8, SM-D9, SM-D10, SM-D11, SM-D12, SM-D13, SM-D14, SM-D15, SM-E1, SM-E2, SM-E3, SM-E4, SM-F1,
 SM-F2, SM-F3, SM-F4, SM-F5를 operation group 단위로 실행하고,
 outer `all`은 이어서 SM-F6, SM-G2, SM-G3, SM-G4, SM-G1을 별도 child scenario로 실행한다.
@@ -33,7 +33,6 @@ close 거절과 새 incarnation 유지, ChannelName·RID direct 지속을 public
 | SM-B2 | 구현 | Session role에서 `play-b` control route로 actor ensure를 보내고, bound actor request가 `play-b` spot actor까지 cross-node relay되며 `entry-created` -> `entry-joined` lifecycle evidence가 remote node에 남는지 검증한다. 선택 PASS: `logs/20260630-070751-3054866` |
 | SM-B3 | 구현 | Session stream auth 뒤 bound actor에 `ComplexActorReq`를 relay하고 scalar, array, dictionary payload가 reply와 `actor-complex` evidence에 그대로 남는지 검증한다. 선택 PASS: `logs/20260629-201946-1303393`; `all` PASS: `logs/20260630-074201-3148526` |
 | SM-B4 | 구현 | Session stream auth가 `play-b` actor를 bind한 뒤 `ActorPingReq`가 cross-node로 `play-b` actor에서 처리되고 reply가 돌아오는지 검증한다. 선택 PASS: `logs/20260629-202300-1319449`; `all` PASS: `logs/20260630-074201-3148526` |
-| SM-B5 | 구현 | missing actor handler request가 stream error reply로 실패하고 `dispatch-error\|surface=spotActor\|kind=actorRequest\|reason=handlerMissing\|action=replyError` evidence를 남기는지 검증한다. 선택 PASS: `logs/20260630-072224-3098758` |
 | SM-B6 | 재검증 필요 | explicit leave는 `spot-actor-left` evidence만 남긴다. Physical stream close는 application이 Actor를 선택해 통지하지 않고 Framework가 current binding 전체에 자동 통지해야 한다. handler loop를 제거했으므로 최신 runtime runner 증거가 필요하다. |
 | SM-B7 | 구현 | 같은 actor에 `ActorPingReq` 두 개를 연속 전송해 `entry-created` -> `entry-joined` -> packet dispatch 순서와 `seen=1`, `seen=2` 직렬 처리 evidence를 검증한다. 선택 PASS: `logs/20260630-070802-3055574` |
 | SM-B8 | 구현 | Entry Spot actor handler에서 public `entrySpot.context.destroyActor(...)`를 호출하고, post-destroy `SnapshotReq`가 stream error reply로 실패하며 `actor-destroyed` evidence가 남는지 검증한다. 선택 PASS: `logs/20260630-072210-3097534` |
@@ -44,8 +43,7 @@ close 거절과 새 incarnation 유지, ChannelName·RID direct 지속을 public
 | SM-C4 | 구현 | local Spot factory가 없는 Gateway MeshNode가 같은 RouteMesh의 public node publisher로 ChannelName과 topic을 제출한다. Play-A의 구독 Spot은 marker를 한 번 받고 미구독 Spot은 받지 않는다. 별도 publish transport endpoint 없이 Gateway와 Play-A의 기존 Router 연결만 사용한다. 선택 PASS: `log/20260729-051542-2246502/` |
 | SM-C5 | 전환 필요 | Play-A의 Logical Multicast가 Play-B의 구독 Spot에 delivery evidence를 남기고 미구독 Spot에는 남기지 않는지 검증한다. 기존 PASS 로그는 이전 topology의 증거이며 10.0.0 구현 뒤 다시 실행한다. |
 | SM-C6 | 전환 필요 | remote ROUTER backpressure를 만들고 blocking publish의 timeout, non-blocking submit의 즉시 backpressure 결과와 앞에서 수락된 target의 전달 유지를 검증해야 한다. 현재 runner에는 이 증거가 없다. |
-| SM-D1 | 구현 | Session HTTP endpoint가 control RouteMesh로 `play-a` readiness를 확인하고, stream auth로 bind한 local actor에 `ActorPushReq`를 relay한다. actor handler는 public `actor.context.boundSession.send(...)`로 같은 stream client에 `ActorPushNotify`를 보내고 reply와 push payload를 검증한다. 선택 PASS: `logs/20260629-211928-1555127`; `all` PASS: `logs/20260630-074201-3148526` |
-| SM-D2 | 구현 | Session HTTP endpoint가 control RouteMesh로 `play-b` readiness를 확인하고, stream auth로 bind한 remote actor에 `ActorPushReq`를 relay한다. `play-b` actor handler가 public bound session push로 `ActorPushNotify`를 보내고 reply node가 `play-b`인지 검증한다. 선택 PASS: `logs/20260629-212246-1563843`; `all` PASS: `logs/20260630-074201-3148526` |
+| SM-D2 | 구현 | Local `play-a`와 remote `play-b` Actor variant를 각각 stream auth로 bind하고 `ActorPushReq` relay reply와 public bound-session `ActorPushNotify`를 검증한다. Historical variant logs: `logs/20260629-211928-1555127`, `logs/20260629-212246-1563843`; `all` PASS: `logs/20260630-074201-3148526` |
 | SM-D3 | 구현 | entry actor stream bind 뒤 `ActorPushReq` reply와 bound session push를 검증한다. user spot bind는 `UserSpotAuthReq`로 spot/actor join marker를 남기고 `UserActorPingReq`/`UserActorPushReq` relay reply, user spot rid, push payload, `actor-pingMsg` evidence를 검증한다. 선택 PASS: `logs/20260629-212739-1577626`; `all` PASS: `logs/20260630-074201-3148526` |
 | SM-D4 | 구현 | `MultiBindReq`가 한 stream session에 두 actor를 bind하고, subsequent request가 stream metadata `actor-id`로 대상 actor를 선택한다. 각 actor request/reply, actor push, id 없는 request 실패를 검증한다. 선택 PASS: `logs/20260629-213206-1588322`; `all` PASS: `logs/20260630-074201-3148526` |
 | SM-D4A | 구현 | `session A to B rebind fences stale relay and late disconnect without touching other actors`가 same-generation rebind, stale typed error, late disconnect 무효화와 다른 Actor binding 유지를 검증한다. |
@@ -62,7 +60,7 @@ close 거절과 새 incarnation 유지, ChannelName·RID direct 지속을 public
 | SM-D13 | 구현 | stream connector heartbeat를 public option으로 켜고 200ms interval, 2s timeout으로 여러 heartbeat 주기 동안 stream auth 상태가 유지되는지 검증한다. 현재 `.NET` 기준 scenario와 동일하게 정상 heartbeat 유지 경로만 완료로 본다. 선택 PASS: `logs/20260629-221012-1704641`; `all` PASS: `logs/20260630-074201-3148526` |
 | SM-D14 | 전환 필요 | Node stream node builder의 public `setTlsServer(...)`로 `wss://` endpoint를 구성하고 auth/request/push를 검증해야 한다. 현재 TypeScript connector에는 자체 서명 인증서를 신뢰하도록 지정하는 public option이 없으므로, 검증 생략 option을 가정하거나 strict 실패와 성공을 모두 완료로 표시하지 않는다. |
 | SM-D15 | 구현 | Session -> actor -> bound session push chain이 cross-role로 이어져 request reply와 push payload가 같은 actor/session evidence로 확인되는지 검증한다. 선택 PASS: `logs/20260707-195152-3345108`; `all` PASS: `logs/20260708-062031-351969` |
-| SM-E1 | 구현 | 애플리케이션이 설정한 OpenTelemetry logger provider와 `ZLinkSpotOutbound.requestToSpot(...)`, `sendToSpot(...)`로 missing handler request/command 경로를 만들고 SpotRoute `handlerMissing` evidence를 검증한다. |
+| SM-E1 | 구현 | Actor missing request의 stream error와 Spot missing request/command를 함께 실행하고, application logger provider에서 surface별 `no_handler` evidence를 검증한다. |
 | SM-E2 | 구현 | public `spot.context.addTimer(...)`로 lifecycle timer를 등록하고 `timer-basic` marker가 두 번 이상 발생한 뒤 spot close가 성공하는지 검증한다. 로그: `logs/20260630-074201-3148526` |
 | SM-E3 | 구현 | public `spot.context.addTimer(...)`와 `spot.context.close(...)`로 idle timer close, `spot-closing` evidence, close 이후 routed request 실패를 검증한다. 선택 PASS: `logs/20260630-081940-3248210` |
 | SM-E4 | 구현 | public `spot.context.addTimer(...)`의 `ZLinkTimerOverrunPolicy` 세 가지를 등록하고 `delivery`/`scheduled`/`skipped` evidence로 skip, bounded catch-up, delay-next-tick 의미를 검증한다. 로그: `logs/20260630-074201-3148526` |
@@ -122,8 +120,8 @@ close 거절과 새 incarnation 유지, ChannelName·RID direct 지속을 public
   - PASS: `logs/20260629-201946-1303393` (complex actor request payload fidelity)
 - 선택 scenario: `timeout 360s framework/languages/node/e2e/SpotService/run_e2e.sh SM-B4`
   - PASS: `logs/20260629-202300-1319449` (remote actor request)
-- 선택 scenario: `timeout 360s framework/languages/node/e2e/SpotService/run_e2e.sh SM-B5`
-  - PASS: `logs/20260630-072224-3098758` (`handlerMissing` evidence와 stream error reply 확인)
+- 선택 scenario: `timeout 360s framework/languages/node/e2e/SpotService/run_e2e.sh SM-E1`
+  - Historical Actor variant PASS: `logs/20260630-072224-3098758` (`handlerMissing` evidence와 stream error reply 확인)
 - 선택 scenario: `timeout 360s framework/languages/node/e2e/SpotService/run_e2e.sh SM-B6`
   - PASS: `logs/20260630-073618-3133487` (explicit leave와 stream close disconnect callback evidence 구분)
 - 선택 scenario: `timeout 360s framework/languages/node/e2e/SpotService/run_e2e.sh SM-B7`
@@ -136,8 +134,8 @@ close 거절과 새 incarnation 유지, ChannelName·RID direct 지속을 public
   - PASS: `logs/20260630-082100-3253716` (spot-to-spot request/send/publish/timeout/negative)
 - 선택 scenario: `framework/languages/node/e2e/SpotService/run_e2e.sh SM-C4`
   - PASS: `log/20260729-051542-2246502/` (local Spot factory가 없는 Gateway publish, Play-A 구독 Spot 1회 수신과 미구독 Spot 미수신 확인)
-- 선택 scenario: `timeout 360s framework/languages/node/e2e/SpotService/run_e2e.sh SM-D1`
-  - PASS: `logs/20260629-211928-1555127` (local stream auth, actor request relay, bound session push)
+- 선택 scenario: `timeout 360s framework/languages/node/e2e/SpotService/run_e2e.sh SM-D2`
+  - Historical local variant PASS: `logs/20260629-211928-1555127` (local stream auth, actor request relay, bound session push)
 - 선택 scenario: `timeout 360s framework/languages/node/e2e/SpotService/run_e2e.sh SM-D5`
   - PASS: `logs/20260630-073619-3133519` (stream close 후 `session-disconnected`/`entry-disconnected` evidence 확인)
 - 선택 scenario: `timeout 420s framework/languages/node/e2e/SpotService/run_e2e.sh SM-D9`

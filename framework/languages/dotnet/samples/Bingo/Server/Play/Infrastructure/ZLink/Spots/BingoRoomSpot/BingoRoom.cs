@@ -209,7 +209,7 @@ internal sealed class BingoRoom(
         ZLinkMessage request,
         CancellationToken cancellationToken)
     {
-        var settings = BingoRoomSettingsPayloadMapper.FromMessage(request, DefaultSettings);
+        var settings = BingoRoomSettingsPayloadMapper.FromCreateRequest(request, DefaultSettings);
         ApplySettings(settings);
         logger.LogInformation(
             "bingo room: created. room={RoomId}, roomName={RoomName}, mode={Mode}, purpose={Purpose}, observedRoom={ObservedRoomId}, requiredPlayers={RequiredPlayers}, maxDrawNumber={MaxDrawNumber}",

@@ -62,11 +62,8 @@ import {
   type ZLinkSpotSerialTurn
 } from '../execution';
 import { ZLinkConfigurationException } from '../configuration';
-import { ZLinkMeshSubmitterRegistry } from '../messaging';
+import type { ZLinkMeshSubmitterRegistry } from '../messaging';
 import { currentZLinkActorExecution } from './actor-execution-context';
-
-const LEGACY_ACTOR_SEND_TIMEOUT_MS = 1000;
-const LEGACY_ACTOR_SEND_CAPACITY = 4096;
 
 export interface ZLinkActorClientOptions {
   readonly nodeProvider: (meshName: string) => ZLinkBackendMeshNode | undefined;
@@ -85,7 +82,7 @@ export interface ZLinkActorClientOptions {
     deadlineUnixMs?: number
   ) => Promise<unknown> | undefined;
   readonly sendErrorReporter?: (error: unknown) => void;
-  readonly meshSubmitters?: ZLinkMeshSubmitterRegistry;
+  readonly meshSubmitters: ZLinkMeshSubmitterRegistry;
   readonly routeTransport?: ZLinkActorRoutedJoinTransport;
   readonly transportDeliveryGate?: () => {
     waitBeforeSubmit(
@@ -94,19 +91,10 @@ export interface ZLinkActorClientOptions {
       signal?: AbortSignal
     ): Promise<number | void>;
   } | undefined;
-  readonly sendTimeoutMs?: number;
-  readonly sendHighWaterMark?: number;
 }
 
 export class DefaultZLinkActorClient implements ZLinkActorClient {
-  private readonly meshSubmitters: ZLinkMeshSubmitterRegistry;
-
-  constructor(private readonly options: ZLinkActorClientOptions) {
-    this.meshSubmitters = options.meshSubmitters ?? new ZLinkMeshSubmitterRegistry(
-      options.sendTimeoutMs ?? LEGACY_ACTOR_SEND_TIMEOUT_MS,
-      Math.max(1, options.sendHighWaterMark ?? LEGACY_ACTOR_SEND_CAPACITY)
-    );
-  }
+  constructor(private readonly options: ZLinkActorClientOptions) {}
 
   sendToActor(actorId: string, message: unknown): ZLinkActorSendCall {
     requireActorId(actorId);
@@ -196,7 +184,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
         );
         return submitted();
       }
-      return await this.meshSubmitters.submit(
+      return await this.options.meshSubmitters.submit(
         meshName,
         () => this.submitActorSend(meshName, toBackendActorRef(actor), parts),
         signal

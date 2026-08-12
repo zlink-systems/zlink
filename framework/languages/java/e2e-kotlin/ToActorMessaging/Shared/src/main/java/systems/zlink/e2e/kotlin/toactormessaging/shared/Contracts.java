@@ -9,37 +9,40 @@ public final class Contracts {
     private Contracts() {
     }
 
-    @ZLinkPacket("ActorNotify")
-    public record ActorNotify(String scenario, String actorId, String value) {
+    @ZLinkPacket("ActorMsg")
+    public record ActorMsg(String scenario, String actorId, String value) {
     }
 
-    @ZLinkPacket("ActorAsk")
-    public record ActorAsk(String scenario, String actorId, String value) {
+    @ZLinkPacket("ActorReq")
+    public record ActorReq(String scenario, String actorId, String value) {
     }
 
-    public record ActorReply(String scenario, String actorId, String value) {
+    public record ActorRes(String scenario, String actorId, String value) {
     }
 
     public record ActorEvidence(String scenario, String actorId, String kind, String value) {
     }
 
-    public record ActorCallRequest(String scenario, String actorId, String value) {
+    public record ActorCallReq(String scenario, String actorId, String value) {
     }
 
-    public record ActorFaultRequest(String scenario, String actorId) {
+    public record ActorCreateReq(String reason) {
     }
 
-    public record ActorCallResponse(
+    public record ActorFaultReq(String scenario, String actorId) {
+    }
+
+    public record ActorCallRes(
         String scenario,
         String actorId,
         String result,
         String errorKind) {
-        public static ActorCallResponse ok(String scenario, String actorId, String result) {
-            return new ActorCallResponse(scenario, actorId, result, null);
+        public static ActorCallRes ok(String scenario, String actorId, String result) {
+            return new ActorCallRes(scenario, actorId, result, null);
         }
 
-        public static ActorCallResponse failed(String scenario, String actorId, String kind) {
-            return new ActorCallResponse(scenario, actorId, "failed", kind);
+        public static ActorCallRes failed(String scenario, String actorId, String kind) {
+            return new ActorCallRes(scenario, actorId, "failed", kind);
         }
     }
 }

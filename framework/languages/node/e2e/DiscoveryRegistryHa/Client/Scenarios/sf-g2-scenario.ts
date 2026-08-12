@@ -13,7 +13,7 @@ interface MeshRow {
   readonly activationConcurrency: { readonly active: number; readonly limit: number };
 }
 
-interface ObjectReply { readonly spotId: string; readonly operationId: string; readonly payload: string; }
+interface ObjectRes { readonly spotId: string; readonly operationId: string; readonly payload: string; }
 
 export async function runSFG2(options: ClientOptions): Promise<void> {
   const mesh = await getJson<readonly MeshRow[]>(options.consumerUrl, '/location/mesh');
@@ -29,7 +29,7 @@ export async function runSFG2(options: ClientOptions): Promise<void> {
   let maximumActive = 0;
   const requestsPromise = Promise.all(Array.from({ length: 32 }, (_, index) => {
     const spotId = `sf-g2-spot-${index}`;
-    return postJson<ObjectReply>(options.consumerUrl, '/object/request', {
+    return postJson<ObjectRes>(options.consumerUrl, '/object/request', {
       spotId, operationId: `${spotId}-operation`, payload: `payload-${spotId}`
     });
   })).finally(() => { complete = true; });

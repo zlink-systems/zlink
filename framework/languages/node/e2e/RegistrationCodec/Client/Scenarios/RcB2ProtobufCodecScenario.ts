@@ -1,4 +1,4 @@
-// RC-B2: Root에 등록한 Protobuf extension을 사용한다 시나리오를 검증한다.
+// RC-B2: Root에 등록한 typed codec extension을 사용한다 시나리오를 검증한다.
 import type { CodecScenarioRes } from '../../Shared/messages';
 import { postJson } from '../../../http-client';
 import { ensure } from '../Support/scenario-assert';
@@ -14,5 +14,24 @@ export async function runRcB2(serverUrl: string): Promise<void> {
   });
   ensure(evidence.some((line) => line.includes('codec-request|codec=protobuf')), 'RC-B2 request evidence missing.');
   ensure(evidence.some((line) => line.includes('codec-command|codec=protobuf')), 'RC-B2 command evidence missing.');
+
+  const messagePackReply = await postJson<CodecScenarioRes>(serverUrl, '/codec/msgpack');
+  ensure(messagePackReply.value === 'echo:rc-b3', 'RC-B2 MessagePack reply value mismatch.');
+  ensure(
+    messagePackReply.contentType === 'application/x-msgpack',
+    'RC-B2 expected MessagePack content type.'
+  );
+  const messagePackEvidence = await postJson<readonly string[]>(serverUrl, '/evidence/wait', {
+    containsAll: ['codec=msgpack', 'rc-b3-send', 'codec-reply|codec=msgpack'],
+    timeoutMilliseconds: 10_000
+  });
+  ensure(
+    messagePackEvidence.some((line) => line.includes('codec-request|codec=msgpack')),
+    'RC-B2 MessagePack request evidence missing.'
+  );
+  ensure(
+    messagePackEvidence.some((line) => line.includes('codec-command|codec=msgpack')),
+    'RC-B2 MessagePack command evidence missing.'
+  );
   console.log('scenario RC-B2 passed');
 }

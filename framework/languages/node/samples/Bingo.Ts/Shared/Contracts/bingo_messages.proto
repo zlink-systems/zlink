@@ -28,7 +28,7 @@ message AuthenticatePlayerRes {
   optional string reason = 4;
 }
 
-message EnsurePlayerActorReq {
+message PlayerActorCreateReq {
   string actor_id = 1;
   string display_name = 2;
   reserved 3;
@@ -42,16 +42,9 @@ message PlayerActorTransferState {
 
 // Internal actor control packets also use generated Protobuf messages so the
 // framework's default typed codec can carry them across RouteMesh peers.
-message LeaveFinishedBingoRoom {}
+message LeaveFinishedBingoRoomMsg {}
 
-message DestroyBingoActor {}
-
-message EnsurePlayerActorRes {
-  string actor_id = 1;
-  string actor_type = 2;
-  reserved 3;
-  reserved "actor";
-}
+message DestroyBingoActorMsg {}
 
 message MatchBingoReq {
   string mode = 1;
@@ -116,6 +109,10 @@ message BingoRoomSettingsPayload {
   int32 max_draw_number = 4;
   string purpose = 5;
   optional string observed_room_id = 6;
+}
+
+message BingoRoomCreateReq {
+  BingoRoomSettingsPayload settings = 1;
 }
 
 message BingoRoomJoinReq {
@@ -197,6 +194,26 @@ message BingoRewardAnnouncedNotify {
   string item_name = 5;
   string rarity = 6;
   reserved 7;
+}
+
+message DeliverPlayerJoinedMsg {
+  PlayerJoinedNotify notification = 1;
+}
+
+message DeliverBingoGameStartedMsg {
+  BingoGameStartedNotify notification = 1;
+}
+
+message DeliverBingoNumberDrawnMsg {
+  BingoNumberDrawnNotify notification = 1;
+}
+
+message DeliverBingoGameEndedMsg {
+  BingoGameEndedNotify notification = 1;
+}
+
+message DeliverBingoRewardAnnouncedMsg {
+  BingoRewardAnnouncedNotify notification = 1;
 }
 
 message BingoRoomState {

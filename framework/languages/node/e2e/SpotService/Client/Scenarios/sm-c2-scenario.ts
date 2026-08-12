@@ -39,7 +39,7 @@ export async function runSmC2(options: ClientOptions): Promise<void> {
     'channel-echo|value=sm-c2',
     'channel-notify|marker=notify-sm-c2',
     'dispatch-error|surface=channel|kind=request|reason=no_handler|action=reply_error|packet=MissingChannelReq',
-    'dispatch-error|surface=channel|kind=send|reason=no_handler|action=drop|packet=MissingChannelNotify'
+    'dispatch-error|surface=channel|kind=send|reason=no_handler|action=drop|packet=MissingChannelMsg'
   ];
   const evidence = await postJson<string[]>(options.playAUrl, '/evidence/wait', {
     containsAll: expectedEvidence,

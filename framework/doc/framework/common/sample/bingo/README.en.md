@@ -128,7 +128,7 @@ domain model don't need to change even if the number of servers changes.
 | Return the room turn during an external record call | `Yield` terminator | Once the result is decided, the continuation runs in a new Spot turn. [SPOT messaging §3.6](../../spec/12-spot-messaging.en.md#36-resuming-channel-request-execution) |
 | Deliver a reward to multiple Play nodes' local observer rooms | Logical Multicast | Scopes local subscription by Channel and topic. [SPOT messaging §4](../../spec/12-spot-messaging.en.md#4-channel-scoped-logical-multicast) |
 | Push to the current client even if the Actor moves | Bound session send | Uses the binding identity and route kept by the session owner. [Spot and Actor membership §9](../../spec/15-spot-actor.en.md#9-bound-session) |
-| Move the room and Actor on a planned node shutdown | Host Relocate | Moves the Spot and member Actors as the same relocation unit. [Host Relocate §8.5](../../spec/28-graceful-drain-handoff.en.md#85-spotwide-user-spot) |
+| Move the room and Actor on a planned node shutdown | Host Relocate | Moves the Spot and member Actors as the same relocation unit. [Host Relocate §8.5](../../spec/30-host-relocation-flow.en.md#85-spotwide-user-spot) |
 
 Handlers are auto-registered via the typed handler contract and declarative metadata. .NET
 attributes, Java/Kotlin annotations, and Node decorators serve the same role. C++ explicitly
@@ -186,7 +186,7 @@ message AuthenticatePlayerRes {
   optional string reason = 4;
 }
 
-message EnsurePlayerActorReq {
+message PlayerActorCreateReq {
   string actor_id = 1;
   string display_name = 2;
   reserved 3;
@@ -232,6 +232,10 @@ message BingoRoomSettingsPayload {
   int32 max_draw_number = 4;
   string purpose = 5;
   optional string observed_room_id = 6;
+}
+
+message BingoRoomCreateReq {
+  BingoRoomSettingsPayload settings = 1;
 }
 
 message BingoRoomJoinReq {
@@ -369,13 +373,14 @@ message BingoPlayerState {
 |---|---|---|
 | `AuthenticateReq/Res` | Client → Session, request | Authentication succeeded and the current STREAM session is bound to the Actor. |
 | `AuthenticatePlayerReq/Res` | Session → API, request | The access token validation result is confirmed. |
-| `EnsurePlayerActorReq` | Session → Play, Actor create payload | Input to create the Player Actor or get the current Actor ref. |
-| `MatchBingoReq/Res` | Client → bound Actor, request | The Actor joined the matched room and confirmed the current state. |
+| `PlayerActorCreateReq` | Session → Play, Actor create payload | Input to create the Player Actor or get the current Actor ref. |
+| `MatchBingoReq/Res` | Client → bound Actor, request | The matched Room Spot is ready and the deferred join is registered. The response state is a pre-join `WaitingForPlayers` projection; `BingoGameStartedNotify` confirms the actual game start. |
 | `MatchBingoApiReq/Res` | Player Actor → API, request | Reservation and Room-Ready confirmation are complete. |
 | `ReserveBingoRoomReq/Res` | API → Matchmaker, request | The waiting-room reservation is confirmed by a Redis transaction. |
+| `BingoRoomCreateReq` | API or Observer Actor → Play, Room Spot create payload | Input to create the room with the reservation settings or get the current Room Spot ref. |
 | `BingoRoomJoinReq/Res` | Entry Spot → Room Spot, Actor join payload/reply | The Actor join and lifecycle callback are complete. |
 | `SubmitBingoCardReq/Res` | Client → bound Actor, request | The card was validated and reflected in room state. |
-| `ObserveBingoEventsReq/Res` | Client → bound Actor, request | The Observer Actor's local room join is complete. |
+| `ObserveBingoEventsReq/Res` | Client → bound Actor, request | The observer room is ready and the Observer Actor's deferred join is registered. Receiving a published reward as `BingoRewardAnnouncedNotify` verifies the observation path actually works. |
 | `StopObservingBingoEventsReq/Res` | Client → bound Actor, request | The Observer Actor left the observed room. |
 | `GetPlayerRecordReq/Res` | Room Spot → API, request | The player record was read. |
 | `ReportBingoResultReq/Res` | Room Spot → API, request | The game result was recorded once. |
@@ -390,7 +395,8 @@ message BingoPlayerState {
 
 `BingoRoomState.status` is one of `WaitingForPlayers`, `Running`, or `Finished`. A game room's
 `BingoRoomSettingsPayload.purpose` is `Game`; an observer room's is `Observer`. Every caller using
-the same reservation passes identical settings to Room `GetOrCreate`.
+the same reservation puts identical settings in `BingoRoomCreateReq` and passes it to Room
+`GetOrCreate`.
 
 The center cell of the 3x3 card is a free cell that's marked from the start. `host_actor_id`,
 `can_start`, and `is_host` remain for wire compatibility and aren't used in this sample's decisions
@@ -452,22 +458,25 @@ sequenceDiagram
     Matchmaker-->>API: ReserveBingoRoomRes
     API->>Room: Get or create Room
     Room-->>API: Ready
-    Actor1->>Room: Join Player 1
-    Room-->>Actor1: WaitingForPlayers
-    Actor1-->>Session: MatchBingoRes
+    Actor1->>Actor1: Register deferred Room join
+    Actor1-->>Session: MatchBingoRes(WaitingForPlayers)
     Session-->>Player1: MatchBingoRes
+    Note over Actor1,Room: The handler returns, then the deferred join runs
+    Actor1->>Room: Join Player 1
+    Room-->>Actor1: Join accepted
 
     Player2->>Session: MatchBingoReq
     Session->>Actor2: Relay through binding
     Actor2->>API: MatchBingoApiReq
     API->>Matchmaker: ReserveBingoRoomReq
     Matchmaker-->>API: Same RoomId and settings
-    Actor2->>Room: Join Player 2
-    Room->>Room: State = Running
+    Actor2->>Actor2: Register deferred Room join
     par Match result
-        Actor2-->>Session: MatchBingoRes
+        Actor2-->>Session: MatchBingoRes(WaitingForPlayers)
         Session-->>Player2: MatchBingoRes
-    and Start notification
+    and Deferred join after handler return
+        Actor2->>Room: Join Player 2
+        Room->>Room: State = Running
         Room-->>Actor1: BingoGameStartedNotify
         Room-->>Actor2: BingoGameStartedNotify
         Actor1-->>Session: BingoGameStartedNotify
@@ -481,11 +490,16 @@ sequenceDiagram
 2. API requests a reservation from the level bucket's Matchmaker Instance Spot.
 3. The Matchmaker creates a waiting room in Redis and returns the `RoomId` and settings.
 4. API gets or creates the Room User Spot with the same `RoomId` and waits until it's `Ready`.
-5. The Player Actor joins the room. The first player's response state is `WaitingForPlayers`.
-6. The Observer joins that `RoomId`'s observation room and confirms `Subscribed = true`.
+5. The Player Actor handler registers a deferred join and responds with the
+   `WaitingForPlayers` projection. The join runs after the handler returns, so
+   `MatchBingoRes` alone does not prove the join completed.
+6. The Observer prepares that `RoomId`'s observation room and receives
+   `Subscribed = true`, which means the deferred join was registered. The later reward publish and
+   client push verify that the observation path actually works.
 7. When `player-2` runs the same process, Redis returns the same reservation.
-8. Once the second Actor join finishes, the room changes to `Running` and both players are notified
-   of the start result.
+8. Once the second Actor join finishes, the room changes to `Running` and sends
+   `BingoGameStartedNotify` to both players. This notification is the authoritative game-start
+   completion.
 
 The Location Store handles the room owner lookup and remote join. Reservation Redis doesn't decide
 which Play node owns the room. A concurrent `GetOrCreate` caller waits for the single `Creating`
@@ -823,6 +837,6 @@ That language's Bingo sample is considered complete once all of the following co
 An implementation that turns on observability features uses the per-language exact interface of
 [flow correlation](../../spec/27-flow-correlation.en.md),
 [runtime metrics](../../spec/25-runtime-metrics.en.md), and
-[Graceful Drain](../../spec/28-graceful-drain-handoff.en.md). Observability configuration and a
+[Graceful Drain](../../spec/30-host-relocation-flow.en.md). Observability configuration and a
 100-Actor relocation workload aren't success criteria for this base sample — they're verified by
 [Config 11 Observability/Ops E2E](../../e2e/config-11-observability-ops.en.md).

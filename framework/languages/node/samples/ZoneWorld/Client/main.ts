@@ -9,8 +9,8 @@ import type { ZlinkStreamConnector } from '@zlink-systems/stream-connector';
 import {
   ActorLocationProbeReq,
   AnnounceWorldReq,
-  JoinWorldReq,
   MessageFollowProbeReq,
+  MessageFollowProbeMsg,
   MoveMsg,
   PacketNames,
   WatchNodesReq
@@ -20,7 +20,6 @@ import { readConfigPath, validateConfiguration } from '../Server/Configuration/c
 import type {
   ActorLocationProbeRes,
   AnnounceWorldRes,
-  JoinWorldRes,
   MessageFollowProbeRes,
   MoveRejectedNotify,
   NodeStatusNotify,
@@ -29,6 +28,7 @@ import type {
   ZoneChangedNotify,
   ZoneStateNotify
 } from '../Shared/contracts';
+import { joinAndWaitForOwnedState } from './join-readiness';
 
 async function main(): Promise<void> {
   const path = readConfigPath(process.argv.slice(2));
@@ -40,10 +40,7 @@ async function main(): Promise<void> {
   const ops = createConnector(config.client.opsEndpoint);
   try {
     await gateway.connect();
-    const joined = await gateway
-      .request(new JoinWorldReq('player-a1'))
-      .packetName(PacketNames.joinWorldReq)
-      .submit<JoinWorldRes>();
+    const joined = await joinAndWaitForOwnedState(gateway, 'player-a1');
     zlinkStreamAssert.ensure(joined.playerId === 'player-a1', 'ZW-A1 player id mismatch.');
     zlinkStreamAssert.ensure(joined.zoneId === ZoneIds.northWest, 'ZW-A1 spawn zone mismatch.');
     zlinkStreamAssert.ensure(joined.nodeId === NodeIds.west, 'ZW-A1 spawn node mismatch.');
@@ -76,10 +73,7 @@ async function main(): Promise<void> {
     console.log('scenario ZW-A5 passed');
 
     await second.connect();
-    const joinedSecond = await second
-      .request(new JoinWorldReq('player-a3'))
-      .packetName(PacketNames.joinWorldReq)
-      .submit<JoinWorldRes>();
+    const joinedSecond = await joinAndWaitForOwnedState(second, 'player-a3');
     zlinkStreamAssert.ensure(joinedSecond.error === null, 'ZW-A3 second player join was rejected.');
     const expectedPlayers = ['player-a1', 'player-a3'];
     const [firstView, secondView] = await Promise.all([
@@ -124,6 +118,28 @@ async function main(): Promise<void> {
     zlinkStreamAssert.ensure(internal.payload.nodeId === NodeIds.west, 'ZW-B3 node id changed.');
     console.log('scenario ZW-B3 passed');
 
+    // Arm the adjacent-zone observer before the producer crosses the node
+    // boundary. Publish is a one-way event and is not replayed to a consumer
+    // that becomes ready after the event has already been delivered.
+    await westObserver.connect();
+    const westJoined = await joinAndWaitForOwnedState(westObserver, 'player-b1-west');
+    // JoinWorldRes describes the accepted target. The first owned-zone state
+    // push proves that join commit and the bound-session route are ready before
+    // the observer starts submitting movement messages.
+    await walkTo(
+      westObserver,
+      westJoined.playerId,
+      { x: westJoined.x, y: westJoined.y },
+      45,
+      25
+    );
+    const adjacentViewTask = westObserver
+      .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
+      .where((message) => message.payload.players.some((player) =>
+        player.playerId === joined.playerId && player.zoneId === ZoneIds.northEast))
+      .timeout(10_000)
+      .submit();
+
     console.log('scenario ZW-B2 preparing cross-node move');
     position = await walkTo(gateway, joined.playerId, position, 49, 25);
     console.log('scenario ZW-B2 source position ready');
@@ -152,6 +168,7 @@ async function main(): Promise<void> {
     zlinkStreamAssert.ensure(transferred.payload.transferred, 'ZW-B2 cross-node move did not transfer the actor.');
     zlinkStreamAssert.ensure(transferred.payload.nodeId === NodeIds.east, 'ZW-B2 target node mismatch.');
     await moveAndWait(gateway, joined.playerId, 55, 25);
+    const adjacentView = await adjacentViewTask;
     console.log('scenario ZW-B2 target position ready');
     console.log('scenario ZW-B2 passed');
 
@@ -175,8 +192,8 @@ async function main(): Promise<void> {
     // previous owner via the primed route; Message Follow must deliver them to
     // the committed target exactly once and answer with the payload intact.
     await gateway
-      .send(new MessageFollowProbeReq(joined.playerId, 'zw-b6-one-way', 'one-way-payload'))
-      .packetName(PacketNames.messageFollowProbeReq)
+      .send(new MessageFollowProbeMsg(joined.playerId, 'zw-b6-one-way', 'one-way-payload'))
+      .packetName(PacketNames.messageFollowProbeMsg)
       .submit();
     const followed = await probeMessageFollow(gateway, joined.playerId, 'zw-b6-request', 'request-payload');
     zlinkStreamAssert.ensure(
@@ -192,23 +209,6 @@ async function main(): Promise<void> {
     );
     console.log('scenario ZW-B6 passed');
 
-    await westObserver.connect();
-    const westJoined = await westObserver
-      .request(new JoinWorldReq('player-b1-west'))
-      .packetName(PacketNames.joinWorldReq)
-      .submit<JoinWorldRes>();
-    await walkTo(
-      westObserver,
-      westJoined.playerId,
-      { x: westJoined.x, y: westJoined.y },
-      45,
-      25
-    );
-    const adjacentView = await westObserver
-      .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
-      .where((message) => message.payload.players.some((player) => player.playerId === joined.playerId))
-      .timeout(10_000)
-      .submit();
     zlinkStreamAssert.ensure(
       adjacentView.payload.players.some((player) =>
         player.playerId === joined.playerId && player.zoneId === ZoneIds.northEast),

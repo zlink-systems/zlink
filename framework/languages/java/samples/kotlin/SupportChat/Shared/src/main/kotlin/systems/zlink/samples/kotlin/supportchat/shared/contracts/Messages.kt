@@ -113,7 +113,7 @@ data class SendChatMessageRes(
     val state: ConversationState,
 )
 
-data class SetTypingReq(
+data class SetTypingMsg(
     val isTyping: Boolean,
 )
 

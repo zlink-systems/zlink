@@ -198,7 +198,7 @@ public final class Program {
             manager.getOrCreate(
                     "monitoring-room-" + config.routingId(),
                     Contracts.MONITORING_SPOT_TYPE)
-                .request(ZLinkMessage.of("bootstrap"))
+                .request(ZLinkMessage.of(new Contracts.SpotCreateReq("bootstrap")))
                 .submit()
                 .whenComplete((ignoredResult, error) -> {
                     if (error != null) {

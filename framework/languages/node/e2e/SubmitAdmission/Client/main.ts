@@ -8,7 +8,6 @@ import { runSAE2E06 } from './Scenarios/sa-e2e-06-scenario';
 import { runSAE2E07 } from './Scenarios/sa-e2e-07-scenario';
 import { runSAE2E08 } from './Scenarios/sa-e2e-08-scenario';
 import { runSAE2E09 } from './Scenarios/sa-e2e-09-scenario';
-import { runSAE2E10 } from './Scenarios/sa-e2e-10-scenario';
 import { runSAE2E11 } from './Scenarios/sa-e2e-11-scenario';
 import { runSAE2E12 } from './Scenarios/sa-e2e-12-scenario';
 import { runSAE2E13 } from './Scenarios/sa-e2e-13-scenario';
@@ -41,7 +40,6 @@ const scenarios: Readonly<Record<string, Scenario>> = {
   'SA-E2E-07': runSAE2E07,
   'SA-E2E-08': runSAE2E08,
   'SA-E2E-09': runSAE2E09,
-  'SA-E2E-10': runSAE2E10,
   'SA-E2E-11': runSAE2E11,
   'SA-E2E-12': runSAE2E12,
   'SA-E2E-13': runSAE2E13,
@@ -75,4 +73,3 @@ function readOptions(): ClientOptions {
   if (argument === undefined) throw new Error('SubmitAdmission client requires --config=<path>.');
   return JSON.parse(fs.readFileSync(argument.slice('--config='.length), 'utf8')) as ClientOptions;
 }
-

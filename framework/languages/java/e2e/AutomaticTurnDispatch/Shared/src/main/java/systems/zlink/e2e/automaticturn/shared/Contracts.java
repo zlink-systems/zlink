@@ -163,7 +163,13 @@ public final class Contracts {
     public record ActorPushNotify(String actorId, String requestId, String value, String nodeRid) {
     }
 
-    public record ActorBindingReplacedNotice(String actorId) {
+    public record ActorBindingReplacedNotify(String actorId) {
+    }
+
+    public record SpotCreateReq(String reason) {
+    }
+
+    public record ActorCreateReq(String reason) {
     }
 
     public record ActorAwaitRes(String scenarioId, String requestId, String actorId, String marker) {

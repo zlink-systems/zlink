@@ -24,22 +24,30 @@ if (!fs.existsSync(path.join(sampleRoot, 'package.json'))) {
   throw new Error(`Unknown Node sample '${sampleName}'.`);
 }
 
-const runDir = fs.mkdtempSync(path.join(os.tmpdir(), `zlink-${sampleName.toLowerCase()}-`));
-fs.chmodSync(runDir, 0o700);
-const logDir = path.join(runDir, 'logs');
-const workDir = path.join(runDir, 'work');
-fs.mkdirSync(logDir, { recursive: true });
-fs.mkdirSync(workDir, { recursive: true });
+let runDir;
+let logDir;
+let workDir;
 
 const children = [];
 const reservedPorts = new Set();
 const portLeases = new Map();
+const sharedPortLeaseDir = path.join(os.tmpdir(), 'zlink-sample-port-leases');
+const redisPortRange = { min: 28000, max: 28099 };
+const applicationPortRange = { min: 28100, max: 29999 };
+const dockerCommandTimeoutMs = 10_000;
 let redisContainer;
 let failed = false;
 let cleaning = false;
 
 async function main() {
   try {
+    runDir = fs.mkdtempSync(path.join(os.tmpdir(), `zlink-${sampleName.toLowerCase()}-`));
+    fs.chmodSync(runDir, 0o700);
+    logDir = path.join(runDir, 'logs');
+    workDir = path.join(runDir, 'work');
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.mkdirSync(workDir, { recursive: true });
+
     run('npm', ['run', 'build'], { cwd: sampleRoot });
     const redisEndpoint = await startRedis();
     const context = createContext(redisEndpoint);
@@ -50,10 +58,12 @@ async function main() {
     throw error;
   } finally {
     await cleanup();
-    if (runnerOptions.keepRunDir || failed) {
-      console.log(`runDir=${runDir}`);
-    } else {
-      fs.rmSync(runDir, { recursive: true, force: true });
+    if (runDir !== undefined) {
+      if (runnerOptions.keepRunDir || failed) {
+        console.log(`runDir=${runDir}`);
+      } else {
+        fs.rmSync(runDir, { recursive: true, force: true });
+      }
     }
   }
 }
@@ -120,6 +130,41 @@ function createContext(redisEndpoint) {
       ];
       if (entryName) args.push('--entry', entryName);
       run(process.execPath, args, { cwd: sampleRoot, env });
+    },
+    startBrowser(definition, entryName) {
+      const completionSignalPath = path.join(runDir, 'browser-lifecycle-complete');
+      const configPath = path.join(runDir, 'browser-runner.json');
+      fs.writeFileSync(configPath, `${JSON.stringify({
+        ...definition,
+        completionSignalPath
+      }, null, 2)}\n`, { mode: 0o600 });
+      fs.chmodSync(configPath, 0o600);
+      const args = [
+        sampleName,
+        '--config',
+        configPath
+      ];
+      if (entryName) args.push('--entry', entryName);
+      const state = startNode(
+        'browser-client',
+        path.join(nodeRoot, 'scripts/browser-e2e/run-sample.mjs'),
+        args,
+        env
+      );
+      children.push(state);
+      return {
+        async complete() {
+          if (state.status !== undefined) {
+            throw new Error(`Browser sample exited before lifecycle evidence completed. See ${state.logPath}.`);
+          }
+          state.expectedStop = true;
+          fs.writeFileSync(completionSignalPath, 'complete\n', { mode: 0o600 });
+          await waitForExit(state);
+          if (state.status !== 0) {
+            throw new Error(`Browser sample exited with ${state.status}. See ${state.logPath}.`);
+          }
+        }
+      };
     }
   };
 }
@@ -131,8 +176,12 @@ async function waitForExit(state) {
 }
 
 async function reserveBrowserSafePort() {
+  return reserveLeasedPort(applicationPortRange, 'application');
+}
+
+async function reserveLeasedPort(range, purpose) {
   for (let attempt = 0; attempt < 200; attempt += 1) {
-    const port = 30000 + Math.floor(Math.random() * 10000);
+    const port = range.min + Math.floor(Math.random() * (range.max - range.min + 1));
     if (reservedPorts.has(port)) continue;
     const leasePath = acquirePortLease(port);
     if (leasePath === undefined) continue;
@@ -143,11 +192,12 @@ async function reserveBrowserSafePort() {
     }
     fs.rmSync(leasePath, { force: true });
   }
-  throw new Error('Unable to reserve a browser-safe loopback port.');
+  throw new Error(`Unable to reserve a ${purpose} loopback port.`);
 }
 
 function acquirePortLease(port) {
-  const leasePath = path.join(os.tmpdir(), `zlink-node-sample-port-${port}.lock`);
+  fs.mkdirSync(sharedPortLeaseDir, { recursive: true, mode: 0o700 });
+  const leasePath = path.join(sharedPortLeaseDir, `${port}.lock`);
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const descriptor = fs.openSync(leasePath, 'wx', 0o600);
@@ -170,6 +220,13 @@ function acquirePortLease(port) {
   return undefined;
 }
 
+function releasePortLease(port) {
+  const leasePath = portLeases.get(port);
+  if (leasePath !== undefined) fs.rmSync(leasePath, { force: true });
+  portLeases.delete(port);
+  reservedPorts.delete(port);
+}
+
 function isProcessRunning(pid) {
   try {
     process.kill(pid, 0);
@@ -190,16 +247,60 @@ function canBind(port) {
 async function startRedis() {
   const name = `zlink-redis-node-sample-${process.pid}-${Date.now()}`;
   const image = runnerOptions.redisImage;
-  const created = command('docker', [
-    'create', '--name', name, '--tmpfs', '/data', '-p', '127.0.0.1::6379', image
-  ]).trim();
-  redisContainer = created;
-  command('docker', ['start', created]);
-  const portLine = command('docker', ['port', created, '6379/tcp']).trim();
-  const port = portLine.slice(portLine.lastIndexOf(':') + 1);
-  const endpoint = `127.0.0.1:${port}`;
-  await waitTcp(`tcp://${endpoint}`);
-  return endpoint;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const port = await reserveLeasedPort(redisPortRange, 'Redis');
+    try {
+      const created = command('docker', [
+        'create', '--name', name, '--tmpfs', '/data', '-p', `127.0.0.1:${port}:6379`, image
+      ]).trim();
+      if (!/^[0-9a-f]{12,64}$/.test(created)) {
+        throw new Error(`Docker create returned an invalid Redis container id for ${name}.`);
+      }
+      redisContainer = created;
+      command('docker', ['start', created]);
+      const running = command('docker', [
+        'inspect', '-f', '{{.State.Running}}', created
+      ]).trim();
+      const publishedPort = command('docker', [
+        'inspect',
+        '-f',
+        '{{(index (index .NetworkSettings.Ports "6379/tcp") 0).HostPort}}',
+        created
+      ]).trim();
+      if (running !== 'true' || publishedPort !== String(port)) {
+        const mismatchedContainer = redisContainer;
+        redisContainer = undefined;
+        removeRedisAttempt(mismatchedContainer, name);
+        releasePortLease(port);
+        continue;
+      }
+      const endpoint = `127.0.0.1:${port}`;
+      await waitTcp(`tcp://${endpoint}`);
+      return endpoint;
+    } catch (error) {
+      releasePortLease(port);
+      removeRedisAttempt(redisContainer, name);
+      redisContainer = undefined;
+      if (!/address already in use|port is already allocated|Bind for .* failed/i.test(String(error))) {
+        throw error;
+      }
+    }
+  }
+  throw new Error('Unable to reserve and bind a Redis loopback port.');
+}
+
+function removeRedisAttempt(containerId, name) {
+  let exactId = containerId;
+  if (!/^[0-9a-f]{12,64}$/.test(exactId ?? '')) {
+    const inspected = spawnSync(platformExecutable('docker'), [
+      'inspect', '--type', 'container', '-f', '{{.Id}}', name
+    ], { encoding: 'utf8', timeout: dockerCommandTimeoutMs });
+    if (inspected.status === 0) exactId = inspected.stdout.trim();
+  }
+  if (!/^[0-9a-f]{12,64}$/.test(exactId ?? '')) return;
+  spawnSync(platformExecutable('docker'), ['rm', '-fv', exactId], {
+    stdio: 'ignore', timeout: dockerCommandTimeoutMs
+  });
 }
 
 function parseRunnerOptions(args) {
@@ -313,7 +414,10 @@ function run(executable, args, options = {}) {
 }
 
 function command(executable, args) {
-  const result = spawnSync(platformExecutable(executable), args, { encoding: 'utf8' });
+  const result = spawnSync(platformExecutable(executable), args, {
+    encoding: 'utf8',
+    timeout: executable === 'docker' ? dockerCommandTimeoutMs : undefined
+  });
   if (result.error) throw result.error;
   if (result.status !== 0) {
     throw new Error(`${executable} ${args.join(' ')} failed: ${result.stderr.trim()}`);
@@ -336,7 +440,7 @@ async function cleanup() {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
   }
   if (redisContainer) {
-    spawnSync(platformExecutable('docker'), ['rm', '-fv', redisContainer], { stdio: 'ignore' });
+    removeRedisAttempt(redisContainer, '');
   }
   for (const leasePath of portLeases.values()) fs.rmSync(leasePath, { force: true });
   portLeases.clear();

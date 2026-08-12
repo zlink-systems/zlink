@@ -117,12 +117,12 @@ public final class Messages {
         String dropoffAddress) {
     }
 
-    @ZLinkPacket("CourierDecision")
-    public record CourierDecision(String deliveryId, String courierId, boolean accepted, String reason) {
+    @ZLinkPacket("CourierDecisionMsg")
+    public record CourierDecisionMsg(String deliveryId, String courierId, boolean accepted, String reason) {
     }
 
-    @ZLinkPacket("ReassignDelivery")
-    public record ReassignDelivery(
+    @ZLinkPacket("ReassignDeliveryMsg")
+    public record ReassignDeliveryMsg(
         String deliveryId,
         String previousCourierId,
         String nextCourierId,
@@ -163,10 +163,10 @@ public final class Messages {
     public record EnsureCustomerActorRes(String customerId, ActorRefSnapshot actorRef) {
     }
 
-    @ZLinkPacket("ServerAssertionRequest")
-    public record ServerAssertionRequest(String successfulDeliveryId, String reassignedDeliveryId) {
+    @ZLinkPacket("ServerAssertionReq")
+    public record ServerAssertionReq(String successfulDeliveryId, String reassignedDeliveryId) {
     }
 
-    public record ServerAssertionResponse(boolean passed, String[] evidence) {
+    public record ServerAssertionRes(boolean passed, String[] evidence) {
     }
 }

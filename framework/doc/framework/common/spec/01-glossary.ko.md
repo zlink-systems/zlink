@@ -2019,22 +2019,18 @@ route와 location snapshot, physical STREAM connection은 유지한다. Location
 binding route를 저장하거나 갱신하지 않는다.
 
 <a id="binding-route-ack"></a>
-### Session Actor 위치 갱신 응답
+### Session Actor 위치 갱신
 
-Session owner가 새 binding route를 저장하고 위치 정보를 target으로 바꿨음을 알리는
-command 45 `sessionRelocationRouted`다. 저장한 location snapshot에는 기존
-ActorId·ObjectGeneration과 새 target의 MeshName·NodeRid가 들어간다. Session owner는 이
-응답을 보내기 전에 이전 owner generation에서 뒤늦게 온 packet과 push가 current binding에
-적용되지 않는지 검증한다. 다른 공개 문서의 `sessionActorLocationUpdateResMsg`는 이
-command가 제공하는 위치 갱신 응답을 가리킨다.
+Target runtime이 Location Store CAS와 target queue 개방 뒤 Session owner에게 `[send]`로
+전달하는 command 44 route update다. 저장할 location snapshot에는 기존
+ActorId·ObjectGeneration과 새 target의 MeshName·NodeRid가 들어간다. Session owner는 exact
+Session identity, binding generation과 relocation identity를 확인하고 route를 바꾼 뒤 held
+message를 제출하고 seal을 해제한다.
 
-Target runtime은 이 응답을 받으면 위치 갱신 재전송을 중단한다. 이 응답은 Target Actor가
-message 처리를 시작하거나 Join을 완료해도 된다는 신호가 아니다.
-
-응답 결과는 `Applied`, `AlreadyApplied`, `Stale` 또는
-`SessionOrBindingClosed`다. 앞의 두 결과는 요청한 위치가 적용됐음을 뜻한다. 뒤의 두
-결과는 더 최신 위치가 있거나 Session·binding이 종료되어 이전 위치를 적용하지 않았음을 뜻한다.
-정확한 wire 값과 Message Follow route 제거 조건은
+이 update에는 reply가 없으며 정상 흐름은 command 45 `sessionRelocationRouted`를 사용하지 않는다.
+`SessionRelocationSealTimeout`의 기본값은 3,000 ms다. 그 안에 exact update가 오지 않으면
+Session owner는 physical Session을 닫고 binding과 held state를 정리한다. Timeout 뒤 late 또는
+duplicate update는 Warning만 기록하고 무시한다. 정확한 처리 순서와 Message Follow 조건은
 [Session–Actor dispatch §5.1](20-session-actor-dispatch.ko.md#51-session-actor-위치-갱신-message)이
 정의한다.
 
@@ -2085,9 +2081,9 @@ ObjectGeneration과는 다른 값이다.
 <a id="session-sequence"></a>
 ### Session sequence
 
-한 STREAM session에서 수락한 ingress message의 순서를 나타내는 값이다. Actor
-handoff에서는 마지막으로 수락한 순서를 barrier로 사용하여 이전 owner와 새 owner가
-같은 message를 함께 처리하지 않게 한다.
+한 STREAM session에서 수락한 ingress message의 순서를 나타내는 값이다. Actor handoff는 이
+값을 cutover high-water로 사용하지 않는다. Session owner가 seal 뒤 도착한 message를 보관하고,
+source와 target의 ordered TCP relay가 cutover 전 순서를 제공한다.
 
 | 항목 | 내용 |
 |---|---|
@@ -2095,7 +2091,7 @@ handoff에서는 마지막으로 수락한 순서를 barrier로 사용하여 이
 | .NET 표기 | Application에 직접 노출하지 않는 `ulong` contract value |
 | 공개 구성 | `1..long.MaxValue` 범위의 ingress 순서 값 하나다. Binding generation과 별개의 축이다. |
 | 생성·관리 | Session owner가 ingress message를 수락하는 순서대로 증가시킨다. |
-| 수명 | 한 STREAM session 안에서만 비교한다. Actor handoff barrier가 마지막 accepted sequence를 high-water로 고정한다. |
+| 수명 | 한 STREAM session 안에서만 비교한다. Relocation owner 전환 증거로 사용하지 않는다. |
 
 ## 11. Stream Connector
 

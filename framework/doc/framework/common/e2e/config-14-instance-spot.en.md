@@ -184,7 +184,7 @@ restored at the target?
   preserved. An operation ID accepted before the relocation is also processed exactly once across
   all evidence.
 - Contract basis: [Location Runtime](../spec/21-location-runtime.en.md) and
-  [Graceful Drain And Handoff](../spec/28-graceful-drain-handoff.en.md)
+  [Graceful Drain And Handoff](../spec/30-host-relocation-flow.en.md)
 
 #### IS-E2E-08 Close And Reactivate
 
@@ -551,7 +551,7 @@ no duplication?
 - Verification: Relocate and the request each end in exactly one terminal, and the request handler
   runs exactly once, on either A or B alone.
 - Contract basis: [Location Runtime](../spec/21-location-runtime.en.md) and
-  [Graceful Drain And Handoff](../spec/28-graceful-drain-handoff.en.md)
+  [Graceful Drain And Handoff](../spec/30-host-relocation-flow.en.md)
 
 #### IS-E2E-30 Multi-Mesh Concurrent Relocate
 
@@ -569,7 +569,7 @@ Concurrent host Relocate calls for the same Spot must not produce two owners.
 - Verification: Variant A callers join the shared operation and receive the same terminal. Variant B
   ends the incompatible call once in `Blocked/OperationInProgress` without changing the first option.
   Both variants finish with one Ready owner, and the follow-up request runs only there.
-- Contract basis: [Graceful Drain — Concurrent Calls And Cancellation](../spec/28-graceful-drain-handoff.en.md#6-concurrent-calls-and-cancellation)
+- Contract basis: [Graceful Drain — Concurrent Calls And Cancellation](../spec/30-host-relocation-flow.en.md#6-concurrent-calls-and-cancellation)
 
 #### IS-E2E-31 Remote Selection Loser
 

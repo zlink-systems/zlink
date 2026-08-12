@@ -645,7 +645,7 @@ class monitoring_entry_spot_t final
     void configure () override
     {
         _context.handlers ().add_actor_request<&monitoring_entry_spot_t::actor_probe> (
-          "runtime.monitoring.actor-probe");
+          "MonitoringActorProbeReq");
     }
 
     void actor_probe (monitoring_actor_t &,
@@ -843,7 +843,6 @@ class create_actor_handler_t
         try {
             const auto result = _actors
               .create (zlink::framework::actor_id_t (actor_id), monitoring_actor_type)
-              .creation_request (zlink::framework::message_t::from (std::string{}))
               .submit ()
               .result ();
             const auto &created = result.value ();

@@ -39,6 +39,7 @@ import {
   zoneOf
 } from '../Shared/spec';
 import { readConfigPath, validateConfiguration } from '../Server/Configuration/configuration';
+import { joinAndWaitForOwnedState } from './join-readiness';
 
 async function main(): Promise<void> {
   const path = readConfigPath(process.argv.slice(2));
@@ -62,8 +63,8 @@ async function runFailureTransition(gatewayEndpoint: string, opsEndpoint: string
   const ops = connector(opsEndpoint);
   try {
     await Promise.all([west.connect(), east.connect(), ops.connect()]);
-    const westJoin = await join(west, 'player-b4-west');
-    const eastJoin = await join(east, 'player-b4-east');
+    const westJoin = await joinAndWaitForOwnedState(west, 'player-b4-west');
+    const eastJoin = await joinAndWaitForOwnedState(east, 'player-b4-east');
     await walkTo(west, westJoin.playerId, westJoin, 45, 25);
     await walkTo(east, eastJoin.playerId, eastJoin, 52, 25);
     await west.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
@@ -163,7 +164,7 @@ async function verifyEastIsolation(gatewayEndpoint: string, ops: ZlinkStreamConn
   const game = connector(gatewayEndpoint);
   try {
     await game.connect();
-    const joined = await join(game, 'player-e1');
+    const joined = await joinAndWaitForOwnedState(game, 'player-e1');
     let position = await walkTo(game, joined.playerId, joined, 48, 25);
     const applied = await setMaintenance(ops, NodeIds.east, true);
     zlinkStreamAssert.ensure(
@@ -185,7 +186,7 @@ async function verifyExistingPlayer(gatewayEndpoint: string, ops: ZlinkStreamCon
   const game = connector(gatewayEndpoint);
   try {
     await game.connect();
-    const joined = await join(game, 'player-e2');
+    const joined = await joinAndWaitForOwnedState(game, 'player-e2');
     await setMaintenance(ops, NodeIds.west, true);
     await moveAndWait(game, joined.playerId, 30, 30);
     await walkTo(game, joined.playerId, { x: 30, y: 30 }, 30, 48);
@@ -205,7 +206,7 @@ async function verifyDeparture(gatewayEndpoint: string, ops: ZlinkStreamConnecto
   const game = connector(gatewayEndpoint);
   try {
     await game.connect();
-    const joined = await join(game, 'player-e3');
+    const joined = await joinAndWaitForOwnedState(game, 'player-e3');
     await walkTo(game, joined.playerId, joined, 48, 25);
     await setMaintenance(ops, NodeIds.west, true);
     const changed = game.waitFor<ZoneChangedNotify>(PacketNames.zoneChangedNotify)
@@ -275,7 +276,7 @@ async function runBots(gatewayEndpoint: string, opsEndpoint: string): Promise<vo
   try {
     await Promise.all([game.connect(), ops.connect()]);
     await watch(ops);
-    const joined = await join(game, 'player-f');
+    const joined = await joinAndWaitForOwnedState(game, 'player-f');
     await resetMaintenance(ops);
     await setMaintenance(ops, NodeIds.east, true);
     await verifyRepresentativeBotMovement(game);

@@ -50,7 +50,7 @@ class stream_session_t final : public zlink::framework::packet_stream_session_t
         auto notice = stream.write_packet (
           zlink::message_t::from_json (
             e2e::actor_push_notify_t{actor_id, "duplicate-session", 0}));
-        notice.packet_name ("ActorBindingReplaced");
+        notice.packet_name ("ActorBindingReplacedNotify");
         co_await notice.submit ();
         _state.record ("ActorBindingReplacedCallback", actor_id, {}, "completed");
     }

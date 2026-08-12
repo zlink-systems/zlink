@@ -1,6 +1,5 @@
-package Configuration
+package systems.zlink.e2e.kotlin.registrymessaging.provider.Configuration
 
-import systems.zlink.e2e.kotlin.registrymessaging.provider.Configuration
 data class ServerOptions(
     val rid: String,
     val instanceId: String,

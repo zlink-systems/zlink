@@ -5,15 +5,15 @@ import systems.zlink.framework.channels.ZLinkRequestHandler
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 
-class ProbeHandler : ZLinkRequestHandler<Contracts.ProbeRequest, Contracts.ProbeReply> {
+class ProbeHandler : ZLinkRequestHandler<Contracts.ProbeReq, Contracts.ProbeRes> {
     override fun handle(
-        request: Contracts.ProbeRequest,
+        request: Contracts.ProbeReq,
         context: ZLinkMessageContext,
-    ): CompletionStage<Contracts.ProbeReply> = if (request.fail) {
+    ): CompletionStage<Contracts.ProbeRes> = if (request.fail) {
         CompletableFuture.failedFuture(
             IllegalStateException("observability probe handler failure"),
         )
     } else {
-        CompletableFuture.completedFuture(Contracts.ProbeReply(request.value))
+        CompletableFuture.completedFuture(Contracts.ProbeRes(request.value))
     }
 }

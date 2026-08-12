@@ -4,7 +4,7 @@ title: "12. Service wire protocol"
 
 # 12. Service wire protocol
 
-[내부 구조 목차](README.ko.md) · [이전: 11. Payload 소유권과 복사](11-message-ownership.ko.md)
+[내부 구조 목차](README.ko.md) · [이전: 11. Payload 소유권과 복사](11-message-ownership.ko.md) · [다음: 13. Relocation handoff 상태 전이](13-relocation-handoff.ko.md)
 
 > **이 장이 답하는 것** — node 사이에 오가는 byte 형식과 command 목록.
 >
@@ -15,7 +15,8 @@ title: "12. Service wire protocol"
 > **함께 보는 계약** — [계층 경계와 식별자](01-layering.ko.md) ·
 > [Location runtime](../spec/21-location-runtime.ko.md) ·
 > [Redis Relocation Store](../spec/23-relocation-store-redis.ko.md) ·
-> [Transport liveness](../spec/29-transport-liveness.ko.md)
+> [Transport liveness](../spec/29-transport-liveness.ko.md) ·
+> [Relocation handoff 상태 전이](13-relocation-handoff.ko.md)
 
 | 절 | 다루는 내용 |
 |---|---|
@@ -161,7 +162,7 @@ Wire v1은 다음 42개 command를 사용한다. `7..15`와 `52..255`는 reserve
 | 29 | `actorLeft` | Actor leave commit |
 | 30 | `relocationReady` | capacity offer와 inventory accept |
 | 31 | `relocationData` | frozen record 전달 |
-| 32 | `relocationAck` | participant high-water ACK |
+| 32 | `relocationAck` | relocation 진행 응답 |
 | 33 | `replyRelay` | terminal completion relay |
 | 34 | `relocationSeal` | participant terminal seal |
 | 35 | `relocationComplete` | target finalization 알림 |
@@ -172,9 +173,9 @@ Wire v1은 다음 42개 command를 사용한다. `7..15`와 `52..255`는 reserve
 | 40 | `relocationPrepare` | 옮길 대상 목록을 봉인해 제안하고, 필요한 건수·byte를 함께 알린다 |
 | 41 | `relocationReserved` | target reservation ACK |
 | 42 | `sessionRelocationSeal` | session ingress seal 요청 |
-| 43 | `sessionRelocationSealed` | session high-water 응답 |
-| 44 | `sessionRelocationRoute` | session route 교체 요청 |
-| 45 | `sessionRelocationRouted` | session route 교체 ACK |
+| 43 | `sessionRelocationSealed` | Session seal 응답 |
+| 44 | `sessionRelocationRoute` | target runtime이 보내는 one-way session route 갱신 |
+| 45 | `sessionRelocationRouted` | 예약된 이전 응답 command. 정상 relocation 경로에서는 보내거나 기다리지 않는다. |
 | 46 | `replyRelayAck` | relayed terminal result ACK |
 | 47 | `userSpotCreate` | 미리 확보한 자리에 remote User Spot을 만든다 |
 | 48 | `userSpotClose` | 지정한 세대의 remote User Spot만 닫는다 |
@@ -206,14 +207,14 @@ relay 시점의 queue count·byte, 원래 operation ID와 원래 reply route ID�
 #### 통지 중복 억제
 
 Relay에 성공한 runtime은 source runtime에 `messageFollow`를 보낼 수 있다. Source runtime은 현재 cache
-항목이 source route와 동일한 object identity, object·authority generation과 target node를 가리킬 때만 그
-항목을 무효화한다. 이미 더 새로운 route가 있으면 지우지 않는다. 통지가 유실되어도 cache lifetime이 지난
-stale route는 반드시 만료된다. 중복 통지를 받거나 억제해도 원래 message operation의 terminal 결과는
-바뀌지 않는다.
+항목이 source route와 동일한 exact route fence를 가리킬 때만 그 항목을 무효화한다. 이미 더 새로운
+route가 있으면 지우지 않는다. 통지가 유실되어도 cache lifetime이 지난 stale route는 반드시 만료된다.
 
-같은 generation에서 처음 한 번만 보내는 방식, 전송 중인 통지를 합치는 방식과 suppression marker의 저장
-위치는 구현 선택이다. 이 선택은 wire body, 위 invalidation fence, cache 만료와 terminal 결과 불변 조건을
-바꿀 수 없다.
+보내는 쪽의 전용 suppression registry는 source와 target의 exact route fence 전체를 key로 사용한다.
+상태는 `idle → inFlight → sentUntilExpiry`로 전이하며, 전송 실패 때만 `inFlight → idle`로 전이한다.
+Route cache 만료·교체가 marker도 함께 지운다. Registry는 원래 operation의 payload, reply route와
+terminal completion을 소유하지 않는다. 자세한 상태 흐름은
+[6. target 선택과 route cache](06-routing-and-cache.ko.md#2-이동과-캐시가-만나는-지점--성능-절벽)가 설명한다.
 
 ### 3.2 Bound session 교체 notification
 
@@ -419,159 +420,117 @@ metadata presence·bytes가 다르면 reservation 전에 protocol error로 거�
 
 ## 9. Maintenance capture와 relocation envelope
 
-### `Retiring` seal과 byte reservation
+### Session seal과 source relay
 
-- Host `Retiring` publication은 unit queue에 wire callback이 아닌 local infrastructure intent notification을 예약한다.
-- Queue turn 경계에서 outbound·inbound unit, 필요한 `Capture`·`Restore` callback과 encoded byte permit을 모두 얻은 unit만 seal하고 accepted boundary를 고정한다.
-- Byte reservation은 `PreserveStateWith` participant마다 64 MiB와 이미 Framework가 소유한 queue·journal·timer·manifest·metadata의 deterministic encoded upper bound를 합한다.
-- `Capture` 뒤 permit은 actual encoded size로만 축소한다.
-- Permit 실패는 모든 provisional permit을 반환하고 wire command를 보내거나 queue를 seal하지 않으며 notification만 다시 예약한다.
-- 기본 gate는 `64/64`, `8/8`, 256 MiB이고 oversized User Spot aggregate는 empty payload window에서 exclusive하다.
-- Standalone Actor와 Instance Spot unit은 gate 안에서만 admit한다.
+- Relocation coordinator는 source application dispatch를 멈추기 전에 command 42로 bound Session
+  binding을 seal한다. Command 43은 seal 설치 결과를 알린다.
+- Session owner는 current Session identity, binding generation, ActorId·ObjectGeneration과
+  relocation identity만 확인한다. Numeric high-water를 만들거나 Actor authority를 다시 조회하지
+  않는다.
+- Seal 뒤 들어온 Session request와 push는 route 변경 또는 abort까지 Session owner가 보관한다.
+  Relocation 전용 record 수 또는 byte 상한은 두지 않는다.
+- Source object route로 들어온 일반 server message는 target temporary queue로 계속 relay한다.
+  같은 TCP connection의 순서와 재전송을 사용하며 message별 ACK나 durable journal을 추가하지
+  않는다.
 
-### Drain 전 조건
+### Relocation envelope와 cutover
 
-- Source lifetime이 `connectionBound`인 accepted send·request는 `Captured` 전에 terminal state까지 drain한다. 이 work는 frozen journal에 기록하지 않는다.
-- Bound-session request는 다른 Actor request와 같은 규칙을 따른다. Seal 전에 수락한 요청은 source fence, operation identity와 reply route를 보존해 frozen journal에 포함하고, seal 뒤에 들어온 요청은 ingress hold에서 target으로 relay한다.
-- 호출이 끝나야 하는 시각을 [Deadline](../spec/01-glossary.ko.md#deadline)이라고 한다. 그 안에 끝나지 않으면 relocation을 pre-Captured에서 abort하고 `Blocked/DeadlineExceeded`로 끝낸 뒤 source admission을 복원한다.
-
-### Session seal, source hold와 target temporary queue
-
-- Session owner는 command 42에 담긴 exact binding fence, authority fence와 seal identity를 한
-  묶음으로 검증한다. Seal 설치와 accepted high-water 고정은 같은 원자적 처리 시점에서
-  일어난다.
-- Seal 뒤에 도착한 Session ingress는 이전 binding의 accepted high-water를 전진시키지 않으며
-  application dispatch에도 들어가지 않는다. Session owner는 이 ingress의 payload와 reply
-  context를 즉시 실패시키지 않고 matching route switch 또는 abort까지 보관한다.
-- Source object ingress hold, target temporary queue와 Session owner의 seal 대기는 서로 다른
-  경계다. 세 경계 모두 relocation 전용 record 수 또는 저장 byte 상한을 두지 않는다.
-- 일반 application execution lane이 이미 소유한 work reservation은 그대로 적용한다. Transport,
-  deadline과 cancellation 제한도 유지하지만 relocation 전용 한도로 취급하지 않는다.
-
-### Durable frozen record
-
-Durable frozen record는 `leaseBacked` source만 허용한다. 각 record는 그 record를 만든 source node의 lifecycle과
-`OwnerId`·`OwnerLeaseGeneration`을 포함하며 replay 전 current authority와 비교한다. Connection lifetime에만 묶인
-record를 relocation envelope에 넣는 것은 protocol error다.
-
-### Relocation envelope encode
-
-- Framework는 seal 시점에 실행하지 않은 message queue, accepted journal, timer logical registration·pending tick, optional application state, manifest와 metadata를 deterministic `relocation-envelope-v1` stream으로 encode한다.
-- Native timer handle과 callback continuation은 encode하지 않는다.
-- 바뀌지 않는 chunk를 모두 쓰고, 그 chunk 목록을 담은 최상위 record를 쓴 다음 authority의 `Captured` CAS로 root를 연결한다. 이 CAS가 durability boundary다.
-- `Captured` 전에 source가 종료되면 relocation을 abort하며 continuity replay를 보장하지 않는다.
-- CAS에 연결되지 않은 chunk와 manifest는 orphan이다.
+- Source는 application state, relocation 시작 전에 실행하지 않은 queue와 timer 정보를
+  relocation envelope로 저장한다. Native timer handle과 callback continuation은 encode하지 않는다.
+- Target은 temporary queue를 등록한 뒤 factory와 Restore를 실행한다. 이 작업을 마칠 때까지
+  application handler를 실행하지 않는다.
+- Source는 cutover 전에 받은 message를 모두 relay한 뒤 같은 ordered connection에 cutover를
+  `[send]`로 보낸다. 이 message는 그 connection에서 앞선 relay가 모두 target에 도착했다는
+  경계다. Reply는 사용하지 않는다.
+- 일반 server 간 `send`에는 relocation 전용 application ACK를 추가하지 않는다. `request`는
+  기존 operation identity, correlation, deadline과 caller retry를 유지한다.
 
 ### Store CAS와 manifest
 
-- Location Store authority는 phase, `RelocationId`, source·target fence, 최상위 record를 가리키는 값과 checksum, 크기를 제한한 participant set·mutation·aggregate generation·inventory digest와 replay·completion count를 원자적으로 CAS한다.
-- Relocation Store manifest는 participant별 payload를 찾기 위한 같은 inventory digest의 projection이며 owner와 membership authority가 아니다.
-- 두 Store는 distributed transaction이나 2PC를 사용하지 않는다.
-
-### 최상위 record 보관과 검증
-
-- 최상위 record는 24시간 보관하고 12시간이 지나면 갱신한다.
-- `Captured`와 `Prepared` CAS 직전에 complete tree가 threshold보다 오래 유지되는지 확인하거나 renew한다.
-- Reader는 current authority가 가리키는 root만 읽고 chunk checksum과 전체 checksum을 streaming으로 검증한다.
+- Target은 Restore와 temporary queue 등록을 마친 뒤 cutover를 받으면 Location Store owner와
+  membership을 source에서 target으로 CAS한다. Restore 준비 reply를 보낸 뒤 1,000 ms 안에
+  cutover가 오지 않아도 `cutover_timeout` Warning을 기록하고 같은 CAS를 시작한다. 이 CAS는
+  target만 실행한다.
+- Source와 Session owner는 timeout, local mirror 또는 Session route 결과로 Location Store를
+  변경하지 않는다.
+- Relocation Store manifest는 application state와 저장한 queue를 찾는 projection이며 owner와
+  membership authority가 아니다. 두 Store는 distributed transaction이나 2PC를 사용하지 않는다.
+- CAS가 실패하면 target queue를 열지 않고 Restore operation이 가진 유효시간까지 같은 CAS를
+  retry한다. 응답이 불확정이면 Store를 다시 읽어 exact target owner인지 먼저 확인한다. 다른
+  valid owner나 generation이 확인되면 stale relocation으로 즉시 종료한다.
+- Restore 유효시간까지 target owner를 확인하지 못하면 `location_update_failed` Error를 기록하고
+  target에 준비한 Actor 또는 Spot, temporary queue와 relocation state를 제거한다. Session route는
+  갱신하지 않는다. 늦은 Store 응답은 종료한 `RelocationId`를 다시 활성화하지 않는다.
+- CAS가 성공하면 source로 rollback하지 않는다.
 
 ## 10. Relocation, Actor membership과 Ready
 
 ### `RelocationId`
 
-`RelocationId`는 runtime이 CSPRNG로 만든 non-zero 128-bit 값이다. Active relocation과 retained relocation root의 ID가
-충돌하면 다시 만들며 application에 노출하지 않는다. 같은 target process에서 준비를 다시 할 때는 stable
-`RelocationId`와 relocation root를 유지하고 target 시도 번호와 준비 정보만 교체한다. `TargetAttemptGeneration`은
-같은 target에 보낸 중복 또는 이전 Restore 요청을 구분하는 값이며 다른 target을 선택하는 데 사용하지 않는다.
+`RelocationId`는 runtime이 만든 non-zero 128-bit 값이다. 같은 relocation의 중복 control
+message를 구분하는 데 사용한다. Application에 노출하지 않는다.
 
-### Authority phase
+### Authority와 target-only CAS
 
-Authority phase는 다음 순서와 closed owner rule을 따른다.
+CAS 전에는 source가 owner다. Target은 Restore를 끝내고 cutover 또는 1,000 ms fallback을 기다리는
+준비된 instance일 뿐 application message를 실행하지 않는다. Target-only CAS가 성공한 시점부터
+target이 owner다. 같은 Actor나 Spot의 `ObjectGeneration`은 유지하고 owner generation만 증가시킨다.
 
-```mermaid
-stateDiagram-v2
-    [*] --> Preparing
-    Preparing --> Captured
-    Captured --> Prepared
-    Prepared --> Committed
-    Committed --> Activating
-    Activating --> Activated
-    Activated --> Cleaning
-    Cleaning --> Completed
-    Preparing --> Aborted
-    Captured --> Aborted
-    Prepared --> Aborted
-```
+Actor 하나, `PerActor` Spot authority, `SpotWide` aggregate와 Instance Spot은 같은
+원칙을 따른다. 여러 owner와 membership을 함께 바꿔야 하면 target이 조건부 batch 한 번으로
+모두 바꾸거나 아무것도 바꾸지 않는다. Relocation은 participant 수, relay record 수 또는 byte
+수에 별도 runtime capacity gate를 추가하지 않는다. Store provider와 transport의 기존 frame·page
+크기 제한은 그대로 적용한다.
 
-- `Preparing`과 `Captured`의 main owner는 source이고 target reservation은 없다.
-- `Prepared`는 source owner와 exact target attempt·reservation을 함께 보존한다.
-- `Committed`부터 `Completed`까지 main owner는 current target이다.
-- 각 transition은 expected `StoreVersion` CAS다.
-- 같은 target의 재시도는 target 시도 번호와 준비 정보만 바꾸며 stable identity와 relocation
-  root를 바꾸지 않는다. 다른 target process로 교체하는 전이는 허용하지 않는다.
+### Commit 뒤 queue와 Ready
 
-### Aggregate relocation commit
+Target은 CAS가 성공하면 다음 순서로 queue와 lifecycle을 연다.
 
-- User Spot과 member Actor relocation은 `non-zero 128-bit aggregate ID`, 즉 0이 아닌 128-bit 묶음 ID를 쓰고, 참여 대상 목록이 그대로 일치해야 한다.
-- Participant 총수에는 1,024개 상한을 두지 않는다. Location Store에는 최대 1,024개·encoded 1 MiB의 immutable leaf chunk와 필요한 index chunk로 inventory tree를 저장한다.
-- Target offer는 tree root·전체 count·digest와 Spot·member Actor의 capacity reservation을 고정한다.
-- `Committed` CAS는 aggregate owner, generation과 inventory root를 바꾸어 membership visibility를 원자적으로 전환한다.
-- Target은 commit 전에 factory·restore와 journal validation·staging을 끝낸다.
+1. 저장된 기존 작업과 timer를 target execution queue에 넣는다.
+2. Cutover 앞까지 relay된 작업을 그 뒤에 넣는다.
+3. Temporary queue에 추가로 들어온 작업을 넣고 dispatch 경로를 전환한다.
+4. 필요한 lifecycle callback을 끝내고 application dispatch를 연다.
+5. Target runtime이 Session owner에게 command 44 route update를 `[send]`로 전달한다.
 
-### Commit 뒤 membership과 replay
+서로 다른 TCP connection에서 온 message 사이의 전역 순서는 보장하지 않는다. Target queue가
+수락한 순서만 유지한다. Owner 전환 뒤 이전 주소로 도착한 message는 Message Follow가 target에
+전달한다.
 
-- User Spot aggregate는 membership을 유지하므로 member Actor의 joined·leave callback을 호출하지 않는다.
-- Commit 뒤 frozen message·journal replay와 Framework timer 자동 복원을 이어서 실행한다.
-- Seal 뒤 source ingress hold는 precommit abort에서 source queue로 돌아가고 commit 뒤에는 original operation identity와 fence를 보존해 target으로 relay한다.
-- Replay 뒤 source는 old membership과 나머지 source resource cleanup을 durable하게 끝낸다.
-
-### Ready 시점
-
-`Committed`와 `Activating`은 Ready가 아니다. Target은 다음 작업을 모두 마친 뒤 application
-admission을 연다.
-
-1. owner와 membership을 변경한다.
-2. lifecycle callback을 실행하고 미완료 작업과 timer를 복원한다.
-3. 저장된 기존 작업과 temporary queue의 작업을 원래 순서대로 execution queue에 넣는다.
-4. temporary queue 등록을 제거하면서 기존 dispatch 경로로 원자적으로 전환한다.
-
-다음 정리 작업은 Ready admission을 막지 않는다. 실행 중인 source와 target runtime이 각각
-후속 작업으로 계속한다.
-
-- source ingress hold의 원본 제거
-- 위치 record를 `Completed`로 변경
-- Session Actor 위치 갱신 응답
-- maintenance authority를 steady 상태로 정규화
-
-Owner를 바꾸기 전에 abort하면 Session route를 바꾸지 않았으므로 route 취소 message나 그
-응답을 기다리지 않는다. Source admission은 다음 정리를 모두 마친 뒤 복원한다.
-
-- `Aborted`를 기록한다.
-- temporary queue 작업을 폐기하고 저장된 작업을 원래 순서대로 source queue에 복원한다.
-- 확보한 target 공간과 어떤 위치 record도 가리키지 않는 payload를 정리한다.
-- relocation 진행 정보를 제거한다.
+Source는 cutover를 `[send]`로 보낸 뒤 target 완료 응답을 기다리지 않는다. Cutover 전 명시적인
+target 실패는 abort하고 source queue와 Session seal을 복원한다. Cutover가 늦거나 중복되면 target은
+`late_cutover` Warning만 기록하고 state를 다시 변경하지 않는다. 1,000 ms fallback으로 queue를
+연 경우에는 늦은 relay가 새 target direct message보다 먼저 실행된다고 보장하지 않는다.
 
 ### Session route
 
-- Session owner는 Bind 때 Actor마다 그 시점의 route와 lease fence를 그대로 저장한다.
-- Relay·request relay와 disconnect는 message마다 Location Store를 조회하지 않는다.
-- Physical disconnect는 current binding snapshot 전체에 모두 확정된 뒤에 통지하며, binding 하나마다 callback을 최대 한 번 실행한다.
-- Route update는 같은 ObjectGeneration에만 적용한다.
-- Command 42는 seal을 설치한다. Command 43은 owner가 실제로 수락한 마지막 session sequence를
-  반환하며 source가 추정한 local counter로 대신할 수 없다.
-- Command 44와 45는 `Completed` 이후 route switch와 ACK에만 사용한다.
-- Route switch는 exact binding fence, authority fence, seal identity와 replayed high-water가
-  모두 일치할 때만 적용한다.
-- Command 42~45가 이전과 같은 bytes로 다시 도착하면 같은 결과를 반환하며 상태를 두 번
-  전진시키지 않는다. 같은 identity에 다른 값이 오면 `ProtocolError`다.
-- Matching abort만 seal을 해제한다. Seal과 high-water를 복원할 durable evidence가 없으면
-  `RelocationFailed`로 끝낸다. Seal이 없는 상태나 추정 high-water로 대신하지 않는다.
+- Session route는 Session owner의 current Session과 binding에서만 검증한다.
+- Command 42는 current binding을 seal하고 command 43은 seal 결과를 반환한다.
+- Command 44는 target runtime이 `[send]`로 전달하며 relocation identity, current binding
+  generation, ActorId·ObjectGeneration과 target route를 포함한다. Session owner는 Location
+  Store나 Actor authority mirror를 다시 읽지 않는다.
+- Session owner는 route와 current `ActorRef` snapshot을 target으로 바꾸고, seal 중 보관한
+  message를 target route로 제출한 뒤 seal을 해제한다.
+- Command 44에는 reply가 없고 정상 경로에서 command 45를 사용하지 않는다.
+- `SessionRelocationSealTimeout`의 기본값은 3,000 ms다. Exact command 44가 그 안에 오지 않으면
+  Session owner는 physical Session을 닫고 binding, held message와 seal state를 정리한다.
+- Timeout 뒤 늦은 command 44나 exact duplicate는 Warning만 남기며 route, seal 또는 authority를
+  다시 변경하지 않는다.
+- Target이 cutover 전에 명시적으로 실패하면 matching seal만 해제하고 보관한 Session message를
+  source route로 제출한다. Cutover 뒤 failure는 source route를 다시 열지 않는다.
+
+Transport adapter의 authenticated peer·node generation·frame 검증, target의 owner CAS,
+Session owner의 binding route 검증은 각각 한 번만 수행한다. Actor join, host relocation,
+Message Follow와 callback 경로는 이 판정을 다시 수행하지 않는다.
 
 ## 11. Request terminal identity
 
 ### `OperationId`와 `ReplyRouteId`
 
-- `OperationId`와 `ReplyRouteId`는 source owner lifecycle 안에서 각각 unique한 non-zero 값이다. Wrap과 reuse는 terminal runtime error다.
-- Operation ID는 deduplication identity이고 reply route를 대신하지 않는다.
+- `OperationId`는 두 `u64` word(`high`, `low`)로 이루어진 non-zero identity다. `ReplyRouteId`는
+  별도 non-zero `u64`다. 둘 다 source owner lifecycle 안에서 unique하며 wrap과 reuse는
+  terminal runtime error다.
+- Operation ID는 deduplication identity이고 reply route를 대신하지 않는다. Registry와
+  durable record는 `OperationId`를 한 word로 줄이지 않는다.
 - Durable terminal identity는 바뀌지 않는 `RelocationId`, 요청을 시작한 쪽의 fence와 `OperationId` 조합이다.
 
 ### Terminal completion 추적
