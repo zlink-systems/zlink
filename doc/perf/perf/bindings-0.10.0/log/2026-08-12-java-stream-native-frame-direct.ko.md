@@ -23,3 +23,22 @@ C를 먼저, Java를 다음에 단독 실행했다.
 
 - C report: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260812_153020_java-stream-native-frame-direct-c.txt`
 - Java report: `/home/hep7hep7/project/zlink/bindings/java/perf/results/multi/report/perf_java_multi_linux_20260812_153044_java-stream-native-frame-direct-java.txt`
+
+## public API metric 재측정
+
+public primitive message read만 사용하는 현재 Java perf에서 release Core `0.10.1`, tcp,
+100 clients, duration 2초, auto-HWM `balanced`, I/O thread 4,
+`64/256/1024/65536B`를 C 다음 Java 순서로 한 번씩 실행했다.
+
+| Size | C throughput (ops/s) | Java throughput (ops/s) | C 대비 |
+|---:|---:|---:|---:|
+| 64 | 337,908.0 | 267,438.0 | 79.14% |
+| 256 | 324,171.5 | 256,812.5 | 79.22% |
+| 1,024 | 310,917.0 | 244,875.0 | 78.76% |
+| 65,536 | 55,860.0 | 59,850.0 | 107.14% |
+| 산술평균 | - | - | **86.07%** |
+
+Java/C 평균은 multi routed echo 목표 `70%`를 통과한다.
+
+- C: `/tmp/zlink-java-stream-c-2s/multi/report/perf_c_multi_linux_20260813_042225_java-stream-c-2s.txt`
+- Java: `/tmp/zlink-java-stream-java-2s/multi/report/perf_java_multi_linux_20260813_042246_java-stream-java-2s.txt`
