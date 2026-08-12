@@ -244,11 +244,11 @@ final class PerfMultiSocketReqRep {
                                   RequestCallback callback) {
         if (routedClients) {
             return ((RouterSocket) client).request(SERVER_RID)
-                .message(payload).timeout(timeout).flags(SendFlags.DONT_WAIT)
+                .message(payload).timeout(timeout).flags(SendFlags.NONE)
                 .submit(callback);
         }
         return ((DealerSocket) client).request()
-            .message(payload).timeout(timeout).flags(SendFlags.DONT_WAIT)
+            .message(payload).timeout(timeout).flags(SendFlags.NONE)
             .submit(callback);
     }
 
