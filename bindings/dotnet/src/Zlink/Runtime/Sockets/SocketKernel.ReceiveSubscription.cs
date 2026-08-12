@@ -12,7 +12,8 @@ internal sealed partial class SocketKernel : IDisposable
     {
         var topicBuffer = result.GetWritableTopicBuffer(TopicBufferSize);
         var allowNoData = (flags & DontWaitFlag) != 0;
-        var received = ReceiveSubscribedParts(flags, topicBuffer,
+        var candidate = result.PrepareReusableSinglePart();
+        var received = ReceiveSubscribedParts(flags, topicBuffer, candidate,
             out var routingId, out var topicLength,
             out var singlePart, out var parts,
             allowNoData);
