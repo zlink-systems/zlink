@@ -1351,10 +1351,51 @@ struct message_value_span_t
 {
     const unsigned char *data;
     size_t size;
+    native_message_frame_t *native_frame;
+};
+
+class contiguous_message_input_t
+{
+  public:
+    contiguous_message_input_t () : spans_ (inline_spans_), count_ (0) {}
+
+    bool resize (size_t count)
+    {
+        count_ = count;
+        if (count <= k_inline_span_count) {
+            spans_ = inline_spans_;
+            return true;
+        }
+        overflow_spans_.resize (count);
+        spans_ = overflow_spans_.data ();
+        return true;
+    }
+
+    message_value_span_t *data () { return spans_; }
+    size_t size () const { return count_; }
+
+    void consume_native_messages () const
+    {
+        for (size_t index = 0; index < count_; ++index) {
+            native_message_frame_t *frame = spans_[index].native_frame;
+            if (!frame)
+                continue;
+            zlink_msg_close (&frame->message);
+            zlink_msg_init (&frame->message);
+        }
+    }
+
+  private:
+    static const size_t k_inline_span_count = 8;
+    message_value_span_t inline_spans_[k_inline_span_count];
+    std::vector<message_value_span_t> overflow_spans_;
+    message_value_span_t *spans_;
+    size_t count_;
 };
 
 bool get_message_value_span (napi_env env, napi_value value, message_value_span_t *span)
 {
+    span->native_frame = NULL;
     bool is_buf = false;
     if (napi_is_buffer (env, value, &is_buf) == napi_ok && is_buf) {
         void *data = NULL;
@@ -1383,6 +1424,7 @@ bool get_message_value_span (napi_env env, napi_value value, message_value_span_
             return false;
         span->size = zlink_msg_size (&frame->message);
         span->data = static_cast<const unsigned char *> (zlink_msg_data (&frame->message));
+        span->native_frame = frame;
         return true;
     }
 
@@ -1400,7 +1442,10 @@ bool get_message_value_span (napi_env env, napi_value value, message_value_span_
     return true;
 }
 
-bool init_contiguous_msg_from_array (napi_env env, napi_value value, zlink_msg_t *msg)
+bool init_contiguous_msg_from_array (napi_env env,
+                                     napi_value value,
+                                     zlink_msg_t *msg,
+                                     contiguous_message_input_t *input)
 {
     bool is_array = false;
     if (napi_is_array (env, value, &is_array) != napi_ok || !is_array) {
@@ -1414,27 +1459,29 @@ bool init_contiguous_msg_from_array (napi_env env, napi_value value, zlink_msg_t
         return false;
     }
 
-    std::vector<message_value_span_t> spans (length);
+    if (!input || !input->resize (length))
+        return false;
     size_t total = 0;
     for (uint32_t index = 0; index < length; ++index) {
         napi_value part;
         if (napi_get_element (env, value, index, &part) != napi_ok
-            || !get_message_value_span (env, part, &spans[index]))
+            || !get_message_value_span (env, part, &input->data ()[index]))
             return false;
-        if (spans[index].size > std::numeric_limits<size_t>::max () - total) {
+        if (input->data ()[index].size > std::numeric_limits<size_t>::max () - total) {
             napi_throw_range_error (env, NULL, "stream parts are too large");
             return false;
         }
-        total += spans[index].size;
+        total += input->data ()[index].size;
     }
 
     if (zlink_msg_init_size (msg, total) != 0)
         return false;
     unsigned char *write = static_cast<unsigned char *> (zlink_msg_data (msg));
-    for (size_t index = 0; index < spans.size (); ++index) {
-        if (spans[index].size > 0) {
-            memcpy (write, spans[index].data, spans[index].size);
-            write += spans[index].size;
+    for (size_t index = 0; index < input->size (); ++index) {
+        const message_value_span_t &span = input->data ()[index];
+        if (span.size > 0) {
+            memcpy (write, span.data, span.size);
+            write += span.size;
         }
     }
     return true;
@@ -2332,7 +2379,8 @@ napi_value socket_stream_try_send_routing_parts (napi_env env, napi_callback_inf
         return NULL;
 
     zlink_msg_t msg;
-    if (!init_contiguous_msg_from_array (env, argv[2], &msg))
+    contiguous_message_input_t input;
+    if (!init_contiguous_msg_from_array (env, argv[2], &msg, &input))
         return NULL;
 
     int rc = send_parts_rid (sock, &routing_id, &msg, 1, ZLINK_SEND_FLAGS_DONTWAIT);
@@ -2345,7 +2393,7 @@ napi_value socket_stream_try_send_routing_parts (napi_env env, napi_callback_inf
     if (rc < 0)
         return throw_last_error (env, "tryStreamSendPartsTo failed");
     if (rc == ZLINK_SUBMIT_OK)
-        consume_native_message_value (env, argv[2]);
+        input.consume_native_messages ();
     napi_value out;
     napi_create_int32 (env, rc, &out);
     return out;
@@ -2422,7 +2470,8 @@ napi_value socket_stream_send_routing_parts (napi_env env, napi_callback_info in
         return NULL;
 
     zlink_msg_t msg;
-    if (!init_contiguous_msg_from_array (env, argv[2], &msg))
+    contiguous_message_input_t input;
+    if (!init_contiguous_msg_from_array (env, argv[2], &msg, &input))
         return NULL;
 
     int32_t flags = 0;
@@ -2432,7 +2481,7 @@ napi_value socket_stream_send_routing_parts (napi_env env, napi_callback_info in
     zlink_msg_close (&msg);
     if (rc != ZLINK_SUBMIT_OK)
         return throw_last_error (env, "streamSendPartsTo failed");
-    consume_native_message_value (env, argv[2]);
+    input.consume_native_messages ();
 
     napi_value ok;
     napi_get_undefined (env, &ok);

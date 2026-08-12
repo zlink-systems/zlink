@@ -2224,6 +2224,19 @@ one-way routed receive에는 `requestSeq: null`, `transportPairId: 0n`,
 같은 `null` 또는 `undefined` 상태로 처리한다. request/reply와 transport-pair 메시지는 기존처럼
 모든 metadata를 제공한다. 상세 결과는 `log/2026-08-12-node-router-omit-zero-metadata.ko.md`에 기록한다.
 
+### 11.18 Node STREAM contiguous send 단일 순회 측정 결과
+
+`MULTI_STREAM / tcp`, 64·256·1024·65536B, clients `100`, duration `1초`, runs `1`,
+balanced auto-HWM 조건에서 C를 먼저, Node를 다음에 단독 실행했다.
+
+| 변경 | C 대비 throughput 비율 (size 순서) | 산술평균 | 결과 |
+|---|---|---:|---|
+| contiguous multipart 입력의 span·native frame 단일 수집 | 15.86 / 14.94 / 15.29 / 63.22% | 27.33% | 이전 24.34% 대비 2.99%p 개선 |
+
+작은 multipart는 stack span storage를 사용하고, native frame은 submit 성공 뒤 첫 순회에서 수집한
+frame만 소비한다. Core에 전달하는 contiguous payload, backpressure 결과, multipart ownership과
+public API는 유지했다. 상세 결과는 `log/2026-08-12-node-stream-single-pass-send.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
