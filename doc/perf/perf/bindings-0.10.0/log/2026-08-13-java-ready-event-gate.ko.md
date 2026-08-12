@@ -74,3 +74,52 @@
 
 - C: `/tmp/zlink-java-received-two-slot-c/multi/report/perf_c_multi_linux_20260813_025441_received-two-slot-c.txt`
 - Java: `/tmp/zlink-java-received-two-slot-java/multi/report/perf_java_multi_linux_20260813_025518_received-two-slot-java.txt`
+
+## single-thread metrics 후보 결과
+
+- transport: `tcp`
+- pattern: `MULTI_DEALER_DEALER`
+- 공통 조건: message size `64,256,1024,4096,65536,131072`, client `100`,
+  duration `5s`, auto-HWM, I/O thread `4`, release Core `0.10.1`
+
+| Message size | C throughput (msg/s) | Java throughput (msg/s) | C 대비 |
+|---:|---:|---:|---:|
+| 64 | 2,737,870.2 | 1,662,077.6 | 60.71% |
+| 256 | 1,483,876.8 | 1,197,203.8 | 80.68% |
+| 1,024 | 1,009,432.0 | 829,059.8 | 82.13% |
+| 4,096 | 470,711.8 | 324,799.8 | 69.00% |
+| 65,536 | 113,395.8 | 82,098.2 | 72.40% |
+| 131,072 | 48,729.4 | 40,514.4 | 83.14% |
+| 산술평균 | - | - | **74.68%** |
+
+목표 90%에 미달해 후보 구현은 제거했다.
+
+원본 결과 파일:
+
+- C: `/tmp/zlink-java-single-metrics-c/multi/report/perf_c_multi_linux_20260813_030051_single-metrics-c.txt`
+- Java: `/tmp/zlink-java-single-metrics-java/multi/report/perf_java_multi_linux_20260813_030128_single-metrics-java.txt`
+
+## metric header 단일 검증 결과
+
+- transport: `tcp`
+- pattern: `MULTI_DEALER_DEALER`
+- 공통 조건: message size `64,256,1024,4096,65536,131072`, client `100`,
+  duration `5s`, auto-HWM, I/O thread `4`, release Core `0.10.1`
+
+| Message size | C throughput (msg/s) | Java throughput (msg/s) | C 대비 |
+|---:|---:|---:|---:|
+| 64 | 2,566,250.2 | 1,787,442.4 | 69.65% |
+| 256 | 1,406,066.2 | 1,074,557.0 | 76.42% |
+| 1,024 | 934,856.0 | 770,997.2 | 82.47% |
+| 4,096 | 448,140.8 | 324,259.8 | 72.36% |
+| 65,536 | 102,742.8 | 81,374.0 | 79.20% |
+| 131,072 | 41,782.2 | 51,262.2 | 122.69% |
+| 산술평균 | - | - | **83.80%** |
+
+목표 90%에는 미달한다. message size와 header 범위 검사를 한 번만 수행해 C의
+직접 header decode와 같은 측정 의미로 정렬했다.
+
+원본 결과 파일:
+
+- C: `/tmp/zlink-java-header-read-c/multi/report/perf_c_multi_linux_20260813_030501_header-read-c.txt`
+- Java: `/tmp/zlink-java-header-read-java/multi/report/perf_java_multi_linux_20260813_030538_header-read-java.txt`

@@ -148,6 +148,16 @@ public final class Message implements AutoCloseable {
                 return Message.acquireReceive();
             }
 
+            @Override
+            public int readIntLeUnchecked(Message message, int offset) {
+                return message.readIntLeUnchecked(offset);
+            }
+
+            @Override
+            public long readLongLeUnchecked(Message message, int offset) {
+                return message.readLongLeUnchecked(offset);
+            }
+
         });
     }
 
@@ -457,8 +467,7 @@ public final class Message implements AutoCloseable {
     public int readIntLe(int offset) {
         int size = size();
         validateRange(size, offset, Integer.BYTES, "offset");
-        int value = UNSAFE.getInt(null, cachedAddress + offset);
-        return NATIVE_LITTLE_ENDIAN ? value : Integer.reverseBytes(value);
+        return readIntLeUnchecked(offset);
     }
 
     public int readIntBe(int offset) {
@@ -505,6 +514,15 @@ public final class Message implements AutoCloseable {
     public long readLongLe(int offset) {
         int size = size();
         validateRange(size, offset, Long.BYTES, "offset");
+        return readLongLeUnchecked(offset);
+    }
+
+    private int readIntLeUnchecked(int offset) {
+        int value = UNSAFE.getInt(null, cachedAddress + offset);
+        return NATIVE_LITTLE_ENDIAN ? value : Integer.reverseBytes(value);
+    }
+
+    private long readLongLeUnchecked(int offset) {
         long value = UNSAFE.getLong(null, cachedAddress + offset);
         return NATIVE_LITTLE_ENDIAN ? value : Long.reverseBytes(value);
     }

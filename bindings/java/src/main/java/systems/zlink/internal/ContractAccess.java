@@ -261,6 +261,10 @@ public final class ContractAccess {
 
         Message acquireReceive();
 
+        int readIntLeUnchecked(Message message, int offset);
+
+        long readLongLeUnchecked(Message message, int offset);
+
     }
 
     public interface NativeMessageAccess {
@@ -721,6 +725,14 @@ public final class ContractAccess {
 
     public static Message messageAcquireReceive() {
         return messageAccess().acquireReceive();
+    }
+
+    public static int messageReadIntLeUnchecked(Message message, int offset) {
+        return messageAccess().readIntLeUnchecked(message, offset);
+    }
+
+    public static long messageReadLongLeUnchecked(Message message, int offset) {
+        return messageAccess().readLongLeUnchecked(message, offset);
     }
 
 
