@@ -2275,6 +2275,19 @@ balanced auto-HWM에서 C를 먼저, Node를 다음에 단독 실행했다.
 native callback은 routing-id, header, body를 각각 전달한다. 공개 packet handler, TSFN queue, body
 materialization과 ownership은 유지한다. 상세 결과는 `log/2026-08-12-node-stream-flat-callback.ko.md`에 기록한다.
 
+### 11.22 Node PUBSUB TopicMessage 단일 part 재충전 후보
+
+`MULTI_PUBSUB / tcp`, 64·256·1024·4096·65536·131072B, clients `100`, duration `1초`,
+runs `1`, balanced auto-HWM에서 C를 먼저, Node를 다음에 단독 실행했다.
+
+| 변경 | C 대비 throughput 비율 (size 순서) | 산술평균 | 결과 |
+|---|---|---:|---|
+| 기존 Message facade와 parts 배열 재사용 | 18.66 / 20.95 / 24.61 / 27.66 / 38.82 / 44.52% | 29.20% | 채택값 30.62%보다 낮아 원복 |
+
+caller-provided `TopicMessage`의 단일 part facade를 제자리에서 재충전하는 후보는 wrapper와 배열
+교체 비용을 줄이는 목적이었지만, 측정 결과가 낮았다. 상세 결과는
+`log/2026-08-12-node-topic-refill-rejected.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
