@@ -980,7 +980,7 @@ size별 편차는 이 표의 판정에 사용하지 않는다.
 
 - perf 경로: `bindings/dotnet/perf`
 - Single 상태: 완료. 통과와 보류의 최종 판정, paired report, 자체 후보와 Sol 검토 근거는 9.2.1에 기록한다.
-- Multi 상태: `tcp / MULTI_DEALER_DEALER` 완료·보류, `tcp / MULTI_DEALER_ROUTER_SENDSEND` 완료·통과, `tcp / MULTI_DEALER_ROUTER_REQREP` 완료·통과, `tcp / MULTI_ROUTER_ROUTER_SENDSEND` 완료·통과, `tcp / MULTI_ROUTER_ROUTER_REQREP` 완료·통과, `tcp / MULTI_PUBSUB` 완료·보류, `tcp / MULTI_STREAM` 완료·보류, `ws / MULTI_DEALER_DEALER` 완료·보류, `ws / MULTI_DEALER_ROUTER_SENDSEND` 완료·통과, `ws / MULTI_DEALER_ROUTER_REQREP` 완료·통과, `ws / MULTI_ROUTER_ROUTER_SENDSEND` 완료·통과, `ws / MULTI_ROUTER_ROUTER_REQREP` 완료·통과, `ws / MULTI_PUBSUB` 완료·통과, `ws / MULTI_STREAM` 완료·보류, `wss / MULTI_DEALER_DEALER` 완료·보류, `wss / MULTI_DEALER_ROUTER_SENDSEND` 완료·통과, `wss / MULTI_DEALER_ROUTER_REQREP` 완료·통과, `wss / MULTI_ROUTER_ROUTER_SENDSEND` 완료·통과, `wss / MULTI_ROUTER_ROUTER_REQREP` 완료·통과, `wss / MULTI_PUBSUB` 완료·보류, `wss / MULTI_STREAM` 완료·통과, `tls / MULTI_DEALER_DEALER` 완료·통과, `tls / MULTI_DEALER_ROUTER_SENDSEND` 완료·통과, `tls / MULTI_DEALER_ROUTER_REQREP` 완료·통과, `tls / MULTI_ROUTER_ROUTER_SENDSEND` 완료·통과, `tls / MULTI_ROUTER_ROUTER_REQREP` 완료·통과, `tls / MULTI_PUBSUB` 완료·통과, `tls / MULTI_STREAM` 완료·통과, Multi 24개 대상 완료, 다음은 Java inventory gate다.
+- Multi 상태: `완료 (통과 28, 보류 0, 미측정 0)`. transport + pattern별 최종 평균과 최소 기준 판정은 9.2.2 표를 사용한다.
 - 다음 작업: .NET Multi 대상의 C → .NET paired 측정과 자체·Sol 개선 검토를 완료했다. 최신 TCP 재측정은 11.6에 기록한다.
 
 #### 9.2.1 Single suite
@@ -1258,8 +1258,8 @@ pattern은 11.6 재측정값을 사용하고, request/reply는 이 절의 최신
 
 - perf 경로: `bindings/node/perf`
 - Single 상태: `재측정 진행 중 (tcp: PAIR·DEALER_ROUTER·DEALER_ROUTER_REQREP·ROUTER_ROUTER·ROUTER_ROUTER_REQREP 보류, PUBSUB·DEALER_DEALER 통과)`
-- Multi 상태: `Node Single 재측정 완료 뒤 처음부터 재측정`
-- 다음 작업: 다음 Node Single transport·pattern을 C와 순차 paired 측정하고 binding hot-path와 POSDDD 개선을 함께 검토한다.
+- Multi 상태: `완료 (통과 20, 보류 0, 미측정 0)`. transport + pattern별 최종 평균과 최소 기준 판정은 9.4.2 표를 사용한다.
+- 다음 작업: Node Single의 보류 행은 C와 Node의 native boundary 비용을 hot path 후보와 함께 다시 검토한다. Multi 재측정은 종료했다.
 
 #### 9.4.1 Single suite
 
