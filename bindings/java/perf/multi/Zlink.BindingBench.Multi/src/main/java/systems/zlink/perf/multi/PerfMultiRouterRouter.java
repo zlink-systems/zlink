@@ -245,13 +245,11 @@ final class PerfMultiRouterRouter {
                         waitingWritable[idx]);
                 }
                 rrIndex = (startIndex + 1) % n;
-                long remainingNs = activeEnd - System.nanoTime();
-                if (remainingNs <= 0L) {
-                    break;
-                }
-                int waitMs = (int) Math.min(Integer.MAX_VALUE,
-                    Math.max(1L, remainingNs / 1_000_000L));
-                int readyCount = pollSet.poll(waitMs);
+                // Match C run_echo_window_round_robin: traffic readiness, not
+                // an arbitrary timer tick, advances the active loop. The
+                // deadline is checked at the next loop boundary after this
+                // ready set is drained.
+                int readyCount = pollSet.poll(-1);
                 for (int readyOffset = 0; readyOffset < readyCount;
                      readyOffset++) {
                     int idx = pollSet.readyIndexAt(readyOffset);
