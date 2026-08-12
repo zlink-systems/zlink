@@ -2333,6 +2333,18 @@ Node를 다음에 실행했다. 일반 SUB 수신에서 `msg_t`를 external Buff
 native frame handle 생성·refcount 비용이 더 커서 즉시 원복했다. 상세 결과는
 `log/2026-08-12-node-pub-native-view-rejected.ko.md`에 기록한다.
 
+### 11.27 Node PUBSUB 빈 topic 생략 후보
+
+`MULTI_PUBSUB / tcp`, 64·256·1024·4096·65536·131072B, clients `100`, duration `1초`,
+runs `1`, balanced auto-HWM에서 C를 먼저, Node를 다음에 단독 실행했다.
+
+| 변경 | C 대비 throughput 비율 (size 순서) | 산술평균 | 결과 |
+|---|---|---:|---|
+| 빈 topic raw property 생략 | 17.17 / 19.21 / 17.57 / 27.04 / 41.91 / 47.44% | 28.39% | 채택값 30.62%보다 낮아 원복 |
+
+native 문자열 생성 감소보다 raw object property shape 변화와 fallback 처리 비용이 더 컸다.
+상세 결과는 `log/2026-08-12-node-pub-empty-topic-rejected.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
