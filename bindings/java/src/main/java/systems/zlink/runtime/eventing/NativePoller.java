@@ -27,6 +27,10 @@ import systems.zlink.runtime.nativeapi.RequestProgressPump;
 import systems.zlink.internal.DurationConversions;
 
 public final class NativePoller implements Poller {
+    // HOT PATH: wait() maps every ready native event into caller-owned
+    // PollEvents. Keep the internal bridge monomorphic after class loading.
+    private static final ContractAccess.PollEventsAccess POLL_EVENTS_ACCESS =
+        ContractAccess.pollEventsAccessForRuntime();
     private final List<PollItem> items = new ArrayList<>();
     private final Map<Long, Integer> socketIndexes = new HashMap<>();
     private MemorySegment handle;
@@ -203,13 +207,13 @@ public final class NativePoller implements Poller {
             if (readyCount < 0)
                 throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
             for (int i = 0; i < readyCount; i++) {
-                ContractAccess.pollEventsMarkEvent(events, i,
+                POLL_EVENTS_ACCESS.markEvent(events, i,
                     NativePollEvents.sourceKindValue(nativeEvents, i),
                     NativePollEvents.slot(nativeEvents, i),
                     NativePollEvents.revents(nativeEvents, i),
                     NativePollEvents.fd(nativeEvents, i));
             }
-            ContractAccess.pollEventsMarkReadyCount(events, readyCount);
+            POLL_EVENTS_ACCESS.markReadyCount(events, readyCount);
             return readyCount;
         } finally {
             synchronized (this) {

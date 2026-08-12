@@ -643,6 +643,16 @@ public final class ContractAccess {
             replySender, onTerminalState);
     }
 
+    /** Runtime-only access cache for receive hot paths. */
+    public static ReceivedAccess receivedAccessForRuntime() {
+        return receivedAccess();
+    }
+
+    /** Runtime-only access cache for poll event materialization. */
+    public static PollEventsAccess pollEventsAccessForRuntime() {
+        return pollEventsAccess();
+    }
+
     public static Object messageDataSegment(Message message) {
         return messageAccess().dataSegment(message);
     }
