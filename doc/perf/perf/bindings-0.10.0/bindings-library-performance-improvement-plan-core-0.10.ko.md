@@ -2237,6 +2237,19 @@ balanced auto-HWM 조건에서 C를 먼저, Node를 다음에 단독 실행했�
 frame만 소비한다. Core에 전달하는 contiguous payload, backpressure 결과, multipart ownership과
 public API는 유지했다. 상세 결과는 `log/2026-08-12-node-stream-single-pass-send.ko.md`에 기록한다.
 
+### 11.19 Node ROUTER_ROUTER zero metadata 재측정 결과
+
+`MULTI_ROUTER_ROUTER / tcp`, 64·256·1024·4096·65536·131072B, clients `100`, duration
+`1초`, runs `1`, balanced auto-HWM 조건에서 C를 먼저, Node를 다음에 단독 실행했다.
+
+| 변경 | C 대비 throughput 비율 (size 순서) | 산술평균 | 결과 |
+|---|---|---:|---|
+| request/reply·transport-pair가 없는 metadata 생략 | 28.21 / 30.10 / 25.15 / 25.68 / 55.86 / 52.58% | 36.26% | 이전 33.63% 대비 2.63%p 개선 |
+
+두 ROUTER endpoint가 같은 receive materialization을 사용해 one-way 메시지의 zero metadata를 만들지
+않는다. public routing-id·send·reply 계약과 request/reply metadata는 변경하지 않았다. 상세 결과는
+`log/2026-08-12-node-router-router-zero-metadata.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
