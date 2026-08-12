@@ -31,6 +31,7 @@ public final class Message implements AutoCloseable {
         UNSAFE.arrayBaseOffset(byte[].class);
     private static final boolean NATIVE_LITTLE_ENDIAN =
         ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN;
+    private static final ContractAccess.NativeMessageAccess NATIVE_ACCESS;
 
     private final Object scope;
     private final long ownedMsgSlotAddress;
@@ -153,6 +154,10 @@ public final class Message implements AutoCloseable {
             }
 
         });
+        // HOT PATH: receive wrappers call init, size, data, and close for
+        // every frame. Resolve the native bridge once after registration,
+        // rather than doing a volatile ContractAccess lookup per operation.
+        NATIVE_ACCESS = ContractAccess.nativeMessageAccessForRuntime();
     }
 
     private Message(Object scope, boolean raw) {
@@ -212,7 +217,7 @@ public final class Message implements AutoCloseable {
             message = new Message(allocateOwnedMsgSlot(), true);
         }
         message.closed = false;
-        int rc = ContractAccess.nativeMessageInit(message.msg);
+        int rc = NATIVE_ACCESS.init(message.msg);
         if (rc != 0) {
             message.retireWrapperSlot();
             throw ZlinkException.fromLastError(
@@ -804,7 +809,7 @@ public final class Message implements AutoCloseable {
         valid = true;
         recvArmed = false;
         more = moreFlag;
-        cachePayload((int) ContractAccess.nativeMessageSize(msg));
+        cachePayload((int) NATIVE_ACCESS.size(msg));
     }
 
     void resetForReuse() {
@@ -930,7 +935,7 @@ public final class Message implements AutoCloseable {
         valid = true;
         recvArmed = false;
         more = moreFlag;
-        cachePayload((int) ContractAccess.nativeMessageSize(msg));
+        cachePayload((int) NATIVE_ACCESS.size(msg));
     }
 
     @Override
@@ -946,7 +951,7 @@ public final class Message implements AutoCloseable {
         if (closed)
             return;
         if (valid) {
-            ContractAccess.nativeMessageClose(msg);
+            NATIVE_ACCESS.close(msg);
             valid = false;
         }
         recvArmed = false;
@@ -974,7 +979,7 @@ public final class Message implements AutoCloseable {
 
     private void cachePayload(int size) {
         cachedSize = size;
-        cachedAddress = size > 0 ? ContractAccess.nativeMessageDataAddress(msg) : 0L;
+        cachedAddress = size > 0 ? NATIVE_ACCESS.dataAddress(msg) : 0L;
         // A receive, move, or resize can replace the native frame address.
         // Never let a view of the preceding frame escape through dataBuffer().
         cachedReadOnlyDataBuffer = null;

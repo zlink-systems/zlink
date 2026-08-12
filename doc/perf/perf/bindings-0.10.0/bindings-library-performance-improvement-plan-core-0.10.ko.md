@@ -44,7 +44,7 @@ pattern·transport 평균의 완료 목표다.
 | .NET | 전체 | 전체 | 재측정 대기 | - | - | 진행 중 |
 | .NET | `MULTI_DEALER_DEALER` | tcp | 33.59 / 58.56 / 148.39 / 78.57 / 137.74 / 91.77% | 91.44% | 85% | 통과 |
 | .NET | `MULTI_PUBSUB` | tcp | 66.16 / 69.85 / 66.91 / 86.00 / 99.39 / 118.34% | 84.44% | 85% | 미달 |
-| Java | `MULTI_DEALER_DEALER` | tcp | 62.74 / 80.27 / 90.99 / 63.43 / 62.61 / 70.09% | 71.69% | 90% | 미달 |
+| Java | `MULTI_DEALER_DEALER` | tcp | 65.10 / 84.02 / 97.34 / 71.44 / 83.08 / 97.51% | 83.07% | 90% | 미달 |
 | Java | `MULTI_DEALER_ROUTER_REQREP` | tcp | 재측정 대기 | - | 70% | 진행 중 |
 | Java | `MULTI_DEALER_ROUTER_SENDSEND` | tcp | 재측정 대기 | - | 85% | 진행 중 |
 | Java | `MULTI_PUBSUB` | tcp | 44.32 / 42.37 / 48.20 / 56.58 / 73.24 / 101.58% | 61.05% | 90% | 미달 |

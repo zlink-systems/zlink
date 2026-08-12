@@ -657,6 +657,11 @@ public final class ContractAccess {
         return messageAccess().dataSegment(message);
     }
 
+    /** Runtime-only access cache for message hot paths. */
+    public static MessageAccess messageAccessForRuntime() {
+        return messageAccess();
+    }
+
     public static Object messageDataSegment(Message message, int knownSize) {
         return messageAccess().dataSegment(message, knownSize);
     }
@@ -831,6 +836,11 @@ public final class ContractAccess {
 
     public static Message nativeMessageAdoptOwned(Object nativeMsg) {
         return nativeMessageAccess().adoptOwnedMessage(nativeMsg);
+    }
+
+    /** Runtime-only access cache for native message hot paths. */
+    public static NativeMessageAccess nativeMessageAccessForRuntime() {
+        return nativeMessageAccess();
     }
 
     public static void nativeMessageCopyFromSegment(Object source,

@@ -45,3 +45,22 @@ single-part receive의 FFM 호출과 message wrapper 상태를 다음 후보로 
 
 - C: `/tmp/zlink-java-dd-c-2s/multi/report/perf_c_multi_linux_20260813_040313_java-dd-c-2s.txt`
 - Java: `/tmp/zlink-java-dd-access-cache-java/multi/report/perf_java_multi_linux_20260813_040646_java-dd-access-cache.txt`
+
+## 채택한 native message·runtime message bridge cache
+
+수신 wrapper는 native `init`, `size`, `data`, `close`와 message wrapper accessor를
+매 frame마다 `ContractAccess`를 통해 조회했다. `Message`와 runtime `InternalAccess`가
+class 초기화 때 각각 native/message accessor를 static final field에 보관하도록 변경했다.
+이는 message ownership, public `Message` API, Core ABI를 변경하지 않는다.
+
+같은 C baseline과 Java 2초 실행에서 C 대비 throughput은
+`65.10 / 84.02 / 97.34 / 71.44 / 83.08 / 97.51%`, 산술평균은 `83.07%`다. 직전
+bridge cache 측정 평균 `71.69%`보다 높다. Java build와 multi perf compile도 통과했다.
+
+- C: `/tmp/zlink-java-dd-c-2s/multi/report/perf_c_multi_linux_20260813_040313_java-dd-c-2s.txt`
+- Java: `/tmp/zlink-java-dd-message-access-java/multi/report/perf_java_multi_linux_20260813_041635_java-dd-message-access.txt`
+
+single-part `Received`의 pooled list를 제거하는 후보도 검토했다. 현재 list는
+caller-provided storage의 close·adopt·multipart transition을 함께 소유하며, access할 때
+fast path를 이미 사용한다. 이를 없애면 ownership 경계를 크게 다시 설계해야 하고 이
+대상에 비례한 작은 개선으로 판단할 수 없어 채택하지 않았다.
