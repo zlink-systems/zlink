@@ -1377,7 +1377,7 @@ for pattern_index in "${!patterns[@]}"; do
 done
 
 python_status=0
-python3 - "${ROOT_DIR}/report_common.py" "${tmp_metrics}" "${tmp_failures}" "${tmp_auto_hwm}" "${tmp_plan}" "${tmp_skips}" "${report}" \
+ZLINK_PERF_REPO_DIR="${REPO_DIR}" python3 - "${ROOT_DIR}/report_common.py" "${tmp_metrics}" "${tmp_failures}" "${tmp_auto_hwm}" "${tmp_plan}" "${tmp_skips}" "${report}" \
   "${RUNS}" "${DURATION}" "${CLIENTS}" "${SERVICE_CLIENTS}" \
   "${display_server_io_threads}" "${display_client_io_threads}" \
   "${display_hwm}" "${display_send_hwm}" "${display_recv_hwm}" "${display_sndbuf}" "${display_rcvbuf}" \
@@ -1728,9 +1728,10 @@ def get_cpu_model():
 
 def get_commit():
     try:
+        repo_dir = os.environ.get("ZLINK_PERF_REPO_DIR")
         out = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"],
-            cwd=str(Path(report_path).resolve().parent),
+            cwd=repo_dir or str(Path(report_path).resolve().parent),
             stderr=subprocess.DEVNULL,
         )
         return out.decode().strip() or "unknown"

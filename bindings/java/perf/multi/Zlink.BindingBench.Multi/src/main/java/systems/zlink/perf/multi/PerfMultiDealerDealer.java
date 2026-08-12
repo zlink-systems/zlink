@@ -45,52 +45,22 @@ final class PerfMultiDealerDealer {
                 "server", SocketType.DEALER);
             PerfUtil.Metrics metrics = new PerfUtil.Metrics(config);
             Received received = new Received();
-            // C parity (perf_multi_dealer_dealer_server.cpp run_receive_window
-            // ~240-301): the counted throughput window is closed by a
-            // server-side measure-seconds deadline, not by the stop token. The
-            // signal-driven (-1) poll only wakes the loop; the stop token wakes
-            // the poll too but does not anchor the aggregation end.
-            //
-            // The deadline MUST be re-checked *after* draining a poll wakeup
-            // (matching C's post-receive / post-drain `if (now >= deadline)
-            // break;` at lines 273-275 and 294-296). The client sends an
-            // active window of identical duration and then exits. The server
-            // and client start their windows at slightly different wall-clock
-            // instants (the server clock starts only after its post-START
-            // auto-HWM recalc), so the client can finish its active phase,
-            // emit its stop token(s), and exit while the server still believes
-            // it is a hair before its own deadline. If the server then looped
-            // back into an unbounded perf_socket_poll(-1) there would be no
-            // remaining peer to ever wake it, hanging until the harness
-            // timeout. C tolerates the unconditional -1 only because its
-            // deadline break is evaluated right after the wakeup is consumed;
-            // to keep that termination guarantee robust against the cross-
-            // process start-clock skew the blocking poll is bounded by the
-            // time remaining to the deadline. Data and the wire stop token
-            // still wake the poll immediately (signal-driven, no busy poll);
-            // the bound only ensures the measure window cannot outlive its
-            // deadline when the peer has already gone.
+            // C parity: the active window advances only when socket readiness
+            // wakes the poller. The stop token wakes a final drain but does
+            // not determine the measured interval.
             long measureDeadline = System.nanoTime()
                 + config.durationSeconds() * 1_000_000_000L;
             while (true) {
-                long remainingNanos = measureDeadline - System.nanoTime();
-                if (remainingNanos <= 0) {
+                if (System.nanoTime() >= measureDeadline) {
                     break;
                 }
-                long remainingMs = Math.max(1L,
-                    remainingNanos / 1_000_000L);
                 pollSet.setEvents(0, PollEventFlags.POLLIN);
-                int readyCount = pollSet.poll((int) Math.min(remainingMs,
-                    (long) Integer.MAX_VALUE));
+                int readyCount = pollSet.poll(-1);
                 if (readyCount <= 0
                     || !pollSet.readyHasEventAt(0, PollEventFlags.POLLIN)) {
                     continue;
                 }
                 drainCounted(server, received, config, metrics);
-                // Post-drain deadline check (C lines 273-275 / 294-296):
-                // break here so the iteration that consumed the final
-                // traffic + stop token terminates instead of re-entering the
-                // poll after the peer has gone.
                 if (System.nanoTime() >= measureDeadline) {
                     break;
                 }
