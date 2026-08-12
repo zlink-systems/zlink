@@ -1359,7 +1359,7 @@ pattern은 11.6 재측정값을 사용하고, request/reply는 이 절의 최신
 | `tcp` | `MULTI_DEALER_DEALER` | 40.74% | 35% | 통과 |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 50.80% | 30% | 통과 |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 38.01% | 30% | 통과 |
-| `tcp` | `MULTI_PUBSUB` | 30.56% | 35% | 보류 |
+| `tcp` | `MULTI_PUBSUB` | 32.51% | 35% | 미달·개선 진행 |
 | `tcp` | `MULTI_STREAM` | 54.71% | 35% | 통과 |
 | `ws` | `MULTI_DEALER_DEALER` | 48.31% | 35% | 통과 |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 41.06% | 30% | 통과 |
@@ -1382,7 +1382,7 @@ pattern은 11.6 재측정값을 사용하고, request/reply는 이 절의 최신
 | `tcp` | `MULTI_DEALER_DEALER` | 21.63% | 24.65% | 38.28% | 22.17% | 36.75% | 51.07% | 이후 재측정 평균 40.74%. 최종 pattern 종합 평균 54.33%로 통과. |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 24.47% | 26.18% | 28.12% | 23.31% | 48.72% | 61.93% | 이후 재측정 평균 50.80%. 최종 pattern 종합 평균 49.73%로 통과. Node runner 이름은 `MULTI_DEALER_ROUTER`다. |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 22.49% | 23.99% | 24.78% | 22.76% | 51.49% | 56.30% | 이후 재측정 평균 38.01%. 최종 pattern 종합 평균 44.79%로 통과. Node runner 이름은 `MULTI_ROUTER_ROUTER`다. |
-| `tcp` | `MULTI_PUBSUB` | 17.10% | 19.51% | 19.01% | 33.43% | 38.81% | 41.57% | 이후 재측정 평균 30.56%. TCP 최소 기준 35%에 미달. |
+| `tcp` | `MULTI_PUBSUB` | 22.70% | 20.35% | 22.01% | 37.54% | 45.96% | 46.52% | topic 검증과 submit closure 재사용 뒤 평균 32.51%. TCP 최소 기준 35%에 미달. |
 | `tcp` | `MULTI_STREAM` | 13.36% | 14.85% | 15.13% | 해당 없음 | 63.51% | 해당 없음 | 이후 재측정 평균 54.71%. TCP 최소 기준 35% 통과. |
 | `ws` | `MULTI_DEALER_DEALER` | 16.19% | 29.84% | 27.07% | 48.75% | 80.83% | 87.18% | 통과·평균 48.31%. |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 26.08% | 30.11% | 30.52% | 31.97% | 61.14% | 66.54% | 통과·평균 41.06%. |

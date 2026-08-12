@@ -94,10 +94,21 @@ export class SendSocket extends SendReadySocket {
 }
 
 export class PublisherSocket extends SendReadySocket {
+  private lastPublishTopic: string | undefined;
+  private lastValidatedPublishTopic: string | undefined;
+  private readonly publishInvoker =
+    (topic: string, payload: MessageLike | readonly MessageLike[], flags: SendFlags) =>
+      this.publishDirect(topic, payload, flags);
+
   publish(topic: string): SendOperation {
+    const normalizedTopic = topic === this.lastPublishTopic
+      ? this.lastValidatedPublishTopic!
+      : validateCString(topic, 'topic', Number.MAX_SAFE_INTEGER);
+    this.lastPublishTopic = topic;
+    this.lastValidatedPublishTopic = normalizedTopic;
     return new PublishOperation(
-      (normalizedTopic, payload, flags) => this.publishDirect(normalizedTopic, payload, flags),
-      validateCString(topic, 'topic', Number.MAX_SAFE_INTEGER)
+      this.publishInvoker,
+      normalizedTopic
     );
   }
   /** @internal */
