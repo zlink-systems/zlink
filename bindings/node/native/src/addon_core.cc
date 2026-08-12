@@ -32,11 +32,11 @@ struct stream_js_payload_t
     ~stream_js_payload_t ()
     {
         if (packet_count > 0)
-            close_recv_parts (packets.data (), packet_count);
+            close_recv_parts (packets, packet_count);
     }
 
     std::vector<unsigned char> routing_id;
-    std::vector<zlink_msg_t> packets;
+    zlink_msg_t packets[2];
     size_t packet_count;
     int body_materialization;
 };
@@ -692,10 +692,10 @@ void stream_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *d
         != napi_ok) {
         return;
     }
-    if (napi_create_array_with_length (env, payload->packets.size (), &argv[1]) != napi_ok) {
+    if (napi_create_array_with_length (env, payload->packet_count, &argv[1]) != napi_ok) {
         return;
     }
-    for (size_t i = 0; i < payload->packets.size (); ++i) {
+    for (size_t i = 0; i < payload->packet_count; ++i) {
         napi_value packet_value = i == 1 && payload->body_materialization == 0
           ? move_message_to_native_frame_value (env, &payload->packets[i])
           : create_received_message_buffer (env, &payload->packets[i]);
@@ -824,7 +824,6 @@ void stream_on_packet_slot (void *stream_,
         payload.reset (new stream_js_payload_t ());
         payload->body_materialization = state->body_materialization;
         payload->routing_id.assign (rid_->data, rid_->data + rid_->size);
-        payload->packets.resize (2);
         if (zlink_msg_init (&payload->packets[0]) != 0) {
             close_messages ();
             return;

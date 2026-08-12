@@ -2125,6 +2125,19 @@ plain single-part receive는 routing metadata가 없을 때 managed Buffer를 �
 
 `TopicMessage` owner cleanup을 `Received`와 같은 wrapper-pool 반환 정책으로 통일했다. 상세 결과는 `log/2026-08-12-java-pubsub-owner-cleanup.ko.md`에 기록한다.
 
+### 11.11 Node STREAM 고정 packet 저장소 측정 결과
+
+`MULTI_STREAM / tcp`, 64·256·1024·65536B, clients `100`, duration `1초`, runs `1`,
+balanced auto-HWM 조건에서 C를 먼저, Node를 다음에 단독 실행했다.
+
+| 변경 | C 대비 throughput 비율 (64·256·1024·65536B) | 산술평균 | 결과 |
+|---|---|---:|---|
+| 고정 2칸 packet 저장소 | 14.88 / 15.70 / 17.55 / 58.53% | 26.67% | 이전 24.94% 대비 1.73%p 개선·목표 미달 |
+
+STREAM callback은 항상 header와 body 두 메시지를 받으므로, 가변 `vector`를 고정 저장소로
+바꾸어 callback별 native heap allocation을 제거했다. public interface, ownership과 body
+materialization 선택은 유지했다. 상세 결과는 `log/2026-08-12-node-stream-fixed-payload.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
