@@ -2325,6 +2325,14 @@ native cache가 반환하는 같은 Buffer identity를 사용해 string key 생�
 공개 `RoutingId`는 기존처럼 immutable copy이며, 상세 결과는
 `log/2026-08-12-node-stream-routing-id-weakmap.ko.md`에 기록한다.
 
+### 11.26 Node PUBSUB native view 후보
+
+`MULTI_PUBSUB / tcp`, clients `100`, duration `1초`, runs `1`, balanced auto-HWM에서 C를 먼저,
+Node를 다음에 실행했다. 일반 SUB 수신에서 `msg_t`를 external Buffer view로 보유하는 후보는 64B
+8.80%, 256B 9.70%로 현재 managed Buffer 경로보다 낮았고 complete report를 만들기 전 종료했다.
+native frame handle 생성·refcount 비용이 더 커서 즉시 원복했다. 상세 결과는
+`log/2026-08-12-node-pub-native-view-rejected.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
