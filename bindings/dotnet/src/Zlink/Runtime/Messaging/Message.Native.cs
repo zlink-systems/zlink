@@ -72,9 +72,17 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Message AllocateCoreValidated(int size)
     {
-        var message = new Message(false);
-        message.InitSizeOnInvalidMessage(size);
-        return message;
+        var message = RentFromPool();
+        try
+        {
+            message.InitSizeOnInvalidMessage(size);
+            return message;
+        }
+        catch
+        {
+            message.TryReturnToPool();
+            throw;
+        }
     }
 
     private unsafe Span<byte> AsSpanCore()
