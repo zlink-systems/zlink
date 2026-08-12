@@ -33,7 +33,18 @@ header/body를 Go byte slice에 먼저 만들지 않고 native `Message`에 직�
 | 기존 frame | 159.499 | 145.006 | 122.249 | 22.061 |
 | native frame 직접 생성 | 96.817 | 103.963 | 97.013 | 22.772 |
 
+STREAM 전용 dispatcher 후보도 비교했다. 이 후보는 public `OnPacket`의 Go-managed 단일 worker,
+순서, panic 정리와 callback 내부 `Close()` 동작은 유지하면서 generic task closure와 one-element
+slice를 제거했다. 하지만 paired 결과는 기존 최종 측정 평균 45.22%보다 낮은 40.16%였으므로
+채택하지 않고 기존 dispatcher를 유지한다.
+
+| Variant | 64B Go/C | 256B Go/C | 1024B Go/C | 65536B Go/C | 산술 평균 |
+|---|---:|---:|---:|---:|---:|
+| STREAM 전용 dispatcher | 40.31% | 39.28% | 46.38% | 34.68% | 40.16% |
+
 - 최종 C report: `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260812_141924_go-stream-tcp-final-c.txt`
 - 최종 Go report: `bindings/go/perf/results/multi/report/perf_go_multi_linux_20260812_141933_go-stream-tcp-final-go.txt`
 - candidate Go report: `bindings/go/perf/results/multi/report/perf_go_multi_linux_20260812_141805_go-stream-tcp-direct-frame-go.txt`
 - baseline Go report: `bindings/go/perf/results/multi/report/perf_go_multi_linux_20260812_141854_go-stream-tcp-frame-baseline-current-go.txt`
+- dispatcher C report: `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260812_142441_go-stream-tcp-dispatcher-c.txt`
+- dispatcher Go report: `bindings/go/perf/results/multi/report/perf_go_multi_linux_20260812_142450_go-stream-tcp-dispatcher-go.txt`
