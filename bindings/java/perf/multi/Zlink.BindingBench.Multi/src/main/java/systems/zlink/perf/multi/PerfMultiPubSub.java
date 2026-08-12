@@ -29,8 +29,6 @@ final class PerfMultiPubSub {
     private static final String TOPIC = "bench";
     private static final MonitorEventType READY_EVENT =
         MonitorEventType.CONNECTION_READY;
-    private static final long STOP_PUBLISH_GRACE_NANOS =
-        Duration.ofSeconds(2).toNanos();
     private static final int RECEIVE_POLL_TIMEOUT_MS = 100;
 
     private PerfMultiPubSub() {
@@ -252,12 +250,10 @@ final class PerfMultiPubSub {
         }
     }
 
-    // Publish the stop token on the topic with blocking semantics, retrying
-    // through transient backpressure. The retry is bounded because the Java
-    // client records a fixed active window and may already be draining a large
-    // backlog; teardown must not outlive the measured case.
+    // C retries a transient stop-token publish until it succeeds. The token
+    // terminates the subscriber phase, so reporting a successful server run
+    // without delivering it changes the benchmark lifecycle.
     private static void publishStopToken(PubSocket pub) {
-        long deadline = System.nanoTime() + STOP_PUBLISH_GRACE_NANOS;
         while (true) {
             try (Message stop = PerfStopToken.newMessage()) {
                 if (pub.publish(TOPIC)
@@ -270,12 +266,6 @@ final class PerfMultiPubSub {
                 if (!isTransientSubmit(ex)) {
                     throw ex;
                 }
-                if (System.nanoTime() >= deadline) {
-                    return;
-                }
-            }
-            if (System.nanoTime() >= deadline) {
-                return;
             }
         }
     }

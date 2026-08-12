@@ -16,6 +16,9 @@ import systems.zlink.perf.PerfUtil;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 final class PerfMultiStream {
@@ -25,6 +28,7 @@ final class PerfMultiStream {
     static PerfUtil.Result runServer(PerfUtil.Config config) {
         AtomicBoolean stopRequested = new AtomicBoolean(false);
         Object stopSignal = new Object();
+        PendingPackets pending = new PendingPackets();
         Thread controlWatcher = startControlWatcher(stopRequested, stopSignal);
 
         try (Context ctx = PerfUtil.newContext(config);
@@ -34,18 +38,22 @@ final class PerfMultiStream {
             PerfUtil.printMultiSocketAutoHwm(config, server, "server",
                 "server", SocketType.STREAM);
             PerfUtil.configureServerTls(server, config.transport());
-            server.options().sendTimeout(java.time.Duration.ZERO);
-            server.options().recvTimeout(java.time.Duration.ZERO);
+            Duration streamTimeout = Duration.ofMillis(streamTimeoutMs());
+            server.options().sendTimeout(streamTimeout);
+            server.options().recvTimeout(streamTimeout);
+            server.setSendReadyHandler(() -> pending.drain(server, stopRequested, stopSignal));
             server.bind(config.endpoint());
             PerfControl.emitReady(config.endpoint());
             server.onPacket(
                 (routingId, header, body) ->
                     onPacket(server, routingId, header, body,
-                        stopRequested, stopSignal));
+                        pending, stopRequested, stopSignal));
 
             waitForStop(stopRequested, stopSignal);
             return PerfUtil.Result.silent(config);
         } finally {
+            stopRequested.set(true);
+            pending.close();
             controlWatcher.interrupt();
         }
     }
@@ -80,6 +88,7 @@ final class PerfMultiStream {
                                  RoutingId routingId,
                                  Message header,
                                  Message body,
+                                 PendingPackets pending,
                                  AtomicBoolean stopRequested,
                                  Object stopSignal) {
         if (routingId == null) {
@@ -91,25 +100,12 @@ final class PerfMultiStream {
             return;
         }
         try {
-            sendFramedPacket(server, routingId, header, body);
+            pending.sendOrQueue(server, routingId, buildPacketFrame(header, body),
+                stopRequested, stopSignal);
         } catch (RuntimeException ex) {
             stopRequested.set(true);
             signal(stopSignal);
             throw ex;
-        }
-    }
-
-    private static void sendFramedPacket(StreamSocket socket,
-                                         RoutingId routingId,
-                                         Message header,
-                                         Message body) {
-        try (Message packet = buildPacketFrame(header, body)) {
-            if (!socket.send(routingId)
-                .message(packet)
-                .flags(SendFlags.DONT_WAIT)
-                .submit()) {
-                throw new ZlinkSubmitException(SubmitResult.BACKPRESSURED);
-            }
         }
     }
 
@@ -145,5 +141,96 @@ final class PerfMultiStream {
         synchronized (stopSignal) {
             stopSignal.notifyAll();
         }
+    }
+
+    private static int streamTimeoutMs() {
+        String configured = System.getenv("PERF_STREAM_TIMEOUT_MS");
+        if (configured == null || configured.isBlank()) {
+            return 5_000;
+        }
+        try {
+            int value = Integer.parseInt(configured);
+            return value >= 0 ? value : 5_000;
+        } catch (NumberFormatException ignored) {
+            return 5_000;
+        }
+    }
+
+    private static final class PendingPackets {
+        private final Object lock = new Object();
+        private final Deque<PendingPacket> queue = new ArrayDeque<>();
+        private boolean closed;
+
+        void sendOrQueue(StreamSocket socket, RoutingId routingId, Message packet,
+                         AtomicBoolean stopRequested, Object stopSignal) {
+            synchronized (lock) {
+                if (closed || stopRequested.get()) {
+                    packet.close();
+                    return;
+                }
+                if (queue.isEmpty()) {
+                    try {
+                        if (trySend(socket, routingId, packet)) {
+                            return;
+                        }
+                    } catch (ZlinkSubmitException ex) {
+                        if (!isTransient(ex)) {
+                            packet.close();
+                            throw ex;
+                        }
+                    }
+                }
+                queue.addLast(new PendingPacket(routingId, packet));
+            }
+        }
+
+        void drain(StreamSocket socket, AtomicBoolean stopRequested,
+                   Object stopSignal) {
+            synchronized (lock) {
+                while (!closed && !stopRequested.get() && !queue.isEmpty()) {
+                    PendingPacket packet = queue.peekFirst();
+                    try {
+                        if (!trySend(socket, packet.routingId(), packet.message())) {
+                            return;
+                        }
+                    } catch (ZlinkSubmitException ex) {
+                        if (isTransient(ex)) {
+                            return;
+                        }
+                        queue.removeFirst();
+                        packet.message().close();
+                        stopRequested.set(true);
+                        signal(stopSignal);
+                        throw ex;
+                    }
+                    queue.removeFirst();
+                }
+            }
+        }
+
+        void close() {
+            synchronized (lock) {
+                closed = true;
+                while (!queue.isEmpty()) {
+                    queue.removeFirst().message().close();
+                }
+            }
+        }
+
+        private static boolean trySend(StreamSocket socket, RoutingId routingId,
+                                       Message packet) {
+            return socket.send(routingId)
+                .message(packet)
+                .flags(SendFlags.DONT_WAIT)
+                .submit();
+        }
+    }
+
+    private record PendingPacket(RoutingId routingId, Message message) {
+    }
+
+    private static boolean isTransient(ZlinkSubmitException ex) {
+        return ex.getResult() == SubmitResult.BACKPRESSURED
+            || ex.getResult() == SubmitResult.NOT_CONNECTED;
     }
 }

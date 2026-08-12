@@ -29,6 +29,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 final class PerfMultiRouterRouter {
     private static final MonitorEventType READY_EVENT =
@@ -40,6 +41,7 @@ final class PerfMultiRouterRouter {
     }
 
     static PerfUtil.Result runServer(PerfUtil.Config config) {
+        AtomicBoolean stopRequested = PerfControl.watchStopSignal("router-router server");
         try (Context ctx = PerfUtil.newContext(config);
              RouterSocket server = ctx.createRouterSocket();
              var monitor = server.monitorOpen(MonitorEventType.CONNECTION_READY)) {
@@ -66,15 +68,16 @@ final class PerfMultiRouterRouter {
             systems.zlink.contracts.messaging.Received receivedBuffer = new systems.zlink.contracts.messaging.Received();
             try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
                 List.of(server), PollEventFlags.POLLIN)) {
-                int stops = 0;
-                while (stops < config.clients()) {
+                // C terminates this relay from runner stdin. Client stop
+                // tokens remain regular routed frames and must be echoed.
+                while (!stopRequested.get()) {
                     if (pendingReplies.isEmpty()) {
                         pollSet.setEvents(0, PollEventFlags.POLLIN);
                     } else {
                         pollSet.setEvents(0,
                             PollEventFlags.POLLIN, PollEventFlags.POLLOUT);
                     }
-                    int readyCount = pollSet.poll(-1);
+                    int readyCount = pollSet.poll(50);
                     boolean writable = readyCount > 0
                         && pollSet.readyHasEventAt(0, PollEventFlags.POLLOUT);
                     boolean readable = readyCount > 0
@@ -98,12 +101,6 @@ final class PerfMultiRouterRouter {
                         }
                         if (!ok) break;
 
-                        if (PerfStopToken.isStopTokenMessage(
-                                receivedBuffer.firstPart())) {
-                            stops++;
-                            receivedBuffer.close();
-                            continue;
-                        }
                         // Fast path: send directly when no pending backlog.
                         if (pendingReplies.isEmpty()
                             && receivedBuffer.send()

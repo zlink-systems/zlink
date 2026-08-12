@@ -27,6 +27,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 final class PerfMultiDealerRouter {
     private static final MonitorEventType READY_EVENT =
@@ -36,6 +37,7 @@ final class PerfMultiDealerRouter {
     }
 
     static PerfUtil.Result runServer(PerfUtil.Config config) {
+        AtomicBoolean stopRequested = PerfControl.watchStopSignal("dealer-router server");
         try (Context ctx = PerfUtil.newContext(config);
              RouterSocket server = ctx.createRouterSocket();
              var monitor = server.monitorOpen(MonitorEventType.CONNECTION_READY)) {
@@ -54,22 +56,21 @@ final class PerfMultiDealerRouter {
             PerfUtil.recalculateAutoHwm(ctx);
             PerfUtil.printMultiMonitorAutoHwm(config, monitor, "server",
                 "server", SocketType.ROUTER);
-            int stops = 0;
             Deque<PendingReply> pendingReplies = new ArrayDeque<>();
             systems.zlink.contracts.messaging.Received receivedBuffer = new systems.zlink.contracts.messaging.Received();
             try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
                 List.of(server), PollEventFlags.POLLIN)) {
-                // PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven wait (-1);
-                // server exits after observing one wire-level stop token per
-                // expected client.
-                while (stops < config.clients()) {
+                // The C relay remains active until the runner sends STOP.
+                // A client wire token is ordinary relay traffic, not a
+                // server termination condition.
+                while (!stopRequested.get()) {
                     if (pendingReplies.isEmpty()) {
                         pollSet.setEvents(0, PollEventFlags.POLLIN);
                     } else {
                         pollSet.setEvents(0, PollEventFlags.POLLIN,
                             PollEventFlags.POLLOUT);
                     }
-                    int readyCount = pollSet.poll(-1);
+                    int readyCount = pollSet.poll(50);
                     if (readyCount > 0
                         && pollSet.readyHasEventAt(0, PollEventFlags.POLLOUT)) {
                         flushPending(server, pendingReplies);
@@ -77,11 +78,6 @@ final class PerfMultiDealerRouter {
                     while (true) {
                         if (!server.recv(receivedBuffer, systems.zlink.contracts.sockets.RecvFlags.DONT_WAIT)) {
                             break;
-                        }
-                        if (PerfStopToken.isStopTokenMessage(receivedBuffer.firstPart())) {
-                            stops++;
-                            receivedBuffer.close();
-                            continue;
                         }
                         if (pendingReplies.isEmpty()
                             && receivedBuffer.send()

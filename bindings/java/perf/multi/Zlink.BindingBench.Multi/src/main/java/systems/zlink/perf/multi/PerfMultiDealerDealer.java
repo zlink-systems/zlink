@@ -60,7 +60,7 @@ final class PerfMultiDealerDealer {
                     || !pollSet.readyHasEventAt(0, PollEventFlags.POLLIN)) {
                     continue;
                 }
-                drainCounted(server, received, config, metrics);
+                drainCounted(server, received, config, metrics, measureDeadline);
                 if (System.nanoTime() >= measureDeadline) {
                     break;
                 }
@@ -77,16 +77,29 @@ final class PerfMultiDealerDealer {
 
     private static void drainCounted(DealerSocket server, Received received,
                                       PerfUtil.Config config,
-                                      PerfUtil.Metrics metrics) {
+                                      PerfUtil.Metrics metrics,
+                                      long measureDeadline) {
+        // C receives one message after a readiness wake, then checks the
+        // deadline before draining further. This keeps the active boundary
+        // from counting an already queued post-deadline tail.
+        if (!PerfUtil.recvNoWait(server, received)) {
+            return;
+        }
+        recordCounted(received, config, metrics);
+        if (System.nanoTime() >= measureDeadline) {
+            return;
+        }
         while (true) {
             if (!PerfUtil.recvNoWait(server, received)) {
                 return;
             }
-            if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
-                // Stop token only wakes the poll; it never ends the
-                // counted window (matches C, which ignores stop_count).
-                continue;
-            }
+            recordCounted(received, config, metrics);
+        }
+    }
+
+    private static void recordCounted(Received received, PerfUtil.Config config,
+                                      PerfUtil.Metrics metrics) {
+        if (!PerfStopToken.isStopTokenMessage(received.firstPart())) {
             PerfUtil.recordActiveLatency(metrics, received.firstPart(),
                 config.size(), false);
         }
