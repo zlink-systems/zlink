@@ -2192,6 +2192,24 @@ STREAM callback의 고정 routing-id를 가변 vector가 아닌 payload inline s
 public routing-id bytes와 packet callback contract는 유지했다. 상세 결과는
 `log/2026-08-12-node-stream-inline-routing-id.ko.md`에 기록한다.
 
+### 11.16 Java PUBSUB Multi와 전체 평균 재집계
+
+`MULTI_PUBSUB / tcp`, 64·256·1024·4096·65536·131072B, clients `100`, duration
+`1초`, runs `1`, balanced auto-HWM 조건에서 C를 먼저, Java를 다음에 단독 실행했다.
+
+| 측정 대상 | C 대비 throughput 비율 (size 순서) | 산술평균 | 결과 |
+|---|---|---:|---|
+| `MULTI_PUBSUB / tcp`, topic-bound send invoker | 43.91 / 46.44 / 45.15 / 37.38 / 64.75 / 80.04% | 52.95% | 이전 46.81% 대비 6.14%p 개선 |
+
+Java 전체 평균은 9.3절의 최종 paired 표본 412개 size cell에서 계산했다. 최신 TCP
+`PAIR`, `DEALER_DEALER`, `PUBSUB`, `MULTI_DEALER_DEALER`, `MULTI_DEALER_ROUTER`,
+`MULTI_PUBSUB` 결과로 같은 행을 교체하면 `80.32%`다. .NET은 9.2절의 최종 paired
+표본 418개 size cell 기준 `82.63%`다. 두 값은 각각 80% 목표를 충족한다.
+
+Node의 과거 batch 기반 값은 현재 batch 미사용 구현의 전체 평균에 포함하지 않는다. 현재 구현의
+모든 대상에 대해 새 paired 값이 누적되기 전에는 Node 전체 평균을 확정하지 않는다. 상세 결과는
+`log/2026-08-12-java-multi-pubsub-and-aggregate.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
