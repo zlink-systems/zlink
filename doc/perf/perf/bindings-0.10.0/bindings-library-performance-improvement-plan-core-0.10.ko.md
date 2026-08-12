@@ -1403,7 +1403,7 @@ pattern은 11.6 재측정값을 사용하고, request/reply는 이 절의 최신
 ### 9.5 Go
 
 - perf 경로: `bindings/go/perf`
-- Single 상태: `TCP 4/5 측정`
+- Single 상태: `TCP 5/5 측정`
 - Multi 상태: `TCP 5/5 측정`
 - 다음 작업: TCP routed single pattern을 C와 순차 paired 측정하고, 측정값이 목표에 미달하면 hot path 후보를 한 번 적용해 비교한다.
 
@@ -1415,7 +1415,7 @@ pattern은 11.6 재측정값을 사용하고, request/reply는 이 절의 최신
 | `tcp` | `PUBSUB` | 37.85% | 56.40% | 93.19% | 84.34% | 72.71% | 76.19% | 평균 70.11%. simple one-way 중앙값 목표 65% 통과. |
 | `tcp` | `DEALER_DEALER` | 46.00% | 56.33% | 86.21% | 62.34% | 62.98% | 72.24% | 평균 64.35%. simple one-way 중앙값 목표 65%에 0.65%p 미달. single-part builder 개선은 이미 적용됐고, 추가 contract-safe hot path 후보가 없어 측정값으로 기록. |
 | `tcp` | `DEALER_ROUTER` | 32.90% | 63.32% | 100.77% | 97.92% | 102.45% | 111.65% | 평균 84.84%. routed one-way 중앙값 목표 57% 통과. ROUTER activity-aware readiness로 C harness와 연결 판정을 정렬. |
-| `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `ROUTER_ROUTER` | 31.26% | 50.22% | 88.45% | 96.02% | 96.44% | 105.72% | 평균 78.02%. routed one-way 중앙값 목표 57% 통과. |
 | `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -2606,6 +2606,16 @@ part가 추가될 때만 multipart slice를 만든다. single-part send에서 �
 
 산술평균 69.54%는 Go simple one-way 중앙값 목표 65%를 충족한다. 상세 결과는
 `log/2026-08-12-go-dealer-dealer-tcp-single-part-builder.ko.md`에 기록한다.
+
+### 11.36 Go TCP pattern 평균
+
+Go runner가 지원하는 TCP single 5개와 multi 5개 pattern을 C release `0.10.1` 뒤 Go 순서로
+각각 단독 실행했다. pattern별 six-size 산술평균은 76.57%, 70.11%, 64.35%, 84.84%, 78.02%,
+69.54%, 85.08%, 75.90%, 131.08%, 45.22%이고, 언어별 산술평균은 **78.07%**다.
+
+Go 언어별 목표 65%를 충족한다. `MULTI_STREAM / tcp`은 45.22%로 최소 기준 40%를 충족하나
+중앙값 목표 53%에는 미달하며, native-frame과 stream 전용 dispatcher 후보가 모두 하락해
+기존 구현을 유지한다.
 
 ## 12. 완료 기준
 
