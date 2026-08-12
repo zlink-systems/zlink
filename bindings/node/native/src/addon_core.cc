@@ -2253,23 +2253,29 @@ napi_value socket_publish (napi_env env, napi_callback_info info)
     std::vector<zlink_msg_t> parts;
     zlink_msg_t single_part;
     bool use_single_part = false;
+    bool is_buf = false;
     bool is_array = false;
     bool contains_native_frame = false;
-    napi_is_array (env, argv[2], &is_array);
-    bool is_buf = false;
-    napi_valuetype payload_type = napi_undefined;
-    napi_typeof (env, argv[2], &payload_type);
-    if (is_array) {
-        if (!build_msg_vector (env, argv[2], &parts))
-            return NULL;
-    } else if ((napi_is_buffer (env, argv[2], &is_buf) == napi_ok && is_buf)
-               || payload_type == napi_object) {
+    if (napi_is_buffer (env, argv[2], &is_buf) == napi_ok && is_buf) {
         if (!init_msg_from_value (env, argv[2], &single_part,
                                   &contains_native_frame))
             return throw_last_error (env, "publish failed");
         use_single_part = true;
-    } else if (!build_msg_vector (env, argv[2], &parts)) {
-        return NULL;
+    } else {
+        napi_is_array (env, argv[2], &is_array);
+        napi_valuetype payload_type = napi_undefined;
+        napi_typeof (env, argv[2], &payload_type);
+        if (is_array) {
+            if (!build_msg_vector (env, argv[2], &parts))
+                return NULL;
+        } else if (payload_type == napi_object) {
+            if (!init_msg_from_value (env, argv[2], &single_part,
+                                      &contains_native_frame))
+                return throw_last_error (env, "publish failed");
+            use_single_part = true;
+        } else if (!build_msg_vector (env, argv[2], &parts)) {
+            return NULL;
+        }
     }
 
     int32_t flags = 0;
@@ -2310,16 +2316,10 @@ napi_value socket_try_publish (napi_env env, napi_callback_info info)
     std::vector<zlink_msg_t> parts;
     zlink_msg_t single_part;
     bool use_single_part = false;
+    bool is_buf = false;
     bool is_array = false;
     bool contains_native_frame = false;
-    napi_is_array (env, argv[2], &is_array);
-    bool is_buf = false;
-    napi_valuetype payload_type = napi_undefined;
-    napi_typeof (env, argv[2], &payload_type);
-    if (is_array) {
-        if (!build_msg_vector (env, argv[2], &parts))
-            return NULL;
-    } else if (napi_is_buffer (env, argv[2], &is_buf) == napi_ok && is_buf) {
+    if (napi_is_buffer (env, argv[2], &is_buf) == napi_ok && is_buf) {
         void *data = NULL;
         size_t len = 0;
         if (napi_get_buffer_info (env, argv[2], &data, &len) != napi_ok) {
@@ -2329,13 +2329,21 @@ napi_value socket_try_publish (napi_env env, napi_callback_info info)
         if (!init_msg_from_bytes (&single_part, data, len))
             return throw_last_error (env, "publishNoWaitResult failed");
         use_single_part = true;
-    } else if (payload_type == napi_object) {
-        if (!init_msg_from_value (env, argv[2], &single_part,
-                                  &contains_native_frame))
-            return throw_last_error (env, "publishNoWaitResult failed");
-        use_single_part = true;
-    } else if (!build_msg_vector (env, argv[2], &parts)) {
-        return NULL;
+    } else {
+        napi_is_array (env, argv[2], &is_array);
+        napi_valuetype payload_type = napi_undefined;
+        napi_typeof (env, argv[2], &payload_type);
+        if (is_array) {
+            if (!build_msg_vector (env, argv[2], &parts))
+                return NULL;
+        } else if (payload_type == napi_object) {
+            if (!init_msg_from_value (env, argv[2], &single_part,
+                                      &contains_native_frame))
+                return throw_last_error (env, "publishNoWaitResult failed");
+            use_single_part = true;
+        } else if (!build_msg_vector (env, argv[2], &parts)) {
+            return NULL;
+        }
     }
 
     int rc = publish_parts (sock, topic, use_single_part ? &single_part : parts.data (),

@@ -213,7 +213,7 @@ function isStopTokenPayload(buffer, size) {
     }
     return true;
 }
-async function waitForConnectionReady(socket, connectFn = null, timeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 1000)) {
+async function waitForConnectionReady(socket, connectFn = null, timeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 10000)) {
     const monitor = socket.monitorOpen([MonitorEventType.ConnectionReady]);
     try {
         if (typeof connectFn === 'function') {
@@ -240,7 +240,7 @@ async function waitForConnectionReady(socket, connectFn = null, timeoutMs = inte
         monitor.close();
     }
 }
-async function waitForMonitorConnectionReady(monitor, timeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 1000)) {
+async function waitForMonitorConnectionReady(monitor, timeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 10000)) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
         try {
@@ -621,7 +621,7 @@ function spawnSenderWorker(workerData) {
     });
     return worker;
 }
-function waitForWorkerMessage(worker, expectedType, timeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 1000)) {
+function waitForWorkerMessage(worker, expectedType, timeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 10000)) {
     return new Promise((resolve, reject) => {
         const state = senderWorkerState(worker);
         const seen = state.seenMessages.find((message) => message && message.type === expectedType);
@@ -676,7 +676,7 @@ function waitForWorkerError(worker) {
     });
 }
 function waitForWorkerDone(worker, durationSeconds) {
-    const readyTimeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 1000);
+    const readyTimeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 10000);
     const activeMs = Math.ceil(Math.max(0, Number(durationSeconds) || 0) * 1000);
     return waitForWorkerMessage(worker, 'done', activeMs + readyTimeoutMs);
 }

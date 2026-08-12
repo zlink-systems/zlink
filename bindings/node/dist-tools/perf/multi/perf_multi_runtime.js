@@ -144,10 +144,10 @@ function subscribeNoWaitInto(socket, received) {
         throw error;
     }
 }
-async function waitForConnectionReady(socket, connectFn = null, timeoutMs = integerEnvPair('PERF_MULTI_CONNECT_READY_TIMEOUT_MS', 'PERF_CONNECT_READY_TIMEOUT_MS', 5000)) {
+async function waitForConnectionReady(socket, connectFn = null, timeoutMs = integerEnvPair('PERF_MULTI_CONNECT_READY_TIMEOUT_MS', 'PERF_CONNECT_READY_TIMEOUT_MS', 10000)) {
     return waitForConnectionReadyCount(socket, 1, connectFn, timeoutMs);
 }
-async function waitForConnectionReadyCount(socket, expectedCount, connectFn = null, timeoutMs = integerEnvPair('PERF_MULTI_CONNECT_READY_TIMEOUT_MS', 'PERF_CONNECT_READY_TIMEOUT_MS', 5000)) {
+async function waitForConnectionReadyCount(socket, expectedCount, connectFn = null, timeoutMs = integerEnvPair('PERF_MULTI_CONNECT_READY_TIMEOUT_MS', 'PERF_CONNECT_READY_TIMEOUT_MS', 10000)) {
     const monitor = socket.monitorOpen([MonitorEventType.ConnectionReady]);
     try {
         if (typeof connectFn === 'function') {
@@ -257,7 +257,7 @@ function sleepMs(ms) {
 // root cause, so this mirrors C exactly: bounded, returns a boolean.
 async function publishControlUntilSent(socket, _waiter, topic, payload) {
     const body = Buffer.isBuffer(payload) ? payload : Buffer.from(String(payload));
-    const deadlineMs = Math.max(1, integerEnvPair('PERF_MULTI_CONNECT_READY_TIMEOUT_MS', 'PERF_CONNECT_READY_TIMEOUT_MS', 5000));
+    const deadlineMs = Math.max(1, integerEnvPair('PERF_MULTI_CONNECT_READY_TIMEOUT_MS', 'PERF_CONNECT_READY_TIMEOUT_MS', 10000));
     const deadline = Date.now() + deadlineMs;
     while (Date.now() < deadline) {
         if (trySocketPublish(socket, topic, body)) {
