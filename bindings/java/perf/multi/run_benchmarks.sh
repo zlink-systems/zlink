@@ -213,7 +213,7 @@ for numeric_opt in SNDTIMEO_MS RCVTIMEO_MS CONNECT_READY_TIMEOUT_MS TRANSPORT_TR
 done
 
 if [[ "${PATTERN}" == "ALL" ]]; then
-  PATTERN="MULTI_DEALER_DEALER,MULTI_DEALER_ROUTER,MULTI_DEALER_ROUTER_REQREP,MULTI_ROUTER_ROUTER,MULTI_ROUTER_ROUTER_REQREP,MULTI_PUBSUB,MULTI_SPOT,MULTI_SPOT_REQREP,MULTI_SPOT_SENDSEND,MULTI_STREAM"
+  PATTERN="MULTI_DEALER_DEALER,MULTI_DEALER_ROUTER_SENDSEND,MULTI_DEALER_ROUTER_REQREP,MULTI_ROUTER_ROUTER_SENDSEND,MULTI_ROUTER_ROUTER_REQREP,MULTI_PUBSUB,MULTI_SPOT,MULTI_SPOT_REQREP,MULTI_SPOT_SENDSEND,MULTI_STREAM"
 fi
 
 detect_platform() {
@@ -1084,8 +1084,11 @@ run_socket_case() {
   append_auto_hwm_details "${client_log}"
 
   if [[ "${bare_pattern}" == "DEALER_ROUTER" \
+     || "${bare_pattern}" == "DEALER_ROUTER_SENDSEND" \
      || "${bare_pattern}" == "DEALER_ROUTER_REQREP" \
-     || "${bare_pattern}" == "ROUTER_ROUTER" || "${bare_pattern}" == "PUBSUB" \
+     || "${bare_pattern}" == "ROUTER_ROUTER" \
+     || "${bare_pattern}" == "ROUTER_ROUTER_SENDSEND" \
+     || "${bare_pattern}" == "PUBSUB" \
      || "${bare_pattern}" == "ROUTER_ROUTER_REQREP" \
      || "${bare_pattern}" == "SPOT_REQREP" \
      || "${bare_pattern}" == "SPOT_SENDSEND" \
@@ -1418,7 +1421,8 @@ all_metrics = ["throughput", "bandwidth", "latency", "latency_p95", "latency_p99
 
 ECHO_PATTERNS = {
     "MULTI_DEALER_ROUTER", "MULTI_DEALER_ROUTER_REQREP",
-    "MULTI_ROUTER_ROUTER", "MULTI_ROUTER_ROUTER_REQREP", "MULTI_SPOT_REQREP",
+    "MULTI_DEALER_ROUTER_SENDSEND", "MULTI_ROUTER_ROUTER",
+    "MULTI_ROUTER_ROUTER_SENDSEND", "MULTI_ROUTER_ROUTER_REQREP", "MULTI_SPOT_REQREP",
     "MULTI_SPOT_SENDSEND", "MULTI_STREAM",
 }
 

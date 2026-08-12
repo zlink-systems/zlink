@@ -102,13 +102,17 @@ final class PerfMeasurement {
 
     static boolean isEchoPattern(String pattern) {
         return "DEALER_ROUTER".equals(pattern)
+            || "DEALER_ROUTER_SENDSEND".equals(pattern)
             || "DEALER_ROUTER_REQREP".equals(pattern)
             || "ROUTER_ROUTER".equals(pattern)
+            || "ROUTER_ROUTER_SENDSEND".equals(pattern)
             || "ROUTER_ROUTER_REQREP".equals(pattern)
             || "STREAM".equals(pattern)
             || "SPOT_REQREP".equals(pattern)
             || "SPOT_SENDSEND".equals(pattern)
+            || "MULTI_DEALER_ROUTER_SENDSEND".equals(pattern)
             || "MULTI_DEALER_ROUTER_REQREP".equals(pattern)
+            || "MULTI_ROUTER_ROUTER_SENDSEND".equals(pattern)
             || "MULTI_ROUTER_ROUTER_REQREP".equals(pattern)
             || "MULTI_SPOT_REQREP".equals(pattern)
             || "MULTI_SPOT_SENDSEND".equals(pattern);
