@@ -50,3 +50,27 @@
 
 - C: `/tmp/zlink-java-ready-gate-reqrep-c/multi/report/perf_c_multi_linux_20260813_024624_ready-gate-reqrep-c.txt`
 - Java: `/tmp/zlink-java-ready-gate-reqrep-java/multi/report/perf_java_multi_linux_20260813_024703_ready-gate-reqrep-java.txt`
+
+## `Received` two-slot 후보 결과
+
+- transport: `tcp`
+- pattern: `MULTI_DEALER_DEALER`
+- 공통 조건: message size `64,256,1024,4096,65536,131072`, client `100`,
+  duration `5s`, auto-HWM, I/O thread `4`, release Core `0.10.1`
+
+| Message size | C throughput (msg/s) | Java throughput (msg/s) | C 대비 |
+|---:|---:|---:|---:|
+| 64 | 2,593,897.2 | 1,723,915.4 | 66.46% |
+| 256 | 1,394,044.0 | 1,115,337.6 | 80.01% |
+| 1,024 | 943,313.4 | 781,752.4 | 82.87% |
+| 4,096 | 524,260.8 | 341,592.6 | 65.16% |
+| 65,536 | 102,494.6 | 82,871.6 | 80.85% |
+| 131,072 | 45,454.2 | 44,914.8 | 98.81% |
+| 산술평균 | - | - | **79.03%** |
+
+목표 90%에 미달해 후보 구현은 제거했다.
+
+원본 결과 파일:
+
+- C: `/tmp/zlink-java-received-two-slot-c/multi/report/perf_c_multi_linux_20260813_025441_received-two-slot-c.txt`
+- Java: `/tmp/zlink-java-received-two-slot-java/multi/report/perf_java_multi_linux_20260813_025518_received-two-slot-java.txt`
