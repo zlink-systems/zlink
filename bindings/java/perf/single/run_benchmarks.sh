@@ -6,6 +6,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 JAVA_BINDINGS_DIR="$(cd "${ROOT_DIR}/.." && pwd)"
 REPO_DIR="$(cd "${ROOT_DIR}/../../.." && pwd)"
 source "${REPO_DIR}/bindings/tools/local_core_runtime.sh"
+source "${ROOT_DIR}/require_java22.sh"
 VERSION_FILE="${REPO_DIR}/VERSION"
 CORE_VERSION="$(awk -F= '/^LIBZLINK_VERSION=/{print $2}' "${VERSION_FILE}")"
 CORE_RUNTIME="${ZLINK_LOCAL_CORE_RUNTIME}"
@@ -260,6 +261,8 @@ ensure_single_runner() {
     unzip -qo "${dist_zip}" -d "${install_dir}"
   fi
 }
+
+require_java22
 
 mkdir -p "${RESULTS_ROOT}/single/report"
 cd "${ROOT_DIR}"
