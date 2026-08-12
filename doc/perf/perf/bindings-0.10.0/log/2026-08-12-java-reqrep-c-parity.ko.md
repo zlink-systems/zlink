@@ -37,3 +37,25 @@ duration 1초, auto-HWM, message size 64/256/1024/4096/65536/131072 byte다.
 | 산술평균 | - | - | 54.64% |
 
 최소 기준 50%는 통과했지만 중앙 목표 70%에는 도달하지 못했다.
+
+## public API metric 재측정
+
+이전 수치는 Java perf가 public contract 밖의 metric access를 사용하던 시점의 결과이므로
+완료 근거로 사용하지 않는다. public primitive message read만 사용하는 현재 metric 경로에서
+release Core `0.10.1`, tcp, client 100, duration 2초, auto-HWM `balanced`, I/O thread 4,
+`64/256/1024/4096/65536/131072B` 조건으로 C 다음 Java를 한 번씩 실행했다.
+
+| Size | C throughput (ops/s) | Java throughput (ops/s) | C 대비 |
+|---:|---:|---:|---:|
+| 64 | 105,746.5 | 60,377.5 | 57.10% |
+| 256 | 104,385.5 | 58,789.5 | 56.32% |
+| 1,024 | 96,692.5 | 56,424.5 | 58.36% |
+| 4,096 | 90,134.0 | 55,207.0 | 61.25% |
+| 65,536 | 23,695.5 | 32,008.0 | 135.08% |
+| 131,072 | 16,056.0 | 18,943.5 | 117.98% |
+| 산술평균 | - | - | **81.01%** |
+
+Java/C 평균은 목표 `70%`를 통과한다.
+
+- C: `/tmp/zlink-java-dr-reqrep-c-2s/multi/report/perf_c_multi_linux_20260813_041836_java-dr-reqrep-c-2s.txt`
+- Java: `/tmp/zlink-java-dr-reqrep-java-2s/multi/report/perf_java_multi_linux_20260813_041904_java-dr-reqrep-java-2s.txt`
