@@ -109,6 +109,10 @@ class message_t
 
     alignas (std::max_align_t) std::array<std::byte, 64> _storage;
     bool _valid;
+    // Distinguishes an initialized empty native frame from a frame carrying
+    // payload, so caller-provided receive can avoid asking Core for the size
+    // solely to decide whether it needs failure rollback.
+    bool _has_payload;
 };
 
 namespace advanced

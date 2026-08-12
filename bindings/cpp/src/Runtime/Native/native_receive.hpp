@@ -66,6 +66,7 @@ inline int recv_envelope (void *socket_,
           &has_more, static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
         if (first_rc != ZLINK_RECV_OK)
             return -1;
+        refresh_payload_presence (first_msg);
 
         if (source_rid && source_rid->size > 0)
             envelope_.source_rid = zlink::detail::native_routing_id (*source_rid);
@@ -95,6 +96,7 @@ inline int recv_envelope (void *socket_,
                                       static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
             if (rc != ZLINK_RECV_OK)
                 return -1;
+            refresh_payload_presence (next_msg);
 
             envelope_.parts.emplace_back (std::move (next_msg));
             if (has_more == ZLINK_PART_FINAL)
