@@ -1359,7 +1359,7 @@ pattern은 11.6 재측정값을 사용하고, request/reply는 이 절의 최신
 | `tcp` | `MULTI_DEALER_DEALER` | 40.74% | 35% | 통과 |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 50.80% | 30% | 통과 |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 38.01% | 30% | 통과 |
-| `tcp` | `MULTI_PUBSUB` | 32.51% | 35% | 미달·개선 진행 |
+| `tcp` | `MULTI_PUBSUB` | 36.39% | 35% | 통과 |
 | `tcp` | `MULTI_STREAM` | 54.71% | 35% | 통과 |
 | `ws` | `MULTI_DEALER_DEALER` | 48.31% | 35% | 통과 |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 41.06% | 30% | 통과 |
@@ -2562,9 +2562,28 @@ STREAM packet handler는 header와 body를 읽기 전까지 native frame으로 �
 제거한다. public interface는 변경하지 않았다.
 
 현재 batch 미사용 Node 표준 TCP 5-pattern 산술평균은 `DEALER_DEALER` 40.74%,
-`DEALER_ROUTER` 50.80%, `ROUTER_ROUTER` 38.01%, `PUBSUB` 31.32%, `STREAM` 54.71%로
-`43.12%`다. Node 40% 목표를 충족한다. 상세 측정값은
+`DEALER_ROUTER` 50.80%, `ROUTER_ROUTER` 38.01%, `PUBSUB` 36.39%, `STREAM` 54.71%로
+`44.13%`다. Node 40% 목표를 충족한다. 상세 측정값은
 `log/2026-08-12-node-stream-native-header.ko.md`에 기록한다.
+
+### 11.34 Node TCP PUBSUB 최종 paired 재측정
+
+`MULTI_PUBSUB / tcp`만 Core release `0.10.1` C를 먼저, Node를 다음에 단독 실행했다.
+clients `100`, duration `1초`, runs `1`, balanced auto-HWM을 사용했다.
+
+| Size | C Kmsg/s | Node Kmsg/s | C 대비 |
+|---|---:|---:|---:|
+| 64B | 1512.172 | 426.902 | 28.23% |
+| 256B | 1453.354 | 445.748 | 30.67% |
+| 1024B | 1343.460 | 390.529 | 29.07% |
+| 4096B | 571.253 | 188.619 | 33.02% |
+| 65536B | 111.687 | 51.551 | 46.16% |
+| 131072B | 56.750 | 29.047 | 51.18% |
+| 산술 평균 | - | - | **36.39%** |
+
+이 paired 측정값은 simple one-way 최소 기준 35%를 충족한다. 따라서
+`tcp / MULTI_PUBSUB` 최종 판정은 통과다. 상세 결과는
+`log/2026-08-12-node-pubsub-tcp-final-measurement.ko.md`에 기록한다.
 
 ## 12. 완료 기준
 
