@@ -2300,6 +2300,18 @@ runs `1`, balanced auto-HWM에서 C를 먼저, Node를 다음에 단독 실행�
 최근 topic cache는 native 문자열 생성을 줄이는 후보였지만 lookup과 `napi_ref` 관리 비용이 더 컸다.
 상세 결과는 `log/2026-08-12-node-pub-topic-cache-rejected.ko.md`에 기록한다.
 
+### 11.24 Node STREAM TSFN payload pool 후보
+
+`MULTI_STREAM / tcp`, 64·256·1024·65536B, clients `100`, duration `1초`, runs `1`,
+balanced auto-HWM에서 C를 먼저, Node를 다음에 단독 실행했다.
+
+| 변경 | C 대비 throughput 비율 (size 순서) | 산술평균 | 결과 |
+|---|---|---:|---|
+| stream slot별 TSFN payload pool | 16.67 / 16.71 / 17.97 / 63.50% | 28.71% | 채택값 29.59%보다 낮아 원복 |
+
+TSFN 전달 payload의 native allocation을 bounded pool로 재사용했지만 mutex와 반환 비용이 더 컸다.
+상세 결과는 `log/2026-08-12-node-stream-payload-pool-rejected.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
