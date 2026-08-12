@@ -3,58 +3,32 @@
 package systems.zlink.perf;
 
 import systems.zlink.contracts.eventing.PollEventFlags;
+import systems.zlink.contracts.eventing.PollEvents;
+import systems.zlink.contracts.eventing.Poller;
+import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.sockets.Socket;
-import systems.zlink.contracts.errors.ZlinkException;
-import systems.zlink.contracts.errors.ErrorCategory;
-import systems.zlink.runtime.nativeapi.InternalAccess;
-import systems.zlink.runtime.nativeapi.Native;
-import java.lang.foreign.Arena;
-import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
+import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 
 public final class PerfSocketPollSet implements AutoCloseable {
-    private static final int MASK_POLLIN = 1;
-    private static final int MASK_POLLOUT = 2;
-    private static final int MASK_POLLERR = 4;
-    private static final int MASK_POLLPRI = 8;
-    private static final int MASK_POLLCOMPLETION = 32;
-    private static final long POLLER_EVENT_SIZE = 48;
-    private static final long EVENT_USER_DATA_OFFSET = 32;
-    private static final long EVENT_EVENTS_OFFSET = 40;
     private final Socket[] sockets;
     private final int[] currentMasks;
-    private final Arena nativeArena = Arena.ofShared();
-    private final MemorySegment poller;
-    private final MemorySegment nativeEvents;
-    private final MemorySegment errorOut;
+    private final Poller poller;
+    private final PollEvents events;
     private int readyCount;
 
     private PerfSocketPollSet(List<Socket> sockets,
                               PollEventFlags... initialEvents) {
         this.sockets = sockets.toArray(Socket[]::new);
         this.currentMasks = new int[this.sockets.length];
-        this.poller = Native.pollerNew();
-        if (poller == null || poller.address() == 0) {
-            nativeArena.close();
-            throw ZlinkException.fromLastError(ErrorCategory.CONFIG);
-        }
-        this.nativeEvents = nativeArena.allocate(
-            POLLER_EVENT_SIZE * Math.max(1, this.sockets.length),
-            ValueLayout.ADDRESS.byteAlignment());
-        this.errorOut = nativeArena.allocate(ValueLayout.JAVA_INT);
+        this.poller = Zlink.createPoller();
+        this.events = new PollEvents(Math.max(1, this.sockets.length));
         readyCount = 0;
-        int initialMask = mask(initialEvents);
         for (int i = 0; i < this.sockets.length; i++) {
             Socket socket = Objects.requireNonNull(this.sockets[i], "socket");
-            int rc = Native.pollerAdd(poller, InternalAccess.socketHandle(socket),
-                MemorySegment.ofAddress(i), initialMask);
-            if (rc != 0) {
-                close();
-                throw ZlinkException.fromLastError(ErrorCategory.CONFIG);
-            }
-            currentMasks[i] = initialMask;
+            poller.add(socket, i, initialEvents);
+            currentMasks[i] = mask(initialEvents);
         }
     }
 
@@ -70,11 +44,7 @@ public final class PerfSocketPollSet implements AutoCloseable {
         if (currentMasks[index] == newMask) {
             return;
         }
-        int rc = Native.pollerModify(poller, InternalAccess.socketHandle(sockets[index]),
-            newMask);
-        if (rc != 0) {
-            throw ZlinkException.fromLastError(ErrorCategory.CONFIG);
-        }
+        poller.modify(sockets[index], newEvents);
         currentMasks[index] = newMask;
     }
 
@@ -86,16 +56,14 @@ public final class PerfSocketPollSet implements AutoCloseable {
         if (offset < 0 || offset >= readyCount) {
             throw new IndexOutOfBoundsException("ready offset " + offset);
         }
-        return (int) nativeEvents.get(ValueLayout.ADDRESS,
-            eventOffset(offset, EVENT_USER_DATA_OFFSET)).address();
+        return (int) events.slot(offset);
     }
 
     public int readyMaskAt(int offset) {
         if (offset < 0 || offset >= readyCount) {
             throw new IndexOutOfBoundsException("ready offset " + offset);
         }
-        return nativeEvents.get(ValueLayout.JAVA_SHORT,
-            eventOffset(offset, EVENT_EVENTS_OFFSET));
+        return events.revents(offset);
     }
 
     public boolean readyHasEventAt(int offset, PollEventFlags event) {
@@ -104,34 +72,13 @@ public final class PerfSocketPollSet implements AutoCloseable {
 
     public int poll(int timeoutMs) {
         readyCount = 0;
-        try {
-            readyCount = Native.pollerWait(poller, nativeEvents, sockets.length,
-                timeoutMs, errorOut);
-        } catch (ZlinkException ex) {
-            int errno = ex.getNativeErrno();
-            if (PerfErrno.isRetryableSend(errno)) {
-                return 0;
-            }
-            throw ex;
-        }
-        if (readyCount < 0) {
-            throw ZlinkException.fromLastError(ErrorCategory.CONFIG);
-        }
+        readyCount = poller.wait(events, Duration.ofMillis(timeoutMs));
         return readyCount;
     }
 
     @Override
     public void close() {
-        try {
-            if (poller.address() != 0) {
-                int rc = Native.pollerDestroy(poller);
-                if (rc != 0) {
-                    throw ZlinkException.fromLastError(ErrorCategory.CONFIG);
-                }
-            }
-        } finally {
-            nativeArena.close();
-        }
+        poller.close();
     }
 
     private void checkIndex(int index) {
@@ -147,11 +94,11 @@ public final class PerfSocketPollSet implements AutoCloseable {
         }
         for (PollEventFlags event : events) {
             mask |= switch (event) {
-                case POLLIN -> 1;
-                case POLLOUT -> MASK_POLLOUT;
-                case POLLERR -> MASK_POLLERR;
-                case POLLPRI -> MASK_POLLPRI;
-                case POLLCOMPLETION -> MASK_POLLCOMPLETION;
+                case POLLIN -> PollEventFlags.POLLIN.mask();
+                case POLLOUT -> PollEventFlags.POLLOUT.mask();
+                case POLLERR -> PollEventFlags.POLLERR.mask();
+                case POLLPRI -> PollEventFlags.POLLPRI.mask();
+                case POLLCOMPLETION -> PollEventFlags.POLLCOMPLETION.mask();
             };
         }
         return mask;
@@ -159,16 +106,12 @@ public final class PerfSocketPollSet implements AutoCloseable {
 
     private static int maskOne(PollEventFlags event) {
         return switch (event) {
-            case POLLIN -> MASK_POLLIN;
-            case POLLOUT -> MASK_POLLOUT;
-            case POLLERR -> MASK_POLLERR;
-            case POLLPRI -> MASK_POLLPRI;
-            case POLLCOMPLETION -> MASK_POLLCOMPLETION;
+            case POLLIN -> PollEventFlags.POLLIN.mask();
+            case POLLOUT -> PollEventFlags.POLLOUT.mask();
+            case POLLERR -> PollEventFlags.POLLERR.mask();
+            case POLLPRI -> PollEventFlags.POLLPRI.mask();
+            case POLLCOMPLETION -> PollEventFlags.POLLCOMPLETION.mask();
         };
-    }
-
-    private static long eventOffset(int index, long fieldOffset) {
-        return (long) index * POLLER_EVENT_SIZE + fieldOffset;
     }
 
 }

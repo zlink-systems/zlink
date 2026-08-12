@@ -67,15 +67,24 @@ public final class RoutedRequestSupport {
     public static CompletableFuture<Void> registerDirectPending(
                                             long requestId,
                                             BiConsumer<RequestResult, List<Message>> callback) {
-        DirectReplyState state = new DirectReplyState(callback);
+        DirectReplyState state = new DirectReplyState(callback,
+            new CompletableFuture<>());
         DIRECT_PENDING.put(requestId, state);
         return state.progress;
+    }
+
+    public static void registerDirectPendingWithoutProgress(
+            long requestId,
+            BiConsumer<RequestResult, List<Message>> callback) {
+        DIRECT_PENDING.put(requestId, new DirectReplyState(callback, null));
     }
 
     public static void removeDirectPending(long requestId) {
         DirectReplyState state = DIRECT_PENDING.remove(requestId);
         if (state != null) {
-            state.progress.cancel(false);
+            if (state.progress != null) {
+                state.progress.cancel(false);
+            }
         }
     }
 
@@ -202,10 +211,12 @@ public final class RoutedRequestSupport {
 
     private static final class DirectReplyState {
         private final BiConsumer<RequestResult, List<Message>> callback;
-        private final CompletableFuture<Void> progress = new CompletableFuture<>();
+        private final CompletableFuture<Void> progress;
 
-        private DirectReplyState(BiConsumer<RequestResult, List<Message>> callback) {
+        private DirectReplyState(BiConsumer<RequestResult, List<Message>> callback,
+                                 CompletableFuture<Void> progress) {
             this.callback = callback;
+            this.progress = progress;
         }
 
         private void complete(RequestResult result, List<Message> parts) {
@@ -220,12 +231,16 @@ public final class RoutedRequestSupport {
             // pump lifetime token; it is not part of user reply delivery.
             try {
                 callback.accept(result, parts);
-                progress.complete(null);
+                if (progress != null) {
+                    progress.complete(null);
+                }
             } catch (Throwable error) {
                 if (closeOnCallbackFailure != null) {
                     Message.closeAll(closeOnCallbackFailure);
                 }
-                progress.completeExceptionally(error);
+                if (progress != null) {
+                    progress.completeExceptionally(error);
+                }
             }
         }
     }

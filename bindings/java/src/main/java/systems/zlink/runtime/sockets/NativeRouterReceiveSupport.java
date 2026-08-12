@@ -303,14 +303,19 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
             InternalAccess.messageFinishReceive(firstPart, hasMore);
             long requestSequence = requestSeqOut.get(ValueLayout.JAVA_LONG, 0);
 
-            if (!hasMore && requestSequence == 0L) {
-                // Routed echo hot path: populate caller storage in place.
+            if (!hasMore) {
+                // A caller-provided Received can retain both plain routed
+                // messages and request/reply metadata without allocating an
+                // intermediate Received object.
                 byte[] nodeRidBytes =
                     NativeRoutingIds.readBytesOut(sourceNodeRidOut);
+                RoutingId nodeRid = requestSequence == 0L
+                    ? null : RoutingId.from(nodeRidBytes);
                 firstPartConsumed = true;
                 ContractAccess.receivedPopulateRoutedSinglePart(target,
-                    nodeRidBytes, firstPart, 0L, false, null,
-                    null);
+                    nodeRidBytes, firstPart, requestSequence,
+                    requestSequence != 0L,
+                    replySender(nodeRid, requestSequence), null);
                 return true;
             }
 
