@@ -283,6 +283,26 @@ export function acquireMessageWrapper(
   return message;
 }
 
+/** @internal Refill an exclusively owned receive wrapper without pool traffic. */
+export function refillMessageWrapper(
+  message: Message,
+  buffer: Buffer,
+  nativeMessage?: unknown
+): Message {
+  const state = message as unknown as MutableMessageState;
+  if (state._nativeMessage !== undefined && state._nativeMessage !== nativeMessage) {
+    requireMessageNativeOperations().close(state._nativeMessage);
+  }
+  state._buffer = buffer;
+  state._refCount = 1;
+  state._properties = EMPTY_PROPERTIES;
+  state._metadata = EMPTY_METADATA;
+  state._nativeMessage = nativeMessage;
+  state._nativeReadOnly = false;
+  state._released = false;
+  return message;
+}
+
 function releaseMessageWrapper(message: Message): void {
   const state = message as unknown as MutableMessageState;
   if (state._released) {

@@ -26,7 +26,8 @@ import {
 } from './received_operations';
 import {
   createTopicMessage,
-  replaceTopicMessage
+  replaceTopicMessage,
+  replaceTopicMessageOwnedSinglePart
 } from './topic_message_state';
 
 export interface NativeReceivedEnvelope {
@@ -319,6 +320,13 @@ export function adoptTopicMessage(result: TopicMessage, raw: NativeTopicMessageE
   const routingId = isNativeTopicMessageSinglePart(raw)
     ? null
     : wrapNativeRoutingId(raw.routingId ?? null);
+  const data = isNativeTopicMessageSinglePart(raw)
+    ? raw[0]
+    : raw.data;
+  if (data !== undefined) {
+    replaceTopicMessageOwnedSinglePart(result, topic, data, routingId);
+    return;
+  }
   replaceTopicMessage(
     result,
     topic,

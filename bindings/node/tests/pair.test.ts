@@ -106,6 +106,45 @@ test('pair messaging uses Message and Received by default', () => {
   ctx.close();
 });
 
+test('subscriber caller-provided TopicMessage alternates its single-part wrappers', async () => {
+  const ctx = zlink.createContext();
+  const pub = zlink.createPubSocket(ctx);
+  const sub = zlink.createSubSocket(ctx);
+  const endpoint = 'inproc://topic-message-two-slot';
+  const topic = 'prices';
+  const received = new zlink.TopicMessage();
+
+  function receive(payload) {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      pub.publish(topic).message(payload).submit();
+      if (sub.subscribe(received, zlink.RecvFlags.DontWait)
+          && received.singlePartOrThrow().data().toString() === payload) {
+        return received.singlePartOrThrow();
+      }
+    }
+    throw new Error(`timed out waiting for ${payload}`);
+  }
+
+  try {
+    pub.bind(endpoint);
+    sub.connect(endpoint);
+    sub.setSubscription(topic);
+    const first = receive('first');
+    const second = receive('second');
+    const third = receive('third');
+
+    assert.equal(received.topic, topic);
+    assert.notStrictEqual(second, first);
+    assert.strictEqual(third, first);
+  } finally {
+    received.close();
+    sub.close();
+    pub.close();
+    ctx.close();
+  }
+});
+
 test('pair nonblocking recv preserves order', () => {
   const ctx = zlink.createContext();
   const sender = zlink.createPairSocket(ctx);
