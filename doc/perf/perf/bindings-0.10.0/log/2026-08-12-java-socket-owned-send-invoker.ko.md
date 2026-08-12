@@ -68,3 +68,25 @@ Core release `0.10.1`, duration `1초`, runs `1`, balanced auto-HWM,
 
 - C report: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260812_092745_java-topic-invoker-pubsub-c.txt`
 - Java report: `/home/hep7hep7/project/zlink/bindings/java/perf/results/single/report/perf_java_single_linux_20260812_092803_java-topic-invoker-pubsub.txt`
+
+## MULTI_DEALER_DEALER / tcp 결과
+
+같은 DEALER send invoker 변경이 Multi one-way 경로에 미치는 값을 별도로 측정했다. Core release
+`0.10.1`, clients `100`, duration `1초`, runs `1`, balanced auto-HWM,
+64·256·1024·4096·65536·131072B 조건에서 C를 먼저, Java를 다음에 단독 실행했다.
+
+| Message size | C throughput | Java throughput | C 대비 비율 |
+|---|---:|---:|---:|
+| 64B | 1,853,373 msg/s | 1,037,891 msg/s | 56.00% |
+| 256B | 1,304,696 msg/s | 831,764 msg/s | 63.75% |
+| 1024B | 1,098,644 msg/s | 698,718 msg/s | 63.60% |
+| 4096B | 319,784 msg/s | 192,599 msg/s | 60.23% |
+| 65536B | 96,541 msg/s | 70,509 msg/s | 73.04% |
+| 131072B | 48,446 msg/s | 38,610 msg/s | 79.70% |
+| 산술평균 | - | - | 66.05% |
+
+Multi one-way는 send invoker 외의 receive·queue 비용 비중이 크므로, 이 값은 Single 결과와
+분리해 전체 평균에 반영한다.
+
+- C report: `/home/hep7hep7/project/zlink/bindings/c/perf/results/multi/report/perf_c_multi_linux_20260812_093204_java-multi-invoker-dealer-c.txt`
+- Java report: `/home/hep7hep7/project/zlink/bindings/java/perf/results/multi/report/perf_java_multi_linux_20260812_093218_java-multi-invoker-dealer.txt`
