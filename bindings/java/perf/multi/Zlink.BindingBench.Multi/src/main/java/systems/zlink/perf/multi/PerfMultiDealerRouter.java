@@ -70,9 +70,21 @@ final class PerfMultiDealerRouter {
                             PollEventFlags.POLLOUT);
                     }
                     int readyCount = pollSet.poll(50);
-                    if (readyCount > 0
-                        && pollSet.readyHasEventAt(0, PollEventFlags.POLLOUT)) {
+                    if (readyCount <= 0) {
+                        continue;
+                    }
+                    boolean writable = pollSet.readyHasEventAt(0,
+                        PollEventFlags.POLLOUT);
+                    boolean readable = pollSet.readyHasEventAt(0,
+                        PollEventFlags.POLLIN);
+                    if (writable) {
                         flushPending(server, pendingReplies);
+                    }
+                    // Match the C relay: a DONT_WAIT drain starts only when
+                    // the poller reported this socket readable.  Calling recv
+                    // after every auxiliary STOP wake changes the hot path.
+                    if (!readable) {
+                        continue;
                     }
                     while (true) {
                         if (stopRequested.get()) {

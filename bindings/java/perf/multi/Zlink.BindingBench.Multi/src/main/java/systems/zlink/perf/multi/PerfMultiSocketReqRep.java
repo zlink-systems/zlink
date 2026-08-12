@@ -54,7 +54,15 @@ final class PerfMultiSocketReqRep {
                      List.of(server), PollEventFlags.POLLIN);
                  Received received = new Received()) {
                 while (stops < config.clients()) {
-                    poller.poll(-1);
+                    int readyCount = poller.poll(-1);
+                    if (readyCount <= 0
+                        || !poller.readyHasEventAt(0,
+                            PollEventFlags.POLLIN)) {
+                        continue;
+                    }
+                    // The reference C server drains only after POLLIN.  Do
+                    // not add an unconditional native DONT_WAIT recv after a
+                    // poll wake that belongs to another event class.
                     while (server.recv(received, RecvFlags.DONT_WAIT)) {
                         if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
                             stops++;
