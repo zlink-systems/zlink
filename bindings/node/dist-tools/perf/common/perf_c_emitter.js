@@ -345,7 +345,7 @@ function buildMultiOptionItems(opts) {
         ['transport_transition_ms', optionValue(opts.transportTransitionMs, 'PERF_MULTI_TRANSPORT_TRANSITION_MS', parseEnvInt('PERF_TRANSPORT_TRANSITION_MS', 3000))],
         ['pattern_transition_ms', optionValue(opts.patternTransitionMs, 'PERF_MULTI_PATTERN_TRANSITION_MS', parseEnvInt('PERF_PATTERN_TRANSITION_MS', 3000))],
         ['lat_timeout_ms', String(parseEnvInt('PERF_MULTI_LAT_TIMEOUT_MS', 5000))],
-        ['stream_non_tcp_clients_max', String(parseEnvPairInt('PERF_STREAM_NON_TCP_CLIENTS_MAX', 'PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX', 1000))],
+        ['stream_non_tcp_clients_max', String(parseEnvPairInt('PERF_STREAM_NON_TCP_CLIENTS_MAX', 'PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX', 10000))],
         ['disable_resource_metrics', String(Math.max(0, parseEnvInt('PERF_DISABLE_RESOURCE_METRICS', 0)))],
         ['timeout_seconds', timeoutOverride > 0 ? String(timeoutOverride) : 'auto']
     ];
