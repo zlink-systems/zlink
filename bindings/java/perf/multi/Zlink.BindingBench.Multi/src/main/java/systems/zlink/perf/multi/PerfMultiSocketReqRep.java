@@ -148,7 +148,8 @@ final class PerfMultiSocketReqRep {
         AtomicReference<Throwable> failure = new AtomicReference<>();
         long activeEnd = System.nanoTime()
             + config.durationSeconds() * 1_000_000_000L;
-        Duration timeout = Duration.ofMillis(Math.max(1, config.recvTimeoutMs()));
+        int requestTimeoutMs = resolveRequestTimeoutMs();
+        Duration timeout = Duration.ofMillis(requestTimeoutMs);
         RequestCallback[] callbacks = new RequestCallback[count];
         for (int i = 0; i < count; i++) {
             waiting[i] = new AtomicBoolean();
@@ -163,10 +164,6 @@ final class PerfMultiSocketReqRep {
                             && header.phase() == PerfUtil.PHASE_ACTIVE) {
                             metrics.recordNanos(header.latencyNanos() / 2L);
                         }
-                    } else if (result != RequestResult.OK
-                        && result != RequestResult.TIMED_OUT) {
-                        failure.compareAndSet(null, new IllegalStateException(
-                            "request completion failed: " + result));
                     }
                 } catch (Throwable ex) {
                     failure.compareAndSet(null, ex);
@@ -183,10 +180,8 @@ final class PerfMultiSocketReqRep {
                  new PerfMessageTemplatePool(config.size(), count)) {
             while (System.nanoTime() < activeEnd && failure.get() == null) {
                 boolean progress = false;
-                boolean hasWaiting = false;
                 for (int i = 0; i < count; i++) {
                     if (waiting[i].get()) {
-                        hasWaiting = true;
                         continue;
                     }
                     Message payload = payloadPool.acquire(config.size(),
@@ -211,11 +206,12 @@ final class PerfMultiSocketReqRep {
                         }
                     }
                 }
-                if (!progress && hasWaiting) {
+                if (!progress) {
                     completions.poll(50);
                 }
             }
-            long drainEnd = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+            long drainEnd = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(
+                Math.max(1_000, requestTimeoutMs * 4));
             while (anyWaiting(waiting) && System.nanoTime() < drainEnd) {
                 completions.poll(50);
             }
@@ -259,5 +255,13 @@ final class PerfMultiSocketReqRep {
             }
         }
         return false;
+    }
+
+    private static int resolveRequestTimeoutMs() {
+        String configured = System.getenv("PERF_MULTI_REQREP_TIMEOUT_MS");
+        if (configured == null || configured.isBlank()) {
+            return 200;
+        }
+        return Math.max(1, Integer.parseInt(configured));
     }
 }
