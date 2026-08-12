@@ -168,10 +168,16 @@ internal static class PerfMultiDealerDealerServer
         double drainWaitSeconds = msgSize >= 65536
             ? Math.Max(10.0, Math.Max(1, durationSeconds) * 2.0)
             : Math.Max(2.0, Math.Max(1, durationSeconds));
+        // The managed client sends one stop token per DEALER after the active
+        // window. For large frames, crossing the managed/native boundary can
+        // leave a gap longer than the C client's 50ms idle drain even though
+        // the phase is still completing. This only extends teardown; metrics
+        // remain limited to the active window above.
+        int idleWaitMs = msgSize >= 65536 ? 1_000 : 50;
         bool drainComplete = DrainPhaseUntilIdle(poller, events, server,
             received, msgSize, expectedRunId, expectedPhase, latSamples,
             ref messageCount,
-            ref stopTokenCount, controlState, drainWaitSeconds, 50);
+            ref stopTokenCount, controlState, drainWaitSeconds, idleWaitMs);
         _ = stopTokenCount;
         return drainComplete;
     }
