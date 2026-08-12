@@ -128,16 +128,16 @@ export class StreamSocket extends SocketBase {
       const bodyMaterialization = this.options.packetBodyMaterialization;
       native.socketStreamAttach(
         getNativeHandle(this),
-        (routingId: Buffer | null, packets: unknown[]) => {
+        (routingId: Buffer | null, headerRaw: Buffer, bodyRaw: unknown) => {
           const sourceRid = this.packetRoutingId(routingId);
           if (!sourceRid) {
             return 0;
           }
-          const header = messageFromNativeBuffer(packets[0] as Buffer);
+          const header = messageFromNativeBuffer(headerRaw);
           const body = bodyMaterialization ===
             StreamPacketBodyMaterialization.Managed
-            ? messageFromNativeBuffer(packets[1] as Buffer)
-            : messageFromNativeFrame(packets[1]);
+            ? messageFromNativeBuffer(bodyRaw as Buffer)
+            : messageFromNativeFrame(bodyRaw);
           handler(sourceRid, header, body);
           return 0;
         },

@@ -152,7 +152,7 @@ export interface SocketNativeBinding {
   ) => void;
   socketStreamAttach: (
     socket: NativeHandle,
-    handler: (routingId: Buffer | null, packets: unknown[]) => number,
+    handler: (routingId: Buffer | null, header: Buffer, body: unknown) => number,
     packetCount: number,
     bodyMaterialization: number
   ) => void;

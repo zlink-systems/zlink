@@ -2263,6 +2263,18 @@ native cache는 stream JS callback thread에서만 `napi_ref`를 만들고 조�
 모든 reference를 해제하며, packet I/O callback과 public routing-id contract는 유지한다. 상세 결과는
 `log/2026-08-12-node-stream-routing-id-cache.ko.md`에 기록한다.
 
+### 11.21 Node STREAM flat callback 측정 결과
+
+`MULTI_STREAM / tcp`, 64·256·1024·65536B, clients `100`, duration `1초`, runs `1`,
+balanced auto-HWM에서 C를 먼저, Node를 다음에 단독 실행했다.
+
+| 변경 | C 대비 throughput 비율 (size 순서) | 산술평균 | 결과 |
+|---|---|---:|---|
+| internal packet array 제거 | 15.60 / 16.44 / 16.65 / 69.68% | 29.59% | 이전 28.21% 대비 1.38%p 개선 |
+
+native callback은 routing-id, header, body를 각각 전달한다. 공개 packet handler, TSFN queue, body
+materialization과 ownership은 유지한다. 상세 결과는 `log/2026-08-12-node-stream-flat-callback.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.

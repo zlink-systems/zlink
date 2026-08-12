@@ -703,7 +703,7 @@ void stream_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *d
     if (!env || !js_cb || !state || !payload)
         return;
 
-    napi_value argv[2];
+    napi_value argv[3];
     const std::string routing_id_key (
       reinterpret_cast<const char *> (payload->routing_id.data), payload->routing_id.size);
     std::unordered_map<std::string, napi_ref>::iterator cached =
@@ -725,23 +725,19 @@ void stream_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *d
             return;
         state->routing_id_cache.emplace (routing_id_key, reference);
     }
-    if (napi_create_array_with_length (env, payload->packet_count, &argv[1]) != napi_ok) {
+    argv[1] = create_received_message_buffer (env, &payload->packets[0]);
+    if (!argv[1])
         return;
-    }
-    for (size_t i = 0; i < payload->packet_count; ++i) {
-        napi_value packet_value = i == 1 && payload->body_materialization == 0
-          ? move_message_to_native_frame_value (env, &payload->packets[i])
-          : create_received_message_buffer (env, &payload->packets[i]);
-        if (!packet_value) {
-            return;
-        }
-        napi_set_element (env, argv[1], static_cast<uint32_t> (i), packet_value);
-    }
+    argv[2] = payload->body_materialization == 0
+      ? move_message_to_native_frame_value (env, &payload->packets[1])
+      : create_received_message_buffer (env, &payload->packets[1]);
+    if (!argv[2])
+        return;
 
     napi_value recv;
     napi_value this_arg;
     napi_get_undefined (env, &this_arg);
-    napi_status call_status = napi_call_function (env, this_arg, js_cb, 2, argv, &recv);
+    napi_status call_status = napi_call_function (env, this_arg, js_cb, 3, argv, &recv);
     if (call_status != napi_ok) {
         state->stop_requested.store (1, std::memory_order_release);
         return;
