@@ -2414,6 +2414,24 @@ Router가 single-part Message를 받은 뒤 `data()`를 호출하지 않고 send
 interface와 Message ownership 계약은 변경하지 않았다. 상세 측정값은
 `log/2026-08-12-node-router-unread-relay.ko.md`에 기록한다.
 
+### 11.33 Node STREAM native header materialization 측정 결과
+
+`MULTI_STREAM / tcp`, 64·256·1024·65536B, clients `100`, duration `1초`, runs `1`,
+balanced auto-HWM에서 C를 먼저, Node를 다음에 단독 실행했다.
+
+| 변경 | C 대비 throughput 비율 (size 순서) | 산술평균 | 이전 평균 | 결과 |
+|---|---|---:|---:|---|
+| STREAM header와 body를 native frame으로 전달 | 46.83 / 38.06 / 45.06 / 88.90% | 54.71% | 29.86% | 채택 |
+
+STREAM packet handler는 header와 body를 읽기 전까지 native frame으로 유지한다. handler가 `data()`를
+호출할 때에만 Buffer view를 만든다. relay는 frame을 그대로 send하여 header의 managed Buffer 복사를
+제거한다. public interface는 변경하지 않았다.
+
+현재 batch 미사용 Node 표준 TCP 5-pattern 산술평균은 `DEALER_DEALER` 40.74%,
+`DEALER_ROUTER` 50.80%, `ROUTER_ROUTER` 38.01%, `PUBSUB` 31.32%, `STREAM` 54.71%로
+`43.12%`다. Node 40% 목표를 충족한다. 상세 측정값은
+`log/2026-08-12-node-stream-native-header.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.

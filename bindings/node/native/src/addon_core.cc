@@ -754,7 +754,10 @@ void stream_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *d
             return;
         state->routing_id_cache.emplace (routing_id_key, reference);
     }
-    argv[1] = create_received_message_buffer (env, &payload->packets[0]);
+    // STREAM packet handlers often relay the header together with the body.
+    // Move both frames to Message storage so a handler that only inspects
+    // their sizes does not first copy the header into a JS-owned Buffer.
+    argv[1] = move_message_to_native_frame_value (env, &payload->packets[0]);
     if (!argv[1])
         return;
     argv[2] = payload->body_materialization == 0
