@@ -306,6 +306,8 @@ public final class ContractAccess {
 
         Message[] materializeVectorShared(Object parts, long count);
 
+        Message materializeSingleVectorShared(Object parts);
+
         Message adoptOwnedMessage(Object nativeMsg);
 
         void copyFromSegment(Object source, long sourceOffset, Object destination,
@@ -810,6 +812,11 @@ public final class ContractAccess {
     public static Message[] nativeMessageMaterializeVectorShared(
         Object parts, long count) {
         return nativeMessageAccess().materializeVectorShared(parts, count);
+    }
+
+    public static Message nativeMessageMaterializeSingleVectorShared(
+        Object parts) {
+        return nativeMessageAccess().materializeSingleVectorShared(parts);
     }
 
     public static Message nativeMessageAdoptOwned(Object nativeMsg) {

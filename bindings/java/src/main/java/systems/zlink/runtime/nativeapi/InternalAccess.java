@@ -301,6 +301,12 @@ public final class InternalAccess {
             count);
     }
 
+    public static Message messageFromOwnedSingleMessageVectorShared(
+      MemorySegment partsAddr) {
+        return ContractAccess.nativeMessageMaterializeSingleVectorShared(
+            partsAddr);
+    }
+
     public static Message messageFromOwnedNative(MemorySegment nativeMsg) {
         return ContractAccess.nativeMessageAdoptOwned(nativeMsg);
     }

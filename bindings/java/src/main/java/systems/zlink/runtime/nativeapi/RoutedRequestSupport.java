@@ -19,7 +19,10 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicReferenceArray;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiConsumer;
 
@@ -36,6 +39,17 @@ public final class RoutedRequestSupport {
       new ConcurrentHashMap<>();
     private static final ConcurrentMap<Long, DirectReplyState> DIRECT_PENDING =
       new ConcurrentHashMap<>();
+    private static final int DIRECT_PENDING_FAST_CAPACITY = 4096;
+    private static final int DIRECT_PENDING_FAST_MASK =
+        DIRECT_PENDING_FAST_CAPACITY - 1;
+    private static final AtomicReferenceArray<DirectReplyState>
+      DIRECT_PENDING_FAST = new AtomicReferenceArray<>(
+          DIRECT_PENDING_FAST_CAPACITY);
+    private static final int DIRECT_REPLY_STATE_POOL_LIMIT = 1024;
+    private static final ConcurrentLinkedQueue<DirectReplyState>
+      DIRECT_REPLY_STATE_POOL = new ConcurrentLinkedQueue<>();
+    private static final AtomicInteger DIRECT_REPLY_STATE_POOL_SIZE =
+      new AtomicInteger();
 
     private RoutedRequestSupport() {
     }
@@ -67,24 +81,23 @@ public final class RoutedRequestSupport {
     public static CompletableFuture<Void> registerDirectPending(
                                             long requestId,
                                             BiConsumer<RequestResult, List<Message>> callback) {
-        DirectReplyState state = new DirectReplyState(callback,
+        DirectReplyState state = acquireDirectReplyState(callback,
             new CompletableFuture<>());
-        DIRECT_PENDING.put(requestId, state);
+        registerDirectPending(requestId, state);
         return state.progress;
     }
 
     public static void registerDirectPendingWithoutProgress(
             long requestId,
             BiConsumer<RequestResult, List<Message>> callback) {
-        DIRECT_PENDING.put(requestId, new DirectReplyState(callback, null));
+        registerDirectPending(requestId,
+            acquireDirectReplyState(callback, null));
     }
 
     public static void removeDirectPending(long requestId) {
-        DirectReplyState state = DIRECT_PENDING.remove(requestId);
+        DirectReplyState state = removeDirectPendingState(requestId);
         if (state != null) {
-            if (state.progress != null) {
-                state.progress.cancel(false);
-            }
+            state.cancel();
         }
     }
 
@@ -98,7 +111,7 @@ public final class RoutedRequestSupport {
 
     public static void completeDirectPending(long requestId,
                                              RequestResult result) {
-        DirectReplyState state = DIRECT_PENDING.remove(requestId);
+        DirectReplyState state = removeDirectPendingState(requestId);
         if (state != null) {
             state.complete(result, List.of());
         }
@@ -143,7 +156,7 @@ public final class RoutedRequestSupport {
                                             long partCount,
                                             MemorySegment userData) {
         long requestId = userData.address();
-        DirectReplyState directState = DIRECT_PENDING.remove(requestId);
+        DirectReplyState directState = removeDirectPendingState(requestId);
         if (directState != null) {
             completeDirect(directState, result, parts, partCount);
             return;
@@ -162,11 +175,16 @@ public final class RoutedRequestSupport {
                 return;
             }
 
-            List<Message> replyParts;
             try {
+                if (partCount == 1) {
+                    Message reply =
+                        InternalAccess.messageFromOwnedSingleMessageVectorShared(parts);
+                    state.completeSingle(RequestResult.OK, reply);
+                    return;
+                }
                 Message[] frames = InternalAccess.messageFromOwnedMessageVectorShared(
                     parts, partCount);
-                replyParts = frames.length == 0
+                List<Message> replyParts = frames.length == 0
                     ? List.of()
                     : Arrays.asList(frames);
                 state.complete(RequestResult.OK, replyParts, frames);
@@ -209,14 +227,80 @@ public final class RoutedRequestSupport {
         }
     }
 
+    private static DirectReplyState acquireDirectReplyState(
+            BiConsumer<RequestResult, List<Message>> callback,
+            CompletableFuture<Void> progress) {
+        DirectReplyState state = DIRECT_REPLY_STATE_POOL.poll();
+        if (state != null) {
+            DIRECT_REPLY_STATE_POOL_SIZE.decrementAndGet();
+            state.reset(callback, progress);
+            return state;
+        }
+        return new DirectReplyState(callback, progress);
+    }
+
+    private static void registerDirectPending(long requestId,
+                                              DirectReplyState state) {
+        state.requestId = requestId;
+        int slot = directPendingSlot(requestId);
+        if (DIRECT_PENDING_FAST.compareAndSet(slot, null, state)) {
+            return;
+        }
+        DIRECT_PENDING.put(requestId, state);
+    }
+
+    private static DirectReplyState removeDirectPendingState(long requestId) {
+        int slot = directPendingSlot(requestId);
+        DirectReplyState candidate = DIRECT_PENDING_FAST.get(slot);
+        if (candidate != null && candidate.requestId == requestId
+            && DIRECT_PENDING_FAST.compareAndSet(slot, candidate, null)) {
+            return candidate;
+        }
+        return DIRECT_PENDING.remove(requestId);
+    }
+
+    private static int directPendingSlot(long requestId) {
+        return (int) requestId & DIRECT_PENDING_FAST_MASK;
+    }
+
+    private static void recycleDirectReplyState(DirectReplyState state) {
+        state.clear();
+        int poolSize = DIRECT_REPLY_STATE_POOL_SIZE.incrementAndGet();
+        if (poolSize <= DIRECT_REPLY_STATE_POOL_LIMIT) {
+            DIRECT_REPLY_STATE_POOL.offer(state);
+            return;
+        }
+        DIRECT_REPLY_STATE_POOL_SIZE.decrementAndGet();
+    }
+
     private static final class DirectReplyState {
-        private final BiConsumer<RequestResult, List<Message>> callback;
-        private final CompletableFuture<Void> progress;
+        private BiConsumer<RequestResult, List<Message>> callback;
+        private CompletableFuture<Void> progress;
+        private volatile long requestId;
 
         private DirectReplyState(BiConsumer<RequestResult, List<Message>> callback,
                                  CompletableFuture<Void> progress) {
             this.callback = callback;
             this.progress = progress;
+        }
+
+        private void reset(BiConsumer<RequestResult, List<Message>> callback,
+                           CompletableFuture<Void> progress) {
+            this.callback = callback;
+            this.progress = progress;
+        }
+
+        private void clear() {
+            callback = null;
+            progress = null;
+            requestId = 0L;
+        }
+
+        private void cancel() {
+            if (progress != null) {
+                progress.cancel(false);
+            }
+            recycleDirectReplyState(this);
         }
 
         private void complete(RequestResult result, List<Message> parts) {
@@ -241,6 +325,27 @@ public final class RoutedRequestSupport {
                 if (progress != null) {
                     progress.completeExceptionally(error);
                 }
+            } finally {
+                recycleDirectReplyState(this);
+            }
+        }
+
+        private void completeSingle(RequestResult result, Message part) {
+            try {
+                callback.accept(result, List.of(part));
+                if (progress != null) {
+                    progress.complete(null);
+                }
+            } catch (Throwable error) {
+                try {
+                    part.close();
+                } catch (RuntimeException ignored) {
+                }
+                if (progress != null) {
+                    progress.completeExceptionally(error);
+                }
+            } finally {
+                recycleDirectReplyState(this);
             }
         }
     }
