@@ -1199,28 +1199,28 @@ pattern은 11.6 재측정값을 사용하고, request/reply는 이 절의 최신
 | `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 58.34% | 50% | 통과 |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 55.42% | 50% | 통과 |
 | `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 53.51% | 50% | 통과 |
-| `tcp` | `MULTI_PUBSUB` | 51.44% | 70% | 미달·개선 진행 |
+| `tcp` | `MULTI_PUBSUB` | 51.44% | 70% | 보류·contract-safe 후보 소진 |
 | `tcp` | `MULTI_STREAM` | 79.14% | 70% | 통과 |
 | `ws` | `MULTI_DEALER_DEALER` | 77.94% | 70% | 통과 |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 60.34% | 50% | 통과 |
 | `ws` | `MULTI_DEALER_ROUTER_REQREP` | 51.77% | 50% | 통과 |
 | `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 53.38% | 50% | 통과 |
 | `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 52.48% | 50% | 통과 |
-| `ws` | `MULTI_PUBSUB` | 45.40% | 70% | 미달·개선 진행 |
+| `ws` | `MULTI_PUBSUB` | 45.40% | 70% | 보류·동일 receive 경로 후보 소진 |
 | `ws` | `MULTI_STREAM` | 84.37% | 70% | 통과 |
 | `wss` | `MULTI_DEALER_DEALER` | 74.08% | 70% | 통과 |
 | `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 74.28% | 50% | 통과 |
 | `wss` | `MULTI_DEALER_ROUTER_REQREP` | 57.14% | 50% | 통과 |
 | `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 54.95% | 50% | 통과 |
 | `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 51.23% | 50% | 통과 |
-| `wss` | `MULTI_PUBSUB` | 39.61% | 70% | 미달·개선 진행 |
+| `wss` | `MULTI_PUBSUB` | 39.61% | 70% | 보류·동일 receive 경로 후보 소진 |
 | `wss` | `MULTI_STREAM` | 82.66% | 70% | 통과 |
 | `tls` | `MULTI_DEALER_DEALER` | 70.78% | 70% | 통과 |
 | `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 66.03% | 50% | 통과 |
 | `tls` | `MULTI_DEALER_ROUTER_REQREP` | 55.33% | 50% | 통과 |
 | `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 60.10% | 50% | 통과 |
 | `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 52.65% | 50% | 통과 |
-| `tls` | `MULTI_PUBSUB` | 29.38% | 70% | 미달·개선 진행 |
+| `tls` | `MULTI_PUBSUB` | 29.38% | 70% | 보류·동일 receive 경로 후보 소진 |
 | `tls` | `MULTI_STREAM` | 85.81% | 70% | 통과 |
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
