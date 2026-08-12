@@ -44,10 +44,10 @@ pattern·transport 평균의 완료 목표다.
 | .NET | 전체 | 전체 | 재측정 대기 | - | - | 진행 중 |
 | .NET | `MULTI_DEALER_DEALER` | tcp | 33.59 / 58.56 / 148.39 / 78.57 / 137.74 / 91.77% | 91.44% | 85% | 통과 |
 | .NET | `MULTI_PUBSUB` | tcp | 66.16 / 69.85 / 66.91 / 86.00 / 99.39 / 118.34% | 84.44% | 85% | 미달 |
-| Java | `MULTI_DEALER_DEALER` | tcp | 65.10 / 84.02 / 97.34 / 71.44 / 83.08 / 97.51% | 83.07% | 90% | 미달 |
+| Java | `MULTI_DEALER_DEALER` | tcp | 63.11 / 79.38 / 92.08 / 56.69 / 53.26 / 75.68% | 70.03% | 90% | 미달 |
 | Java | `MULTI_DEALER_ROUTER_REQREP` | tcp | 57.10 / 56.32 / 58.36 / 61.25 / 135.08 / 117.98% | 81.01% | 70% | 통과 |
 | Java | `MULTI_DEALER_ROUTER_SENDSEND` | tcp | 68.65 / 69.48 / 69.41 / 73.75 / 141.34 / 103.96% | 87.77% | 85% | 통과 |
-| Java | `MULTI_PUBSUB` | tcp | 44.32 / 42.37 / 48.20 / 56.58 / 73.24 / 101.58% | 61.05% | 90% | 미달 |
+| Java | `MULTI_PUBSUB` | tcp | 64.14 / 62.78 / 67.31 / 52.90 / 66.90 / 67.42% | 63.57% | 90% | 미달 |
 | Java | `MULTI_STREAM` | tcp | 79.14 / 79.22 / 78.76 / 107.14% | 86.07% | 70% | 통과 |
 | Node | `MULTI_PUBSUB` | tcp | 22.05 / 21.75 / 21.23 / 32.79 / 44.52 / 41.94% | 30.71% | 60% | 미달 |
 | Node | `MULTI_DEALER_DEALER` | tcp | 18.38 / 32.11 / 34.51 / 61.13 / 40.19 / 46.82% | 38.86% | 60% | 미달 |
@@ -56,6 +56,8 @@ pattern·transport 평균의 완료 목표다.
 Java 공개 API 경로 재측정 결과는
 `log/2026-08-13-java-public-api-policy-audit.ko.md`에 있다. Node PUB/SUB의 C parity
 결과는 `log/2026-08-12-node-pubsub-poll-parity.ko.md`에 있다.
+Java multi runner는 `log/2026-08-13-java-native-poller-parity.ko.md`부터 C와 같이
+native ready event를 직접 읽고 해당 socket을 `DONT_WAIT`로 drain한다.
 
 ## 완료 조건
 
