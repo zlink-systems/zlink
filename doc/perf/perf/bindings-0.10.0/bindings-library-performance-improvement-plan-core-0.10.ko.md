@@ -1403,9 +1403,9 @@ pattern은 11.6 재측정값을 사용하고, request/reply는 이 절의 최신
 ### 9.5 Go
 
 - perf 경로: `bindings/go/perf`
-- Single 상태: `TCP 5/5 측정`
-- Multi 상태: `TCP 5/5 측정`
-- 다음 작업: TCP routed single pattern을 C와 순차 paired 측정하고, 측정값이 목표에 미달하면 hot path 후보를 한 번 적용해 비교한다.
+- Single 상태: `TCP·WS 10/10 측정`
+- Multi 상태: `TCP·WS 10/10 측정`
+- 다음 작업: WSS와 TLS를 pattern별 C/Go 순차 paired 측정하고, 측정값이 목표에 미달하면 hot path 후보를 한 번 적용해 비교한다.
 
 #### 9.5.1 Single suite
 
@@ -1451,11 +1451,11 @@ pattern은 11.6 재측정값을 사용하고, request/reply는 이 절의 최신
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 66.03% | 65.71% | 62.63% | 63.52% | 96.13% | 101.38% | 평균 75.90%. routed one-way 중앙값 목표 57% 통과. Go runner 이름은 `MULTI_ROUTER_ROUTER`다. |
 | `tcp` | `MULTI_PUBSUB` | 237.78% | 127.23% | 79.84% | 93.02% | 109.23% | 139.39% | 평균 131.08%. simple one-way 중앙값 목표 65% 통과. |
 | `tcp` | `MULTI_STREAM` | 50.37% | 50.40% | 40.27% | 해당 없음 | 39.86% | 해당 없음 | 평균 45.22%. multi routed echo 최소 기준 40%는 통과, 중앙값 목표 53% 미달. |
-| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `ws` | `MULTI_DEALER_DEALER` | 29.05% | 54.08% | 76.18% | 70.04% | 108.10% | 91.02% | 평균 71.41%. simple one-way 중앙값 목표 65% 통과. |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 72.19% | 74.86% | 76.40% | 73.28% | 88.94% | 92.75% | 평균 79.74%. routed one-way 중앙값 목표 57% 통과. Go runner 이름은 `MULTI_DEALER_ROUTER`다. |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 62.84% | 63.94% | 65.30% | 62.04% | 83.59% | 87.26% | 평균 70.83%. routed one-way 중앙값 목표 57% 통과. Go runner 이름은 `MULTI_ROUTER_ROUTER`다. |
+| `ws` | `MULTI_PUBSUB` | 462.07% | 140.42% | 73.21% | 74.74% | 92.50% | 115.38% | 평균 159.72%. simple one-way 중앙값 목표 65% 통과. |
+| `ws` | `MULTI_STREAM` | 51.70% | 52.31% | 51.82% | 해당 없음 | 91.87% | 해당 없음 | 평균 61.93%. multi routed echo 중앙값 목표 53% 통과. clients 100을 명시해 C와 Go 조건을 정렬. |
 | `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
