@@ -1403,9 +1403,9 @@ pattern은 11.6 재측정값을 사용하고, request/reply는 이 절의 최신
 ### 9.5 Go
 
 - perf 경로: `bindings/go/perf`
-- Single 상태: `미측정`
-- Multi 상태: `미측정`
-- 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
+- Single 상태: `TCP 4/5 측정`
+- Multi 상태: `TCP 5/5 측정`
+- 다음 작업: TCP routed single pattern을 C와 순차 paired 측정하고, 측정값이 목표에 미달하면 hot path 후보를 한 번 적용해 비교한다.
 
 #### 9.5.1 Single suite
 
@@ -1413,8 +1413,8 @@ pattern은 11.6 재측정값을 사용하고, request/reply는 이 절의 최신
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
 | `tcp` | `PAIR` | 33.93% | 66.40% | 112.59% | 77.88% | 77.55% | 91.09% | 평균 76.57%. simple one-way 중앙값 목표 65% 통과. |
 | `tcp` | `PUBSUB` | 37.85% | 56.40% | 93.19% | 84.34% | 72.71% | 76.19% | 평균 70.11%. simple one-way 중앙값 목표 65% 통과. |
-| `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `DEALER_DEALER` | 46.00% | 56.33% | 86.21% | 62.34% | 62.98% | 72.24% | 평균 64.35%. simple one-way 중앙값 목표 65%에 0.65%p 미달. single-part builder 개선은 이미 적용됐고, 추가 contract-safe hot path 후보가 없어 측정값으로 기록. |
+| `tcp` | `DEALER_ROUTER` | 32.90% | 63.32% | 100.77% | 97.92% | 102.45% | 111.65% | 평균 84.84%. routed one-way 중앙값 목표 57% 통과. ROUTER activity-aware readiness로 C harness와 연결 판정을 정렬. |
 | `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
