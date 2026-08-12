@@ -1450,7 +1450,7 @@ pattern은 11.6 재측정값을 사용하고, request/reply는 이 절의 최신
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 75.46% | 77.89% | 73.39% | 82.83% | 101.39% | 99.51% | 평균 85.08%. routed one-way 중앙값 목표 57% 통과. Go runner 이름은 `MULTI_DEALER_ROUTER`다. |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 66.03% | 65.71% | 62.63% | 63.52% | 96.13% | 101.38% | 평균 75.90%. routed one-way 중앙값 목표 57% 통과. Go runner 이름은 `MULTI_ROUTER_ROUTER`다. |
 | `tcp` | `MULTI_PUBSUB` | 237.78% | 127.23% | 79.84% | 93.02% | 109.23% | 139.39% | 평균 131.08%. simple one-way 중앙값 목표 65% 통과. |
-| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `tcp` | `MULTI_STREAM` | 50.37% | 50.40% | 40.27% | 해당 없음 | 39.86% | 해당 없음 | 평균 45.22%. multi routed echo 최소 기준 40%는 통과, 중앙값 목표 53% 미달. |
 | `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
