@@ -14,6 +14,7 @@ napi_value sleep (napi_env env, napi_callback_info info);
 napi_value message_from_buffer (napi_env env, napi_callback_info info);
 napi_value message_allocate (napi_env env, napi_callback_info info);
 napi_value message_frame_data (napi_env env, napi_callback_info info);
+napi_value message_frame_copy_data (napi_env env, napi_callback_info info);
 napi_value message_frame_size (napi_env env, napi_callback_info info);
 napi_value message_frame_close (napi_env env, napi_callback_info info);
 

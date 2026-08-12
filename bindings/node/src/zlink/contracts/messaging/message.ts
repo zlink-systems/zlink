@@ -19,6 +19,7 @@ type MutableMessageState = {
   _properties: Readonly<Record<string, string>>;
   _metadata: Readonly<Map<number, Buffer>>;
   _nativeMessage?: unknown;
+  _nativeReadOnly: boolean;
   _released: boolean;
 };
 
@@ -27,6 +28,7 @@ export interface MessageNativeOperations {
   allocate(size: number): { data?: Buffer; nativeMessage: unknown };
   close(nativeMessage: unknown): void;
   data(nativeMessage: unknown): Buffer;
+  copyData(nativeMessage: unknown): Buffer;
   fromBuffer(data: Buffer): { data?: Buffer; nativeMessage: unknown };
   size(nativeMessage: unknown): number;
 }
@@ -79,6 +81,8 @@ export class Message {
   private _properties!: Readonly<Record<string, string>>;
   /** Opaque owner when this message uses native storage. */
   private _nativeMessage?: unknown;
+  /** True when a received frame remains movable until data() exposes it. */
+  private _nativeReadOnly!: boolean;
   /** True after ownership has ended and this facade has entered the pool. */
   private _released!: boolean;
 
@@ -241,7 +245,18 @@ export class Message {
     if (this._nativeMessage === undefined) {
       return EMPTY_BUFFER;
     }
-    this._buffer = requireMessageNativeOperations().data(this._nativeMessage);
+    const nativeMessage = this._nativeMessage;
+    const operations = requireMessageNativeOperations();
+    if (this._nativeReadOnly) {
+      // Router receive storage is movable until JavaScript observes it. Once
+      // exposed, materialize a managed Buffer and release the native frame.
+      this._buffer = operations.copyData(nativeMessage);
+      operations.close(nativeMessage);
+      this._nativeMessage = undefined;
+      this._nativeReadOnly = false;
+      return this._buffer;
+    }
+    this._buffer = operations.data(nativeMessage);
     return this._buffer;
   }
 }
@@ -252,7 +267,8 @@ export function acquireMessageWrapper(
   refCount = 1,
   properties?: Readonly<Record<string, string>>,
   nativeMessage?: unknown,
-  metadata?: Readonly<Map<number, Buffer>>
+  metadata?: Readonly<Map<number, Buffer>>,
+  nativeReadOnly = false
 ): Message {
   const message = messageWrapperPool.pop()
     ?? Object.create(Message.prototype) as Message;
@@ -262,6 +278,7 @@ export function acquireMessageWrapper(
   state._properties = normalizeMessageProperties(properties);
   state._metadata = metadata ?? EMPTY_METADATA;
   state._nativeMessage = nativeMessage;
+  state._nativeReadOnly = nativeReadOnly;
   state._released = false;
   return message;
 }
@@ -276,6 +293,7 @@ function releaseMessageWrapper(message: Message): void {
   state._properties = EMPTY_PROPERTIES;
   state._metadata = EMPTY_METADATA;
   state._nativeMessage = undefined;
+  state._nativeReadOnly = false;
   state._released = true;
   if (messageWrapperPool.length < MESSAGE_WRAPPER_POOL_CAPACITY) {
     messageWrapperPool.push(message);
@@ -289,6 +307,7 @@ function markMessageConsumed(message: Message): void {
   state._properties = EMPTY_PROPERTIES;
   state._metadata = EMPTY_METADATA;
   state._nativeMessage = undefined;
+  state._nativeReadOnly = false;
 }
 
 /** @internal */

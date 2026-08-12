@@ -2398,6 +2398,22 @@ successful send는 Message payload view를 detach하고 native frame ownership�
 per-message Message wrapper와 external Buffer 생성 비용이 더 커 direct Buffer를 유지한다. 상세 결과는
 `log/2026-08-12-node-message-zero-copy.ko.md`에 기록한다.
 
+### 11.32 Node Router unread relay ownership 이동 측정 결과
+
+`MULTI_DEALER_ROUTER`와 `MULTI_ROUTER_ROUTER`의 `tcp`만 C와 Node 순서로 개별 실행했다.
+clients `100`, duration `1초`, runs `1`, balanced auto-HWM을 사용했고, 64·256·1024·4096·131072B를
+비교했다.
+
+| Pattern | C 대비 throughput 비율 (size 순서) | 산술평균 | 이전 평균 | 결과 |
+|---|---|---:|---:|---|
+| `MULTI_DEALER_ROUTER` | 49.44 / 44.55 / 47.78 / 47.32 / 64.91% | 50.80% | 36.11% | 채택 |
+| `MULTI_ROUTER_ROUTER` | 36.49 / 32.15 / 32.37 / 30.70 / 58.34% | 38.01% | 36.26% | 채택 |
+
+Router가 single-part Message를 받은 뒤 `data()`를 호출하지 않고 send하면 `msg_t` ownership을 Core로
+직접 넘긴다. `data()`를 호출한 경우에는 managed Buffer를 만들어 기존 읽기 경로를 유지한다. public
+interface와 Message ownership 계약은 변경하지 않았다. 상세 측정값은
+`log/2026-08-12-node-router-unread-relay.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.

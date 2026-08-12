@@ -129,7 +129,8 @@ function materializeReceivedParts(raw: NativeReceivedRaw): Message[] {
       : undefined;
     return [messageFromNativeFrame(
       envelope.nativeMessage,
-      identity === undefined ? undefined : { 'Routing-Id': identity, Identity: identity }
+      identity === undefined ? undefined : { 'Routing-Id': identity, Identity: identity },
+      true
     )];
   }
   return materializeParts(envelope.parts ?? []);

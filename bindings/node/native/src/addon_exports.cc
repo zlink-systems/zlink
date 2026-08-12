@@ -28,6 +28,7 @@ void define_core_exports (napi_env env, napi_value exports)
       ZLINK_METHOD ("messageFromBuffer", message_from_buffer),
       ZLINK_METHOD ("messageAllocate", message_allocate),
       ZLINK_METHOD ("messageFrameData", message_frame_data),
+      ZLINK_METHOD ("messageFrameCopyData", message_frame_copy_data),
       ZLINK_METHOD ("messageFrameSize", message_frame_size),
       ZLINK_METHOD ("messageFrameClose", message_frame_close),
       ZLINK_METHOD ("ctxNew", ctx_new),

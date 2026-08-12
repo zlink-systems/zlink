@@ -60,6 +60,7 @@ configureMessageNativeOperations({
   allocate: (size) => requireNative().messageAllocate(size),
   close: (nativeMessage) => requireNative().messageFrameClose(nativeMessage),
   data: (nativeMessage) => requireNative().messageFrameData(nativeMessage),
+  copyData: (nativeMessage) => requireNative().messageFrameCopyData(nativeMessage),
   fromBuffer: (data) => requireNative().messageFromBuffer(data),
   size: (nativeMessage) => requireNative().messageFrameSize(nativeMessage),
 });

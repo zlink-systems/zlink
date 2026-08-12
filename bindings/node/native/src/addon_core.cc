@@ -509,7 +509,24 @@ napi_value create_router_recv_message_value (napi_env env,
                                              zlink_msg_t *parts,
                                              size_t part_count)
 {
-    napi_value obj = create_recv_message_value (env, routing_id, parts, part_count);
+    napi_value obj;
+    if (part_count == 1) {
+        // Router relay is a common application path. Keep its sole received
+        // frame in msg_t storage until the caller either reads data() or sends
+        // it again. A successful send can then transfer the same ownership to
+        // Core without a JS Buffer copy between the two native calls.
+        napi_create_object (env, &obj);
+        napi_value native_message = move_message_to_native_frame_value (env, &parts[0]);
+        if (!native_message)
+            return NULL;
+        napi_set_named_property (env, obj, "nativeMessage", native_message);
+        napi_value rid = create_routing_id_value (env, routing_id);
+        napi_set_named_property (env, obj, "routingId", rid);
+    } else {
+        obj = create_recv_message_value (env, routing_id, parts, part_count);
+    }
+    if (!obj)
+        return NULL;
     if (request_seq != 0) {
         napi_value request_seq_value;
         napi_create_bigint_uint64 (env, request_seq, &request_seq_value);
@@ -1636,6 +1653,22 @@ napi_value message_frame_data (napi_env env, napi_callback_info info)
     if (!frame)
         return NULL;
     return create_native_message_data_buffer (env, frame);
+}
+
+napi_value message_frame_copy_data (napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    size_t argc = 1;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    if (argc < 1) {
+        napi_throw_type_error (env, NULL, "messageFrameCopyData requires a native message frame");
+        return NULL;
+    }
+    native_message_frame_t *frame = get_native_message_frame (
+      env, argv[0], "messageFrameCopyData requires a native message frame");
+    if (!frame)
+        return NULL;
+    return create_received_message_buffer (env, &frame->message);
 }
 
 napi_value message_frame_size (napi_env env, napi_callback_info info)

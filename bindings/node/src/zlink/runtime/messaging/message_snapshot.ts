@@ -31,9 +31,10 @@ export function messageFromOwnedBuffer(data: Buffer, nativeMessage?: unknown): M
 
 export function messageFromNativeFrame(
   nativeMessage: unknown,
-  properties?: Readonly<Record<string, string>>
+  properties?: Readonly<Record<string, string>>,
+  nativeReadOnly = false
 ): Message {
-  return acquireMessageWrapper(undefined, 1, properties, nativeMessage);
+  return acquireMessageWrapper(undefined, 1, properties, nativeMessage, undefined, nativeReadOnly);
 }
 
 export function messageFromOwnedRoutedBuffer(

@@ -6,6 +6,7 @@ export interface CoreNativeBinding {
   errno: () => number;
   messageAllocate: (size: number) => { data?: Buffer; nativeMessage: unknown };
   messageFrameData: (nativeMessage: unknown) => Buffer;
+  messageFrameCopyData: (nativeMessage: unknown) => Buffer;
   messageFrameSize: (nativeMessage: unknown) => number;
   messageFrameClose: (nativeMessage: unknown) => void;
   messageFromBuffer: (data: Buffer) => { data?: Buffer; nativeMessage: unknown };
