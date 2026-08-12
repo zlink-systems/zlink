@@ -44,6 +44,7 @@ final class PerfMultiDealerDealer {
             PerfUtil.printMultiSocketAutoHwm(config, server, "server",
                 "server", SocketType.DEALER);
             PerfUtil.Metrics metrics = new PerfUtil.Metrics(config);
+            Received received = new Received();
             // C parity (perf_multi_dealer_dealer_server.cpp run_receive_window
             // ~240-301): the counted throughput window is closed by a
             // server-side measure-seconds deadline, not by the stop token. The
@@ -85,7 +86,7 @@ final class PerfMultiDealerDealer {
                     || !pollSet.readyHasEventAt(0, PollEventFlags.POLLIN)) {
                     continue;
                 }
-                drainCounted(server, config, metrics);
+                drainCounted(server, received, config, metrics);
                 // Post-drain deadline check (C lines 273-275 / 294-296):
                 // break here so the iteration that consumed the final
                 // traffic + stop token terminates instead of re-entering the
@@ -98,31 +99,31 @@ final class PerfMultiDealerDealer {
             // in-flight messages WITHOUT counting them so stale traffic does
             // not spill into the next size case (C drain_phase_until_idle,
             // count_message=false / collect_latency=false).
-            drainTailUncounted(server, config, pollSet);
+            drainTailUncounted(server, received, config, pollSet);
+            received.close();
             return metrics.finishMulti(config);
         }
     }
 
-    private static void drainCounted(DealerSocket server, PerfUtil.Config config,
+    private static void drainCounted(DealerSocket server, Received received,
+                                      PerfUtil.Config config,
                                       PerfUtil.Metrics metrics) {
         while (true) {
-            systems.zlink.contracts.messaging.Received received = PerfUtil.recvNoWait(server);
-            if (received == null) {
+            if (!PerfUtil.recvNoWait(server, received)) {
                 return;
             }
-            try (received) {
-                if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
-                    // Stop token only wakes the poll; it never ends the
-                    // counted window (matches C, which ignores stop_count).
-                    continue;
-                }
-                PerfUtil.recordActiveLatency(metrics, received.firstPart(),
-                    config.size(), false);
+            if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
+                // Stop token only wakes the poll; it never ends the
+                // counted window (matches C, which ignores stop_count).
+                continue;
             }
+            PerfUtil.recordActiveLatency(metrics, received.firstPart(),
+                config.size(), false);
         }
     }
 
     private static void drainTailUncounted(DealerSocket server,
+                                            Received received,
                                             PerfUtil.Config config,
                                             PerfSocketPollSet pollSet) {
         // Bounded idle-based tail drain (C drain_phase_until_idle: 2s max,
@@ -133,14 +134,10 @@ final class PerfMultiDealerDealer {
             && System.nanoTime() < idleDeadline) {
             boolean progressed = false;
             while (true) {
-                systems.zlink.contracts.messaging.Received received =
-                    PerfUtil.recvNoWait(server);
-                if (received == null) {
+                if (!PerfUtil.recvNoWait(server, received)) {
                     break;
                 }
-                try (received) {
-                    progressed = true;
-                }
+                progressed = true;
             }
             if (progressed) {
                 idleDeadline = System.nanoTime() + 50_000_000L;
