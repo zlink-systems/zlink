@@ -2117,6 +2117,14 @@ interface와 packet body storage 옵션은 그대로다. 측정 조건과 Sol �
 
 plain single-part receive는 routing metadata가 없을 때 managed Buffer를 내부 envelope 없이 직접 materialize한다. public Message·Received ownership, multipart와 DONTWAIT 동작은 그대로다. 상세 결과는 `log/2026-08-12-node-dealer-dealer-held-second-pass.ko.md`에 기록한다.
 
+### 11.10 Java PUBSUB owner cleanup 측정 결과
+
+| Transport / pattern | C 대비 throughput 비율 (64·256·1024·4096·65536·131072B) | 산술평균 | 결과 |
+|---|---|---:|---|
+| TCP / `MULTI_PUBSUB` | 43.42 / 42.90 / 39.57 / 39.52 / 61.03 / 82.25% | 51.45% | 기존 30.72% 대비 개선·목표 미달 |
+
+`TopicMessage` owner cleanup을 `Received`와 같은 wrapper-pool 반환 정책으로 통일했다. 상세 결과는 `log/2026-08-12-java-pubsub-owner-cleanup.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.

@@ -97,7 +97,7 @@ public final class TopicMessage implements AutoCloseable {
             if (part == keep) {
                 continue;
             }
-            part.close();
+            part.closeFromOwner();
         }
     }
 
@@ -153,10 +153,12 @@ public final class TopicMessage implements AutoCloseable {
         if (closed)
             return;
         closed = true;
-        Message.closeAll(parts);
+        for (Message part : parts) {
+            part.closeFromOwner();
+        }
         if (reusableSinglePart != null
             && (parts == null || !parts.contains(reusableSinglePart))) {
-            reusableSinglePart.close();
+            reusableSinglePart.closeFromOwner();
         }
     }
 }
