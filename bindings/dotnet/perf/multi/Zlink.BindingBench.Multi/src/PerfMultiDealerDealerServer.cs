@@ -9,6 +9,7 @@ using static PerfRunner;
 internal static class PerfMultiDealerDealerServer
 {
     private const int ServerSocketTag = 0;
+    private const int ActiveDeadlineTag = int.MaxValue;
 
     private enum ReceiveStatus
     {
@@ -106,17 +107,20 @@ internal static class PerfMultiDealerDealerServer
         ref long messageCount, int durationSeconds,
         RunnerControlState controlState)
     {
+        using var activeTimer = Zlink.CreateTimer();
         using var poller = Zlink.CreatePoller();
-        var events = new PollEvent[1];
+        var events = new PollEvent[2];
         long activeDeadlineTicks = Stopwatch.GetTimestamp()
             + (long)Math.Max(1, durationSeconds) * Stopwatch.Frequency;
         poller.Add(server, PollEventFlags.PollIn, ServerSocketTag);
+        poller.Add(activeTimer, ActiveDeadlineTag);
+        activeTimer.Start(TimeSpan.FromSeconds(Math.Max(1, durationSeconds)),
+            1);
 
         int stopTokenCount = 0;
         while (!controlState.StopRequested)
         {
-            int written = poller.Wait(events,
-                TimeSpan.FromMilliseconds(50));
+            int written = poller.Wait(events, TimeSpan.FromMilliseconds(-1));
             if (written == 0)
             {
                 if (Stopwatch.GetTimestamp() >= activeDeadlineTicks)
@@ -126,6 +130,12 @@ internal static class PerfMultiDealerDealerServer
 
             for (int i = 0; i < written; i++)
             {
+                if (events[i].Slot == (nuint)ActiveDeadlineTag)
+                {
+                    _ = activeTimer.Recv();
+                    goto active_window_complete;
+                }
+
                 if (events[i].Slot != (nuint)ServerSocketTag
                     || (events[i].Revents & PollEventFlags.PollIn) == 0)
                     continue;
@@ -140,6 +150,13 @@ internal static class PerfMultiDealerDealerServer
                 if (receiveStatus == ReceiveStatus.StopToken)
                     stopTokenCount++;
 
+                // C receives one message after readiness, then checks the
+                // active boundary before a DONT_WAIT drain. Counting a
+                // queued tail after this point would include post-window
+                // traffic in the next result.
+                if (Stopwatch.GetTimestamp() >= activeDeadlineTicks)
+                    goto active_window_complete;
+
                 DrainAvailable(server, received, msgSize, expectedRunId,
                     expectedPhase, latSamples, ref messageCount,
                     ref stopTokenCount, collectMetrics: true);
@@ -153,15 +170,8 @@ internal static class PerfMultiDealerDealerServer
         if (controlState.StopRequested)
             return true;
 
-        double drainWaitSeconds = msgSize >= 65536
-            ? Math.Max(10.0, Math.Max(1, durationSeconds) * 2.0)
-            : Math.Max(2.0, Math.Max(1, durationSeconds));
-        // The managed client sends one stop token per DEALER after the active
-        // window. For large frames, crossing the managed/native boundary can
-        // leave a gap longer than the C client's 50ms idle drain even though
-        // the phase is still completing. This only extends teardown; metrics
-        // remain limited to the active window above.
-        int idleWaitMs = msgSize >= 65536 ? 1_000 : 50;
+        const double drainWaitSeconds = 2.0;
+        const int idleWaitMs = 50;
         bool drainComplete = DrainPhaseUntilIdle(poller, events, server,
             received, msgSize, expectedRunId, expectedPhase, latSamples,
             ref messageCount,

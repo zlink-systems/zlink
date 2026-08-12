@@ -57,7 +57,7 @@ internal sealed class DealerSocket : MessageSocketBase, IDealerSocket
         {
             while (true)
             {
-                ZlinkMsg nativePart = default;
+                Unsafe.SkipInit(out ZlinkMsg nativePart);
                 var initRc = NativeMethods.zlink_msg_init(ref nativePart);
                 if (initRc != 0)
                     throw ZlinkException.CreateRecvException(

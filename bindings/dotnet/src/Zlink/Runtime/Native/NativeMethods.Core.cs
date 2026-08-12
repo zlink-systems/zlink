@@ -222,8 +222,9 @@ internal static partial class NativeMethods
         ref ZlinkMsg part, int flags, ZlinkPartFlag partFlag, uint timeoutMs,
         IntPtr handler, IntPtr userData);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int zlink_dealer_recv_part(IntPtr dealer,
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int zlink_dealer_recv_part(IntPtr dealer,
         out byte messageType, out ulong requestSeq, ref ZlinkMsg part,
         out ZlinkPartFlag hasMore, int flags);
 
