@@ -495,19 +495,19 @@ napi_value create_router_recv_message_value (napi_env env,
                                              size_t part_count)
 {
     napi_value obj = create_recv_message_value (env, routing_id, parts, part_count);
-    napi_value request_seq_value;
-    if (request_seq == 0) {
-        napi_get_null (env, &request_seq_value);
-    } else {
+    if (request_seq != 0) {
+        napi_value request_seq_value;
         napi_create_bigint_uint64 (env, request_seq, &request_seq_value);
+        napi_set_named_property (env, obj, "requestSeq", request_seq_value);
     }
-    napi_set_named_property (env, obj, "requestSeq", request_seq_value);
-    napi_value pair_id_value;
-    napi_value pair_generation_value;
-    napi_create_bigint_uint64 (env, transport_pair_id, &pair_id_value);
-    napi_create_bigint_uint64 (env, transport_pair_generation, &pair_generation_value);
-    napi_set_named_property (env, obj, "transportPairId", pair_id_value);
-    napi_set_named_property (env, obj, "transportPairGeneration", pair_generation_value);
+    if (transport_pair_id != 0 || transport_pair_generation != 0) {
+        napi_value pair_id_value;
+        napi_value pair_generation_value;
+        napi_create_bigint_uint64 (env, transport_pair_id, &pair_id_value);
+        napi_create_bigint_uint64 (env, transport_pair_generation, &pair_generation_value);
+        napi_set_named_property (env, obj, "transportPairId", pair_id_value);
+        napi_set_named_property (env, obj, "transportPairGeneration", pair_generation_value);
+    }
     return obj;
 }
 

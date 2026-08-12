@@ -2210,6 +2210,20 @@ Node의 과거 batch 기반 값은 현재 batch 미사용 구현의 전체 평�
 모든 대상에 대해 새 paired 값이 누적되기 전에는 Node 전체 평균을 확정하지 않는다. 상세 결과는
 `log/2026-08-12-java-multi-pubsub-and-aggregate.ko.md`에 기록한다.
 
+### 11.17 Node routed receive zero metadata 생략 측정 결과
+
+`MULTI_DEALER_ROUTER / tcp`, 64·256·1024·4096·65536·131072B, clients `100`, duration
+`1초`, runs `1`, balanced auto-HWM 조건에서 C를 먼저, Node를 다음에 단독 실행했다.
+
+| 변경 | C 대비 throughput 비율 (size 순서) | 산술평균 | 결과 |
+|---|---|---:|---|
+| request/reply·transport-pair가 없는 metadata 생략 | 26.49 / 26.45 / 24.99 / 27.54 / 54.31 / 56.90% | 36.11% | 이전 35.45% 대비 0.66%p 개선 |
+
+one-way routed receive에는 `requestSeq: null`, `transportPairId: 0n`,
+`transportPairGeneration: 0n`을 만들지 않는다. TypeScript materializer는 누락한 내부 field를
+같은 `null` 또는 `undefined` 상태로 처리한다. request/reply와 transport-pair 메시지는 기존처럼
+모든 metadata를 제공한다. 상세 결과는 `log/2026-08-12-node-router-omit-zero-metadata.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
