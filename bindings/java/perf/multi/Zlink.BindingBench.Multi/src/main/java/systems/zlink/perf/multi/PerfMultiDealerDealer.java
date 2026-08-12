@@ -292,26 +292,24 @@ final class PerfMultiDealerDealer {
     }
 
     private static void sendStopTokenBlocking(DealerSocket socket) {
-        try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
-                 List.of((systems.zlink.contracts.sockets.Socket) socket),
-                 PollEventFlags.POLLOUT)) {
-            pollSet.setEvents(0);
-            while (true) {
-                try (Message stop = PerfStopToken.newMessage()) {
-                    if (socket.send().message(stop).flags(SendFlags.DONT_WAIT).submit()) {
-                        return;
-                    }
-                } catch (ZlinkSubmitException ex) {
-                    if (!isTransient(ex)) {
-                        throw ex;
-                    }
-                } catch (ZlinkException ex) {
-                    if (!isTransient(ex)) {
-                        throw ex;
-                    }
+        // C send_stop_token uses ZLINK_SEND_FLAGS_NONE, not a DONT_WAIT
+        // retry loop. The socket send timeout bounds each retry under the
+        // benchmark policy. Waiting forever for POLLOUT after the server's
+        // measurement deadline can otherwise keep this process alive after
+        // the peer stopped draining its queue.
+        while (true) {
+            try (Message stop = PerfStopToken.newMessage()) {
+                if (socket.send().message(stop).flags(SendFlags.NONE).submit()) {
+                    return;
                 }
-                pollSet.setEvents(0, PollEventFlags.POLLOUT);
-                pollSet.poll(-1);
+            } catch (ZlinkSubmitException ex) {
+                if (!isTransient(ex)) {
+                    throw ex;
+                }
+            } catch (ZlinkException ex) {
+                if (!isTransient(ex)) {
+                    throw ex;
+                }
             }
         }
     }
