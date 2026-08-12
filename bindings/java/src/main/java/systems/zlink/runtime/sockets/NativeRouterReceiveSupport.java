@@ -311,9 +311,6 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
                 ContractAccess.receivedPopulateRoutedSinglePart(target,
                     nodeRidBytes, firstPart, 0L, false, null,
                     null);
-                if (nodeRidBytes != null) {
-                    socket.attachSendSender(target);
-                }
                 return true;
             }
 
@@ -504,8 +501,13 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
                                MemorySegment partOut,
                                MemorySegment hasMoreOut,
                                int flags) {
-        return Native.routerRecvPart(InternalAccess.socketHandle(socket), sourceNodeRidOut,
-            requestSeqOut, partOut, hasMoreOut, flags);
+        MemorySegment handle = InternalAccess.socketHandle(socket);
+        if (flags == RecvFlags.DONT_WAIT.value()) {
+            return Native.routerRecvPartNoWaitCritical(handle, sourceNodeRidOut,
+                requestSeqOut, partOut, hasMoreOut, flags);
+        }
+        return Native.routerRecvPart(handle, sourceNodeRidOut, requestSeqOut,
+            partOut, hasMoreOut, flags);
     }
 
     private MethodHandle callbackHandle(String name, MethodType type) {

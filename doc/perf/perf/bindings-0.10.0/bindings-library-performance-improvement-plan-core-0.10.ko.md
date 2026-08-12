@@ -2138,6 +2138,19 @@ STREAM callback은 항상 header와 body 두 메시지를 받으므로, 가변 `
 바꾸어 callback별 native heap allocation을 제거했다. public interface, ownership과 body
 materialization 선택은 유지했다. 상세 결과는 `log/2026-08-12-node-stream-fixed-payload.ko.md`에 기록한다.
 
+### 11.12 Java ROUTER critical receive 측정 결과
+
+`MULTI_DEALER_ROUTER / tcp`, 64·256·1024·4096·65536·131072B, clients `100`, duration
+`1초`, runs `1`, balanced auto-HWM 조건에서 C를 먼저, Java를 다음에 단독 실행했다.
+
+| 변경 | C 대비 throughput 비율 (size 순서) | 산술평균 | 결과 |
+|---|---|---:|---|
+| `DONT_WAIT` critical receive와 sender 연결 단일화 | 30.65 / 28.01 / 30.99 / 30.37 / 81.20 / 78.47% | 46.62% | 이전 42.45% 대비 4.17%p 개선·목표 미달 |
+
+non-blocking ROUTER receive는 critical FFM downcall을 사용하고, receive support는 결과 채우기,
+socket은 routed sender 연결을 각각 담당한다. public interface, Core ABI, error mapping과 ownership은
+유지했다. Sol review와 상세 결과는 `log/2026-08-12-java-router-critical-receive.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
