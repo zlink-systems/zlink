@@ -939,6 +939,43 @@ Routed echo client의 동일한 owning-copy 분기를 한 경로로 합치고 �
 complete다. STREAM은 자체·Sol 검토에서 추가 contract-safe 후보가 없어 측정 결과를 유지했다.
 size별 ratio와 report 경로는 measurement log에 기록했다.
 
+#### 9.1.12 Multi transport + pattern 최종 판정
+
+아래 평균은 `transport + pattern`별 throughput 산술평균이다. 같은 대상의 이전 size별
+기록보다 9.1.9와 9.1.11의 최종 재측정 값을 우선한다. 최소 기준만으로 판정하며 latency와
+size별 편차는 이 표의 판정에 사용하지 않는다.
+
+| Transport | Pattern | 평균 | 최소 기준 | 판정 |
+|-----------|---------|-----:|----------:|------|
+| `tcp` | `MULTI_DEALER_DEALER` | 99.22% | 85% | 통과 |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 100.15% | 80% | 통과 |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 97.08% | 75% | 통과 |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 119.88% | 80% | 통과 |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 96.78% | 75% | 통과 |
+| `tcp` | `MULTI_PUBSUB` | 96.21% | 85% | 통과 |
+| `tcp` | `MULTI_STREAM` | 95.63% | 80% | 통과 |
+| `ws` | `MULTI_DEALER_DEALER` | 119.04% | 85% | 통과 |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 104.21% | 80% | 통과 |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 85.06% | 75% | 통과 |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 98.65% | 80% | 통과 |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 99.77% | 75% | 통과 |
+| `ws` | `MULTI_PUBSUB` | 112.46% | 85% | 통과 |
+| `ws` | `MULTI_STREAM` | 106.16% | 80% | 통과 |
+| `wss` | `MULTI_DEALER_DEALER` | 102.38% | 85% | 통과 |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 100.15% | 80% | 통과 |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 85.02% | 75% | 통과 |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 99.31% | 80% | 통과 |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 87.24% | 75% | 통과 |
+| `wss` | `MULTI_PUBSUB` | 112.21% | 85% | 통과 |
+| `wss` | `MULTI_STREAM` | 100.24% | 80% | 통과 |
+| `tls` | `MULTI_DEALER_DEALER` | 97.59% | 85% | 통과 |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 102.43% | 80% | 통과 |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 94.77% | 75% | 통과 |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 99.06% | 80% | 통과 |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 99.91% | 75% | 통과 |
+| `tls` | `MULTI_PUBSUB` | 124.98% | 85% | 통과 |
+| `tls` | `MULTI_STREAM` | 98.23% | 80% | 통과 |
+
 ### 9.2 .NET
 
 - perf 경로: `bindings/dotnet/perf`
