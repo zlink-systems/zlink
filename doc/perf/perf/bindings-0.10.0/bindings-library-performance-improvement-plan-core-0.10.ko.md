@@ -2288,6 +2288,18 @@ caller-provided `TopicMessage`의 단일 part facade를 제자리에서 재충�
 교체 비용을 줄이는 목적이었지만, 측정 결과가 낮았다. 상세 결과는
 `log/2026-08-12-node-topic-refill-rejected.ko.md`에 기록한다.
 
+### 11.23 Node PUBSUB 최근 topic cache 후보
+
+`MULTI_PUBSUB / tcp`, 64·256·1024·4096·65536·131072B, clients `100`, duration `1초`,
+runs `1`, balanced auto-HWM에서 C를 먼저, Node를 다음에 단독 실행했다.
+
+| 변경 | C 대비 throughput 비율 (size 순서) | 산술평균 | 결과 |
+|---|---|---:|---|
+| socket별 최근 topic JS string cache | 17.77 / 19.53 / 22.51 / 24.82 / 40.03 / 43.94% | 28.10% | 채택값 30.62%보다 낮아 원복 |
+
+최근 topic cache는 native 문자열 생성을 줄이는 후보였지만 lookup과 `napi_ref` 관리 비용이 더 컸다.
+상세 결과는 `log/2026-08-12-node-pub-topic-cache-rejected.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
