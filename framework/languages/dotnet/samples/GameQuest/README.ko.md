@@ -44,7 +44,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\run_sample.ps1
 ## 성공 조건
 
 클라이언트 시나리오는 `JoinSessionReq` 이후 같은 direct stream으로 첫 사냥, 경매 개방, gameplay
-action, 진행 push, 멱등성, projection rebuild, owner spot close 뒤 재활성, 두 번째 플레이어 진행
+action, one-way `EnterAreaMsg`·`CollectItemMsg`, 진행 push, 멱등성, projection rebuild,
+owner spot close 뒤 재활성, 두 번째 플레이어 진행
 동기화를 검증한다. projection delete/rebuild, owner 메시징 없이 누락된 gameplay fact를 만드는
 보정 hook과 server assertion은 업무 API가 아닌 sample self-check용 HTTP endpoint를 사용한다.
 이 endpoint는 public GameQuest message contract에 포함되지 않으며, raw WebSocket bridge나 raw

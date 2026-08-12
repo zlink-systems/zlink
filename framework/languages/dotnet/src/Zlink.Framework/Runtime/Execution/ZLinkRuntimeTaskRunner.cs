@@ -122,6 +122,10 @@ internal sealed class ZLinkRuntimeTaskRunner
         TaskCreationOptions creationOptions,
         out Task task)
     {
+        // The outer task is created cold and started only after both gates are
+        // released, so the thread-pool enqueue never runs inside the runner or
+        // supervisor locks shared with the dispatch path.
+        Task<Task>? outer = null;
         lock (_gate)
         {
             if (!_accepting
@@ -134,12 +138,15 @@ internal sealed class ZLinkRuntimeTaskRunner
             }
 
             if (!_supervisor.TryStart(
-                    () => Task.Factory.StartNew(
-                        static state => RunDetachedCoreAsync((TaskState)state!),
-                        new TaskState(this, name, callback, _errorSink, _shutdownToken),
-                        CancellationToken.None,
-                        TaskCreationOptions.DenyChildAttach | creationOptions,
-                        TaskScheduler.Default).Unwrap(),
+                    () =>
+                    {
+                        outer = new Task<Task>(
+                            static state => RunDetachedCoreAsync((TaskState)state!),
+                            new TaskState(this, name, callback, _errorSink, _shutdownToken),
+                            CancellationToken.None,
+                            TaskCreationOptions.DenyChildAttach | creationOptions);
+                        return outer.Unwrap();
+                    },
                     out task))
                 return false;
             _active.Add(task);
@@ -149,13 +156,15 @@ internal sealed class ZLinkRuntimeTaskRunner
                 CancellationToken.None,
                 TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);
-            return true;
         }
+
+        outer!.Start(TaskScheduler.Default);
+        return true;
     }
 
     private void RemoveCompletedTask(Task completed)
     {
-        lock (_gate) _active.RemoveWhere(static candidate => candidate.IsCompleted);
+        lock (_gate) _active.Remove(completed);
         _supervisor.Remove(completed);
     }
 

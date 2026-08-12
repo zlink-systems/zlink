@@ -682,17 +682,18 @@ relocation commit and, once it passes, the previous owner no longer forwards.
 <a id="relocation-ingress-hold"></a>
 ### Relocation Ingress Hold
 
-A size-bounded queue temporarily holding messages that arrive on the previous source
-route even after the source Actor's message acceptance is sealed, so they aren't
-lost. A message arriving after `Defer()` but before the seal goes not into this hold
-but into the Actor queue behind the deferred Join barrier.
+A queue that prevents message loss after the source Actor seals message acceptance.
+It temporarily keeps messages that still arrive on the previous source route. The
+queue has no record-count or byte bound defined specifically for relocation. A message
+that arrives after `Defer()` but before the seal goes into the Actor queue behind the
+deferred Join barrier instead.
 
 | Item | Content |
 |---|---|
-| Shape | A framework-managed, bounded message hold |
+| Shape | A framework-managed message hold with no relocation-specific record-count or byte bound |
 | .NET notation | No public type |
 | Public composition | Keeps the message payload, original operation identity, `ObjectGeneration`, and the framework metadata needed for queue ordering. Internal storage format isn't disclosed. |
-| Creation/management | The source runtime holds messages arriving after the relocation seal. Regular messaging backpressure and timeout apply once capacity fills. |
+| Creation/management | The source runtime holds messages arriving after the relocation seal. It does not reuse the ordinary application lane's count and byte reservations as a relocation-specific ceiling. Separate limits set by transport, deadline, and cancellation still apply. |
 | Lifetime | On an abort before commit, restored to the source queue in original order; after a successful commit, relayed to the target queue and then removed. |
 
 <a id="reply-correlation"></a>
@@ -1163,7 +1164,7 @@ existing dispatch path.
 
 | Item | Content |
 |---|---|
-| Shape | A bounded framework queue tied to a `RelocationId`, target attempt, object kind/ID, and `ObjectGeneration` |
+| Shape | A framework queue tied to a `RelocationId`, target attempt, object kind/ID, and `ObjectGeneration`, with no relocation-specific item-count or byte bound |
 | .NET notation | No public queue type |
 | Public composition | Preserves target identity, original operation identity, deadline, payload, and reply route. For `SpotWide`, the Spot and member Actors go in the same relocation group, but each record preserves its actual target. |
 | Lifetime | Registered when the target accepts a Restore request. Work is moved to the real object queue and this queue removed after commit and any needed callbacks. Discarded without running on an abort before commit. |
@@ -2114,20 +2115,19 @@ relocation are kept. The Location Store and Relocation Store don't store or upda
 binding route.
 
 <a id="binding-route-ack"></a>
-### Session Actor Location Update Acknowledgement
+### Session Actor Location Update
 
-The `sessionActorLocationUpdateResMsg` by which a session owner stores the new
-binding route and the current Actor location snapshot after relocation, and confirms
-it has verified that late packets and pushes from a previous owner generation aren't
-applied to the current binding. The snapshot has the same ActorId/ObjectGeneration
-and target MeshName/NodeRid. This response is used to stop location-update resends —
-it isn't a signal allowing the target Actor to process messages or complete a Join.
+After Location Store CAS and target queue opening, the target runtime sends command 44
+route update to the Session owner as `[send]`. The saved location snapshot contains the
+existing ActorId/ObjectGeneration and the target MeshName/NodeRid. The Session owner
+validates exact Session identity, binding generation, and relocation identity, changes
+the route, submits held messages, and releases the seal.
 
-The response result is `Applied`, `AlreadyApplied`, `Stale`, or
-`SessionOrBindingClosed`. The first two mean the requested location was applied. The
-latter two mean a more recent location exists, or the Session/binding closed, so the
-previous location wasn't applied. The exact wire values and the conditions for
-removing a Message Follow route are defined by
+The update has no reply, and the normal flow doesn't use command 45
+`sessionRelocationRouted`. `SessionRelocationSealTimeout` defaults to 3,000 ms. Without
+an exact update in time, the Session owner closes the physical Session and cleans
+binding and held state. A late or duplicate update after timeout only records a Warning
+and is ignored. The exact order and Message Follow conditions are defined by
 [Session-Actor dispatch §5.1](20-session-actor-dispatch.en.md#51-session-actor-location-update-message).
 
 <a id="binding-generation"></a>
@@ -2179,8 +2179,9 @@ identity, from being accepted as current work after a restart.
 ### Session Sequence
 
 A value representing the order of ingress messages accepted on one STREAM session.
-In Actor handoff, the last accepted sequence is used as a barrier so the previous
-owner and the new owner don't process the same message together.
+Actor handoff doesn't use it as a cutover high-water. The Session owner holds messages
+arriving after seal, while ordered TCP relay provides pre-cutover order between source
+and target.
 
 | Item | Content |
 |---|---|
@@ -2188,7 +2189,7 @@ owner and the new owner don't process the same message together.
 | .NET notation | A `ulong` contract value not exposed directly to the application |
 | Public composition | A single ingress-order value in the range `1..long.MaxValue`. A separate axis from binding generation. |
 | Creation/management | Incremented by the session owner in the order ingress messages are accepted. |
-| Lifetime | Compared only within one STREAM session. The Actor handoff barrier fixes the last accepted sequence as the high-water mark. |
+| Lifetime | Compared only within one STREAM session. It isn't owner-transition evidence for relocation. |
 
 ## 11. Stream Connector
 

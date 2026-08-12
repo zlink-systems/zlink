@@ -5,6 +5,7 @@ import systems.zlink.samples.kotlin.bingo.server.configuration.SampleTimings
 import systems.zlink.samples.kotlin.bingo.server.play.domain.bingo.BingoRoomSettings
 import systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.spots.bingoroomspot.BingoRoomSpot
 import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomSettingsPayload
+import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomCreateReq
 
 class BingoRoomSettingsInitializer {
     fun handle(
@@ -22,7 +23,7 @@ class BingoRoomSettingsInitializer {
                 SampleTimings.DrawPeriod.toMillis(),
             )
         }
-        val settings = request.decode(BingoRoomSettingsPayload::class.java)
+        val settings = request.decode(BingoRoomCreateReq::class.java).settings
         return BingoRoomSettings(
             roomName = settings.roomName,
             mode = settings.mode,

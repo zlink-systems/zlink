@@ -1,4 +1,5 @@
 package systems.zlink.e2e.kotlin.automaticturn;
+import systems.zlink.framework.actors.ZLinkActorCreateResult;
 
 import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.actors.ZLinkActorManager;
@@ -28,9 +29,9 @@ public final class ActorAuthReqHandler
             .request(request)
             .submit()
             .thenCompose(result -> context.actors().bind(switch (result) {
-                case systems.zlink.framework.actors.ZLinkActorCreateResult.Existing existing -> existing.actor();
-                case systems.zlink.framework.actors.ZLinkActorCreateResult.Created created -> created.actor();
-                case systems.zlink.framework.actors.ZLinkActorCreateResult.Rejected rejected ->
+                case ZLinkActorCreateResult.Existing existing -> existing.actor();
+                case ZLinkActorCreateResult.Created created -> created.actor();
+                case ZLinkActorCreateResult.Rejected rejected ->
                     throw new IllegalStateException("actor creation rejected");
             }))
             .thenRun(() -> context.client()

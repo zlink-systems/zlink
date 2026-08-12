@@ -1,5 +1,4 @@
 package systems.zlink.e2e.resiliencelifecycle.client.Scenarios;
-
 import systems.zlink.e2e.resiliencelifecycle.client.Support.ResilienceScenarioContext;
 
 public final class RlA4DrainAndGreenEndpointScenario {

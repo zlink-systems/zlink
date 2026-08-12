@@ -1,4 +1,8 @@
 package systems.zlink.e2e.observabilityops.a5.server;
+import org.springframework.beans.factory.ObjectProvider;
+import java.net.URI;
+import systems.zlink.framework.channels.ZLinkRouteClient;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Path;
@@ -58,9 +62,9 @@ public final class Program {
     @Bean
     HttpServer httpServer(
         ObjectMapper json,
-        org.springframework.beans.factory.ObjectProvider<
-            systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime> runtimeProvider,
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        ObjectProvider<
+            ZLinkFrameworkRuntime> runtimeProvider,
+        ZLinkRouteClient routes,
         FlowEvidence evidence,
         Options config) {
         return new HttpServer(json, runtimeProvider, routes, evidence, config);
@@ -83,7 +87,7 @@ public final class Program {
             options.configureLocations().setPollingInterval(Duration.ofMillis(250));
             options.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
-            java.net.URI endpoint = java.net.URI.create(config.routeEndpoint());
+            URI endpoint = URI.create(config.routeEndpoint());
             var channel = options.addClientServerChannel(Contracts.CHANNEL);
             channel
                 .server()
@@ -92,8 +96,8 @@ public final class Program {
                 .listen(endpoint.getPort())
                 .addRequestHandler(
                 ProbeHandler.class,
-                Contracts.ProbeRequest.class,
-                Contracts.ProbeReply.class);
+                Contracts.ProbeReq.class,
+                Contracts.ProbeRes.class);
             channel.client().connect(config.routeEndpoint());
         };
     }

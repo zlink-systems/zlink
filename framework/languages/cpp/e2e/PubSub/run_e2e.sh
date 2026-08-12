@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CPP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/../redis-common.sh"
+zlink_cpp_e2e_acquire_run_lock "${BASH_SOURCE[0]}" "$@"
+zlink_cpp_e2e_install_cleanup_trap
 BUILD_DIR="$CPP_DIR/build"
 LOCAL_READINESS_TIMEOUT_SECONDS=3
 LOCAL_READINESS_POLL_SECONDS=0.1
@@ -25,22 +27,8 @@ print(max(1, math.ceil(timeout / poll)))
 PY
 )"
 
-read -r PUBLISHER PUBLISHER_HTTP HTTP_1 HTTP_2 HTTP_3 <<<"$(python3 - <<'PY'
-import socket
-
-sockets = []
-ports = []
-for _ in range(5):
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    sockets.append(s)
-    ports.append(s.getsockname()[1])
-print(f"tcp://127.0.0.1:{ports[0]}", end=" ")
-print(" ".join(f"http://127.0.0.1:{p}" for p in ports[1:5]))
-for s in sockets:
-    s.close()
-PY
-)"
+read -r PUBLISHER PUBLISHER_HTTP HTTP_1 HTTP_2 HTTP_3 \
+  <<<"$(zlink_cpp_e2e_allocate_endpoints tcp http http http http)"
 
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="$SCRIPT_DIR/logs/$RUN_ID"
@@ -123,7 +111,7 @@ cleanup() {
     fi
   done
   if [[ -n "$REDIS_CONTAINER" && "$REDIS_CONTAINER_OWNED" == "1" ]]; then
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   if [[ $code -ne 0 ]]; then
     echo "E2E failed. Logs: $LOG_DIR" >&2

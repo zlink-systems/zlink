@@ -8,6 +8,8 @@
 
 #include <zlink/framework/contracts/locations/stores.hpp>
 
+#include <cstdlib>
+#include <iostream>
 #include <memory>
 #include <atomic>
 #include <map>
@@ -109,56 +111,92 @@ class public_authority_store_adapter_t final :
             || target.mesh_name.empty () || target.node_id.empty ())
             return {authority_publish_status_t::failed, std::nullopt};
         const auto key = authority_key (source);
-        const auto read =
-          _store->read_authority (key).result ().value ();
-        const auto *snapshot =
-          std::get_if<authority_snapshot_t> (&read);
-        if (!snapshot
-            || snapshot->object_generation
-                 != source.object_generation
-            || snapshot->authority_owner_generation
-                 != source.authority_owner_generation)
-            return {authority_publish_status_t::conflict,
-                    decode_current (read)};
+        // The commit CAS is against the previous logical fence
+        // (ObjectGeneration + AuthorityOwnerGeneration), not against
+        // incidental store-version churn: the source owner's periodic lease
+        // renewal rewrites the same record without changing the fence. A
+        // version-only conflict therefore re-reads and retries; only a fence
+        // change is a genuine conflict.
+        constexpr int max_attempts = 4;
+        for (int attempt = 0; attempt != max_attempts; ++attempt) {
+            const auto read =
+              _store->read_authority (key).result ().value ();
+            const auto *snapshot =
+              std::get_if<authority_snapshot_t> (&read);
+            if (!snapshot
+                || snapshot->object_generation
+                     != source.object_generation
+                || snapshot->authority_owner_generation
+                     != source.authority_owner_generation) {
+                if (std::getenv ("ZLINK_CPP_AUTO_CONNECT_TRACE") != nullptr) {
+                    std::cerr << "zlink authority-publish stage=snapshot-mismatch key="
+                              << source.key
+                              << " expected-object=" << source.object_generation
+                              << " expected-owner=" << source.authority_owner_generation;
+                    if (snapshot != nullptr) {
+                        std::cerr << " snapshot-object=" << snapshot->object_generation
+                                  << " snapshot-owner=" << snapshot->authority_owner_generation;
+                    } else {
+                        std::cerr << " snapshot=absent";
+                    }
+                    std::cerr << '\n';
+                }
+                return {authority_publish_status_t::conflict,
+                        decode_current (read)};
+            }
 
-        authority_relocation_reference_t reference{
-          source,
-          source,
-          std::move (relocation_reference),
-          checksum_crc32c,
-          inventory_digest,
-          target_owner,
-          target_application_payload.empty ()
-            ? snapshot->payload
-            : std::move (target_application_payload)};
-        reference.target = target;
-        const auto exchanged =
-          _store
-            ->compare_exchange_authority (
-              key,
-              snapshot->store_version,
-              authority_put_t{
-                encode (reference),
-                authority_generation_transition_t::new_owner,
-                target_owner,
-                std::move (relocation_capacity_fence)})
-            .result ()
-            .value ();
-        if (const auto *stored =
-              std::get_if<authority_stored_t> (&exchanged)) {
-            auto current = decode (stored->snapshot);
-            if (!current
-                || !same_owner (
-                  stored->snapshot.owner, target_owner))
-                return {authority_publish_status_t::failed,
+            authority_relocation_reference_t reference{
+              source,
+              source,
+              relocation_reference,
+              checksum_crc32c,
+              inventory_digest,
+              target_owner,
+              target_application_payload.empty ()
+                ? snapshot->payload
+                : target_application_payload};
+            reference.target = target;
+            const auto exchanged =
+              _store
+                ->compare_exchange_authority (
+                  key,
+                  snapshot->store_version,
+                  authority_put_t{
+                    encode (reference),
+                    authority_generation_transition_t::new_owner,
+                    target_owner,
+                    relocation_capacity_fence})
+                .result ()
+                .value ();
+            if (const auto *stored =
+                  std::get_if<authority_stored_t> (&exchanged)) {
+                auto current = decode (stored->snapshot);
+                if (!current
+                    || !same_owner (
+                      stored->snapshot.owner, target_owner)) {
+                    if (std::getenv ("ZLINK_CPP_AUTO_CONNECT_TRACE") != nullptr) {
+                        std::cerr << "zlink authority-publish stage=stored-owner-mismatch key="
+                                  << source.key << " decoded=" << (current ? 1 : 0)
+                                  << '\n';
+                    }
+                    return {authority_publish_status_t::failed,
+                            std::move (current)};
+                }
+                return {authority_publish_status_t::published,
                         std::move (current)};
-            return {authority_publish_status_t::published,
-                    std::move (current)};
+            }
+            const auto *conflict =
+              std::get_if<authority_conflict_t> (&exchanged);
+            if (conflict == nullptr)
+                return {authority_publish_status_t::failed, std::nullopt};
+            if (std::getenv ("ZLINK_CPP_AUTO_CONNECT_TRACE") != nullptr) {
+                std::cerr << "zlink authority-publish stage=cas-conflict key="
+                          << source.key << " attempt=" << attempt << '\n';
+            }
+            if (attempt + 1 == max_attempts)
+                return {authority_publish_status_t::conflict,
+                        decode_current (conflict->current)};
         }
-        if (const auto *conflict =
-              std::get_if<authority_conflict_t> (&exchanged))
-            return {authority_publish_status_t::conflict,
-                    decode_current (conflict->current)};
         return {authority_publish_status_t::failed, std::nullopt};
     }
 

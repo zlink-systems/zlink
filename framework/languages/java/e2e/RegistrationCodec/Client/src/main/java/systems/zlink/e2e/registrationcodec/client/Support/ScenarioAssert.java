@@ -51,7 +51,7 @@ public final class ScenarioAssert {
         while (System.nanoTime() < deadline) {
             List<String> entries = evidence.snapshot().entries().stream()
                 .filter(entry -> "Filter".equals(entry.marker()))
-                .filter(entry -> "EchoManual".equals(entry.packetName()))
+                .filter(entry -> "EchoManualReq".equals(entry.packetName()))
                 .map(Contracts.EvidenceEntry::value)
                 .toList();
             List<String> expected = List.of(

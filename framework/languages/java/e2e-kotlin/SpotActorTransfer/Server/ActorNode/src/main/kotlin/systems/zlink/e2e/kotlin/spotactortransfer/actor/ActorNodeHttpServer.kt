@@ -1,5 +1,12 @@
 package systems.zlink.e2e.kotlin.spotactortransfer.actor
 
+
+import java.util.concurrent.CompletionException
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.ExecutorService
+import systems.zlink.contracts.errors.ZlinkRequestException
+import systems.zlink.contracts.errors.ZlinkSubmitException
+import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
@@ -28,10 +35,10 @@ class ActorNodeHttpServer(
     private val actors: ZLinkActorManager,
     private val actorClient: ZLinkActorClient,
     private val requiredPeerCount: Int,
-    private val lifecycle: systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle,
+    private val lifecycle: ZLinkFrameworkLifecycle,
 ) : SmartLifecycle {
     private var server: HttpServer? = null
-    private var executor: java.util.concurrent.ExecutorService? = null
+    private var executor: ExecutorService? = null
     private var running = false
 
     override fun start() {
@@ -188,8 +195,8 @@ class ActorNodeHttpServer(
 
     private fun errorKind(error: Throwable): String {
         var current = error
-        while ((current is java.util.concurrent.CompletionException
-                || current is java.util.concurrent.ExecutionException)
+        while ((current is CompletionException
+                || current is ExecutionException)
             && current.cause != null) {
             current = current.cause!!
         }
@@ -235,10 +242,10 @@ class ActorNodeHttpServer(
     private fun rootMessage(error: Throwable): String {
         val current = generateSequence(error) { it.cause }.last()
         return when (current) {
-            is systems.zlink.contracts.errors.ZlinkRequestException ->
+            is ZlinkRequestException ->
                 "${current.javaClass.name}: result=${current.getResult()}, " +
                     "errno=${current.getNativeErrno()}"
-            is systems.zlink.contracts.errors.ZlinkSubmitException ->
+            is ZlinkSubmitException ->
                 "${current.javaClass.name}: result=${current.getResult()}, " +
                     "errno=${current.getNativeErrno()}"
             else -> current.toString()

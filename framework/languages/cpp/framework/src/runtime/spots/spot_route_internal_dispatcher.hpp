@@ -8,6 +8,8 @@
 namespace zlink::framework::detail
 {
 
+struct spot_actor_commit_route_request_t;
+
 class spot_route_internal_dispatcher_t final : public route_internal_packet_dispatcher_t
 {
   public:
@@ -24,6 +26,11 @@ class spot_route_internal_dispatcher_t final : public route_internal_packet_disp
     dispatch_request (const route_received_packet_t &received,
                       const runtime::messaging::envelope_header_t &header,
                       service_provider_t &services) const override;
+    bool dispatch_request_async (
+      const route_received_packet_t &received,
+      const runtime::messaging::envelope_header_t &header,
+      service_provider_t &services,
+      std::function<void (result_t<zlink::message_t>)> completion) const;
 
   private:
     result_t<void> bind_actor_session_route (
@@ -37,6 +44,12 @@ class spot_route_internal_dispatcher_t final : public route_internal_packet_disp
       const actor_ref_t &actor_ref,
       const runtime::messaging::envelope_header_t &header,
       const route_received_packet_t &received) const;
+    void dispatch_actor_commit_request (
+      spot_actor_commit_route_request_t request,
+      const route_received_packet_t &received,
+      const runtime::messaging::envelope_header_t &header,
+      service_provider_t &services,
+      std::function<void (result_t<zlink::message_t>)> completion) const;
 
     spot_node_runtime_t _runtime;
     actor_gateway_runtime_t _actor_gateway;

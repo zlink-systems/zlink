@@ -10,7 +10,7 @@ interface PeerDto {
   readonly draining: boolean;
 }
 
-interface RelocationResult {
+interface RelocationRes {
   readonly outcome: number;
   readonly reason: number;
 }
@@ -18,7 +18,7 @@ interface RelocationResult {
 export async function runSfC2(options: ClientOptions): Promise<void> {
   ensure(options.providerBUrl !== undefined, 'SF-C2 requires the api-b HTTP endpoint.');
   const drainStartedAt = Date.now();
-  const drain = postJsonWithin<RelocationResult>(options.providerBUrl, '/drain', {}, 35_000);
+  const drain = postJsonWithin<RelocationRes>(options.providerBUrl, '/drain', {}, 35_000);
 
   await waitForDrainingPeer(options.consumerUrl, 'api-b');
   await waitForProviderReply(options.consumerUrl, 'api-a', 'sf-c2-draining', 20);

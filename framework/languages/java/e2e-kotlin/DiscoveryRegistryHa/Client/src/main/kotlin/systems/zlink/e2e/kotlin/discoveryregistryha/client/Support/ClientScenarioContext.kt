@@ -1,5 +1,9 @@
-package systems.zlink.e2e.kotlin.discoveryregistryha.client.Support
+package Support
 
+
+import systems.zlink.e2e.kotlin.discoveryregistryha.client.Support
+import java.io.IOException
+import java.util.Locale
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import java.net.URI
@@ -355,7 +359,7 @@ class ClientScenarioContext(
         val root = json.readTree(get("${requireConsumerEndpoint()}/location/object?kind=spot&id=$encoded"))
         return ObjectLookup(
             root.path("found").asBoolean(false),
-            root.path("state").asText("").lowercase(java.util.Locale.ROOT),
+            root.path("state").asText("").lowercase(Locale.ROOT),
         )
     }
 
@@ -408,7 +412,7 @@ class ClientScenarioContext(
                     "SF-C5A returned an object with the wrong stable type",
                 )
                 ScenarioAssert.that(!observed.containsKey(globalId), "SF-C5A returned a duplicate object $globalId")
-                observed[globalId] = item.path("state").asText("").lowercase(java.util.Locale.ROOT)
+                observed[globalId] = item.path("state").asText("").lowercase(Locale.ROOT)
             }
             continuation = root.path("continuationToken").asText("").ifBlank { null }
             pages++
@@ -585,7 +589,7 @@ class ClientScenarioContext(
             )
             ScenarioAssert.that(response.statusCode() in 200..299, "GET $url returned ${response.statusCode()}")
             response.body()
-        } catch (error: java.io.IOException) {
+        } catch (error: IOException) {
             throw IllegalStateException("GET failed: $url", error)
         } catch (error: InterruptedException) {
             Thread.currentThread().interrupt()
@@ -604,7 +608,7 @@ class ClientScenarioContext(
             )
             ScenarioAssert.that(response.statusCode() in 200..299, "POST $url returned ${response.statusCode()}: ${response.body()}")
             response.body()
-        } catch (error: java.io.IOException) {
+        } catch (error: IOException) {
             throw IllegalStateException("POST failed: $url", error)
         } catch (error: InterruptedException) {
             Thread.currentThread().interrupt()

@@ -14,8 +14,8 @@ title: "4. Operation Completion Confirmation — Only One Finalizes"
 > [the Framework Error Model](../spec/32-framework-error-model.en.md),
 > and the ban on resending after acceptance by
 > [Transport Liveness](../spec/29-transport-liveness.en.md). This
-> chapter covers the **structure** that satisfies that contract, and
-> the mismatches actually observed across the four implementations.
+> chapter covers the **structure** that satisfies that contract and
+> the failures that become visible during completion races.
 
 For one call waiting on a response, a response, a timeout, a
 cancellation, a shutdown, and a disconnect can all arrive **at the same
@@ -38,130 +38,86 @@ flowchart LR
     S --> W["only the path that claimed it<br/>finalizes the caller"]
 ```
 
-### The Approach The Implementations Converged On
+<a id="the-approach-the-implementations-converged-on"></a>
+### Completion Authority Confirmation
 
-The four implementations are different languages but arrived at the
-same approach — **using the operation of removing an entry from the
-in-progress call table itself as the contention point.** The path that
-succeeds at removing it holds the completion authority. This is
-simpler than keeping a separate marker value and flipping it, and
-cleanup finishes at the same moment as removal.
+**Decision — atomically taking an entry from the in-progress call table is the
+completion contention point.** The response, timeout, cancellation, and shutdown paths
+all try to take the same entry. Only the successful path gains completion authority; the
+others observe that the call is already complete and stop.
 
-This convergence isn't accidental. Removing from the table is needed
-anyway, and once that's already atomic, there's no reason to build a
-separate contention point.
+This operation confirms completion authority and removes the in-progress call together.
+It therefore needs neither a separate completion marker nor a second slot reservation.
+Every completion path uses the same approach so that adding a path cannot introduce a
+different contention rule.
 
-One implementation has **three** completion-confirmation approaches
-coexisting — removing inside a lock, flipping a separate marker value,
-and slot reservation. Even if all three are correct, you have to check
-which path uses which approach, and when adding a new path, there's no
-way to know which one to follow. Keep it to one approach.
-
-## 2. Don't Call The Handler From Where Completion Was Confirmed
+<a id="2-dont-call-the-handler-from-where-completion-was-confirmed"></a>
+## 2. Completion Callback Execution Turn
 
 If an application callback runs inside the lock held while confirming
 completion, the callback calling back into the runtime requires the
 same lock, causing a deadlock. Timer cancellation and payload cleanup
 are also done outside it.
 
-The order is — **confirm completion authority → release the lock → run
-the callback.**
+Releasing the lock and immediately invoking the callback on the same
+call stack is still insufficient. It lets application code re-enter the
+runtime before the current transport response or timeout handling has
+returned. The callback is placed on a process-shared completion dispatcher
+and runs on a new execution turn after the current handling returns.
 
-## 3. Create The Call Identifier First, Register It, Then Send
+The order is — **confirm completion authority → release the lock → enqueue
+the callback on the dispatcher → run the callback on a new execution turn.**
 
-### The Problem
+If the terminal winner takes the in-progress table entry and dispatcher admission then
+fails, the application completion is lost. The runtime therefore reserves a completion
+dispatcher slot when it accepts the operation. That reservation remains until the callback
+returns. The combined number of in-progress operations and callbacks waiting or running on
+the dispatcher cannot exceed 4,096, so the callback queue cannot grow without a bound.
 
-One implementation's mesh node surface returns the call identifier as
-**submit's output.**
+If no slot can be reserved, the operation is rejected with `CapacityExceeded` before the
+request is sent. Once an operation is accepted, completion enqueue has no reject or drop
+path. The dispatcher uses a process-shared lane instead of creating a thread per callback,
+and shutdown drains every accepted callback. An exception from one callback does not stop
+later callbacks from running.
 
-```text
-Send SubmitResult(..., out call identifier, ...)
-```
+## 3. Separate Operation Identity From The Reply Route
 
-Since submit returns the identifier, **wait registration can't happen
-before submit.** In the gap between sending and receiving the
-identifier back to register it, if the target is within the same
-process, the response may get processed first. If an unregistered
-response is treated as "a response to an unknown call" and dropped,
-that call hangs until timeout.
+A service-wire request preserves two different values. Both are Framework-internal values
+and are not exposed to the application.
 
-This problem isn't Core's making. Core explicitly states it doesn't
-provide request-response correlation
-([Core Runtime Boundary 「2」](https://zlink-systems.github.io/zlink/spec/core/09-runtime-boundary/)),
-and the call identifier and completion table are entirely owned by
-Framework. So this order is something Framework can decide.
+| Value | Form | Responsibility |
+|---|---|---|
+| `OperationId` | `{ high: u64, low: u64 }` | Terminal-deduplication identity for one operation. It stays unchanged through relocation and reply relay |
+| `ReplyRouteId` | non-zero `u64` | Connects a terminal reply to a pending entry within the source lifecycle. It does not replace operation identity |
 
-### The Decision
+An operation that expects a terminal result cannot have an `OperationId` with both words
+zero. Registries and durable completion records preserve both words. Using only the `low`
+word as a key can make two different operations appear to be the same entry. A
+`ReplyRouteId` is also unique among requests pending in one source-owner lifecycle, but it
+does not by itself decide terminal deduplication after relocation.
 
-**The sending side creates the value to match the response first, and
-submits only after finishing wait registration.**
-
-The value referred to here is the **response correlation value.** It's
-different from the identifier pointing at the operation itself, and
-what's registered in the completion table is the former. Treating the
-two as one breaks the rule that a new correlation value is created at
-every hop
-([Request Correlation 「2. The Role Of The Two Identifiers」](../spec/27-flow-correlation.en.md#2-the-role-of-the-two-identifiers)).
+The sending runtime first creates `OperationId` and, when a reply route is required,
+`ReplyRouteId`. It then registers a pending completion entry keyed by the full `OperationId`,
+reserves a dispatcher slot, and fixes the reply route addressed by `ReplyRouteId`. Only then
+does it submit to transport. The wire request preserves the two values in separate fields;
+neither value is used as an alias for the other.
 
 ```mermaid
-flowchart LR
-    A["① create the response correlation value"] --> B["② register it in the completion table"]
-    B --> C["③ submit to transport"]
-    C --> D["④ response arrives"]
-    D --> E["registration already exists,<br/>so 'arrives first' can't happen"]
+sequenceDiagram
+    participant S as Source runtime
+    participant P as Completion and reply-route registry
+    participant T as Transport
+    S->>S: create OperationId and ReplyRouteId
+    S->>P: register full OperationId, reply route, and dispatcher slot
+    S->>T: submit the registered request
+    T-->>P: terminal reply arrives
+    P->>P: atomically take the exact entry
+    P-->>S: deliver completion in a new execution turn
 ```
 
-With this order, no matter how fast the response is, **it can't arrive
-before registration.** A response is only produced after the request
-goes out, and the request only goes out after registration.
-
-The substance of this decision is changing the mesh node surface so
-the response correlation value is received as submit's **input**
-rather than its output. The operation identifier doesn't appear on
-this surface.
-
-### What Disappears Together
-
-Once "arrives first" becomes impossible, the following three become
-unnecessary altogether.
-
-| What disappears | Cost it currently incurs |
-|---|---|
-| A slot to hold an early-arrived response | One more map lookup per completion |
-| Contention handling between that slot and the wait table | Code that cross-checks both sides |
-| The slot's bound and overflow handling | Bound management and its overflow path |
-
-Completion is a hot path. Removing one map lookup here is a rare kind
-of improvement — it simplifies the structure and speeds it up at the
-same time.
-
-### The Rule Until Then
-
-Until the surface is changed, the holding slot is needed. During that
-period, keep the following.
-
-- The holding slot **has a bound.**
-- Exceeding the bound **ends in an observable failure.** Since the
-  holding slot is a **bounded resource** owned by the source runtime,
-  the error kind is `CapacityExceeded`
-  ([Framework Error Model 「5. `Request` Completion And Failure」](../spec/32-framework-error-model.en.md#5-request-completion-and-failure)).
-  One implementation silently drops the response here, so the waiting
-  caller only finds out via timeout.
-- Since there are two places — the holding slot and the wait table —
-  **the path that observes both is responsible for delivery.** Without
-  this rule, a response disappears between the two slots — the side
-  putting it in reasons "it's not in the table, so let's hold it,"
-  while the side registering reasons "it's not in the holding slot, so
-  let's wait," and both hold true at once.
-
-**Don't confuse this with the pending-during-a-move slot.** There, a
-request ends in `Unavailable` when the bound is exceeded
-([Host Relocate And Shutdown 「9. Moving Pending Messages, Timers, And Sessions」](../spec/28-graceful-drain-handoff.en.md#9-moving-pending-messages-timers-and-sessions)).
-The kind differs because the owner differs — the response-holding slot
-is held as its own resource by **the runtime that started the call**,
-while the pending-during-a-move slot is the affair of **the peer
-currently moving.** The caller needs these two distinguished to judge
-a retry target.
+With this order, even an immediate in-process response cannot be processed before
+registration. No separate early-response map, or race-handling that cross-checks such a map
+with the pending table, is needed.
 
 ## 4. Don't Resend After Acceptance
 
@@ -191,22 +147,20 @@ remote queue received it or the handler executed it can't be known
 from this result
 ([Framework API 「12. Spot, Actor, And STREAM Owner」](../spec/06-framework-api.en.md#12-spot-actor-and-stream-owner)).
 
-The four implementations already agree on this definition. But the
-wording tends to diverge — "local acceptance" and "transport
-acceptance" read as if they're different, but in this product the send
-path is exactly the socket's send queue, so they're the same event.
-Don't mix the two phrasings across docs and code comments.
+"Local acceptance" and "transport acceptance" are not separate events.
+In this product the send path is the socket's send queue, so both terms
+refer to the same completion boundary. Documentation and code comments
+use the single term send acceptance.
 
 ## 6. Don't Classify Failure By String
 
 The completion path must distinguish cancellation, timeout, and
 shutdown. This distinction decides the result the caller receives.
 
-One implementation judges cancellation by **running a regex against
-the error message string.** Two things break — if the language or
-library changes the message wording, the classification silently
-changes, and conversely, a business error whose message happens to
-contain "cancel" gets misclassified as a cancellation and swallowed.
+Judging cancellation by **running a regex against the error message
+string** makes classification change silently when the language or
+library changes the wording. Conversely, a business error whose message
+contains "cancel" is misclassified as cancellation and swallowed.
 
 **Decision — classify failure by type or a dedicated value.** The
 message string is for humans to read, not a branch condition.
@@ -216,12 +170,18 @@ message string is for humans to read, not a branch condition.
 - Even if a response, timeout, cancellation, and shutdown occur at the
   same time, the caller completes exactly once.
 - A late-arriving response doesn't finalize the caller again.
-- The application callback doesn't run inside the lock held while
-  confirming completion.
-- The call identifier is submit's input, and registration happens
-  before submit.
-- While the holding slot is kept, a response arriving when it's full
-  doesn't silently disappear, and the caller observes a result.
+- The completion callback runs on a new execution turn outside both the
+  confirmation lock and the current transport call stack.
+- A dispatcher slot is reserved before operation acceptance, and an
+  accepted completion enqueue is neither rejected nor dropped. The
+  combined number of in-progress operations and waiting/running
+  callbacks doesn't exceed 4,096.
+- The dispatcher is a process-shared lane that doesn't create a thread
+  per callback, and shutdown drains every accepted callback.
+- The completion table keys by both `u64` words of the wire `OperationId`, while
+  `ReplyRouteId` remains a separate reply-route identity.
+- The full operation identity, reply route, and dispatcher slot are registered before the
+  request is submitted.
 - Even if the connection drops after transport accepted, the runtime
   doesn't resend to a different target.
 - There's one completion-confirmation approach within the runtime.

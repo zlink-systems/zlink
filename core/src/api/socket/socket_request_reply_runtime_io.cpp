@@ -576,6 +576,12 @@ int send_completion_frames (zlink::socket_base_t *socket_,
         return -1;
     }
 
+    //  Both accessors hand back a pinned pipe: this reply path runs on an
+    //  application thread while a second mailbox executor can be running the
+    //  completion lane's pipe_terminated, which clears the transport-pair
+    //  slot and then deallocates the pipe. Without the pin the write () below
+    //  would lock a freed pipe_t::_out_sync. The pin is dropped on every exit
+    //  from here on, so the loop breaks instead of returning.
     zlink::pipe_t *completion =
       application_pipe_
         ? socket_->completion_pipe_for_application (application_pipe_)
@@ -587,6 +593,7 @@ int send_completion_frames (zlink::socket_base_t *socket_,
         errno = EAGAIN;
         return -1;
     }
+    int rc = 0;
     for (size_t i = 0; i < part_count_; ++i) {
         zlink::msg_t *msg = reinterpret_cast<zlink::msg_t *> (&parts_[i]);
         if (i + 1 < part_count_)
@@ -604,13 +611,20 @@ int send_completion_frames (zlink::socket_base_t *socket_,
             zlink::request_reply::consume_send_frames_from (
               parts_, i, part_count_);
             errno = saved_errno;
-            return -1;
+            rc = -1;
+            break;
         }
         const int init_rc = zlink_msg_init (&parts_[i]);
         errno_assert (init_rc == 0);
     }
-    errno = 0;
-    return 0;
+    if (rc == 0)
+        errno = 0;
+    //  Dropping the pin can run the pipe destructor, so preserve the errno
+    //  this function reports across it.
+    const int reported_errno = errno;
+    completion->release_lifetime_ref ();
+    errno = reported_errno;
+    return rc;
 }
 
 int send_completion_frames_for_transport_pair (

@@ -40,8 +40,8 @@ object Contracts {
     )
 
     data class ChannelProbeMsg(val id: String)
-    data class FanoutProbe(val id: String)
-    data class StreamProbe(val id: String)
+    data class FanoutProbeEvent(val id: String)
+    data class StreamProbeMsg(val id: String)
     data class SpotWorkflowReq(val id: String, val timerName: String = "$id-timer")
     data class SpotWorkflowRes(val id: String, val sequence: List<String>)
     data class SpotCreateReq(val spotId: String)
@@ -190,9 +190,9 @@ class ChannelProbeSendHandler(
 @ZLinkHandlerGroup(Contracts.FANOUT_HANDLER_GROUP)
 class FanoutProbeHandler(
     private val evidence: EvidenceState,
-) : ZLinkSuspendingPublishHandler<Contracts.FanoutProbe> {
+) : ZLinkSuspendingPublishHandler<Contracts.FanoutProbeEvent> {
     override suspend fun handle(
-        message: Contracts.FanoutProbe,
+        message: Contracts.FanoutProbeEvent,
         context: ZLinkPublishMessageContext,
     ) {
         evidence.add("fanout", "channel=${context.channelName()}|id=${message.id}")

@@ -99,7 +99,7 @@ class multi_node_route_ping_proxy_handler_t
         if (!reply) {
             throw zlink::framework::framework_exception_t (
               reply.error_kind (),
-              reply.error () ? reply.error ()->what () : "MultiNodeRoutePing failed");
+              reply.error () ? reply.error ()->what () : "MultiNodeRoutePingReq failed");
         }
 
         zlink::framework::http_response_t response;

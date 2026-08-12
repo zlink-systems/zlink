@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Service;
+
 namespace Zlink.Framework.Runtime.Actors;
 
 internal sealed record ZLinkSessionBindingEntry(
@@ -15,7 +17,11 @@ internal sealed record ZLinkSessionBindingEntry(
     string? CompletedRelocationHandoffId = null,
     int ActiveFrames = 0,
     TaskCompletionSource? DrainSignal = null,
-    TaskCompletionSource? RouteAvailableSignal = null)
+    TaskCompletionSource? RouteAvailableSignal = null,
+    ZLinkServiceWireCodec.SessionRelocationSealRecord?
+        CanonicalRelocationSeal = null,
+    ZLinkServiceWireCodec.SessionRelocationSealedRecord?
+        CanonicalRelocationSealResult = null)
 {
     internal ulong ObjectGeneration => Route.Ref.ObjectGeneration;
     internal ulong AuthorityOwnerGeneration => Route.AuthorityOwnerGeneration;
@@ -170,6 +176,81 @@ internal readonly record struct ZLinkSessionBindingKey(
             bindingToken);
 }
 
+internal readonly record struct ZLinkSessionOutboundTenure(
+    string ActorId,
+    ulong ObjectGeneration,
+    string MeshName,
+    RoutingId TargetNodeRid,
+    ulong TargetNodeGeneration,
+    ulong AuthorityOwnerGeneration,
+    ulong OwnerLeaseGeneration,
+    string BindingToken,
+    ulong BindingGeneration,
+    ulong SessionOwnerNodeGeneration,
+    RoutingId SessionRid);
+
+internal readonly record struct ZLinkSessionOutboundTenureProof(
+    ZLinkSessionOutboundTenure Tenure,
+    string OwnerId);
+
+internal enum ZLinkSessionOutboundAdmissionKind
+{
+    Immediate,
+    Retained,
+    ProofRequired,
+    NoBinding,
+    WrongSession,
+    Backpressured
+}
+
+internal enum ZLinkSessionOutboundDelivery
+{
+    Delivered,
+    Backpressured,
+    Discarded
+}
+
+internal readonly record struct ZLinkSessionOutboundAdmission(
+    ZLinkSessionOutboundAdmissionKind Kind,
+    ZLinkSessionOutboundCapability? Capability = null);
+
+internal sealed class ZLinkSessionOutboundCapability(
+    ZLinkSessionContext context,
+    byte[] frame)
+{
+    private readonly TaskCompletionSource<ZLinkSessionOutboundDelivery>
+        _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int _settled;
+
+    internal Task<ZLinkSessionOutboundDelivery> Completion => _completion.Task;
+
+    internal ZLinkSessionOutboundDelivery Settle(bool deliver)
+    {
+        if (Interlocked.Exchange(ref _settled, 1) != 0)
+            return _completion.Task.IsCompletedSuccessfully
+                ? _completion.Task.Result
+                : ZLinkSessionOutboundDelivery.Discarded;
+
+        var result = ZLinkSessionOutboundDelivery.Discarded;
+        if (deliver)
+        {
+            try
+            {
+                using var message = Message.From(frame);
+                result = context.Write(message)
+                    ? ZLinkSessionOutboundDelivery.Delivered
+                    : ZLinkSessionOutboundDelivery.Backpressured;
+            }
+            catch
+            {
+                result = ZLinkSessionOutboundDelivery.Backpressured;
+            }
+        }
+        _completion.TrySetResult(result);
+        return result;
+    }
+}
+
 internal readonly record struct ZLinkSessionBindingTombstone(
     RoutingId SessionRid,
     ulong BindingGeneration,
@@ -179,17 +260,31 @@ internal readonly record struct ZLinkSessionBindingTombstone(
 
 internal sealed class ZLinkSessionActorBindingTable
 {
+    private const int DefaultMaxCanonicalRouteApplications = 65_536;
+    private const int DefaultMaxRetainedOutbound = 4_096;
     private readonly Dictionary<ZLinkSessionBindingKey, ZLinkSessionBindingEntry> _entries = new();
     private readonly Dictionary<ZLinkSessionBindingKey, ZLinkSessionBindingTombstone>
         _tombstones = new();
+    private readonly Dictionary<CanonicalRelocationKey, CanonicalRouteApplication>
+        _canonicalRouteApplications = new();
+    private readonly HashSet<CanonicalRelocationKey>
+        _outstandingCanonicalRouteApplications = [];
+    private readonly Queue<CanonicalRelocationKey> _canonicalRouteApplicationOrder = new();
+    private readonly Dictionary<ZLinkSessionBindingKey, SessionBindingOutboundState>
+        _outbound = new();
     private readonly TimeSpan _tombstoneRetention;
     private readonly TimeProvider _timeProvider;
     private readonly int _maxTombstones;
+    private readonly int _maxCanonicalRouteApplications;
+    private readonly int _maxRetainedOutbound;
 
     public ZLinkSessionActorBindingTable(
         TimeSpan tombstoneRetention,
         TimeProvider? timeProvider = null,
-        int maxTombstones = 4_096)
+        int maxTombstones = 4_096,
+        int maxCanonicalRouteApplications =
+            DefaultMaxCanonicalRouteApplications,
+        int maxRetainedOutbound = DefaultMaxRetainedOutbound)
     {
         _tombstoneRetention = tombstoneRetention > TimeSpan.Zero
             ? tombstoneRetention
@@ -198,6 +293,238 @@ internal sealed class ZLinkSessionActorBindingTable
         _maxTombstones = maxTombstones > 0
             ? maxTombstones
             : 4_096;
+        _maxCanonicalRouteApplications = maxCanonicalRouteApplications > 0
+            ? maxCanonicalRouteApplications
+            : DefaultMaxCanonicalRouteApplications;
+        _maxRetainedOutbound = maxRetainedOutbound > 0
+            ? maxRetainedOutbound
+            : DefaultMaxRetainedOutbound;
+    }
+
+    internal ZLinkSessionOutboundAdmission AdmitOutbound(
+        ZLinkSessionOutboundTenure tenure,
+        ZLinkSessionOutboundTenureProof? firstProof,
+        byte[] frame)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        lock (_entries)
+        {
+            var key = ZLinkSessionBindingKey.FromBoundary(
+                tenure.ActorId,
+                tenure.BindingToken);
+            if (!_entries.TryGetValue(key, out var entry))
+                return new ZLinkSessionOutboundAdmission(
+                    _entries.Keys.Any(candidate =>
+                        candidate.ActorId.Value == tenure.ActorId)
+                        ? ZLinkSessionOutboundAdmissionKind.WrongSession
+                        : ZLinkSessionOutboundAdmissionKind.NoBinding);
+            if (!MatchesPhysicalSession(entry, tenure))
+                return new ZLinkSessionOutboundAdmission(
+                    ZLinkSessionOutboundAdmissionKind.WrongSession);
+
+            var capability = new ZLinkSessionOutboundCapability(
+                entry.Context,
+                frame);
+            if (MatchesOutboundTenure(entry.Route, tenure)
+                || MatchesLegacyProvisionalTenure(entry, tenure))
+                return new ZLinkSessionOutboundAdmission(
+                    ZLinkSessionOutboundAdmissionKind.Immediate,
+                    capability);
+
+            if (tenure.AuthorityOwnerGeneration
+                    <= entry.AuthorityOwnerGeneration
+                || tenure.TargetNodeRid.IsEmpty
+                || tenure.TargetNodeGeneration == 0
+                || tenure.OwnerLeaseGeneration == 0
+                || string.IsNullOrWhiteSpace(tenure.MeshName))
+                return new ZLinkSessionOutboundAdmission(
+                    ZLinkSessionOutboundAdmissionKind.WrongSession);
+
+            if (!_outbound.TryGetValue(key, out var outbound))
+            {
+                if (firstProof is not { } candidate
+                    || candidate.Tenure != tenure
+                    || string.IsNullOrWhiteSpace(candidate.OwnerId))
+                    return new ZLinkSessionOutboundAdmission(
+                        ZLinkSessionOutboundAdmissionKind.ProofRequired);
+                outbound = new SessionBindingOutboundState();
+                outbound.PendingTenureProof = candidate;
+                _outbound.Add(key, outbound);
+            }
+            else if (outbound.PendingTenureProof is not { } acceptedProof)
+            {
+                if (firstProof is not { } candidate
+                    || candidate.Tenure != tenure
+                    || string.IsNullOrWhiteSpace(candidate.OwnerId))
+                    return new ZLinkSessionOutboundAdmission(
+                        ZLinkSessionOutboundAdmissionKind.ProofRequired);
+                outbound.PendingTenureProof = candidate;
+            }
+            else if (acceptedProof.Tenure != tenure)
+            {
+                return new ZLinkSessionOutboundAdmission(
+                    ZLinkSessionOutboundAdmissionKind.WrongSession);
+            }
+
+            if (outbound.Retained.Count >= _maxRetainedOutbound)
+                return new ZLinkSessionOutboundAdmission(
+                    ZLinkSessionOutboundAdmissionKind.Backpressured);
+            outbound.Retained.Enqueue(capability);
+            return new ZLinkSessionOutboundAdmission(
+                ZLinkSessionOutboundAdmissionKind.Retained,
+                capability);
+        }
+    }
+
+    internal bool TryGetMemoizedOutboundProof(
+        ZLinkSessionOutboundTenure tenure,
+        out ZLinkSessionOutboundTenureProof proof)
+    {
+        lock (_entries)
+        {
+            var key = ZLinkSessionBindingKey.FromBoundary(
+                tenure.ActorId,
+                tenure.BindingToken);
+            if (_entries.TryGetValue(key, out var entry)
+                && MatchesPhysicalSession(entry, tenure)
+                && _outbound.TryGetValue(key, out var outbound)
+                && outbound.PendingTenureProof is { } accepted
+                && accepted.Tenure == tenure)
+            {
+                proof = accepted;
+                return true;
+            }
+            proof = default;
+            return false;
+        }
+    }
+
+    internal bool TryGetMemoizedOutboundProof(
+        ZLinkServiceWireCodec.SessionRelocationRouteRecord route,
+        ZLinkSessionRelocationAuthenticatedRoute authenticatedCandidate,
+        out ZLinkSessionRelocationAuthenticatedRoute authenticatedRoute)
+    {
+        lock (_entries)
+        {
+            if (route.Route.Action
+                    != ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit
+                || !TryFindCanonicalBinding(
+                    route.Actor,
+                    route.Session,
+                    out var key,
+                    out var entry)
+                || !_outbound.TryGetValue(key, out var outbound)
+                || outbound.PendingTenureProof is not { } proof)
+            {
+                authenticatedRoute = default;
+                return false;
+            }
+
+            var tenure = proof.Tenure;
+            var exact = MatchesPhysicalSession(entry, tenure)
+                        && string.Equals(
+                            tenure.BindingToken,
+                            key.BindingToken,
+                            StringComparison.Ordinal)
+                        && tenure.ActorId == route.Actor.ActorId
+                        && tenure.ObjectGeneration
+                        == route.Actor.ObjectGeneration
+                        && tenure.BindingGeneration
+                        == route.Session.BindingGeneration
+                        && tenure.SessionOwnerNodeGeneration
+                        == route.Session.SessionOwnerNodeGeneration
+                        && tenure.SessionRid == route.Session.SessionRid
+                        && tenure.TargetNodeRid
+                        == route.Route.TargetNodeRid
+                        && tenure.TargetNodeRid
+                        == authenticatedCandidate.NodeRid
+                        && tenure.TargetNodeGeneration
+                        == route.Route.TargetNodeGeneration
+                        && tenure.TargetNodeGeneration
+                        == authenticatedCandidate.NodeGeneration
+                        && tenure.AuthorityOwnerGeneration
+                        == route.Route.TargetAuthorityOwnerGeneration
+                        && tenure.AuthorityOwnerGeneration
+                        == authenticatedCandidate.AuthorityOwnerGeneration
+                        && tenure.OwnerLeaseGeneration > 0
+                        && string.Equals(
+                            tenure.MeshName,
+                            authenticatedCandidate.MeshName,
+                            StringComparison.Ordinal)
+                        && !string.IsNullOrWhiteSpace(proof.OwnerId);
+            if (!exact)
+            {
+                authenticatedRoute = default;
+                return false;
+            }
+
+            authenticatedRoute = authenticatedCandidate with
+            {
+                OwnerLeaseGeneration = tenure.OwnerLeaseGeneration
+            };
+            return true;
+        }
+    }
+
+    private static bool MatchesPhysicalSession(
+        ZLinkSessionBindingEntry entry,
+        ZLinkSessionOutboundTenure tenure) =>
+        entry.ObjectGeneration == tenure.ObjectGeneration
+        && entry.BindingGeneration == tenure.BindingGeneration
+        && entry.SessionOwnerNodeGeneration
+        == tenure.SessionOwnerNodeGeneration
+        && entry.Context.RoutingId is { } sessionRid
+        && sessionRid == tenure.SessionRid;
+
+    private static bool MatchesOutboundTenure(
+        ZLinkSessionBindingRoute route,
+        ZLinkSessionOutboundTenure tenure) =>
+        route.MatchesFence(
+            tenure.ActorId,
+            tenure.ObjectGeneration,
+            tenure.AuthorityOwnerGeneration,
+            ZLinkMeshName.FromBoundary(
+                tenure.MeshName,
+                nameof(tenure.MeshName)),
+            tenure.TargetNodeGeneration,
+            tenure.OwnerLeaseGeneration)
+        && route.Ref.NodeRid == tenure.TargetNodeRid;
+
+    private static bool MatchesLegacyProvisionalTenure(
+        ZLinkSessionBindingEntry entry,
+        ZLinkSessionOutboundTenure tenure) =>
+        entry.RelocationHandoffId is not null
+        && entry.ObjectGeneration == tenure.ObjectGeneration
+        && (entry.AuthorityOwnerGeneration
+                != tenure.AuthorityOwnerGeneration
+            || entry.TargetNodeGeneration != tenure.TargetNodeGeneration
+            || entry.OwnerLeaseGeneration != tenure.OwnerLeaseGeneration);
+
+    private List<ZLinkSessionOutboundCapability> RemoveOutbound(
+        ZLinkSessionBindingKey key)
+    {
+        if (!_outbound.Remove(key, out var outbound))
+            return [];
+        var retained = new List<ZLinkSessionOutboundCapability>(
+            outbound.Retained.Count);
+        while (outbound.Retained.TryDequeue(out var capability))
+            retained.Add(capability);
+        return retained;
+    }
+
+    private static void SettleOutbound(
+        IEnumerable<ZLinkSessionOutboundCapability> retained,
+        bool deliver)
+    {
+        foreach (var capability in retained)
+            capability.Settle(deliver);
+    }
+
+    private sealed class SessionBindingOutboundState
+    {
+        internal ZLinkSessionOutboundTenureProof? PendingTenureProof
+            { get; set; }
+        internal Queue<ZLinkSessionOutboundCapability> Retained { get; } = new();
     }
 
     public ZLinkSessionBindingEntry[] Bind(
@@ -240,8 +567,11 @@ internal sealed class ZLinkSessionActorBindingTable
                 .ToArray();
             foreach (var entry in replaced)
             {
-                _entries.Remove(
-                    new ZLinkSessionBindingKey(actorId, entry.BindingToken));
+                var replacedKey = new ZLinkSessionBindingKey(
+                    actorId,
+                    entry.BindingToken);
+                _entries.Remove(replacedKey);
+                SettleOutbound(RemoveOutbound(replacedKey), deliver: false);
                 entry.DrainSignal?.TrySetResult();
                 entry.RouteAvailableSignal?.TrySetResult();
             }
@@ -318,6 +648,7 @@ internal sealed class ZLinkSessionActorBindingTable
             if (_entries.TryGetValue(key, out var entry))
             {
                 _entries.Remove(key);
+                SettleOutbound(RemoveOutbound(key), deliver: false);
                 entry.DrainSignal?.TrySetResult();
                 entry.RouteAvailableSignal?.TrySetResult();
             }
@@ -363,7 +694,8 @@ internal sealed class ZLinkSessionActorBindingTable
                 acceptedHighWater = 0;
                 return false;
             }
-            if (entry.RelocationHandoffId is not null)
+            if (entry.RelocationHandoffId is not null
+                || entry.CanonicalRelocationSeal is not null)
             {
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"session_frame_refused reason=route_sealed actor={actorId} "
@@ -393,7 +725,8 @@ internal sealed class ZLinkSessionActorBindingTable
             var key = ZLinkSessionBindingKey.FromBoundary(actorId, bindingToken);
             if (!_entries.TryGetValue(key, out var entry))
                 return ValueTask.FromResult(false);
-            if (entry.RelocationHandoffId is null)
+            if (entry.RelocationHandoffId is null
+                && entry.CanonicalRelocationSeal is null)
                 return ValueTask.FromResult(true);
 
             var signal = entry.RouteAvailableSignal
@@ -430,6 +763,470 @@ internal sealed class ZLinkSessionActorBindingTable
                 entry.DrainSignal?.TrySetResult();
         }
     }
+
+    internal async ValueTask<
+        ZLinkServiceWireCodec.SessionRelocationSealedRecord>
+        SealCanonicalRouteAsync(
+            ZLinkServiceWireCodec.SessionRelocationSealRecord request,
+            CancellationToken cancellationToken)
+    {
+        var relocationKey = CanonicalRelocationKey.From(request);
+        Task? drain;
+        ulong acceptedHighWater;
+        lock (_entries)
+        {
+            if (_canonicalRouteApplications.TryGetValue(
+                    relocationKey,
+                    out var application))
+            {
+                if (application.Seal != request)
+                    throw new InvalidDataException(
+                        "A command 42 retry changed fields after the route terminal.");
+                return application.Sealed;
+            }
+            if (!TryFindCanonicalBinding(
+                    request.Actor.Actor,
+                    request.Session,
+                    out var key,
+                    out var entry)
+                || !MatchesCanonicalActorRoute(entry, request.Actor))
+                throw new InvalidDataException(
+                    "Command 42 does not match the current session binding.");
+            if (entry.RelocationHandoffId is not null)
+                throw new InvalidDataException(
+                    "Command 42 conflicts with a legacy session route seal.");
+            if (entry.CanonicalRelocationSeal is { } installed
+                && installed != request)
+                throw new InvalidDataException(
+                    "A command 42 retry changed fields for the active seal.");
+            if (entry.CanonicalRelocationSealResult is { } installedResult)
+                return installedResult;
+
+            if (!_outstandingCanonicalRouteApplications.Contains(
+                    relocationKey))
+            {
+                EnsureCanonicalRouteApplicationCapacity();
+                _outstandingCanonicalRouteApplications.Add(relocationKey);
+            }
+
+            var signal = entry.ActiveFrames == 0
+                ? null
+                : entry.DrainSignal
+                  ?? new TaskCompletionSource(
+                      TaskCreationOptions.RunContinuationsAsynchronously);
+            _entries[key] = entry with
+            {
+                CanonicalRelocationSeal = request,
+                DrainSignal = signal
+            };
+            acceptedHighWater = entry.AcceptedHighWater;
+            drain = signal?.Task;
+        }
+
+        if (drain is not null)
+            await drain.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        lock (_entries)
+        {
+            if (!TryFindCanonicalBinding(
+                    request.Actor.Actor,
+                    request.Session,
+                    out var key,
+                    out var current)
+                || current.CanonicalRelocationSeal != request
+                || current.ActiveFrames != 0
+                || current.AcceptedHighWater != acceptedHighWater)
+                throw new InvalidDataException(
+                    "The command 42 binding changed while accepted frames drained.");
+            if (current.CanonicalRelocationSealResult is { } installedResult)
+                return installedResult;
+            var result = new ZLinkServiceWireCodec.SessionRelocationSealedRecord(
+                request.RelocationId,
+                request.Coordinator,
+                request.Actor,
+                request.Session,
+                acceptedHighWater);
+            _entries[key] = current with
+            {
+                CanonicalRelocationSealResult = result
+            };
+            return result;
+        }
+    }
+
+    internal ZLinkServiceWireCodec.SessionRelocationRoutedRecord
+        RouteCanonical(
+            ZLinkServiceWireCodec.SessionRelocationRouteRecord request,
+            ZLinkSessionRelocationAuthenticatedRoute authenticatedRoute)
+    {
+        var relocationKey = CanonicalRelocationKey.From(request);
+        TaskCompletionSource? routeAvailableSignal = null;
+        List<ZLinkSessionOutboundCapability> retained = [];
+        var deliverRetained = false;
+        ZLinkServiceWireCodec.SessionRelocationRoutedRecord response;
+        lock (_entries)
+        {
+            if (_canonicalRouteApplications.TryGetValue(
+                    relocationKey,
+                    out var application))
+            {
+                if (application.Route != request
+                    || application.AuthenticatedRoute != authenticatedRoute)
+                    throw new InvalidDataException(
+                        "A command 44 retry changed fields after the route terminal.");
+                return application.Routed with
+                {
+                    Result = ZLinkServiceWireCodec
+                        .SessionRelocationRouteResult.AlreadyApplied
+                };
+            }
+            if (!TryFindCanonicalBinding(
+                    request.Actor,
+                    request.Session,
+                    out var key,
+                    out var entry))
+                return CreateClosedCanonicalRouteResult(request);
+
+            if (entry.CanonicalRelocationSeal is not { } seal)
+                return CreateCanonicalRouteResult(
+                    request,
+                    ZLinkServiceWireCodec.SessionRelocationRouteResult.Stale,
+                    entry.AuthorityOwnerGeneration,
+                    entry.AcceptedHighWater);
+            if (seal.RelocationId != request.RelocationId
+                || seal.Coordinator != request.Coordinator
+                || seal.Actor.Actor != request.Actor
+                || seal.Session != request.Session)
+                throw new InvalidDataException(
+                    "Command 44 does not identify the active command 42 seal.");
+            if (entry.CanonicalRelocationSealResult is not { } sealedResult
+                || sealedResult.LastAcceptedSessionSequence
+                != entry.AcceptedHighWater)
+                throw new InvalidDataException(
+                    "Command 44 arrived before the exact command 43 terminal.");
+
+            if (request.Route.Action
+                == ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit)
+            {
+                if (request.Route.PreviousAuthorityOwnerGeneration
+                    != seal.Actor.AuthorityOwnerGeneration
+                    || request.Route.ReplayedHighWater
+                    != sealedResult.LastAcceptedSessionSequence
+                    || authenticatedRoute.NodeRid
+                    != request.Route.TargetNodeRid
+                    || authenticatedRoute.NodeGeneration
+                    != request.Route.TargetNodeGeneration
+                    || authenticatedRoute.AuthorityOwnerGeneration
+                    != request.Route.TargetAuthorityOwnerGeneration
+                    || authenticatedRoute.OwnerLeaseGeneration == 0
+                    || string.IsNullOrWhiteSpace(
+                        authenticatedRoute.MeshName))
+                    return CreateCanonicalRouteResult(
+                        request,
+                        ZLinkServiceWireCodec.SessionRelocationRouteResult.Stale,
+                        entry.AuthorityOwnerGeneration,
+                        entry.AcceptedHighWater);
+
+                var targetActor = new ActorRef(
+                    request.Actor.ActorId,
+                    request.Actor.ObjectGeneration,
+                    authenticatedRoute.MeshName,
+                    request.Route.TargetNodeRid);
+                if (!ZLinkSessionBindingRoute.TryCreate(
+                        targetActor,
+                        authenticatedRoute.MeshName,
+                        request.Route.TargetNodeGeneration,
+                        request.Route.TargetAuthorityOwnerGeneration,
+                        authenticatedRoute.OwnerLeaseGeneration,
+                        out var targetRoute))
+                    throw new InvalidDataException(
+                        "Command 44 target route is invalid.");
+                RequireCanonicalRouteApplicationReservation(relocationKey);
+                response = CreateCanonicalRouteResult(
+                    request,
+                    ZLinkServiceWireCodec.SessionRelocationRouteResult.Applied,
+                    targetRoute.AuthorityOwnerGeneration,
+                    entry.AcceptedHighWater);
+                _entries[key] = entry with
+                {
+                    Route = targetRoute,
+                    CanonicalRelocationSeal = null,
+                    CanonicalRelocationSealResult = null,
+                    DrainSignal = null,
+                    RouteAvailableSignal = null
+                };
+                if (_outbound.TryGetValue(key, out var outbound))
+                {
+                    var targetTenure = new ZLinkSessionOutboundTenure(
+                        request.Actor.ActorId,
+                        request.Actor.ObjectGeneration,
+                        authenticatedRoute.MeshName,
+                        request.Route.TargetNodeRid,
+                        request.Route.TargetNodeGeneration,
+                        request.Route.TargetAuthorityOwnerGeneration,
+                        authenticatedRoute.OwnerLeaseGeneration,
+                        entry.BindingToken,
+                        entry.BindingGeneration,
+                        entry.SessionOwnerNodeGeneration,
+                        entry.ActorRef.SessionRid);
+                    deliverRetained = outbound.PendingTenureProof is { } proof
+                                      && proof.Tenure == targetTenure;
+                    retained = RemoveOutbound(key);
+                }
+            }
+            else
+            {
+                if (request.Route.CurrentAuthorityOwnerGeneration
+                    != entry.AuthorityOwnerGeneration
+                    || authenticatedRoute.NodeRid
+                    != seal.Coordinator.NodeRid
+                    || authenticatedRoute.NodeGeneration
+                    != seal.Coordinator.NodeGeneration
+                    || authenticatedRoute.AuthorityOwnerGeneration
+                    != seal.Actor.AuthorityOwnerGeneration
+                    || authenticatedRoute.OwnerLeaseGeneration
+                    != seal.Actor.OwnerLeaseGeneration
+                    || !string.Equals(
+                        authenticatedRoute.MeshName,
+                        entry.MeshName,
+                        StringComparison.Ordinal))
+                    return CreateCanonicalRouteResult(
+                        request,
+                        ZLinkServiceWireCodec.SessionRelocationRouteResult.Stale,
+                        entry.AuthorityOwnerGeneration,
+                        entry.AcceptedHighWater);
+                RequireCanonicalRouteApplicationReservation(relocationKey);
+                response = CreateCanonicalRouteResult(
+                    request,
+                    ZLinkServiceWireCodec.SessionRelocationRouteResult.Applied,
+                    entry.AuthorityOwnerGeneration,
+                    sealedResult.LastAcceptedSessionSequence);
+                _entries[key] = entry with
+                {
+                    CanonicalRelocationSeal = null,
+                    CanonicalRelocationSealResult = null,
+                    DrainSignal = null,
+                    RouteAvailableSignal = null
+                };
+                retained = RemoveOutbound(key);
+            }
+            AddCanonicalRouteApplication(
+                relocationKey,
+                new CanonicalRouteApplication(
+                    seal,
+                    sealedResult,
+                    request,
+                    authenticatedRoute,
+                    response,
+                    IsSafeTerminal: true));
+            _outstandingCanonicalRouteApplications.Remove(relocationKey);
+            routeAvailableSignal = entry.RouteAvailableSignal;
+        }
+        routeAvailableSignal?.TrySetResult();
+        SettleOutbound(retained, deliverRetained);
+        return response;
+    }
+
+    internal bool TryGetCanonicalRouteApplication(
+        ZLinkServiceWireCodec.SessionRelocationRouteRecord request,
+        ZLinkSessionRelocationAuthenticatedRoute authenticatedCandidate,
+        out ZLinkServiceWireCodec.SessionRelocationRoutedRecord response)
+    {
+        var relocationKey = CanonicalRelocationKey.From(request);
+        lock (_entries)
+        {
+            if (!_canonicalRouteApplications.TryGetValue(
+                    relocationKey,
+                    out var application))
+            {
+                response = default;
+                return false;
+            }
+            if (application.Route != request)
+                throw new InvalidDataException(
+                    "A command 44 retry changed fields after the route application.");
+            var accepted = application.AuthenticatedRoute;
+            var candidateMatches = accepted.NodeRid
+                                   == authenticatedCandidate.NodeRid
+                                   && accepted.NodeGeneration
+                                   == authenticatedCandidate.NodeGeneration
+                                   && string.Equals(
+                                       accepted.MeshName,
+                                       authenticatedCandidate.MeshName,
+                                       StringComparison.Ordinal)
+                                   && accepted.AuthorityOwnerGeneration
+                                   == authenticatedCandidate.AuthorityOwnerGeneration
+                                   && (authenticatedCandidate.OwnerLeaseGeneration == 0
+                                       || accepted.OwnerLeaseGeneration
+                                       == authenticatedCandidate.OwnerLeaseGeneration);
+            if (!candidateMatches)
+                throw new InvalidDataException(
+                    "A command 44 retry changed its authenticated route fingerprint.");
+            response = application.Routed with
+            {
+                Result = ZLinkServiceWireCodec
+                    .SessionRelocationRouteResult.AlreadyApplied
+            };
+            return true;
+        }
+    }
+
+    private void EnsureCanonicalRouteApplicationCapacity()
+    {
+        if (_canonicalRouteApplications.Count
+            + _outstandingCanonicalRouteApplications.Count
+            < _maxCanonicalRouteApplications)
+            return;
+
+        var candidates = _canonicalRouteApplicationOrder.Count;
+        while (candidates-- > 0
+               && _canonicalRouteApplicationOrder.TryDequeue(out var oldest))
+        {
+            if (!_canonicalRouteApplications.TryGetValue(
+                    oldest,
+                    out var candidate))
+                continue;
+            if (!candidate.IsSafeTerminal)
+            {
+                _canonicalRouteApplicationOrder.Enqueue(oldest);
+                continue;
+            }
+            _canonicalRouteApplications.Remove(oldest);
+            if (_canonicalRouteApplications.Count
+                + _outstandingCanonicalRouteApplications.Count
+                < _maxCanonicalRouteApplications)
+                return;
+        }
+
+        throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.Rejected,
+            "Session route application journal capacity is exhausted.",
+            ZLinkRetryAdvice.RetryAfterBackoff);
+    }
+
+    private void RequireCanonicalRouteApplicationReservation(
+        CanonicalRelocationKey key)
+    {
+        if (!_outstandingCanonicalRouteApplications.Contains(key))
+            throw new InvalidDataException(
+                "Command 44 has no outstanding command 42 application reservation.");
+    }
+
+    private void AddCanonicalRouteApplication(
+        CanonicalRelocationKey key,
+        CanonicalRouteApplication application)
+    {
+        if (!_canonicalRouteApplications.TryAdd(key, application))
+            throw new InvalidDataException(
+                "The command 44 application identity was reused concurrently.");
+        _canonicalRouteApplicationOrder.Enqueue(key);
+    }
+
+    private readonly record struct CanonicalRelocationKey(
+        ZLinkServiceWireCodec.RelocationWireId RelocationId,
+        ZLinkServiceWireCodec.RelocationCoordinatorFence Coordinator,
+        ZLinkServiceWireCodec.SessionActorIdentityRecord Actor,
+        ZLinkServiceWireCodec.SessionOwnerFenceRecord Session)
+    {
+        internal static CanonicalRelocationKey From(
+            ZLinkServiceWireCodec.SessionRelocationSealRecord seal) =>
+            new(
+                seal.RelocationId,
+                seal.Coordinator,
+                seal.Actor.Actor,
+                seal.Session);
+
+        internal static CanonicalRelocationKey From(
+            ZLinkServiceWireCodec.SessionRelocationRouteRecord route) =>
+            new(
+                route.RelocationId,
+                route.Coordinator,
+                route.Actor,
+                route.Session);
+    }
+
+    private readonly record struct CanonicalRouteApplication(
+        ZLinkServiceWireCodec.SessionRelocationSealRecord Seal,
+        ZLinkServiceWireCodec.SessionRelocationSealedRecord Sealed,
+        ZLinkServiceWireCodec.SessionRelocationRouteRecord Route,
+        ZLinkSessionRelocationAuthenticatedRoute AuthenticatedRoute,
+        ZLinkServiceWireCodec.SessionRelocationRoutedRecord Routed,
+        bool IsSafeTerminal);
+
+    private bool TryFindCanonicalBinding(
+        ZLinkServiceWireCodec.SessionActorIdentityRecord actor,
+        ZLinkServiceWireCodec.SessionOwnerFenceRecord session,
+        out ZLinkSessionBindingKey key,
+        out ZLinkSessionBindingEntry entry)
+    {
+        foreach (var candidate in _entries)
+        {
+            var value = candidate.Value;
+            if (candidate.Key.ActorId.Value == actor.ActorId
+                && value.ObjectGeneration == actor.ObjectGeneration
+                && value.ActorRef.SessionRid == session.SessionRid
+                && value.BindingGeneration == session.BindingGeneration
+                && value.SessionOwnerNodeRid == session.SessionOwnerNodeRid
+                && value.SessionOwnerNodeGeneration
+                == session.SessionOwnerNodeGeneration
+                && string.Equals(
+                    value.SessionOwnerId,
+                    session.SessionOwnerId,
+                    StringComparison.Ordinal)
+                && value.SessionOwnerLeaseGeneration
+                == session.SessionOwnerLeaseGeneration)
+            {
+                key = candidate.Key;
+                entry = value;
+                return true;
+            }
+        }
+        key = default;
+        entry = null!;
+        return false;
+    }
+
+    private static bool MatchesCanonicalActorRoute(
+        ZLinkSessionBindingEntry entry,
+        ZLinkServiceWireCodec.SessionActorRouteFenceRecord actor) =>
+        entry.ObjectGeneration == actor.Actor.ObjectGeneration
+        && string.Equals(
+            entry.ActorRef.ActorId,
+            actor.Actor.ActorId,
+            StringComparison.Ordinal)
+        && entry.Route.Ref.NodeRid == actor.TargetNodeRid
+        && entry.TargetNodeGeneration == actor.TargetNodeGeneration
+        && entry.AuthorityOwnerGeneration == actor.AuthorityOwnerGeneration
+        && entry.OwnerLeaseGeneration == actor.OwnerLeaseGeneration;
+
+    private static ZLinkServiceWireCodec.SessionRelocationRoutedRecord
+        CreateClosedCanonicalRouteResult(
+            ZLinkServiceWireCodec.SessionRelocationRouteRecord request) =>
+        CreateCanonicalRouteResult(
+            request,
+            ZLinkServiceWireCodec.SessionRelocationRouteResult
+                .SessionOrBindingClosed,
+            request.Route.Action
+            == ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit
+                ? request.Route.TargetAuthorityOwnerGeneration
+                : request.Route.CurrentAuthorityOwnerGeneration,
+            acceptedHighWater: 0);
+
+    private static ZLinkServiceWireCodec.SessionRelocationRoutedRecord
+        CreateCanonicalRouteResult(
+            ZLinkServiceWireCodec.SessionRelocationRouteRecord request,
+            ZLinkServiceWireCodec.SessionRelocationRouteResult result,
+            ulong currentAuthorityOwnerGeneration,
+            ulong acceptedHighWater) =>
+        new(
+            request.RelocationId,
+            request.Coordinator,
+            request.Actor,
+            request.Session,
+            request.Route.Action,
+            result,
+            currentAuthorityOwnerGeneration,
+            acceptedHighWater);
 
     public async ValueTask<ZLinkSessionRouteSealResult> SealRouteAsync(
         ZLinkSessionRouteSeal request,
@@ -855,6 +1652,7 @@ internal sealed class ZLinkSessionActorBindingTable
                 && string.Equals(existing.BindingToken, bindingToken, StringComparison.Ordinal))
             {
                 _entries.Remove(key);
+                SettleOutbound(RemoveOutbound(key), deliver: false);
                 existing.DrainSignal?.TrySetResult();
                 existing.RouteAvailableSignal?.TrySetResult();
             }
@@ -1009,8 +1807,14 @@ internal sealed class ZLinkSessionActorBindingTable
                 entry.DrainSignal?.TrySetResult();
                 entry.RouteAvailableSignal?.TrySetResult();
             }
+            foreach (var outbound in _outbound.Values)
+                SettleOutbound(outbound.Retained, deliver: false);
+            _outbound.Clear();
             _entries.Clear();
             _tombstones.Clear();
+            _canonicalRouteApplications.Clear();
+            _outstandingCanonicalRouteApplications.Clear();
+            _canonicalRouteApplicationOrder.Clear();
         }
     }
 }

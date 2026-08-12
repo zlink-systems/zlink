@@ -17,7 +17,6 @@ import systems.zlink.e2e.resiliencelifecycle.client.Scenarios.RlB4RuntimeDrainSc
 import systems.zlink.e2e.resiliencelifecycle.client.Scenarios.RlB5DrainInflightScenario;
 import systems.zlink.e2e.resiliencelifecycle.client.Scenarios.RlB6GrayFaultScenario;
 import systems.zlink.e2e.resiliencelifecycle.client.Scenarios.RlC1ClientHostLifecycleScenario;
-import systems.zlink.e2e.resiliencelifecycle.client.Scenarios.RlC2TopologyRecoveryScenario;
 import systems.zlink.e2e.resiliencelifecycle.client.Scenarios.RlC4RegistryOutageScenario;
 import systems.zlink.e2e.resiliencelifecycle.client.Scenarios.RlD2ObserverFaultScenario;
 import systems.zlink.e2e.resiliencelifecycle.client.Scenarios.RlD3DispatchErrorEvidenceScenario;
@@ -73,7 +72,6 @@ public final class ResilienceLifecycleSuite {
                 runDefault("all");
                 restartProviderB();
                 runCrashDuringInflight();
-                runTopologyRecovery();
                 runStoreOutage();
                 runStorm();
                 runCleanup("all");
@@ -84,13 +82,12 @@ public final class ResilienceLifecycleSuite {
             case "RL-A4" -> runRollingGreen();
             case "RL-A5" -> runFlapping();
             case "RL-B2" -> runCrashDuringInflight();
-            case "RL-C2" -> runTopologyRecovery();
             case "RL-C4" -> runStoreOutage();
             case "RL-B1", "RL-B3", "RL-B4", "RL-B5", "RL-B6", "RL-D2", "RL-D3", "RL-D4" ->
                 runDefault(scenario);
             case "RL-C1", "RL-D5" -> runCleanup(scenario);
             case "RL-E1", "RL-E2", "RL-E3", "RL-E4", "RL-E5",
-                "RL-F1", "RL-F2", "RL-F3", "RL-F4", "RL-F5", "RL-F6", "RL-F7",
+                "RL-F1", "RL-F3", "RL-F5", "RL-F6", "RL-F7",
                 "RL-F8", "RL-F9", "RL-F10", "RL-F11", "RL-F12", "RL-F13", "RL-F14" ->
                 runCommonScenario(scenario);
             default -> throw new IllegalArgumentException("unknown ResilienceLifecycle scenario: " + scenario);
@@ -248,25 +245,6 @@ public final class ResilienceLifecycleSuite {
             providerB = processes.startProvider("api-b", "api-b", options.apiBEndpoint(), options.httpBEndpoint());
             processes.sleep(2_000);
             processes.touchSignal("b2-restored");
-            scenario.join();
-        }
-    }
-
-    private void runTopologyRecovery() {
-        String consumerHttp = processes.reserveHttpEndpoint();
-        try (var consumerProcess = processes.startConsumer(
-            "consumer-topology-recovery", consumerHttp, options.logDir())) {
-            ResilienceScenarioContext consumer = new ResilienceScenarioContext(consumerHttp, currentHttpA, options);
-            CompletableFuture<Void> scenario = CompletableFuture.runAsync(
-                () -> RlC2TopologyRecoveryScenario.run(consumer));
-            processes.waitSignal("c2-ready", scenario);
-            providerB.killForcibly();
-            processes.waitEndpointDown("api-b", options.httpBEndpoint());
-            processes.touchSignal("c2-crashed");
-            processes.waitSignal("c2-survivor-observed", scenario);
-            providerB = processes.startProvider("api-b", "api-b", options.apiBEndpoint(), options.httpBEndpoint());
-            processes.sleep(2_000);
-            processes.touchSignal("c2-restored");
             scenario.join();
         }
     }

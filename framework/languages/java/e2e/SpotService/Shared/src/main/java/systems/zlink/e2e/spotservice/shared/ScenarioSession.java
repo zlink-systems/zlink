@@ -1,4 +1,6 @@
 package systems.zlink.e2e.spotservice.shared;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.streams.ZLinkSession;
@@ -28,30 +30,30 @@ public final class ScenarioSession implements ZLinkSession {
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onConnected() {
+    public CompletionStage<Void> onConnected() {
         evidence.record("StreamConnected", "session", context.sessionId());
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onDisconnected() {
+    public CompletionStage<Void> onDisconnected() {
         evidence.record("StreamDisconnected", "session", context.sessionId());
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onError(ZLinkStreamError error) {
+    public CompletionStage<Void> onError(ZLinkStreamError error) {
         evidence.record("StreamError", "session", error.error().name());
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onDispatch(
+    public CompletionStage<Void> onDispatch(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload) {
         evidence.record("StreamInbound", "session", dispatch.packetName());
         return handlers.tryHandle(context, dispatch, payload).thenCompose(handled ->
-            handled ? java.util.concurrent.CompletableFuture.completedFuture(null)
+            handled ? CompletableFuture.completedFuture(null)
                 : requireActor(dispatch).relay(dispatch, payload));
     }
 

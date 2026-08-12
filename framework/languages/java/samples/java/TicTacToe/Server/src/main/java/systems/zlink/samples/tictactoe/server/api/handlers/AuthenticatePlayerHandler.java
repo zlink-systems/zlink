@@ -1,4 +1,6 @@
 package systems.zlink.samples.tictactoe.server.api.handlers;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
@@ -12,14 +14,14 @@ import systems.zlink.samples.tictactoe.shared.contracts.PlayerInfo;
 public final class AuthenticatePlayerHandler
     implements ZLinkRequestHandler<AuthenticatePlayerReq, AuthenticatePlayerRes> {
     @Override
-    public java.util.concurrent.CompletionStage<AuthenticatePlayerRes> handle(
+    public CompletionStage<AuthenticatePlayerRes> handle(
         AuthenticatePlayerReq request,
         ZLinkMessageContext context) {
         String actorId = request.accessToken().trim();
         if (actorId.isBlank()) {
             throw new IllegalArgumentException("authentication token is empty");
         }
-        return java.util.concurrent.CompletableFuture.completedFuture(new AuthenticatePlayerRes(new PlayerInfo(
+        return CompletableFuture.completedFuture(new AuthenticatePlayerRes(new PlayerInfo(
             actorId,
             displayName(actorId),
             3,

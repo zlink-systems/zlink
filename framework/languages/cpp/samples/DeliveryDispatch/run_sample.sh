@@ -5,9 +5,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../redis-common.sh"
 CPP_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 source "$CPP_ROOT/samples/sample-build-common.sh"
-FLOW_LOG_DIR="${SCRIPT_DIR}/logs"
-mkdir -p "$FLOW_LOG_DIR"
-rm -f "$FLOW_LOG_DIR"/*.log
 zlink_cpp_sample_prepare_build "$CPP_ROOT"
 if [[ ! -x "$BIN_DIR/sample_cpp_framework_deliverydispatch_client" && -x "$BIN_DIR/linux-ninja-debug/sample_cpp_framework_deliverydispatch_client" ]]; then
   BIN_DIR="$BIN_DIR/linux-ninja-debug"
@@ -17,8 +14,9 @@ PIDS=()
 RUN_DIR="$(mktemp -d)"
 LOG_DIR="$RUN_DIR/logs"
 CONFIG_DIR="$RUN_DIR/config"
+FLOW_LOG_DIR="$RUN_DIR/flow-logs"
 REDIS_CONTAINER_NAME=""
-mkdir -p "$LOG_DIR" "$CONFIG_DIR"
+mkdir -p "$LOG_DIR" "$CONFIG_DIR" "$FLOW_LOG_DIR"
 cleanup() {
   local code=$?
   local cleanup_failed=0
@@ -48,7 +46,7 @@ cleanup() {
     fi
   done
   if [[ -n "$REDIS_CONTAINER_NAME" ]]; then
-    docker rm -fv "$REDIS_CONTAINER_NAME" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER_NAME" || true
   fi
   rm -rf "$RUN_DIR"
   if [[ "$cleanup_failed" -ne 0 && "$code" -eq 0 ]]; then
@@ -58,27 +56,27 @@ cleanup() {
 }
 trap 'cleanup; status=$?; exit "$status"' EXIT
 
-read -r RESERVED_PORT API_HTTP_PORT DISPATCH_ROUTE DISPATCH_SPOT_ROUTER TRACKING_ROUTE TRACKING_SPOT_ROUTER TRACKING_SPOT DISPATCH_SPOT CUSTOMER_STREAM CUSTOMER_SPOT_ROUTER CUSTOMER_SPOT COURIER_STREAM COURIER_SESSION_SPOT_ROUTER COURIER_SESSION_SPOT COURIER_NODE1_ROUTE COURIER_NODE1_ROUTER COURIER_NODE1 COURIER_NODE2_ROUTE COURIER_NODE2_ROUTER COURIER_NODE2 <<<"$(python3 - <<'PY'
-import socket
-sockets = []
-chosen = set()
-while len(sockets) < 20:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    if port in chosen or port + 1000 in chosen:
-        sock.close()
-        continue
-    chosen.add(port)
-    chosen.add(port + 1000)
-    sockets.append(sock)
-ports = [sock.getsockname()[1] for sock in sockets]
-endpoints = " ".join(f"tcp://127.0.0.1:{port}" for port in ports[2:])
-print(f"{ports[0]} {ports[1]} {endpoints}")
-for sock in sockets:
-    sock.close()
-PY
-)"
+read -r -a DELIVERY_PORTS <<<"$(zlink_sample_allocate_paired_ports 20)"
+RESERVED_PORT="${DELIVERY_PORTS[0]}"
+API_HTTP_PORT="${DELIVERY_PORTS[1]}"
+DISPATCH_ROUTE="tcp://127.0.0.1:${DELIVERY_PORTS[2]}"
+DISPATCH_SPOT_ROUTER="tcp://127.0.0.1:${DELIVERY_PORTS[3]}"
+TRACKING_ROUTE="tcp://127.0.0.1:${DELIVERY_PORTS[4]}"
+TRACKING_SPOT_ROUTER="tcp://127.0.0.1:${DELIVERY_PORTS[5]}"
+TRACKING_SPOT="tcp://127.0.0.1:${DELIVERY_PORTS[6]}"
+DISPATCH_SPOT="tcp://127.0.0.1:${DELIVERY_PORTS[7]}"
+CUSTOMER_STREAM="tcp://127.0.0.1:${DELIVERY_PORTS[8]}"
+CUSTOMER_SPOT_ROUTER="tcp://127.0.0.1:${DELIVERY_PORTS[9]}"
+CUSTOMER_SPOT="tcp://127.0.0.1:${DELIVERY_PORTS[10]}"
+COURIER_STREAM="tcp://127.0.0.1:${DELIVERY_PORTS[11]}"
+COURIER_SESSION_SPOT_ROUTER="tcp://127.0.0.1:${DELIVERY_PORTS[12]}"
+COURIER_SESSION_SPOT="tcp://127.0.0.1:${DELIVERY_PORTS[13]}"
+COURIER_NODE1_ROUTE="tcp://127.0.0.1:${DELIVERY_PORTS[14]}"
+COURIER_NODE1_ROUTER="tcp://127.0.0.1:${DELIVERY_PORTS[15]}"
+COURIER_NODE1="tcp://127.0.0.1:${DELIVERY_PORTS[16]}"
+COURIER_NODE2_ROUTE="tcp://127.0.0.1:${DELIVERY_PORTS[17]}"
+COURIER_NODE2_ROUTER="tcp://127.0.0.1:${DELIVERY_PORTS[18]}"
+COURIER_NODE2="tcp://127.0.0.1:${DELIVERY_PORTS[19]}"
 if [[ -z "$RESERVED_PORT" || -z "$COURIER_NODE2" ]]; then
   echo "Failed to allocate local TCP ports for the DeliveryDispatch sample." >&2
   echo "This environment may block local socket creation." >&2

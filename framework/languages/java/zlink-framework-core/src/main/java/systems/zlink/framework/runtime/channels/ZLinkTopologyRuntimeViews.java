@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.ArrayList;
 
 import java.time.Instant;
 import java.util.List;
@@ -105,6 +106,7 @@ final class ZLinkClientServerRuntimeView implements ZLinkClientServerRuntime {
                 status.isReady(),
                 status.readyTargetCount(),
                 status.targets()),
+            ZLinkClientServerStatus::channelName,
             capacity,
             status -> status.state() == ZLinkTopologyState.STOPPED
                 || status.state() == ZLinkTopologyState.FAILED,
@@ -155,7 +157,7 @@ final class ZLinkFanoutRuntimeView implements ZLinkFanoutRuntime {
     public ZLinkFanoutStatus snapshot(String channelName) {
         requireChannel(channelName);
         ZLinkFanoutLocationRuntime location = locationRuntime.get();
-        List<ZLinkMeshPeerSnapshot> publishers = new java.util.ArrayList<>();
+        List<ZLinkMeshPeerSnapshot> publishers = new ArrayList<>();
         if (location != null) {
             publishers.addAll(location.publisherSnapshots(channelName).stream()
                 .map(publisher -> new ZLinkMeshPeerSnapshot(
@@ -225,6 +227,7 @@ final class ZLinkFanoutRuntimeView implements ZLinkFanoutRuntime {
                 status.isReady(),
                 status.readyPublisherCount(),
                 status.publishers()),
+            ZLinkFanoutStatus::channelName,
             capacity,
             status -> status.state() == ZLinkTopologyState.STOPPED
                 || status.state() == ZLinkTopologyState.FAILED,

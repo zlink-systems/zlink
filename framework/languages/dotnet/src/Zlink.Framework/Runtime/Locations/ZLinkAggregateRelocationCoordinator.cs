@@ -333,7 +333,11 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                 stored.Reference,
                 stored.ChecksumCrc32c,
                 envelope.CanonicalApplicationVersion,
-                SourceCleanupState: 0),
+                SourceCleanupState: 0)
+            {
+                CoordinatorExpectedAuthorityStoreVersion =
+                    spotParticipant.ExpectedStoreVersion
+            },
             envelope);
     }
 

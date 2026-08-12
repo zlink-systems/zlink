@@ -12,8 +12,8 @@ title: "7. Receive And Dispatch Loop"
 > **Contract ownership** — receive fairness is owned by
 > [Transport Liveness](../spec/29-transport-liveness.en.md), and the
 > queue bound by [the Framework API](../spec/06-framework-api.en.md).
-> This chapter covers the **structure** that satisfies that contract,
-> and the mismatches actually observed across the four implementations.
+> This chapter covers the **structure** that satisfies that contract and
+> the failures that become visible at the receive/dispatch boundary.
 
 The span that carries a received message to the execution gate.
 Whether to wake per message or batch-process decides throughput, and
@@ -66,22 +66,37 @@ but right before enqueuing, a move finishes and the owner changes. The
 message ends up **in the queue of a node that's no longer owner**, and
 that queue is processed by no one. The sender waits until timeout.
 
-Within one span, handle the following in order.
+Handle the following as one commit inside that span.
 
 1. Is the host and topology currently accepting application work
 2. Is the target object on this node and is the owner info valid
 3. Is it not sealed for a move / not waiting for creation / not
    waiting for a session connection
-4. Is there a queue slot available (the byte bound from
+4. Can both the lane's item count and bytes be reserved (the byte bound from
    [8. Object Kind And Activation 「6. Which Unit Memory Accounting Uses」](08-object-lifecycle.en.md#6-which-unit-memory-accounting-uses))
-5. Enqueue, and if a previously empty queue is now filled, put it into
-   §1's ready set
+5. Commit the accepted-order sequence and append the work to the FIFO
+6. If the FIFO was empty, create §1's ready state and notify the execution resource
+   immediately
 
 **Decision — a message that fails a check doesn't appear in the
 queue.** It's not built as enqueue-then-remove. Enqueuing then
 removing lets it possibly execute in between, and there's no way to
 distinguish the removal from observation either. A call waiting for a
-response receives the failure reason as its result.
+response receives the failure reason as its result. A failed reservation or enqueue also
+leaves the item/byte usage and accepted sequence unchanged. A failed attempt must not change
+the ordering or admission result of the next valid work item.
+
+```mermaid
+flowchart LR
+    C["check state and owner fence"] --> R["reserve count · bytes together"]
+    R --> Q["commit sequence and enqueue to FIFO"]
+    Q --> W{"was the FIFO empty<br/>before enqueue?"}
+    W -- "yes" --> S["signal shared execution resources immediately"]
+    W -- "no" --> D["the existing drain continues"]
+    C -. "reject" .-> N["queue · reservation · sequence unchanged"]
+    R -. "reject" .-> N
+    Q -. "failure" .-> N
+```
 
 **Per-language discretion.** Whether this span is built with a lock or
 another method is free. Since a long span becomes a bottleneck itself,
@@ -175,38 +190,25 @@ authority a late-arriving completion belongs to after cycling through
 this arrow, an owner where short work keeps arriving never releases
 the execution resource.
 
-## 5. Pick Only One Wake-Up Method
+<a id="5-pick-one-wake-up-method"></a>
+<a id="5-wake-immediately-when-an-empty-fifo-receives-work"></a>
 
-**Decision — don't mix wake-up methods during execution within one
-runtime.** Which of the three below to use is per-language discretion,
-but if the chosen method changes mid-execution, latency
-characteristics differ per span and the cause can't be traced.
+## 5. Wake Immediately When An Empty FIFO Receives Work
 
-| Method | Latency characteristic | Idle cost |
-|---|---|---|
-| Block and wait | Wakes immediately on arrival | No cost while waiting |
-| Wake via callback | Wakes immediately on arrival | No cost while waiting |
-| Poll periodically | **Creates a latency floor equal to the period** | Keeps waking even while idle |
+**Decision — work arrival directly wakes execution.** When an owner's application or
+lifecycle FIFO changes from empty to non-empty, the path that commits the enqueue signals or
+calls back into the process-shared execution resource. Waking a waiting worker in C++,
+scheduling a drain on an executor in .NET or the JVM, and scheduling the next event-loop turn
+in Node are valid language mappings. In every case, the arrival of new work causes execution
+to start.
 
-Choosing the third creates a latency floor regardless of load. With a
-1ms period, it wakes 1,000 times a second even while idle, and the
-best-case latency of one message is tied to that period.
+Periodic polling is not the normal start condition. It consumes execution resources while
+idle and creates a latency floor equal to the polling period. A watchdog may diagnose a
+missed wake-up, but it must not own message-processing correctness or normal latency.
 
-**Decision — use a method that wakes immediately on arrival. Use
-periodic polling only when that language's receive model allows no
-other method.**
-
-This isn't discretion but **a constrained choice.** Since the latency
-floor changing is an observable difference, polling isn't chosen for
-convenience. Some languages can't block a single event loop and have
-no path but polling, and it's allowed only in that case.
-
-If polling is used, record the period in that language's
-documentation — since that value is the latency floor itself, it's the
-first value to check when comparing performance.
-
-**Decision.** Whichever method is chosen, §1's last rule is the
-same — always recheck the ready-owner set after waking up.
+After waking, the runtime rechecks the ready-owner state as required by §1's final rule. A
+signal is a reason to check state, not the work itself, so several signals may be coalesced
+without losing work.
 
 ### MeshNode socket options stay directional
 
@@ -279,23 +281,23 @@ connections get delayed even with a ceiling in place.
 
 ## 7. Don't Make Timer Resources Proportional To Registration Count
 
-If each Spot has several timers, timers quickly outnumber Spots. With
-10,000 rooms and two timers each, that's 20,000.
+Because each Spot can register several timers, timer count grows faster than Spot count.
+Ten thousand Spots with two timers each produce 20,000 timers.
 
 **Decision — one shared scheduler manages timers. Don't create a
 dedicated resource per registration.**
 
-The approaches observed across the four implementations split two
-ways.
+Creating a resource for every registered timer and managing all timers with one scheduler
+require very different resource counts.
 
 | Approach | 10,000 Spots × 2 timers |
 |---|---|
 | A dedicated resource per registration (OS timer, wait loop, deferred call) | That resource is **20,000** |
 | **A shared scheduler + a deadline-priority queue** | One thread and 20,000 queue entries |
 
-The second is the standard. The entry count is the same, but the
-resource is one. One implementation actually takes this approach, with
-one shared scheduler and one core thread handling every Spot's timers.
+The shared-scheduler approach is the common standard. It has the same number of queue
+entries, but needs only one scheduler and one core thread. The scheduler manages every
+Spot's timer in a deadline-priority queue.
 
 ### The Application Chooses How A Late Tick Is Handled
 
@@ -304,7 +306,7 @@ is a **public option** — skip and run only the current one, catch up
 up to a fixed count, or recompute the next scheduled time from the
 completion moment
 ([Stage Wrapper On Spot 「5. Timer」](../spec/17-stage-wrapper-on-spot.en.md#5-timer)).
-All four implementations implement these three, with the same names.
+This option fixes the three behaviors and their names as public contract.
 
 internals doesn't pick and fix one of these. In particular, **"the
 next schedule happens after processing completes" is just one of the
@@ -317,10 +319,9 @@ pending record"
 But if the application chose catch-up, **the ceiling is the count that
 option defines**, and internals doesn't reduce it to one.
 
-**Decision — don't accumulate tick statistics indefinitely.** One
-implementation keeps accumulating delivered-tick and failure records
-for the timer's whole lifetime, so a long-running timer keeps eating
-memory.
+**Decision — don't accumulate tick statistics indefinitely.** If delivered-tick and
+failure records remain for a timer's entire lifetime, memory usage continues to grow for
+a long-running timer.
 
 ### The Path By Which A Tick Enters Execution Authority
 

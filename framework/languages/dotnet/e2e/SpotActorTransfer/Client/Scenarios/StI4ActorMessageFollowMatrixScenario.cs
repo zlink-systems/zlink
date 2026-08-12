@@ -33,7 +33,7 @@ internal static class StI4ActorMessageFollowMatrixScenario
         var baseline = context.SendFromNodeAsync(
             caller,
             actorId,
-            new HandoffPacket(scenario, baselineMarker));
+            new HandoffMsg(scenario, baselineMarker));
         await context.WaitExternalTransportDeliveryAsync(baselineGate);
         await context.ReleaseExternalTransportDeliveryAsync(baselineGate);
         await baseline;
@@ -65,7 +65,7 @@ internal static class StI4ActorMessageFollowMatrixScenario
         var oneWay = context.SendFromNodeAsync(
             caller,
             actorId,
-            new HandoffPacket(scenario, oneWayMarker));
+            new HandoffMsg(scenario, oneWayMarker));
         var request = context.ProbeFromNodeAsync(
             caller,
             actorId,

@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Map;
 
 import java.util.List;
 import java.time.Duration;
@@ -64,16 +65,16 @@ final class ZLinkUserSpotRetireScheduler {
                 .thenApply(ignored -> prepared))
             .thenCompose(prepared -> request.source()
                 .commitAuthority(cancellation))
-            .thenCompose(activated -> {
+            .thenCompose(pending -> {
                 sourceCommitted.set(true);
-                request.source().commitSourceBarrier(
-                    activated.targetOwnerGenerations());
-                return CompletableFuture.completedFuture(activated);
+                return request.source().commitSourceBarrier(
+                    pending, cancellation);
             })
             .thenCompose(activated -> request.client().publish(
                     stage.targetNodeRid(),
                     stage.fence(),
                     request.timeout())
+                .thenRun(request.source()::completeSourceBarrierCommit)
                 .thenCompose(ignored -> request.sourceCleanup().cleanup())
                 .thenCompose(ignored -> request.source().completeSourceCleanup(
                     activated,
@@ -179,7 +180,7 @@ final class ZLinkUserSpotRetireScheduler {
             systems.zlink.framework.runtime.internal.metrics
                 .ZLinkRuntimeMetrics.increment(
                     "zlink.drain.actors.handed_off",
-                    java.util.Map.of());
+                    Map.of());
         }
     }
 

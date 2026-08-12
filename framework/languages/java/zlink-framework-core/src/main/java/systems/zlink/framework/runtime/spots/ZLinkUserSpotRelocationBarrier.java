@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Collections;
+import java.util.Objects;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -33,9 +35,9 @@ final class ZLinkUserSpotRelocationBarrier {
     ZLinkUserSpotRelocationBarrier(
         DefaultSpotContext context,
         ZLinkActorSessionCoordinator actors) {
-        this.context = java.util.Objects.requireNonNull(
+        this.context = Objects.requireNonNull(
             context, "context");
-        this.actors = java.util.Objects.requireNonNull(
+        this.actors = Objects.requireNonNull(
             actors, "actors");
     }
 
@@ -44,7 +46,7 @@ final class ZLinkUserSpotRelocationBarrier {
     }
 
     Optional<Seal> trySeal(Predicate<Preview> admission) {
-        java.util.Objects.requireNonNull(admission, "admission");
+        Objects.requireNonNull(admission, "admission");
         byte[] timerEnvelope;
         List<String> participantActorIds;
         Optional<ZLinkCompositeRelocationBarrier.Seal> localSeal =
@@ -128,13 +130,13 @@ final class ZLinkUserSpotRelocationBarrier {
     CompletionStage<Optional<Seal>> sealAtTurnBoundary(
         Predicate<Preview> admission,
         BooleanSupplier cancelled) {
-        java.util.Objects.requireNonNull(admission, "admission");
-        java.util.Objects.requireNonNull(cancelled, "cancelled");
+        Objects.requireNonNull(admission, "admission");
+        Objects.requireNonNull(cancelled, "cancelled");
         List<String> participantActorIds;
         LinkedHashMap<String, ZLinkAsyncSerialQueue> lanes;
         synchronized (this) {
             if (active != null || sealing || committing) {
-                return java.util.concurrent.CompletableFuture
+                return CompletableFuture
                     .completedFuture(Optional.empty());
             }
             participantActorIds =
@@ -275,7 +277,7 @@ final class ZLinkUserSpotRelocationBarrier {
             completion = CompletableFuture.completedFuture(null);
         } else {
             try {
-                completion = java.util.Objects.requireNonNull(
+                completion = Objects.requireNonNull(
                     context.runRelocationReadyCompletion(
                         systems.zlink.framework.spots
                             .ZLinkSpotRelocationReadyOutcome.CONTINUED),
@@ -335,6 +337,12 @@ final class ZLinkUserSpotRelocationBarrier {
     }
 
     Optional<Committed> commit(Seal seal) {
+        Optional<RelocationCommit> retained = retainCommit(seal);
+        retained.ifPresent(RelocationCommit::complete);
+        return retained.map(RelocationCommit::committed);
+    }
+
+    Optional<RelocationCommit> retainCommit(Seal seal) {
         synchronized (this) {
             if (committing || seal == null || seal != active
                 || seal.aborting()) {
@@ -342,8 +350,8 @@ final class ZLinkUserSpotRelocationBarrier {
             }
             committing = true;
         }
-        Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> committed =
-            barrier.commit(seal.composite)
+        ZLinkCompositeRelocationBarrier.RelocationCommit committed =
+            barrier.retainCommit(seal.composite)
                 .orElseThrow(() -> new IllegalStateException(
                     "User Spot barrier commit lost a lane"));
         synchronized (this) {
@@ -355,12 +363,14 @@ final class ZLinkUserSpotRelocationBarrier {
             committing = false;
         }
         LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
-            heldIngress = new LinkedHashMap<>(committed);
-        return Optional.of(new Committed(
-            seal.generation(),
-            seal.timerEnvelope(),
-            seal.participantActorIds(),
-            heldIngress));
+            heldIngress = new LinkedHashMap<>(committed.records());
+        return Optional.of(new RelocationCommit(
+            new Committed(
+                seal.generation(),
+                seal.timerEnvelope(),
+                seal.participantActorIds(),
+                heldIngress),
+            committed));
     }
 
     synchronized Optional<Map<String, List<
@@ -376,7 +386,7 @@ final class ZLinkUserSpotRelocationBarrier {
         held.putAll(barrier.freezeIngress(seal.composite)
             .orElseThrow(() -> new IllegalStateException(
                 "User Spot barrier freeze lost a lane")));
-        return Optional.of(java.util.Collections.unmodifiableMap(held));
+        return Optional.of(Collections.unmodifiableMap(held));
     }
 
     private void rollback(ZLinkCompositeRelocationBarrier.Seal seal) {
@@ -520,6 +530,65 @@ final class ZLinkUserSpotRelocationBarrier {
         @Override
         public byte[] timerEnvelope() {
             return timerEnvelope.clone();
+        }
+    }
+
+    static final class RelocationCommit {
+        private final Committed committed;
+        private final ZLinkCompositeRelocationBarrier.RelocationCommit retained;
+
+        private RelocationCommit(
+            Committed committed,
+            ZLinkCompositeRelocationBarrier.RelocationCommit retained) {
+            this.committed = committed;
+            this.retained = retained;
+        }
+
+        Committed committed() {
+            return committed;
+        }
+
+        Cut cut() {
+            ZLinkCompositeRelocationBarrier.RelocationCommit.Cut cut =
+                retained.cut();
+            return new Cut(
+                new Committed(
+                    committed.generation(),
+                    committed.timerEnvelope(),
+                    committed.participantActorIds(),
+                    cut.records()),
+                cut);
+        }
+
+        boolean tryFinishCapture(Cut cut) {
+            Objects.requireNonNull(cut, "cut");
+            return retained.tryFinishCapture(cut.retained);
+        }
+
+        boolean tryEstablishDurableCut(Cut cut) {
+            Objects.requireNonNull(cut, "cut");
+            return retained.tryEstablishDurableCut(cut.retained);
+        }
+
+        void complete() {
+            retained.complete();
+        }
+
+        static final class Cut {
+            private final Committed committed;
+            private final ZLinkCompositeRelocationBarrier.RelocationCommit.Cut
+                retained;
+
+            private Cut(
+                Committed committed,
+                ZLinkCompositeRelocationBarrier.RelocationCommit.Cut retained) {
+                this.committed = committed;
+                this.retained = retained;
+            }
+
+            Committed committed() {
+                return committed;
+            }
         }
     }
 }

@@ -3,6 +3,7 @@ using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Channels;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.LocationProvider;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -26,7 +27,7 @@ public sealed class FanoutAutomaticDiscoveryTests
         var mixedMode = Assert.Throws<ZLinkConfigurationException>(() =>
             mixed.AddZLinkFramework(options =>
             {
-                options.AddLocationStore(new ZLinkInMemoryLocationStore());
+                options.AddLocationStore(new ZLinkInMemoryProviderLocationStore());
                 options.AddFanoutChannel("events")
                     .EnableSubscriber()
                     .Connect("tcp://127.0.0.1:7001")
@@ -164,6 +165,83 @@ public sealed class FanoutAutomaticDiscoveryTests
         var relocating = runtime.GetStatus("automatic");
         Assert.False(relocating.IsReady);
         Assert.Equal(ZLinkTopologyState.Stopping, relocating.State);
+    }
+
+    [Fact]
+    public async Task RuntimeObserverRetainsRemovalSnapshotUntilItsSourceSlotIsDelivered()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        registration.Channels.Add(
+            "automatic",
+            new ZLinkChannelRegistration
+            {
+                ChannelName = "automatic",
+                AutoConnectType = ZLinkLocationAutoConnectType.Fanout,
+                Subscriber = new ZLinkChannelSubscriberCapabilityRegistration
+                {
+                    AutomaticDiscoveryEnabled = true
+                }
+            });
+        var hostLifecycle = new ZLinkFrameworkHostLifecycleState();
+        hostLifecycle.TransitionTo(ZLinkFrameworkRuntimeState.Serving);
+        using var runtime = new ZLinkFanoutRuntimeService(
+            registration,
+            hostLifecycle);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using var observer = runtime.ObserveAsync(
+                "automatic",
+                timeout.Token)
+            .GetAsyncEnumerator(timeout.Token);
+        var pendingInitial = observer.MoveNextAsync().AsTask();
+        var location = new ZLinkLocationRuntimeSnapshot(
+            "unknown",
+            null,
+            null);
+        var source = new ZLinkFanoutPublisherConnectionSnapshot(
+            RoutingId.From("publisher-a"),
+            9,
+            1,
+            "tcp://127.0.0.1:7001",
+            ConnectionIntent: true,
+            Ready: false,
+            ZLinkFanoutPublisherConnectionState.Connecting,
+            LastFailure: null);
+
+        runtime.RecordSnapshot("automatic", [source], location);
+        Assert.True(await pendingInitial.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(
+            ZLinkPeerState.Connecting,
+            Assert.Single(observer.Current.Status.Publishers).State);
+
+        runtime.RecordSnapshot("automatic", [], location);
+        runtime.RecordSnapshot(
+            "automatic",
+            [source with
+            {
+                DescriptorRevision = 2,
+                Ready = true,
+                State = ZLinkFanoutPublisherConnectionState.Ready
+            }],
+            location);
+
+        Assert.True(await observer.MoveNextAsync().AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Empty(observer.Current.Status.Publishers);
+        Assert.Equal(1UL, observer.Current.Loss.CoalescedCount);
+
+        var pendingRestart = observer.MoveNextAsync().AsTask();
+        runtime.RecordSnapshot(
+            "automatic",
+            [source with
+            {
+                DescriptorRevision = 3,
+                State = ZLinkFanoutPublisherConnectionState.Reconnecting
+            }],
+            location);
+        Assert.True(await pendingRestart.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(
+            ZLinkPeerState.Connecting,
+            Assert.Single(observer.Current.Status.Publishers).State);
     }
 
     [Fact]

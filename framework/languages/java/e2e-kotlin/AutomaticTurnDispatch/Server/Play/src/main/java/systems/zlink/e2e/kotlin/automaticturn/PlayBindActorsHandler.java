@@ -1,4 +1,5 @@
 package systems.zlink.e2e.kotlin.automaticturn;
+import systems.zlink.framework.actors.ZLinkActorCreateResult;
 
 import java.util.List;
 import java.util.concurrent.CompletionStage;
@@ -30,7 +31,7 @@ public final class PlayBindActorsHandler
         Contracts.BindActorsReq request,
         ZLinkRouteMessageContext context) {
         return spots.getOrCreate(request.spotRid(), "probe")
-            .request(ZLinkMessage.of("bind"))
+            .request(ZLinkMessage.of(new Contracts.ActorCreateReq("bind")))
             .submit()
             .thenCompose(ignored -> bind(request.spotRid(), request.actorA())
                 .thenCompose(actorA -> bind(request.spotRid(), request.actorB())
@@ -43,13 +44,13 @@ public final class PlayBindActorsHandler
 
     private CompletionStage<ActorRef> bind(String spotRid, String actorId) {
         return actors.getOrCreate(actorId, "probe")
-            .request(ZLinkMessage.of("bind"))
+            .request(ZLinkMessage.of(new Contracts.ActorCreateReq("bind")))
             .submit()
             .thenApply(result -> {
                 ActorRef actor = switch (result) {
-                    case systems.zlink.framework.actors.ZLinkActorCreateResult.Existing existing -> existing.actor();
-                    case systems.zlink.framework.actors.ZLinkActorCreateResult.Created created -> created.actor();
-                    case systems.zlink.framework.actors.ZLinkActorCreateResult.Rejected rejected ->
+                    case ZLinkActorCreateResult.Existing existing -> existing.actor();
+                    case ZLinkActorCreateResult.Created created -> created.actor();
+                    case ZLinkActorCreateResult.Rejected rejected ->
                         throw new IllegalStateException("actor creation rejected");
                 };
                 evidence.record("bind-actors", "bind-actor", "spot=" + spotRid

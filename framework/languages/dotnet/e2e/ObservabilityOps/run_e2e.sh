@@ -4,6 +4,7 @@ umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/../redis-common.sh"
+zlink_dotnet_e2e_acquire_run_lock "$0" "$@"
 SCENARIO="${*:-all}"
 SCENARIO="${SCENARIO// /,}"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
@@ -19,20 +20,7 @@ LOCAL_READINESS_TIMEOUT_SECONDS=3
 LOCAL_READINESS_POLL_SECONDS=0.1
 REDIS_READINESS_TIMEOUT_SECONDS=60
 
-read -r -a PORTS <<<"$(python3 - <<'PY'
-import socket
-sockets = []
-try:
-    for _ in range(22):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-    print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
-)"
+read -r -a PORTS <<<"$(zlink_dotnet_e2e_allocate_ports 22)"
 
 PLAY_A_URL="http://127.0.0.1:${PORTS[0]}"
 PLAY_B_URL="http://127.0.0.1:${PORTS[1]}"
@@ -64,7 +52,7 @@ cleanup() {
   local code=$?
   terminate_roles
   rm -rf "$CONFIG_DIR"
-  [[ -n "$REDIS_CONTAINER" ]] && docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+  [[ -n "$REDIS_CONTAINER" ]] && zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   [[ "$code" -ne 0 ]] && echo "ObservabilityOps failed. Logs: $LOG_DIR" >&2
   return "$code"
 }
@@ -199,8 +187,6 @@ configure_topology_for_scenario() {
     PLAY_B_WEIGHT=1
     PLAY_C_WEIGHT=1
     PLAY_D_WEIGHT=10
-  elif [[ "$scenario" == "OBS-C9B" ]]; then
-    PLAY_A_MANUAL_PEER="$PLAY_B_ROUTER"
   fi
   if [[ "$scenario" == "OBS-C11" || "$scenario" == "OBS-C12" ]]; then
     SKIP_PLAY_B=true
@@ -246,7 +232,7 @@ if [[ "$SCENARIO" != "all" && "$SCENARIO" != *","* ]]; then
   configure_topology_for_scenario "$SCENARIO"
 fi
 start_topology
-if [[ "$SCENARIO" == "OBS-C9A" || "$SCENARIO" == "OBS-C9B" ]]; then
+if [[ "$SCENARIO" == "OBS-C9A" ]]; then
   python3 "$ROOT_DIR/wait_relocation_readiness.py" \
     "$PLAY_A_URL" "$PLAY_B_URL" "$LOG_DIR" 10
 fi
@@ -278,13 +264,13 @@ if [[ "$SCENARIO" == "all" ]]; then
   TOPOLOGY_PHASE=c5-simultaneous
   start_topology
   run_client OBS-C5 simultaneous
-  for scenario in OBS-C6 OBS-C7 OBS-C8 OBS-C9A OBS-C9B OBS-C11 OBS-C12; do
+  for scenario in OBS-C6 OBS-C7 OBS-C8 OBS-C9A OBS-C11 OBS-C12; do
     terminate_roles
     REDIS_KEY_PREFIX="observability-ops:$RUN_ID:$scenario:"
     TOPOLOGY_PHASE="${scenario,,}"
     configure_topology_for_scenario "$scenario"
     start_topology
-    if [[ "$scenario" == "OBS-C9A" || "$scenario" == "OBS-C9B" ]]; then
+    if [[ "$scenario" == "OBS-C9A" ]]; then
       python3 "$ROOT_DIR/wait_relocation_readiness.py" \
         "$PLAY_A_URL" "$PLAY_B_URL" "$LOG_DIR" 10
     fi

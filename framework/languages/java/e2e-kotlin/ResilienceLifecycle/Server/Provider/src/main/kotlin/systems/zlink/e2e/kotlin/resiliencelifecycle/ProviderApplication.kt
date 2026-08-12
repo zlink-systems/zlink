@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.resiliencelifecycle
 
+
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime
 import com.fasterxml.jackson.databind.ObjectMapper
 import java.time.Duration
 import java.net.URI
@@ -37,7 +39,7 @@ open class ProviderApplication {
         json: ObjectMapper,
         runtimeOptions: ZLinkChannelRuntimeOptions,
         applicationContext: ConfigurableApplicationContext,
-        runtime: ObjectProvider<systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime>,
+        runtime: ObjectProvider<ZLinkFrameworkRuntime>,
     ): EvidenceHttpServer =
         EvidenceHttpServer(
             state,

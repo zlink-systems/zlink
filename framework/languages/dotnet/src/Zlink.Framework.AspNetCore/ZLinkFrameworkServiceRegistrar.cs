@@ -95,11 +95,6 @@ internal static class ZLinkFrameworkServiceRegistrar
         services.TryAddScoped<ZLinkRemoteSessionPushRelayHandler>();
         services.TryAddScoped<ZLinkRemoteActorFrameRelayHandler>();
         services.TryAddScoped<ZLinkRemoteActorReplyRelayHandler>();
-        services.TryAddScoped<ZLinkSessionRouteSealHandler>();
-        services.TryAddScoped<ZLinkSessionRouteAbortHandler>();
-        services.TryAddScoped<ZLinkSessionRouteCommitHandler>();
-        services.TryAddScoped<ZLinkSessionRouteUnsealHandler>();
-
         registration.DispatchOptions.Diagnostics.LiveLevel ??=
             new ZLinkDiagnosticsLevelCell(
                 registration.DispatchOptions.Diagnostics.ConfiguredLevel);
@@ -346,10 +341,7 @@ internal static class ZLinkFrameworkServiceRegistrar
         }
         else if (locations.UseInMemoryStores)
         {
-            services.AddSingleton(
-                (ZLinkInMemoryLocationStore)locations.ResolveStore()!);
-            services.AddSingleton<IZLinkLocationRepository>(
-                static provider => provider.GetRequiredService<ZLinkInMemoryLocationStore>());
+            services.AddSingleton(locations.ResolveStore()!);
         }
         else if (locations.ResolveStore() is { } repository)
         {

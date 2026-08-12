@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.messaging;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -45,7 +46,7 @@ final class ZLinkFrameworkErrorReplyTest {
     @Test
     void rejectsIncompleteReply() {
         try (Message marker = Message.from("ZLinkFrameworkError".getBytes(
-            java.nio.charset.StandardCharsets.UTF_8))) {
+            StandardCharsets.UTF_8))) {
             assertFalse(ZLinkFrameworkErrorReply.isReply(List.of(marker)));
         }
     }

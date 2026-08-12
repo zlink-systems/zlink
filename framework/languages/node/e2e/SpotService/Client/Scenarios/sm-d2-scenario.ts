@@ -1,4 +1,4 @@
-// SM-D2: Remote Actor를 Session에 bind하고 relay한다 시나리오를 검증한다.
+// SM-D2: Local·remote Actor를 Session에 bind하고 relay한다 시나리오를 검증한다.
 import {
   zlinkStreamConnectorFactory,
   zlinkStreamJsonCodec,
@@ -17,8 +17,10 @@ import type {
 import type { ClientOptions } from '../Support/client-options';
 import { postJson } from '../../../http-client';
 import { ensure } from '../Support/scenario-assert';
+import { runLocalActorRelayVariant } from '../Support/sm-d2-local-relay-variant';
 
 export async function runSmD2(options: ClientOptions): Promise<void> {
+  await runLocalActorRelayVariant(options);
   await waitForControlRoute(options.sessionAUrl, 'play-b');
 
   const actorId = 'actor-sm-d2';

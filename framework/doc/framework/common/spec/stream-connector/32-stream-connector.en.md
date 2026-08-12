@@ -217,7 +217,7 @@ no flow flag. **The payload differs per control packet.**
 
 `session-closing` is a control packet the server sends right before
 closing a session, and the client reads it to confirm `closeReason`
-([Host Relocate And Shutdown §9](../28-graceful-drain-handoff.en.md#9-moving-pending-messages-timers-and-sessions)).
+([Complete Host Relocation Flow §9](../30-host-relocation-flow.en.md#9-moving-pending-messages-timers-and-sessions)).
 
 ```text
 +------------+-------------------+----------------+--------------------+
@@ -490,7 +490,7 @@ packet.
 
 A client that received `ServerDrain` looks at this value to **decide
 reconnection and backoff**
-([Host Relocate And Shutdown §9](../28-graceful-drain-handoff.en.md#9-moving-pending-messages-timers-and-sessions)).
+([Complete Host Relocation Flow §9](../30-host-relocation-flow.en.md#9-moving-pending-messages-timers-and-sessions)).
 **A capability for the server to specify a replacement endpoint isn't
 included in this contract.**
 

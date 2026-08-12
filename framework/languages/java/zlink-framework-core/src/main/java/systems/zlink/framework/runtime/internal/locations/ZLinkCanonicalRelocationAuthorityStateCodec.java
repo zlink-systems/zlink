@@ -34,9 +34,28 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         ZLinkAuthorityGenerationTransition ownerTransition,
         ZLinkRelocationStored stored,
         boolean sourceCleanupCompleted) {
+        return publish(
+            authorityPayload,
+            request,
+            ownerTransition,
+            stored,
+            sourceCleanupCompleted ? 8 : 4);
+    }
+
+    static byte[] publish(
+        byte[] authorityPayload,
+        ZLinkAggregateRelocationCoordinator.Request request,
+        ZLinkAuthorityGenerationTransition ownerTransition,
+        ZLinkRelocationStored stored,
+        int phase) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(ownerTransition, "ownerTransition");
         Objects.requireNonNull(stored, "stored");
+        if (phase != 3 && phase != 4 && phase != 8) {
+            throw new IllegalArgumentException(
+                "canonical relocation phase must be 3, 4 or 8");
+        }
+        boolean sourceCleanupCompleted = phase == 8;
         Published previous = decodeStrict(authorityPayload);
         byte[] applicationPayload = previous == null
             ? Objects.requireNonNull(authorityPayload, "authorityPayload").clone()
@@ -77,7 +96,7 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         body.u64(request.targetOwner().leaseGeneration());
         body.sized8(request.targetDescriptor().rid().toBytes());
         body.u64(request.targetDescriptorLifecycleGeneration());
-        body.u8(sourceCleanupCompleted ? 8 : 4);
+        body.u8(phase);
         Writer pointer = new Writer();
         pointer.text16(stored.reference());
         pointer.u32(stored.checksumCrc32c());
@@ -118,7 +137,7 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         return new ZLinkAggregateProgress(
             publication.reference(),
             publication.checksumCrc32c(),
-            publication.sourceCleanupCompleted() ? 8 : 4,
+            publication.phase(),
             publication.sourceCleanupCompleted(),
             publication.terminalCompletionCount(),
             publication.pendingRelayCount());
@@ -142,6 +161,7 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
             current.targetNodeGeneration(),
             current.targetOwnerId(), current.targetOwnerLeaseGeneration(),
             replace(slot, EMPTY),
+            current.phase(),
             current.sourceCleanupCompleted(),
             current.terminalCompletionCount(),
             current.pendingRelayCount());
@@ -152,6 +172,18 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         ZLinkRelocationStored stored,
         ZLinkServiceRelocationEnvelopeCodec.Envelope root) {
         return replaceRoot(authorityPayload, stored, root, false);
+    }
+
+    /** Replaces the public authority projection without changing relocation state. */
+    static byte[] replaceApplicationPayload(
+        byte[] authorityPayload,
+        byte[] applicationPayload) {
+        Slot current = slot(authorityPayload);
+        Slot replacement = slot(applicationPayload);
+        if (!current.present() || replacement.present()) {
+            throw invalid();
+        }
+        return replace(replacement, current.state());
     }
 
     static byte[] completeSourceCleanup(
@@ -246,7 +278,8 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         RoutingId capacityDescriptorRid = RoutingId.from(body.sized8());
         long capacityDescriptorGeneration = body.nonzeroU64();
         int phase = body.u8();
-        if (phase != 4 && phase != 8 || body.u8() != 1) throw invalid();
+        if (phase != 3 && phase != 4 && phase != 8
+            || body.u8() != 1) throw invalid();
         Reader pointer = body.reader(body.u16());
         String reference = pointer.text16();
         long checksumCrc32c = pointer.u32Unsigned();
@@ -551,6 +584,7 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         String targetOwnerId,
         long targetOwnerLeaseGeneration,
         byte[] applicationPayload,
+        int phase,
         boolean sourceCleanupCompleted,
         int terminalCompletionCount,
         int pendingRelayCount) {
@@ -644,7 +678,7 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         byte[] sized8(){ int n=u8(); if(n==0) throw invalid(); return take(n); }
         Reader reader(int n){ return new Reader(take(n)); }
         void skip(int n){ take(n); }
-        byte[] take(int n){ require(n); byte[] v=java.util.Arrays.copyOfRange(bytes,offset,offset+n); offset+=n; return v; }
+        byte[] take(int n){ require(n); byte[] v=Arrays.copyOfRange(bytes,offset,offset+n); offset+=n; return v; }
         int offset(){ return offset; }
         int remaining(){ return bytes.length - offset; }
         byte[] bytes(){ return bytes; }

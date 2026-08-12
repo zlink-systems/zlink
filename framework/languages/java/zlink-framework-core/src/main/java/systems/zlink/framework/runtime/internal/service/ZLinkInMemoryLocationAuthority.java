@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.internal.service;
+import java.util.function.LongConsumer;
+import java.util.function.Supplier;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -17,7 +19,7 @@ final class ZLinkInMemoryLocationAuthority {
 
     private final Map<String, Snapshot> rows = new HashMap<>();
     private final List<Consumer<Change>> listeners = new ArrayList<>();
-    private final java.util.function.Supplier<Instant> now;
+    private final Supplier<Instant> now;
     private long storeVersion;
     private long objectGeneration;
     private long ownerGeneration;
@@ -28,7 +30,7 @@ final class ZLinkInMemoryLocationAuthority {
     }
 
     public ZLinkInMemoryLocationAuthority(
-        java.util.function.Supplier<Instant> now) {
+        Supplier<Instant> now) {
         this.now = Objects.requireNonNull(now, "now");
     }
 
@@ -146,7 +148,7 @@ final class ZLinkInMemoryLocationAuthority {
 
     private static long increment(
         long current,
-        java.util.function.LongConsumer assign,
+        LongConsumer assign,
         String field) {
         if (current == Long.MAX_VALUE) {
             throw new IllegalStateException(field + " is exhausted");

@@ -1,4 +1,14 @@
 package systems.zlink.e2e.spotactortransfer.actor;
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.Map;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeoutException;
+import systems.zlink.contracts.errors.ZlinkRequestException;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
@@ -29,10 +39,10 @@ public final class ActorNodeHttpServer implements SmartLifecycle {
     private final ZLinkActorManager actors;
     private final ZLinkActorClient actorClient;
     private final int requiredPeerCount;
-    private final systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle
+    private final ZLinkFrameworkLifecycle
         lifecycle;
     private HttpServer server;
-    private java.util.concurrent.ExecutorService executor;
+    private ExecutorService executor;
     private boolean running;
 
     public ActorNodeHttpServer(
@@ -44,7 +54,7 @@ public final class ActorNodeHttpServer implements SmartLifecycle {
         ZLinkActorManager actors,
         ZLinkActorClient actorClient,
         int requiredPeerCount,
-        systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle lifecycle) {
+        ZLinkFrameworkLifecycle lifecycle) {
         this.endpoint = endpoint;
         this.json = json;
         this.evidence = evidence;
@@ -61,7 +71,7 @@ public final class ActorNodeHttpServer implements SmartLifecycle {
         try {
             URI uri = URI.create(endpoint);
             server = HttpServer.create(new InetSocketAddress(uri.getHost(), uri.getPort()), 0);
-            executor = java.util.concurrent.Executors.newCachedThreadPool();
+            executor = Executors.newCachedThreadPool();
             server.setExecutor(executor);
             server.createContext("/health", exchange -> handle(exchange, () -> {
                 var mesh = lifecycle.routeMeshRuntime().snapshot(Contracts.MESH);
@@ -75,7 +85,7 @@ public final class ActorNodeHttpServer implements SmartLifecycle {
                             + lifecycle.status().state().name());
                     return;
                 }
-                writeJson(exchange, java.util.Map.of(
+                writeJson(exchange, Map.of(
                     "status", "ready",
                     "nodeRid", evidence.nodeRid()));
             }));
@@ -254,7 +264,7 @@ public final class ActorNodeHttpServer implements SmartLifecycle {
             }
             Thread.sleep(20);
         }
-        throw new java.util.concurrent.TimeoutException(
+        throw new TimeoutException(
             "Actor location did not commit to target owner");
     }
 
@@ -287,7 +297,7 @@ public final class ActorNodeHttpServer implements SmartLifecycle {
 
     private void actorRef(HttpExchange exchange, String actorId) throws Exception {
         ActorRef actor = requireActor(actorId);
-        writeJson(exchange, java.util.Map.of(
+        writeJson(exchange, Map.of(
             "actorId", actor.actorId(),
             "nodeRid", actor.nodeRid().toString(),
             "objectGeneration", actor.objectGeneration()));
@@ -315,12 +325,12 @@ public final class ActorNodeHttpServer implements SmartLifecycle {
     }
 
     private static String[] pathParts(HttpExchange exchange) {
-        return java.util.Arrays.stream(exchange.getRequestURI().getPath().split("/"))
+        return Arrays.stream(exchange.getRequestURI().getPath().split("/"))
             .filter(part -> !part.isBlank())
             .toArray(String[]::new);
     }
 
-    private void handle(HttpExchange exchange, ThrowingRunnable action) throws java.io.IOException {
+    private void handle(HttpExchange exchange, ThrowingRunnable action) throws IOException {
         try {
             action.run();
         } catch (Exception error) {
@@ -329,7 +339,7 @@ public final class ActorNodeHttpServer implements SmartLifecycle {
         }
     }
 
-    private void writeJson(HttpExchange exchange, Object value) throws java.io.IOException {
+    private void writeJson(HttpExchange exchange, Object value) throws IOException {
         byte[] body = json.writeValueAsBytes(value);
         exchange.getResponseHeaders().add("Content-Type", "application/json");
         exchange.sendResponseHeaders(200, body.length);
@@ -338,7 +348,7 @@ public final class ActorNodeHttpServer implements SmartLifecycle {
     }
 
     private static void writeText(HttpExchange exchange, int status, String value)
-        throws java.io.IOException {
+        throws IOException {
         byte[] body = value.getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(status, body.length);
         exchange.getResponseBody().write(body);
@@ -350,12 +360,12 @@ public final class ActorNodeHttpServer implements SmartLifecycle {
         while (current.getCause() != null) {
             current = current.getCause();
         }
-        if (current instanceof systems.zlink.contracts.errors.ZlinkRequestException request) {
+        if (current instanceof ZlinkRequestException request) {
             return request.getClass().getName()
                 + ": result=" + request.getResult()
                 + ", errno=" + request.getNativeErrno();
         }
-        if (current instanceof systems.zlink.contracts.errors.ZlinkSubmitException submit) {
+        if (current instanceof ZlinkSubmitException submit) {
             return submit.getClass().getName()
                 + ": result=" + submit.getResult()
                 + ", errno=" + submit.getNativeErrno();
@@ -365,7 +375,7 @@ public final class ActorNodeHttpServer implements SmartLifecycle {
 
     private static String errorKind(Throwable error) {
         Throwable current = error;
-        while (current instanceof java.util.concurrent.CompletionException
+        while (current instanceof CompletionException
             && current.getCause() != null) {
             current = current.getCause();
         }

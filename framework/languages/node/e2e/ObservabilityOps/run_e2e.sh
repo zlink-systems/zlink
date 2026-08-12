@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
 source "$NODE_ROOT/e2e/redis-container.sh"
 source "$NODE_ROOT/e2e/runner-common.sh"
+serialize_node_e2e_run "$0" "$@"
 
 SCENARIO="${1:-all}"
 CHILD_RUN="${2:-}"
@@ -15,17 +16,17 @@ if [[ "$CHILD_RUN" != "--child-run" && "$SCENARIO" == "all" ]]; then
   build_package "$ROOT_DIR/Server/Session"
   build_package "$ROOT_DIR/Server/Workflow"
   build_package "$ROOT_DIR/Client"
-  for scenario in OBS-A1 OBS-A2 OBS-A3 OBS-A4 OBS-A5 OBS-B1 OBS-B2 OBS-B3 OBS-B4 OBS-C1 OBS-C2 OBS-C3 OBS-C4 OBS-C6 OBS-C7 OBS-C8 OBS-C9A OBS-C9B OBS-C10 OBS-C11 OBS-C12; do
-    OBSERVABILITY_OPS_SKIP_BUILD=1 "$0" "$scenario" --child-run
+  for scenario in OBS-A1 OBS-A2 OBS-A3 OBS-A4 OBS-A5 OBS-B1 OBS-B2 OBS-B3 OBS-B4 OBS-C1 OBS-C2 OBS-C3 OBS-C4 OBS-C6 OBS-C7 OBS-C8 OBS-C9A OBS-C10 OBS-C11 OBS-C12; do
+    OBSERVABILITY_OPS_SKIP_BUILD=1 bash "$0" "$scenario" --child-run
   done
-  OBSERVABILITY_OPS_SKIP_BUILD=1 "$0" OBS-C5 --child-run sequential
-  OBSERVABILITY_OPS_SKIP_BUILD=1 "$0" OBS-C5 --child-run simultaneous
+  OBSERVABILITY_OPS_SKIP_BUILD=1 bash "$0" OBS-C5 --child-run sequential
+  OBSERVABILITY_OPS_SKIP_BUILD=1 bash "$0" OBS-C5 --child-run simultaneous
   echo "observability-ops e2e result=passed"
   exit 0
 fi
 
 case "$SCENARIO" in
-  OBS-A1|OBS-A2|OBS-A3|OBS-A4|OBS-A5|OBS-B1|OBS-B2|OBS-B3|OBS-B4|OBS-C1|OBS-C2|OBS-C3|OBS-C4|OBS-C5|OBS-C6|OBS-C7|OBS-C8|OBS-C9A|OBS-C9B|OBS-C10|OBS-C11|OBS-C12) ;;
+  OBS-A1|OBS-A2|OBS-A3|OBS-A4|OBS-A5|OBS-B1|OBS-B2|OBS-B3|OBS-B4|OBS-C1|OBS-C2|OBS-C3|OBS-C4|OBS-C5|OBS-C6|OBS-C7|OBS-C8|OBS-C9A|OBS-C10|OBS-C11|OBS-C12) ;;
   *) echo "Unknown ObservabilityOps scenario '$SCENARIO'." >&2; exit 2 ;;
 esac
 
@@ -38,7 +39,6 @@ LOCAL_READINESS_ATTEMPTS=30
 ROUTE_SETTLE_TIMEOUT_SECONDS=5
 SCENARIO_SETTLE_TIMEOUT_SECONDS=3
 HTTP_PROBE_TIMEOUT_SECONDS=3
-mkdir -p "$LOG_DIR"
 echo "log_dir=$LOG_DIR"
 
 pids=()
@@ -52,6 +52,7 @@ cleanup() {
   if [[ "$code" -ne 0 ]]; then tail_failure_logs; fi
 }
 trap cleanup EXIT
+mkdir -p "$LOG_DIR"
 CONFIG_DIR="$(mktemp -d)"
 chmod 700 "$CONFIG_DIR"
 
@@ -67,7 +68,7 @@ if ! command -v docker >/dev/null 2>&1; then
   echo "Docker is required to run ObservabilityOps." >&2
   exit 1
 fi
-start_redis_container "zlink-redis-node-observability-${RANDOM}-$$" -p "127.0.0.1::6379" "redis:7.2-alpine"
+start_redis_container "zlink-redis-node-observability-${RANDOM}-$$" "redis:7.2-alpine"
 REDIS_ENDPOINT="$(redis_container_endpoint "$REDIS_CONTAINER_ID")"
 wait_tcp redis "tcp://$REDIS_ENDPOINT" 100
 REDIS_KEY_PREFIX="observability-ops:node:$RUN_ID:"
@@ -155,7 +156,8 @@ node "$NODE_ROOT/e2e/location-readiness.js" \
     "$WORKFLOW_B_ROUTER"
 
 if [[ "$SCENARIO" == "OBS-B3" ]]; then
-  docker exec "$REDIS_CONTAINER_ID" redis-cli CLIENT PAUSE 1800 ALL >/dev/null
+  timeout -k 2s 10s docker exec "$REDIS_CONTAINER_ID" \
+    redis-cli CLIENT PAUSE 1800 ALL >/dev/null
   sleep 3
 fi
 

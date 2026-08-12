@@ -133,16 +133,20 @@ class raw_stateful_dispatch_t
     static delivery_key_t delivery_key (
       const object_ref_t &owner,
       std::uint64_t sequence);
+    stateful_error_t commit_accepted_ingress (
+      const object_ref_t &owner,
+      turn_record_t turn,
+      pending_delivery_t pending,
+      bool allocate_sequence,
+      stateful_error_t collision_error);
 
     stateful_object_runtime_t *_objects;
     mesh::raw_mesh_node_owner_t *_transport;
     accepted_record_authority_resolver_t _authority_resolver;
     std::mutex _mutex;
-    std::condition_variable _pending_condition;
     std::map<std::pair<object_kind_t, std::string>, std::uint64_t>
       _next_sequence;
     std::map<delivery_key_t, pending_delivery_t> _pending;
-    std::map<delivery_key_t, object_ref_t> _pending_reservations;
     std::map<delivery_key_t, object_ref_t> _discarding_owners;
 };
 
@@ -312,8 +316,6 @@ class raw_relocation_replay_coordinator_t
         std::map<std::pair<std::uint64_t, std::uint64_t>, std::uint64_t>
           accepted_operations;
         std::optional<std::uint64_t> staging_sequence;
-        std::size_t accepted_bytes = 0;
-        std::size_t staging_bytes = 0;
         std::size_t active_stages = 0;
         bool closing = false;
         bool removing = false;
@@ -321,8 +323,6 @@ class raw_relocation_replay_coordinator_t
     struct target_group_state_t
     {
         std::size_t participant_count = 0;
-        std::size_t record_count = 0;
-        std::size_t byte_count = 0;
         std::map<std::pair<std::uint64_t, std::uint64_t>, key_t>
           staging_operations;
     };

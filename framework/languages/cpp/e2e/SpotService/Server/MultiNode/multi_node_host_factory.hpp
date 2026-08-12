@@ -90,7 +90,7 @@ inline int run_multi_node_server (int argc, char **argv)
               .add_route_request_handler<multi_node_route_ping_handler_t,
                                           e2e::channel_control_ping_req_t,
                                           e2e::channel_control_ping_res_t> (
-                "MultiNodeRoutePing")
+                "MultiNodeRoutePingReq")
               .add_route_request_handler<multi_node_create_local_handler_t,
                                           e2e::multi_node_create_spot_req_t,
                                           e2e::multi_node_create_spot_res_t> (

@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+option csharp_namespace = "RegistrationCodec.Shared";
+
+package registration_codec;
+
+message ProtobufEchoReq {
+  string value = 1;
+}
+
+message ProtobufEchoRes {
+  string value = 1;
+}
+
+message ProtobufEchoMsg {
+  string value = 1;
+}

@@ -2,7 +2,7 @@
 
 [.NET exact interface table of contents](README.en.md) ·
 [Runtime Monitoring](../../../../24-runtime-monitoring.en.md) ·
-[Host Relocate, Shutdown & Handoff](../../../../28-graceful-drain-handoff.en.md)
+[Host Relocate, Shutdown & Handoff](../../../../30-host-relocation-flow.en.md)
 
 ## 1. Scope
 

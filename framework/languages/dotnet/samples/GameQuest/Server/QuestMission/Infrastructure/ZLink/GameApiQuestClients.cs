@@ -42,13 +42,13 @@ internal sealed class ZLinkQuestProgressNotifier(IZLinkActorClient actors) : IQu
         {
             var contracts = projection.Select(QuestContractMapper.ToContract).ToArray();
             foreach (var progress in contracts)
-                await actors.SendToActor(playerId, new QuestProgressNotify(playerId, progress))
+                await actors.SendToActor(playerId, new QuestProgressMsg(playerId, progress))
                     .Async(cancellationToken);
 
             if (!string.IsNullOrWhiteSpace(completedQuestId))
             {
                 var completed = contracts.First(progress => progress.QuestId == completedQuestId);
-                await actors.SendToActor(playerId, new QuestCompletedNotify(playerId, completed, true))
+                await actors.SendToActor(playerId, new QuestCompletedMsg(playerId, completed, true))
                     .Async(cancellationToken);
             }
 

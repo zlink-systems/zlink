@@ -1,8 +1,19 @@
 package systems.zlink.framework.runtime.streams;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.EnumSet;
+import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.ZLinkEncodedPayload;
+import systems.zlink.framework.ZLinkMessageSerializer;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorBindOperation;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorUnbindOperation;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
@@ -13,6 +24,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
@@ -37,6 +49,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapt
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMonitoringBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkSpotBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkStreamBackendAdapter;
@@ -66,6 +79,8 @@ final class ZLinkStreamRuntimeIngressTest {
         TestSession.holdFirstDispatch = false;
         TestSession.failNextConstruction = false;
         TestSession.replacementMode = ReplacementMode.NONE;
+        TestSession.decodeWirePayload = false;
+        TestSession.decodedWirePayload.set(null);
         TestSession.createdCount.set(0);
         TestSession.lastSession.set(null);
         runtimes.forEach(runtime -> runtime.closeAsync().toCompletableFuture().join());
@@ -78,8 +93,8 @@ final class ZLinkStreamRuntimeIngressTest {
         FakeStream stream = new FakeStream();
         stream.enqueue(PEER_A, new byte[0]);
         byte[] frame = frame("segmented", "{}");
-        stream.enqueue(PEER_A, java.util.Arrays.copyOfRange(frame, 0, 4));
-        stream.enqueue(PEER_A, java.util.Arrays.copyOfRange(frame, 4, frame.length));
+        stream.enqueue(PEER_A, Arrays.copyOfRange(frame, 0, 4));
+        stream.enqueue(PEER_A, Arrays.copyOfRange(frame, 4, frame.length));
 
         ZLinkStreamRuntime runtime = start(stream, 0);
         runtimes.add(runtime);
@@ -92,6 +107,24 @@ final class ZLinkStreamRuntimeIngressTest {
         assertTrue(stream.successfulReceives.get() >= 3);
         assertTrue(stream.readinessWaits.get() >= 3);
         assertEquals(List.of("segmented"), session.packetNames);
+    }
+
+    @Test
+    void sessionPayloadDecodeUsesTheSerializerMappedByTheWireCodec() throws Exception {
+        TestSession.decodeWirePayload = true;
+        FakeStream stream = new FakeStream();
+        stream.enqueue(
+            PEER_A,
+            frame("custom", ZLinkStreamCodec.PROTOBUF, "wire"));
+
+        ZLinkStreamRuntime runtime = startWithCustomReceiveCodec(stream);
+        runtimes.add(runtime);
+
+        TestSession session = awaitSession();
+        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+        assertEquals(
+            new WirePayload("CUSTOM"),
+            TestSession.decodedWirePayload.get());
     }
 
     @Test
@@ -156,7 +189,7 @@ final class ZLinkStreamRuntimeIngressTest {
     void segmentedOversizeRecordsEmsgsizeAndDisconnectsThePeer() throws Exception {
         FakeStream stream = new FakeStream();
         byte[] oversize = frame("oversize", "x".repeat(512));
-        stream.enqueue(PEER_A, java.util.Arrays.copyOf(oversize, 6));
+        stream.enqueue(PEER_A, Arrays.copyOf(oversize, 6));
         stream.enqueue(PEER_B, frame("good", "{}"));
 
         ZLinkStreamRuntime runtime = start(stream, 0, 256);
@@ -300,6 +333,85 @@ final class ZLinkStreamRuntimeIngressTest {
         assertFalse(session.packetNames.contains("after-replacement"));
         assertTrue(elapsedMillis >= 80, "replacement close must be timer driven");
         assertTrue(elapsedMillis < 2_000, "replacement close exceeded its timer");
+    }
+
+    @Test
+    void relocationHandlersFenceTheTransportSourceAndAcceptSourceAbort()
+        throws Exception {
+        FakeStream stream = new FakeStream();
+        stream.enqueue(PEER_A, frame("initial", "{}"));
+        ReplacementFixture fixture = startReplacement(stream);
+        runtimes.add(fixture.runtime());
+        TestSession session = awaitSession();
+        ZLinkActor actor = fixture.actors().getOrCreateLocalActor(
+                "relocation-actor", ZLinkActor.class)
+            .toCompletableFuture().join().orElseThrow();
+        ZLinkBackendActorRef actorRef = fixture.actors().currentRef(actor);
+        session.context().actors().bind(new ActorRef(
+                actorRef.actorId(),
+                actorRef.generation(),
+                MESH,
+                actorRef.nodeRid()))
+            .toCompletableFuture().join();
+        var codec = new ZLinkServiceM6BWireCodec();
+        var relocation = new ZLinkServiceM6BWireCodec.RelocationIdentity(3, 4);
+        var coordinator =
+            new ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
+                "actor-owner", 11, actorRef.nodeRid(), 3, "store-v1");
+        var owner = new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+            RoutingId.from("session-owner-node"),
+            3,
+            "session-owner",
+            5,
+            PEER_A,
+            1);
+        var seal = new ZLinkServiceM6BWireCodec.SessionRelocationSeal(
+            relocation,
+            coordinator,
+            ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
+            new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                actorRef, 3, 7, 11),
+            owner);
+
+        assertThrows(CompletionException.class, () ->
+            fixture.runtime().handleSessionRelocationSeal(
+                    PEER_B,
+                    codec.encodeSessionRelocationSeal(seal))
+                .toCompletableFuture().join());
+        var sealed = codec.decodeSessionRelocationSealed(
+            fixture.runtime().handleSessionRelocationSeal(
+                    actorRef.nodeRid(),
+                    codec.encodeSessionRelocationSeal(seal))
+                .toCompletableFuture().join());
+        var abort = new ZLinkServiceM6BWireCodec.SessionRelocationRoute(
+            relocation,
+            coordinator,
+            ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
+            new ZLinkServiceM6BWireCodec.ActorIdentity(
+                actorRef.actorId(), actorRef.generation()),
+            owner,
+            ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.ABORT,
+            0,
+            7,
+            null,
+            0,
+            0);
+
+        assertThrows(CompletionException.class, () ->
+            fixture.runtime().handleSessionRelocationRoute(
+                    PEER_B,
+                    codec.encodeSessionRelocationRoute(abort))
+                .toCompletableFuture().join());
+        var ack = codec.decodeSessionRelocationRouted(
+            fixture.runtime().handleSessionRelocationRoute(
+                    actorRef.nodeRid(),
+                    codec.encodeSessionRelocationRoute(abort))
+                .toCompletableFuture().join());
+
+        assertEquals(sealed.lastAcceptedSessionSequence(),
+            ack.lastAcceptedSessionSequence());
+        assertEquals(ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.ABORT,
+            ack.action());
     }
 
     @Test
@@ -550,6 +662,42 @@ final class ZLinkStreamRuntimeIngressTest {
                     CompletableFuture.completedFuture(null));
     }
 
+    private ZLinkStreamRuntime startWithCustomReceiveCodec(FakeStream stream) {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addStreamNode("stream")
+            .bind("tcp://127.0.0.1:18081")
+            .registerSession(TestSession.class);
+        ZLinkFrameworkRegistration registration = options.registration();
+        ZLinkCodecRegistration codecs = registration.codecs();
+        codecs.addSerializer(
+            "application/x-wire",
+            new WirePayloadSerializer(),
+            WirePayload.class::equals);
+        codecs.addStreamCodec(
+            "application/x-wire", ZLinkStreamCodec.PROTOBUF);
+        codecs.freeze();
+        ZLinkMessageSerializer serializer = codecs.serializerWithFallback(
+            new ZLinkJsonMessageSerializer());
+        lastRegistration = registration;
+        return new ZLinkStreamRuntime(
+            new FakeProvider(stream),
+            new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)),
+            registration,
+            Map.of(),
+            Map.of(),
+            serializer,
+            null,
+            ZLinkHandlerActivator.reflection(),
+            ignored -> true,
+            null,
+            null,
+            new FakeContext(),
+            false,
+            (ignoredBackend, ignoredKey) ->
+                (ignoredReady, ignoredShutdown) ->
+                    CompletableFuture.completedFuture(null));
+    }
+
     private static TestSession awaitSession() throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (System.nanoTime() < deadline) {
@@ -563,23 +711,30 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     private static byte[] frame(String packetName, String payload) {
+        return frame(packetName, ZLinkStreamCodec.JSON, payload);
+    }
+
+    private static byte[] frame(
+        String packetName,
+        ZLinkStreamCodec codec,
+        String payload) {
         ZLinkStreamHeader header = new ZLinkStreamHeader(
             ZLinkStreamMessageKind.SEND,
-            ZLinkStreamCodec.JSON,
-            java.util.EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+            codec,
+            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
             Optional.empty(),
             packetName,
             Map.of());
         return ZLinkStreamFrameCodec.encode(
             ZLinkStreamHeaderCodec.encode(header),
-            payload.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            payload.getBytes(StandardCharsets.UTF_8));
     }
 
     private static byte[] controlFrame(String packetName) {
         ZLinkStreamHeader header = new ZLinkStreamHeader(
             ZLinkStreamMessageKind.CONTROL,
             ZLinkStreamCodec.RAW,
-            java.util.EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
             Optional.empty(),
             packetName,
             Map.of());
@@ -595,6 +750,9 @@ final class ZLinkStreamRuntimeIngressTest {
         private static volatile boolean holdFirstDispatch;
         private static volatile boolean failNextConstruction;
         private static volatile ReplacementMode replacementMode = ReplacementMode.NONE;
+        private static volatile boolean decodeWirePayload;
+        private static final AtomicReference<WirePayload> decodedWirePayload =
+            new AtomicReference<>();
         private final ZLinkSessionContext context;
         private final CountDownLatch dispatchLatch = new CountDownLatch(1);
         private final CountDownLatch secondDispatchLatch = new CountDownLatch(1);
@@ -605,7 +763,7 @@ final class ZLinkStreamRuntimeIngressTest {
         private final CompletableFuture<Void> replacementCompletion =
             new CompletableFuture<>();
         private final List<String> packetNames =
-            java.util.Collections.synchronizedList(new ArrayList<>());
+            Collections.synchronizedList(new ArrayList<>());
 
         public TestSession(ZLinkSessionContext context) {
             if (failNextConstruction) {
@@ -639,7 +797,10 @@ final class ZLinkStreamRuntimeIngressTest {
         }
         @Override public CompletionStage<Void> onDispatch(
             ZLinkSessionDispatchContext dispatch,
-            systems.zlink.framework.messaging.ZLinkMessage payload) {
+            ZLinkMessage payload) {
+            if (decodeWirePayload) {
+                decodedWirePayload.set(payload.decode(WirePayload.class));
+            }
             int count = dispatchCount.incrementAndGet();
             packetNames.add(dispatch.packetName());
             dispatchLatch.countDown();
@@ -648,6 +809,23 @@ final class ZLinkStreamRuntimeIngressTest {
             }
             secondDispatchLatch.countDown();
             return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    private record WirePayload(String marker) {
+    }
+
+    private static final class WirePayloadSerializer
+        implements ZLinkMessageSerializer {
+        @Override
+        public <T> ZLinkEncodedPayload serialize(T value) {
+            return ZLinkEncodedPayload.from(
+                "CUSTOM".getBytes(StandardCharsets.UTF_8));
+        }
+
+        @Override
+        public <T> T deserialize(ZLinkEncodedPayload payload, Class<T> type) {
+            return type.cast(new WirePayload("CUSTOM"));
         }
     }
 
@@ -811,12 +989,12 @@ final class ZLinkStreamRuntimeIngressTest {
         @Override public boolean reply(
             RoutingId routingId, ZLinkStreamHeader header,
             List<Message> parts, SendFlags flags) { return true; }
-        @Override public systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorBindOperation
+        @Override public ZLinkBackendActorBindOperation
             bindActor(RoutingId sessionRid,
-                systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef actor) {
+                ZLinkBackendActorRef actor) {
             return timeout -> CompletableFuture.completedFuture(null);
         }
-        @Override public systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorUnbindOperation
+        @Override public ZLinkBackendActorUnbindOperation
             unbindActor(RoutingId sessionRid, String actorId) {
             return timeout -> CompletableFuture.completedFuture(null);
         }

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient.kotlin
 
+import org.junit.jupiter.api.Assertions
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpHandler
 import com.sun.net.httpserver.HttpServer
@@ -81,6 +82,25 @@ class HttpClientCoroutineTest {
         assertTrue(!submitted.isDone)
         submitted.complete("completed-after-caller-cancel")
         assertEquals("completed-after-caller-cancel", submitted.join())
+    }
+
+    @Test
+    fun `await bridge unwraps nested completion failures`() {
+        val expected = IllegalStateException("request failed")
+        val submitted = CompletableFuture<String>()
+        submitted.completeExceptionally(
+            java.util.concurrent.CompletionException(
+                java.util.concurrent.ExecutionException(expected),
+            ),
+        )
+
+        val thrown = Assertions.assertThrows(IllegalStateException::class.java) {
+            runBlocking {
+                submitted.awaitWithoutCancellingOperation()
+            }
+        }
+
+        assertEquals(expected.message, thrown.message)
     }
 
     @Test

@@ -44,7 +44,6 @@ provider/consumer role application, provider handler, shared message type은 Kot
 | `Client/Scenarios/RlB5DrainInflightScenario.cs` | `Client/src/main/kotlin/.../Scenarios/RlB5DrainInflightScenario.kt` | scenario | done | RL-B5 drain in-flight scenario를 Kotlin scenario 파일로 분리했다. |
 | `Client/Scenarios/RlB6GrayFaultScenario.cs` | `Client/src/main/kotlin/.../Scenarios/RlB6GrayFaultScenario.kt` | scenario | done | RL-B6 gray fault scenario를 Kotlin scenario 파일로 분리했다. |
 | `Client/Scenarios/RlC1ClientHostLifecycleScenario.cs` | `Client/src/main/kotlin/.../Scenarios/RlC1ClientHostLifecycleScenario.kt` | scenario | done | RL-C1 client host lifecycle marker를 Kotlin scenario file로 분리했다. 현재 cleanup workload는 RL-D5 mixed burst body와 함께 실행된다. |
-| `Client/Scenarios/RlC2TopologyRecoveryScenario.cs` | `Client/src/main/kotlin/.../Scenarios/RlC2TopologyRecoveryScenario.kt` | scenario | done | runner가 provider-b를 `SIGKILL`해 owner lease stale row를 만들고 consumer를 새 discovery host로 재시작한다. public location runtime query에서 provider-b가 live topology에서 빠지는지, request가 provider-a로만 가는지, provider-b 재시작 뒤 다시 traffic을 받는지 확인한다. |
 | `Client/Scenarios/RlC3NodePauseRecoveryScenario.cs` | `Client/src/main/kotlin/.../Scenarios/RlA1ProviderRestartScenario.kt` | scenario | not-needed | Kotlin runner는 provider restart orchestration에서 RL-C3 node pause/recovery marker를 함께 관측한다. 별도 file을 두면 같은 orchestration을 중복 실행하게 되어 만들지 않는다. |
 | `Client/Scenarios/RlC4RegistryOutageScenario.cs` | `Client/src/main/kotlin/.../Scenarios/RlC4RegistryOutageScenario.kt` | scenario | done | runner-owned Redis를 pause/unpause해 store outage를 만들고, 이미 연결된 channel request가 계속 성공하는지, public topology read가 outage 중 infrastructure error로 실패하는지, store 복구 뒤 topology read와 follow-up request가 정상화되는지 확인한다. |
 | `Client/Scenarios/RlD1HighFanoutScenario.cs` | `Client/src/main/kotlin/.../Scenarios/RlD1HighFanoutScenario.kt` | scenario | done | RL-D1 marker emission을 Kotlin scenario 파일로 분리했고 RL-A3 storm workload가 호출한다. |
@@ -104,7 +103,6 @@ provider/consumer role application, provider handler, shared message type은 Kot
 | `RL-B5` | P0 | `Client/Scenarios/RlB5DrainInflightScenario.cs` | `Client/.../Scenarios/RlB5DrainInflightScenario.kt` | done |
 | `RL-B6` | P1 | `Client/Scenarios/RlB6GrayFaultScenario.cs` | `Client/.../Scenarios/RlB6GrayFaultScenario.kt` | done |
 | `RL-C1` | P1 | `Client/Scenarios/RlC1ClientHostLifecycleScenario.cs` | `Client/.../Scenarios/RlC1ClientHostLifecycleScenario.kt` | done |
-| `RL-C2` | P2 | `Client/Scenarios/RlC2TopologyRecoveryScenario.cs` | `Client/.../Scenarios/RlC2TopologyRecoveryScenario.kt` | done |
 | `RL-C3` | P2 | `Client/Scenarios/RlC3NodePauseRecoveryScenario.cs` | `Client/.../Scenarios/RlA1ProviderRestartScenario.kt` | not-needed |
 | `RL-C4` | P1 | `Client/Scenarios/RlC4RegistryOutageScenario.cs` | `Client/.../Scenarios/RlC4RegistryOutageScenario.kt` | done |
 | `RL-D1` | P2 | `Client/Scenarios/RlD1HighFanoutScenario.cs` | `Client/.../Scenarios/RlD1HighFanoutScenario.kt` | done |

@@ -15,7 +15,7 @@ public final class SmE1Scenario extends SpotServiceScenarioContext {
 
     private void execute() {
         String ownerEndpoint = options().httpAEndpoint();
-        String spotRid = "spot-sm-e1-" + java.util.UUID.randomUUID().toString().replace("-", "");
+        String spotRid = "spot-sm-e1-" + UUID.randomUUID().toString().replace("-", "");
         Contracts.CreateSpotRes created = postJson(
             ownerEndpoint,
             "/spot/create",

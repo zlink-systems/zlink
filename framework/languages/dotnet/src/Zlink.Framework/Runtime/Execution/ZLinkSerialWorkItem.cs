@@ -37,6 +37,8 @@ internal sealed class ZLinkSerialWorkItem
 
     public Task Completion => _completion.Task;
 
+    internal ZLinkSerialWorkItem? Next { get; set; }
+
     public ulong AcceptedSequence { get; }
     public ReadOnlyMemory<byte> AcceptedPayload
     {

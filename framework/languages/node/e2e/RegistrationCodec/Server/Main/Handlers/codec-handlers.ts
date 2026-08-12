@@ -6,7 +6,9 @@ import type {
 } from '@zlink-systems/framework';
 import {
   MessagePackEchoReq,
+  MessagePackEchoRes,
   ProtobufEchoReq,
+  ProtobufEchoRes,
   type EchoMsg,
   type EchoRes,
   type EchoReq,
@@ -35,12 +37,12 @@ export class JsonEchoCommandHandler implements ZLinkSendHandler<EchoMsg> {
 }
 
 @Injectable()
-export class ProtobufEchoRequestHandler implements ZLinkRequestHandler<EchoReq, ProtobufEchoReq> {
+export class ProtobufEchoRequestHandler implements ZLinkRequestHandler<ProtobufEchoReq, ProtobufEchoRes> {
   constructor(private readonly evidence: EvidenceStore) {}
 
-  async handle(request: EchoReq, context: ZLinkMessageContext): Promise<ProtobufEchoReq> {
+  async handle(request: ProtobufEchoReq, context: ZLinkMessageContext): Promise<ProtobufEchoRes> {
     this.evidence.add(`codec-request|codec=protobuf|value=${request.value}|content=${context.contentType}`);
-    return new ProtobufEchoReq(`echo:${request.value}|content:${context.contentType ?? '<null>'}`);
+    return new ProtobufEchoRes(`echo:${request.value}|content:${context.contentType ?? '<null>'}`);
   }
 }
 
@@ -54,12 +56,12 @@ export class ProtobufEchoCommandHandler implements ZLinkSendHandler<ProtobufEcho
 }
 
 @Injectable()
-export class MessagePackEchoRequestHandler implements ZLinkRequestHandler<EchoReq, MessagePackEchoReq> {
+export class MessagePackEchoRequestHandler implements ZLinkRequestHandler<MessagePackEchoReq, MessagePackEchoRes> {
   constructor(private readonly evidence: EvidenceStore) {}
 
-  async handle(request: EchoReq, context: ZLinkMessageContext): Promise<MessagePackEchoReq> {
+  async handle(request: MessagePackEchoReq, context: ZLinkMessageContext): Promise<MessagePackEchoRes> {
     this.evidence.add(`codec-request|codec=msgpack|value=${request.value}|content=${context.contentType}`);
-    return new MessagePackEchoReq(`echo:${request.value}|content:${context.contentType ?? '<null>'}`);
+    return new MessagePackEchoRes(`echo:${request.value}|content:${context.contentType ?? '<null>'}`);
   }
 }
 

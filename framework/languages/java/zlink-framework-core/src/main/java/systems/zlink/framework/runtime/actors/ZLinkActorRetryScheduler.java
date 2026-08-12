@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.Objects;
 
 import java.time.Duration;
 import java.util.Optional;
@@ -29,6 +30,18 @@ final class ZLinkActorRetryScheduler {
 
     static void scheduleRoute(Runnable attempt) {
         schedule(attempt, ROUTE_RETRY_DELAY);
+    }
+
+    /**
+     * Schedules the next Session route retransmission at an explicit spec
+     * interval (spec 20 §5 step 8: 1s, 1s, 2s, 4s, 5s and then 5s).
+     */
+    static void scheduleRouteAfter(Runnable attempt, Duration delay) {
+        if (delay == null || delay.isNegative() || delay.isZero()) {
+            execute(attempt);
+            return;
+        }
+        schedule(attempt, delay);
     }
 
     static CompletionStage<Void> delayRoute() {
@@ -87,7 +100,7 @@ final class ZLinkActorRetryScheduler {
                 }
                 CompletionStage<Optional<T>> lookupStage;
                 try {
-                    lookupStage = java.util.Objects.requireNonNull(
+                    lookupStage = Objects.requireNonNull(
                         lookup.get(), "route lookup stage");
                 } catch (RuntimeException failure) {
                     result.completeExceptionally(failure);

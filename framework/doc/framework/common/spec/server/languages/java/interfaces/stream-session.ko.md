@@ -132,7 +132,7 @@ callback이나 close를 기다리지 않는다.
 
 | 구현 차이 | 현재 상태 |
 |---|---|
-| Session Actor binding 교체 | JVM runtime에는 command 51 송수신, Java callback과 non-blocking 100 ms close timer가 아직 없다. |
+| Session Actor binding 교체 | 없음. JVM runtime은 one-way command 51, Java callback과 non-blocking 100 ms close timer를 구현한다. |
 
 Payload만 받는 `relay(...)`는 one-way admission이다. Dispatch context를 받는 overload는 explicit current
 STREAM request reply capability를 호출 즉시 runtime에 이전한다. Submitted면 Actor typed reply가 original

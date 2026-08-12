@@ -30,7 +30,7 @@ internal static class InstanceSpotEndpoints
 
         app.MapPost("/instance/cold-request", async (
             IZLinkSpotClient spots,
-            InstanceColdRequestReq request,
+            InstanceColdProbeReq request,
             CancellationToken cancellationToken) =>
         {
             try
@@ -38,11 +38,11 @@ internal static class InstanceSpotEndpoints
                 var reply = await spots
                     .RequestToSpot(
                         request.SpotId,
-                        new InstanceColdRequest(request.OperationId))
+                        new InstanceColdReq(request.OperationId))
                     .InstanceSpot(SpotServiceNames.InstanceSpotType)
                     .Timeout(TimeSpan.FromSeconds(10))
-                    .Async<InstanceColdRequestReply>(cancellationToken);
-                return Results.Ok(new InstanceColdRequestRes(
+                    .Async<InstanceColdRes>(cancellationToken);
+                return Results.Ok(new InstanceColdProbeRes(
                     request.SpotId,
                     request.OperationId,
                     Succeeded: true,
@@ -52,7 +52,7 @@ internal static class InstanceSpotEndpoints
             }
             catch (ZLinkFrameworkException error)
             {
-                return Results.Ok(new InstanceColdRequestRes(
+                return Results.Ok(new InstanceColdProbeRes(
                     request.SpotId,
                     request.OperationId,
                     Succeeded: false,
@@ -72,7 +72,7 @@ internal static class InstanceSpotEndpoints
                 await spots
                     .SendToSpot(
                         request.SpotId,
-                        new InstanceColdSend(request.OperationId))
+                        new InstanceColdMsg(request.OperationId))
                     .InstanceSpot(SpotServiceNames.InstanceSpotType)
                     .Async(cancellationToken);
                 return Results.Ok(new InstanceColdSendRes(

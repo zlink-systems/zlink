@@ -20,6 +20,7 @@ title: "Python 바인딩 공개 계약"
 |---|---|
 | [범위](#범위) | Core 자원을 표현하는 Python 공개 type 목록 |
 | [Package 표면](#package-표면) | public factory와 private 영역 경계 |
+| [Byte HWM과 Auto-HWM](#byte-hwm과-auto-hwm) | Python `int`와 Core `uint64_t` byte HWM의 매핑 |
 | [소유권과 수명](#소유권과-수명) | native handle·message·Received의 소유·해제 규칙 |
 | [Callback 표면](#callback-표면) | 공개 callback 경로와 노출하지 않는 primitive |
 | [송수신과 no-data](#송수신과-no-data) | submit·no-data 표현과 native failure 전달 |
@@ -52,6 +53,26 @@ handle, FFI symbol, native struct를 public type으로 노출하지 않는다.
 `create_router_socket()`, `create_stream_socket()`, `create_pub_socket()`, `create_sub_socket()`,
 `create_poller()`, `create_timer()`, `create_received()`와 `create_message` 계열이다.
 정확한 Python signature는 같은 디렉터리의 contract module과 public header를 함께 기준으로 한다.
+
+## Byte HWM과 Auto-HWM
+
+HWM의 계산과 queue admission은 Core가 담당한다. Python의
+`send_high_water_mark`와 `receive_high_water_mark`는 byte 단위의 `int`이며
+음수가 아닌 `uint64_t` 범위만 허용한다. 바인딩은 값을 정확히 8-byte option으로
+Core에 전달하고 getter도 Core의 64-bit 값을 Python `int`로 반환한다. 값 `0`은
+무제한이다.
+
+`ContextOptions.auto_hwm_msg_unit_bytes`는 Core planner에 전달하는 planning
+unit이다. Core는 선택한 message slot 수에 이 값을 곱해 planned byte HWM을
+계산한다. 이 값은 평균 message 크기나 실제 admission charge가 아니다. Caller가
+방향별 HWM을 설정하면 그 방향은 수동 override가 되어 Auto-HWM 재계산에서
+제외된다.
+
+실제 pipe에 쌓인 accounted byte가 applied HWM에 도달하면 Core가
+backpressure를 결정한다. Python 바인딩은 message 수를 다시 세지 않으며 native
+result를 기존 submit·error 계약으로 전달한다. `MonitorStatus`의 planned,
+applied, deferred HWM과 in-flight 사용량은 byte 단위의 Python `int`다. Pending
+message와 `auto_hwm_socket_message_slots`만 count 진단값이다.
 
 ## 소유권과 수명
 

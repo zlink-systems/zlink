@@ -210,12 +210,38 @@ internal sealed class ResilienceProcessManager(ClientOptions options) : IAsyncDi
         startInfo.ArgumentList.Add(container);
         using var process = Process.Start(startInfo)
                             ?? throw new InvalidOperationException($"Failed to run docker {verb}.");
-        await process.WaitForExitAsync();
-        if (process.ExitCode != 0)
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        try
         {
-            var error = await process.StandardError.ReadToEndAsync();
-            throw new InvalidOperationException($"docker {verb} {container} failed: {error}");
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
         }
+        catch (TimeoutException error)
+        {
+            try
+            {
+                if (!process.HasExited) process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+                // The process exited between HasExited and Kill.
+            }
+            try
+            {
+                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(2));
+            }
+            catch (TimeoutException)
+            {
+                // Preserve the original command timeout below.
+            }
+            throw new TimeoutException(
+                $"docker {verb} {container} timed out after 10 seconds.", error);
+        }
+        _ = await outputTask;
+        var commandError = await errorTask;
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException(
+                $"docker {verb} {container} failed: {commandError}");
     }
 
     private ManagedProcess StartProvider(

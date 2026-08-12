@@ -21,6 +21,10 @@ import {
 } from './service-runtime-contracts';
 import type { ServiceMailboxRecord } from './service-mailbox';
 import {
+  MessageFollowSuppressionRegistry,
+  type MessageFollowSuppressionFence
+} from './message-follow-suppression-registry';
+import {
   ServiceStaleGenerationError,
   ServiceStatefulRegistry,
   ServiceTerminalOperationRegistry,
@@ -66,6 +70,7 @@ import {
   type ServiceUserSpotCloseRecord,
   type ServiceUserSpotCreateRecord
 } from './service-stateful-wire-codec';
+import { routingIdsEqual } from '../routing-id';
 
 import {
   decodeApplicationPayload,
@@ -77,6 +82,7 @@ import type {
   ServiceInstanceActivationRecoveryEnvelope
 } from './service-instance-activation-recovery-codec';
 import { validateServiceMetadataFrame } from './service-metadata-codec';
+import type { ServiceSessionBindingIngressPort } from './service-session-binding-ingress-port';
 import {
   ZLinkFrameworkException
 } from '../../contracts';
@@ -86,8 +92,6 @@ const SPOT_MOVING = 34;
 const USER_SPOT_OPERATION_CAPACITY = 65_536;
 const USER_SPOT_OPERATION_REPLAY_RETENTION_MS = 5 * 60_000;
 const ACTOR_ROUTE_NOT_FOUND = 1;
-const MESSAGE_FOLLOW_MESSAGE_LIMIT = 1024;
-const MESSAGE_FOLLOW_BYTE_LIMIT = 16 * 1024 * 1024;
 const SESSION_BINDING_REPLACEMENT_RETRY_DEADLINE_MS = 30_000;
 const SESSION_BINDING_REPLACEMENT_RETRY_INITIAL_DELAY_MS = 25;
 const SESSION_BINDING_REPLACEMENT_RETRY_MAX_DELAY_MS = 1_000;
@@ -95,6 +99,12 @@ const SESSION_BINDING_REPLACEMENT_RETRY_MAX_DELAY_MS = 1_000;
 export interface ServiceSpotMessageFollowSeal {
   readonly key: string;
   readonly serial: bigint;
+}
+
+export interface ServiceBoundSessionSendFence {
+  readonly targetNodeGeneration: bigint;
+  readonly authorityOwnerGeneration: bigint;
+  readonly ownerLeaseGeneration: bigint;
 }
 
 interface ServiceSpotMessageFollowRecord {
@@ -108,12 +118,14 @@ interface ServiceSpotMessageFollowRecord {
 
 interface ServiceSpotMessageFollowState {
   readonly seal: ServiceSpotMessageFollowSeal;
+  readonly objectKind: 'userSpot' | 'instanceSpot';
   readonly source: ServiceDirectSpotRouteFence;
   readonly queued: Array<ServiceSpotMessageFollowRecord | undefined>;
   queuedHead: number;
   queuedCount: number;
   queuedBytes: number;
   target?: ServiceDirectSpotRouteFence;
+  suppressionFence?: MessageFollowSuppressionFence;
   expiresAtMs?: number;
   draining: boolean;
   retryTimer?: ReturnType<typeof setTimeout>;
@@ -166,6 +178,7 @@ export interface ServiceStatefulMailboxData {
 
 export interface ServiceSessionDelivery {
   readonly binding: ServiceSessionBinding;
+  readonly bindingIngress?: ServiceSessionBindingIngressPort;
   /**
    * Delivers the retained M6A application frame after the binding fence has
    * been validated. The stream adapter owns multipart decoding at that point.
@@ -343,6 +356,7 @@ export class ServiceStatefulRuntime {
   private readonly spotRoutes = new Map<string, ServiceDirectSpotRouteFence>();
   private readonly directSpotRoutes = new Map<string, ServiceDirectSpotRouteFence>();
   private readonly spotMessageFollow = new Map<string, ServiceSpotMessageFollowState>();
+  private readonly spotMessageFollowSuppression = new MessageFollowSuppressionRegistry();
   private nextMessageFollowSerial = 1n;
   private nextMessageFollowOperation = 1n;
   private nextSpotId = 1n;
@@ -953,9 +967,7 @@ export class ServiceStatefulRuntime {
       actor: Object.freeze({ ...route.actor }),
       targetNodeGeneration: route.targetNodeGeneration,
       authorityOwnerGeneration: route.authorityOwnerGeneration,
-      ...(route.ownerLeaseGeneration === undefined
-        ? {}
-        : { ownerLeaseGeneration: route.ownerLeaseGeneration })
+      ownerLeaseGeneration: route.ownerLeaseGeneration
     }));
   }
 
@@ -1013,9 +1025,9 @@ export class ServiceStatefulRuntime {
   sendMessageFollowNotification(
     targetNodeRid: string,
     record: Omit<import('./service-stateful-wire-codec').ServiceMessageFollowRecord, 'kind'>
-  ): void {
+  ): boolean {
     this.requireOpen();
-    this.raw.sendService(targetNodeRid, [encodeMessageFollowHeader(record)]);
+    return this.raw.sendService(targetNodeRid, [encodeMessageFollowHeader(record)]);
   }
 
   setMessageFollowHandler(handler: (
@@ -1036,9 +1048,11 @@ export class ServiceStatefulRuntime {
     }
     const key = spotKey(source.spot);
     if (this.spotMessageFollow.has(key)) return undefined;
+    const sourceSpot = this.registry.requireSpot(source.spot);
     const seal = Object.freeze({ key, serial: this.nextMessageFollowSerial++ });
     this.spotMessageFollow.set(key, {
       seal,
+      objectKind: sourceSpot.kind === 'user' ? 'userSpot' : 'instanceSpot',
       source: freezeDirectSpotRoute(source),
       queued: [],
       queuedHead: 0,
@@ -1083,6 +1097,12 @@ export class ServiceStatefulRuntime {
       throw new ServiceStaleGenerationError('spot', state.source.spot.spotId);
     }
     state.target = freezeDirectSpotRoute(target);
+    state.suppressionFence = spotMessageFollowSuppressionFence(
+      state.objectKind,
+      state.source,
+      state.target
+    );
+    this.spotMessageFollowSuppression.retainRoute(state.suppressionFence);
     state.expiresAtMs = durationMs === 0
       ? Number.MAX_SAFE_INTEGER
       : Date.now() + durationMs;
@@ -1560,7 +1580,8 @@ export class ServiceStatefulRuntime {
     actor: ServiceActorRef,
     timeoutMs: number,
     deliver: ServiceSessionDelivery['deliver'],
-    onBindingReplaced?: ServiceSessionDelivery['onBindingReplaced']
+    onBindingReplaced?: ServiceSessionDelivery['onBindingReplaced'],
+    bindingIngress?: ServiceSessionBindingIngressPort
   ): ServiceStatefulPendingOperation {
     const pending = this.operations.reserve(timeoutMs);
     const generation = this.nextSessionSequence++;
@@ -1577,6 +1598,7 @@ export class ServiceStatefulRuntime {
     const delivery: ServiceSessionDelivery = {
       binding: localBinding,
       deliver,
+      ...(bindingIngress === undefined ? {} : { bindingIngress }),
       ...(onBindingReplaced === undefined ? {} : { onBindingReplaced })
     };
     const deliveryKey = actorKey(actor);
@@ -1628,7 +1650,8 @@ export class ServiceStatefulRuntime {
               actor,
               targetNodeGeneration: this.nodeGeneration,
               authorityOwnerGeneration: this.registry.actor(actor.actorId)?.authorityOwnerGeneration
-                ?? actor.generation
+                ?? actor.generation,
+              ownerLeaseGeneration: this.nodeGeneration
             }
           ));
         }
@@ -1756,7 +1779,8 @@ export class ServiceStatefulRuntime {
   sendBoundSession(
     actor: ServiceActorRef,
     expectedBindingGeneration: bigint,
-    payload: ServiceApplicationPayload
+    payload: ServiceApplicationPayload,
+    senderFence?: ServiceBoundSessionSendFence
   ): number {
     let binding: ServiceSessionBinding;
     try {
@@ -1764,8 +1788,10 @@ export class ServiceStatefulRuntime {
     } catch {
       return SubmitResult.InvalidState;
     }
+    const actorFence = this.tryBoundSessionSendFence(actor, senderFence);
+    if (actorFence === undefined) return SubmitResult.InvalidState;
     const header = encodeBoundSessionSendHeader(
-      this.actorFence(actor),
+      actorFence,
       expectedBindingGeneration
     );
     return this.submitOneWay(
@@ -1778,6 +1804,18 @@ export class ServiceStatefulRuntime {
     if (this.closed) return;
     this.closed = true;
     this.operations.close();
+    const clearedActors = new Set<string>();
+    for (const deliveries of [this.sessionDeliveries, this.retiredSessionDeliveries]) {
+      for (const delivery of deliveries.values()) {
+        const actorId = delivery.binding.actor.actorId;
+        if (clearedActors.has(actorId)) continue;
+        clearedActors.add(actorId);
+        delivery.bindingIngress?.clearOutbound(
+          actorId,
+          new Error(`Actor '${actorId}' Session service closed with retained outbound delivery.`)
+        );
+      }
+    }
     this.sessionDeliveries.clear();
     this.retiredSessionDeliveries.clear();
     this.appliedReplacementNotices.clear();
@@ -3149,7 +3187,6 @@ export class ServiceStatefulRuntime {
             actorAuthorityFromRoute({
               ...record.actor,
               ownerLeaseGeneration: record.actor.ownerLeaseGeneration
-                ?? this.nodeGeneration
             })
           );
         }
@@ -3190,8 +3227,7 @@ export class ServiceStatefulRuntime {
       && (
         knownAuthority.targetNodeGeneration !== authority.targetNodeGeneration
         || knownAuthority.authorityOwnerGeneration !== authority.authorityOwnerGeneration
-        || knownAuthority.ownerLeaseGeneration !== undefined
-          && knownAuthority.ownerLeaseGeneration !== authority.ownerLeaseGeneration
+        || knownAuthority.ownerLeaseGeneration !== authority.ownerLeaseGeneration
       )
     ) {
       return 'infrastructure';
@@ -3390,7 +3426,7 @@ export class ServiceStatefulRuntime {
   }
 
   private deliverBoundSession(
-    _ingress: RawServiceIngressRecord,
+    ingress: RawServiceIngressRecord,
     record: Extract<ServiceStatefulWireRecord, { readonly kind: 'boundSessionSend' }>,
     payloadFrame: Uint8Array | undefined
   ): RawServicePumpResult {
@@ -3399,8 +3435,54 @@ export class ServiceStatefulRuntime {
       delivery === undefined
       || delivery.binding.bindingGeneration !== record.expectedBindingGeneration
       || payloadFrame === undefined
-      || !delivery.deliver(delivery.binding.sessionRid, payloadFrame)
+      || ingress.sourceNodeGeneration === undefined
+      || !routingIdsEqual(ingress.sourceRoutingId, record.actor.actor.nodeRid)
+      || ingress.sourceNodeGeneration !== record.actor.targetNodeGeneration
     ) {
+      return 'protocolError';
+    }
+    const sessionRid = delivery.binding.sessionRid;
+    let retainedPayload: Uint8Array | undefined = payloadFrame;
+    let settled = false;
+    const settle = () => {
+      if (settled) return false;
+      settled = true;
+      retainedPayload = undefined;
+      return true;
+    };
+    const operation = {
+      deliver: async () => {
+        if (settled || retainedPayload === undefined) return false;
+        const delivered = delivery.deliver(sessionRid, retainedPayload);
+        if (delivered) settle();
+        return delivered;
+      },
+      fail: (_error: unknown) => {
+        settle();
+      }
+    };
+    const decision = delivery.bindingIngress?.retainOutbound({
+      actorId: record.actor.actor.actorId,
+      objectGeneration: record.actor.actor.generation,
+      actorNodeRid: record.actor.actor.nodeRid,
+      actorNodeGeneration: record.actor.targetNodeGeneration,
+      authorityOwnerGeneration: record.actor.authorityOwnerGeneration,
+      ownerLeaseGeneration: record.actor.ownerLeaseGeneration,
+      producerNodeRid: ingress.sourceRoutingId,
+      producerNodeGeneration: ingress.sourceNodeGeneration,
+      sessionIdentity: sessionRid,
+      bindingGeneration: record.expectedBindingGeneration
+    }, operation);
+    if (decision === 'retained') return 'application';
+    if (decision === 'rejected') {
+      return 'protocolError';
+    }
+    try {
+      const delivered = delivery.deliver(sessionRid, retainedPayload);
+      settle();
+      if (!delivered) return 'protocolError';
+    } catch (error) {
+      operation.fail(error);
       return 'protocolError';
     }
     return 'application';
@@ -3838,6 +3920,7 @@ export class ServiceStatefulRuntime {
         command: parts[0]![3]!,
         flags: parts[0]![4]!,
         sourceRoutingId: this.nodeRid,
+        sourceNodeGeneration: this.nodeGeneration,
         parts
       });
       return result === 'application' || result === 'infrastructure'
@@ -4240,7 +4323,8 @@ export class ServiceStatefulRuntime {
       this.rememberActorRoute({
         actor: resolvedActor,
         targetNodeGeneration: this.peerGeneration(targetNodeRid),
-        authorityOwnerGeneration: tail.authorityOwnerGeneration
+        authorityOwnerGeneration: tail.authorityOwnerGeneration,
+        ownerLeaseGeneration: this.peerGeneration(targetNodeRid)
       });
       kindData = {
         kind: 'actorLookupCompletion',
@@ -4389,19 +4473,6 @@ export class ServiceStatefulRuntime {
       return undefined;
     }
     const bytes = ingress.parts.reduce((sum, part) => sum + part.byteLength, 0);
-    if (
-      state.queuedCount >= MESSAGE_FOLLOW_MESSAGE_LIMIT
-      || bytes > MESSAGE_FOLLOW_BYTE_LIMIT - state.queuedBytes
-    ) {
-      if (wire.kind === 'spotRequest') {
-        const result = failure(createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
-          `Spot '${wire.target.spot.spotId}' exhausted the Message Follow capacity.`
-        ));
-        this.replyWire(ingress, wire.correlation!, result.terminalResult, result.failureCode);
-      }
-      return 'infrastructure';
-    }
     state.queued.push({
       ingress: retainIngress(ingress),
       wire,
@@ -4481,23 +4552,31 @@ export class ServiceStatefulRuntime {
     current: ServiceSpotMessageFollowRecord
   ): void {
     const target = state.target;
-    if (target === undefined) return;
+    const suppressionFence = state.suppressionFence;
+    if (target === undefined || suppressionFence === undefined) return;
+    const claim = this.spotMessageFollowSuppression.begin(suppressionFence);
+    if (claim === undefined) return;
     const operationLow = current.ingress.requestSequence !== undefined
       && current.ingress.requestSequence !== 0n
       ? current.ingress.requestSequence
       : this.nextMessageFollowOperation++;
-    this.raw.sendService(current.ingress.sourceRoutingId, [encodeMessageFollowHeader({
+    const accepted = this.raw.sendService(current.ingress.sourceRoutingId, [encodeMessageFollowHeader({
       source: messageFollowSpotRoute(state.source),
       target: messageFollowSpotRoute(target),
       hopCount: 1,
-      queuedMessages: state.queuedCount,
-      queuedBytes: state.queuedBytes,
+      queuedMessages: Math.min(state.queuedCount, 0xffff_ffff),
+      queuedBytes: Math.min(state.queuedBytes, 0xffff_ffff),
       originalOperation: {
         high: this.nodeGeneration,
         low: operationLow
       },
       originalReplyRouteId: current.ingress.requestSequence ?? 0n
     })]);
+    if (accepted) {
+      this.spotMessageFollowSuppression.markSent(claim);
+    } else {
+      this.spotMessageFollowSuppression.abort(claim);
+    }
   }
 
   private failExpiredSpotMessageFollow(state: ServiceSpotMessageFollowState): void {
@@ -4531,6 +4610,9 @@ export class ServiceStatefulRuntime {
     }
     if (state.retryTimer !== undefined) clearTimeout(state.retryTimer);
     state.retryTimer = undefined;
+    if (state.suppressionFence !== undefined) {
+      this.spotMessageFollowSuppression.expireRoute(state.suppressionFence);
+    }
   }
 
   private peekSpotMessageFollow(
@@ -4561,6 +4643,34 @@ export class ServiceStatefulRuntime {
     const route = this.tryActorFence(actor);
     if (route === undefined) throw new ServiceStaleGenerationError('actor', actor.actorId);
     return route;
+  }
+
+  private tryBoundSessionSendFence(
+    actor: ServiceActorRef,
+    senderFence: ServiceBoundSessionSendFence | undefined
+  ): ServiceActorRouteFence | undefined {
+    if (
+      senderFence === undefined
+      || senderFence.targetNodeGeneration !== this.nodeGeneration
+      || senderFence.authorityOwnerGeneration <= 0n
+      || senderFence.ownerLeaseGeneration <= 0n
+    ) {
+      return undefined;
+    }
+    const local = actor.nodeRid === this.nodeRid ? this.registry.actor(actor.actorId) : undefined;
+    if (
+      local === undefined
+      || !sameActorRef(local.ref, actor)
+      || local.authorityOwnerGeneration !== senderFence.authorityOwnerGeneration
+    ) {
+      return undefined;
+    }
+    return {
+      actor,
+      targetNodeGeneration: senderFence.targetNodeGeneration,
+      authorityOwnerGeneration: senderFence.authorityOwnerGeneration,
+      ownerLeaseGeneration: senderFence.ownerLeaseGeneration
+    };
   }
 
   private tryActorFence(actor: ServiceActorRef): ServiceActorRouteFence | undefined {
@@ -4925,7 +5035,7 @@ function actorAuthorityFromRoute(route: ServiceActorRouteFence): ServiceBoundSes
     actor: route.actor,
     targetNodeGeneration: route.targetNodeGeneration,
     authorityOwnerGeneration: route.authorityOwnerGeneration,
-    ownerLeaseGeneration: route.ownerLeaseGeneration ?? route.targetNodeGeneration
+    ownerLeaseGeneration: route.ownerLeaseGeneration
   };
 }
 
@@ -5066,6 +5176,26 @@ function messageFollowSpotRoute(
     authorityOwnerGeneration: route.authorityOwnerGeneration,
     ownerLeaseGeneration: route.ownerLeaseGeneration
   };
+}
+
+function spotMessageFollowSuppressionFence(
+  objectKind: 'userSpot' | 'instanceSpot',
+  source: ServiceDirectSpotRouteFence,
+  target: ServiceDirectSpotRouteFence
+): MessageFollowSuppressionFence {
+  return Object.freeze({
+    objectKind,
+    logicalObjectId: source.spot.spotId,
+    objectGeneration: source.spot.generation.toString(),
+    sourceNodeRid: source.targetNodeRid,
+    sourceNodeGeneration: source.targetNodeGeneration.toString(),
+    sourceAuthorityOwnerGeneration: source.authorityOwnerGeneration.toString(),
+    sourceOwnerLeaseGeneration: source.ownerLeaseGeneration.toString(),
+    targetNodeRid: target.targetNodeRid,
+    targetNodeGeneration: target.targetNodeGeneration.toString(),
+    targetAuthorityOwnerGeneration: target.authorityOwnerGeneration.toString(),
+    targetOwnerLeaseGeneration: target.ownerLeaseGeneration.toString()
+  });
 }
 
 function sameMessageFollowSpotSource(

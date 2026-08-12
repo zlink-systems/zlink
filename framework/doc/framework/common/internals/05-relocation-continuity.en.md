@@ -9,24 +9,24 @@ title: "5. Message Continuity During A Move"
 > **What this chapter answers** — where a message addressed to an
 > object goes while that object is moving to another node.
 >
-> **Contract ownership** — the move procedure's step order and store
-> contract are owned by
-> [Host Relocate And Shutdown](../spec/28-graceful-drain-handoff.en.md)
-> and [Location Runtime](../spec/21-location-runtime.en.md). This
-> chapter covers the **structure** that satisfies that contract, and
-> the mismatches actually observed across the four implementations.
+> **Contract ownership** — the complete move sequence is owned by
+> [Complete Actor And Spot Relocation Flow](../spec/28-relocation-flow.en.md),
+> the host operation by
+> [Complete Host Relocation Flow](../spec/30-host-relocation-flow.en.md),
+> and the store contract by [Location Runtime](../spec/21-location-runtime.en.md). This
+> chapter covers the **structure** that satisfies that contract and
+> the failures that become visible when a move boundary is violated.
 
 While a running object moves to another node, where does a message
 addressed to it go? This document covers **how a message is handled at
-each boundary**, rather than the move procedure itself. The step order
-of the procedure and the store contract are owned by the formal spec
-([Location Runtime](../spec/21-location-runtime.en.md),
-[Host Relocate And Shutdown](../spec/28-graceful-drain-handoff.en.md)).
+each boundary**, rather than the move procedure itself. The formal spec owns the step
+order and Store contract. [13. Relocation Handoff State Transitions](13-relocation-handoff.en.md)
+explains the complete state transition every runtime follows.
 
 ## 1. Four Boundaries
 
-From a message's point of view, a move splits into four spans. The
-fate of an arriving message differs in each span.
+From a message's point of view, a move splits into four spans. Each span handles an
+arriving message differently.
 
 ```mermaid
 flowchart LR
@@ -44,17 +44,16 @@ flowchart LR
 
 The order in ① is a design decision — **new work on the source isn't
 blocked until the receiving slot is confirmed**
-([Host Relocate And Shutdown 「8.2 The Common Order Every Actor And Spot Follows」](../spec/28-graceful-drain-handoff.en.md#82-the-common-order-every-actor-and-spot-follows)).
+([Complete Host Relocation Flow 「8.2 The Common Order Every Actor And Spot Follows」](../spec/30-host-relocation-flow.en.md#82-the-common-order-every-actor-and-spot-follows)).
 Reversed, if the move fails for lack of a slot, that object would have
 been stopped for no reason at all.
 
 ## 2. Span ② — Holding And Order
 
-A message arriving after the block is held in a bounded slot. The
-bound is **1,024 items / 16 MiB per move**, and exceeding it ends a
-call waiting for a response in `Unavailable`, and one not waiting in a
-drop
-([Host Relocate And Shutdown 「9. Moving Pending Messages, Timers, And Sessions」](../spec/28-graceful-drain-handoff.en.md#9-moving-pending-messages-timers-and-sessions)).
+A message arriving after the block is held in a relocation slot. The
+queue has no relocation-specific bound on item count or stored size
+([Complete Host Relocation Flow 「9. Moving Pending Messages, Timers, And Sessions」](../spec/30-host-relocation-flow.en.md#9-moving-pending-messages-timers-and-sessions)).
+Limits on an individual message, transport, deadline, and cancellation remain in force.
 
 There's one rule for order — **restored prior work runs before the
 messages held during the move**
@@ -90,62 +89,70 @@ its default active period is **30 seconds**
 |---|---|
 | Active period | 30 seconds by default. Per move |
 | Forwarding hops | Up to 8 chained forwards |
-| Forwarding volume | 1,024 items / 16 MiB per move |
+| Forwarding volume | No relocation-specific bound |
 
 | Situation | Result the caller observes |
 |---|---|
-| Forwarding loops back to where it started | `Unavailable` |
+| The forwarding path forms a loop and returns to the first node | `Unavailable` |
 | Object generation doesn't match | `InvalidOperation` |
-| Forwarding volume bound exceeded | `CapacityExceeded` |
 
 When forwarding, the call identifier, object generation, payload, and
 response path are kept exactly as-is. Not keeping them means
 [4. Operation Completion Confirmation](04-completion.en.md)'s
-completion slot can't be found, and the caller hangs until timeout.
+completion slot can't be found, and the call remains incomplete until timeout.
 
 ### This Isn't An Optional Feature
 
 **Session connection and relay depend on this forwarding path**
 ([Session Actor Dispatch 「4. How A Session Holds An Actor Route」](../spec/20-session-actor-dispatch.en.md#4-how-a-session-holds-an-actor-route)).
-Without implementing it, a session connected to a moved Actor won't
-work correctly. Reading it as a "nice-to-have optimization" and
-deferring it shows up later as an unexplainable failure on the session
-side.
+Without it, a session connected to a moved Actor does not work correctly. Message Follow
+is therefore a path required for session behavior, not an optional performance
+optimization.
 
 ## 4. Span ③ — The Asymmetry Before And After Owner Switch
 
-The owner switch is done as **one conditional change** to the store.
-If even one condition doesn't match, nothing changes and `Conflict` is
-returned
-([Location Store Provider SPI 「4. Conditional Atomic Batch」](../spec/22-location-store-redis.en.md#4-conditional-atomic-batch)).
+Even after stopping application dispatch, the source keeps relaying messages arriving at
+the old address to the target. This relay preserves order within the same TCP connection.
+After sending every message received before cutover, the source puts cutover as a
+`[send]` on the same connection, letting the target know every earlier relay has arrived. Relocation
+adds no per-message ACK, numeric high-water, separate journal, or capacity limit here.
 
-Failure handling is completely different depending on this one point.
+After factory, Restore, and temporary queue preparation, the target conditionally changes
+the Location Store owner from source to target when cutover arrives or 1,000 ms elapses
+after the relay-ready reply. Only the target performs this CAS. Neither the source nor
+the Session owner changes owner based on a timeout or local mirror.
 
-| Timing | If it fails |
+Failure handling changes across this one CAS.
+
+| Timing | On failure |
 |---|---|
-| Before the switch | The source remains owner. There's nothing to roll back |
-| After the switch | **It's not rolled back to the source.** The current step is retried against the same target within a fixed time, and if the target shuts down, that object is left unusable |
+| Before cutover | The source remains owner. The target queue doesn't execute, and source can use the original pre-relay records again. |
+| After cutover, before successful CAS | Removes the target object and queue without reopening source dispatch. Session cleans under its own seal timeout. |
+| After CAS | It isn't rolled back to the source. The target queue opens, and Message Follow delivers messages arriving late at the old address. |
 
-The reason it isn't rolled back is this — at the moment the switch
-succeeds, the target is already the official owner, and in that
-interval, another participant may have seen the target as owner and
-sent it messages. Rolling back to the source would erase the
-processing results of those messages.
+For a retryable Store failure or indeterminate response, the target repeats CAS and read
+with the same fence and `RelocationId` until Restore validity expires. If target ownership
+isn't confirmed by then, it records a `location_update_failed` Error and removes the
+prepared Actor or Spot, temporary queue, and relocation state. It sends no Session route
+update.
 
-### So Steps After The Switch Must Be Idempotent
+The target enqueues existing work first, then relay before cutover, then work
+that entered the temporary queue, and opens dispatch. There's no global ordering promise
+between source relay and messages arriving directly at the target over another TCP
+connection. Only order after acceptance into the target queue is preserved.
 
-Since it can't roll back, only forward retries remain. So each step
-after the switch is built so that **receiving the same request again
-produces the same result as receiving it once.** Receiving the same
-restore request again doesn't start over — it uses the state already
-in progress
-([Host Relocate And Shutdown 「8.2 The Common Order Every Actor And Spot Follows」](../spec/28-graceful-drain-handoff.en.md#82-the-common-order-every-actor-and-spot-follows)).
+The source sends cutover, waits for no target completion response, and changes to Message
+Follow. After CAS and queue opening, the target sends a Session route update for a bound
+Actor. Neither cutover nor Session route update has a reply. A late or duplicate control
+only records a Warning; it doesn't change owner, route, or queue again.
 
-Only one thing in this span must have no intermediate state —
-**switching which node receives processing** must change in one shot
-([Host Relocate And Shutdown 「8.2 The Common Order Every Actor And Spot Follows」](../spec/28-graceful-drain-handoff.en.md#82-the-common-order-every-actor-and-spot-follows)).
-An intermediate state here means two nodes process the same object at
-once.
+### Therefore Post-CAS Steps Must Be Repeatable
+
+Because post-CAS work isn't rolled back to the source, opening the target queue and
+sending the Session route update under the same relocation identity must not mutate current state a
+second time. This doesn't require durably journaling every message or adding an
+application ACK. Ordinary server delivery relies on TCP, while a request completes under
+its existing correlation and deadline.
 
 ## 5. Don't Split The Move Path Into Multiple Branches
 
@@ -158,11 +165,10 @@ not the component decomposition. But splitting into branches means
 failure happens in the middle, **which branch owns cleanup
 responsibility** can't be read off.
 
-One implementation has the move path split into three branches using
-two unrelated sets of stage values. Another implementation has it
-owned by a single transition rule. The latter is taken as the
-standard. This is a part the formal spec left undecided that internals
-decides.
+Splitting a move path into several branches with unrelated stage-value
+sets duplicates the same transitions. One transition rule owns the
+move of one object or group. This internals decision fixes the component
+boundary that the formal spec leaves undecided.
 
 ## 6. Result To Confirm
 
@@ -171,12 +177,11 @@ decides.
 - A message arriving after the block isn't lost and is delivered to
   the new owner.
 - Restored prior work runs before messages held during the move.
-- A call exceeding the holding bound ends in `Unavailable`.
+- A call is not rejected because of a relocation-specific record-count or byte bound.
 - A message sent to the old address right after a move is delivered to
   the new owner within 30 seconds, with the call identifier and
   response path preserved.
-- Exceeding 8 forwards or the forwarding-volume bound ends in the
-  defined error.
+- Exceeding 8 forwards ends in `Unavailable`.
 - If the owner switch ends in `Conflict`, no value in the store
   changes.
 - If it fails after the owner switch, the source doesn't become owner

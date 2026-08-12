@@ -2,6 +2,7 @@
 
 #include <zlink/framework.hpp>
 
+#include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
@@ -55,16 +56,21 @@ struct traced_reply_t
 };
 
 template <typename T>
-void add_int_serializer (zlink::framework::serializer_registry_t &serializers)
+requires (std::is_same_v<T, event_t> || std::is_same_v<T, request_t>
+          || std::is_same_v<T, reply_t> || std::is_same_v<T, traced_event_t>
+          || std::is_same_v<T, traced_request_t> || std::is_same_v<T, traced_reply_t>)
+void to_json (nlohmann::json &json, const T &value)
 {
-    serializers.add<T> (
-      [] (const T &value) {
-          return zlink::framework::encoded_payload_t::from_string (
-            std::to_string (value.value));
-      },
-      [] (const zlink::framework::encoded_payload_t &payload) {
-          return T{std::stoi (payload.to_string ())};
-      });
+    json = value.value;
+}
+
+template <typename T>
+requires (std::is_same_v<T, event_t> || std::is_same_v<T, request_t>
+          || std::is_same_v<T, reply_t> || std::is_same_v<T, traced_event_t>
+          || std::is_same_v<T, traced_request_t> || std::is_same_v<T, traced_reply_t>)
+void from_json (const nlohmann::json &json, T &value)
+{
+    value.value = json.get<int> ();
 }
 
 class resolver_t final : public zlink::framework::runtime::spot_address_resolver_t
@@ -139,9 +145,6 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       MissingIntentActivatesOnceAndReadyOwnerIgnoresPlacementHints)
 {
     zlink::framework::serializer_registry_t serializers;
-    add_int_serializer<event_t> (serializers);
-    add_int_serializer<request_t> (serializers);
-    add_int_serializer<reply_t> (serializers);
 
     zlink::framework::zlink_builder_t builder;
     auto runtime = zlink::framework::detail::channel_runtime_t::from (
@@ -199,8 +202,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
           reply_t reply{71};
           return zlink::framework::result_t<
             zlink::framework::runtime::messaging::message_parts_t>::success (
-            envelopes.encode_parts (header, std::type_index (typeid (reply_t)),
-                                    &reply, serializers));
+            envelopes.encode_parts (header, reply, serializers));
       });
 
     auto client = builder.route_client (serializers);
@@ -225,7 +227,6 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       MissingWithoutIntentDoesNotActivate)
 {
     zlink::framework::serializer_registry_t serializers;
-    add_int_serializer<event_t> (serializers);
     zlink::framework::zlink_builder_t builder;
     auto runtime = zlink::framework::detail::channel_runtime_t::from (
       builder.message_bus ());
@@ -262,8 +263,6 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       MissingRequestUsesDefaultTimeoutForColdActivation)
 {
     zlink::framework::serializer_registry_t serializers;
-    add_int_serializer<request_t> (serializers);
-    add_int_serializer<reply_t> (serializers);
 
     zlink::framework::zlink_builder_t builder;
     auto runtime = zlink::framework::detail::channel_runtime_t::from (
@@ -304,7 +303,6 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       MissingIsNotCachedAndEachOperationAttemptsActivationOnce)
 {
     zlink::framework::serializer_registry_t serializers;
-    add_int_serializer<event_t> (serializers);
     zlink::framework::zlink_builder_t builder;
     auto runtime = zlink::framework::detail::channel_runtime_t::from (
       builder.message_bus ());
@@ -340,12 +338,81 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
 }
 
 TEST (ZLinkFrameworkInstanceSpotActivation,
+      RetiredOwnerRequestCompletesWithUnavailableTerminal)
+{
+    namespace host = zlink::framework::runtime::host;
+    namespace messaging = zlink::framework::runtime::messaging;
+
+    zlink::framework::serializer_registry_t serializers;
+    zlink::framework::zlink_builder_t builder;
+    auto mesh = builder.add_route_mesh ("retired-owner");
+    auto runtime = zlink::framework::detail::spot_node_runtime_t::from (
+      builder, "retired-owner");
+    ASSERT_TRUE (runtime);
+    zlink::framework::detail::channel_runtime_t::from (
+      builder.message_bus ())
+      .bind_serializers (serializers);
+    runtime->set_route_client (builder.route_client (serializers));
+
+    zlink::framework::service_collection_t services;
+    services.add_singleton<
+      zlink::framework::detail::actor_gateway_runtime_t> ();
+    auto provider = services.build_provider ();
+
+    const auto reply_host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{
+        .mesh = {
+          .descriptor = {
+            .mesh_name = "retired-owner",
+            .node_routing_id =
+              zlink::routing_id_t::from ("retired-owner-reply").to_bytes (),
+            .lifecycle_generation = 1,
+            .descriptor_revision = 1,
+            .advertised_endpoint = "tcp://127.0.0.1:0"}}});
+    std::vector<zlink::message_t> reply_parts;
+    host::receive_record_t record{
+      .kind = host::record_kind_t::spot_request,
+      .domain = host::ready_domain_t::application,
+      .spot_route = zlink::framework::runtime::protocol::spot_route_fence_t{
+        "retired-spot", 1, {}, 1, 1, 1}};
+    record.reply_token.host = reply_host;
+    record.reply_token.local_reply =
+      [&reply_parts] (const std::vector<zlink::message_t> &parts) {
+          reply_parts = parts;
+          return true;
+      };
+    const host::ready_record_t owner{
+      .owner_kind = host::owner_kind_t::spot,
+      .domain = host::ready_domain_t::application,
+      .spot_id = "retired-spot"};
+    messaging::envelope_codec_t codec;
+    auto encoded = codec.encode_parts (
+      messaging::envelope_header_t{
+        .kind = messaging::message_kind_t::request,
+        .channel_name = "retired-owner",
+        .message_name = traced_request_t::packet_name,
+        .correlation_id = "retired-request"},
+      traced_request_t{7}, serializers);
+    auto request_parts = std::move (encoded).take_items ();
+
+    EXPECT_TRUE (runtime->dispatch_mesh_record (
+      owner, record, request_parts, provider, serializers));
+    ASSERT_EQ (2u, reply_parts.size ());
+    const auto reply_header = codec.decode_header (
+      messaging::message_parts_t (reply_parts));
+    ASSERT_TRUE (reply_header);
+    EXPECT_EQ (messaging::message_kind_t::error,
+               reply_header.value ().kind);
+    EXPECT_EQ ("unavailable",
+               reply_header.value ().error_code.value_or (""));
+    EXPECT_EQ ("Spot route owner is no longer registered",
+               reply_header.value ().error_message.value_or (""));
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation,
       ColdActivationDispatchEmitsReceivedAndTerminalFlowEvents)
 {
     zlink::framework::serializer_registry_t serializers;
-    add_int_serializer<traced_event_t> (serializers);
-    add_int_serializer<traced_request_t> (serializers);
-    add_int_serializer<traced_reply_t> (serializers);
 
     std::mutex events_mutex;
     std::condition_variable events_changed;
@@ -390,7 +457,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       serializers.get<traced_event_t> ().serialize (traced_event_t{7}));
     const auto event_result = runtime->dispatch_instance_activation (
       zlink::framework::spot_id_t ("traced-player-1"), traced_event_t::packet_name,
-      "application/octet-stream", event_payload.to_bytes (), {}, false, "operation-send", provider,
+      serializers.get<traced_event_t> ().content_type (), event_payload.to_bytes (), {}, false,
+      "operation-send", provider,
       serializers, activation_flow_id, zlink::framework::flow_origin_t::application)
                                  .result ();
     ASSERT_TRUE (event_result);
@@ -399,7 +467,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       serializers.get<traced_request_t> ().serialize (traced_request_t{9}));
     const auto request_result = runtime->dispatch_instance_activation (
       zlink::framework::spot_id_t ("traced-player-1"), traced_request_t::packet_name,
-      "application/octet-stream", request_payload.to_bytes (), {}, true, "operation-request", provider,
+      serializers.get<traced_request_t> ().content_type (), request_payload.to_bytes (), {}, true,
+      "operation-request", provider,
       serializers, activation_flow_id, zlink::framework::flow_origin_t::application)
                                    .result ();
     ASSERT_TRUE (request_result);

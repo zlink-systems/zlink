@@ -10,7 +10,7 @@ location store를 등록하지 않고 수동 endpoint 연결만 사용한다.
 | 시나리오 | 상태 | 근거 |
 |----------|------|------|
 | `RC-A1` | not-applicable | 공통 framework spec은 runtime reflection이 없는 C++을 assembly·module 자동 등록 원칙의 예외로 정한다. C++는 정식 public builder에서 handler 타입을 명시하므로 자동 스캔 경로를 별도 구현하지 않는다. 기존 scenario는 명시 등록한 `EchoAuto` request/send의 typed dispatch만 회귀 검증한다. |
-| `RC-A2` | not-applicable | 공통 E2E는 annotation·attribute scan 표면이 없는 언어에 같은 문법을 요구하지 않는다. C++ 정식 interface에는 attribute 기반 자동 등록이 없으므로 기존 scenario는 명시 등록한 `EchoAttr` request/send의 packet 이름과 context만 회귀 검증한다. |
+| `RC-A2` | not-applicable | 공통 E2E는 annotation·attribute scan 표면이 없는 언어에 같은 문법을 요구하지 않는다. C++ 정식 interface에는 attribute 기반 자동 등록이 없으므로 기존 scenario는 명시 등록한 `EchoAttrReq` request와 `EchoAttrMsg` send의 packet 이름과 context만 회귀 검증한다. |
 | `RC-A3` | 구현 | 수동 channel handler 등록의 명시 packet 이름으로 request와 send를 검증한다. 로그: `logs/20260708-124643-1329498`, 출력: `scenario RC-A3 passed`, `registration-codec e2e result=passed`. |
 | `RC-A4` | 구현 | request handler마다 새 invocation scope가 만들어지고 scoped dependency가 요청 뒤 dispose되는지 검증한다. singleton dependency 유지도 함께 확인한다. 로그: `logs/20260708-124643-1329498`, 출력: `scenario RC-A4 passed`, `registration-codec e2e result=passed`. |
 | `RC-A5` | 구현 | handler filter pipeline의 before/after 실행 순서를 검증한다. 로그: `logs/20260708-124643-1329498`, 출력: `scenario RC-A5 passed`, `registration-codec e2e result=passed`. |

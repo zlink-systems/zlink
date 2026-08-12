@@ -228,20 +228,6 @@ internal abstract partial class ZLinkSpotActivation
         }
     }
 
-    internal async ValueTask CompleteRelocationReadyAsync(
-        ZLinkSpotRelocationReadyOutcome outcome,
-        CancellationToken cancellationToken)
-    {
-        lock (_relocationReadyGate)
-        {
-            if (!_relocationReadyCompletionPending)
-                return;
-            _relocationReadyCompletionPending = false;
-        }
-        await InvokeRelocationReadyCompletedAsync(outcome, cancellationToken)
-            .ConfigureAwait(false);
-    }
-
     internal async ValueTask CompleteRelocationReadyBeforeAbortAsync(
         ZLinkSpotRelocationSeal admissionSeal,
         CancellationToken cancellationToken)
@@ -1283,114 +1269,55 @@ internal abstract partial class ZLinkSpotActivation
     internal async ValueTask<ZLinkRemoteActorBoundSessionRoute>
         SealActorBoundSessionRouteForRetireAsync(
             string actorId,
-            string handoffId,
+            ZLinkSessionRelocationContext wireContext,
             CancellationToken cancellationToken)
     {
         var route = CaptureActorBoundSessionRouteForRetire(actorId);
         if (!route.IsBound)
             return route;
-        var seal = new ZLinkSessionRouteSeal(
-            actorId,
-            route.BindingToken!,
-            route.BindingGeneration,
-            route.ObjectGeneration,
-            route.AuthorityOwnerGeneration,
-            route.MeshName!,
-            route.TargetNodeGeneration,
-            route.OwnerLeaseGeneration,
-            route.SessionOwnerNodeGeneration,
-            handoffId);
-        ZLinkSessionRouteSealResult result;
         var routeNodeRid = route.NodeRid
                            ?? throw new InvalidOperationException(
                                "A bound Session route requires a target NodeRid.");
-        if (routeNodeRid
-            == _runtime.GetMeshNodeRuntime(route.MeshName!).Node.RoutingId)
+        var result = await _runtime.SealSessionRelocationAsync(
+                route.MeshName!,
+                routeNodeRid,
+                ZLinkSessionRelocationWire.CreateSeal(
+                    actorId,
+                    NodeRid,
+                    route,
+                    wireContext),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return route with
         {
-            result = await _runtime.SealSessionActorRouteAsync(
-                    seal,
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
-        else
-        {
-            var reply = await _runtime
-                .RequestSessionRouteSealAsync(
-                    route.MeshName!,
-                    routeNodeRid,
-                    new ZLinkSessionRouteSealRequest(
-                        actorId,
-                        route.BindingToken!,
-                        route.BindingGeneration,
-                        route.ObjectGeneration,
-                        route.AuthorityOwnerGeneration,
-                        route.MeshName!,
-                        route.TargetNodeGeneration,
-                        route.OwnerLeaseGeneration,
-                        route.SessionOwnerNodeGeneration,
-                        handoffId),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            result = new ZLinkSessionRouteSealResult(
-                reply.Acknowledged,
-                reply.AcceptedHighWater);
-        }
-        if (!result.Acknowledged)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.InvalidOperation,
-                $"Actor '{actorId}' session ingress seal was fenced.");
-        return route with { AcceptedHighWater = result.AcceptedHighWater };
+            AcceptedHighWater = result.LastAcceptedSessionSequence
+        };
     }
 
     internal async ValueTask AbortActorBoundSessionRouteSealForRetireAsync(
         string actorId,
         ZLinkRemoteActorBoundSessionRoute route,
-        string handoffId,
+        ZLinkSessionRelocationContext wireContext,
         CancellationToken cancellationToken)
     {
         if (!route.IsBound)
             return;
-        var seal = new ZLinkSessionRouteSeal(
-            actorId,
-            route.BindingToken!,
-            route.BindingGeneration,
-            route.ObjectGeneration,
-            route.AuthorityOwnerGeneration,
-            route.MeshName!,
-            route.TargetNodeGeneration,
-            route.OwnerLeaseGeneration,
-            route.SessionOwnerNodeGeneration,
-            handoffId);
-        bool acknowledged;
         var routeNodeRid = route.NodeRid
                            ?? throw new InvalidOperationException(
                                "A bound Session route requires a target NodeRid.");
-        if (routeNodeRid
-            == _runtime.GetMeshNodeRuntime(route.MeshName!).Node.RoutingId)
-        {
-            acknowledged = _runtime.AbortSessionActorRouteSeal(seal);
-        }
-        else
-        {
-            var reply = await _runtime
-                .RequestSessionRouteAbortAsync(
-                    route.MeshName!,
-                    routeNodeRid,
-                    new ZLinkSessionRouteAbortRequest(
-                        actorId,
-                        route.BindingToken!,
-                        route.BindingGeneration,
-                        route.ObjectGeneration,
-                        route.AuthorityOwnerGeneration,
-                        route.MeshName!,
-                        route.TargetNodeGeneration,
-                        route.OwnerLeaseGeneration,
-                        route.SessionOwnerNodeGeneration,
-                        handoffId),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            acknowledged = reply.Acknowledged;
-        }
+        var reply = await _runtime.RouteSessionRelocationAsync(
+                route.MeshName!,
+                routeNodeRid,
+                ZLinkSessionRelocationWire.CreateAbort(
+                    actorId,
+                    route,
+                    wireContext),
+                route.AcceptedHighWater,
+                cancellationToken)
+            .ConfigureAwait(false);
+        var acknowledged = reply.Result is
+            ZLinkServiceWireCodec.SessionRelocationRouteResult.Applied
+            or ZLinkServiceWireCodec.SessionRelocationRouteResult.AlreadyApplied;
         // Best-effort: source admission restore no longer waits on the session
         // owner (wire contract, Ready boundary). A missing or negative ack
         // means the seal is already gone or fenced by a newer binding
@@ -1398,7 +1325,8 @@ internal abstract partial class ZLinkSpotActivation
         if (!acknowledged)
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"session_route_abort_unacknowledged actor={actorId}"
-                + $" handoff={handoffId}");
+                + $" relocation={wireContext.RelocationId.High:x16}"
+                + $"{wireContext.RelocationId.Low:x16}");
     }
 
     internal void BeginMessageFollow(
@@ -1625,14 +1553,28 @@ internal abstract partial class ZLinkSpotActivation
         MeshOperationId operationId,
         byte hopCount)
     {
-        if (!messageFollow.TryClaimMessageFollowNotice())
+        var fence = new ZLinkMessageFollowFence(
+            ZLinkMessageFollowObjectKind.Spot,
+            SpotId,
+            SpotId,
+            NodeRid,
+            messageFollow.TargetNodeRid,
+            ObjectGeneration,
+            messageFollow.ObjectGeneration,
+            SourceNodeLifecycleGeneration,
+            messageFollow.TargetNodeGeneration,
+            messageFollow.SourceAuthorityOwnerGeneration,
+            messageFollow.TargetAuthorityOwnerGeneration,
+            checked((ulong)messageFollow.SourceOwner.LeaseGeneration),
+            checked((ulong)messageFollow.TargetOwner.LeaseGeneration));
+        if (!messageFollow.TryBeginMessageFollowNotice(fence))
             return;
         if (sourceNodeRid is not { } source
             || source.IsEmpty
             || operationId == default
             || hopCount is 0 or > ZLinkServiceWireCodec.MessageFollowMaximumHopCount)
         {
-            messageFollow.ReleaseMessageFollowNoticeClaim();
+            messageFollow.AbortMessageFollowNotice(fence);
             return;
         }
 
@@ -1657,21 +1599,23 @@ internal abstract partial class ZLinkSpotActivation
                     messageFollow.TargetAuthorityOwnerGeneration,
                     checked((ulong)messageFollow.TargetOwner.LeaseGeneration)),
                 hopCount,
-                checked((uint)admission.Records),
-                checked((uint)admission.Bytes),
+                (uint)admission.Records,
+                (uint)Math.Min(admission.Bytes, uint.MaxValue),
                 operationId,
                 replyRouteId);
             var node = _runtime.GetMeshNodeRuntime(MeshName).Node;
             if (node is not IZLinkBackendMessageFollowNotifications sender
                 || !sender.TrySendMessageFollowNotification(source, record))
-                messageFollow.ReleaseMessageFollowNoticeClaim();
+                messageFollow.AbortMessageFollowNotice(fence);
+            else
+                messageFollow.MarkMessageFollowNoticeSent(fence);
         }
         catch (Exception exception)
             when (exception is InvalidOperationException
                 or ZlinkException
                 or ZLinkFrameworkException)
         {
-            messageFollow.ReleaseMessageFollowNoticeClaim();
+            messageFollow.AbortMessageFollowNotice(fence);
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"spot message follow notification failed: {exception.Message}");
         }
@@ -1685,12 +1629,7 @@ internal abstract partial class ZLinkSpotActivation
         {
             if (Volatile.Read(ref _messageFollow) is null)
             {
-                if (!_holdIngressForMessageFollow
-                    || _messageFollowPending.Count
-                    >= ZLinkSerialExecutionQueue.RelocationHoldMessageLimit
-                    || encodedBytes
-                       > ZLinkSerialExecutionQueue.RelocationHoldByteLimit
-                                      - _messageFollowPendingBytes)
+                if (!_holdIngressForMessageFollow)
                     return false;
                 _messageFollowPending.Enqueue(
                     new PendingMessageFollowRoute(received, encodedBytes));
@@ -2225,54 +2164,6 @@ internal abstract partial class ZLinkSpotActivation
         return captured
                ?? throw new InvalidOperationException(
                    "SPOT relocation capture did not complete.");
-    }
-
-    internal async ValueTask RestoreRelocationApplicationStateAsync(
-        ZLinkSpotRelocationApplicationState state,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(state);
-        await _serial.ExecuteLifecycleAsync(
-                async (activation, ct) =>
-                {
-                    await activation.RestoreInstanceAsync(
-                            activation.ResolveSpotRelocationRegistration(),
-                            activation.Spot,
-                            state.SpotState,
-                            ct)
-                        .ConfigureAwait(false);
-                    var actors = activation._actors.Snapshot();
-                    for (var first = 0;
-                         first < actors.Count;
-                         first += MaxConcurrentRelocationAdapterCallbacks)
-                    {
-                        var count = Math.Min(
-                            MaxConcurrentRelocationAdapterCallbacks,
-                            actors.Count - first);
-                        await Task.WhenAll(
-                                actors.Skip(first).Take(count).Select(
-                                    async actor =>
-                                    {
-                                        var actorId = ZLinkActorId.FromBoundary(
-                                            actor.Context.ActorId,
-                                            nameof(actor));
-                                        if (!state.ActorStates.TryGetValue(
-                                                actorId,
-                                                out var actorState))
-                                            throw new InvalidDataException(
-                                                $"Relocation state for Actor '{actor.Context.ActorId}' is missing.");
-                                        await activation.RestoreInstanceAsync(
-                                                activation.ResolveActorRelocationRegistration(actor),
-                                                actor,
-                                                actorState,
-                                                ct)
-                                            .ConfigureAwait(false);
-                                    }))
-                            .ConfigureAwait(false);
-                    }
-                },
-                cancellationToken)
-            .ConfigureAwait(false);
     }
 
     private async ValueTask<IReadOnlyDictionary<ZLinkActorId, ReadOnlyMemory<byte>>>

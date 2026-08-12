@@ -62,8 +62,8 @@ internal sealed class ZLinkAsyncSubmitter : IAsyncDisposable
     private static ulong MeasureParts(IReadOnlyList<Message> parts)
     {
         ulong bytes = 0;
-        foreach (var part in parts)
-            bytes = checked(bytes + (ulong)Math.Max(part.Size, 1));
+        for (var index = 0; index < parts.Count; index++)
+            bytes = checked(bytes + (ulong)Math.Max(parts[index].Size, 1));
         return bytes;
     }
 
@@ -532,8 +532,9 @@ internal sealed class ZLinkAsyncSubmitter : IAsyncDisposable
                 if (!_pending.TryEnqueue(pending))
                     throw new InvalidOperationException(
                         "Pending admission capacity was acquired but the queue rejected the item.");
-                Trace(pending.OperationId, "pending");
             }
+
+            Trace(pending.OperationId, "pending");
         }
         catch (OperationCanceledException) when (_admissionClosed.IsCancellationRequested)
         {
@@ -683,32 +684,35 @@ internal sealed class ZLinkAsyncSubmitter : IAsyncDisposable
         PendingSubmit? pending = null,
         Action? onAccepted = null)
     {
-        lock (_submitGate)
+        retryableFailure = null;
+        if (pending?.IsCompleted == true) return false;
+        IReadOnlyList<Message>? attempt = null;
+        try
         {
-            ObjectDisposedException.ThrowIf(!_accepting, this);
-            retryableFailure = null;
-            IReadOnlyList<Message>? attempt = null;
-            try
+            // Keep Framework-owned parts valid for the pending request and
+            // its completion callback. The binding receives a separate
+            // attempt payload whose ownership ends with this attempt. Copy
+            // and free happen outside _submitGate so the node-wide gate only
+            // covers the native submit itself.
+            attempt = ZLinkMessageParts.CopyAll(parts);
+            lock (_submitGate)
             {
+                ObjectDisposedException.ThrowIf(!_accepting, this);
                 if (pending?.IsCompleted == true) return false;
-                // Keep Framework-owned parts valid for the pending request and
-                // its completion callback. The binding receives a separate
-                // attempt payload whose ownership ends with this attempt.
-                attempt = ZLinkMessageParts.CopyAll(parts);
                 var accepted = trySubmit(attempt);
                 if (accepted) onAccepted?.Invoke();
                 return accepted;
             }
-            catch (ZlinkException error)
-            {
-                retryableFailure = error;
-                return false;
-            }
-            finally
-            {
-                if (attempt is not null)
-                    ZLinkMessageParts.DisposeAll(attempt);
-            }
+        }
+        catch (ZlinkException error)
+        {
+            retryableFailure = error;
+            return false;
+        }
+        finally
+        {
+            if (attempt is not null)
+                ZLinkMessageParts.DisposeAll(attempt);
         }
     }
 
@@ -785,12 +789,17 @@ internal sealed class ZLinkAsyncSubmitter : IAsyncDisposable
         Drain();
     }
 
-    private void Trace(string operationId, string eventName, bool retry = false) =>
+    private void Trace(string operationId, string eventName, bool retry = false)
+    {
+        // _pending.Count takes the queue lock; skip it entirely unless a
+        // listener can actually observe the trace.
+        if (!ZLinkTelemetry.IsSubmitAdmissionTracingEnabled(operationId)) return;
         ZLinkTelemetry.TraceSubmitAdmission(
             operationId,
             eventName,
             _pending.Count,
             retry);
+    }
 
     private static TimeSpan ValidateTimeout(TimeSpan? timeout)
     {

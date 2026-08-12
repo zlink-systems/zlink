@@ -29,7 +29,7 @@ public sealed class ZoneSpot(
     ILogger<ZoneSpot> logger) : IZLinkSpot<PlayerActor>
 {
     private readonly ZoneState _state = new(context.SpotId);
-    private readonly Dictionary<string, EnterZoneMsg> _pendingJoins = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, EnterZoneReq> _pendingJoins = new(StringComparer.Ordinal);
     private readonly HashSet<string> _observedBorderSources = new(StringComparer.Ordinal);
     private IZLinkTimer? _tick;
     private IZLinkTimer? _botTick;
@@ -100,7 +100,7 @@ public sealed class ZoneSpot(
         ZLinkMessage request,
         CancellationToken cancellationToken)
     {
-        var enter = request.Decode<EnterZoneMsg>();
+        var enter = request.Decode<EnterZoneReq>();
         if (maintenance.RejectsArrival(maintenance.OwnNodeId, enter.FromNodeId))
         {
             logger.LogInformation(

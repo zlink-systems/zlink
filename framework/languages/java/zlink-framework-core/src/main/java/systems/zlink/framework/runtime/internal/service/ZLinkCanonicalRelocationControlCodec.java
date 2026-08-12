@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.service;
+import java.nio.ByteBuffer;
 
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
@@ -380,7 +381,7 @@ final class ZLinkCanonicalRelocationControlCodec {
                 String value = StandardCharsets.UTF_8.newDecoder()
                     .onMalformedInput(CodingErrorAction.REPORT)
                     .onUnmappableCharacter(CodingErrorAction.REPORT)
-                    .decode(java.nio.ByteBuffer.wrap(raw(length))).toString();
+                    .decode(ByteBuffer.wrap(raw(length))).toString();
                 if (value.indexOf('\0') >= 0) throw invalid("NUL text"); return value;
             } catch (CharacterCodingException failure) { throw invalid("UTF-8"); }
         }

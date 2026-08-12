@@ -1,4 +1,6 @@
 package systems.zlink.e2e.runtimemonitoring.client.Support;
+import java.io.File;
+import java.nio.charset.StandardCharsets;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -96,8 +98,8 @@ public final class MonitoringScenarioContext implements AutoCloseable {
                 + response.status() + ": " + response.body());
     }
 
-    public ValidationResult validation(String name) {
-        return trigger.post("/validation/" + name).submit(ValidationResult.class).toCompletableFuture().join().body();
+    public ValidationRes validation(String name) {
+        return trigger.post("/validation/" + name).submit(ValidationRes.class).toCompletableFuture().join().body();
     }
 
     public void post(String baseUrl, String path) {
@@ -274,9 +276,24 @@ public final class MonitoringScenarioContext implements AutoCloseable {
             "docker",
             paused ? "pause" : "unpause",
             options.redisContainer());
+        builder.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+        builder.redirectError(ProcessBuilder.Redirect.DISCARD);
         try {
             Process process = builder.start();
-            ensure(process.waitFor() == 0,
+            if (!process.waitFor(10, TimeUnit.SECONDS)) {
+                process.descendants().forEach(ProcessHandle::destroyForcibly);
+                process.destroyForcibly();
+                if (!process.waitFor(2, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException(
+                        "docker " + (paused ? "pause" : "unpause")
+                            + " timed out and could not be terminated for "
+                            + options.redisContainer());
+                }
+                throw new IllegalStateException(
+                    "docker " + (paused ? "pause" : "unpause")
+                        + " timed out after 10 seconds for " + options.redisContainer());
+            }
+            ensure(process.exitValue() == 0,
                 "docker " + (paused ? "pause" : "unpause")
                     + " failed for " + options.redisContainer());
         } catch (IOException error) {
@@ -411,9 +428,9 @@ public final class MonitoringScenarioContext implements AutoCloseable {
             options.filteredServiceBinary(),
             "--config",
             options.filteredServiceConfigPath());
-        builder.redirectOutput(new java.io.File(
+        builder.redirectOutput(new File(
             options.logDirectory() + "/filtered-service-restart.stdout.log"));
-        builder.redirectError(new java.io.File(
+        builder.redirectError(new File(
             options.logDirectory() + "/filtered-service-restart.stderr.log"));
         try {
             restartedServiceB = builder.start();
@@ -482,7 +499,7 @@ public final class MonitoringScenarioContext implements AutoCloseable {
             try (Socket socket = new Socket()) {
                 socket.connect(new InetSocketAddress("127.0.0.1", port), 500);
                 OutputStream output = socket.getOutputStream();
-                output.write(("invalid-zmtp-handshake-" + index).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                output.write(("invalid-zmtp-handshake-" + index).getBytes(StandardCharsets.UTF_8));
                 output.flush();
             } catch (IOException ignored) {
                 // Rejection is the event this probe asks the service to report.
@@ -531,6 +548,6 @@ public final class MonitoringScenarioContext implements AutoCloseable {
         }
     }
 
-    public record ValidationResult(boolean rejected, String message) {
+    public record ValidationRes(boolean rejected, String message) {
     }
 }

@@ -25,7 +25,6 @@ import { readZLinkDecoratorMetadata } from '../../contracts/Handlers/Attributes'
 
 export interface ZLinkSpotHandlerRegistration {
   readonly kind:
-    | 'handler'
     | 'packet'
     | 'subscribe'
     | 'actorSend'
@@ -43,9 +42,23 @@ export class DefaultZLinkSpotHandlerRegistry<TActor extends ZLinkActor = ZLinkAc
 
   constructor(private readonly actorHandlers?: ZLinkSpotActorHandlerRegistryRuntime) {}
 
-  addHandler(handlerType: Type): this {
-    this.entries.push({ kind: 'handler', handlerType });
-    return this;
+  addHandler<THandler>(handlerType: Type<THandler>, packetName?: string): this {
+    const metadata = readZLinkDecoratorMetadata(handlerType).find((entry) =>
+      entry.kind === 'spotActorSend' || entry.kind === 'spotActorRequest');
+    const resolvedPacketName = packetName ?? metadata?.packetName;
+    if (metadata === undefined || resolvedPacketName === undefined) {
+      throw new ZLinkConfigurationException(
+        `Actor packet handler '${handlerType.name}' must declare a packet name.`
+      );
+    }
+    return this.addActorPacketRegistration(
+      metadata.kind === 'spotActorSend'
+        ? ZLinkActorPacketKind.Send
+        : ZLinkActorPacketKind.Request,
+      handlerType,
+      Object as unknown as Type<TActor>,
+      resolvedPacketName
+    );
   }
 
   addActorPacket<THandler, TRegisteredActor extends ZLinkActor>(

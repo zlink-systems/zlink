@@ -13,7 +13,7 @@ import type {
   DeleteQuestProjectionRes,
   GameQuestServerAssertRes,
   GetGameplaySnapshotReq,
-  QuestProgress
+  RebuildQuestProjectionRes
 } from '../../Shared/Contracts/messages';
 
 function startGameApiServer(
@@ -58,7 +58,7 @@ function startGameApiServer(
           .instanceSpot(SampleNames.playerQuestSpotType)
           .inMesh(SampleNames.playerQuestSpotMesh)
           .timeout(SampleNames.requestTimeout)
-          .submit<QuestProgress>();
+          .submit<RebuildQuestProjectionRes>();
         sendJson(response, 200, rebuilt);
         return;
       }

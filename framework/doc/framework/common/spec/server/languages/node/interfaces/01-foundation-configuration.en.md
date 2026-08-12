@@ -263,6 +263,10 @@ export interface ZLinkCodecExtension {
 
 export interface ZLinkCodecRegistrar {
     addSerializer(contentType: string, serializer: ZLinkMessageSerializer): this;
+    addSerializer(
+        contentType: string,
+        serializer: ZLinkMessageSerializer,
+        canSerialize: (declaredType: Type) => boolean): this;
     addStreamCodec(contentType: string, codec: unknown): this;
 }
 
@@ -270,6 +274,33 @@ export interface ZLinkCodecRegistryBuilder {
     use(extension: ZLinkCodecExtension): this;
 }
 ```
+
+The codec registrar's `contentType` takes a parameter-free ASCII `type/subtype`. At
+startup, the registry removes leading and trailing SP and TAB and converts ASCII uppercase
+letters to lowercase. The result is the canonical content type used as the registry key.
+A parameter, whitespace inside the value, or a non-ASCII token is rejected with
+`ZLinkConfigurationException`. If the same canonical content type is registered again,
+the last registration replaces the earlier one.
+
+A value received from the framework service wire must already be canonical. Another
+representation completes with `ZLinkFrameworkErrorKind.ProtocolError`.
+
+The two-argument `addSerializer(contentType, serializer)` registers a fallback serializer
+that matches every declared message type. The three-argument overload passes the message
+type declared at the send call site to `canSerialize`. If several registrations match, the
+serializer registered later is used. If none matches, the JSON serializer is used. A member
+such as `serializer.canSerialize(value)` that inspects a runtime value isn't part of this
+contract. A serializer selected by type supplies that condition as the registrar's third
+argument, `(declaredType) => boolean`.
+
+The registry doesn't change after startup. Send-selection results are stored for up to 1,024
+declared types. Reaching the limit doesn't evict existing entries. Each type first seen after
+the limit is re-evaluated against the registration list on every send, and its result isn't
+stored.
+
+The receive path performs an exact serializer lookup using the canonical content type from
+the wire. An unregistered or noncanonical value isn't reinterpreted as JSON and completes
+with `ZLinkFrameworkErrorKind.ProtocolError`.
 
 Entry Spot registration only takes the implementation type. The Entry
 Spot's `SpotId` is issued by the framework in the format

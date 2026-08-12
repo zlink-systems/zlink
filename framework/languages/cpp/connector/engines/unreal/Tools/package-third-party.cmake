@@ -206,12 +206,28 @@ endif()
 foreach(cache_key IN ITEMS OPENSSL_SSL_LIBRARY OPENSSL_CRYPTO_LIBRARY ZLINK_LZ4_LIBRARY)
   zlink_unreal_cache_value("${cache_key}" dependency_path)
   if(dependency_path AND EXISTS "${dependency_path}")
+    file(REAL_PATH "${dependency_path}" resolved_dependency_path)
+    if(resolved_dependency_path
+        AND NOT resolved_dependency_path STREQUAL dependency_path)
+      # CMake preserves a shared-library symlink when it copies the alias, but
+      # it does not also copy the symlink target. Stage the target first so the
+      # alias remains usable after the package leaves the build machine.
+      file(COPY "${resolved_dependency_path}"
+        DESTINATION "${ZLINK_UNREAL_OUTPUT_DIR}/lib")
+    endif()
     file(COPY "${dependency_path}" DESTINATION "${ZLINK_UNREAL_OUTPUT_DIR}/lib")
     get_filename_component(dependency_name "${dependency_path}" NAME)
     set(staged_dependency "lib/${dependency_name}")
     zlink_unreal_append_unique(ZLINK_UNREAL_MANIFEST_LIBRARIES "${staged_dependency}")
     if(dependency_name MATCHES "\\.(dll|so|dylib)(\\.|$)")
       zlink_unreal_append_unique(ZLINK_UNREAL_MANIFEST_RUNTIMES "${staged_dependency}")
+      get_filename_component(resolved_dependency_name
+        "${resolved_dependency_path}" NAME)
+      if(resolved_dependency_name
+          AND NOT resolved_dependency_name STREQUAL dependency_name)
+        zlink_unreal_append_unique(ZLINK_UNREAL_MANIFEST_RUNTIMES
+          "lib/${resolved_dependency_name}")
+      endif()
     endif()
   endif()
 endforeach()

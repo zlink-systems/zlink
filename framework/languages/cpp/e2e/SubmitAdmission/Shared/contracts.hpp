@@ -20,37 +20,60 @@ inline constexpr const char *client_server_channel = "submit.admission.client-se
 inline constexpr const char *client_server_handler_group =
   "submit.admission.client-server.handlers";
 
-struct admission_message_t
+struct admission_msg_t
 {
-    static constexpr const char *packet_name = "admission";
+    static constexpr const char *packet_name = "AdmissionMsg";
     std::string operation_id;
     std::uint64_t sequence = 0;
     std::string payload;
 };
 
-struct saturation_prime_message_t
+struct admission_req_t
 {
-    static constexpr const char *packet_name = "saturation-prime";
+    static constexpr const char *packet_name = "AdmissionReq";
     std::string operation_id;
     std::uint64_t sequence = 0;
     std::string payload;
 };
 
-struct node_submit_request_t
+struct admission_event_t
 {
-    std::string target_rid;
-    admission_message_t message;
+    static constexpr const char *packet_name = "AdmissionEvent";
+    std::string operation_id;
+    std::uint64_t sequence = 0;
+    std::string payload;
 };
 
-struct submit_response_t
+struct admission_res_t
 {
+    static constexpr const char *packet_name = "AdmissionRes";
     std::string operation_id;
     std::string status;
     std::uint64_t public_invocation_count = 0;
     std::uint64_t terminal_count = 0;
 };
 
-struct actor_target_t
+struct saturation_prime_msg_t
+{
+    static constexpr const char *packet_name = "SaturationPrimeMsg";
+    std::string operation_id;
+    std::uint64_t sequence = 0;
+    std::string payload;
+};
+
+struct node_submit_req_t
+{
+    std::string target_rid;
+    admission_msg_t message;
+};
+
+struct actor_ensure_req_t
+{
+    std::string operation_id;
+    std::string actor_id;
+};
+
+struct actor_ensure_res_t
 {
     std::string operation_id;
     std::string actor_id;
@@ -58,10 +81,35 @@ struct actor_target_t
     std::uint64_t generation = 0;
 };
 
-struct actor_relay_request_t
+struct actor_create_req_t
 {
+    static constexpr const char *packet_name = "AdmissionActorCreateReq";
     std::string actor_id;
-    admission_message_t message;
+};
+
+struct actor_bind_req_t
+{
+    static constexpr const char *packet_name = "ActorBindReq";
+    std::string operation_id;
+    std::string actor_id;
+    std::string node_rid;
+    std::uint64_t generation = 0;
+};
+
+struct actor_bind_res_t
+{
+    static constexpr const char *packet_name = "ActorBindRes";
+    std::string operation_id;
+    std::string actor_id;
+    std::string node_rid;
+    std::uint64_t generation = 0;
+};
+
+struct actor_relay_req_t
+{
+    static constexpr const char *packet_name = "ActorRelayReq";
+    std::string actor_id;
+    admission_msg_t message;
 };
 
 struct operation_evidence_t
@@ -71,48 +119,49 @@ struct operation_evidence_t
     std::uint64_t handler_completed_count = 0;
 };
 
-inline void to_json (nlohmann::json &json, const admission_message_t &value)
+template <typename T> inline void write_admission_payload (nlohmann::json &json, const T &value)
 {
     json = nlohmann::json{{"operationId", value.operation_id},
                           {"sequence", value.sequence},
                           {"payload", value.payload}};
 }
 
-inline void from_json (const nlohmann::json &json, admission_message_t &value)
+template <typename T> inline void read_admission_payload (const nlohmann::json &json, T &value)
 {
     json.at ("operationId").get_to (value.operation_id);
     json.at ("sequence").get_to (value.sequence);
     json.at ("payload").get_to (value.payload);
 }
 
-inline void to_json (nlohmann::json &json,
-                     const saturation_prime_message_t &value)
-{
-    json = nlohmann::json{{"operationId", value.operation_id},
-                          {"sequence", value.sequence},
-                          {"payload", value.payload}};
-}
+inline void to_json (nlohmann::json &json, const admission_msg_t &value)
+{ write_admission_payload (json, value); }
+inline void from_json (const nlohmann::json &json, admission_msg_t &value)
+{ read_admission_payload (json, value); }
+inline void to_json (nlohmann::json &json, const admission_req_t &value)
+{ write_admission_payload (json, value); }
+inline void from_json (const nlohmann::json &json, admission_req_t &value)
+{ read_admission_payload (json, value); }
+inline void to_json (nlohmann::json &json, const admission_event_t &value)
+{ write_admission_payload (json, value); }
+inline void from_json (const nlohmann::json &json, admission_event_t &value)
+{ read_admission_payload (json, value); }
+inline void to_json (nlohmann::json &json, const saturation_prime_msg_t &value)
+{ write_admission_payload (json, value); }
+inline void from_json (const nlohmann::json &json, saturation_prime_msg_t &value)
+{ read_admission_payload (json, value); }
 
-inline void from_json (const nlohmann::json &json,
-                       saturation_prime_message_t &value)
-{
-    json.at ("operationId").get_to (value.operation_id);
-    json.at ("sequence").get_to (value.sequence);
-    json.at ("payload").get_to (value.payload);
-}
-
-inline void to_json (nlohmann::json &json, const node_submit_request_t &value)
+inline void to_json (nlohmann::json &json, const node_submit_req_t &value)
 {
     json = nlohmann::json{{"targetRid", value.target_rid}, {"message", value.message}};
 }
 
-inline void from_json (const nlohmann::json &json, node_submit_request_t &value)
+inline void from_json (const nlohmann::json &json, node_submit_req_t &value)
 {
     json.at ("targetRid").get_to (value.target_rid);
     json.at ("message").get_to (value.message);
 }
 
-inline void to_json (nlohmann::json &json, const submit_response_t &value)
+inline void to_json (nlohmann::json &json, const admission_res_t &value)
 {
     json = nlohmann::json{{"operationId", value.operation_id},
                           {"status", value.status},
@@ -120,7 +169,7 @@ inline void to_json (nlohmann::json &json, const submit_response_t &value)
                           {"terminalCount", value.terminal_count}};
 }
 
-inline void from_json (const nlohmann::json &json, submit_response_t &value)
+inline void from_json (const nlohmann::json &json, admission_res_t &value)
 {
     json.at ("operationId").get_to (value.operation_id);
     json.at ("status").get_to (value.status);
@@ -128,7 +177,7 @@ inline void from_json (const nlohmann::json &json, submit_response_t &value)
     json.at ("terminalCount").get_to (value.terminal_count);
 }
 
-inline void to_json (nlohmann::json &json, const actor_target_t &value)
+template <typename T> inline void write_actor_target (nlohmann::json &json, const T &value)
 {
     json = nlohmann::json{{"operationId", value.operation_id},
                           {"actorId", value.actor_id},
@@ -136,7 +185,7 @@ inline void to_json (nlohmann::json &json, const actor_target_t &value)
                           {"generation", value.generation}};
 }
 
-inline void from_json (const nlohmann::json &json, actor_target_t &value)
+template <typename T> inline void read_actor_target (const nlohmann::json &json, T &value)
 {
     json.at ("operationId").get_to (value.operation_id);
     json.at ("actorId").get_to (value.actor_id);
@@ -144,12 +193,39 @@ inline void from_json (const nlohmann::json &json, actor_target_t &value)
     json.at ("generation").get_to (value.generation);
 }
 
-inline void to_json (nlohmann::json &json, const actor_relay_request_t &value)
+inline void to_json (nlohmann::json &json, const actor_ensure_req_t &value)
+{
+    json = nlohmann::json{{"operationId", value.operation_id},
+                          {"actorId", value.actor_id}};
+}
+inline void from_json (const nlohmann::json &json, actor_ensure_req_t &value)
+{
+    json.at ("operationId").get_to (value.operation_id);
+    json.at ("actorId").get_to (value.actor_id);
+}
+inline void to_json (nlohmann::json &json, const actor_ensure_res_t &value)
+{ write_actor_target (json, value); }
+inline void from_json (const nlohmann::json &json, actor_ensure_res_t &value)
+{ read_actor_target (json, value); }
+inline void to_json (nlohmann::json &json, const actor_create_req_t &value)
+{ json = nlohmann::json{{"actorId", value.actor_id}}; }
+inline void from_json (const nlohmann::json &json, actor_create_req_t &value)
+{ json.at ("actorId").get_to (value.actor_id); }
+inline void to_json (nlohmann::json &json, const actor_bind_req_t &value)
+{ write_actor_target (json, value); }
+inline void from_json (const nlohmann::json &json, actor_bind_req_t &value)
+{ read_actor_target (json, value); }
+inline void to_json (nlohmann::json &json, const actor_bind_res_t &value)
+{ write_actor_target (json, value); }
+inline void from_json (const nlohmann::json &json, actor_bind_res_t &value)
+{ read_actor_target (json, value); }
+
+inline void to_json (nlohmann::json &json, const actor_relay_req_t &value)
 {
     json = nlohmann::json{{"actorId", value.actor_id}, {"message", value.message}};
 }
 
-inline void from_json (const nlohmann::json &json, actor_relay_request_t &value)
+inline void from_json (const nlohmann::json &json, actor_relay_req_t &value)
 {
     json.at ("actorId").get_to (value.actor_id);
     json.at ("message").get_to (value.message);

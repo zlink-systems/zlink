@@ -7,6 +7,8 @@ internal sealed record SampleSettings(
     string ApiBindUrl,
     string MeshEndpoint,
     IReadOnlyList<string> PeerMeshEndpoints,
+    string ApiChannelListenEndpoint,
+    IReadOnlyList<string> ApiChannelPeerEndpoints,
     string PlayEndpoint,
     IReadOnlyList<string> PlayEndpoints,
     string RedisEndpoint,
@@ -27,6 +29,8 @@ internal sealed record SampleSettings(
             RequireString(section, nameof(ApiBindUrl)),
             RequireString(section, nameof(MeshEndpoint)),
             RequireList(section, nameof(PeerMeshEndpoints), 2),
+            RequireTcpEndpoint(section, nameof(ApiChannelListenEndpoint)),
+            [],
             string.Empty,
             playEndpoints,
             RequireString(section, nameof(RedisEndpoint)),
@@ -42,6 +46,8 @@ internal sealed record SampleSettings(
             string.Empty,
             RequireString(section, nameof(MeshEndpoint)),
             ReadList(section, nameof(PeerMeshEndpoints)),
+            string.Empty,
+            RequireTcpEndpointList(section, nameof(ApiChannelPeerEndpoints), 2),
             RequireString(section, nameof(PlayEndpoint)),
             RequireList(section, nameof(PlayEndpoints), 2),
             RequireString(section, nameof(RedisEndpoint)),
@@ -77,6 +83,37 @@ internal sealed record SampleSettings(
         return values.Count == count
             ? values
             : throw new InvalidOperationException($"Sample.{name} must contain {count} values.");
+    }
+
+    private static string RequireTcpEndpoint(
+        IConfigurationSection section,
+        string name)
+    {
+        var endpoint = RequireString(section, name);
+        return IsTcpEndpoint(endpoint)
+            ? endpoint
+            : throw new InvalidOperationException(
+                $"Sample.{name} must be an absolute tcp endpoint with an explicit port.");
+    }
+
+    private static IReadOnlyList<string> RequireTcpEndpointList(
+        IConfigurationSection section,
+        string name,
+        int count)
+    {
+        var endpoints = RequireList(section, name, count);
+        return endpoints.All(IsTcpEndpoint)
+            ? endpoints
+            : throw new InvalidOperationException(
+                $"Sample.{name} must contain absolute tcp endpoints with explicit ports.");
+    }
+
+    private static bool IsTcpEndpoint(string endpoint)
+    {
+        return Uri.TryCreate(endpoint, UriKind.Absolute, out var uri)
+               && string.Equals(uri.Scheme, "tcp", StringComparison.OrdinalIgnoreCase)
+               && !string.IsNullOrWhiteSpace(uri.Host)
+               && uri.Port is > 0 and <= 65535;
     }
 
     private static IReadOnlyList<string> ReadList(

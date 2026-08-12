@@ -49,8 +49,52 @@ function Invoke-SampleDockerCommand {
 function Remove-SampleRedisContainer {
     param([Parameter(Mandatory = $true)][string]$ContainerId)
 
-    if (-not $ContainerId) { return }
+    if ($ContainerId -notmatch '^[0-9a-f]{12,64}$') { return }
     Invoke-SampleDockerCommand -Arguments @("rm", "-fv", $ContainerId) -AllowFailure | Out-Null
+}
+
+function Test-SampleTcpPortAvailable {
+    param([Parameter(Mandatory = $true)][int]$Port)
+
+    $listener = [System.Net.Sockets.TcpListener]::new(
+        [System.Net.IPAddress]::Loopback,
+        $Port)
+    $listener.Server.ExclusiveAddressUse = $true
+    try {
+        $listener.Start()
+        return $true
+    }
+    catch [System.Net.Sockets.SocketException] {
+        return $false
+    }
+    finally {
+        $listener.Stop()
+    }
+}
+
+function Test-SampleDockerBindConflict {
+    param([Parameter(Mandatory = $true)]$Result)
+
+    $details = "$($Result.StdOut)`n$($Result.StdErr)"
+    return $details -match '(?i)(address already in use|port is already allocated|failed to bind host port|bind for .* failed)'
+}
+
+function Remove-SampleRedisAttempt {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [string]$ContainerId = ""
+    )
+
+    if ($ContainerId -notmatch '^[0-9a-f]{12,64}$') {
+        $inspected = Invoke-SampleDockerCommand -Arguments @(
+            "inspect", "--type", "container", "-f", "{{.Id}}", $Name) -AllowFailure
+        if ($inspected.ExitCode -eq 0 -and $inspected.StdOut -match '^[0-9a-f]{12,64}$') {
+            $ContainerId = $inspected.StdOut
+        }
+    }
+    if ($ContainerId -match '^[0-9a-f]{12,64}$') {
+        Remove-SampleRedisContainer $ContainerId
+    }
 }
 
 function Start-SampleRedisContainer {
@@ -63,36 +107,82 @@ function Start-SampleRedisContainer {
         throw "Docker is required to run this sample."
     }
 
-    $name = "$Scope-$PID-$([Guid]::NewGuid().ToString('N'))"
-    $created = Invoke-SampleDockerCommand -Arguments @(
-        "create", "--name", $name, "--tmpfs", "/data",
-        "-p", "127.0.0.1::6379", $Image)
-    $containerId = $created.StdOut
-    if ($containerId -notmatch '^[0-9a-f]{12,64}$') {
-        throw "Docker create did not return a Redis container id for $name."
+    $redisMinimumPort = 22000
+    $redisMaximumPort = 22099
+    $redisPoolSize = $redisMaximumPort - $redisMinimumPort + 1
+    $startPort = Get-Random -Minimum $redisMinimumPort -Maximum ($redisMaximumPort + 1)
+
+    for ($offset = 0; $offset -lt $redisPoolSize; $offset++) {
+        $port = $redisMinimumPort + (($startPort - $redisMinimumPort + $offset) % $redisPoolSize)
+        if (-not (Test-SampleTcpPortAvailable -Port $port)) {
+            continue
+        }
+
+        $name = "$Scope-$PID-$([Guid]::NewGuid().ToString('N'))-$port"
+        $containerId = ""
+        try {
+            $created = Invoke-SampleDockerCommand -Arguments @(
+                "create", "--name", $name, "--tmpfs", "/data",
+                "-p", "127.0.0.1:$($port):6379", $Image) -AllowFailure
+        }
+        catch {
+            Remove-SampleRedisAttempt -Name $name -ContainerId $containerId
+            throw
+        }
+        $containerId = if ($created.StdOut -match '^[0-9a-f]{12,64}$') {
+            $created.StdOut
+        }
+        else {
+            ""
+        }
+
+        if ($created.ExitCode -ne 0 -or -not $containerId) {
+            Remove-SampleRedisAttempt -Name $name -ContainerId $containerId
+            if (Test-SampleDockerBindConflict -Result $created) {
+                continue
+            }
+            throw "Docker create failed for Redis container $name.`n$($created.StdErr)"
+        }
+
+        try {
+            $started = Invoke-SampleDockerCommand -Arguments @(
+                "start", $containerId) -AllowFailure
+        }
+        catch {
+            Remove-SampleRedisAttempt -Name $name -ContainerId $containerId
+            throw
+        }
+        if ($started.ExitCode -ne 0) {
+            Remove-SampleRedisAttempt -Name $name -ContainerId $containerId
+            if (Test-SampleDockerBindConflict -Result $started) {
+                continue
+            }
+            throw "Docker start failed for Redis container $name.`n$($started.StdErr)"
+        }
+
+        try {
+            $running = Invoke-SampleDockerCommand -Arguments @(
+                "inspect", "-f", "{{.State.Running}}", $containerId)
+            if ($running.StdOut -ne "true") {
+                throw "Redis container $name did not enter the running state."
+            }
+            $publishedPort = Invoke-SampleDockerCommand -Arguments @(
+                "inspect", "-f", "{{(index (index .NetworkSettings.Ports `"6379/tcp`") 0).HostPort}}", $containerId)
+            if ($publishedPort.StdOut -ne "$port") {
+                throw "Redis container $name did not publish the selected host port $port."
+            }
+            return [pscustomobject]@{
+                ContainerId = $containerId
+                Endpoint = "127.0.0.1:$port"
+            }
+        }
+        catch {
+            Remove-SampleRedisAttempt -Name $name -ContainerId $containerId
+            throw
+        }
     }
 
-    try {
-        Invoke-SampleDockerCommand -Arguments @("start", $containerId) | Out-Null
-        $running = Invoke-SampleDockerCommand -Arguments @(
-            "inspect", "-f", "{{.State.Running}}", $containerId)
-        if ($running.StdOut -ne "true") {
-            throw "Redis container $name did not enter the running state."
-        }
-        $port = Invoke-SampleDockerCommand -Arguments @(
-            "inspect", "-f", "{{(index (index .NetworkSettings.Ports `"6379/tcp`") 0).HostPort}}", $containerId)
-        if ($port.StdOut -notmatch '^\d+$') {
-            throw "Docker inspect did not return a Redis host port for $name."
-        }
-        return [pscustomobject]@{
-            ContainerId = $containerId
-            Endpoint = "127.0.0.1:$($port.StdOut)"
-        }
-    }
-    catch {
-        Remove-SampleRedisContainer $containerId
-        throw
-    }
+    throw "No Redis port is available within $redisMinimumPort-$redisMaximumPort."
 }
 
 function New-SampleRunDirectory {
@@ -138,22 +228,54 @@ function New-SamplePorts {
         [int]$BasePort = 0
     )
 
+    $applicationMinimumPort = 22100
+    $applicationMaximumPort = 23999
+    $poolSize = $applicationMaximumPort - $applicationMinimumPort + 1
+    if ($Count -le 0 -or $Count -gt $poolSize) {
+        throw "Sample port count must be between 1 and $poolSize."
+    }
+
     if ($BasePort -gt 0) {
-        $ports = @()
-        for ($i = 1; $i -le $Count; $i++) {
-            $ports += ($BasePort + $i)
+        $firstPort = $BasePort + 1
+        $lastPort = $BasePort + $Count
+        if ($firstPort -lt $applicationMinimumPort -or $lastPort -gt $applicationMaximumPort) {
+            throw "Configured sample ports must stay within $applicationMinimumPort-$applicationMaximumPort."
         }
-        return $ports
+        $candidates = @($firstPort..$lastPort)
+    }
+    else {
+        $startPort = Get-Random -Minimum $applicationMinimumPort -Maximum ($applicationMaximumPort + 1)
+        $candidates = for ($offset = 0; $offset -lt $poolSize; $offset++) {
+            $applicationMinimumPort + (($startPort - $applicationMinimumPort + $offset) % $poolSize)
+        }
     }
 
     $ports = @()
     $listeners = @()
     try {
-        for ($i = 0; $i -lt $Count; $i++) {
-            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
-            $listener.Start()
+        foreach ($port in $candidates) {
+            $listener = [System.Net.Sockets.TcpListener]::new(
+                [System.Net.IPAddress]::Loopback,
+                $port)
+            $listener.Server.ExclusiveAddressUse = $true
+            try {
+                $listener.Start()
+            }
+            catch [System.Net.Sockets.SocketException] {
+                $listener.Stop()
+                if ($BasePort -gt 0) {
+                    throw "Configured sample port $port is unavailable."
+                }
+                continue
+            }
             $listeners += $listener
-            $ports += $listener.LocalEndpoint.Port
+            $ports += $port
+            if ($ports.Count -eq $Count) {
+                break
+            }
+        }
+        if ($ports.Count -ne $Count) {
+            throw "Could not reserve $Count application ports within $applicationMinimumPort-$applicationMaximumPort."
         }
     }
     finally {

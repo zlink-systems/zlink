@@ -1,4 +1,5 @@
 package systems.zlink.e2e.spotservice.client.Scenarios;
+import java.util.List;
 
 import java.util.UUID;
 import systems.zlink.e2e.spotservice.shared.Contracts;
@@ -31,9 +32,9 @@ public final class SmC6Scenario extends SpotServiceScenarioContext {
         sendOutbound(readySpot, "sm-c6-marker");
 
         waitForEvidence(options().httpAEndpoint(),
-            java.util.List.of("SpotMeshMsg|" + readySpot + "|publish:sm-c6-marker"));
+            List.of("SpotMeshMsg|" + readySpot + "|publish:sm-c6-marker"));
         waitForEvidence(options().httpBEndpoint(),
-            java.util.List.of("SpotBackpressureEntered|" + blockedSpot + "|publish:sm-c6-marker"));
+            List.of("SpotBackpressureEntered|" + blockedSpot + "|publish:sm-c6-marker"));
         Contracts.EvidenceSnapshot beforeRelease = readEvidence(options().httpBEndpoint());
         long blockedMessages = beforeRelease.entries().stream()
             .filter(entry -> entry.marker().equals("SpotMeshMsg"))
@@ -46,7 +47,7 @@ public final class SmC6Scenario extends SpotServiceScenarioContext {
         postJson(options().httpBEndpoint(), "/spot/c6/release",
             new Contracts.GatedSpotCreateReq(blockedSpot), Contracts.OperationAccepted.class);
         waitForEvidence(options().httpBEndpoint(),
-            java.util.List.of("SpotBackpressureResumed|" + blockedSpot + "|publish:sm-c6-marker"));
+            List.of("SpotBackpressureResumed|" + blockedSpot + "|publish:sm-c6-marker"));
         Contracts.EvidenceSnapshot afterRelease = readEvidence(options().httpBEndpoint());
         long resumedMessages = afterRelease.entries().stream()
             .filter(entry -> entry.marker().equals("SpotMeshMsg"))

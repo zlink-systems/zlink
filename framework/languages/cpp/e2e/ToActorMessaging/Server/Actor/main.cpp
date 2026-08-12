@@ -112,9 +112,9 @@ class to_actor_e2e_spot_t
     void configure () override
     {
         _context.handlers ().add_actor_send<&to_actor_e2e_spot_t::on_notify> (
-          e2e::actor_notify_t::packet_name);
+          e2e::actor_msg_t::packet_name);
         _context.handlers ().add_actor_request<&to_actor_e2e_spot_t::on_ask> (
-          e2e::actor_ask_t::packet_name);
+          e2e::actor_req_t::packet_name);
     }
 
     zlink::framework::task_t<zlink::framework::actor_create_response_t>
@@ -147,7 +147,7 @@ class to_actor_e2e_spot_t
 
     void on_notify (to_actor_e2e_actor_t &actor,
                     zlink::framework::message_context_t &,
-                    const e2e::actor_notify_t &message)
+                    const e2e::actor_msg_t &message)
     {
         _evidence.append ({message.scenario, actor.actor_id (), "send", message.value});
         if (message.push_to_session) {
@@ -158,13 +158,13 @@ class to_actor_e2e_spot_t
         }
     }
 
-    zlink::framework::task_t<e2e::actor_reply_t>
+    zlink::framework::task_t<e2e::actor_res_t>
     on_ask (to_actor_e2e_actor_t &actor,
             zlink::framework::message_context_t &,
-            const e2e::actor_ask_t &message)
+            const e2e::actor_req_t &message)
     {
         _evidence.append ({message.scenario, actor.actor_id (), "request", message.value});
-        auto reply = e2e::actor_reply_t{message.scenario, actor.actor_id (),
+        auto reply = e2e::actor_res_t{message.scenario, actor.actor_id (),
                                         "reply:" + message.value};
         if (message.scenario == "TA-B1-destroy" || message.scenario == "TA-A4-destroy"
             || message.scenario == "TA-B2-destroy") {
@@ -183,15 +183,15 @@ class ensure_actor_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::actor_manager_t>;
-    using request_type = e2e::actor_call_request_t;
-    using reply_type = e2e::actor_call_response_t;
+    using request_type = e2e::actor_call_req_t;
+    using reply_type = e2e::actor_call_res_t;
 
     explicit ensure_actor_handler_t (zlink::framework::actor_manager_t actors) :
         _actors (std::move (actors))
     {
     }
 
-    e2e::actor_call_response_t handle (const e2e::actor_call_request_t &request)
+    e2e::actor_call_res_t handle (const e2e::actor_call_req_t &request)
     {
         try {
             const auto created = _actors
@@ -242,28 +242,28 @@ class push_actor_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::actor_client_t>;
-    using request_type = e2e::actor_call_request_t;
-    using reply_type = e2e::actor_call_response_t;
+    using request_type = e2e::actor_call_req_t;
+    using reply_type = e2e::actor_call_res_t;
 
     explicit push_actor_handler_t (zlink::framework::actor_client_t &actors) :
         _actors (actors)
     {
     }
 
-    zlink::framework::task_t<e2e::actor_call_response_t>
-    handle (const e2e::actor_call_request_t &request)
+    zlink::framework::task_t<e2e::actor_call_res_t>
+    handle (const e2e::actor_call_req_t &request)
     {
         try {
             co_await _actors
               .send (zlink::framework::actor_id_t (request.actor_id),
-                     e2e::actor_notify_t{request.scenario, request.actor_id,
+                     e2e::actor_msg_t{request.scenario, request.actor_id,
                                          request.value, true})
               .submit ();
-            co_return e2e::actor_call_response_t{request.scenario, request.actor_id,
+            co_return e2e::actor_call_res_t{request.scenario, request.actor_id,
                                                 "pushed", ""};
         }
         catch (const zlink::framework::framework_exception_t &error) {
-            co_return e2e::actor_call_response_t{
+            co_return e2e::actor_call_res_t{
               request.scenario, request.actor_id, "", error.what ()};
         }
     }

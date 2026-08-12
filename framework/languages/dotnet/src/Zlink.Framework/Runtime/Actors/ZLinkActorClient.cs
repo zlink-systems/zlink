@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using Systems.Zlink.Stream.Connector.Runtime;
+using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
+
 namespace Zlink.Framework.Runtime.Actors;
 
 internal sealed class ZLinkActorClient(
@@ -432,16 +434,18 @@ internal sealed class ZLinkActorClient(
 
         public ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default)
         {
-            ZLinkApplicationExecutionContext.RejectActorRequestWhenSameClaim(
+            ZLinkApplicationExecutionContext.ValidateActorRequest(
                 actorId,
+                ZLinkNestedRequestTerminator.Async,
                 _executionScope);
             return ExecuteAsync<TReply>(cancellationToken);
         }
 
         public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default)
         {
-            ZLinkApplicationExecutionContext.RejectActorRequestWhenSameClaim(
+            ZLinkApplicationExecutionContext.ValidateActorRequest(
                 actorId,
+                ZLinkNestedRequestTerminator.Yield,
                 _executionScope);
             return ZLinkApplicationExecutionContext
                 .RequireYieldTurn(_turn, "Actor request")

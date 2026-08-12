@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/backend/raw_dealer_port.hpp"
+#include "runtime/backend/raw_binding_adapter.hpp"
 
 #include <zlink/Contracts/Eventing/poll_event.hpp>
 #include <zlink/Contracts/Eventing/poller.hpp>
@@ -18,50 +19,6 @@
 
 namespace zlink::framework::detail::backend
 {
-namespace
-{
-
-raw_message_t copy_parts (
-  const std::vector<zlink::message_t> &parts)
-{
-    raw_message_t result;
-    result.reserve (parts.size ());
-    for (const auto &part : parts) {
-        result.push_back (part.to_bytes ());
-    }
-    return result;
-}
-
-std::vector<zlink::message_t> materialize_parts (
-  const raw_message_t &parts)
-{
-    std::vector<zlink::message_t> result;
-    result.reserve (parts.size ());
-    for (const auto &part : parts) {
-        result.push_back (zlink::message_t::from (part));
-    }
-    return result;
-}
-
-raw_request_result_t map_request_result (
-  zlink::request_result_t result) noexcept
-{
-    switch (result) {
-        case zlink::request_result_t::ok:
-            return raw_request_result_t::ok;
-        case zlink::request_result_t::timed_out:
-            return raw_request_result_t::timed_out;
-        case zlink::request_result_t::not_connected:
-            return raw_request_result_t::not_connected;
-        case zlink::request_result_t::terminated:
-            return raw_request_result_t::terminated;
-        default:
-            return raw_request_result_t::failed;
-    }
-}
-
-} // namespace
-
 raw_dealer_port_t::raw_dealer_port_t (
   zlink::dealer_socket_t &socket,
   std::mutex *shared_socket_mutex,
@@ -95,7 +52,7 @@ bool raw_dealer_port_t::send (const raw_message_t &parts)
     if (!_socket) {
         return false;
     }
-    auto messages = materialize_parts (parts);
+    auto messages = materialize_binding_parts (parts);
     auto operation = std::move (_socket->send ()).message (messages[0]);
     for (std::size_t index = 1; index < messages.size (); ++index) {
         operation = std::move (operation).message (messages[index]);
@@ -121,7 +78,7 @@ bool raw_dealer_port_t::request (
     if (!_socket) {
         return false;
     }
-    auto messages = materialize_parts (parts);
+    auto messages = materialize_binding_parts (parts);
     auto operation =
       std::move (_socket->request ()).message (messages[0]);
     for (std::size_t index = 1; index < messages.size (); ++index) {
@@ -132,7 +89,8 @@ bool raw_dealer_port_t::request (
           [callback = std::move (callback)] (
             zlink::request_result_t result,
             std::vector<zlink::message_t> reply) mutable {
-              callback (map_request_result (result), copy_parts (reply));
+              callback (map_binding_request_result (result),
+                        copy_binding_parts (reply));
           });
     }
     catch (const zlink::submit_error_t &) {
@@ -165,8 +123,8 @@ std::optional<raw_message_t> raw_dealer_port_t::try_receive ()
     if (result != 0) {
         throw std::runtime_error ("raw dealer receive failed");
     }
-    auto parts = copy_parts (_received.parts ());
-    _received.close ();
+    binding_received_release_t received_release (_received);
+    auto parts = copy_binding_parts (_received.parts ());
     return parts;
 }
 

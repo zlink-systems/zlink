@@ -1,4 +1,9 @@
 package systems.zlink.framework.spring.internal.runtime;
+import java.util.Objects;
+import systems.zlink.framework.monitoring.ZLinkObservedStatus;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeMonitor;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerSource;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 
@@ -94,13 +99,13 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
         Supplier<ZLinkLocationRuntimeQuery> locationRuntime,
         BiFunction<String, RoutingId, ZLinkMeshNodeMonitoringProjection> placementProjection,
         Function<String, List<String>> channelNames) {
-        this.nodes = java.util.Objects.requireNonNull(nodes, "nodes");
+        this.nodes = Objects.requireNonNull(nodes, "nodes");
         this.locationRuntime =
-            java.util.Objects.requireNonNull(locationRuntime, "locationRuntime");
-        this.placementProjection = java.util.Objects.requireNonNull(
+            Objects.requireNonNull(locationRuntime, "locationRuntime");
+        this.placementProjection = Objects.requireNonNull(
             placementProjection,
             "placementProjection");
-        this.channelNames = java.util.Objects.requireNonNull(
+        this.channelNames = Objects.requireNonNull(
             channelNames,
             "channelNames");
     }
@@ -131,7 +136,7 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
             .map(channelName -> {
                 long readyMembers = peers.stream()
                     .filter(peer -> peer.state()
-                        == systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState.ADMITTED)
+                        == MeshPeerState.ADMITTED)
                     .map(peer -> peerChannels(node, peer))
                     .filter(peerChannels -> {
                         int index = peerChannels.names().indexOf(channelName);
@@ -144,7 +149,7 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
             .toList();
         boolean hasAdmittedPeer = peers.stream().anyMatch(peer ->
             peer.state()
-                == systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState.ADMITTED);
+                == MeshPeerState.ADMITTED);
         if (state == ZLinkTopologyState.READY
             && hasAdmittedPeer
             && channels.stream().anyMatch(channel -> !channel.isReady())) {
@@ -162,7 +167,7 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
             state == ZLinkTopologyState.READY,
             Math.toIntExact(peers.stream()
                 .filter(peer -> peer.state()
-                    == systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState.ADMITTED)
+                    == MeshPeerState.ADMITTED)
                 .count()),
             channels,
             peers.stream().map(peer -> mapPeer(node, peer)).toList(),
@@ -182,7 +187,7 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
     }
 
     @Override
-    public Flow.Publisher<systems.zlink.framework.monitoring.ZLinkObservedStatus<
+    public Flow.Publisher<ZLinkObservedStatus<
         ZLinkMeshNodeSnapshot>> observe(String meshName, int capacity) {
         if (capacity <= 0) {
             throw new IllegalArgumentException("capacity must be positive");
@@ -313,9 +318,9 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
         ZLinkInternalMeshNode node,
         MeshPeerEntry peer) {
         if (peer.state()
-                != systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState.ADMITTED
+                != MeshPeerState.ADMITTED
             && peer.state()
-                != systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState.DRAINING) {
+                != MeshPeerState.DRAINING) {
             return new PeerChannels(List.of(), List.of());
         }
         try {
@@ -329,11 +334,11 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
 
     private static List<String> descriptorSources(List<MeshPeerEntry> peers) {
         boolean manual = peers.stream().anyMatch(peer ->
-            peer.source() == systems.zlink.framework.runtime.internal.binding.spot.MeshPeerSource.MANUAL
-                || peer.source() == systems.zlink.framework.runtime.internal.binding.spot.MeshPeerSource.MIXED);
+            peer.source() == MeshPeerSource.MANUAL
+                || peer.source() == MeshPeerSource.MIXED);
         boolean redis = peers.stream().anyMatch(peer ->
-            peer.source() == systems.zlink.framework.runtime.internal.binding.spot.MeshPeerSource.DISCOVERY
-                || peer.source() == systems.zlink.framework.runtime.internal.binding.spot.MeshPeerSource.MIXED);
+            peer.source() == MeshPeerSource.DISCOVERY
+                || peer.source() == MeshPeerSource.MIXED);
         if (manual && redis) {
             return List.of("manual_and_redis");
         }
@@ -355,9 +360,9 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
 
     private static boolean isRequiredPeerUnavailable(MeshPeerEntry peer) {
         return peer.state()
-            != systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState.ADMITTED
+            != MeshPeerState.ADMITTED
             && peer.state()
-            != systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState.NOT_REQUIRED;
+            != MeshPeerState.NOT_REQUIRED;
     }
 
     private static boolean hasAvailableObjectCapacity(
@@ -552,7 +557,7 @@ final class ZLinkRouteMeshRuntimeService implements ZLinkRouteMeshRuntime, AutoC
         }
 
         private void pump() {
-            systems.zlink.framework.runtime.internal.binding.spot.MeshNodeMonitor monitor = null;
+            MeshNodeMonitor monitor = null;
             try {
                 try {
                     monitor = node.openMonitor();

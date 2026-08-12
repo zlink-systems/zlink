@@ -50,7 +50,7 @@ struct actor_ref_dto_t
 
 struct ensure_actor_req_t
 {
-    static constexpr const char *packet_name = "EnsureActor";
+    static constexpr const char *packet_name = "EnsureActorReq";
     std::string actor_id;
     std::string display_name;
 };
@@ -302,7 +302,7 @@ struct channel_echo_res_t
 
 struct channel_control_ping_req_t
 {
-    static constexpr const char *packet_name = "MultiNodeRoutePing";
+    static constexpr const char *packet_name = "MultiNodeRoutePingReq";
     std::string target_node_rid;
     std::string value;
     std::string mesh_name;
@@ -660,6 +660,12 @@ struct idle_close_msg_t
     int period_ms = 0;
 };
 
+struct idle_close_create_req_t
+{
+    std::string name;
+    int period_ms = 0;
+};
+
 struct spot_idle_close_req_t
 {
     std::string spot_id;
@@ -667,7 +673,7 @@ struct spot_idle_close_req_t
     int period_ms = 0;
 };
 
-struct overrun_timer_msg_t
+struct overrun_timer_create_req_t
 {
     std::string name;
     std::string policy;
@@ -2041,6 +2047,17 @@ inline void from_json (const nlohmann::json &json, idle_close_msg_t &value)
     json.at ("period_ms").get_to (value.period_ms);
 }
 
+inline void to_json (nlohmann::json &json, const idle_close_create_req_t &value)
+{
+    json = nlohmann::json{{"name", value.name}, {"period_ms", value.period_ms}};
+}
+
+inline void from_json (const nlohmann::json &json, idle_close_create_req_t &value)
+{
+    json.at ("name").get_to (value.name);
+    json.at ("period_ms").get_to (value.period_ms);
+}
+
 inline void to_json (nlohmann::json &json, const spot_idle_close_req_t &value)
 {
     json = nlohmann::json{
@@ -2054,13 +2071,13 @@ inline void from_json (const nlohmann::json &json, spot_idle_close_req_t &value)
     json.at ("period_ms").get_to (value.period_ms);
 }
 
-inline void to_json (nlohmann::json &json, const overrun_timer_msg_t &value)
+inline void to_json (nlohmann::json &json, const overrun_timer_create_req_t &value)
 {
     json = nlohmann::json{
       {"name", value.name}, {"policy", value.policy}, {"period_ms", value.period_ms}};
 }
 
-inline void from_json (const nlohmann::json &json, overrun_timer_msg_t &value)
+inline void from_json (const nlohmann::json &json, overrun_timer_create_req_t &value)
 {
     json.at ("name").get_to (value.name);
     json.at ("policy").get_to (value.policy);

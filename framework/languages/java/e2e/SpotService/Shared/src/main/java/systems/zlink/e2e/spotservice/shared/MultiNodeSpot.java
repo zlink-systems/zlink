@@ -1,4 +1,6 @@
 package systems.zlink.e2e.spotservice.shared;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import java.time.Duration;
 import systems.zlink.framework.messaging.ZLinkMessage;
@@ -31,10 +33,13 @@ public final class MultiNodeSpot implements ZLinkSpot<ScenarioActor> {
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<ZLinkSpotCreateResponse> onCreate(ZLinkMessage request) {
+    public CompletionStage<ZLinkSpotCreateResponse> onCreate(ZLinkMessage request) {
         evidence.record("MultiNodeSpotCreated", context.spotId(), request.isEmpty() ? "" : "request");
         if (!request.isEmpty()) {
             Contracts.SpotOnlyMeshReq command = request.decode(Contracts.SpotOnlyMeshReq.class);
+            if (command.targetSpotRid() == null || command.targetSpotRid().isBlank()) {
+                return CompletableFuture.completedFuture(ZLinkSpotCreateResponse.accept());
+            }
             return context.outbound()
                     .requestToSpot(command.targetSpotRid(), new Contracts.MultiNodeStateReq(7))
                     .timeout(Duration.ofSeconds(5))
@@ -47,31 +52,31 @@ public final class MultiNodeSpot implements ZLinkSpot<ScenarioActor> {
                         return ZLinkSpotCreateResponse.accept();
                     });
         }
-        return java.util.concurrent.CompletableFuture.completedFuture(ZLinkSpotCreateResponse.accept());
+        return CompletableFuture.completedFuture(ZLinkSpotCreateResponse.accept());
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onInitialize() {
+    public CompletionStage<Void> onInitialize() {
         evidence.record("MultiNodeSpotInitialized", context.spotId(), "");
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
+    public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
         String actorId,
         ZLinkMessage request) {
-        return java.util.concurrent.CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
+        return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onJoinedActor(ScenarioActor actor) {
+    public CompletionStage<Void> onJoinedActor(ScenarioActor actor) {
         evidence.record("SpotOnlyActorJoined", context.spotId(), actor.actorId());
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onLeaveActor(ScenarioActor actor) {
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+    public CompletionStage<Void> onLeaveActor(ScenarioActor actor) {
+        return CompletableFuture.completedFuture(null);
     }
 
     public int add(int delta) {

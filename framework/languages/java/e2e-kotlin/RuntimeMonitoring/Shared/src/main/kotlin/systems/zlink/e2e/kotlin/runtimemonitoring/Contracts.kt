@@ -21,6 +21,9 @@ class Contracts private constructor() {
     )
 
     @JvmRecord
+    data class SpotCreateReq(val reason: String)
+
+    @JvmRecord
     data class EvidenceEntry(
         val surface: String,
         val sourceName: String,

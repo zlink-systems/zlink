@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.Objects;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -13,7 +14,7 @@ public final class ZLinkStoreActorDirectory implements ZLinkActorDirectory {
     private final ZLinkStoreLocationResolvers locations;
 
     public ZLinkStoreActorDirectory(ZLinkStoreLocationResolvers locations) {
-        this.locations = java.util.Objects.requireNonNull(locations, "locations");
+        this.locations = Objects.requireNonNull(locations, "locations");
     }
 
     @Override

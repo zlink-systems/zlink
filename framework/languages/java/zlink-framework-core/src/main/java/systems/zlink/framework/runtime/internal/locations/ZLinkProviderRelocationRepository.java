@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.internal.locations;
+import java.time.Instant;
+import java.util.concurrent.TimeUnit;
+import systems.zlink.framework.locationprovider.ZLinkBlobPutResult;
 
 import java.time.Duration;
 import java.util.Arrays;
@@ -58,7 +61,7 @@ public final class ZLinkProviderRelocationRepository
         // ignores the caller cancellation that ended the original operation.
         return provider.read(reference, () -> false)
             .toCompletableFuture()
-            .orTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+            .orTimeout(5, TimeUnit.SECONDS)
             .handle((result, failure) -> {
                 if (failure == null
                     && result instanceof ZLinkBlobFound found
@@ -76,7 +79,7 @@ public final class ZLinkProviderRelocationRepository
     private static CompletionStage<ZLinkRelocationStored> completed(
         ZLinkBlobReference reference,
         long checksum,
-        systems.zlink.framework.locationprovider.ZLinkBlobPutResult result) {
+        ZLinkBlobPutResult result) {
         if (result instanceof ZLinkBlobStored stored) {
             return CompletableFuture.completedFuture(stored(
                 reference, checksum, stored.expiresAt(), stored.storeNow()));
@@ -130,8 +133,8 @@ public final class ZLinkProviderRelocationRepository
     private static ZLinkRelocationStored stored(
         ZLinkBlobReference reference,
         long checksum,
-        java.time.Instant expiresAt,
-        java.time.Instant storeNow) {
+        Instant expiresAt,
+        Instant storeNow) {
         return new ZLinkRelocationStored(
             reference.value(), checksum, expiresAt, storeNow);
     }

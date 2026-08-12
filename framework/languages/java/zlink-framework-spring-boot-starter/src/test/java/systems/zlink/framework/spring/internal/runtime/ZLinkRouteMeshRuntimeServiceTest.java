@@ -1,4 +1,5 @@
 package systems.zlink.framework.spring.internal.runtime;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -347,7 +348,7 @@ final class ZLinkRouteMeshRuntimeServiceTest {
             new ZLinkActivationConcurrency(activationActive, 8),
             List.of(),
             0,
-            java.util.Optional.empty());
+            Optional.empty());
     }
 
     private static ZLinkMeshNodeMonitoringProjection actorPlacement(
@@ -370,7 +371,7 @@ final class ZLinkRouteMeshRuntimeServiceTest {
                 false,
                 0)),
             0,
-            java.util.Optional.empty());
+            Optional.empty());
     }
 
     private static ZLinkMeshNodeMonitoringProjection spotPlacement(
@@ -397,7 +398,7 @@ final class ZLinkRouteMeshRuntimeServiceTest {
                 false,
                 limit)),
             0,
-            java.util.Optional.empty());
+            Optional.empty());
     }
 
     private static final class FakeNode implements ZLinkInternalMeshNode {

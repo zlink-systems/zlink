@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.Objects;
 
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
@@ -17,7 +18,12 @@ final class ZLinkActorContextState {
     private final String meshName;
     private ZLinkBackendActorRef actorRef;
     private ZLinkBoundSession boundSession;
+    // The local token identifies the current binding instance for cleanup;
+    // the generation is owned by the Session and must survive Actor
+    // relocation.  They are intentionally kept separate because a target
+    // can recreate its local binding while retaining the owner's fence.
     private long sessionBindingToken;
+    private long sessionBindingGeneration;
     private long sessionSourceSequence;
     private RoutingId boundSessionSourceNodeRid;
     private RoutingId boundSessionSourceSessionRid;
@@ -216,27 +222,75 @@ final class ZLinkActorContextState {
         ZLinkBoundSession boundSession,
         RoutingId sourceNodeRid,
         RoutingId sourceSessionRid) {
+        return bindSession(
+            boundSession,
+            sourceNodeRid,
+            sourceSessionRid,
+            0,
+            0);
+    }
+
+    long bindSession(
+        ZLinkBoundSession boundSession,
+        RoutingId sourceNodeRid,
+        RoutingId sourceSessionRid,
+        long bindingGeneration,
+        long initialSessionSequence) {
+        if (bindingGeneration < 0 || initialSessionSequence < 0
+            || bindingGeneration == 0 && initialSessionSequence != 0) {
+            throw new IllegalArgumentException(
+                "bound Session fence must be zero or fully initialized");
+        }
+        //  A fence-less re-bind of the session that is already bound must
+        //  keep the session-owner-issued fence and accepted sequence. Every
+        //  bind path funnels through this overload; without the guard the
+        //  remote bound-session BIND relay that follows a relocation
+        //  fabricated a fresh local generation over the owner fence, so the
+        //  next relocation's command 44 failed the owner's binding-fence
+        //  check as stale. A different session rid is a new binding identity
+        //  and still fabricates below.
+        if (bindingGeneration == 0
+            && this.boundSession != null
+            && sourceSessionRid != null
+            && sourceSessionRid.equals(boundSessionSourceSessionRid)
+            && sourceNodeRid != null
+            && sourceNodeRid.equals(boundSessionSourceNodeRid)
+            && sessionBindingGeneration > 0) {
+            this.boundSession = boundSession;
+            return sessionBindingToken;
+        }
         boundSessionSourceNodeRid = sourceNodeRid;
         boundSessionSourceSessionRid = sourceSessionRid;
         sessionBindingToken++;
-        sessionSourceSequence = 0;
+        sessionBindingGeneration = bindingGeneration == 0
+            ? sessionBindingToken
+            : bindingGeneration;
+        sessionSourceSequence = initialSessionSequence;
         this.boundSession = boundSession;
         return sessionBindingToken;
     }
 
     BoundSessionSource nextBoundSessionSource() {
+        return nextBoundSessionSource(
+            sessionSourceSequence == Long.MAX_VALUE
+                ? 0
+                : sessionSourceSequence + 1);
+    }
+
+    BoundSessionSource nextBoundSessionSource(long acceptedSessionSequence) {
         if (boundSession == null
             || boundSessionSourceNodeRid == null
             || boundSessionSourceSessionRid == null
             || sessionBindingToken <= 0
-            || sessionSourceSequence == Long.MAX_VALUE) {
+            || sessionBindingGeneration <= 0
+            || acceptedSessionSequence <= sessionSourceSequence) {
             return null;
         }
-        sessionSourceSequence++;
+        sessionSourceSequence = acceptedSessionSequence;
         return new BoundSessionSource(
             boundSessionSourceNodeRid,
             boundSessionSourceSessionRid,
-            sessionBindingToken,
+            sessionBindingGeneration,
             sessionSourceSequence);
     }
 
@@ -244,13 +298,14 @@ final class ZLinkActorContextState {
         if (boundSession == null
             || boundSessionSourceNodeRid == null
             || boundSessionSourceSessionRid == null
-            || sessionBindingToken <= 0) {
+            || sessionBindingToken <= 0
+            || sessionBindingGeneration <= 0) {
             return null;
         }
         return new BoundSessionSource(
             boundSessionSourceNodeRid,
             boundSessionSourceSessionRid,
-            sessionBindingToken,
+            sessionBindingGeneration,
             sessionSourceSequence);
     }
 
@@ -259,6 +314,7 @@ final class ZLinkActorContextState {
             boundSession = null;
             boundSessionSourceNodeRid = null;
             boundSessionSourceSessionRid = null;
+            sessionBindingGeneration = 0;
             sessionSourceSequence = 0;
             return true;
         }
@@ -299,8 +355,8 @@ final class ZLinkActorContextState {
         RoutingId sourceNodeRid,
         RoutingId sourceSessionRid) {
         return boundSession != null
-            && java.util.Objects.equals(boundSessionSourceNodeRid, sourceNodeRid)
-            && java.util.Objects.equals(boundSessionSourceSessionRid, sourceSessionRid);
+            && Objects.equals(boundSessionSourceNodeRid, sourceNodeRid)
+            && Objects.equals(boundSessionSourceSessionRid, sourceSessionRid);
     }
 
     CompletionStage<Boolean> sendBoundSessionFrame(byte[] frameBytes) {
@@ -330,6 +386,7 @@ final class ZLinkActorContextState {
         entrySpotId = null;
         entryRouterChannelId = null;
         sessionBindingToken++;
+        sessionBindingGeneration = 0;
         spotId = null;
         spot = null;
         joined = false;

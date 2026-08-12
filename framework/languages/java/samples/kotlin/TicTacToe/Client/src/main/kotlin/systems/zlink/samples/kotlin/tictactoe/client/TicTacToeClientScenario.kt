@@ -17,9 +17,9 @@ import systems.zlink.samples.kotlin.tictactoe.shared.contracts.AuthenticateRes
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.CreateGameHttpReq
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.CreateGameHttpRes
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.GameStateNotify
-import systems.zlink.samples.kotlin.tictactoe.shared.contracts.JoinGameReq
-import systems.zlink.samples.kotlin.tictactoe.shared.contracts.JoinGameRes
-import systems.zlink.samples.kotlin.tictactoe.shared.contracts.LeaveGameReq
+import systems.zlink.samples.kotlin.tictactoe.shared.contracts.JoinGameMsg
+import systems.zlink.samples.kotlin.tictactoe.shared.contracts.JoinGameNotify
+import systems.zlink.samples.kotlin.tictactoe.shared.contracts.LeaveGameMsg
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.ObserveMilestoneReq
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.ObserveMilestoneRes
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.PlaceMarkReq
@@ -41,6 +41,8 @@ class TicTacToeClientScenario {
         val hostStream = playerConnector(game.playEndpoints[0])
         val guestStream = playerConnector(game.playEndpoints[1])
         val observerStream = playerConnector(game.playEndpoints[1])
+        var reconnectedHostStream: ZLinkKotlinStreamConnector? = null
+        var hostClosed = false
 
         try {
             hostStream.connect().await()
@@ -79,10 +81,10 @@ class TicTacToeClientScenario {
                     .within(Duration.ofMillis(400))
                     .await()
             }
-            val xJoinWait = hostStream.waitFor<JoinGameRes>()
+            val xJoinWait = hostStream.waitFor<JoinGameNotify>()
                 .where { message -> message.payload().state.roomId == game.roomId }
                 .let { wait -> async(start = CoroutineStart.UNDISPATCHED) { wait.await() } }
-            hostStream.send(JoinGameReq(game.roomId)).await()
+            hostStream.send(JoinGameMsg(game.roomId)).await()
             val xJoin = xJoinWait.await().payload()
             ensure(xJoin.state.roomId == game.roomId)
             ensure(xJoin.state.status == "WaitingForPlayers")
@@ -101,10 +103,10 @@ class TicTacToeClientScenario {
                     .within(Duration.ofMillis(400))
                     .await()
             }
-            val oJoinWait = guestStream.waitFor<JoinGameRes>()
+            val oJoinWait = guestStream.waitFor<JoinGameNotify>()
                 .where { message -> message.payload().state.roomId == game.roomId }
                 .let { wait -> async(start = CoroutineStart.UNDISPATCHED) { wait.await() } }
-            guestStream.send(JoinGameReq(game.roomId)).await()
+            guestStream.send(JoinGameMsg(game.roomId)).await()
             val oJoin = oJoinWait.await().payload()
             ensure(oJoin.state.roomId == game.roomId)
             ensure(oJoin.state.status == "InProgress")
@@ -136,10 +138,6 @@ class TicTacToeClientScenario {
             ensure(hostMove1Notify.state.nextTurn == "O")
             ensure(hostMove1Notify.state.lastMoveActorId == options.xActorId)
             ensure(hostMove1Notify.state.lastMoveCell == 0)
-
-            // The common scenario checks that a leave request during an active
-            // game is ignored before the guest takes the next turn.
-            guestStream.send(LeaveGameReq(game.roomId)).await()
 
             val hostSawGuestMove1 = hostStream.waitFor<GameStateNotify>()
                 .where { message -> message.payload().state.lastMoveCell == 3 }
@@ -213,11 +211,43 @@ class TicTacToeClientScenario {
                     "wins=${milestone.wins}",
             )
 
-            hostStream.send(LeaveGameReq(game.roomId)).await()
-            guestStream.send(LeaveGameReq(game.roomId)).await()
+            // Closing this connector removes the session binding. A distinct
+            // connector must authenticate and bind the existing Actor again.
+            hostStream.close().await()
+            hostClosed = true
+            val freshHostStream = playerConnector(game.playEndpoints[0])
+            reconnectedHostStream = freshHostStream
+            freshHostStream.connect().await()
+            val reconnectedAuthentication = freshHostStream
+                .request(AuthenticateReq(options.xActorId))
+                .awaitReply<AuthenticateRes>()
+            ensure(reconnectedAuthentication.player == xAuthentication.player)
+
+            // JoinGameMsg stays one-way on reconnect. Start the public wait
+            // before send so a fast current-session push cannot be missed.
+            val reconnectedJoinWait = freshHostStream.waitFor<JoinGameNotify>()
+                .where { message -> message.payload().state.roomId == game.roomId }
+                .let { wait ->
+                    async(start = CoroutineStart.UNDISPATCHED) { wait.await() }
+                }
+            freshHostStream.send(JoinGameMsg(game.roomId)).await()
+            val reconnectedJoin = reconnectedJoinWait.await().payload()
+            ensure(reconnectedJoin.state == hostWin.state)
+            println(
+                "reconnected-game-state=verified actor=${reconnectedAuthentication.player.actorId} " +
+                    "room=${game.roomId}",
+            )
+
+            // LeaveGameMsg remains one-way. The runners wait for the separate
+            // leave and Entry Spot destroy lifecycle evidence.
+            freshHostStream.send(LeaveGameMsg(game.roomId)).await()
+            guestStream.send(LeaveGameMsg(game.roomId)).await()
             println("tictactoe completed")
         } finally {
-            hostStream.close().await()
+            if (!hostClosed) {
+                hostStream.close().await()
+            }
+            reconnectedHostStream?.let { it.close().await() }
             guestStream.close().await()
             observerStream.close().await()
         }

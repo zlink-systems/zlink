@@ -37,6 +37,7 @@ import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProvider
 import type { ZLinkSpotSerialExecutor } from './spot-serial-executor';
 import type { ZLinkSerialWorkOptions } from '../execution/serial-scheduler';
 import { zlinkMetadataByteLength, zlinkSerialWorkOptions } from '../execution/serial-work-size';
+import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
 
 export interface ZLinkActorResponseOptions {
   readonly metadata: ReadonlyMap<string, string>;
@@ -49,19 +50,26 @@ export interface ZLinkActorRequestTerminal {
   readonly prepare?: (response: unknown) => Promise<unknown> | unknown;
 }
 
+/** One admitted Actor packet and the routing context that must move with it. */
+export interface ZLinkActorPacketDelivery {
+  readonly actorId: string;
+  readonly parts: readonly Message[];
+  readonly returnResponse: boolean;
+  readonly remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget;
+  readonly fallbackActorRef?: ActorRef;
+  readonly requestTerminal?: ZLinkActorRequestTerminal;
+  readonly messageFollowOrigin?: ZLinkMessageFollowOrigin;
+}
+
 interface ZLinkSpotActorPacketDispatchOptions {
-  readonly spot: ZLinkSpot;
+  readonly spot: ZLinkSpot | (() => ZLinkSpot);
   readonly spotId: () => string;
   readonly registry: ZLinkSpotActorHandlerRegistryRuntime;
   readonly serial?: ZLinkSpotSerialExecutor;
   readonly resolveActor: (actorId: string) => ZLinkActor | undefined;
   readonly actorLeft?: (actorId: string) => boolean;
   readonly routeBeforeLocal?: (
-    actorId: string,
-    parts: readonly Message[],
-    returnResponse: boolean,
-    remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
-    fallbackActorRef?: ActorRef
+    delivery: ZLinkActorPacketDelivery
   ) => Promise<{ readonly handled: boolean; readonly response?: unknown } | undefined> |
     { readonly handled: boolean; readonly response?: unknown } |
     undefined;
@@ -105,6 +113,25 @@ export class ZLinkSpotActorPacketDispatch {
     fallbackActorRef?: ActorRef,
     requestTerminal?: ZLinkActorRequestTerminal
   ): Promise<unknown> {
+    return await this.dispatchDelivery({
+      actorId,
+      parts,
+      returnResponse,
+      remoteBoundSessionTarget,
+      fallbackActorRef,
+      requestTerminal
+    });
+  }
+
+  async dispatchDelivery(delivery: ZLinkActorPacketDelivery): Promise<unknown> {
+    const {
+      actorId,
+      parts,
+      returnResponse,
+      remoteBoundSessionTarget,
+      fallbackActorRef,
+      requestTerminal
+    } = delivery;
     if (parts.length < 2) {
       this.reportInvalidFrame(actorId, ZLinkDispatchMessageKind.ActorSend);
       return undefined;
@@ -138,11 +165,7 @@ export class ZLinkSpotActorPacketDispatch {
         this.options.onRemoteBoundSessionTarget?.(actorId, remoteBoundSessionTarget);
       }
       const routed = await this.options.routeBeforeLocal?.(
-        actorId,
-        parts,
-        returnResponse,
-        remoteBoundSessionTarget,
-        fallbackActorRef
+        delivery
       );
       if (routed?.handled === true) {
         return routed.response;
@@ -251,9 +274,12 @@ export class ZLinkSpotActorPacketDispatch {
     requestTerminal: ZLinkActorRequestTerminal | undefined,
     workOptions: ZLinkSerialWorkOptions
   ): Promise<unknown> {
+    const spot = typeof this.options.spot === 'function'
+      ? this.options.spot()
+      : this.options.spot;
     const dispatcher = new ZLinkSpotActorDispatcher({
       registry: this.options.registry,
-      spot: this.options.spot,
+      spot,
       providerResolver: this.options.providerResolver,
       serial: this.options.serial,
       serialWorkOptions: workOptions,
@@ -262,7 +288,7 @@ export class ZLinkSpotActorPacketDispatch {
     try {
       if (header.kind === ZLinkStreamMessageKind.Send) {
         await dispatcher.dispatchSendDecoded(actor, header.name, decodePayload, {
-          meshName: this.options.spot.context.meshName,
+          meshName: spot.context.meshName,
           metadata: zlinkMessageMetadata(header.metadata),
           correlationId: header.correlationId ?? undefined
         });
@@ -286,7 +312,7 @@ export class ZLinkSpotActorPacketDispatch {
         let preparedReply: unknown;
         let preparedReplyReady = false;
         await dispatcher.dispatchRequestThenDecoded(actor, header.name, decodePayload, {
-          meshName: this.options.spot.context.meshName,
+          meshName: spot.context.meshName,
           metadata: zlinkMessageMetadata(header.metadata),
           correlationId: header.correlationId ?? header.requestSeq.toString()
         }, async (response) => {
@@ -302,7 +328,7 @@ export class ZLinkSpotActorPacketDispatch {
       }
       if (returnResponse || this.options.actorResponseSender === undefined) {
         const response = await dispatcher.dispatchRequestDecoded(actor, header.name, decodePayload, {
-          meshName: this.options.spot.context.meshName,
+          meshName: spot.context.meshName,
           metadata: zlinkMessageMetadata(header.metadata),
           correlationId: header.correlationId ?? header.requestSeq.toString()
         });
@@ -310,7 +336,7 @@ export class ZLinkSpotActorPacketDispatch {
         return response;
       }
       await dispatcher.dispatchRequestThenDecoded(actor, header.name, decodePayload, {
-        meshName: this.options.spot.context.meshName,
+        meshName: spot.context.meshName,
         metadata: zlinkMessageMetadata(header.metadata),
         correlationId: header.correlationId ?? header.requestSeq.toString()
       }, async (response, replyOptions) => {

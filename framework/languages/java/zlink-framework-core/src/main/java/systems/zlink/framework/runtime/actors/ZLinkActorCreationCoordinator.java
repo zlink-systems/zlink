@@ -1,4 +1,13 @@
 package systems.zlink.framework.runtime.actors;
+import java.security.NoSuchAlgorithmException;
+import java.util.Base64;
+import java.util.HashSet;
+import java.util.Objects;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Supplier;
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.locations.ZLinkCapacityUsage;
 
 import java.security.MessageDigest;
 import java.time.Duration;
@@ -72,13 +81,13 @@ public final class ZLinkActorCreationCoordinator
         ZLinkLocationRepository locations,
         ZLinkActorRuntime actors,
         ZLinkMessageSerializer serializer) {
-        this.meshName = java.util.Objects.requireNonNull(
+        this.meshName = Objects.requireNonNull(
             meshName, "meshName");
-        this.node = java.util.Objects.requireNonNull(node, "node");
-        this.locations = java.util.Objects.requireNonNull(
+        this.node = Objects.requireNonNull(node, "node");
+        this.locations = Objects.requireNonNull(
             locations, "locations");
-        this.actors = java.util.Objects.requireNonNull(actors, "actors");
-        this.serializer = java.util.Objects.requireNonNull(
+        this.actors = Objects.requireNonNull(actors, "actors");
+        this.serializer = Objects.requireNonNull(
             serializer, "serializer");
     }
 
@@ -789,7 +798,7 @@ public final class ZLinkActorCreationCoordinator
                 long total = candidates.stream()
                     .mapToLong(ZLinkMeshNodeDescriptor::placementWeight)
                     .sum();
-                long selected = java.util.concurrent.ThreadLocalRandom
+                long selected = ThreadLocalRandom
                     .current().nextLong(total);
                 for (var candidate : candidates) {
                     selected -= candidate.placementWeight();
@@ -804,7 +813,7 @@ public final class ZLinkActorCreationCoordinator
 
     static Optional<ZLinkMeshNodeDescriptor> localCandidate(
         List<ZLinkMeshNodeDescriptor> candidates,
-        systems.zlink.contracts.core.RoutingId localRoutingId) {
+        RoutingId localRoutingId) {
         return candidates.stream()
             .filter(candidate -> candidate.rid().equals(localRoutingId))
             .findFirst();
@@ -814,9 +823,9 @@ public final class ZLinkActorCreationCoordinator
         ZLinkMeshNodeDescriptor candidate,
         MeshNodeStatus localStatus,
         List<MeshPeerEntry> peers) {
-        java.util.Objects.requireNonNull(candidate, "candidate");
-        java.util.Objects.requireNonNull(localStatus, "localStatus");
-        java.util.Objects.requireNonNull(peers, "peers");
+        Objects.requireNonNull(candidate, "candidate");
+        Objects.requireNonNull(localStatus, "localStatus");
+        Objects.requireNonNull(peers, "peers");
         if (candidate.rid().equals(localStatus.routingId())) {
             return candidate.meshName().equals(localStatus.meshName())
                 && localStatus.state() == MeshNodeState.READY
@@ -867,7 +876,7 @@ public final class ZLinkActorCreationCoordinator
     }
 
     private static boolean hasRoom(
-        systems.zlink.framework.locations.ZLinkCapacityUsage usage) {
+        ZLinkCapacityUsage usage) {
         return usage.limit() == 0
             || (long) usage.active() + usage.reserved() < usage.limit();
     }
@@ -881,7 +890,7 @@ public final class ZLinkActorCreationCoordinator
     private static Set<ZLinkMeshNodeDescriptorKey> excluding(
         Set<ZLinkMeshNodeDescriptorKey> current,
         ZLinkMeshNodeDescriptor descriptor) {
-        var result = new java.util.HashSet<>(current);
+        var result = new HashSet<>(current);
         result.add(descriptorKey(descriptor));
         return Set.copyOf(result);
     }
@@ -944,7 +953,7 @@ public final class ZLinkActorCreationCoordinator
     private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse>
         serializeTarget(
             String actorId,
-            java.util.function.Supplier<CompletionStage<
+            Supplier<CompletionStage<
                 ZLinkInternalMeshNode.ActorCreateResponse>> operation) {
         CompletableFuture<Void> next = new CompletableFuture<>();
         CompletableFuture<Void> previous =
@@ -970,7 +979,7 @@ public final class ZLinkActorCreationCoordinator
 
     private static String inline(byte[] value) {
         return "inline-v1:"
-            + java.util.Base64.getUrlEncoder()
+            + Base64.getUrlEncoder()
                 .withoutPadding()
                 .encodeToString(value);
     }
@@ -981,14 +990,14 @@ public final class ZLinkActorCreationCoordinator
             throw new IllegalArgumentException(
                 "unsupported Actor creation intent reference");
         }
-        return java.util.Base64.getUrlDecoder().decode(
+        return Base64.getUrlDecoder().decode(
             value.substring(prefix.length()));
     }
 
     private static byte[] sha256(byte[] value) {
         try {
             return MessageDigest.getInstance("SHA-256").digest(value);
-        } catch (java.security.NoSuchAlgorithmException impossible) {
+        } catch (NoSuchAlgorithmException impossible) {
             throw new AssertionError(impossible);
         }
     }
@@ -1030,7 +1039,7 @@ public final class ZLinkActorCreationCoordinator
     private static Throwable unwrap(Throwable failure) {
         Throwable current = failure;
         while ((current instanceof CompletionException
-            || current instanceof java.util.concurrent.ExecutionException)
+            || current instanceof ExecutionException)
             && current.getCause() != null) {
             current = current.getCause();
         }

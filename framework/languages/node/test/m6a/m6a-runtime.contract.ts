@@ -10,8 +10,12 @@ import {
   ServiceWireCommand
 } from '../../../../runtime/protocol/generated/node/service_wire_constants';
 import {
-  RawServiceMeshRuntime
+  RawServiceMeshRuntime,
+  type RawServiceMeshRuntimeOptions
 } from '../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime';
+import {
+  ZLinkNodeRawBindingPort
+} from '../../packages/framework/src/runtime/backend/node/node-raw-binding-port';
 import {
   ZLinkNodeRawMeshBackend
 } from '../../packages/framework/src/runtime/backend/node/node-raw-mesh-backend';
@@ -78,6 +82,16 @@ function descriptor(
     activeCapacityUsed: 0,
     pendingCapacityUsed: 0
   };
+}
+
+function rawServiceRuntime(
+  options: Omit<RawServiceMeshRuntimeOptions, 'bindingPort'>
+    & Partial<Pick<RawServiceMeshRuntimeOptions, 'bindingPort'>>
+): RawServiceMeshRuntime {
+  return new RawServiceMeshRuntime({
+    ...options,
+    bindingPort: options.bindingPort ?? new ZLinkNodeRawBindingPort()
+  });
 }
 
 function runtimeStateWireValue(frame: Uint8Array): number {
@@ -182,7 +196,11 @@ test('RouteMesh admission preserves an optional maintenance wave across updates'
   }, 'connection-a'), 'admitted');
   assert.equal(topology.peer(initial.nodeRoutingId)?.descriptor.maintenanceWave, 'rolling-b');
 
-  const backend = new ZLinkNodeRawMeshBackend('wave-mesh', 'wave-node');
+  const backend = new ZLinkNodeRawMeshBackend(
+    'wave-mesh',
+    'wave-node',
+    new ZLinkNodeRawBindingPort()
+  );
   backend.configureObjectPlacement({
     role: 'server',
     placementWeight: 100,
@@ -194,6 +212,23 @@ test('RouteMesh admission preserves an optional maintenance wave across updates'
   const created = (backend as unknown as { createDescriptor(): ServiceNodeDescriptor })
     .createDescriptor();
   assert.equal(created.maintenanceWave, 'rolling-a');
+});
+
+test('RouteMesh admission rejects malformed UTF-8 instead of replacing bytes', () => {
+  const meshName = 'canonical-utf8-mesh';
+  const frame = Buffer.from(encodeRouteMeshAdmission(
+    M6aServiceWireCommand.update,
+    { ...descriptor('utf8-peer'), meshName }
+  ));
+  const meshOffset = frame.indexOf(Buffer.from(meshName, 'utf8'));
+  assert.ok(meshOffset > 0);
+  frame[meshOffset] = 0xff;
+  assert.throws(
+    () => decodeRouteMeshAdmission(frame, M6aServiceWireCommand.update, 'utf8-peer'),
+    error => error instanceof Error
+      && error.name === 'ServiceWireProtocolError'
+      && /meshName/.test(error.message)
+  );
 });
 
 test('reply header preserves the schema tail length field', () => {
@@ -252,7 +287,7 @@ test('topology snapshots fence reconnect and exclude retiring placement targets'
 });
 
 test('RouteMesh admission classifies stale and conflicting descriptor revisions as protocol errors', () => {
-  const runtime = new RawServiceMeshRuntime({ descriptor: descriptor('local') });
+  const runtime = rawServiceRuntime({ descriptor: descriptor('local') });
   const current = {
     ...descriptor('peer'),
     descriptorRevision: 2n,
@@ -443,7 +478,7 @@ test('topology treats lifecycle generation as an opaque equality token', () => {
 });
 
 test('raw monitor preserves each physical candidate direction through admission and disconnect fencing', () => {
-  const runtime = new RawServiceMeshRuntime({ descriptor: descriptor('local') });
+  const runtime = rawServiceRuntime({ descriptor: descriptor('local') });
   const peer = { ...descriptor('peer'), state: 'serving' as const };
   const internal = runtime as unknown as {
     expectedPeers: Map<string, {
@@ -523,7 +558,7 @@ test('raw monitor preserves each physical candidate direction through admission 
 });
 
 test('raw monitor ignores a late disconnect from the superseded physical connection', () => {
-  const runtime = new RawServiceMeshRuntime({ descriptor: descriptor('local') });
+  const runtime = rawServiceRuntime({ descriptor: descriptor('local') });
   const peer = { ...descriptor('peer'), state: 'serving' as const };
   const internal = runtime as unknown as {
     connectionIds: Map<string, string>;
@@ -552,7 +587,7 @@ test('raw monitor ignores a late disconnect from the superseded physical connect
 });
 
 test('raw monitor fences paired transport lanes and ignores ready-count snapshots', () => {
-  const runtime = new RawServiceMeshRuntime({ descriptor: descriptor('local') });
+  const runtime = rawServiceRuntime({ descriptor: descriptor('local') });
   const peer = { ...descriptor('peer-paired'), state: 'serving' as const };
   const internal = runtime as unknown as {
     connectionCandidates: Map<string, Map<string, { connectionId: string }>>;
@@ -639,7 +674,7 @@ test('raw monitor fences paired transport lanes and ignores ready-count snapshot
 
 test('raw disconnect fences a late lifecycle generation after peer replacement', () => {
   const endpoint = `ipc:///tmp/zlink-m6a-generation-fence-${process.pid}-${Date.now()}.sock`;
-  const runtime = new RawServiceMeshRuntime({
+  const runtime = rawServiceRuntime({
     descriptor: descriptor('local-generation-fence', endpoint)
   });
   runtime.start();
@@ -669,7 +704,7 @@ test('raw disconnect fences a late lifecycle generation after peer replacement',
 
 test('raw disconnect tolerates a late native route removal after the peer is already gone', () => {
   const endpoint = `ipc:///tmp/zlink-m6a-late-disconnect-${process.pid}-${Date.now()}.sock`;
-  const runtime = new RawServiceMeshRuntime({
+  const runtime = rawServiceRuntime({
     descriptor: descriptor('local-late-disconnect', endpoint)
   });
   runtime.start();
@@ -882,7 +917,7 @@ test('ClientServer keeps a known target observable while its transport is discon
 });
 
 test('runtime weight changes increment the local descriptor revision and preserve public bounds', () => {
-  const runtime = new RawServiceMeshRuntime({
+  const runtime = rawServiceRuntime({
     descriptor: {
       ...descriptor('runtime-options'),
       state: 'serving'
@@ -944,7 +979,7 @@ test('mailbox domains remain bounded and infrastructure claims progress independ
 });
 
 test('remote request receives CapacityExceeded when bounded mailbox admission fails', () => {
-  const runtime = new RawServiceMeshRuntime({
+  const runtime = rawServiceRuntime({
     descriptor: descriptor('local'),
     mailbox: { applicationMessages: 1, applicationBytes: 4_096 }
   });
@@ -1002,7 +1037,7 @@ test('raw protocol errors reply when correlation is recoverable and always repor
     replied: boolean;
     command?: number;
   }> = [];
-  const runtime = new RawServiceMeshRuntime({
+  const runtime = rawServiceRuntime({
     descriptor: descriptor('local'),
     onProtocolError: record => observed.push(record)
   });
@@ -1124,8 +1159,8 @@ test('raw admission keeps Object Client-only pairs out of liveness and records N
     channels: [],
     objectRole: 'client' as const
   };
-  const left = new RawServiceMeshRuntime({ descriptor: leftDescriptor });
-  const right = new RawServiceMeshRuntime({ descriptor: rightDescriptor });
+  const left = rawServiceRuntime({ descriptor: leftDescriptor });
+  const right = rawServiceRuntime({ descriptor: rightDescriptor });
   left.start();
   right.start();
   try {
@@ -1153,7 +1188,8 @@ test('raw admission keeps Object Client-only pairs out of liveness and records N
 
   const backend = new ZLinkNodeRawMeshBackend(
     'm6a-mesh',
-    'client-monitor'
+    'client-monitor',
+    new ZLinkNodeRawBindingPort()
   );
   backend.configureObjectPlacement({
     role: 'client',
@@ -1201,8 +1237,8 @@ test('raw runtime admits peers and completes node/channel requests once', async 
     ]
   };
   const rightDescriptor = descriptor('m6a-right', `ipc:///tmp/zlink-m6a-right-${endpointNonce}.sock`);
-  const left = new RawServiceMeshRuntime({ descriptor: leftDescriptor });
-  const right = new RawServiceMeshRuntime({ descriptor: rightDescriptor });
+  const left = rawServiceRuntime({ descriptor: leftDescriptor });
+  const right = rawServiceRuntime({ descriptor: rightDescriptor });
   left.start();
   right.start();
   try {
@@ -1266,7 +1302,11 @@ test('raw runtime admits peers and completes node/channel requests once', async 
     right.close();
   }
 
-  const backend = new ZLinkNodeRawMeshBackend('m6a-mesh', 'backend-host');
+  const backend = new ZLinkNodeRawMeshBackend(
+    'm6a-mesh',
+    'backend-host',
+    new ZLinkNodeRawBindingPort()
+  );
   backend.setBind(`ipc:///tmp/zlink-m6a-backend-${process.pid}-${Date.now()}.sock`);
   backend.addChannelName('alpha');
   backend.start();
@@ -1301,12 +1341,12 @@ test('completion control preserves liveness while Application receive is paused'
     'completion-right',
     `ipc:///tmp/zlink-m6a-completion-right-${endpointNonce}.sock`
   );
-  const left = new RawServiceMeshRuntime({
+  const left = rawServiceRuntime({
     descriptor: leftDescriptor,
     probeIntervalMs: 1,
     peerTimeoutMs: 5_000
   });
-  const right = new RawServiceMeshRuntime({
+  const right = rawServiceRuntime({
     descriptor: rightDescriptor,
     probeIntervalMs: 1,
     peerTimeoutMs: 5_000
@@ -1409,8 +1449,8 @@ test('one-sided endpoint-only client upgrades the provisional route before Ready
     'm6a-manual-client',
     `ipc:///tmp/zlink-m6a-manual-client-${endpointNonce}.sock`
   );
-  const provider = new RawServiceMeshRuntime({ descriptor: providerDescriptor });
-  const client = new RawServiceMeshRuntime({ descriptor: clientDescriptor });
+  const provider = rawServiceRuntime({ descriptor: providerDescriptor });
+  const client = rawServiceRuntime({ descriptor: clientDescriptor });
   provider.start();
   client.start();
   try {
@@ -1472,8 +1512,8 @@ test('bilateral endpoint-only manual connections learn peer RIDs and converge', 
     'm6a-endpoint-right',
     `ipc:///tmp/zlink-m6a-endpoint-right-${endpointNonce}.sock`
   );
-  const left = new RawServiceMeshRuntime({ descriptor: leftDescriptor });
-  const right = new RawServiceMeshRuntime({ descriptor: rightDescriptor });
+  const left = rawServiceRuntime({ descriptor: leftDescriptor });
+  const right = rawServiceRuntime({ descriptor: rightDescriptor });
   right.start();
   try {
     right.connectPeerEndpoint(leftDescriptor.advertisedEndpoint);
@@ -1553,7 +1593,7 @@ test('bilateral endpoint-only manual connections learn peer RIDs and converge', 
 });
 
 test('local channel requests preserve successful and failed terminal results', async () => {
-  const local = new RawServiceMeshRuntime({
+  const local = rawServiceRuntime({
     descriptor: descriptor(
       'm6a-local-channel',
       `ipc:///tmp/zlink-m6a-local-channel-${process.pid}-${Date.now()}.sock`

@@ -1,4 +1,5 @@
 package systems.zlink.stream.connector;
+import java.util.Objects;
 
 import java.util.ArrayDeque;
 import java.util.HashMap;
@@ -221,7 +222,7 @@ final class ZLinkStreamDispatchQueue {
         }
         queued.stream()
             .map(QueuedDispatch::message)
-            .filter(java.util.Objects::nonNull)
+            .filter(Objects::nonNull)
             .forEach(ZLinkStreamDispatchQueue::closeMessage);
         pending.forEach(waiter -> waiter.result().completeExceptionally(
             new IllegalStateException("stream dispatch queue was closed")));

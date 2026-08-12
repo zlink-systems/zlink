@@ -486,7 +486,7 @@ ClientServer client가 제출한 request와 일치하지 않는 server message�
 Transport library의 내부 result를 public call에 직접 노출하지 않는다.
 
 전체 종료 순서는
-[Graceful drain](28-graceful-drain-handoff.ko.md)이 정의한다.
+[Graceful drain](30-host-relocation-flow.ko.md)이 정의한다.
 
 ## 8. Metadata와 관측
 

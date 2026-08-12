@@ -10,12 +10,12 @@ and this document shows that contract as an executable business flow. A per-lang
 copy one language's implementation as the standard — it follows this common scenario together with
 that language's spec.
 
-Bingo, TicTacToe, SupportChat, DeliveryDispatch, ShoppingMall, and GameQuest are provided in common
-by five framework languages (.NET, Java, Kotlin, Node.js, C++). ZoneWorld is provided by .NET and
-Node.js, sharing a TypeScript browser client. The supported languages follow the same role
-separation, request/response/notify names, state fields, and smoke verification order. Even if the
-per-language API representation differs, the same framework features must be confirmable in the same
-order.
+The common samples are provided by five framework languages (.NET, Java, Kotlin, Node.js, C++).
+The .NET and Node.js ZoneWorld runners also share a TypeScript browser client, while the C++, Java,
+and Kotlin runners verify the same business flow with their language clients. Every implementation
+follows the same role separation, request/response/notify names, state fields, and smoke verification
+order. Even if the per-language API representation differs, the same framework features must be
+confirmable in the same order.
 
 A per-language guide doesn't redefine the common sample's purpose, server composition, message
 contract, state transitions, or verification order. Copying this content per language could create
@@ -29,16 +29,20 @@ difference, no per-language sample document is created.
 | Sample | Purpose | Server Composition | Connection Method | Handler Registration Method | Default Payload Codec |
 |------|------|-----------|-----------|-------------------|--------------------|
 | [Bingo](bingo/README.en.md) | Shows a level-based matchmaking Instance Spot, session gateway, actor binding, room User Spot, timer, and bound push in one flow. | `Session`, `Api`, `Matchmaking`, `Play` separated | Location-store-based automatic connection | **automatic registration** | Protobuf |
-| [TicTacToe](tictactoe/README.en.md) | Shows manual endpoint scale-out with 2 APIs and 2 Plays, room routing based on the official Redis Location Store, and a realtime game flow. | 2 `Api`, 2 `Play`, `Play` owns the stream session together, with no separate `Session` server | **manual endpoint connection** | **automatic registration** | JSON |
+| [TicTacToe](tictactoe/README.en.md) | Shows manual endpoint scale-out with 2 APIs and 2 Plays, room routing based on the official Redis Location Store, and a realtime game flow. | 2 `Api`, 2 `Play`, `Play` owns the stream session together, with no separate `Session` server | **manual endpoint connection** | **manual registration** | JSON |
 | [SupportChat](supportchat/README.en.md) | A customer and an agent talk in the same conversation Spot, confirming reconnect, idle timer, close, and bound push. | `Session`, `Api`, `Support` separated | Location-store-based automatic connection | **automatic registration** | JSON |
 | [DeliveryDispatch](deliverydispatch/README.en.md) | Confirms delivery assignment, timeout reassignment, status push, and customer stream push. | `Dispatch`, `CourierSession`, 2 `CourierMeshNode`, `Tracking`, `CustomerGateway` separated | Location-store-based automatic connection | **automatic registration** | JSON |
 | [ShoppingMall](event/shoppingmall.en.md) | Separates `CommerceApi` (the HTTP edge) from `OrderWorkflow` (the order owner) to build event-sourced order processing and a lookup model. | `CommerceApi`, `OrderWorkflow` separated | Location-store-based automatic connection | **automatic registration** | JSON |
 | [GameQuest](event/gamequest.en.md) | Gathers gameplay events into a per-player owner spot to update an event-sourced quest aggregate and lookup model. | `Session Server`, `PlayerQuestSpot` owner distributed across MeshNodes | Location-store-based automatic connection | **automatic registration** | JSON |
 | [ZoneWorld](zoneworld/README.en.md) | Shows, via a browser UI, a zone-partitioned MMORPG's boundary crossing (actor relocation), boundary sync, bots (actors with no bound session), and the operations console managing it (runtime events, fanout announcements, node targeting). | `Gateway`, 2 `ZoneNode`, `Ops` separated | Location-store-based automatic connection | **automatic registration** | JSON |
 
-> ZoneWorld confirms zone movement and node operations via a browser UI. The .NET and Node.js
-> servers share one TypeScript client with the same wire contract. It verifies `ws`/`wss`,
-> request/reply, push, reconnect, and explicit flow propagation in an actual Chromium.
+Automatic handler registration in this table applies to managed languages that support a runtime
+scanner. C++ has no such scanner, so every C++ sample registers handlers explicitly. This exception
+applies only to handler registration; C++ also uses manual connections only in TicTacToe.
+
+> ZoneWorld confirms zone movement and node operations in all five languages. The .NET and Node.js
+> runners share a TypeScript browser client with the same wire contract and additionally verify
+> `ws`/`wss`, request/reply, push, reconnect, and explicit flow propagation in an actual Chromium.
 
 ### Relocation Scope By Sample
 
@@ -53,7 +57,7 @@ support policy, and a sample verifies only the scope below.
 | GameQuest | Verifies cold activation of a Missing Instance Spot and a new generation after explicit close. | `PlayerQuestSpot` uses `DisableRelocation`. A separate Relocation Store is still required for the Instance activation record. |
 | DeliveryDispatch | Doesn't verify planned relocation. | Every Actor and Spot factory uses `DisableRelocation`; no Relocation Store is registered. |
 | SupportChat | Doesn't verify planned relocation. | Conversation Spot and Actor factories use `DisableRelocation`; no Relocation Store is registered. |
-| TicTacToe | Doesn't verify planned relocation. | Room Spot and Player Actor factories use `DisableRelocation`; no Relocation Store is registered. |
+| TicTacToe | Verifies cross-node relocation when a Player Actor joins a Room Spot owned by another node. It doesn't run a separate planned-relocation scenario. | The Player Actor uses `PreserveStateWith`; the Room Spot that stays in place uses `DisableRelocation`. It requires separate Location and Relocation Stores. |
 
 The Location and Relocation Stores may use the same Redis deployment, but their providers and key
 prefixes stay separate. They own different contracts: authority lookup and relocation-payload
@@ -84,10 +88,12 @@ needed.
 - If an Object Client process must also provide a channel Server, that channel is registered as an
   independent ClientServer topology. A channel Server role isn't mixed into the Object Client
   RouteMesh.
-- A local sample runner uses the default BindHost `127.0.0.1` and automatic port 0. A
-  Container/Kubernetes deployment specifies, in `ConfigureNetwork()`, the AdvertiseHost that a remote
-  peer connects to from the Pod or Service. A wildcard BindHost isn't recorded as the descriptor's
-  advertised endpoint.
+- A local sample runner uses the default BindHost `127.0.0.1`. When the runner must select a
+  listener port in advance, it uses an OS-bind-checked value from this document's language-specific
+  application range. Port `0` may be used for an internal listener only when the runtime binds the
+  socket atomically and reports the actual endpoint. A Container/Kubernetes deployment specifies,
+  in `ConfigureNetwork()`, the AdvertiseHost that a remote peer connects to from the Pod or Service.
+  A wildcard BindHost isn't recorded as the descriptor's advertised endpoint.
 - A sample doesn't pre-share a specific MeshNode's `NodeRid` as a setting value, message field, or
   business constant. Actor/Spot creation and direct messaging use the global `ActorId`/`SpotId` and
   Location-Store-based placement, with the caller never choosing the owner node or passing the owner
@@ -201,7 +207,7 @@ application uses, not the host's overall elapsed time. The measurement window is
 source blocks new work to when the target sends an ACK that it has started accepting new work. A
 single Actor, a single Instance Spot, and a single SpotWide User Spot aggregate each target a
 default of within 1 second. Exceeding 1 second doesn't cancel or roll back the relocation. The
-detailed standard follows [Graceful Drain And Handoff §7.1](../spec/28-graceful-drain-handoff.en.md#71-service-interruption-time-target-per-relocation-unit).
+detailed standard follows [Graceful Drain And Handoff §7.1](../spec/30-host-relocation-flow.en.md#71-service-interruption-time-target-per-relocation-unit).
 
 A SpotWide User Spot moves Spot state and member Actor state as a single relocation unit. Multiple
 Actor payloads aren't stored to or read from the Relocation Store sequentially — they're processed
@@ -231,9 +237,9 @@ change to the current owner. The sample's verification confirms each of the foll
   Location Store during Message Follow.
 - The `MessageFollowDuration` default is 30 seconds, and 0 means relay isn't used. If a sample sets
   a shorter value, it leaves the actual configured value and expiry time as evidence.
-- Relay works only up to 8 hops, and within 1,024 messages and 16 MiB per move. Confirm each of:
-  route-missing/period-expired/loop/hop-exceeded is `Unavailable`, generation mismatch is
-  `InvalidOperation`, and message/byte limit exceeded is `CapacityExceeded`.
+- Relay works only up to 8 hops, with no bound on the retained amount. Confirm each of:
+  route-missing/period-expired/loop/hop-exceeded is `Unavailable` and generation mismatch is
+  `InvalidOperation`.
 - A failure whose execution status is ambiguous after a relay failure or target admission isn't
   automatically resubmitted to a fresh owner. A failed operation ends in a terminal, and only the
   next call resolves fresh.
@@ -282,6 +288,12 @@ boundary. The following two cases are exceptions, since they aren't wire message
 Conversely, an internal message actually delivered from an entry-spot to an owner spot via a real
 `SendToSpot`/`RequestToSpot` is not an exception. Such a message is named `Msg` (one-way send) or
 `Req`/`Res` (request/reply), matching its call method.
+
+An application payload passed to an Actor or Spot manager's `Create`/`GetOrCreate` is also a request
+message that crosses RouteMesh to reach the target factory. Instead of sending a raw domain object,
+the sample puts it in a purpose-named `Req` wrapper such as `PlayerActorCreateReq` or
+`BingoRoomCreateReq`. The Framework defines the creation operation's reply, so the sample doesn't
+add a separate application `Res` DTO for it.
 
 ## The Spot Execution Turn And Terminator Sample Standard
 
@@ -358,20 +370,21 @@ standard below.
   the framework implementation where location-store registration/lookup/connection lifecycle is
   broken. This prohibition applies across the entire per-language sample, and even one violation
   means that sample's change isn't judged complete.
-- **Automatic registration is the default.** In a language where the framework can scan and
-  register handlers, handlers are automatically registered with no separate registration call
-  ([05 §8](../spec/06-framework-api.en.md#8-handler-registration-and-dispatch)). Repeating the
-  handler list in every sample would make the public usage example verbose, and a client scenario
-  would catch a missing handler addition too late.
-- **Manual topology and handler registration are separate matters.** TicTacToe also declares
-  handlers with annotations/attributes/decorators and automatically registers them via
-  assembly/module scanning. It doesn't repeat the handler list in configuration code just to
-  showcase manual endpoint connection.
-- Since C++ doesn't use a runtime reflection scanner, it explicitly registers handlers with
-  compile-time types. The exact surface follows the
+- **Managed languages use automatic handler registration in every sample except TicTacToe.** The
+  Framework scans annotation, attribute, or decorator metadata and registers the handlers, so the
+  sample configuration doesn't repeat the same list
+  ([Handler Registration And Dispatch §8](../spec/06-framework-api.en.md#8-handler-registration-and-dispatch)).
+- **Only TicTacToe uses both manual connections and manual handler registration in every
+  language.** Each public builder or handler registry registers the handlers explicitly. This lets
+  the sample contrast its configuration with Bingo, which uses automatic connections and automatic
+  handler registration. This rule isn't a reason to add manual connections or manual handler
+  registration to another sample.
+- **C++ has a separate exception only for handler registration.** Because C++ has no runtime
+  reflection scanner, every C++ sample, not only TicTacToe, registers handlers explicitly with
+  compile-time types and a public registry. The exact surface follows the
   [C++ Handler Public Contract](../spec/server/languages/cpp/interfaces/03-channel-messaging.en.md).
-  Only the registration method differs — the message, role, codec, and verification criteria don't
-  change.
+  Its connection rule stays the same as other languages: only TicTacToe connects manually, and all
+  other samples connect automatically through the Location Store.
 
 ## The Dispatch Error Log Standard
 
@@ -440,6 +453,35 @@ created by a different sample or E2E must not be shared or used as a fallback. S
 different key prefix doesn't permit instance sharing either. This rule's purpose is to make sure
 cleanup timing and stored data don't affect a different run.
 
+This isolation rule applies both to repeated runs in one language and to concurrent runs of the same
+sample in different languages. Even when language implementations use the same Mesh, Channel, Actor,
+and Spot names, each run must use its own Redis endpoint and direct-connection endpoints and must not
+discover nodes from another language run. Isolation uses a separate Redis container and key prefix
+per run, not separate Redis database numbers. The runner doesn't let Docker choose an arbitrary host
+port. It selects a bindable port from the language-specific Redis range below and publishes it
+explicitly. If Docker can't bind that port, the runner removes only the container created by that
+attempt and retries another port in the same range.
+
+| Language | Redis host port | Application listener port |
+|----------|-----------------|---------------------------|
+| C++ | `20000-20099` | `20100-21999` |
+| .NET | `22000-22099` | `22100-23999` |
+| Java | `24000-24099` | `24100-25999` |
+| Kotlin | `26000-26099` | `26100-27999` |
+| Node.js | `28000-28099` | `28100-29999` |
+
+An application listener port selected in advance by the runner is assigned from that language's
+range only after an OS bind verifies availability. A runtime may bind a socket atomically with port
+`0` and report the actual endpoint, because that form has no gap between the availability check and
+the real bind. Fixed ports and unchecked consecutive port blocks are not used. Because Java and
+Kotlin runners share Gradle output, they serialize only the build section with one common file lock
+and release it before starting server processes. The lock is shared within one runner execution
+environment. Running WSL Bash and Windows PowerShell against the same checkout at the same time is
+unsupported because they use different operating-system lock namespaces. Temporary configuration
+is created per run, and cleanup targets only the PIDs or process handles started by that run and the
+exact Redis container ID it created. A runtime log root is not shared with another language
+implementation.
+
 The standard templates are placed under this directory's `runner-templates/`.
 
 - `runner-templates/redis-common.template.sh`: the Redis helper standard
@@ -459,11 +501,13 @@ The standard templates are placed under this directory's `runner-templates/`.
   or own the Redis container lifecycle.
 - If a Docker Redis can't be created, the runner fails immediately. It must not auto-fall-back to
   host Redis or a different run's endpoint and treat that as success.
-- Starting the Redis container uses the same order in every language: create the container with
-  `docker create --name <scoped-name> --tmpfs /data -p 127.0.0.1::6379 <pinned-redis-image>`, start
-  it with `docker start <container-id>`, then read the running state and assigned host port with
-  `docker inspect`. Relying on `docker run -d`'s output to handle the container id and port at the
-  same time isn't used.
+- Starting the Redis container uses the same order in every language. The runner first selects a
+  bindable `<redis-port>` from that language's Redis range, then creates the container with
+  `docker create --name <scoped-name> --tmpfs /data -p 127.0.0.1:<redis-port>:6379 <pinned-redis-image>`.
+  After `docker start <container-id>`, `docker inspect` verifies that the container is running and
+  the published host port equals the selected value. On a bind conflict, the runner removes only
+  that attempt's container and retries another port in the same range. Relying on `docker run -d`'s
+  output to handle the container id and port at the same time isn't used.
 - Since sample Redis data is needed only during the run, a Docker volume isn't created. The `/data`
   volume the Redis image declares is overridden with `--tmpfs /data`, and container cleanup uses
   `docker rm -fv`. This keeps an anonymous volume from being left behind after repeated runs.
@@ -479,21 +523,24 @@ The standard templates are placed under this directory's `runner-templates/`.
   trap.
 - The integrated sample runner doesn't clean up a different run's Redis — it sequentially calls each
   individual `run_sample.*`. This runner also doesn't run samples in parallel within one run.
+- The integrated runner invokes a shell runner as `bash <path>/run_sample.sh`; it doesn't change the
+  source file's executable mode in order to run it.
 - The integrated sample runner must be able to run only a specific sample list. With no argument, it
   runs every sample; with an argument, it sequentially runs only the specified sample runners. E.g.:
   `./run_samples.sh Bingo SupportChat`, or for a runner that needs to distinguish per-language paths,
   `./run_samples.sh java/Bingo kotlin/SupportChat`. The integrated runner doesn't re-implement a
   sample's internal procedure — it only calls the selected individual `run_sample.*`.
-- The integrated sample runner doesn't re-implement per-sample internal behavior. It calls the
-  selected individual `run_sample.*` once and manages only the final result. Redis endpoint
+- The integrated sample runner doesn't re-implement per-sample internal behavior. On each attempt,
+  it calls the selected individual `run_sample.*` and manages only the final result. Redis endpoint
   creation, readiness, log location, and self-check detailed procedure are handled by the
   individual script and common helper.
-- The Redis host port isn't fixed — Docker is allowed to assign a free loopback port. The runner
-  reads the assigned port via inspect and delivers it to the application configuration. The Redis
-  key prefix is also made unique per run.
+- The Redis host port is selected per run from the language-specific Redis range. The runner verifies
+  availability with an OS bind, passes that port explicitly to Docker, verifies that the inspected
+  port equals the selected value, and delivers it to the application configuration. The Redis key
+  prefix is also unique per run.
 - Even if a different sample/e2e is using Redis on the same host, that endpoint isn't borrowed. A
-  new Docker Redis container must be created, using a different loopback port Docker assigned, to
-  prevent test interference.
+  new Docker Redis container must be created with the language-specific Redis port assigned to that
+  run, to prevent test interference.
 - Since Redis container creation can take a while, a short timeout is set on the Docker command
   itself, and actual Redis readiness is confirmed with a separate port/readiness wait function. A
   Docker command not responding and Redis not yet being ready aren't hidden behind the same sleep.
@@ -503,9 +550,10 @@ The standard templates are placed under this directory's `runner-templates/`.
   helper failed, leading to the wrong outcome of starting the server without Redis. The helper is
   provided as a function that assigns a value to the caller's variable, like
   `zlink_redis_start_scoped_assign`, so a helper failure directly becomes a runner failure.
-- The integrated sample runner doesn't retry an individual sample failure, including a bind
-  failure. Even if the per-run port was reserved in advance, if the bind still fails, it must fail
-  immediately instead of hiding it by repeating the same run, so the cause can be confirmed.
+- The integrated sample runner doesn't retry an individual sample failure indiscriminately. It may
+  rerun the whole sample a small, bounded number of times only when retained output clearly identifies
+  a transient bind conflict. Any other error, or a failure with an uncertain cause, is returned
+  immediately.
 - On failure, the runner prints `log_dir=...` or the per-sample log location, leaving each process's
   stdout/stderr and the framework log in `logs/*.log`.
 

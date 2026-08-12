@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.handlers;
+import java.util.Objects;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -14,12 +15,12 @@ public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
     private boolean closed;
 
     public ZLinkHandlerInstanceOwner(ZLinkHandlerActivator activator) {
-        this.activation = java.util.Objects.requireNonNull(activator, "activator")
+        this.activation = Objects.requireNonNull(activator, "activator")
             .openActivation();
     }
 
     public synchronized Object instance(Class<?> handlerType) {
-        java.util.Objects.requireNonNull(handlerType, "handlerType");
+        Objects.requireNonNull(handlerType, "handlerType");
         if (closed) {
             throw new IllegalStateException("handler instance owner is closed");
         }

@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { ZLinkUserSpotExecutionMode } from '../../packages/framework/src/contracts/Configuration/ObjectRoles';
+import {
+  ZLinkSpotRelocationReadinessMode,
+  ZLinkUserSpotExecutionMode
+} from '../../packages/framework/src/contracts/Configuration/ObjectRoles';
 import { ZLinkExecutionBarrier } from '../../packages/framework/src/runtime/execution';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -36,7 +39,11 @@ function activation(
     spotType: class BarrierSpot {} as never,
     spot: {} as never,
     serial,
-    executionMode,
+    domain: {
+      kind: 'user',
+      executionMode,
+      relocationReadiness: ZLinkSpotRelocationReadinessMode.AnyTurnBoundary
+    },
     timers,
     actorHandlers: {} as never,
     handlers: {} as never
@@ -161,6 +168,11 @@ test('Spot close invokes lifecycle cleanup only after its execution seal is quie
   const state = new ZLinkSpotActivation({
     meshName: 'mesh',
     spotId: 'spot-close-barrier' as never,
+    domain: {
+      kind: 'user',
+      executionMode: ZLinkUserSpotExecutionMode.SpotWide,
+      relocationReadiness: ZLinkSpotRelocationReadinessMode.AnyTurnBoundary
+    },
     spotType: class ClosingSpot {} as never,
     spot: {
       async onClosing() {

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/e2e-redis-common.sh"
+zlink_e2e_initialize java "$0" "$@"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/start-order-common.sh"
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -71,23 +72,7 @@ trap cleanup EXIT
 
 reserve_ports() {
   local count="${1:-5}"
-  python3 - "${count}" <<'PY'
-import socket
-import sys
-count = int(sys.argv[1])
-sockets = []
-ports = []
-try:
-    for _ in range(count):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        ports.append(sock.getsockname()[1])
-    print(" ".join(str(port) for port in ports))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  zlink_e2e_reserve_ports "${count}"
 }
 
 tcp() {
@@ -141,7 +126,7 @@ PY
 }
 
 gradle_run() {
-  ../../gradlew -PzlinkE2eBuildDir="${e2e_build_dir}" \
+  zlink_e2e_gradle_build_locked ../../gradlew -PzlinkE2eBuildDir="${e2e_build_dir}" \
     --project-cache-dir "${gradle_cache_dir}" --no-daemon --no-parallel --max-workers=1 "$@" --quiet
 }
 
@@ -292,9 +277,10 @@ PY
   grep -Rq "message flow" "${log_dir}"/*.stdout.log
 fi
 if [[ "${SCENARIO}" == "all" ]]; then
-  grep -q "EchoAuto" "${log_dir}/server-evidence.json"
-  grep -q "ProtobufEcho" "${log_dir}/server-evidence.json"
-  grep -q "MsgpackEcho" "${log_dir}/server-evidence.json"
+  grep -q "EchoAutoReq" "${log_dir}/server-evidence.json"
+  grep -q "ProtobufEchoReq" "${log_dir}/server-evidence.json"
+  grep -q "ProtobufEchoMsg" "${log_dir}/server-evidence.json"
+  grep -q "PackedEchoReq" "${log_dir}/server-evidence.json"
   grep -q "scenario RC-A4 passed" "${log_dir}/client.stdout.log"
   grep -q "scenario RC-A6 passed" "${log_dir}/client.stdout.log"
   grep -q "scenario RC-B5 passed" "${log_dir}/client.stdout.log"

@@ -113,6 +113,19 @@ fanout_publisher_connection_state_t connection_state (
     return fanout_publisher_connection_state_t::disconnected;
 }
 
+std::string fanout_location_observation_source (
+  const std::string &channel_name)
+{
+    return "location:" + channel_name;
+}
+
+std::string fanout_publisher_observation_source (
+  const fanout_publisher_connection_snapshot_t &publisher)
+{
+    return "publisher:" + publisher.publisher_rid.to_hex () + ":"
+           + std::to_string (publisher.lifecycle_generation);
+}
+
 } // namespace
 
 fanout_location_runtime_t::fanout_location_runtime_t (
@@ -443,12 +456,14 @@ fanout_location_runtime_t::observe (
         std::lock_guard lock (_gate);
         _observers[channel_name].push_back (value);
         const auto current = build_snapshot_locked (channel_name);
-        value->enqueue (fanout_runtime_event_t{
-          fanout_location_changed_event_t{
-            current.sequence,
-            current.observed_at,
-            channel_name,
-            current.location}});
+        value->enqueue (
+          fanout_location_observation_source (channel_name),
+          fanout_runtime_event_t{
+            fanout_location_changed_event_t{
+              current.sequence,
+              current.observed_at,
+              channel_name,
+              current.location}});
     }
     return std::make_unique<fanout_observation_t> (std::move (value));
 }
@@ -542,8 +557,14 @@ bool fanout_location_runtime_t::snapshot_equivalent (
 
 void fanout_location_runtime_t::publish_snapshot_changes ()
 {
-    std::vector<std::pair<std::shared_ptr<observer_t>, fanout_runtime_event_t>>
-      notifications;
+    struct pending_observation_t
+    {
+        std::shared_ptr<observer_t> observer;
+        std::string source_key;
+        fanout_runtime_event_t event;
+        bool terminal = false;
+    };
+    std::vector<pending_observation_t> notifications;
     {
         std::lock_guard lock (_gate);
         std::set<std::string> channel_names;
@@ -594,34 +615,48 @@ void fanout_location_runtime_t::publish_snapshot_changes ()
                             removed.ready = false;
                             removed.state =
                               fanout_publisher_connection_state_t::disconnected;
-                            notifications.emplace_back (
-                              current_observer,
-                              fanout_runtime_event_t{
-                                fanout_publisher_changed_event_t{
-                                  sequence,
-                                  current.observed_at,
-                                  channel_name,
-                                  std::move (removed)}});
+                            const auto source_key =
+                              fanout_publisher_observation_source (removed);
+                            notifications.push_back (
+                              pending_observation_t{
+                                current_observer,
+                                source_key,
+                                fanout_runtime_event_t{
+                                  fanout_publisher_changed_event_t{
+                                    sequence,
+                                    current.observed_at,
+                                    channel_name,
+                                    std::move (removed)}},
+                                true});
                         }
-                        for (const auto &publisher : current.publishers)
-                            notifications.emplace_back (
-                              current_observer,
-                              fanout_runtime_event_t{
-                                fanout_publisher_changed_event_t{
-                                  sequence,
-                                  current.observed_at,
-                                  channel_name,
-                                  publisher}});
+                        for (const auto &publisher : current.publishers) {
+                            notifications.push_back (
+                              pending_observation_t{
+                                current_observer,
+                                fanout_publisher_observation_source (
+                                  publisher),
+                                fanout_runtime_event_t{
+                                  fanout_publisher_changed_event_t{
+                                    sequence,
+                                    current.observed_at,
+                                    channel_name,
+                                    publisher}},
+                                false});
+                        }
                     }
                     if (location_changed || !publishers_changed) {
-                        notifications.emplace_back (
-                          current_observer,
-                          fanout_runtime_event_t{
-                            fanout_location_changed_event_t{
-                              sequence,
-                              current.observed_at,
-                              channel_name,
-                              current.location}});
+                        notifications.push_back (
+                          pending_observation_t{
+                            current_observer,
+                            fanout_location_observation_source (
+                              channel_name),
+                            fanout_runtime_event_t{
+                              fanout_location_changed_event_t{
+                                sequence,
+                                current.observed_at,
+                                channel_name,
+                                current.location}},
+                            false});
                     }
                     *write++ = *read;
                 }
@@ -630,7 +665,10 @@ void fanout_location_runtime_t::publish_snapshot_changes ()
         }
     }
     for (auto &notification : notifications)
-        notification.first->enqueue (std::move (notification.second));
+        notification.observer->enqueue (
+          std::move (notification.source_key),
+          std::move (notification.event),
+          notification.terminal);
 }
 
 void fanout_location_runtime_t::pump ()

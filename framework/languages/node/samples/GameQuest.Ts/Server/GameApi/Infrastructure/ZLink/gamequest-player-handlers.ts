@@ -1,14 +1,18 @@
 import { Inject } from '@nestjs/common';
-import { ZLINK_SPOT_OUTBOUND, zlinkEntrySpotActorRequestHandler } from '@zlink-systems/nestjs';
+import {
+  ZLINK_SPOT_OUTBOUND,
+  zlinkEntrySpotActorRequestHandler,
+  zlinkEntrySpotActorSendHandler
+} from '@zlink-systems/nestjs';
 import { GameplayActionService } from '../../Application/gameplay-action-service';
 import { questMissionSpotId, SampleNames } from '../../../../Shared/Configuration/sample-names';
 import { PacketNames, getQuestProgressReq, syncQuestProgressReq } from '../../../../Shared/Contracts/messages';
 import { GameQuestEntrySpot } from './gamequest-entry-spot';
 import { GameQuestPlayerActor } from './gamequest-player-actor';
 import type {
-  CollectItemReq,
+  CollectItemMsg,
   CompleteMissionReq,
-  EnterAreaReq,
+  EnterAreaMsg,
   GetQuestProgressReq,
   GetQuestProgressRes,
   KillMonsterReq,
@@ -18,6 +22,7 @@ import type {
 } from '../../../../Shared/Contracts/messages';
 import type {
   ZLinkEntrySpotActorRequestHandler,
+  ZLinkEntrySpotActorSendHandler,
   ZLinkSpotOutbound,
   ZLinkMessageContext
 } from '@zlink-systems/framework';
@@ -36,6 +41,20 @@ abstract class GameQuestActionHandler<TRequest, TResponse>
   }
 }
 
+abstract class GameQuestActionSendHandler<TMessage extends { playerId: string }>
+  implements ZLinkEntrySpotActorSendHandler<GameQuestEntrySpot, GameQuestPlayerActor, TMessage> {
+  constructor(protected readonly actions: GameplayActionService) {}
+  abstract handle(
+    spot: GameQuestEntrySpot,
+    actor: GameQuestPlayerActor,
+    context: ZLinkMessageContext,
+    message: TMessage
+  ): Promise<void>;
+  protected requirePlayer(actor: GameQuestPlayerActor, playerId: string): void {
+    if (actor.actorId !== playerId) throw new Error(`Actor '${actor.actorId}' cannot act for player '${playerId}'.`);
+  }
+}
+
 @zlinkEntrySpotActorRequestHandler({ actor: () => GameQuestPlayerActor, entrySpot: () => GameQuestEntrySpot, packetName: PacketNames.killMonsterReq })
 class KillMonsterHandler extends GameQuestActionHandler<KillMonsterReq, { eventId: string }> {
   constructor(actions: GameplayActionService) { super(actions); }
@@ -45,12 +64,12 @@ class KillMonsterHandler extends GameQuestActionHandler<KillMonsterReq, { eventI
   }
 }
 
-@zlinkEntrySpotActorRequestHandler({ actor: () => GameQuestPlayerActor, entrySpot: () => GameQuestEntrySpot, packetName: PacketNames.collectItemReq })
-class CollectItemHandler extends GameQuestActionHandler<CollectItemReq, { eventId: string }> {
+@zlinkEntrySpotActorSendHandler({ actor: () => GameQuestPlayerActor, entrySpot: () => GameQuestEntrySpot, packetName: PacketNames.collectItemMsg })
+class CollectItemHandler extends GameQuestActionSendHandler<CollectItemMsg> {
   constructor(actions: GameplayActionService) { super(actions); }
-  async handle(_spot: GameQuestEntrySpot, actor: GameQuestPlayerActor, _context: ZLinkMessageContext, request: CollectItemReq) {
-    this.requirePlayer(actor, request.playerId);
-    return (await this.actions.collectItem(request)).response;
+  async handle(_spot: GameQuestEntrySpot, actor: GameQuestPlayerActor, _context: ZLinkMessageContext, message: CollectItemMsg): Promise<void> {
+    this.requirePlayer(actor, message.playerId);
+    await this.actions.collectItem(message);
   }
 }
 
@@ -63,12 +82,12 @@ class CompleteMissionHandler extends GameQuestActionHandler<CompleteMissionReq, 
   }
 }
 
-@zlinkEntrySpotActorRequestHandler({ actor: () => GameQuestPlayerActor, entrySpot: () => GameQuestEntrySpot, packetName: PacketNames.enterAreaReq })
-class EnterAreaHandler extends GameQuestActionHandler<EnterAreaReq, { eventId: string }> {
+@zlinkEntrySpotActorSendHandler({ actor: () => GameQuestPlayerActor, entrySpot: () => GameQuestEntrySpot, packetName: PacketNames.enterAreaMsg })
+class EnterAreaHandler extends GameQuestActionSendHandler<EnterAreaMsg> {
   constructor(actions: GameplayActionService) { super(actions); }
-  async handle(_spot: GameQuestEntrySpot, actor: GameQuestPlayerActor, _context: ZLinkMessageContext, request: EnterAreaReq) {
-    this.requirePlayer(actor, request.playerId);
-    return (await this.actions.enterArea(request)).response;
+  async handle(_spot: GameQuestEntrySpot, actor: GameQuestPlayerActor, _context: ZLinkMessageContext, message: EnterAreaMsg): Promise<void> {
+    this.requirePlayer(actor, message.playerId);
+    await this.actions.enterArea(message);
   }
 }
 

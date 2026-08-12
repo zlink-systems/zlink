@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$(cd "${ROOT}/../.." && pwd)/e2e-redis-common.sh"
+zlink_e2e_initialize kotlin "$0" "$@"
 cd "${ROOT}"
 SCENARIO="${1:-all}"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
@@ -32,7 +33,7 @@ cleanup() {
   for pid in "${PIDS[@]}"; do kill "${pid}" >/dev/null 2>&1 || true; done
   sleep 0.2
   for pid in "${PIDS[@]}"; do kill -9 "${pid}" >/dev/null 2>&1 || true; done
-  [[ -z "${REDIS_CONTAINER}" ]] || docker rm -fv "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+  [[ -z "${REDIS_CONTAINER}" ]] || zlink_redis_remove_by_id "${REDIS_CONTAINER}" || true
   rm -rf "${CONFIG_DIR}"
   wait >/dev/null 2>&1 || true
   exit "${status}"
@@ -40,21 +41,12 @@ cleanup() {
 trap cleanup EXIT
 
 ports() {
-  python3 - "$1" <<'PY'
-import socket, sys
-sockets, values = [], []
-try:
-    for _ in range(int(sys.argv[1])):
-        sock = socket.socket(); sock.bind(("127.0.0.1", 0))
-        sockets.append(sock); values.append(str(sock.getsockname()[1]))
-    print(" ".join(values))
-finally:
-    for sock in sockets: sock.close()
-PY
+  zlink_e2e_reserve_ports "$1"
 }
 
 gradle_run() {
-  ZLINK_KOTLIN_E2E_BUILD_DIR="${BUILD_DIR}" ../../gradlew --project-cache-dir "${CACHE_DIR}" --no-daemon "$@" --quiet
+  zlink_e2e_gradle_build_locked env ZLINK_KOTLIN_E2E_BUILD_DIR="${BUILD_DIR}" \
+    ../../gradlew --project-cache-dir "${CACHE_DIR}" --no-daemon "$@" --quiet
 }
 owner_bin() { echo "${BUILD_DIR}/Owner/install/instance-spot-kotlin-owner/bin/instance-spot-kotlin-owner"; }
 client_bin() { echo "${BUILD_DIR}/Client/install/instance-spot-kotlin-client/bin/instance-spot-kotlin-client"; }
@@ -130,7 +122,8 @@ setup() {
     fi
     gradle_run "${build_args[@]}"
   fi
-  zlink_redis_start_scoped_assign REDIS_CONTAINER REDIS_PORT "zlink-redis-kotlin-instance-spot" "redis:7.2-alpine" "127.0.0.1::6379" || return 3
+  zlink_redis_start_scoped_assign REDIS_CONTAINER REDIS_PORT \
+    "zlink-redis-kotlin-instance-spot" "redis:7.2-alpine" || return 3
   read -r oh1 om1 oh2 om2 ch1 cm1 ch2 cm2 <<<"$(ports 8)"
   OWNER_A_HTTP="http://127.0.0.1:${oh1}"; OWNER_B_HTTP="http://127.0.0.1:${oh2}"
   CLIENT_A_HTTP="http://127.0.0.1:${ch1}"; CLIENT_B_HTTP="http://127.0.0.1:${ch2}"

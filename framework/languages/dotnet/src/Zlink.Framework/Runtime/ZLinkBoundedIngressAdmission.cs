@@ -5,8 +5,10 @@ namespace Zlink.Framework.Runtime;
 /// </summary>
 internal sealed class ZLinkBoundedIngressAdmission
 {
-    internal const int SourceIngressHoldRecordCapacity = 1_024;
-    internal const long SourceIngressHoldByteCapacity = 16L * 1024 * 1024;
+    //  The relocation hold has no record or byte bound; a negotiated
+    //  admission still passes the peer's agreed values explicitly.
+    internal const int SourceIngressHoldRecordCapacity = int.MaxValue;
+    internal const long SourceIngressHoldByteCapacity = long.MaxValue;
 
     private readonly object _gate = new();
     private readonly int _recordCapacity;

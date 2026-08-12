@@ -62,9 +62,9 @@ internal static class ZLinkActorHandoffIngress
         {
             var capture = state.Handoff.TryCapture(
                 frame,
-                () => ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(
-                    runtime,
-                    frame));
+                runtime,
+                static (rt, fr) =>
+                    ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(rt, fr));
             if (capture == ZLinkActorHandoffCaptureResult.Captured)
                 return true;
 
@@ -165,9 +165,9 @@ internal static class ZLinkActorHandoffIngress
                 // sequence (spec 23 §10.2).
                 if (state.Handoff.TryCapture(
                         frame,
-                        () => ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(
-                            runtime,
-                            frame))
+                        runtime,
+                        static (rt, fr) =>
+                            ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(rt, fr))
                     == ZLinkActorHandoffCaptureResult.Captured)
                 {
                     continue;

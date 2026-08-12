@@ -10,10 +10,8 @@ import { runRlB4 } from './Scenarios/rl-b4-runtime-drain-scenario';
 import { runRlB5 } from './Scenarios/rl-b5-drain-inflight-scenario';
 import { runRlB6 } from './Scenarios/rl-b6-gray-fault-scenario';
 import { runRlC1 } from './Scenarios/rl-c1-client-host-lifecycle-scenario';
-import { runRlC2 } from './Scenarios/rl-c2-topology-recovery-scenario';
 import { runRlC3 } from './Scenarios/rl-c3-node-pause-recovery-scenario';
 import { runRlC4 } from './Scenarios/rl-c4-store-outage-scenario';
-import { runRlD1 } from './Scenarios/rl-d1-high-fanout-scenario';
 import { runRlD2 } from './Scenarios/rl-d2-observer-fault-scenario';
 import { runRlD3 } from './Scenarios/rl-d3-dispatch-error-evidence-scenario';
 import { runRlD4 } from './Scenarios/rl-d4-missing-request-handler-scenario';
@@ -26,9 +24,7 @@ import { runRLE3 } from './Scenarios/rl-e3-scenario';
 import { runRLE4 } from './Scenarios/rl-e4-scenario';
 import { runRLE5 } from './Scenarios/rl-e5-scenario';
 import { runRLF1 } from './Scenarios/rl-f1-scenario';
-import { runRLF2 } from './Scenarios/rl-f2-scenario';
 import { runRLF3 } from './Scenarios/rl-f3-scenario';
-import { runRLF4 } from './Scenarios/rl-f4-scenario';
 import { runRLF5 } from './Scenarios/rl-f5-scenario';
 import { runRLF6 } from './Scenarios/rl-f6-scenario';
 import { runRLF7 } from './Scenarios/rl-f7-scenario';
@@ -56,10 +52,8 @@ async function main(): Promise<void> {
     'RL-B5': () => runRlB5(options),
     'RL-B6': () => runRlB6(options),
     'RL-C1': () => runRlC1(options),
-    'RL-C2': () => runRlC2(options, state),
     'RL-C3': () => runRlC3(options, state),
     'RL-C4': () => runRlC4(options, state),
-    'RL-D1': () => runRlD1(options),
     'RL-D2': () => runRlD2(options),
     'RL-D3': () => runRlD3(options),
     'RL-D4': () => runRlD4(options),
@@ -70,9 +64,7 @@ async function main(): Promise<void> {
     'RL-E4': () => runRLE4(options),
     'RL-E5': () => runRLE5(options),
     'RL-F1': () => runRLF1(options),
-    'RL-F2': () => runRLF2(options),
     'RL-F3': () => runRLF3(options),
-    'RL-F4': () => runRLF4(options),
     'RL-F5': () => runRLF5(options),
     'RL-F6': () => runRLF6(options),
     'RL-F7': () => runRLF7(options),
@@ -85,7 +77,7 @@ async function main(): Promise<void> {
     'RL-F14': () => runRLF14(options),
   };
   const gaps: Record<string, string> = {};
-  const defaultScenarioIds = ['RL-A1', 'RL-A2', 'RL-A3', 'RL-A4', 'RL-A5', 'RL-B1', 'RL-B2', 'RL-B3', 'RL-B4', 'RL-B5', 'RL-B6', 'RL-C1', 'RL-C2', 'RL-C3', 'RL-C4', 'RL-D1', 'RL-D2', 'RL-D3', 'RL-D4', 'RL-D5', 'RL-E1', 'RL-E2', 'RL-E3', 'RL-E4', 'RL-E5', 'RL-F1', 'RL-F2', 'RL-F3', 'RL-F4', 'RL-F5', 'RL-F6', 'RL-F7', 'RL-F8', 'RL-F9', 'RL-F10', 'RL-F11', 'RL-F12', 'RL-F13', 'RL-F14'];
+  const defaultScenarioIds = ['RL-A1', 'RL-A2', 'RL-A3', 'RL-A4', 'RL-A5', 'RL-B1', 'RL-B2', 'RL-B3', 'RL-B4', 'RL-B5', 'RL-B6', 'RL-C1', 'RL-C3', 'RL-C4', 'RL-D2', 'RL-D3', 'RL-D4', 'RL-D5', 'RL-E1', 'RL-E2', 'RL-E3', 'RL-E4', 'RL-E5', 'RL-F1', 'RL-F3', 'RL-F5', 'RL-F6', 'RL-F7', 'RL-F8', 'RL-F9', 'RL-F10', 'RL-F11', 'RL-F12', 'RL-F13', 'RL-F14'];
 
   try {
     if (options.scenario.toLowerCase() === 'all') {

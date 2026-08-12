@@ -1,5 +1,7 @@
 package systems.zlink.samples.kotlin.deliverydispatch.client
 
+
+import systems.zlink.stream.connector.ZLinkStreamMessage
 import java.time.Duration
 import java.net.URI
 import kotlinx.coroutines.CoroutineStart
@@ -218,7 +220,7 @@ class DeliveryDispatchClientScenario {
     }
 
     private fun matchesStatus(
-        message: systems.zlink.stream.connector.ZLinkStreamMessage<DeliveryStatusNotify>,
+        message: ZLinkStreamMessage<DeliveryStatusNotify>,
         deliveryId: String,
         status: DeliveryStatus,
     ): Boolean {

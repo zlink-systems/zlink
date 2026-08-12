@@ -1,4 +1,5 @@
 package systems.zlink.e2e.instancespot.owner;
+import java.nio.file.StandardOpenOption;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -14,7 +15,7 @@ import systems.zlink.e2e.instancespot.shared.Wait;
 public final class EvidenceStore {
     private final OwnerOptions options;
     private final AtomicLong nextSequence = new AtomicLong();
-    private final List<Contracts.EvidenceEvent> events = new ArrayList<>();
+    private final List<Contracts.EvidenceEntry> events = new ArrayList<>();
 
     public EvidenceStore(OwnerOptions options) {
         this.options = options;
@@ -28,7 +29,7 @@ public final class EvidenceStore {
         return options.lifecycleId();
     }
 
-    public synchronized Contracts.EvidenceEvent record(
+    public synchronized Contracts.EvidenceEntry record(
         String kind,
         String spotId,
         String operationId,
@@ -36,7 +37,7 @@ public final class EvidenceStore {
         long generation,
         int activeHandlers,
         String detail) {
-        Contracts.EvidenceEvent event = new Contracts.EvidenceEvent(
+        Contracts.EvidenceEntry event = new Contracts.EvidenceEntry(
             nextSequence.incrementAndGet(),
             kind,
             spotId == null ? "" : spotId,
@@ -57,8 +58,8 @@ public final class EvidenceStore {
             options.rid(), options.lifecycleId(), List.copyOf(events));
     }
 
-    public Contracts.EvidenceWaitResult waitFor(
-        Contracts.EvidenceWaitRequest request) {
+    public Contracts.EvidenceWaitRes waitFor(
+        Contracts.EvidenceWaitReq request) {
         Contracts.EvidenceSnapshot result = Wait.until(
             Duration.ofMillis(request.timeoutMilliseconds()),
             "timed out waiting for Instance Spot evidence kind=" + request.kind()
@@ -71,10 +72,10 @@ public final class EvidenceStore {
                             || event.operationId().equals(request.operationId())));
                 return found ? current : null;
             });
-        return new Contracts.EvidenceWaitResult(true, result);
+        return new Contracts.EvidenceWaitRes(true, result);
     }
 
-    private void append(Contracts.EvidenceEvent event) {
+    private void append(Contracts.EvidenceEntry event) {
         if (options.evidenceFile().isBlank()) {
             return;
         }
@@ -91,11 +92,10 @@ public final class EvidenceStore {
                     + event.payload() + "|" + event.objectGeneration() + "|"
                     + event.activeHandlers() + System.lineSeparator(),
                 StandardCharsets.UTF_8,
-                java.nio.file.StandardOpenOption.CREATE,
-                java.nio.file.StandardOpenOption.APPEND);
+                StandardOpenOption.CREATE,
+                StandardOpenOption.APPEND);
         } catch (IOException error) {
             throw new IllegalStateException("failed to write Instance Spot evidence", error);
         }
     }
 }
-

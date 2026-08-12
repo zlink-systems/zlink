@@ -1,152 +1,175 @@
-[English](./README.md) | [한국어](./README.ko.md)
+**English** | [한국어](./README.ko.md)
 
 # zlink
 
-> A modern messaging library built on [libzmq](https://github.com/zeromq/libzmq) v4.3.5 — focused on the essential patterns, with Boost.Asio-powered I/O and a developer-friendly API.
+> A multi-language messaging platform that combines a core messaging engine,
+> bindings for seven languages, and a real-time messaging framework implemented
+> by four independent language-runtime families.
 
 [![Build](https://github.com/zlink-systems/zlink/actions/workflows/build.yml/badge.svg)](https://github.com/zlink-systems/zlink/actions/workflows/build.yml)
 [![License: MPL-2.0 / FSL-1.1 / Apache-2.0](https://img.shields.io/badge/License-multiple-blue.svg)](./doc/license/README.md)
 
-[Website](https://zlink-systems.github.io/zlink/) · [User Guide](./doc/guide/01-overview.md) · [Spec](./doc/spec/README.md) · [Bindings](doc/bindings/overview.md) · [Internals](./doc/internals/architecture.md) · [Build](./doc/building/build-guide.md)
+[Website](https://zlink-systems.github.io/zlink/) ·
+[Documentation](./doc/README.md) ·
+[Core Guide](./core/doc/guide/01-overview.en.md) ·
+[Bindings Guide](./bindings/doc/guide/README.en.md) ·
+[Framework Guide](./framework/doc/framework/common/guide/server/01-overview.en.md) ·
+[Build Guide](./doc/building/build-guide.md)
 
----
+## At a glance
 
-## Why zlink?
+The zlink repository has three layers with distinct responsibilities and levels
+of abstraction.
 
-libzmq is powerful, but it carries decades of accumulated complexity — legacy protocols, rarely used socket types, and an I/O engine designed for a different era.
+| Layer | Responsibility | Primary targets |
+|---|---|---|
+| [`core/`](./core/) | Native Boost.Asio-based messaging engine and C API | Low-level messaging and native integration |
+| [`bindings/`](./bindings/) | Language-native APIs and resource lifetime models for Core | C++, .NET, Java, Node.js, Python, Go, Rust |
+| [`framework/`](./framework/) | Typed handlers, Channel, RouteMesh, Spot, Actor, STREAM, and the location runtime | C++, .NET, JVM (Java/Kotlin), Node.js |
 
-**zlink strips libzmq down to its core and rebuilds it for the modern world:**
-
-| | libzmq | zlink |
-|---|--------|-------|
-| **Socket Types** | 17 (incl. draft) | **7** — PAIR, PUB/SUB, XPUB/XSUB, DEALER/ROUTER, STREAM |
-| **I/O Engine** | Custom poll/epoll/kqueue | **Boost.Asio** (bundled, no external dependencies) |
-| **Encryption** | CURVE (libsodium) | **TLS** (OpenSSL) — `tls://`, `wss://` |
-| **Transport** | 10+ (PGM, TIPC, VMCI, etc.) | **6** — `tcp`, `ipc`, `inproc`, `ws`, `wss`, `tls` |
-| **Dependencies** | libsodium, libbsd, etc. | **OpenSSL only** |
-
----
-
-## Key Features
-
-### Streamlined Core
-
-REQ/REP, PUSH/PULL, and all draft sockets have been removed. The remaining 7 socket types — PAIR, PUB/SUB, XPUB/XSUB, DEALER/ROUTER, STREAM — cover the vast majority of real-world messaging patterns while reducing mistakes caused by unnecessary complexity. The STREAM socket supports tcp, tls, ws, and wss transports for raw communication with external clients.
-Current STREAM defaults are tuned for production throughput: accept concurrency `4`, session scheduling `rr`, and socket `SNDBUF/RCVBUF` auto-default to `256KB` when unset. Most legacy STREAM runtime tuning env flags were removed and replaced with fixed internal constants.
-
-### Boost.Asio-Based I/O Engine
-
-The entire I/O layer has been rewritten with **Boost.Asio** (header-only bundle — no external Boost dependency). TLS and WebSocket transports are natively integrated on top of a proven asynchronous foundation.
-
-### Native TLS & WebSocket
-
-Encrypted transports are supported directly, with no external proxy required:
-
-```c
-// TLS server
-zlink_setsockopt(socket, ZLINK_TLS_CERT, "/path/to/cert.pem", ...);
-zlink_setsockopt(socket, ZLINK_TLS_KEY, "/path/to/key.pem", ...);
-zlink_bind(socket, "tls://*:5555");
-
-// TLS client
-zlink_setsockopt(socket, ZLINK_TLS_CA, "/path/to/ca.pem", ...);
-zlink_connect(socket, "tls://server.example.com:5555");
+```text
+Application
+    │
+ZLink Framework
+  Channel · RouteMesh · Spot · Actor · STREAM
+    │
+Language Binding
+    │
+zlink Core
+  PAIR · PUB/SUB · XPUB/XSUB · DEALER/ROUTER · STREAM
+    │
+tcp · ipc · inproc · tls · ws · wss
 ```
 
----
+Start with Core or a Binding when you want to compose sockets and transports
+directly. Start with Framework when you want to build distributed real-time
+services inside an application host and its dependency-injection model.
 
-## Architecture
+## Language support
 
-zlink is composed of five clearly separated layers:
+### Bindings: seven languages
 
+zlink Core exposes the C API directly. Bindings are provided for these seven
+languages:
+
+| Language | Binding guide | Source |
+|---|---|---|
+| C++ | [Guide](./bindings/doc/guide/cpp/index.en.md) | [`bindings/cpp`](./bindings/cpp/) |
+| .NET/C# | [Guide](./bindings/doc/guide/dotnet/index.en.md) | [`bindings/dotnet`](./bindings/dotnet/) |
+| Java | [Guide](./bindings/doc/guide/java/index.en.md) | [`bindings/java`](./bindings/java/) |
+| Node.js/TypeScript | [Guide](./bindings/doc/guide/node/index.en.md) | [`bindings/node`](./bindings/node/) |
+| Python | [Guide](./bindings/doc/guide/python/index.en.md) | [`bindings/python`](./bindings/python/) |
+| Go | [Guide](./bindings/doc/guide/go/index.en.md) | [`bindings/go`](./bindings/go/) |
+| Rust | [Guide](./bindings/doc/guide/rust/index.en.md) | [`bindings/rust`](./bindings/rust/) |
+
+- C is the public Core API, not a separate Binding.
+- Kotlin shares the Java Binding.
+- JavaScript shares the Node.js Binding.
+
+### Framework: four language families, four runtime implementations
+
+Each ZLink Framework service runtime is independently implemented in its host
+language. The runtimes do not share a native service runtime or service C ABI;
+they share public contracts, a versioned wire protocol, and verification
+fixtures.
+
+| Framework runtime | Application integration | Documentation | Source |
+|---|---|---|---|
+| C++ | zlink framework host | [C++ docs](./framework/doc/framework/cpp/README.en.md) | [`framework/languages/cpp`](./framework/languages/cpp/) |
+| .NET/C# | ASP.NET Core | [.NET docs](./framework/doc/framework/dotnet/README.en.md) | [`framework/languages/dotnet`](./framework/languages/dotnet/) |
+| JVM | Java/Kotlin, Spring Boot | [Java docs](./framework/doc/framework/java/README.en.md) · [Kotlin docs](./framework/doc/framework/kotlin/README.en.md) | [`framework/languages/java`](./framework/languages/java/) |
+| Node.js | TypeScript/JavaScript, NestJS | [Node.js docs](./framework/doc/framework/node/README.en.md) | [`framework/languages/node`](./framework/languages/node/) |
+
+Framework therefore provides **four independent runtime implementations**. The
+JVM runtime supports Java and Kotlin, while the Node.js runtime supports
+TypeScript and JavaScript.
+
+## zlink Core
+
+Core is a native messaging engine derived from
+[libzmq](https://github.com/zeromq/libzmq) v4.3.5 and rebuilt around a focused set
+of messaging patterns.
+
+- PAIR, PUB/SUB, XPUB/XSUB, DEALER/ROUTER, and STREAM sockets
+- Asynchronous I/O based on Boost.Asio
+- `tcp`, `ipc`, `inproc`, `tls`, `ws`, and `wss` transports
+- TLS and WebSocket integration backed by OpenSSL
+- Routing IDs, socket monitoring, and backpressure
+- Shared messaging semantics across the C API and seven language Bindings
+
+If you are new to Core, start with the [Core overview](./core/doc/guide/01-overview.en.md),
+continue to the [socket pattern guide](./core/doc/guide/03-0-socket-patterns.en.md),
+and use the [Core specification](./core/doc/spec/README.en.md) as the formal contract.
+
+## ZLink Framework
+
+ZLink Framework connects a real-time messaging layer to the lifecycle and
+dependency injection facilities of an application host. In the same way that
+Spring MVC adds a web layer to Spring, ZLink Framework integrates a real-time
+messaging layer with ASP.NET Core, Spring Boot, and NestJS. For C++, the zlink
+framework host also provides dependency injection, configuration, HTTP hosting,
+and process lifecycle management.
+
+Applications define typed handlers and clients. Framework manages transport
+connections, peer discovery, location resolution, routing, reconnects, packet
+codecs, and reply correlation.
+
+| Capability | Purpose |
+|---|---|
+| **Channel / RouteMesh** | Find services by logical ChannelName and carry inter-server requests, replies, commands, and events |
+| **Spot** | Process stateful units such as rooms, stages, and zones in a serialized execution context |
+| **Actor** | Manage lifecycle, session binding, and relocation for state objects representing connections or users |
+| **STREAM** | Manage external TCP/TLS/WS/WSS client lifecycles, framing, and packet dispatch |
+| **Location runtime** | Discover current service, Spot, and Actor locations and maintain connections |
+| **Graceful drain** | Restrict new work and shut down while accounting for in-flight work and state movement |
+
+Framework fits systems that must manage connections, state, and routing together,
+including real-time game servers, long-lived stateful services, and distributed
+services implemented in multiple languages. Room, zone, match, and actor-based
+topologies are composed from the same RouteMesh, Spot, Actor, and STREAM
+primitives.
+
+See the [Framework server overview](./framework/doc/framework/common/guide/server/01-overview.en.md)
+for the guided introduction and the [common Framework specification](./framework/doc/framework/common/spec/README.en.md)
+for formal semantics and responsibility boundaries.
+
+## Quick start
+
+### Package consumers
+
+Applications that consume a Binding or Framework package do not normally build
+Core from the repository first. Packages for .NET, Java, Node.js, and Go, among
+others, include a platform-native Core; each remaining language guide owns its
+installation and native-runtime preparation procedure.
+
+- To use the Core API through a language package, [choose a Binding](./bindings/doc/guide/README.en.md)
+  and follow its installation procedure and five-minute example.
+- To use ZLink Framework, open [Framework getting started](./framework/doc/framework/common/guide/server/02-getting-started.en.md)
+  and select the C++, .NET, Java, Kotlin, or Node.js tab.
+- After installation, run the samples for that language to verify the package
+  and native runtime together in real client/server processes.
+
+### Build Core from the repository
+
+The following requirements and commands are for developers building zlink Core
+from source. They are not common prerequisites for applications that only
+consume a language package.
+
+#### Requirements
+
+- CMake 3.10 or newer
+- A compiler with C++17 support
+- OpenSSL when TLS/WSS is enabled
+
+Run the following commands from the repository root:
+
+```bash
+cmake -S core -B core/build -DWITH_TLS=ON -DBUILD_TESTS=ON
+cmake --build core/build
+ctest --test-dir core/build --output-on-failure
 ```
-┌──────────────────────────────────────────────────────┐
-│  Application Layer                                    │
-│  zlink_ctx_new() · zlink_socket() · zlink_send/recv()      │
-├──────────────────────────────────────────────────────┤
-│  Socket Logic Layer                                   │
-│  PAIR · PUB/SUB · XPUB/XSUB · DEALER/ROUTER · STREAM  │
-│  Routing strategies: lb_t(Round-robin) · fq_t · dist_t │
-├──────────────────────────────────────────────────────┤
-│  Engine Layer (Boost.Asio)                            │
-│  asio_zmp_engine — ZMP v1.0 Protocol (8B fixed header)│
-│  Proactor pattern · Speculative I/O · Backpressure    │
-├──────────────────────────────────────────────────────┤
-│  Transport Layer                                      │
-│  tcp · ipc · inproc · ws — plaintext                  │
-│  tls · wss             — OpenSSL encrypted            │
-├──────────────────────────────────────────────────────┤
-│  Core Infrastructure                                  │
-│  msg_t(64B fixed) · pipe_t(Lock-free YPipe)           │
-│  ctx_t(I/O Thread Pool) · session_base_t(Bridge)      │
-└──────────────────────────────────────────────────────┘
-```
 
-### Core Design
-
-| Design Principle | Description |
-|------------------|-------------|
-| **Zero-Copy** | Minimizes message copying — VSM (33B or less) stored inline, larger messages use reference counting |
-| **Lock-Free** | Inter-thread communication via YPipe (CAS-based FIFO), no mutexes |
-| **True Async** | Proactor pattern-based async I/O with Speculative I/O optimization |
-| **Protocol Agnostic** | Clean separation of Transport and Protocol — uses the custom ZMP v1.0 protocol |
-
-### Threading Model
-
-- **Application Thread**: Calls `zlink_send()`/`zlink_recv()`
-- **I/O Thread**: Async network processing based on Boost.Asio `io_context`
-- **Reaper Thread**: Cleans up resources from terminated sockets/sessions
-- Inter-thread communication is handled through the Lock-free YPipe + Mailbox system
-
-> For a detailed look at the internal architecture, see the [Architecture Document](./doc/internals/architecture.md).
-
----
-
-## Services
-
-Built on top of the core socket layer, zlink provides a **high-level service layer** for production distributed systems:
-
-```
-┌───────────────────────────────────────────────────────┐
-│                      Application                      │
-│          Gateway (req/rep) · SPOT (pub/sub)           │
-├───────────────────────────────────────────────────────┤
-│              Discovery (service lookup)               │
-├───────────────────────────────────────────────────────┤
-│              Registry (service registry)              │
-├───────────────────────────────────────────────────────┤
-│         zlink Core (7 sockets + 6 transports)         │
-└───────────────────────────────────────────────────────┘
-```
-
-| Service | Description | Guide |
-|---------|-------------|:-----:|
-| **Discovery** | Registry cluster with HA, heartbeat-based health check, client-side service cache | [Discovery](./doc/guide/07-1-discovery.md) |
-| **Gateway** | Location-transparent request/response with automatic load balancing, thread-safe send | [Gateway](doc/guide/07-2-gateway.md) |
-| **SPOT** | Location-transparent topic PUB/SUB with Discovery-based automatic mesh | [SPOT](./doc/guide/07-3-spot.md) |
-
-> For the full feature roadmap and dependency graph, see the [Feature Roadmap](doc/plan/feature-roadmap.md).
-
----
-
-## Additional Features
-
-| Feature | Description | Guide |
-|---------|-------------|:-----:|
-| **Routing ID** | `zlink_routing_id_t` standard type, own 16B UUID / peer 4B uint32 | [Routing ID](./doc/guide/08-routing-id.md) |
-| **Monitoring** | Routing-ID-based event identification, polling-style monitor API | [Monitoring](./doc/guide/06-monitoring.md) |
-
----
-
-## Getting Started
-
-### Requirements
-
-- **CMake** 3.10+
-- **C++17** compiler (GCC 7+, Clang 5+, MSVC 2017+)
-- **OpenSSL** (for TLS/WSS support)
-
-### Build
+Platform build scripts are also available:
 
 ```bash
 # Linux
@@ -155,133 +178,116 @@ Built on top of the core socket layer, zlink provides a **high-level service lay
 # macOS
 ./core/builds/macos/build.sh arm64 ON
 
-# Windows (PowerShell)
+# Windows PowerShell
 .\core\builds\windows\build.ps1 -Architecture x64 -RunTests "ON"
 ```
 
-### Direct CMake Build
+See the [build guide](./doc/building/build-guide.md) and
+[CMake options](./doc/building/cmake-options.md) for dependencies and the full
+option set.
+
+### Build local Core and Binding packages
+
+In a WSL development environment, use the local package runner to build Core and
+first-party Binding packages from the current source revision.
 
 ```bash
-cmake -S core -B core/build/local -DWITH_TLS=ON -DBUILD_TESTS=ON
-cmake --build core/build/local
-ctest --test-dir core/build/local --output-on-failure
+# Core and every first-party Binding package
+scripts/local-package/build-wsl.sh
+
+# Only selected Binding packages
+scripts/local-package/build-wsl.sh dotnet java node
 ```
 
-### C Perf Benchmark Build Rule
+See the [local package guide](./scripts/local-package/README.ko.md) for output
+locations, package provenance, and per-language artifacts. This runner produces
+Core and Binding packages; it does not establish Framework build completion.
 
-`bindings/c/perf/run_benchmarks_multi.sh` does not use `build_cpp_release`.
-The standalone C benchmark build links zlink core from `core/build`, so benchmark
-results are valid only after rebuilding that runtime.
+[Framework getting started](./framework/doc/framework/common/guide/server/02-getting-started.en.md)
+covers package installation and the first application scenario. Framework source
+builds and tests are independent runtime lanes that require a matching Binding
+package and start from the corresponding source root:
+[C++](./framework/languages/cpp/),
+[.NET](./framework/languages/dotnet/),
+[JVM](./framework/languages/java/), or
+[Node.js](./framework/languages/node/).
 
-```bash
-cmake --build core/build
-./bindings/c/perf/run_benchmarks_multi.sh --pattern SPOT_REQREP
-```
+> A successful Core build, a language package build, clean-consumer validation,
+> and a real client/server sample run are separate validation stages. Before
+> deployment, run the build, test, and sample procedures for the layers and
+> languages you use.
 
-The runner now prints the resolved `libzlink.so` path before execution and fails
-fast when files under `core/src` or `core/include` are newer than the runtime
-library in `core/build`.
+## Samples
 
-### CMake Options
+### Core and Bindings
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `WITH_TLS` | `ON` | Enable TLS/WSS via OpenSSL |
-| `BUILD_TESTS` | `ON` | Build tests |
-| `BUILD_BENCHMARKS` | `OFF` | Build benchmarks |
-| `BUILD_SHARED` | `ON` | Build shared library |
-| `BUILD_STATIC` | `ON` | Build static library |
-| `ZLINK_CXX_STANDARD` | `17` | C++ standard (11, 14, 17, 20, 23) |
+Each Binding includes language-specific samples for PAIR, PUB/SUB,
+DEALER/ROUTER, request/reply, STREAM, and monitoring.
 
-### Installing OpenSSL
+- [`bindings/cpp/samples`](./bindings/cpp/samples/)
+- [`bindings/dotnet/samples`](./bindings/dotnet/samples/)
+- [`bindings/java/samples`](./bindings/java/samples/)
+- [`bindings/node/samples`](./bindings/node/samples/)
+- [`bindings/python/samples`](./bindings/python/samples/)
+- [`bindings/go/samples`](./bindings/go/samples/)
+- [`bindings/rust/samples`](./bindings/rust/samples/)
 
-```bash
-# Ubuntu/Debian
-sudo apt-get install libssl-dev
+### Framework
 
-# macOS
-brew install openssl@3
+Framework samples run clients and multiple server roles to validate complete
+application scenarios, not only individual API calls. Read the common sample
+contract first, then select a language implementation.
 
-# Windows (vcpkg)
-vcpkg install openssl:x64-windows
-```
+- [Common Framework samples](./framework/doc/framework/common/sample/README.en.md)
+- [`framework/languages/cpp/samples`](./framework/languages/cpp/samples/)
+- [`framework/languages/dotnet/samples`](./framework/languages/dotnet/samples/)
+- [`framework/languages/java/samples`](./framework/languages/java/samples/)
+- [`framework/languages/node/samples`](./framework/languages/node/samples/)
 
----
+## Documentation map
 
-## Supported Platforms
+| Goal | Document |
+|---|---|
+| Understand the documentation structure | [Documentation index](./doc/README.md) |
+| Learn the Core API | [Core user guide](./core/doc/guide/01-overview.en.md) |
+| Read the formal Core contract | [Core specification](./core/doc/spec/README.en.md) |
+| Use a language Binding | [Bindings guide](./bindings/doc/guide/README.en.md) |
+| Read the formal Binding contracts | [Bindings specification](./bindings/doc/spec/README.en.md) |
+| Understand Framework and its use cases | [Framework server overview](./framework/doc/framework/common/guide/server/01-overview.en.md) |
+| Read the formal Framework contract | [Common Framework specification](./framework/doc/framework/common/spec/README.en.md) |
+| Understand Framework internals | [Framework internals](./framework/doc/framework/common/internals/README.en.md) |
+| Build and test Core from source | [Core build guide](./doc/building/build-guide.md) |
+| Build local Core and Binding packages from the current source | [Local package guide](./scripts/local-package/README.ko.md) |
+| Install and use a Binding package | [Bindings guide](./bindings/doc/guide/README.en.md) |
+| Install a Framework package and run the first scenario | [Framework getting started](./framework/doc/framework/common/guide/server/02-getting-started.en.md) |
+| Enter a Framework runtime source/build lane | [C++](./framework/languages/cpp/) · [.NET](./framework/languages/dotnet/) · [JVM](./framework/languages/java/) · [Node.js](./framework/languages/node/) |
+| Prepare release packages | [Packaging guide](./doc/building/packaging.md) |
+| Review licensing | [License guide](./doc/license/README.md) |
+| Report a security issue | [Security policy](./SECURITY.md) |
 
-| Platform | Architecture | Status |
-|----------|:------------:|:------:|
-| Linux | x64, ARM64 | Stable |
-| macOS | x64, ARM64 | Stable |
-| Windows | x64, ARM64 | Stable |
+Guides explain concepts and usage. Specifications and language-specific exact
+interfaces own the formal contracts; when they differ, the specification and
+exact interface take precedence.
 
----
+## Supported platforms
 
-## Performance
-
-Throughput comparison with libzmq on 64-byte messages over TCP:
-
-| Pattern | libzmq | zlink | Diff |
-|---------|-------:|------:|-----:|
-| DEALER↔DEALER | 5,936 Kmsg/s | 6,168 Kmsg/s | **+3.9%** |
-| PAIR | 6,195 Kmsg/s | 5,878 Kmsg/s | -5.1% |
-| PUB/SUB | 5,654 Kmsg/s | 5,756 Kmsg/s | **+1.8%** |
-| DEALER↔ROUTER | 5,609 Kmsg/s | 5,634 Kmsg/s | +0.4% |
-| ROUTER↔ROUTER | 5,161 Kmsg/s | 5,250 Kmsg/s | **+1.7%** |
-| ROUTER↔ROUTER (poll) | 4,405 Kmsg/s | 5,249 Kmsg/s | **+19.2%** |
-| STREAM | 1,786 Kmsg/s | 5,216 Kmsg/s | **+192%** |
-
-> For detailed analysis, see the [Performance Report](doc/report/benchmark-2026-02-11.md) and the [Performance Guide](./doc/guide/10-performance.md).
-
----
-
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| [Documentation Index](./doc/README.md) | Full table of contents and reader-specific paths |
-| [Library Spec](./doc/spec/README.md) | zlink library specification (core + bindings) |
-| [User Guide](./doc/guide/01-overview.md) | zlink API guide (12 chapters) |
-| [Bindings Guide](doc/bindings/overview.md) | C++/Java/.NET/Node.js/Python bindings |
-| [Internal Architecture](./doc/internals/architecture.md) | System architecture and internals |
-| [Build Guide](./doc/building/build-guide.md) | Building, testing, and packaging |
-| [Feature Roadmap](doc/plan/feature-roadmap.md) | Feature roadmap and dependency graph |
-
----
+Core provides x64 and ARM64 build paths for Linux, macOS, and Windows. Consult
+each language document for runtime support, package formats, and platform-specific
+constraints of its Binding or Framework implementation.
 
 ## License
 
-This repository uses three licenses, split by layer:
+Licensing differs by repository layer.
 
-| Layer | License |
-|-------|---------|
-| `core/`, `bindings/` — the messaging engine and per-language native bindings | [Mozilla Public License 2.0](./LICENSE) |
-| `framework/` — the higher-level framework (SPOT/actor, channel messaging, STREAM, drain) | [Functional Source License 1.1, ALv2 Future License](./framework/LICENSE) |
-| `framework`'s `http-client` package in each language — a thin wrapper over that platform's commonly used HTTP client library (.NET's `System.Net.Http`, Java/Kotlin's `java.net.http`, Node's `undici`, C++'s Boost.Beast) | Apache License 2.0 |
+| Scope | License |
+|---|---|
+| `core/`, `bindings/` | [Mozilla Public License 2.0](./LICENSE) |
+| `framework/` | [Functional Source License 1.1, ALv2 Future License](./framework/LICENSE) |
+| Language-specific Framework `http-client` packages | Apache License 2.0 |
 
-Each `http-client` package wraps a permissively-licensed HTTP client library
-rather than any zlink-original transport, so it carries Apache-2.0 instead of
-FSL. The .NET and Node packages declare `Apache-2.0` directly in their own
-package manifest; the Java and Kotlin packages receive it from the shared
-Gradle publish configuration; the C++ package ships the license text
-alongside its sources (CMake has no standard SPDX manifest field).
+See the [license guide](./doc/license/README.md) and
+[THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for detailed terms, the
+two-year Apache License 2.0 conversion policy, and redistribution notices.
 
-`core`/`bindings` stay MPL-2.0 because `core` began from
-[libzmq](https://github.com/zeromq/libzmq) v4.3.5, itself MPL-2.0. `framework`
-is licensed under FSL-1.1-ALv2: free for internal use, non-commercial
-education/research, and professional services, plus anything else that
-isn't a Competing Use — offering the Software as a substitute for the
-Software itself, for another product or service we offer, or for anything
-with substantially similar functionality (full definition in
-[framework/LICENSE](./framework/LICENSE)). Building and shipping your own
-product with it, including embedding it, falls under that last "isn't a
-Competing Use" clause rather than the license's explicit list.
-Each `framework` release automatically converts to Apache License 2.0 two
-years after its publication date.
-
-For third-party component notices and binary redistribution information,
-see [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md). For the full policy
-rationale, see [doc/license/README.md](./doc/license/README.md).
-
-Built on [libzmq](https://github.com/zeromq/libzmq) — Copyright (c) 2007-2024 Contributors as noted in the [AUTHORS](./core/AUTHORS) file.
+Based on [libzmq](https://github.com/zeromq/libzmq) — Copyright (c) 2007-2024
+Contributors as noted in [`core/AUTHORS`](./core/AUTHORS).

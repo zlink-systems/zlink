@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.spots;
+import java.util.concurrent.CompletableFuture;
 
 import java.time.Duration;
 import java.util.List;
@@ -13,7 +14,7 @@ public interface ZLinkInstanceSpotCallRuntime {
     default CompletionStage<Boolean> isStaleRoute(
         String spotId,
         SpotTransportAddress address) {
-        return java.util.concurrent.CompletableFuture.completedFuture(false);
+        return CompletableFuture.completedFuture(false);
     }
 
     CompletionStage<Void> send(

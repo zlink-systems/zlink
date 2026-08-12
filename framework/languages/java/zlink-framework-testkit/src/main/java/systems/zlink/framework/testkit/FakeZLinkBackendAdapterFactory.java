@@ -589,7 +589,7 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
         @Override
         public ZLinkBackendStreamSocket createStreamSocket(
             ZLinkBackendContext context,
-            systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode meshNode) {
+            ZLinkInternalMeshNode meshNode) {
             FakeStreamSocket stream = new FakeStreamSocket(calls);
             streams.add(stream);
             return stream;

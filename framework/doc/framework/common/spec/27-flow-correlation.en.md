@@ -4,7 +4,7 @@ title: "Request Correlation And Business Flow Identification"
 
 # Request Correlation And Business Flow Identification
 
-[Spec table of contents](README.en.md) · [Previous: Message Flow Tracing](26-message-flow-tracing.en.md) · [Next: Host Relocate And Shutdown](28-graceful-drain-handoff.en.md)
+[Spec table of contents](README.en.md) · [Previous: Message Flow Tracing](26-message-flow-tracing.en.md) · [Next: Complete Actor And Spot Relocation Flow](28-relocation-flow.en.md)
 
 > **What this chapter defines** — the contract linking a request and terminal
 > reply, and identifying several messages continuing from the same cause as

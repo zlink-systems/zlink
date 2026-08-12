@@ -1,4 +1,11 @@
 package systems.zlink.framework.runtime.spots;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Collections;
+import java.util.concurrent.CancellationException;
+import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -22,6 +29,8 @@ import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkLocationRepository;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkAggregateRelocationCoordinator;
 import systems.zlink.framework.runtime.internal.locations
@@ -54,7 +63,9 @@ final class ZLinkUserSpotRetireSourceBuilder {
     private static final int MAX_DESCRIPTORS = 65_536;
     private static final byte[] SOURCE_CLEANUP_PENDING =
         "zlink.spot.source.pending.v1".getBytes(
-            java.nio.charset.StandardCharsets.UTF_8);
+            StandardCharsets.UTF_8);
+    private static final Duration SESSION_SEAL_DEADLINE =
+        Duration.ofSeconds(5);
 
     private final String meshName;
     private final RoutingId localNodeRid;
@@ -64,6 +75,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
     private final ZLinkRelocationPermitPool permits;
     private final ZLinkSpotLifecycle spots;
     private final ZLinkSpotRuntime relocationReplies;
+    private final ZLinkSessionRelocationPeerClient sessionSealer;
     private final ZLinkActorSessionCoordinator actors;
     private final ZLinkRelocationAdapterRegistry adapters;
     private final Map<String, RelocatableSpotFactory<?>>
@@ -73,7 +85,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
     private final ZLinkServiceAuthorityPayloadCodec spotAuthorities =
         new ZLinkServiceAuthorityPayloadCodec();
     private final List<UnresolvedPreparation> unresolved =
-        java.util.Collections.synchronizedList(new ArrayList<>());
+        Collections.synchronizedList(new ArrayList<>());
 
     ZLinkUserSpotRetireSourceBuilder(
         String meshName,
@@ -119,6 +131,36 @@ final class ZLinkUserSpotRetireSourceBuilder {
         Map<String, RelocatableActorFactory<?>>
             actorFactories,
         ZLinkSpotRuntime relocationReplies) {
+        this(
+            meshName,
+            localNodeRid,
+            localNodeGeneration,
+            locations,
+            coordinator,
+            permits,
+            spots,
+            actors,
+            adapters,
+            spotFactories,
+            actorFactories,
+            relocationReplies,
+            null);
+    }
+
+    ZLinkUserSpotRetireSourceBuilder(
+        String meshName,
+        RoutingId localNodeRid,
+        long localNodeGeneration,
+        ZLinkLocationRepository locations,
+        ZLinkAggregateRelocationCoordinator coordinator,
+        ZLinkRelocationPermitPool permits,
+        ZLinkSpotLifecycle spots,
+        ZLinkActorSessionCoordinator actors,
+        ZLinkRelocationAdapterRegistry adapters,
+        Map<String, RelocatableSpotFactory<?>> spotFactories,
+        Map<String, RelocatableActorFactory<?>> actorFactories,
+        ZLinkSpotRuntime relocationReplies,
+        ZLinkSessionRelocationPeerClient sessionSealer) {
         if (meshName == null || meshName.isBlank()) {
             throw new IllegalArgumentException("meshName is required");
         }
@@ -135,6 +177,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
         this.permits = Objects.requireNonNull(permits, "permits");
         this.spots = Objects.requireNonNull(spots, "spots");
         this.relocationReplies = relocationReplies;
+        this.sessionSealer = sessionSealer;
         this.actors = Objects.requireNonNull(actors, "actors");
         this.adapters = Objects.requireNonNull(adapters, "adapters");
         this.spotFactories = Map.copyOf(
@@ -149,18 +192,20 @@ final class ZLinkUserSpotRetireSourceBuilder {
         ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(targetPolicy, "targetPolicy");
         Objects.requireNonNull(cancellation, "cancellation");
-        ZLinkSpot<?> spot = activeSpot(spotId, cancellation);
-        if (spot == null) {
-            return cancellation.isCancellationRequested()
-                ? cancelled()
-                : failed(new IllegalStateException(
-                    "User Spot is not active locally: " + spotId));
-        }
-        return admit(spotId, spot, targetPolicy, cancellation)
-            .thenCompose(admission -> sealAndCapture(
-                spot,
-                admission,
-                cancellation));
+        return reconcileUnresolvedPreparations().thenCompose(ignored -> {
+            ZLinkSpot<?> spot = activeSpot(spotId, cancellation);
+            if (spot == null) {
+                return cancellation.isCancellationRequested()
+                    ? cancelled()
+                    : failed(new IllegalStateException(
+                        "User Spot is not active locally: " + spotId));
+            }
+            return admit(spotId, spot, targetPolicy, cancellation)
+                .thenCompose(admission -> sealAndCapture(
+                    spot,
+                    admission,
+                    cancellation));
+        });
     }
 
     CompletionStage<Void> preflight(
@@ -199,38 +244,44 @@ final class ZLinkUserSpotRetireSourceBuilder {
         ZLinkMeshNodeDescriptor pinnedTarget,
         ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(pinnedTarget, "pinnedTarget");
-        ZLinkSpot<?> spot = activeSpot(spotId, cancellation);
-        if (spot == null) {
-            return cancellation.isCancellationRequested()
-                ? cancelled()
-                : failed(new IllegalStateException(
-                    "User Spot is not active locally: " + spotId));
-        }
-        List<String> actorIds = actors.actorIdsInSpot(spotId);
-        return readInventory(spotId, actorIds, cancellation)
-            .thenCompose(inventory -> {
-                validateLiveInventory(spot, inventory);
-                return listDescriptors(cancellation)
-                    .thenApply(descriptors -> new Admission(
-                        inventory,
-                        descriptors.stream()
-                            .filter(candidate -> candidate.rid().equals(
-                                pinnedTarget.rid()))
-                            .filter(candidate -> candidate.lifecycleGeneration()
-                                == pinnedTarget.lifecycleGeneration())
-                            .filter(this::baseEligible)
-                            .filter(candidate -> hasCapabilities(
-                                inventory, candidate))
-                            .findFirst()
-                            .orElseThrow(() -> new ZLinkUserSpotRetireRuntime
-                                .RelocationBlockedException(
-                                systems.zlink.framework.runtime.host
-                                    .ZLinkFrameworkRelocationReason.TARGET_UNAVAILABLE,
-                                "Pinned User Spot relocation target is no longer Ready")),
-                        descriptors));
-            })
-            .thenCompose(admission -> sealAndCapture(
-                spot, admission, cancellation));
+        return reconcileUnresolvedPreparations().thenCompose(ignored -> {
+            ZLinkSpot<?> spot = activeSpot(spotId, cancellation);
+            if (spot == null) {
+                return cancellation.isCancellationRequested()
+                    ? cancelled()
+                    : failed(new IllegalStateException(
+                        "User Spot is not active locally: " + spotId));
+            }
+            List<String> actorIds = actors.actorIdsInSpot(spotId);
+            return readInventory(spotId, actorIds, cancellation)
+                .thenCompose(inventory -> {
+                    validateLiveInventory(spot, inventory);
+                    return listDescriptors(cancellation)
+                        .thenApply(descriptors -> new Admission(
+                            inventory,
+                            descriptors.stream()
+                                .filter(candidate -> candidate.rid().equals(
+                                    pinnedTarget.rid()))
+                                .filter(candidate -> candidate
+                                    .lifecycleGeneration()
+                                    == pinnedTarget.lifecycleGeneration())
+                                .filter(this::baseEligible)
+                                .filter(candidate -> hasCapabilities(
+                                    inventory, candidate))
+                                .findFirst()
+                                .orElseThrow(() ->
+                                    new ZLinkUserSpotRetireRuntime
+                                        .RelocationBlockedException(
+                                        systems.zlink.framework.runtime.host
+                                            .ZLinkFrameworkRelocationReason
+                                            .TARGET_UNAVAILABLE,
+                                        "Pinned User Spot relocation target "
+                                            + "is no longer Ready")),
+                            descriptors));
+                })
+                .thenCompose(admission -> sealAndCapture(
+                    spot, admission, cancellation));
+        });
     }
 
     private ZLinkSpot<?> activeSpot(
@@ -275,6 +326,47 @@ final class ZLinkUserSpotRetireSourceBuilder {
 
     int unresolvedPreparationCount() {
         return unresolved.size();
+    }
+
+    CompletionStage<Void> reconcileUnresolvedPreparations() {
+        List<UnresolvedPreparation> pending;
+        synchronized (unresolved) {
+            pending = List.copyOf(unresolved);
+        }
+        CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
+        for (UnresolvedPreparation context : pending) {
+            chain = chain.thenCompose(ignored -> {
+                if (!context.authorityAborted()) {
+                    return failed(new IllegalStateException(
+                        "User Spot relocation authority outcome is unresolved: "
+                            + context.spotId()));
+                }
+                return abortSessionRoutes(
+                        sessionSealer,
+                        context.sealedSessionRoutes())
+                    .thenCompose(aborted -> context.stagedRoot() == null
+                        ? CompletableFuture.completedFuture(null)
+                        : coordinator.discardStagedRoot(
+                            context.stagedRoot()))
+                    .thenCompose(discarded -> context.barrier().abortAsync(
+                        context.seal()))
+                    .thenAccept(aborted -> {
+                        if (!aborted) {
+                            throw new IllegalStateException(
+                                "source relocation barrier was lost during "
+                                    + "Session abort recovery");
+                        }
+                        if (relocationReplies != null) {
+                            context.seal().participantActorIds().forEach(
+                                relocationReplies
+                                    ::resumeActorTimersAfterRelocationAbort);
+                        }
+                        context.permit().close();
+                        unresolved.remove(context);
+                    });
+            });
+        }
+        return chain;
     }
 
     private CompletionStage<PreparedSource> sealAndCapture(
@@ -344,6 +436,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
         ZLinkRelocationPermitPool.Lease lease) {
         AtomicReference<ZLinkAggregateRelocationCoordinator.StagedRoot>
             staged = new AtomicReference<>();
+        AtomicReference<List<SealedSessionRoute>> sealedSessions =
+            new AtomicReference<>(List.of());
         return readInventory(
                 admission.inventory().spot().id(),
                 seal.participantActorIds(),
@@ -365,46 +459,61 @@ final class ZLinkUserSpotRetireSourceBuilder {
             })
             .thenCompose(captured -> {
                 UUID aggregateId = UUID.randomUUID();
-                List<ZLinkSpotRetireControl.ParticipantFence> inventory =
-                    participantFences(captured);
-                byte[] root = ZLinkCanonicalUserSpotRelocationEnvelope.encode(
-                    captured.staging(),
-                    aggregateId,
-                    captured.inventory().spot().snapshot()
-                        .authorityOwnerGeneration(),
-                    inventory);
-                if (!lease.tryShrinkPayload(root.length)) {
-                    return failed(new IllegalStateException(
-                        "captured relocation root exceeded its permit"));
-                }
-                var authorityRequest = relocationRequest(
-                    captured,
-                    root,
-                    admission.target(),
-                    aggregateId);
-                return coordinator.stageRoot(authorityRequest, cancellation)
-                    .thenCompose(stagedRoot -> {
-                        staged.set(stagedRoot);
-                        if (cancellation.isCancellationRequested()) {
-                            return cancelled();
+                return sealSessionRoutes(
+                        captured,
+                        aggregateId,
+                        sealedSessions)
+                    .thenCompose(sealed -> {
+                        Captured exact = captured.withSessionRoutes(
+                            sealed.stream()
+                                .map(SealedSessionRoute::route)
+                                .toList());
+                        List<ZLinkSpotRetireControl.ParticipantFence> inventory =
+                            participantFences(exact);
+                        byte[] root =
+                            ZLinkCanonicalUserSpotRelocationEnvelope.encode(
+                                exact.staging(),
+                                aggregateId,
+                                exact.inventory().spot().snapshot()
+                                    .authorityOwnerGeneration(),
+                                inventory);
+                        if (!lease.tryShrinkPayload(root.length)) {
+                            return failed(new IllegalStateException(
+                                "captured relocation root exceeded its permit"));
                         }
-                        return CompletableFuture.completedFuture(
-                            new PreparedSource(
-                                coordinator,
-                                barrier,
-                                seal,
-                                lease,
-                                captured,
-                                authorityRequest,
-                                stagedRoot,
-                                spots,
-                                actors,
-                                relocationReplies,
-                                stageRequest(
-                                    captured,
-                                    authorityRequest,
-                                    stagedRoot.stored(),
-                                    admission.target())));
+                        var authorityRequest = relocationRequest(
+                            exact,
+                            root,
+                            admission.target(),
+                            aggregateId);
+                        return coordinator.stageRoot(
+                                authorityRequest, cancellation)
+                            .thenCompose(stagedRoot -> {
+                                staged.set(stagedRoot);
+                                if (cancellation.isCancellationRequested()) {
+                                    return cancelled();
+                                }
+                                return CompletableFuture.completedFuture(
+                                    new PreparedSource(
+                                        coordinator,
+                                        barrier,
+                                        seal,
+                                        lease,
+                                        exact,
+                                        authorityRequest,
+                                        stagedRoot,
+                                        spots,
+                                        actors,
+                                        relocationReplies,
+                                        sessionSealer,
+                                        sealed,
+                                        unresolved,
+                                        stageRequest(
+                                            exact,
+                                            authorityRequest,
+                                            stagedRoot.stored(),
+                                            admission.target())));
+                            });
                     });
             })
             .exceptionallyCompose(failure -> {
@@ -412,33 +521,51 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 if (cause instanceof ZLinkAggregateRelocationCoordinator
                     .PreparationOutcomeUnknownException) {
                     unresolved.add(new UnresolvedPreparation(
-                        admission.inventory().spot().id(), seal, lease));
+                        admission.inventory().spot().id(),
+                        barrier,
+                        seal,
+                        lease,
+                        sealedSessions.get(),
+                        staged.get(),
+                        false));
                     return failed(cause);
                 }
-                //  A staged root left by a post-stage failure would leak in
-                //  Relocation Store; discard it before the queues resume.
-                CompletionStage<Void> discard = staged.get() == null
-                    ? CompletableFuture.completedFuture(null)
-                    : coordinator.discardStagedRoot(staged.get());
-                return discard
-                    .handle((ignored, discardFailure) -> {
-                        if (discardFailure != null) {
-                            cause.addSuppressed(discardFailure);
-                        }
-                        return null;
-                    })
+                CompletionStage<Void> release = abortSessionRoutes(
+                        sessionSealer,
+                        sealedSessions.get())
+                    .thenCompose(ignored -> staged.get() == null
+                        ? CompletableFuture.completedFuture(null)
+                        : coordinator.discardStagedRoot(staged.get()))
                     .thenCompose(ignored -> barrier.abortAsync(seal))
-                    .handle((ignored, abortFailure) -> {
+                    .thenAccept(aborted -> {
+                        if (!aborted) {
+                            throw new IllegalStateException(
+                                "source relocation barrier was lost during abort");
+                        }
+                    });
+                return release.handle((ignored, releaseFailure) -> releaseFailure)
+                    .thenCompose(releaseFailure -> {
+                        if (releaseFailure != null) {
+                            cause.addSuppressed(unwrap(releaseFailure));
+                            rememberUnresolved(
+                                unresolved,
+                                new UnresolvedPreparation(
+                                    admission.inventory().spot().id(),
+                                    barrier,
+                                    seal,
+                                    lease,
+                                    sealedSessions.get(),
+                                    staged.get(),
+                                    true));
+                            return failed(cause);
+                        }
                         if (relocationReplies != null) {
                             admission.inventory().actorIds().forEach(
                                 relocationReplies
                                     ::resumeActorTimersAfterRelocationAbort);
                         }
                         lease.close();
-                        if (abortFailure != null) {
-                            throw new CompletionException(abortFailure);
-                        }
-                        throw new CompletionException(cause);
+                        return failed(cause);
                     });
             });
     }
@@ -576,15 +703,167 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 record.sourceSessionSequence()));
         }
         routes.sort((left, right) -> Arrays.compareUnsigned(
-            left.actorId().getBytes(java.nio.charset.StandardCharsets.UTF_8),
-            right.actorId().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            left.actorId().getBytes(StandardCharsets.UTF_8),
+            right.actorId().getBytes(StandardCharsets.UTF_8)));
         return List.copyOf(routes);
+    }
+
+    private CompletionStage<List<SealedSessionRoute>> sealSessionRoutes(
+        Captured captured,
+        UUID aggregateId,
+        AtomicReference<List<SealedSessionRoute>> observed) {
+        if (captured.sessionRoutes().isEmpty()) {
+            return CompletableFuture.completedFuture(List.of());
+        }
+        if (sessionSealer == null) {
+            return failed(new ZLinkUserSpotRetireRuntime
+                .RelocationBlockedException(
+                    systems.zlink.framework.runtime.host
+                        .ZLinkFrameworkRelocationReason.STATE_INCOMPATIBLE,
+                    "Bound-Session User Spot relocation requires the "
+                        + "command 42/43 seal barrier"));
+        }
+        List<SealedSessionRoute> sealed = new ArrayList<>();
+        CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
+        for (ZLinkSpotRetireControl.SessionRouteFence route
+            : captured.sessionRoutes()) {
+            Owned actor = captured.inventory().actors().stream()
+                .filter(candidate -> candidate.id().equals(route.actorId()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException(
+                    "bound Session route Actor is outside the inventory: "
+                        + route.actorId()));
+            chain = chain.thenCompose(ignored -> {
+                ZLinkServiceM6BWireCodec.SessionRelocationSeal command =
+                    sessionSeal(captured, actor, route, aggregateId);
+                return sessionSealer.sealRouteUntilAck(
+                        command, SESSION_SEAL_DEADLINE)
+                    .thenAcceptAsync(acknowledgement -> {
+                        ZLinkSpotRetireControl.SessionRouteFence exact =
+                            new ZLinkSpotRetireControl.SessionRouteFence(
+                                route.actorId(),
+                                route.actorObjectGeneration(),
+                                route.sourceAuthorityOwnerGeneration(),
+                                route.sourceAuthorityStoreVersion(),
+                                route.sessionOwnerNodeRid(),
+                                route.sessionOwnerNodeGeneration(),
+                                route.sessionOwnerId(),
+                                route.sessionOwnerLeaseGeneration(),
+                                route.sessionRid(),
+                                route.bindingGeneration(),
+                                acknowledgement
+                                    .lastAcceptedSessionSequence());
+                        sealed.add(new SealedSessionRoute(
+                            exact,
+                            command,
+                            acknowledgement.lastAcceptedSessionSequence()));
+                        observed.set(List.copyOf(sealed));
+                    });
+            });
+        }
+        return chain.thenApply(ignored -> List.copyOf(sealed));
+    }
+
+    private ZLinkServiceM6BWireCodec.SessionRelocationSeal sessionSeal(
+        Captured captured,
+        Owned actor,
+        ZLinkSpotRetireControl.SessionRouteFence route,
+        UUID aggregateId) {
+        ZLinkAuthoritySnapshot source =
+            captured.inventory().spot().snapshot();
+        return new ZLinkServiceM6BWireCodec.SessionRelocationSeal(
+            new ZLinkServiceM6BWireCodec.RelocationIdentity(
+                aggregateId.getMostSignificantBits(),
+                aggregateId.getLeastSignificantBits()),
+            new ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
+                source.ownerId(),
+                source.ownerLeaseGeneration(),
+                localNodeRid,
+                localNodeGeneration,
+                route.sourceAuthorityStoreVersion()),
+            ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
+            new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                new systems.zlink.framework.runtime.internal.backend
+                    .ZLinkBackendActorRef(
+                        localNodeRid,
+                        route.actorId(),
+                        route.actorObjectGeneration()),
+                localNodeGeneration,
+                route.sourceAuthorityOwnerGeneration(),
+                actor.snapshot().ownerLeaseGeneration()),
+            new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                route.sessionOwnerNodeRid(),
+                route.sessionOwnerNodeGeneration(),
+                route.sessionOwnerId(),
+                route.sessionOwnerLeaseGeneration(),
+                route.sessionRid(),
+                route.bindingGeneration()));
+    }
+
+    private static CompletionStage<Void> abortSessionRoutes(
+        ZLinkSessionRelocationPeerClient sessionSealer,
+        List<SealedSessionRoute> contexts) {
+        if (contexts.isEmpty()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        if (sessionSealer == null) {
+            return failed(new IllegalStateException(
+                "Session relocation abort sender is unavailable"));
+        }
+        AtomicReference<Throwable> firstFailure = new AtomicReference<>();
+        CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
+        for (SealedSessionRoute context : List.copyOf(contexts)) {
+            chain = chain.thenCompose(ignored ->
+                abortSessionRoute(sessionSealer, context)
+                    .handle((aborted, failure) -> {
+                        if (failure != null) {
+                            Throwable cause = unwrap(failure);
+                            Throwable first = firstFailure.get();
+                            if (first == null
+                                && firstFailure.compareAndSet(null, cause)) {
+                                return null;
+                            }
+                            firstFailure.get().addSuppressed(cause);
+                        }
+                        return null;
+                    }));
+        }
+        return chain.thenCompose(ignored -> firstFailure.get() == null
+            ? CompletableFuture.completedFuture(null)
+            : failed(firstFailure.get()));
+    }
+
+    private static CompletionStage<Void> abortSessionRoute(
+        ZLinkSessionRelocationPeerClient sessionSealer,
+        SealedSessionRoute context) {
+        ZLinkServiceM6BWireCodec.SessionRelocationSeal command42 =
+            context.seal();
+        ZLinkServiceM6BWireCodec.SessionRelocationRoute abort =
+            new ZLinkServiceM6BWireCodec.SessionRelocationRoute(
+                command42.relocation(),
+                command42.coordinator(),
+                ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
+                new ZLinkServiceM6BWireCodec.ActorIdentity(
+                    command42.actor().actor().actorId(),
+                    command42.actor().actor().generation()),
+                command42.session(),
+                ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.ABORT,
+                0,
+                command42.actor().authorityOwnerGeneration(),
+                null,
+                0,
+                0);
+        return sessionSealer.abortRouteUntilAck(
+                abort,
+                context.lastAcceptedSessionSequence(),
+                SESSION_SEAL_DEADLINE)
+            .thenApply(ignored -> null);
     }
 
     private static CompletionStage<byte[]> captureState(
         String stableType,
         RelocationPolicy policy,
-        java.util.function.Supplier<CompletionStage<byte[]>> capture) {
+        Supplier<CompletionStage<byte[]>> capture) {
         if (policy instanceof RelocationPolicy.Recreate) {
             return CompletableFuture.completedFuture(new byte[0]);
         }
@@ -686,7 +965,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
         var authority = spotAuthorities.decode(inventory.spot().snapshot().payload())
             .orElseThrow(() -> new IllegalStateException(
                 "User Spot authority payload is invalid"));
-        if (authority.kind() != ZLinkServiceAuthorityPayloadCodec.Kind.USER
+        if (authority.user().isEmpty()
             || authority.state()
                 != ZLinkServiceAuthorityPayloadCodec.State.READY
             || !authority.spotId().equals(inventory.spot().id())
@@ -964,8 +1243,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
 
     private static List<ZLinkSpotRetireControl.ParticipantFence>
         participantFences(Captured captured) {
-        return java.util.stream.Stream.concat(
-                    java.util.stream.Stream.of(captured.inventory().spot()),
+        return Stream.concat(
+                    Stream.of(captured.inventory().spot()),
                     captured.inventory().actors().stream())
                 .map(owned -> new ZLinkSpotRetireControl.ParticipantFence(
                     owned.key(),
@@ -978,9 +1257,9 @@ final class ZLinkUserSpotRetireSourceBuilder {
                     owned.snapshot().authorityOwnerGeneration()))
                 .sorted((left, right) -> Arrays.compareUnsigned(
                     left.authorityKey().getBytes(
-                        java.nio.charset.StandardCharsets.UTF_8),
+                        StandardCharsets.UTF_8),
                     right.authorityKey().getBytes(
-                        java.nio.charset.StandardCharsets.UTF_8)))
+                        StandardCharsets.UTF_8)))
                 .toList();
     }
 
@@ -1027,11 +1306,24 @@ final class ZLinkUserSpotRetireSourceBuilder {
         private final ZLinkSpotLifecycle spots;
         private final ZLinkActorSessionCoordinator actors;
         private final ZLinkSpotRuntime relocationReplies;
+        private final ZLinkSessionRelocationPeerClient sessionSealer;
+        private final List<SealedSessionRoute> sealedSessionRoutes;
+        private final List<UnresolvedPreparation> unresolved;
         private final ZLinkSpotRetireControl.StageRequest stageRequest;
         private ZLinkAggregateRelocationCoordinator.Prepared finalPrepared;
+        private ZLinkAggregateRelocationCoordinator.Prepared
+            uncertainPrepared;
         private boolean finalJournalEmpty;
         private Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
             finalJournal = Map.of();
+        private ZLinkUserSpotRelocationBarrier.RelocationCommit
+            relocationCommit;
+        private byte[] committedRoot;
+        private CompletionStage<
+            ZLinkAggregateRelocationCoordinator.Published> sourceCommitFlight;
+        private ZLinkAggregateRelocationCoordinator.Published
+            activatedPublication;
+        private boolean captureFinished;
         private boolean sourceCommitted;
         private boolean terminal;
 
@@ -1046,6 +1338,9 @@ final class ZLinkUserSpotRetireSourceBuilder {
             ZLinkSpotLifecycle spots,
             ZLinkActorSessionCoordinator actors,
             ZLinkSpotRuntime relocationReplies,
+            ZLinkSessionRelocationPeerClient sessionSealer,
+            List<SealedSessionRoute> sealedSessionRoutes,
+            List<UnresolvedPreparation> unresolved,
             ZLinkSpotRetireControl.StageRequest stageRequest) {
             this.coordinator = coordinator;
             this.barrier = barrier;
@@ -1057,6 +1352,9 @@ final class ZLinkUserSpotRetireSourceBuilder {
             this.spots = Objects.requireNonNull(spots, "spots");
             this.actors = Objects.requireNonNull(actors, "actors");
             this.relocationReplies = relocationReplies;
+            this.sessionSealer = sessionSealer;
+            this.sealedSessionRoutes = List.copyOf(sealedSessionRoutes);
+            this.unresolved = Objects.requireNonNull(unresolved, "unresolved");
             this.stageRequest = stageRequest;
         }
 
@@ -1098,15 +1396,26 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 authorityRequest.targetDescriptorLifecycleGeneration(),
                 authorityRequest.capacityBundle(),
                 authorityRequest.targetOwner());
-            return coordinator.prepare(request, cancellation)
+            return coordinator.prepareReplayPending(request, cancellation)
                 .thenApply(prepared -> {
                     synchronized (PreparedSource.this) {
                         finalPrepared = prepared;
+                        uncertainPrepared = null;
                         finalJournal = finalStaging.acceptedJournal();
                         finalJournalEmpty = finalStaging.acceptedJournal()
                             .values().stream().allMatch(List::isEmpty);
                     }
                     return prepared;
+                })
+                .exceptionallyCompose(failure -> {
+                    Throwable cause = unwrap(failure);
+                    if (cause instanceof ZLinkAggregateRelocationCoordinator
+                        .PreparationOutcomeUnknownException unknown) {
+                        synchronized (PreparedSource.this) {
+                            uncertainPrepared = unknown.prepared();
+                        }
+                    }
+                    return failed(cause);
                 });
         }
 
@@ -1118,17 +1427,190 @@ final class ZLinkUserSpotRetireSourceBuilder {
             return CompletableFuture.completedFuture(null);
         }
 
-        synchronized ZLinkUserSpotRelocationBarrier.Committed
-            commitSourceBarrier(Map<String, Long> targetOwnerGenerations) {
-            if (terminal || sourceCommitted || finalPrepared == null) {
-                throw new IllegalStateException(
-                    "source relocation final root is not prepared or is terminal");
+        synchronized CompletionStage<
+            ZLinkAggregateRelocationCoordinator.Published> commitSourceBarrier(
+            ZLinkAggregateRelocationCoordinator.Published published,
+            ZLinkStoreCancellation cancellation) {
+            if (terminal || finalPrepared == null) {
+                return failed(new IllegalStateException(
+                    "source relocation final root is not prepared or is terminal"));
             }
-            Objects.requireNonNull(
-                targetOwnerGenerations,
-                "targetOwnerGenerations");
+            Objects.requireNonNull(published, "published");
+            Objects.requireNonNull(cancellation, "cancellation");
+            if (sourceCommitted) {
+                return CompletableFuture.completedFuture(
+                    activatedPublication);
+            }
+            if (sourceCommitFlight != null) {
+                return sourceCommitFlight;
+            }
+            if (relocationCommit == null) {
+                relocationCommit = barrier.retainCommit(seal).orElseThrow(() ->
+                    new IllegalStateException(
+                        "source relocation barrier was lost"));
+            }
+            CompletableFuture<ZLinkAggregateRelocationCoordinator.Published>
+                flight = new CompletableFuture<>();
+            sourceCommitFlight = flight;
+            commitNextSourceBarrierCut(published, cancellation)
+                .whenComplete((activated, failure) -> {
+                Throwable terminal = failure;
+                if (terminal == null) {
+                    try {
+                        bindCommittedReplies(
+                            activated.targetOwnerGenerations());
+                    } catch (RuntimeException bindFailure) {
+                        terminal = bindFailure;
+                    }
+                }
+                synchronized (PreparedSource.this) {
+                    if (terminal == null) {
+                        sourceCommitted = true;
+                        activatedPublication = activated;
+                    } else {
+                        sourceCommitFlight = null;
+                    }
+                }
+                if (terminal == null) {
+                    flight.complete(activated);
+                } else {
+                    flight.completeExceptionally(unwrap(terminal));
+                }
+            });
+            return flight;
+        }
+
+        private CompletionStage<
+            ZLinkAggregateRelocationCoordinator.Published>
+            commitNextSourceBarrierCut(
+                ZLinkAggregateRelocationCoordinator.Published published,
+                ZLinkStoreCancellation cancellation) {
+            if (cancellation.isCancellationRequested()) {
+                return cancelled();
+            }
+            ZLinkAggregateRelocationCoordinator.Prepared authority;
+            ZLinkUserSpotRelocationBarrier.RelocationCommit retained;
+            boolean finished;
+            synchronized (this) {
+                authority = finalPrepared;
+                retained = relocationCommit;
+                finished = captureFinished;
+            }
+            if (finished) {
+                return coordinator.activateCanonicalReplay(
+                    authority, cancellation);
+            }
+            var cut = retained.cut();
+            var finalStaging = withHeldIngress(
+                captured.staging(),
+                cut.committed().heldIngress());
+            Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> journal =
+                finalStaging.acceptedJournal();
+            byte[] root = ZLinkCanonicalUserSpotRelocationEnvelope.encode(
+                finalStaging,
+                authorityRequest.aggregateId(),
+                captured.inventory().spot().snapshot()
+                    .authorityOwnerGeneration(),
+                participantFences(captured));
+            synchronized (this) {
+                finalJournal = journal;
+                finalJournalEmpty = journal.values().stream()
+                    .allMatch(List::isEmpty);
+                committedRoot = root.clone();
+            }
+            return coordinator.updateCanonicalReplay(
+                    authority.request().participants().stream()
+                        .map(value -> new ZLinkAggregateRelocationCoordinator
+                            .ExpectedParticipant(
+                                value.authorityKey(),
+                                value.objectGeneration(),
+                                value.authorityOwnerGeneration()))
+                        .toList(),
+                    authority.fence(),
+                    authority.request().targetOwner(),
+                    ignored -> ZLinkServiceRelocationEnvelopeCodec.decode(root),
+                    cancellation)
+                .thenCompose(ignored -> {
+                    if (cancellation.isCancellationRequested()) {
+                        return cancelled();
+                    }
+                    installRelocationForwards(published);
+                    if (!retained.tryEstablishDurableCut(cut)) {
+                        return commitNextSourceBarrierCut(
+                            published, cancellation);
+                    }
+                    if (!retained.tryFinishCapture(cut)) {
+                        return commitNextSourceBarrierCut(
+                            published, cancellation);
+                    }
+                    synchronized (PreparedSource.this) {
+                        captureFinished = true;
+                    }
+                    return coordinator.activateCanonicalReplay(
+                        authority, cancellation);
+                });
+        }
+
+        private void installRelocationForwards(
+            ZLinkAggregateRelocationCoordinator.Published published) {
+            var node = relocationReplies.nodeByRid(
+                stageRequest.sourceNodeRid());
+            Duration retention = relocationReplies.relocationForwardRetention();
+            Owned spot = captured.inventory().spot();
+            node.installRelocationSpotForward(
+                spotRoute(spot, false, published),
+                spotRoute(spot, true, published),
+                retention);
+            for (Owned actor : captured.inventory().actors()) {
+                node.installRelocationActorForward(
+                    actorRoute(actor, false, published),
+                    actorRoute(actor, true, published),
+                    retention);
+            }
+        }
+
+        private ZLinkServiceM6BWireCodec.SpotRouteFence spotRoute(
+            Owned spot,
+            boolean target,
+            ZLinkAggregateRelocationCoordinator.Published published) {
+            return new ZLinkServiceM6BWireCodec.SpotRouteFence(
+                spot.id(),
+                spot.snapshot().objectGeneration(),
+                target ? stageRequest.targetNodeRid()
+                    : stageRequest.sourceNodeRid(),
+                target ? stageRequest.targetNodeGeneration()
+                    : stageRequest.sourceNodeGeneration(),
+                target ? published.targetOwnerGeneration(spot.key())
+                    : spot.snapshot().authorityOwnerGeneration(),
+                target ? stageRequest.targetOwnerLeaseGeneration()
+                    : spot.snapshot().ownerLeaseGeneration());
+        }
+
+        private ZLinkServiceM6BWireCodec.ActorRouteFence actorRoute(
+            Owned actor,
+            boolean target,
+            ZLinkAggregateRelocationCoordinator.Published published) {
+            RoutingId nodeRid = target
+                ? stageRequest.targetNodeRid()
+                : stageRequest.sourceNodeRid();
+            return new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                new systems.zlink.framework.runtime.internal.backend
+                    .ZLinkBackendActorRef(
+                        nodeRid,
+                        actor.id(),
+                        actor.snapshot().objectGeneration()),
+                target ? stageRequest.targetNodeGeneration()
+                    : stageRequest.sourceNodeGeneration(),
+                target ? published.targetOwnerGeneration(actor.key())
+                    : actor.snapshot().authorityOwnerGeneration(),
+                target ? stageRequest.targetOwnerLeaseGeneration()
+                    : actor.snapshot().ownerLeaseGeneration());
+        }
+
+        private void bindCommittedReplies(
+            Map<String, Long> targetOwnerGenerations) {
             Map<String, ZLinkSpotRelocationReplyRoutes.CommittedFence>
-                replyFences = new java.util.LinkedHashMap<>();
+                replyFences = new LinkedHashMap<>();
             for (int index = 0;
                 index < stageRequest.participants().size();
                 index++) {
@@ -1153,12 +1635,14 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 stageRequest.targetNodeRid(),
                 stageRequest.targetNodeGeneration(),
                 Map.copyOf(replyFences));
-            ZLinkUserSpotRelocationBarrier.Committed committed =
-                barrier.commit(seal).orElseThrow(() ->
-                    new IllegalStateException(
-                        "source relocation barrier was lost"));
-            sourceCommitted = true;
-            return committed;
+        }
+
+        synchronized void completeSourceBarrierCommit() {
+            if (!sourceCommitted || relocationCommit == null) {
+                throw new IllegalStateException(
+                    "source relocation barrier is not durably committed");
+            }
+            relocationCommit.complete();
         }
 
         CompletionStage<
@@ -1199,12 +1683,29 @@ final class ZLinkUserSpotRetireSourceBuilder {
                     "committed source relocation cannot be aborted"));
             }
             CompletionStage<Void> abortAuthority = finalPrepared == null
-                ? CompletableFuture.completedFuture(null)
+                ? uncertainPrepared != null
+                    ? coordinator.abort(uncertainPrepared)
+                    : CompletableFuture.completedFuture(null)
                 : coordinator.abort(finalPrepared);
             //  Contract order: Aborted record, staged payload discard, queue
             //  restore, then terminal progress removal while the lanes are
             //  still paused. Lane resume is the last observable step.
             return abortAuthority
+                .thenCompose(ignored -> abortSessionRoutes(
+                        sessionSealer, sealedSessionRoutes)
+                    .exceptionallyCompose(failure -> {
+                        rememberUnresolved(
+                            unresolved,
+                            new UnresolvedPreparation(
+                                captured.inventory().spot().id(),
+                                barrier,
+                                seal,
+                                permit,
+                                sealedSessionRoutes,
+                                stagedRoot,
+                                true));
+                        return failed(unwrap(failure));
+                    }))
                 .thenCompose(ignored -> coordinator.discardStagedRoot(
                     stagedRoot))
                 .thenCompose(ignored -> barrier.abortAsync(seal, () -> {
@@ -1212,6 +1713,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                             terminal = true;
                             permit.close();
                         }
+                        forgetUnresolved(unresolved, seal);
                     })
                     .thenAccept(aborted -> {
                     if (!aborted) {
@@ -1236,7 +1738,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
             return coordinator.discardStagedRoot(stagedRoot);
         }
 
-        CompletionStage<Void> cleanupLocal(java.time.Instant deadline) {
+        CompletionStage<Void> cleanupLocal(Instant deadline) {
             Objects.requireNonNull(deadline, "deadline");
             List<String> actorIds = captured.inventory().actorIds();
             String spotId = captured.inventory().spot().id();
@@ -1324,12 +1826,58 @@ final class ZLinkUserSpotRetireSourceBuilder {
         private Captured {
             sessionRoutes = List.copyOf(sessionRoutes);
         }
+
+        private Captured withSessionRoutes(
+            List<ZLinkSpotRetireControl.SessionRouteFence> exact) {
+            return new Captured(inventory, staging, exact);
+        }
     }
 
     private record UnresolvedPreparation(
         String spotId,
+        ZLinkUserSpotRelocationBarrier barrier,
         ZLinkUserSpotRelocationBarrier.Seal seal,
-        ZLinkRelocationPermitPool.Lease permit) {
+        ZLinkRelocationPermitPool.Lease permit,
+        List<SealedSessionRoute> sealedSessionRoutes,
+        ZLinkAggregateRelocationCoordinator.StagedRoot stagedRoot,
+        boolean authorityAborted) {
+        private UnresolvedPreparation {
+            sealedSessionRoutes = List.copyOf(sealedSessionRoutes);
+        }
+    }
+
+    private record SealedSessionRoute(
+        ZLinkSpotRetireControl.SessionRouteFence route,
+        ZLinkServiceM6BWireCodec.SessionRelocationSeal seal,
+        long lastAcceptedSessionSequence) {
+        private SealedSessionRoute {
+            Objects.requireNonNull(route, "route");
+            Objects.requireNonNull(seal, "seal");
+            if (lastAcceptedSessionSequence < 0) {
+                throw new IllegalArgumentException(
+                    "sealed Session sequence must be nonnegative");
+            }
+        }
+    }
+
+    private static void rememberUnresolved(
+        List<UnresolvedPreparation> unresolved,
+        UnresolvedPreparation context) {
+        synchronized (unresolved) {
+            boolean known = unresolved.stream().anyMatch(candidate ->
+                candidate.seal().equals(context.seal()));
+            if (!known) {
+                unresolved.add(context);
+            }
+        }
+    }
+
+    private static void forgetUnresolved(
+        List<UnresolvedPreparation> unresolved,
+        ZLinkUserSpotRelocationBarrier.Seal seal) {
+        synchronized (unresolved) {
+            unresolved.removeIf(candidate -> candidate.seal().equals(seal));
+        }
     }
 
     private static void close(AutoCloseable closeable) {
@@ -1352,7 +1900,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
     }
 
     private static <T> CompletionStage<T> cancelled() {
-        return failed(new java.util.concurrent.CancellationException());
+        return failed(new CancellationException());
     }
 
     private static <T> CompletionStage<T> failed(Throwable failure) {

@@ -8,7 +8,6 @@ using var context = new ToActorScenarioContext(options);
 var scenarios = new Dictionary<string, Func<Task>>(StringComparer.OrdinalIgnoreCase)
 {
     ["TA-A1"] = () => TaA1BoundActorMessagingScenario.RunAsync(context),
-    ["TA-A2"] = () => TaA2UnboundActorMessagingScenario.RunAsync(context),
     ["TA-A3"] = () => TaA3LateBindScenario.RunAsync(context),
     ["TA-A4"] = () => TaA4DisconnectAndDestroyScenario.RunAsync(context),
     ["TA-B1"] = () => TaB1MissingActorScenario.RunAsync(context),

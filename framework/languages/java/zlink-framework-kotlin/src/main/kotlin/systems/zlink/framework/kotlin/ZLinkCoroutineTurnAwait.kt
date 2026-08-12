@@ -1,5 +1,8 @@
 package systems.zlink.framework.kotlin
 
+
+import java.util.concurrent.CompletionException
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.CompletionStage
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
@@ -26,8 +29,8 @@ internal suspend fun <T> awaitFrameworkStage(stage: CompletionStage<T>): T {
 
 private fun unwrapCompletionError(error: Throwable): Throwable =
     when (error) {
-        is java.util.concurrent.CompletionException,
-        is java.util.concurrent.ExecutionException,
+        is CompletionException,
+        is ExecutionException,
         -> error.cause ?: error
         else -> error
     }

@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.registrymessaging.client.Support
 
+
+import java.util.concurrent.TimeUnit
 import java.io.File
 import java.net.ServerSocket
 import java.time.Duration
@@ -155,7 +157,7 @@ class DynamicProcess(
         }
         try {
             HttpJson(httpUrl).post<Map<String, Any>>("/shutdown")
-            process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+            process.waitFor(5, TimeUnit.SECONDS)
         } catch (_: Exception) {
         }
         if (process.isAlive) {

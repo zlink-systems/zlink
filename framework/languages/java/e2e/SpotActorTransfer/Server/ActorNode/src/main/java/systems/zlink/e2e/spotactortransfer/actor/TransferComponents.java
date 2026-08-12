@@ -1,4 +1,6 @@
 package systems.zlink.e2e.spotactortransfer.actor;
+import systems.zlink.framework.actors.ZLinkActorManager;
+import systems.zlink.framework.spots.ZLinkSpotActorSendHandler;
 
 import java.time.Duration;
 import java.nio.ByteBuffer;
@@ -494,10 +496,10 @@ public final class TransferComponents {
                 request.scenario(), actorId, "probe_gate_released", gate));
     }
 
-    public static final class MessageFollowSendHandler implements systems.zlink.framework.spots.ZLinkSpotActorSendHandler<
+    public static final class MessageFollowSendHandler implements ZLinkSpotActorSendHandler<
         TransferUserSpot,
         TransferActor,
-        Contracts.MessageFollowSendReq> {
+        Contracts.MessageFollowMsg> {
         private final EvidenceStore evidence;
 
         public MessageFollowSendHandler(EvidenceStore evidence) {
@@ -509,7 +511,7 @@ public final class TransferComponents {
             TransferUserSpot spot,
             TransferActor actor,
             ZLinkMessageContext context,
-            Contracts.MessageFollowSendReq request) {
+            Contracts.MessageFollowMsg request) {
             evidence.add(
                 request.scenario(), actor.actorId(), "message_follow_send", request.marker());
             return CompletableFuture.completedFuture(null);
@@ -571,11 +573,11 @@ public final class TransferComponents {
     public static final class BindSessionHandler implements ZLinkTypedSessionPacketHandler<
         ZLinkSessionContext,
         Contracts.BindSessionReq> {
-        private final systems.zlink.framework.actors.ZLinkActorManager actors;
+        private final ZLinkActorManager actors;
         private final EvidenceStore evidence;
 
         public BindSessionHandler(
-            systems.zlink.framework.actors.ZLinkActorManager actors,
+            ZLinkActorManager actors,
             EvidenceStore evidence) {
             this.actors = actors;
             this.evidence = evidence;

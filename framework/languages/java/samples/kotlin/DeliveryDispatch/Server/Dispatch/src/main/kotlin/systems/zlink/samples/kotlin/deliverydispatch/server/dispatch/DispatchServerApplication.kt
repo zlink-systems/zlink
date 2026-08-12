@@ -1,5 +1,8 @@
 package systems.zlink.samples.kotlin.deliverydispatch.server.dispatch
 
+
+import java.net.URI
+import systems.zlink.framework.actors.ZLinkActorClient
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.KotlinModule
 import kotlinx.coroutines.Dispatchers
@@ -35,7 +38,7 @@ class DispatchServerApplication {
                 .client()
             // The courier's decision comes back here as its own one-way message, so dispatch has
             // to be a channel server (common sample spec section 7.4).
-            val dispatchEndpoint = java.net.URI.create(SampleTopology.DispatchChannelEndpoint)
+            val dispatchEndpoint = URI.create(SampleTopology.DispatchChannelEndpoint)
             options.addClientServerChannel(SampleNames.DispatchChannel)
                 .server()
                 .setBindHost(dispatchEndpoint.host)
@@ -63,7 +66,7 @@ class DispatchServerApplication {
     @Bean
     fun dispatchWorker(
         channels: ZLinkClient,
-        actors: systems.zlink.framework.actors.ZLinkActorClient,
+        actors: ZLinkActorClient,
         offers: DeliveryOfferStore,
     ): DispatchWorker = DispatchWorker(channels, actors, offers)
 

@@ -14,7 +14,7 @@ inline void run_manual_registration_scenario (const client_options_t &options)
       post_empty<echo_manual_res_t> (options.http_endpoint,
                                     "/registration/manual");
     ensure (reply.value == "manual:manual", "RC-A3 reply mismatch");
-    ensure (reply.packet_name == "EchoManual", "RC-A3 packet name mismatch");
+    ensure (reply.packet_name == "EchoManualReq", "RC-A3 packet name mismatch");
     ensure (reply.content_type == "application/json", "RC-A3 content type mismatch");
     wait_evidence_contains (options.http_endpoint, "RC-A3-send",
                             "application/json:send-a3", std::chrono::seconds (10));

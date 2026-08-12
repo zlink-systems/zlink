@@ -18,9 +18,9 @@ public final class RcB3MessagePackCodecScenario {
         ScenarioAssert.waitForEvidence(
             context.evidence(),
             "ContentType",
-            "MsgpackEcho",
+            "PackedEchoReq",
             "application/x-msgpack");
-        ScenarioAssert.waitForEvidence(context.evidence(), "Send", "MsgpackEcho", "msgpack-send");
+        ScenarioAssert.waitForEvidence(context.evidence(), "Send", "PackedEchoMsg", "msgpack-send");
         System.out.println("scenario RC-B3 passed");
     }
 }

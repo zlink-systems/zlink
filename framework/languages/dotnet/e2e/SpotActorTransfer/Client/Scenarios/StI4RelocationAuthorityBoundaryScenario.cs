@@ -266,7 +266,7 @@ internal static class StI4RelocationAuthorityBoundaryScenario
         }
     }
 
-    private static async Task<RelocationWorkloadReply> RequestAsync(
+    private static async Task<RelocationWorkloadRes> RequestAsync(
         SpotActorTransferScenarioContext context,
         TargetKind kind,
         string targetId,

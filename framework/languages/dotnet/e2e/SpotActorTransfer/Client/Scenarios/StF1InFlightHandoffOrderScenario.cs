@@ -19,7 +19,7 @@ internal static class StF1InFlightHandoffOrderScenario
             await context.SendFromNodeAsync(
                 context.NodeA,
                 actorId,
-                new HandoffPacket("ST-F1", marker));
+                new HandoffMsg("ST-F1", marker));
         // After authority commit, the public Actor ID route follows the
         // target. The target ingress owns the backlog while OnJoinedActorAsync
         // is waiting; the source only records the Message Follow relay.

@@ -10,6 +10,14 @@ export interface ZLinkStreamActorLookupPort {
     readonly authorityOwnerGeneration: bigint;
     readonly ownerLeaseGeneration: bigint;
   } | undefined;
+  sessionRouteFence(actorId: string): {
+    readonly actor: ActorRef;
+    readonly sessionRid: ActorRef['nodeRid'];
+    readonly bindingGeneration: bigint;
+    readonly authorityOwnerGeneration: bigint;
+    readonly ownerLeaseGeneration: bigint;
+    readonly acceptedHighWater: bigint;
+  } | undefined;
 }
 
 export interface ZLinkStreamActorLifecyclePort {
@@ -41,6 +49,14 @@ export interface ZLinkActorRouteCommitOptions {
    * ownership command is being dispatched.
    */
   readonly confirmRemoteSessionBinding?: boolean | 'send';
+  /**
+   * Command 44 keeps ingress sealed while the native route is prepared, then
+   * publishes the new route and releases this exact seal in one owner turn.
+   */
+  readonly releaseSeal?: {
+    readonly sealId: string;
+    readonly acceptedHighWater: bigint;
+  };
 }
 
 export interface ZLinkBoundSessionResponsePort {

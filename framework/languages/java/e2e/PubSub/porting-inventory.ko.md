@@ -39,7 +39,7 @@
 | `run_e2e.sh` | `run_e2e.sh` | runner | done | 실행별 Redis location store 컨테이너를 준비한 뒤 publisher/subscriber/client installDist binary를 시작하고 health, evidence, message flow marker를 검증한다. PS-A4/PS-B2 process restart 제어는 Client support가 수행한다. |
 | `README.ko.md` 없음 | `README.ko.md` | docs | done | `.NET`에는 없지만 Java 산출물로 역할, 실행법, 검증 경로를 기록했다. |
 | `Shared/PubSub.Shared.csproj` | `Shared/build.gradle.kts` | build | done | Java `Shared` library project다. |
-| `Shared/Messages.cs` | `Shared/src/main/java/systems/zlink/e2e/pubsub/shared/Contracts.java` | shared | done | channel, packet name, `EventMsg`, evidence record를 공유한다. |
+| `Shared/Messages.cs` | `Shared/src/main/java/systems/zlink/e2e/pubsub/shared/Contracts.java` | shared | done | channel, packet name, `Event`, evidence record를 공유한다. |
 | `Client/PubSub.Client.csproj` | `Client/build.gradle.kts` | build | done | Java client application project다. |
 | `Client/Program.cs` | `Client/src/main/java/systems/zlink/e2e/pubsub/client/Program.java` | client | done | scenario 실행 순서와 mode 분기를 담당한다. |
 | `Client/Scenarios/FanoutBasicDeliveryScenario.cs` | `Client/src/main/java/systems/zlink/e2e/pubsub/client/Scenarios/FanoutBasicDeliveryScenario.java` | scenario | done | PS-A1. warm-up barrier와 공통 연속 sequence를 검증한다. |
@@ -73,7 +73,7 @@
 | `Server/Subscriber/Configuration/HostFactorySupport.cs` | `Server/Subscriber/src/main/java/systems/zlink/e2e/pubsub/subscriber/SubscriberApplication.java` | configuration | not-needed | Java Spring application class가 host setup을 직접 캡슐화한다. |
 | `Server/Subscriber/OperationalEndpoints.cs` | `Server/Subscriber/src/main/java/systems/zlink/e2e/pubsub/subscriber/Endpoints/OperationalEndpoints.java` | endpoint | done | `/health`와 `/evidence`를 제공한다. |
 | `Server/Subscriber/EvidenceStore.cs` | `Server/Subscriber/src/main/java/systems/zlink/e2e/pubsub/subscriber/Infrastructure/EvidenceStore.java` | infrastructure | done | subscriber evidence와 topic interest를 보관한다. |
-| `Server/Subscriber/Handlers/EventMsgHandler.cs` | `Server/Subscriber/src/main/java/systems/zlink/e2e/pubsub/subscriber/Handlers/EventMsgHandler.java` | handler | done | public publish handler 구현이다. |
+| `Server/Subscriber/Handlers/EventHandler.cs` | `Server/Subscriber/src/main/java/systems/zlink/e2e/pubsub/subscriber/Handlers/EventHandler.java` | handler | done | public publish handler 구현이다. |
 | `Server/Subscriber/Handlers/EvidenceDispatchErrorObserver.cs` | `Server/Subscriber/src/main/java/systems/zlink/e2e/pubsub/subscriber/Handlers/EvidenceDispatchErrorObserver.java` | handler | done | missing message name dispatch error를 evidence로 기록한다. |
 
 ## 공통 시나리오 매핑

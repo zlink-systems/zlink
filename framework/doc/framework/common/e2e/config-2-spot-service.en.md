@@ -363,22 +363,6 @@ receiving the reply?
   matching reply.
 - Detailed behavior: verifies [Actor Model §5](../spec/14-actor-model.en.md).
 
-#### SM-B5 Record An Actor Request With No Handler
-
-Priority: `P0`
-
-If the Actor exists but has no packet handler, that's a dispatch failure distinct from a missing
-target.
-
-**Verification question:** Does a missing-handler request leave a public error and
-`no_handler/reply_error` logger evidence?
-
-- Starting condition: The Actor is ready, and an application logger provider is configured.
-- Procedure: An unregistered packet name's request is sent, then a normal request is sent.
-- Verification: The first is a formal error terminal with one `zlink.dispatch_error` logger record. The normal
-  request succeeds.
-- Detailed behavior: verifies [Message Flow Tracing §2.2](../spec/26-message-flow-tracing.en.md).
-
 #### SM-B6 Distinguish Explicit Leave From A Session Disconnect Callback
 
 Priority: `P0`
@@ -579,37 +563,22 @@ target process the marker exactly once?
 
 ### Track D — Confirm Session Binding, Relay, And Stream Lifecycle
 
-#### SM-D1 Bind A Local Actor To A Session And Relay
+#### SM-D2 Bind Local And Remote Actors To A Session And Relay
 
 Priority: `P0`
 
-Once the Session gateway and Actor-owner route are ready, a client request is relayed to the bound
-Actor, and the Actor's push returns to the same client.
+Whether the Session gateway and Actor owner share a process or use different processes, the binding
+route connects request and push to the same client.
 
-**Verification question:** Do a local-owner Actor request reply and push both reach the bound Stream
-client?
+**Verification question:** In both local- and remote-owner variants, do the Actor relay reply and
+push reach the bound Stream client?
 
-- Starting condition: The Session and Actor are ready, and an exact ActorRef is bound.
-- Procedure: The client sends a request with Actor ID metadata, and the Actor sends a push once.
-- Verification: The Actor handler processes the request exactly once, and the client receives a
-  matching reply and push exactly once each.
-- Detailed behavior: verifies [Session Actor Dispatch §5](../spec/20-session-actor-dispatch.en.md).
-
-#### SM-D2 Bind A Remote Actor To A Session And Relay
-
-Priority: `P0`
-
-Even if the Actor owner is a different process from the gateway, the binding route connects request
-and push.
-
-**Verification question:** Do the remote Actor's relay and push both reach the same client through
-the gateway?
-
-- Starting condition: The Actor is on play-b, the Session is on session-a, and an exact-ref bind is
-  complete.
-- Procedure: The SM-D1 request and push are repeated.
-- Verification: The play-b handler processes the request, and the client receives the reply/push.
-  The caller provides no RID or endpoint.
+- Starting condition: The local variant places the Session gateway and Actor owner in the same
+  process. The remote variant places the Actor on play-b and the Session on session-a. Both complete
+  an exact-ActorRef bind.
+- Procedure: The client sends a request with Actor ID metadata, and the Actor sends one push.
+- Verification: Each variant's Actor handler processes the request once, and the client receives a
+  matching reply and push exactly once each. The remote variant's caller supplies no RID or endpoint.
 - Detailed behavior: verifies [Session Actor Dispatch §5](../spec/20-session-actor-dispatch.en.md).
 
 #### SM-D3 Entry And User Spot Actor Binding Have The Same Meaning
@@ -647,15 +616,18 @@ Actor?
 
 Priority: `P0`
 
-Once an Actor is rebound to Session B, Session A's old binding identity is no longer current.
+Once an Actor is rebound to Session B, Session A's old binding identity is no longer current. The
+same identity boundary applies even when the Actor owner moves A→B→A.
 
 **Verification question:** Does Session A's late relay/disconnect not change Session B's binding and
 Actor state?
 
-- Starting condition: Actor X is bound to A. Normal callback and callback failure use fresh fixtures.
-- Procedure: In each fixture, explicitly rebind to B, submitting logical disconnect for A's exact
-  old binding. After callback terminal and tombstone, deliver A's gated relay and late disconnect
-  result, then run a normal relay/push on B.
+- Starting condition: Actor X is bound to Session A. Same-owner rebind and rebind after an owner
+  A→B→A move run as separate placement variants. Normal callback and callback failure use fresh
+  fixtures.
+- Procedure: In each fixture, explicitly rebind to Session B, submitting logical disconnect for
+  Session A's exact old binding. After callback terminal and tombstone, deliver A's gated relay and
+  late disconnect result, then run a normal relay/push on B.
 - Verification: In both fixtures the old binding's callback runs at most once and is not repeated
   after its terminal tombstone. Failure neither restores the old binding nor removes B's binding.
   Late old operations end stale with no handler evidence. B's relay/push each succeed exactly once.
@@ -883,20 +855,22 @@ Channel, direct Actor, and bound push.
 
 ### Track E — Confirm Negative Dispatch And Timer
 
-#### SM-E1 Record A Spot Request With No Handler
+#### SM-E1 Record Actor And Spot Requests With No Handler
 
 Priority: `P0`
 
-If a ready Spot has no packet handler, the caller and application logger provider must be able to
-confirm the dispatch error.
+If a ready Actor or Spot has no packet handler, the caller and application logger provider must be
+able to confirm a dispatch error distinct from a missing target.
 
-**Verification question:** Does a missing Spot handler produce an error reply and
-`no_handler/reply_error` evidence?
+**Verification question:** Do Actor and Spot missing handlers each produce an error reply and
+surface-specific `no_handler/reply_error` evidence?
 
-- Starting condition: The Spot and an application logger provider are ready.
-- Procedure: A missing-packet request and a normal-packet request are sent.
-- Verification: The first returns a formal error with `zlink.dispatch_error` logger evidence; the second returns a normal
-  reply exactly once.
+- Starting condition: The Actor, Spot, and an application logger provider are ready.
+- Procedure: Send an unregistered-packet request to the Actor and Spot, then a normal request on each
+  surface.
+- Verification: Each missing request has one formal error terminal and one `zlink.dispatch_error`
+  logger record with its own `surface`, `reason=no_handler`, and `action=reply_error`. Each normal
+  request returns one normal reply.
 - Detailed behavior: verifies [Message Flow Tracing §2.2](../spec/26-message-flow-tracing.en.md).
 
 #### SM-E2 A Spot One-Shot Timer Changes State

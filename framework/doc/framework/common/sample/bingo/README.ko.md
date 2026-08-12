@@ -123,7 +123,7 @@ message와 domain model을 바꾸지 않아도 된다.
 | External record call 동안 room turn 반환 | `Yield` terminator | 결과가 정해지면 새 Spot turn에서 continuation을 실행한다. [SPOT 메시징 §3.6](../../spec/12-spot-messaging.ko.md#36-channel-request의-실행-재개) |
 | Reward를 여러 Play node의 local observer room에 전달 | Logical Multicast | Channel과 topic으로 local subscription 범위를 정한다. [SPOT 메시징 §4](../../spec/12-spot-messaging.ko.md#4-channel-범위-logical-multicast) |
 | Actor가 이동해도 현재 client로 push | Bound session send | Session owner가 보관한 binding identity와 route를 사용한다. [Spot과 Actor membership §9](../../spec/15-spot-actor.ko.md#9-bound-session) |
-| 계획된 node 종료 때 room과 Actor 이동 | Host Relocate | Spot과 member Actor를 같은 relocation unit으로 옮긴다. [Host Relocate §8.5](../../spec/28-graceful-drain-handoff.ko.md#85-spotwide-user-spot) |
+| 계획된 node 종료 때 room과 Actor 이동 | Host Relocate | Spot과 member Actor를 같은 relocation unit으로 옮긴다. [Host Relocate §8.5](../../spec/30-host-relocation-flow.ko.md#85-spotwide-user-spot) |
 
 Handler는 typed handler contract와 선언형 metadata로 자동 등록한다. .NET의 attribute,
 Java·Kotlin의 annotation과 Node의 decorator가 같은 역할을 한다. C++은 runtime scan 대신
@@ -179,7 +179,7 @@ message AuthenticatePlayerRes {
   optional string reason = 4;
 }
 
-message EnsurePlayerActorReq {
+message PlayerActorCreateReq {
   string actor_id = 1;
   string display_name = 2;
   reserved 3;
@@ -225,6 +225,10 @@ message BingoRoomSettingsPayload {
   int32 max_draw_number = 4;
   string purpose = 5;
   optional string observed_room_id = 6;
+}
+
+message BingoRoomCreateReq {
+  BingoRoomSettingsPayload settings = 1;
 }
 
 message BingoRoomJoinReq {
@@ -362,13 +366,14 @@ message BingoPlayerState {
 |---|---|---|
 | `AuthenticateReq/Res` | Client → Session, request | 인증이 성공하고 현재 STREAM session이 Actor에 bind되었다. |
 | `AuthenticatePlayerReq/Res` | Session → API, request | Access token 검증 결과가 확정되었다. |
-| `EnsurePlayerActorReq` | Session → Play, Actor create payload | Player Actor를 만들거나 current Actor ref를 얻는 입력이다. |
-| `MatchBingoReq/Res` | Client → bound Actor, request | Actor가 matching 결과의 room에 참가하고 current state를 확인했다. |
+| `PlayerActorCreateReq` | Session → Play, Actor create payload | Player Actor를 만들거나 current Actor ref를 얻는 입력이다. |
+| `MatchBingoReq/Res` | Client → bound Actor, request | Matching 대상 Room Spot이 준비되고 deferred join이 등록되었다. 응답 state는 join 완료 전의 `WaitingForPlayers` projection이며, 실제 game 시작은 `BingoGameStartedNotify`로 확인한다. |
 | `MatchBingoApiReq/Res` | Player Actor → API, request | Reservation과 Room Ready 확인이 끝났다. |
 | `ReserveBingoRoomReq/Res` | API → Matchmaker, request | Redis transaction으로 waiting room reservation이 확정되었다. |
+| `BingoRoomCreateReq` | API 또는 Observer Actor → Play, Room Spot create payload | 같은 reservation의 settings로 room을 만들거나 current Room Spot ref를 얻는 입력이다. |
 | `BingoRoomJoinReq/Res` | Entry Spot → Room Spot, Actor join payload·reply | Actor join과 lifecycle callback이 끝났다. |
 | `SubmitBingoCardReq/Res` | Client → bound Actor, request | Card가 검증되어 room state에 반영되었다. |
-| `ObserveBingoEventsReq/Res` | Client → bound Actor, request | Observer Actor의 local room 참가가 완료되었다. |
+| `ObserveBingoEventsReq/Res` | Client → bound Actor, request | Observer room이 준비되고 Observer Actor의 deferred join이 등록되었다. 이후 publish event를 `BingoRewardAnnouncedNotify`로 받는지 확인해 실제 관찰 경로를 검증한다. |
 | `StopObservingBingoEventsReq/Res` | Client → bound Actor, request | Observer Actor가 관찰 room에서 나왔다. |
 | `GetPlayerRecordReq/Res` | Room Spot → API, request | Player record를 읽었다. |
 | `ReportBingoResultReq/Res` | Room Spot → API, request | Game result가 한 번 반영되었다. |
@@ -383,7 +388,7 @@ message BingoPlayerState {
 
 `BingoRoomState.status`는 `WaitingForPlayers`, `Running`, `Finished` 가운데 하나다. Game room의
 `BingoRoomSettingsPayload.purpose`는 `Game`, observer room은 `Observer`다. 같은 reservation을 사용하는
-모든 caller는 동일한 settings를 Room `GetOrCreate`에 전달한다.
+모든 caller는 동일한 settings를 `BingoRoomCreateReq`에 담아 Room `GetOrCreate`에 전달한다.
 
 3 x 3 card의 가운데 칸은 처음부터 mark된 free cell이다. 이전 wire와의 compatibility를 위해 남아
 있는 `host_actor_id`, `can_start`, `is_host`는 이 sample의 판단이나 self-check에 사용하지 않는다.
@@ -441,22 +446,25 @@ sequenceDiagram
     Matchmaker-->>API: ReserveBingoRoomRes
     API->>Room: Get or create Room
     Room-->>API: Ready
-    Actor1->>Room: Join Player 1
-    Room-->>Actor1: WaitingForPlayers
-    Actor1-->>Session: MatchBingoRes
+    Actor1->>Actor1: Room join을 deferred operation으로 등록
+    Actor1-->>Session: MatchBingoRes(WaitingForPlayers)
     Session-->>Player1: MatchBingoRes
+    Note over Actor1,Room: Handler 반환 뒤 deferred join 실행
+    Actor1->>Room: Player 1 참가
+    Room-->>Actor1: 참가 수락
 
     Player2->>Session: MatchBingoReq
     Session->>Actor2: Relay through binding
     Actor2->>API: MatchBingoApiReq
     API->>Matchmaker: ReserveBingoRoomReq
     Matchmaker-->>API: Same RoomId and settings
-    Actor2->>Room: Join Player 2
-    Room->>Room: State = Running
-    par Match result
-        Actor2-->>Session: MatchBingoRes
+    Actor2->>Actor2: Room join을 deferred operation으로 등록
+    par Matching 응답
+        Actor2-->>Session: MatchBingoRes(WaitingForPlayers)
         Session-->>Player2: MatchBingoRes
-    and Start notification
+    and Handler 반환 뒤 deferred join
+        Actor2->>Room: Player 2 참가
+        Room->>Room: State = Running
         Room-->>Actor1: BingoGameStartedNotify
         Room-->>Actor2: BingoGameStartedNotify
         Actor1-->>Session: BingoGameStartedNotify
@@ -470,10 +478,14 @@ sequenceDiagram
 2. API가 level bucket의 Matchmaker Instance Spot에 reservation을 요청한다.
 3. Matchmaker가 Redis에서 waiting room을 만들고 `RoomId`와 settings를 반환한다.
 4. API가 같은 `RoomId`로 Room User Spot을 만들거나 찾고 `Ready`가 될 때까지 기다린다.
-5. Player Actor가 room으로 join한다. 첫 player의 response state는 `WaitingForPlayers`다.
-6. Observer가 해당 `RoomId`의 관찰 room에 참가하고 `Subscribed = true`를 확인한다.
+5. Player Actor handler가 deferred join을 등록하고 `WaitingForPlayers` projection을 응답한다. Handler가
+   반환된 뒤 join이 실행되므로 `MatchBingoRes`만으로 join 완료를 판정하지 않는다.
+6. Observer가 해당 `RoomId`의 관찰 room을 준비하고 deferred join이 등록됐다는
+   `Subscribed = true` 응답을 받는다. 실제 관찰 경로는 이후 reward publish를 client push로 받는지
+   확인해 검증한다.
 7. `player-2`가 같은 과정을 실행하면 Redis가 같은 reservation을 반환한다.
-8. 두 번째 Actor join이 끝나면 room은 `Running`으로 바뀌고 두 player에게 start 결과를 알린다.
+8. 두 번째 Actor join이 끝나면 room은 `Running`으로 바뀌고 두 player에게
+   `BingoGameStartedNotify`를 보낸다. 이 알림이 game 시작의 authoritative completion이다.
 
 Room owner 조회와 remote join은 Location Store가 처리한다. Reservation Redis는 어느 Play node가
 room을 소유하는지 결정하지 않는다. Concurrent `GetOrCreate` caller는 하나의 `Creating` authority가
@@ -783,6 +795,6 @@ Docker를 사용할 수 없거나 Redis가 ready가 아니면 명확한 오류�
 
 관측 기능을 켜는 구현은 [flow correlation](../../spec/27-flow-correlation.ko.md),
 [runtime metrics](../../spec/25-runtime-metrics.ko.md)과
-[Graceful Drain](../../spec/28-graceful-drain-handoff.ko.md)의 언어별 exact interface를 사용한다.
+[Graceful Drain](../../spec/30-host-relocation-flow.ko.md)의 언어별 exact interface를 사용한다.
 관측 설정과 100 Actor relocation workload는 이 기본 sample의 성공 조건이 아니라
 [Config 11 관측·운영 E2E](../../e2e/config-11-observability-ops.ko.md)가 검증한다.

@@ -3,7 +3,7 @@ import type { ClientOptions } from '../Support/client-options';
 import { getJson, postJson } from '../../../http-client';
 import { ensure } from '../Support/scenario-assert';
 
-interface ObjectReply { readonly spotId: string; readonly operationId: string; readonly payload: string; }
+interface ObjectRes { readonly spotId: string; readonly operationId: string; readonly payload: string; }
 interface ObjectPage { readonly items: readonly { readonly spotId: string }[]; readonly continuationToken?: string; }
 
 export async function runSFF6(options: ClientOptions): Promise<void> {
@@ -57,8 +57,8 @@ export async function runSFF6(options: ClientOptions): Promise<void> {
   console.log('scenario SF-F6 passed');
 }
 
-async function request(options: ClientOptions, spotId: string, operationId: string): Promise<ObjectReply> {
-  return await postJson<ObjectReply>(options.consumerUrl, '/object/request', {
+async function request(options: ClientOptions, spotId: string, operationId: string): Promise<ObjectRes> {
+  return await postJson<ObjectRes>(options.consumerUrl, '/object/request', {
     spotId, operationId, payload: `payload-${spotId}`
   });
 }

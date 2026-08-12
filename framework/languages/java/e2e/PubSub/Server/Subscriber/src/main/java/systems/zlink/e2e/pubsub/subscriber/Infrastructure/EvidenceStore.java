@@ -97,7 +97,7 @@ public final class EvidenceStore {
 
     private boolean hasContiguousRun(String scenario, int minLength) {
         List<Integer> sequences = entries.stream()
-            .filter(entry -> "EventMsg".equals(entry.marker()))
+            .filter(entry -> "Event".equals(entry.marker()))
             .filter(entry -> scenario.equals(entry.scenario()))
             .map(Contracts.EvidenceEntry::sequence)
             .distinct()

@@ -1896,9 +1896,11 @@ test('CH-001 ZLinkFrameworkRuntimeHost dispatches client-server channel request 
     await serverRuntime.start();
     await clientRuntime.start();
     const client = new framework.DefaultZLinkChannelClient(clientRegistration, clientRuntime.channelTransport);
-    const reply = await submitWhenReachable(() =>
-      client.requestToChannel('play', typedPacket('CreateGame', { gameName: 'sample' })).timeout(1000).submit()
-    );
+    await waitUntil(() => clientRuntime.clientServerRuntime.isReady('play'), 5000);
+    const reply = await client
+      .requestToChannel('play', typedPacket('CreateGame', { gameName: 'sample' }))
+      .timeout(1000)
+      .submit();
 
     assert.deepEqual(calls, [{ created: 'sample' }]);
     assert.deepEqual(reply, { created: 'sample' });
@@ -2089,9 +2091,14 @@ test('DERR-001 ZLinkFrameworkRuntimeHost replies error and reports provider reco
     await clientRuntime.start();
     const client = new framework.DefaultZLinkChannelClient(clientRegistration, clientRuntime.channelTransport);
 
-    const knownBefore = await submitWhenReachable(() =>
-      client.requestToChannel('play', typedPacket('KnownReq', { value: 'before' })).timeout(1000).submit()
-    );
+    // Runtime topology is the readiness contract. Waiting for it avoids
+    // spending the whole request deadline in the first not-yet-connected
+    // submission when coverage instrumentation delays socket monitoring.
+    await waitUntil(() => clientRuntime.clientServerRuntime.isReady('play'));
+    const knownBefore = await client
+      .requestToChannel('play', typedPacket('KnownReq', { value: 'before' }))
+      .timeout(1000)
+      .submit();
     assert.deepEqual(knownBefore, { value: 'known:before' });
 
     await assert.rejects(

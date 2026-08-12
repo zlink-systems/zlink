@@ -5,7 +5,7 @@ import systems.zlink.framework.spots.ZLinkInstanceSpotContext;
 import systems.zlink.samples.shoppingmall.server.orderworkflow.spots.handlers.ContinueOrderWorkflowSpotHandler;
 import systems.zlink.samples.shoppingmall.server.orderworkflow.spots.handlers.PrepareInventoryReservedCheckpointSpotHandler;
 import systems.zlink.samples.shoppingmall.server.orderworkflow.spots.handlers.RebuildOrderProjectionSpotHandler;
-import systems.zlink.samples.shoppingmall.server.orderworkflow.spots.handlers.RunOrderWorkflowCommandHandler;
+import systems.zlink.samples.shoppingmall.server.orderworkflow.spots.handlers.RunOrderWorkflowMsgHandler;
 import systems.zlink.samples.shoppingmall.server.orderworkflow.spots.handlers.StartOrderWorkflowSpotHandler;
 
 public final class OrderWorkflowSpot implements ZLinkInstanceSpot {

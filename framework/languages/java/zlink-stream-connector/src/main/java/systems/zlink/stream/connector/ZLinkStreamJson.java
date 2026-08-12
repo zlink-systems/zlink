@@ -1,4 +1,5 @@
 package systems.zlink.stream.connector;
+import java.nio.charset.StandardCharsets;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.JsonGenerator;
@@ -98,7 +99,7 @@ public final class ZLinkStreamJson {
                     + " as "
                     + type.getName()
                     + " payload="
-                    + new String(payload.payload().toByteArray(), java.nio.charset.StandardCharsets.UTF_8),
+                    + new String(payload.payload().toByteArray(), StandardCharsets.UTF_8),
                 ex);
         }
     }

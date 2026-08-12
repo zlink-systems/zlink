@@ -3,7 +3,6 @@
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 
 #include <runtime/locations/location_repository.hpp>
-#include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/sha256.hpp"
 
@@ -25,8 +24,6 @@ constexpr std::uint32_t terminal_protocol_error = 104;
 constexpr std::uint32_t terminal_internal_error = 105;
 constexpr std::uint32_t terminal_rejected = 106;
 constexpr std::uint32_t terminal_conflict = 107;
-constexpr std::size_t max_relocation_temporary_records = 1024;
-constexpr std::size_t max_relocation_temporary_bytes = 16u * 1024u * 1024u;
 
 class mailbox_claim_release_guard_t final
 {
@@ -93,18 +90,6 @@ std::array<std::byte, 32> digest_bytes (
     for (const auto value : bytes)
         public_bytes.push_back (static_cast<std::byte> (value));
     return runtime::sha256 (public_bytes);
-}
-
-std::size_t relocation_temporary_record_bytes (
-  const protocol::relocation_data_t &data)
-{
-    if (!data.frozen_record)
-        return 0;
-    const auto encoded = protocol::encode_frozen_record (*data.frozen_record);
-    constexpr auto fixed = dispatch_limits::fixed_work_byte_cost;
-    if (encoded.size () > std::numeric_limits<std::size_t>::max () - fixed)
-        return std::numeric_limits<std::size_t>::max ();
-    return fixed + encoded.size ();
 }
 
 std::size_t retained_bytes (
@@ -217,6 +202,95 @@ raw_stateful_dispatch_t::raw_stateful_dispatch_t (
     _objects (&objects), _transport (&transport),
     _authority_resolver (std::move (authority_resolver))
 {
+}
+
+stateful_error_t raw_stateful_dispatch_t::commit_accepted_ingress (
+  const object_ref_t &owner,
+  turn_record_t turn,
+  pending_delivery_t pending,
+  bool allocate_sequence,
+  stateful_error_t collision_error)
+{
+    const auto owner_key = delivery_key (owner, 0);
+    const auto sequence_key = std::pair{owner.kind, owner.key};
+    std::lock_guard lock (_mutex);
+
+    const auto discarding = _discarding_owners.find (owner_key);
+    if (discarding != _discarding_owners.end ()
+        && discarding->second == owner) {
+        return collision_error;
+    }
+
+    std::map<std::pair<object_kind_t, std::string>,
+             std::uint64_t>::iterator next_sequence;
+    bool inserted_sequence = false;
+    if (allocate_sequence) {
+        try {
+            const auto inserted = _next_sequence.try_emplace (
+              sequence_key, std::uint64_t{1});
+            next_sequence = inserted.first;
+            inserted_sequence = inserted.second;
+        }
+        catch (...) {
+            return stateful_error_t::backpressured;
+        }
+        if (next_sequence->second == 0
+            || next_sequence->second
+                 == std::numeric_limits<std::uint64_t>::max ()) {
+            if (inserted_sequence)
+                _next_sequence.erase (next_sequence);
+            return stateful_error_t::conflict;
+        }
+        turn.sequence = next_sequence->second;
+    }
+    if (turn.sequence == 0) {
+        if (inserted_sequence)
+            _next_sequence.erase (next_sequence);
+        return stateful_error_t::invalid;
+    }
+
+    const auto pending_key = delivery_key (owner, turn.sequence);
+    if (_pending.contains (pending_key)) {
+        if (inserted_sequence)
+            _next_sequence.erase (next_sequence);
+        return collision_error;
+    }
+
+    std::map<delivery_key_t, pending_delivery_t>::iterator pending_entry;
+    try {
+        auto inserted = _pending.emplace (
+          pending_key, std::move (pending));
+        if (!inserted.second) {
+            if (inserted_sequence)
+                _next_sequence.erase (next_sequence);
+            return collision_error;
+        }
+        pending_entry = inserted.first;
+    }
+    catch (...) {
+        if (inserted_sequence)
+            _next_sequence.erase (next_sequence);
+        return stateful_error_t::backpressured;
+    }
+
+    stateful_error_t enqueued = stateful_error_t::none;
+    try {
+        enqueued = _objects->enqueue (
+          owner, turn_domain_t::application, std::move (turn));
+    }
+    catch (...) {
+        enqueued = stateful_error_t::backpressured;
+    }
+    if (enqueued != stateful_error_t::none) {
+        _pending.erase (pending_entry);
+        if (inserted_sequence)
+            _next_sequence.erase (next_sequence);
+        return enqueued;
+    }
+
+    if (allocate_sequence)
+        ++next_sequence->second;
+    return stateful_error_t::none;
 }
 
 stateful_error_t raw_stateful_dispatch_t::ingest (
@@ -447,18 +521,6 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
         return validation;
     }
 
-    const auto admission = _objects->application_admission (
-      owner, application_payload_bytes);
-    if (admission != stateful_error_t::none) {
-        if (record.request_sequence && record.correlation) {
-            (void) _transport->reply_failure (
-              record, terminal_rejected,
-              static_cast<std::uint32_t> (
-                protocol::framework_error_code::requestRejected));
-        }
-        return admission;
-    }
-
     try {
         payload = protocol::decode_application_payload (record.parts[1]);
         if (actor_header) {
@@ -486,61 +548,35 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
         return stateful_error_t::invalid;
     }
 
-    std::uint64_t sequence = 0;
-    {
-        std::lock_guard lock (_mutex);
-        auto &next = _next_sequence[{owner.kind, owner.key}];
-        if (next == 0)
-            next = 1;
-        sequence = next++;
-    }
-    const auto pending_key = delivery_key (owner, sequence);
-    const auto owner_key = delivery_key (owner, 0);
-    stateful_error_t reservation_error = stateful_error_t::none;
-    try {
-        std::lock_guard lock (_mutex);
-        const auto discarded = _discarding_owners.find (owner_key);
-        if ((discarded != _discarding_owners.end ()
-             && discarded->second == owner)
-            || _pending.contains (pending_key)) {
-            reservation_error = stateful_error_t::conflict;
-        } else if (!_pending_reservations.emplace (pending_key, owner)
-                        .second) {
-            reservation_error = stateful_error_t::conflict;
-        }
-    }
-    catch (...) {
-        reservation_error = stateful_error_t::backpressured;
-    }
-    if (reservation_error != stateful_error_t::none)
-        return reservation_error;
-    const auto clear_reservation = [&] {
-        std::lock_guard lock (_mutex);
-        _pending_reservations.erase (pending_key);
-        _pending_condition.notify_all ();
-    };
     protocol::frozen_record_t accepted_frozen;
     try {
         accepted_frozen =
           protocol::summarize_frozen_application_record (frozen);
     }
     catch (...) {
-        clear_reservation ();
         return stateful_error_t::backpressured;
     }
-    stateful_error_t enqueued = stateful_error_t::none;
+    const auto request = frozen.reply_route_id.has_value ();
+    stateful_error_t enqueued;
     try {
-        enqueued = _objects->enqueue (
-          owner, turn_domain_t::application,
-          turn_record_t{sequence, {}, application_payload_bytes,
-                        std::move (frozen)});
+        enqueued = commit_accepted_ingress (
+          owner,
+          turn_record_t{0, {}, application_payload_bytes,
+                        std::move (frozen)},
+          pending_delivery_t{
+            owner,
+            std::move (accepted_frozen),
+            record,
+            request,
+            {},
+            claim_holder},
+          true,
+          stateful_error_t::conflict);
     }
     catch (...) {
-        clear_reservation ();
-        return stateful_error_t::backpressured;
+        enqueued = stateful_error_t::backpressured;
     }
     if (enqueued != stateful_error_t::none) {
-        clear_reservation ();
         if (record.request_sequence && record.correlation) {
             (void) _transport->reply_failure (
               record, terminal_rejected,
@@ -549,63 +585,18 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
         }
         return enqueued;
     }
-    bool inserted = false;
-    bool discarded = false;
-    bool insertion_failed = false;
-    {
-        try {
-            std::lock_guard lock (_mutex);
-            const auto reservation = _pending_reservations.find (pending_key);
-            const auto discarding = _discarding_owners.find (owner_key);
-            if (reservation == _pending_reservations.end ()
-                || reservation->second != owner
-                || (discarding != _discarding_owners.end ()
-                    && discarding->second == owner)) {
-                discarded = true;
-            } else {
-                /* The stateful queue is the next execution stage for this
-                 * record. Keep the transport claim until that stage reaches
-                 * its terminal result. */
-                inserted = _pending.emplace (
-                             pending_key,
-                             pending_delivery_t{
-                               owner,
-                               std::move (accepted_frozen),
-                               std::move (record),
-                               frozen.reply_route_id.has_value (),
-                               {},
-                               claim_holder})
-                             .second;
-            }
-            _pending_reservations.erase (pending_key);
-            _pending_condition.notify_all ();
-        }
-        catch (...) {
-            insertion_failed = true;
-            std::lock_guard lock (_mutex);
-            _pending_reservations.erase (pending_key);
-            _pending_condition.notify_all ();
-        }
-    }
-    if (!inserted) {
-        (void) _objects->discard_application (owner, sequence);
-        return insertion_failed
-                 ? stateful_error_t::backpressured
-                 : discarded ? stateful_error_t::conflict
-                             : stateful_error_t::already_exists;
-    }
     claim_guard.dismiss ();
     return stateful_error_t::none;
 }
 std::pair<stateful_error_t, std::optional<stateful_delivery_t>>
 raw_stateful_dispatch_t::try_claim (const object_ref_t &owner)
 {
+    std::lock_guard lock (_mutex);
     auto [error, turn] =
       _objects->try_claim (owner, turn_domain_t::application);
     if (error != stateful_error_t::none || !turn) {
         return {error, std::nullopt};
     }
-    std::lock_guard lock (_mutex);
     auto pending =
       _pending.find (delivery_key (owner, turn->sequence));
     if (pending == _pending.end ()) {
@@ -687,83 +678,24 @@ stateful_error_t raw_stateful_dispatch_t::stage_relocated (
     catch (...) {
         return stateful_error_t::invalid;
     }
-    const auto pending_key = delivery_key (owner, turn.sequence);
-    const auto owner_key = delivery_key (owner, 0);
+    const auto request = frozen.reply_route_id.has_value ();
     try {
-        std::lock_guard lock (_mutex);
-        const auto discarded = _discarding_owners.find (owner_key);
-        if ((discarded != _discarding_owners.end ()
-             && discarded->second == owner)
-            || _pending.contains (pending_key)) {
-            return stateful_error_t::already_exists;
-        }
-        if (!_pending_reservations.emplace (pending_key, owner).second)
-            return stateful_error_t::already_exists;
+        return commit_accepted_ingress (
+          owner,
+          std::move (turn),
+          pending_delivery_t{
+            owner,
+            std::move (frozen),
+            {},
+            request,
+            std::move (terminal),
+            {}},
+          false,
+          stateful_error_t::already_exists);
     }
     catch (...) {
         return stateful_error_t::backpressured;
     }
-    const auto clear_reservation = [&] {
-        std::lock_guard lock (_mutex);
-        _pending_reservations.erase (pending_key);
-        _pending_condition.notify_all ();
-    };
-    stateful_error_t enqueued = stateful_error_t::none;
-    try {
-        enqueued = _objects->enqueue (
-          owner, turn_domain_t::application, turn);
-    }
-    catch (...) {
-        clear_reservation ();
-        return stateful_error_t::backpressured;
-    }
-    if (enqueued != stateful_error_t::none)
-    {
-        clear_reservation ();
-        return enqueued;
-    }
-    bool inserted = false;
-    bool discarded = false;
-    bool insertion_failed = false;
-    try {
-        std::lock_guard lock (_mutex);
-        const auto reservation = _pending_reservations.find (pending_key);
-        const auto discarding = _discarding_owners.find (owner_key);
-        if (reservation == _pending_reservations.end ()
-            || reservation->second != owner
-            || (discarding != _discarding_owners.end ()
-                && discarding->second == owner)) {
-            discarded = true;
-        } else {
-            const auto request = frozen.reply_route_id.has_value ();
-            inserted = _pending.emplace (
-                         pending_key,
-                         pending_delivery_t{
-                           owner,
-                           std::move (frozen),
-                           {},
-                           request,
-                           std::move (terminal),
-                           {}})
-                         .second;
-        }
-        _pending_reservations.erase (pending_key);
-        _pending_condition.notify_all ();
-    }
-    catch (...) {
-        insertion_failed = true;
-        std::lock_guard lock (_mutex);
-        _pending_reservations.erase (pending_key);
-        _pending_condition.notify_all ();
-    }
-    if (!inserted) {
-        (void) _objects->discard_application (owner, turn.sequence);
-        return insertion_failed
-                 ? stateful_error_t::backpressured
-                 : discarded ? stateful_error_t::conflict
-                             : stateful_error_t::already_exists;
-    }
-    return stateful_error_t::none;
 }
 
 bool raw_stateful_dispatch_t::complete_relocated_source (
@@ -883,7 +815,7 @@ stateful_error_t raw_stateful_dispatch_t::discard_pending (
     };
     std::vector<cleanup_t> cleanup;
     {
-        std::unique_lock lock (_mutex);
+        std::lock_guard lock (_mutex);
         try {
             const auto [_, inserted] = _discarding_owners.emplace (
               owner_key, owner);
@@ -893,12 +825,6 @@ stateful_error_t raw_stateful_dispatch_t::discard_pending (
         catch (...) {
             return stateful_error_t::backpressured;
         }
-        _pending_condition.wait (lock, [&] {
-            return std::none_of (
-              _pending_reservations.begin (),
-              _pending_reservations.end (),
-              [&] (const auto &entry) { return entry.second == owner; });
-        });
         try {
             const auto count = std::count_if (
               _pending.begin (), _pending.end (),
@@ -909,7 +835,6 @@ stateful_error_t raw_stateful_dispatch_t::discard_pending (
         }
         catch (...) {
             _discarding_owners.erase (owner_key);
-            _pending_condition.notify_all ();
             return stateful_error_t::backpressured;
         }
         for (auto entry = _pending.begin (); entry != _pending.end ();) {
@@ -922,13 +847,15 @@ stateful_error_t raw_stateful_dispatch_t::discard_pending (
                std::move (entry->second.mailbox_claim)});
             entry = _pending.erase (entry);
         }
-        _discarding_owners.erase (owner_key);
-        _pending_condition.notify_all ();
     }
     for (auto &item : cleanup) {
         (void) _objects->discard_application (owner, item.sequence);
         if (item.claim)
             (void) _transport->mailbox ().release (*item.claim);
+    }
+    {
+        std::lock_guard lock (_mutex);
+        _discarding_owners.erase (owner_key);
     }
     return stateful_error_t::none;
 }
@@ -941,6 +868,7 @@ stateful_error_t raw_stateful_dispatch_t::discard_pending (
         return stateful_error_t::invalid;
     const auto pending_key = delivery_key (owner, sequence);
     std::shared_ptr<mesh::service_mailbox_claim_t> claim;
+    stateful_error_t object_error = stateful_error_t::none;
     {
         std::lock_guard lock (_mutex);
         const auto found = _pending.find (pending_key);
@@ -950,9 +878,8 @@ stateful_error_t raw_stateful_dispatch_t::discard_pending (
             return stateful_error_t::conflict;
         claim = std::move (found->second.mailbox_claim);
         _pending.erase (found);
-        _pending_condition.notify_all ();
+        object_error = _objects->discard_application (owner, sequence);
     }
-    const auto object_error = _objects->discard_application (owner, sequence);
     if (claim)
         (void) _transport->mailbox ().release (*claim);
     return object_error == stateful_error_t::not_found
@@ -1210,17 +1137,6 @@ bool raw_relocation_replay_coordinator_t::unregister_target (
             else
                 ++operation;
         }
-        const auto retained = found->second.accepted_bytes
-                              + found->second.staging_bytes;
-        if (group->second.record_count
-            >= found->second.accepted.size ()
-                 + (found->second.staging_sequence ? 1u : 0u)) {
-            group->second.record_count -=
-              found->second.accepted.size ()
-              + (found->second.staging_sequence ? 1u : 0u);
-        }
-        if (group->second.byte_count >= retained)
-            group->second.byte_count -= retained;
         if (group->second.participant_count != 0)
             --group->second.participant_count;
         if (group->second.participant_count == 0)
@@ -1404,15 +1320,6 @@ raw_relocation_replay_coordinator_t::process_data (
       data.participant_id);
     const auto digest = digest_bytes (
       protocol::encode_relocation_control (data));
-    std::size_t retained = 0;
-    try {
-        retained = relocation_temporary_record_bytes (data);
-    }
-    catch (...) {
-        return raw_relocation_replay_result_t::invalid;
-    }
-    if (retained == 0)
-        return raw_relocation_replay_result_t::invalid;
     const auto operation_key = std::pair{
       data.frozen_record->operation.high,
       data.frozen_record->operation.low};
@@ -1492,12 +1399,6 @@ raw_relocation_replay_coordinator_t::process_data (
           key (data.relocation, data.target_attempt_generation, 0));
         if (group == _target_groups.end ())
             return raw_relocation_replay_result_t::not_registered;
-        if (group->second.record_count
-              >= max_relocation_temporary_records
-            || retained > max_relocation_temporary_bytes
-            || group->second.byte_count
-                 > max_relocation_temporary_bytes - retained)
-            return raw_relocation_replay_result_t::restore_failed;
         try {
             if (!group->second.staging_operations
                    .emplace (operation_key, state_key)
@@ -1506,9 +1407,6 @@ raw_relocation_replay_coordinator_t::process_data (
             stage = registration.stage;
             rollback = registration.rollback;
             state.staging_sequence = data.sequence;
-            state.staging_bytes = retained;
-            ++group->second.record_count;
-            group->second.byte_count += retained;
             ++state.active_stages;
             activity_guard.activate ();
         }
@@ -1543,14 +1441,6 @@ raw_relocation_replay_coordinator_t::process_data (
             return raw_relocation_replay_result_t::stale_fence;
         const auto clear_staging = [&] () noexcept {
             group->second.staging_operations.erase (operation_key);
-            state.staging_bytes = 0;
-        };
-        auto release_staging = [&] () noexcept {
-            clear_staging ();
-            if (group->second.record_count != 0)
-                --group->second.record_count;
-            if (group->second.byte_count >= retained)
-                group->second.byte_count -= retained;
         };
         const auto rollback_stage = [&] () noexcept {
             if (!rollback)
@@ -1563,7 +1453,7 @@ raw_relocation_replay_coordinator_t::process_data (
         };
         if (!staged || state.closing) {
             rollback_stage ();
-            release_staging ();
+            clear_staging ();
             return raw_relocation_replay_result_t::restore_failed;
         }
         try {
@@ -1571,7 +1461,7 @@ raw_relocation_replay_coordinator_t::process_data (
               data.sequence, digest);
             if (!inserted) {
                 rollback_stage ();
-                release_staging ();
+                clear_staging ();
                 return raw_relocation_replay_result_t::conflicting_duplicate;
             }
             try {
@@ -1583,7 +1473,7 @@ raw_relocation_replay_coordinator_t::process_data (
                 if (!operation_inserted) {
                     rollback_stage ();
                     state.accepted.erase (accepted);
-                    release_staging ();
+                    clear_staging ();
                     return raw_relocation_replay_result_t::conflicting_duplicate;
                 }
                 (void) operation;
@@ -1591,15 +1481,14 @@ raw_relocation_replay_coordinator_t::process_data (
             catch (...) {
                 rollback_stage ();
                 state.accepted.erase (accepted);
-                release_staging ();
+                clear_staging ();
                 return raw_relocation_replay_result_t::restore_failed;
             }
-            state.accepted_bytes += retained;
             clear_staging ();
         }
         catch (...) {
             rollback_stage ();
-            release_staging ();
+            clear_staging ();
             return raw_relocation_replay_result_t::restore_failed;
         }
         state.high_water = data.sequence;

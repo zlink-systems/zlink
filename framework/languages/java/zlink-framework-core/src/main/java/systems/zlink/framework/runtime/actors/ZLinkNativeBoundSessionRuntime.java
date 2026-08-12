@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
@@ -11,8 +12,10 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
+import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkBoundSession;
@@ -69,6 +72,12 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
 
     @Override
     public ZLinkBoundSessionSendCall send(Object message) {
+        ZLinkBoundSessionSendOptions options =
+            ZLinkBoundSessionSendOptions.createForPayload(
+                serializer,
+                message,
+                ZLinkPayloadEncoding.resolvePacketName(message),
+                defaultCodec);
         ZLinkPayloadEncoding.EncodedPayload encoded =
             ZLinkPayloadEncoding.encode(serializer, message);
         return new SendCall(
@@ -79,22 +88,20 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
             sourceSessionRid,
             encoded.payload(),
             timeout,
-            ZLinkBoundSessionSendOptions.create(encoded.packetName(), defaultCodec),
+            options,
             metadataPolicy);
     }
 
     CompletionStage<Void> sendFrame(byte[] frameBytes) {
         ZLinkBackendActorRef currentActorRef = currentActorRef();
         Message frame = Message.from(frameBytes);
-        return actorRuntime.oneWayCalls().submitOneWay(
+        return submitBoundSessionFrame(
             spotNode,
-            ZLinkBackendAdmissionKey.boundSession(
-                currentActorRef.nodeRid(),
-                currentActorRef.actorId(),
-                currentActorRef.generation()),
-            () -> spotNode.sendActorBoundSession(
-                currentActorRef, List.of(frame), SendFlags.DONT_WAIT),
-            frame::close).thenApply(ignored -> null);
+            actorRuntime,
+            actor,
+            currentActorRef,
+            frame,
+            timeout).thenApply(ignored -> null);
     }
 
     @Override
@@ -117,7 +124,7 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
         Duration timeout,
         ZLinkBoundSessionSendOptions options,
         ZLinkRelayMetadataPolicy metadataPolicy,
-        java.util.concurrent.atomic.AtomicBoolean submitGate)
+        AtomicBoolean submitGate)
         implements ZLinkBoundSessionSendCall {
         SendCall(
             ZLinkInternalSpotNode spotNode,
@@ -131,7 +138,7 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
             ZLinkRelayMetadataPolicy metadataPolicy) {
             this(spotNode, actorRuntime, actor, sourceNodeRid, sourceSessionRid, payload,
                 timeout, options, metadataPolicy,
-                new java.util.concurrent.atomic.AtomicBoolean());
+                new AtomicBoolean());
         }
         public ZLinkBoundSessionSendCall packetName(String packetName) {
             return new SendCall(
@@ -177,17 +184,46 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
                 payload.close();
             }
             Message frame = Message.from(frameBytes);
-            return actorRuntime.oneWayCalls().submitOneWay(
+            return submitBoundSessionFrame(
                 spotNode,
-                ZLinkBackendAdmissionKey.boundSession(
-                    currentActorRef.nodeRid(),
-                    currentActorRef.actorId(),
-                    currentActorRef.generation()),
-                () -> spotNode.sendActorBoundSession(
-                    currentActorRef, List.of(frame), SendFlags.DONT_WAIT),
-                frame::close);
+                actorRuntime,
+                actor,
+                currentActorRef,
+                frame,
+                timeout);
         }
 
+    }
+
+    private static CompletionStage<Void> submitBoundSessionFrame(
+        ZLinkInternalSpotNode spotNode,
+        ZLinkActorRuntime actorRuntime,
+        ZLinkActor actor,
+        ZLinkBackendActorRef actorRef,
+        Message frame,
+        Duration timeout) {
+        java.util.function.Supplier<Boolean> submission =
+            () -> sendBoundSessionFrame(spotNode, actorRef, frame);
+        return actorRuntime.oneWayCalls().submitOneWay(
+            spotNode,
+            ZLinkBackendAdmissionKey.boundSession(
+                actorRef.nodeRid(),
+                actorRef.actorId(),
+                actorRef.generation()),
+            submission,
+            frame::close,
+            timeout);
+    }
+
+    private static boolean sendBoundSessionFrame(
+        ZLinkInternalSpotNode spotNode,
+        ZLinkBackendActorRef actorRef,
+        Message frame) {
+        if (spotNode.boundSessionRoute(actorRef).isEmpty()) {
+            throw new ZlinkSubmitException(SubmitResult.NOT_FOUND);
+        }
+        return spotNode.sendActorBoundSession(
+            actorRef, List.of(frame), SendFlags.DONT_WAIT);
     }
 
 }

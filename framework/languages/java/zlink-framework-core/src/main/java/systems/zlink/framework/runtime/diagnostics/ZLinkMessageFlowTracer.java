@@ -54,6 +54,24 @@ public final class ZLinkMessageFlowTracer {
         return options.diagnostics().effectiveMessageFlow().value() >= requiredMode(outcome).value();
     }
 
+    /**
+     * Traces a flow event built only when the outcome is enabled.
+     *
+     * <p>Use this on failure and other rare transitions: the supplier keeps the
+     * call site free of an explicit gate and never runs when tracing is off, at
+     * the cost of one lambda per call. Hot paths that trace every message must
+     * keep the {@code if (enabled(outcome))} guard so no lambda is allocated
+     * there either.
+     */
+    public void traceLazy(
+        ZLinkMessageFlowOutcome outcome,
+        java.util.function.Supplier<ZLinkMessageFlowEvent> flow) {
+        if (!enabled(outcome)) {
+            return;
+        }
+        trace(flow.get());
+    }
+
     public void trace(ZLinkMessageFlowEvent flow) {
         if (!enabled(flow.outcome())) {
             return;

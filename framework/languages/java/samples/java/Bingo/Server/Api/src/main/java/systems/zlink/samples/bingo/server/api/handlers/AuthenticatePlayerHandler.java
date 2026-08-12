@@ -1,4 +1,6 @@
 package systems.zlink.samples.bingo.server.api.handlers;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
@@ -13,11 +15,11 @@ public final class AuthenticatePlayerHandler
         Messages.AuthenticatePlayerReq,
         Messages.AuthenticatePlayerRes> {
     @Override
-    public java.util.concurrent.CompletionStage<Messages.AuthenticatePlayerRes> handle(
+    public CompletionStage<Messages.AuthenticatePlayerRes> handle(
         Messages.AuthenticatePlayerReq request,
         ZLinkMessageContext context) {
         String actorId = request.getAccessToken();
-        return java.util.concurrent.CompletableFuture.completedFuture(
+        return CompletableFuture.completedFuture(
             BingoMessages.authenticatePlayerRes(true, actorId, actorId, null));
     }
 }

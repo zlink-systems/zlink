@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.spotservice.multinode
 
+
+import java.time.Duration
 import systems.zlink.e2e.kotlin.spotservice.Contracts
 import kotlinx.coroutines.future.await
 import systems.zlink.framework.actors.ZLinkActor
@@ -106,9 +108,12 @@ private suspend fun onCreateMultiNodeSpot(
         return ZLinkSpotCreateResponse.accept()
     }
     val command = request.decode(Contracts.SpotOnlyMeshReq::class.java)
+    if (command.targetSpotRid.isBlank()) {
+        return ZLinkSpotCreateResponse.accept()
+    }
     val reply = context.outbound()
         .requestToSpot(command.targetSpotRid, Contracts.MultiNodeStateReq("add", 7))
-        .timeout(java.time.Duration.ofSeconds(5))
+        .timeout(Duration.ofSeconds(5))
         .submit(Contracts.MultiNodeStateRes::class.java).await()
     context.outbound()
         .sendToSpot(command.targetSpotRid, Contracts.StateMsg("sm-f6-send-${command.marker}"))

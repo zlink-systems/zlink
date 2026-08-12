@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.locations;
+import java.util.concurrent.CompletionException;
 
 import java.time.Instant;
 import java.nio.charset.StandardCharsets;
@@ -316,7 +317,7 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
                 return;
             }
             Throwable cause = failure;
-            while (cause instanceof java.util.concurrent.CompletionException
+            while (cause instanceof CompletionException
                 && cause.getCause() != null) {
                 cause = cause.getCause();
             }

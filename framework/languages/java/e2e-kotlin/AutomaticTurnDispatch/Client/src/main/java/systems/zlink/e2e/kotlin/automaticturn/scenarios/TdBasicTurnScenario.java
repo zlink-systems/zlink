@@ -13,10 +13,6 @@ public final class TdBasicTurnScenario {
     private TdBasicTurnScenario() {
     }
 
-    public static void runSurface() {
-        System.out.println("scenario TD-A1 passed");
-    }
-
     public static void runAsyncHoldsTurn(ZLinkStreamConnector connector) {
         runInterleave(connector, "TD-A2", "await-held", List.of(
             "await-held", "await-resumed", "completed", "probe-started", "probe-completed"));

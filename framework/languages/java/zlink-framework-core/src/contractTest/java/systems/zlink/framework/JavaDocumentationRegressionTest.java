@@ -1,4 +1,6 @@
 package systems.zlink.framework;
+import java.io.UncheckedIOException;
+import java.util.TreeSet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -57,21 +59,21 @@ final class JavaDocumentationRegressionTest {
         }
         Set<String> missing = expected.stream()
             .filter(id -> !sourceIds.contains(id))
-            .collect(Collectors.toCollection(java.util.TreeSet::new));
+            .collect(Collectors.toCollection(TreeSet::new));
 
         Map<Integer, String> suites = canonicalSuites();
         Set<String> missingSuites = suites.entrySet().stream()
             .filter(entry -> !Files.isDirectory(javaE2e.resolve(entry.getValue()))
                 || !Files.isRegularFile(javaE2e.resolve(entry.getValue()).resolve("run_e2e.sh")))
             .map(entry -> "Config " + entry.getKey() + "=" + entry.getValue())
-            .collect(Collectors.toCollection(java.util.TreeSet::new));
+            .collect(Collectors.toCollection(TreeSet::new));
 
         String allRunner = Files.readString(javaE2e.resolve("run_e2e_all.sh"));
         assertTrue(allRunner.contains("validate_selected_suites"));
         assertTrue(allRunner.contains("aggregate_incomplete"));
         Set<String> runnerMissing = suites.values().stream()
             .filter(suite -> !allRunner.contains(suite))
-            .collect(Collectors.toCollection(java.util.TreeSet::new));
+            .collect(Collectors.toCollection(TreeSet::new));
         assertTrue(missing.isEmpty() && missingSuites.isEmpty() && runnerMissing.isEmpty(),
             "Java E2E inventory mismatch: expected=" + expected.size()
                 + ", sourceIds=" + sourceIds.size()
@@ -98,21 +100,21 @@ final class JavaDocumentationRegressionTest {
         }
         Set<String> missing = expected.stream()
             .filter(id -> !sourceIds.contains(id))
-            .collect(Collectors.toCollection(java.util.TreeSet::new));
+            .collect(Collectors.toCollection(TreeSet::new));
 
         Map<Integer, String> suites = canonicalSuites();
         Set<String> missingSuites = suites.entrySet().stream()
             .filter(entry -> !Files.isDirectory(kotlinE2e.resolve(entry.getValue()))
                 || !Files.isRegularFile(kotlinE2e.resolve(entry.getValue()).resolve("run_e2e.sh")))
             .map(entry -> "Config " + entry.getKey() + "=" + entry.getValue())
-            .collect(Collectors.toCollection(java.util.TreeSet::new));
+            .collect(Collectors.toCollection(TreeSet::new));
 
         String allRunner = Files.readString(kotlinE2e.resolve("run_e2e_all.sh"));
         assertTrue(allRunner.contains("validate_selected_suites"));
         assertTrue(allRunner.contains("aggregate_incomplete"));
         Set<String> runnerMissing = suites.values().stream()
             .filter(suite -> !allRunner.contains(suite))
-            .collect(Collectors.toCollection(java.util.TreeSet::new));
+            .collect(Collectors.toCollection(TreeSet::new));
         assertTrue(missing.isEmpty() && missingSuites.isEmpty() && runnerMissing.isEmpty(),
             "Kotlin E2E inventory mismatch: expected=" + expected.size()
                 + ", sourceIds=" + sourceIds.size()
@@ -161,7 +163,7 @@ final class JavaDocumentationRegressionTest {
                 while (matcher.find()) target.add(matcher.group(1));
             }
         } catch (IOException error) {
-            throw new java.io.UncheckedIOException(error);
+            throw new UncheckedIOException(error);
         }
     }
 
@@ -190,7 +192,7 @@ final class JavaDocumentationRegressionTest {
         try {
             return Files.readString(path, StandardCharsets.UTF_8);
         } catch (IOException error) {
-            throw new java.io.UncheckedIOException(error);
+            throw new UncheckedIOException(error);
         }
     }
 }

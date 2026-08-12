@@ -1,4 +1,5 @@
 package systems.zlink.framework.execution;
+import java.util.concurrent.Executors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -447,7 +448,7 @@ final class ZLinkAsyncSerialQueueTest {
         CompletableFuture<Void> remote = new CompletableFuture<>();
         CompletableFuture<Void> handlerStarted = new CompletableFuture<>();
         CompletableFuture<Void> probeStarted = new CompletableFuture<>();
-        try (var handlerExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+        try (var handlerExecutor = Executors.newSingleThreadExecutor()) {
             CompletableFuture<Void> first = queue.enqueue(() -> {
                 CompletableFuture<Void> result = new CompletableFuture<>();
                 ZLinkAsyncSerialQueue.propagateCurrent(handlerExecutor).execute(() -> {
@@ -560,7 +561,7 @@ final class ZLinkAsyncSerialQueueTest {
         CompletableFuture<ZLinkAsyncSerialQueue.RelocationSeal> sealed =
             new CompletableFuture<>();
         List<String> handled =
-            new java.util.concurrent.CopyOnWriteArrayList<>();
+            new CopyOnWriteArrayList<>();
 
         queue.enqueue(() -> {
             intentStarted.complete(null);
@@ -681,9 +682,18 @@ final class ZLinkAsyncSerialQueueTest {
     }
 
     @Test
-    void relocationIngressFreezeFixesHeldHighWaterBeforeAuthorityPrepare()
+    void relocationIngressContinuesHoldingAfterFreezeUntilTargetAck()
         throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
+        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
+            null,
+            false,
+            1,
+            5,
+            1,
+            5,
+            4,
+            1,
+            Duration.ofSeconds(1));
         ZLinkAsyncSerialQueue.RelocationSeal seal =
             queue.trySealRelocation().orElseThrow();
         CompletableFuture<Void> held = queue.enqueueRelocatable(
@@ -694,13 +704,102 @@ final class ZLinkAsyncSerialQueueTest {
         var frozen = queue.freezeRelocationIngress(seal).orElseThrow();
         assertEquals(1, frozen.size());
         assertArrayEquals(new byte[] {7}, frozen.getFirst().payload());
-        assertTrue(queue.enqueueRelocatable(
-            new byte[] {8},
+        CompletableFuture<Void> suffix = queue.enqueueRelocatable(
+            new byte[] {8, 8, 8, 8, 8, 8, 8, 8},
             () -> CompletableFuture.completedFuture(null))
-            .toCompletableFuture().isCompletedExceptionally());
+            .toCompletableFuture();
+
+        systems.zlink.framework.runtime.internal.relocation
+            .ZLinkRetainedSerialQueueCommit.Commit commit =
+            systems.zlink.framework.runtime.internal.relocation
+                .ZLinkRetainedSerialQueueCommit.retain(queue, seal)
+                .orElseThrow();
+        assertEquals(2, commit.records().size());
+        assertFalse(held.isDone());
+        assertFalse(suffix.isDone());
+        var firstCut = commit.cut();
+        CompletableFuture<Void> late = queue.enqueueRelocatable(
+            new byte[] {9},
+            () -> CompletableFuture.completedFuture(null))
+            .toCompletableFuture();
+        assertFalse(commit.tryEstablishDurableCut(firstCut));
+        var durableCut = commit.cut();
+        assertEquals(3, durableCut.records().size());
+        assertTrue(commit.tryEstablishDurableCut(durableCut));
+        CompletableFuture<Void> duringActivation = queue.enqueueRelocatable(
+            new byte[] {10},
+            () -> CompletableFuture.completedFuture(null))
+            .toCompletableFuture();
+        assertFalse(commit.tryFinishCapture(durableCut));
+        var finalCut = commit.cut();
+        assertEquals(4, finalCut.records().size());
+        assertTrue(commit.tryFinishCapture(finalCut));
+        commit.complete();
+        held.get(3, TimeUnit.SECONDS);
+        suffix.get(3, TimeUnit.SECONDS);
+        late.get(3, TimeUnit.SECONDS);
+        duringActivation.get(3, TimeUnit.SECONDS);
+    }
+
+    @Test
+    void relocationHoldDoesNotReuseNormalApplicationCountOrByteCapacity()
+        throws Exception {
+        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
+            null,
+            false,
+            1,
+            5,
+            1,
+            5,
+            4,
+            1,
+            Duration.ofSeconds(1));
+        ZLinkAsyncSerialQueue.RelocationSeal seal =
+            queue.trySealRelocation().orElseThrow();
+        List<String> handled = new CopyOnWriteArrayList<>();
+
+        CompletableFuture<Void> first = queue.enqueueRelocatable(
+            new byte[] {1, 1},
+            () -> {
+                handled.add("first");
+                return CompletableFuture.completedFuture(null);
+            }).toCompletableFuture();
+        assertEquals(1, queue.freezeRelocationIngress(seal)
+            .orElseThrow().size());
+        CompletableFuture<Void> second = queue.enqueueRelocatableLazyRecord(
+            () -> new byte[] {2},
+            Long.MAX_VALUE,
+            () -> {
+                handled.add("second");
+                return CompletableFuture.completedFuture(null);
+            },
+            () -> { }).toCompletableFuture();
+        CompletableFuture<Void> third = queue.enqueueWithPayloadBytes(
+            Long.MAX_VALUE,
+            () -> {
+                handled.add("third");
+                return CompletableFuture.completedFuture(null);
+            }).toCompletableFuture();
+        CompletableFuture<Void> fourth = queue.enqueueRelocatable(
+            new byte[] {4, 4},
+            () -> {
+                handled.add("fourth");
+                return CompletableFuture.completedFuture(null);
+            }).toCompletableFuture();
 
         assertTrue(queue.abortRelocation(seal));
-        held.get(3, TimeUnit.SECONDS);
+        CompletableFuture.allOf(first, second, third, fourth)
+            .get(3, TimeUnit.SECONDS);
+        waitForSize(handled, 4);
+        assertEquals(
+            List.of("first", "second", "third", "fourth"),
+            handled);
+
+        CompletableFuture<Void> active = new CompletableFuture<>();
+        assertTrue(queue.tryEnqueue(() -> active));
+        assertFalse(queue.tryEnqueue(
+            () -> CompletableFuture.completedFuture(null)));
+        active.complete(null);
     }
 
     @Test

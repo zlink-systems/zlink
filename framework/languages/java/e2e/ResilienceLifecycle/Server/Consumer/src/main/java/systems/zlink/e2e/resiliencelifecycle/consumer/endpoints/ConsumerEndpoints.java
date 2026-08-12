@@ -1,4 +1,6 @@
 package systems.zlink.e2e.resiliencelifecycle.consumer.endpoints;
+import com.sun.net.httpserver.HttpExchange;
+import java.io.IOException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -120,17 +122,17 @@ public final class ConsumerEndpoints implements SmartLifecycle {
         return running;
     }
 
-    private <T> T read(com.sun.net.httpserver.HttpExchange exchange, Class<T> type) {
+    private <T> T read(HttpExchange exchange, Class<T> type) {
         try {
             return json.readValue(exchange.getRequestBody(), type);
-        } catch (java.io.IOException error) {
+        } catch (IOException error) {
             throw new IllegalArgumentException("invalid operation request", error);
         }
     }
 
     private void handle(
-        com.sun.net.httpserver.HttpExchange exchange,
-        Supplier<Object> operation) throws java.io.IOException {
+        HttpExchange exchange,
+        Supplier<Object> operation) throws IOException {
         try {
             writeJson(exchange, 200, operation.get());
         } catch (RuntimeException error) {
@@ -138,14 +140,14 @@ public final class ConsumerEndpoints implements SmartLifecycle {
         }
     }
 
-    private void writeJson(com.sun.net.httpserver.HttpExchange exchange, Object value) throws java.io.IOException {
+    private void writeJson(HttpExchange exchange, Object value) throws IOException {
         writeJson(exchange, 200, value);
     }
 
     private void writeJson(
-        com.sun.net.httpserver.HttpExchange exchange,
+        HttpExchange exchange,
         int status,
-        Object value) throws java.io.IOException {
+        Object value) throws IOException {
         byte[] body = json.writeValueAsBytes(value);
         exchange.getResponseHeaders().add("Content-Type", "application/json");
         exchange.sendResponseHeaders(status, body.length);

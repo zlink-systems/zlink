@@ -62,7 +62,7 @@ public final class AwaitSession implements ZLinkSession {
     public CompletionStage<Void> onActorBindingReplaced(String actorId) {
         evidence.record("actor-binding-replaced", actorId, context.sessionId());
         return context.client()
-            .send(new Contracts.ActorBindingReplacedNotice(actorId))
+            .send(new Contracts.ActorBindingReplacedNotify(actorId))
             .submit();
     }
 

@@ -277,7 +277,7 @@ internal static class SmD4BStoredRouteWithoutStoreScenario
         var snapshot = (await client
                 .Post("/location-store/read-probe/configure")
                 .Body(new LocationStoreReadProbeReq(actorIds, blocked))
-                .Async<LocationStoreReadProbeSnapshot>())
+                .Async<LocationStoreReadProbeRes>())
             .Body;
         ZlinkStreamAssert.Ensure(
             snapshot.Blocked == blocked
@@ -291,7 +291,7 @@ internal static class SmD4BStoredRouteWithoutStoreScenario
     {
         var snapshot = (await client
                 .Get("/location-store/read-probe")
-                .Async<LocationStoreReadProbeSnapshot>())
+                .Async<LocationStoreReadProbeRes>())
             .Body;
         ZlinkStreamAssert.Ensure(
             snapshot.Blocked && snapshot.MatchingReads == 0,
@@ -345,7 +345,7 @@ internal static class SmD4BStoredRouteWithoutStoreScenario
         {
             using var client = CreateAdminClient(admin);
             await client.Post("/arm")
-                .Body(new TransportGateArm(gateId, marker))
+                .Body(new TransportGateArmReq(gateId, marker))
                 .AsyncRaw();
         }
     }
@@ -418,7 +418,7 @@ internal static class SmD4BStoredRouteWithoutStoreScenario
             MaxReceivedMessages = 1024
         });
 
-    private sealed record TransportGateArm(string GateId, string Marker);
+    private sealed record TransportGateArmReq(string GateId, string Marker);
 
     private sealed record TransportGateSnapshot(
         string GateId,

@@ -1,4 +1,5 @@
 package systems.zlink.samples.shoppingmall.server.orderworkflow;
+import java.util.concurrent.CompletableFuture;
 
 import java.util.List;
 import java.util.concurrent.CompletionStage;
@@ -24,7 +25,7 @@ public final class OrderWorkflowService {
         List<OrderDomain.StoredOrderEvent> existing = store.readEvents(request.orderId());
         Messages.OrderState current = store.findProjection(request.orderId());
         if (current != null) {
-            return java.util.concurrent.CompletableFuture.completedFuture(current);
+            return CompletableFuture.completedFuture(current);
         }
         if (existing.isEmpty()) {
             append(
@@ -45,8 +46,8 @@ public final class OrderWorkflowService {
         }
         spot.context().outbound().sendToSpot(
             spot.context().spotId(),
-            new Messages.RunOrderWorkflowCommand(request.orderId())).submit();
-        return java.util.concurrent.CompletableFuture.completedFuture(
+            new Messages.RunOrderWorkflowMsg(request.orderId())).submit();
+        return CompletableFuture.completedFuture(
             store.findProjection(request.orderId()));
     }
 

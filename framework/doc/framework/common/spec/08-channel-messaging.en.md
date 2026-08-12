@@ -531,7 +531,7 @@ framework result. A transport library's internal result isn't directly exposed
 on the public call.
 
 The full termination order is defined by
-[Graceful Drain](28-graceful-drain-handoff.en.md).
+[Graceful Drain](30-host-relocation-flow.en.md).
 
 ## 8. Metadata And Observability
 

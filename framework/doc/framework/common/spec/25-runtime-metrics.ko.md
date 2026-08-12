@@ -19,7 +19,7 @@ alert rule을 공통으로 사용할 수 있다.
 현재 runtime과 topology의 완전한 상태는
 [Runtime 상태와 운영 진단](24-runtime-monitoring.ko.md), message 한 건의 진행 기록은
 [Message flow tracing](26-message-flow-tracing.ko.md), host operation의 개별 결과는
-[Host relocation와 shutdown](28-graceful-drain-handoff.ko.md)이 소유한다.
+[Host relocation와 shutdown](30-host-relocation-flow.ko.md)이 소유한다.
 
 | 주체 | 책임 |
 |---|---|
@@ -210,7 +210,7 @@ Host가 새 작업 수락을 중단하고 이미 받은 작업과 resource를 �
 
 `state`는 `preparing|serving|relocating|relocated|draining|stopped|error`다. Relocation
 `outcome`은 `relocated|blocked`다. Shutdown `outcome`은 `stopped|force_stopped`다. Reason은
-[Host relocation와 shutdown](28-graceful-drain-handoff.ko.md)의 식별자를 사용한다.
+[Host relocation와 shutdown](30-host-relocation-flow.ko.md)의 식별자를 사용한다.
 
 ## 6. Location과 telemetry
 
@@ -266,7 +266,7 @@ histogram bucket을 구성하지 않는다.
   Store record를 순회하지 않는다.
 - topic, Actor ID, Spot ID, RID, endpoint, correlation ID와 flow ID가 어떤 metric label에도 나타나지 않는다.
 - Telemetry queue overflow와 provider failure가 dispatch와 host lifecycle 결과를 바꾸지 않는다.
-- Host 계기와 label은 [Host relocation과 shutdown](28-graceful-drain-handoff.ko.md)의 result와 일치한다.
+- Host 계기와 label은 [Host relocation과 shutdown](30-host-relocation-flow.ko.md)의 result와 일치한다.
 - Instance activation은 등록된 type 단위로 관찰하며 Spot ID·owner ID·generation은 label에서 제외한다.
 - Instance one-way activation 실패는 `surface=instance_spot` drop이며 reply나 replay를 만들지 않는다.
 - Public Framework interface에 exporter, reader, storage, bucket과 metric event DTO가 나타나지 않는다.

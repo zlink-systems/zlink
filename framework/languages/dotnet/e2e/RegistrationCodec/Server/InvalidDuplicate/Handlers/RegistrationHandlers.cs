@@ -35,7 +35,7 @@ internal sealed class AttributeHandlers(EvidenceStore evidence)
     : IZLinkRequestHandler<EchoAttrReq, EchoRes>,
       IZLinkSendHandler<EchoAttrMsg>
 {
-    [ZLinkRequest(PacketName = "EchoAttr")]
+    [ZLinkRequest(PacketName = "EchoAttrReq")]
     public EchoRes Request(EchoAttrReq request, IZLinkMessageContext context, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

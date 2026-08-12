@@ -1,4 +1,10 @@
 package systems.zlink.framework.runtime.host;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
 
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
@@ -16,12 +22,12 @@ import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolv
 final class ZLinkFrameworkSpotSubsystem {
     private final ZLinkSpotRuntime spots;
     private final SpotTransportAddressResolver remoteAddressResolver;
-    private final java.util.concurrent.CompletionStage<Void> startup;
+    private final CompletionStage<Void> startup;
 
     private ZLinkFrameworkSpotSubsystem(
         ZLinkSpotRuntime spots,
         SpotTransportAddressResolver remoteAddressResolver,
-        java.util.concurrent.CompletionStage<Void> startup) {
+        CompletionStage<Void> startup) {
         this.spots = spots;
         this.remoteAddressResolver = remoteAddressResolver;
         this.startup = startup;
@@ -37,12 +43,12 @@ final class ZLinkFrameworkSpotSubsystem {
         ZLinkChannelRuntime channels,
         ZLinkBackendContext backendContext,
         ZLinkLocationLifecycle locationLifecycle,
-        systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository authorityStore,
-        systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository locationStore,
-        systems.zlink.framework.runtime.locations.ZLinkLocationRuntime
+        ZLinkLocationRepository authorityStore,
+        ZLinkLocationRepository locationStore,
+        ZLinkLocationRuntime
             locationRuntime,
         SpotTransportAddressResolver locationTransportResolver,
-        java.util.Map<String, systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode>
+        Map<String, ZLinkInternalMeshNode>
             meshNodes) {
         SpotTransportAddressResolver remoteAddressResolver = locationTransportResolver;
         boolean hasMeshServices = options.registration().meshNodes().stream()
@@ -54,7 +60,7 @@ final class ZLinkFrameworkSpotSubsystem {
         if (options.registration().spotNodes().isEmpty() && !hasMeshServices) {
             return new ZLinkFrameworkSpotSubsystem(
                 null, remoteAddressResolver,
-                java.util.concurrent.CompletableFuture.completedFuture(null));
+                CompletableFuture.completedFuture(null));
         }
 
         ZLinkSpotRuntime spots = new ZLinkSpotRuntime(
@@ -81,7 +87,7 @@ final class ZLinkFrameworkSpotSubsystem {
                 locationStore,
                 locationRuntime);
         }
-        java.util.concurrent.CompletionStage<Void> startup = spots.claimEntrySpotLocations();
+        CompletionStage<Void> startup = spots.claimEntrySpotLocations();
         runtimeHandlers.add(ZLinkSpotManager.class, spots);
         if (!options.registration().spotNodes().isEmpty()) {
             channels.registerSpotRouteBridgeOwner(spots::primaryNode);
@@ -98,7 +104,7 @@ final class ZLinkFrameworkSpotSubsystem {
         return remoteAddressResolver;
     }
 
-    java.util.concurrent.CompletionStage<Void> startup() {
+    CompletionStage<Void> startup() {
         return startup;
     }
 

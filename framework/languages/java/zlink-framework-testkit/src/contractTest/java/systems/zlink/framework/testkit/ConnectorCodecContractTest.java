@@ -1,4 +1,9 @@
 package systems.zlink.framework.testkit;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -73,7 +78,7 @@ final class ConnectorCodecContractTest {
             List<String> handled = new ArrayList<>();
             ZLinkStreamJson.on(connector, "String", String.class, message -> {
                 handled.add(message.payload());
-                return java.util.concurrent.CompletableFuture.completedFuture(null);
+                return CompletableFuture.completedFuture(null);
             });
 
             connector.connect().submit().toCompletableFuture().join();
@@ -128,7 +133,7 @@ final class ConnectorCodecContractTest {
         ZLinkStreamCodec codec,
         ZLinkStreamEncodedPayload encoded,
         String expected,
-        java.util.function.Function<ZLinkStreamEncodedPayload, String> decode) {
+        Function<ZLinkStreamEncodedPayload, String> decode) {
         try {
             assertEquals(packetName, encoded.packetName());
             assertEquals(codec, encoded.codec());
@@ -159,7 +164,7 @@ final class ConnectorCodecContractTest {
     }
 
     private static void awaitPendingDispatch(ZLinkStreamConnector connector) {
-        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (System.nanoTime() < deadline) {
             if (connector.pendingDispatchCount() > 0) {
                 return;
@@ -179,8 +184,8 @@ final class ConnectorCodecContractTest {
 
     private static final class TcpServer implements AutoCloseable {
         private final ServerSocket server;
-        private final java.util.concurrent.BlockingQueue<Socket> sockets =
-            new java.util.concurrent.LinkedBlockingQueue<>();
+        private final BlockingQueue<Socket> sockets =
+            new LinkedBlockingQueue<>();
         private final Thread acceptThread;
         private Socket current;
 
@@ -245,7 +250,7 @@ final class ConnectorCodecContractTest {
             if (current != null && !current.isClosed()) {
                 return current;
             }
-            current = sockets.poll(5, java.util.concurrent.TimeUnit.SECONDS);
+            current = sockets.poll(5, TimeUnit.SECONDS);
             if (current == null) {
                 throw new AssertionError("client did not connect within 5s");
             }

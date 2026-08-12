@@ -1,4 +1,9 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Map;
+import java.util.function.Function;
+import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchInfo;
+import systems.zlink.framework.spots.ZLinkInstanceSpotContext;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -26,9 +31,9 @@ final class ZLinkSpotActivationFactory {
     private final ZLinkSpotHandlerLoader handlerLoader;
     private final ZLinkSpotHandlerInvoker handlerInvoker;
     private final ZLinkHandlerActivator handlerFactory;
-    private final java.util.Map<
+    private final Map<
         Class<? extends ZLinkSpot<?>>, ZLinkUserSpotExecutionMode> executionModes;
-    private final java.util.Map<
+    private final Map<
         Class<? extends ZLinkSpot<?>>, ZLinkSpotRelocationReadinessMode>
             relocationReadinessModes;
 
@@ -38,9 +43,9 @@ final class ZLinkSpotActivationFactory {
         ZLinkSpotHandlerLoader handlerLoader,
         ZLinkSpotHandlerInvoker handlerInvoker,
         ZLinkHandlerActivator handlerFactory,
-        java.util.Map<
+        Map<
             Class<? extends ZLinkSpot<?>>, ZLinkUserSpotExecutionMode> executionModes,
-        java.util.Map<
+        Map<
             Class<? extends ZLinkSpot<?>>, ZLinkSpotRelocationReadinessMode>
                 relocationReadinessModes) {
         this.host = host;
@@ -48,9 +53,9 @@ final class ZLinkSpotActivationFactory {
         this.handlerLoader = handlerLoader;
         this.handlerInvoker = handlerInvoker;
         this.handlerFactory = handlerFactory;
-        this.executionModes = java.util.Map.copyOf(executionModes);
+        this.executionModes = Map.copyOf(executionModes);
         this.relocationReadinessModes =
-            java.util.Map.copyOf(relocationReadinessModes);
+            Map.copyOf(relocationReadinessModes);
     }
 
     CompletionStage<SpotActivationCreateResult> activate(
@@ -64,7 +69,7 @@ final class ZLinkSpotActivationFactory {
             handlerLoader,
             host.primaryNode().routingId(),
             backendSpot,
-            new systems.zlink.framework.execution.ZLinkAsyncSerialQueue(
+            new ZLinkAsyncSerialQueue(
                 host.serialExecutor(), false),
             executionModes.getOrDefault(
                 spotType,
@@ -194,7 +199,7 @@ final class ZLinkSpotActivationFactory {
         try {
             spot = (ZLinkInstanceSpot) ZLinkHandlerActivator
                 .services(handlerFactory)
-                .add(systems.zlink.framework.spots.ZLinkInstanceSpotContext.class, context)
+                .add(ZLinkInstanceSpotContext.class, context)
                 .create(spotType);
         } catch (RuntimeException error) {
             context.closeResources();
@@ -262,13 +267,13 @@ final class ZLinkSpotActivationFactory {
 
     private static void registerDispatchHandler(
         ZLinkBackendSpot backendSpot,
-        java.util.function.Function<
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchInfo,
+        Function<
+            ZLinkBackendSpotDispatchInfo,
             CompletionStage<Void>> handler) {
         backendSpot.onDispatchEvent(new ZLinkInternalAsyncSpotDispatchHandler() {
             @Override
             public CompletionStage<Void> handleAsync(
-                systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchInfo info) {
+                ZLinkBackendSpotDispatchInfo info) {
                 return handler.apply(info);
             }
         });

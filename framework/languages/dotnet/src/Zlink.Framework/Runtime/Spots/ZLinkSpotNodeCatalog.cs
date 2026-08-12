@@ -1278,13 +1278,6 @@ internal sealed class ZLinkSpotNodeCatalog(
         await prepared.Activation.DisposeAsync().ConfigureAwait(false);
     }
 
-    internal bool HasActiveActors(string spotId)
-    {
-        lock (_gate)
-            return _spots.TryGetValue(spotId, out var activation)
-                   && activation.JoinedActorCount > 0;
-    }
-
     internal ReservedSpotCloseReadiness CloseReadiness(string spotId)
     {
         lock (_gate)

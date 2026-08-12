@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.pubsub.publisher
 
+
+import systems.zlink.e2e.kotlin.pubsub.shared.Contracts
 data class PublisherOptions(
     val publisherEndpoint: String,
     val httpEndpoint: String,
@@ -24,7 +26,7 @@ data class PublisherOptions(
                 routingIdPrefix = values["routing-id-prefix"]?.takeIf { it.isNotBlank() },
                 advertiseHost = values["advertise-host"]?.takeIf { it.isNotBlank() },
                 channelName = values["channel-name"]?.takeIf { it.isNotBlank() }
-                    ?: systems.zlink.e2e.kotlin.pubsub.shared.Contracts.EVENT_CHANNEL,
+                    ?: Contracts.EVENT_CHANNEL,
                 listenPort = values["publisher-port"]?.takeIf { it.isNotBlank() }?.toInt(),
                 redisLocationEndpoint = values["redis-location-endpoint"]?.takeIf { it.isNotBlank() },
                 locationKeyPrefix = values["location-key-prefix"]?.takeIf { it.isNotBlank() },

@@ -9,10 +9,10 @@ internal sealed class NodeAdmissionHandler(
     ServerOptions options,
     HandlerGate gate,
     OperationEvidenceStore evidence)
-    : IZLinkRouteSendHandler<AdmissionMessage>
+    : IZLinkRouteSendHandler<AdmissionMsg>
 {
     public async ValueTask HandleAsync(
-        AdmissionMessage message,
+        AdmissionMsg message,
         ZLinkRouteMessageContext context,
         CancellationToken cancellationToken)
     {
@@ -29,10 +29,10 @@ internal sealed class ChannelAdmissionHandler(
     ServerOptions options,
     HandlerGate gate,
     OperationEvidenceStore evidence)
-    : IZLinkSendHandler<AdmissionMessage>
+    : IZLinkSendHandler<AdmissionMsg>
 {
     public async ValueTask HandleAsync(
-        AdmissionMessage message,
+        AdmissionMsg message,
         IZLinkMessageContext context,
         CancellationToken cancellationToken)
     {
@@ -43,21 +43,21 @@ internal sealed class ChannelAdmissionHandler(
 }
 
 internal sealed class NodeReadyHandler(ServerOptions options)
-    : IZLinkRouteRequestHandler<RouteReadyRequest, RouteReadyReply>
+    : IZLinkRouteRequestHandler<RouteReadyReq, RouteReadyRes>
 {
-    public ValueTask<RouteReadyReply> HandleAsync(
-        RouteReadyRequest request,
+    public ValueTask<RouteReadyRes> HandleAsync(
+        RouteReadyReq request,
         ZLinkRouteMessageContext context,
         CancellationToken cancellationToken) =>
-        ValueTask.FromResult(new RouteReadyReply(options.Rid, request.Marker));
+        ValueTask.FromResult(new RouteReadyRes(options.Rid, request.Marker));
 }
 
 internal sealed class ChannelReadyHandler(ServerOptions options)
-    : IZLinkRequestHandler<RouteReadyRequest, RouteReadyReply>
+    : IZLinkRequestHandler<RouteReadyReq, RouteReadyRes>
 {
-    public ValueTask<RouteReadyReply> HandleAsync(
-        RouteReadyRequest request,
+    public ValueTask<RouteReadyRes> HandleAsync(
+        RouteReadyReq request,
         IZLinkMessageContext context,
         CancellationToken cancellationToken) =>
-        ValueTask.FromResult(new RouteReadyReply(options.Rid, request.Marker));
+        ValueTask.FromResult(new RouteReadyRes(options.Rid, request.Marker));
 }

@@ -142,6 +142,14 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             var acceptedCount = 0;
             var interruption =
                 ZLinkRelocationInterruptionOperation.Disabled;
+            var sessionRelocationContext =
+                ZLinkSessionRelocationContext.Create(
+                    relocationId,
+                    found.Snapshot.OwnerId,
+                    checked((ulong)found.Snapshot.OwnerLeaseGeneration),
+                    sourceAuthority.NodeRid,
+                    sourceAuthority.NodeGeneration,
+                    found.Snapshot.StoreVersion);
             try
             {
                 var route = default(ZLinkRemoteActorBoundSessionRoute);
@@ -150,7 +158,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     sealedSession = await SealSessionRouteAsync(
                             actorState,
                             bound,
-                            handoffId,
+                            sessionRelocationContext,
                             cancellationToken)
                         .ConfigureAwait(false);
                     route = ToRemoteRoute(sealedSession.Value);
@@ -237,14 +245,11 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         initialPrepared.Relocation,
                         sealedSession,
                         registration.ApplicationVersion,
-                        checked((ulong)semanticSealRecords.Count
-                            + ZLinkBoundedIngressAdmission
-                                .SourceIngressHoldRecordCapacity),
+                        checked((ulong)semanticSealRecords.Count),
                         checked(initialEnvelope.Participants[0].AcceptedJobs
                                 .Aggregate(0UL, static (sum, job) =>
                                     checked(sum + (ulong)job.Payload.Length))
-                            + (ulong)ZLinkBoundedIngressAdmission
-                                .SourceIngressHoldByteCapacity),
+                            ),
                         checked((ulong)sourcePermit.ReservedPayloadBytes));
                 _ = await canonical.ReserveCanonicalRelocationAsync(
                         target.Rid,
@@ -471,7 +476,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         await AbortSessionRouteBestEffortAsync(
                                 actorState.ActorId,
                                 session,
-                                handoffId,
+                                sessionRelocationContext,
                                 cancellationToken)
                             .ConfigureAwait(false);
                     sourceTerminalized = true;
@@ -934,7 +939,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     private async ValueTask<ZLinkActorBoundSession> SealSessionRouteAsync(
         ZLinkActorRuntimeState actorState,
         ZLinkActorBoundSession session,
-        string handoffId,
+        ZLinkSessionRelocationContext wireContext,
         CancellationToken cancellationToken)
     {
         var sourceRef = actorState.NativeActorRef
@@ -953,53 +958,20 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     $"Actor '{actorState.ActorId}' session authority fence is empty.")
                 : session.AuthorityOwnerGeneration
         };
-        var request = new ZLinkSessionRouteSealRequest(
-            actorState.ActorId,
-            normalized.BindingToken,
-            normalized.BindingGeneration,
-            normalized.ObjectGeneration,
-            normalized.AuthorityOwnerGeneration,
-            normalized.MeshName.Value,
-            normalized.TargetNodeGeneration,
-            normalized.OwnerLeaseGeneration,
-            normalized.SessionOwnerNodeGeneration,
-            handoffId);
-        ZLinkSessionRouteSealReply reply;
-        if (sessionNode == runtime.GetMeshNodeRuntime(normalized.MeshName.Value)
-                .Node.RoutingId)
+        var reply = await runtime.SealSessionRelocationAsync(
+                normalized.MeshName.Value,
+                sessionNode,
+                ZLinkSessionRelocationWire.CreateSeal(
+                    actorState.ActorId,
+                    sourceRef.NodeRid,
+                    normalized,
+                    wireContext),
+                cancellationToken)
+            .ConfigureAwait(false);
+        normalized = normalized with
         {
-            var result = await runtime.SealSessionActorRouteAsync(
-                    new ZLinkSessionRouteSeal(
-                        request.ActorId,
-                        request.BindingToken,
-                        request.BindingGeneration,
-                        request.ObjectGeneration,
-                        request.AuthorityOwnerGeneration,
-                        request.MeshName,
-                        request.TargetNodeGeneration,
-                        request.OwnerLeaseGeneration,
-                        request.SessionOwnerNodeGeneration,
-                        request.HandoffId),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            reply = new ZLinkSessionRouteSealReply(
-                result.Acknowledged,
-                result.AcceptedHighWater);
-        }
-        else
-        {
-            reply = await runtime.RequestSessionRouteSealAsync(
-                    normalized.MeshName.Value,
-                    sessionNode,
-                    request,
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
-        if (!reply.Acknowledged)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.InvalidOperation,
-                $"Actor '{actorState.ActorId}' session ingress seal was fenced.");
-        normalized = normalized with { AcceptedHighWater = reply.AcceptedHighWater };
+            AcceptedHighWater = reply.LastAcceptedSessionSequence
+        };
         actorState.BindSession(
             normalized.SessionNodeRid,
             normalized.SessionRid,
@@ -1020,43 +992,20 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     private async ValueTask AbortSessionRouteBestEffortAsync(
         string actorId,
         ZLinkActorBoundSession session,
-        string handoffId,
+        ZLinkSessionRelocationContext wireContext,
         CancellationToken cancellationToken)
     {
         try
         {
-            var seal = new ZLinkSessionRouteSeal(
-                actorId,
-                session.BindingToken,
-                session.BindingGeneration,
-                session.ObjectGeneration,
-                session.AuthorityOwnerGeneration,
-                session.MeshName.Value,
-                session.TargetNodeGeneration,
-                session.OwnerLeaseGeneration,
-                session.SessionOwnerNodeGeneration,
-                handoffId);
             var sessionNode = session.SessionNodeRid!.Value;
-            if (sessionNode == runtime.GetMeshNodeRuntime(session.MeshName.Value)
-                    .Node.RoutingId)
-            {
-                _ = runtime.AbortSessionActorRouteSeal(seal);
-                return;
-            }
-            _ = await runtime.RequestSessionRouteAbortAsync(
+            _ = await runtime.RouteSessionRelocationAsync(
                     session.MeshName.Value,
                     sessionNode,
-                    new ZLinkSessionRouteAbortRequest(
+                    ZLinkSessionRelocationWire.CreateAbort(
                         actorId,
-                        session.BindingToken,
-                        session.BindingGeneration,
-                        session.ObjectGeneration,
-                        session.AuthorityOwnerGeneration,
-                        session.MeshName.Value,
-                        session.TargetNodeGeneration,
-                        session.OwnerLeaseGeneration,
-                        session.SessionOwnerNodeGeneration,
-                        handoffId),
+                        session,
+                        wireContext),
+                    session.AcceptedHighWater,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -1542,7 +1491,19 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         }
         actorState.StageRelocationSessionRoute(
             handoffId,
-            relocating.BoundSessionRoute);
+            relocating.BoundSessionRoute,
+            new ZLinkSessionRelocationContext(
+                new ZLinkServiceWireCodec.RelocationWireId(
+                    candidate.Envelope.CanonicalRelocationHigh,
+                    candidate.Envelope.CanonicalRelocationLow),
+                new ZLinkServiceWireCodec.RelocationCoordinatorFence(
+                    canonical.State.CoordinatorOwnerId,
+                    canonical.State.CoordinatorLeaseGeneration,
+                    RoutingId.FromHex(
+                        canonical.State.CoordinatorNodeRid),
+                    canonical.State.CoordinatorNodeGeneration,
+                    canonical.State
+                        .CoordinatorExpectedAuthorityStoreVersion)));
         var frames = DecodeAcceptedRecords(participant.AcceptedJobs)
             .Select(static accepted => accepted.Frame)
             .ToArray();
@@ -1561,7 +1522,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             handoffId,
             actorRef,
             authority.Snapshot.AuthorityOwnerGeneration,
-            targetAuthority.MeshName,
+            ZLinkMeshName.FromBoundary(
+                targetAuthority.MeshName,
+                nameof(targetAuthority.MeshName)),
             targetAuthority.NodeGeneration,
             targetAuthority.OwnerLeaseGeneration);
         if (!actorState.Handoff.IsAuthorityCommitted(handoffId))
@@ -1929,7 +1892,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             }
             actorState.StageRelocationSessionRoute(
                 tree.Envelope.AggregateId.ToString("N"),
-                relocating.BoundSessionRoute);
+                relocating.BoundSessionRoute,
+                new ZLinkSessionRelocationContext(
+                    prepare.RelocationId,
+                    prepare.Coordinator));
             var frames = DecodeAcceptedRecords(participant.AcceptedJobs)
                 .Select(static accepted => accepted.Frame)
                 .ToArray();
@@ -2029,7 +1995,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             stage.Envelope.AggregateId.ToString("N"),
             actorRef,
             stage.TargetAuthorityOwnerGeneration,
-            stage.TargetAuthority.MeshName,
+            ZLinkMeshName.FromBoundary(
+                stage.TargetAuthority.MeshName,
+                nameof(stage.TargetAuthority.MeshName)),
             stage.TargetAuthority.NodeGeneration,
             stage.TargetAuthority.OwnerLeaseGeneration);
         if (!stage.ActorState.Handoff.IsAuthorityCommitted(
@@ -2044,17 +2012,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 actor,
                 stage.ActorState);
         stage.AuthorityPublished = true;
-    }
-
-    internal bool IsAuthorityPublished(
-        ZLinkServiceWireCodec.RelocationPrepareRecord prepare)
-    {
-        var key = new AttemptKey(
-            prepare.RelocationId.High,
-            prepare.RelocationId.Low,
-            prepare.TargetAttemptGeneration);
-        return _targetStages.TryGetValue(key, out var stage)
-               && stage.AuthorityPublished;
     }
 
     internal void RetainTargetPermit(

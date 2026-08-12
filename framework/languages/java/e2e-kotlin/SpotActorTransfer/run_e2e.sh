@@ -2,6 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$(cd "${ROOT_DIR}/../.." && pwd)/e2e-runner-common.sh"
+export ZLINK_E2E_RUNNER_LANGUAGE_OVERRIDE=kotlin
+zlink_e2e_initialize kotlin "$0" "$@"
 JAVA_SCENARIO_DIR="${ROOT_DIR}/../../e2e/SpotActorTransfer"
 
 export ZLINK_JAVA_E2E_PROJECT_ROOT="${ROOT_DIR}"
@@ -18,4 +21,4 @@ scenario="${1:-${ZLINK_JAVA_E2E_SCENARIO:-all}}"
 if [[ "$#" -gt 0 ]]; then
   shift
 fi
-"${JAVA_SCENARIO_DIR}/run_e2e.sh" "$scenario" "$@"
+bash "${JAVA_SCENARIO_DIR}/run_e2e.sh" "$scenario" "$@"

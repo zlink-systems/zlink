@@ -1,5 +1,9 @@
 package systems.zlink.e2e.kotlin.runtimemonitoring.service
 
+
+import java.net.URLDecoder
+import systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot
+import systems.zlink.framework.monitoring.ZLinkObservedStatus
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
@@ -178,12 +182,12 @@ class EvidenceHttpServer @JvmOverloads constructor(
         if (state.observerStatus().started) return
         state.observerStatus(Contracts.ObserverStatus(true, 0, false, 0, ""))
         current.routeMeshRuntime().observe(Contracts.SPOT_MESH, 32).subscribe(
-            object : Flow.Subscriber<systems.zlink.framework.monitoring.ZLinkObservedStatus<systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot>> {
+            object : Flow.Subscriber<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>> {
                 override fun onSubscribe(subscription: Flow.Subscription) {
                     subscription.request(Long.MAX_VALUE)
                 }
 
-                override fun onNext(item: systems.zlink.framework.monitoring.ZLinkObservedStatus<systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot>) {
+                override fun onNext(item: ZLinkObservedStatus<ZLinkMeshNodeSnapshot>) {
                     val status = item.status()
                     state.observerStatus(
                         Contracts.ObserverStatus(true, status.sequence(), status.isReady, status.readyPeerCount(), ""),
@@ -221,7 +225,7 @@ class EvidenceHttpServer @JvmOverloads constructor(
             val current = runtime?.ifAvailable ?: error("runtime monitoring is not configured")
             val result = current.spotManager().getOrCreate(id, "monitoring")
                 .inMesh(Contracts.SPOT_MESH)
-                .request(ZLinkMessage.of("placement-spot"))
+                .request(ZLinkMessage.of(Contracts.SpotCreateReq("placement-spot")))
                 .submit().toCompletableFuture().join()
             write(exchange, 200, json.writeValueAsString(mapOf("accepted" to true, "state" to result.state().name)))
         } catch (error: Throwable) {
@@ -271,7 +275,7 @@ class EvidenceHttpServer @JvmOverloads constructor(
         val value = exchange.requestURI.rawQuery?.split("&")
             ?.firstOrNull { it.startsWith("$name=") }
             ?.substringAfter('=')
-        return value?.let { java.net.URLDecoder.decode(it, StandardCharsets.UTF_8) }
+        return value?.let { URLDecoder.decode(it, StandardCharsets.UTF_8) }
             ?: error("missing query parameter $name")
     }
 

@@ -1,4 +1,5 @@
 package systems.zlink.e2e.resiliencelifecycle.client.Scenarios;
+import java.util.ArrayList;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Duration;
@@ -13,7 +14,7 @@ import systems.zlink.e2e.resiliencelifecycle.shared.Contracts;
 public final class CommonScenarioGapScenario {
     private static final List<String> SCENARIOS = List.of(
         "RL-E1", "RL-E2", "RL-E3", "RL-E4", "RL-E5",
-        "RL-F1", "RL-F2", "RL-F3", "RL-F4", "RL-F5", "RL-F6", "RL-F7",
+        "RL-F1", "RL-F3", "RL-F5", "RL-F6", "RL-F7",
         "RL-F8", "RL-F9", "RL-F10", "RL-F11", "RL-F12", "RL-F13", "RL-F14");
 
     private CommonScenarioGapScenario() {
@@ -79,7 +80,7 @@ public final class CommonScenarioGapScenario {
     }
 
     private static List<String> missingCapabilities(String scenario, JsonNode capabilities) {
-        java.util.ArrayList<String> reasons = new java.util.ArrayList<>();
+        ArrayList<String> reasons = new ArrayList<>();
         if (!capabilities.path("routeMeshConfigured").asBoolean(false)) {
             reasons.add("RouteMesh target fixture is not configured");
         }
@@ -102,7 +103,7 @@ public final class CommonScenarioGapScenario {
     }
 
     private static List<String> append(List<String> values, String value) {
-        java.util.ArrayList<String> result = new java.util.ArrayList<>(values);
+        ArrayList<String> result = new ArrayList<>(values);
         result.add(value);
         return result;
     }

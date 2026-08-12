@@ -1,4 +1,13 @@
 package systems.zlink.framework.runtime;
+import java.util.Arrays;
+import systems.zlink.framework.locationprovider.ZLinkBlobFound;
+import systems.zlink.framework.locationprovider.ZLinkBlobMissing;
+import systems.zlink.framework.locationprovider.ZLinkBlobPutResult;
+import systems.zlink.framework.locationprovider.ZLinkBlobReadResult;
+import systems.zlink.framework.locationprovider.ZLinkBlobReference;
+import systems.zlink.framework.locationprovider.ZLinkBlobRenewResult;
+import systems.zlink.framework.locationprovider.ZLinkBlobRenewed;
+import systems.zlink.framework.locationprovider.ZLinkBlobStored;
 
 import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore;
 import systems.zlink.framework.runtime.internal.locations
@@ -25,6 +34,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.zip.CRC32C;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.internal.locations.*;
@@ -33,6 +43,8 @@ public final class InMemoryRelocationStore implements
     ZLinkRelocationStore,
     systems.zlink.framework.locationprovider.ZLinkRelocationStore {
     private final Map<String, Entry> values = new ConcurrentHashMap<>();
+    private final AtomicReference<PutGate> nextInternalPut =
+        new AtomicReference<>();
 
     public InMemoryRelocationStore() {
     }
@@ -42,6 +54,12 @@ public final class InMemoryRelocationStore implements
         byte[] payload,
         Duration retention,
         ZLinkStoreCancellation cancellation) {
+        PutGate gate = nextInternalPut.getAndSet(null);
+        if (gate != null) {
+            gate.entered().complete(null);
+            return gate.release().thenCompose(ignored ->
+                put(payload, retention, cancellation));
+        }
         String reference = UUID.randomUUID().toString();
         Instant now = Instant.now();
         Instant expiresAt = now.plus(retention);
@@ -54,10 +72,21 @@ public final class InMemoryRelocationStore implements
                 reference, checksum.getValue(), expiresAt, now));
     }
 
+    public void gateNextInternalPut(
+        CompletableFuture<Void> entered,
+        CompletableFuture<Void> release) {
+        if (!nextInternalPut.compareAndSet(
+                null,
+                new PutGate(entered, release))) {
+            throw new IllegalStateException(
+                "an internal relocation put gate is already installed");
+        }
+    }
+
     @Override
     public CompletionStage<
-        systems.zlink.framework.locationprovider.ZLinkBlobPutResult> put(
-        systems.zlink.framework.locationprovider.ZLinkBlobReference reference,
+        ZLinkBlobPutResult> put(
+        ZLinkBlobReference reference,
         byte[] payload,
         Duration retention,
         systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
@@ -67,11 +96,11 @@ public final class InMemoryRelocationStore implements
         Entry current = values.putIfAbsent(reference.value(), candidate);
         if (current == null) {
             return CompletableFuture.completedFuture(
-                new systems.zlink.framework.locationprovider.ZLinkBlobStored(
+                new ZLinkBlobStored(
                     expiresAt, now));
         }
         return CompletableFuture.completedFuture(
-            java.util.Arrays.equals(current.payload(), payload)
+            Arrays.equals(current.payload(), payload)
                 ? new systems.zlink.framework.locationprovider
                     .ZLinkBlobAlreadyStored(current.expiresAt(), now)
                 : new systems.zlink.framework.locationprovider
@@ -80,25 +109,25 @@ public final class InMemoryRelocationStore implements
 
     @Override
     public CompletionStage<
-        systems.zlink.framework.locationprovider.ZLinkBlobReadResult> read(
-        systems.zlink.framework.locationprovider.ZLinkBlobReference reference,
+        ZLinkBlobReadResult> read(
+        ZLinkBlobReference reference,
         systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
         Entry entry = values.get(reference.value());
         Instant now = Instant.now();
         if (entry == null || !entry.expiresAt().isAfter(now)) {
             values.remove(reference.value());
             return CompletableFuture.completedFuture(
-                new systems.zlink.framework.locationprovider.ZLinkBlobMissing(now));
+                new ZLinkBlobMissing(now));
         }
         return CompletableFuture.completedFuture(
-            new systems.zlink.framework.locationprovider.ZLinkBlobFound(
+            new ZLinkBlobFound(
                 entry.payload(), entry.expiresAt(), now));
     }
 
     @Override
     public CompletionStage<
-        systems.zlink.framework.locationprovider.ZLinkBlobRenewResult> renew(
-        systems.zlink.framework.locationprovider.ZLinkBlobReference reference,
+        ZLinkBlobRenewResult> renew(
+        ZLinkBlobReference reference,
         Duration retention,
         systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
         Entry entry = values.get(reference.value());
@@ -111,13 +140,13 @@ public final class InMemoryRelocationStore implements
         Instant expiresAt = now.plus(retention);
         values.put(reference.value(), new Entry(entry.payload(), expiresAt));
         return CompletableFuture.completedFuture(
-            new systems.zlink.framework.locationprovider.ZLinkBlobRenewed(
+            new ZLinkBlobRenewed(
                 expiresAt, now));
     }
 
     @Override
     public CompletionStage<Void> delete(
-        systems.zlink.framework.locationprovider.ZLinkBlobReference reference,
+        ZLinkBlobReference reference,
         systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
         values.remove(reference.value());
         return CompletableFuture.completedFuture(null);
@@ -171,5 +200,10 @@ public final class InMemoryRelocationStore implements
         @Override public byte[] payload() {
             return payload.clone();
         }
+    }
+
+    private record PutGate(
+        CompletableFuture<Void> entered,
+        CompletableFuture<Void> release) {
     }
 }

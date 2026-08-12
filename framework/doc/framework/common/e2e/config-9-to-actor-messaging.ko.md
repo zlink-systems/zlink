@@ -49,43 +49,27 @@ public error kind로 판정한다. File log는 실패 원인을 찾는 데만 �
 
 ### Track A — Session binding과 direct message를 분리
 
-#### TA-A1 Bind된 Actor에게 direct send·request를 보낸다
+#### TA-A1 Session binding과 독립적으로 Actor direct send·request를 보낸다
 
 우선순위: `P0`
 
-Actor가 이미 Session에 bind되어 있어도 server 간 direct message는 같은 Actor handler에서 처리되어야
-한다. Direct message가 기존 binding을 바꾸면 이후 Actor push가 엉뚱한 client로 전달될 수 있다.
+Actor direct messaging은 Session binding을 전제로 하지 않는다. 이미 bind된 Actor의 binding을 바꾸어서도
+안 되며, bind되지 않은 Actor에 암묵적인 binding을 만들어서도 안 된다.
 
-**검증 질문:** Bind된 Actor에게 direct send·request를 보내도 handler가 처리하고 기존 Session binding이
+**검증 질문:** Binding 유무와 관계없이 Actor가 direct send·request를 처리하고 binding 상태는 그대로
 유지되는가.
 
-- 시작 조건: Client가 `session-a`에 연결하고 `actor-bound`를 생성하여 bind한다. Session gateway의 public
-  binding 조회에서 해당 Actor가 확인되고, Actor가 보낸 `BeforeNotify` push를 client가 받는다.
-- 절차: Caller server가 `actor-bound`로 direct send와 request를 각각 한 번 보낸다. 처리가 끝난 뒤 Actor가
-  bound-session API로 `AfterNotify`를 보낸다.
-- 검증: Actor handler는 send와 request를 각각 한 번 처리하고 request는 입력 marker가 포함된 reply를
-  반환한다. Public binding 조회 결과는 전후가 같으며 `BeforeNotify`와 `AfterNotify`는 처음 연결한 client만
-  받는다.
+- 시작 조건: Bound variant는 client가 `session-a`에 연결해 `actor-bound`를 bind하고 public binding 조회와
+  `BeforeNotify` push를 확인한다. Unbound variant는 `actor-unbound`를 만들고 두 Session gateway의 public
+  binding 조회에 없음을 확인한다.
+- 절차: Caller server가 두 Actor 각각에 direct send와 request를 한 번씩 보낸다. Bound variant 처리 뒤
+  Actor가 bound-session API로 `AfterNotify`를 보낸다.
+- 검증: 두 Actor handler가 자기 send와 request를 각각 한 번 처리하고 caller는 입력 marker가 포함된
+  reply를 받는다. Bound Actor의 public binding은 전후가 같고 두 push는 처음 연결한 client만 받는다.
+  Unbound Actor는 실행 뒤에도 binding이 없으며 Stream client push도 없다.
 - 세부 동작: [Actor model §5](../spec/14-actor-model.ko.md)와
-  [Session Actor dispatch §4](../spec/20-session-actor-dispatch.ko.md)의 direct message와
-  binding 분리를 검증한다.
-
-#### TA-A2 Bind되지 않은 Actor에게 direct send·request를 보낸다
-
-우선순위: `P0`
-
-Direct Actor messaging은 Session binding을 전제로 하지 않는다. 이 경로가 binding을 요구하면 backend
-작업이나 다른 server가 Actor를 직접 호출할 수 없다.
-
-**검증 질문:** Bound Session이 없는 Actor도 direct send를 처리하고 direct request에 reply하는가.
-
-- 시작 조건: Actor node에 `actor-unbound`를 생성한다. 두 Session gateway의 public binding 조회에는 이
-  Actor가 없다.
-- 절차: Caller server가 `actor-unbound`로 direct send와 request를 각각 한 번 보낸다.
-- 검증: Actor handler가 두 message를 각각 한 번 처리하고 caller server가 request reply를 받는다. 실행
-  뒤에도 Session binding은 생기지 않으며 Stream client가 받은 push도 없다.
-- 세부 동작: [Actor model §2.3](../spec/14-actor-model.ko.md)과
-  [§5](../spec/14-actor-model.ko.md)의 binding 독립성을 검증한다.
+  [Actor model §2.3](../spec/14-actor-model.ko.md),
+  [Session Actor dispatch §4](../spec/20-session-actor-dispatch.ko.md)의 binding 독립성을 검증한다.
 
 #### TA-A3 Direct message 뒤에 Session을 bind한다
 

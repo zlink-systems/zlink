@@ -62,14 +62,14 @@ class ProbeSpot(
     fun evidence() = evidence
 }
 
-class ProbeRequestHandler : ZLinkSpotRequestHandler<ProbeSpot, Contracts.InstanceRequest, Contracts.InstanceReply> {
+class ProbeRequestHandler : ZLinkSpotRequestHandler<ProbeSpot, Contracts.InstanceReq, Contracts.InstanceRes> {
     override fun handle(
         spot: ProbeSpot,
-        request: Contracts.InstanceRequest,
-    ): CompletionStage<Contracts.InstanceReply> {
+        request: Contracts.InstanceReq,
+    ): CompletionStage<Contracts.InstanceRes> {
         spot.enter(request.operationId, request.payload)
         return spot.awaitPayload(request.payload).thenApply {
-            Contracts.InstanceReply(
+            Contracts.InstanceRes(
                 spot.context.spotId(), request.operationId, request.payload,
                 spot.evidence().snapshot().rid, spot.evidence().snapshot().lifecycleId,
                 spot.context.objectGeneration(), spot.nextSequence(),
@@ -78,8 +78,8 @@ class ProbeRequestHandler : ZLinkSpotRequestHandler<ProbeSpot, Contracts.Instanc
     }
 }
 
-class ProbeSendHandler : ZLinkSpotPacketHandler<ProbeSpot, Contracts.InstanceSend> {
-    override fun handle(spot: ProbeSpot, message: Contracts.InstanceSend): CompletionStage<Void> =
+class ProbeSendHandler : ZLinkSpotPacketHandler<ProbeSpot, Contracts.InstanceMsg> {
+    override fun handle(spot: ProbeSpot, message: Contracts.InstanceMsg): CompletionStage<Void> =
         spot.awaitPayload(message.payload).thenRun {
             spot.evidence().record(
             "SEND_HANDLER", spot.context.spotId(), message.operationId, message.payload,
@@ -88,8 +88,8 @@ class ProbeSendHandler : ZLinkSpotPacketHandler<ProbeSpot, Contracts.InstanceSen
         }
 }
 
-class CloseHandler : ZLinkSpotPacketHandler<ProbeSpot, Contracts.CloseRequest> {
-    override fun handle(spot: ProbeSpot, message: Contracts.CloseRequest): CompletionStage<Void> =
+class CloseHandler : ZLinkSpotPacketHandler<ProbeSpot, Contracts.CloseMsg> {
+    override fun handle(spot: ProbeSpot, message: Contracts.CloseMsg): CompletionStage<Void> =
         spot.awaitGate(message.gateId).thenCompose {
             spot.context.close().thenAccept { closed ->
                 spot.evidence().record(

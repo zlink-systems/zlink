@@ -109,23 +109,6 @@ internal sealed class ZLinkRelocationPermitPool
         }
     }
 
-    internal bool CanAcquire(ZLinkRelocationPermitRequest request)
-    {
-        Validate(request);
-        lock (_gate)
-        {
-            var limits = ReadLimits();
-            var oversized = request.PayloadBytes > limits.MaxPayloadBytes;
-            return _outboundUnits <= limits.MaxOutboundUnits - request.OutboundUnits
-                && _inboundUnits <= limits.MaxInboundUnits - request.InboundUnits
-                && _captureCallbacks <= limits.MaxCaptureCallbacks
-                    - request.CaptureCallbacks
-                && _restoreCallbacks <= limits.MaxRestoreCallbacks
-                    - request.RestoreCallbacks
-                && CanAdmitPayload(request, oversized, limits.MaxPayloadBytes);
-        }
-    }
-
     internal bool TryGetInboundOffer(out ulong messages, out ulong bytes)
     {
         lock (_gate)

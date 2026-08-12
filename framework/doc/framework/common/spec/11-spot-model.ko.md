@@ -57,7 +57,7 @@ Entry Spot은 Object Server와 함께 준비된다. User Spot은 application이 
 | .NET 구현 type | `IZLinkEntrySpot`, Actor type을 지정하면 `IZLinkEntrySpot<TActor>` | `IZLinkSpot`, Actor type을 지정하면 `IZLinkSpot<TActor>` | `IZLinkInstanceSpot` |
 
 Host relocation의 공통 단계와 Spot 종류별 sequence diagram은
-[Graceful drain과 handoff §8](28-graceful-drain-handoff.ko.md#8-unit-하나를-이전하는-순서)이
+[Graceful drain과 handoff §8](30-host-relocation-flow.ko.md#8-unit-하나를-이전하는-순서)이
 정의한다.
 
 Framework는 작업의 대상에 따라 실행을 기다릴 queue를 정한다. 세 종류의 Spot에
@@ -553,7 +553,7 @@ public interface IZLinkEntrySpotContext : IZLinkSpotCommonContext
 | [21 MeshNode](13-mesh-node.ko.md) | Object role, Entry Spot과 factory 등록, placement capability |
 | [23 Spot과 Actor membership](15-spot-actor.ko.md) | Actor 생성, Entry·User Spot membership과 callback·commit 순서 |
 | [24 Spot 주소 메시징](16-spot-address-messaging.ko.md) | User·Instance Spot의 ID, 생성, cold activation, route와 close |
-| [54 Host Relocate, Shutdown과 handoff](28-graceful-drain-handoff.ko.md) | 세 Spot 종류의 shutdown, relocation과 recovery 순서 |
+| [54 Host Relocate, Shutdown과 handoff](30-host-relocation-flow.ko.md) | 세 Spot 종류의 shutdown, relocation과 recovery 순서 |
 
 ## 9. 검증 요구
 

@@ -1,33 +1,29 @@
-import { zlinkSpotActorSendHandler } from '@zlink-systems/nestjs';
+import { Injectable } from '@nestjs/common';
+import { ZLinkSpotActorSend } from '@zlink-systems/framework';
 import type {
   ZLinkMessageContext,
   ZLinkSpotActorSendHandler
 } from '@zlink-systems/framework';
 import { PlayActor } from '../../../Actors/play-actor';
 import type { LeaveGameMsg } from '../../../../../../../Shared/Contracts/messages';
-import { PendingActorDestroyRegistry } from '../../EntrySpot/entry-spot-registries';
+import { PacketNames } from '../../../../../../../Shared/Contracts/messages';
 import { TicTacToeGameSpot } from '../tictactoe-game-spot';
 
-@zlinkSpotActorSendHandler({
-  actor: () => PlayActor,
-  packetName: 'LeaveGameMsg',
-  spot: () => TicTacToeGameSpot
-})
+@Injectable()
 class PlayActorLeaveGameHandler
   implements ZLinkSpotActorSendHandler<TicTacToeGameSpot, PlayActor, LeaveGameMsg> {
-  constructor(private readonly pendingDestroys: PendingActorDestroyRegistry) {}
-
+  @ZLinkSpotActorSend(PacketNames.leaveGameMsg)
   async handle(
     spot: TicTacToeGameSpot,
     actor: PlayActor,
     _context: ZLinkMessageContext,
-    request: LeaveGameMsg
+    message: LeaveGameMsg
   ): Promise<void> {
-    if (actor.context.spotId !== request.roomId) {
-      throw new Error(`Actor requested leave for a different room. roomId=${request.roomId}`);
+    if (actor.context.spotId !== message.roomId) {
+      throw new Error(`Actor requested leave for a different room. roomId=${message.roomId}`);
     }
-    spot.verifyLeave(actor.actorId, request.roomId);
-    this.pendingDestroys.mark(actor.actorId);
+    spot.verifyLeave(actor.actorId, message.roomId);
+    actor.markForDestroyAfterRoomLeave();
     await spot.context.leaveActor(actor);
     actor.roomId = undefined;
     console.log(`actor: LeaveGameMsg completed. actor=${actor.actorId}`);

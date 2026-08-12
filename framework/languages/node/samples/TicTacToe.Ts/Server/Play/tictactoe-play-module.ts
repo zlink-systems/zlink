@@ -3,14 +3,25 @@ import { SampleNames } from '../Configuration/sample-settings';
 import { PlayActorFactory } from './Infrastructure/ZLink/Actors/play-actor-factory';
 import { PlayActorRelocationAdapter } from './Infrastructure/ZLink/Actors/play-actor-relocation-adapter';
 import {
+  DeliverPlayNotificationEntryHandler,
+  DeliverPlayNotificationHandler
+} from './Infrastructure/ZLink/Actors/play-actor';
+import {
   PlayEntrySpot
 } from './Infrastructure/ZLink/Spots/EntrySpot/play-entry-spot';
-import {
-  MilestoneObserverRegistry,
-  PendingActorDestroyRegistry
-} from './Infrastructure/ZLink/Spots/EntrySpot/entry-spot-registries';
+import { MilestoneObserverRegistry } from './Infrastructure/ZLink/Spots/EntrySpot/entry-spot-registries';
+import { PlayActorJoinGameHandler } from './Infrastructure/ZLink/Spots/EntrySpot/Handlers/play-actor-join-game-handler';
+import { PlayActorObserveMilestoneHandler } from './Infrastructure/ZLink/Spots/EntrySpot/Handlers/play-actor-observe-milestone-handler';
+import { PlayerWinMilestoneEventHandler } from './Infrastructure/ZLink/Spots/EntrySpot/Handlers/player-win-milestone-event-handler';
 import { TicTacToeGameSpot } from './Infrastructure/ZLink/Spots/TicTacToeGameSpot/tictactoe-game-spot';
+import {
+  PlayActorCurrentGameStateHandler,
+  PlayActorPlaceMarkHandler
+} from './Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/play-actor-place-mark-handler';
+import { PlayActorLeaveGameHandler } from './Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/play-actor-leave-game-handler';
+import { TicTacToeGameTimerHandler } from './Infrastructure/ZLink/Spots/TicTacToeGameSpot/Handlers/tictactoe-game-timer-handler';
 import { PlaySessionFactory } from './Infrastructure/ZLink/Sessions/play-session-factory';
+import { AuthenticatePlaySessionHandler } from './Infrastructure/ZLink/Sessions/Handlers/authenticate-play-session-handler';
 import { PLAY_STREAM_ENDPOINT } from './play-tokens';
 import { createTicTacToeLocationStore } from '../Configuration/location-store';
 import { createTicTacToeRelocationStore } from '../Configuration/relocation-store';
@@ -20,6 +31,7 @@ function createTicTacToePlayModule() {
   class TicTacToePlayModule {}
   const configuration = createTicTacToeConfigurationModule([
     'apiEndpoints',
+    'playIndex',
     'playSpotEndpoint',
     'playStreamEndpoint',
     'playEndpoints',
@@ -30,7 +42,7 @@ function createTicTacToePlayModule() {
     'logDir'
   ]);
 
-  zlinkModule(__dirname, {
+  zlinkModule({
     imports: [
       configuration,
       ZLinkModule.forRootFactory({
@@ -38,6 +50,7 @@ function createTicTacToePlayModule() {
         inject: [TICTACTOE_SAMPLE_CONFIG],
         useFactory: (config: TicTacToeSampleConfig) => {
           const builder = zlinkFramework();
+          builder.disableImplicitHandlerAutoRegistration();
           builder.configureDispatch()
             .messageFlow('normal');
           builder.addLocationStore(createTicTacToeLocationStore(config));
@@ -46,6 +59,11 @@ function createTicTacToePlayModule() {
             .enableActorDispatch()
             .bind(config.playStreamEndpoint)
             .registerSession(PlaySessionFactory);
+          const apiChannel = builder.addClientServerChannel(SampleNames.apiChannel).client();
+          for (const endpoint of config.apiEndpoints) {
+            // request: AuthenticatePlayerReq is sent to one explicitly connected Api server.
+            apiChannel.connect(endpoint);
+          }
           const mesh = builder.addRouteMesh(SampleNames.playSpotNode)
             .listen(config.playSpotEndpoint)
             .setRoutingIdPrefix('tictactoe-play');
@@ -61,12 +79,11 @@ function createTicTacToePlayModule() {
             PlayActorFactory,
             (factory) => factory.preserveStateWith(PlayActorRelocationAdapter)
           );
-          mesh.channel(SampleNames.apiChannel).client();
           mesh.channel(SampleNames.playerMilestoneChannel).server();
-          for (const endpoint of config.apiEndpoints) {
-            mesh.peerConnections().connect(endpoint);
+          if (config.playIndex === 0) {
+            // RouteMesh: Play-A is the single initiator for the Play-A to Play-B connection.
+            mesh.peerConnections().connect(config.peerPlaySpotEndpoint);
           }
-          mesh.peerConnections().connect(config.peerPlaySpotEndpoint);
           return builder.build();
         }
       })
@@ -79,10 +96,19 @@ function createTicTacToePlayModule() {
       },
       PlayActorFactory,
       PlayActorRelocationAdapter,
+      AuthenticatePlaySessionHandler,
+      DeliverPlayNotificationEntryHandler,
+      DeliverPlayNotificationHandler,
       MilestoneObserverRegistry,
-      PendingActorDestroyRegistry,
+      PlayActorCurrentGameStateHandler,
+      PlayActorJoinGameHandler,
+      PlayActorLeaveGameHandler,
+      PlayActorObserveMilestoneHandler,
+      PlayActorPlaceMarkHandler,
       PlayEntrySpot,
       PlaySessionFactory,
+      PlayerWinMilestoneEventHandler,
+      TicTacToeGameTimerHandler,
     ]
   })(TicTacToePlayModule);
 

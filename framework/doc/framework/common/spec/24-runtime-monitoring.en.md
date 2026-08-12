@@ -23,7 +23,7 @@ collected over time is owned by
 [Runtime Metrics](25-runtime-metrics.en.md); the progress record of one message is
 owned by [Message Flow Tracing](26-message-flow-tracing.en.md); the state transitions
 of relocation and shutdown are owned by
-[Host Relocation And Shutdown](28-graceful-drain-handoff.en.md).
+[Complete Host Relocation Flow](30-host-relocation-flow.en.md).
 
 | Actor | Responsibility |
 |---|---|
@@ -113,7 +113,7 @@ within a time limit is called
 `IsReady` is `true` only when `State` is `serving`. `AcceptingWork` indicates whether
 the current host accepts new application operations. Don't reinterpret the two values
 as separate conditions. The exact meaning of relocation option, deadline, and result is
-set by [Host Relocation And Shutdown](28-graceful-drain-handoff.en.md).
+set by [Complete Host Relocation Flow](30-host-relocation-flow.en.md).
 
 Host status's inbound dispatch item shows how much application payload the framework
 has received and is currently processing. The value is read from a running total the

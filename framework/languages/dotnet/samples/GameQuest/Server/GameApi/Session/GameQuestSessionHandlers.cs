@@ -75,15 +75,15 @@ internal sealed class KillMonsterHandler(GameplayActionService actions)
     }
 }
 
-[ZLinkSpotActorSendHandler(nameof(CollectItemReq))]
+[ZLinkSpotActorSendHandler(nameof(CollectItemMsg))]
 internal sealed class CollectItemHandler(GameplayActionService actions)
-    : IZLinkEntrySpotActorSendHandler<GameQuestEntrySpot, PlayerSessionActor, CollectItemReq>
+    : IZLinkEntrySpotActorSendHandler<GameQuestEntrySpot, PlayerSessionActor, CollectItemMsg>
 {
     public async ValueTask HandleAsync(
         GameQuestEntrySpot entrySpot,
         PlayerSessionActor actor,
         IZLinkMessageContext context,
-        CollectItemReq message,
+        CollectItemMsg message,
         CancellationToken cancellationToken)
     {
         actor.EnsurePlayer(message.PlayerId);
@@ -96,15 +96,15 @@ internal sealed class CollectItemHandler(GameplayActionService actions)
     }
 }
 
-[ZLinkSpotActorSendHandler(nameof(EnterAreaReq))]
+[ZLinkSpotActorSendHandler(nameof(EnterAreaMsg))]
 internal sealed class EnterAreaHandler(GameplayActionService actions)
-    : IZLinkEntrySpotActorSendHandler<GameQuestEntrySpot, PlayerSessionActor, EnterAreaReq>
+    : IZLinkEntrySpotActorSendHandler<GameQuestEntrySpot, PlayerSessionActor, EnterAreaMsg>
 {
     public async ValueTask HandleAsync(
         GameQuestEntrySpot entrySpot,
         PlayerSessionActor actor,
         IZLinkMessageContext context,
-        EnterAreaReq message,
+        EnterAreaMsg message,
         CancellationToken cancellationToken)
     {
         actor.EnsurePlayer(message.PlayerId);

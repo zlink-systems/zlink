@@ -1,5 +1,4 @@
 import {
-  zlinkEntrySpotActorRequestHandler,
   zlinkEntrySpotActorSendHandler,
   zlinkSpotActorSendHandler
 } from '@zlink-systems/nestjs';
@@ -26,7 +25,7 @@ import {
   JoinConversationFailedNotify
 } from '../../../../../Shared/Contracts/messages';
 
-class DeliverSupportNotification {
+class DeliverSupportNotificationMsg {
   readonly packetName: string;
 
   constructor(readonly message: unknown, readonly conversationId: string) {
@@ -122,15 +121,15 @@ class SupportUserActor implements ZLinkActor {
 @zlinkEntrySpotActorSendHandler({
   entrySpot: () => SupportEntrySpot,
   actor: () => SupportUserActor,
-  packetName: 'DeliverSupportNotification'
+  packetName: 'DeliverSupportNotificationMsg'
 })
 @zlinkSpotActorSendHandler({
   spot: () => ConversationSpot,
   actor: () => SupportUserActor,
-  packetName: 'DeliverSupportNotification'
+  packetName: 'DeliverSupportNotificationMsg'
 })
-class DeliverSupportNotificationHandler {
-  async handle(_spot: unknown, actor: SupportUserActor, _context: ZLinkMessageContext, message: DeliverSupportNotification): Promise<void> {
+class DeliverSupportNotificationMsgHandler {
+  async handle(_spot: unknown, actor: SupportUserActor, _context: ZLinkMessageContext, message: DeliverSupportNotificationMsg): Promise<void> {
     await actor.push(
       rehydrateSupportNotification(message.packetName, message.message),
       message.conversationId
@@ -172,26 +171,9 @@ function rehydrateSupportNotification(packetName: string, payload: unknown): unk
   }
 }
 
-@zlinkEntrySpotActorRequestHandler({
-  entrySpot: () => SupportEntrySpot,
-  actor: () => SupportUserActor,
-  packetName: 'JoinSupportConversation'
-})
-class JoinSupportConversationHandler {
-  async handle(
-    _spot: SupportEntrySpot,
-    actor: SupportUserActor,
-    _context: ZLinkMessageContext,
-    message: JoinSupportConversation
-  ): Promise<{ readonly scheduled: true; readonly state: ConversationState }> {
-    return actor.scheduleConversationJoin(message);
-  }
-}
-
 export {
-  DeliverSupportNotification,
-  DeliverSupportNotificationHandler,
+  DeliverSupportNotificationMsg,
+  DeliverSupportNotificationMsgHandler,
   JoinSupportConversation,
-  JoinSupportConversationHandler,
   SupportUserActor
 };

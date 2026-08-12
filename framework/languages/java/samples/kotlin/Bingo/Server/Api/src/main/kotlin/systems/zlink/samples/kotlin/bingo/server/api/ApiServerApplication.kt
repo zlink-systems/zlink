@@ -1,5 +1,7 @@
 package systems.zlink.samples.kotlin.bingo.server.api
 
+
+import java.net.URI
 import kotlinx.coroutines.Dispatchers
 import org.springframework.boot.WebApplicationType
 import org.springframework.boot.autoconfigure.SpringBootApplication
@@ -42,7 +44,7 @@ class ApiServerApplication {
                 .setRoutingIdPrefix("api")
                 .listen(topology.selectedApiMeshEndpoint())
             api.objects().client()
-            val apiChannelEndpoint = java.net.URI.create(topology.selectedApiChannelEndpoint())
+            val apiChannelEndpoint = URI.create(topology.selectedApiChannelEndpoint())
             options.addClientServerChannel(SampleNames.ApiChannel)
                 .server()
                 .setBindHost(apiChannelEndpoint.host)

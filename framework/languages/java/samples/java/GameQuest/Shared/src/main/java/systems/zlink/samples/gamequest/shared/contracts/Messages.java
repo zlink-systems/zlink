@@ -35,10 +35,7 @@ public final class Messages {
     public record KillMonsterRes(String eventId) {
     }
 
-    public record CollectItemReq(String playerId, String itemId, int count, String idempotencyKey) {
-    }
-
-    public record CollectItemRes(String eventId) {
+    public record CollectItemMsg(String playerId, String itemId, int count, String idempotencyKey) {
     }
 
     public record CompleteMissionReq(String playerId, String missionId, String idempotencyKey) {
@@ -47,10 +44,7 @@ public final class Messages {
     public record CompleteMissionRes(String eventId) {
     }
 
-    public record EnterAreaReq(String playerId, String areaId, String idempotencyKey) {
-    }
-
-    public record EnterAreaRes(String eventId) {
+    public record EnterAreaMsg(String playerId, String areaId, String idempotencyKey) {
     }
 
     public record UnlockFeatureReq(String playerId, String featureId, String idempotencyKey) {

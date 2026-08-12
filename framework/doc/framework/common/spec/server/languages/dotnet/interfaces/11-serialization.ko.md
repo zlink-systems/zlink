@@ -19,6 +19,30 @@ JSON만 사용하는 application은 codec API를 호출하지 않는다. 선택 
 Stream Connector가 소유하는 `IZlinkStreamCodecRegistration`으로 선언한다. 이 분리로 HTTP client가
 STREAM runtime이나 compression package에 의존하지 않는다.
 
+`contentType`에는 parameter가 없는 ASCII `type/subtype`을 전달한다. Registry는 startup에 값
+앞뒤의 SP와 TAB을 제거하고 ASCII 대문자를 소문자로 바꾼다. 이 결과가 registry에서 사용하는
+canonical content-type이다. Parameter, 값 내부의 공백 또는 non-ASCII token이 있으면
+`ArgumentException`을 발생시킨다. 같은 canonical content-type을 다시 등록하면 마지막
+serializer가 앞의 serializer를 교체한다.
+
+Framework service wire에서 받은 값은 이미 canonical content-type이어야 한다. 다른 표기의 값은
+`ZLinkFrameworkErrorKind.ProtocolError`로 완료한다. HTTP client는 response parameter를 먼저
+parse하고, parameter가 없는 media type만 이 규칙에 전달한다.
+
+송신 serializer를 고를 때는 실제 instance의 concrete type이 아니라 호출 지점에 선언된 message
+type을 사용한다. 세 번째 인자를 받는 overload는 이 declared type을 `canSerialize`에 전달한다.
+둘 이상의 등록이 `true`를 반환하면 나중에 등록한 serializer를 사용한다. 조건에 맞는 등록이
+없으면 JSON serializer를 사용한다. 두 인자 overload로 fallback serializer를 여러 개 등록한
+경우에도 나중 등록이 앞의 등록을 교체한다.
+
+Registry는 startup 뒤 바뀌지 않는다. 송신 선택 결과는 declared type 1,024개까지 저장한다.
+한도에 도달해도 기존 entry를 제거하지 않는다. 그 뒤 처음 보는 type은 송신할 때마다 등록
+목록을 다시 평가하고 결과를 저장하지 않는다.
+
+수신 경로는 wire에서 받은 canonical content-type으로 serializer를 정확히 찾는다. 등록되지 않은
+값이나 canonical form이 아닌 값은 JSON으로 다시 해석하지 않고
+`ZLinkFrameworkErrorKind.ProtocolError`로 완료한다.
+
 ```csharp
 public interface IZLinkCodecExtension
 {

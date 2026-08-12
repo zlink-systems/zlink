@@ -188,8 +188,8 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
     {
         EnsureParts(parts);
         long size = sizeof(uint);
-        foreach (var part in parts)
-            size = checked(size + sizeof(uint) + part.Size);
+        for (var index = 0; index < parts.Count; index++)
+            size = checked(size + sizeof(uint) + parts[index].Size);
         return size;
     }
 
@@ -198,8 +198,8 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
     {
         EnsureParts(parts);
         long size = sizeof(uint);
-        foreach (var part in parts)
-            size = checked(size + sizeof(uint) + part.Length);
+        for (var index = 0; index < parts.Count; index++)
+            size = checked(size + sizeof(uint) + parts[index].Length);
         return size;
     }
 
@@ -290,8 +290,9 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
             result.AsSpan(offset, sizeof(uint)),
             checked((uint)parts.Count));
         offset += sizeof(uint);
-        foreach (var part in parts)
+        for (var index = 0; index < parts.Count; index++)
         {
+            var part = parts[index];
             BinaryPrimitives.WriteUInt32BigEndian(
                 result.AsSpan(offset, sizeof(uint)),
                 checked((uint)part.Size));
@@ -310,8 +311,9 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
             result.AsSpan(offset, sizeof(uint)),
             checked((uint)parts.Count));
         offset += sizeof(uint);
-        foreach (var part in parts)
+        for (var index = 0; index < parts.Count; index++)
         {
+            var part = parts[index];
             BinaryPrimitives.WriteUInt32BigEndian(
                 result.AsSpan(offset, sizeof(uint)),
                 checked((uint)part.Length));

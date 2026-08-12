@@ -18,7 +18,6 @@ descriptor를 자동으로 게시한다. store 상태는 `ListMeshNodesAsync(mes
 - `RM-B3` owner lease 만료 뒤 failover — 10.0.0 전환 대상
 - `RM-C1` request / send happy path
 - `RM-C2` targeted request by rid
-- `RM-C3` 다중 provider 분산
 - `RM-C4` timeout과 late reply 비오염
 - `RM-C5` 미등록 packet 처리
 - `RM-C7` weighted 분산 — 10.0.0 전환 대상

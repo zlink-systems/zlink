@@ -1,4 +1,9 @@
 package systems.zlink.framework.runtime.internal.backend;
+import java.time.Duration;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.ToIntFunction;
 
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterOptions;
 import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
@@ -20,34 +25,34 @@ public interface ZLinkBackendAdapterProvider {
 
     ZLinkMonitoringBackendAdapter createMonitoringAdapter(ZLinkBackendAdapterOptions options);
 
-    default java.util.function.Function<
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject,
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject> admissionSource() {
+    default Function<
+        ZLinkBackendObject,
+        ZLinkBackendObject> admissionSource() {
         return backend -> backend;
     }
 
-    default java.util.function.Function<
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject,
-        java.time.Duration> admissionTimeout() {
-        return ignored -> java.time.Duration.ofSeconds(1);
+    default Function<
+        ZLinkBackendObject,
+        Duration> admissionTimeout() {
+        return ignored -> Duration.ofSeconds(1);
     }
 
-    default java.util.function.ToIntFunction<
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject>
+    default ToIntFunction<
+        ZLinkBackendObject>
         admissionPendingCapacity() {
         return ignored -> 4096;
     }
 
-    default java.util.function.BiConsumer<
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject,
-        java.util.function.Consumer<
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey>>
+    default BiConsumer<
+        ZLinkBackendObject,
+        Consumer<
+            ZLinkBackendAdmissionKey>>
         admissionReadyRegistrar() {
         return (ignored, handler) -> { };
     }
 
-    default java.util.function.BiConsumer<
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject,
+    default BiConsumer<
+        ZLinkBackendObject,
         Runnable> admissionShutdownRegistrar() {
         return (ignored, handler) -> { };
     }

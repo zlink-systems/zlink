@@ -1,7 +1,7 @@
 import type { ZLinkHttpClient } from '@zlink-systems/http-client';
 import { delay, post, require } from './scenario-support.js';
 
-interface RelocationResult {
+interface RelocationRes {
   readonly outcome: number;
   readonly reason: number;
 }
@@ -16,7 +16,7 @@ export interface MetricEvidence {
 
 export interface DrainStatus {
   readonly ready: boolean;
-  readonly result?: RelocationResult;
+  readonly result?: RelocationRes;
   readonly peerRows?: readonly { readonly nodeRid: string; readonly draining: boolean; readonly generation: string }[];
   readonly actors?: readonly { readonly actorId: string; readonly nodeRid: string; readonly generation: string }[];
 }

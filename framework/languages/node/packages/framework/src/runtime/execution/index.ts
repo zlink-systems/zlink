@@ -19,6 +19,8 @@ interface ZLinkSpotSerialTurnContext {
 
 interface ZLinkSpotSerialExecutorLike {
   readonly activeTurnId: number;
+  readonly sourceSpotId?: unknown;
+  isActiveTurn(turn: ZLinkSpotSerialTurn, turnId: number): boolean;
   post<T>(operation: () => Promise<T> | T): Promise<T>;
 }
 
@@ -70,6 +72,10 @@ export class ZLinkSpotSerialTurn {
       throw new Error('ZLink Spot serial turn already owns an execution claim.');
     }
     this.executionClaim = claim;
+  }
+
+  get isSuspended(): boolean {
+    return this.suspendSignaled;
   }
 
   releaseBoundExecutionClaim(): void {
@@ -183,6 +189,18 @@ export function captureZLinkSpotSerialTurn(
   return current.turn;
 }
 
+/** Returns the physical Spot owner only while its captured turn owns the gate. */
+export function currentZLinkSpotSerialSourceId(): unknown {
+  const current = spotSerialTurnStorage.getStore();
+  if (
+    current === undefined
+    || !current.executor.isActiveTurn(current.turn, current.turnId)
+  ) {
+    return undefined;
+  }
+  return current.executor.sourceSpotId;
+}
+
 export function requireZLinkYieldTurn(
   capturedTurn?: ZLinkSpotSerialTurn
 ): ZLinkSpotSerialTurn {
@@ -215,7 +233,7 @@ export function isCurrentZLinkSpotSerialTurn(executor: ZLinkSpotSerialExecutorLi
   const current = spotSerialTurnStorage.getStore();
   return current !== undefined
     && current.executor === executor
-    && current.turnId === executor.activeTurnId;
+    && executor.isActiveTurn(current.turn, current.turnId);
 }
 
 export interface ZLinkExecutionBarrierSeal {

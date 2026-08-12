@@ -202,6 +202,10 @@ export interface BindAwaitActorsReq {
   readonly actorIds: readonly string[];
 }
 
+export interface AwaitActorCreateReq {
+  readonly spotId: string;
+}
+
 export interface BindAwaitActorsRes {
   readonly spotId: string;
   readonly actors: readonly AwaitActorBinding[];
@@ -234,7 +238,7 @@ export interface ActorJoinAwaitReq {
   readonly targetSpotId: string;
 }
 
-export interface DeferredJoinFailureMsg {
+export interface DeferredJoinFailureReq {
   readonly requestId: string;
   readonly firstActorId: string;
   readonly secondActorId: string;
@@ -303,9 +307,10 @@ export class EnsureSpotReq {}
 export class AwaitEvidenceWaitReq {}
 export class AwaitEvidenceReq {}
 export class BindAwaitActorsReq {}
+export class AwaitActorCreateReq { constructor(readonly spotId: string) {} }
 export class ActorAwaitReq {}
 export class ActorFastReq {}
 export class ActorFastMsg {}
 export class ActorJoinAwaitReq {}
-export class DeferredJoinFailureMsg {}
+export class DeferredJoinFailureReq {}
 export class ActorPushAwaitReq {}

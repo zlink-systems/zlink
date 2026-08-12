@@ -1,4 +1,14 @@
 package systems.zlink.e2e.automaticturn.client.Support;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import systems.zlink.framework.actors.ZLinkActorJoinCall;
+import systems.zlink.framework.channels.ZLinkRequestCall;
+import systems.zlink.framework.spots.ZLinkWorkerCall;
+import systems.zlink.httpclient.ZLinkHttpExecutionTurn;
+import systems.zlink.httpclient.ZLinkHttpRequestBuilder;
+import systems.zlink.httpclient.ZLinkHttpServerRequestBuilder;
+import systems.zlink.stream.connector.ZLinkStreamCloseReason;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -44,54 +54,54 @@ public final class AutomaticTurnDispatchScenarioSupport {
 
     private static void compileTimeTerminatorSurface() {
         // These method references make the exact Java interface contract a compile-time check.
-        java.util.function.BiFunction<
-            systems.zlink.framework.channels.ZLinkRequestCall,
+        BiFunction<
+            ZLinkRequestCall,
             Class<Object>,
             CompletionStage<Object>> requestSubmit =
-            systems.zlink.framework.channels.ZLinkRequestCall::submit;
-        java.util.function.BiFunction<
-            systems.zlink.framework.channels.ZLinkRequestCall,
+            ZLinkRequestCall::submit;
+        BiFunction<
+            ZLinkRequestCall,
             Class<Object>,
             CompletionStage<Object>> requestYield =
-            systems.zlink.framework.channels.ZLinkRequestCall::yield;
-        java.util.function.Function<
-            systems.zlink.framework.actors.ZLinkActorJoinCall,
-            systems.zlink.framework.actors.ZLinkActorJoinCall> joinTimeout =
+            ZLinkRequestCall::yield;
+        Function<
+            ZLinkActorJoinCall,
+            ZLinkActorJoinCall> joinTimeout =
             call -> call.timeout(Duration.ZERO);
-        java.util.function.Consumer<systems.zlink.framework.actors.ZLinkActorJoinCall> joinDefer =
-            systems.zlink.framework.actors.ZLinkActorJoinCall::defer;
-        java.util.function.Function<
-            systems.zlink.framework.spots.ZLinkWorkerCall<Object>,
+        Consumer<ZLinkActorJoinCall> joinDefer =
+            ZLinkActorJoinCall::defer;
+        Function<
+            ZLinkWorkerCall<Object>,
             CompletionStage<Object>> workerSubmit =
-            systems.zlink.framework.spots.ZLinkWorkerCall::submit;
-        java.util.function.Function<
-            systems.zlink.framework.spots.ZLinkWorkerCall<Object>,
+            ZLinkWorkerCall::submit;
+        Function<
+            ZLinkWorkerCall<Object>,
             CompletionStage<Object>> workerYield =
-            systems.zlink.framework.spots.ZLinkWorkerCall::yield;
-        java.util.function.Function<
-            systems.zlink.httpclient.ZLinkHttpServerRequestBuilder,
+            ZLinkWorkerCall::yield;
+        Function<
+            ZLinkHttpServerRequestBuilder,
             CompletionStage<Void>> serverSubmit =
-            systems.zlink.httpclient.ZLinkHttpServerRequestBuilder::submit;
-        java.util.function.BiFunction<
-            systems.zlink.httpclient.ZLinkHttpExecutionTurn,
+            ZLinkHttpServerRequestBuilder::submit;
+        BiFunction<
+            ZLinkHttpExecutionTurn,
             CompletionStage<Object>,
             CompletionStage<Object>> serverAsync =
-            systems.zlink.httpclient.ZLinkHttpExecutionTurn::async;
-        java.util.function.BiFunction<
-            systems.zlink.httpclient.ZLinkHttpExecutionTurn,
+            ZLinkHttpExecutionTurn::async;
+        BiFunction<
+            ZLinkHttpExecutionTurn,
             CompletionStage<Object>,
             CompletionStage<Object>> serverYield =
-            systems.zlink.httpclient.ZLinkHttpExecutionTurn::yield;
-        java.util.function.BiFunction<
-            systems.zlink.httpclient.ZLinkHttpRequestBuilder,
+            ZLinkHttpExecutionTurn::yield;
+        BiFunction<
+            ZLinkHttpRequestBuilder,
             Class<Object>,
             CompletionStage<Object>> clientFetch =
-            systems.zlink.httpclient.ZLinkHttpRequestBuilder::fetch;
+            ZLinkHttpRequestBuilder::fetch;
         if (requestSubmit == null || requestYield == null || joinTimeout == null
             || joinDefer == null || workerSubmit == null || workerYield == null
             || serverSubmit == null || serverAsync == null || serverYield == null
             || clientFetch == null) {
-            throw new IllegalStateException("TD-A1 terminator contract references were not created");
+            throw new IllegalStateException("terminator contract references were not created");
         }
     }
 
@@ -378,11 +388,11 @@ public final class AutomaticTurnDispatchScenarioSupport {
         ensure(actorA.equals(bind.actorA()), "JVM-SESSION-001 actor A bind mismatch");
         ensure(actorB.equals(bind.actorB()), "JVM-SESSION-001 actor B bind mismatch");
 
-        CompletionStage<ZLinkStreamMessage<Contracts.ActorBindingReplacedNotice>> notice =
+        CompletionStage<ZLinkStreamMessage<Contracts.ActorBindingReplacedNotify>> notice =
             retiredSession
-                .waitFor(Contracts.ActorBindingReplacedNotice.class)
+                .waitFor(Contracts.ActorBindingReplacedNotify.class)
                 .timeout(Duration.ofSeconds(5))
-                .submit(Contracts.ActorBindingReplacedNotice.class);
+                .submit(Contracts.ActorBindingReplacedNotify.class);
         CompletableFuture<ZLinkStreamDisconnected> disconnected =
             new CompletableFuture<>();
         AutoCloseable disconnectSubscription = retiredSession.onDisconnected(event -> {
@@ -399,7 +409,7 @@ public final class AutomaticTurnDispatchScenarioSupport {
             ensure(actorB.equals(authenticated.actorId()),
                 "JVM-SESSION-001 current session bind mismatch");
 
-            Contracts.ActorBindingReplacedNotice callback =
+            Contracts.ActorBindingReplacedNotify callback =
                 notice.toCompletableFuture().join().payload();
             ensure(actorB.equals(callback.actorId()),
                 "JVM-SESSION-001 callback actor mismatch");
@@ -420,7 +430,7 @@ public final class AutomaticTurnDispatchScenarioSupport {
                 .join();
             long closeDelayMillis = TimeUnit.NANOSECONDS.toMillis(
                 System.nanoTime() - callbackTerminalNanos);
-            ensure(close.closeReason() == systems.zlink.stream.connector.ZLinkStreamCloseReason.SERVER_DRAIN,
+            ensure(close.closeReason() == ZLinkStreamCloseReason.SERVER_DRAIN,
                 "JVM-SESSION-001 retired session close reason mismatch: " + close.closeReason());
             ensure(closeDelayMillis >= 80 && closeDelayMillis < 2_000,
                 "JVM-SESSION-001 retired session close was not timer bounded: "

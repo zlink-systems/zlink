@@ -4,7 +4,7 @@
   "description": "RouteMesh 11 formal document semantics. This inventory intentionally contains no document or code-block hash.",
   "languages": ["dotnet", "cpp", "java", "kotlin", "node"],
   "host_lifecycle_contract": {
-    "formal_path": "framework/doc/framework/common/spec/28-graceful-drain-handoff.ko.md",
+    "formal_path": "framework/doc/framework/common/spec/30-host-relocation-flow.ko.md",
     "e2e_path": "framework/doc/framework/common/e2e/config-6-store-failure-recovery.ko.md",
     "states": [
       { "name": "Preparing", "wire_value": 0 },
@@ -588,7 +588,7 @@
       "forbidden_fragments": ["Instance Spot authority row"]
     },
     {
-      "path": "framework/doc/framework/common/spec/28-graceful-drain-handoff.ko.md",
+      "path": "framework/doc/framework/common/spec/30-host-relocation-flow.ko.md",
       "required_fragments": ["Relocate", "Shutdown", "admission seal", "Component별 `Drain`", "ManualTopologyUnsupported=8", "| 0 | `Relocated` | `None` |", "| 1 | `Blocked` | `TargetUnavailable`, `StoreUnavailable`, `RelocationDisabled`, `StateIncompatible`, `DeadlineExceeded`, `RelocationFailed`, `RuntimeNotReady`, `ManualTopologyUnsupported`, `ShutdownRequested`, `OperationInProgress` |", "Shutdown outcome은 `Stopped=0`, `ForceStopped=1`", "reason은 `None=0`,", "`DeadlineExceeded=1`, `TeardownFailed=2`"],
       "forbidden_fragments": ["Retire", "Retiring", "ZLinkMeshNodeDrainPolicy", "ReleaseAndRecreate", "DrainNatural", "CheckpointTooLarge", "| `Completed` |", "| `Failed` |"]
     },

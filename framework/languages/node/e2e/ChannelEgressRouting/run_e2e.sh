@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
 source "$NODE_ROOT/e2e/redis-container.sh"
 source "$NODE_ROOT/e2e/runner-common.sh"
+serialize_node_e2e_run "$0" "$@"
 
 SELECTOR="${1:-all}"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
@@ -16,12 +17,11 @@ LOCAL_READINESS_ATTEMPTS=30
 ROUTE_SETTLE_TIMEOUT_SECONDS=5
 SCENARIO_SETTLE_TIMEOUT_SECONDS=3
 HTTP_PROBE_TIMEOUT_SECONDS=3
-mkdir -p "$LOG_DIR"
 
 pids=()
 REDIS_CONTAINER_ID=""
 ROLE_MAIN="$ROOT_DIR/Role/dist/Role/main.js"
-CLIENT_MAIN="$ROOT_DIR/Client/dist/Client/main.js"
+CLIENT_MAIN="$ROOT_DIR/Client/dist/ChannelEgressRouting/Client/main.js"
 declare -A ROLE_URL ROLE_PID ROLE_MARKER ROLE_RID ROLE_WORKFLOW_PORT
 
 cleanup() {
@@ -43,6 +43,7 @@ cleanup() {
   [[ -z "$CONFIG_DIR" ]] || rm -rf "$CONFIG_DIR"
 }
 trap cleanup EXIT
+mkdir -p "$LOG_DIR"
 
 echo "log_dir=$LOG_DIR"
 echo "scenario=$SELECTOR"
@@ -56,7 +57,7 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
-start_redis_container "zlink-redis-node-channel-egress-${RANDOM}-$$" -p "127.0.0.1::6379" "redis:7.2-alpine"
+start_redis_container "zlink-redis-node-channel-egress-${RANDOM}-$$" "redis:7.2-alpine"
 REDIS_ENDPOINT="$(redis_container_endpoint "$REDIS_CONTAINER_ID")"
 
 stop_scenario_processes() {

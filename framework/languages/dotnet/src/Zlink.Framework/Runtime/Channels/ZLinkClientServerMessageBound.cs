@@ -7,9 +7,9 @@ internal static class ZLinkClientServerMessageBound
         uint maximumMessageBytes)
     {
         ulong total = 0;
-        foreach (var part in parts)
+        for (var index = 0; index < parts.Count; index++)
         {
-            total += checked((ulong)part.Size);
+            total += checked((ulong)parts[index].Size);
             if (total > maximumMessageBytes)
                 return false;
         }

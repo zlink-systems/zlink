@@ -28,6 +28,34 @@ public final class ZLinkOneWayCalls {
             Runnable cleanup,
             Duration timeoutOverride);
 
+        /**
+         * Accepts a one-way operation into the bounded local outbound queue
+         * while this admission owner continues the transport attempt. The
+         * default keeps custom/test admissions source-compatible; the host
+         * runtime overrides it with detached queue ownership.
+         */
+        default CompletionStage<Void> submitDetached(
+            ZLinkBackendObject backend,
+            ZLinkBackendAdmissionKey key,
+            Supplier<Boolean> submission,
+            Runnable cleanup,
+            Duration timeoutOverride) {
+            return submit(backend, key, submission, cleanup, timeoutOverride);
+        }
+
+        /** Starts the ordinary post-route delivery deadline for retained calls. */
+        default void releaseDetached(
+            ZLinkBackendObject backend,
+            ZLinkBackendAdmissionKey key) {
+        }
+
+        /** Removes retained calls when their exact route can no longer open. */
+        default void terminateDetached(
+            ZLinkBackendObject backend,
+            ZLinkBackendAdmissionKey key,
+            Throwable failure) {
+        }
+
         @Override
         default BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>> apply(
             ZLinkBackendObject backend,
@@ -71,6 +99,38 @@ public final class ZLinkOneWayCalls {
         }
         return timedAdmission.submit(
             backend, key, submission, cleanup, timeoutOverride);
+    }
+
+    public CompletionStage<Void> submitDetachedOneWay(
+        ZLinkBackendObject backend,
+        ZLinkBackendAdmissionKey key,
+        Supplier<Boolean> submission,
+        Runnable cleanup,
+        Duration timeoutOverride) {
+        if (timedAdmission == null) {
+            return submitOneWay(
+                backend, key, submission, cleanup, timeoutOverride);
+        }
+        return timedAdmission.submitDetached(
+            backend, key, submission, cleanup, timeoutOverride);
+    }
+
+    public void releaseDetachedOneWay(
+        ZLinkBackendObject backend,
+        ZLinkBackendAdmissionKey key) {
+        if (timedAdmission != null) {
+            timedAdmission.releaseDetached(backend, key);
+        }
+    }
+
+    public void terminateDetachedOneWay(
+        ZLinkBackendObject backend,
+        ZLinkBackendAdmissionKey key,
+        Throwable failure) {
+        if (timedAdmission != null) {
+            timedAdmission.terminateDetached(
+                backend, key, Objects.requireNonNull(failure, "failure"));
+        }
     }
 
     public CompletionStage<Void> submitOneWay(

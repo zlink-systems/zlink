@@ -1,5 +1,7 @@
 package systems.zlink.samples.kotlin.gamequest.client
 
+
+import java.util.Properties
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
@@ -16,12 +18,10 @@ import systems.zlink.framework.kotlin.awaitReply
 import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleTimings
-import systems.zlink.samples.kotlin.gamequest.shared.contracts.CollectItemReq
-import systems.zlink.samples.kotlin.gamequest.shared.contracts.CollectItemRes
+import systems.zlink.samples.kotlin.gamequest.shared.contracts.CollectItemMsg
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.CompleteMissionReq
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.CompleteMissionRes
-import systems.zlink.samples.kotlin.gamequest.shared.contracts.EnterAreaReq
-import systems.zlink.samples.kotlin.gamequest.shared.contracts.EnterAreaRes
+import systems.zlink.samples.kotlin.gamequest.shared.contracts.EnterAreaMsg
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.GameQuestServerAssertRes
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.GetGameplaySnapshotReq
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.GetGameplaySnapshotRes
@@ -130,12 +130,10 @@ class GameQuestClientScenario(private val options: GameQuestClientOptions) {
         val tutorial = apiAStream.request(CompleteMissionReq("player-alice", "tutorial", "mission-tutorial"))
             .awaitReply<CompleteMissionRes>()
         ensure(tutorial.eventId == "player-alice-mission-tutorial")
-        val ruins = apiAStream.request(EnterAreaReq("player-alice", "ruins", "enter-ruins")).awaitReply<EnterAreaRes>()
-        ensure(ruins.eventId == "player-alice-enter-ruins")
+        apiAStream.send(EnterAreaMsg("player-alice", "ruins", "enter-ruins")).await()
 
-        val offlineItem = apiAStream.request(CollectItemReq("player-bob", "healing-herb", 1, "herb-1"))
-            .awaitReply<CollectItemRes>()
-        ensure(offlineItem.eventId == "player-bob-herb-1")
+        apiAStream.send(CollectItemMsg("player-bob", "healing-herb", 1, "herb-1")).await()
+        waitForProjection("player-bob", QuestIds.HerbGathering, 1)
 
         apiBStream.connect().await()
         val bobJoined = apiBStream.request(JoinSessionReq("player-bob")).awaitReply<JoinSessionRes>()
@@ -144,9 +142,7 @@ class GameQuestClientScenario(private val options: GameQuestClientOptions) {
         val herbCompleted = apiBStream.waitFor<QuestCompletedNotify>()
             .where { it.payload().progress.questId == QuestIds.HerbGathering }
             .let { wait -> async { wait.await() } }
-        val onlineItem = apiBStream.request(CollectItemReq("player-bob", "healing-herb", 4, "herb-2"))
-            .awaitReply<CollectItemRes>()
-        ensure(onlineItem.eventId == "player-bob-herb-2")
+        apiBStream.send(CollectItemMsg("player-bob", "healing-herb", 4, "herb-2")).await()
         val herbPush = herbCompleted.await().payload()
         ensure(herbPush.playerId == "player-bob")
         ensure(herbPush.rewardGranted)
@@ -194,6 +190,21 @@ class GameQuestClientScenario(private val options: GameQuestClientOptions) {
         return last ?: error("Server assertion did not return a response")
     }
 
+    private suspend fun waitForProjection(playerId: String, questId: String, currentCount: Int) {
+        val deadline = Instant.now().plus(Duration.ofSeconds(10))
+        do {
+            val projection = post<GetQuestProgressRes>(
+                options.apiAHttpEndpoint,
+                "/quest/progress/$playerId",
+                "",
+            )
+            if (hasProgress(projection.activeQuests, questId, currentCount)) {
+                return
+            }
+        } while (Instant.now().isBefore(deadline))
+        error("Projection did not reach $questId=$currentCount")
+    }
+
     private fun hasProgress(progress: List<QuestProgress>, questId: String, currentCount: Int): Boolean =
         progress.any { it.questId == questId && it.currentCount == currentCount }
 
@@ -226,7 +237,7 @@ data class GameQuestClientOptions(
             require(args.size == 2 && args[0] == "--config" && args[1].isNotBlank()) {
                 "Usage: Client --config <path>"
             }
-            val properties = java.util.Properties().apply {
+            val properties = Properties().apply {
                 Files.newBufferedReader(Path.of(args[1])).use(::load)
             }
             fun required(name: String): String =

@@ -28,7 +28,7 @@ import systems.zlink.samples.kotlin.supportchat.shared.contracts.JoinConversatio
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.JoinConversationRes
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.SendChatMessageReq
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.SendChatMessageRes
-import systems.zlink.samples.kotlin.supportchat.shared.contracts.SetTypingReq
+import systems.zlink.samples.kotlin.supportchat.shared.contracts.SetTypingMsg
 
 class ConversationSpot(
     override val context: ZLinkSpotContext,
@@ -149,8 +149,8 @@ class ConversationSpot(
         )
     }
 
-    suspend fun setTyping(actor: SupportUserActor, request: SetTypingReq) {
-        publishChange(requireConversation().setTyping(actor.participantId, request.isTyping))
+    suspend fun setTyping(actor: SupportUserActor, message: SetTypingMsg) {
+        publishChange(requireConversation().setTyping(actor.participantId, message.isTyping))
     }
 
     suspend fun close(actor: SupportUserActor, request: CloseConversationReq): CloseConversationRes {

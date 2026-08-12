@@ -38,8 +38,8 @@ public final class DispatchWorkQueue implements AutoCloseable {
         });
     }
 
-    public CompletionStage<Messages.ServerAssertionResponse> assertServerEvidence(
-        Messages.ServerAssertionRequest request) {
+    public CompletionStage<Messages.ServerAssertionRes> assertServerEvidence(
+        Messages.ServerAssertionReq request) {
         return worker.assertServerEvidence(request);
     }
 

@@ -32,12 +32,12 @@ import type { ZLinkActorManager } from '@zlink-systems/framework';
 import { createRedisLocationStore, locationMessagingOptions } from '../../Shared/location-store';
 import {
   PacketNames,
-  type ActorAsk,
-  type ActorNotify,
+  type ActorMsg,
+  type ActorReq,
   ActorPushNotify,
   type ActorPushReq,
   type ActorRefPayload,
-  type ActorReply
+  type ActorRes
 } from '../../Shared/messages';
 import { EvidenceStore } from './evidence-store';
 import { closeHttpServer, startHttpServer } from '../Support/http-server';
@@ -126,10 +126,10 @@ class DestroySelfHandler {
 @zlinkEntrySpotActorSendHandler({
   actor: () => TestActor,
   entrySpot: () => TestEntrySpot,
-  packetName: PacketNames.actorNotify
+  packetName: PacketNames.actorMsg
 })
-class NotifyHandler {
-  async handle(_spot: TestEntrySpot, actor: TestActor, _context: ZLinkMessageContext, message: ActorNotify): Promise<void> {
+class ActorMsgHandler {
+  async handle(_spot: TestEntrySpot, actor: TestActor, _context: ZLinkMessageContext, message: ActorMsg): Promise<void> {
     evidence.append({ scenario: message.scenario, actorId: actor.actorId, kind: 'send', value: message.value });
   }
 }
@@ -137,10 +137,10 @@ class NotifyHandler {
 @zlinkEntrySpotActorRequestHandler({
   actor: () => TestActor,
   entrySpot: () => TestEntrySpot,
-  packetName: PacketNames.actorAsk
+  packetName: PacketNames.actorReq
 })
-class AskHandler {
-  async handle(_spot: TestEntrySpot, actor: TestActor, _context: ZLinkMessageContext, request: ActorAsk): Promise<ActorReply> {
+class ActorReqHandler {
+  async handle(_spot: TestEntrySpot, actor: TestActor, _context: ZLinkMessageContext, request: ActorReq): Promise<ActorRes> {
     if (request.value === 'throw') {
       throw new Error('to-actor handler exception');
     }
@@ -152,10 +152,10 @@ class AskHandler {
 @zlinkEntrySpotActorRequestHandler({
   actor: () => TestActor,
   entrySpot: () => TestEntrySpot,
-  packetName: PacketNames.actorPush
+  packetName: PacketNames.actorPushReq
 })
 class PushHandler {
-  async handle(_spot: TestEntrySpot, actor: TestActor, _context: ZLinkMessageContext, request: ActorPushReq): Promise<ActorReply> {
+  async handle(_spot: TestEntrySpot, actor: TestActor, _context: ZLinkMessageContext, request: ActorPushReq): Promise<ActorRes> {
     await actor.context.boundSession
       .send(new ActorPushNotify(request.scenario, actor.actorId, request.value))
       .submit();
@@ -201,7 +201,7 @@ Module({
       }
     })
   ],
-  providers: [TestActorFactory, TestEntrySpot, NotifyHandler, AskHandler, PushHandler, DestroySelfHandler]
+  providers: [TestActorFactory, TestEntrySpot, ActorMsgHandler, ActorReqHandler, PushHandler, DestroySelfHandler]
 })(ActorModule);
 
 async function main(): Promise<void> {

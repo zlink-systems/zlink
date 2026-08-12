@@ -1,4 +1,5 @@
 package systems.zlink.samples.bingo.server.api.handlers;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.spots.ZLinkSpotManager;
@@ -24,7 +25,7 @@ public final class MatchBingoHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Messages.MatchBingoApiRes> handle(
+    public CompletionStage<Messages.MatchBingoApiRes> handle(
         Messages.MatchBingoApiReq request,
         ZLinkMessageContext context) {
         String levelBucket = "1-10";
@@ -39,7 +40,7 @@ public final class MatchBingoHandler
             .thenCompose(allocated -> spots
                 .getOrCreate(allocated.getRoomId(), SampleNames.RoomSpotType)
                 .inMesh(SampleNames.Mesh)
-                .request(allocated.getSettings())
+                .request(BingoMessages.bingoRoomCreateReq(allocated.getSettings()))
                 .timeout(SampleTimings.RequestTimeout)
                 .submit()
                 .thenApply(ignored ->

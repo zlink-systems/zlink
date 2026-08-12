@@ -646,16 +646,17 @@ source가 보관했다가 target queue로 넘기는 임시 저장이고, Message
 <a id="relocation-ingress-hold"></a>
 ### Relocation ingress hold
 
-Source Actor의 message 수락을 seal한 뒤에도 이전 source route로 도착한 message를
-잃지 않도록 임시로 보관하는 크기가 제한된 queue다. `Defer()` 뒤 seal 전까지
-도착한 message는 이 hold가 아니라 deferred Join barrier 뒤의 Actor queue에 둔다.
+Source Actor가 message 수락을 seal한 뒤, 이전 source route로 도착한 message를
+잃지 않도록 잠시 보관하는 queue다. 이 queue에는 relocation 자체가 정하는 record 수나
+byte 상한이 없다. `Defer()`를 호출한 뒤 seal하기 전에 도착한 message는 이 queue가
+아니라 deferred Join barrier 뒤의 Actor queue에 둔다.
 
 | 항목 | 내용 |
 |---|---|
-| 형태 | Framework가 관리하는 bounded message hold |
+| 형태 | Framework가 관리하며, relocation 전용 record 수·byte 상한이 없는 message hold |
 | .NET 표기 | Public type 없음 |
 | 공개 구성 | Message payload와 original operation identity, `ObjectGeneration`과 queue ordering에 필요한 Framework metadata를 유지한다. 내부 storage 형식은 공개하지 않는다. |
-| 생성·관리 | Source runtime이 relocation seal 뒤 도착한 message를 보관한다. Capacity가 가득 차면 일반 messaging backpressure와 timeout을 적용한다. |
+| 생성·관리 | Source runtime이 relocation seal 뒤 도착한 message를 보관한다. 일반 application lane의 count·byte reservation을 relocation 전용 상한으로 다시 적용하지 않는다. Transport, deadline과 cancellation이 정하는 별도 제한은 그대로 적용한다. |
 | 수명 | Commit 전 abort에서는 source queue로 원래 순서에 맞춰 되돌리고, commit 성공 뒤에는 target queue로 relay한 뒤 제거한다. |
 
 <a id="reply-correlation"></a>
@@ -1104,7 +1105,7 @@ relocation에 등록된 temporary queue가 있는지 확인한다. 있으면 mes
 
 | 항목 | 내용 |
 |---|---|
-| 형태 | `RelocationId`, target attempt, object 종류·ID와 `ObjectGeneration`에 연결된 bounded Framework queue |
+| 형태 | `RelocationId`, target attempt, object 종류·ID와 `ObjectGeneration`에 연결된 Framework queue. Relocation 전용 record 수·byte 상한은 없다. |
 | .NET 표기 | Public queue type 없음 |
 | 공개 구성 | Target identity, original operation identity, deadline, payload와 reply route를 보존한다. `SpotWide`에서는 Spot과 member Actor를 같은 relocation group에 넣되 record마다 실제 target을 보존한다. |
 | 수명 | Target이 Restore 요청을 수락할 때 등록한다. Commit과 필요한 callback 뒤 실제 object queue로 작업을 옮기고 제거한다. Commit 전 abort에서는 실행하지 않고 폐기한다. |
@@ -2018,18 +2019,18 @@ route와 location snapshot, physical STREAM connection은 유지한다. Location
 binding route를 저장하거나 갱신하지 않는다.
 
 <a id="binding-route-ack"></a>
-### Session Actor 위치 갱신 응답
+### Session Actor 위치 갱신
 
-Session owner가 새 binding route와 relocation 뒤 current Actor location snapshot을 저장하고,
-이전 owner generation의 늦은 packet과 push를 current binding에 적용하지 않도록 검증을 마쳤다는
-`sessionActorLocationUpdateResMsg`다. Snapshot은 같은 ActorId·ObjectGeneration과 target
-MeshName·NodeRid를 가진다. 이 응답은 위치 갱신 재전송을 중단하기 위해 사용하며 Target
-Actor의 message 처리나 Join completion을 허용하는 신호가 아니다.
+Target runtime이 Location Store CAS와 target queue 개방 뒤 Session owner에게 `[send]`로
+전달하는 command 44 route update다. 저장할 location snapshot에는 기존
+ActorId·ObjectGeneration과 새 target의 MeshName·NodeRid가 들어간다. Session owner는 exact
+Session identity, binding generation과 relocation identity를 확인하고 route를 바꾼 뒤 held
+message를 제출하고 seal을 해제한다.
 
-응답 결과는 `Applied`, `AlreadyApplied`, `Stale` 또는
-`SessionOrBindingClosed`다. 앞의 두 결과는 요청한 위치가 적용됐음을 뜻한다. 뒤의 두
-결과는 더 최신 위치가 있거나 Session·binding이 종료되어 이전 위치를 적용하지 않았음을 뜻한다.
-정확한 wire 값과 Message Follow route 제거 조건은
+이 update에는 reply가 없으며 정상 흐름은 command 45 `sessionRelocationRouted`를 사용하지 않는다.
+`SessionRelocationSealTimeout`의 기본값은 3,000 ms다. 그 안에 exact update가 오지 않으면
+Session owner는 physical Session을 닫고 binding과 held state를 정리한다. Timeout 뒤 late 또는
+duplicate update는 Warning만 기록하고 무시한다. 정확한 처리 순서와 Message Follow 조건은
 [Session–Actor dispatch §5.1](20-session-actor-dispatch.ko.md#51-session-actor-위치-갱신-message)이
 정의한다.
 
@@ -2080,9 +2081,9 @@ ObjectGeneration과는 다른 값이다.
 <a id="session-sequence"></a>
 ### Session sequence
 
-한 STREAM session에서 수락한 ingress message의 순서를 나타내는 값이다. Actor
-handoff에서는 마지막으로 수락한 순서를 barrier로 사용하여 이전 owner와 새 owner가
-같은 message를 함께 처리하지 않게 한다.
+한 STREAM session에서 수락한 ingress message의 순서를 나타내는 값이다. Actor handoff는 이
+값을 cutover high-water로 사용하지 않는다. Session owner가 seal 뒤 도착한 message를 보관하고,
+source와 target의 ordered TCP relay가 cutover 전 순서를 제공한다.
 
 | 항목 | 내용 |
 |---|---|
@@ -2090,7 +2091,7 @@ handoff에서는 마지막으로 수락한 순서를 barrier로 사용하여 이
 | .NET 표기 | Application에 직접 노출하지 않는 `ulong` contract value |
 | 공개 구성 | `1..long.MaxValue` 범위의 ingress 순서 값 하나다. Binding generation과 별개의 축이다. |
 | 생성·관리 | Session owner가 ingress message를 수락하는 순서대로 증가시킨다. |
-| 수명 | 한 STREAM session 안에서만 비교한다. Actor handoff barrier가 마지막 accepted sequence를 high-water로 고정한다. |
+| 수명 | 한 STREAM session 안에서만 비교한다. Relocation owner 전환 증거로 사용하지 않는다. |
 
 ## 11. Stream Connector
 

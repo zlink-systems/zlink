@@ -60,10 +60,12 @@ public final class SmG3Scenario extends SpotServiceScenarioContext {
                             .submit(Contracts.ActorEchoRes.class).toCompletableFuture().join();
                         ensure(actorId.equals(ping.actorId()), "SM-G3 actor request target mismatch");
                         ensure("play-a".equals(ping.nodeRid()), "SM-G3 actor request node mismatch");
-                        connector
-                            .send(new Contracts.LeaveActorReq(actorId))
+                        Contracts.LeaveActorRes left = connector
+                            .request(new Contracts.LeaveActorReq(actorId))
                             .metadata("actor-id", actorId)
-                            .submit();
+                            .submit(Contracts.LeaveActorRes.class).toCompletableFuture().join();
+                        ensure(actorId.equals(left.actorId()), "SM-G3 leave actor mismatch");
+                        ensure(left.accepted(), "SM-G3 leave was not accepted");
                     } catch (Exception error) {
                         throw new RuntimeException(error);
                     }

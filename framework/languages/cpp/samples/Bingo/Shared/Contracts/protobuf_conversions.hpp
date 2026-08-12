@@ -307,6 +307,18 @@ inline void from_protobuf (const pb::BingoRoomSettingsPayload &message,
                                : std::nullopt;
 }
 
+inline void to_protobuf (const bingo_room_create_req_t &value,
+                         pb::BingoRoomCreateReq &message)
+{
+    to_protobuf (value.settings, *message.mutable_settings ());
+}
+
+inline void from_protobuf (const pb::BingoRoomCreateReq &message,
+                           bingo_room_create_req_t &value)
+{
+    from_protobuf (message.settings (), value.settings);
+}
+
 inline void to_protobuf (const reserve_bingo_room_res_t &value, pb::ReserveBingoRoomRes &message)
 {
     message.set_room_id (value.room_id);
@@ -550,6 +562,7 @@ ZLINK_BINGO_STREAM_PAYLOAD (match_bingo_api_res_t, MatchBingoApiRes)
 ZLINK_BINGO_STREAM_PAYLOAD (reserve_bingo_room_req_t, ReserveBingoRoomReq)
 ZLINK_BINGO_STREAM_PAYLOAD (reserve_bingo_room_res_t, ReserveBingoRoomRes)
 ZLINK_BINGO_STREAM_PAYLOAD (bingo_room_settings_payload_t, BingoRoomSettingsPayload)
+ZLINK_BINGO_STREAM_PAYLOAD (bingo_room_create_req_t, BingoRoomCreateReq)
 ZLINK_BINGO_STREAM_PAYLOAD (bingo_room_join_req_t, BingoRoomJoinReq)
 ZLINK_BINGO_STREAM_PAYLOAD (bingo_room_join_res_t, BingoRoomJoinRes)
 ZLINK_BINGO_STREAM_PAYLOAD (submit_bingo_card_req_t, SubmitBingoCardReq)

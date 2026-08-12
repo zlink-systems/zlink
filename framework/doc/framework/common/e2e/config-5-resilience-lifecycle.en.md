@@ -122,7 +122,7 @@ does completion happen with no lost terminal, with only the new version processi
 - Verification: Each request receives exactly one terminal, and the serving-target count never
   reaches 0. After completion, new requests are recorded only in N+1's handler evidence.
   Descriptor discovery alone is not treated as ready.
-- Detailed behavior: verifies [Host Maintenance §5](../spec/28-graceful-drain-handoff.en.md).
+- Detailed behavior: verifies [Host Maintenance §5](../spec/30-host-relocation-flow.en.md).
 
 #### RL-A5 Converge On The Current Target Even With Repeated Provider Lifecycle
 
@@ -195,7 +195,7 @@ accepted reply is preserved?
   released.
 - Verification: The accepted request completes exactly once with B's reply. New requests after the
   seal go to A, and after B's terminal, public status no longer keeps B as a ready target.
-- Detailed behavior: verifies [The Race Between Shutdown And Relocate](../spec/28-graceful-drain-handoff.en.md#11-the-race-between-shutdown-and-relocate).
+- Detailed behavior: verifies [The Race Between Shutdown And Relocate](../spec/30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate).
 
 #### RL-B4 Exclude From New Selection With Runtime Weight 0, Then Restore
 
@@ -269,22 +269,7 @@ the same listeners?
   a replacement is started on the same ports.
 - Verification: There are no pending public operations, the old process exits, and the replacement's
   listeners become ready.
-- Detailed behavior: verifies [The Race Between Shutdown And Relocate](../spec/28-graceful-drain-handoff.en.md#11-the-race-between-shutdown-and-relocate).
-
-#### RL-C2 Exclude A Crashed Provider After Its Owner Lease Expires
-
-Priority: `P2`
-
-Even a crash that couldn't remove its descriptor must drop out of ready targets once the current
-lease expires.
-
-**Verification question:** After provider B crashes, does only A process follow-up requests?
-
-- Starting condition: A and B are ready.
-- Procedure: B is force-terminated, the configured lease/status convergence is awaited, then 20
-  requests are sent.
-- Verification: Public status does not show B as ready, and A processes all 20.
-- Detailed behavior: verifies [Location Runtime §5](../spec/21-location-runtime.en.md).
+- Detailed behavior: verifies [The Race Between Shutdown And Relocate](../spec/30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate).
 
 #### RL-C3 Converge On The New Lifecycle After A Normal Restart
 
@@ -319,27 +304,6 @@ with status returning to Ready after recovery?
 - Detailed behavior: verifies [Transport Liveness §7](../spec/29-transport-liveness.en.md).
 
 ### Track D — Isolate Load And Observability Failures
-
-#### RL-D1 Isolate Subscribers From Each Other Under High Fanout
-
-Priority: `P2`
-
-Instead of a vague "stable under high load," the subscriber count and application marker are fixed.
-Cross-subscriber ordering and lossless delivery in Classic fanout are not this scenario's contract.
-
-**Verification question:** Do 20 ready subscribers independently observe the same marker, with one
-subscriber's processing not blocking another?
-
-- Starting condition: 20 subscribers see the publisher as ready. Only one subscriber's
-  `fanout-start` handler waits on an application gate, with the rest left open. The start marker is
-  kept small, with no network block introduced.
-- Procedure: The publisher sends the `fanout-start` marker, the selected subscriber's gate is
-  confirmed waiting, and load events are sent at a bounded rate. The other subscribers' marker
-  evidence is confirmed, then the gate is opened.
-- Verification: Each subscriber's evidence records the `fanout-start` marker, and one subscriber's
-  processing delay does not block another subscriber's public ready state or marker processing.
-  Event-sequence completeness/order and drop counts are not judged.
-- Detailed behavior: verifies [Framework API §11](../spec/06-framework-api.en.md).
 
 #### RL-D2 Isolate A Telemetry Provider Failure From Messaging
 
@@ -520,29 +484,8 @@ target-capacity/availability race?
 - Verification: When Relocate succeeds, state exists exactly once at the target. The blocked variant
   keeps the source location and state, its follow-up request succeeds, and there is no automatic
   switch to a different target.
-- Detailed behavior: verifies [Selecting A Target Matching The Mode](../spec/28-graceful-drain-handoff.en.md#5-selecting-a-target-matching-the-mode)
-  and [Relocation Units And Concurrency Limits](../spec/28-graceful-drain-handoff.en.md#7-relocation-units-and-concurrency-limits).
-
-#### RL-F2 A Previous Session's Message Does Not Apply To The New Binding After Rebind
-
-Priority: `P0`
-
-Even if the Actor owner changes A→B→A, the previous Session-binding token has a different identity
-from the new binding.
-
-**Verification question:** Does an old Session's delayed relay/logical disconnect not change the new binding and
-Actor state?
-
-- Starting condition: The Actor, bound to Session S1, moves to a target owner and rebinds to a new
-  Session S2.
-- Procedure: Complete the S2 rebind, which submits the disconnect callback for the exact old S1
-  binding. After callback completion and tombstone recording, deliver S1's gated relay and logical
-  disconnect result. Also run callback failure, then send a normal relay and push on S2.
-- Verification: The exact old binding's disconnect callback runs at most once and is not repeated
-  after the terminal tombstone. Callback failure neither removes S2's binding nor changes Actor
-  state. Post-tombstone old operations end stale with no Actor handler evidence. S2's
-  relay and push each succeed exactly once, and the current binding is S2.
-- Detailed behavior: verifies [Session Actor Dispatch §4](../spec/20-session-actor-dispatch.en.md).
+- Detailed behavior: verifies [Selecting A Target Matching The Mode](../spec/30-host-relocation-flow.en.md#5-selecting-a-target-matching-the-mode)
+  and [Relocation Units And Concurrency Limits](../spec/30-host-relocation-flow.en.md#7-relocation-units-and-concurrency-limits).
 
 #### RL-F3 Interpret Cross-Language Terminal Failures The Same Way
 
@@ -562,22 +505,6 @@ directional language combinations?
   unknown-code injection is the protocol contract test's responsibility.
 - Detailed behavior: verifies [Error Model §8](../spec/32-framework-error-model.en.md).
 
-#### RL-F4 A ClientServer Process With No Client Role Cannot Call Outbound
-
-Priority: `P0`
-
-A process that registers only the ClientServer Server role has no Client egress for the same
-ChannelName.
-
-**Verification question:** Does a server-only process's request return `NotConfigured`, while a normal
-Client request succeeds?
-
-- Starting condition: A server-only process and a separate Client-role process are ready.
-- Procedure: Both processes each start a request for the same ChannelName.
-- Verification: The server-only call is `NotConfigured`, and its handler does not run. The Client call is
-  processed exactly once by the server handler.
-- Detailed behavior: verifies [ClientServer Channel §3](../spec/09-client-server-channel.en.md).
-
 #### RL-F5 Process Messages Received During Relocation In Order At The Target
 
 Priority: `P0`
@@ -596,7 +523,7 @@ target after relocation completes?
 - Verification: The target handler evidence is in the order `Q1, Q2, H1, H2`, and each marker appears
   exactly once. There is no application handler evidence during the restore-held window.
 - Detailed behavior: verifies [When The Target Starts Accepting New Messages](../spec/21-location-runtime.en.md#74-when-the-target-starts-accepting-new-messages)
-  and [The Order For Relocating One Unit](../spec/28-graceful-drain-handoff.en.md#8-the-order-for-relocating-one-unit).
+  and [The Order For Relocating One Unit](../spec/30-host-relocation-flow.en.md#8-the-order-for-relocating-one-unit).
 
 #### RL-F6 Distinguish A Runtime Mutable Update From An Invalid Mutation
 
@@ -646,15 +573,17 @@ preflight. In this case, source's accepted work and Host admission are not chang
 **Verification question:** Does Relocate on a manual-only topology end in `ManualTopologyUnsupported`
 while keeping the source?
 
-- Starting condition: A fresh Host with only a manual RouteMesh or ClientServer endpoint has a
-  stateful source object and an accepted request waiting on an application gate.
+- Starting condition: A fresh Host with only a manual RouteMesh peer, ClientServer endpoint, or
+  manual fanout endpoint has a stateful source object and an accepted request waiting on an
+  application gate.
 - Procedure: Public Host Relocate is called and the terminal is confirmed. The request gate is then
-  released, and a follow-up request is sent to the source object.
+  released, a follow-up request is sent to the source object, and explicit Shutdown is called.
 - Verification: Relocate is `Blocked/ManualTopologyUnsupported`, and the Host stays `Serving`. The
   accepted request and follow-up request are each processed once at the source, with no target
-  restore/factory evidence.
-- Detailed behavior: verifies [Host Maintenance §4](../spec/28-graceful-drain-handoff.en.md) and
-  [§10](../spec/28-graceful-drain-handoff.en.md).
+  restore/factory evidence. Shutdown does not use manual topology as a blocker and ends in a
+  bounded terminal.
+- Detailed behavior: verifies [Host Maintenance §4](../spec/30-host-relocation-flow.en.md) and
+  [§10](../spec/30-host-relocation-flow.en.md).
 
 #### RL-F9 Distinguish A Preflight Timeout From A Post-Seal Deadline
 
@@ -673,8 +602,8 @@ outcomes/Host states?
 - Verification: The first is `Blocked/DeadlineExceeded`, and the Host is Serving. The second is
   `ForceStopped/DeadlineExceeded` or the spec's post-seal forced outcome, and the source is not
   mistaken as Serving again.
-- Detailed behavior: verifies [Relocate Completion And Failure](../spec/28-graceful-drain-handoff.en.md#10-relocate-completion-and-failure)
-  and [The Race Between Shutdown And Relocate](../spec/28-graceful-drain-handoff.en.md#11-the-race-between-shutdown-and-relocate).
+- Detailed behavior: verifies [Relocate Completion And Failure](../spec/30-host-relocation-flow.en.md#10-relocate-completion-and-failure)
+  and [The Race Between Shutdown And Relocate](../spec/30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate).
 
 #### RL-F10 Host-Relocate An Entry Actor And SpotWide Aggregate
 
@@ -691,7 +620,7 @@ Join/Leave callbacks?
 - Procedure: Host Relocate completes, and current refs, state, and callbacks are queried.
 - Verification: The objects preserve generation and state, processing requests at the target. The
   Join/Leave callback counters are 0, and the source Spot's closing reason is RelocationOut.
-- Detailed behavior: verifies [Host Maintenance §8](../spec/28-graceful-drain-handoff.en.md).
+- Detailed behavior: verifies [Host Maintenance §8](../spec/30-host-relocation-flow.en.md).
 
 #### RL-F11 Ready Relocation Units Finish Before Slow Units
 
@@ -709,7 +638,7 @@ handler-held?
 - Verification: At least one ready object has a target location and a normal handler result before
   the slow gates are released. The slow objects also reach a terminal after release, and aggregate
   members move together.
-- Detailed behavior: verifies [Host Maintenance §7](../spec/28-graceful-drain-handoff.en.md).
+- Detailed behavior: verifies [Host Maintenance §7](../spec/30-host-relocation-flow.en.md).
 
 #### RL-F12 Restore A User Spot's Queue And Timer After Relocation
 
@@ -728,7 +657,7 @@ original order, at the target?
 - Verification: After R0, Q1/Q2 and A1/A2 keep their target-queue and Actor-lane order and are each processed once. The
   timer callback also runs exactly once at the target, and the Application does not repeat timer
   registration.
-- Detailed behavior: verifies [Graceful Drain — Moving Pending Messages, Timers, And Sessions](../spec/28-graceful-drain-handoff.en.md#9-moving-pending-messages-timers-and-sessions).
+- Detailed behavior: verifies [Graceful Drain — Moving Pending Messages, Timers, And Sessions](../spec/30-host-relocation-flow.en.md#9-moving-pending-messages-timers-and-sessions).
 
 #### RL-F13 Finish Relocation Of Many Large-State Units With A Bounded Terminal
 
@@ -747,7 +676,7 @@ within a bound across many units and a size boundary, and do not block source ad
 - Verification: Units at or below 64 MiB preserve checksum and logical length at the target. The
   one-byte-over unit keeps source authority and is
   `StateIncompatible` while keeping the source. Every unit and Host operation has a bounded terminal.
-- Detailed behavior: verifies [Host Maintenance §7](../spec/28-graceful-drain-handoff.en.md).
+- Detailed behavior: verifies [Host Maintenance §7](../spec/30-host-relocation-flow.en.md).
 
 #### RL-F14 Restore The Source Queue Order After A Precommit Abort
 
@@ -766,7 +695,7 @@ in order?
 - Verification: Relocate has a blocked or failed terminal, and the public current location is the
   source. Source handler evidence is in the order `Q1, Q2, H1, H2` with no duplicates. A follow-up
   timer also runs normally at the source.
-- Detailed behavior: verifies [Host Maintenance §9](../spec/28-graceful-drain-handoff.en.md).
+- Detailed behavior: verifies [Host Maintenance §9](../spec/30-host-relocation-flow.en.md).
 
 ## 5. Completion Criteria
 

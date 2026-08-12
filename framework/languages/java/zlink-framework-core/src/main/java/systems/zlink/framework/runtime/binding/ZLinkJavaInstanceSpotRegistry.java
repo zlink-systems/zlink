@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.binding;
+import java.nio.charset.StandardCharsets;
 
 import java.util.Map;
 import java.util.Objects;
@@ -174,7 +175,7 @@ final class ZLinkJavaInstanceSpotRegistry {
         if (value == null
             || value.isBlank()
             || value.indexOf('\0') >= 0
-            || value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+            || value.getBytes(StandardCharsets.UTF_8).length
                 > 0xff) {
             throw new IllegalArgumentException(
                 "Instance Spot stable type must be text8");

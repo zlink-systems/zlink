@@ -2,7 +2,7 @@
 
 [.NET exact interface 목차](README.ko.md) ·
 [Runtime monitoring](../../../../24-runtime-monitoring.ko.md) ·
-[Host Relocate, Shutdown & Handoff](../../../../28-graceful-drain-handoff.ko.md)
+[Host Relocate, Shutdown & Handoff](../../../../30-host-relocation-flow.ko.md)
 
 ## 1. 범위
 

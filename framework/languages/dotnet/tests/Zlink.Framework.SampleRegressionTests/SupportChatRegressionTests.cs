@@ -256,9 +256,18 @@ public sealed partial class RegressionTests
         Assert.Contains("CurrentRef = accepted.Actor", supportActor, StringComparison.Ordinal);
         Assert.Contains("reply.Decode<JoinConversationRes>()", supportActor, StringComparison.Ordinal);
         Assert.Contains("JoinConversationFailedNotify", supportActor, StringComparison.Ordinal);
+        Assert.Contains("public sealed record JoinConversationReq", sharedMessages, StringComparison.Ordinal);
+        Assert.Contains("public sealed record JoinConversationRes", sharedMessages, StringComparison.Ordinal);
+        Assert.DoesNotContain("record JoinConversationMsg", sharedMessages, StringComparison.Ordinal);
+        Assert.DoesNotContain("record JoinConversationNotify", sharedMessages, StringComparison.Ordinal);
+        Assert.DoesNotContain("record ConversationJoinReq", sharedMessages, StringComparison.Ordinal);
+        Assert.DoesNotContain("record ConversationJoinRes", sharedMessages, StringComparison.Ordinal);
+        Assert.Contains("connector.Request(new JoinConversationReq())", clientScenario, StringComparison.Ordinal);
+        Assert.Contains(".Async<JoinConversationRes>(cancellationToken)", clientScenario, StringComparison.Ordinal);
+        Assert.Contains("new JoinConversationReq(", joinConversationHandler, StringComparison.Ordinal);
+        Assert.Contains("ValueTask<JoinConversationRes> HandleAsync", joinConversationHandler,
+            StringComparison.Ordinal);
         Assert.Contains(".Defer()", joinConversationHandler, StringComparison.Ordinal);
-        Assert.Contains("Context.BoundSession", joinConversationHandler, StringComparison.Ordinal);
-        Assert.Contains(".Async(cancellationToken)", joinConversationHandler, StringComparison.Ordinal);
         Assert.Contains("public sealed record SupportUserActorCreateReq", serverContracts, StringComparison.Ordinal);
         Assert.Contains("CompletedJoinOperations", relocationAdapter, StringComparison.Ordinal);
         AssertLocationStoreHost(apiHost);

@@ -10,6 +10,8 @@ export interface ZLinkPreparedActorSource {
   readonly stateChecksumCrc32c?: number;
   readonly handoffBacklog: readonly ZLinkActorHandoffPacket[];
   readonly sourceLeaveCompletion?: Promise<void>;
+  readonly sourceLeaveSubmitted?: Promise<void>;
+  onSourceLeaveSubmitted(notify: () => Promise<void>): void;
   reserveTarget(target: ZLinkSpotRouteTarget, signal?: AbortSignal): Promise<void>;
   commitAuthority(
     target: ZLinkSpotRouteTarget,

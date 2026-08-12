@@ -209,8 +209,8 @@ ShuttingDown get rejected with the formal terminal?
   rejection result, and the Shutdown variant in `ShuttingDown`, with
   no target handler evidence.
 - Detailed behavior: verifies
-  [Host State And Completion Results](../spec/28-graceful-drain-handoff.en.md#3-host-state-and-completion-results)
-  and [Admission Per State](../spec/28-graceful-drain-handoff.en.md#12-admission-per-state).
+  [Host State And Completion Results](../spec/30-host-relocation-flow.en.md#3-host-state-and-completion-results)
+  and [Admission Per State](../spec/30-host-relocation-flow.en.md#12-admission-per-state).
 
 #### SA-E2E-07 Distinguish An Admission Terminal From A Publish Commit
 
@@ -260,51 +260,33 @@ produce the same terminal and handler evidence?
 - Detailed behavior: verifies
   [Interaction Model §3](../spec/03-interaction-model.en.md#3-node-direct-and-channel-select-one).
 
-#### SA-E2E-09 Apply The RouteMesh Channel Send Deadline
+#### SA-E2E-09 Apply The Send Deadline For Each Channel Topology
 
 Priority: `P0`
 
-A RouteMesh Channel send must also wait until its family's send
-deadline when queue capacity is unavailable, then end in exactly one
-terminal.
+RouteMesh and ClientServer Channel sends must wait until the family
+send deadline when queue capacity is unavailable, then end in the same
+single public terminal.
 
-**Verification question:** Is a Channel send pending before capacity
-recovers, and does it succeed if capacity recovers before the
-deadline?
+**Verification question:** In both RouteMesh and ClientServer, is a
+Channel send pending before capacity recovers, does it succeed when
+capacity recovers before the deadline, and does it return the same
+timeout result when capacity does not recover?
 
-- Start condition: Configure a success variant and a timeout variant
-  with different ChannelNames and target processes. Set public HWM
-  and a handler gate on each target, and send a blocker payload first
-  to confirm pending and Application receive paused state.
-- Procedure: Start a send to the success target and open its gate
-  before the deadline; start a separate operation to the timeout
-  target and keep its gate closed through the deadline.
-- Verification: The success target's send completes normally with the
-  handler run once. The timeout target's send is `DeadlineExceeded`
-  with no handler marker.
+- Start condition: Configure RouteMesh and ClientServer as actual,
+  separate topologies. In each topology, the success and timeout
+  variants use different ChannelNames and target processes. Set a small
+  public HWM and a handler gate on each target, and use a blocker payload
+  to confirm handler entry, pending, and Application receive paused state.
+- Procedure: For each topology, start a send to the success target and
+  open its gate before the deadline. Keep the timeout target's gate
+  closed through the deadline while a separate send is pending.
+- Verification: In both topologies, the success send has a payload-less
+  normal terminal and one handler execution. The timeout send is
+  `DeadlineExceeded` with zero handler executions.
 - Detailed behavior: verifies
-  [Channel Messaging §7](../spec/08-channel-messaging.en.md#7-failure-and-termination).
-
-#### SA-E2E-10 Apply The ClientServer Channel Send Deadline
-
-Priority: `P0`
-
-ClientServer also uses the same public send terminal as RouteMesh.
-
-**Verification question:** Does ClientServer send's capacity-recovery
-and deadline result match RouteMesh Channel?
-
-- Start condition: Configure a success variant and a timeout variant
-  with different ClientServer ChannelNames and target processes, each
-  with a handler gate and a small public HWM. Send a blocker payload
-  to each target first to confirm handler entry and Application
-  receive paused state.
-- Procedure: Open the success target's gate before the deadline while
-  keeping the timeout target's gate closed through the deadline,
-  starting a separate send to each target.
-- Verification: Success is a payload-less terminal with the handler
-  once; timeout is `DeadlineExceeded` with the handler zero times.
-- Detailed behavior: verifies
+  [Channel Messaging §7](../spec/08-channel-messaging.en.md#7-failure-and-termination)
+  and
   [ClientServer Channel §6](../spec/09-client-server-channel.en.md#6-send-request-and-reply).
 
 #### SA-E2E-11 Keep SpotId Send's Admission And Logical Identity

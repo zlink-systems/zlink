@@ -1,5 +1,10 @@
 package systems.zlink.framework.kotlin
 
+
+import org.junit.jupiter.api.Assertions
+import systems.zlink.framework.spots.ZLinkEntrySpotContext
+import systems.zlink.framework.spots.ZLinkSpotClosingContext
+import systems.zlink.framework.spots.ZLinkSpotContext
 import java.lang.reflect.Modifier
 import java.nio.file.Files
 import java.nio.file.Path
@@ -237,7 +242,7 @@ class KotlinPublicSurfaceContractTest {
             "configureStreamCompression", "configureDispatch", "decode",
             "ensureActor", "errors", "findActor", "isPeerReady", "kotlin",
             "listServiceSummaries", "listTopology",
-            "messageOf", "messages", "onMessageFlow", "publishToTopic",
+            "messageOf", "messages", "publishToTopic",
             "request", "requestToActorAwait",
             "send", "snapshot", "status", "topology", "useCoroutineHandlers",
             "waitFor", "withDefaultStreamCompression", "withLz4StreamCompression",
@@ -298,11 +303,11 @@ class KotlinPublicSurfaceContractTest {
     fun `suspending Spot lifecycle matches the exact interface`() {
         assertSuspendingSpotLifecycle(
             ZLinkSuspendingSpot::class.java,
-            systems.zlink.framework.spots.ZLinkSpotContext::class.java,
+            ZLinkSpotContext::class.java,
         )
         assertSuspendingSpotLifecycle(
             ZLinkSuspendingEntrySpot::class.java,
-            systems.zlink.framework.spots.ZLinkEntrySpotContext::class.java,
+            ZLinkEntrySpotContext::class.java,
         )
 
         val timerSpotBound = ZLinkSuspendingSpotTimerHandler::class.java
@@ -321,7 +326,7 @@ class KotlinPublicSurfaceContractTest {
 
         val closingBridge = type.getDeclaredMethod(
             "onClosing",
-            systems.zlink.framework.spots.ZLinkSpotClosingContext::class.java,
+            ZLinkSpotClosingContext::class.java,
         )
         assertTrue(Modifier.isFinal(closingBridge.modifiers))
         assertEquals(CompletionStage::class.java, closingBridge.returnType)
@@ -331,7 +336,7 @@ class KotlinPublicSurfaceContractTest {
 
         val suspending = type.getDeclaredMethod(
             "onClosingSuspending",
-            systems.zlink.framework.spots.ZLinkSpotClosingContext::class.java,
+            ZLinkSpotClosingContext::class.java,
             Continuation::class.java,
         )
         assertTrue(Modifier.isProtected(suspending.modifiers))
@@ -356,7 +361,7 @@ class KotlinPublicSurfaceContractTest {
         assertFacadeMethodCounts("ZLinkCoroutineTurnAwaitKt", mapOf("await" to 1))
         assertFacadeMethodCounts(
             "ZLinkDispatchOptionsExtensionsKt",
-            mapOf("configureDispatch" to 1, "onMessageFlow" to 1),
+            mapOf("configureDispatch" to 1),
         )
         assertFacadeMethodCounts(
             "ZLinkFrameworkExtensionsKt",
@@ -377,6 +382,9 @@ class KotlinPublicSurfaceContractTest {
             mapOf(
                 "topology" to 1,
                 "status" to 1,
+                "findActorLocation" to 1,
+                "findSpotLocation" to 1,
+                "listObjectLocations" to 1,
                 "listTopology" to 1,
                 "listServiceSummaries" to 1,
                 "asFlow" to 1,
@@ -384,11 +392,11 @@ class KotlinPublicSurfaceContractTest {
         )
         assertFacadeMethodCounts(
             "ZLinkMessageExtensionsKt",
-            mapOf("messageOf" to 1, "decode" to 1),
+            mapOf("messageOf" to 2, "decode" to 1),
         )
         assertFacadeMethodCounts(
             "ZLinkSpotHandlerRegistryExtensionsKt",
-            mapOf("addHandler" to 1, "addTypedHandler" to 1),
+            mapOf("addHandler" to 2, "addTypedHandler" to 1),
         )
     }
 
@@ -453,10 +461,7 @@ class KotlinPublicSurfaceContractTest {
         val type = Class.forName(
             "systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions",
         )
-        assertEquals(
-            "systems.zlink.framework.channels.ZLinkMeshNodeRuntimeOptions",
-            type.getMethod("meshNode", String::class.java).returnType.name,
-        )
+        assertFalse(type.methods.any { it.name == "meshNode" })
         assertEquals(
             "systems.zlink.framework.channels.ZLinkMeshChannelRuntimeOptions",
             type.getMethod("channel", String::class.java, String::class.java)
@@ -478,11 +483,11 @@ class KotlinPublicSurfaceContractTest {
             "ZLinkConnectorExtensionsKt" to "a83aa6550a9fd806bd21496bfd1eafac476f4ae368cd99fb624b22bc1931a76f",
             "ZLinkCoroutineHandlerOptionsKt" to "67fda6a26015bcd374098db883ec13f012b2536da914e6b3e8fb0f6aea9e86f4",
             "ZLinkCoroutineTurnAwaitKt" to "0e58ca9d82f2e14d26e4763e955296534d7ce8e863c8fdd5b5231148a5661d5f",
-            "ZLinkDispatchOptionsExtensionsKt" to "eb26c767da350a140c90c974e5485a3ba7af9265bb0f6badec8a381efb591443",
+            "ZLinkDispatchOptionsExtensionsKt" to "2638e59c7f57be05d687be9f366dda0c5421d8ee59fa4105a82e52d7f13fa110",
             "ZLinkFrameworkExtensionsKt" to "269802638a1b53095e969d738fbf4789b295cc3e388e03729f82f7523e5b5bfb",
-            "ZLinkLocationExtensionsKt" to "81932a1fe63f6a00014d4eab8258c4e905529694e94bfa0e64ee8293d03e2100",
-            "ZLinkMessageExtensionsKt" to "836b0c8038be8ee1beae9f8cf1f59cbd7e0811e936d1a4d47e7625b37abdaa9e",
-            "ZLinkSpotHandlerRegistryExtensionsKt" to "0cc8a319eb99070b97332cab96c480fc74c14b9b160b022fa8d60ab4de814196",
+            "ZLinkLocationExtensionsKt" to "6b50002598f83c1e5d7a0054b758dc3ad5711645fcc64cd46c67807d13f08563",
+            "ZLinkMessageExtensionsKt" to "77ec5d78879dc243678140f1f99b9046f58b035ebf72a838f1f691e15c8673a7",
+            "ZLinkSpotHandlerRegistryExtensionsKt" to "6a6300a0e8b2591d92c9192e8cae9e17dcfee43cdda3f5188ac60173175754ea",
             "ZLinkKotlinStreamConnector" to "eaf3cd7485e7e0a2bbf9d4db7ff5268422637947f00718083684002034c00993",
             "ZLinkKotlinLifecycleCall" to "bef9eb581a23386b7802f54c64e3fec57c9920a17745c00c59195f7e67949aa5",
             "ZLinkKotlinSendCall" to "bef9eb581a23386b7802f54c64e3fec57c9920a17745c00c59195f7e67949aa5",

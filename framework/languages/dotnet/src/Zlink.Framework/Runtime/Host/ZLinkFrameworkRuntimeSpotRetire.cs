@@ -219,11 +219,55 @@ internal sealed partial class ZLinkFrameworkRuntime
                         stagedActorStates.TryAdd(
                             actorKey,
                             actorState);
+                        var boundRoute = hasRelocation
+                            ? relocationAuthority.BoundSessionRoute
+                            : default;
+                        var wireContext = default(
+                            ZLinkSessionRelocationContext);
+                        if (boundRoute.IsBound)
+                        {
+                            if (preparedAggregate is not null)
+                            {
+                                var coordinatorParticipant =
+                                    preparedAggregate.Participants.Single(
+                                        candidate => candidate.Envelope.ObjectKind
+                                            is ZLinkPlacementObjectKind.UserSpot
+                                            or ZLinkPlacementObjectKind.InstanceSpot);
+                                wireContext = ZLinkSessionRelocationContext.Create(
+                                    envelope.AggregateId,
+                                    request.SourceOwnerId,
+                                    request.SourceOwnerLeaseGeneration,
+                                    RoutingId.FromHex(request.SourceNodeRid),
+                                    request.SourceNodeLifecycleGeneration,
+                                    coordinatorParticipant.ExpectedStoreVersion);
+                            }
+                            else if (ZLinkCanonicalRelocationAuthorityStateCodec
+                                         .TryRead(
+                                             descriptor.AuthorityPayload,
+                                             out var canonical))
+                            {
+                                wireContext = new ZLinkSessionRelocationContext(
+                                    new ZLinkServiceWireCodec.RelocationWireId(
+                                        canonical.RelocationHigh,
+                                        canonical.RelocationLow),
+                                    new ZLinkServiceWireCodec
+                                        .RelocationCoordinatorFence(
+                                            canonical.State.CoordinatorOwnerId,
+                                            canonical.State
+                                                .CoordinatorLeaseGeneration,
+                                            RoutingId.FromHex(
+                                                canonical.State
+                                                    .CoordinatorNodeRid),
+                                            canonical.State
+                                                .CoordinatorNodeGeneration,
+                                            canonical.State
+                                                .CoordinatorExpectedAuthorityStoreVersion));
+                            }
+                        }
                         actorState.StageRelocationSessionRoute(
                             envelope.AggregateId.ToString("N"),
-                            hasRelocation
-                                ? relocationAuthority.BoundSessionRoute
-                                : default);
+                            boundRoute,
+                            wireContext);
                         var acceptedFrames =
                             ZLinkStandaloneActorRelocationRuntime
                                 .DecodeAcceptedRecords(
@@ -417,7 +461,9 @@ internal sealed partial class ZLinkFrameworkRuntime
                         actorRef,
                         stage.TargetActorAuthorityOwnerGeneration(
                             actorState.RuntimeActorId),
-                        stage.TargetMeshName,
+                        ZLinkMeshName.FromBoundary(
+                            stage.TargetMeshName,
+                            nameof(stage.TargetMeshName)),
                         stage.TargetNodeLifecycleGeneration,
                         stage.TargetOwnerLeaseGeneration);
                 }
@@ -459,10 +505,9 @@ internal sealed partial class ZLinkFrameworkRuntime
 
             // Published means queue publication is complete: restore, replay,
             // catalog, and the ready callback. Admission opens from the
-            // publish path; session route commit ACKs, source cleanup
-            // (command 35), and steady normalization converge asynchronously
-            // and never gate admission.
-            ScheduleRelocationSessionRouteConvergence(stage);
+            // publish path. Session route convergence remains asynchronous,
+            // but command 44 cannot begin until command 35 has durably moved
+            // the relocation authority to Completed.
         }
         finally
         {
@@ -495,6 +540,7 @@ internal sealed partial class ZLinkFrameworkRuntime
     internal void ScheduleRelocationSessionRouteConvergence(TargetStage stage)
     {
         if (Volatile.Read(ref stage.Published) == 0
+            || Volatile.Read(ref stage.SourceCleanupCompleted) == 0
             || Volatile.Read(ref stage.SessionRoutesConverged) != 0)
             return;
         if (stage.ActorStates.Count == 0)
@@ -559,8 +605,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         string handoffId,
         CancellationToken cancellationToken)
     {
-        (ZLinkSessionRouteCommitRequest Request,
-            RoutingId SessionOwnerNode)? commit;
+        bool commit;
         try
         {
             commit = await CommitCompletedSessionRouteAsync(
@@ -580,14 +625,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                 + $"handoff={handoffId}");
             return;
         }
-        if (commit is not { } completedRoute)
+        if (!commit)
             return;
-        await UnsealCompletedSessionRouteAsync(
-                completedRoute.Request,
-                completedRoute.SessionOwnerNode,
-                cancellationToken)
-            .ConfigureAwait(false);
-        actorState.CompleteRelocationSessionRoute(handoffId);
     }
 
     internal static async ValueTask PublishCatalogBeforeNormalizationAsync(
@@ -893,18 +932,6 @@ internal sealed partial class ZLinkFrameworkRuntime
             // orders followed frames before direct new-owner ingress and
             // opens admission once, without waiting for command 35.
         }
-    }
-
-    internal async ValueTask CompleteInboundSpotAggregateAsync(
-        TargetStage stage,
-        CancellationToken cancellationToken)
-    {
-        await CompleteInboundSpotAggregateReplayAsync(
-                stage,
-                cancellationToken)
-            .ConfigureAwait(false);
-        await OpenInboundSpotAggregateAdmissionAsync(stage)
-            .ConfigureAwait(false);
     }
 
     internal async ValueTask CompleteInboundSpotAggregateReplayAsync(

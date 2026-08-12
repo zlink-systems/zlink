@@ -1,4 +1,5 @@
 package systems.zlink.e2e.channelegress.role;
+import java.util.ArrayList;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
@@ -362,8 +363,8 @@ public final class ChannelEgressHttpServer implements SmartLifecycle {
     }
 
     private void fanoutPublish(HttpExchange exchange) throws Exception {
-        Contracts.FanoutProbe request = HttpSupport.readJson(
-            exchange, json, Contracts.FanoutProbe.class);
+        Contracts.FanoutProbeEvent request = HttpSupport.readJson(
+            exchange, json, Contracts.FanoutProbeEvent.class);
         fanout.publish(Contracts.FANOUT_CHANNEL, request)
             .submit()
             .toCompletableFuture()
@@ -372,7 +373,7 @@ public final class ChannelEgressHttpServer implements SmartLifecycle {
     }
 
     private List<Contracts.ListenerStatus> listenerStatuses() {
-        List<Contracts.ListenerStatus> statuses = new java.util.ArrayList<>();
+        List<Contracts.ListenerStatus> statuses = new ArrayList<>();
         if (options.gameServerNames().length > 0) {
             statuses.add(listenerStatus(
                 ZLinkListenerKind.ROUTE_MESH, Contracts.GAME_MESH));

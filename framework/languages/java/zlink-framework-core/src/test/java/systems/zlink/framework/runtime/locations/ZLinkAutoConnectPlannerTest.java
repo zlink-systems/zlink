@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.locations;
+import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -277,7 +278,7 @@ final class ZLinkAutoConnectPlannerTest {
         ZLinkLocationRole role,
         RoutingId rid,
         long lifecycleGeneration) {
-        return role.name().toLowerCase(java.util.Locale.ROOT)
+        return role.name().toLowerCase(Locale.ROOT)
             + "|"
             + rid.toHex()
             + "|"

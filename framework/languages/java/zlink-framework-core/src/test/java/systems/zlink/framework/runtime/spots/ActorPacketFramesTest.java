@@ -1,8 +1,10 @@
 package systems.zlink.framework.runtime.spots;
+import java.io.IOException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
@@ -14,6 +16,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
@@ -67,6 +70,68 @@ final class ActorPacketFramesTest {
     }
 
     @Test
+    void actorReplyCarriesTheDeclaredReplyCodecInsteadOfTheRequestCodec() {
+        ZLinkStreamHeader request = new ZLinkStreamHeader(
+            ZLinkStreamMessageKind.REQUEST,
+            ZLinkStreamCodec.JSON,
+            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+            Optional.of(7L),
+            "ActorReq",
+            Map.of());
+        try (Message headerPart = Message.from(ZLinkStreamHeaderCodec.encode(request));
+             Message payload = Message.from("reply".getBytes());
+             Message frame = ActorPacketFrames.encodeReply(
+                 ActorPacketFrames.decode(actorReceived(headerPart)),
+                 payload,
+                 "DeclaredReply",
+                 ZLinkStreamCodec.PROTOBUF)) {
+            DecodedFrame decoded = decodeFrame(frame);
+
+            assertEquals(ZLinkStreamCodec.PROTOBUF, decoded.header().codec());
+            assertEquals("reply", new String(decoded.body(), StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    void routedActorReplyPreservesDeclaredCodecAcrossTheInternalRoute() {
+        ZLinkStreamHeader request = new ZLinkStreamHeader(
+            ZLinkStreamMessageKind.REQUEST,
+            ZLinkStreamCodec.JSON,
+            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+            Optional.of(7L),
+            "ActorReq",
+            Map.of());
+        try (Message payload = Message.from("reply".getBytes());
+             Message frame = ActorPacketFrames.encodeRoutedReply(
+                 request,
+                 new LocalActorReply(payload, ZLinkStreamCodec.PROTOBUF))) {
+            LocalActorReply decoded = ActorPacketFrames.decodeRoutedReply(
+                request, frame);
+            try (Message decodedPayload = decoded.payload()) {
+                assertEquals(ZLinkStreamCodec.PROTOBUF, decoded.codec());
+                assertEquals("reply", decodedPayload.toUtf8String());
+            }
+        }
+    }
+
+    @Test
+    void routedActorReplyRejectsTheLegacyRawPayloadInsteadOfEchoingRequestCodec() {
+        ZLinkStreamHeader request = new ZLinkStreamHeader(
+            ZLinkStreamMessageKind.REQUEST,
+            ZLinkStreamCodec.JSON,
+            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+            Optional.of(7L),
+            "ActorReq",
+            Map.of());
+        try (Message rawReply = Message.from("reply".getBytes())) {
+            ZLinkFrameworkException failure = assertThrows(
+                ZLinkFrameworkException.class,
+                () -> ActorPacketFrames.decodeRoutedReply(request, rawReply));
+            assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
+        }
+    }
+
+    @Test
     void streamActorErrorUsesTheCommonJsonEnvelope() {
         ZLinkStreamHeader request = new ZLinkStreamHeader(
             ZLinkStreamMessageKind.REQUEST,
@@ -87,7 +152,7 @@ final class ActorPacketFramesTest {
                 var json = new ObjectMapper().readTree(decoded.body());
                 assertEquals("IllegalStateException", json.get("code").asText());
                 assertEquals("handler failed", json.get("message").asText());
-            } catch (java.io.IOException failure) {
+            } catch (IOException failure) {
                 throw new AssertionError("error payload is not JSON", failure);
             }
         }
@@ -114,7 +179,7 @@ final class ActorPacketFramesTest {
                 var json = new ObjectMapper().readTree(decoded.body());
                 assertEquals("NotFound", json.get("code").asText());
                 assertEquals("actor was not found", json.get("message").asText());
-            } catch (java.io.IOException failure) {
+            } catch (IOException failure) {
                 throw new AssertionError("error payload is not JSON", failure);
             }
         }

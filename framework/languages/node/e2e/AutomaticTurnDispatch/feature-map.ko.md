@@ -6,15 +6,13 @@ topology와 `TD-*` 공개 계약을 직접 증명하지 않으므로 완료 근�
 
 | 시나리오 | 상태 | 검증 대상 |
 |---|---|---|
-| `TD-A1` | 전환 필요 | 공개 API와 독립 marker로 검증할 대상: 세 terminator 공개 표면과 기본 의미. |
 | `TD-A2` | 전환 필요 | 공개 API와 독립 marker로 검증할 대상: 비동기 완료 전 같은 Spot callback 차단. |
 | `TD-A3` | 전환 필요 | 공개 API와 독립 marker로 검증할 대상: 비동기 구간의 Spot 상태 불변식. |
 | `TD-A4` | 전환 필요 | 공개 API와 독립 marker로 검증할 대상: 비동기 대기가 완료 처리를 점유하지 않음. |
 | `TD-A5` | 전환 필요 | 공개 API와 독립 marker로 검증할 대상: 비동기 handler가 같은 Spot timer를 지연. |
-| `TD-B1` | 전환 필요 | 공개 API와 독립 marker로 검증할 대상: yield 중 같은 Spot의 다른 callback 진행. |
+| `TD-B1` | 전환 필요 | 공개 API와 독립 marker로 검증할 대상: yield 중 같은 Spot의 request와 timer callback 진행. |
 | `TD-B2` | 전환 필요 | 공개 API와 독립 marker로 검증할 대상: yield continuation 재삽입 순서. |
 | `TD-B3` | 전환 필요 | 공개 API와 독립 marker로 검증할 대상: yield 경계의 상태 불변식 비보장. |
-| `TD-B4` | 전환 필요 | 공개 API와 독립 marker로 검증할 대상: yield 중 같은 Spot timer 진행. |
 | `TD-C1` | 전환 필요 | 공개 API와 독립 marker로 검증할 대상: HTTP client 작업의 yield 실행. |
 | `TD-C2` | 전환 필요 | 공개 API와 독립 marker로 검증할 대상: HTTP client 작업의 async 실행과 turn 유지. |
 | `TD-C3` | 전환 필요 | 공개 API와 독립 marker로 검증할 대상: I/O worker 대기 중 worker thread 비점유. |

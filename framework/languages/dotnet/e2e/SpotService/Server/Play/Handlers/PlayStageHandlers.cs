@@ -9,11 +9,11 @@ namespace SpotService.Server.Play.Handlers;
 
 [ZLinkSpotSubscriptionHandler(SpotServiceNames.SpotChannel, SpotServiceNames.SpotMsgTopic)]
 internal sealed class SpotMsgHandler(EvidenceStore evidence)
-    : IZLinkSpotSubscriptionHandler<ScenarioUserSpot, SpotMsg>
+    : IZLinkSpotSubscriptionHandler<ScenarioUserSpot, SpotEvent>
 {
     public ValueTask HandleAsync(
         ScenarioUserSpot spot,
-        SpotMsg message,
+        SpotEvent message,
         ZLinkPublishMessageContext context,
         CancellationToken cancellationToken)
     {
@@ -25,11 +25,11 @@ internal sealed class SpotMsgHandler(EvidenceStore evidence)
 
 [ZLinkSpotSubscriptionHandler(SpotServiceNames.SpotChannel, SpotServiceNames.SpotMsgTopic)]
 internal sealed class SpotBackpressureMsgHandler(EvidenceStore evidence, BackpressureGate gate)
-    : IZLinkSpotSubscriptionHandler<ScenarioUserSpot, SpotBackpressureMsg>
+    : IZLinkSpotSubscriptionHandler<ScenarioUserSpot, SpotBackpressureEvent>
 {
     public async ValueTask HandleAsync(
         ScenarioUserSpot spot,
-        SpotBackpressureMsg message,
+        SpotBackpressureEvent message,
         ZLinkPublishMessageContext context,
         CancellationToken cancellationToken)
     {

@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
@@ -160,8 +164,8 @@ final class ZLinkSpotRoutedOutbound {
                 parts).whenComplete((ignored, error) -> {
                     parts.forEach(Message::close);
                     if (error != null) {
-                        java.util.logging.Logger.getLogger(ZLinkSpotRoutedOutbound.class.getName())
-                            .log(java.util.logging.Level.SEVERE, "one-way routed SPOT submission failed", error);
+                        Logger.getLogger(ZLinkSpotRoutedOutbound.class.getName())
+                            .log(Level.SEVERE, "one-way routed SPOT submission failed", error);
                     }
                 }));
         } catch (RuntimeException error) {
@@ -257,7 +261,7 @@ final class ZLinkSpotRoutedOutbound {
 }
 
 final class ZLinkSpotRoutedSendCall implements ZLinkSendCall {
-    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
+    private final AtomicBoolean submitGate;
     private final ZLinkSpotRoutedOutbound outbound;
     private final String routerChannelId;
     private final RoutingId targetNodeRid;
@@ -320,7 +324,7 @@ final class ZLinkSpotRoutedSendCall implements ZLinkSendCall {
         String contentType,
         ZLinkApplicationMetadata metadata) {
         this(outbound, routerChannelId, targetNodeRid, spotId, spotGeneration, payload,
-            packetName, contentType, metadata, new java.util.concurrent.atomic.AtomicBoolean());
+            packetName, contentType, metadata, new AtomicBoolean());
     }
 
     private ZLinkSpotRoutedSendCall(
@@ -333,7 +337,7 @@ final class ZLinkSpotRoutedSendCall implements ZLinkSendCall {
         Optional<String> packetName,
         String contentType,
         ZLinkApplicationMetadata metadata,
-        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        AtomicBoolean submitGate) {
         this.submitGate = submitGate;
         this.outbound = outbound;
         this.routerChannelId = routerChannelId;
@@ -410,7 +414,7 @@ final class ZLinkSpotRoutedSendCall implements ZLinkSendCall {
 }
 
 final class ZLinkSpotRoutedRequestCall implements ZLinkRequestCall {
-    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
+    private final AtomicBoolean submitGate;
     private final ZLinkSpotRoutedOutbound outbound;
     private final String routerChannelId;
     private final RoutingId targetNodeRid;
@@ -480,7 +484,7 @@ final class ZLinkSpotRoutedRequestCall implements ZLinkRequestCall {
         ZLinkApplicationMetadata metadata) {
         this(outbound, routerChannelId, targetNodeRid, spotId, spotGeneration, payload,
             packetName, contentType, timeout, metadata,
-            new java.util.concurrent.atomic.AtomicBoolean());
+            new AtomicBoolean());
     }
 
     private ZLinkSpotRoutedRequestCall(
@@ -494,7 +498,7 @@ final class ZLinkSpotRoutedRequestCall implements ZLinkRequestCall {
         String contentType,
         Duration timeout,
         ZLinkApplicationMetadata metadata,
-        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        AtomicBoolean submitGate) {
         this.submitGate = submitGate;
         this.outbound = outbound;
         this.routerChannelId = routerChannelId;
@@ -580,7 +584,7 @@ final class ZLinkSpotRoutedRequestCall implements ZLinkRequestCall {
         }
         systems.zlink.framework.runtime.internal.handlers
             .ZLinkSuspendInvocationContext.rejectSameSpotWait(spotId);
-        return systems.zlink.framework.execution.ZLinkAsyncSerialQueue.manageCurrent(
+        return ZLinkAsyncSerialQueue.manageCurrent(
             outbound.submitRequest(
             routerChannelId,
             targetNodeRid,
@@ -598,7 +602,7 @@ final class ZLinkSpotRoutedRequestCall implements ZLinkRequestCall {
     public <TReply> CompletionStage<TReply> yield(Class<TReply> replyType) {
         systems.zlink.framework.runtime.internal.handlers
             .ZLinkSuspendInvocationContext.requireYieldAllowed("Spot request");
-        return systems.zlink.framework.execution.ZLinkAsyncSerialQueue
+        return ZLinkAsyncSerialQueue
             .yieldCurrent(submit(replyType));
     }
 

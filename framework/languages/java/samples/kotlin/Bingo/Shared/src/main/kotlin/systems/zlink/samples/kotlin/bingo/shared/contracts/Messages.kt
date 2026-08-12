@@ -17,6 +17,7 @@ typealias MatchBingoApiRes = Messages.MatchBingoApiRes
 typealias ReserveBingoRoomReq = Messages.ReserveBingoRoomReq
 typealias ReserveBingoRoomRes = Messages.ReserveBingoRoomRes
 typealias BingoRoomSettingsPayload = Messages.BingoRoomSettingsPayload
+typealias BingoRoomCreateReq = Messages.BingoRoomCreateReq
 typealias BingoRoomJoinReq = Messages.BingoRoomJoinReq
 typealias BingoRoomJoinRes = Messages.BingoRoomJoinRes
 typealias SubmitBingoCardReq = Messages.SubmitBingoCardReq
@@ -193,6 +194,11 @@ fun BingoRoomSettingsPayload(
         .setMaxDrawNumber(maxDrawNumber)
         .setPurpose(purpose)
         .apply { if (observedRoomId.isNotBlank()) setObservedRoomId(observedRoomId) }
+        .build()
+
+fun BingoRoomCreateReq(settings: BingoRoomSettingsPayload): BingoRoomCreateReq =
+    Messages.BingoRoomCreateReq.newBuilder()
+        .setSettings(settings)
         .build()
 
 fun BingoRoomJoinReq(

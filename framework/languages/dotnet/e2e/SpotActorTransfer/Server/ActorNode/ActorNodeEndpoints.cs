@@ -546,7 +546,7 @@ internal static class ActorNodeEndpoints
             // application does not supply an owner RID or ObjectGeneration.
             await actorClient.SendToActor(
                     actorId,
-                    new HandoffPacket(request.Scenario, request.Marker))
+                    new HandoffMsg(request.Scenario, request.Marker))
                 .Async(cancellationToken);
             return Results.Ok();
         });
@@ -558,7 +558,7 @@ internal static class ActorNodeEndpoints
             var reply = await actors
                 .RequestToActor(
                     request.TargetId,
-                    new RelocationWorkloadRequest(
+                    new RelocationWorkloadReq(
                         request.Scenario,
                         request.Sequence,
                         request.OperationId,
@@ -568,7 +568,7 @@ internal static class ActorNodeEndpoints
                     RelocationWorkloadMetadata.OperationId,
                     request.OperationId)
                 .Timeout(RemainingTimeout(request))
-                .Async<RelocationWorkloadReply>(cancellationToken);
+                .Async<RelocationWorkloadRes>(cancellationToken);
             return Results.Ok(reply);
         });
         app.MapPost("/workload/actors/request-probe", async (
@@ -581,7 +581,7 @@ internal static class ActorNodeEndpoints
                 var reply = await actors
                     .RequestToActor(
                         request.TargetId,
-                        new RelocationWorkloadRequest(
+                        new RelocationWorkloadReq(
                             request.Scenario,
                             request.Sequence,
                             request.OperationId,
@@ -591,7 +591,7 @@ internal static class ActorNodeEndpoints
                         RelocationWorkloadMetadata.OperationId,
                         request.OperationId)
                     .Timeout(RemainingTimeout(request))
-                    .Async<RelocationWorkloadReply>(cancellationToken);
+                    .Async<RelocationWorkloadRes>(cancellationToken);
                 return Results.Ok(new RelocationWorkloadProbeRes(true, reply, null));
             }
             catch (ZLinkFrameworkException error)
@@ -617,7 +617,7 @@ internal static class ActorNodeEndpoints
             await actors
                 .SendToActor(
                     request.TargetId,
-                    new RelocationWorkloadPacket(
+                    new RelocationWorkloadMsg(
                         request.Scenario,
                         request.Sequence,
                         request.OperationId,
@@ -648,7 +648,7 @@ internal static class ActorNodeEndpoints
             var reply = await spots
                 .RequestToSpot(
                     request.TargetId,
-                    new RelocationWorkloadRequest(
+                    new RelocationWorkloadReq(
                         request.Scenario,
                         request.Sequence,
                         request.OperationId,
@@ -658,7 +658,7 @@ internal static class ActorNodeEndpoints
                     RelocationWorkloadMetadata.OperationId,
                     request.OperationId)
                 .Timeout(RemainingTimeout(request))
-                .Async<RelocationWorkloadReply>(cancellationToken);
+                .Async<RelocationWorkloadRes>(cancellationToken);
             return Results.Ok(reply);
         });
         app.MapPost("/workload/spots/request-probe", async (
@@ -671,7 +671,7 @@ internal static class ActorNodeEndpoints
                 var reply = await spots
                     .RequestToSpot(
                         request.TargetId,
-                        new RelocationWorkloadRequest(
+                        new RelocationWorkloadReq(
                             request.Scenario,
                             request.Sequence,
                             request.OperationId,
@@ -681,7 +681,7 @@ internal static class ActorNodeEndpoints
                         RelocationWorkloadMetadata.OperationId,
                         request.OperationId)
                     .Timeout(RemainingTimeout(request))
-                    .Async<RelocationWorkloadReply>(cancellationToken);
+                    .Async<RelocationWorkloadRes>(cancellationToken);
                 return Results.Ok(new RelocationWorkloadProbeRes(true, reply, null));
             }
             catch (ZLinkFrameworkException error)
@@ -707,7 +707,7 @@ internal static class ActorNodeEndpoints
             await spots
                 .SendToSpot(
                     request.TargetId,
-                    new RelocationWorkloadPacket(
+                    new RelocationWorkloadMsg(
                         request.Scenario,
                         request.Sequence,
                         request.OperationId,

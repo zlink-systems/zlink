@@ -1,5 +1,7 @@
 package systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.actors
 
+
+import systems.zlink.framework.actors.ZLinkActorJoinOperationId
 import systems.zlink.framework.actors.ZLinkActor
 import systems.zlink.framework.actors.ZLinkActorContext
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion
@@ -30,7 +32,7 @@ class SupportUserActor(
     var conversationId: String = ""
         private set
     private var pendingConversationId: String? = null
-    private val completedJoinOperations = mutableSetOf<systems.zlink.framework.actors.ZLinkActorJoinOperationId>()
+    private val completedJoinOperations = mutableSetOf<ZLinkActorJoinOperationId>()
 
     override fun context(): ZLinkActorContext = context
 
@@ -54,11 +56,11 @@ class SupportUserActor(
         pendingConversationId = conversationId.ifBlank { null }
     }
 
-    fun completedJoinOperations(): Set<systems.zlink.framework.actors.ZLinkActorJoinOperationId> =
+    fun completedJoinOperations(): Set<ZLinkActorJoinOperationId> =
         completedJoinOperations.toSet()
 
     fun restoreCompletedJoinOperations(
-        operationIds: Collection<systems.zlink.framework.actors.ZLinkActorJoinOperationId>,
+        operationIds: Collection<ZLinkActorJoinOperationId>,
     ) {
         completedJoinOperations.addAll(operationIds)
     }

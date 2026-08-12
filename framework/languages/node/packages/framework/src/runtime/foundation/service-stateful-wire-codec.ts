@@ -6,12 +6,19 @@ import type {
 import { operationRequiresReply } from './service-runtime-contracts';
 import { ServiceWireProtocolError } from './service-wire-m6a-codec';
 import { isCanonicalWireReplyTerminal } from '../framework-errors-internal';
+import { routingIdsEqual } from '../routing-id';
 import {
   SERVICE_WIRE_MAGIC,
   SERVICE_WIRE_MAJOR,
   ServiceWireCommand,
   ServiceWireFlag
 } from './service-wire-constants.generated';
+import {
+  decodeCanonicalServiceWireText,
+  decodeServiceWireRoutingId,
+  encodeCanonicalServiceWireText,
+  encodeServiceWireRoutingId
+} from './service-wire-binary-primitives';
 
 const PREFIX_SIZE = 5;
 const MAGIC_0 = SERVICE_WIRE_MAGIC[0];
@@ -266,7 +273,7 @@ export interface ServiceActorRouteFence {
   readonly actor: ServiceActorRef;
   readonly targetNodeGeneration: bigint;
   readonly authorityOwnerGeneration: bigint;
-  readonly ownerLeaseGeneration?: bigint;
+  readonly ownerLeaseGeneration: bigint;
 }
 
 /**
@@ -280,6 +287,76 @@ export interface ServiceBoundSessionActorAuthority {
   readonly targetNodeGeneration: bigint;
   readonly authorityOwnerGeneration: bigint;
   readonly ownerLeaseGeneration: bigint;
+}
+
+export interface ServiceSessionRelocationOwnerFence {
+  readonly sessionOwnerNodeRid: string;
+  readonly sessionOwnerNodeGeneration: bigint;
+  readonly sessionOwnerId: string;
+  readonly sessionOwnerLeaseGeneration: bigint;
+  readonly sessionRid: string;
+  readonly bindingGeneration: bigint;
+}
+
+export interface ServiceSessionRelocationSeal {
+  readonly relocation: ServiceWireOperationId;
+  readonly coordinator: ServiceWireRelocationCoordinatorFence;
+  readonly senderRole: 'source';
+  readonly actor: ServiceBoundSessionActorAuthority;
+  readonly session: ServiceSessionRelocationOwnerFence;
+}
+
+export interface ServiceSessionRelocationSealed {
+  readonly relocation: ServiceWireOperationId;
+  readonly coordinator: ServiceWireRelocationCoordinatorFence;
+  readonly actor: ServiceBoundSessionActorAuthority;
+  readonly session: ServiceSessionRelocationOwnerFence;
+  readonly lastAcceptedSessionSequence: bigint;
+}
+
+export type ServiceSessionRelocationRoute =
+  | {
+      readonly relocation: ServiceWireOperationId;
+      readonly coordinator: ServiceWireRelocationCoordinatorFence;
+      readonly senderRole: 'target';
+      readonly actor: ServiceActorRef;
+      readonly session: ServiceSessionRelocationOwnerFence;
+      readonly route: {
+        readonly action: 'commit';
+        readonly previousAuthorityOwnerGeneration: bigint;
+        readonly targetAuthorityOwnerGeneration: bigint;
+        readonly targetNodeRid: string;
+        readonly targetNodeGeneration: bigint;
+        readonly replayedHighWater: bigint;
+      };
+    }
+  | {
+      readonly relocation: ServiceWireOperationId;
+      readonly coordinator: ServiceWireRelocationCoordinatorFence;
+      readonly senderRole: 'source';
+      readonly actor: ServiceActorRef;
+      readonly session: ServiceSessionRelocationOwnerFence;
+      readonly route: {
+        readonly action: 'abort';
+        readonly currentAuthorityOwnerGeneration: bigint;
+      };
+    };
+
+export type ServiceSessionRelocationRouteResult =
+  | 'applied'
+  | 'alreadyApplied'
+  | 'stale'
+  | 'sessionOrBindingClosed';
+
+export interface ServiceSessionRelocationRouted {
+  readonly relocation: ServiceWireOperationId;
+  readonly coordinator: ServiceWireRelocationCoordinatorFence;
+  readonly actor: ServiceActorRef;
+  readonly session: ServiceSessionRelocationOwnerFence;
+  readonly action: 'commit' | 'abort';
+  readonly result: ServiceSessionRelocationRouteResult;
+  readonly currentAuthorityOwnerGeneration: bigint;
+  readonly lastAcceptedSessionSequence: bigint;
 }
 
 export interface ServiceRetiredBoundSessionRouteFence {
@@ -660,6 +737,231 @@ export function encodeBoundSessionReplacedHeader(
     rid(retiredSession.sessionRid, 'sessionRid'),
     u64(retiredSession.retiredBindingGeneration)
   );
+}
+
+/** Encodes canonical service-wire command 42. */
+export function encodeSessionRelocationSeal(value: ServiceSessionRelocationSeal): Buffer {
+  return concat(
+    prefix(M6bServiceWireCommand.sessionRelocationSeal),
+    wireId(value.relocation, 'relocation'),
+    coordinatorFence(value.coordinator),
+    Buffer.of(relocationRole(value.senderRole)),
+    actorAuthorityFence(value.actor),
+    sessionRelocationOwnerFence(value.session)
+  );
+}
+
+/** Decodes canonical service-wire command 42. */
+export function decodeSessionRelocationSeal(frame: Uint8Array): ServiceSessionRelocationSeal {
+  const reader = new Reader(frame);
+  const command = reader.prefix();
+  if (command.command !== M6bServiceWireCommand.sessionRelocationSeal || command.flags !== 0) {
+    fail('Command is not sessionRelocationSeal.');
+  }
+  const relocation = reader.operationId('relocation');
+  const coordinator = reader.coordinatorFence();
+  const senderRole = reader.relocationRole();
+  if (senderRole !== 'source') {
+    fail('Session relocation seal sender role is invalid.');
+  }
+  const actor = reader.actorAuthorityFence();
+  const session = reader.sessionRelocationOwnerFence();
+  reader.end();
+  return { relocation, coordinator, senderRole, actor, session };
+}
+
+/** Encodes canonical service-wire command 43. */
+export function encodeSessionRelocationSealed(value: ServiceSessionRelocationSealed): Buffer {
+  return concat(
+    prefix(M6bServiceWireCommand.sessionRelocationSealed),
+    wireId(value.relocation, 'relocation'),
+    coordinatorFence(value.coordinator),
+    actorAuthorityFence(value.actor),
+    sessionRelocationOwnerFence(value.session),
+    ordinalU64(value.lastAcceptedSessionSequence, 'lastAcceptedSessionSequence')
+  );
+}
+
+/** Decodes canonical service-wire command 43. */
+export function decodeSessionRelocationSealed(frame: Uint8Array): ServiceSessionRelocationSealed {
+  const reader = new Reader(frame);
+  const command = reader.prefix();
+  if (command.command !== M6bServiceWireCommand.sessionRelocationSealed || command.flags !== 0) {
+    fail('Command is not sessionRelocationSealed.');
+  }
+  const relocation = reader.operationId('relocation');
+  const coordinator = reader.coordinatorFence();
+  const actor = reader.actorAuthorityFence();
+  const session = reader.sessionRelocationOwnerFence();
+  const lastAcceptedSessionSequence = reader.ordinal('lastAcceptedSessionSequence');
+  reader.end();
+  return { relocation, coordinator, actor, session, lastAcceptedSessionSequence };
+}
+
+/** Encodes canonical service-wire command 44. */
+export function encodeSessionRelocationRoute(value: ServiceSessionRelocationRoute): Buffer {
+  const route = value.route.action === 'commit'
+    ? (() => {
+        if (value.senderRole !== 'target') {
+          fail('Session relocation commit sender role is invalid.');
+        }
+        if (
+          value.route.targetAuthorityOwnerGeneration
+            <= value.route.previousAuthorityOwnerGeneration
+        ) {
+          fail('Session relocation commit must advance the authority owner generation.');
+        }
+        return concat(
+          u64(value.route.previousAuthorityOwnerGeneration),
+          u64(value.route.targetAuthorityOwnerGeneration),
+          rid(value.route.targetNodeRid, 'targetNodeRid'),
+          u64(value.route.targetNodeGeneration),
+          ordinalU64(value.route.replayedHighWater, 'replayedHighWater')
+        );
+      })()
+    : (() => {
+        if (value.senderRole !== 'source') {
+          fail('Session relocation abort sender role is invalid.');
+        }
+        return u64(value.route.currentAuthorityOwnerGeneration);
+      })();
+  return concat(
+    prefix(M6bServiceWireCommand.sessionRelocationRoute),
+    wireId(value.relocation, 'relocation'),
+    coordinatorFence(value.coordinator),
+    Buffer.of(relocationRole(value.senderRole)),
+    actorRef(value.actor),
+    sessionRelocationOwnerFence(value.session),
+    Buffer.of(value.route.action === 'commit' ? 1 : 2),
+    u16(route.byteLength),
+    route
+  );
+}
+
+/** Decodes canonical service-wire command 44. */
+export function decodeSessionRelocationRoute(frame: Uint8Array): ServiceSessionRelocationRoute {
+  const reader = new Reader(frame);
+  const command = reader.prefix();
+  if (command.command !== M6bServiceWireCommand.sessionRelocationRoute || command.flags !== 0) {
+    fail('Command is not sessionRelocationRoute.');
+  }
+  const relocation = reader.operationId('relocation');
+  const coordinator = reader.coordinatorFence();
+  const senderRole = reader.relocationRole();
+  const actor = reader.actorRef('actor');
+  const session = reader.sessionRelocationOwnerFence();
+  const action = reader.u8('route.action');
+  const routeLength = reader.u16('route.length');
+  const routeEnd = reader.offset + routeLength;
+  if (routeEnd > reader.bytes.byteLength) fail('Truncated Session relocation route body.');
+  if (action === 1) {
+    if (senderRole !== 'target') {
+      fail('Session relocation commit sender role is invalid.');
+    }
+    const previousAuthorityOwnerGeneration = reader.nonZeroU64(
+      'previousAuthorityOwnerGeneration'
+    );
+    const targetAuthorityOwnerGeneration = reader.nonZeroU64(
+      'targetAuthorityOwnerGeneration'
+    );
+    const targetNodeRid = reader.rid('targetNodeRid');
+    const targetNodeGeneration = reader.nonZeroU64('targetNodeGeneration');
+    const replayedHighWater = reader.ordinal('replayedHighWater');
+    if (reader.offset !== routeEnd) fail('Invalid Session relocation commit route length.');
+    if (targetAuthorityOwnerGeneration <= previousAuthorityOwnerGeneration) {
+      fail('Session relocation commit must advance the authority owner generation.');
+    }
+    reader.end();
+    return {
+      relocation,
+      coordinator,
+      senderRole,
+      actor,
+      session,
+      route: {
+        action: 'commit',
+        previousAuthorityOwnerGeneration,
+        targetAuthorityOwnerGeneration,
+        targetNodeRid,
+        targetNodeGeneration,
+        replayedHighWater
+      }
+    };
+  }
+  if (action === 2) {
+    if (senderRole !== 'source') {
+      fail('Session relocation abort sender role is invalid.');
+    }
+    const currentAuthorityOwnerGeneration = reader.nonZeroU64(
+      'currentAuthorityOwnerGeneration'
+    );
+    if (reader.offset !== routeEnd) fail('Invalid Session relocation abort route length.');
+    reader.end();
+    return {
+      relocation,
+      coordinator,
+      senderRole,
+      actor,
+      session,
+      route: { action: 'abort', currentAuthorityOwnerGeneration }
+    };
+  }
+  fail('Session relocation route action is invalid.');
+}
+
+/** Encodes canonical service-wire command 45. */
+export function encodeSessionRelocationRouted(value: ServiceSessionRelocationRouted): Buffer {
+  const result = value.result === 'applied' ? 0
+    : value.result === 'alreadyApplied' ? 1
+      : value.result === 'stale' ? 2 : 3;
+  return concat(
+    prefix(M6bServiceWireCommand.sessionRelocationRouted),
+    wireId(value.relocation, 'relocation'),
+    coordinatorFence(value.coordinator),
+    actorRef(value.actor),
+    sessionRelocationOwnerFence(value.session),
+    Buffer.of(value.action === 'commit' ? 1 : 2, result),
+    u64(value.currentAuthorityOwnerGeneration),
+    ordinalU64(value.lastAcceptedSessionSequence, 'lastAcceptedSessionSequence')
+  );
+}
+
+/** Decodes canonical service-wire command 45. */
+export function decodeSessionRelocationRouted(frame: Uint8Array): ServiceSessionRelocationRouted {
+  const reader = new Reader(frame);
+  const command = reader.prefix();
+  if (command.command !== M6bServiceWireCommand.sessionRelocationRouted || command.flags !== 0) {
+    fail('Command is not sessionRelocationRouted.');
+  }
+  const relocation = reader.operationId('relocation');
+  const coordinator = reader.coordinatorFence();
+  const actor = reader.actorRef('actor');
+  const session = reader.sessionRelocationOwnerFence();
+  const actionValue = reader.u8('action');
+  if (actionValue !== 1 && actionValue !== 2) fail('Session relocation routed action is invalid.');
+  const resultValue = reader.u8('result');
+  if (resultValue > 3) fail('Session relocation routed result is invalid.');
+  const currentAuthorityOwnerGeneration = reader.nonZeroU64(
+    'currentAuthorityOwnerGeneration'
+  );
+  const lastAcceptedSessionSequence = reader.ordinal('lastAcceptedSessionSequence');
+  reader.end();
+  const results: readonly ServiceSessionRelocationRouteResult[] = [
+    'applied',
+    'alreadyApplied',
+    'stale',
+    'sessionOrBindingClosed'
+  ];
+  return {
+    relocation,
+    coordinator,
+    actor,
+    session,
+    action: actionValue === 1 ? 'commit' : 'abort',
+    result: results[resultValue]!,
+    currentAuthorityOwnerGeneration,
+    lastAcceptedSessionSequence
+  };
 }
 
 export function encodeInstanceSpotHeader(
@@ -1989,7 +2291,8 @@ function actorFence(value: ServiceActorRouteFence): Buffer {
     actorRef(value.actor),
     rid(value.actor.nodeRid, 'targetNodeRid'),
     u64(value.targetNodeGeneration),
-    u64(value.authorityOwnerGeneration)
+    u64(value.authorityOwnerGeneration),
+    u64(value.ownerLeaseGeneration)
   );
 }
 
@@ -2000,6 +2303,17 @@ function actorAuthorityFence(value: ServiceBoundSessionActorAuthority): Buffer {
     u64(value.targetNodeGeneration),
     u64(value.authorityOwnerGeneration),
     u64(value.ownerLeaseGeneration)
+  );
+}
+
+function sessionRelocationOwnerFence(value: ServiceSessionRelocationOwnerFence): Buffer {
+  return concat(
+    rid(value.sessionOwnerNodeRid, 'sessionOwnerNodeRid'),
+    u64(value.sessionOwnerNodeGeneration),
+    text8(value.sessionOwnerId, 'sessionOwnerId'),
+    u64(value.sessionOwnerLeaseGeneration),
+    rid(value.sessionRid, 'sessionRid'),
+    u64(value.bindingGeneration)
   );
 }
 
@@ -2059,13 +2373,13 @@ function validateMessageFollowRecord(
   }
   if (!Number.isInteger(value.queuedMessages)
       || value.queuedMessages < 0
-      || value.queuedMessages > 1024) {
-    invalid('Message Follow queuedMessages must be in 0..1024.');
+      || value.queuedMessages > 0xffff_ffff) {
+    invalid('Message Follow queuedMessages must be a u32.');
   }
   if (!Number.isInteger(value.queuedBytes)
       || value.queuedBytes < 0
-      || value.queuedBytes > 16 * 1024 * 1024) {
-    invalid('Message Follow queuedBytes must be in 0..16 MiB.');
+      || value.queuedBytes > 0xffff_ffff) {
+    invalid('Message Follow queuedBytes must be a u32.');
   }
   if (value.originalOperation.high === 0n && value.originalOperation.low === 0n) {
     invalid('Message Follow originalOperation must not be zero.');
@@ -2091,7 +2405,8 @@ function spotRef(value: ServiceSpotRef): Buffer {
 }
 
 function rid(value: string, name: string): Buffer {
-  return sized8(value, name);
+  const bytes = encodeServiceWireRoutingId(value, name, 0xff, outOfRange);
+  return concat(Buffer.of(bytes.byteLength), bytes);
 }
 
 function text8(value: string, name: string): Buffer {
@@ -2099,10 +2414,7 @@ function text8(value: string, name: string): Buffer {
 }
 
 function text16(value: string, name: string): Buffer {
-  const bytes = Buffer.from(value);
-  if (bytes.byteLength < 1 || bytes.byteLength > 0xffff || bytes.includes(0)) {
-    throw new RangeError(`${name} must be 1..65535 UTF-8 bytes without NUL.`);
-  }
+  const bytes = encodeCanonicalServiceWireText(value, name, 0xffff, outOfRange);
   return concat(u16(bytes.byteLength), bytes);
 }
 
@@ -2111,10 +2423,7 @@ function optionalRid(value: string | undefined): Buffer {
 }
 
 function sized8(value: string, name: string): Buffer {
-  const bytes = Buffer.from(value);
-  if (bytes.byteLength < 1 || bytes.byteLength > 255 || bytes.includes(0)) {
-    throw new RangeError(`${name} must be 1..255 UTF-8 bytes without NUL.`);
-  }
+  const bytes = encodeCanonicalServiceWireText(value, name, 0xff, outOfRange);
   return concat(Buffer.of(bytes.byteLength), bytes);
 }
 
@@ -2150,6 +2459,13 @@ function u64Any(value: bigint): Buffer {
   return result;
 }
 
+function ordinalU64(value: bigint, name: string): Buffer {
+  if (value < 0n || value > 0x7fff_ffff_ffff_ffffn) {
+    throw new RangeError(`${name} exceeds the signed ordinal range.`);
+  }
+  return u64Any(value);
+}
+
 function requirePositive(value: bigint | undefined, name: string): bigint {
   if (value === undefined || value < 1n || value > 0xffff_ffff_ffff_ffffn) {
     throw new RangeError(`${name} must be a non-zero u64.`);
@@ -2167,6 +2483,10 @@ function concat(...parts: readonly Uint8Array[]): Buffer {
 
 function fail(message: string): never {
   throw new ServiceWireProtocolError(message);
+}
+
+function outOfRange(message: string): never {
+  throw new RangeError(message);
 }
 
 class Reader {
@@ -2530,10 +2850,9 @@ class Reader {
     const length = this.u16('relocationReference.length');
     if (length < 1 || length > 4096) fail('relocationReference length is invalid.');
     this.need(length, 'relocationReference');
-    const value = this.bytes.subarray(this.offset, this.offset + length).toString();
+    const bytes = this.bytes.subarray(this.offset, this.offset + length);
     this.offset += length;
-    if (value.includes('\0')) fail('relocationReference contains NUL.');
-    return value;
+    return decodeCanonicalServiceWireText(bytes, 'relocationReference', fail);
   }
 
   applicationPayload(): NonNullable<ServiceMaintenanceReplyRelay['payload']> {
@@ -2554,7 +2873,7 @@ class Reader {
   }
 
   rid(name: string): string {
-    return this.sized8(name);
+    return this.opaque8(name);
   }
 
   text8(name: string): string {
@@ -2565,20 +2884,18 @@ class Reader {
     const length = this.u16(`${name}.length`);
     if (length === 0) fail(`${name} must not be empty.`);
     this.need(length, name);
-    const value = this.bytes.subarray(this.offset, this.offset + length).toString();
+    const bytes = this.bytes.subarray(this.offset, this.offset + length);
     this.offset += length;
-    if (value.includes('\0')) fail(`${name} contains NUL.`);
-    return value;
+    return decodeCanonicalServiceWireText(bytes, name, fail);
   }
 
   optionalRid(name: string): string | undefined {
     const length = this.u8(`${name}.length`);
     if (length === 0) return undefined;
     this.need(length, name);
-    const value = this.bytes.subarray(this.offset, this.offset + length).toString();
+    const bytes = this.bytes.subarray(this.offset, this.offset + length);
     this.offset += length;
-    if (value.includes('\0')) fail(`${name} contains NUL.`);
-    return value;
+    return decodeServiceWireRoutingId(bytes, name, 0xff, fail);
   }
 
   actorRef(name: string): ServiceActorRef {
@@ -2593,9 +2910,9 @@ class Reader {
     const length = this.u8('sourceActorId.length');
     if (length === 0) return undefined;
     this.need(length, 'sourceActorId');
-    const actorId = this.bytes.subarray(this.offset, this.offset + length).toString();
+    const bytes = this.bytes.subarray(this.offset, this.offset + length);
     this.offset += length;
-    if (actorId.includes('\0')) fail('sourceActorId contains NUL.');
+    const actorId = decodeCanonicalServiceWireText(bytes, 'sourceActorId', fail);
     return {
       nodeRid: '',
       actorId,
@@ -2616,7 +2933,30 @@ class Reader {
     return {
       actor: { ...actor, nodeRid: targetNodeRid },
       targetNodeGeneration: this.nonZeroU64('targetNodeGeneration'),
-      authorityOwnerGeneration: this.nonZeroU64('authorityOwnerGeneration')
+      authorityOwnerGeneration: this.nonZeroU64('authorityOwnerGeneration'),
+      ownerLeaseGeneration: this.nonZeroU64('ownerLeaseGeneration')
+    };
+  }
+
+  actorAuthorityFence(): ServiceBoundSessionActorAuthority {
+    const actor = this.actorRef('actor');
+    const targetNodeRid = this.rid('targetNodeRid');
+    return {
+      actor: { ...actor, nodeRid: targetNodeRid },
+      targetNodeGeneration: this.nonZeroU64('targetNodeGeneration'),
+      authorityOwnerGeneration: this.nonZeroU64('authorityOwnerGeneration'),
+      ownerLeaseGeneration: this.nonZeroU64('ownerLeaseGeneration')
+    };
+  }
+
+  sessionRelocationOwnerFence(): ServiceSessionRelocationOwnerFence {
+    return {
+      sessionOwnerNodeRid: this.rid('sessionOwnerNodeRid'),
+      sessionOwnerNodeGeneration: this.nonZeroU64('sessionOwnerNodeGeneration'),
+      sessionOwnerId: this.text8('sessionOwnerId'),
+      sessionOwnerLeaseGeneration: this.nonZeroU64('sessionOwnerLeaseGeneration'),
+      sessionRid: this.rid('sessionRid'),
+      bindingGeneration: this.nonZeroU64('bindingGeneration')
     };
   }
 
@@ -2678,10 +3018,18 @@ class Reader {
     const length = this.u8(`${name}.length`);
     if (length === 0) fail(`${name} must not be empty.`);
     this.need(length, name);
-    const value = this.bytes.subarray(this.offset, this.offset + length).toString();
+    const bytes = this.bytes.subarray(this.offset, this.offset + length);
     this.offset += length;
-    if (value.includes('\0')) fail(`${name} contains NUL.`);
-    return value;
+    return decodeCanonicalServiceWireText(bytes, name, fail);
+  }
+
+  private opaque8(name: string): string {
+    const length = this.u8(`${name}.length`);
+    if (length === 0) fail(`${name} must not be empty.`);
+    this.need(length, name);
+    const bytes = this.bytes.subarray(this.offset, this.offset + length);
+    this.offset += length;
+    return decodeServiceWireRoutingId(bytes, name, 0xff, fail);
   }
 
   private need(count: number, name: string): void {
@@ -2697,7 +3045,7 @@ export function decodeServiceWireFrozenRecord(bytes: Uint8Array): ServiceWireFro
   if (sourceKind < 1 || sourceKind > 4) fail('Invalid frozen source kind.');
   const sourceReader = reader.body16('frozen source');
   const source: ServiceWireRequestSourceFence = {
-    nodeRid: sourceReader.text8('sourceNodeRid'),
+    nodeRid: sourceReader.rid8('sourceNodeRid'),
     nodeGeneration: sourceReader.nonZeroU64('sourceNodeGeneration'),
     ownerId: sourceReader.text8('sourceOwnerId'),
     leaseGeneration: sourceReader.nonZeroU64('sourceOwnerLeaseGeneration')
@@ -2715,7 +3063,7 @@ export function decodeServiceWireFrozenRecord(bytes: Uint8Array): ServiceWireFro
       generation: sourceReader.nonZeroU64('sourceActorGeneration')
     };
     if (sourceKind === 4) {
-      sourceSessionRid = sourceReader.text8('sourceSessionRid');
+      sourceSessionRid = sourceReader.rid8('sourceSessionRid');
       sourceBindingGeneration = sourceReader.nonZeroU64('sourceBindingGeneration');
       sourceSessionSequence = sourceReader.nonZeroU64('sourceSessionSequence');
     }
@@ -2819,7 +3167,7 @@ export function encodeServiceWireFrozenActorApplicationRecord(input: {
 function sameFrozenRecordSummary(left: ServiceWireFrozenRecord, right: ServiceWireFrozenRecord): boolean {
   return left.recordKind === right.recordKind
     && left.sourceKind === right.sourceKind
-    && left.source.nodeRid === right.source.nodeRid
+    && routingIdsEqual(left.source.nodeRid, right.source.nodeRid)
     && left.source.nodeGeneration === right.source.nodeGeneration
     && left.source.ownerId === right.source.ownerId
     && left.source.leaseGeneration === right.source.leaseGeneration
@@ -2920,6 +3268,15 @@ class FrozenReader {
     return this.textBody(length, name);
   }
 
+  rid8(name: string): string {
+    const length = this.u8(`${name}.length`);
+    if (length === 0) fail(`${name} must not be empty.`);
+    this.need(length, name);
+    const bytes = this.bytes.subarray(this.offset, this.offset + length);
+    this.offset += length;
+    return decodeServiceWireRoutingId(bytes, name, 0xff, fail);
+  }
+
   text16(name: string, allowEmpty = false): string {
     const length = this.u16(`${name}.length`);
     if (!allowEmpty && length === 0) fail(`${name} must not be empty.`);
@@ -3004,7 +3361,7 @@ class FrozenReader {
 
   private spotRoute(): void {
     this.spotIdentity();
-    this.text8('targetNodeRid');
+    this.rid8('targetNodeRid');
     this.nonZeroU64('targetNodeGeneration');
     this.nonZeroU64('expectedAuthorityOwnerGeneration');
     this.nonZeroU64('expectedOwnerLeaseGeneration');
@@ -3012,7 +3369,7 @@ class FrozenReader {
 
   private actorRoute(): void {
     this.actorIdentity();
-    this.text8('targetNodeRid');
+    this.rid8('targetNodeRid');
     this.nonZeroU64('targetNodeGeneration');
     this.nonZeroU64('expectedAuthorityOwnerGeneration');
     this.nonZeroU64('expectedOwnerLeaseGeneration');
@@ -3072,7 +3429,7 @@ class FrozenReader {
     const kind = this.u8('instanceRouteKind');
     if (kind < 1 || kind > 2) fail('Invalid Instance route kind.');
     const body = this.body16('Instance route');
-    body.text8('targetNodeRid');
+    body.rid8('targetNodeRid');
     body.nonZeroU64('targetNodeGeneration');
     body.text8('targetSpotId');
     if (kind === 1) {
@@ -3124,10 +3481,9 @@ class FrozenReader {
 
   private textBody(length: number, name: string): string {
     this.need(length, name);
-    const value = Buffer.from(this.bytes.subarray(this.offset, this.offset + length)).toString();
+    const bytes = this.bytes.subarray(this.offset, this.offset + length);
     this.offset += length;
-    if (value.includes('\0')) fail(`${name} contains NUL.`);
-    return value;
+    return decodeCanonicalServiceWireText(bytes, name, fail);
   }
 
   private need(length: number, name: string): void {

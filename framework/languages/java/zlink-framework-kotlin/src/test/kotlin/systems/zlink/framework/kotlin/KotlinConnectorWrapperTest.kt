@@ -1,5 +1,9 @@
 package systems.zlink.framework.kotlin
 
+
+import org.junit.jupiter.api.Assertions
+import java.time.Duration
+import java.util.concurrent.TimeoutException
 import java.net.URI
 import java.net.ServerSocket
 import java.net.Socket
@@ -301,7 +305,7 @@ final class KotlinConnectorWrapperTest {
                 connector.connect().await()
 
                 connector.expectNone<Map<String, String>>("Notice")
-                    .within(java.time.Duration.ofMillis(25))
+                    .within(Duration.ofMillis(25))
                     .await()
 
                 val sequence = async(start = CoroutineStart.UNDISPATCHED) {
@@ -429,11 +433,11 @@ final class KotlinConnectorWrapperTest {
     fun kotlinAssertionsUseJavaFailureClassification() = runBlocking {
         ZLinkKotlinStreamAssert.ensure(true, "condition should pass")
         val timeout = ZLinkKotlinStreamAssert.expectFailure("REQUEST_TIMEOUT") {
-            throw java.util.concurrent.TimeoutException("request timed out")
+            throw TimeoutException("request timed out")
         }
         assertEquals(ZLinkStreamErrorCode.REQUEST_TIMEOUT, timeout.code())
         ZLinkKotlinStreamAssert.expectTimeout {
-            throw java.util.concurrent.TimeoutException("request timed out")
+            throw TimeoutException("request timed out")
         }
     }
 

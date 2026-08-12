@@ -16,8 +16,16 @@ import systems.zlink.contracts.core.RoutingId;
 public final class ZLinkServiceLivenessRegistry {
     public static final Duration DEFAULT_PROBE_INTERVAL = Duration.ofSeconds(5);
     public static final Duration DEFAULT_PEER_TIMEOUT = Duration.ofSeconds(15);
+    //  A connection that has never completed a probe round trip gates every
+    //  outbound bound-session send (isReady == false). The very first probe
+    //  can be lost while the freshly admitted route is still settling; waiting
+    //  a full probe interval to retransmit leaves a multi-second not-ready
+    //  window in which one-way sends exhaust their bounded submit deadline.
+    //  Retry the outstanding probe quickly until the first ACK arrives.
+    static final Duration NOT_READY_PROBE_RETRY = Duration.ofMillis(250);
 
     private final long probeIntervalNanos;
+    private final long notReadyProbeRetryNanos;
     private final long peerTimeoutNanos;
     private final Map<RoutingId, PeerState> peers = new HashMap<>();
     private long nextProbeId = 1;
@@ -37,6 +45,8 @@ public final class ZLinkServiceLivenessRegistry {
                 "peer timeout must be larger than a positive probe interval");
         }
         probeIntervalNanos = probeInterval.toNanos();
+        notReadyProbeRetryNanos = Math.min(
+            probeIntervalNanos, NOT_READY_PROBE_RETRY.toNanos());
         peerTimeoutNanos = peerTimeout.toNanos();
     }
 
@@ -143,7 +153,9 @@ public final class ZLinkServiceLivenessRegistry {
             if (state.outstandingProbe == 0) {
                 state.outstandingProbe = allocateProbeId();
             }
-            state.nextProbeNanos = addExact(nowNanos, probeIntervalNanos);
+            state.nextProbeNanos = addExact(
+                nowNanos,
+                state.ready ? probeIntervalNanos : notReadyProbeRetryNanos);
             probes.add(new Probe(
                 entry.getKey(), state.connectionId, state.outstandingProbe));
         }

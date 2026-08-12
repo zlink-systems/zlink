@@ -1,5 +1,8 @@
 package systems.zlink.framework.kotlin
 
+
+import systems.zlink.framework.messaging.ZLinkMessage
+import systems.zlink.framework.streams.ZLinkSessionDispatchContext
 import java.time.Duration
 import kotlin.reflect.KClass
 import systems.zlink.contracts.core.RoutingId
@@ -143,11 +146,11 @@ interface ZLinkKotlinSessionClient {
 }
 
 interface ZLinkKotlinSessionActor {
-    fun relay(message: systems.zlink.framework.messaging.ZLinkMessage):
+    fun relay(message: ZLinkMessage):
         ZLinkKotlinSubmissionCall
     fun relay(
-        dispatch: systems.zlink.framework.streams.ZLinkSessionDispatchContext,
-        message: systems.zlink.framework.messaging.ZLinkMessage,
+        dispatch: ZLinkSessionDispatchContext,
+        message: ZLinkMessage,
     ): ZLinkKotlinSubmissionCall
 }
 

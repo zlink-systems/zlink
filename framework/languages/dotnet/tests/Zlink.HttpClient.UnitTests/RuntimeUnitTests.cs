@@ -2,8 +2,11 @@
 
 using System.IO.Compression;
 using System.Net;
+using System.Reflection;
+using System.Reflection.Emit;
 using System.Text;
 using Xunit;
+using Zlink.Framework.Contracts.Codecs;
 using Zlink.Framework.Contracts.Errors;
 using Zlink.HttpClient.Runtime;
 
@@ -160,6 +163,110 @@ public sealed class RuntimeUnitTests
     }
 
     [Fact]
+    public void HttpCodecRegistry_canonicalizes_registration_and_parses_response_parameters()
+    {
+        var codecs = new HttpClientCodecRegistry();
+        codecs.AddSerializer(" \tApplication/X-Test\t", MarkerSerializer.Instance);
+
+        var encoded = codecs.Encode("request", typeof(string));
+        var decoded = codecs.Decode(
+            Encoding.UTF8.GetBytes("response"),
+            typeof(string),
+            "Application/X-Test; charset=utf-8");
+
+        Assert.Equal("application/x-test", encoded.ContentType);
+        Assert.Equal("response", decoded);
+        Assert.Throws<ArgumentException>(() =>
+            codecs.AddSerializer("application/x-test; charset=utf-8", MarkerSerializer.Instance));
+        Assert.Throws<ArgumentException>(() =>
+            codecs.AddSerializer("application /x-test", MarkerSerializer.Instance));
+    }
+
+    [Fact]
+    public void HttpCodecRegistry_uses_the_last_matching_declared_type_registration()
+    {
+        var codecs = new HttpClientCodecRegistry();
+        codecs.AddSerializer(
+            "application/x-first",
+            new TaggedSerializer("first"),
+            static type => type == typeof(string));
+        codecs.AddSerializer(
+            "application/x-second",
+            new TaggedSerializer("second"),
+            static type => type == typeof(string));
+
+        var encoded = codecs.Encode("payload", typeof(string));
+
+        Assert.Equal("application/x-second", encoded.ContentType);
+        Assert.Equal("second:payload", Encoding.UTF8.GetString(encoded.Body));
+    }
+
+    [Fact]
+    public void HttpCodecRegistry_uses_the_last_fallback_registration()
+    {
+        var codecs = new HttpClientCodecRegistry();
+        codecs.AddSerializer("application/x-first", new TaggedSerializer("first"));
+        codecs.AddSerializer("application/x-second", new TaggedSerializer("second"));
+
+        var encoded = codecs.Encode("payload", typeof(string));
+
+        Assert.Equal("application/x-second", encoded.ContentType);
+        Assert.Equal("second:payload", Encoding.UTF8.GetString(encoded.Body));
+    }
+
+    [Fact]
+    public void HttpCodecRegistry_does_not_evict_cached_types_after_saturation()
+    {
+        var resolutions = new Dictionary<Type, int>();
+        var codecs = new HttpClientCodecRegistry();
+        codecs.AddSerializer(
+            "application/x-marker",
+            MarkerSerializer.Instance,
+            type =>
+            {
+                resolutions[type] = resolutions.GetValueOrDefault(type) + 1;
+                return type == typeof(string);
+            });
+
+        _ = codecs.Encode("cached", typeof(string));
+        var assembly = AssemblyBuilder.DefineDynamicAssembly(
+            new AssemblyName("Zlink.HttpSerializerCacheSaturation"),
+            AssemblyBuilderAccess.Run);
+        var module = assembly.DefineDynamicModule("Main");
+        Type? uncachedType = null;
+        object? uncachedValue = null;
+        for (var index = 0; index < 1_024; index++)
+        {
+            var type = module.DefineType($"Payload{index}")
+                .CreateTypeInfo()!
+                .AsType();
+            _ = codecs.Encode(Activator.CreateInstance(type), type);
+            uncachedType = type;
+            uncachedValue = Activator.CreateInstance(type);
+        }
+
+        _ = codecs.Encode("cached-again", typeof(string));
+        Assert.Equal(1, resolutions[typeof(string)]);
+        Assert.NotNull(uncachedType);
+        _ = codecs.Encode(uncachedValue, uncachedType);
+        Assert.Equal(2, resolutions[uncachedType]);
+    }
+
+    [Fact]
+    public void HttpCodecRegistry_rejects_an_unregistered_explicit_non_json_response()
+    {
+        var codecs = new HttpClientCodecRegistry();
+
+        var error = Assert.Throws<ZLinkFrameworkException>(() =>
+            codecs.Decode(
+                Encoding.UTF8.GetBytes("{}"),
+                typeof(Dictionary<string, string>),
+                "application/x-unknown"));
+
+        Assert.Equal(ZLinkFrameworkErrorKind.ProtocolError, error.Kind);
+    }
+
+    [Fact]
     public async Task Proxy_credentials_are_not_added_to_origin_request_headers()
     {
         var handler = new CapturingRequestHandler();
@@ -217,6 +324,31 @@ public sealed class RuntimeUnitTests
                 Content = new ByteArrayContent([])
             });
         }
+    }
+
+    private sealed class MarkerSerializer : IZLinkMessageSerializer
+    {
+        public static MarkerSerializer Instance { get; } = new();
+
+        public ZLinkEncodedPayload Serialize(object value, Type type)
+        {
+            return ZLinkEncodedPayload.From(Encoding.UTF8.GetBytes((string)value));
+        }
+
+        public object? Deserialize(ZLinkEncodedPayload payload, Type type)
+        {
+            return Encoding.UTF8.GetString(payload.Bytes.Span);
+        }
+    }
+
+    private sealed class TaggedSerializer(string tag) : IZLinkMessageSerializer
+    {
+        public ZLinkEncodedPayload Serialize(object value, Type type) =>
+            ZLinkEncodedPayload.From(
+                Encoding.UTF8.GetBytes($"{tag}:{value}"));
+
+        public object? Deserialize(ZLinkEncodedPayload payload, Type type) =>
+            Encoding.UTF8.GetString(payload.Bytes.Span);
     }
 
     private static byte[] GzipBytes(byte[] input)

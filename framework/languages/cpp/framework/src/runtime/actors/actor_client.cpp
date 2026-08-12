@@ -17,6 +17,7 @@
 #include <zlink/framework/contracts/monitoring/route_mesh_runtime.hpp>
 
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -33,6 +34,40 @@ namespace zlink::framework
 
 namespace detail
 {
+namespace
+{
+inline thread_local std::optional<bool> current_actor_request_release_turn;
+
+class actor_request_turn_intent_scope_t
+{
+  public:
+    explicit actor_request_turn_intent_scope_t (bool release_turn) :
+        _previous (current_actor_request_release_turn)
+    {
+        current_actor_request_release_turn = release_turn;
+    }
+
+    ~actor_request_turn_intent_scope_t ()
+    {
+        current_actor_request_release_turn = _previous;
+    }
+
+    actor_request_turn_intent_scope_t (
+      const actor_request_turn_intent_scope_t &) = delete;
+    actor_request_turn_intent_scope_t &operator= (
+      const actor_request_turn_intent_scope_t &) = delete;
+
+  private:
+    std::optional<bool> _previous;
+};
+
+bool actor_request_releases_current_turn ()
+{
+    assert (current_actor_request_release_turn.has_value ());
+    return *current_actor_request_release_turn;
+}
+} // namespace
+
 class actor_manager_state_t
 {
   public:
@@ -308,9 +343,6 @@ task_t<message_t> actor_request_call_t::yield_message ()
 
 task_t<message_t> actor_request_call_t::start (bool release_turn)
 {
-    if (release_turn && !detail::current_serial_turn_allows_yield ()) {
-        return detail::unsupported_yield_task<message_t> ();
-    }
     if (!runtime::current_actor_execution.actor_key.empty ()) {
         const auto separator = runtime::current_actor_execution.actor_key.rfind (':');
         const auto current_actor_id = separator == std::string::npos
@@ -323,9 +355,14 @@ task_t<message_t> actor_request_call_t::start (bool release_turn)
               "awaited request to the current Actor cannot complete while its FIFO claim is held"));
         }
     }
-    auto task = _client->request_erased (std::move (_actor_id), std::move (_packet_name),
-                                         std::move (_request), _timeout, _metadata);
+    if (release_turn && !detail::current_serial_turn_allows_yield ()) {
+        return detail::unsupported_yield_task<message_t> ();
+    }
     auto turn_plan = detail::prepare_serial_turn_await (release_turn);
+    detail::actor_request_turn_intent_scope_t request_intent (release_turn);
+    auto task = _client->request_erased (
+      std::move (_actor_id), std::move (_packet_name),
+      std::move (_request), _timeout, _metadata);
     if (!turn_plan) {
         return task;
     }
@@ -341,6 +378,17 @@ serializer_registry_t &actor_request_call_t::serializers () const
 
 namespace zlink::framework::runtime
 {
+
+bool actor_request_requires_current_spot_gate (
+  std::string_view target_spot_id,
+  bool release_turn)
+{
+    assert (!target_spot_id.empty ());
+    return !release_turn
+           && detail::current_serial_turn_allows_yield ()
+           && !current_actor_execution.spot_id.empty ()
+           && target_spot_id == current_actor_execution.spot_id;
+}
 
 namespace
 {
@@ -433,22 +481,28 @@ class actor_client_impl_t final : public actor_client_t
         _actor_locations (std::move (actor_locations)),
         _location_options (std::move (options)), _route_runtime (route_runtime)
     {
-        for (const auto &mesh_node : _mesh_nodes) {
-            if (!mesh_node)
-                continue;
-            mesh_node->set_message_follow_invalidation_handler (
-              [this] (const auto &notice) {
-                  invalidate_cached_route_on_message_follow (notice);
-              });
+        _message_follow_subscriptions.reserve (_mesh_nodes.size ());
+        try {
+            for (const auto &mesh_node : _mesh_nodes) {
+                if (!mesh_node)
+                    continue;
+                const auto subscription_id =
+                  mesh_node->subscribe_message_follow_invalidation (
+                    [this] (const auto &notice) {
+                        invalidate_cached_route_on_message_follow (notice);
+                    });
+                _message_follow_subscriptions.emplace_back (mesh_node, subscription_id);
+            }
+        }
+        catch (...) {
+            release_message_follow_subscriptions ();
+            throw;
         }
     }
 
     ~actor_client_impl_t () override
     {
-        for (const auto &mesh_node : _mesh_nodes) {
-            if (mesh_node)
-                mesh_node->set_message_follow_invalidation_handler ({});
-        }
+        release_message_follow_subscriptions ();
     }
 
     task_t<void> send_to_ref (actor_ref_t actor,
@@ -524,14 +578,17 @@ class actor_client_impl_t final : public actor_client_t
       std::optional<std::chrono::milliseconds> timeout,
       const actor_request_call_t::metadata_map_t &metadata) override
     {
-        if (detail::current_serial_turn_allows_yield ()
+        const auto release_turn =
+          detail::actor_request_releases_current_turn ();
+        if (!release_turn
+            && detail::current_serial_turn_allows_yield ()
             && !runtime::current_actor_execution.spot_id.empty ()) {
             const auto target =
               resolve_actor (std::string (actor_id.value ()),
                              stale_policy_t::route_not_found);
             if (target
-                && target.value ().spot_id
-                     == runtime::current_actor_execution.spot_id) {
+                && actor_request_requires_current_spot_gate (
+                  target.value ().spot_id, release_turn)) {
                 co_return result_t<message_t>::failure (
                   framework_error_kind_t::invalid_operation,
                   "awaited request requires the current Spot execution gate");
@@ -630,6 +687,14 @@ class actor_client_impl_t final : public actor_client_t
     serializer_registry_t &actor_client_serializers () override { return *_serializers; }
 
   private:
+    void release_message_follow_subscriptions () noexcept
+    {
+        for (const auto &[mesh_node, subscription_id] : _message_follow_subscriptions) {
+            mesh_node->unsubscribe_message_follow_invalidation (subscription_id);
+        }
+        _message_follow_subscriptions.clear ();
+    }
+
     enum class stale_policy_t
     {
         route_not_found,
@@ -1081,6 +1146,9 @@ class actor_client_impl_t final : public actor_client_t
     std::shared_ptr<actor_location_observer_t> _actor_locations;
     location_options_t _location_options;
     route_mesh_runtime_t *_route_runtime = nullptr;
+    std::vector<std::pair<std::shared_ptr<detail::mesh_node_runtime_t>,
+                          detail::mesh_node_runtime_t::message_follow_subscription_id_t>>
+      _message_follow_subscriptions;
     struct cached_actor_t
     {
         resolved_actor_t actor;

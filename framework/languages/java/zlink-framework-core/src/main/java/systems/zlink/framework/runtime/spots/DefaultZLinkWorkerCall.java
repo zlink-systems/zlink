@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -50,14 +51,14 @@ final class DefaultZLinkWorkerCall<T> implements ZLinkWorkerCall<T> {
         ensureSingleTerminator();
         CompletableFuture<T> result = new CompletableFuture<>();
         start(result);
-        return systems.zlink.framework.execution.ZLinkAsyncSerialQueue.manageCurrent(result);
+        return ZLinkAsyncSerialQueue.manageCurrent(result);
     }
 
     @Override
     public CompletionStage<T> yield() {
         systems.zlink.framework.runtime.internal.handlers
             .ZLinkSuspendInvocationContext.requireYieldAllowed("CPU worker");
-        return systems.zlink.framework.execution.ZLinkAsyncSerialQueue
+        return ZLinkAsyncSerialQueue
             .yieldCurrent(submit());
     }
 

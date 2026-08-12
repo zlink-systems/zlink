@@ -1,4 +1,6 @@
 package systems.zlink.e2e.spotservice.shared;
+import com.sun.net.httpserver.HttpExchange;
+import java.io.IOException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -88,9 +90,9 @@ public final class GatewayHealthHttpServer implements SmartLifecycle {
     }
 
     private static void write(
-        com.sun.net.httpserver.HttpExchange exchange,
+        HttpExchange exchange,
         int status,
-        String value) throws java.io.IOException {
+        String value) throws IOException {
         byte[] body = value.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().add("Content-Type", "text/plain");
         exchange.sendResponseHeaders(status, body.length);

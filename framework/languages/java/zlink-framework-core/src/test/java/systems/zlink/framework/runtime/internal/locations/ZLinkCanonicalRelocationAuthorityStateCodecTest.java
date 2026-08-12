@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.locations;
+import java.io.IOException;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -235,7 +236,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
                     if (match.find()) {
                         return HexFormat.of().parseHex(match.group(1));
                     }
-                } catch (java.io.IOException failure) {
+                } catch (IOException failure) {
                     throw new IllegalStateException(failure);
                 }
             }

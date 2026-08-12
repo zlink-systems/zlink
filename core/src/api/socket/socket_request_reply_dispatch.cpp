@@ -165,8 +165,15 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
         zlink_routing_id_t source_rid;
         memset (&source_rid, 0, sizeof (source_rid));
         const blob_t *rid = &pipe_->get_routing_id ();
+        //  This drain runs on the completion owner (often the async mailbox
+        //  worker) while an application thread inside process_commands can be
+        //  running the application lane's pipe_terminated, which clears the
+        //  transport-pair slot and then deallocates that pipe. The accessor
+        //  therefore returns a pinned pipe; rid aliases into it, so the pin
+        //  has to outlive the copy into source_rid below.
+        pipe_t *application = NULL;
         if (rid->size () == 0) {
-            pipe_t *application = socket_->application_pipe_for_completion (pipe_);
+            application = socket_->application_pipe_for_completion (pipe_);
             if (application)
                 rid = &application->get_routing_id ();
         }
@@ -174,6 +181,8 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
             source_rid.size = static_cast<uint8_t> (rid->size ());
             memcpy (source_rid.data, rid->data (), rid->size ());
         }
+        if (application)
+            application->release_lifetime_ref ();
         complete_reply_from_transport (
           state.get (), source_rid.size > 0 ? &source_rid : NULL,
           pipe_->get_transport_pair_id (), pipe_->get_transport_pair_generation (),

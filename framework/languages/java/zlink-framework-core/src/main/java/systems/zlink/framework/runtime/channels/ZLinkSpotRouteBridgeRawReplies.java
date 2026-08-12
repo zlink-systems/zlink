@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.Arrays;
 
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -154,7 +155,7 @@ final class ZLinkSpotRouteBridgeRawReplies {
             return false;
         }
         for (int i = 0; i < expected.size(); i++) {
-            if (!java.util.Arrays.equals(expected.get(i), actual.get(i).toByteArray())) {
+            if (!Arrays.equals(expected.get(i), actual.get(i).toByteArray())) {
                 return false;
             }
         }
@@ -165,7 +166,7 @@ final class ZLinkSpotRouteBridgeRawReplies {
         if (expected.isEmpty() || actual.isEmpty()) {
             return false;
         }
-        return java.util.Arrays.equals(expected.get(0), actual.get(0).toByteArray());
+        return Arrays.equals(expected.get(0), actual.get(0).toByteArray());
     }
 
     record Pending(

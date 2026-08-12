@@ -1,4 +1,5 @@
 package systems.zlink.framework.actors;
+import systems.zlink.framework.spots.SpotRef;
 
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
@@ -21,7 +22,7 @@ public interface ZLinkActorManager {
      * Looks up the Spot the actor currently belongs to. Returns an empty result
      * when the actor is unknown or is not a member of any Spot.
      */
-    CompletionStage<Optional<systems.zlink.framework.spots.SpotRef>> findSpot(String actorId);
+    CompletionStage<Optional<SpotRef>> findSpot(String actorId);
 
     /**
      * Destroys the exact actor incarnation identified by {@code actor}.

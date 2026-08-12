@@ -434,6 +434,17 @@ context_options.auto_hwm_msg_unit_bytes (
   zlink::byte_count_t::bytes (planning_unit)); // The 64-bit byte input for the Auto HWM calculation.
 ```
 
+`context_options.auto_hwm_msg_unit_bytes(...)` sets a planner input, not a
+calculated result. Core multiplies the selected message-slot count by the
+planning unit to choose the planned byte HWM. A direction on which the caller
+uses `send_hwm(...)` or `recv_hwm(...)` becomes a manual override and is no
+longer changed by automatic HWM recalculation.
+
+The C++ binding does not decide send or receive admission. Core returns
+backpressure when the accounted bytes retained by a pipe reach the applied HWM,
+and the binding carries that result and timeout through the existing operation
+builder contract. `0 bytes` means unlimited; it does not mean one message.
+
 The monitor snapshot projects the Core monitoring ABI v2. The planned,
 applied, deferred, and in-flight HWM fields use a `_bytes` suffix and
 `uint64_t`. A deferred field's validity is provided as a separate boolean.

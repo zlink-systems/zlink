@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.locations;
+import java.util.Objects;
+import java.util.concurrent.CompletionException;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -51,18 +53,18 @@ public final class ZLinkStatefulAuthorityRouteRuntime
         Map<String, ZLinkInternalMeshNode> meshNodes,
         Duration pollingInterval,
         Consumer<Throwable> reportFailure) {
-        this.store = java.util.Objects.requireNonNull(store, "store");
+        this.store = Objects.requireNonNull(store, "store");
         this.meshNodes = Map.copyOf(
-            java.util.Objects.requireNonNull(
+            Objects.requireNonNull(
                 meshNodes, "meshNodes"));
-        this.pollingInterval = java.util.Objects.requireNonNull(
+        this.pollingInterval = Objects.requireNonNull(
             pollingInterval, "pollingInterval");
         if (pollingInterval.isNegative()
             || pollingInterval.isZero()) {
             throw new IllegalArgumentException(
                 "pollingInterval must be positive");
         }
-        this.reportFailure = java.util.Objects.requireNonNull(
+        this.reportFailure = Objects.requireNonNull(
             reportFailure, "reportFailure");
     }
 
@@ -127,8 +129,7 @@ public final class ZLinkStatefulAuthorityRouteRuntime
                 boolean coldActivation =
                     snapshot.allocation().state()
                         == ZLinkPlacementAllocationState.PENDING
-                    && value.kind()
-                        == ZLinkServiceAuthorityPayloadCodec.Kind.INSTANCE
+                    && value.instance().isPresent()
                     && value.state()
                         == ZLinkServiceAuthorityPayloadCodec.State.CREATING;
                 return (ready || coldActivation)
@@ -165,14 +166,13 @@ public final class ZLinkStatefulAuthorityRouteRuntime
                         snapshot.authorityOwnerGeneration(),
                         snapshot.ownerLeaseGeneration(),
                         snapshot.storeVersion());
-                return new Applied(
-                    value.kind(),
-                    value.stableType(),
-                    value.meshName(),
-                    snapshot.allocation().state()
-                        == ZLinkPlacementAllocationState.ACTIVE,
-                    route,
-                    instance);
+                boolean ready = snapshot.allocation().state()
+                    == ZLinkPlacementAllocationState.ACTIVE;
+                return value.instance()
+                    .<Applied>map(ignored -> new InstanceApplied(
+                        value.stableType(), value.meshName(), ready, route, instance))
+                    .orElseGet(() -> new UserApplied(
+                        value.stableType(), value.meshName(), ready, route));
             });
     }
 
@@ -201,10 +201,9 @@ public final class ZLinkStatefulAuthorityRouteRuntime
         if (value.ready()) {
             node.rememberSpotAuthority(value.route());
         }
-        if (value.kind()
-                == ZLinkServiceAuthorityPayloadCodec.Kind.INSTANCE) {
+        if (value instanceof InstanceApplied instance) {
             node.registerInstanceIntent(
-                value.stableType(), value.instance());
+                value.stableType(), instance.instance());
         }
     }
 
@@ -217,9 +216,8 @@ public final class ZLinkStatefulAuthorityRouteRuntime
         if (value.ready()) {
             node.forgetSpotAuthority(value.route());
         }
-        if (value.kind()
-                == ZLinkServiceAuthorityPayloadCodec.Kind.INSTANCE) {
-            node.forgetInstanceIntent(value.instance());
+        if (value instanceof InstanceApplied instance) {
+            node.forgetInstanceIntent(instance.instance());
         }
     }
 
@@ -245,19 +243,32 @@ public final class ZLinkStatefulAuthorityRouteRuntime
     }
 
     private static Throwable unwrap(Throwable failure) {
-        return failure instanceof java.util.concurrent.CompletionException
+        return failure instanceof CompletionException
                 && failure.getCause() != null
             ? failure.getCause()
             : failure;
     }
 
-    private record Applied(
-        ZLinkServiceAuthorityPayloadCodec.Kind kind,
+    private sealed interface Applied permits UserApplied, InstanceApplied {
+        String stableType();
+        String meshName();
+        boolean ready();
+        ZLinkInternalMeshNode.SpotAuthorityRoute route();
+    }
+
+    private record UserApplied(
+        String stableType,
+        String meshName,
+        boolean ready,
+        ZLinkInternalMeshNode.SpotAuthorityRoute route) implements Applied {
+    }
+
+    private record InstanceApplied(
         String stableType,
         String meshName,
         boolean ready,
         ZLinkInternalMeshNode.SpotAuthorityRoute route,
-        ZLinkServiceM6BWireCodec.InstanceRouteFence instance) {
+        ZLinkServiceM6BWireCodec.InstanceRouteFence instance) implements Applied {
     }
 
 }

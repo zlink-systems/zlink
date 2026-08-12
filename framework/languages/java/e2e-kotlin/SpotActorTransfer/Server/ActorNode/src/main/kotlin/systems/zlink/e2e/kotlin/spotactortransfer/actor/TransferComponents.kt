@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.spotactortransfer.actor
 
+
+import systems.zlink.framework.actors.ZLinkActorManager
 import java.time.Duration
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
@@ -347,13 +349,13 @@ class MessageFollowSendHandler(
 ) : ZLinkSuspendingSpotActorSendHandler<
     TransferUserSpot,
     TransferActor,
-    Contracts.MessageFollowSendReq
+    Contracts.MessageFollowMsg
 > {
     override suspend fun handle(
         spot: TransferUserSpot,
         actor: TransferActor,
         context: ZLinkMessageContext,
-        message: Contracts.MessageFollowSendReq,
+        message: Contracts.MessageFollowMsg,
     ) {
         evidence.add(message.scenario(), actor.actorId(), "message_follow_send", message.marker())
     }
@@ -391,7 +393,7 @@ class TransferSession(
 }
 
 class BindSessionHandler(
-    private val actors: systems.zlink.framework.actors.ZLinkActorManager,
+    private val actors: ZLinkActorManager,
     private val evidence: EvidenceStore,
 ) : ZLinkSuspendingTypedSessionPacketHandler<ZLinkSessionContext, Contracts.BindSessionReq> {
     override fun packetName(): String = "BindSessionReq"

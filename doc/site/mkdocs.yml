@@ -128,9 +128,10 @@ plugins:
             Location Store and relocation: Location Store와 relocation
             Observability and shutdown: 관측과 종료
             Runtime status and diagnostics: Runtime 상태와 운영 진단
-            Host relocate and shutdown: Host Relocate와 Shutdown
+            Complete Actor and Spot relocation flow: Actor와 Spot relocation 전체 흐름
             Failure handling and failover: 장애 대응과 failover
             Framework error model: Framework 오류 모델
+            Complete Host relocation flow: Host relocation 전체 흐름
             Implementation gap record: Framework 구현 차이 기록
 
             # Framework 내부 구조. 숫자 접두사가 키를 유일하게 만든다 — 가이드의
@@ -147,6 +148,8 @@ plugins:
             "9. Session and Actor connection": "9. Session과 Actor 연결"
             "10. Liveness and status publication": "10. Liveness와 상태 공개"
             "11. Payload ownership and copy": "11. Payload 소유권과 복사"
+            "12. Service wire protocol": "12. Service wire protocol"
+            "13. Relocation handoff state transitions": "13. Relocation handoff 상태 전이"
 
             # Core 가이드 · 스펙 · 내부 구조.
             Transports: 트랜스포트
@@ -386,8 +389,9 @@ nav:
               - "Runtime metric": common/spec/25-runtime-metrics.md
               - "Message flow tracing": common/spec/26-message-flow-tracing.md
               - "Request correlation": common/spec/27-flow-correlation.md
-              - "Host relocate and shutdown": common/spec/28-graceful-drain-handoff.md
+              - "Complete Actor and Spot relocation flow": common/spec/28-relocation-flow.md
               - "Transport liveness": common/spec/29-transport-liveness.md
+              - "Complete Host relocation flow": common/spec/30-host-relocation-flow.md
               - "Failure handling and failover": common/spec/31-failure-failover-policy.md
               - "Framework error model": common/spec/32-framework-error-model.md
       - Internals:
@@ -404,6 +408,7 @@ nav:
           - "10. Liveness and status publication": common/internals/10-liveness-and-state.md
           - "11. Payload ownership and copy": common/internals/11-message-ownership.md
           - "12. Service wire protocol": common/internals/12-service-wire-protocol.md
+          - "13. Relocation handoff state transitions": common/internals/13-relocation-handoff.md
   - Bindings:
       - Guide:
         - Overview: bindings/guide/README.md

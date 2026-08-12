@@ -655,6 +655,16 @@ interface CommonSocketOptions {
 }
 ```
 
+`autoHwmMsgUnitBytes` is an input to Core's planner. Core multiplies the
+selected message-slot count by this value to calculate the planned byte HWM. A
+direction on which the caller sets `sendHwm` or `recvHwm` becomes a manual
+override and is not changed by later automatic HWM recalculation.
+
+The Node.js binding does not recount queued messages or payloads. When the
+actual accounted bytes in a Core pipe reach the applied HWM, the native submit
+result reports backpressure and the Node.js operation preserves it through the
+existing result and timeout contract. `0n` means unlimited.
+
 The monitor snapshot projects Core monitoring ABI v2 as-is. Planned,
 applied, and deferred values, and in-flight HWM values, include `Bytes` in
 their name and are provided as `bigint`. Whether a deferred value is valid

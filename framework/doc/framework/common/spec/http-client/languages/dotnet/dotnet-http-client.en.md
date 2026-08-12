@@ -26,10 +26,23 @@ and codec contract, but doesn't depend on `Zlink.Framework` server
 runtime. So a standalone client uses the same error/codec contract
 without distributing the server runtime assembly together.
 
-The HTTP codec registry only handles serializer registration. Even if
-the same extension also implements `IZlinkStreamCodecRegistration`, it
-ignores the STREAM descriptor. The HTTP client package doesn't depend
-on the Stream Connector runtime or the compression package.
+The HTTP codec registry only handles serializer registration. A
+registered `contentType` is a parameter-free ASCII `type/subtype`. The
+registry removes leading and trailing SP and TAB, converts ASCII
+uppercase letters to lowercase, and uses that canonical media type as
+the key.
+
+An HTTP response `Content-Type` enters through a different boundary
+from registration. The client first separates RFC parameters such as
+`charset`, then lowercases the parameter-free media type and looks up
+the canonical key. A normal response such as
+`application/json; charset=utf-8` therefore uses the
+`application/json` serializer.
+
+Even if the same extension also implements
+`IZlinkStreamCodecRegistration`, it ignores the STREAM descriptor. The
+HTTP client package doesn't depend on the Stream Connector runtime or
+the compression package.
 
 ## 2. Deliverable Boundary
 

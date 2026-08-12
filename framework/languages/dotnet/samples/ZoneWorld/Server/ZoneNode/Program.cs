@@ -79,7 +79,7 @@ builder.Services.AddZLinkFramework(options =>
     if (!hostsZones)
     {
         options.AddFanoutChannel(ZoneWorldNames.BroadcastChannel)
-            .Connect(shared.BroadcastEndpoint)
+            .EnableSubscriber()
             .AddHandler<BroadcastProbeSubscriber, WorldAnnounceEvent>();
         return;
     }
@@ -107,7 +107,7 @@ builder.Services.AddZLinkFramework(options =>
     mesh.Channel(ZoneWorldNames.ZoneChannel).Server();
 
     options.AddFanoutChannel(ZoneWorldNames.BroadcastChannel)
-        .Connect(shared.BroadcastEndpoint)
+        .EnableSubscriber()
         .AddHandler<WorldAnnounceSubscriber, WorldAnnounceEvent>()
         .AddHandler<NodeMaintenanceChangedSubscriber, NodeMaintenanceChangedEvent>();
 

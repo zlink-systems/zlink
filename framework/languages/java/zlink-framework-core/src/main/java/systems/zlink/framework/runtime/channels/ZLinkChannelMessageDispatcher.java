@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
 import java.util.List;
 import java.util.Map;
@@ -52,7 +55,7 @@ final class ZLinkChannelMessageDispatcher {
         ZLinkBackendReceived received) {
         var incomingFlow = ZLinkChannelFlowFrame.decode(received.parts());
         var flowScope = incomingFlow == null ? null
-            : systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext.enter(incomingFlow);
+            : ZLinkFlowContext.enter(incomingFlow);
         try {
             if (isProbeFrame(received.parts())) {
                 return;
@@ -125,7 +128,7 @@ final class ZLinkChannelMessageDispatcher {
     void dispatchPublish(String channelName, ZLinkBackendTopicMessage received) {
         var incomingFlow = ZLinkChannelFlowFrame.decode(received.parts());
         var flowScope = incomingFlow == null ? null
-            : systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext.enter(incomingFlow);
+            : ZLinkFlowContext.enter(incomingFlow);
         try {
             String contentType = ZLinkChannelContentTypeFrame.decode(received.parts());
             ParsedPacket packet = parsePacket(received.parts());
@@ -337,7 +340,7 @@ final class ZLinkChannelMessageDispatcher {
                                 });
                         } catch (RuntimeException failure) {
                             permit.close();
-                            return java.util.concurrent.CompletableFuture
+                            return CompletableFuture
                                 .<Message>failedFuture(failure);
                         }
                     })
@@ -361,7 +364,7 @@ final class ZLinkChannelMessageDispatcher {
 
     private static <T> CompletionStage<T> invokeStarted(
         ZLinkInboundDispatchBudget.Lease lease,
-        java.util.function.Supplier<CompletionStage<T>> invocation) {
+        Supplier<CompletionStage<T>> invocation) {
         lease.handlerStarted();
         try {
             return invocation.get();

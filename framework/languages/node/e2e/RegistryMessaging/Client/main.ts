@@ -9,7 +9,6 @@ import { runRmB2 } from './Scenarios/rm-b2-scale-in-scenario';
 import { runRmB3 } from './Scenarios/rm-b3-provider-crash-failover-scenario';
 import { runRmC1 } from './Scenarios/rm-c1-request-send-scenario';
 import { runRmC2 } from './Scenarios/rm-c2-targeted-route-scenario';
-import { runRmC3 } from './Scenarios/rm-c3-multi-provider-distribution-scenario';
 import { runRmC4 } from './Scenarios/rm-c4-timeout-isolation-scenario';
 import { runRmC5 } from './Scenarios/rm-c5-missing-packet-scenario';
 import { runRmC7 } from './Scenarios/rm-c7-weighted-provider-scenario';
@@ -30,7 +29,6 @@ async function main(): Promise<void> {
     'RM-B3': () => runRmB3(options),
     'RM-C1': () => runRmC1(options.providerAUrl, options.providerBUrl),
     'RM-C2': () => runRmC2(options.providerAUrl, options.providerBUrl),
-    'RM-C3': () => runRmC3(options.directConsumerUrl, options.providerAUrl, options.providerBUrl),
     'RM-C4': () => runRmC4(options.locationConsumerUrl, options.providerAUrl, options.providerBUrl),
     'RM-C5': () => runRmC5(options.locationConsumerUrl, options.providerAUrl, options.providerBUrl),
     'RM-C7': () => runRmC7(options),
@@ -49,7 +47,6 @@ async function main(): Promise<void> {
     'RM-B3',
     'RM-C1',
     'RM-C2',
-    'RM-C3',
     'RM-C4',
     'RM-C5',
     'RM-C7',

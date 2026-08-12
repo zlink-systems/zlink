@@ -1,4 +1,6 @@
 package systems.zlink.e2e.registrationcodec.main.Handlers;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.e2e.registrationcodec.shared.Contracts;
 import systems.zlink.e2e.registrationcodec.main.Infrastructure.EvidenceStore;
@@ -16,11 +18,11 @@ public final class AutoRequestHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Contracts.EchoRes> handle(
+    public CompletionStage<Contracts.EchoRes> handle(
         Contracts.EchoAutoReq request,
         ZLinkMessageContext context) {
-        state.record("Request", "EchoAuto", request.value());
-        return java.util.concurrent.CompletableFuture.completedFuture(
+        state.record("Request", "EchoAutoReq", request.value());
+        return CompletableFuture.completedFuture(
             new Contracts.EchoRes("echo:" + request.value(), "auto"));
     }
 }

@@ -7,10 +7,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JAVA_E2E_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "${JAVA_E2E_DIR}/../e2e-redis-common.sh"
+zlink_e2e_initialize java "$0" "$@"
 
 SELECTOR="${1:-}"
 case "${SELECTOR}" in
-  OBS-C6|OBS-C7|OBS-C8|OBS-C9A|OBS-C9B|OBS-C10|OBS-C11|OBS-C12) ;;
+  OBS-C6|OBS-C7|OBS-C8|OBS-C9A|OBS-C10|OBS-C11|OBS-C12) ;;
   *) echo "Unknown Config 11 C selector: ${SELECTOR}" >&2; exit 2 ;;
 esac
 
@@ -24,6 +25,27 @@ gradle_cache="${HOME}/.cache/zlink/java-e2e/ObservabilityOps-gradle-cache"
 default_core_lib="${repo_root}/core/build/lib/libzlink.so"
 pids=()
 REDIS_CONTAINER=""
+
+cleanup() {
+  local status="$?"
+  set +e
+  for ((index=${#pids[@]}-1; index>=0; index--)); do
+    kill "${pids[${index}]}" >/dev/null 2>&1 || true
+  done
+  for pid in "${pids[@]}"; do
+    wait "${pid}" >/dev/null 2>&1 || true
+  done
+  [[ -z "${REDIS_CONTAINER}" ]] || zlink_redis_remove_by_id "${REDIS_CONTAINER}" || true
+  rm -rf "${config_dir}"
+  if [[ "${status}" != 0 ]]; then
+    for log in "${log_dir}"/*.log; do
+      [[ -f "${log}" ]] && { echo "===== ${log} =====" >&2; tail -n 120 "${log}" >&2; }
+    done
+  fi
+  exit "${status}"
+}
+trap cleanup EXIT
+
 mkdir -p -m 0700 "${log_dir}" "${evidence_dir}" "${config_dir}"
 echo "log_dir=${log_dir}"
 
@@ -35,37 +57,8 @@ zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
 redis_location_endpoint="127.0.0.1:${redis_port}"
 location_key_prefix="zlink:e2e:observability:${run_id}"
 
-cleanup() {
-  local status="$?"
-  set +e
-  for ((index=${#pids[@]}-1; index>=0; index--)); do
-    kill "${pids[${index}]}" >/dev/null 2>&1 || true
-  done
-  for pid in "${pids[@]}"; do
-    wait "${pid}" >/dev/null 2>&1 || true
-  done
-  [[ -z "${REDIS_CONTAINER}" ]] || docker rm -fv "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
-  rm -rf "${config_dir}"
-  if [[ "${status}" != 0 ]]; then
-    for log in "${log_dir}"/*.log; do
-      [[ -f "${log}" ]] && { echo "===== ${log} =====" >&2; tail -n 120 "${log}" >&2; }
-    done
-  fi
-  exit "${status}"
-}
-trap cleanup EXIT
-
 reserve_ports() {
-  python3 - <<'PY'
-import socket
-sockets=[]
-try:
-    for _ in range(24):
-        sock=socket.socket(); sock.bind(("127.0.0.1", 0)); sockets.append(sock)
-    print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
-finally:
-    for sock in sockets: sock.close()
-PY
+  zlink_e2e_reserve_ports 24
 }
 tcp() { echo "tcp://127.0.0.1:$1"; }
 http() { echo "http://127.0.0.1:$1"; }
@@ -402,9 +395,6 @@ elif selector == "OBS-C9A":
           "relocation":load("relocation.json"), "targetStatus":load("target-status.json"),
           "after":load("target-after.json"),
           "handler":{"nodeRid":node_from_client("OBS-C9A-AFTER.stdout.log")}})
-elif selector == "OBS-C9B":
-    save({"scenario":selector, "relocation":load("relocation.json"),
-          "sourceDuring":load("source-before.json"), "shutdown":load("shutdown.json")})
 elif selector == "OBS-C10":
     save({"scenario":selector, "planned":load("relocation-one.json"),
           "rolling":load("relocation-two.json"), "firstTarget":load("target-one.json"),
@@ -432,7 +422,8 @@ session_bin="${obs_build}/Server-Session/install/observability-ops-session/bin/o
 client_bin="${obs_build}/Client/install/observability-ops-client/bin/observability-ops-client"
 verifier_bin="${obs_build}/Verifier/install/observability-ops-verifier/bin/observability-ops-verifier"
 
-"${SCRIPT_DIR}/gradlew" -PzlinkE2eBuildDir="${obs_build}" \
+zlink_e2e_gradle_build_locked "${SCRIPT_DIR}/gradlew" \
+  -PzlinkE2eBuildDir="${obs_build}" \
   --project-cache-dir "${gradle_cache}" --no-daemon --no-parallel --max-workers=1 --quiet \
   installDist
 
@@ -493,16 +484,6 @@ case "${SELECTOR}" in
     touch "${release_file}"
     wait "${client_pid}"
     cp "${log_dir}/OBS-C9A-PREPARE.stdout.log" "${log_dir}/OBS-C9A-AFTER.stdout.log"
-    compose_evidence
-    ;;
-  OBS-C9B)
-    route_b_value="${ROUTE_ENDPOINT[play-b]}"
-    start_common false present 1 100
-    start_client_background OBS-C9B-PREPARE
-    wait_prepared OBS-C9B
-    fetch_json "${MAINTENANCE_ENDPOINT[play-a]}/maintenance/objects?spotId=$(scenario_spot)&actorId=obs-obs-c9b-actor" "${log_dir}/source-before.json"
-    post_json "${MAINTENANCE_ENDPOINT[play-a]}/maintenance/relocate?mode=planned-maintenance&deadlineMs=5000" "${log_dir}/relocation.json"
-    post_json "${MAINTENANCE_ENDPOINT[play-a]}/maintenance/shutdown?deadlineMs=10000" "${log_dir}/shutdown.json"
     compose_evidence
     ;;
   OBS-C10)

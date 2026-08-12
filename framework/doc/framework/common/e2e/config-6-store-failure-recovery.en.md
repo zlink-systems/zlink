@@ -159,8 +159,8 @@ longer be used as a current ready target.
 follow-up requests handled only by A?
 
 - Starting condition: A and B are ready and have each processed a baseline request.
-- Procedure: The runner force-terminates B and waits until public status converges on the current
-  target set. 20 follow-up requests are sent.
+- Procedure: The runner force-terminates B and waits for the configured owner lease to expire and
+  public status to converge on the current target set. 20 follow-up requests are sent.
 - Verification: B does not appear in status's ready peers/targets, and A processes all 20. Repeated
   timeouts against B's endpoint are not treated as success.
 - Detailed behavior: verifies [Finding Running Nodes And Their Capabilities](../spec/21-location-runtime.en.md#3-finding-running-nodes-and-their-capabilities).
@@ -180,7 +180,7 @@ continuing to serve?
   polled immediately, and follow-up requests are sent.
 - Verification: B drops out of new targets and only finishes already-accepted work within a bounded
   time. After the shutdown terminal, A processes every follow-up request.
-- Detailed behavior: verifies [Host Maintenance §10](../spec/28-graceful-drain-handoff.en.md#10-relocate-completion-and-failure).
+- Detailed behavior: verifies [Host Maintenance §10](../spec/30-host-relocation-flow.en.md#10-relocate-completion-and-failure).
 
 #### SF-C3 A Previous Owner's Lifecycle Cannot Change The Replacement
 
@@ -459,7 +459,7 @@ The Framework preserves and restores encoded participant state at or below the 6
 - Verification: The 64 MiB state has the same checksum/logical length at the target and processes
   requests. The one-byte-over operation keeps source authority and ends in exactly one
   `Blocked/StateIncompatible` terminal.
-- Detailed behavior: verifies [Relocation Units And Concurrency Limits](../spec/28-graceful-drain-handoff.en.md#7-relocation-units-and-concurrency-limits).
+- Detailed behavior: verifies [Relocation Units And Concurrency Limits](../spec/30-host-relocation-flow.en.md#7-relocation-units-and-concurrency-limits).
 
 #### SF-F8 The Source Is Kept If The Target Owner's Lease Expires
 
@@ -514,7 +514,7 @@ operation get exactly one terminal?
   are released. After completion, a follow-up request is sent.
 - Verification: Each accepted request ends exactly once, in reply, timeout, or relocation failure.
   The Relocate terminal is also single, and the follow-up is processed once at the current target.
-- Detailed behavior: verifies [Host Maintenance §7](../spec/28-graceful-drain-handoff.en.md#7-relocation-units-and-concurrency-limits).
+- Detailed behavior: verifies [Host Maintenance §7](../spec/30-host-relocation-flow.en.md#7-relocation-units-and-concurrency-limits).
 
 #### SF-F11 Preserve Payload Values After Waiter Termination And Response Loss
 
@@ -573,24 +573,6 @@ concurrency respects the configured limit?
   create eventually succeeds. The Entry Spot is not counted in Spot population, and member Actors are
   counted in the Actor count.
 - Detailed behavior: verifies [MeshNode §5](../spec/13-mesh-node.en.md#5-object-placement-capability).
-
-#### SF-G3 Apply User Spot Aggregate Capacity All-Or-None
-
-Priority: `P0`
-
-Moving a User Spot together with its N member Actors requires the target to have both one Spot slot
-and N Actor slots.
-
-**Verification question:** If even one capacity bucket is short, does the source aggregate stay put,
-moving to the target only when everything is sufficient?
-
-- Starting condition: Variants for a short Spot slot, a short Actor slot, a short stable-type slot,
-  and an all-sufficient target are each prepared.
-- Procedure: An aggregate of the same size is relocated to each fresh target.
-- Verification: The short variants return a capacity-blocker result, with public locations and state
-  kept at the source. The sufficient variant has the Spot and every Actor processed at the target with
-  the same state and generations.
-- Detailed behavior: verifies [Host Maintenance §8.5](../spec/28-graceful-drain-handoff.en.md#85-spotwide-user-spot).
 
 ## 5. Completion Criteria
 

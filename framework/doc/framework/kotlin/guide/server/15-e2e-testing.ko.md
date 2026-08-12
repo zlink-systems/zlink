@@ -264,10 +264,10 @@ suspend fun run(options: TicTacToeClientOptions) {
 - **서로 다른 node에 연결한 둘** — node 사이 라우팅과 위치 해석이 실제로 동작하는지
 
 ```kotlin
-// join 응답은 request의 reply가 아니라 push로 온다 — 대기를 먼저 등록하고 send한다.
-private suspend fun joinGame(connector: ZLinkStreamConnector, roomId: String): JoinGameRes {
-    val completion = connector.waitFor(JoinGameRes::class.java).submit(JoinGameRes::class.java)
-    connector.send(JoinGameReq(roomId)).submit().await()
+// join 완료 알림은 client push로 온다 — 대기를 먼저 등록하고 one-way send한다.
+private suspend fun joinGame(connector: ZLinkStreamConnector, roomId: String): JoinGameNotify {
+    val completion = connector.waitFor(JoinGameNotify::class.java).submit(JoinGameNotify::class.java)
+    connector.send(JoinGameMsg(roomId)).submit().await()
     return completion.await().payload()
 }
 ```

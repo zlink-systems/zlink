@@ -14,26 +14,26 @@ namespace zlink::e2e::to_actor_messaging
 inline constexpr const char *spot_mesh_name = "to-actor-messaging";
 inline constexpr const char *actor_type_name = "TestActor";
 
-struct actor_notify_t
+struct actor_msg_t
 {
-    static constexpr const char *packet_name = "ActorNotify";
+    static constexpr const char *packet_name = "ActorMsg";
     std::string scenario;
     std::string actor_id;
     std::string value;
     bool push_to_session = false;
 };
 
-struct actor_ask_t
+struct actor_req_t
 {
-    static constexpr const char *packet_name = "ActorAsk";
+    static constexpr const char *packet_name = "ActorReq";
     std::string scenario;
     std::string actor_id;
     std::string value;
 };
 
-struct actor_reply_t
+struct actor_res_t
 {
-    static constexpr const char *packet_name = "ActorReply";
+    static constexpr const char *packet_name = "ActorRes";
     std::string scenario;
     std::string actor_id;
     std::string value;
@@ -61,30 +61,30 @@ struct actor_push_notify_t
     std::string value;
 };
 
-struct caller_request_t
+struct caller_req_t
 {
-    static constexpr const char *packet_name = "CallerRequest";
+    static constexpr const char *packet_name = "CallerReq";
     std::string scenario;
     std::string actor_id;
     std::string value;
 };
 
-struct caller_reply_t
+struct caller_res_t
 {
-    static constexpr const char *packet_name = "CallerReply";
+    static constexpr const char *packet_name = "CallerRes";
     std::string scenario;
     std::string actor_id;
     std::string value;
 };
 
-struct actor_call_request_t
+struct actor_call_req_t
 {
     std::string scenario;
     std::string actor_id;
     std::string value;
 };
 
-struct actor_call_response_t
+struct actor_call_res_t
 {
     std::string scenario;
     std::string actor_id;
@@ -100,7 +100,7 @@ struct actor_evidence_t
     std::string value;
 };
 
-inline void to_json (nlohmann::json &json, const actor_notify_t &value)
+inline void to_json (nlohmann::json &json, const actor_msg_t &value)
 {
     json = {{"scenario", value.scenario},
             {"actorId", value.actor_id},
@@ -108,7 +108,7 @@ inline void to_json (nlohmann::json &json, const actor_notify_t &value)
             {"pushToSession", value.push_to_session}};
 }
 
-inline void from_json (const nlohmann::json &json, actor_notify_t &value)
+inline void from_json (const nlohmann::json &json, actor_msg_t &value)
 {
     value.scenario = json.value ("scenario", "");
     value.actor_id = json.contains ("actorId") ? json.value ("actorId", "")
@@ -117,12 +117,12 @@ inline void from_json (const nlohmann::json &json, actor_notify_t &value)
     value.push_to_session = json.value ("pushToSession", false);
 }
 
-inline void to_json (nlohmann::json &json, const actor_ask_t &value)
+inline void to_json (nlohmann::json &json, const actor_req_t &value)
 {
     json = {{"scenario", value.scenario}, {"actorId", value.actor_id}, {"value", value.value}};
 }
 
-inline void from_json (const nlohmann::json &json, actor_ask_t &value)
+inline void from_json (const nlohmann::json &json, actor_req_t &value)
 {
     value.scenario = json.value ("scenario", "");
     value.actor_id = json.contains ("actorId") ? json.value ("actorId", "")
@@ -130,12 +130,12 @@ inline void from_json (const nlohmann::json &json, actor_ask_t &value)
     value.value = json.value ("value", "");
 }
 
-inline void to_json (nlohmann::json &json, const actor_reply_t &value)
+inline void to_json (nlohmann::json &json, const actor_res_t &value)
 {
     json = {{"scenario", value.scenario}, {"actorId", value.actor_id}, {"value", value.value}};
 }
 
-inline void from_json (const nlohmann::json &json, actor_reply_t &value)
+inline void from_json (const nlohmann::json &json, actor_res_t &value)
 {
     value.scenario = json.value ("scenario", "");
     value.actor_id = json.contains ("actorId") ? json.value ("actorId", "")
@@ -177,12 +177,12 @@ inline void from_json (const nlohmann::json &json, actor_push_notify_t &value)
     value.value = json.value ("value", "");
 }
 
-inline void to_json (nlohmann::json &json, const caller_request_t &value)
+inline void to_json (nlohmann::json &json, const caller_req_t &value)
 {
     json = {{"scenario", value.scenario}, {"actorId", value.actor_id}, {"value", value.value}};
 }
 
-inline void from_json (const nlohmann::json &json, caller_request_t &value)
+inline void from_json (const nlohmann::json &json, caller_req_t &value)
 {
     value.scenario = json.value ("scenario", "");
     value.actor_id = json.contains ("actorId") ? json.value ("actorId", "")
@@ -190,12 +190,12 @@ inline void from_json (const nlohmann::json &json, caller_request_t &value)
     value.value = json.value ("value", "");
 }
 
-inline void to_json (nlohmann::json &json, const caller_reply_t &value)
+inline void to_json (nlohmann::json &json, const caller_res_t &value)
 {
     json = {{"scenario", value.scenario}, {"actorId", value.actor_id}, {"value", value.value}};
 }
 
-inline void from_json (const nlohmann::json &json, caller_reply_t &value)
+inline void from_json (const nlohmann::json &json, caller_res_t &value)
 {
     value.scenario = json.value ("scenario", "");
     value.actor_id = json.contains ("actorId") ? json.value ("actorId", "")
@@ -203,12 +203,12 @@ inline void from_json (const nlohmann::json &json, caller_reply_t &value)
     value.value = json.value ("value", "");
 }
 
-inline void to_json (nlohmann::json &json, const actor_call_request_t &value)
+inline void to_json (nlohmann::json &json, const actor_call_req_t &value)
 {
     json = {{"scenario", value.scenario}, {"actorId", value.actor_id}, {"value", value.value}};
 }
 
-inline void from_json (const nlohmann::json &json, actor_call_request_t &value)
+inline void from_json (const nlohmann::json &json, actor_call_req_t &value)
 {
     value.scenario = json.value ("scenario", "");
     value.actor_id = json.contains ("actorId") ? json.value ("actorId", "")
@@ -216,7 +216,7 @@ inline void from_json (const nlohmann::json &json, actor_call_request_t &value)
     value.value = json.value ("value", "");
 }
 
-inline void to_json (nlohmann::json &json, const actor_call_response_t &value)
+inline void to_json (nlohmann::json &json, const actor_call_res_t &value)
 {
     json = {{"scenario", value.scenario}, {"actorId", value.actor_id}, {"result", value.result}};
     if (!value.error_kind.empty ()) {
@@ -224,7 +224,7 @@ inline void to_json (nlohmann::json &json, const actor_call_response_t &value)
     }
 }
 
-inline void from_json (const nlohmann::json &json, actor_call_response_t &value)
+inline void from_json (const nlohmann::json &json, actor_call_res_t &value)
 {
     value.scenario = json.value ("scenario", "");
     value.actor_id = json.contains ("actorId") ? json.value ("actorId", "")

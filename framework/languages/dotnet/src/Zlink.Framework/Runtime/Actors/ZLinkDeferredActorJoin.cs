@@ -168,6 +168,23 @@ internal sealed class ZLinkDeferredActorJoin(
         using var spot = _spotActivation is null
             ? null
             : ZLinkSpotAmbientContext.Push(_spotActivation);
+        //  Ledger §2.3 fixes WHERE the deferred join starts — the submitting
+        //  queue, in registration order — not that the queue stays occupied
+        //  for the join's whole cross-node round trip. Running the join
+        //  without yielding held the Spot's serial queue while the routed
+        //  join awaited its remote commit, freezing every timer, push and
+        //  admission on the submitting Spot for up to the join deadline; two
+        //  Spots deferring joins into each other could not process the
+        //  counterpart's commit until a deadline broke the cycle. Yield the
+        //  executing turn exactly like every other framework call submitted
+        //  from a Spot handler, so the queue resumes as soon as the join
+        //  actually suspends.
+        if (ZLinkSerialTurn.Current is { } turn)
+        {
+            await turn.YieldFrameworkCallAsync(RunAsync, cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
         await RunAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -279,9 +296,27 @@ internal sealed class ZLinkDeferredActorJoin(
                 var kind = MapFailure(exception, deadline);
                 //  The completion carries only a kind, so without this the
                 //  originating exception is lost and every throw site that maps
-                //  to the same kind looks identical from the outside.
+                //  to the same kind looks identical from the outside. Trace it on
+                //  the message flow as well, so the cause carries the same flow
+                //  identity as the Join that produced it.
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"deferred_join_failed kind={kind} {exception}");
+                runtime.Flow.TraceLazy(
+                    ZLinkMessageFlowOutcome.Error,
+                    () => new ZLinkMessageFlowEvent(
+                        ZLinkMessageFlowOutcome.Error,
+                        ZLinkDispatchErrorSurface.SpotActor,
+                        ZLinkDispatchMessageKind.ActorRequest,
+                        PacketName: "JoinSpot",
+                        ActorId: actor.Context.ActorId,
+                        ErrorReason: ZLinkDispatchErrorReason.HandlerException,
+                        ErrorAction: ZLinkDispatchErrorAction.ReplyError,
+                        ErrorType: kind.ToString(),
+                        ErrorMessage: exception.ToString())
+                    {
+                        FlowId = _flow?.FlowId ?? string.Empty,
+                        FlowOrigin = _flow?.Origin
+                    });
                 completion = new ZLinkActorJoinCompletion.Failed(_operationId, kind);
             }
 

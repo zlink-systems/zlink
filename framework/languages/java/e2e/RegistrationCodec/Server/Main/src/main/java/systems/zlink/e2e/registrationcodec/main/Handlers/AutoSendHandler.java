@@ -1,4 +1,6 @@
 package systems.zlink.e2e.registrationcodec.main.Handlers;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.e2e.registrationcodec.shared.Contracts;
 import systems.zlink.e2e.registrationcodec.main.Infrastructure.EvidenceStore;
@@ -16,10 +18,10 @@ public final class AutoSendHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> handle(
+    public CompletionStage<Void> handle(
         Contracts.EchoAutoMsg message,
         ZLinkMessageContext context) {
-        state.record("Send", "EchoAuto", message.value());
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        state.record("Send", "EchoAutoMsg", message.value());
+        return CompletableFuture.completedFuture(null);
     }
 }

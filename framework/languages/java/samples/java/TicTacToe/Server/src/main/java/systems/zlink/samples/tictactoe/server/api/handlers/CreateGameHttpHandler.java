@@ -1,4 +1,5 @@
 package systems.zlink.samples.tictactoe.server.api.handlers;
+import java.util.concurrent.CompletionStage;
 
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -9,6 +10,7 @@ import systems.zlink.samples.tictactoe.server.configuration.SampleNames;
 import systems.zlink.samples.tictactoe.shared.contracts.CreateGameHttpReq;
 import systems.zlink.samples.tictactoe.shared.contracts.CreateGameHttpRes;
 import systems.zlink.samples.tictactoe.shared.contracts.PlayNodeInfo;
+import systems.zlink.samples.tictactoe.shared.contracts.TicTacToeGameCreateReq;
 
 @RestController
 public final class CreateGameHttpHandler {
@@ -21,12 +23,13 @@ public final class CreateGameHttpHandler {
     }
 
     @PostMapping("/games")
-    public java.util.concurrent.CompletionStage<CreateGameHttpRes> handle(@RequestBody CreateGameHttpReq request) {
+    public CompletionStage<CreateGameHttpRes> handle(@RequestBody CreateGameHttpReq request) {
         String gameName = gameName(request);
         // --8<-- [start:doc-create]
         return spots.create("tictactoe.game")   // 이 stable type을 등록한 node가 후보가 된다.
             .inMesh(SampleNames.SpotMesh)       // Spot을 만들 mesh를 고른다.
-                .timeout(SampleNames.RequestTimeout)
+            .request(new TicTacToeGameCreateReq(gameName, SampleNames.RequiredLevel))
+            .timeout(SampleNames.RequestTimeout)
             .submit()                           // Java의 비동기 완료 terminal이다.
         // --8<-- [end:doc-create]
             .thenApply(created -> new CreateGameHttpRes(

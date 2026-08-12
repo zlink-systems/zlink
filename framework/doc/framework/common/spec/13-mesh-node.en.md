@@ -434,7 +434,7 @@ A create whose reservation is already finished, an accepted message, a
 completion, and a relocation barrier proceed to a terminal state
 according to their set deadline and fence. The full shutdown and handoff
 order is defined by
-[Host Relocation And Shutdown](28-graceful-drain-handoff.en.md).
+[Complete Host Relocation Flow](30-host-relocation-flow.en.md).
 
 `Shutdown` doesn't start a new relocation. `Relocate` moves the Actor,
 User Spot aggregate, and Instance Spot according to the registered

@@ -43,7 +43,7 @@ async function createEntryFixture(entrySpotType, packetHandlers = [], options = 
     registry,
     spot: activation.entrySpot
   });
-  const mailboxes = new framework.ZLinkActorDispatchMailboxSet();
+  const mailboxes = new framework.ZLinkActorDispatchMailboxSet(activation.spotId);
   const router = {
     submit(actorId, operation) {
       return mailboxes.submit(actorId, () => {
@@ -279,16 +279,11 @@ test('detached request continuation re-enters the entry spot serial line', async
   class DetachedEntrySpot {}
   const fixture = await createEntryFixture(DetachedEntrySpot);
   const serial = fixture.activation.serialExecutor;
-  const outbound = new framework.DefaultZLinkSpotOutbound(
+  const outbound = new framework.DefaultZLinkSpotOutbound({
     serial,
     channelClient,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    'test-mesh'
-  );
+    meshName: 'test-mesh'
+  });
 
   // Detached path: the continuation is registered outside the handler turn.
   const continuation = outbound.requestToChannel('api', 'ping').submit().then((reply) => {
@@ -342,9 +337,11 @@ test('request submit keeps the entry turn until its reply completes', async () =
   class GatedEntrySpot {}
   const fixture = await createEntryFixture(GatedEntrySpot);
   const serial = fixture.activation.serialExecutor;
-  const outbound = new framework.DefaultZLinkSpotOutbound(
-    serial, channelClient, undefined, undefined, undefined, undefined, undefined, 'test-mesh'
-  );
+  const outbound = new framework.DefaultZLinkSpotOutbound({
+    serial,
+    channelClient,
+    meshName: 'test-mesh'
+  });
 
   const gated = serial.execute(async () => {
     events.push('handler:start');
@@ -361,8 +358,9 @@ test('request submit keeps the entry turn until its reply completes', async () =
   assert.deepEqual(events, ['handler:start', 'request:ping', 'handler:reply:ping', 'next']);
 });
 
-test('same-Spot awaited requests fail before transport while self-send remains FIFO-admitted', async () => {
+test('same-Spot Async rejects while Yield resumes on a new FIFO turn', async () => {
   const submissions = [];
+  const events = [];
   const addressTransport = {
     async sendToSpotAddress(spotId, message) {
       submissions.push({ kind: 'send', spotId, message });
@@ -374,34 +372,36 @@ test('same-Spot awaited requests fail before transport while self-send remains F
     }
   };
   const serial = new framework.ZLinkSpotSerialExecutor(true, 'same-spot');
-  const outbound = new framework.DefaultZLinkSpotOutbound(
+  const outbound = new framework.DefaultZLinkSpotOutbound({
     serial,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    'test-mesh',
-    undefined,
+    meshName: 'test-mesh',
     addressTransport
-  );
+  });
   const isInvalidOperation = (error) => error instanceof framework.ZLinkFrameworkException
     && error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation;
 
-  assert.throws(
-    () => outbound.requestToSpot('same-spot', { requestId: 'async' }).submit(),
-    isInvalidOperation
-  );
+  let initialTurn;
+  let resumedTurn;
+  let earlier;
   await serial.execute(async () => {
+    initialTurn = serial.activeTurnId;
     assert.throws(
-      () => outbound.requestToSpot('same-spot', { requestId: 'yield' }).yield(),
+      () => outbound.requestToSpot('same-spot', { requestId: 'async' }).submit(),
       isInvalidOperation
     );
+    earlier = serial.post(() => events.push('queued:earlier'));
+    const reply = await outbound
+      .requestToSpot('same-spot', { requestId: 'yield' })
+      .yield();
+    resumedTurn = serial.activeTurnId;
+    events.push(`resumed:${reply.marker}`);
   });
+  await earlier;
 
   await outbound.sendToSpot('same-spot', { requestId: 'send', marker: 'self-send' }).submit();
-  assert.deepEqual(submissions.map(({ kind }) => kind), ['send']);
+  assert.notEqual(resumedTurn, initialTurn);
+  assert.deepEqual(events, ['queued:earlier', 'resumed:unexpected-reply']);
+  assert.deepEqual(submissions.map(({ kind }) => kind), ['request', 'send']);
 });
 
 test('routed local self-send queues behind the current turn while self-request fails before dispatch', async () => {
@@ -559,9 +559,11 @@ test('yield request from an entry turn is rejected because Entry forbids Yield',
   class YieldEntrySpot {}
   const fixture = await createEntryFixture(YieldEntrySpot);
   const serial = fixture.activation.serialExecutor;
-  const outbound = new framework.DefaultZLinkSpotOutbound(
-    serial, channelClient, undefined, undefined, undefined, undefined, undefined, 'test-mesh'
-  );
+  const outbound = new framework.DefaultZLinkSpotOutbound({
+    serial,
+    channelClient,
+    meshName: 'test-mesh'
+  });
 
   await assert.rejects(
     serial.execute(async () => {
@@ -597,16 +599,11 @@ test('yield from an injected outbound is still gated by the ambient entry turn',
   class YieldEntrySpot {}
   const fixture = await createEntryFixture(YieldEntrySpot);
   const ownerSerial = fixture.activation.serialExecutor;
-  const injectedOutbound = new framework.DefaultZLinkSpotOutbound(
-    new framework.ZLinkSpotSerialExecutor(),
+  const injectedOutbound = new framework.DefaultZLinkSpotOutbound({
+    serial: new framework.ZLinkSpotSerialExecutor(),
     channelClient,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    'test-mesh'
-  );
+    meshName: 'test-mesh'
+  });
 
   await assert.rejects(
     ownerSerial.execute(async () => {
@@ -802,7 +799,7 @@ test('runCpuWorker queue full fails fast with WorkerQueueFull and does not block
   const overflowCallback = cpuWorkerCall(worker, serial, () => 'overflow');
   void overflowCallback.submit().then(
     () => errors.push('completed'),
-    (error) => serial.execute(() => errors.push(`error:${error.kind}:executing=${serial.isExecuting}`))
+    (error) => errors.push(`error:${error.kind}:executing=${serial.isExecuting}`)
   );
   await delay(10);
   assert.deepEqual(errors, [`error:${framework.ZLinkFrameworkErrorKind.CapacityExceeded}:executing=true`]);

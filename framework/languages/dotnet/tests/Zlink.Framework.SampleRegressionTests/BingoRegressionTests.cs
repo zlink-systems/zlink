@@ -113,9 +113,11 @@ public sealed partial class RegressionTests
             StringComparison.Ordinal);
         Assert.Contains("client2Drawn.Payload.State.Equals(client1Drawn.Payload.State)", scenario,
             StringComparison.Ordinal);
-        Assert.Contains("connector.WaitFor<MatchBingoRes>()", scenario, StringComparison.Ordinal);
-        Assert.Contains("connector.Send(new MatchBingoReq", scenario, StringComparison.Ordinal);
-        Assert.Contains("connector.WaitFor<ObserveBingoEventsRes>()", scenario, StringComparison.Ordinal);
+        Assert.Contains("connector.Request(new MatchBingoReq", scenario, StringComparison.Ordinal);
+        Assert.Contains(".Async<MatchBingoRes>(cancellationToken)", scenario, StringComparison.Ordinal);
+        Assert.Contains("connector.Request(new ObserveBingoEventsReq", scenario, StringComparison.Ordinal);
+        Assert.Contains(".Async<ObserveBingoEventsRes>(cancellationToken)", scenario, StringComparison.Ordinal);
+        Assert.Contains("WaitFor<BingoGameStartedNotify>()", scenario, StringComparison.Ordinal);
         Assert.DoesNotContain("State = new BingoRoomState()", File.ReadAllText(Path.Combine(
             sampleRoot,
             "Server",
@@ -136,11 +138,22 @@ public sealed partial class RegressionTests
             "MatchBingoHandler.cs"));
         var matchmaker = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Matchmaking",
             "Infrastructure", "ZLink", "BingoMatchmakerHandlers.cs"));
+        var observer = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure",
+            "ZLink", "Spots", "EntrySpot", "Handlers", "ObserveBingoEventsHandler.cs"));
+        var mapper = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure",
+            "ZLink", "Spots", "BingoRoomSpot", "BingoRoomSettingsPayloadMapper.cs"));
 
         Assert.Contains("RequestToSpot(", handler, StringComparison.Ordinal);
         Assert.Contains(".InstanceSpot(SampleNames.MatchmakerSpotType)", handler, StringComparison.Ordinal);
         Assert.Contains(".GetOrCreate(allocated.RoomId, SampleNames.RoomSpotType)", handler,
             StringComparison.Ordinal);
+        Assert.Contains(".Request(new BingoRoomCreateReq { Settings = allocated.Settings })", handler,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(".Request(allocated.Settings)", handler, StringComparison.Ordinal);
+        Assert.Contains(".Request(BingoRoomSettingsPayloadMapper.ToCreateRequest(settings))", observer,
+            StringComparison.Ordinal);
+        Assert.Contains("request.Decode<BingoRoomCreateReq>().Settings", mapper, StringComparison.Ordinal);
+        Assert.DoesNotContain("request.Decode<BingoRoomSettingsPayload>()", mapper, StringComparison.Ordinal);
         Assert.Contains("IZLinkSpotRequestHandler<BingoMatchmaker", matchmaker, StringComparison.Ordinal);
         Assert.DoesNotContain("NodeRid", handler, StringComparison.Ordinal);
     }

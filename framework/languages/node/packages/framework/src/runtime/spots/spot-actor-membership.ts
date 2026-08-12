@@ -126,12 +126,20 @@ export class ZLinkSpotActorMembership {
     }
     const remoteEntry = localEntryNodeRid !== undefined && !routingIdsEqual(entryNodeRid, localEntryNodeRid);
     if (!remoteEntry) {
-      await activation.serial.execute(async () => {
+      const leaveSource = async () => {
         activation.beginActorTransfer(actor.context.actorId);
         await activation.spot.onLeaveActor(actor);
         activation.commitActorDeparture(actor.context.actorId);
         this.options.actorTransferRuntime?.clearRoutedActor(actor);
-      });
+      };
+      // A Spot actor handler already owns this activation's serial turn.
+      // Complete its lifecycle transition inside that turn instead of trying
+      // to acquire a second turn for the same owner.
+      if (activation.serial.isCurrentTurn) {
+        await leaveSource();
+      } else {
+        await activation.serial.execute(leaveSource);
+      }
     }
     const request = RuntimeMessage.from(Buffer.alloc(0));
     try {

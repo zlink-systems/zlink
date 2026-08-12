@@ -1,9 +1,22 @@
 package systems.zlink.framework.runtime.binding;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ExecutionException;
+import systems.zlink.framework.actors.ActorRef;
+import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
+import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
+import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -34,10 +47,12 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchEvent;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.channels.ZLinkChannelContentTypeFrame;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
+import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 final class ZLinkJavaRawSpotNodeM6BTest {
     @Test
@@ -52,7 +67,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             target.setRoutingId(targetRid);
             target.setBind(endpoint);
             target.setObjectRole(
-                systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.SERVER);
+                ZLinkMeshNodeObjectRole.SERVER);
             target.deferServiceReadyPublication();
             source.setRoutingId(sourceRid);
             source.setBind("inproc://jvm-service-ready-source-"
@@ -235,7 +250,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             }
 
             assertThrows(
-                java.util.concurrent.ExecutionException.class,
+                ExecutionException.class,
                 () -> source.requestUserSpotCreate(
                         targetRid,
                         intent,
@@ -351,7 +366,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             .ZLinkBackendActorReceived::close);
                 }
             });
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef actor;
+            ZLinkBackendActorRef actor;
             try (Message create = Message.from("create")) {
                 actor = node.spotNode().createActor("actor-content-type", create);
             }
@@ -419,7 +434,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 List.of(),
                 ignored -> { }));
 
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef actor;
+            ZLinkBackendActorRef actor;
             try (Message create = Message.from("create")) {
                 actor = spots.createActor("owner-actor", create);
             }
@@ -443,6 +458,243 @@ final class ZLinkJavaRawSpotNodeM6BTest {
     }
 
     @Test
+    void exactRelocationForwardKeepsRawActorRequestContextUntilTargetReplay()
+        throws Exception {
+        String endpoint = "inproc://jvm-relocation-forward-"
+            + System.nanoTime();
+        String sourceEndpoint = "inproc://jvm-relocation-source-"
+            + System.nanoTime();
+        RoutingId sourceRid = RoutingId.from("jvm-relocation-source");
+        RoutingId targetRid = RoutingId.from("jvm-relocation-target");
+        RoutingId callerRid = RoutingId.from("jvm-relocation-caller");
+        try (var context = Zlink.createContext();
+             var source = new ZLinkJavaRawMeshNode(context, "mesh");
+             var target = new ZLinkJavaRawMeshNode(context, "mesh");
+             var caller = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            source.setRoutingId(sourceRid);
+            source.setBind(sourceEndpoint);
+            target.setRoutingId(targetRid);
+            target.setBind(endpoint);
+            caller.setRoutingId(callerRid);
+            caller.setBind("inproc://jvm-relocation-caller-"
+                + System.nanoTime());
+            source.start();
+            target.start();
+            caller.start();
+            acceptExactSource(
+                target, sourceRid, source.lifecycleGeneration());
+            acceptExactSource(
+                source, callerRid, caller.lifecycleGeneration());
+            source.connectPeer(endpoint, targetRid);
+            caller.connectPeer(sourceEndpoint, sourceRid);
+            awaitAdmitted(source);
+            awaitAdmitted(caller);
+
+            var sourceRoute = new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                new ZLinkBackendActorRef(sourceRid, "moving-actor", 7),
+                source.lifecycleGeneration(),
+                11,
+                3);
+            var targetRoute = new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                new ZLinkBackendActorRef(targetRid, "moving-actor", 7),
+                target.lifecycleGeneration(),
+                12,
+                5);
+            source.spotNode().installRelocationActorForward(
+                sourceRoute, targetRoute, Duration.ofMinutes(1));
+            var sourceSpotRoute = new ZLinkServiceM6BWireCodec.SpotRouteFence(
+                "moving-spot",
+                17,
+                sourceRid,
+                source.lifecycleGeneration(),
+                21,
+                3);
+            var targetSpotRoute = new ZLinkServiceM6BWireCodec.SpotRouteFence(
+                "moving-spot",
+                17,
+                targetRid,
+                target.lifecycleGeneration(),
+                22,
+                5);
+            source.spotNode().installRelocationSpotForward(
+                sourceSpotRoute, targetSpotRoute, Duration.ofMinutes(1));
+
+            List<String> targetFifo = new CopyOnWriteArrayList<>();
+            List<String> targetSpotFifo = new CopyOnWriteArrayList<>();
+            AtomicReference<Throwable> targetFailure = new AtomicReference<>();
+            AtomicReference<java.util.function.Consumer<List<Message>>>
+                targetRequestReply = new AtomicReference<>();
+            CompletableFuture<Void> receivedAll = new CompletableFuture<>();
+            CompletableFuture<Void> receivedSpots = new CompletableFuture<>();
+            target.spotNode().setRelocationStagingIngressHandler(
+                new ZLinkInternalSpotNode.RelocationStagingIngressHandler() {
+                    @Override
+                    public boolean handleSpot(
+                        ZLinkInternalMeshNode.PeerAuthorityFence peer,
+                        ZLinkServiceM6BWireCodec.SpotMessage header,
+                        byte[] metadata,
+                        java.util.function.Supplier<byte[]> acceptedRecord,
+                        int acceptedRecordSizeHint,
+                        List<Message> parts,
+                        String contentType,
+                        ZLinkInboundDispatchBudget.Lease lease,
+                        java.util.function.Consumer<List<Message>> reply,
+                        java.util.function.Consumer<Throwable> failure) {
+                        try {
+                            assertEquals(sourceRid, peer.sourceNodeRid());
+                            assertEquals(targetSpotRoute, header.target());
+                            assertTrue(acceptedRecord.get().length > 0);
+                            targetSpotFifo.add(parts.getLast().toUtf8String());
+                            if (targetSpotFifo.size() == 2) {
+                                receivedSpots.complete(null);
+                            }
+                        } catch (Throwable error) {
+                            targetFailure.compareAndSet(null, error);
+                            receivedSpots.completeExceptionally(error);
+                        } finally {
+                            parts.forEach(Message::close);
+                            if (lease != null) {
+                                lease.close();
+                            }
+                        }
+                        return true;
+                    }
+
+                    @Override
+                    public boolean handleActor(
+                        ZLinkInternalMeshNode.PeerAuthorityFence peer,
+                        ZLinkServiceM6BWireCodec.ActorMessage header,
+                        java.util.function.Supplier<byte[]> acceptedRecord,
+                        List<Message> parts,
+                        String contentType,
+                        ZLinkInboundDispatchBudget.Lease lease,
+                        java.util.function.Consumer<List<Message>> reply,
+                        java.util.function.Consumer<Throwable> failure) {
+                        try {
+                            assertEquals(sourceRid, peer.sourceNodeRid());
+                            assertEquals(source.lifecycleGeneration(),
+                                peer.sourceNodeGeneration());
+                            assertEquals(targetRoute, header.target());
+                            assertTrue(acceptedRecord.get().length > 0);
+                            targetFifo.add(parts.getLast().toUtf8String());
+                            if (header.request()) {
+                                assertTrue(targetRequestReply.compareAndSet(
+                                    null, reply));
+                            }
+                            if (targetFifo.size() == 4) {
+                                receivedAll.complete(null);
+                            }
+                        } catch (Throwable error) {
+                            targetFailure.compareAndSet(null, error);
+                            receivedAll.completeExceptionally(error);
+                        } finally {
+                            parts.forEach(Message::close);
+                            if (lease != null) {
+                                lease.close();
+                            }
+                        }
+                        return true;
+                    }
+                });
+
+            AtomicInteger callerFailures = new AtomicInteger();
+            ZLinkJavaRawSpotNode sourceSpots =
+                (ZLinkJavaRawSpotNode) source.spotNode();
+            caller.spotNode().rememberActorAuthority(
+                sourceRoute.actor(),
+                sourceRoute.authorityOwnerGeneration(),
+                sourceRoute.ownerLeaseGeneration());
+            for (int index = 0; index < 3; index++) {
+                List<Message> parts = List.of(
+                    Message.from(ZLinkStreamHeaderCodec.encode(
+                        new ZLinkStreamHeader(
+                            "RelocatedPacket",
+                            Map.of(),
+                            Optional.empty()))),
+                    Message.from("suffix-" + index));
+                boolean accepted = caller.spotNode().sendToActor(
+                    sourceRoute.actor(), parts, SendFlags.DONT_WAIT);
+                if (!accepted) {
+                    parts.forEach(Message::close);
+                }
+                assertTrue(accepted,
+                    "the exact old route must reroute instead of rejecting");
+            }
+
+            CompletionStage<List<Message>> pendingReply;
+            List<Message> requestParts = List.of(
+                Message.from(ZLinkStreamHeaderCodec.encode(
+                    new ZLinkStreamHeader(
+                        "RelocatedRequest",
+                        Map.of(),
+                        Optional.empty()))),
+                Message.from("request-suffix"));
+            pendingReply = caller.spotNode().requestToActor(
+                sourceRoute.actor(),
+                requestParts,
+                SendFlags.DONT_WAIT,
+                Duration.ofSeconds(3));
+            requestParts.forEach(Message::close);
+            receivedAll.get(3, TimeUnit.SECONDS);
+            assertFalse(pendingReply.toCompletableFuture().isDone(),
+                "the source must retain the reply route while target ingress is staged");
+            targetRequestReply.get().accept(
+                List.of(Message.from("target-staged-reply")));
+            List<Message> forwardedReply = pendingReply.toCompletableFuture()
+                .get(3, TimeUnit.SECONDS);
+            try {
+                assertEquals("target-staged-reply",
+                    forwardedReply.getFirst().toUtf8String());
+            } finally {
+                forwardedReply.forEach(Message::close);
+            }
+            for (int index = 0; index < 2; index++) {
+                var header = new ZLinkServiceM6BWireCodec.SpotMessage(
+                    false,
+                    0,
+                    null,
+                    201,
+                    index + 1,
+                    0,
+                    "caller-spot",
+                    sourceSpotRoute);
+                List<Message> parts = List.of(
+                    Message.from(ZLinkStreamHeaderCodec.encode(
+                        new ZLinkStreamHeader(
+                            "RelocatedSpotPacket",
+                            Map.of(),
+                            Optional.empty()))),
+                    Message.from("spot-suffix-" + index));
+                boolean accepted = sourceSpots.enqueueRemoteSpotLazy(
+                    new ZLinkInternalMeshNode.PeerAuthorityFence(
+                        callerRid, 9, "caller-owner", 7),
+                    header,
+                    new byte[0],
+                    () -> new byte[0],
+                    0,
+                    parts,
+                    null,
+                    null,
+                    null,
+                    ignored -> callerFailures.incrementAndGet());
+                if (!accepted) {
+                    parts.forEach(Message::close);
+                }
+                assertTrue(accepted,
+                    "the exact old Spot route must reroute without rejection");
+            }
+            receivedSpots.get(3, TimeUnit.SECONDS);
+            assertEquals(List.of(
+                    "suffix-0", "suffix-1", "suffix-2", "request-suffix"),
+                targetFifo);
+            assertEquals(List.of("spot-suffix-0", "spot-suffix-1"),
+                targetSpotFifo);
+            assertEquals(0, callerFailures.get());
+            assertNull(targetFailure.get());
+        }
+    }
+
+    @Test
     void staleActorRelayOwnsPartsAndAdmissionLeaseAtTheInfrastructureBoundary() {
         try (var context = Zlink.createContext();
              var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
@@ -453,7 +705,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             node.start();
             ZLinkJavaRawSpotNode spots =
                 (ZLinkJavaRawSpotNode) node.spotNode();
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef
+            ZLinkBackendActorRef
                 current;
             try (Message create = Message.from("create")) {
                 current = spots.createActor("relay-actor", 2, create);
@@ -505,8 +757,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 Message.from(ZLinkStreamHeaderCodec.encode(
                     new ZLinkStreamHeader(
                         "RelayReq",
-                        java.util.Map.of(),
-                        java.util.Optional.empty()))),
+                        Map.of(),
+                        Optional.empty()))),
                 Message.from("payload"));
             boolean accepted = spots.enqueueRemoteActor(
                 sourceRid,
@@ -524,6 +776,109 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             assertFalse(failureCalled.get());
             assertEquals(0, budget.snapshot().pendingPayloadBytes());
             assertEquals("relay-actor", current.actorId());
+        }
+    }
+
+    @Test
+    void retainedMessageFollowFenceMismatchCannotFallBackToTheRetiredActor() {
+        try (var context = Zlink.createContext();
+             var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            RoutingId nodeRid = RoutingId.from("jvm-m6b-follow-retired");
+            RoutingId callerRid = RoutingId.from("jvm-m6b-follow-caller");
+            node.setRoutingId(nodeRid);
+            node.setBind("inproc://jvm-m6b-follow-retired-"
+                + System.nanoTime());
+            node.start();
+
+            ZLinkJavaRawSpotNode spots =
+                (ZLinkJavaRawSpotNode) node.spotNode();
+            ZLinkBackendActorRef actor;
+            try (Message create = Message.from("create")) {
+                actor = spots.createActor("follow-retired-actor", create);
+            }
+            spots.rememberActorAuthority(actor, 11, 3);
+
+            AtomicInteger relayAttempts = new AtomicInteger();
+            AtomicInteger localDispatches = new AtomicInteger();
+            spots.setMessageFollowRelayHandler((
+                sourceNodeRid,
+                sourceNodeGeneration,
+                header,
+                acceptedJournalRecord,
+                parts,
+                contentType,
+                inboundDispatchLease,
+                reply,
+                failure) -> {
+                relayAttempts.incrementAndGet();
+                return false;
+            });
+            spots.entrySpot().onDispatchEvent(info -> {
+                if (info.event()
+                    == ZLinkBackendSpotDispatchEvent.ACTOR_READABLE) {
+                    localDispatches.incrementAndGet();
+                    info.actorMessages().forEach(
+                        systems.zlink.framework.runtime.internal.backend
+                            .ZLinkBackendActorReceived::close);
+                }
+            });
+
+            var wrongLease = new ZLinkServiceM6BWireCodec.ActorMessage(
+                false,
+                0,
+                null,
+                null,
+                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                    actor,
+                    node.lifecycleGeneration(),
+                    11,
+                    4));
+            try (Message packet = Message.from(ZLinkStreamHeaderCodec.encode(
+                     new ZLinkStreamHeader(
+                         "FollowedPacket", Map.of(), Optional.empty())));
+                 Message payload = Message.from("stale-payload")) {
+                assertFalse(spots.enqueueRemoteActor(
+                    callerRid,
+                    7,
+                    wrongLease,
+                    new byte[0],
+                    List.of(packet, payload),
+                    "application/json",
+                    null,
+                    null,
+                    ignored -> { }));
+            }
+
+            assertEquals(1, relayAttempts.get());
+            assertEquals(0, localDispatches.get());
+
+            var currentLease = new ZLinkServiceM6BWireCodec.ActorMessage(
+                false,
+                0,
+                null,
+                null,
+                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                    actor,
+                    node.lifecycleGeneration(),
+                    11,
+                    3));
+            try (Message packet = Message.from(ZLinkStreamHeaderCodec.encode(
+                     new ZLinkStreamHeader(
+                         "CurrentPacket", Map.of(), Optional.empty())));
+                 Message payload = Message.from("current-payload")) {
+                assertTrue(spots.enqueueRemoteActor(
+                    callerRid,
+                    7,
+                    currentLease,
+                    new byte[0],
+                    List.of(packet, payload),
+                    "application/json",
+                    null,
+                    null,
+                    ignored -> { }));
+            }
+            assertEquals(2, relayAttempts.get());
+            assertEquals(1, localDispatches.get());
         }
     }
 
@@ -593,7 +948,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 target.replyActorJoin(request, 0, List.of());
             });
 
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef actor;
+            ZLinkBackendActorRef actor;
             try (Message create = Message.from("create")) {
                 actor = node.spotNode().createActor("actor-1", create);
             }
@@ -760,14 +1115,14 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 (meshName, candidateRid, candidateGeneration) ->
                     CompletableFuture.completedFuture(
                         candidateRid.equals(leftRid)
-                            ? java.util.Optional.of(
+                            ? Optional.of(
                                 new ZLinkInternalMeshNode
                                     .PeerAuthorityFence(
                                         leftRid,
                                         candidateGeneration,
                                         "target-owner",
                                         1))
-                            : java.util.Optional.empty()));
+                            : Optional.empty()));
             CompletableFuture<ZLinkBackendRequestResult> stale =
                 new CompletableFuture<>();
             try (Message message = Message.from("stale-source")) {
@@ -819,7 +1174,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             .ZLinkBackendActorReceived::close);
                 }
             });
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef actor;
+            ZLinkBackendActorRef actor;
             try (Message create = Message.from("create")) {
                 actor = node.spotNode().createActor("actor-local", create);
             }
@@ -871,7 +1226,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 }
                 accepted.complete(info.actorMessages().getFirst());
             });
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef
+            ZLinkBackendActorRef
                 actor;
             try (Message create = Message.from("create")) {
                 actor = node.spotNode().createActor(
@@ -952,7 +1307,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             .ZLinkBackendActorReceived::close);
                 }
             });
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef actor;
+            ZLinkBackendActorRef actor;
             try (Message create = Message.from("create")) {
                 actor = left.spotNode().createActor("actor-remote", create);
             }
@@ -1005,7 +1360,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             left.setRoutingId(leftRid);
             left.setBind(endpoint);
             left.setObjectRole(
-                systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.SERVER);
+                ZLinkMeshNodeObjectRole.SERVER);
             left.addChannel("events");
             left.setChannelWeight("events", 10_000);
             right.setRoutingId(rightRid);
@@ -1050,7 +1405,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     List.of(packet, payload));
             }
 
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage
+            ZLinkBackendTopicMessage
                 received = null;
             while (received == null && System.nanoTime() < deadline) {
                 received = remote.subscribe(
@@ -1260,7 +1615,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     systems.zlink.framework.runtime.internal.backend
                         .ZLinkBackendActorReceived::close);
             });
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef actor;
+            ZLinkBackendActorRef actor;
             try (Message create = Message.from("create")) {
                 actor = node.spotNode().createActor("actor-stream", create);
             }
@@ -1362,6 +1717,49 @@ final class ZLinkJavaRawSpotNodeM6BTest {
     }
 
     @Test
+    void remoteUnbindIsIdempotentAfterActorIsNoLongerCurrent()
+        throws Exception {
+        try (var context = Zlink.createContext();
+             var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            RoutingId nodeRid = RoutingId.from("jvm-m6b-unbind-node");
+            RoutingId sourceRid = RoutingId.from("jvm-m6b-unbind-source");
+            node.setRoutingId(nodeRid);
+            node.setBind("inproc://jvm-m6b-unbind-" + System.nanoTime());
+            node.start();
+
+            ZLinkJavaRawSpotNode target =
+                (ZLinkJavaRawSpotNode) node.spotNode();
+            var actor = new systems.zlink.framework.runtime.internal.backend
+                .ZLinkBackendActorRef(nodeRid, "retired-actor", 1);
+            var route = new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                actor,
+                node.lifecycleGeneration(),
+                41,
+                1);
+            var inactive = new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                1,
+                route,
+                RoutingId.from("jvm-m6b-unbind-session"),
+                false,
+                3);
+
+            assertTrue(target.acceptRemoteStreamBinding(
+                sourceRid, 7, inactive));
+            assertTrue(target.acceptRemoteStreamBinding(
+                sourceRid, 7, inactive));
+            assertFalse(target.acceptRemoteStreamBinding(
+                sourceRid,
+                7,
+                new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                    2,
+                    route,
+                    inactive.sessionRid(),
+                    true,
+                    3)));
+        }
+    }
+
+    @Test
     void remoteBindingIdentityFencesOldOwnerEpochWithoutGlobalCounter()
         throws Exception {
         try (var context = Zlink.createContext();
@@ -1374,7 +1772,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             actorNode.start();
             ZLinkJavaRawSpotNode target =
                 (ZLinkJavaRawSpotNode) actorNode.spotNode();
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef
+            ZLinkBackendActorRef
                 actor;
             try (Message create = Message.from("create")) {
                 actor = target.createActor("actor-owner-epoch", create);
@@ -1872,7 +2270,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     systems.zlink.framework.runtime.internal.backend
                         .ZLinkBackendActorReceived::close);
             });
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef
+            ZLinkBackendActorRef
                 actor;
             try (Message create = Message.from("create")) {
                 actor = actorNode.spotNode().createActor(
@@ -1898,10 +2296,46 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             .MeshPeerState.ADMITTED));
 
             stream.startSessionService();
+            ZLinkBackendStreamSocket ownerStream =
+                (ZLinkBackendStreamSocket) Proxy.newProxyInstance(
+                    ZLinkBackendStreamSocket.class.getClassLoader(),
+                    new Class<?>[] {ZLinkBackendStreamSocket.class},
+                    (proxy, method, arguments) -> {
+                        if (method.getName().equals("requestBoundActor")) {
+                            return CompletableFuture.completedFuture(List.of());
+                        }
+                        try {
+                            return method.invoke(stream, arguments);
+                        } catch (InvocationTargetException failure) {
+                            throw failure.getCause();
+                        }
+                    });
+            var sessionOwner = new ZLinkSessionActorsRuntime(
+                sessionNode.spotNode(),
+                ownerStream,
+                sessionRid,
+                null,
+                new ZLinkStringMessageSerializer(),
+                ignored -> true,
+                null,
+                true,
+                ZLinkStreamCodec.RAW);
+            sessionNode.setBoundSessionSendHandler((
+                sourceNodeRid,
+                sourceNodeGeneration,
+                command,
+                payload) -> sessionOwner.matchesBoundSessionSend(
+                    sourceNodeRid, sourceNodeGeneration, command)
+                    && sessionOwner.acceptBoundSessionSend(
+                        sourceNodeRid,
+                        sourceNodeGeneration,
+                        command,
+                        payload));
             long firstBindingGeneration =
                 sessionNode.bindingGenerationSeed();
-            stream.bindActor(sessionRid, actor)
-                .submit(Duration.ofSeconds(1)).toCompletableFuture()
+            sessionOwner.bind(new ActorRef(
+                    actor.actorId(), actor.generation(), "mesh", actor.nodeRid()))
+                .toCompletableFuture()
                 .get(1, TimeUnit.SECONDS);
             try (Message message = Message.from("ingress")) {
                 assertTrue(stream.sendBoundActor(
@@ -1924,8 +2358,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             assertEquals(List.of("push-one"), pushed);
             sessionNode.spotNode().rememberActorAuthority(actor, 73, 1);
 
-            stream.bindActor(sessionRid, actor)
-                .submit(Duration.ofSeconds(1)).toCompletableFuture()
+            sessionOwner.bind(new ActorRef(
+                    actor.actorId(), actor.generation(), "mesh", actor.nodeRid()))
+                .toCompletableFuture()
                 .get(1, TimeUnit.SECONDS);
             ZLinkJavaRawSpotNode source =
                 (ZLinkJavaRawSpotNode) sessionNode.spotNode();
@@ -2097,12 +2532,12 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             (meshName, candidateRid, candidateGeneration) ->
                 CompletableFuture.completedFuture(
                     candidateGeneration > 0
-                        ? java.util.Optional.of(
+                        ? Optional.of(
                             new ZLinkInternalMeshNode.PeerAuthorityFence(
                                 candidateRid,
                                 candidateGeneration,
                                 "test-source-owner",
                                 1))
-                        : java.util.Optional.empty()));
+                        : Optional.empty()));
     }
 }

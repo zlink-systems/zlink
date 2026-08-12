@@ -7,13 +7,14 @@ using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Handlers;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Streams;
+using Zlink.Framework.LocationProvider;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class NodesAndServicesTests : RegistrationValidationSupport
 {
     [Fact]
-    public void AddZLinkFramework_Registers_Internal_RemoteSessionRouteHandlers()
+    public void AddZLinkFramework_Uses_ServiceWire_ForSessionRelocationBarriers()
     {
         var services = new ServiceCollection();
 
@@ -25,18 +26,11 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
         Assert.Contains(
             services,
             descriptor => descriptor.ServiceType == typeof(ZLinkRemoteSessionUnbindRouteHandler));
-        Assert.Contains(
+        Assert.DoesNotContain(
             services,
-            descriptor => descriptor.ServiceType == typeof(ZLinkSessionRouteSealHandler));
-        Assert.Contains(
-            services,
-            descriptor => descriptor.ServiceType == typeof(ZLinkSessionRouteAbortHandler));
-        Assert.Contains(
-            services,
-            descriptor => descriptor.ServiceType == typeof(ZLinkSessionRouteCommitHandler));
-        Assert.Contains(
-            services,
-            descriptor => descriptor.ServiceType == typeof(ZLinkSessionRouteUnsealHandler));
+            descriptor => descriptor.ServiceType.Name.StartsWith(
+                "ZLinkSessionRoute",
+                StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1008,7 +1002,7 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
     public async Task AddZLinkFramework_AddLocationStores_ResolvesEveryStoreRoleToOneInstance()
     {
         var services = new ServiceCollection();
-        var backing = new ZLinkInMemoryLocationStore();
+        var backing = new ZLinkInMemoryProviderLocationStore();
 
         services.AddZLinkFramework(options =>
         {
@@ -1020,7 +1014,9 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
 
         await using var provider = services.BuildServiceProvider();
 
-        Assert.Same(backing, provider.GetRequiredService<IZLinkLocationRepository>());
+        Assert.Same(backing, provider.GetRequiredService<IZLinkLocationStore>());
+        Assert.IsType<ZLinkProviderLocationRepository>(
+            provider.GetRequiredService<IZLinkLocationRepository>());
 
         // The location runtime surface comes up on top of the hook exactly
         // as it does for the per-role registrations.
@@ -1135,7 +1131,7 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
             inMemory.AddZLinkFramework(options =>
             {
                 options.UseTestLocationStore();
-                options.AddLocationStore(new ZLinkInMemoryLocationStore());
+                options.AddLocationStore(new ZLinkInMemoryProviderLocationStore());
             }));
         Assert.Contains("AddLocationStore", inMemoryConflict.Message, StringComparison.Ordinal);
 

@@ -272,12 +272,12 @@ public async ValueTask RunAsync(TicTacToeClientOptions options, CancellationToke
     ZlinkStreamAssert.Ensure(sawMove.Payload.State.Board == move.State.Board, "board state mismatch.");
 }
 
-// The join response arrives as a push, not the request's reply -- register the wait first, then send.
-private static async ValueTask<JoinGameRes> JoinGameAsync(
+// The join completion arrives as a client push -- register the wait before the one-way send.
+private static async ValueTask<JoinGameNotify> JoinGameAsync(
     IZlinkStreamConnector connector, string roomId, CancellationToken ct)
 {
-    var completion = connector.WaitFor<JoinGameRes>().Async(ct);
-    await connector.Send(new JoinGameReq(roomId)).Async(ct);
+    var completion = connector.WaitFor<JoinGameNotify>().Async(ct);
+    await connector.Send(new JoinGameMsg(roomId)).Async(ct);
     return (await completion).Payload;
 }
 ```

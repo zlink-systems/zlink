@@ -15,8 +15,8 @@ import type {
   DeleteQuestProjectionRes,
   GetQuestProgressReq,
   GetQuestProgressRes,
-  QuestProgress,
   RebuildQuestProjectionReq,
+  RebuildQuestProjectionRes,
   SyncQuestProgressReq,
   SyncQuestProgressRes
 } from '../../../../../../Shared/Contracts/messages';
@@ -94,13 +94,13 @@ class DeleteQuestProjectionSpotHandler
 @Injectable()
 @zlinkSpotPacketHandler({ spot: () => PlayerQuestSpot, packetName: 'RebuildQuestProjectionReq' })
 class RebuildQuestProjectionSpotHandler
-  implements ZLinkSpotRequestHandler<PlayerQuestSpot, RebuildQuestProjectionReq, QuestProgress> {
+  implements ZLinkSpotRequestHandler<PlayerQuestSpot, RebuildQuestProjectionReq, RebuildQuestProjectionRes> {
   constructor(
     @Inject(QuestEventStore) private readonly events: QuestEventStore,
     @Inject(QuestReadModelStore) private readonly store: QuestReadModelStore
   ) {}
 
-  async handle(spot: PlayerQuestSpot, request: RebuildQuestProjectionReq): Promise<QuestProgress> {
+  async handle(spot: PlayerQuestSpot, request: RebuildQuestProjectionReq): Promise<RebuildQuestProjectionRes> {
     requirePlayer(spot, request.playerId);
     const rebuilt = this.store.rebuildProjection(request.playerId, request.questId, this.events.read(request.playerId));
     return rebuilt;

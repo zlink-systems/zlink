@@ -110,7 +110,7 @@ std::string kind_name (zlink::framework::framework_error_kind_t kind)
     }
 }
 
-e2e::actor_call_response_t failed (const e2e::actor_call_request_t &request,
+e2e::actor_call_res_t failed (const e2e::actor_call_req_t &request,
                                    const zlink::framework::framework_exception_t &error)
 {
     return {request.scenario, request.actor_id, error.what (), kind_name (error.kind ())};
@@ -120,22 +120,22 @@ class send_handler_t
 {
   public:
     using dependency_types = zlink::framework::dependency_list_t<zlink::framework::actor_client_t>;
-    using request_type = e2e::actor_call_request_t;
-    using reply_type = e2e::actor_call_response_t;
+    using request_type = e2e::actor_call_req_t;
+    using reply_type = e2e::actor_call_res_t;
 
     explicit send_handler_t (zlink::framework::actor_client_t &actors) : _actors (actors)
     {
     }
 
-    zlink::framework::task_t<e2e::actor_call_response_t>
-    handle (const e2e::actor_call_request_t &request)
+    zlink::framework::task_t<e2e::actor_call_res_t>
+    handle (const e2e::actor_call_req_t &request)
     {
         try {
-            e2e::actor_notify_t notify{request.scenario, request.actor_id, request.value};
+            e2e::actor_msg_t notify{request.scenario, request.actor_id, request.value};
             co_await _actors
               .send (zlink::framework::actor_id_t (request.actor_id), notify)
               .submit ();
-            co_return e2e::actor_call_response_t{request.scenario, request.actor_id, "sent", ""};
+            co_return e2e::actor_call_res_t{request.scenario, request.actor_id, "sent", ""};
         }
         catch (const zlink::framework::framework_exception_t &error) {
             co_return failed (request, error);
@@ -150,22 +150,22 @@ class request_handler_t
 {
   public:
     using dependency_types = zlink::framework::dependency_list_t<zlink::framework::actor_client_t>;
-    using request_type = e2e::actor_call_request_t;
-    using reply_type = e2e::actor_call_response_t;
+    using request_type = e2e::actor_call_req_t;
+    using reply_type = e2e::actor_call_res_t;
 
     explicit request_handler_t (zlink::framework::actor_client_t &actors) : _actors (actors)
     {
     }
 
-    zlink::framework::task_t<e2e::actor_call_response_t>
-    handle (const e2e::actor_call_request_t &request)
+    zlink::framework::task_t<e2e::actor_call_res_t>
+    handle (const e2e::actor_call_req_t &request)
     {
         try {
-            e2e::actor_ask_t ask{request.scenario, request.actor_id, request.value};
+            e2e::actor_req_t ask{request.scenario, request.actor_id, request.value};
             auto reply = co_await _actors.request (zlink::framework::actor_id_t (request.actor_id), ask)
                            .timeout (std::chrono::seconds (5))
-                           .submit<e2e::actor_reply_t> ();
-            co_return e2e::actor_call_response_t{
+                           .submit<e2e::actor_res_t> ();
+            co_return e2e::actor_call_res_t{
               request.scenario, request.actor_id, reply.value, ""};
         }
         catch (const zlink::framework::framework_exception_t &error) {
@@ -182,19 +182,19 @@ class location_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::actor_directory_t>;
-    using request_type = e2e::actor_call_request_t;
-    using reply_type = e2e::actor_call_response_t;
+    using request_type = e2e::actor_call_req_t;
+    using reply_type = e2e::actor_call_res_t;
 
     explicit location_handler_t (zlink::framework::actor_directory_t &directory) :
         _directory (directory)
     {
     }
 
-    zlink::framework::task_t<e2e::actor_call_response_t>
-    handle (const e2e::actor_call_request_t &request)
+    zlink::framework::task_t<e2e::actor_call_res_t>
+    handle (const e2e::actor_call_req_t &request)
     {
         const auto located = co_await _directory.find (request.actor_id);
-        co_return e2e::actor_call_response_t{
+        co_return e2e::actor_call_res_t{
           request.scenario, request.actor_id, located ? "present" : "missing", ""};
     }
 
@@ -208,8 +208,8 @@ class capture_ref_handler_t
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::actor_directory_t,
                                           captured_actor_refs_t>;
-    using request_type = e2e::actor_call_request_t;
-    using reply_type = e2e::actor_call_response_t;
+    using request_type = e2e::actor_call_req_t;
+    using reply_type = e2e::actor_call_res_t;
 
     capture_ref_handler_t (zlink::framework::actor_directory_t &directory,
                            captured_actor_refs_t &captured) :
@@ -217,16 +217,16 @@ class capture_ref_handler_t
     {
     }
 
-    zlink::framework::task_t<e2e::actor_call_response_t>
-    handle (const e2e::actor_call_request_t &request)
+    zlink::framework::task_t<e2e::actor_call_res_t>
+    handle (const e2e::actor_call_req_t &request)
     {
         const auto actor_ref = co_await _directory.find (request.actor_id);
         if (!actor_ref) {
-            co_return e2e::actor_call_response_t{request.scenario, request.actor_id, "",
+            co_return e2e::actor_call_res_t{request.scenario, request.actor_id, "",
                                                  "actor_route_not_found"};
         }
         _captured.save (request.actor_id, *actor_ref);
-        co_return e2e::actor_call_response_t{request.scenario, request.actor_id, "captured", ""};
+        co_return e2e::actor_call_res_t{request.scenario, request.actor_id, "captured", ""};
     }
 
   private:
@@ -240,8 +240,8 @@ class request_captured_handler_t
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::actor_client_t,
                                           captured_actor_refs_t>;
-    using request_type = e2e::actor_call_request_t;
-    using reply_type = e2e::actor_call_response_t;
+    using request_type = e2e::actor_call_req_t;
+    using reply_type = e2e::actor_call_res_t;
 
     request_captured_handler_t (zlink::framework::actor_client_t &actors,
                                 captured_actor_refs_t &captured) :
@@ -249,22 +249,22 @@ class request_captured_handler_t
     {
     }
 
-    zlink::framework::task_t<e2e::actor_call_response_t>
-    handle (const e2e::actor_call_request_t &request)
+    zlink::framework::task_t<e2e::actor_call_res_t>
+    handle (const e2e::actor_call_req_t &request)
     {
         const auto actor_ref = _captured.find (request.actor_id);
         if (!actor_ref) {
-            co_return e2e::actor_call_response_t{request.scenario, request.actor_id, "",
+            co_return e2e::actor_call_res_t{request.scenario, request.actor_id, "",
                                                  "actor_route_not_found"};
         }
         try {
             auto reply = co_await _actors
                            .request (zlink::framework::actor_id_t (request.actor_id),
-                                              e2e::actor_ask_t{request.scenario,
+                                              e2e::actor_req_t{request.scenario,
                                                                request.actor_id, request.value})
                            .timeout (std::chrono::seconds (5))
-                           .submit<e2e::actor_reply_t> ();
-            co_return e2e::actor_call_response_t{request.scenario, request.actor_id, reply.value,
+                           .submit<e2e::actor_res_t> ();
+            co_return e2e::actor_call_res_t{request.scenario, request.actor_id, reply.value,
                                                  ""};
         }
         catch (const zlink::framework::framework_exception_t &error) {
@@ -283,8 +283,8 @@ class destroy_captured_handler_t
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::actor_manager_t,
                                           captured_actor_refs_t>;
-    using request_type = e2e::actor_call_request_t;
-    using reply_type = e2e::actor_call_response_t;
+    using request_type = e2e::actor_call_req_t;
+    using reply_type = e2e::actor_call_res_t;
 
     destroy_captured_handler_t (zlink::framework::actor_manager_t &actors,
                                 captured_actor_refs_t &captured) :
@@ -292,16 +292,16 @@ class destroy_captured_handler_t
     {
     }
 
-    zlink::framework::task_t<e2e::actor_call_response_t>
-    handle (const e2e::actor_call_request_t &request)
+    zlink::framework::task_t<e2e::actor_call_res_t>
+    handle (const e2e::actor_call_req_t &request)
     {
         const auto actor_ref = _captured.find (request.actor_id);
         if (!actor_ref)
-            co_return e2e::actor_call_response_t{request.scenario, request.actor_id, "",
+            co_return e2e::actor_call_res_t{request.scenario, request.actor_id, "",
                                                  "actor_route_not_found"};
         try {
             const auto destroyed = co_await _actors.destroy (*actor_ref);
-            co_return e2e::actor_call_response_t{
+            co_return e2e::actor_call_res_t{
               request.scenario, request.actor_id, destroyed ? "destroyed" : "", ""};
         }
         catch (const zlink::framework::framework_exception_t &error) {

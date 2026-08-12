@@ -1,4 +1,10 @@
 package systems.zlink.e2e.spotactortransfer.client;
+import java.util.Arrays;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
+import systems.zlink.e2e.spotactortransfer.shared.Env;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.net.URI;
@@ -42,7 +48,7 @@ public final class Program implements AutoCloseable {
             throw new IllegalArgumentException(
                 "Usage: spot-actor-transfer-client --config <path> --scenario <selector>");
         }
-        systems.zlink.e2e.spotactortransfer.shared.Env.configure(args);
+        Env.configure(args);
         try (Program program = new Program(ClientOptions.load(args[1]))) {
             String selected = args[3];
             for (String scenario : scenarios(selected)) {
@@ -61,10 +67,10 @@ public final class Program implements AutoCloseable {
         if ("all".equalsIgnoreCase(selected)) {
             return implemented;
         }
-        return java.util.Arrays.stream(selected.split(","))
+        return Arrays.stream(selected.split(","))
             .map(String::trim)
             .filter(value -> !value.isEmpty())
-            .map(value -> value.toUpperCase(java.util.Locale.ROOT))
+            .map(value -> value.toUpperCase(Locale.ROOT))
             .toList();
     }
 
@@ -128,7 +134,7 @@ public final class Program implements AutoCloseable {
             CompletableFuture<Contracts.RetireRes> retire =
                 postAsyncWithTimeout(
                     nodeA + "/runtime/retire",
-                    java.util.Map.of(),
+                    Map.of(),
                     Contracts.RetireRes.class,
                     Duration.ofSeconds(40));
             waitForRetireCapture(
@@ -362,7 +368,7 @@ public final class Program implements AutoCloseable {
                             .metadata("actor-id", actorId)
                             .submit(Contracts.BoundPushRes.class).toCompletableFuture().join();
                     } catch (Exception error) {
-                        throw new java.util.concurrent.CompletionException(error);
+                        throw new CompletionException(error);
                     }
                 }));
                 Thread.sleep(75);
@@ -458,7 +464,7 @@ public final class Program implements AutoCloseable {
         try {
             expiring.get(3, TimeUnit.SECONDS);
             throw new AssertionError("ST-F6 request did not use its original timeout");
-        } catch (java.util.concurrent.ExecutionException expected) {
+        } catch (ExecutionException expected) {
         }
         waitFor(timeout.actorId(), "request_timeout", Duration.ofSeconds(3));
         release(timeout.targetHttp(), timeout.spotRid());
@@ -549,7 +555,7 @@ public final class Program implements AutoCloseable {
         try {
             Contracts.JoinTargetRes response = join.get(15, TimeUnit.SECONDS);
             require(!response.accepted(), "ST-C1 join succeeded after source shutdown");
-        } catch (java.util.concurrent.ExecutionException expected) {
+        } catch (ExecutionException expected) {
         }
         Thread.sleep(13_000);
         List<Contracts.Evidence> target = get(
@@ -864,7 +870,7 @@ public final class Program implements AutoCloseable {
             new Contracts.SendAtRefReq(
                 actorRef.path("nodeRid").asText(),
                 actorRef.path("generation").asLong(),
-                new Contracts.MessageFollowSendReq(scenario, marker)),
+                new Contracts.MessageFollowMsg(scenario, marker)),
             JsonNode.class);
     }
 
@@ -883,7 +889,7 @@ public final class Program implements AutoCloseable {
     }
 
     private void release(String node, String key) throws Exception {
-        post(node + "/gates/" + key, java.util.Map.of(), Contracts.GateReleaseRes.class);
+        post(node + "/gates/" + key, Map.of(), Contracts.GateReleaseRes.class);
     }
 
     private List<Contracts.Evidence> evidence() throws Exception {

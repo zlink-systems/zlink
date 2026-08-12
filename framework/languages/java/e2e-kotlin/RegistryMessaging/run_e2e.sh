@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/e2e-redis-common.sh"
+zlink_e2e_initialize kotlin "$0" "$@"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${ROOT_DIR}"
@@ -46,7 +47,7 @@ run_all_scenarios() {
   local scenario
   for scenario in RM-A1 RM-A2 RM-A4 RM-A6 RM-B1 RM-B2 RM-C1 RM-C2 RM-C3 RM-C4 RM-C5 RM-C7 RM-C8 RM-C9; do
     echo "===== ${scenario} ====="
-    "${ROOT_DIR}/run_e2e.sh" "${scenario}"
+    bash "${ROOT_DIR}/run_e2e.sh" "${scenario}"
   done
   echo "registry-messaging kotlin e2e result=passed"
 }
@@ -63,7 +64,7 @@ cleanup() {
     kill -9 "${pids[$i]}" >/dev/null 2>&1 || true
   done
   if [[ -n "${REDIS_CONTAINER}" ]]; then
-    docker rm -fv "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "${REDIS_CONTAINER}" || true
   fi
   wait >/dev/null 2>&1 || true
   exit "${status}"
@@ -74,16 +75,6 @@ if [[ "${SCENARIO}" == "all" ]]; then
   run_all_scenarios
   exit 0
 fi
-
-pick_port() {
-  python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
-}
 
 wait_health() {
   local url="$1"
@@ -186,7 +177,8 @@ start_redis_container() {
 }
 
 gradle_run() {
-  ../../gradlew --project-cache-dir "${ZLINK_KOTLIN_E2E_GRADLE_CACHE}" --no-daemon "$@" --quiet
+  zlink_e2e_gradle_build_locked ../../gradlew \
+    --project-cache-dir "${ZLINK_KOTLIN_E2E_GRADLE_CACHE}" --no-daemon "$@" --quiet
 }
 
 bin_path() {
@@ -219,19 +211,12 @@ start_server() {
   pids+=("$!")
 }
 
-PROVIDER_A_HTTP_PORT="$(pick_port)"
-PROVIDER_B_HTTP_PORT="$(pick_port)"
-WORKFLOW_HTTP_PORT="$(pick_port)"
-CONSUMER_HTTP_PORT="$(pick_port)"
-SINGLE_CONSUMER_HTTP_PORT="$(pick_port)"
-DISCOVERY_CONSUMER_HTTP_PORT="$(pick_port)"
-BACKPRESSURE_CONSUMER_HTTP_PORT="$(pick_port)"
-API_A_PORT="$(pick_port)"
-API_B_PORT="$(pick_port)"
-WORKFLOW_PORT="$(pick_port)"
-ROUTE_A_PORT="$(pick_port)"
-ROUTE_B_PORT="$(pick_port)"
-CLIENT_ROUTE_PORT="$(pick_port)"
+assigned_ports=()
+zlink_e2e_assign_unique_ports assigned_ports 13
+read -r PROVIDER_A_HTTP_PORT PROVIDER_B_HTTP_PORT WORKFLOW_HTTP_PORT \
+  CONSUMER_HTTP_PORT SINGLE_CONSUMER_HTTP_PORT DISCOVERY_CONSUMER_HTTP_PORT \
+  BACKPRESSURE_CONSUMER_HTTP_PORT API_A_PORT API_B_PORT WORKFLOW_PORT \
+  ROUTE_A_PORT ROUTE_B_PORT CLIENT_ROUTE_PORT <<<"${assigned_ports[*]}"
 
 API_A="tcp://127.0.0.1:${API_A_PORT}"
 API_B="tcp://127.0.0.1:${API_B_PORT}"

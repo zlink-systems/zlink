@@ -1,5 +1,7 @@
 package systems.zlink.samples.kotlin.deliverydispatch.server.tracking
 
+
+import java.net.URI
 import kotlinx.coroutines.Dispatchers
 import org.springframework.boot.WebApplicationType
 import org.springframework.boot.autoconfigure.SpringBootApplication
@@ -33,7 +35,7 @@ class TrackingServerApplication {
                 .listen(SampleTopology.TrackingSpotEndpoint)
                 .setRoutingIdPrefix("delivery-tracking")
             trackingSpot.objects().client()
-            val trackingEndpoint = java.net.URI.create(SampleTopology.TrackingChannelEndpoint)
+            val trackingEndpoint = URI.create(SampleTopology.TrackingChannelEndpoint)
             options.addClientServerChannel(SampleNames.TrackingChannel)
                 .server()
                 .setBindHost(trackingEndpoint.host)

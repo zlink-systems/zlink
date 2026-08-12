@@ -68,6 +68,15 @@ function createResolver(resolve = ({ actorId }) => actorLocation(actorId)) {
 }
 
 const operationId = Object.freeze({ high: 1n, low: 2n });
+const actorClientMeshSubmitters = framework.createStandaloneMeshSubmitterRegistry();
+test.after(() => actorClientMeshSubmitters.dispose());
+
+function createActorClient(options) {
+  return new framework.DefaultZLinkActorClient({
+    meshSubmitters: actorClientMeshSubmitters,
+    ...options
+  });
+}
 
 function completionTable(terminalResult, parts = []) {
   return {
@@ -94,7 +103,7 @@ test('actor client submit completes without exposing an admission result', async
     }
   };
   const resolver = createResolver();
-  const client = new framework.DefaultZLinkActorClient({
+  const client = createActorClient({
     nodeProvider: () => node,
     locationResolver: () => resolver
   });
@@ -120,9 +129,6 @@ test('actor client submit completes without exposing an admission result', async
 test('actor client writes the selected serializer into the packet codec header', async () => {
   const sent = [];
   const serializer = {
-    canSerialize(value) {
-      return value instanceof ActorNotify;
-    },
     serialize(value) {
       return framework.ZLinkEncodedPayload.from(Buffer.from(`packed:${value.value}`));
     },
@@ -130,7 +136,14 @@ test('actor client writes the selected serializer into the packet codec header',
       return Buffer.from(payload.data()).toString('utf8');
     }
   };
-  const client = new framework.DefaultZLinkActorClient({
+  const messageSerializers = new framework.DefaultZLinkCodecRegistryBuilder()
+    .addSerializer(
+      'application/x-msgpack',
+      serializer,
+      (declaredType) => declaredType === ActorNotify
+    )
+    .registeredSerializers;
+  const client = createActorClient({
     nodeProvider: () => ({
       sendToActor(_actor, parts) {
         sent.push({
@@ -141,7 +154,7 @@ test('actor client writes the selected serializer into the packet codec header',
       }
     }),
     locationResolver: () => createResolver(),
-    messageSerializers: new Map([['application/x-msgpack', serializer]])
+    messageSerializers
   });
 
   await client.sendToActor('actor-1', new ActorNotify('ping')).submit();
@@ -152,7 +165,7 @@ test('actor client writes the selected serializer into the packet codec header',
 
 test('actor client rejects an incomplete authority fence before transport submission', async () => {
   let sends = 0;
-  const client = new framework.DefaultZLinkActorClient({
+  const client = createActorClient({
     nodeProvider: () => ({
       sendToActor() {
         sends += 1;
@@ -216,7 +229,7 @@ test('actor client selects the MeshNode and completion table from the current Ac
       }
     }]
   ]);
-  const client = new framework.DefaultZLinkActorClient({
+  const client = createActorClient({
     nodeProvider: (meshName) => nodes.get(meshName),
     completionTableProvider: (meshName) => completions.get(meshName),
     locationResolver: () => createResolver(({ actorId }) =>
@@ -265,7 +278,7 @@ test('actor client request decodes the handler reply and never auto-creates a mi
     createReplyParts({ value: 'pong' })
   );
   const resolver = createResolver();
-  const client = new framework.DefaultZLinkActorClient({
+  const client = createActorClient({
     nodeProvider: () => node,
     completionTableProvider: () => completions,
     locationResolver: () => resolver
@@ -288,7 +301,7 @@ test('actor client request decodes a single framed handler reply through stream 
     RequestResult.Ok,
     createReplyFrame({ value: 'framed-pong' })
   );
-  const client = new framework.DefaultZLinkActorClient({
+  const client = createActorClient({
     nodeProvider: () => node,
     completionTableProvider: () => completions,
     locationResolver: () => createResolver()
@@ -346,7 +359,7 @@ test('actor client invalidates a stale resolved route without retrying the opera
   let invalidations = 0;
   const resolver = createResolver(() => actorLocation('actor-1', 1n));
   resolver.invalidateActorRoute = () => { invalidations += 1; };
-  const client = new framework.DefaultZLinkActorClient({
+  const client = createActorClient({
     nodeProvider: () => node,
     locationResolver: () => resolver
   });
@@ -366,7 +379,7 @@ test('actor client submit maps native terminal outcomes to operation-specific er
     [3, framework.ZLinkFrameworkErrorKind.NotFound],
     [4, framework.ZLinkFrameworkErrorKind.ShuttingDown]
   ];
-  const accepted = new framework.DefaultZLinkActorClient({
+  const accepted = createActorClient({
     nodeProvider: () => ({ sendToActor: () => 0 }),
     completionTableProvider: () => undefined,
     locationResolver: () => createResolver(),
@@ -378,7 +391,7 @@ test('actor client submit maps native terminal outcomes to operation-specific er
   );
 
   for (const [nativeResult, expectedKind] of results) {
-    const client = new framework.DefaultZLinkActorClient({
+    const client = createActorClient({
       nodeProvider: () => ({
         sendToActor() {
           return nativeResult;
@@ -395,7 +408,7 @@ test('actor client submit maps native terminal outcomes to operation-specific er
   }
 
   for (const nativeResult of [1, 13]) {
-    const client = new framework.DefaultZLinkActorClient({
+    const client = createActorClient({
       nodeProvider: () => ({ sendToActor: () => nativeResult }),
       completionTableProvider: () => undefined,
       locationResolver: () => createResolver(),
@@ -407,7 +420,7 @@ test('actor client submit maps native terminal outcomes to operation-specific er
     );
   }
 
-  const invalid = new framework.DefaultZLinkActorClient({
+  const invalid = createActorClient({
     nodeProvider: () => ({
       sendToActor() {
         return 6;
@@ -500,7 +513,7 @@ test('pre-aborted Actor call does not read authority or submit transport work', 
   const controller = new AbortController();
   controller.abort();
   let attempts = 0;
-  const client = new framework.DefaultZLinkActorClient({
+  const client = createActorClient({
     nodeProvider: () => ({
       sendToActor() {
         attempts += 1;
@@ -520,7 +533,7 @@ test('pre-aborted Actor call does not read authority or submit transport work', 
 });
 
 test('actor client maps stale and disconnected route failures', async () => {
-  const noNode = new framework.DefaultZLinkActorClient({
+  const noNode = createActorClient({
     nodeProvider: () => undefined,
     completionTableProvider: () => undefined,
     locationResolver: () => createResolver()
@@ -535,7 +548,7 @@ test('actor client maps stale and disconnected route failures', async () => {
       return operationId;
     }
   };
-  const stale = new framework.DefaultZLinkActorClient({
+  const stale = createActorClient({
     nodeProvider: () => staleNode,
     completionTableProvider: () => completionTable(RequestResult.Conflict),
     locationResolver: () => createResolver(({ actorId }) => actorLocation(actorId, 1n))
@@ -550,7 +563,7 @@ test('actor client maps stale and disconnected route failures', async () => {
       return operationId;
     }
   };
-  const disconnected = new framework.DefaultZLinkActorClient({
+  const disconnected = createActorClient({
     nodeProvider: () => disconnectedNode,
     completionTableProvider: () => completionTable(RequestResult.NotConnected),
     locationResolver: () => createResolver()
@@ -568,7 +581,7 @@ test('actor client preserves ActorRouteNotFound for a missing actor route', asyn
       return operationId;
     }
   };
-  const client = new framework.DefaultZLinkActorClient({
+  const client = createActorClient({
     nodeProvider: () => missingNode,
     completionTableProvider: () => completionTable(RequestResult.NotFound),
     locationResolver: () => createResolver(({ actorId }) => actorLocation(actorId))

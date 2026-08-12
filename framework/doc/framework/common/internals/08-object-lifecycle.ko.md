@@ -11,7 +11,7 @@ title: "8. 객체 종류와 활성화"
 > **계약 소유** — Spot 종류와 종료 사유는 [Spot 모델](../spec/11-spot-model.ko.md)이,
 > generation을 쓰는 자리는 [Spot·Actor routing](../spec/18-object-routing.ko.md)이,
 > owner 장애 뒤 결과는 [Failure와 failover policy](../spec/31-failure-failover-policy.ko.md)가 소유한다.
-> 이 장은 그 계약을 만족시키는 **구조**와, 네 구현에서 관찰된 어긋남을 다룬다.
+> 이 장은 그 계약을 만족시키는 **구조**와, lifecycle 경계를 어겼을 때 나타나는 실패를 다룬다.
 
 Actor와 handler를 담는 실행 단위인 [Spot](../spec/01-glossary.ko.md#spot) 세 종류를 코드에서
 어떻게 구분하고, 없는 객체를 언제 만들며, 낡은 owner에게 보낸
@@ -30,8 +30,8 @@ Spot 종류는 닫힌 값 집합이다 — `Invalid = 0`, `Entry = 1`, `User = 2
 
 **결정 — 세 종류를 서로 다른 타입으로 표현한다.** 한 타입에 `entry_spot`,
 `instance_spot` 같은 표시를 붙여 구분하면 두 가지가 동시에 참인 조합을 타입이 막지
-못하고, 종류마다 다른 규칙이 조건문으로 흩어진다. 한 구현이 실제로 표시 방식이며,
-반납 대기 허용 여부가 그 표시를 확인하는 조건문으로 들어가 있다.
+못하고, 종류마다 다른 규칙이 조건문으로 흩어진다. 반납 대기 허용 여부처럼 종류에 따른
+규칙도 각 타입의 경계에서 결정한다.
 
 공통 기반 위에 세 형제 타입을 두면 종류별 차이가 타입 경계에 모인다.
 
@@ -56,8 +56,9 @@ Actor들은 node가 내려갈 때 사라진다.
 ### Spec 상태를 activation state machine에 전달한다
 
 공개 동작은 [장애 대응과 failover 범위 §4.4](../spec/31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)가
-정의한다. Activation state machine은 resolver 결과를 다음 내부 상태로 받아 각 책임 component에
-한 번만 전달한다.
+정의한다. Resolver는 조회 결과를 아래의 닫힌 내부 상태 중 하나로 만든다. Activation state
+machine은 그 상태를 담당 component 한 곳에만 전달하므로, 뒤 단계가 Store 결과를 다시
+추측하지 않는다.
 
 | 내부 상태 | 보존하는 fence | 다음 component |
 |---|---|---|
@@ -66,8 +67,9 @@ Actor들은 node가 내려갈 때 사라진다.
 | `Ready` | route와 authority·owner lease fence | route admission |
 | `Unavailable` | authority와 무효 owner evidence | terminal completion adapter |
 
-`Unavailable`에서 `Missing`으로 가는 activation 전이는 두지 않는다. Explicit `Close`, `IdleEvicted`
-cleanup 또는 다른 정식 lifecycle operation이 authority release를 완료한 뒤 resolver가 새 `Missing`
+`Unavailable`은 authority가 남아 있지만 current owner를 사용할 수 없다는 뜻이다. Authority가
+없다는 `Missing`과 같은 상태로 취급하지 않는다. Explicit `Close`, `IdleEvicted` cleanup 또는
+다른 정식 lifecycle operation이 authority release를 완료한 뒤에만 resolver가 새 `Missing`
 입력을 만들 수 있다.
 
 Stored creation intent는 같은 target node·lifecycle에서 끝나지 않은 최초 cold activation operation만
@@ -107,10 +109,10 @@ sequenceDiagram
 
 ### Ready 기록과 대상 route의 공개 순서
 
-Instance Spot은 Location Store에 `Ready`가 기록된 것만으로 대상 node의 수신 준비가
-끝나지 않는다. 대상 runtime도 같은 route를 내부 `instance intent` projection에 즉시
-반영해야 한다. 이 projection은 Store를 대신하는 권위 있는 기록이 아니라, 이미
-검증된 `Ready` route를 application message admission에서 사용하는 local view다.
+Instance Spot은 Location Store에 `Ready`를 기록한 뒤에도 한 단계를 더 수행해야 한다.
+Target runtime이 같은 route를 application message admission에 사용하는 local view에 즉시
+반영해야 한다. 이 local view를 `instance intent` projection이라고 한다. Projection은 Store를
+대신하는 authority가 아니라, 이미 검증된 `Ready` route를 process 안에서 조회하기 위한 값이다.
 
 따라서 순서는 다음과 같다.
 
@@ -119,19 +121,18 @@ Instance Spot은 Location Store에 `Ready`가 기록된 것만으로 대상 node
    등록한다.
 3. 그 뒤에 activation continuation이 첫 application message를 대기열에 넣는다.
 
-2번이 뒤로 밀리면 Store에는 `Ready`가 있지만 target runtime에는 route가 없어 첫
-application message가 `NotFound` 또는 stale route 오류로 끝날 수 있다. 뒤따르는
-continuation에서 같은 route를 다시 등록하는 동작은 누락을 복구하는 안전장치이며,
-첫 admission보다 먼저 수행되어야 한다. 같은 route의 재등록은 중복 실행을 만들지
-않도록 멱등적으로 처리한다.
+2번이 늦어지면 Store에는 `Ready`가 있지만 target runtime에는 route가 없다. 이 사이에 첫
+application message가 도착하면 `NotFound` 또는 stale route 오류로 끝날 수 있다. 다음
+continuation에서 같은 route를 다시 등록하여 누락을 복구할 수 있지만, 이 등록도 첫
+admission 전에 끝나야 한다. 같은 route를 여러 번 등록해도 중복 실행이 생기지 않도록
+멱등적으로 처리한다.
 
 진 쪽이 **"만드는 중"을 캐시하면** 이 그림의 마지막 두 줄이 캐시 수명만큼 늦어진다.
 
 ### 만들다 실패하면
 
-만들기가 중간에 실패하면 남은 기록을 정리해야 한다. 한 구현은 만들기 진행 상태를
-저장소에 남기고 시작 시점에 훑어 미완성 기록을 정리한다. 정리 주체를 정하지 않으면
-실패한 만들기가 그 ID를 영구히 점유한다.
+만들기가 중간에 실패하면 activation state machine이 남은 기록의 정리 주체와 시점을
+정해야 한다. 이 책임이 없으면 실패한 만들기가 그 ID를 영구히 점유한다.
 
 ## 4. 낡은 owner로 보낸 message 걸러내기
 
@@ -175,8 +176,8 @@ Application이 새 호출을 시작할 수는 있으며, 그때 중복 실행 �
 
 ### 유휴 정리는 Instance Spot만 대상으로 한다
 
-이 장의 유휴 정리 기준을 .NET runtime은 `ZLinkSpotNodeCatalog`가 소유한다. 설정된
-`InstanceSpotIdleTimeout`이 양수이면 catalog가 주기적으로 후보를 검사한다. 한 번의
+유휴 정리 상태는 runtime 내부 object catalog가 소유한다. .NET mapping에서는 이 owner의
+이름이 `ZLinkSpotNodeCatalog`다. 설정된 `InstanceSpotIdleTimeout`이 양수이면 catalog가 주기적으로 후보를 검사한다. 한 번의
 검사에서 최대 64개만 확인하고 마지막 검사 위치를 다음 주기에 이어서 사용하므로, Spot
 수가 많아도 유지보수 작업이 application dispatch를 독점하지 않는다.
 
@@ -199,9 +200,8 @@ Resolver는 idle cleanup이 authority release를 완료한 결과와 owner avail
 받고, 후자는 terminal completion adapter에 연결한다. 이미 수락된 request의 재제출 금지는
 [장애 대응과 failover 범위 §2](../spec/31-failure-failover-policy.ko.md#2-공통-판단-기준)가 정의한다.
 
-다른 Framework 언어의 유휴 정리 상태와 공통 process 검증 결과는 이 .NET 구조 설명만으로
-완료로 간주하지 않는다. 각 언어는 같은 종료 조건과 process evidence를 별도로 확인해야
-한다.
+언어별 catalog 이름이 달라도 같은 종료 조건을 구현하고 독립된 process evidence로 검증한다.
+한 language mapping의 구조 설명은 다른 mapping의 검증 증거를 대신하지 않는다.
 
 ### 상한은 있지만 배치 단계에서만 쓴다
 
@@ -224,7 +224,7 @@ Resolver는 idle cleanup이 authority release를 완료한 결과와 owner avail
 
 **결정 — 정리 대상은 Instance Spot뿐이다.** 정식 spec이 `IdleEvicted` 종료 사유를
 Instance Spot 한정으로 추가했다([Spot 모델](../spec/11-spot-model.ko.md)). User Spot을
-정리하지 않는 이유는 **정리된 User Spot이 일반 message로 되살아나지 않기** 때문이다 —
+정리하지 않는 이유는 **정리된 User Spot을 일반 message가 다시 만들지 않기** 때문이다.
 없는 객체를 만들 수 있는 것은 Instance intent를 명시한 호출뿐이다(§3). Entry Spot은
 그 Object Server의 lifecycle에 속하므로 애초에 대상이 아니다(§2).
 
@@ -243,15 +243,15 @@ process 단위 byte 회계와 Spot 단위 byte 회계는 서로 다른 회계 �
 lane별 작업 건수와 byte를 함께 제한한다. 한쪽의 숫자를 다른 쪽의 상한으로 재사용하지
 않는다.
 
-현재 .NET의 `ZLinkSerialExecutionQueue`는 application과 lifecycle을 별도 FIFO lane으로
-두고 각 lane에 count·byte reservation을 둔다. application 기본값은 4,096건·64 MiB,
-lifecycle 기본값은 256건·4 MiB이며, accepted application work는 payload와 작업당
-고정 비용을 함께 예약한다. reservation은 handler terminal completion에서 반납한다.
-relocation hold는 별도로 1,024건·16 MiB 상한을 사용한다.
+실행 queue는 application과 lifecycle을 별도 FIFO lane으로 두고 각 lane에 count·byte
+reservation을 둔다. Application lane 기본값은 1,024건·64 MiB이고, lifecycle lane
+기본값은 128건·4 MiB다. Accepted application work는 payload 크기와 work당 고정 retained
+cost 256 byte를 함께 예약한다. Reservation은 handler terminal completion에서 반납한다.
+Relocation hold에는 relocation 전용 건수·byte 상한을 두지 않는다.
 
 따라서 process HWM이 남아 있어도 Spot queue가 먼저 포화될 수 있고, 반대로 Spot queue에
 여유가 있어도 process inbound admission이 먼저 멈출 수 있다. 두 결과를 같은
-`CapacityExceeded` 상황으로 뭉뚱그리지 않고 owning queue의 admission 결과로 구분한다.
+`CapacityExceeded` 상황으로 합치지 않고, 실제로 admission에 실패한 queue에 따라 구분한다.
 
 ### 대기열 한도는 쌓인 payload 크기로 정한다
 
@@ -269,7 +269,7 @@ envelope·metadata·queue node를 포함한다. 정확히 계산할 수 없는 �
 대기열 한도가 존재하는 이유는 두 가지다 — 메모리를 묶어 두는 양을 정하는 것과, 밀린
 일이 얼마나 되는지 판단하는 것. **건수는 둘 중 어느 것도 알려 주지 못한다.**
 
-같은 4,096건이라도 100 byte짜리면 400 KB이고 1 MiB짜리면 4 GiB다. 메모리가 1만 배
+같은 1,024건이라도 100 byte짜리면 약 100 KB이고 1 MiB짜리면 1 GiB다. 메모리가 1만 배
 차이 나는데 한도는 똑같이 걸린다. 배출에 걸리는 시간도 마찬가지다 — 처리량은 초당 몇
 건이 아니라 초당 몇 byte에 가깝게 움직이므로, 밀린 양을 재려면 byte로 재야 한다.
 
@@ -284,7 +284,7 @@ process 단위 회계가 이미 byte로 되어 있다(§6 첫 문단). 같은 �
 되고, 두 층이 같은 단위를 쓰므로 어느 층에서 걸렸는지도 구분된다.
 
 **결정 — 상한이 없는 실행 대기열을 두지 않는다.** 각 lane은 건수와 byte reservation을
-모두 가져야 하며, relocation hold도 별도 상한을 가져야 한다
+모두 가져야 한다
 ([Framework API](../spec/06-framework-api.ko.md)).
 
 초과했을 때의 결과는 **하나가 아니다.** 제출 계열과 대기열 위치에 따라 갈리므로 구현이
@@ -293,9 +293,9 @@ process 단위 회계가 이미 byte로 되어 있다(§6 첫 문단). 같은 �
 대기열이 아닌 두 자리는 그 표에 없으며 각각 `CapacityExceeded`다 — **worker scheduler
 대기열**과 **배치 수용량**이다. 뒤의 것은 대기열 포화가 아니라 admission 판정이다.
 
-이동 중 보류 한도만은 건수와 byte를 함께 쓴다(1,024건 / 16 MiB). 정식 spec이 정한
-값이므로 그대로 따른다
-([Host Relocate와 Shutdown 「9. 대기 중인 message, timer와 session을 옮긴다」](../spec/28-graceful-drain-handoff.ko.md#9-대기-중인-message-timer와-session을-옮긴다)).
+이동 중 보류에는 relocation 전용 건수·byte 상한이 없다. 이미 work를 소유한 실행 lane의
+reservation과 transport·deadline·cancellation 제한을 relocation hold의 별도 상한으로 재사용하지 않는다. 정식 spec이 정한 규칙이므로 그대로 따른다
+([Host relocation 전체 흐름 「9. 대기 중인 message, timer와 session을 옮긴다」](../spec/30-host-relocation-flow.ko.md#9-대기-중인-message-timer와-session을-옮긴다)).
 
 ## 7. 확인할 결과
 

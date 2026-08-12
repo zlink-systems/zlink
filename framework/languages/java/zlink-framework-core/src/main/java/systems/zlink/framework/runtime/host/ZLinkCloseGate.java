@@ -1,13 +1,17 @@
 package systems.zlink.framework.runtime.host;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 final class ZLinkCloseGate {
-    private final java.util.concurrent.atomic.AtomicBoolean started =
-        new java.util.concurrent.atomic.AtomicBoolean();
-    private final java.util.concurrent.CompletableFuture<Void> ownershipCleanup =
-        new java.util.concurrent.CompletableFuture<>();
+    private final AtomicBoolean started =
+        new AtomicBoolean();
+    private final CompletableFuture<Void> ownershipCleanup =
+        new CompletableFuture<>();
 
-    java.util.concurrent.CompletionStage<Void> close(
-        java.util.function.Supplier<java.util.concurrent.CompletionStage<Void>> cleanup) {
+    CompletionStage<Void> close(
+        Supplier<CompletionStage<Void>> cleanup) {
         if (!started.compareAndSet(false, true)) {
             return ownershipCleanup;
         }

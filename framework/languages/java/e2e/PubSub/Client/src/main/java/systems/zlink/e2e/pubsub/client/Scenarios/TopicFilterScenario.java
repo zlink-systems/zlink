@@ -9,9 +9,9 @@ public final class TopicFilterScenario {
     }
 
     public static void run(ScenarioContext context) {
-        context.publisher().publish("alpha", new Contracts.EventMsg("ps-a2", 1, "alpha-only"));
-        context.publisher().publish("beta", new Contracts.EventMsg("ps-a2", 2, "beta-only"));
-        context.publisher().publish("gamma", new Contracts.EventMsg("ps-a2", 3, "gamma-only"));
+        context.publisher().publish("alpha", new Contracts.Event("ps-a2", 1, "alpha-only"));
+        context.publisher().publish("beta", new Contracts.Event("ps-a2", 2, "beta-only"));
+        context.publisher().publish("gamma", new Contracts.Event("ps-a2", 3, "gamma-only"));
 
         ScenarioAssert.waitForEvent(context.evidence(), "sub-1", "ps-a2", 1);
         ScenarioAssert.waitForEvent(context.evidence(), "sub-2", "ps-a2", 2);

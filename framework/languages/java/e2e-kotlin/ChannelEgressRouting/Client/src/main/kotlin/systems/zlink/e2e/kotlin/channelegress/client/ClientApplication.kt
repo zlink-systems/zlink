@@ -338,7 +338,7 @@ private object ScenarioSuite {
             ClientHttp.post<Map<String, Any>>(
                 options.apiAEndpoint,
                 "/fanout/publish",
-                Contracts.FanoutProbe(fanoutId),
+                Contracts.FanoutProbeEvent(fanoutId),
             )
             waitFor(options.fanoutSubscriberEndpoint, fanoutId)
         }
@@ -355,7 +355,7 @@ private object ScenarioSuite {
                         connector.connect().await()
                         connector.send(
                             ZLinkStreamEncodedPayload(
-                                "StreamProbe",
+                                "StreamProbeMsg",
                                 Message.from(streamId.toByteArray()),
                                 emptyMap(),
                                 ZLinkStreamCodec.RAW,
@@ -365,7 +365,7 @@ private object ScenarioSuite {
                         connector.close().await()
                     }
                 }
-                waitFor(options.apiAEndpoint, "packet=StreamProbe")
+                waitFor(options.apiAEndpoint, "packet=StreamProbeMsg")
             }
         }
         check(failures.isEmpty()) { "CH-E2E-09 failures: ${failures.joinToString("; ")}" }

@@ -163,7 +163,7 @@ The new bind does not wait for this callback or close.
 
 | Implementation difference | Current state |
 |---|---|
-| Session Actor binding replacement | The .NET runtime does not yet implement command 51, this callback, or the non-blocking 100 ms close timer. |
+| Session Actor binding replacement | The .NET runtime implements command 51 send/receive, this callback, and the non-blocking 100 ms close timer. No implementation difference remains. |
 
 After bind, `RelayAsync(...)` and `NotifyDisconnectedAsync(...)` use the
 per-Actor binding. A physical disconnect is notified by the framework to

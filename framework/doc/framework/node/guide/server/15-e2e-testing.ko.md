@@ -263,11 +263,11 @@ async function run(options: TicTacToeClientOptions, signal: AbortSignal): Promis
 - **서로 다른 node에 연결한 둘** — node 사이 라우팅과 위치 해석이 실제로 동작하는지
 
 ```typescript
-// join 응답은 request의 reply가 아니라 push로 온다 — 대기를 먼저 등록하고 send한다.
+// join 완료 알림은 client push로 온다 — 대기를 먼저 등록하고 one-way send한다.
 async function joinGame(
-  connector: ZlinkStreamConnector, roomId: string, signal: AbortSignal): Promise<JoinGameRes> {
-  const completion = connector.waitFor<JoinGameRes>(PacketNames.joinGameRes).submit(signal);
-  await connector.send(joinGameReq(roomId)).submit();
+  connector: ZlinkStreamConnector, roomId: string, signal: AbortSignal): Promise<JoinGameNotify> {
+  const completion = connector.waitFor<JoinGameNotify>(PacketNames.joinGameNotify).submit(signal);
+  await connector.send(joinGameMsg(roomId)).submit();
   return (await completion).payload;
 }
 ```

@@ -10,7 +10,7 @@ import {
 } from '@zlink-systems/framework';
 import { ZLINK_ACTOR_CLIENT, ZLINK_LOCATION_RUNTIME_QUERY, ZLINK_ROUTE_MESH_RUNTIME, ZLinkModule, zlinkFramework } from '@zlink-systems/nestjs';
 import { createRedisLocationStore, locationMessagingOptions } from '../../Shared/location-store';
-import { actorAsk, actorNotify, actorPush, type ActorCallRequest, type ActorCallResponse, type ActorReply } from '../../Shared/messages';
+import { actorMsg, actorPush, actorReq, type ActorCallReq, type ActorCallRes, type ActorRes } from '../../Shared/messages';
 import { closeHttpServer, startHttpServer } from '../Support/http-server';
 import { createLocationTopologyRoute } from '../Support/location-topology-route';
 import { TO_ACTOR_OPTIONS, createToActorConfigurationModule } from '../../configuration';
@@ -64,12 +64,12 @@ async function main(): Promise<void> {
       method: 'POST',
       path: '/send',
       handle: async (body) => {
-        const request = body as ActorCallRequest;
+        const request = body as ActorCallReq;
         try {
           await actors
-            .sendToActor(request.actorId, actorNotify(request.scenario, request.actorId, request.value))
+            .sendToActor(request.actorId, actorMsg(request.scenario, request.actorId, request.value))
             .submit();
-          return { scenario: request.scenario, actorId: request.actorId, result: 'sent' } satisfies ActorCallResponse;
+          return { scenario: request.scenario, actorId: request.actorId, result: 'sent' } satisfies ActorCallRes;
         } catch (error) {
           return failure(request, error);
         }
@@ -79,13 +79,13 @@ async function main(): Promise<void> {
       method: 'POST',
       path: '/request',
       handle: async (body) => {
-        const request = body as ActorCallRequest;
+        const request = body as ActorCallReq;
         try {
           const reply = await actors
-            .requestToActor(request.actorId, actorAsk(request.scenario, request.actorId, request.value))
+            .requestToActor(request.actorId, actorReq(request.scenario, request.actorId, request.value))
             .timeout(callTimeoutMs)
-            .submit<ActorReply>();
-          return { scenario: request.scenario, actorId: request.actorId, result: reply.value } satisfies ActorCallResponse;
+            .submit<ActorRes>();
+          return { scenario: request.scenario, actorId: request.actorId, result: reply.value } satisfies ActorCallRes;
         } catch (error) {
           return failure(request, error);
         }
@@ -95,13 +95,13 @@ async function main(): Promise<void> {
       method: 'POST',
       path: '/push',
       handle: async (body) => {
-        const request = body as ActorCallRequest;
+        const request = body as ActorCallReq;
         try {
           const reply = await actors
             .requestToActor(request.actorId, actorPush(request.scenario, request.actorId, request.value))
             .timeout(5000)
-            .submit<ActorReply>();
-          return { scenario: request.scenario, actorId: request.actorId, result: reply.value } satisfies ActorCallResponse;
+            .submit<ActorRes>();
+          return { scenario: request.scenario, actorId: request.actorId, result: reply.value } satisfies ActorCallRes;
         } catch (error) {
           return failure(request, error);
         }
@@ -121,7 +121,7 @@ async function main(): Promise<void> {
   await app.close();
 }
 
-function failure(request: ActorCallRequest, error: unknown): ActorCallResponse {
+function failure(request: ActorCallReq, error: unknown): ActorCallRes {
   return {
     scenario: request.scenario,
     actorId: request.actorId,

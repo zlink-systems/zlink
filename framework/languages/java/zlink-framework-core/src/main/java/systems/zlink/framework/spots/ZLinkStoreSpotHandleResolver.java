@@ -1,4 +1,7 @@
 package systems.zlink.framework.spots;
+import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
@@ -18,7 +21,7 @@ public final class ZLinkStoreSpotHandleResolver
     public ZLinkStoreSpotHandleResolver(
         ZLinkStoreLocationResolvers.AddressResolvers addresses,
         ZLinkLocationRepository authorities) {
-        this.addresses = java.util.Objects.requireNonNull(addresses, "addresses");
+        this.addresses = Objects.requireNonNull(addresses, "addresses");
     }
 
     @Override
@@ -47,7 +50,7 @@ public final class ZLinkStoreSpotHandleResolver
     public CompletionStage<Optional<SpotHandle>> resolveActorSpotHandle(String actorId) {
         return flowAware(addresses.resolveActor(actorId)).thenCompose(row -> {
             if (row == null) {
-                return java.util.concurrent.CompletableFuture.completedFuture(Optional.empty());
+                return CompletableFuture.completedFuture(Optional.empty());
             }
             return flowAware(addresses.resolveSpot(row.spotId())).thenApply(spot -> spot == null
                 ? Optional.empty()
@@ -78,18 +81,18 @@ public final class ZLinkStoreSpotHandleResolver
     public CompletionStage<Optional<SpotTransportAddress>> resolve(String spotId) {
         return resolveSpotHandle(spotId).thenCompose(handle -> handle
             .map(this::resolve)
-            .orElseGet(() -> java.util.concurrent.CompletableFuture.completedFuture(
+            .orElseGet(() -> CompletableFuture.completedFuture(
                 Optional.empty())));
     }
 
     @Override
     public void invalidate(String spotId) {
         addresses.invalidateSpotRoute(
-            java.util.Objects.requireNonNull(spotId, "spotId"));
+            Objects.requireNonNull(spotId, "spotId"));
     }
 
     private static <T> CompletionStage<T> flowAware(CompletionStage<T> source) {
-        return systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext.propagate(source);
+        return ZLinkFlowContext.propagate(source);
     }
 
 }

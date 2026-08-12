@@ -1,4 +1,5 @@
 package systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.entryspot.handlers;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
 import systems.zlink.framework.ZLinkMessageContext;
@@ -13,7 +14,7 @@ public final class ObserveBingoEventsHandler
         Messages.ObserveBingoEventsReq,
         Messages.ObserveBingoEventsRes> {
     @Override
-    public java.util.concurrent.CompletionStage<Messages.ObserveBingoEventsRes> handle(
+    public CompletionStage<Messages.ObserveBingoEventsRes> handle(
         BingoEntrySpot spot,
         PlayerActor actor,
         ZLinkMessageContext context,

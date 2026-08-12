@@ -1,3 +1,4 @@
+using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 using Zlink.Framework.Runtime.Dispatch;
 
 namespace Zlink.Framework.Runtime.Channels;
@@ -492,8 +493,8 @@ internal sealed class ZLinkChannelReceiveLoop(
     private static ulong MeasurePayloadBytes(IReadOnlyList<Message> parts)
     {
         ulong total = 0;
-        foreach (var part in parts)
-            total = checked(total + checked((ulong)part.Size));
+        for (var index = 0; index < parts.Count; index++)
+            total = checked(total + checked((ulong)parts[index].Size));
         return total;
     }
 

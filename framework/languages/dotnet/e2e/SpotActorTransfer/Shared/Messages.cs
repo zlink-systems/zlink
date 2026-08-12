@@ -89,7 +89,7 @@ public sealed record ProbeReq(
     string Marker,
     string? ReplyMarker = null);
 
-public sealed record HandoffPacket(
+public sealed record HandoffMsg(
     string Scenario,
     string Marker);
 
@@ -217,14 +217,14 @@ public sealed record ProcessMemoryRes(
     long WorkingSetBytes,
     long PeakWorkingSetBytes);
 
-public sealed record RelocationWorkloadRequest(
+public sealed record RelocationWorkloadReq(
     string Scenario,
     long Sequence,
     string OperationId,
     long SentUnixTimeMilliseconds,
     long AbsoluteDeadlineUnixTimeMilliseconds);
 
-public sealed record RelocationWorkloadReply(
+public sealed record RelocationWorkloadRes(
     string Scenario,
     long Sequence,
     string OperationId,
@@ -237,10 +237,10 @@ public sealed record RelocationWorkloadReply(
 
 public sealed record RelocationWorkloadProbeRes(
     bool Succeeded,
-    RelocationWorkloadReply? Reply,
+    RelocationWorkloadRes? Reply,
     string? ErrorKind);
 
-public sealed record RelocationWorkloadPacket(
+public sealed record RelocationWorkloadMsg(
     string Scenario,
     long Sequence,
     string OperationId,

@@ -4,12 +4,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
 source "$NODE_ROOT/e2e/redis-container.sh"
+source "$NODE_ROOT/e2e/runner-common.sh"
+serialize_node_e2e_run "$0" "$@"
 
 SCENARIO="${1:-all}"
 CHILD_RUN="${2:-}"
 if [[ "$CHILD_RUN" != "--child-run" && "$SCENARIO" == "all" ]]; then
   for child_scenario in all-core ST-F3 ST-F5 ST-H1 ST-H2 ST-H3 ST-H4 ST-H5 ST-I1 ST-I2 ST-I3 ST-I4 ST-I5 ST-I6; do
-    "$ROOT_DIR/run_e2e.sh" "$child_scenario" --child-run
+    bash "$ROOT_DIR/run_e2e.sh" "$child_scenario" --child-run
   done
   echo "spot-actor-transfer e2e result=passed"
   exit 0
@@ -23,7 +25,6 @@ LOCAL_READINESS_ATTEMPTS=30
 ROUTE_SETTLE_TIMEOUT_SECONDS=5
 SCENARIO_SETTLE_TIMEOUT_SECONDS=3
 HTTP_PROBE_TIMEOUT_SECONDS=3
-mkdir -p "$LOG_DIR"
 
 wait_health() {
   local url="$1" name="$2" pid="${3:-}"
@@ -88,7 +89,7 @@ stop_processes() {
 cleanup() {
   local code=$?
   stop_processes
-  if [[ -n "$REDIS_CONTAINER_ID" ]]; then docker rm -fv "$REDIS_CONTAINER_ID" >/dev/null 2>&1 || true; fi
+  if [[ -n "$REDIS_CONTAINER_ID" ]]; then remove_redis_container_by_id "$REDIS_CONTAINER_ID" || true; fi
   [[ -z "$CONFIG_DIR" ]] || rm -rf "$CONFIG_DIR"
   if [[ "$code" -ne 0 ]]; then
     echo "E2E failed. log_dir=$LOG_DIR" >&2
@@ -100,6 +101,7 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+mkdir -p "$LOG_DIR"
 CONFIG_DIR="$(mktemp -d)"
 chmod 700 "$CONFIG_DIR"
 
@@ -234,20 +236,21 @@ if ! command -v docker >/dev/null 2>&1; then
   echo "Docker is required to run SpotActorTransfer." >&2
   exit 1
 fi
-start_redis_container "zlink-redis-node-spot-transfer-${RANDOM}-$$" -p "127.0.0.1::6379" "redis:7.2-alpine"
+start_redis_container "zlink-redis-node-spot-transfer-${RANDOM}-$$" "redis:7.2-alpine"
 REDIS_ENDPOINT="$(redis_container_endpoint "$REDIS_CONTAINER_ID")"
 wait_tcp redis "tcp://$REDIS_ENDPOINT"
 REDIS_KEY_PREFIX="spot-actor-transfer:node:$RUN_ID"
 
-read -r -a PORTS <<<"$(python3 - <<'PY'
+read -r -a PORTS <<<"$(python3 - "$NODE_E2E_APPLICATION_PORT_MIN" "$NODE_E2E_APPLICATION_PORT_MAX" <<'PY'
 import random
 import socket
+import sys
 
 sockets = []
 try:
     chosen = set()
     while len(sockets) < 17:
-        port = random.randint(20000, 60999)
+        port = random.randint(int(sys.argv[1]), int(sys.argv[2]))
         if port in chosen:
             continue
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

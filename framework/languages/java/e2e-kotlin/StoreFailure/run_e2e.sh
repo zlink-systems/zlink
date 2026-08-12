@@ -5,6 +5,8 @@ set -euo pipefail
 # fixture. Keep the canonical suite entry point separate so the aggregate
 # runner cannot silently omit the common StoreFailure contract.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$(cd "${ROOT_DIR}/../.." && pwd)/e2e-runner-common.sh"
+zlink_e2e_initialize kotlin "$0" "$@"
 LEGACY_RUNNER="${ROOT_DIR}/../DiscoveryRegistryHa/run_e2e.sh"
 SCENARIO="${1:-all}"
 
@@ -25,7 +27,7 @@ contains() {
   return 1
 }
 
-if [[ ! -x "${LEGACY_RUNNER}" ]]; then
+if [[ ! -f "${LEGACY_RUNNER}" ]]; then
   echo "Kotlin StoreFailure legacy runner is missing: ${LEGACY_RUNNER}" >&2
   exit 1
 fi
@@ -42,7 +44,7 @@ if contains "${SCENARIO}" "${blocked_common[@]}"; then
 fi
 
 if contains "${SCENARIO}" "${supported[@]}"; then
-  exec "${LEGACY_RUNNER}" "${SCENARIO}"
+  exec bash "${LEGACY_RUNNER}" "${SCENARIO}"
 fi
 
 echo "unknown Kotlin StoreFailure selector: ${SCENARIO}" >&2

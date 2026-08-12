@@ -38,11 +38,11 @@ public final class TriggeredMonitoringSpot implements ZLinkSpot<ZLinkActor> {
 
     @ZLinkSpotSubscription(topic = "monitoring.subject.trigger")
     public static final class SubjectProbeHandler
-        implements ZLinkSpotSubscriptionHandler<TriggeredMonitoringSpot, Contracts.SpotSubjectProbe> {
+        implements ZLinkSpotSubscriptionHandler<TriggeredMonitoringSpot, Contracts.SpotSubjectProbeEvent> {
         @Override
         public CompletionStage<Void> handle(
             TriggeredMonitoringSpot spot,
-            Contracts.SpotSubjectProbe event) {
+            Contracts.SpotSubjectProbeEvent event) {
             return CompletableFuture.completedFuture(null);
         }
     }

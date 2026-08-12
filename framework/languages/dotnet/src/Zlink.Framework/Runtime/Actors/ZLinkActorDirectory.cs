@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
+
 namespace Zlink.Framework.Runtime.Actors;
 
 internal interface IZLinkActorResolver
@@ -15,15 +17,6 @@ internal sealed class ZLinkActorDirectory(
     private readonly ZLinkSpotMeshLocationResolver? _meshRows = locations is null
         ? null
         : new ZLinkSpotMeshLocationResolver(registration, locations);
-
-    public async ValueTask<ActorRef?> FindAsync(
-        string actorId,
-        CancellationToken cancellationToken = default)
-    {
-        var (actorRef, _) = await FindWithPresenceAsync(actorId, cancellationToken)
-            .ConfigureAwait(false);
-        return actorRef;
-    }
 
     /// <summary>Find plus the raw-row presence: a null ref with a present row
     /// is a transient resolve window (claimed-but-unpublished generation-0,

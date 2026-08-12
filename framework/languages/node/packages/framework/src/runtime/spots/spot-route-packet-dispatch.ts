@@ -243,7 +243,11 @@ export class ZLinkSpotRoutePacketDispatch {
           });
         }
       }, zlinkSerialWorkOptions(
-        Buffer.byteLength(JSON.stringify(envelope.payload ?? null), 'utf8'),
+        //  Wire frame length, matching the sibling admission sites; the
+        //  previous JSON.stringify re-serialized the payload only to measure.
+        //  Spot-direct envelopes are single-part, so the whole frame stands in
+        //  for the payload size.
+        received.parts[0]?.size() ?? 0,
         zlinkMetadataByteLength(envelope.metadata)
       ));
       if (replyable) {
@@ -321,7 +325,7 @@ function decodeSpotDirectEnvelope(parts: readonly Message[]): ZLinkSpotDirectEnv
 }
 
 function encodeSpotDirectReply(ok: boolean, response?: unknown, error?: string): Message {
-  return RuntimeMessage.from(Buffer.from(JSON.stringify({
+  return RuntimeMessage.fromOwned(Buffer.from(JSON.stringify({
     marker: SPOT_DIRECT_ENVELOPE,
     ok,
     response,

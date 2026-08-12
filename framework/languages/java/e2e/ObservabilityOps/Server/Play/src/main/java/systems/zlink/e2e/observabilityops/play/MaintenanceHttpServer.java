@@ -125,7 +125,7 @@ public final class MaintenanceHttpServer implements SmartLifecycle {
             throw new IllegalArgumentException("spotId is required");
         }
         ZLinkSpotCreateResult result = spots.getOrCreate(spotId, spotType)
-            .request(ZLinkMessage.of("maintenance-control"))
+            .request(ZLinkMessage.of(new SpotCreateReq("maintenance-control")))
             .timeout(Duration.ofSeconds(30))
             .submit().toCompletableFuture().join();
         return Map.of(
@@ -287,6 +287,9 @@ public final class MaintenanceHttpServer implements SmartLifecycle {
         } finally {
             exchange.close();
         }
+    }
+
+    private record SpotCreateReq(String reason) {
     }
 
     @Override

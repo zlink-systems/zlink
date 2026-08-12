@@ -30,7 +30,7 @@ public final class RcB6JsonGoldenScenario {
         ScenarioAssert.ensure(result.optionalNote() == null, "RC-B6 nullable value changed");
         ScenarioAssert.ensure("application/json".equals(result.contentType()),
             "RC-B6 did not use default JSON: " + result.contentType());
-        ScenarioAssert.waitForEvidence(context.evidence(), "ContentType", "JsonGolden", "application/json");
+        ScenarioAssert.waitForEvidence(context.evidence(), "ContentType", "JsonGoldenReq", "application/json");
         System.out.println("scenario RC-B6 passed");
     }
 }

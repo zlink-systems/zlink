@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JAVA_DIR="$(cd "${SCRIPT_DIR}/../../" && pwd)"
 source "${JAVA_DIR}/e2e-redis-common.sh"
+zlink_e2e_initialize kotlin "$0" "$@"
 source "${JAVA_DIR}/e2e-kotlin-config.sh"
 
 run_id="$(date +%Y%m%d-%H%M%S)-$$"
@@ -31,7 +32,7 @@ cleanup() {
   for ((i=${#pids[@]}-1; i>=0; i--)); do
     kill -9 "${pids[$i]}" >/dev/null 2>&1 || true
   done
-  [[ -z "${REDIS_CONTAINER}" ]] || docker rm -fv "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+  [[ -z "${REDIS_CONTAINER}" ]] || zlink_redis_remove_by_id "${REDIS_CONTAINER}" || true
   wait >/dev/null 2>&1 || true
   if [[ "${status}" != 0 ]]; then
     for log in "${log_dir}"/*.log; do
@@ -45,16 +46,7 @@ cleanup() {
 trap cleanup EXIT
 
 reserve_ports() {
-  python3 - <<'PY'
-import socket
-sockets=[]
-try:
-    for _ in range(2):
-        sock=socket.socket(); sock.bind(("127.0.0.1", 0)); sockets.append(sock)
-    print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
-finally:
-    for sock in sockets: sock.close()
-PY
+  zlink_e2e_reserve_ports 2
 }
 
 wait_http() {
@@ -79,7 +71,7 @@ zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
   "zlink-redis-kotlin-e2e-observability-a5" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
 
 export ZLINK_KOTLIN_E2E_BUILD_DIR="${build_dir}"
-bash "${SCRIPT_DIR}/gradlew" \
+zlink_e2e_gradle_build_locked bash "${SCRIPT_DIR}/gradlew" \
   --project-cache-dir "${gradle_cache}" \
   --no-daemon --no-parallel --max-workers=1 --quiet \
   :A5:Server:installDist :A5:Client:installDist

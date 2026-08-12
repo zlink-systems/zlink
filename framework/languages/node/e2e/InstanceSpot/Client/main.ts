@@ -7,7 +7,6 @@ import { runISE2E05 } from './Scenarios/is-e2e-05-scenario';
 import { runISE2E06 } from './Scenarios/is-e2e-06-scenario';
 import { runISE2E07 } from './Scenarios/is-e2e-07-scenario';
 import { runISE2E08 } from './Scenarios/is-e2e-08-scenario';
-import { runISE2E09 } from './Scenarios/is-e2e-09-scenario';
 import { runISE2E10 } from './Scenarios/is-e2e-10-scenario';
 import { runISE2E11 } from './Scenarios/is-e2e-11-scenario';
 import { runISE2E12 } from './Scenarios/is-e2e-12-scenario';
@@ -54,7 +53,6 @@ const scenarios: Readonly<Record<string, Scenario>> = {
   'IS-E2E-06': runISE2E06,
   'IS-E2E-07': runISE2E07,
   'IS-E2E-08': runISE2E08,
-  'IS-E2E-09': runISE2E09,
   'IS-E2E-10': runISE2E10,
   'IS-E2E-11': runISE2E11,
   'IS-E2E-12': runISE2E12,
@@ -111,4 +109,3 @@ function readOptions(): ClientOptions {
   if (argument === undefined) throw new Error('InstanceSpot client requires --config=<path>.');
   return JSON.parse(fs.readFileSync(argument.slice('--config='.length), 'utf8')) as ClientOptions;
 }
-

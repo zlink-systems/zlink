@@ -1,4 +1,9 @@
 package systems.zlink.framework.runtime.actors;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.stream.Stream;
+import systems.zlink.framework.actors.ActorRef;
+import systems.zlink.framework.spots.ZLinkSpotKind;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -59,7 +64,7 @@ final class ZLinkActorTransferHandoffTest {
         List<ZLinkActorHandoffPacket> trailing = handoff.finish("actor");
 
         assertEquals(List.of("B1", "B2", "D1"),
-            java.util.stream.Stream.concat(committed.stream(), trailing.stream())
+            Stream.concat(committed.stream(), trailing.stream())
                 .map(packet -> packet.header().packetName()).toList());
         committed.forEach(ZLinkActorHandoffPacket::close);
         trailing.forEach(ZLinkActorHandoffPacket::close);
@@ -200,44 +205,21 @@ final class ZLinkActorTransferHandoffTest {
         packet.close();
     }
 
+    //  The committed Message Follow route has no message-count or stored-size
+    //  bound, so a large backlog of oversized records is accepted.
     @Test
-    void committedMessageFollowRouteBoundsMessagesAndBytes() {
+    void committedMessageFollowRouteHasNoVolumeBound() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
         handoff.retain(
             "actor", ref("source", 7), ref("target", 7),
             Duration.ofMinutes(1), ignored -> { });
-        List<CompletableFuture<Void>> pending = new java.util.ArrayList<>();
-        for (int index = 0;
-             index < ZLinkActorTransferHandoff.MAX_MESSAGE_FOLLOW_MESSAGES;
-             index++) {
+        List<CompletableFuture<Void>> pending = new ArrayList<>();
+        for (int index = 0; index < 2048; index++) {
             CompletableFuture<Void> operation = new CompletableFuture<>();
             pending.add(operation);
-            handoff.follow("actor", 7, 1, () -> operation);
+            handoff.follow("actor", 7, 64L * 1024 * 1024, () -> operation);
         }
-
-        CompletionException messageLimit = assertThrows(CompletionException.class, () ->
-            handoff.follow(
-                    "actor", 7, 1,
-                    () -> CompletableFuture.completedFuture(null))
-                .toCompletableFuture().join());
-        assertEquals(
-            ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
-            ((ZLinkFrameworkException) messageLimit.getCause()).kind());
         pending.forEach(value -> value.complete(null));
-
-        CompletableFuture<Void> bytes = new CompletableFuture<>();
-        handoff.follow(
-            "actor", 7, ZLinkActorTransferHandoff.MAX_MESSAGE_FOLLOW_BYTES,
-            () -> bytes);
-        CompletionException byteLimit = assertThrows(CompletionException.class, () ->
-            handoff.follow(
-                    "actor", 7, 1,
-                    () -> CompletableFuture.completedFuture(null))
-                .toCompletableFuture().join());
-        assertEquals(
-            ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
-            ((ZLinkFrameworkException) byteLimit.getCause()).kind());
-        bytes.complete(null);
         handoff.close();
     }
 
@@ -276,52 +258,91 @@ final class ZLinkActorTransferHandoffTest {
     }
 
     @Test
-    void precommitBacklogRejectsTheMessageAfterItsPerTransferLimit() {
+    void precommitBacklogHasNoPerTransferLimit() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
         handoff.begin("actor");
-        for (int index = 0;
-             index < ZLinkActorTransferHandoff.MAX_MESSAGE_FOLLOW_MESSAGES;
-             index++) {
+        for (int index = 0; index < 2048; index++) {
             capture(handoff, "P" + index, Map.of());
         }
-        ZLinkActorHandoffPacket overflow;
-        try (Message payload = Message.from("overflow")) {
-            overflow = handoff.capture(
+        assertEquals(2048, handoff.pendingCount("actor"));
+        handoff.close();
+    }
+
+    @Test
+    void precommitBacklogHasNoSixteenMebibyteRelocationLimit() {
+        ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
+        handoff.begin("actor");
+        try (Message payload = Message.from(new byte[17 * 1024 * 1024])) {
+            handoff.capture(
                 "actor",
-                new ZLinkStreamHeader("overflow", Map.of(), Optional.empty()),
+                new ZLinkStreamHeader("Large", Map.of(), Optional.empty()),
                 payload,
                 null,
                 new byte[] {1});
         }
 
-        CompletionException failure = assertThrows(
-            CompletionException.class,
-            () -> overflow.reply().toCompletableFuture().join());
-        assertEquals(
-            ZLinkFrameworkErrorKind.UNAVAILABLE,
-            ((ZLinkFrameworkException) failure.getCause()).kind());
-        assertEquals(
-            ZLinkActorTransferHandoff.MAX_MESSAGE_FOLLOW_MESSAGES,
-            handoff.pendingCount("actor"));
+        assertEquals(1, handoff.pendingCount("actor"));
+        handoff.finish("actor").forEach(ZLinkActorHandoffPacket::close);
         handoff.close();
     }
 
     @Test
-    void messageFollowNoticeClaimIsSingleUseUntilExplicitlyReleased() {
+    void messageFollowNoticeSaturatesLogicalQueueDiagnosticsAtUint32() {
+        var source = new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+            "actor", 7, RoutingId.from("source"), 2, 3, 4);
+        var target = new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+            "actor", 7, RoutingId.from("target"), 5, 6, 7);
+        long overUint32 = 0x1_0000_0000L + 19L;
+
+        var notice = ZLinkActorRuntime.messageFollowNotice(
+            source,
+            target,
+            1,
+            new ZLinkActorTransferHandoff.MessageFollowQueueSnapshot(
+                overUint32, overUint32 + 1),
+            11,
+            13,
+            17);
+
+        assertEquals(0xffff_ffffL, notice.queuedMessages());
+        assertEquals(0xffff_ffffL, notice.queuedBytes());
+        assertEquals(
+            notice,
+            new ZLinkServiceMessageFollowWireCodec().decode(
+                new ZLinkServiceMessageFollowWireCodec().encode(notice)));
+    }
+
+    @Test
+    void messageFollowNoticeClaimIsSingleUseUntilMatchingClaimIsAborted() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
+        ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute =
+            new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+                "actor", 7, RoutingId.from("source"), 2, 3, 4);
+        ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute =
+            new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+                "actor", 7, RoutingId.from("target"), 5, 6, 7);
+        SpotTransportAddress targetAddress = new SpotTransportAddress(
+            "router", RoutingId.from("target"), "spot", 7, 5, 6, 7,
+            ZLinkSpotKind.USER);
         handoff.retain(
             "actor", ref("source", 7), ref("target", 7),
+            targetAddress, sourceRoute, targetRoute,
             Duration.ofMinutes(1), ignored -> { });
 
         ZLinkActorTransferHandoff.MessageFollowSource source =
             handoff.messageFollowSource("actor").orElseThrow();
-        assertTrue(source.tryClaimMessageFollowNotice());
-        assertTrue(source.messageFollowNoticeClaimed());
-        assertFalse(source.tryClaimMessageFollowNotice());
+        ZLinkServiceMessageFollowWireCodec.ActorRoute newerSourceRoute =
+            new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+                "actor", 7, RoutingId.from("source"), 2, 4, 4);
+        assertTrue(source.matchesSourceRoute(sourceRoute));
+        assertFalse(source.matchesSourceRoute(newerSourceRoute));
+        assertTrue(source.beginMessageFollowNotice(newerSourceRoute).isEmpty());
+        ZLinkMessageFollowSuppressionRegistry.Claim first =
+            source.beginMessageFollowNotice(sourceRoute).orElseThrow();
+        assertTrue(source.beginMessageFollowNotice(sourceRoute).isEmpty());
 
-        source.releaseMessageFollowNoticeClaim();
-        assertFalse(source.messageFollowNoticeClaimed());
-        assertTrue(source.tryClaimMessageFollowNotice());
+        source.abortMessageFollowNotice(first);
+        assertTrue(source.beginMessageFollowNotice(sourceRoute).isPresent());
         handoff.close();
     }
 
@@ -354,16 +375,22 @@ final class ZLinkActorTransferHandoffTest {
     @Test
     void messageFollowRetainsTargetRouteFenceAtInstallation() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
+        ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute =
+            new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+                "actor", 7, RoutingId.from("source"), 2, 3, 4);
         ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute =
             new ZLinkServiceMessageFollowWireCodec.ActorRoute(
                 "actor", 7, RoutingId.from("target"), 11, 13, 17);
         SpotTransportAddress targetAddress = new SpotTransportAddress(
             "router", RoutingId.from("target"), "spot", 7, 11, 13, 17,
-            systems.zlink.framework.spots.ZLinkSpotKind.USER);
+            ZLinkSpotKind.USER);
         handoff.retain(
             "actor", ref("source", 7), ref("target", 7), targetAddress,
-            targetRoute, Duration.ofMinutes(1), ignored -> { });
+            sourceRoute, targetRoute, Duration.ofMinutes(1), ignored -> { });
 
+        assertEquals(
+            sourceRoute,
+            handoff.messageFollowSource("actor").orElseThrow().sourceRoute());
         assertEquals(
             targetRoute,
             handoff.messageFollowSource("actor").orElseThrow().targetRoute());
@@ -375,11 +402,11 @@ final class ZLinkActorTransferHandoffTest {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
         SpotTransportAddress targetAddress = new SpotTransportAddress(
             "router", RoutingId.from("target"), "spot", 7, 11, 13, 17,
-            systems.zlink.framework.spots.ZLinkSpotKind.USER);
+            ZLinkSpotKind.USER);
 
         assertThrows(IllegalArgumentException.class, () -> handoff.retain(
             "actor", ref("source", 7), ref("target", 7), targetAddress,
-            null, Duration.ofMinutes(1), ignored -> { }));
+            null, null, Duration.ofMinutes(1), ignored -> { }));
         handoff.close();
     }
 
@@ -388,9 +415,9 @@ final class ZLinkActorTransferHandoffTest {
         RoutingId targetNode = RoutingId.from("target");
         ZLinkStoreLocationResolvers.ActorRoute route =
             new ZLinkStoreLocationResolvers.ActorRoute(
-                new systems.zlink.framework.actors.ActorRef(
+                new ActorRef(
                     "actor", 7, "mesh", targetNode),
-                systems.zlink.framework.spots.ZLinkSpotKind.USER,
+                ZLinkSpotKind.USER,
                 "spot",
                 "mesh",
                 targetNode,
@@ -401,7 +428,7 @@ final class ZLinkActorTransferHandoffTest {
             new ZLinkBackendActorRef(targetNode, "actor", 7);
         SpotTransportAddress targetAddress = new SpotTransportAddress(
             "router", targetNode, "spot", 7, 11, 13, 17,
-            systems.zlink.framework.spots.ZLinkSpotKind.USER);
+            ZLinkSpotKind.USER);
 
         assertTrue(ZLinkActorRuntime.messageFollowTargetRouteMatches(
             route, targetActor, targetAddress));
@@ -415,7 +442,7 @@ final class ZLinkActorTransferHandoffTest {
         ZLinkActorTransferHandoff handoff,
         String packetName,
         Map<String, String> metadata) {
-        try (Message payload = Message.from(packetName.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+        try (Message payload = Message.from(packetName.getBytes(StandardCharsets.UTF_8))) {
             handoff.capture(
                 "actor",
                 new ZLinkStreamHeader(packetName, metadata, Optional.empty()),

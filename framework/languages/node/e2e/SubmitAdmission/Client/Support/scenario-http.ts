@@ -11,7 +11,7 @@ export interface SubmitScenarioContext {
   readonly scenarioId: string;
 }
 
-export interface TerminalResult {
+export interface TerminalRes {
   readonly operationId: string;
   readonly status: string;
   readonly publicInvocationCount: number;
@@ -28,10 +28,10 @@ export async function submit(
   baseUrl: string,
   operationId: string,
   targetRid?: string
-): Promise<TerminalResult> {
+): Promise<TerminalRes> {
   void context;
   try {
-    return await postJson<TerminalResult>(baseUrl, '/submit/node', { operationId, targetRid });
+    return await postJson<TerminalRes>(baseUrl, '/submit/node', { operationId, targetRid });
   } catch (error) {
     const message = String(error);
     const status = /target was not found/i.test(message)
@@ -47,15 +47,15 @@ export async function submit(
 export async function submitChannel(
   context: SubmitScenarioContext,
   operationId: string
-): Promise<TerminalResult> {
-  return postJson<TerminalResult>(context.callerUrl, '/submit/channel', { operationId });
+): Promise<TerminalRes> {
+  return postJson<TerminalRes>(context.callerUrl, '/submit/channel', { operationId });
 }
 
 export async function submitFanout(
   context: SubmitScenarioContext,
   operationId: string
-): Promise<TerminalResult> {
-  return postJson<TerminalResult>(context.publisherUrl, '/submit/fanout', { operationId });
+): Promise<TerminalRes> {
+  return postJson<TerminalRes>(context.publisherUrl, '/submit/fanout', { operationId });
 }
 
 export async function closeGate(context: SubmitScenarioContext): Promise<void> {
@@ -102,7 +102,7 @@ export async function waitRouteState(
 }
 
 export function terminal(
-  value: TerminalResult,
+  value: TerminalRes,
   operationId: string,
   status = 'submitted'
 ): void {

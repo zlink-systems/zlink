@@ -27,7 +27,7 @@ internal sealed class PlayServer(SampleSettings settings)
         builder.Services.AddSingleton(settings);
         builder.Services.AddZLinkFramework(options =>
         {
-            options.AddHandlersFromAssemblyOf(typeof(PlayServer));
+            options.DisableImplicitHandlerAutoRegistration();
             options.DefaultRequestTimeout = TimeSpan.FromSeconds(15);
             var locations = options.ConfigureLocations();
             locations.RouteCacheMaxAge = TimeSpan.Zero;
@@ -48,8 +48,10 @@ internal sealed class PlayServer(SampleSettings settings)
                 .Bind(settings.PlayEndpoint)
                 .EnableActorDispatch()
                 .AddSession<PlaySession>();
-            options.AddClientServerChannel(SampleChannels.Api)
+            var apiChannel = options.AddClientServerChannel(SampleChannels.Api)
                 .Client();
+            foreach (var endpoint in settings.ApiChannelPeerEndpoints)
+                apiChannel.Connect(endpoint);
 
             var mesh = options.AddRouteMesh(SampleNodes.Mesh)
                 .Listen(settings.MeshEndpoint);

@@ -183,6 +183,7 @@ export interface ZLinkNestModuleRegistrationOptions extends Omit<
   'channels' | 'routeChannels' | 'streamNodes' | 'spotNodes'
 > {
   readonly [ZLINK_MODULE_OPTIONS_BRAND]: true;
+  readonly implicitHandlerAutoRegistration?: boolean;
   readonly clientServerChannels?: Readonly<Record<string, InternalZLinkNestClientServerChannelOptions>>;
   readonly fanoutChannels?: Readonly<Record<string, InternalZLinkNestFanoutChannelOptions>>;
   readonly spotNodes?: readonly (string | ZLinkSpotNodeRegistrationOptions)[] |
@@ -192,6 +193,7 @@ export interface ZLinkNestModuleRegistrationOptions extends Omit<
 
 export interface ZLinkNestFrameworkOptionsBuilder {
   options(options: ZLinkNestFrameworkAdditionalOptions): this;
+  disableImplicitHandlerAutoRegistration(): this;
   codecs(): ZLinkNestCodecRegistryBuilder;
   configureDispatch(): ZLinkDispatchOptionsBuilder;
   configureInboundDispatch(): ZLinkInboundDispatchOptions;

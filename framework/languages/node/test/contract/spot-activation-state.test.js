@@ -9,6 +9,11 @@ function createActivation(externalActorCount = () => 0) {
   return new ZLinkSpotActivation({
     meshName: 'play',
     spotId: 'room-1',
+    domain: {
+      kind: 'user',
+      executionMode: 'spot_wide',
+      relocationReadiness: 'any_turn_boundary'
+    },
     spotType: class Room {},
     spot: {},
     // SpotWide execution mode drives every actor operation through this
@@ -75,6 +80,37 @@ test('spot activation includes external actors in its close decision', () => {
   assert.equal(activation.canClose(), false);
   externalActors = 0;
   assert.equal(activation.canClose(), true);
+});
+
+test('Spot lifecycle domain rejects invalid Instance state combinations', () => {
+  const base = {
+    meshName: 'play',
+    spotId: 'instance-1',
+    spotType: class Instance {},
+    spot: {},
+    serial: { setExecutionBarrier: () => {} },
+    timers: {},
+    actorHandlers: {},
+    handlers: {}
+  };
+  assert.throws(
+    () => new ZLinkSpotActivation({
+      ...base,
+      domain: { kind: 'instance', objectGeneration: 0n }
+    }),
+    /object generation must be positive/
+  );
+
+  const instance = new ZLinkSpotActivation({
+    ...base,
+    domain: { kind: 'instance', objectGeneration: 7n }
+  });
+  assert.equal(instance.domain.kind, 'instance');
+  assert.equal(instance.objectGeneration, 7n);
+
+  const user = createActivation();
+  assert.equal(user.domain.kind, 'user');
+  assert.equal(user.objectGeneration, undefined);
 });
 
 test('explicit close ignores a stale native count only after every tracked actor departs', () => {

@@ -1,4 +1,7 @@
 package systems.zlink.e2e.registrationcodec.jsononlypeer;
+import systems.zlink.e2e.registrationcodec.shared.protobuf.ProtobufEchoReq;
+import systems.zlink.e2e.registrationcodec.shared.protobuf.ProtobufEchoRes;
+import java.net.URI;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Path;
@@ -47,7 +50,7 @@ public final class JsonOnlyPeerApplication {
         return framework -> {
             framework.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
-            var endpoint = java.net.URI.create(options.serverEndpoint());
+            var endpoint = URI.create(options.serverEndpoint());
             var channel = framework.addClientServerChannel(Contracts.CHANNEL);
             var server = channel.server()
                 .setBindHost(endpoint.getHost())
@@ -63,8 +66,8 @@ public final class JsonOnlyPeerApplication {
                 Contracts.PackedEchoRes.class);
             server.addRequestHandler(
                 UnexpectedProtobufHandler.class,
-                com.google.protobuf.StringValue.class,
-                com.google.protobuf.StringValue.class);
+                ProtobufEchoReq.class,
+                ProtobufEchoRes.class);
         };
     }
 

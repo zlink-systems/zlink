@@ -31,7 +31,7 @@ public final class EnsureSpotRouteRequestHandler
         Contracts.EnsureSpotReq request,
         int attempt) {
         return spots.getOrCreate(request.spotRid(), "probe")
-            .request(ZLinkMessage.of("ensure"))
+            .request(ZLinkMessage.of(new Contracts.SpotCreateReq("ensure")))
             .submit()
             .thenCompose(created -> {
                 String nodeRid = Env.get("nodeRid", "play-a");

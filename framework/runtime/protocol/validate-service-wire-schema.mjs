@@ -104,8 +104,7 @@ function validateSchema(schema) {
     ["relocationResourceParticipants", 2048n],
     ["maintenanceAggregateBytes", 1048576n],
     ["messageFollowHopCount", 8n],
-    ["messageFollowMessages", 1024n],
-    ["messageFollowBytes", 16777216n],
+    ["messageFollowControlEnvelopeBytes", 16777216n],
     ["routingIdCollisionAttempts", 8n],
     ["nodeActiveCapacityDefault", 10000n],
     ["nodePendingCapacityDefault", 128n],
@@ -1641,6 +1640,7 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       sequence: [
         "source-sessionRelocationSeal",
         "session-owner-reversible-ingress-seal",
+        "post-seal-ingress-waits-with-payload-and-reply-context-without-advancing-sealed-high-water-or-entering-application-dispatch",
         "session-owner-sessionRelocationSealed-high-water",
         "source-receives-every-sequence-through-high-water",
         "source-captured-relocation",
@@ -1664,11 +1664,14 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       sessionOwnerLeaseFence: "owner-id-and-lease-generation-exact-descriptor-and-current-host-lease-read",
       senderAdmissionDeadline: "local-monotonic-deadline-derived-from-last-successful-host-lease-read",
       staleSessionOwnerLease: "protocol-error-no-seal-or-route-switch",
+      sourceIngressHold: "no-relocation-specific-record-or-byte-cap-normal-application-lane-transport-deadline-and-cancellation-rules-remain",
+      targetTemporaryQueue: "no-relocation-specific-record-or-byte-cap-normal-application-lane-transport-deadline-and-cancellation-rules-remain",
       commitPhase: "completed-only",
       targetAdmission: "sealed-until-owner-membership-cas-lifecycle-callbacks-pending-work-and-timer-restore-ordered-queue-merge-temporary-queue-registration-removal-and-atomic-dispatch-switch-then-open-source-cleanup-completed-cas-route-ack-and-steady-normalization-never-gate",
-      abort: "aborted-authority-cas-first-no-route-abort-or-routed-ack-wait-discard-temporary-queue-and-restore-source-queue-in-original-order-cleanup-reserved-target-space-and-orphan-payload-remove-relocation-progress-then-reopen-admission",
+      abort: "aborted-authority-cas-first-source-sends-matching-sessionRelocationRoute-abort-session-owner-releases-only-the-exact-seal-and-acks-then-source-discards-temporary-queue-restores-source-queue-in-original-order-cleans-reserved-target-space-and-orphan-payload-removes-relocation-progress-and-reopens-admission",
       duplicate: "idempotent-if-identical-else-protocol-error",
       missingSequence: "do-not-capture-or-commit",
+      missingSealEvidence: "abort-relocation-no-estimated-high-water-or-session-route-fallback",
       sessionOwnerRestart: "stale-node-generation-protocol-error-no-route-switch",
     }],
     ["relocation-complete-integrity", {
@@ -1814,8 +1817,6 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       aggregateEncodedBytesMaximum: { $bound: "maintenanceAggregateBytes" },
       aggregateId: "nonzero-128-bit",
       messageFollowHopCountMaximum: { $bound: "messageFollowHopCount" },
-      messageFollowQueuedMessagesMaximum: { $bound: "messageFollowMessages" },
-      messageFollowQueuedBytesMaximum: { $bound: "messageFollowBytes" },
       routingIdEntropyBits: 128,
       routingIdCollisionAttemptsMaximum: { $bound: "routingIdCollisionAttempts" },
       nodeActiveCapacityDefault: { $bound: "nodeActiveCapacityDefault" },
@@ -4045,10 +4046,11 @@ function validateRelocationStateMachine(machine, commands, types, fail) {
     }],
     ["sessionRelocationRoute", {
       command: "sessionRelocationRoute",
-      senderRoles: ["target"],
-      phases: ["completed"],
+      senderRoles: ["source", "target"],
+      phases: ["aborted", "completed"],
       actionRules: {
         commit: { senderRoles: ["target"], phases: ["completed"] },
+        abort: { senderRoles: ["source"], phases: ["aborted"] },
       },
       duplicate: "idempotent-if-identical-else-protocol-error",
       reorder: "commit-after-replay",
@@ -4057,9 +4059,10 @@ function validateRelocationStateMachine(machine, commands, types, fail) {
     ["sessionRelocationRouted", {
       command: "sessionRelocationRouted",
       senderKind: "sessionOwner",
-      phases: ["completed"],
+      phases: ["aborted", "completed"],
       actionRules: {
         commit: { phases: ["completed"] },
+        abort: { phases: ["aborted"] },
       },
       duplicate: "idempotent-if-identical-else-protocol-error",
       reorder: "hold-until-matching-route-action",
@@ -4779,9 +4782,10 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "queuedBytes", $ref: "u32" },
     { name: "originalOperation", $ref: "operation-id" },
     { name: "originalReplyRouteId", $ref: "u64" },
-  ], "$.types", "Message Follow route must preserve exact route, queue accounting and reply identity");
-  if (messageFollowRoute?.maximumEncodedBytes?.$bound !== "messageFollowBytes") {
-    fail("$.types", "Message Follow route must use the bounded queue byte limit");
+  ], "$.types", "Message Follow route must preserve exact route, saturating queue diagnostics and reply identity");
+  if (messageFollowRoute?.maximumEncodedBytes?.$bound
+      !== "messageFollowControlEnvelopeBytes") {
+    fail("$.types", "Message Follow route must use the control-envelope byte limit");
   }
 
   requireFields(types.get("actor-route-fence")?.fields, [
@@ -5040,6 +5044,7 @@ function validateServiceInvariants(schema, types, fail) {
       { name: "sessionRid", $ref: "rid" },
       { name: "bindingGeneration", $ref: "nonzero-u64" },
       { name: "action", $ref: "session-relocation-route-action" },
+      { name: "result", $ref: "session-relocation-route-result" },
       { name: "currentAuthorityOwnerGeneration", $ref: "nonzero-u64" },
       { name: "lastAcceptedSessionSequence", $ref: "ordinal-or-zero" },
     ],

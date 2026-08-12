@@ -206,7 +206,7 @@ internal sealed class RelocationMessageFlowEvidenceStore : IDisposable
         var packetName = Tag(activity, "packet_name");
         if (surface != "spot"
             || messageKind != "request"
-            || packetName != nameof(RelocationWorkloadRequest)
+            || packetName != nameof(RelocationWorkloadReq)
             || phase is not ("received" or "replied"))
             return;
 

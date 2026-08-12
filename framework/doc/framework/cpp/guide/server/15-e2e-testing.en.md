@@ -286,11 +286,11 @@ client can't confirm.
   nodes actually work
 
 ```cpp
-// The join response arrives as a push, not the request's reply -- register the wait first, then send.
-task_t<join_game_res_t> join_game (auto &connector, const std::string &room_id)
+// The join completion arrives as a client push -- register the wait before the one-way send.
+task_t<join_game_notify_t> join_game (auto &connector, const std::string &room_id)
 {
-    auto completion = connector.wait_for<join_game_res_t> ().async ();
-    co_await connector.send (join_game_req_t{room_id}).submit ();
+    auto completion = connector.wait_for<join_game_notify_t> ().async ();
+    co_await connector.send (join_game_msg_t{room_id}).submit ();
     co_return (co_await std::move (completion)).payload;
 }
 ```

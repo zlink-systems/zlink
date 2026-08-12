@@ -1,4 +1,9 @@
 package systems.zlink.framework.runtime.host;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.ToIntFunction;
+import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -6,6 +11,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.concurrent.CompletableFuture;
@@ -29,7 +35,7 @@ final class ZLinkAdmissionRuntime {
     private ZLinkAdmissionRuntime() {
     }
 
-    static systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.Admission factory(
+    static ZLinkOneWayCalls.Admission factory(
         systems.zlink.framework.runtime.internal.backend
             .ZLinkBackendAdapterProvider provider) {
         var source = provider.admissionSource();
@@ -41,27 +47,96 @@ final class ZLinkAdmissionRuntime {
             source, timeout, capacity, readyRegistrar, shutdownRegistrar);
     }
 
-    static systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.Admission factory(
-        java.util.function.Function<ZLinkBackendObject, ZLinkBackendObject> source,
-        java.util.function.Function<ZLinkBackendObject, Duration> timeout,
-        java.util.function.ToIntFunction<ZLinkBackendObject> capacity,
-        java.util.function.BiConsumer<
+    static ZLinkOneWayCalls.Admission factory(
+        Function<ZLinkBackendObject, ZLinkBackendObject> source,
+        Function<ZLinkBackendObject, Duration> timeout,
+        ToIntFunction<ZLinkBackendObject> capacity,
+        BiConsumer<
             ZLinkBackendObject,
-            java.util.function.Consumer<ZLinkBackendAdmissionKey>> readyRegistrar,
-        java.util.function.BiConsumer<ZLinkBackendObject, Runnable>
+            Consumer<ZLinkBackendAdmissionKey>> readyRegistrar,
+        BiConsumer<ZLinkBackendObject, Runnable>
             shutdownRegistrar) {
-        return (backend, key, submission, cleanup, timeoutOverride) ->
-            submit(
-                backend,
-                key,
-                submission,
-                cleanup,
-                source,
-                timeout,
-                capacity,
-                readyRegistrar,
-                shutdownRegistrar,
-                timeoutOverride);
+        return new ZLinkOneWayCalls.Admission() {
+            @Override
+            public CompletionStage<Void> submit(
+                ZLinkBackendObject backend,
+                ZLinkBackendAdmissionKey key,
+                Supplier<Boolean> submission,
+                Runnable cleanup,
+                Duration timeoutOverride) {
+                return ZLinkAdmissionRuntime.submit(
+                    backend,
+                    key,
+                    submission,
+                    cleanup,
+                    source,
+                    timeout,
+                    capacity,
+                    readyRegistrar,
+                    shutdownRegistrar,
+                    timeoutOverride,
+                    false);
+            }
+
+            @Override
+            public CompletionStage<Void> submitDetached(
+                ZLinkBackendObject backend,
+                ZLinkBackendAdmissionKey key,
+                Supplier<Boolean> submission,
+                Runnable cleanup,
+                Duration timeoutOverride) {
+                return ZLinkAdmissionRuntime.submit(
+                    backend,
+                    key,
+                    submission,
+                    cleanup,
+                    source,
+                    timeout,
+                    capacity,
+                    readyRegistrar,
+                    shutdownRegistrar,
+                    timeoutOverride,
+                    true);
+            }
+
+            @Override
+            public void releaseDetached(
+                ZLinkBackendObject backend,
+                ZLinkBackendAdmissionKey key) {
+                ZLinkAdmissionRuntime.releaseDetached(backend, key, source);
+            }
+
+            @Override
+            public void terminateDetached(
+                ZLinkBackendObject backend,
+                ZLinkBackendAdmissionKey key,
+                Throwable failure) {
+                ZLinkAdmissionRuntime.terminateDetached(
+                    backend, key, failure, source);
+            }
+        };
+    }
+
+    static void releaseDetached(
+        ZLinkBackendObject backend,
+        ZLinkBackendAdmissionKey key,
+        Function<ZLinkBackendObject, ZLinkBackendObject> sourceResolver) {
+        Source current = existingSource(sourceResolver.apply(backend));
+        if (current != null) {
+            current.releaseDetached(key);
+        }
+    }
+
+    static void terminateDetached(
+        ZLinkBackendObject backend,
+        ZLinkBackendAdmissionKey key,
+        Throwable failure,
+        Function<ZLinkBackendObject, ZLinkBackendObject> sourceResolver) {
+        Source current = existingSource(sourceResolver.apply(backend));
+        if (current != null) {
+            current.terminateDetached(
+                key, Objects.requireNonNull(failure, "failure"));
+        }
     }
 
     static CompletionStage<Void> submit(
@@ -69,14 +144,14 @@ final class ZLinkAdmissionRuntime {
         ZLinkBackendAdmissionKey key,
         Supplier<Boolean> attempt,
         Runnable cleanup,
-        java.util.function.Function<ZLinkBackendObject, ZLinkBackendObject>
+        Function<ZLinkBackendObject, ZLinkBackendObject>
             sourceResolver,
-        java.util.function.Function<ZLinkBackendObject, Duration> timeoutResolver,
-        java.util.function.ToIntFunction<ZLinkBackendObject> capacityResolver,
-        java.util.function.BiConsumer<
+        Function<ZLinkBackendObject, Duration> timeoutResolver,
+        ToIntFunction<ZLinkBackendObject> capacityResolver,
+        BiConsumer<
             ZLinkBackendObject,
-            java.util.function.Consumer<ZLinkBackendAdmissionKey>> readyRegistrar,
-        java.util.function.BiConsumer<ZLinkBackendObject, Runnable>
+            Consumer<ZLinkBackendAdmissionKey>> readyRegistrar,
+        BiConsumer<ZLinkBackendObject, Runnable>
             shutdownRegistrar) {
         return submit(
             backend,
@@ -88,7 +163,8 @@ final class ZLinkAdmissionRuntime {
             capacityResolver,
             readyRegistrar,
             shutdownRegistrar,
-            null);
+            null,
+            false);
     }
 
     static CompletionStage<Void> submit(
@@ -96,16 +172,46 @@ final class ZLinkAdmissionRuntime {
         ZLinkBackendAdmissionKey key,
         Supplier<Boolean> attempt,
         Runnable cleanup,
-        java.util.function.Function<ZLinkBackendObject, ZLinkBackendObject>
+        Function<ZLinkBackendObject, ZLinkBackendObject>
             sourceResolver,
-        java.util.function.Function<ZLinkBackendObject, Duration> timeoutResolver,
-        java.util.function.ToIntFunction<ZLinkBackendObject> capacityResolver,
-        java.util.function.BiConsumer<
+        Function<ZLinkBackendObject, Duration> timeoutResolver,
+        ToIntFunction<ZLinkBackendObject> capacityResolver,
+        BiConsumer<
             ZLinkBackendObject,
-            java.util.function.Consumer<ZLinkBackendAdmissionKey>> readyRegistrar,
-        java.util.function.BiConsumer<ZLinkBackendObject, Runnable>
+            Consumer<ZLinkBackendAdmissionKey>> readyRegistrar,
+        BiConsumer<ZLinkBackendObject, Runnable>
             shutdownRegistrar,
         Duration timeoutOverride) {
+        return submit(
+            backend,
+            key,
+            attempt,
+            cleanup,
+            sourceResolver,
+            timeoutResolver,
+            capacityResolver,
+            readyRegistrar,
+            shutdownRegistrar,
+            timeoutOverride,
+            false);
+    }
+
+    static CompletionStage<Void> submit(
+        ZLinkBackendObject backend,
+        ZLinkBackendAdmissionKey key,
+        Supplier<Boolean> attempt,
+        Runnable cleanup,
+        Function<ZLinkBackendObject, ZLinkBackendObject>
+            sourceResolver,
+        Function<ZLinkBackendObject, Duration> timeoutResolver,
+        ToIntFunction<ZLinkBackendObject> capacityResolver,
+        BiConsumer<
+            ZLinkBackendObject,
+            Consumer<ZLinkBackendAdmissionKey>> readyRegistrar,
+        BiConsumer<ZLinkBackendObject, Runnable>
+            shutdownRegistrar,
+        Duration timeoutOverride,
+        boolean detached) {
         ZLinkBackendObject admissionSource = sourceResolver.apply(backend);
         Duration configuredTimeout = timeoutResolver.apply(admissionSource);
         Duration effectiveTimeout = timeoutOverride == null
@@ -120,7 +226,8 @@ final class ZLinkAdmissionRuntime {
             key,
             attempt,
             cleanup,
-            normalizedTimeoutMillis(effectiveTimeout));
+            normalizedTimeoutMillis(effectiveTimeout),
+            detached);
     }
 
     static int normalizedTimeoutMillis(Duration timeout) {
@@ -143,10 +250,10 @@ final class ZLinkAdmissionRuntime {
     private static Source source(
         ZLinkBackendObject backend,
         int pendingCapacity,
-        java.util.function.BiConsumer<
+        BiConsumer<
             ZLinkBackendObject,
-            java.util.function.Consumer<ZLinkBackendAdmissionKey>> readyRegistrar,
-        java.util.function.BiConsumer<ZLinkBackendObject, Runnable>
+            Consumer<ZLinkBackendAdmissionKey>> readyRegistrar,
+        BiConsumer<ZLinkBackendObject, Runnable>
             shutdownRegistrar) {
         synchronized (SOURCES) {
             Source current = SOURCES.get(backend);
@@ -158,6 +265,12 @@ final class ZLinkAdmissionRuntime {
             readyRegistrar.accept(backend, created::ready);
             shutdownRegistrar.accept(backend, created::shutdown);
             return created;
+        }
+    }
+
+    private static Source existingSource(ZLinkBackendObject backend) {
+        synchronized (SOURCES) {
+            return SOURCES.get(backend);
         }
     }
 
@@ -193,8 +306,10 @@ final class ZLinkAdmissionRuntime {
             ZLinkBackendAdmissionKey key,
             Supplier<Boolean> attempt,
             Runnable cleanup,
-            int timeoutMillis) {
-            Pending item = new Pending(this, key, attempt, cleanup);
+            int timeoutMillis,
+            boolean detached) {
+            Pending item = new Pending(
+                this, key, attempt, cleanup, detached, timeoutMillis);
             item.deadlineNanos = System.nanoTime()
                 + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
             if (item.attemptOnce() == AttemptResult.RETRY) {
@@ -232,12 +347,27 @@ final class ZLinkAdmissionRuntime {
                     emptyKeys.forEach(queues::remove);
                 } else {
                     ArrayDeque<Pending> queue = queues.get(key);
-                    Pending item = queue == null ? null : pollLive(queue);
+                    //  A BOUND_SESSION ready edge is a binding-state change,
+                    //  not one unit of send capacity: the remote bound-session
+                    //  binding was installed and every push that parked while
+                    //  it was missing can now be attempted. The install emits
+                    //  exactly one edge, so releasing only the queue head
+                    //  would strand the rest until their send deadline. Drain
+                    //  the key in FIFO order; an item whose attempt still
+                    //  cannot submit re-queues through `drive`, which leaves
+                    //  the capacity semantics of every other kind unchanged.
+                    boolean drain = key.kind()
+                        == ZLinkBackendAdmissionKey.Kind.BOUND_SESSION;
+                    Pending item;
+                    while (queue != null
+                        && (item = pollLive(queue)) != null) {
+                        items.add(item);
+                        if (!drain) {
+                            break;
+                        }
+                    }
                     if (queue != null && queue.isEmpty()) {
                         queues.remove(key);
-                    }
-                    if (item != null) {
-                        items.add(item);
                     }
                 }
             }
@@ -279,9 +409,44 @@ final class ZLinkAdmissionRuntime {
             deadlines.shutdownNow();
         }
 
+        void releaseDetached(ZLinkBackendAdmissionKey key) {
+            ArrayList<Pending> retained = new ArrayList<>();
+            synchronized (lock) {
+                if (shutdown) {
+                    return;
+                }
+                for (Pending item : pending) {
+                    if (item.matchesDetached(key)
+                        && item.releaseRouteLocked()) {
+                        retained.add(item);
+                    }
+                }
+            }
+            retained.forEach(Pending::schedulePostRouteDeadline);
+            if (!retained.isEmpty()) {
+                ready(key);
+            }
+        }
+
+        void terminateDetached(
+            ZLinkBackendAdmissionKey key,
+            Throwable failure) {
+            ArrayList<Pending> terminal = new ArrayList<>();
+            synchronized (lock) {
+                for (Pending item : new ArrayList<>(pending)) {
+                    if (item.matchesDetached(key) && markDoneLocked(item)) {
+                        terminal.add(item);
+                    }
+                }
+            }
+            terminal.forEach(item ->
+                item.completeDetachedTerminalMarked(failure));
+        }
+
         private void drive(Pending item, int timeoutMillis) {
             while (true) {
                 AwaitResult wait = reserveOrAwait(item, timeoutMillis);
+                item.acceptDetachedIfReserved();
                 if (wait == AwaitResult.QUEUED) {
                     return;
                 }
@@ -365,8 +530,20 @@ final class ZLinkAdmissionRuntime {
             item.queued = true;
         }
 
-        boolean markDone(Pending item) {
+        boolean cancelFromCaller(Pending item) {
             synchronized (lock) {
+                if (item.callerAccepted) {
+                    return false;
+                }
+                return markDoneLocked(item);
+            }
+        }
+
+        boolean timeoutWhileArmed(Pending item) {
+            synchronized (lock) {
+                if (item.callerAccepted && !item.routeReleased) {
+                    return false;
+                }
                 return markDoneLocked(item);
             }
         }
@@ -436,11 +613,15 @@ final class ZLinkAdmissionRuntime {
         private final Supplier<Boolean> attempt;
         private final Runnable cleanup;
         private final AdmissionFuture future;
+        private final boolean detached;
         private boolean queued;
         private boolean reserved;
         private boolean waitingCapacity;
         private boolean done;
         private boolean cleaned;
+        private boolean callerAccepted;
+        private boolean routeReleased;
+        private final int timeoutMillis;
         private long deadlineNanos;
         private ScheduledFuture<?> deadline;
 
@@ -448,12 +629,72 @@ final class ZLinkAdmissionRuntime {
             Source source,
             ZLinkBackendAdmissionKey key,
             Supplier<Boolean> attempt,
-            Runnable cleanup) {
+            Runnable cleanup,
+            boolean detached,
+            int timeoutMillis) {
             this.source = source;
             this.key = key;
             this.attempt = attempt;
             this.cleanup = cleanup;
+            this.detached = detached;
+            this.timeoutMillis = timeoutMillis;
             this.future = new AdmissionFuture(this);
+        }
+
+        void acceptDetachedIfReserved() {
+            boolean accepted = false;
+            ScheduledFuture<?> admissionDeadline = null;
+            synchronized (source.lock) {
+                if (detached && reserved && !done && !callerAccepted) {
+                    callerAccepted = true;
+                    accepted = true;
+                    if (!routeReleased) {
+                        admissionDeadline = deadline;
+                    }
+                }
+            }
+            if (accepted) {
+                // The public send deadline governs admission into this bounded
+                // owner. Once admitted, relocation route readiness owns the
+                // retained attempt until transport terminal or runtime
+                // shutdown; reusing the public deadline here would drop a
+                // command-44-racing push before command 38 installs its route.
+                if (admissionDeadline != null) {
+                    admissionDeadline.cancel(false);
+                }
+                future.completeTerminal();
+            }
+        }
+
+        boolean matchesDetached(ZLinkBackendAdmissionKey candidate) {
+            return detached && key.equals(candidate);
+        }
+
+        boolean releaseRouteLocked() {
+            if (done || routeReleased) {
+                return false;
+            }
+            routeReleased = true;
+            if (!callerAccepted) {
+                return false;
+            }
+            deadlineNanos = System.nanoTime()
+                + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+            return true;
+        }
+
+        void schedulePostRouteDeadline() {
+            ScheduledFuture<?> task = source.deadlines.schedule(
+                this::timeout,
+                timeoutMillis,
+                TimeUnit.MILLISECONDS);
+            synchronized (source.lock) {
+                if (done) {
+                    task.cancel(false);
+                } else {
+                    deadline = task;
+                }
+            }
         }
 
         AttemptResult attemptOnce() {
@@ -463,7 +704,8 @@ final class ZLinkAdmissionRuntime {
                 if (done) {
                     return AttemptResult.TERMINAL;
                 }
-                if (System.nanoTime() >= deadlineNanos) {
+                if ((!callerAccepted || routeReleased)
+                    && System.nanoTime() >= deadlineNanos) {
                     source.markDoneLocked(this);
                     terminal = ZLinkOneWayAdmission.result(
                         ZLinkOneWayAdmissionStatus.TIMED_OUT);
@@ -511,7 +753,7 @@ final class ZLinkAdmissionRuntime {
         }
 
         void timeout() {
-            if (!source.markDone(this)) {
+            if (!source.timeoutWhileArmed(this)) {
                 return;
             }
             completeExceptionallyMarked(
@@ -519,7 +761,7 @@ final class ZLinkAdmissionRuntime {
         }
 
         boolean cancel() {
-            if (!source.markDone(this)) {
+            if (!source.cancelFromCaller(this)) {
                 return false;
             }
             cancelDeadline();
@@ -539,7 +781,22 @@ final class ZLinkAdmissionRuntime {
         void completeExceptionallyMarked(Throwable error) {
             cancelDeadline();
             cleanupOnce();
-            future.completeExceptionallyTerminal(error);
+            if (!future.completeExceptionallyTerminal(error)
+                && detached && callerAccepted) {
+                LOGGER.log(
+                    Level.WARNING,
+                    "accepted one-way transport attempt ended after local "
+                        + "outbound admission for " + key,
+                    error);
+            }
+        }
+
+        void completeDetachedTerminalMarked(Throwable error) {
+            cancelDeadline();
+            cleanupOnce();
+            if (!callerAccepted) {
+                future.completeExceptionallyTerminal(error);
+            }
         }
 
         private void cancelDeadline() {

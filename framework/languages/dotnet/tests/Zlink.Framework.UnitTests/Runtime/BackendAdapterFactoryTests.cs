@@ -143,7 +143,10 @@ public sealed class BackendAdapterFactoryTests
     {
         await using var streamSocket = context.CreateStreamSocket("test-mesh");
 
-        Assert.IsType<ZLinkBackendStreamSocketWrapper>(streamSocket);
+        var wrapper = Assert.IsType<ZLinkBackendStreamSocketWrapper>(streamSocket);
+        var endpoint = $"inproc://stream-backend-{Guid.NewGuid():N}";
+        wrapper.Bind(endpoint);
+        Assert.Equal(endpoint, wrapper.GetLastEndpoint());
     }
 
     [Fact]

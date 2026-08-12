@@ -18,7 +18,7 @@ typed dispatch, binding, owner handoff와 실행 순서를 정의한다.
 
 Core raw transport는 Actor identity, 이전 session 작업을 구분하는 binding token,
 같은 object incarnation에서 [owner](01-glossary.ko.md#owner)가 바뀐 순서를 나타내는 `AuthorityOwnerGeneration`,
-sequence barrier와 Actor route를 해석하지 않는다.
+binding generation과 Actor route를 해석하지 않는다.
 
 `EnableActorDispatch()`는 `MeshName`을 받지 않고 global object dispatch capability를
 활성화한다. Startup은 같은 process에 Object `Client` 또는 `Server` role과 Location
@@ -308,151 +308,134 @@ sequenceDiagram
 
 ## 5. Actor relocation route barrier
 
-Actor가 다른 MeshNode로 이동해도 physical STREAM connection과 session scope는 session owner process에 유지된다.
-Socket, transport handle과 session callback state를 target Actor process로 이동하거나 복제하지 않는다.
+Relocation의 source·target queue와 Location Store owner를 바꾸는 전체 순서는
+[Actor와 Spot relocation 전체 흐름](28-relocation-flow.ko.md)이 단일 기준이다. 이 절은 그
+흐름에서 Session owner가 담당하는 binding seal, held message와 route 전환만 정의한다.
 
-Relocation 중에도 session은 Location Store를 조회해 route를 추측하지 않는다. Source와
-target이 owner 변경을 commit한 뒤 target이 session owner에 새 route를 전달한다.
-Session owner는 요청의 generation과 high-water가 현재 binding에 기록된 값과 같은지 확인한 뒤 해당 Actor binding의
-route를 atomic하게 바꾼다. Route switch와 같은 전환에서 bound-session API의 current
-ActorRef location snapshot을 target MeshName·NodeRid로 갱신하며 ActorId와
-ObjectGeneration은 유지한다. 같은 Session에서 relocation 대상에 포함되지 않은 다른 Actor의 route와 physical
-STREAM connection은 바꾸지 않는다. 이 위치 갱신은 Target Actor의 message 처리나 Join
-completion을 막지 않는다. Application은 relocation을 알기 위해 rebind하지 않는다.
+Actor가 다른 MeshNode로 이동해도 physical STREAM connection과 Session scope는 Session owner
+process에 유지된다. Socket, transport handle과 Session callback state를 target Actor process로
+이동하거나 복제하지 않는다.
 
-1. Source Actor는 현재 handler가 끝난 뒤 새 Actor message의 application dispatch를 막는다.
-   이때 current AuthorityOwnerGeneration, binding generation과 마지막 accepted session sequence를
-   기록한다.
-2. Seal 전에 Actor queue가 수락한 request와 one-way packet은 reply route와 수락 순서를 포함해
-   Relocation Store에 저장한다. Seal 뒤 source로 들어온 Actor message는 크기가 제한된 ingress
-   hold에 보관한다.
-3. Target은 Restore 요청을 받으면 Actor relocation temporary queue를 등록한다. Relocation
-   Store에서 Actor state를 복원하는 동안 들어오는 message는 이 queue에 보관하고 실행하지 않는다.
-   Source의 ingress hold message와 이후 이전 route의 message도 temporary queue에 넣는다.
-   Restore가 끝나면 owner와 membership을 commit하고 target lifecycle callback을 호출한다.
-4. Join으로 이동했다면 target runtime이 Join completion callback을 호출한다. Host relocation의
-   `PerActor`와 `SpotWide` 이동에는 Join completion callback이 없으므로 이 단계를 실행하지 않는다.
-5. 저장된 기존 작업을 실제 Actor queue에 먼저 넣고 temporary queue의 작업을 그 뒤에 옮긴다.
-   Temporary queue 등록을 제거하고 기존 dispatch로 전환한 뒤 Target Actor가 message 처리를
-   시작한다. Owner 변경 뒤 source의 이전 route로 도착한 message는 Message Follow가 같은 Actor
-   queue에 전달한다.
-6. Target runtime은 각 bound Session owner에 `sessionActorLocationUpdateReqMsg`를 send한다.
-   이 send의 응답을 기다리기 위해 Target Actor의 처리를 중단하지 않는다.
-7. Session owner는 요청의 Actor ObjectGeneration이 현재 binding과 같은지 확인하고, 이전·target
-   AuthorityOwnerGeneration,
-   binding generation, session owner lease와 high-water를 검증한다. 검증에 성공하면 해당
-   Actor route와 bound-session current Actor location snapshot을 atomic하게 바꾸고
-   `sessionActorLocationUpdateResMsg`를 send한다. Snapshot은 같은
-   ActorId·ObjectGeneration과 target MeshName·NodeRid를 가진다.
-8. Target runtime은 응답이 없으면 첫 요청을 보낸 지 1초 뒤 같은 요청을 다시 보낸다.
-   이후 재전송 간격은 1초, 2초, 4초, 5초이며 그 뒤에는 5초를 유지한다.
+Session의 책임은 이동 중 해당 binding을 닫아 두고, 이동 결과에 맞춰 route를 한 번 바꾼 뒤
+다시 여는 것이다. Session은 relocation target을 선택하거나 Actor·Spot의 준비 상태를 판정하지
+않으며 Location Store를 읽거나 변경하지 않는다. 일반 server 간 message relay와 Actor·Spot
+queue의 cutover 순서도 relocation runtime이 소유한다.
 
-Route 갱신은 binding이 가리키는 `ObjectGeneration`과 같은 Actor relocation에만
-허용한다. 같은 ActorId라도 새 incarnation이 만들어졌다면 Framework가 기존 binding을
-그 새 Actor로 바꾸지 않으며, application이 새 `ActorRef`로 명시적인 bind를 시작해야
-한다. 같은 Session에서 relocation 대상에 포함되지 않은 다른 Actor는 route·location snapshot·token·generation을 유지한다.
+### Session에서만 검증하는 값
 
-### 5.1 Session Actor 위치 갱신 message
+Session binding에 관한 검증은 Session owner 한 곳에서만 수행한다. Session owner는 다음 값만
+검증한다.
 
-Target runtime이 relocation된 Actor의 새 위치를 Session owner에 반영하고 응답을 받을
-때까지 재시도하는 전체 작업을 `sessionRelocationRouteUpdate`라고 한다. 이 작업은 Target
-Actor의 실행과 독립적으로 진행한다.
+- 현재 physical Session identity와 SessionRid
+- 현재 binding generation과 binding이 가리키는 ActorId·ObjectGeneration
+- 같은 relocation인지 구분하는 relocation identity
+- seal을 설치한 binding과 route를 바꿀 binding이 같은지 여부
 
-`sessionActorLocationUpdateReqMsg`와 `sessionActorLocationUpdateResMsg`는 transport의
-동기 request/reply가 아니다. Target runtime과 Session owner가 각각 send하는 두 개의
-infrastructure message다. `ReqMsg`와 `ResMsg` 이름은 어느 message가 위치 갱신을 요청하고
-어느 message가 처리 결과를 반환하는지 구분한다.
+Transport는 authenticated peer와 node generation, frame 형식을 transport 경계에서 검증한다.
+Target relocation runtime은 준비를 끝낸 뒤 예상 source owner와 generation으로 Location Store
+CAS를 수행한다. Actor join, host relocation, Message Follow와 Session owner는 이 두 검증을
+반복하거나 서로의 결과를 다시 판단하지 않는다. Session route 변경에는 numeric high-water,
+message별 ACK journal 또는 relocation 전용 capacity 조건을 사용하지 않는다.
 
-`sessionActorLocationUpdateReqMsg`에는 relocation ID, ActorId, ObjectGeneration,
-이전·target AuthorityOwnerGeneration, target MeshName·NodeRid, Session owner identity,
-SessionRid, binding generation과 마지막 accepted session sequence를 넣는다. Session owner는
-이 값으로 현재 binding과 같은 Actor relocation인지 확인한 뒤 binding route와 current
-`ActorRef` 위치 snapshot을 한 번에 바꾼다.
+전체 순서는 다음과 같다.
 
-`sessionActorLocationUpdateResMsg`에는 요청과 같은 relocation ID, SessionRid, ActorId,
-ObjectGeneration, binding generation과 다음 처리 결과를 넣는다.
+1. Relocation coordinator는 application dispatch를 중단하기 전에 command 42
+   `sessionRelocationSeal`을 Session owner에 보낸다.
+2. Session owner는 current Session과 binding이 일치하면 seal을 설치하고 command 43
+   `sessionRelocationSealed`를 보낸다. Seal 뒤 그 binding으로 들어오는 request와 push는
+   Session owner가 보관한다. 같은 Session의 다른 binding은 영향을 받지 않는다.
+3. Source와 target은 [Actor와 Spot relocation 전체 흐름 §4](28-relocation-flow.ko.md#4-정상-처리-순서)에
+   정의한 공통 절차를 수행한다. Target이 temporary queue와 Restore 준비를 reply하면 source가
+   cached queue와 ingress hold를 relay하고 cutover를 one-way로 보낸다.
+4. Target은 cutover를 받으면 Location Store CAS를 실행한다. Relay 준비 reply 뒤 1,000ms 동안
+   cutover가 오지 않아도 Warning을 기록하고 CAS와 queue 개방을 진행한다. Late·duplicate cutover는
+   Warning만 기록하고 무시한다.
+5. CAS에 성공한 target은 기존 작업과 relay된 작업을 target queue에 넣고 application dispatch를
+   연다. 그 뒤 target runtime이 command 44 `sessionRelocationRoute`를 Session owner에 one-way로
+   보내 binding route와 current `ActorRef` location snapshot을 target으로 바꾸도록 알린다.
+6. Session owner는 current Session, binding과 relocation identity가 일치하면 route를 한 번 바꾸고
+   seal 중 보관한 message를 target route로 제출한 뒤 seal을 해제한다. 적용 응답은 보내지 않는다.
+7. 같은 route update를 다시 받으면 state를 바꾸지 않는다. Seal timeout 뒤 늦게 도착한 update나
+   다른 relocation의 update는 Warning만 기록하고 무시한다.
+8. Session owner는 seal 설치부터 `SessionRelocationSealTimeout`을 적용한다. 기본값은 3,000ms이며
+   server 설정으로 변경할 수 있다. Timeout까지 exact route update가 없으면 physical Session을
+   종료하고 해당 Session의 binding, held message와 seal을 정리한다.
+9. Target이 cutover 전에 명시적으로 실패하면 matching seal만 해제하고 Session message를 source
+   route로 다시 제출한다. Cutover 뒤 실패에서는 source route를 다시 열지 않으며 seal timeout이
+   physical Session과 held state를 정리한다.
 
-| 값 | 결과 | 의미 |
-|---:|---|---|
-| 0 | `Applied` | 요청한 route와 location snapshot을 이번에 갱신했다. |
-| 1 | `AlreadyApplied` | 같은 relocation의 갱신을 이미 적용했다. |
-| 2 | `Stale` | 더 최신 binding generation, owner generation 또는 Actor 위치가 적용되어 있다. |
-| 3 | `SessionOrBindingClosed` | 대상 Session 또는 binding이 종료되어 갱신할 수 없다. |
+Cutover와 command 44는 one-way라 response 유실 상태를 만들지 않는다. 짧은 handoff 동안의
+server 간 전송은 TCP의 순서와 재전송에
+의존한다. `send`는 별도 application ACK를 추가하지 않으며, `request`는 기존 correlation,
+deadline과 caller retry 계약을 그대로 사용한다.
 
-Session owner는 요청을 처리할 수 있으면 결과와 함께 응답한다. Target runtime은 네 결과
-중 하나를 받으면 해당 요청의 재전송을 중단한다. Source Message Follow route도 이 응답을
-받거나 `MessageFollowDuration`이 끝나면 제거한다. `Stale`와
-`SessionOrBindingClosed`는 이전 위치를 다시 적용하지 않았음을 뜻한다.
+<a id="51-session-actor-위치-갱신-message"></a>
+### 5.1 Session relocation route message
 
-응답이 없으면 Target runtime은 같은 relocation ID와 binding generation을 가진 요청을
-정해진 간격으로 다시 보낸다. 첫 재전송은 최초 send 후 1초 뒤에 수행한다. 이후에도 응답이
-없으면 1초, 2초, 4초, 5초 간격으로 다시 보내며 그 뒤에는 5초 간격을 유지한다. Session
-owner는 같은 요청을 여러 번 받아도 route와 snapshot을 한 번 갱신한 것과 같은 결과를
-유지하고 매번 같은 처리 결과를 응답해야 한다. 위치 갱신이 확인되기 전에는 source Message
-Follow route가 `MessageFollowDuration` 안에서 이전 route로 도착한 message를 Target Actor에
-전달한다. Route가 만료되면 이전 route의 request는 `Unavailable`로 끝나지만 위치 갱신
-재전송은 실행 중인 target runtime이 계속한다. Target runtime이 종료되면 다른 runtime이
-같은 요청을 자동으로 이어서 보내지 않는다. 재전송은 Join completion, Target Actor의
-message 처리나 source host의 Shutdown을 지연시키지 않는다.
+Command 42와 43은 Session seal의 설치 request와 reply를 전달한다. Command 44는 target runtime이
+보내는 one-way target route update다. 이 command들은 relocation을 조정하기 위한 내부 message이며 Location
+Store owner를 확정하는 protocol이 아니다.
+
+`sessionRelocationRoute`에는 relocation identity, ActorId, ObjectGeneration, target
+MeshName·NodeRid, Session identity, SessionRid와 binding generation을 넣는다. Session owner는
+자신이 소유한 current Session과 binding에 필요한 값만 대조한다. Target authority가 유효한지는
+이미 target-only Location Store CAS가 결정했으므로 Session owner가 Store나 Actor authority
+mirror를 다시 조회하지 않는다.
+
+`sessionRelocationRoute`를 적용할 때 Session owner는 route와 current `ActorRef` location
+snapshot을 한 번에 바꾸고 seal 중 보관한 message를 target route에 제출한다. 그 뒤 seal을
+해제한다. Response는 보내지 않는다. 같은 update를 다시 받으면 no-op이다.
+
+Seal 설치 뒤 `SessionRelocationSealTimeout` 안에 exact update가 없으면 physical STREAM
+connection을 종료하고 Session state를 정리한다. Timeout과 update는 같은 직렬 실행 구간에서
+처리하며 먼저 처리한 결과가 유효하다. Timeout 뒤 update는 Warning만 기록하고 무시한다.
 
 ```mermaid
 sequenceDiagram
-    participant SourceRuntime as Source runtime
-    participant SourceActor as Source Actor
-    participant RelocationStore as Relocation Store
-    participant LocationStore as Location Store
-    participant TargetRuntime as Target runtime
-    participant TargetTemp as Actor temporary queue
-    participant TargetQueue as Target Actor queue
-    participant TargetActor as Target Actor
-    participant SessionOwner as Session owner
+    participant C as Relocation coordinator
+    participant S as Session owner
+    participant A as Source runtime
+    participant B as Target runtime
+    participant L as Location Store
 
-    SourceRuntime->>SourceActor: 현재 handler 종료 뒤 application dispatch 중단
-    SourceRuntime->>RelocationStore: Actor state와 저장된 기존 작업 기록
-    SourceRuntime->>TargetRuntime: Actor Restore 요청
-    TargetRuntime->>TargetTemp: Actor temporary queue 등록
-    TargetRuntime->>RelocationStore: Actor state와 저장된 queue 읽기
-    TargetRuntime->>TargetActor: Actor 생성과 state Restore
-    SourceRuntime->>TargetRuntime: ingress hold message relay
-    TargetRuntime->>TargetTemp: temporary queue에 message 보관
-    TargetRuntime->>LocationStore: target owner와 membership commit
-    TargetRuntime->>TargetActor: lifecycle·Join completion callback
-    TargetRuntime->>TargetQueue: 저장된 기존 작업 먼저 추가
-    TargetRuntime->>TargetQueue: temporary queue 작업 이동
-    TargetRuntime->>TargetTemp: 등록 제거 후 기존 dispatch로 전환
-    TargetQueue->>TargetActor: message 처리 시작
-    TargetRuntime-)SessionOwner: sessionActorLocationUpdateReqMsg send
-    SessionOwner->>SessionOwner: generation 확인 후 route와 current ActorRef snapshot 교체
-    SessionOwner-)TargetRuntime: sessionActorLocationUpdateResMsg send
-    Note over TargetRuntime,SessionOwner: ResMsg가 없으면 같은 ReqMsg를 1초, 1초, 2초, 4초, 이후 5초 간격으로 재전송
+    C->>S: [request] command 42 · exact binding route 고정과 이후 message 보관
+    S-->>C: [reply] command 43 · exact binding seal 설치 완료
+    A->>B: [request] temporary queue 설치·Restore 후 dispatch 없이 relay 준비
+    B-->>A: [reply] temporary queue·Restore 준비 완료 · source owner 유지
+    A->>B: [send/request relay] cached queue와 ingress hold
+    alt cutover가 1,000ms 안에 도착
+        A->>B: [send] cutover · boundary 전 relay 전송 완료
+    else relay 준비 reply 뒤 1,000ms 동안 cutover 없음
+        B->>B: [local] cutover_timeout Warning · fallback 진행
+    end
+    B->>L: [request] source fence가 같으면 owner를 target으로 CAS
+    L-->>B: [reply] target owner CAS 결과
+    B->>B: [local] target queue 개방
+    B->>S: [send] command 44 · exact target route 적용·held 제출·seal 해제
+    alt SessionRelocationSealTimeout 안에 exact update 처리
+        S->>S: [local] route 전환 · held Session message 제출 · seal 해제
+    else seal timeout
+        S->>S: [local] physical Session 종료와 binding·held·seal 정리
+    end
 ```
-
-이 다이어그램은 relocation commit 뒤 session route를 target Actor로 전환하는 정상
-경로다. Physical STREAM connection은 Session owner에 남는다. Target Actor는 위치 갱신
-응답을 기다리지 않고 message를 처리하며, 이전 route로 도착한 message는 source Message
-Follow route를 통해 받는다.
-
-Session Actor 위치 갱신 상태는 Target Actor의 message 처리를 제어하지 않는다. 이전 owner,
-stale authority owner generation, binding token과 sequence의 packet·reply·push·close는 current
-connection에 적용하지 않는다.
 
 ## 6. Failure 처리
 
-Commit 전 failure에서는 Session Actor 위치 갱신을 보내지 않는다. Session owner의 binding route와
-current `ActorRef` 위치 snapshot은 source를 계속 가리킨다. Framework는 Location Store에서 source가
-owner로 유지되는지 확인하고 target temporary queue를 폐기한 뒤 source Actor queue와 ingress를
-복원한다. Owner를 확인하기 전에는 source Actor의 message 처리를 다시 시작하지 않는다.
+Target이 cutover 전에 실패하면 source가 owner다. Relocation coordinator는 matching Session
+seal을 해제하고 보관한 Session message를 source route로 다시 제출한다. Target temporary queue는
+실행하지 않는다. Cutover 뒤 CAS가 실패하면 source route를 다시 열지 않는다. Target은 준비한
+object와 queue를 제거하고 Session owner는 `SessionRelocationSealTimeout`으로 connection과 held
+state를 정리한다.
 
-Commit 뒤에는 source route나 location snapshot으로 rollback하지 않는다. 실행 중인 current
-target만 `sessionActorLocationUpdateReqMsg` 재전송을 이어간다. Session owner가 위치
-갱신을 확인하지 못했더라도 source Message Follow route는 `MessageFollowDuration`까지만 이전
-route로 도착한 message를 target에 전달한다.
-Session owner process가 종료되면 connection을 다른 process로 복구하지 않고 닫으며 client reconnect가 새 session을 만든다.
+Target CAS 뒤에는 source로 rollback하지 않는다. Target runtime이 command 44를 보내고 Session
+owner는 exact update를 받으면 route를 적용하고 seal을 해제한다. Timeout까지 update가 없으면
+physical Session을 종료하고 state를 정리한다. 늦은 update는 Warning만 기록하며 current route를
+다시 바꾸지 않는다.
 
-Physical disconnect는 accepted participant high-water, request terminal completion 또는 relocation cleanup의 증거가
-아니다. Session에서 Actor로 전달한 요청도 다른 Actor 요청과 같은 규칙을 따른다. Seal 전에 Actor queue가
-수락한 요청은 저장한 기존 작업에 포함하고, seal 뒤 owner commit 전에 source로 들어온 요청은 ingress
-hold에서 target temporary queue로 relay한다.
+Owner 전환 뒤 이전 주소로 도착한 server message는 Message Follow가 target에 전달한다. 서로 다른
+connection에서 들어온 message 사이의 전역 순서는 보장하지 않는다. Physical Session disconnect는
+relocation 성공이나 실패의 증거가 아니며, Session owner process가 종료되면 connection을 다른
+process로 복구하지 않고 닫는다.
 
 ## 7. Execution과 lifecycle
 

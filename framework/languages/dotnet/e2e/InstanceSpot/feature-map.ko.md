@@ -14,11 +14,10 @@
 | IS-E2E-02 | 검증 완료 | `framework/languages/dotnet/e2e/SpotService/logs/20260804-150030-587658/`에 cold send와 `instance-initialize` 1회가 기록됐다. Client assertion은 send 수락 결과를 확인했다. |
 | IS-E2E-03 | 검증 완료 | `framework/languages/dotnet/e2e/SpotService/logs/20260804-150104-591087/`에 동일 Spot의 `instance-initialize` 1회와 서로 다른 두 operation의 `instance-request`가 기록됐다. Client assertion은 두 응답이 같은 owner를 가리키는지 확인했다. |
 | IS-E2E-04 | 미구현 | 서로 다른 Instance Spot의 execution queue 독립성을 검증하는 runner가 없다. |
-| IS-E2E-05 | 검증 완료 | `SpotService/logs/20260807-202307-1312454/`에서 public Ready owner `play-b`를 SIGKILL한 뒤 같은 generation의 location이 `Unavailable`이 되고, 후속 request도 `Unavailable`로 끝났다. 다른 owner의 factory·handler evidence는 0건이다. |
+| IS-E2E-05 | 구현·재실행 필요 | public Ready owner를 SIGKILL한 뒤 같은 generation의 location이 `Unavailable`이 되는지 확인한다. 이어 5초 bound 안에서 concurrent request 32개가 모두 `Unavailable`로 끝나고 다른 owner의 factory·handler evidence가 0건인지 검증한다. 기존 단일 후속 request의 process 증거는 `SpotService/logs/20260807-202307-1312454/`에 있으며 concurrent variant는 재실행해야 한다. |
 | IS-E2E-06 | 부분 구현 | `SpotService/logs/20260807-202813-1625005/`에서 initialization gate로 Creating을 유지한 같은 target·generation에 두 번째 request가 합류하고, gate 해제 뒤 initialization 1회와 두 handler가 각각 한 번 실행됐다. Creating owner crash와 취소 분기는 아직 실행 경로가 없다. |
 | IS-E2E-07 | 미구현 | 정상 relocation 뒤 identity와 state 보존을 검증하는 runner가 없다. |
 | IS-E2E-08 | 검증 완료 | `framework/languages/dotnet/e2e/SpotService/logs/20260804-165721-1053531/`에 `IdleEvicted` 종료 뒤 같은 Spot ID의 두 번째 cold request와 `instance-initialize` 2회가 기록됐다. `instance-idle` process runner가 두 request의 성공과 새 instance 생성을 확인했다. |
-| IS-E2E-09 | 미구현 | owner crash 뒤 concurrent request의 bounded failure를 검증하는 runner가 없다. |
 | IS-E2E-10 | 미구현 | stale owner resume 뒤 자동 owner 생성이 없는지 검증하는 runner가 없다. |
 | IS-E2E-11 | 미구현 | confirmed not admitted terminal을 검증하는 runner가 없다. |
 | IS-E2E-12 | 미구현 | ambiguous result 처리와 후속 상태를 검증하는 runner가 없다. |

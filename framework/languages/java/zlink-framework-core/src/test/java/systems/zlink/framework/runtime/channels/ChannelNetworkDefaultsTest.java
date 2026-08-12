@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -56,7 +57,7 @@ final class ChannelNetworkDefaultsTest {
             .enablePublisher(0);
 
         assertEquals(
-            java.util.List.of("tcp://0.0.0.0:0"),
+            List.of("tcp://0.0.0.0:0"),
             registration.publisherBinds());
         assertEquals(
             "events.example.test",
@@ -74,7 +75,7 @@ final class ChannelNetworkDefaultsTest {
             .listen(0);
 
         assertEquals(
-            java.util.List.of("tcp://0.0.0.0:0"),
+            List.of("tcp://0.0.0.0:0"),
             registration.serverBinds());
         assertEquals(
             "orders.example.test",

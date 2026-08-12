@@ -5,7 +5,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties("sample")
 public record PlaySettings(
-    String apiChannelEndpoint,
+    List<String> apiChannelEndpoints,
     String playEndpoint,
     List<String> playEndpoints,
     String spotEndpoint,
@@ -17,7 +17,12 @@ public record PlaySettings(
     String logDirectory) implements SampleLogSettings {
 
     public PlaySettings {
-        require(apiChannelEndpoint, "apiChannelEndpoint");
+        if (apiChannelEndpoints == null || apiChannelEndpoints.size() != 2
+            || apiChannelEndpoints.stream().anyMatch(
+                endpoint -> endpoint == null || endpoint.isBlank())) {
+            throw new IllegalArgumentException(
+                "sample.apiChannelEndpoints must contain Api A and Api B endpoints");
+        }
         require(playEndpoint, "playEndpoint");
         if (playEndpoints == null || playEndpoints.isEmpty()) {
             throw new IllegalArgumentException("sample.playEndpoints is required");

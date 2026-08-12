@@ -66,7 +66,7 @@ PowerShell runner 검증을 대신하지 않는다.
 | MeshNode ROUTER의 send·receive HWM과 send·receive timeout이 방향을 유지하는가 | `ZLinkSpotNodeInitializer` → `ZLinkBackendSpotNodeWrapper` → `ZLinkManagedMeshNode`, `BackendAdapterFactoryTests.SpotNode_Router_Send_Config_RoundTrips_Through_Binding` | source/unit 반영, targeted 10/10과 fixed package verifier 통과 | Windows PowerShell runner |
 | ShoppingMall Client가 public order API만 사용하고 fixture·server evidence hook을 runner에 남기는가 | `ShoppingMallClientScenario`, `CommerceApi/Program.cs`, `ShoppingMallRegressionTests` | source/regression 18/18, build와 `shoppingmall-server-evidence=completed` 통과 | Windows PowerShell runner |
 | GameQuest Client가 raw WebSocket bridge 없이 public Stream connector를 사용하는가 | `GameApi/Program.cs`, `run_sample.sh`, `run_sample.ps1`, `GameQuest/README.ko.md` | source/build와 `gamequest-server-evidence=completed` 통과 | Windows PowerShell runner |
-| TicTacToe가 manual topology와 handler 등록을 분리하는가 | assembly scan 설정과 `TicTacToeRegressionTests` | source/regression, sample process와 Linux aggregate 통과 | Windows PowerShell runner |
+| TicTacToe가 endpoint 연결과 handler 등록을 모두 수동으로 구성하는가 | public builder·handler registry의 명시적 등록과 `TicTacToeRegressionTests` | source/regression과 build 통과 | 변경 후 Linux sample process와 Windows PowerShell runner |
 | ShoppingMall workflow message가 `sourceCommandId`를 공통 sample contract와 같이 전달하는가 | `Shared/Contracts/Messages.cs`, `StartOrderUseCase`, public continue/rebuild route와 `ShoppingMallRegressionTests` | source/regression 18/18, sample build와 process evidence 통과 | Windows PowerShell runner |
 
 이번 변경 후 `verify_packaged_contract.sh`의 fixed mode가 9개 NuGet package, assembly manifest,
@@ -447,7 +447,7 @@ backend gate 와 별도로 유지한다.
 | Relocate 순서 | all-or-none preflight → admission seal → current turn completion → queue·journal·timer freeze → Actor·Spot relocation → STREAM barrier → authority commit |
 | User Spot aggregate | User Spot과 소속 Actor를 하나의 aggregate로 relocation하며 participant 전체와 generation을 Location Store commit에서 검증한다 |
 | Spot 생성 경계 | direct Spot send/request의 fluent builder에 Instance marker를 지정한다. Missing Instance는 marker가 정확히 한 factory type을 선택할 때만 cold placement를 시작한다 |
-| terminal result | `ZLinkFrameworkRelocationResult`와 `ZLinkFrameworkTerminationResult`의 enum 숫자와 허용 조합이 [graceful drain 계약](../../common/spec/28-graceful-drain-handoff.ko.md)과 일치한다 |
+| terminal result | `ZLinkFrameworkRelocationResult`와 `ZLinkFrameworkTerminationResult`의 enum 숫자와 허용 조합이 [graceful drain 계약](../../common/spec/30-host-relocation-flow.ko.md)과 일치한다 |
 | 명시 제어 | `FrameworkRuntimeContracts.Relocation_and_shutdown_are_separate_host_operations`: DI singleton `IZLinkFrameworkRuntime`은 `RelocateAsync(options, ...)`와 `ShutdownAsync(...)`를 분리한다. Relocation deadline은 options에 두며 두 operation의 `deadline == null`은 30초다 |
 | concurrent caller | `Relocating` 이후 같은 relocation caller는 shared operation의 mode, deadline과 terminal result를 공유한다. `Blocked`는 terminal cache에 넣지 않는다 |
 | readiness probe | `IZLinkFrameworkRuntime.Status.IsReady`는 host `Serving`에서만 true이고 component readiness는 host state projection을 포함한다 |

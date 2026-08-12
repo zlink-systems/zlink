@@ -135,6 +135,13 @@ public final class BingoMessages {
             .build();
     }
 
+    public static Messages.BingoRoomCreateReq bingoRoomCreateReq(
+        Messages.BingoRoomSettingsPayload settings) {
+        return Messages.BingoRoomCreateReq.newBuilder()
+            .setSettings(settings)
+            .build();
+    }
+
     public static Messages.BingoRoomJoinReq bingoRoomJoinReq(
         String roomId,
         String actorId,

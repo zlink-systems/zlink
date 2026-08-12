@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ZLINK_ACTOR_MANAGER } from '@zlink-systems/nestjs';
 import { SampleNames } from '../../Shared/Configuration/sample-names';
 import {
+  CustomerActorCreateReq,
   PacketNames,
   SubscribeDeliveryReq,
   SubscribeDeliveryRes
@@ -44,7 +45,7 @@ class SubscribeDeliverySessionHandler {
     const ensured = await this.actors
       .getOrCreate(CustomerId, SampleNames.customerActorType)
       .inMesh(SampleNames.customerMeshName)
-      .request({ customerId: CustomerId })
+      .request(new CustomerActorCreateReq(CustomerId))
       .submit();
     if (ensured.status === 'rejected') {
       throw new Error(`Customer actor '${CustomerId}' creation was rejected.`);

@@ -1,4 +1,6 @@
 package systems.zlink.e2e.registrymessaging.consumer.Endpoints;
+import java.util.Locale;
+import java.util.Map;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -29,20 +31,20 @@ public final class ConsumerEndpoints {
     }
 
     @GetMapping("/health")
-    public java.util.Map<String, String> health() {
-        return java.util.Map.of("status", "ready");
+    public Map<String, String> health() {
+        return Map.of("status", "ready");
     }
 
     @GetMapping("/locations/peers")
-    public CompletionStage<List<java.util.Map<String, Object>>> peers() {
+    public CompletionStage<List<Map<String, Object>>> peers() {
         return CompletableFuture.completedFuture(clientServerRuntime.snapshot(Contracts.API_CHANNEL))
             .thenApply(status -> status.targets().stream()
             .filter(target -> target.state() == ZLinkPeerState.READY)
-            .map(target -> java.util.Map.<String, Object>of(
+            .map(target -> Map.<String, Object>of(
                 "meshName", status.channelName(),
                 "role", "ROUTER",
                 "nodeRid", target.nodeRid().toString(),
-                "state", target.state().name().toLowerCase(java.util.Locale.ROOT),
+                "state", target.state().name().toLowerCase(Locale.ROOT),
                 "weight", target.weight(),
                 "endpoint", "",
                 "ownerId", ""))
@@ -55,12 +57,12 @@ public final class ConsumerEndpoints {
     }
 
     @PostMapping("/profile/request/outcome")
-    public CompletionStage<Contracts.RequestOutcome> profileRequestOutcome(
+    public CompletionStage<Contracts.ProfileCallRes> profileRequestOutcome(
         @RequestBody Contracts.ProfileReq request) {
         return requestProfile(request, Duration.ofSeconds(5))
             .handle((reply, error) -> error == null
-                ? new Contracts.RequestOutcome(request.value(), reply.providerRid(), false, "")
-                : new Contracts.RequestOutcome(
+                ? new Contracts.ProfileCallRes(request.value(), reply.providerRid(), false, "")
+                : new Contracts.ProfileCallRes(
                     request.value(), "", true, FailureEvidence.from(error).errorKind()));
     }
 
@@ -100,11 +102,11 @@ public final class ConsumerEndpoints {
     }
 
     @PostMapping("/profile/missing-command")
-    public java.util.Map<String, String> missingCommand(@RequestBody Contracts.ProfileMsg command) {
+    public Map<String, String> missingCommand(@RequestBody Contracts.ProfileMsg command) {
         client.sendToChannel(
             Contracts.API_CHANNEL,
             new Contracts.MissingProfileMsg(command.commandId())).submit();
-        return java.util.Map.of("status", "sent");
+        return Map.of("status", "sent");
     }
 
     @PostMapping("/profile/payload")
@@ -115,8 +117,8 @@ public final class ConsumerEndpoints {
     }
 
     @PostMapping("/profile/backpressure/reset")
-    public java.util.Map<String, String> backpressureReset() {
-        return java.util.Map.of("status", "ready");
+    public Map<String, String> backpressureReset() {
+        return Map.of("status", "ready");
     }
 
     @PostMapping("/profile/backpressure/send")

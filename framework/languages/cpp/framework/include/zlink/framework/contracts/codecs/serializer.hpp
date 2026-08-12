@@ -5,6 +5,7 @@
 #include <zlink/framework/contracts/errors/error.hpp>
 #include <zlink/framework/codecs/json.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -21,10 +22,13 @@ namespace zlink::framework
 {
 
 class encoded_payload_t;
+class codec_registration_context_t;
 
 namespace detail
 {
+inline constexpr std::size_t serializer_send_type_cache_capacity = 1024;
 class serializer_registry_state_t;
+struct serializer_registry_access_t;
 encoded_payload_t encoded_payload_from_raw (const zlink::message_t &message);
 zlink::message_t encoded_payload_to_raw (const encoded_payload_t &payload);
 
@@ -59,6 +63,26 @@ class encoded_payload_t
   public:
     encoded_payload_t () = default;
 
+    encoded_payload_t (const encoded_payload_t &other)
+    {
+        const auto source = other.bytes ();
+        _bytes.assign (source.begin (), source.end ());
+    }
+
+    encoded_payload_t &operator= (const encoded_payload_t &other)
+    {
+        if (this == &other)
+            return *this;
+        const auto source = other.bytes ();
+        std::vector<std::byte> owned (source.begin (), source.end ());
+        _bytes = std::move (owned);
+        _borrowed_bytes.reset ();
+        return *this;
+    }
+
+    encoded_payload_t (encoded_payload_t &&) noexcept = default;
+    encoded_payload_t &operator= (encoded_payload_t &&) noexcept = default;
+
     static encoded_payload_t from_bytes (std::span<const std::byte> bytes)
     {
         encoded_payload_t payload;
@@ -76,12 +100,17 @@ class encoded_payload_t
         return from_bytes (std::as_bytes (std::span<const char> (text.data (), text.size ())));
     }
 
-    std::span<const std::byte> bytes () const noexcept { return _bytes; }
+    std::span<const std::byte> bytes () const noexcept
+    {
+        return _borrowed_bytes.value_or (
+          std::span<const std::byte> (_bytes));
+    }
     std::vector<std::uint8_t> to_bytes () const
     {
+        const auto source = bytes ();
         std::vector<std::uint8_t> result;
-        result.reserve (_bytes.size ());
-        for (const auto byte : _bytes) {
+        result.reserve (source.size ());
+        for (const auto byte : source) {
             result.push_back (static_cast<std::uint8_t> (byte));
         }
         return result;
@@ -89,11 +118,15 @@ class encoded_payload_t
 
     std::string to_string () const
     {
-        return std::string (reinterpret_cast<const char *> (_bytes.data ()), _bytes.size ());
+        const auto source = bytes ();
+        if (source.empty ())
+            return {};
+        return std::string (reinterpret_cast<const char *> (source.data ()),
+                            source.size ());
     }
 
-    std::size_t size () const noexcept { return _bytes.size (); }
-    bool empty () const noexcept { return _bytes.empty (); }
+    std::size_t size () const noexcept { return bytes ().size (); }
+    bool empty () const noexcept { return bytes ().empty (); }
 
   private:
     friend class serializer_registry_t;
@@ -103,12 +136,17 @@ class encoded_payload_t
 
     static encoded_payload_t from_raw (const zlink::message_t &message)
     {
-        return from_bytes (message.bytes ());
+        encoded_payload_t payload;
+        payload._borrowed_bytes = message.bytes ();
+        return payload;
     }
 
     zlink::message_t to_raw () const { return zlink::message_t::from (bytes ()); }
 
     std::vector<std::byte> _bytes;
+    // Only the private raw-message bridge creates a borrowed view. Public
+    // factories and copies keep value semantics by owning their bytes.
+    std::optional<std::span<const std::byte>> _borrowed_bytes;
 };
 
 namespace detail
@@ -202,21 +240,17 @@ class serializer_registry_t
     serializer_registry_t &operator= (const serializer_registry_t &) = delete;
 
     /// Registers a serializer for a payload that cannot use the default JSON path.
-    /// Normal JSON payloads do not need per-message registration.
+    /// The content type is normalized to a parameter-free lowercase ASCII media type.
+    /// A later registration replaces an earlier registration with the same normalized
+    /// content type. Normal JSON payloads do not need per-message registration.
     template <typename T>
     serializer_registry_t &add (typename serializer_t<T>::serialize_fn_t serialize,
                                 typename serializer_t<T>::deserialize_fn_t deserialize,
                                 std::string content_type = "application/octet-stream")
     {
-        return add_erased (
-          std::type_index (typeid (T)),
-          [serialize = std::move (serialize)] (const void *value) {
-              return serialize (*static_cast<const T *> (value));
-          },
-          [deserialize = std::move (deserialize)] (const encoded_payload_t &payload, void *out) {
-              *static_cast<T *> (out) = deserialize (payload);
-          },
-          std::move (content_type));
+        return add_for_registration<T> (
+          std::move (serialize), std::move (deserialize),
+          std::move (content_type), std::nullopt);
     }
 
     /// Gets the serializer for T. If no custom serializer is registered and T can be converted
@@ -292,6 +326,27 @@ class serializer_registry_t
     std::string content_type (std::type_index type) const;
 
   private:
+    friend struct detail::serializer_registry_access_t;
+    friend class codec_registration_context_t;
+
+    template <typename T>
+    serializer_registry_t &add_for_registration (
+      typename serializer_t<T>::serialize_fn_t serialize,
+      typename serializer_t<T>::deserialize_fn_t deserialize,
+      std::string content_type,
+      std::optional<std::size_t> registration)
+    {
+        return add_erased (
+          std::type_index (typeid (T)),
+          [serialize = std::move (serialize)] (const void *value) {
+              return serialize (*static_cast<const T *> (value));
+          },
+          [deserialize = std::move (deserialize)] (const encoded_payload_t &payload, void *out) {
+              *static_cast<T *> (out) = deserialize (payload);
+          },
+          std::move (content_type), registration);
+    }
+
     struct erased_serializer_t
     {
         serialize_any_fn_t serialize;
@@ -307,17 +362,28 @@ class serializer_registry_t
     cache_serializer (std::type_index type,
                       std::shared_ptr<const void> serializer) const;
     void invalidate_cached_serializer (std::type_index type) noexcept;
+    void freeze () noexcept;
+    std::size_t begin_registration ();
 
     serializer_registry_t &add_erased (std::type_index type,
                                        serialize_any_fn_t serialize,
                                        deserialize_any_fn_t deserialize,
-                                       std::string content_type);
+                                       std::string content_type,
+                                       std::optional<std::size_t> registration);
 
     std::unique_ptr<detail::serializer_registry_state_t> _state;
 };
 
 namespace detail
 {
+
+struct serializer_registry_access_t
+{
+    static void freeze (serializer_registry_t &registry) noexcept
+    {
+        registry.freeze ();
+    }
+};
 
 template <typename TPayload>
 TPayload deserialize_typed_payload (serializer_registry_t &serializers,

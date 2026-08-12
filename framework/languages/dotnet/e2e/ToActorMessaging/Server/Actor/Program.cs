@@ -59,14 +59,14 @@ app.MapPost("/actors/{actorId}/destroy", async (
                 ?? throw new InvalidOperationException($"Actor '{actorId}' was not found.");
     var reply = await actorClient.RequestToActor(
             actor.ActorId,
-            new DestroyActorRequest(actorId, scenario ?? "destroy"))
+            new DestroyActorReq(actorId, scenario ?? "destroy"))
         .Timeout(TimeSpan.FromSeconds(5))
-        .Async<DestroyActorReply>(ct);
+        .Async<DestroyActorRes>(ct);
     return Results.Ok(reply);
 });
 app.MapPost("/actors/{actorId}/push", async (
     string actorId,
-    BoundPushRequest request,
+    BoundPushReq request,
     IZLinkActorManager actorManager,
     IZLinkActorClient actorClient,
     CancellationToken ct) =>
@@ -79,12 +79,12 @@ app.MapPost("/actors/{actorId}/push", async (
     {
         var reply = await actorClient.RequestToActor(actor.ActorId, request)
             .Timeout(TimeSpan.FromSeconds(5))
-            .Async<BoundPushReply>(ct);
+            .Async<BoundPushRes>(ct);
         return Results.Ok(reply);
     }
     catch (Zlink.Framework.Contracts.Errors.ZLinkFrameworkException error)
     {
-        return Results.Ok(new BoundPushReply(actorId, request.Value, false, error.Kind.ToString()));
+        return Results.Ok(new BoundPushRes(actorId, request.Value, false, error.Kind.ToString()));
     }
 });
 app.MapGet("/evidence", (EvidenceStore evidence) => Results.Ok(evidence.All()));
@@ -158,13 +158,13 @@ namespace ToActorMessaging.Actor
         EvidenceStore evidence,
         IZLinkActorManager actors,
         ServerOptions options)
-        : IZLinkEntrySpotActorSendHandler<TestEntrySpot, TestActor, ActorNotify>
+        : IZLinkEntrySpotActorSendHandler<TestEntrySpot, TestActor, ActorMsg>
     {
         public async ValueTask HandleAsync(
             TestEntrySpot spot,
             TestActor actor,
             IZLinkMessageContext context,
-            ActorNotify message,
+            ActorMsg message,
             CancellationToken cancellationToken)
         {
             var actorRef = await actors.FindAsync(actor.ActorId, cancellationToken);
@@ -175,7 +175,7 @@ namespace ToActorMessaging.Actor
                 message.Value,
                 options.Rid,
                 actorRef?.ObjectGeneration,
-                nameof(ActorNotify),
+                nameof(ActorMsg),
                 message.Scenario));
         }
     }
@@ -184,13 +184,13 @@ namespace ToActorMessaging.Actor
         EvidenceStore evidence,
         IZLinkActorManager actors,
         ServerOptions options)
-        : IZLinkEntrySpotActorRequestHandler<TestEntrySpot, TestActor, ActorAsk, ActorReply>
+        : IZLinkEntrySpotActorRequestHandler<TestEntrySpot, TestActor, ActorReq, ActorRes>
     {
-        public async ValueTask<ActorReply> HandleAsync(
+        public async ValueTask<ActorRes> HandleAsync(
             TestEntrySpot spot,
             TestActor actor,
             IZLinkMessageContext context,
-            ActorAsk request,
+            ActorReq request,
             CancellationToken cancellationToken)
         {
             var actorRef = await actors.FindAsync(actor.ActorId, cancellationToken);
@@ -201,20 +201,20 @@ namespace ToActorMessaging.Actor
                 request.Value,
                 options.Rid,
                 actorRef?.ObjectGeneration,
-                nameof(ActorAsk),
+                nameof(ActorReq),
                 request.Scenario));
-            return new ActorReply(request.Scenario, actor.ActorId, $"reply:{request.Value}");
+            return new ActorRes(request.Scenario, actor.ActorId, $"reply:{request.Value}");
         }
     }
 
     internal sealed class DestroyHandler(EvidenceStore evidence)
-        : IZLinkEntrySpotActorRequestHandler<TestEntrySpot, TestActor, DestroyActorRequest, DestroyActorReply>
+        : IZLinkEntrySpotActorRequestHandler<TestEntrySpot, TestActor, DestroyActorReq, DestroyActorRes>
     {
-        public async ValueTask<DestroyActorReply> HandleAsync(
+        public async ValueTask<DestroyActorRes> HandleAsync(
             TestEntrySpot spot,
             TestActor actor,
             IZLinkMessageContext context,
-            DestroyActorRequest request,
+            DestroyActorReq request,
             CancellationToken cancellationToken)
         {
             _ = context;
@@ -223,18 +223,18 @@ namespace ToActorMessaging.Actor
 
             await spot.Context.DestroyActorAsync(actor, cancellationToken);
             evidence.Append(new ActorEvidence(request.Scenario, actor.ActorId, "destroy", "destroyed"));
-            return new DestroyActorReply(actor.ActorId, true);
+            return new DestroyActorRes(actor.ActorId, true);
         }
     }
 
     internal sealed class BoundPushHandler(EvidenceStore evidence)
-        : IZLinkEntrySpotActorRequestHandler<TestEntrySpot, TestActor, BoundPushRequest, BoundPushReply>
+        : IZLinkEntrySpotActorRequestHandler<TestEntrySpot, TestActor, BoundPushReq, BoundPushRes>
     {
-        public async ValueTask<BoundPushReply> HandleAsync(
+        public async ValueTask<BoundPushRes> HandleAsync(
             TestEntrySpot spot,
             TestActor actor,
             IZLinkMessageContext context,
-            BoundPushRequest request,
+            BoundPushReq request,
             CancellationToken cancellationToken)
         {
             _ = spot;
@@ -243,7 +243,7 @@ namespace ToActorMessaging.Actor
                     new BoundPushNotify(request.Scenario, actor.ActorId, request.Value))
                 .Async(cancellationToken);
             evidence.Append(new ActorEvidence(request.Scenario, actor.ActorId, "bound-push", request.Value));
-            return new BoundPushReply(actor.ActorId, request.Value, true);
+            return new BoundPushRes(actor.ActorId, request.Value, true);
         }
     }
 }

@@ -570,7 +570,7 @@ handoff에는 사용할 수 없다. Framework가 replacement endpoint를 모든 
 배포하고 실제 연결 준비를 확인할 수 없기 때문이다. Host가 사용하는 service topology에
 manual connection이 하나라도 있으면 `Relocate`는 state와 admission을 바꾸기 전에
 `Blocked/ManualTopologyUnsupported`로 끝난다. Automatic rolling replacement의 연결 순서는
-[Host Relocate와 Shutdown](28-graceful-drain-handoff.ko.md#5-mode에-맞는-target을-선택한다)이
+[Host relocation 전체 흐름](30-host-relocation-flow.ko.md#5-mode에-맞는-target을-선택한다)이
 정의한다.
 
 Manual peer 연결과 Spot·Actor 위치 조회는 다른 기능이다. 분산 [Spot](01-glossary.ko.md#spot)·Actor 주소나
@@ -605,7 +605,7 @@ Server를 선택하여 send나 request를 시작할 수 있다.
 
 Drain을 시작한 MeshNode는 새로운 ChannelName 선택과 Logical Multicast remote
 target에서 제외한다. 이미 제출한 작업과 RID direct의 종료 규칙은
-[Graceful drain](28-graceful-drain-handoff.ko.md)이 정의한다.
+[Graceful drain](30-host-relocation-flow.ko.md)이 정의한다.
 
 ## 8. RouteMesh SS message 크기와 mailbox 상한
 

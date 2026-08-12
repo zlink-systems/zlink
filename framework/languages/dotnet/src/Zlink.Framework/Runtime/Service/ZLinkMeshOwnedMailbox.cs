@@ -33,15 +33,6 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
         }
     }
 
-    internal bool IsClaimed
-    {
-        get
-        {
-            lock (_gate)
-                return _claimed;
-        }
-    }
-
     internal bool TryEnqueue(
         ZLinkMeshQueuedRecord record,
         ulong messageBudget,

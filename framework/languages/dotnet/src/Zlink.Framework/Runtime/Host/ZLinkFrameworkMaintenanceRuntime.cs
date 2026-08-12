@@ -11,7 +11,6 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
     IDisposable
 {
     private static readonly TimeSpan DefaultDeadline = TimeSpan.FromSeconds(30);
-    private const int ObserverMailboxCapacity = 16;
 
     private readonly ZLinkDrainCoordinator _lifecycle;
     private readonly ZLinkFrameworkHostLifecycleState _hostLifecycle;
@@ -109,8 +108,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var observer = new ZLinkObservationQueue<ZLinkFrameworkRuntimeStatus>(
-            ObserverMailboxCapacity,
-            static status => status.Sequence);
+            static _ => "framework-runtime");
         lock (_gate)
         {
             ThrowIfDisposed();

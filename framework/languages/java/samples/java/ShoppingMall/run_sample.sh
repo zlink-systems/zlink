@@ -4,7 +4,30 @@ set +m
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/../../runner-common.sh"
+zlink_sample_configure_port_pool java
 ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kts)
+
+RUN_DIR=""
+LOG_DIR=""
+REDIS_CONTAINER=""
+pids=()
+
+on_exit() {
+  local status="$?"
+  trap - EXIT
+  if [[ "$status" != "0" && -n "${LOG_DIR}" ]]; then
+    for log in "$LOG_DIR"/*.log; do
+      [[ -f "$log" ]] || continue
+      echo "===== $log =====" >&2
+      tail -n 200 "$log" >&2 || true
+    done
+  fi
+  cleanup
+  [[ -z "${RUN_DIR}" ]] || rm -rf "$RUN_DIR"
+  exit "$status"
+}
+trap on_exit EXIT
+
 cd "$ROOT_DIR"
 if rg -n -U '\.enableClient\(\s*[^)\s]|\.connect(?:Router|PeerPub)\(' Server --glob '*.java'; then
   echo "ShoppingMall server code must use location-store automatic connections" >&2
@@ -30,28 +53,10 @@ workflow_b_spot="tcp://127.0.0.1:$workflow_b_spot_port"
 workflow_a_router="tcp://127.0.0.1:$workflow_a_router_port"
 workflow_b_router="tcp://127.0.0.1:$workflow_b_router_port"
 
-REDIS_CONTAINER=""
 zlink_redis_start_scoped_assign REDIS_CONTAINER REDIS_PORT \
   "zlink-redis-java-sample-shoppingmall" "redis:7.2-alpine"
 redis_endpoint="127.0.0.1:$REDIS_PORT"
 redis_key_prefix="shoppingmall:java:$(date +%s):$$:"
-
-pids=()
-on_exit() {
-  local status="$?"
-  trap - EXIT
-  if [[ "$status" != "0" ]]; then
-    for log in "$LOG_DIR"/*.log; do
-      [[ -f "$log" ]] || continue
-      echo "===== $log =====" >&2
-      tail -n 200 "$log" >&2 || true
-    done
-  fi
-  cleanup
-  rm -rf "$RUN_DIR"
-  exit "$status"
-}
-trap on_exit EXIT
 
 workflow_a_config="$RUN_DIR/workflow-a.properties"
 workflow_b_config="$RUN_DIR/workflow-b.properties"

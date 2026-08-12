@@ -5,9 +5,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../redis-common.sh"
 CPP_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 source "$CPP_ROOT/samples/sample-build-common.sh"
-FLOW_LOG_DIR="${SCRIPT_DIR}/logs"
-mkdir -p "$FLOW_LOG_DIR"
-rm -f "$FLOW_LOG_DIR"/*.log
 zlink_cpp_sample_prepare_build "$CPP_ROOT"
 if [[ ! -x "$BIN_DIR/sample_cpp_framework_supportchat_client" && -x "$BIN_DIR/linux-ninja-debug/sample_cpp_framework_supportchat_client" ]]; then
   BIN_DIR="$BIN_DIR/linux-ninja-debug"
@@ -16,8 +13,9 @@ fi
 PIDS=()
 RUN_DIR="$(mktemp -d)"
 LOG_DIR="$RUN_DIR/logs"
+FLOW_LOG_DIR="$RUN_DIR/flow-logs"
 REDIS_CONTAINER_NAME=""
-mkdir -p "$LOG_DIR"
+mkdir -p "$LOG_DIR" "$FLOW_LOG_DIR"
 cleanup() {
   local code=$?
   local cleanup_failed=0
@@ -47,7 +45,7 @@ cleanup() {
     fi
   done
   if [[ -n "$REDIS_CONTAINER_NAME" ]]; then
-    docker rm -fv "$REDIS_CONTAINER_NAME" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER_NAME" || true
   fi
   rm -rf "$RUN_DIR"
   if [[ "$cleanup_failed" -ne 0 && "$code" -eq 0 ]]; then
@@ -57,41 +55,19 @@ cleanup() {
 }
 trap 'cleanup; status=$?; exit "$status"' EXIT
 
-PORT_ALLOCATION_OUTPUT="$(python3 - <<'PY'
-import socket
-sockets = []
-try:
-    for _ in range(12):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-    ports = [sock.getsockname()[1] for sock in sockets]
-    print(
-        f"{ports[0]} "
-        f"tcp://127.0.0.1:{ports[1]} "
-        f"tcp://127.0.0.1:{ports[2]} "
-        f"tcp://127.0.0.1:{ports[3]} "
-        f"tcp://127.0.0.1:{ports[4]} "
-        f"tcp://127.0.0.1:{ports[5]} "
-        f"tcp://127.0.0.1:{ports[6]} "
-        f"tcp://127.0.0.1:{ports[7]} "
-        f"http://127.0.0.1:{ports[8]} "
-        f"tcp://127.0.0.1:{ports[9]} "
-        f"tcp://127.0.0.1:{ports[10]}"
-        f" tcp://127.0.0.1:{ports[11]}"
-    )
-except OSError as error:
-    print(f"SOCKETLESS {error.errno}:{error.strerror}")
-finally:
-    for sock in sockets:
-        sock.close()
-PY
-)"
-if [[ "$PORT_ALLOCATION_OUTPUT" == SOCKETLESS* ]]; then
-  echo "Failed to allocate local TCP ports for the SupportChat sample: ${PORT_ALLOCATION_OUTPUT#SOCKETLESS }" >&2
-  exit 1
-fi
-read -r SUPPORTCHAT_RESERVED_PORT SUPPORTCHAT_API_ROUTE SUPPORTCHAT_SUPPORT_ROUTE SUPPORTCHAT_SUPPORT_SPOT_ROUTER SUPPORTCHAT_SUPPORT_SPOT SUPPORTCHAT_SESSION_STREAM SUPPORTCHAT_SESSION_SPOT_ROUTER SUPPORTCHAT_SESSION_SPOT SUPPORTCHAT_SUPPORT_HTTP_URL SUPPORTCHAT_SESSION_ACTOR_ROUTE SUPPORTCHAT_SUPPORT_ACTOR_ROUTE SUPPORTCHAT_API_SPOT_ROUTE <<<"$PORT_ALLOCATION_OUTPUT"
+read -r -a SUPPORTCHAT_PORTS <<<"$(zlink_sample_allocate_ports 12)"
+SUPPORTCHAT_RESERVED_PORT="${SUPPORTCHAT_PORTS[0]}"
+SUPPORTCHAT_API_ROUTE="tcp://127.0.0.1:${SUPPORTCHAT_PORTS[1]}"
+SUPPORTCHAT_SUPPORT_ROUTE="tcp://127.0.0.1:${SUPPORTCHAT_PORTS[2]}"
+SUPPORTCHAT_SUPPORT_SPOT_ROUTER="tcp://127.0.0.1:${SUPPORTCHAT_PORTS[3]}"
+SUPPORTCHAT_SUPPORT_SPOT="tcp://127.0.0.1:${SUPPORTCHAT_PORTS[4]}"
+SUPPORTCHAT_SESSION_STREAM="tcp://127.0.0.1:${SUPPORTCHAT_PORTS[5]}"
+SUPPORTCHAT_SESSION_SPOT_ROUTER="tcp://127.0.0.1:${SUPPORTCHAT_PORTS[6]}"
+SUPPORTCHAT_SESSION_SPOT="tcp://127.0.0.1:${SUPPORTCHAT_PORTS[7]}"
+SUPPORTCHAT_SUPPORT_HTTP_URL="http://127.0.0.1:${SUPPORTCHAT_PORTS[8]}"
+SUPPORTCHAT_SESSION_ACTOR_ROUTE="tcp://127.0.0.1:${SUPPORTCHAT_PORTS[9]}"
+SUPPORTCHAT_SUPPORT_ACTOR_ROUTE="tcp://127.0.0.1:${SUPPORTCHAT_PORTS[10]}"
+SUPPORTCHAT_API_SPOT_ROUTE="tcp://127.0.0.1:${SUPPORTCHAT_PORTS[11]}"
 if [[ -z "$SUPPORTCHAT_RESERVED_PORT" || -z "$SUPPORTCHAT_SESSION_SPOT" ]]; then
   echo "Failed to allocate local TCP ports for the SupportChat sample." >&2
   exit 1

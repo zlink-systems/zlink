@@ -96,6 +96,10 @@ message BingoRoomSettingsPayload {
   optional string observed_room_id = 6;
 }
 
+message BingoRoomCreateReq {
+  BingoRoomSettingsPayload settings = 1;
+}
+
 message BingoRoomJoinReq {
   string room_id = 1;
   string actor_id = 2;

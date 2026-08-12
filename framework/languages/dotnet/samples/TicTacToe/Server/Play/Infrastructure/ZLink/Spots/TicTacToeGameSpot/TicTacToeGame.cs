@@ -27,7 +27,15 @@ internal sealed class TicTacToeGame(
 
     public IZLinkSpotContext Context { get; } = context;
 
-    public void Configure() { }
+    public void Configure()
+    {
+        // send: returns the full game state after reconnect.
+        Context.Handlers.AddHandler<PlayActorGetCurrentGameStateHandler>(nameof(JoinGameMsg));
+        // send: leaves the actor's current room.
+        Context.Handlers.AddHandler<PlayActorLeaveGameHandler>(nameof(LeaveGameMsg));
+        // request: places one mark and returns the updated state.
+        Context.Handlers.AddHandler<PlayActorPlaceMarkHandler>(nameof(PlaceMarkReq));
+    }
 
     public async ValueTask OnJoinedActorAsync(
         PlayActor actor,
@@ -116,6 +124,7 @@ internal sealed class TicTacToeGame(
 
     public async ValueTask OnInitializeAsync(CancellationToken cancellationToken)
     {
+        // Registers the periodic Spot timer handler explicitly for this room.
         _gameTick = await Context.AddTimer<TicTacToeGameTimerHandler>(
             "game-tick",
             GameTickPeriod,
@@ -165,6 +174,21 @@ internal sealed class TicTacToeGame(
         await BroadcastAsync(change.State, actor.ActorId, cancellationToken);
         await PublishWinMilestoneAsync(actor, before, change.State, cancellationToken);
         return new PlaceMarkRes(change.State);
+    }
+
+    public GameState GetCurrentState(
+        PlayActor actor,
+        string roomId)
+    {
+        var joinedRoomId = actor.RequireJoinedRoom();
+        if (!string.Equals(joinedRoomId, roomId, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"Actor is joined to '{joinedRoomId}', not '{roomId}'.");
+        if (!_actors.ContainsKey(actor.ActorId))
+            throw new InvalidOperationException(
+                $"Actor '{actor.ActorId}' is not a member of room '{roomId}'.");
+
+        return _match.Snapshot();
     }
 
     internal async ValueTask TickAsync(CancellationToken cancellationToken)

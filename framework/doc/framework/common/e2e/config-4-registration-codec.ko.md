@@ -55,41 +55,29 @@ evidence endpoint로 제공한다. Encoded bytes, private registry entry와 refl
 
 ### Track A — Handler 등록과 dispatch
 
-#### RC-A1 지원 언어에서 handler를 scan한다
+#### RC-A1 언어별 public scan 방식으로 handler를 등록한다
 
 우선순위: `P0`
 
 Runtime reflection을 제공하는 언어는 application이 지정한 assembly, module 또는 package에서 handler를
-찾을 수 있다. Scan 범위를 잘못 해석하면 host는 시작되지만 실제 request에서 handler를 찾지 못한다.
+찾을 수 있다. Annotation이나 attribute가 exact interface의 scan 표식인 언어는 그 metadata도 정확한
+dispatch key로 변환해야 한다. 해당 표면이 없는 언어에 같은 문법을 요구하지 않는다.
 
-**검증 질문:** Scan을 지원하는 언어에서 지정한 범위의 request·send handler가 explicit registration
-없이 message를 처리하는가.
+**검증 질문:** Scan을 지원하는 언어에서 exact interface가 정한 범위·metadata로 등록한 request·send
+handler가 explicit registration 없이 지정한 packet을 처리하는가.
 
-- 시작 조건: Registration server는 `EchoScanReq`와 `EchoScanMsg` handler가 포함된 public scan 범위만
-  등록한다. 같은 handler를 explicit builder에 추가하지 않는다.
-- 절차: Client가 scan variant의 request와 send를 caller endpoint를 통해 각각 한 번 보낸다.
-- 검증: Request는 정확한 `EchoRes`를 받고 send marker는 handler evidence에 한 번 기록된다. Scan 범위
-  밖의 대조 handler는 실행되지 않는다. C++ runner는 이 scenario를 `not-applicable`로 기록하고 RC-A3을
-  필수로 실행한다.
+- 시작 조건: 언어별 exact interface가 제공하는 assembly·module·package 또는 provider scan 범위만
+  등록한다. Annotation·attribute를 제공하는 언어는 표시한 handler variant도 같은 범위에 두며 어느
+  variant도 explicit builder에 추가하지 않는다.
+- 절차: Client가 범위 scan variant와, exact interface가 제공하는 경우 annotation·attribute variant의
+  request와 send를 각각 한 번 보낸다.
+- 검증: 각 request는 정확한 `EchoRes`를 받고 각 send marker는 handler evidence에 한 번 기록된다. Scan
+  범위 밖의 대조 handler는 실행되지 않는다. 해당 metadata 표면이 없는 언어는 그 variant만
+  `not-applicable`로 기록하며 대체 helper를 추가하지 않는다. C++ runner는 scan scenario 전체를
+  `not-applicable`로 기록하고 RC-A3을 필수로 실행한다.
 - 세부 동작: [Framework API §8](../spec/06-framework-api.ko.md)의 runtime
-  reflection과 C++ explicit registration 경계를 검증한다.
-
-#### RC-A2 언어별 annotation·attribute handler를 scan한다
-
-우선순위: `P1`
-
-Annotation이나 attribute를 handler scan의 표식으로 사용하는 언어는 그 metadata가 dispatch key로
-정확히 변환되는지 확인해야 한다. 해당 표면이 없는 언어에 같은 문법을 요구하지 않는다.
-
-**검증 질문:** 언어별 public interface가 annotation·attribute scan을 제공하는 언어에서 표시한 handler가 지정한
-packet name의 request와 send를 처리하는가.
-
-- 시작 조건: 해당 언어의 public annotation·attribute를 사용한 handler와 scan 범위를 등록한다.
-- 절차: Client가 annotation variant의 request와 send를 각각 한 번 보낸다.
-- 검증: Request reply와 send evidence의 marker·payload가 입력과 일치한다. 언어별 public interface에 이 등록
-  방식이 없는 언어는 `not-applicable`이며 대체 annotation helper를 추가하지 않는다.
-- 세부 동작: [Public contract governance](../spec/00-public-contract-governance.ko.md)의 언어별 표현과
-  공통 dispatch 의미를 검증한다.
+  reflection과 C++ explicit registration 경계, [Public contract governance](../spec/00-public-contract-governance.ko.md)의
+  언어별 표현을 검증한다.
 
 #### RC-A3 Handler를 명시적으로 등록한다
 
@@ -179,37 +167,24 @@ serializer 책임이 호출자에게 노출된다.
 - 세부 동작: [Framework API §9](../spec/06-framework-api.ko.md)과
   [message model §1](../spec/04-message-model.ko.md)의 기본 typed JSON 계약을 검증한다.
 
-#### RC-B2 Root에 등록한 Protobuf extension을 사용한다
+#### RC-B2 Root에 등록한 typed codec extension을 사용한다
 
 우선순위: `P0`
 
-Protobuf를 사용하는 application은 message마다 encoder를 넘기지 않고 extension을 root에 한 번
-등록한다. Payload type과 extension이 일치하면 Framework가 해당 codec을 선택한다.
+Protobuf나 MessagePack을 사용하는 application은 message마다 encoder를 넘기지 않고 공식 extension을
+root에 한 번 등록한다. Payload type과 extension이 일치하면 Framework가 해당 codec을 선택한다.
 
-**검증 질문:** Protobuf extension을 root에 한 번 등록하면 Protobuf DTO request와 send가 그 extension을
-통해 처리되는가.
+**검증 질문:** Protobuf와 MessagePack extension을 각각 root에 한 번 등록하면 해당 DTO request와 send가
+선택된 extension을 통해 처리되는가.
 
-- 시작 조건: Caller와 codec server가 공식 Protobuf extension을 root에 각각 한 번 등록한다.
-- 절차: Protobuf DTO request와 send를 각각 한 번 보낸다.
-- 검증: Reply와 send evidence의 application 값이 입력과 일치한다. Caller encode와 server decode
-  extension callback이 message마다 한 번 실행된다. Handler 호출부에 codec option을 전달하지 않는다.
-- 세부 동작: [Framework API §9](../spec/06-framework-api.ko.md)의 root codec extension을 검증한다.
-
-#### RC-B3 Root에 등록한 MessagePack extension을 사용한다
-
-우선순위: `P1`
-
-MessagePack도 Protobuf와 같은 root extension 규칙을 사용하며 packet name이나 Channel 설정으로 codec을
-선택하지 않는다.
-
-**검증 질문:** MessagePack extension을 root에 한 번 등록하면 MessagePack DTO request와 send가 그
-extension을 통해 처리되는가.
-
-- 시작 조건: Caller와 codec server가 공식 MessagePack extension을 root에 각각 한 번 등록한다.
-- 절차: MessagePack DTO request와 send를 각각 한 번 보낸다.
-- 검증: Reply와 send evidence가 입력과 일치하고 extension의 encode·decode callback이 message마다 한 번
-  실행된다. Packet name을 codec 선택 값으로 사용하지 않는다.
-- 세부 동작: [Framework API §9](../spec/06-framework-api.ko.md)의 extension 선택을 검증한다.
+- 시작 조건: Protobuf와 MessagePack variant를 fresh root에서 각각 실행하고, Caller와 codec server가
+  해당 공식 extension을 root에 한 번씩 등록한다.
+- 절차: 각 variant의 DTO request와 send를 각각 한 번 보낸다.
+- 검증: 각 reply와 send evidence의 application 값이 입력과 일치한다. Extension의 encode·decode callback이
+  message마다 한 번 실행된다. Handler 호출부에 codec option을 전달하지 않고 packet name이나 Channel
+  설정을 codec 선택 값으로 사용하지 않는다.
+- 세부 동작: [Framework API §9](../spec/06-framework-api.ko.md)의 root codec extension과 type 기반
+  extension 선택을 검증한다.
 
 #### RC-B4 한 root에서 여러 codec을 함께 사용한다
 

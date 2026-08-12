@@ -1,4 +1,5 @@
 package systems.zlink.e2e.registrymessaging.client.Scenarios;
+import java.util.Arrays;
 
 import systems.zlink.e2e.registrymessaging.client.Support.ScenarioAssert;
 import systems.zlink.e2e.registrymessaging.client.Support.ScenarioWait;
@@ -29,7 +30,7 @@ public final class RmC4TimeoutIsolationScenario {
             .submit(Contracts.ProfileRes.class).toCompletableFuture().join().body();
         ScenarioAssert.that("profile:later".equals(later.value()), "RM-C4 later request failed");
         String[] slowEvidence = ScenarioAssert.waitAnyEvidence(providerA, providerB, "value=slow");
-        ScenarioAssert.that(java.util.Arrays.stream(slowEvidence)
+        ScenarioAssert.that(Arrays.stream(slowEvidence)
                 .anyMatch(line -> line.contains("ProfileReq") && line.contains("value=slow")),
             "RM-C4 slow handler completion evidence missing");
         System.out.println("scenario RM-C4 passed");

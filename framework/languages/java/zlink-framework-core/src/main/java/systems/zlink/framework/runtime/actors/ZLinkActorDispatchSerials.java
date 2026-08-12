@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.Objects;
+import java.util.logging.Logger;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -12,12 +14,14 @@ import java.util.concurrent.Executor;
 import java.util.function.Supplier;
 import java.util.function.Function;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.runtime.internal.relocation
+    .ZLinkRetainedSerialQueueCommit;
 
 final class ZLinkActorDispatchSerials {
     private static final boolean STREAM_TRACE =
         "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
-    private static final java.util.logging.Logger LOGGER =
-        java.util.logging.Logger.getLogger(ZLinkActorDispatchSerials.class.getName());
+    private static final Logger LOGGER =
+        Logger.getLogger(ZLinkActorDispatchSerials.class.getName());
     private final Object runtimeScope;
     private final Function<String, Object> incarnationResolver;
     private final Executor executor;
@@ -43,9 +47,9 @@ final class ZLinkActorDispatchSerials {
         Object runtimeScope,
         Function<String, Object> incarnationResolver,
         Executor executor) {
-        this.runtimeScope = java.util.Objects.requireNonNull(
+        this.runtimeScope = Objects.requireNonNull(
             runtimeScope, "runtimeScope");
-        this.incarnationResolver = java.util.Objects.requireNonNull(
+        this.incarnationResolver = Objects.requireNonNull(
             incarnationResolver, "incarnationResolver");
         this.executor = executor;
     }
@@ -177,7 +181,15 @@ final class ZLinkActorDispatchSerials {
                                 + turn.actorId));
                 }
             }
+            //  Only the first part of a multi-part message carries an
+            //  accepted-journal record; the remaining parts are handed an
+            //  empty array (ZLinkJavaRawSpotNode). An empty record has nothing
+            //  to replay, and enqueuing it as relocatable writes a zero-length
+            //  entry into the relocation envelope - the reader takes the first
+            //  byte of every journal record as its `kind`, so the empty entry
+            //  makes it read the following field and reject the envelope.
             return acceptedJournalRecord == null
+                || acceptedJournalRecord.length == 0
                 ? turn.queue.enqueue(turnOperation)
                 : turn.queue.enqueueRelocatable(
                     acceptedJournalRecord,
@@ -317,6 +329,18 @@ final class ZLinkActorDispatchSerials {
             : queue.commitRelocation(seal);
     }
 
+    Optional<ZLinkRetainedSerialQueueCommit.Commit> retainCommit(
+        String actorId,
+        ZLinkAsyncSerialQueue.RelocationSeal seal) {
+        ZLinkAsyncSerialQueue queue;
+        synchronized (this) {
+            queue = queues.get(actorId);
+        }
+        return queue == null
+            ? Optional.empty()
+            : ZLinkRetainedSerialQueueCommit.retain(queue, seal);
+    }
+
     Optional<List<ZLinkAsyncSerialQueue.QueuedRecord>>
         freezeIngress(
             String actorId,
@@ -353,7 +377,7 @@ final class ZLinkActorDispatchSerials {
              ZLinkDeferredActorJoinScope.Scope joins =
                  ZLinkDeferredActorJoinScope.enter(
                      runtimeScope,
-                     java.util.Objects.requireNonNull(
+                     Objects.requireNonNull(
                          incarnationResolver.apply(actorId),
                          "actor incarnation"),
                      actorId)) {

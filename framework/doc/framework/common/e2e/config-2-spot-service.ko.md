@@ -315,21 +315,6 @@ Caller와 Actor owner가 다른 process여도 global ActorId request는 target m
 - 검증: Play-b handler만 marker를 한 번 기록하고 caller가 matching reply를 받는다.
 - 세부 동작: [Actor model §5](../spec/14-actor-model.ko.md)을 검증한다.
 
-#### SM-B5 Handler 없는 Actor request를 기록한다
-
-우선순위: `P0`
-
-Actor는 존재하지만 packet handler가 없으면 target missing과 다른 dispatch failure다.
-
-**검증 질문:** Missing handler request가 public error와 `no_handler/reply_error` logger evidence를 남기는가.
-
-- 시작 조건: Actor는 ready이고 application logger provider가 설정되어 있다.
-- 절차: 등록하지 않은 packet name의 request를 보낸 뒤 normal request를 보낸다.
-- 검증: First는 정식 error terminal이고 `zlink.dispatch_error` logger evidence가 한 번 있다. Normal
-  request는 성공한다.
-- 세부 동작: [Message flow tracing §2.2](../spec/26-message-flow-tracing.ko.md)을
-  검증한다.
-
 #### SM-B6 Explicit leave와 Session disconnect callback을 구분한다
 
 우선순위: `P0`
@@ -512,33 +497,21 @@ Publish terminal은 remote 수신 확인이 아니다. E2E는 target handler evi
 
 ### Track D — Session binding, relay와 Stream lifecycle을 확인
 
-#### SM-D1 Local Actor를 Session에 bind하고 relay한다
+#### SM-D2 Local·remote Actor를 Session에 bind하고 relay한다
 
 우선순위: `P0`
 
-Session gateway와 Actor owner route가 준비되면 client request는 bound Actor로 relay되고 Actor push는 같은
-client로 돌아온다.
+Session gateway와 Actor owner의 배치가 같거나 달라도 binding route는 request와 push를 같은 client에
+연결한다.
 
-**검증 질문:** Local-owner Actor request reply와 push가 bound Stream client에 도착하는가.
+**검증 질문:** Local·remote owner variant 모두에서 Actor relay reply와 push가 bound Stream client에
+도착하는가.
 
-- 시작 조건: Session과 Actor가 ready이고 exact ActorRef를 bind했다.
+- 시작 조건: Local variant는 Session gateway와 Actor owner를 같은 process에, remote variant는 Actor를
+  play-b와 Session을 session-a에 둔다. 두 variant 모두 exact ActorRef bind를 완료한다.
 - 절차: Client가 Actor ID metadata로 request를 보내고 Actor가 push를 한 번 보낸다.
-- 검증: Actor handler가 request를 한 번 처리하고 client는 matching reply와 push를 한 번씩 받는다.
-- 세부 동작: [Session Actor dispatch §5](../spec/20-session-actor-dispatch.ko.md)를
-  검증한다.
-
-#### SM-D2 Remote Actor를 Session에 bind하고 relay한다
-
-우선순위: `P0`
-
-Actor owner가 gateway와 다른 process여도 binding route가 request와 push를 연결한다.
-
-**검증 질문:** Remote Actor relay와 push가 gateway를 거쳐 같은 client에 도착하는가.
-
-- 시작 조건: Actor는 play-b, Session은 session-a에 있고 exact ref bind가 완료됐다.
-- 절차: SM-D1 request와 push를 반복한다.
-- 검증: Play-b handler가 request를 처리하고 client가 reply·push를 받는다. Caller는 RID와 endpoint를
-  제공하지 않는다.
+- 검증: 각 variant의 Actor handler가 request를 한 번 처리하고 client는 matching reply와 push를 한 번씩
+  받는다. Remote variant의 caller는 RID와 endpoint를 제공하지 않는다.
 - 세부 동작: [Session Actor dispatch §5](../spec/20-session-actor-dispatch.ko.md)를
   검증한다.
 
@@ -576,12 +549,14 @@ Session 하나는 여러 Actor bindings를 가질 수 있고 Application은 inbo
 
 우선순위: `P0`
 
-Actor를 Session B에 rebind하면 Session A의 old binding identity는 더 이상 current가 아니다.
+Actor를 Session B에 rebind하면 Session A의 old binding identity는 더 이상 current가 아니다. Actor owner가
+A→B→A로 바뀌어도 이 identity 경계는 같아야 한다.
 
 **검증 질문:** Session A의 late relay·disconnect가 Session B binding과 Actor state를 바꾸지 않는가.
 
-- 시작 조건: Actor X를 A에 bind한다. Normal callback과 callback failure는 fresh fixture로 분리한다.
-- 절차: 각 fixture에서 B에 explicit rebind하여 A의 exact old binding에 logical disconnect를 제출한다.
+- 시작 조건: Actor X를 Session A에 bind한다. Same-owner rebind와 owner A→B→A 이동 뒤 rebind를 별도
+  placement variant로 실행하고, normal callback과 callback failure는 fresh fixture로 분리한다.
+- 절차: 각 fixture에서 Session B에 explicit rebind하여 Session A의 exact old binding에 logical disconnect를 제출한다.
   Callback terminal과 tombstone을 확인한 뒤 A network gate에 보류한 relay와 늦은 disconnect 결과를
   전달하고 B에서 normal relay·push를 실행한다.
 - 검증: 두 fixture 모두 old binding의 disconnect callback은 최대 한 번 실행되고 terminal tombstone 뒤에는
@@ -787,17 +762,21 @@ TLS는 transport security를 바꾸지만 Session·binding의 application 의미
 
 ### Track E — Negative dispatch와 timer를 확인
 
-#### SM-E1 Handler 없는 Spot request를 기록한다
+#### SM-E1 Handler 없는 Actor·Spot request를 기록한다
 
 우선순위: `P0`
 
-Ready Spot에 packet handler가 없으면 dispatch error를 caller와 application logger provider가 확인할 수 있어야 한다.
+Ready Actor나 Spot에 packet handler가 없으면 target missing과 구분되는 dispatch error를 caller와
+application logger provider가 확인할 수 있어야 한다.
 
-**검증 질문:** Missing Spot handler가 error reply와 `no_handler/reply_error` evidence를 만드는가.
+**검증 질문:** Actor·Spot missing handler가 각각 error reply와 surface별 `no_handler/reply_error` evidence를
+만드는가.
 
-- 시작 조건: Spot과 application logger provider가 ready다.
-- 절차: Missing packet request와 normal packet request를 보낸다.
-- 검증: First는 정식 error와 `zlink.dispatch_error` logger evidence, second는 normal reply를 한 번 반환한다.
+- 시작 조건: Actor, Spot과 application logger provider가 ready다.
+- 절차: Actor와 Spot에 등록하지 않은 packet request를 각각 보낸 뒤 각 surface의 normal request를 보낸다.
+- 검증: 두 missing request는 정식 error terminal 하나와 자기 `surface`, `reason=no_handler`,
+  `action=reply_error`인 `zlink.dispatch_error` logger evidence를 한 번 남긴다. 두 normal request는
+  각각 정상 reply를 한 번 반환한다.
 - 세부 동작: [Message flow tracing §2.2](../spec/26-message-flow-tracing.ko.md)을
   검증한다.
 

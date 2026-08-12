@@ -1,3 +1,4 @@
+using System;
 using Microsoft.Extensions.Logging;
 
 namespace Zlink.Framework.Runtime.Diagnostics;
@@ -36,6 +37,20 @@ internal sealed class ZLinkMessageFlowTracer
     public bool Enabled(ZLinkMessageFlowOutcome outcome)
     {
         return ShouldLog(outcome);
+    }
+
+    // Traces an event built only when the outcome is enabled.
+    //
+    // Use this on failure and other rare transitions: the delegate keeps the call
+    // site free of an explicit gate and never runs when tracing is off, at the
+    // cost of one closure per call. Hot paths that trace every message must keep
+    // the `if (Enabled(outcome))` guard so no closure is allocated there either.
+    public void TraceLazy(
+        ZLinkMessageFlowOutcome outcome,
+        Func<ZLinkMessageFlowEvent> flow)
+    {
+        if (!ShouldLog(outcome)) return;
+        Trace(flow());
     }
 
     public void Trace(ZLinkMessageFlowEvent flow)

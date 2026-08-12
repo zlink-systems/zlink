@@ -16,6 +16,181 @@ const encodedPayloadStorage = require('../../packages/framework/dist/contracts/C
 const { ZLinkBufferMessage } = require('../../packages/framework/dist/runtime/backend/runtime-message');
 const { Message } = require('@zlink-systems/zlink');
 
+const codecSelectionFixture = JSON.parse(fs.readFileSync(path.resolve(
+  __dirname,
+  '../../../../runtime/conformance/codec-selection-v1.json'
+), 'utf8'));
+
+function fixtureSerializer(name) {
+  return {
+    serialize(value) {
+      return framework.ZLinkEncodedPayload.from(Buffer.from(JSON.stringify({ name, value })));
+    },
+    deserialize() {
+      return name;
+    }
+  };
+}
+
+test('codec registry normalization consumes the shared conformance fixture', () => {
+  assert.equal(codecSelectionFixture.fixture, 'zlink.framework.codec-selection');
+  assert.equal(codecSelectionFixture.version, 1);
+
+  for (const scenario of codecSelectionFixture.normalizationScenarios) {
+    const builder = new framework.DefaultZLinkCodecRegistryBuilder();
+    if (scenario.expectedError !== undefined) {
+      assert.throws(
+        () => builder.addSerializer(scenario.input, fixtureSerializer(scenario.name)),
+        (error) => error instanceof framework.ZLinkConfigurationException
+      );
+      continue;
+    }
+    builder.addSerializer(scenario.input, fixtureSerializer(scenario.name));
+    assert.deepEqual([...builder.registeredSerializers.keys()], [scenario.expected]);
+  }
+
+  const duplicate = codecSelectionFixture.normalizedDuplicateScenario;
+  const selected = fixtureSerializer('selected');
+  const builder = new framework.DefaultZLinkCodecRegistryBuilder()
+    .addSerializer(duplicate.registrationInputs[0], fixtureSerializer('replaced'))
+    .addSerializer(duplicate.registrationInputs[1], selected);
+  assert.equal(builder.registeredSerializers.size, duplicate.finalEntryCount);
+  assert.equal(builder.registeredSerializers.get('application/x-base'), selected);
+
+  let capturedCodecs;
+  const registrationOptions = framework.createFrameworkOptions((options) => {
+    capturedCodecs = options.codecs();
+    capturedCodecs.addSerializer('application/x-startup', fixtureSerializer('startup'));
+  });
+  const registration = framework.createFrameworkRegistration(registrationOptions);
+  capturedCodecs.addSerializer('application/x-late', fixtureSerializer('late'));
+  assert.deepEqual([...registration.messageSerializers.keys()], ['application/x-startup']);
+});
+
+test('codec selection consumes declared-type, priority, fallback, and cache fixture rules', () => {
+  class BaseMessage {}
+  class DerivedMessage extends BaseMessage {}
+  class OtherMessage {}
+  class UnregisteredMessage {}
+  const messageTypes = { BaseMessage, DerivedMessage, OtherMessage, UnregisteredMessage };
+  const extensions = new Map(codecSelectionFixture.extensions.map((extension) => [
+    extension.name,
+    {
+      ...extension,
+      serializer: fixtureSerializer(extension.name)
+    }
+  ]));
+
+  for (const scenario of codecSelectionFixture.sendScenarios) {
+    const builder = new framework.DefaultZLinkCodecRegistryBuilder();
+    for (const extensionName of scenario.registrationOrder) {
+      const extension = extensions.get(extensionName);
+      builder.addSerializer(
+        extension.contentType,
+        extension.serializer,
+        (declaredType) => extension.matchesDeclaredTypes.includes(declaredType.name)
+      );
+    }
+    const declaredType = messageTypes[scenario.declaredType];
+    const runtimeType = messageTypes[scenario.runtimeType];
+    const encoded = payloadCodec.encodeFrameworkPayload(
+      framework.ZLinkMessage.from(new runtimeType(), declaredType),
+      builder.registeredSerializers
+    );
+    try {
+      assert.equal(encoded.contentType, scenario.expectedContentType);
+    } finally {
+      encoded.message.close();
+    }
+  }
+
+  const cache = codecSelectionFixture.cacheScenarios[0];
+  const selectorCalls = new Map();
+  const cacheBuilder = new framework.DefaultZLinkCodecRegistryBuilder()
+    .addSerializer('application/x-cache', fixtureSerializer('cache'), (declaredType) => {
+      selectorCalls.set(declaredType, (selectorCalls.get(declaredType) ?? 0) + 1);
+      return false;
+    });
+  const types = Array.from(
+    { length: cache.distinctDeclaredTypes },
+    (_, index) => ({ [`CacheType${index}`]: class {} })[`CacheType${index}`]
+  );
+  for (const type of types) {
+    assert.equal(payloadCodec.selectSerializer(undefined, cacheBuilder.registeredSerializers, type), undefined);
+  }
+  assert.equal(payloadCodec.selectSerializer(
+    undefined,
+    cacheBuilder.registeredSerializers,
+    types[0]
+  ), undefined);
+  assert.equal(payloadCodec.selectSerializer(
+    undefined,
+    cacheBuilder.registeredSerializers,
+    types.at(-1)
+  ), undefined);
+  assert.equal(selectorCalls.get(types[0]), 1);
+  assert.equal(selectorCalls.get(types.at(-1)), 2);
+});
+
+test('codec selection keeps the content type attached to the matching registration', () => {
+  class FirstMessage {}
+  class SecondMessage {}
+  const sharedSerializer = fixtureSerializer('shared');
+  const builder = new framework.DefaultZLinkCodecRegistryBuilder()
+    .addSerializer(
+      'application/x-first',
+      sharedSerializer,
+      (declaredType) => declaredType === FirstMessage
+    )
+    .addSerializer(
+      'application/x-second',
+      sharedSerializer,
+      (declaredType) => declaredType === SecondMessage
+    );
+
+  const encoded = payloadCodec.encodeFrameworkPayload(
+    framework.ZLinkMessage.from(new FirstMessage(), FirstMessage),
+    builder.registeredSerializers
+  );
+  try {
+    assert.equal(encoded.contentType, 'application/x-first');
+  } finally {
+    encoded.message.close();
+  }
+});
+
+test('channel receive accepts only canonical registered content types from the shared fixture', () => {
+  const baseSerializer = fixtureSerializer('baseCodec');
+  const codecs = {
+    serializers: new Map([['application/x-base', baseSerializer]])
+  };
+  for (const scenario of codecSelectionFixture.receiveScenarios) {
+    const incoming = {
+      header: {
+        formatMarker: envelope.ZLINK_CHANNEL_FORMAT_MARKER,
+        kind: 1,
+        channelName: 'codec',
+        messageName: scenario.name,
+        contentType: scenario.wireContentType,
+        correlationId: null,
+        deadline: null,
+        topic: null,
+        metadata: {}
+      },
+      payload: Buffer.from([1])
+    };
+    if (scenario.expectedTerminal === 'success') {
+      assert.equal(envelope.decodeChannelPayload(incoming, codecs), scenario.expectedCodec);
+    } else {
+      assert.throws(
+        () => envelope.decodeChannelPayload(incoming, codecs),
+        (error) => error instanceof framework.ZLinkFrameworkException
+          && error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError
+      );
+    }
+  }
+});
+
 test('default payload codec enforces schema-independent framework-json-v1 rules', () => {
   assert.equal(frameworkJson.FRAMEWORK_JSON_V1_PROFILE, 'framework-json-v1');
 
@@ -372,10 +547,6 @@ test('selective application serializer leaves framework payload encoding on JSON
   class ApplicationPayload {}
   let selectionCalls = 0;
   const serializer = {
-    canSerialize(value) {
-      selectionCalls += 1;
-      return value instanceof ApplicationPayload;
-    },
     serialize() {
       throw new Error('serializer must not encode framework-owned payloads');
     },
@@ -383,14 +554,19 @@ test('selective application serializer leaves framework payload encoding on JSON
       return { decoded: true };
     }
   };
-  const registry = new Map([['application/x-test', serializer]]);
+  const registry = new framework.DefaultZLinkCodecRegistryBuilder()
+    .addSerializer('application/x-test', serializer, (declaredType) => {
+      selectionCalls += 1;
+      return declaredType === ApplicationPayload;
+    })
+    .registeredSerializers;
 
   assert.equal(payloadCodec.selectSerializer(new FrameworkPayload(), registry), undefined);
   assert.equal(payloadCodec.selectSerializer(new FrameworkPayload(), registry), undefined);
   assert.equal(payloadCodec.selectSerializer(new ApplicationPayload(), registry), serializer);
   assert.equal(payloadCodec.selectSerializer(new ApplicationPayload(), registry), serializer);
   assert.equal(selectionCalls, 2);
-  assert.equal(payloadCodec.selectDefaultSerializer(registry), serializer);
+  assert.equal(payloadCodec.selectDefaultSerializer(registry), undefined);
 });
 
 test('wire content type selects the exact serializer without parsing payload bytes', () => {
@@ -408,7 +584,9 @@ test('wire content type selects the exact serializer without parsing payload byt
       return { kind: 'application', decoded: true };
     }
   };
-  const registry = new Map([['application/x-test', serializer]]);
+  const registry = new framework.DefaultZLinkCodecRegistryBuilder()
+    .addSerializer('application/x-test', serializer)
+    .registeredSerializers;
   const jsonMessage = Message.from(Buffer.from('{"kind":"framework"}'));
   const applicationMessage = Message.from(Buffer.from('wire:application'));
   try {

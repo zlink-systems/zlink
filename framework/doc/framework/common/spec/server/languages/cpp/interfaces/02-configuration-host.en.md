@@ -16,10 +16,9 @@ different node of the same application version and then inspect or
 restart the current host. `rolling_update` is used only to move
 objects to an application-specified higher version.
 
-The existing `retire()`, `drain()`, and `await_drained()` are removed
-from the public interface. `stop()` and `request_stop()` start the
-host's `shutdown()`. A component lifecycle operation taking MeshName
-isn't provided.
+The public interface has no `retire()`, `drain()`, or `await_drained()`.
+`stop()` and `request_stop()` start the host's `shutdown()`. A component
+lifecycle operation taking MeshName isn't provided.
 
 ```cpp
 namespace zlink::framework {
@@ -659,6 +658,15 @@ public:
     metadata_policy_builder_t &allow_actor_to_session(std::string key);
 };
 
+class codec_registration_context_t {
+public:
+    template <typename TPayload>
+    codec_registration_context_t &add_serializer(
+      typename serializer_t<TPayload>::serialize_fn_t serialize,
+      typename serializer_t<TPayload>::deserialize_fn_t deserialize,
+      std::string content_type = "application/octet-stream");
+};
+
 class codec_options_builder_t {
 public:
     template <typename TExtension>
@@ -723,6 +731,28 @@ public:
 
 } // namespace zlink::framework
 ```
+
+Before host startup, `codec_options_builder_t::use(extension)` calls the extension's
+`register_framework_codecs(codec_registration_context_t&)`. The extension registers a
+serializer through `add_serializer<TPayload>(...)`. Its compile-time template argument
+`TPayload` is the declared payload descriptor used for send-side codec selection. The
+runtime doesn't select again from the instance's concrete type. If that type has no custom
+serializer, the default JSON path is used.
+
+`content_type` takes a parameter-free ASCII `type/subtype`. The registry removes leading and
+trailing SP and TAB, converts ASCII uppercase letters to lowercase, and uses the resulting
+canonical content type as its key. A later registration with the same canonical content type
+replaces the earlier one. A parameter, whitespace inside the value, a non-ASCII character, or
+an empty token is `framework_error_kind_t::protocol_error`.
+
+The registry doesn't change after host startup. A later registration attempt is
+`framework_error_kind_t::invalid_operation`. Send-selection results are stored for up to
+1,024 declared payload descriptors. Reaching the limit doesn't evict existing entries. Each
+type first seen after the limit is looked up again on every send, and its result isn't stored.
+
+The receive path compares the canonical content type from the wire exactly with a registry
+key. An unregistered or noncanonical value isn't reinterpreted as JSON and completes with
+`framework_error_kind_t::protocol_error`.
 
 Building an `http_options_builder_t` snapshot and running validation are
 internal host-startup responsibilities, not public interfaces. An
@@ -1074,8 +1104,8 @@ ID, or an internal authority field as a label.
 An unregistered message and dispatch failure is recorded through the standard
 logger or telemetry provider configured by the application as a structured record
 with `event_id=zlink.dispatch_error` and `outcome=failed`.
-Per-channel or per-spot diagnostics-provider registration isn't a public contract
-of this version. A request failure ends as an error reply if it has a
+Per-channel or per-spot diagnostics-provider registration isn't part of the public
+contract. A request failure ends as an error reply if it has a
 reply path, and a path with no reply frame, such as a local actor call,
 completes the `task_t` or pending operation with a framework error. A
 one-way failure is dropped but leaves a default structured log and counter.
@@ -1217,7 +1247,7 @@ registration surface.
 - Spot/Actor registration is put on the owner `mesh_node_builder_t`.
 
 The meaning of claim progress during drain is owned by
-[Graceful Drain §5](../../../../28-graceful-drain-handoff.en.md).
+[Graceful Drain §5](../../../../30-host-relocation-flow.en.md).
 
 ## 9. Configuration Lookup
 

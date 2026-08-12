@@ -89,10 +89,13 @@ final class ZLinkRelocationTreeStore {
         long expectedRootChecksum,
         ZLinkStoreCancellation cancellation) {
         return store.get(rootReference, cancellation).thenCompose(rootRead -> {
-            if (!(rootRead instanceof ZLinkRelocationFound found)
-                || crc32c(found.payload()) != expectedRootChecksum) {
+            if (!(rootRead instanceof ZLinkRelocationFound found)) {
+                return failed(new MissingException(
+                    "relocation manifest is missing: " + rootReference));
+            }
+            if (crc32c(found.payload()) != expectedRootChecksum) {
                 return failed(new DataLostException(
-                    "relocation manifest is missing or corrupt"));
+                    "relocation manifest is corrupt: " + rootReference));
             }
             Manifest manifest;
             try {
@@ -188,6 +191,21 @@ final class ZLinkRelocationTreeStore {
         // unreachable; provider retention later removes unreferenced chunks.
         return store.delete(rootReference, cancellation)
             .handle((value, failure) -> null);
+    }
+
+    static CompletionStage<Void> deleteStrict(
+        ZLinkRelocationStore store,
+        String rootReference,
+        ZLinkStoreCancellation cancellation) {
+        Objects.requireNonNull(store, "store");
+        Objects.requireNonNull(rootReference, "rootReference");
+        Objects.requireNonNull(cancellation, "cancellation");
+        return store.delete(rootReference, cancellation)
+            .thenCompose(result -> result == ZLinkRelocationDeleteResult.DELETED
+                    || result == ZLinkRelocationDeleteResult.MISSING
+                ? CompletableFuture.completedFuture(null)
+                : failed(new DataLostException(
+                    "relocation manifest deletion returned no result")));
     }
 
     private static CompletionStage<ZLinkRelocationStored> putVerified(
@@ -425,8 +443,22 @@ final class ZLinkRelocationTreeStore {
         @Override public byte[] inventoryDigest() { return inventoryDigest.clone(); }
     }
 
-    static final class DataLostException extends RuntimeException {
+    static class DataLostException extends RuntimeException {
         DataLostException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * The Relocation Store no longer holds the payload the reference names.
+     * "Missing" and "corrupt" are different facts: a payload the Store still
+     * holds but that fails its integrity check is unrecoverable data loss,
+     * while a payload the Store no longer holds may be residue whose owning
+     * relocation already finished. Only the caller that can evaluate that
+     * predicate may treat this as residue.
+     */
+    static final class MissingException extends DataLostException {
+        MissingException(String message) {
             super(message);
         }
     }

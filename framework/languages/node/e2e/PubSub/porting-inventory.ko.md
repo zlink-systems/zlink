@@ -11,7 +11,7 @@
 | `PS-A2` | `Client/Scenarios/TopicFilterScenario.cs` | `Client/Scenarios/ps-a2-topic-filter-scenario.ts` | done | handler가 관심 topic만 business event로 기록하는 marker를 실제 subscriber 역할 server evidence로 확인 |
 | `PS-A3` | `Client/Scenarios/LateSubscriberScenario.cs` | `Client/Scenarios/ps-a3-late-subscriber-scenario.ts` | done | transport 차단 중 event와 실제 `ConnectionReady` 뒤 event를 한 번씩 발행해 ready 전 replay 부재와 ready 후 첫 전달을 확인 |
 | `PS-A4` | `Client/Scenarios/SubscriberReconnectScenario.cs` | `Client/Scenarios/ps-a4-subscriber-reconnect-scenario.ts` | done | 같은 subscriber process의 transport fault·복구 뒤 기존 subscription 자동 재적용과 disconnect 구간 replay 부재를 확인 |
-| `PS-B1` | `Client/Scenarios/SlowSubscriberScenario.cs` | `Client/Scenarios/ps-b1-slow-subscriber-scenario.ts` | done | 느린 subscriber handler가 다른 subscriber 수신을 막지 않는 marker를 실제 subscriber 역할 server evidence로 확인 |
+| `PS-B1` | `Client/Scenarios/SlowSubscriberScenario.cs` | `Client/Scenarios/ps-b1-slow-subscriber-scenario.ts` | partial | 기본 profile은 구현했다. 통합된 scale profile은 같은 canonical scenario에 추가해야 한다. |
 | `PS-B2` | `Client/Scenarios/PublisherRestartScenario.cs` | `Client/Scenarios/ps-b2-publisher-restart-scenario.ts` | done | terminal `Drained`와 기존 row 제거 뒤 같은 rid/endpoint 재등록·`ConnectionReady`·첫 event 전달을 확인 |
 | `PS-C1` | `Client/Scenarios/MissingMessageNameScenario.cs` | `Client/Scenarios/ps-c1-missing-message-name-scenario.ts` | done | 미등록 publish packet drop과 정상 publish marker를 실제 subscriber 역할 server evidence로 확인 |
 
@@ -58,8 +58,8 @@
 | `Server/Subscriber/Configuration/SubscriberOptions.cs` | `Server/Subscriber/Configuration/subscriber-options.ts` | configuration | done | subscriber endpoint, evidence file, handler delay 옵션 |
 | `Server/Subscriber/OperationalEndpoints.cs` | `Server/Subscriber/Endpoints/operational-endpoints.ts` | endpoints | done | health, evidence, wait, clear, shutdown endpoint |
 | `Server/Subscriber/EvidenceStore.cs` | `Server/Subscrib../Infrastructure/evidence-store.ts` | infrastructure | done | subscriber evidence 저장과 bounded wait |
-| `Server/Subscriber/Handlers/EventMsgHandler.cs` | `Server/Subscriber/Handlers/event-msg-handler.ts` | handler | done | topic filter, slow handler evidence |
-| `Server/Subscriber/Handlers/EvidenceDispatchErrorObserver.cs` | `Server/Subscriber/Handlers/event-msg-handler.ts` | observer | done | missing packet dispatch error evidence |
+| `Server/Subscriber/Handlers/EventMsgHandler.cs` | `Server/Subscriber/Handlers/pub-sub-event-handler.ts` | handler | done | topic filter, slow handler evidence |
+| `Server/Subscriber/Handlers/EvidenceDispatchErrorObserver.cs` | `Server/Subscriber/Handlers/pub-sub-event-handler.ts` | observer | done | missing packet dispatch error evidence |
 
 ## 검증 경로 판정
 

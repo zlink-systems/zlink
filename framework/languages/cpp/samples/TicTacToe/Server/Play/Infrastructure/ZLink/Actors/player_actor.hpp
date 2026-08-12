@@ -105,7 +105,7 @@ struct player_actor_t : framework::actor_t
             const auto joined =
               accepted->reply->decode<tictactoe_game_join_res_t> ();
             actor_context->bound_session ()
-              .send (join_game_res_t{joined.state})
+              .send (join_game_notify_t{joined.state})
               .submit ();
         } else if (std::holds_alternative<actor_join_rejected_t> (completion)) {
             actor_context->bound_session ()

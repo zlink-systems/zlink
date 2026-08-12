@@ -19,7 +19,13 @@ import type {
   SpotOnlyMeshReq,
   SpotOnlyMeshRes
 } from '../../../Shared/messages';
-import { ScaleOutActorProbeReq, SpotOnlyJoinReq, SpotServiceNames, spotServicePacket } from '../../../Shared/messages';
+import {
+  ScaleOutActorProbeReq,
+  ScenarioActorCreateReq,
+  SpotOnlyJoinReq,
+  SpotServiceNames,
+  spotServicePacket
+} from '../../../Shared/messages';
 import type { EvidenceStore } from '../Infrastructure/evidence-store';
 import type { HttpRoute } from '../Support/http-server';
 import { createLocalMultiNodeSpot, requestStateViaSpotOutbound, SpotOnlyUserSpot } from '../Spots/multi-node-spots';
@@ -147,7 +153,7 @@ export function createMultiNodeEndpoints(
         const actor = await actors
           .getOrCreate(request.actorId, SpotServiceNames.actorType)
           .inMesh(actorMeshName)
-          .request({ displayName: `spot-only-${request.actorId}` })
+          .request(new ScenarioActorCreateReq(`spot-only-${request.actorId}`))
           .submit();
         if (actor.status === 'rejected') {
           throw new Error(`Actor '${request.actorId}' creation was rejected.`);
@@ -171,7 +177,7 @@ export function createMultiNodeEndpoints(
         const actor = await actors
           .getOrCreate(request.actorId, SpotServiceNames.actorType)
           .inMesh(actorMeshName)
-          .request({ displayName: `scale-out-${request.actorId}` })
+          .request(new ScenarioActorCreateReq(`scale-out-${request.actorId}`))
           .submit();
         if (actor.status === 'rejected') {
           throw new Error(`Actor '${request.actorId}' creation was rejected.`);

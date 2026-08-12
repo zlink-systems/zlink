@@ -117,8 +117,8 @@ internal static class EnterWorld
         var zoneId = ZoneWorldSpec.ZoneOf(message.X, message.Y);
         actor.TrackDeferredJoin(new PlayerPosition(message.X, message.Y));
         actor.Context.JoinSpot(
-                zoneId,
-            new EnterZoneMsg(
+            zoneId,
+            new EnterZoneReq(
                 actor.ActorId,
                 message.X,
                 message.Y,

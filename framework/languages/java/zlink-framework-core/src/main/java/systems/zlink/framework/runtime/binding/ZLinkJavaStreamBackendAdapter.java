@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.binding;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 
 import systems.zlink.contracts.core.Context;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
@@ -9,7 +10,7 @@ final class ZLinkJavaStreamBackendAdapter implements ZLinkStreamBackendAdapter {
     @Override
     public ZLinkBackendStreamSocket createStreamSocket(
         ZLinkBackendContext context,
-        systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode meshNode) {
+        ZLinkInternalMeshNode meshNode) {
         return new ZLinkJavaStreamSocket(
             ZLinkJavaSocketOptions.configureFrameworkSocket(
                 nativeContext(context).createStreamSocket()),

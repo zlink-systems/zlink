@@ -2,57 +2,15 @@
 #pragma once
 
 #include <zlink/Contracts/Messaging/message.hpp>
-#include <zlink/framework/contracts/actors/actor.hpp>
 
 #include <array>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace zlink::samples::tictactoe
 {
-
-using zlink::framework::actor_id_t;
-using zlink::framework::actor_ref_t;
-using zlink::framework::node_rid_t;
-
-struct actor_location_t
-{
-    node_rid_t node_rid;
-    std::string actor_id;
-    std::uint64_t generation = 0;
-
-    static actor_location_t from (const actor_ref_t &actor_ref)
-    {
-        return actor_location_t{actor_ref.node_rid (),
-                                std::string (actor_ref.actor_id ().value ()),
-                                actor_ref.object_generation ()};
-    }
-
-    actor_ref_t to_actor_ref (std::string mesh_name) const
-    {
-        return actor_ref_t (actor_id_t (actor_id), generation, std::move (mesh_name), node_rid);
-    }
-};
-
-inline void to_json (nlohmann::json &json, const actor_location_t &value)
-{
-    json = {{"nodeRid", std::string (value.node_rid.value ())},
-            {"actorId", value.actor_id},
-            {"generation", value.generation}};
-}
-
-inline void from_json (const nlohmann::json &json, actor_location_t &value)
-{
-    const auto node_rid = json.contains ("nodeRid") ? json.value ("nodeRid", std::string{})
-                                                    : json.value ("node_rid", std::string{});
-    value.node_rid = node_rid_t::from_string (node_rid);
-    value.actor_id = json.contains ("actorId") ? json.value ("actorId", std::string{})
-                                               : json.value ("actor_id", std::string{});
-    value.generation = json.value ("generation", std::uint64_t{0});
-}
 
 template <typename T>
 void write_nullable (nlohmann::json &json, const char *name, const std::optional<T> &value)
@@ -99,6 +57,12 @@ struct player_info_t
     int wins = 0;
 };
 
+struct player_actor_create_req_t
+{
+    static constexpr const char *packet_name = "PlayerActorCreateReq";
+    player_info_t player;
+};
+
 struct play_node_info_t
 {
     std::string stream_endpoint;
@@ -119,16 +83,14 @@ struct authenticate_player_req_t
 struct authenticate_player_res_t
 {
     static constexpr const char *packet_name = "AuthenticatePlayerRes";
-    bool accepted = false;
     player_info_t player;
-    std::string reason;
 };
 
 /* Internal Play-role request. The public client uses CreateGameHttpReq; this message crosses the
  * API-to-Play application boundary and must not be treated as an additional client API. */
-struct create_game_req_t
+struct tictactoe_game_create_req_t
 {
-    static constexpr const char *packet_name = "CreateGameReq";
+    static constexpr const char *packet_name = "TicTacToeGameCreateReq";
     std::string game_name;
     int required_level = 0;
 };
@@ -149,18 +111,19 @@ struct create_game_http_res_t
     int required_level = 0;
 };
 
-/* 공통 sample spec §11: JoinGameReq에는 RoomId만 담는다. PlayerInfo는 인증 때 actor에
+/* 공통 sample spec §11: JoinGameMsg에는 RoomId만 담는다. PlayerInfo는 인증 때 actor에
  * 설정되고, room join payload(TicTacToeGameJoinReq)에 actor가 직접 실어 보낸다. */
-struct join_game_req_t
+struct join_game_msg_t
 {
-    static constexpr const char *packet_name = "JoinGameReq";
+    static constexpr const char *packet_name = "JoinGameMsg";
     std::string room_id;
 };
 
 /* Internal Play-role messages. The Entry Spot uses them to pass the authenticated player to the
- * room Spot; the public client sees JoinGameReq/Res only. */
+ * room Spot; the public client sends JoinGameMsg and receives JoinGameNotify. */
 struct tictactoe_game_join_req_t
 {
+    static constexpr const char *packet_name = "TicTacToeGameJoinReq";
     std::string room_id;
     player_info_t player;
 };
@@ -180,12 +143,13 @@ struct tictactoe_state_t
 
 struct tictactoe_game_join_res_t
 {
+    static constexpr const char *packet_name = "TicTacToeGameJoinRes";
     tictactoe_state_t state;
 };
 
-struct join_game_res_t
+struct join_game_notify_t
 {
-    static constexpr const char *packet_name = "JoinGameRes";
+    static constexpr const char *packet_name = "JoinGameNotify";
     tictactoe_state_t state;
 };
 
@@ -257,8 +221,6 @@ struct win_milestone_notify_t
 struct game_state_notify_t
 {
     static constexpr const char *packet_name = "GameStateNotify";
-    std::string room_id;
-    std::string next_turn;
     tictactoe_state_t state;
 };
 
@@ -288,6 +250,16 @@ inline void from_json (const nlohmann::json &json, player_info_t &value)
     value.wins = json.value ("wins", 0);
 }
 
+inline void to_json (nlohmann::json &json, const player_actor_create_req_t &value)
+{
+    json = {{"player", value.player}};
+}
+
+inline void from_json (const nlohmann::json &json, player_actor_create_req_t &value)
+{
+    value.player = json.value ("player", player_info_t{});
+}
+
 inline void to_json (nlohmann::json &json, const play_node_info_t &value)
 {
     json = {{"streamEndpoint", value.stream_endpoint}};
@@ -310,22 +282,20 @@ inline void from_json (const nlohmann::json &json, authenticate_player_req_t &va
 
 inline void to_json (nlohmann::json &json, const authenticate_player_res_t &value)
 {
-    json = {{"accepted", value.accepted}, {"player", value.player}, {"reason", value.reason}};
+    json = {{"player", value.player}};
 }
 
 inline void from_json (const nlohmann::json &json, authenticate_player_res_t &value)
 {
-    value.accepted = json.value ("accepted", false);
     value.player = json.value ("player", player_info_t{});
-    value.reason = json.value ("reason", "");
 }
 
-inline void to_json (nlohmann::json &json, const create_game_req_t &value)
+inline void to_json (nlohmann::json &json, const tictactoe_game_create_req_t &value)
 {
     json = {{"gameName", value.game_name}, {"requiredLevel", value.required_level}};
 }
 
-inline void from_json (const nlohmann::json &json, create_game_req_t &value)
+inline void from_json (const nlohmann::json &json, tictactoe_game_create_req_t &value)
 {
     value.game_name = json.value ("gameName", "");
     value.required_level = json.value ("requiredLevel", 0);
@@ -341,12 +311,12 @@ inline void from_json (const nlohmann::json &json, create_game_http_req_t &value
     value.game_name = read_nullable<std::string> (json, "gameName");
 }
 
-inline void to_json (nlohmann::json &json, const join_game_req_t &value)
+inline void to_json (nlohmann::json &json, const join_game_msg_t &value)
 {
     json = {{"roomId", value.room_id}};
 }
 
-inline void from_json (const nlohmann::json &json, join_game_req_t &value)
+inline void from_json (const nlohmann::json &json, join_game_msg_t &value)
 {
     value.room_id = json.value ("roomId", "");
 }
@@ -436,12 +406,12 @@ inline void from_json (const nlohmann::json &json, create_game_http_res_t &value
     value.required_level = json.value ("requiredLevel", 0);
 }
 
-inline void to_json (nlohmann::json &json, const join_game_res_t &value)
+inline void to_json (nlohmann::json &json, const join_game_notify_t &value)
 {
     json = {{"state", value.state}};
 }
 
-inline void from_json (const nlohmann::json &json, join_game_res_t &value)
+inline void from_json (const nlohmann::json &json, join_game_notify_t &value)
 {
     value.state = json.value ("state", tictactoe_state_t{});
 }
@@ -548,13 +518,11 @@ inline void from_json (const nlohmann::json &json, win_milestone_notify_t &value
 
 inline void to_json (nlohmann::json &json, const game_state_notify_t &value)
 {
-    json = {{"roomId", value.room_id}, {"nextTurn", value.next_turn}, {"state", value.state}};
+    json = {{"state", value.state}};
 }
 
 inline void from_json (const nlohmann::json &json, game_state_notify_t &value)
 {
-    value.room_id = json.value ("roomId", "");
-    value.next_turn = json.value ("nextTurn", "");
     value.state = json.value ("state", tictactoe_state_t{});
 }
 

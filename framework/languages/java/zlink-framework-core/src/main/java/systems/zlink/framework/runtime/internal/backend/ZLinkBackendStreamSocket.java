@@ -30,11 +30,35 @@ public interface ZLinkBackendStreamSocket
         // Alternate test backends may not own a native STREAM transport.
     }
 
+    /**
+     * Allocates the next ingress sequence owned by this physical Session.
+     * A zero result means that an alternate backend leaves allocation to the
+     * Framework Session ingress gate.
+     */
+    default long allocateBoundSessionIngressSequence() {
+        return 0;
+    }
+
+    /** Returns the exact generation of the current bound-Actor route. */
+    default long boundActorBindingGeneration(
+        RoutingId sessionRid,
+        String actorId) {
+        return 0;
+    }
+
     void onTransportError(ZLinkBackendStreamErrorHandler handler);
 
     void startSessionService();
 
     boolean send(RoutingId routingId, List<Message> parts, SendFlags flags);
+
+    /** Delivers an Actor-to-Session frame without adding another STREAM header. */
+    default boolean sendBoundSessionPush(
+        RoutingId routingId,
+        List<Message> parts,
+        SendFlags flags) {
+        return send(routingId, parts, flags);
+    }
 
     boolean send(RoutingId routingId, String packetName, List<Message> parts, SendFlags flags);
 
@@ -61,6 +85,32 @@ public interface ZLinkBackendStreamSocket
         ZLinkStreamHeader header,
         List<Message> parts,
         SendFlags flags);
+
+    /** Relays ingress with the sequence already accepted by the owner gate. */
+    default boolean relayBoundActor(
+        RoutingId sessionRid,
+        String actorId,
+        long sourceSessionSequence,
+        ZLinkStreamHeader header,
+        List<Message> parts,
+        SendFlags flags) {
+        return relayBoundActor(sessionRid, actorId, header, parts, flags);
+    }
+
+    /**
+     * Changes the physical Actor route without creating a new logical Session
+     * binding generation.
+     */
+    default CompletionStage<Void> relocateBoundActor(
+        RoutingId sessionRid,
+        String actorId,
+        long bindingGeneration,
+        ZLinkBackendActorRef targetActor,
+        Duration timeout) {
+        return unbindActor(sessionRid, actorId).submit(timeout)
+            .thenCompose(ignored -> bindActor(sessionRid, targetActor)
+                .submit(timeout));
+    }
 
     /**
      * Completes after an internal bound-Actor request has been handled by the

@@ -1,3 +1,4 @@
+// Verifies concurrent requests join one instance Spot while creation is in progress.
 using SpotService.Client.Support;
 using SpotService.Shared;
 using Zlink.HttpClient;
@@ -41,13 +42,13 @@ internal static class InstanceSpotCreatingJoinScenario
             + $"|owner={gate.Owner}|generation={ready.ObjectGeneration}");
     }
 
-    private static async Task<InstanceColdRequestRes> RequestAsync(
+    private static async Task<InstanceColdProbeRes> RequestAsync(
         ZLinkHttpClient client,
         string spotId,
         string operationId) =>
         (await client.Post("/instance/cold-request")
-            .Body(new InstanceColdRequestReq(spotId, operationId))
-            .Async<InstanceColdRequestRes>()).Body;
+            .Body(new InstanceColdProbeReq(spotId, operationId))
+            .Async<InstanceColdProbeRes>()).Body;
 
     private static async Task<(string Owner, string Line)> WaitForGateAsync(
         ZLinkHttpClient playA,

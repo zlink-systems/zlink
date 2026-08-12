@@ -1,4 +1,5 @@
 package systems.zlink.framework.spots;
+import java.util.concurrent.CompletableFuture;
 
 import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.actors.ZLinkActor;
@@ -12,7 +13,7 @@ public interface ZLinkUserSpotActorLifecycle<TActor extends ZLinkActor>
     default CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
         String actorId,
         ZLinkMessage request) {
-        return java.util.concurrent.CompletableFuture.completedFuture(
+        return CompletableFuture.completedFuture(
             ZLinkSpotActorJoinResult.reject());
     }
 }

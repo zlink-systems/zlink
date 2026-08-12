@@ -1,0 +1,208 @@
+{
+  "fixture": "zlink.framework.message-follow-suppression",
+  "version": 1,
+  "routeFenceFields": [
+    "objectKind",
+    "logicalObjectId",
+    "objectGeneration",
+    "targetNodeRid",
+    "targetNodeGeneration",
+    "authorityOwnerGeneration",
+    "ownerLeaseGeneration"
+  ],
+  "registryInvariants": {
+    "states": ["idle", "inFlight", "sentUntilExpiry"],
+    "markerCapacityPerRetainedRoute": 1,
+    "separateSuppressionTimer": false,
+    "sendAcceptedMarksSent": true,
+    "sendRejectedOrFailedRestoresIdle": true,
+    "beginReturnsOpaqueClaimToken": true,
+    "completionRequiresMatchingClaimToken": true,
+    "staleClaimCannotMutateCurrentMarker": true,
+    "routeExpiryRemovesMarker": true,
+    "routeFenceReplacementRemovesMarker": true,
+    "payloadAndReplyCompletionOwnedElsewhere": true
+  },
+  "keys": {
+    "base": {
+      "sourceRoute": {
+        "objectKind": "actor",
+        "logicalObjectId": "actor-17",
+        "objectGeneration": "31",
+        "targetNodeRid": "source-a",
+        "targetNodeGeneration": "2",
+        "authorityOwnerGeneration": "41",
+        "ownerLeaseGeneration": "51"
+      },
+      "targetRoute": {
+        "objectKind": "actor",
+        "logicalObjectId": "actor-17",
+        "objectGeneration": "31",
+        "targetNodeRid": "target-b",
+        "targetNodeGeneration": "3",
+        "authorityOwnerGeneration": "42",
+        "ownerLeaseGeneration": "52"
+      }
+    },
+    "changedTargetLease": {
+      "sourceRoute": {
+        "objectKind": "actor",
+        "logicalObjectId": "actor-17",
+        "objectGeneration": "31",
+        "targetNodeRid": "source-a",
+        "targetNodeGeneration": "2",
+        "authorityOwnerGeneration": "41",
+        "ownerLeaseGeneration": "51"
+      },
+      "targetRoute": {
+        "objectKind": "actor",
+        "logicalObjectId": "actor-17",
+        "objectGeneration": "31",
+        "targetNodeRid": "target-b",
+        "targetNodeGeneration": "3",
+        "authorityOwnerGeneration": "42",
+        "ownerLeaseGeneration": "53"
+      }
+    },
+    "differentMulticastTarget": {
+      "sourceRoute": {
+        "objectKind": "actor",
+        "logicalObjectId": "actor-17",
+        "objectGeneration": "31",
+        "targetNodeRid": "source-a",
+        "targetNodeGeneration": "2",
+        "authorityOwnerGeneration": "41",
+        "ownerLeaseGeneration": "51"
+      },
+      "targetRoute": {
+        "objectKind": "actor",
+        "logicalObjectId": "actor-17",
+        "objectGeneration": "31",
+        "targetNodeRid": "target-c",
+        "targetNodeGeneration": "4",
+        "authorityOwnerGeneration": "43",
+        "ownerLeaseGeneration": "61"
+      }
+    }
+  },
+  "independentKeyMutations": [
+    {
+      "name": "object-kind",
+      "paths": ["sourceRoute.objectKind", "targetRoute.objectKind"],
+      "replacement": "userSpot"
+    },
+    {
+      "name": "logical-object-id",
+      "paths": ["sourceRoute.logicalObjectId", "targetRoute.logicalObjectId"],
+      "replacement": "actor-18"
+    },
+    {
+      "name": "object-generation",
+      "paths": ["sourceRoute.objectGeneration", "targetRoute.objectGeneration"],
+      "replacement": "32"
+    },
+    {
+      "name": "source-node-rid",
+      "paths": ["sourceRoute.targetNodeRid"],
+      "replacement": "source-z"
+    },
+    {
+      "name": "source-node-generation",
+      "paths": ["sourceRoute.targetNodeGeneration"],
+      "replacement": "12"
+    },
+    {
+      "name": "source-authority-owner-generation",
+      "paths": ["sourceRoute.authorityOwnerGeneration"],
+      "replacement": "141"
+    },
+    {
+      "name": "source-owner-lease-generation",
+      "paths": ["sourceRoute.ownerLeaseGeneration"],
+      "replacement": "151"
+    },
+    {
+      "name": "target-node-rid",
+      "paths": ["targetRoute.targetNodeRid"],
+      "replacement": "target-z"
+    },
+    {
+      "name": "target-node-generation",
+      "paths": ["targetRoute.targetNodeGeneration"],
+      "replacement": "13"
+    },
+    {
+      "name": "target-authority-owner-generation",
+      "paths": ["targetRoute.authorityOwnerGeneration"],
+      "replacement": "142"
+    },
+    {
+      "name": "target-owner-lease-generation",
+      "paths": ["targetRoute.ownerLeaseGeneration"],
+      "replacement": "152"
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "same-fence-single-flight-and-suppression",
+      "operations": [
+        { "kind": "begin", "key": "base", "claim": "single-1", "result": "granted", "state": "inFlight" },
+        { "kind": "begin", "key": "base", "result": "suppressed", "state": "inFlight" },
+        { "kind": "markSent", "key": "base", "claim": "single-1", "result": "applied", "state": "sentUntilExpiry" },
+        { "kind": "begin", "key": "base", "result": "suppressed", "state": "sentUntilExpiry" }
+      ]
+    },
+    {
+      "name": "failed-send-reopens-admission",
+      "operations": [
+        { "kind": "begin", "key": "base", "claim": "retry-1", "result": "granted", "state": "inFlight" },
+        { "kind": "abort", "key": "base", "claim": "retry-1", "result": "applied", "state": "idle" },
+        { "kind": "begin", "key": "base", "claim": "retry-2", "result": "granted", "state": "inFlight" }
+      ]
+    },
+    {
+      "name": "expiry-removes-marker",
+      "operations": [
+        { "kind": "begin", "key": "base", "claim": "expiry-1", "result": "granted", "state": "inFlight" },
+        { "kind": "markSent", "key": "base", "claim": "expiry-1", "result": "applied", "state": "sentUntilExpiry" },
+        { "kind": "expireRoute", "key": "base", "result": "removed", "state": "idle" },
+        { "kind": "retainRoute", "key": "base", "result": "retained", "state": "idle" },
+        { "kind": "begin", "key": "base", "claim": "expiry-2", "result": "granted", "state": "inFlight" }
+      ]
+    },
+    {
+      "name": "route-fence-replacement-removes-old-marker",
+      "operations": [
+        { "kind": "begin", "key": "base", "claim": "replace-1", "result": "granted", "state": "inFlight" },
+        { "kind": "markSent", "key": "base", "claim": "replace-1", "result": "applied", "state": "sentUntilExpiry" },
+        {
+          "kind": "replaceRoute",
+          "key": "base",
+          "replacement": "changedTargetLease",
+          "result": "replaced",
+          "state": "idle"
+        },
+        { "kind": "begin", "key": "changedTargetLease", "claim": "replace-2", "result": "granted", "state": "inFlight" }
+      ]
+    },
+    {
+      "name": "exact-fence-and-multicast-targets-are-independent",
+      "operations": [
+        { "kind": "begin", "key": "base", "claim": "independent-1", "result": "granted", "state": "inFlight" },
+        { "kind": "begin", "key": "changedTargetLease", "claim": "independent-2", "result": "granted", "state": "inFlight" },
+        { "kind": "begin", "key": "differentMulticastTarget", "claim": "independent-3", "result": "granted", "state": "inFlight" }
+      ]
+    },
+    {
+      "name": "late-claim-cannot-mutate-reopened-marker",
+      "operations": [
+        { "kind": "begin", "key": "base", "claim": "aba-1", "result": "granted", "state": "inFlight" },
+        { "kind": "abort", "key": "base", "claim": "aba-1", "result": "applied", "state": "idle" },
+        { "kind": "begin", "key": "base", "claim": "aba-2", "result": "granted", "state": "inFlight" },
+        { "kind": "markSent", "key": "base", "claim": "aba-1", "result": "ignoredStaleClaim", "state": "inFlight" },
+        { "kind": "abort", "key": "base", "claim": "aba-1", "result": "ignoredStaleClaim", "state": "inFlight" },
+        { "kind": "markSent", "key": "base", "claim": "aba-2", "result": "applied", "state": "sentUntilExpiry" }
+      ]
+    }
+  ]
+}

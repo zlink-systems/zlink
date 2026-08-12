@@ -1,4 +1,5 @@
 package systems.zlink.e2e.registrymessaging.provider.Infrastructure;
+import java.util.concurrent.TimeUnit;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -43,7 +44,7 @@ public final class ScenarioState {
     }
 
     public synchronized List<String> waitUntil(Predicate<String> predicate, long timeoutMillis) {
-        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
         while (true) {
             List<String> current = lines();
             if (current.stream().anyMatch(predicate)) {
@@ -54,7 +55,7 @@ public final class ScenarioState {
                 return current;
             }
             try {
-                wait(Math.min(100, java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(remaining)));
+                wait(Math.min(100, TimeUnit.NANOSECONDS.toMillis(remaining)));
             } catch (InterruptedException error) {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException("interrupted while waiting for evidence", error);

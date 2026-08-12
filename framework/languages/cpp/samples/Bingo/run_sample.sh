@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # that reports EADDRINUSE; functional sample failures keep their status.
 if [[ "${1:-}" != "--zlink-bingo-retry-child" ]]; then
   for attempt in 1 2 3; do
-    if "$SCRIPT_DIR/run_sample.sh" --zlink-bingo-retry-child "$@"; then
+    if bash "$SCRIPT_DIR/run_sample.sh" --zlink-bingo-retry-child "$@"; then
       exit 0
     else
       status=$?
@@ -25,10 +25,6 @@ fi
 source "$SCRIPT_DIR/../redis-common.sh"
 CPP_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$CPP_ROOT/samples/sample-build-common.sh"
-# Message-flow logs land in the sample's own logs/ folder (git-ignored).
-FLOW_LOG_DIR="$SCRIPT_DIR/logs"
-mkdir -p "$FLOW_LOG_DIR"
-rm -f "$FLOW_LOG_DIR"/*.log
 zlink_cpp_sample_prepare_build "$CPP_ROOT"
 cmake --build "$BUILD_DIR" --parallel 2 --target \
   sample_cpp_framework_bingo_api \
@@ -63,37 +59,7 @@ done
   -R 'test_cpp_framework_sample_parity|zlink_cpp_framework_mesh_node_vertical_test|test_cpp_framework_actor_gateway' \
   --output-on-failure
 
-read -r -a PORTS <<<"$(python3 - <<'PY'
-import random
-import socket
-
-sockets = []
-try:
-    chosen = set()
-    blocked = set()
-    while len(sockets) < 24:
-        port = random.randint(48000, 60999)
-        if port in chosen or port in blocked or port + 1000 in chosen or port + 1000 in blocked:
-            continue
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        ctrl = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            sock.bind(("127.0.0.1", port))
-            ctrl.bind(("127.0.0.1", port + 1000))
-        except OSError:
-            sock.close()
-            ctrl.close()
-            continue
-        chosen.add(port)
-        blocked.add(port + 1000)
-        ctrl.close()
-        sockets.append(sock)
-    print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
-  )"
+read -r -a PORTS <<<"$(zlink_sample_allocate_paired_ports 24)"
 
 if [[ ${#PORTS[@]} -lt 24 ]]; then
   echo "Failed to allocate 24 local TCP ports for the Bingo sample." >&2
@@ -186,7 +152,8 @@ wait_log_contains() {
 
 RUN_DIR="$(mktemp -d)"
 LOG_DIR="$RUN_DIR/logs"
-mkdir -p "$LOG_DIR"
+FLOW_LOG_DIR="$RUN_DIR/flow-logs"
+mkdir -p "$LOG_DIR" "$FLOW_LOG_DIR"
 PIDS=()
 PID_ROLES=()
 REDIS_CONTAINER=""
@@ -241,7 +208,7 @@ cleanup() {
     fi
   done
   if [[ -n "$REDIS_CONTAINER" ]]; then
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   if [[ "$code" -ne 0 ]]; then
     echo "Bingo sample process logs (failure evidence):" >&2

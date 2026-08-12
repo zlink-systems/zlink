@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient.internal;
+import java.io.InputStream;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -46,7 +47,7 @@ public final class ResponseCompression {
         }
     }
 
-    private static byte[] decode(java.io.InputStream stream, long maxBytes) throws IOException {
+    private static byte[] decode(InputStream stream, long maxBytes) throws IOException {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         // The limit failure is unchecked, so it escapes the callers' IOException->malformed
         // mapping and keeps its REQUEST_FAILED kind.

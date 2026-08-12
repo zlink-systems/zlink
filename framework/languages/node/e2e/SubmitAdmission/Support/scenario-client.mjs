@@ -199,8 +199,6 @@ for (const selector of selectors) {
     const operationId = 'sa07-fanout';
     terminal(await submit(`${publisherUrl}/submit/fanout`, operationId), operationId);
     emit(selector, { status: 'submitted', subscriberCount: 0, handlerCount: 0 });
-  } else if (selector === 'SA-E2E-10') {
-    await runReady(selector, 'sa10-channel', '/submit/channel');
   } else if (selector === 'SA-E2E-11') {
     await runReady(selector, 'sa11-spot', '/submit/node');
   } else if (selector === 'SA-E2E-12') {

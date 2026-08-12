@@ -10,11 +10,34 @@
 #include "utils/err.hpp"
 #include "utils/macros.hpp"
 
+#include <chrono>
+#include <thread>
+
 namespace
 {
 const uint32_t public_api_closing_bit = 0x80000000u;
 const uint32_t public_api_sync_bit = 0x40000000u;
 const uint32_t public_api_inflight_mask = ~(public_api_closing_bit | public_api_sync_bit);
+
+//  The sync bit is held for the whole body of a public API call, which can be
+//  arbitrarily long (a blocking recv, an endpoint teardown). A contended
+//  waiter therefore cannot assume the holder releases within a few hundred
+//  cycles, so an unbounded CAS spin burns a whole core - observed as a thread
+//  pinned at 100% CPU during shutdown. Spin briefly for the common short hold,
+//  then yield, then sleep so a long hold costs no CPU.
+const unsigned int public_api_sync_spin_limit = 64;
+const unsigned int public_api_sync_yield_limit = 1024;
+
+void public_api_sync_backoff (unsigned int attempt_)
+{
+    if (attempt_ < public_api_sync_spin_limit)
+        return;
+    if (attempt_ < public_api_sync_yield_limit) {
+        std::this_thread::yield ();
+        return;
+    }
+    std::this_thread::sleep_for (std::chrono::microseconds (100));
+}
 }
 
 bool zlink::socket_lifecycle_coordinator_t::enter_public_api ()
@@ -133,6 +156,7 @@ bool zlink::socket_lifecycle_coordinator_t::public_api_sync_held () const
 
 void zlink::socket_lifecycle_coordinator_t::lock_public_api_sync ()
 {
+    unsigned int attempt = 0;
     uint32_t old = public_api_state.load (std::memory_order_acquire);
     while (true) {
         if ((old & public_api_sync_bit) == 0) {
@@ -144,6 +168,9 @@ void zlink::socket_lifecycle_coordinator_t::lock_public_api_sync ()
             continue;
         }
 
+        public_api_sync_backoff (attempt);
+        if (attempt < public_api_sync_yield_limit)
+            ++attempt;
         old = public_api_state.load (std::memory_order_acquire);
     }
 }

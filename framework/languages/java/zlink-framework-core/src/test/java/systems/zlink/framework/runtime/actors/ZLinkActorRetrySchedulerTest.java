@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.actors;
 
+import org.junit.jupiter.api.Assertions;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -32,7 +33,7 @@ final class ZLinkActorRetrySchedulerTest {
     @Test
     void waitUntilRelayFailsWithTimeoutErrorWhenConditionDoesNotBecomeReady() {
         AtomicInteger attempts = new AtomicInteger();
-        CompletionException failure = org.junit.jupiter.api.Assertions.assertThrows(
+        CompletionException failure = Assertions.assertThrows(
             CompletionException.class,
             () -> ZLinkActorRetryScheduler.waitUntilRelay(
                     Duration.ZERO,
@@ -74,7 +75,7 @@ final class ZLinkActorRetrySchedulerTest {
 
     @Test
     void submitRelayUntilAcceptedFailsNonRetryableSubmitException() {
-        CompletionException failure = org.junit.jupiter.api.Assertions.assertThrows(
+        CompletionException failure = Assertions.assertThrows(
             CompletionException.class,
             () -> ZLinkActorRetryScheduler.submitRelayUntilAccepted(
                     Duration.ofMillis(100),
@@ -129,7 +130,7 @@ final class ZLinkActorRetrySchedulerTest {
     void routeLookupPreservesStoreFailure() {
         IllegalStateException failure = new IllegalStateException("store unavailable");
 
-        CompletionException observed = org.junit.jupiter.api.Assertions.assertThrows(
+        CompletionException observed = Assertions.assertThrows(
             CompletionException.class,
             () -> ZLinkActorRetryScheduler.retryRouteUntilPresent(
                     Duration.ofMillis(100),

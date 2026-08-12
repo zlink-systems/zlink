@@ -13,11 +13,11 @@ public final class PublisherClient {
         this.endpoint = endpoint;
     }
 
-    public void publish(String topic, Contracts.EventMsg message) {
+    public void publish(String topic, Contracts.Event message) {
         post("/publish/event", topic, message);
     }
 
-    public void publishMissing(String topic, Contracts.EventMsg message) {
+    public void publishMissing(String topic, Contracts.Event message) {
         post("/publish/missing", topic, message);
     }
 
@@ -37,7 +37,7 @@ public final class PublisherClient {
         http.post(endpoint + "/shutdown");
     }
 
-    private void post(String path, String topic, Contracts.EventMsg message) {
+    private void post(String path, String topic, Contracts.Event message) {
         String uri = endpoint + path
             + "?topic=" + encode(topic)
             + "&scenario=" + encode(message.scenario())

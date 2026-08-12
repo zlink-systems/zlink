@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.channels;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 
 import java.time.Duration;
 import java.util.List;
@@ -146,7 +147,7 @@ final class ZLinkSpotRouterNodeDispatcher {
     }
 
     private static void completeReply(
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived reply,
+        ZLinkBackendReceived reply,
         CompletableFuture<List<Message>> result,
         long requestStartedNanos) {
         try {

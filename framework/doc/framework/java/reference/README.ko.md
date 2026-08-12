@@ -13,13 +13,13 @@ exact interface(`javap` inventory)를 직접 대조해 작성했다.
 
 | Category | 상태 | 대응 spec |
 |---|---|---|
-| [Host lifecycle](01-host-lifecycle.ko.md) | 작성 완료 | 06-framework-api, 28-graceful-drain-handoff |
+| [Host lifecycle](01-host-lifecycle.ko.md) | 작성 완료 | 06-framework-api, 30-host-relocation-flow |
 | [Topology discovery](02-topology-discovery.ko.md) | 작성 완료 | 07-channel-topology, 09-client-server-channel, 10-network-listener-identity, 21-location-runtime |
 | [Messaging execution](03-messaging-execution.ko.md) | 작성 완료 | 04-message-model, 05-async-execution-policy, 08-channel-messaging |
 | [Spot instance](04-spot-instance.ko.md) | 작성 완료 | 12-spot-messaging, 15-spot-actor, 16-spot-address-messaging, 17-stage-wrapper-on-spot |
-| [Actor relocation](05-actor-relocation.ko.md) | 작성 완료 | 14-actor-model, 15-spot-actor, 20-session-actor-dispatch, 28-graceful-drain-handoff |
+| [Actor relocation](05-actor-relocation.ko.md) | 작성 완료 | 14-actor-model, 15-spot-actor, 20-session-actor-dispatch, 30-host-relocation-flow |
 | [Stream session](06-stream-session.ko.md) | 작성 완료 | 19-stream-session, 20-session-actor-dispatch |
-| [Location authority](07-location-authority.ko.md) | 작성 완료 | 21-location-runtime, 22-location-store-redis, 23-relocation-store-redis, 28-graceful-drain-handoff |
+| [Location authority](07-location-authority.ko.md) | 작성 완료 | 21-location-runtime, 22-location-store-redis, 23-relocation-store-redis, 30-host-relocation-flow |
 | [Observability diagnostics](08-observability-diagnostics.ko.md) | 작성 완료 | 24-runtime-monitoring, 25-runtime-metrics, 26-message-flow-tracing, 27-flow-correlation, 29-transport-liveness |
 
 **Java 고유 표기.** Java framework는 Spring Boot starter로 배선한다 — 등록 시점 호출은

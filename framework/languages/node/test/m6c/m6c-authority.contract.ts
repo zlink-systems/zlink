@@ -32,6 +32,9 @@ import {
   ZLinkPublicSpotManager
 } from '../../packages/framework/src/runtime/spots/spot-manager-public';
 import {
+  ZLinkSpotSerialExecutor
+} from '../../packages/framework/src/runtime/spots/spot-serial-executor';
+import {
   invokeSpotClosing
 } from '../../packages/framework/src/runtime/spots/spot-closing';
 import {
@@ -890,6 +893,41 @@ test('exact User Spot manager call is single-use and returns the committed SpotR
   assert.equal(published, true);
   assert.ok(result.spot.objectGeneration > 0n);
   await assert.rejects(() => call.submit(), /already been submitted/);
+
+  published = false;
+  const outsideTurn = manager.getOrCreate('room-outside', 'room').inMesh('mesh');
+  assert.throws(
+    () => outsideTurn.yield(),
+    /yield requires a SpotWide User Spot or Instance Spot application handler/
+  );
+  assert.equal((await outsideTurn.submit()).state, ZLinkSpotCreateState.Created);
+
+  published = false;
+  let entryTurn: ReturnType<ZLinkPublicSpotManager['getOrCreate']> | undefined;
+  await new ZLinkSpotSerialExecutor(false, 'entry').execute(async () => {
+    const call = manager.getOrCreate('room-entry', 'room').inMesh('mesh');
+    entryTurn = call;
+    assert.throws(
+      () => call.yield(),
+      /yield requires a SpotWide User Spot or Instance Spot application handler/
+    );
+  });
+  assert.equal((await entryTurn!.submit()).state, ZLinkSpotCreateState.Created);
+
+  published = false;
+  const spotWideSerial = new ZLinkSpotSerialExecutor(true, 'owner');
+  let initialTurn = 0;
+  let resumedTurn = 0;
+  const yielded = await spotWideSerial.execute(async () => {
+    initialTurn = spotWideSerial.activeTurnId;
+    const created = await manager.getOrCreate('room-yield', 'room')
+      .inMesh('mesh')
+      .yield();
+    resumedTurn = spotWideSerial.activeTurnId;
+    return created;
+  });
+  assert.equal(yielded.state, ZLinkSpotCreateState.Created);
+  assert.notEqual(resumedTurn, initialTurn);
 });
 
 test('User Spot create reports its first generated SpotId collision without another UUID or reservation', async () => {

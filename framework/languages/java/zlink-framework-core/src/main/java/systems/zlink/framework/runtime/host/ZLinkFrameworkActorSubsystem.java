@@ -1,4 +1,11 @@
 package systems.zlink.framework.runtime.host;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.concurrent.CompletionStage;
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.actors.ZLinkActorFactory;
+import systems.zlink.framework.actors.ZLinkActorRelocationAdapter;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActorClient;
@@ -48,11 +55,11 @@ final class ZLinkFrameworkActorSubsystem {
         ZLinkLocationLifecycle locationLifecycle,
         ZLinkStoreLocationResolvers storeLocationResolvers,
         SpotTransportAddressResolver remoteAddressResolver,
-        systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository locationStore,
-        java.util.Map<String,
+        ZLinkLocationRepository locationStore,
+        Map<String,
             systems.zlink.framework.runtime.internal.backend
                 .ZLinkInternalMeshNode> meshNodes,
-        java.util.concurrent.CompletionStage<Void> runtimeReady) {
+        CompletionStage<Void> runtimeReady) {
         var legacyActorNode = registration.spotNodes().stream()
             .filter(node -> !node.actorFactories().isEmpty())
             .findFirst()
@@ -69,12 +76,12 @@ final class ZLinkFrameworkActorSubsystem {
             : meshActorNode == null ? null : meshActorNode.meshName();
         var actorFactories = legacyActorNode != null
             ? legacyActorNode.actorFactories()
-            : meshActorNode == null ? java.util.Map.<String,
-                Class<? extends systems.zlink.framework.actors.ZLinkActorFactory>>of()
+            : meshActorNode == null ? Map.<String,
+                Class<? extends ZLinkActorFactory>>of()
                 : meshActorNode.actorFactories();
-        java.util.Map<String, Class<? extends
-            systems.zlink.framework.actors.ZLinkActorRelocationAdapter<?>>>
-            transferAdapters = new java.util.LinkedHashMap<>();
+        Map<String, Class<? extends
+            ZLinkActorRelocationAdapter<?>>>
+            transferAdapters = new LinkedHashMap<>();
         if (meshActorNode != null) {
             meshActorNode.relocatableActorFactories().forEach(
                 (stableType, factory) -> {
@@ -194,7 +201,7 @@ final class ZLinkFrameworkActorSubsystem {
         ZLinkLocationLifecycle locationLifecycle,
         ZLinkStoreLocationResolvers storeLocationResolvers,
         SpotTransportAddressResolver remoteAddressResolver,
-        java.util.Map<String,
+        Map<String,
             systems.zlink.framework.runtime.internal.backend
                 .ZLinkInternalMeshNode> meshNodes,
         ZLinkActorRuntime actors) {
@@ -230,10 +237,8 @@ final class ZLinkFrameworkActorSubsystem {
         if (storeLocationResolvers != null) {
             meshNodes.values().forEach(node -> node.setMessageFollowHandler(
                 (sourceNodeRid, notice) -> {
-                    if (!node.status().routingId().equals(
-                        notice.source().targetNodeRid())
-                        || !sourceNodeRid.equals(
-                            notice.target().targetNodeRid())) {
+                    if (!acceptsMessageFollowNotice(
+                        sourceNodeRid, notice)) {
                         return;
                     }
                     storeLocationResolvers.invalidateRouteIfMatches(notice);
@@ -255,5 +260,14 @@ final class ZLinkFrameworkActorSubsystem {
         channels.registerRouteInternalRequestHandler(
             ZLinkActorEntryTransferEnvelope.PACKET_NAME,
             spots::handleEntryActorTransferRoute);
+    }
+
+    static boolean acceptsMessageFollowNotice(
+        RoutingId sourceNodeRid,
+        systems.zlink.framework.runtime.internal.service
+            .ZLinkServiceMessageFollowWireCodec.Notice notice) {
+        return sourceNodeRid != null
+            && notice != null
+            && sourceNodeRid.equals(notice.source().targetNodeRid());
     }
 }

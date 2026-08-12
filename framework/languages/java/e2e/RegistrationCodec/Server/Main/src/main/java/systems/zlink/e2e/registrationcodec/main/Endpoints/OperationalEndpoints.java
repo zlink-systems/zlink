@@ -1,8 +1,12 @@
 package systems.zlink.e2e.registrationcodec.main.Endpoints;
+import com.sun.net.httpserver.HttpExchange;
+import java.io.IOException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
-import com.google.protobuf.StringValue;
+import systems.zlink.e2e.registrationcodec.shared.protobuf.ProtobufEchoMsg;
+import systems.zlink.e2e.registrationcodec.shared.protobuf.ProtobufEchoReq;
+import systems.zlink.e2e.registrationcodec.shared.protobuf.ProtobufEchoRes;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -148,13 +152,17 @@ public final class OperationalEndpoints implements SmartLifecycle {
             .submit(Contracts.EchoRes.class)
             .thenCompose(jsonReply -> {
                 client.sendToChannel(Contracts.CHANNEL, new Contracts.JsonEchoMsg("json-send")).submit();
-                return client.requestToChannel(Contracts.CHANNEL, StringValue.of("protobuf-request"))
+                return client.requestToChannel(
+                        Contracts.CHANNEL,
+                        ProtobufEchoReq.newBuilder().setValue("protobuf-request").build())
                     .timeout(Duration.ofSeconds(5))
-                    .submit(StringValue.class)
+                    .submit(ProtobufEchoRes.class)
                     .thenApply(protobufReply -> new Object[] {jsonReply, protobufReply});
             })
             .thenCompose(replies -> {
-                client.sendToChannel(Contracts.CHANNEL, StringValue.of("protobuf-send")).submit();
+                client.sendToChannel(
+                    Contracts.CHANNEL,
+                    ProtobufEchoMsg.newBuilder().setValue("protobuf-send").build()).submit();
                 return client.requestToChannel(
                         Contracts.CHANNEL,
                         new Contracts.PackedEchoReq("msgpack-request"))
@@ -162,7 +170,7 @@ public final class OperationalEndpoints implements SmartLifecycle {
                     .submit(Contracts.PackedEchoRes.class)
                     .thenApply(packedReply -> new Contracts.CodecScenarioRes(
                         (Contracts.EchoRes) replies[0],
-                        ((StringValue) replies[1]).getValue(),
+                        ((ProtobufEchoRes) replies[1]).getValue(),
                         packedReply.value()));
             })
             .thenApply(reply -> {
@@ -180,7 +188,7 @@ public final class OperationalEndpoints implements SmartLifecycle {
     }
 
     private void writeJson(
-        com.sun.net.httpserver.HttpExchange exchange,
+        HttpExchange exchange,
         CompletionStage<?> response) {
         response.whenComplete((value, error) -> {
             try {
@@ -192,13 +200,13 @@ public final class OperationalEndpoints implements SmartLifecycle {
                     ? error.getCause()
                     : error;
                 writeError(exchange, cause);
-            } catch (java.io.IOException writeFailure) {
+            } catch (IOException writeFailure) {
                 exchange.close();
             }
         });
     }
 
-    private void writeJson(com.sun.net.httpserver.HttpExchange exchange, Object value) throws java.io.IOException {
+    private void writeJson(HttpExchange exchange, Object value) throws IOException {
         if (!"POST".equals(exchange.getRequestMethod()) && !"/health".equals(exchange.getRequestURI().getPath())) {
             byte[] body = "method not allowed\n".getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(405, body.length);
@@ -219,8 +227,8 @@ public final class OperationalEndpoints implements SmartLifecycle {
     }
 
     private static void writeError(
-        com.sun.net.httpserver.HttpExchange exchange,
-        Throwable error) throws java.io.IOException {
+        HttpExchange exchange,
+        Throwable error) throws IOException {
         byte[] body = error.toString().getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(500, body.length);
         exchange.getResponseBody().write(body);

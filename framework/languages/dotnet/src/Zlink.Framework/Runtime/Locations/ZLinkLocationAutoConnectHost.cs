@@ -591,9 +591,6 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
             : reconciler.SetLocalWeightAsync(weight, cancellationToken);
     }
 
-    private static RoutingId? RidOrNull(RoutingId routingId) =>
-        routingId.Size > 0 ? routingId : null;
-
     private static ulong CreateLifecycleNonce()
     {
         Span<byte> bytes = stackalloc byte[sizeof(ulong)];

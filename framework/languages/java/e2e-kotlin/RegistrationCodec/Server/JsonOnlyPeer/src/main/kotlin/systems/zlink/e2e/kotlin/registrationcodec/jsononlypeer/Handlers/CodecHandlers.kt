@@ -1,6 +1,8 @@
 package systems.zlink.e2e.kotlin.registrationcodec.jsononlypeer.handlers
 
-import com.google.protobuf.StringValue
+import systems.zlink.e2e.kotlin.registrationcodec.protobuf.ProtobufEchoMsg
+import systems.zlink.e2e.kotlin.registrationcodec.protobuf.ProtobufEchoReq
+import systems.zlink.e2e.kotlin.registrationcodec.protobuf.ProtobufEchoRes
 import systems.zlink.e2e.kotlin.registrationcodec.Contracts
 import systems.zlink.e2e.kotlin.registrationcodec.JsonEchoMsg
 import systems.zlink.e2e.kotlin.registrationcodec.JsonEchoReq
@@ -36,19 +38,22 @@ class JsonSendHandler(
 @ZLinkHandlerGroup(Contracts.MANUAL_GROUP)
 class ProtobufRequestHandler(
     private val state: ScenarioState,
-) : ZLinkSuspendingRequestHandler<StringValue, StringValue> {
-    override suspend fun handle(request: StringValue, context: ZLinkMessageContext): StringValue {
-        state.record("Request", "ProtobufEcho", request.value)
-        return StringValue.of("echo:${request.value}")
+) : ZLinkSuspendingRequestHandler<ProtobufEchoReq, ProtobufEchoRes> {
+    override suspend fun handle(
+        request: ProtobufEchoReq,
+        context: ZLinkMessageContext,
+    ): ProtobufEchoRes {
+        state.record("Request", "ProtobufEchoReq", request.value)
+        return ProtobufEchoRes.newBuilder().setValue("echo:${request.value}").build()
     }
 }
 
 @ZLinkHandlerGroup(Contracts.MANUAL_GROUP)
 class ProtobufSendHandler(
     private val state: ScenarioState,
-) : ZLinkSuspendingSendHandler<StringValue> {
-    override suspend fun handle(message: StringValue, context: ZLinkMessageContext) {
-        state.record("Send", "ProtobufEcho", message.value)
+) : ZLinkSuspendingSendHandler<ProtobufEchoMsg> {
+    override suspend fun handle(message: ProtobufEchoMsg, context: ZLinkMessageContext) {
+        state.record("Send", "ProtobufEchoMsg", message.value)
     }
 }
 

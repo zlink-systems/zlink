@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CPP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BUILD_DIR="$CPP_DIR/build"
 source "$SCRIPT_DIR/../redis-common.sh"
+zlink_cpp_e2e_acquire_run_lock "${BASH_SOURCE[0]}" "$@"
+zlink_cpp_e2e_install_cleanup_trap
 
 SCENARIO="${1:-all}"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
@@ -29,7 +31,7 @@ cleanup() {
   done
   rm -rf -- "$CONFIG_DIR"
   if [[ -n "$REDIS_CONTAINER" && "$REDIS_CONTAINER_OWNED" == "1" ]]; then
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   if [[ "$code" != "0" ]]; then
     echo "InstanceSpot failed; logs=$LOG_DIR" >&2
@@ -52,23 +54,10 @@ zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
   "zlink-redis-cpp-e2e-instance-spot" "redis:7-alpine"
 REDIS_CONTAINER_OWNED=1
 REDIS_ENDPOINT="127.0.0.1:${redis_port}"
+REDIS_KEY_PREFIX="zlink:cpp:e2e:instance-spot:${RUN_ID}:"
 
-read -r OWNER_HTTP OWNER_B_HTTP CALLER_HTTP OWNER_MESH OWNER_B_MESH CALLER_MESH < <(python3 - <<'PY'
-import socket
-sockets = []
-ports = []
-try:
-    for _ in range(6):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        ports.append(sock.getsockname()[1])
-finally:
-    for sock in sockets:
-        sock.close()
-print(*(f"http://127.0.0.1:{ports[i]}" if i < 3 else f"tcp://127.0.0.1:{ports[i]}" for i in range(6)))
-PY
-)
+read -r OWNER_HTTP OWNER_B_HTTP CALLER_HTTP OWNER_MESH OWNER_B_MESH CALLER_MESH \
+  < <(zlink_cpp_e2e_allocate_endpoints http http http tcp tcp tcp)
 
 wait_http() {
   local endpoint="$1"
@@ -94,7 +83,8 @@ PY
 write_config() {
   local path="$1" role="$2" rid="$3" http_endpoint="$4" mesh_endpoint="$5" peer_rid="$6" peer_endpoint="$7" second_peer_rid="$8" second_peer_endpoint="$9"
   python3 - "$path" "$role" "$rid" "$http_endpoint" "$mesh_endpoint" "$peer_rid" "$peer_endpoint" \
-    "$second_peer_rid" "$second_peer_endpoint" "$REDIS_ENDPOINT" "$LOG_DIR" <<'PY'
+    "$second_peer_rid" "$second_peer_endpoint" "$REDIS_ENDPOINT" \
+    "$REDIS_KEY_PREFIX" "$LOG_DIR" <<'PY'
 import json
 import os
 import stat
@@ -102,13 +92,13 @@ import sys
 
 (path, role, rid, http_endpoint, mesh_endpoint, peer_rid, peer_endpoint,
  second_peer_rid, second_peer_endpoint,
- redis_endpoint, log_dir) = sys.argv[1:]
+ redis_endpoint, redis_key_prefix, log_dir) = sys.argv[1:]
 value = {
     "e2e": {
         "role": role, "rid": rid, "httpEndpoint": http_endpoint,
         "meshEndpoint": mesh_endpoint, "redis": {
             "endpoint": redis_endpoint,
-            "keyPrefix": "zlink:e2e:instance-spot"
+            "keyPrefix": redis_key_prefix
         }, "logDir": log_dir,
         "evidenceFile": os.path.join(log_dir, rid + ".evidence.jsonl")
     }

@@ -443,14 +443,16 @@ test('framework package exports only the public root contract', () => {
   assert.equal(packageJson.exports['.'].types, './dist/index.d.ts');
 });
 
-test('framework public root excludes raw route storage and serializer selection details', () => {
+test('framework public root exposes declared-type codec selection without per-message context', () => {
   const publicRoot = fs.readFileSync(path.join(declarationsRoot, 'index.d.ts'), 'utf8');
   const codecDeclarations = readTree(path.join(declarationsRoot, 'Codecs'));
   assert.doesNotMatch(publicRoot, /ZLinkRouteKind|ZLinkRouteLocation/);
   assert.doesNotMatch(
     codecDeclarations,
-    /ZLinkSerializerSelectionContext|canSerialize|selection|packetName|messageType|parseMessage/
+    /ZLinkSerializerSelectionContext|packetName|messageType|parseMessage/
   );
+  assert.match(codecDeclarations, /ZLinkMessageTypeSelector/);
+  assert.match(codecDeclarations, /canSerialize: ZLinkMessageTypeSelector/);
 });
 
 test('NestJS package declarations stay inside declared public package boundaries', () => {
@@ -512,6 +514,15 @@ test('entry spot public surface separates creation and membership from user spot
   assert.equal(entryContext.includes('close('), false);
 });
 
+test('Spot handler registry includes the Actor handler registration contract', () => {
+  const declarations = readTree(declarationsRoot);
+  const spotHandlers = declarationBody(declarations, 'ZLinkSpotHandlerRegistry');
+
+  assert.equal(interfaceExtends(spotHandlers, 'ZLinkActorHandlerRegistry'), true);
+  assert.equal(spotHandlers.includes('addPacket'), true);
+  assert.equal(spotHandlers.includes('addSubscribe'), true);
+});
+
 test('actor join and one-way calls expose only their target terminators', () => {
   const actorContracts = fs.readFileSync(
     path.join(workspaceRoot, 'packages', 'framework', 'src', 'contracts', 'Actors', 'ZLinkActorFactory.ts'),
@@ -538,6 +549,8 @@ test('actor join and one-way calls expose only their target terminators', () => 
 test('spot manager exposes exact single-use stable-type calls and generation-fenced refs', () => {
   const declarations = readTree(declarationsRoot);
   const spotManager = declarationBody(declarations, 'ZLinkSpotManager');
+  const spotCreateCall = declarationBody(declarations, 'ZLinkSpotCreateCall');
+  const spotGetOrCreateCall = declarationBody(declarations, 'ZLinkSpotGetOrCreateCall');
   const meshNodeBuilder = declarationBody(declarations, 'ZLinkMeshNodeBuilder');
   const objectServerBuilder = declarationBody(declarations, 'ZLinkMeshObjectServerBuilder');
 
@@ -545,6 +558,9 @@ test('spot manager exposes exact single-use stable-type calls and generation-fen
   assert.match(spotManager, /getOrCreate\(spotId: SpotId, spotType: string\): ZLinkSpotGetOrCreateCall/);
   assert.match(spotManager, /find\(spotId: SpotId, signal\?: AbortSignal\): Promise<SpotRef \| undefined>/);
   assert.match(spotManager, /close\(spot: SpotRef, signal\?: AbortSignal\): Promise<boolean>/);
+  assert.match(spotCreateCall, /submit\(signal\?: AbortSignal\): Promise<ZLinkSpotCreateResult>/);
+  assert.match(spotCreateCall, /yield\(signal\?: AbortSignal\): Promise<ZLinkSpotCreateResult>/);
+  assert.equal(interfaceExtends(spotGetOrCreateCall, 'ZLinkSpotCreateCall'), true);
   assert.doesNotMatch(spotManager, /Type<TSpot>|meshName: string,\s*spotType/);
   assert.match(objectServerBuilder, /addEntrySpot<TEntrySpot extends ZLinkEntrySpot>/);
   assert.doesNotMatch(meshNodeBuilder, /configureEntrySpot/);

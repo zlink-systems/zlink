@@ -1334,33 +1334,6 @@ internal sealed partial class ZLinkInMemoryLocationStore
             request.TargetNodeLifecycleGeneration,
             request.Capacity);
 
-    private void AdjustCapacityVector(
-        Dictionary<PlacementCapacityKey, long> counters,
-        ZLinkMeshNodeDescriptorKey descriptor,
-        ulong descriptorLifecycleGeneration,
-        ZLinkCapacityVector capacity,
-        int multiplier)
-    {
-        if (capacity.Actors != 0)
-            AdjustPlacementCapacity(
-                counters,
-                new PlacementCapacityKey(
-                    descriptor,
-                    descriptorLifecycleGeneration,
-                    ZLinkPlacementObjectKind.Actor,
-                    string.Empty),
-                checked((long)capacity.Actors * multiplier));
-        if (capacity.SpotType is { } spotType)
-            AdjustPlacementCapacity(
-                counters,
-                new PlacementCapacityKey(
-                    descriptor,
-                    descriptorLifecycleGeneration,
-                    spotType.ObjectKind,
-                    spotType.StableType),
-                checked((long)spotType.Count * multiplier));
-    }
-
     private void AdjustPlacementCapacity(
         Dictionary<PlacementCapacityKey, long> counters,
         PlacementCapacityKey key,

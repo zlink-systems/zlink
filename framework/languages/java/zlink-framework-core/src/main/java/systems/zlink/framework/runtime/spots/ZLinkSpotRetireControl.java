@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.ArrayList;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -23,6 +24,8 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.locations
+    .ZLinkRelocationStartupScanner;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 
 /**
@@ -296,6 +299,12 @@ final class ZLinkSpotRetireControl {
         CompletionStage<Void> abort(StageRequest request);
 
         CompletionStage<Void> finalizeAfterCompletion(StageRequest request);
+
+        default CompletionStage<Void> recoverRetainedSessionAbort(
+            ZLinkRelocationStartupScanner.RetainedSessionAbort retained) {
+            return CompletableFuture.failedFuture(new IllegalStateException(
+                "retained Session abort recovery is unavailable"));
+        }
 
         default CompletionStage<ZLinkSpotRelocationReplyRoutes.Ack> relayReply(
             RoutingId transportSource,
@@ -653,8 +662,8 @@ final class ZLinkSpotRetireControl {
                     throw new IllegalArgumentException(
                         "relocation participant count is invalid");
                 }
-                java.util.ArrayList<ParticipantFence> participants =
-                    new java.util.ArrayList<>(participantCount);
+                ArrayList<ParticipantFence> participants =
+                    new ArrayList<>(participantCount);
                 for (int index = 0; index < participantCount; index++) {
                     participants.add(new ParticipantFence(
                         readText(input),
@@ -673,8 +682,8 @@ final class ZLinkSpotRetireControl {
                     throw new IllegalArgumentException(
                         "Session route count is invalid");
                 }
-                java.util.ArrayList<SessionRouteFence> sessionRoutes =
-                    new java.util.ArrayList<>(sessionRouteCount);
+                ArrayList<SessionRouteFence> sessionRoutes =
+                    new ArrayList<>(sessionRouteCount);
                 for (int index = 0; index < sessionRouteCount; index++) {
                     sessionRoutes.add(new SessionRouteFence(
                         readText(input),
@@ -747,8 +756,8 @@ final class ZLinkSpotRetireControl {
                     throw new IllegalArgumentException(
                         "relocation reply part count is invalid");
                 }
-                java.util.ArrayList<byte[]> parts =
-                    new java.util.ArrayList<>(partCount);
+                ArrayList<byte[]> parts =
+                    new ArrayList<>(partCount);
                 for (int index = 0; index < partCount; index++) {
                     int length = input.readInt();
                     if (length < 0 || length > MAX_COMMAND_BYTES) {

@@ -11,7 +11,7 @@ fi
 for sample in "${SAMPLES[@]}"; do
   case "${sample}" in
     TicTacToe|Bingo|SupportChat|ShoppingMall|DeliveryDispatch|GameQuest|ZoneWorld)
-      "${SCRIPT_DIR}/${sample}/run_sample.sh"
+      bash "${SCRIPT_DIR}/${sample}/run_sample.sh"
       ;;
     *)
       echo "Unknown .NET sample '${sample}'." >&2

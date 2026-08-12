@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -25,7 +26,7 @@ final class ZLinkFilterPipelineTest {
         CapturingFilter filter = new CapturingFilter();
         try (var owner = owner(filter)) {
             ZLinkFilterPipeline.Result<String> result = ZLinkFilterPipeline.invoke(
-                    java.util.List.of(CapturingFilter.class),
+                    List.of(CapturingFilter.class),
                     owner,
                     filterContext(ZLinkHandlerDispatchKind.CHANNEL_REQUEST),
                     () -> CompletableFuture.completedFuture("handler"))
@@ -46,7 +47,7 @@ final class ZLinkFilterPipelineTest {
         ReplacingFilter filter = new ReplacingFilter();
         try (var owner = owner(filter)) {
             ZLinkFilterPipeline.Result<String> result = ZLinkFilterPipeline.invoke(
-                    java.util.List.of(ReplacingFilter.class),
+                    List.of(ReplacingFilter.class),
                     owner,
                     filterContext(ZLinkHandlerDispatchKind.CHANNEL_REQUEST),
                     () -> CompletableFuture.completedFuture("handler"))
@@ -63,7 +64,7 @@ final class ZLinkFilterPipelineTest {
         ShortCircuitFilter filter = new ShortCircuitFilter();
         try (var owner = owner(filter)) {
             ZLinkFilterPipeline.Result<String> result = ZLinkFilterPipeline.invoke(
-                    java.util.List.of(ShortCircuitFilter.class),
+                    List.of(ShortCircuitFilter.class),
                     owner,
                     filterContext(ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST),
                     () -> CompletableFuture.completedFuture("handler"))
@@ -83,7 +84,7 @@ final class ZLinkFilterPipelineTest {
             assertThrows(
                 IllegalStateException.class,
                 () -> ZLinkFilterPipeline.invoke(
-                    java.util.List.of(DuplicateNextFilter.class),
+                    List.of(DuplicateNextFilter.class),
                     owner,
                     filterContext(ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST),
                     () -> {
@@ -108,7 +109,7 @@ final class ZLinkFilterPipelineTest {
             assertThrows(
                 IllegalStateException.class,
                 () -> ZLinkFilterPipeline.invoke(
-                    java.util.List.of(
+                    List.of(
                         DuplicateNextFilter.class,
                         ShortCircuitFilter.class),
                     owner,

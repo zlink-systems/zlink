@@ -7,7 +7,7 @@ internal static class TdG1TerminatorConformanceScenario
 {
     public static async Task RunAsync(ExecutionTurnScenarioContext context)
     {
-        await TdA1TerminatorSurfaceScenario.RunAsync(context);
+        await TerminatorSurfaceContract.RunAsync(context);
         await VerifyAsync(context, "async", false);
         await VerifyAsync(context, "yield", true);
     }

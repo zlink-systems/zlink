@@ -17,7 +17,7 @@ public final class PublisherRestartScenario {
             for (int sequence = 1; sequence <= 80; sequence++) {
                 context.publisher().publish(
                     "all",
-                    new Contracts.EventMsg(
+                    new Contracts.Event(
                         "ps-b2",
                         sequence,
                         "before-publisher-restart-" + sequence));
@@ -40,7 +40,7 @@ public final class PublisherRestartScenario {
 
         context.processes().waitStopped("publisher", context.options().publisherHttp());
         ScenarioAssert.expectPublishFailure(
-            () -> context.publisher().publish("all", new Contracts.EventMsg("ps-b2", 2, "during-publisher-down")),
+            () -> context.publisher().publish("all", new Contracts.Event("ps-b2", 2, "during-publisher-down")),
             "PS-B2 expected publish to fail while publisher process is down");
 
         try (var restarted = context.processes().startPublisher("publisher-restarted")) {
@@ -48,7 +48,7 @@ public final class PublisherRestartScenario {
             for (int sequence = 3; sequence <= 42; sequence++) {
                 context.publisher().publish(
                     "all",
-                    new Contracts.EventMsg(
+                    new Contracts.Event(
                         "ps-b2",
                         sequence,
                         "after-publisher-restart-" + sequence));

@@ -7,9 +7,9 @@ import {
 } from '@zlink-systems/nestjs';
 import {
   EnterWorldRes,
-  EnterZoneMsg,
-  BotTickRes,
+  EnterZoneReq,
   JoinWorldRes,
+  MessageFollowProbeRes,
   MoveRejectedNotify,
   PacketNames,
 } from '../../../../../Shared/contracts';
@@ -18,7 +18,14 @@ import type { ZoneId } from '../../../../../Shared/spec';
 import { nextBotStep } from '../../../Domain/bot-patrol';
 import { validateMove } from '../../../Domain/move-policy';
 import { NodeRuntimeState } from '../../../Domain/node-runtime-state';
-import type { BotTickReq, EnterWorldReq, JoinWorldReq, MoveMsg } from '../../../../../Shared/contracts';
+import type {
+  BotTickMsg,
+  EnterWorldReq,
+  JoinWorldReq,
+  MessageFollowProbeReq,
+  MessageFollowProbeMsg,
+  MoveMsg
+} from '../../../../../Shared/contracts';
 import type {
   ZLinkMessageContext,
   ZLinkSpotOutbound
@@ -48,7 +55,7 @@ class EntryEnterWorldHandler {
     try {
       actor.context.joinSpot(
         targetZone,
-        new EnterZoneMsg(actor.actorId, request.x, request.y, request.isBot, null)
+        new EnterZoneReq(actor.actorId, request.x, request.y, request.isBot, null)
       ).timeout(10_000).defer();
     } catch (error) {
       actor.completePendingJoin();
@@ -106,7 +113,7 @@ class EntryJoinWorldHandler {
     try {
       actor.context.joinSpot(
         targetZone,
-        new EnterZoneMsg(actor.actorId, actor.x, actor.y, false, null)
+        new EnterZoneReq(actor.actorId, actor.x, actor.y, false, null)
       ).timeout(10_000).defer();
     } catch (error) {
       actor.completePendingJoin();
@@ -147,7 +154,7 @@ class PlayerMovement {
     try {
       actor.context.joinSpot(
         targetZone,
-        new EnterZoneMsg(actor.actorId, x, y, actor.isBot, nodeOf(previousZone))
+        new EnterZoneReq(actor.actorId, x, y, actor.isBot, nodeOf(previousZone))
       ).timeout(10_000).defer();
     } catch (error) {
       actor.completePendingJoin();
@@ -195,11 +202,59 @@ class PlayerMoveHandler {
   }
 }
 
+/**
+ * Answers the runner-only Message Follow probe on whichever node currently
+ * owns the actor. Echoing the probe id and payload proves the followed
+ * request kept its payload and reply correlation (ZW-B6).
+ */
 @Injectable()
 @zlinkSpotActorRequestHandler({
   spot: () => ZoneSpot,
   actor: () => PlayerActor,
-  packetName: PacketNames.botTickReq
+  packetName: PacketNames.messageFollowProbeReq
+})
+class PlayerMessageFollowProbeHandler {
+  async handle(
+    _spot: ZoneSpot,
+    actor: PlayerActor,
+    _context: ZLinkMessageContext,
+    request: MessageFollowProbeReq
+  ): Promise<MessageFollowProbeRes> {
+    console.log(
+      `message-follow probe handled actor=${actor.actorId} probe=${request.probeId} payload=${request.payload}`
+    );
+    return new MessageFollowProbeRes(request.probeId, request.payload);
+  }
+}
+
+/**
+ * Records the one-way half of the Message Follow probe. A one-way send has no
+ * reply that could prove target execution, so the runner reads this log line.
+ */
+@Injectable()
+@zlinkSpotActorSendHandler({
+  spot: () => ZoneSpot,
+  actor: () => PlayerActor,
+  packetName: PacketNames.messageFollowProbeMsg
+})
+class PlayerMessageFollowProbeSendHandler {
+  async handle(
+    _spot: ZoneSpot,
+    actor: PlayerActor,
+    _context: ZLinkMessageContext,
+    message: MessageFollowProbeMsg
+  ): Promise<void> {
+    console.log(
+      `message-follow probe one-way handled actor=${actor.actorId} probe=${message.probeId} payload=${message.payload}`
+    );
+  }
+}
+
+@Injectable()
+@zlinkSpotActorSendHandler({
+  spot: () => ZoneSpot,
+  actor: () => PlayerActor,
+  packetName: PacketNames.botTickMsg
 })
 class PlayerBotTickHandler {
   constructor(private readonly movement: PlayerMovement) {}
@@ -208,12 +263,11 @@ class PlayerBotTickHandler {
     _spot: ZoneSpot,
     actor: PlayerActor,
     _context: ZLinkMessageContext,
-    _message: BotTickReq
-  ): Promise<BotTickRes> {
-    if (!actor.isBot || actor.hasPendingJoin) return new BotTickRes();
+    _message: BotTickMsg
+  ): Promise<void> {
+    if (!actor.isBot || actor.hasPendingJoin) return;
     const next = nextBotStep(actor.x, actor.y, actor.dirX, actor.dirY);
     await this.movement.move(actor, next.x, next.y);
-    return new BotTickRes();
   }
 }
 
@@ -227,6 +281,8 @@ export {
   EntryEnterWorldHandler,
   EntryJoinWorldHandler,
   PlayerBotTickHandler,
+  PlayerMessageFollowProbeHandler,
+  PlayerMessageFollowProbeSendHandler,
   PlayerMoveHandler,
   PlayerMovement,
 };

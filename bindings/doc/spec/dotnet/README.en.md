@@ -408,6 +408,17 @@ public partial class CommonSocketOptions
 }
 ```
 
+`AutoHwmMessageUnitBytes` is an input to Core's planner. Core multiplies the
+selected message-slot count by this value to calculate the planned byte HWM. A
+direction on which the caller sets `SendHighWaterMark` or
+`ReceiveHighWaterMark` becomes a manual override and is not changed by later
+automatic HWM recalculation.
+
+The .NET binding does not recount queued messages or payloads. When the actual
+accounted bytes in a Core pipe reach the applied HWM, the native submit result
+reports backpressure and the .NET operation preserves it through the existing
+result and timeout contract. `0UL` means unlimited.
+
 - `MonitorStatus` provides the same fields as the native `zlink_monitor_status_t` ABI version 2.
 - Planned, applied, and deferred HWM, and in-flight usage, are all `ulong` byte values.
 - A deferred value is valid only when the matching `AutoHwmDeferredSendHighWaterMarkValid` or `AutoHwmDeferredReceiveHighWaterMarkValid` is `true`.

@@ -219,8 +219,8 @@ async Task AssertSpotWorkflowAndTimerAsync()
     var actor = await CreateActorOnAsync("play", "10-play", "spot-workflow");
     var reply = (await http["play"]
             .Post($"/objects/actors/{actor.ActorId}/workflow")
-            .Body(new ChannelSpotWorkflowRequest("spot-workflow"))
-            .Async<ChannelSpotWorkflowReply>())
+            .Body(new ChannelSpotWorkflowReq("spot-workflow"))
+            .Async<ChannelSpotWorkflowRes>())
         .Body;
     Require(reply.StateVersion == 2, "Spot state was not changed after the awaited reply.");
     Require(reply.WorkflowRole is "workflow-100" or "workflow-300" or "workflow-300-new",
@@ -241,11 +241,11 @@ async Task AssertClientServerStateAddressAsync()
     var spot = await CreateSpotOnAsync("play", null, "state-address-room");
     var reply = (await http["workflow100"]
             .Post("/objects/state-address")
-            .Body(new ChannelObjectScenarioRequest(
+            .Body(new ChannelObjectScenarioReq(
                 actor.ActorId,
                 spot.SpotId,
                 "state-address"))
-            .Async<ChannelProbeReply>())
+            .Async<ChannelProbeRes>())
         .Body;
     Require(reply.Downstream.Length == 2
             && reply.Downstream[0].StartsWith($"spot:{spot.SpotId}:", StringComparison.Ordinal)
@@ -264,8 +264,8 @@ async Task AssertStateAddressRegressionAsync()
 
     var node = (await http["workflow100"]
             .Post($"/objects/nodes/{Uri.EscapeDataString(actor.NodeRid)}/probe")
-            .Body(new ChannelObjectProbeRequest("node-direct"))
-            .Async<ChannelProbeReply>())
+            .Body(new ChannelObjectProbeReq("node-direct"))
+            .Async<ChannelProbeRes>())
         .Body;
     Require(node.Role == "session" && node.Channel == ChannelEgressNames.GameMesh,
         "Node direct request selected the wrong MeshNode.");
@@ -276,13 +276,13 @@ async Task AssertStateAddressRegressionAsync()
 
     var join = (await http["session"]
             .Post($"/objects/actors/{actor.ActorId}/join")
-            .Body(new ChannelActorJoinRequest("snapshot-join", spot.SpotId))
-            .Async<ChannelActorJoinReply>())
+            .Body(new ChannelActorJoinReq("snapshot-join", spot.SpotId))
+            .Async<ChannelActorJoinRes>())
         .Body;
     Require(join.Submitted, "Snapshot Actor join was not submitted.");
 
     var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
-    ChannelObjectProbeReply? after = null;
+    ChannelObjectProbeRes? after = null;
     do
     {
         try
@@ -316,19 +316,19 @@ async Task AssertStateAddressRegressionAsync()
         });
     await connector.Connect.Async();
     var bound = await connector
-        .Request(new ChannelBindActorRequest(actor.ActorId))
-        .PacketName(nameof(ChannelBindActorRequest))
-        .Async<ChannelBindActorReply>();
+        .Request(new ChannelBindActorReq(actor.ActorId))
+        .PacketName(nameof(ChannelBindActorReq))
+        .Async<ChannelBindActorRes>();
     Require(bound.ActorId == actor.ActorId,
         "Session binding selected a different Actor.");
     var notificationTask = connector
-        .WaitFor<ChannelBoundPushNotification>()
+        .WaitFor<ChannelBoundPushNotify>()
         .Async()
         .AsTask();
     var push = (await http["play"]
             .Post($"/objects/actors/{actor.ActorId}/bound-push")
-            .Body(new ChannelBoundPushRequest("after-snapshot-join"))
-            .Async<ChannelBoundPushReply>())
+            .Body(new ChannelBoundPushReq("after-snapshot-join"))
+            .Async<ChannelBoundPushRes>())
         .Body;
     var notification = await notificationTask.WaitAsync(TimeSpan.FromSeconds(5));
     Require(push.Submitted
@@ -338,7 +338,7 @@ async Task AssertStateAddressRegressionAsync()
         "Bound-session push did not follow the relocated Actor.");
 }
 
-async Task<ChannelActorCreateReply> CreateActorOnAsync(
+async Task<ChannelActorCreateRes> CreateActorOnAsync(
     string source,
     string? nodeRidPrefix,
     string idPrefix)
@@ -348,8 +348,8 @@ async Task<ChannelActorCreateReply> CreateActorOnAsync(
         var actorId = $"{idPrefix}-{Guid.NewGuid():N}";
         var actor = (await http[source]
                 .Post("/objects/actors")
-                .Body(new ChannelActorCreateRequest(actorId))
-                .Async<ChannelActorCreateReply>())
+                .Body(new ChannelActorCreateReq(actorId))
+                .Async<ChannelActorCreateRes>())
             .Body;
         if (nodeRidPrefix is null
             || actor.NodeRid.StartsWith(nodeRidPrefix, StringComparison.Ordinal))
@@ -359,7 +359,7 @@ async Task<ChannelActorCreateReply> CreateActorOnAsync(
         $"Could not place an Actor on node prefix '{nodeRidPrefix}'.");
 }
 
-async Task<ChannelSpotCreateReply> CreateSpotOnAsync(
+async Task<ChannelSpotCreateRes> CreateSpotOnAsync(
     string source,
     string? nodeRidPrefix,
     string idPrefix)
@@ -369,8 +369,8 @@ async Task<ChannelSpotCreateReply> CreateSpotOnAsync(
         var spotId = $"{idPrefix}-{Guid.NewGuid():N}";
         var spot = (await http[source]
                 .Post("/objects/spots")
-                .Body(new ChannelSpotCreateRequest(spotId))
-                .Async<ChannelSpotCreateReply>())
+                .Body(new ChannelSpotCreateReq(spotId))
+                .Async<ChannelSpotCreateRes>())
             .Body;
         if (nodeRidPrefix is null
             || spot.NodeRid.StartsWith(nodeRidPrefix, StringComparison.Ordinal))
@@ -380,31 +380,31 @@ async Task<ChannelSpotCreateReply> CreateSpotOnAsync(
         $"Could not place a Spot on node prefix '{nodeRidPrefix}'.");
 }
 
-async Task<ChannelObjectProbeReply> ProbeActorAsync(
+async Task<ChannelObjectProbeRes> ProbeActorAsync(
     string source,
     string actorId,
     string id)
 {
     return (await http[source]
             .Post($"/objects/actors/{actorId}/probe")
-            .Body(new ChannelObjectProbeRequest(id))
-            .Async<ChannelObjectProbeReply>())
+            .Body(new ChannelObjectProbeReq(id))
+            .Async<ChannelObjectProbeRes>())
         .Body;
 }
 
-async Task<ChannelObjectProbeReply> ProbeSpotAsync(
+async Task<ChannelObjectProbeRes> ProbeSpotAsync(
     string source,
     string spotId,
     string id)
 {
     return (await http[source]
             .Post($"/objects/spots/{spotId}/probe")
-            .Body(new ChannelObjectProbeRequest(id))
-            .Async<ChannelObjectProbeReply>())
+            .Body(new ChannelObjectProbeReq(id))
+            .Async<ChannelObjectProbeRes>())
         .Body;
 }
 
-async Task<RouteInvokeResult> InvokeRequestAsync(
+async Task<RouteRequestInvokeRes> InvokeRequestAsync(
     string role,
     string channel,
     string id,
@@ -412,8 +412,8 @@ async Task<RouteInvokeResult> InvokeRequestAsync(
 {
     return (await http[role]
             .Post("/request")
-            .Body(new RouteInvokeRequest(channel, id, mode))
-            .Async<RouteInvokeResult>())
+            .Body(new RouteRequestInvokeReq(channel, id, mode))
+            .Async<RouteRequestInvokeRes>())
         .Body;
 }
 
@@ -437,8 +437,8 @@ async Task AssertSendAsync(string source, string channel, string id)
 {
     var result = (await http[source]
             .Post("/send")
-            .Body(new RouteInvokeRequest(channel, id))
-            .Async<SendInvokeResult>())
+            .Body(new RouteSendInvokeReq(channel, id))
+            .Async<RouteSendInvokeRes>())
         .Body;
     Require(result.Succeeded, $"send failed: {result.Error}");
 }

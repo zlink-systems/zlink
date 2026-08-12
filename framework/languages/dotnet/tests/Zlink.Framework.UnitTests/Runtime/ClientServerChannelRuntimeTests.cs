@@ -6,6 +6,7 @@ using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Runtime.Codecs;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.LocationProvider;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -567,16 +568,30 @@ public sealed class ClientServerChannelRuntimeTests
                     "work",
                     timeout.Token)
                 .GetAsyncEnumerator(timeout.Token);
+            await using var secondEvents = monitoring.ObserveAsync(
+                    "work",
+                    timeout.Token)
+                .GetAsyncEnumerator(timeout.Token);
+            var firstChange = WaitForTargetStateAsync(
+                events,
+                ZLinkPeerState.Draining);
+            var secondChange = WaitForTargetStateAsync(
+                secondEvents,
+                ZLinkPeerState.Draining);
             var state = await runtime.EnsureStartedStateAsync(
                 CancellationToken.None);
             GetServerBundle(state, "work")
                 .ClientServerServer!
                 .MarkDraining();
 
-            Assert.True(await events.MoveNextAsync());
+            Assert.True(await firstChange);
+            Assert.True(await secondChange);
             Assert.Equal(
                 ZLinkPeerState.Draining,
                 Assert.Single(events.Current.Status.Targets).State);
+            Assert.Equal(
+                ZLinkPeerState.Draining,
+                Assert.Single(secondEvents.Current.Status.Targets).State);
             Assert.False(events.Current.Status.IsReady);
             Assert.False(monitoring.GetStatus("work").IsReady);
         }
@@ -584,6 +599,17 @@ public sealed class ClientServerChannelRuntimeTests
         {
             await runtime.StopAsync(CancellationToken.None);
         }
+    }
+
+    private static async Task<bool> WaitForTargetStateAsync(
+        IAsyncEnumerator<ZLinkObservedStatus<ZLinkClientServerStatus>> observer,
+        ZLinkPeerState expected)
+    {
+        while (await observer.MoveNextAsync())
+            if (observer.Current.Status.Targets.Any(target =>
+                    target.State == expected))
+                return true;
+        return false;
     }
 
     [Fact]
@@ -615,9 +641,10 @@ public sealed class ClientServerChannelRuntimeTests
     [Fact]
     public async Task AutomaticClient_UsesDedicatedDescriptorAndActualBoundEndpoint()
     {
-        var store = new ZLinkInMemoryLocationStore();
-        await using var server = CreateAutomaticServer(store, "only");
-        await using var client = CreateAutomaticClient(store);
+        var locationProvider = new ZLinkInMemoryProviderLocationStore();
+        var store = new ZLinkProviderLocationRepository(locationProvider);
+        await using var server = CreateAutomaticServer(locationProvider, "only");
+        await using var client = CreateAutomaticClient(locationProvider);
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
         var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         var serverLocations = server.GetRequiredService<ZLinkLocationRuntime>();
@@ -678,11 +705,12 @@ public sealed class ClientServerChannelRuntimeTests
     [Fact]
     public async Task AutomaticClient_SelectsAcrossPositiveWeightReadyServers()
     {
-        var store = new ZLinkInMemoryLocationStore();
-        await using var first = CreateAutomaticServer(store, "first", weight: 100);
-        await using var second = CreateAutomaticServer(store, "second", weight: 300);
-        await using var excluded = CreateAutomaticServer(store, "excluded", weight: 0);
-        await using var client = CreateAutomaticClient(store);
+        var locationProvider = new ZLinkInMemoryProviderLocationStore();
+        var store = new ZLinkProviderLocationRepository(locationProvider);
+        await using var first = CreateAutomaticServer(locationProvider, "first", weight: 100);
+        await using var second = CreateAutomaticServer(locationProvider, "second", weight: 300);
+        await using var excluded = CreateAutomaticServer(locationProvider, "excluded", weight: 0);
+        await using var client = CreateAutomaticClient(locationProvider);
         var providers = new[] { first, second, excluded, client };
         foreach (var provider in providers)
             await provider.GetRequiredService<ZLinkLocationRuntime>()
@@ -780,9 +808,10 @@ public sealed class ClientServerChannelRuntimeTests
     [Fact]
     public async Task ManualAndAutomaticIntents_ShareAdmittedServerIdentity()
     {
-        var store = new ZLinkInMemoryLocationStore();
-        await using var server = CreateAutomaticServer(store, "shared");
-        await using var client = CreateAutomaticClient(store);
+        var locationProvider = new ZLinkInMemoryProviderLocationStore();
+        var store = new ZLinkProviderLocationRepository(locationProvider);
+        await using var server = CreateAutomaticServer(locationProvider, "shared");
+        await using var client = CreateAutomaticClient(locationProvider);
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
         var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         var serverLocations = server.GetRequiredService<ZLinkLocationRuntime>();
@@ -839,10 +868,11 @@ public sealed class ClientServerChannelRuntimeTests
     [Fact]
     public async Task ServerRestart_ReusesRidAndPublishesNewLifecycleIntent()
     {
-        var store = new ZLinkInMemoryLocationStore();
+        var locationProvider = new ZLinkInMemoryProviderLocationStore();
+        var store = new ZLinkProviderLocationRepository(locationProvider);
         var port = ReservePort();
-        await using var server = CreateAutomaticServer(store, "restart", port: port);
-        await using var client = CreateAutomaticClient(store);
+        await using var server = CreateAutomaticServer(locationProvider, "restart", port: port);
+        await using var client = CreateAutomaticClient(locationProvider);
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
         var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         var serverLocations = server.GetRequiredService<ZLinkLocationRuntime>();
@@ -1004,9 +1034,10 @@ public sealed class ClientServerChannelRuntimeTests
     [Fact]
     public async Task AutomaticClient_IncludesSameProcessServerWithoutLocalPreferenceOrBypass()
     {
-        var store = new ZLinkInMemoryLocationStore();
-        await using var local = CreateAutomaticClientAndServer(store, "local");
-        await using var remote = CreateAutomaticServer(store, "remote");
+        var locationProvider = new ZLinkInMemoryProviderLocationStore();
+        var store = new ZLinkProviderLocationRepository(locationProvider);
+        await using var local = CreateAutomaticClientAndServer(locationProvider, "local");
+        await using var remote = CreateAutomaticServer(locationProvider, "remote");
         var providers = new[] { local, remote };
 
         foreach (var provider in providers)
@@ -1073,12 +1104,13 @@ public sealed class ClientServerChannelRuntimeTests
     [Fact]
     public async Task AutomaticClient_ExcludesSameProcessZeroWeightServer()
     {
-        var store = new ZLinkInMemoryLocationStore();
+        var locationProvider = new ZLinkInMemoryProviderLocationStore();
+        var store = new ZLinkProviderLocationRepository(locationProvider);
         await using var local = CreateAutomaticClientAndServer(
-            store,
+            locationProvider,
             "local",
             weight: 0);
-        await using var remote = CreateAutomaticServer(store, "remote");
+        await using var remote = CreateAutomaticServer(locationProvider, "remote");
         var providers = new[] { local, remote };
 
         foreach (var provider in providers)
@@ -1282,9 +1314,10 @@ public sealed class ClientServerChannelRuntimeTests
     [Fact]
     public async Task AutomaticClient_RejectsDescriptorWhoseAdmissionIdentityDoesNotMatch()
     {
-        var store = new ZLinkInMemoryLocationStore();
-        await using var server = CreateAutomaticServer(store, "identity");
-        await using var client = CreateAutomaticClient(store);
+        var locationProvider = new ZLinkInMemoryProviderLocationStore();
+        var store = new ZLinkProviderLocationRepository(locationProvider);
+        await using var server = CreateAutomaticServer(locationProvider, "identity");
+        await using var client = CreateAutomaticClient(locationProvider);
         var serverLocations = server.GetRequiredService<ZLinkLocationRuntime>();
         var clientLocations = client.GetRequiredService<ZLinkLocationRuntime>();
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
@@ -1556,7 +1589,7 @@ public sealed class ClientServerChannelRuntimeTests
     }
 
     private static ServiceProvider CreateAutomaticServer(
-        ZLinkInMemoryLocationStore store,
+        IZLinkLocationStore store,
         string name,
         int weight = 100,
         int port = 0)
@@ -1579,7 +1612,7 @@ public sealed class ClientServerChannelRuntimeTests
     }
 
     private static ServiceProvider CreateAutomaticClient(
-        ZLinkInMemoryLocationStore store)
+        IZLinkLocationStore store)
     {
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
@@ -1592,7 +1625,7 @@ public sealed class ClientServerChannelRuntimeTests
     }
 
     private static ServiceProvider CreateAutomaticClientAndServer(
-        ZLinkInMemoryLocationStore store,
+        IZLinkLocationStore store,
         string name,
         int weight = 100)
     {

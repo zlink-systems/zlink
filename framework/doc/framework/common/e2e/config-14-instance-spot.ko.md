@@ -110,16 +110,17 @@ One-way send의 성공은 Framework가 message를 전송 경로에 수락했다�
 Ready owner가 종료되면 Framework는 다른 node를 새 owner로 선택하거나 같은 ID의 새 incarnation을 자동으로
 만들지 않는다. 새 request는 Application이 명시적으로 Close와 recreate를 완료하기 전까지 사용할 수 없다.
 
-**검증 질문:** 이전 owner 종료 뒤 새 request가 bounded `Unavailable`로 끝나고 다른 owner에서 실행되지
-않는가.
+**검증 질문:** 이전 owner 종료 뒤 single·concurrent request가 각각 bounded `Unavailable`로 끝나고 다른
+owner에서 실행되지 않는가.
 
 - 시작 조건: Spot이 owner A에서 Ready이고 domain state는 external store에 저장되어 있다. 다른 node B는
   같은 type을 제공하지만 이 Spot의 owner가 아니다.
-- 절차: A를 crash하고 public liveness·owner lease 상태가 invalid가 된 뒤 request를 보낸다. Location Store
-  authority record가 자동으로 삭제되는지는 이 scenario의 판정 대상이 아니다.
-- 검증: Request는 `Unavailable`로 한 번 끝난다. A와 B 어느 쪽에도 해당 operation ID의 handler·factory
-  evidence가 없고 Framework가 자동으로 새 generation을 만들지 않는다. 명시적 recreate와 rebind는
-  `IS-E2E-08`과 Application 복구 시나리오에서 별도로 확인한다.
+- 절차: A를 crash하고 public liveness·owner lease 상태가 invalid가 된 뒤 fresh fixture에서 single caller
+  request와 두 caller의 concurrent requests를 각각 보낸다. Location Store authority record가 자동으로
+  삭제되는지는 이 scenario의 판정 대상이 아니다.
+- 검증: Single request와 두 concurrent requests는 각각 `Unavailable`로 한 번 끝난다. A와 B 어느 쪽에도
+  해당 operation ID의 handler·factory evidence가 없고 Framework가 자동으로 새 generation을 만들지
+  않는다. 명시적 recreate와 rebind는 `IS-E2E-08`과 Application 복구 시나리오에서 별도로 확인한다.
 - 계약 근거: [Failure와 failover](../spec/31-failure-failover-policy.ko.md)
 
 #### IS-E2E-06 Creating owner crash는 같은 generation의 recovery 경계를 지킨다
@@ -153,7 +154,7 @@ stale owner와 섞이지 않는가.
 - 절차: Target 인자 없는 public host relocation을 시작하고 terminal success를 기다린 뒤 state request를 보낸다.
 - 검증: 후속 handler는 B에서만 실행되고 Spot identity와 state version이 유지된다. Relocation 전 수락된 operation ID도 전체 evidence에서 한 번만 처리된다.
 - 계약 근거: [Location runtime](../spec/21-location-runtime.ko.md)과
-  [Graceful drain과 handoff](../spec/28-graceful-drain-handoff.ko.md)
+  [Graceful drain과 handoff](../spec/30-host-relocation-flow.ko.md)
 
 #### IS-E2E-08 Close and reactivate
 
@@ -168,21 +169,6 @@ instance를 준비해야 한다.
 - 절차: Public close operation의 완료를 기다린 뒤 같은 ID로 Instance request를 보낸다.
 - 검증: 새 factory instance ID는 이전 값과 다르고 handler는 새 instance에서 한 번 실행된다.
 - 계약 근거: [Location runtime](../spec/21-location-runtime.ko.md)
-
-#### IS-E2E-09 Ready owner crash 뒤 concurrent request를 자동 전환하지 않는다
-
-우선순위: `P0`
-
-Ready owner가 무효화된 뒤 여러 caller가 동시에 요청해도 Framework는 새 owner와 factory를 자동으로 만들지
-않는다.
-
-**검증 질문:** Crash 뒤 concurrent requests가 각각 bounded failure로 끝나고 자동 takeover가 없는가.
-
-- 시작 조건: 이전 owner crash가 public liveness·owner lease 상태에서 무효화되었고 Application recreate는
-  실행하지 않았다.
-- 절차: 두 caller가 같은 ID로 requests를 동시에 보낸다.
-- 검증: 두 request가 각각 `Unavailable`로 한 번 끝나고 어떤 owner에도 handler·factory evidence가 없다.
-- 계약 근거: [Failure와 failover](../spec/31-failure-failover-policy.ko.md)
 
 #### IS-E2E-10 Stale owner resume 뒤에도 자동 owner가 생기지 않는다
 
@@ -468,7 +454,7 @@ Close가 시작된 Spot은 새 업무를 기존 instance queue에 수락해서�
 - 절차: Target 인자 없는 host Relocate를 시작하고 동시에 고유 operation ID request를 보낸다.
 - 검증: Relocate와 request가 각각 terminal 하나로 끝나며 request handler는 A 또는 B 한 곳에서만 한 번 실행된다.
 - 계약 근거: [Location runtime](../spec/21-location-runtime.ko.md)과
-  [Graceful drain과 handoff](../spec/28-graceful-drain-handoff.ko.md)
+  [Graceful drain과 handoff](../spec/30-host-relocation-flow.ko.md)
 
 #### IS-E2E-30 Multi-Mesh concurrent Relocate
 
@@ -486,7 +472,7 @@ Close가 시작된 Spot은 새 업무를 기존 instance queue에 수락해서�
 - 검증: Variant A callers는 shared operation에 join하여 같은 terminal을 받는다. Variant B의 incompatible
   call은 `Blocked/OperationInProgress`로 한 번 끝나며 first option을 바꾸지 않는다. 두 variant 모두 최종
   public 조회는 Ready owner 하나이고 후속 request handler도 그 owner에서만 실행된다.
-- 계약 근거: [Graceful drain — concurrent 호출과 cancellation](../spec/28-graceful-drain-handoff.ko.md#6-concurrent-호출과-cancellation)
+- 계약 근거: [Graceful drain — concurrent 호출과 cancellation](../spec/30-host-relocation-flow.ko.md#6-concurrent-호출과-cancellation)
 
 #### IS-E2E-31 Remote selection loser
 

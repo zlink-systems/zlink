@@ -24,10 +24,8 @@ import type {
   ZLinkEntrySpotTimerHandlerRegistration
 } from '../../contracts/Configuration/RegistrationTypes';
 import type { Message } from '../../contracts/Common/Message';
-import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
 import { throwIfAborted } from '../abort';
 import { routingIdsEqual } from '../routing-id';
-import type { ZLinkRemoteBoundSessionTarget } from '../actors';
 import {
   ZLinkActorDispatchMailboxSet,
   ZLinkSpotActorHandlerRegistryRuntime
@@ -43,7 +41,10 @@ import type { ZLinkDispatchErrorReporter } from '../channels';
 import { ZLinkConfigurationException } from '../configuration';
 import { ZLinkWorkerRuntime } from '../workers';
 import { disposeLifecycleHandlers } from '../handlers/handler-instance-scope';
-import { ZLinkSpotActorPacketDispatch } from './spot-actor-packet-dispatch';
+import {
+  ZLinkSpotActorPacketDispatch,
+  type ZLinkActorPacketDelivery
+} from './spot-actor-packet-dispatch';
 import {
   ZLinkSpotActorJoinDispatch,
   type ZLinkDetachedTaskRunner
@@ -121,6 +122,7 @@ export class ZLinkEntrySpotActivation {
   private readonly workerRuntime: ZLinkWorkerRuntime;
   private readonly lifecycleMetrics: ZLinkSpotLifecycleMetrics;
   private readonly packetDispatch: ZLinkRoutedSpotPacketDispatch;
+  private readonly actorPacketDispatch: ZLinkSpotActorPacketDispatch;
   private initialized = false;
   private disposed = false;
   private actorDispatch?: ZLinkSpotActorJoinDispatch;
@@ -130,20 +132,19 @@ export class ZLinkEntrySpotActivation {
 
   constructor(private readonly options: ZLinkEntrySpotActivationOptions) {
     this.serial = new ZLinkSpotSerialExecutor(false, options.nativeSpot.routingId);
-    this.actorPacketMailboxes = new ZLinkActorDispatchMailboxSet();
+    this.actorPacketMailboxes = new ZLinkActorDispatchMailboxSet(
+      options.nativeSpot.routingId
+    );
     // Entry Spot lifecycle, timers and detached continuations use this serial
     // executor. Actor packets use the target actor mailbox.
-    this.outbound = new DefaultZLinkSpotOutbound(
-      this.serial,
-      options.channelClient,
-      options.fanoutClient,
-      options.spotPublisherClient,
-      options.routedTransport,
-      options.spotRouterChannelIdForMesh ?? ((meshName) => meshName),
-      undefined,
-      options.spotNodeName,
-      options.channelMeshNameForChannel
-    );
+    this.outbound = new DefaultZLinkSpotOutbound({
+      serial: this.serial,
+      channelClient: options.channelClient,
+      spotPublisherClient: options.spotPublisherClient,
+      routedTransport: options.routedTransport,
+      spotRouterChannelIdForMesh: options.spotRouterChannelIdForMesh,
+      meshName: options.spotNodeName
+    });
     this.timers = new ZLinkSpotTimerRegistry(
       options.metrics,
       () => options.dispatchErrors?.flow.flowCreationEnabled() ?? true
@@ -190,6 +191,28 @@ export class ZLinkEntrySpotActivation {
         : undefined,
       providerResolver: options.providerResolver,
       dispatchErrors: options.dispatchErrors
+    });
+    this.actorPacketDispatch = new ZLinkSpotActorPacketDispatch({
+      spot: () => this.entrySpot as unknown as ZLinkSpot,
+      spotId: () => String(this.options.nativeSpot.routingId),
+      registry: this.actorHandlers,
+      resolveActor: (targetActorId) => this.options.entryActorRuntime?.resolveActor(targetActorId),
+      routeBeforeLocal: (target) =>
+        this.options.entryActorRuntime?.routePacket(
+          target.actorId,
+          target.parts,
+          target.returnResponse,
+          target.remoteBoundSessionTarget,
+          target.fallbackActorRef
+        ),
+      onRemoteBoundSessionTarget: (targetActorId, target) =>
+        this.options.boundSessionRuntime?.rememberRemoteBoundSessionTarget(targetActorId, target),
+      onDisconnectActor: (actor) => this.notifyDisconnectActor(actor),
+      actorResponseSender: this.options.boundSessionRuntime?.sendActorResponse.bind(this.options.boundSessionRuntime),
+      actorErrorSender: this.options.boundSessionRuntime?.sendActorError.bind(this.options.boundSessionRuntime),
+      providerResolver: this.options.providerResolver,
+      messageSerializers: this.options.messageSerializers,
+      dispatchErrors: this.options.dispatchErrors
     });
   }
 
@@ -371,8 +394,7 @@ export class ZLinkEntrySpotActivation {
         }
       },
       packets: {
-        handle: (actorId, parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) =>
-          this.dispatchActorPacket(actorId, parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef),
+        handle: (delivery) => this.dispatchActorPacket(delivery),
         bindRemoteSession: (actor, sourceNodeRid, sourceSessionRid, declaredTarget) => {
           if (routingIdsEqual(sourceNodeRid, this.options.nativeNode.routingId)) {
             return;
@@ -428,15 +450,15 @@ export class ZLinkEntrySpotActivation {
     return this.serial.execute(() => this.entrySpot.onDisconnectActor?.(actor));
   }
 
-  async dispatchActorPacket(
-    actorId: string,
-    parts: readonly Message[],
-    returnResponse = false,
-    remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
-    fallbackActorRef?: ActorRef,
-    requestTerminal?: (response: unknown) => Promise<void> | void,
-    messageFollowOrigin?: ZLinkMessageFollowOrigin
-  ): Promise<unknown> {
+  async dispatchActorPacket(delivery: ZLinkActorPacketDelivery): Promise<unknown> {
+    const {
+      actorId,
+      parts,
+      returnResponse,
+      remoteBoundSessionTarget,
+      fallbackActorRef,
+      messageFollowOrigin
+    } = delivery;
     const handoff = this.options.actorHandoffRuntime?.capture(
       actorId,
       parts,
@@ -447,24 +469,17 @@ export class ZLinkEntrySpotActivation {
       messageFollowOrigin,
       (replayedParts, replayReturnResponse, replayRemoteBoundSessionTarget, replayFallbackActorRef) =>
         this.actorPacketMailboxes.submit(actorId, () =>
-          this.dispatchActorPacketInsideMailbox(
+          this.dispatchActorPacketInsideMailbox({
             actorId,
-            replayedParts,
-            replayReturnResponse,
-            replayRemoteBoundSessionTarget,
-            replayFallbackActorRef
-          ))
+            parts: replayedParts,
+            returnResponse: replayReturnResponse,
+            remoteBoundSessionTarget: replayRemoteBoundSessionTarget,
+            fallbackActorRef: replayFallbackActorRef
+          }))
     );
     if (handoff !== undefined) return await handoff;
     return this.actorPacketMailboxes.submit(actorId, () =>
-      this.dispatchActorPacketInsideMailbox(
-        actorId,
-        parts,
-        returnResponse,
-        remoteBoundSessionTarget,
-        fallbackActorRef,
-        requestTerminal
-      ));
+      this.dispatchActorPacketInsideMailbox(delivery));
   }
 
   private async replayActorBacklog(
@@ -475,13 +490,13 @@ export class ZLinkEntrySpotActivation {
       backlog,
       (parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) =>
         this.actorPacketMailboxes.submit(actor.context.actorId, () =>
-          this.dispatchActorPacketInsideMailbox(
-            actor.context.actorId,
+          this.dispatchActorPacketInsideMailbox({
+            actorId: actor.context.actorId,
             parts,
             returnResponse,
             remoteBoundSessionTarget,
             fallbackActorRef
-          )),
+          })),
       (index) => this.options.runtimeEventPublisher?.publish({
           sourceName: 'zlink.framework.actor-handoff',
           timestamp: new Date(),
@@ -493,48 +508,9 @@ export class ZLinkEntrySpotActivation {
   }
 
   private async dispatchActorPacketInsideMailbox(
-    actorId: string,
-    parts: readonly Message[],
-    returnResponse = false,
-    remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
-    fallbackActorRef?: ActorRef,
-    requestTerminal?: (response: unknown) => Promise<void> | void
+    delivery: ZLinkActorPacketDelivery
   ): Promise<unknown> {
-    return new ZLinkSpotActorPacketDispatch({
-      spot: this.entrySpot as unknown as ZLinkSpot,
-      spotId: () => String(this.options.nativeSpot.routingId),
-      registry: this.actorHandlers,
-      resolveActor: (targetActorId) => this.options.entryActorRuntime?.resolveActor(targetActorId),
-      routeBeforeLocal: (
-        targetActorId,
-        targetParts,
-        targetReturnResponse,
-        targetRemoteBoundSessionTarget,
-        targetFallbackActorRef
-      ) =>
-        this.options.entryActorRuntime?.routePacket(
-          targetActorId,
-          targetParts,
-          targetReturnResponse,
-          targetRemoteBoundSessionTarget,
-          targetFallbackActorRef
-        ),
-      onRemoteBoundSessionTarget: (targetActorId, target) =>
-        this.options.boundSessionRuntime?.rememberRemoteBoundSessionTarget(targetActorId, target),
-      onDisconnectActor: (actor) => this.notifyDisconnectActor(actor),
-      actorResponseSender: this.options.boundSessionRuntime?.sendActorResponse.bind(this.options.boundSessionRuntime),
-      actorErrorSender: this.options.boundSessionRuntime?.sendActorError.bind(this.options.boundSessionRuntime),
-      providerResolver: this.options.providerResolver,
-      messageSerializers: this.options.messageSerializers,
-      dispatchErrors: this.options.dispatchErrors
-    }).dispatch(
-      actorId,
-      parts,
-      returnResponse,
-      remoteBoundSessionTarget,
-      fallbackActorRef,
-      requestTerminal
-    );
+    return this.actorPacketDispatch.dispatchDelivery(delivery);
   }
 
   private replyActorNoBind(

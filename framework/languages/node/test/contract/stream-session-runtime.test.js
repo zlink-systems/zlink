@@ -538,6 +538,10 @@ test('stream heartbeat control bypasses a blocked application handler', async ()
   await clock.advance(5000);
   releaseHandler();
   await clock.flush();
+  await waitForCondition(
+    () => controlHeader(socket.sent.at(-1)).name === '$zlink.heartbeat.ping',
+    'heartbeat scheduling after blocked application'
+  );
 
   assert.deepEqual(socket.disconnects, []);
   assert.equal(controlHeader(socket.sent.at(-1)).name, '$zlink.heartbeat.ping');

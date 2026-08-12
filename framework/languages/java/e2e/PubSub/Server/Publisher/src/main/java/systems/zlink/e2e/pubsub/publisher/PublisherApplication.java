@@ -1,4 +1,6 @@
 package systems.zlink.e2e.pubsub.publisher;
+import systems.zlink.framework.channels.ZLinkFanoutClient;
+import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.WebApplicationType;
@@ -51,10 +53,10 @@ public final class PublisherApplication {
     @Bean
     PublisherEndpoints publisherEndpoints(
         PublisherOptions options,
-        systems.zlink.framework.channels.ZLinkFanoutClient fanout,
+        ZLinkFanoutClient fanout,
         EvidenceStore evidence,
         ObjectMapper json,
-        systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle drain,
+        ZLinkFrameworkLifecycle drain,
         ConfigurableApplicationContext application,
         ObjectProvider<ZLinkFrameworkRuntime> runtime) {
         return new PublisherEndpoints(

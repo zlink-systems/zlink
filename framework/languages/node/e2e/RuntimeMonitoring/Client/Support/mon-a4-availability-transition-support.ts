@@ -10,7 +10,7 @@ import {
 import { waitForRouteStatus, delay } from './public-status';
 import { ensure } from './scenario-assert';
 
-interface RelocationResult {
+interface RelocationRes {
   readonly outcome: number;
   readonly reason: number;
 }
@@ -26,7 +26,7 @@ export async function runMonA4A(options: ClientOptions): Promise<ManagedProcess>
     (status) => status.isReady && status.peers.some((peer) => peer.nodeRid === 'svc-b'),
     'normal replacement initial provider was not ready.'
   );
-  const drain = await postJsonWithin<RelocationResult>(options.serviceBUrl, '/admin/drain', {}, 35_000);
+  const drain = await postJsonWithin<RelocationRes>(options.serviceBUrl, '/admin/drain', {}, 35_000);
   ensure(drain.outcome === 0 && drain.reason === 0, 'normal replacement provider relocation did not complete.');
   await postJson<object>(options.serviceBUrl, '/shutdown', {});
   await waitForRouteStatus(

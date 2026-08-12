@@ -60,7 +60,7 @@ moves to an exact version, greater than the source's, that the caller specifies.
 provide a drain operation per MeshName, ChannelName, or node RID.
 State, per-mode target selection, terminal result, default deadline, repeated calls, and
 cancellation contract are owned by
-[54 Host Relocate, Shutdown & Handoff](28-graceful-drain-handoff.en.md).
+[54 Host Relocate, Shutdown & Handoff](30-host-relocation-flow.en.md).
 
 The framework builder doesn't expose the service liveness interval and
 [deadline](01-glossary.en.md#deadline). The service runtime applies a common profile
@@ -566,6 +566,27 @@ JSON is the default codec for typed messages. An application using only JSON doe
 register a codec per message type. Protobuf, MessagePack, and custom codecs are registered
 in the root codec registry as optional extension packages.
 
+A codec extension registers its content type as an ASCII media type in the form
+`type/subtype`, without parameters. The `type` and `subtype` may contain only the media-type
+token characters defined by the RFC.
+
+When the host starts, the registry validates each registration and converts it to one
+representation. It removes leading and trailing SP and TAB, then converts ASCII uppercase
+letters in `type` and `subtype` to lowercase. This result is the canonical form. A parameter,
+whitespace inside the value, a non-ASCII character, or an empty token is a configuration
+error. If several registrations have the same canonical form, the last registration
+replaces the earlier one.
+
+The framework writes only the canonical form to the service wire. The receive path does not
+transform a wire content type; it compares the received value directly with a registry key.
+Therefore, a value that differs in case, whitespace, or parameters, or that is absent from
+the registry, completes with `ProtocolError` instead of falling back to JSON. This rule lets
+the receive table remain immutable after startup and use exact string lookup.
+
+The HTTP client handles response media-type parameters at its own boundary. It parses the
+parameters first and passes only the parameter-free media type through the same
+canonicalization procedure.
+
 If no extension matches the outgoing business type, the JSON codec is chosen. Conversely,
 if no codec in the registry matches the non-JSON content-type the receiving envelope
 specifies, the payload isn't reinterpreted as JSON — it completes with `ProtocolError`.
@@ -578,6 +599,21 @@ what value happened to be passed at runtime.
 
 If multiple conditions match simultaneously, **the one registered later takes priority.** If
 none match, the JSON codec is used.
+
+The framework stores send-selection results for up to 1,024 declared types. When that
+storage is full, it doesn't evict existing results. Each type first seen after the limit is
+re-evaluated against the registration list on every send, and its result isn't stored.
+
+Node.js accounts for TypeScript static types not being retained at runtime. An ordinary class
+instance uses its constructor as the declared type. If a call-site base class differs from
+the instance's runtime subtype, the second argument to
+`ZLinkMessage.from(value, declaredType)` supplies the base-class constructor. A TypeScript
+interface has no runtime constructor, so representing an interface contract requires an
+explicit constructor token for an application-defined class compatible with that interface.
+
+C++ uses the compile-time `TPayload` in
+`codec_registration_context_t::add_serializer<TPayload>(...)` as the declared payload
+descriptor. It doesn't select again from the instance's concrete runtime type.
 
 The default for send-type selection and receive-side wire content-type validation are
 different boundaries, so the same fallback rule doesn't apply to both.
@@ -597,7 +633,7 @@ interfaces.
 | Java | `codecs().use(extension)` | connector's `typedCodec` option | [server](server/languages/java/interfaces/README.en.md), [connector](stream-connector/languages/java/03-stream-connector.en.md) |
 | Kotlin | `codecs().use(extension)` | connector's `typedCodec` option | [server](server/languages/kotlin/interfaces/README.en.md), [Java/Kotlin connector](stream-connector/languages/java/03-stream-connector.en.md) |
 | Node.js | `codecs().use(extension)` | connector's `codec` option | [server](server/languages/node/interfaces/README.en.md), [connector](stream-connector/languages/typescript/03-stream-connector.en.md) |
-| C++ | `codecs().use(extension)` | `connector_options_t::typed_codec` | [server](server/languages/cpp/interfaces/01-common-runtime.en.md), [connector](stream-connector/languages/cpp/03-stream-connector.en.md) |
+| C++ | `codecs().use(extension)` | `connector_options_t::typed_codec` | [server](server/languages/cpp/interfaces/02-configuration-host.en.md), [connector](stream-connector/languages/cpp/03-stream-connector.en.md) |
 
 Both registration surfaces project the same typed-payload contract, but that doesn't mean
 the concrete types of the server extension object and connector option must also match. The
@@ -827,9 +863,9 @@ An Actor factory builds the Actor lifecycle, and Actor handlers are registered o
 context's handler registry. Actor messages dispatch directly to the Actor mailbox. Actor
 messages aren't re-classified by a Node callback or Spot packet handler.
 
-The `Yield` terminator is provided only for Channel request, Spot request, Actor request,
-and CPU/I/O worker calls. It isn't provided for Actor join, Actor/Spot create/get-or-create,
-send, publish, timer registration, close, or destroy. `Yield` is valid only in a context
+The `Yield` terminator is provided for Channel requests, Spot requests, Actor requests,
+CPU/I/O worker calls, and Actor/Spot create/get-or-create calls. It isn't provided for
+Actor join, send, publish, timer registration, close, or destroy. `Yield` is valid only in a context
 where the shared execution gate of a `SpotWide` User Spot or Instance Spot can be briefly
 given back. A language that uses a common call type callable from Entry Spot, `PerActor`
 User Spot, Node/Channel handlers, and a client outside an owner turn checks the context

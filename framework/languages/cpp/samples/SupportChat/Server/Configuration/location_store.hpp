@@ -27,6 +27,11 @@ inline void add_supportchat_location_store (
         zlink::framework::redis::redis_location_options_t{
           .connection_string = topology.redis_endpoint,
           .key_prefix = topology.redis_key_prefix + "location:"}));
+    framework.add_relocation_store (
+      std::make_shared<zlink::framework::redis::redis_relocation_store_t> (
+        zlink::framework::redis::redis_relocation_options_t{
+          .connection_string = topology.redis_endpoint,
+          .key_prefix = topology.redis_key_prefix + "relocation:"}));
 }
 
 } // namespace zlink::samples::supportchat

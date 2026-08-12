@@ -1,4 +1,9 @@
 package systems.zlink.e2e.spotactortransfer.actor;
+import java.util.Arrays;
+import systems.zlink.framework.actors.ZLinkActorClient;
+import systems.zlink.framework.actors.ZLinkActorManager;
+import systems.zlink.framework.spots.ZLinkSpotManager;
+import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
@@ -71,12 +76,12 @@ public final class Program {
         ObjectMapper json,
         EvidenceStore evidence,
         GateStore gates,
-        systems.zlink.framework.spots.ZLinkSpotManager spots,
-            systems.zlink.framework.actors.ZLinkActorManager actors,
-            systems.zlink.framework.actors.ZLinkActorClient actorClient,
-            systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle lifecycle,
+        ZLinkSpotManager spots,
+            ZLinkActorManager actors,
+            ZLinkActorClient actorClient,
+            ZLinkFrameworkLifecycle lifecycle,
             ActorNodeOptions config) {
-        int requiredPeerCount = java.util.Arrays.stream(config.meshPeers().split(","))
+        int requiredPeerCount = Arrays.stream(config.meshPeers().split(","))
             .map(peer -> peer.split("=", 2))
             .filter(fields -> fields.length == 2 && !config.nodeRid().equals(fields[0]))
             .mapToInt(ignored -> 1)

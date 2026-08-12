@@ -14,6 +14,7 @@ internal sealed class ZLinkCompletionAdmissionOwner : IDisposable
     private ulong _requestBytes;
     private ulong _replyBytes;
     private long _generation = 1;
+    private int _waiters;
     private bool _stopped;
 
     internal ZLinkCompletionAdmissionOwner(
@@ -49,8 +50,16 @@ internal sealed class ZLinkCompletionAdmissionOwner : IDisposable
                         this, _generation, reservedReplyBytes);
                 }
                 wait = _changed.Task;
+                _waiters++;
             }
-            await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                lock (_gate) _waiters--;
+            }
         }
     }
 
@@ -71,8 +80,16 @@ internal sealed class ZLinkCompletionAdmissionOwner : IDisposable
                     return new ResponderLease(this, _generation);
                 }
                 wait = _changed.Task;
+                _waiters++;
             }
-            await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                lock (_gate) _waiters--;
+            }
         }
     }
 
@@ -86,7 +103,7 @@ internal sealed class ZLinkCompletionAdmissionOwner : IDisposable
 
     public void Dispose()
     {
-        TaskCompletionSource<bool> changed;
+        TaskCompletionSource<bool>? changed;
         lock (_gate)
         {
             if (_stopped) return;
@@ -98,7 +115,7 @@ internal sealed class ZLinkCompletionAdmissionOwner : IDisposable
             _replyBytes = 0;
             changed = ReplaceSignal();
         }
-        changed.TrySetResult(true);
+        changed?.TrySetResult(true);
     }
 
     private async ValueTask ReserveReplyAsync(
@@ -133,8 +150,16 @@ internal sealed class ZLinkCompletionAdmissionOwner : IDisposable
                         return;
                     }
                     wait = _changed.Task;
+                    _waiters++;
                 }
-                await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    lock (_gate) _waiters--;
+                }
             }
         }
         catch
@@ -156,7 +181,7 @@ internal sealed class ZLinkCompletionAdmissionOwner : IDisposable
 
     private void TransferToCore(ResponderLease lease)
     {
-        TaskCompletionSource<bool> changed;
+        TaskCompletionSource<bool>? changed;
         lock (_gate)
         {
             Validate(lease);
@@ -168,7 +193,7 @@ internal sealed class ZLinkCompletionAdmissionOwner : IDisposable
             _replyBytes -= lease.ReplyBytes;
             changed = ReplaceSignal();
         }
-        changed.TrySetResult(true);
+        changed?.TrySetResult(true);
     }
 
     private void Release(RequesterLease lease)
@@ -183,7 +208,7 @@ internal sealed class ZLinkCompletionAdmissionOwner : IDisposable
             _requestBytes -= lease.ReservedBytes;
             changed = ReplaceSignal();
         }
-        changed.TrySetResult(true);
+        changed?.TrySetResult(true);
     }
 
     private void Release(ResponderLease lease)
@@ -198,7 +223,7 @@ internal sealed class ZLinkCompletionAdmissionOwner : IDisposable
             if (lease.Prepared) _replyBytes -= lease.ReplyBytes;
             changed = ReplaceSignal();
         }
-        changed.TrySetResult(true);
+        changed?.TrySetResult(true);
     }
 
     private bool CanReserve(ulong bytes)
@@ -222,8 +247,12 @@ internal sealed class ZLinkCompletionAdmissionOwner : IDisposable
             throw new ObjectDisposedException(nameof(ZLinkCompletionAdmissionOwner));
     }
 
-    private TaskCompletionSource<bool> ReplaceSignal()
+    private TaskCompletionSource<bool>? ReplaceSignal()
     {
+        // Waiters register (and grab _changed.Task) under _gate, so with no
+        // waiters nobody can observe the old signal: skip the allocation and
+        // the completion's thread-pool continuations entirely.
+        if (_waiters == 0) return null;
         var previous = _changed;
         _changed = NewSignal();
         return previous;

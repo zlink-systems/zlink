@@ -263,12 +263,12 @@ public async ValueTask RunAsync(TicTacToeClientOptions options, CancellationToke
     ZlinkStreamAssert.Ensure(sawMove.Payload.State.Board == move.State.Board, "board state mismatch.");
 }
 
-// join 응답은 request의 reply가 아니라 push로 온다 — 대기를 먼저 등록하고 send한다.
-private static async ValueTask<JoinGameRes> JoinGameAsync(
+// join 완료 알림은 client push로 온다 — 대기를 먼저 등록하고 one-way send한다.
+private static async ValueTask<JoinGameNotify> JoinGameAsync(
     IZlinkStreamConnector connector, string roomId, CancellationToken ct)
 {
-    var completion = connector.WaitFor<JoinGameRes>().Async(ct);
-    await connector.Send(new JoinGameReq(roomId)).Async(ct);
+    var completion = connector.WaitFor<JoinGameNotify>().Async(ct);
+    await connector.Send(new JoinGameMsg(roomId)).Async(ct);
     return (await completion).Payload;
 }
 ```

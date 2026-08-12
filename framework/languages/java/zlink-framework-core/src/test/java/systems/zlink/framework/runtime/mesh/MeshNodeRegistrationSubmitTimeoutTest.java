@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.mesh;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -40,9 +41,9 @@ final class MeshNodeRegistrationSubmitTimeoutTest {
 
         registration.configureRouterSocket().setSendTimeout(null);
         registration.configureSpotPublisher().setSendTimeout(null);
-        assertEquals(java.util.Optional.empty(),
+        assertEquals(Optional.empty(),
             registration.configureRouterSocket().sendTimeout());
-        assertEquals(java.util.Optional.empty(),
+        assertEquals(Optional.empty(),
             registration.configureSpotPublisher().sendTimeout());
     }
 

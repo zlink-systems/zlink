@@ -1,11 +1,23 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.UUID;
+import java.util.Objects;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.function.BooleanSupplier;
+import java.util.logging.Logger;
+import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.spots.ZLinkEntrySpot;
 
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.List;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
@@ -23,6 +35,7 @@ import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinRequest;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
 
@@ -35,22 +48,148 @@ final class ZLinkActorSpotAdmission {
 
     private record CommittedJoin(
         ZLinkActorRuntime.PreparedTransferredActor prepared,
-        long authorityOwnerGeneration) {
+        systems.zlink.framework.runtime.internal.locations
+            .ZLinkDeferredJoinCompletionAuthority.CommittedActorTenure tenure) {
+    }
+
+    private record BoundSessionFence(
+        long bindingGeneration,
+        long lastAcceptedSessionSequence) {
+    }
+
+    private record BoundSessionRouteUpdate(
+        ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
+        ZLinkBackendActorRef targetActor) {
+    }
+
+    /** Owns the target-side ordering required before Ready is observable. */
+    static <T> CompletionStage<T> completeTargetBeforeReady(
+        Supplier<CompletionStage<Void>> lifecycle,
+        Supplier<CompletionStage<Void>> joinCompletion,
+        Supplier<CompletionStage<T>> replay,
+        Runnable dispatchSwitch,
+        Supplier<CompletionStage<Void>> publishReady) {
+        return lifecycle.get()
+            .thenCompose(ignored -> joinCompletion.get())
+            .thenCompose(ignored -> replay.get())
+            .thenApply(result -> {
+                dispatchSwitch.run();
+                return result;
+            })
+            .thenCompose(result -> publishReady.get()
+                .thenApply(ignored -> result));
+    }
+
+    /**
+     * Retains one exact direct-Join route context until durable source-cleanup
+     * evidence releases command 44. The handoff is deliberately independent of
+     * the target Ready chain, and transient evidence-read failures retain the
+     * context for another read instead of starting the route from an estimate.
+     */
+    static final class SourceCleanupRouteHandoff {
+        private final Supplier<CompletionStage<Void>> completedEvidence;
+        private final Runnable startRoute;
+        private final BooleanSupplier superseded;
+        private final Consumer<Throwable> terminalFailure;
+        private final Duration retryDelay;
+        private final AtomicBoolean routeStarted = new AtomicBoolean();
+        private final AtomicBoolean terminated = new AtomicBoolean();
+
+        SourceCleanupRouteHandoff(
+            Supplier<CompletionStage<Void>> completedEvidence,
+            Runnable startRoute,
+            BooleanSupplier superseded,
+            Consumer<Throwable> terminalFailure,
+            Duration retryDelay) {
+            this.completedEvidence = Objects.requireNonNull(
+                completedEvidence, "completedEvidence");
+            this.startRoute = Objects.requireNonNull(startRoute, "startRoute");
+            this.superseded = Objects.requireNonNull(superseded, "superseded");
+            this.terminalFailure = Objects.requireNonNull(
+                terminalFailure, "terminalFailure");
+            this.retryDelay = Objects.requireNonNull(retryDelay, "retryDelay");
+        }
+
+        void start() {
+            if (terminated.get() || routeStarted.get()) {
+                return;
+            }
+            if (isSuperseded()) {
+                terminate(new ZLinkConfigurationException(
+                    "direct-Join Session route handoff was superseded"));
+                return;
+            }
+            CompletionStage<Void> evidence;
+            try {
+                evidence = Objects.requireNonNull(
+                    completedEvidence.get(), "source-cleanup evidence stage");
+            } catch (RuntimeException failure) {
+                retryOrStop(failure);
+                return;
+            }
+            evidence.whenComplete((ignored, failure) -> {
+                if (failure != null) {
+                    retryOrStop(failure);
+                    return;
+                }
+                if (isSuperseded()) {
+                    terminate(new ZLinkConfigurationException(
+                        "direct-Join Session route handoff was superseded"));
+                    return;
+                }
+                if (!routeStarted.compareAndSet(false, true)) {
+                    return;
+                }
+                terminated.set(true);
+                try {
+                    startRoute.run();
+                } catch (RuntimeException startFailure) {
+                    terminalFailure.accept(startFailure);
+                }
+            });
+        }
+
+        private void retryOrStop(Throwable failure) {
+            if (terminated.get() || routeStarted.get()) {
+                return;
+            }
+            if (isSuperseded()) {
+                terminate(failure);
+                return;
+            }
+            long delayMillis = Math.max(1L, retryDelay.toMillis());
+            CompletableFuture.delayedExecutor(delayMillis, TimeUnit.MILLISECONDS)
+                .execute(this::start);
+        }
+
+        private boolean isSuperseded() {
+            try {
+                return superseded.getAsBoolean();
+            } catch (RuntimeException unavailable) {
+                return false;
+            }
+        }
+
+        private void terminate(Throwable failure) {
+            if (terminated.compareAndSet(false, true)) {
+                terminalFailure.accept(failure);
+            }
+        }
     }
 
     private ZLinkActorRuntime actors;
     private ZLinkSessionRelocationPeerClient sessionRoutes;
-    private java.util.function.BooleanSupplier draining = () -> false;
+    private BooleanSupplier draining = () -> false;
     private final ZLinkPendingActorTransfers pendingTransfers =
         new ZLinkPendingActorTransfers();
     private final ZLinkActorTransferCommitRegistry commitRegistry =
         new ZLinkActorTransferCommitRegistry();
-    private final java.util.concurrent.ConcurrentMap<String, CompletableFuture<Void>>
-        pendingEntryJoins = new java.util.concurrent.ConcurrentHashMap<>();
-    private final java.util.concurrent.ConcurrentMap<String, CompletableFuture<Void>>
-        pendingLeaves = new java.util.concurrent.ConcurrentHashMap<>();
-    private final java.util.concurrent.ConcurrentMap<String, LocalJoin> pendingLocalJoins =
-        new java.util.concurrent.ConcurrentHashMap<>();
+    private final ConcurrentMap<String, CompletableFuture<Void>>
+        pendingEntryJoins = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, CompletableFuture<Void>>
+        pendingLeaves = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, LocalJoin> pendingLocalJoins =
+        new ConcurrentHashMap<>();
 
     private record LocalJoin(
         ZLinkBackendActorRef actorRef,
@@ -61,7 +200,7 @@ final class ZLinkActorSpotAdmission {
 
     void attach(
         ZLinkActorRuntime actors,
-        java.util.function.BooleanSupplier draining,
+        BooleanSupplier draining,
         ZLinkSessionRelocationPeerClient sessionRoutes) {
         this.actors = actors;
         this.draining = draining == null ? () -> false : draining;
@@ -133,7 +272,7 @@ final class ZLinkActorSpotAdmission {
                 ? CompletableFuture.completedFuture(null)
                 : joinEntrySpotAfterLeave(runtime, actor, entryNodeRid, timeout)
                     .thenCompose(joined -> entryJoined));
-        return systems.zlink.framework.execution.ZLinkAsyncSerialQueue.manageCurrent(leaving);
+        return ZLinkAsyncSerialQueue.manageCurrent(leaving);
     }
 
     private static CompletionStage<Void> joinEntrySpotAfterLeave(
@@ -435,7 +574,7 @@ final class ZLinkActorSpotAdmission {
                         request.coreMembershipEpoch() + 1);
                 }
                 return runtime.commitDeferredJoinRelocation(request)
-                    .thenApply(authorityOwnerGeneration -> {
+                    .thenApply(tenure -> {
                         aggregateCommitted.set(true);
                         runtime.traceActorTransferMarker(
                             "location_committed",
@@ -445,9 +584,13 @@ final class ZLinkActorSpotAdmission {
                             prepared.actorRef(),
                             spotId,
                             request.coreMembershipEpoch() + 1);
+                        primaryNode.rememberActorAuthority(
+                            tenure.actor(),
+                            tenure.authorityOwnerGeneration(),
+                            tenure.ownerLeaseGeneration());
                         return new CommittedJoin(
                             prepared,
-                            authorityOwnerGeneration);
+                            tenure);
                     });
             })
             .thenCompose(committed -> {
@@ -465,27 +608,38 @@ final class ZLinkActorSpotAdmission {
                     runtime,
                     actor,
                     actorRef,
+                    request,
                     pending,
                     primaryNode);
                 runtime.traceActorTransferMarker(
                     "target_session_bound", actor.context().actorId(), request.transferId());
-                CompletionStage<Void> boundSessionRoute = startBoundSessionRouteUpdate(
+                BoundSessionRouteUpdate sessionRoute =
+                    prepareBoundSessionRouteUpdate(
                     request,
                     primaryNode,
-                    committed.authorityOwnerGeneration());
-                return boundSessionRoute
-                    // Command 45 is the terminal route-switch acknowledgement. It
-                    // is emitted only after the source Session has rebound its
-                    // actor and the target has accepted the remote binding. Do
-                    // not invoke user Join completion before that barrier: the
-                    // callback is allowed to send through the bound Session.
-                    .thenCompose(ignored ->
-                        systems.zlink.framework.execution.ZLinkAsyncSerialQueue
-                            .yieldCurrent(
-                                CompletableFuture.completedFuture(null)
-                                    .thenRun(() -> completeRemoteMove(runtime, prepared))))
+                    committed.tenure());
+                if (sessionRoute != null) {
+                    primaryNode.installRelocatingActorBoundSession(
+                        new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                            sessionRoute.targetActor(),
+                            committed.tenure().targetNodeGeneration(),
+                            committed.tenure().authorityOwnerGeneration(),
+                            committed.tenure().ownerLeaseGeneration()),
+                        sessionRoute.command().session());
+                }
+                //  Ready and admission do not wait for source cleanup or
+                //  command 45. Command 44 itself is different: it is released
+                //  only by the canonical authority marker written after exact
+                //  source cleanup. The background handoff retains the decoded
+                //  command context across polling failures.
+                startBoundSessionRouteUpdateAfterSourceCleanup(
+                    request,
+                    primaryNode,
+                    sessionRoute);
+                return ZLinkAsyncSerialQueue
+                    .yieldCurrent(CompletableFuture.completedFuture(null))
                     .thenCompose(ignored -> {
-                        boolean entryTarget = spotSurface instanceof systems.zlink.framework.spots.ZLinkEntrySpot<?>;
+                        boolean entryTarget = spotSurface instanceof ZLinkEntrySpot<?>;
                         if (!entryTarget) {
                             runtime.markJoined(
                                 actor,
@@ -505,18 +659,36 @@ final class ZLinkActorSpotAdmission {
                             // the callback that is required to complete the transfer.
                             primaryNode.activateActorTransfer(preparedFence.token());
                         }
-                        return joinedCallback.apply(actor)
-                            .thenRun(() -> runtime.traceActorTransferMarker(
-                                "target_joined_callback", actor.context().actorId(), request.transferId()))
-                            .thenCompose(ignoredAfterJoin -> {
-                                return runtime.deliverDeferredJoinAccepted(
+                        return completeTargetBeforeReady(
+                                () -> joinedCallback.apply(actor)
+                                    .thenRun(() ->
+                                        runtime.traceActorTransferMarker(
+                                            "target_joined_callback",
+                                            actor.context().actorId(),
+                                            request.transferId())),
+                                () -> runtime.deliverDeferredJoinAccepted(
                                     request,
-                                    actorRef);
-                            })
-                            .thenCompose(ignoredAfterDelivery -> backlogReplay.apply(actorRef))
+                                    actorRef),
+                                () -> backlogReplay.apply(actorRef)
+                                    .thenApply(replies -> {
+                                        runtime.traceActorTransferMarker(
+                                            "target_backlog_replayed",
+                                            actor.context().actorId(),
+                                            request.transferId());
+                                        return replies;
+                                    }),
+                                () -> {
+                                    completeRemoteMove(runtime, prepared);
+                                    runtime.traceActorTransferMarker(
+                                        "target_dispatch_switched",
+                                        actor.context().actorId(),
+                                        request.transferId());
+                                },
+                                () -> runtime.deliverDeferredJoinAccepted(
+                                    request, actorRef))
                             .thenApply(replies -> {
                                 runtime.traceActorTransferMarker(
-                                    "target_backlog_replayed", actor.context().actorId(), request.transferId());
+                                    "target_ready", actor.context().actorId(), request.transferId());
                                 return replies;
                             })
                             .thenApply(replies -> new RoutedJoin(
@@ -550,36 +722,76 @@ final class ZLinkActorSpotAdmission {
                     if (abortError != null) {
                         error.addSuppressed(abortError);
                     }
-                    throw new java.util.concurrent.CompletionException(error);
+                    throw new CompletionException(error);
                 });
             });
     }
 
-    /**
-     * The route-switch acknowledgement is the target-side readiness barrier.
-     * It confirms that the source Session has rebound the actor and that the
-     * target has installed the remote bound-session binding before user Join
-     * completion or backlog replay can send through that binding.
-     */
-    private CompletionStage<Void> startBoundSessionRouteUpdate(
+    private BoundSessionRouteUpdate prepareBoundSessionRouteUpdate(
         ZLinkActorSpotRoutePackets.TransferRequest request,
         ZLinkInternalSpotNode primaryNode,
-        long authorityOwnerGeneration) {
-        CompletionStage<Void> update;
-        try {
-            update = switchBoundSessionRoute(
-                request,
-                primaryNode,
-                authorityOwnerGeneration);
-        } catch (Throwable failure) {
-            reportBoundSessionRouteUpdateFailure(request, failure);
-            return CompletableFuture.failedFuture(failure);
+        systems.zlink.framework.runtime.internal.locations
+            .ZLinkDeferredJoinCompletionAuthority.CommittedActorTenure tenure) {
+        byte[] command44 = request.sessionRouteCommand44();
+        if (command44.length == 0) {
+            return null;
         }
-        return update.whenComplete((ignored, failure) -> {
-            if (failure != null) {
-                reportBoundSessionRouteUpdateFailure(request, failure);
-            }
-        });
+        if (request.completionManifest() == null) {
+            throw new ZLinkConfigurationException(
+                "StateIncompatible: bound-Session direct Join has no durable "
+                    + "source-cleanup completion marker");
+        }
+        if (sessionRoutes == null) {
+            throw new ZLinkConfigurationException(
+                "bound Session relocation route runtime is unavailable");
+        }
+        var codec = new ZLinkServiceM6BWireCodec();
+        var intent = codec.decodeSessionRelocationRouteIntent(command44);
+        UUID relocationId =
+            UUID.fromString(request.transferId());
+        if (intent.relocation().high()
+                != relocationId.getMostSignificantBits()
+            || intent.relocation().low()
+                != relocationId.getLeastSignificantBits()
+            || !intent.actor().actorId().equals(request.actorId())
+            || intent.actor().generation()
+                != request.actorGeneration()
+            || !intent.targetNodeRid().equals(primaryNode.routingId())) {
+            throw new ZLinkConfigurationException(
+                "bound Session route command does not match direct Join");
+        }
+        var command = intent.materialize(tenure.authorityOwnerGeneration());
+        ZLinkBackendActorRef targetActor = new ZLinkBackendActorRef(
+            primaryNode.routingId(),
+            request.actorId(),
+            request.actorGeneration());
+        if (!tenure.actor().equals(targetActor)
+            || tenure.targetNodeGeneration()
+                != command.targetNodeGeneration()) {
+            throw new ZLinkConfigurationException(
+                "committed Actor tenure differs from the Session route target");
+        }
+        return new BoundSessionRouteUpdate(command, targetActor);
+    }
+
+    private void startBoundSessionRouteUpdateAfterSourceCleanup(
+        ZLinkActorSpotRoutePackets.TransferRequest request,
+        ZLinkInternalSpotNode primaryNode,
+        BoundSessionRouteUpdate update) {
+        if (update == null) {
+            return;
+        }
+        new SourceCleanupRouteHandoff(
+            () -> requireActors().awaitDeferredJoinSourceCleanup(
+                request,
+                update.targetActor(),
+                Duration.ofMillis(Math.max(1L, request.timeoutMillis()))),
+            () -> switchBoundSessionRoute(request, primaryNode, update),
+            () -> draining.getAsBoolean()
+                || routeSwitchSuperseded(primaryNode, update.targetActor()),
+            failure -> reportBoundSessionRouteUpdateFailure(request, failure),
+            Duration.ofSeconds(1))
+            .start();
     }
 
     private void reportBoundSessionRouteUpdateFailure(
@@ -589,57 +801,78 @@ final class ZLinkActorSpotAdmission {
             "session_route_update_failed",
             request.actorId(),
             request.transferId());
-        java.util.logging.Logger.getLogger(ZLinkActorSpotAdmission.class.getName())
+        Logger.getLogger(ZLinkActorSpotAdmission.class.getName())
             .warning("Bound Session route update failed after Actor relocation commit: "
                 + failure);
     }
 
-    private CompletionStage<Void> switchBoundSessionRoute(
+    private void switchBoundSessionRoute(
         ZLinkActorSpotRoutePackets.TransferRequest request,
         ZLinkInternalSpotNode primaryNode,
-        long authorityOwnerGeneration) {
-        byte[] command44 = request.sessionRouteCommand44();
-        if (command44.length == 0) {
-            return CompletableFuture.completedFuture(null);
+        BoundSessionRouteUpdate update) {
+        requireActors().traceActorTransferMarker(
+            "session_route_update_started",
+            request.actorId(),
+            request.transferId());
+        //  The returned stage settles after the first attempt whatever the
+        //  outcome, so the terminal callback - not that stage - is what proves
+        //  the switch. A command 45 ACK traces `session_route_switched`;
+        //  stopping without one means the relocation was superseded and is
+        //  traced as a failure.
+        sessionRoutes.switchRouteUntilTerminal(
+            update.command(),
+            Duration.ofMillis(Math.max(1L, request.timeoutMillis())),
+            () -> CompletableFuture.completedFuture(
+                routeSwitchSuperseded(primaryNode, update.targetActor())),
+            () -> requireActors().renewDeferredJoinCompletion(
+                request),
+            (ack, failure) -> {
+                if (ack == null) {
+                    reportBoundSessionRouteUpdateFailure(
+                        request,
+                        failure == null
+                            ? new ZLinkConfigurationException(
+                                "Session route switch ended without command 45")
+                            : failure);
+                    return;
+                }
+                //  Spec 20 §5: `Stale` and `SessionOrBindingClosed` mean the
+                //  owner did not move the route, so they end the
+                //  retransmission without a switch.
+                if (ack.result() != ZLinkServiceM6BWireCodec
+                        .SessionRelocationRouteResult.APPLIED
+                    && ack.result() != ZLinkServiceM6BWireCodec
+                        .SessionRelocationRouteResult.ALREADY_APPLIED) {
+                    ZLinkConfigurationException refusal =
+                        new ZLinkConfigurationException(
+                            "Session owner refused the route switch: "
+                                + ack.result());
+                    reportBoundSessionRouteUpdateFailure(request, refusal);
+                    return;
+                }
+                requireActors().traceActorTransferMarker(
+                    "session_route_switched",
+                    request.actorId(),
+                    request.transferId());
+            });
+    }
+
+    /**
+     * Spec 20 §5.1: only the running target runtime continues the location
+     * update retransmission. Once this node no longer holds that exact Actor
+     * incarnation the relocation it was announcing is over, so the retry is
+     * terminal.
+     */
+    private static boolean routeSwitchSuperseded(
+        ZLinkInternalSpotNode primaryNode,
+        ZLinkBackendActorRef targetActor) {
+        ZLinkBackendActorRef current;
+        try {
+            current = primaryNode.actorLookup(targetActor.actorId());
+        } catch (RuntimeException unavailable) {
+            return false;
         }
-        if (sessionRoutes == null) {
-            return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                    "bound Session relocation route runtime is unavailable"));
-        }
-        var codec =
-            new systems.zlink.framework.runtime.internal.service
-                .ZLinkServiceM6BWireCodec();
-        var intent = codec.decodeSessionRelocationRouteIntent(command44);
-        java.util.UUID relocationId =
-            java.util.UUID.fromString(request.transferId());
-        if (intent.relocation().high()
-                != relocationId.getMostSignificantBits()
-            || intent.relocation().low()
-                != relocationId.getLeastSignificantBits()
-            || !intent.actor().actorId().equals(request.actorId())
-            || intent.actor().generation()
-                != request.actorGeneration()
-            || !intent.targetNodeRid().equals(primaryNode.routingId())) {
-            return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                    "bound Session route command does not match direct Join"));
-        }
-        var command = intent.materialize(authorityOwnerGeneration);
-        primaryNode.rememberActorAuthority(
-            new ZLinkBackendActorRef(
-                primaryNode.routingId(),
-                request.actorId(),
-                request.actorGeneration()),
-            command.currentAuthorityOwnerGeneration(),
-            primaryNode.localAuthorityLeaseGeneration());
-        return sessionRoutes.switchRoute(
-                command,
-                Duration.ofMillis(Math.max(1L, request.timeoutMillis())))
-            .thenRun(() -> requireActors().traceActorTransferMarker(
-                "session_route_switched",
-                request.actorId(),
-                request.transferId()));
+        return current == null || !current.equals(targetActor);
     }
 
     private static ZLinkBackendActorRef completeRemoteMove(
@@ -653,16 +886,19 @@ final class ZLinkActorSpotAdmission {
         ZLinkActorRuntime runtime,
         ZLinkActor actor,
         ZLinkBackendActorRef actorRef,
+        ZLinkActorSpotRoutePackets.TransferRequest request,
         ZLinkPendingActorTransfers.Admission pending,
         ZLinkInternalSpotNode primaryNode) {
-        ZLinkActorSpotRoutePackets.TransferRequest request = pending.request();
         if (request.hasSourceSessionRoute()) {
+            BoundSessionFence fence = boundSessionFence(request);
             return runtime.bindNativeSession(
                 actor,
                 primaryNode,
                 actorRef,
                 request.sourceNodeRid(),
-                request.sourceSessionRid());
+                request.sourceSessionRid(),
+                fence.bindingGeneration(),
+                fence.lastAcceptedSessionSequence());
         }
         if (pending.routeChannelName() != null || pending.sourcePeerRid() != null) {
             return runtime.bindRoutedSession(
@@ -675,6 +911,20 @@ final class ZLinkActorSpotAdmission {
                 request.actorRef());
         }
         return runtime.bindNativeSession(actor, primaryNode, actorRef);
+    }
+
+    private static BoundSessionFence boundSessionFence(
+        ZLinkActorSpotRoutePackets.TransferRequest request) {
+        byte[] command44 = request.sessionRouteCommand44();
+        if (command44.length == 0) {
+            return new BoundSessionFence(0, 0);
+        }
+        ZLinkServiceM6BWireCodec.SessionRelocationRouteIntent intent =
+            new ZLinkServiceM6BWireCodec()
+                .decodeSessionRelocationRouteIntent(command44);
+        return new BoundSessionFence(
+            intent.session().bindingGeneration(),
+            intent.lastAcceptedSessionSequence());
     }
 
     private static CompletionStage<ZLinkSpotActorJoinResult> invokeAdmissionCallback(

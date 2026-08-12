@@ -15,7 +15,7 @@ inline void run_missing_message_name_scenario (const client_options_t &options)
     std::this_thread::sleep_for (std::chrono::milliseconds (500));
     publish (publisher_url, topic_fanout, "after-missing");
     const std::vector<std::vector<std::string>> expected{
-      accepted_evidence ("after-missing"), dispatch_error_evidence ("MissingEventMsg")};
+      accepted_evidence ("after-missing"), dispatch_error_evidence ("MissingEvent")};
     for (const auto &subscriber_url : subscriber_urls (options)) {
         (void) wait_for_subscriber_evidence (subscriber_url, expected);
     }

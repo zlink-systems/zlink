@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletionStage;
+import systems.zlink.framework.actors.ZLinkBoundSession;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -18,7 +22,7 @@ final class ZLinkActorTransferRegistryTest {
     @Test
     void registeredAdapterCapturesAndRestoresDomainState() {
         ZLinkActorTransferRegistry registry = new ZLinkActorTransferRegistry(
-            java.util.Map.of("stateful", StatefulAdapter.class),
+            Map.of("stateful", StatefulAdapter.class),
             ZLinkHandlerActivator.reflection());
         TestActor source = new TestActor(contextFor("actor-1"), "version-7");
 
@@ -38,7 +42,7 @@ final class ZLinkActorTransferRegistryTest {
     @Test
     void missingAdapterUsesEmptyStateAndFactorySignal() {
         ZLinkActorTransferRegistry registry = new ZLinkActorTransferRegistry(
-            java.util.Map.of(),
+            Map.of(),
             ZLinkHandlerActivator.reflection());
 
         ZLinkActorTransferRegistry.TransferState state =
@@ -60,7 +64,7 @@ final class ZLinkActorTransferRegistryTest {
     public static final class StatefulAdapter
         implements ZLinkActorRelocationAdapter<TestActor> {
         @Override
-        public java.util.concurrent.CompletionStage<byte[]> capture(
+        public CompletionStage<byte[]> capture(
             TestActor actor,
             ZLinkRelocationCancellation cancellation) {
             return CompletableFuture.completedFuture(
@@ -68,7 +72,7 @@ final class ZLinkActorTransferRegistryTest {
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<Void> restore(
+        public CompletionStage<Void> restore(
             TestActor actor,
             byte[] state,
             ZLinkRelocationCancellation cancellation) {
@@ -79,7 +83,7 @@ final class ZLinkActorTransferRegistryTest {
 
     public static final class TestActorFactory implements ZLinkActorFactory {
         @Override
-        public java.util.concurrent.CompletionStage<ZLinkActor> create(
+        public CompletionStage<ZLinkActor> create(
             ZLinkActorContext context) {
             return CompletableFuture.completedFuture(
                 new TestActor(context, "loaded-elsewhere"));
@@ -106,10 +110,10 @@ final class ZLinkActorTransferRegistryTest {
             @Override public String actorId() { return actorId; }
             @Override public long objectGeneration() { return 1L; }
             @Override public String meshName() { return "test"; }
-            @Override public java.util.Optional<String> spotId() {
-                return java.util.Optional.empty();
+            @Override public Optional<String> spotId() {
+                return Optional.empty();
             }
-            @Override public systems.zlink.framework.actors.ZLinkBoundSession boundSession() {
+            @Override public ZLinkBoundSession boundSession() {
                 return null;
             }
             @Override public ZLinkActorJoinCall joinSpot(String spotId) {

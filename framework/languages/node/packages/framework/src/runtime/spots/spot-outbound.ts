@@ -9,7 +9,6 @@ import type {
   RoutingId,
   ZLinkChannelClient,
   ZLinkChannelRequestCall,
-  ZLinkFanoutClient,
   ZLinkPublishCall,
   ZLinkRequestCall,
   ZLinkSendCall,
@@ -41,19 +40,38 @@ import {
   type ResolvedSpotHandle
 } from './spot-handle';
 
+export interface DefaultZLinkSpotOutboundOptions {
+  readonly serial: ZLinkSpotSerialExecutor;
+  readonly channelClient?: ZLinkChannelClient;
+  readonly spotPublisherClient?: ZLinkSpotPublisherClient;
+  readonly routedTransport?: ZLinkSpotRoutedTransport;
+  readonly spotRouterChannelIdForMesh?: (meshName: string) => string;
+  readonly sourceSpotProvider?: () => ZLinkBackendSpot | undefined;
+  readonly meshName?: string;
+  readonly addressTransport?: ZLinkSpotAddressTransport;
+}
+
 export class DefaultZLinkSpotOutbound implements ZLinkSpotOutbound {
-  constructor(
-    private readonly serial: ZLinkSpotSerialExecutor,
-    private readonly channelClient?: ZLinkChannelClient,
-    _fanoutClient?: ZLinkFanoutClient,
-    private readonly spotPublisherClient?: ZLinkSpotPublisherClient,
-    private readonly routedTransport?: ZLinkSpotRoutedTransport,
-    private readonly spotRouterChannelIdForMesh: (meshName: string) => string = (meshName) => meshName,
-    private readonly sourceSpotProvider?: () => ZLinkBackendSpot | undefined,
-    private readonly meshName?: string,
-    _channelMeshNameForChannel?: (channelName: string) => string | undefined,
-    private readonly addressTransport?: ZLinkSpotAddressTransport
-  ) {}
+  private readonly serial: ZLinkSpotSerialExecutor;
+  private readonly channelClient: ZLinkChannelClient | undefined;
+  private readonly spotPublisherClient: ZLinkSpotPublisherClient | undefined;
+  private readonly routedTransport: ZLinkSpotRoutedTransport | undefined;
+  private readonly spotRouterChannelIdForMesh: (meshName: string) => string;
+  private readonly sourceSpotProvider: (() => ZLinkBackendSpot | undefined) | undefined;
+  private readonly meshName: string | undefined;
+  private readonly addressTransport: ZLinkSpotAddressTransport | undefined;
+
+  constructor(options: DefaultZLinkSpotOutboundOptions) {
+    this.serial = options.serial;
+    this.channelClient = options.channelClient;
+    this.spotPublisherClient = options.spotPublisherClient;
+    this.routedTransport = options.routedTransport;
+    this.spotRouterChannelIdForMesh = options.spotRouterChannelIdForMesh
+      ?? ((meshName) => meshName);
+    this.sourceSpotProvider = options.sourceSpotProvider;
+    this.meshName = options.meshName;
+    this.addressTransport = options.addressTransport;
+  }
 
   sendToSpot(spotId: RoutingId, message: unknown): ZLinkSpotSendCall;
   /** @internal Compatibility path for an already resolved handle. */
@@ -286,9 +304,9 @@ function createAddressedSpotRequestCall(
   sourceSpotProvider?: () => ZLinkBackendSpot | undefined
 ): ZLinkSpotRequestCall {
   const options = newAddressCallOptions();
-  const begin = <TReply>(signal?: AbortSignal) => {
+  const begin = <TReply>(waitPolicy: 'async' | 'yield', signal?: AbortSignal) => {
     markSubmitted(options);
-    rejectSameSpotRequest(serial, spotId);
+    rejectSameSpotAsyncRequest(serial, spotId, waitPolicy);
     return startRequestOnSerial<TReply>(serial, () => ({
       pending: transport.requestToSpotAddress<TReply>(
         spotId,
@@ -328,12 +346,12 @@ function createAddressedSpotRequestCall(
       return this;
     },
     submit<TReply>(signal?: AbortSignal) {
-      const pending = begin<TReply>(signal);
+      const pending = begin<TReply>('async', signal);
       return serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending);
     },
     yield<TReply>(signal?: AbortSignal) {
       const turn = requireZLinkYieldTurn();
-      const pending = begin<TReply>(signal);
+      const pending = begin<TReply>('yield', signal);
       return turn.yieldPromise(pending);
     }
   };
@@ -426,7 +444,7 @@ function wrapSendCall(serial: ZLinkSpotSerialExecutor, inner: ZLinkSendCall): ZL
       return this;
     },
     async submit(signal?: AbortSignal) {
-      const result = await serial.execute(() => inner.submit(signal));
+      const result = await runInternalTransportStart(serial, () => inner.submit(signal));
       return result;
     }
   };
@@ -440,7 +458,7 @@ function wrapPublishCall(serial: ZLinkSpotSerialExecutor, inner: ZLinkPublishCal
       return this;
     },
     submit(signal?: AbortSignal) {
-      return serial.execute(() => inner.submit(signal));
+      return runInternalTransportStart(serial, () => inner.submit(signal));
     }
   };
 }
@@ -483,7 +501,21 @@ function startRequestOnSerial<TReply>(
   serial: ZLinkSpotSerialExecutor,
   begin: () => Promise<{ pending: Promise<TReply> }> | { pending: Promise<TReply> }
 ): Promise<TReply> {
-  return serial.execute(begin).then((startedRequest) => startedRequest.pending);
+  return runInternalTransportStart(serial, begin)
+    .then((startedRequest) => startedRequest.pending);
+}
+
+/**
+ * Synthesizes only the transport start in the current turn. This is not a
+ * nested public operation: public same-owner waits are rejected or use Yield.
+ */
+function runInternalTransportStart<T>(
+  serial: ZLinkSpotSerialExecutor,
+  begin: () => Promise<T> | T
+): Promise<T> {
+  return serial.isCurrentTurn
+    ? Promise.resolve().then(begin)
+    : serial.post(begin);
 }
 
 function wrapRoutedSpotSendCall(
@@ -540,11 +572,11 @@ function wrapRoutedSpotRequestCall(
 ): ZLinkRequestCall & Pick<ZLinkChannelRequestCall, 'yield'> {
   let selectedTimeoutMs: number | undefined;
   const metadata = new Map<string, string>();
-  const begin = <TReply>(signal?: AbortSignal) => {
+  const begin = <TReply>(waitPolicy: 'async' | 'yield', signal?: AbortSignal) => {
     // A request to the current Spot would wait behind the handler that owns
     // the same Spot claim. Reject it before resolving a route or submitting
     // transport work; one-way self-send remains a valid FIFO admission.
-    rejectSameSpotRequest(serial, spot.spotId);
+    rejectSameSpotAsyncRequest(serial, spot.spotId, waitPolicy);
     return startRequestOnSerial<TReply>(serial, () => ({
       pending: requestToSpotHandle<TReply>(transport, spot, request, {
         timeoutMs: selectedTimeoutMs,
@@ -571,18 +603,23 @@ function wrapRoutedSpotRequestCall(
       return this;
     },
     submit<TReply>(signal?: AbortSignal) {
-      const pending = begin<TReply>(signal);
+      const pending = begin<TReply>('async', signal);
       return serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending);
     },
     yield<TReply>(signal?: AbortSignal) {
       const turn = requireZLinkYieldTurn();
-      const pending = begin<TReply>(signal);
+      const pending = begin<TReply>('yield', signal);
       return turn.yieldPromise(pending);
     }
   };
 }
 
-function rejectSameSpotRequest(serial: ZLinkSpotSerialExecutor, targetSpotId: RoutingId): void {
+function rejectSameSpotAsyncRequest(
+  serial: ZLinkSpotSerialExecutor,
+  targetSpotId: RoutingId,
+  waitPolicy: 'async' | 'yield'
+): void {
+  if (waitPolicy === 'yield' || !serial.isCurrentTurn) return;
   const sourceSpotId = serial.sourceSpotId;
   if (sourceSpotId === undefined || String(sourceSpotId) !== String(targetSpotId)) return;
   throw createInternalFrameworkException(

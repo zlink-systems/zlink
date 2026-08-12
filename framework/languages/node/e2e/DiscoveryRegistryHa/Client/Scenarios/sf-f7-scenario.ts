@@ -3,11 +3,11 @@ import type { ClientOptions } from '../Support/client-options';
 import { getJson, postJson, postJsonWithin } from '../../../http-client';
 import { ensure } from '../Support/scenario-assert';
 
-interface CapacityResult {
+interface CapacityRes {
   readonly status: string;
 }
 
-interface ProbeResult {
+interface ProbeRes {
   readonly actorId: string;
   readonly actorState: string;
   readonly spotId: string;
@@ -16,7 +16,7 @@ interface ProbeResult {
   readonly nodeRid: string;
 }
 
-interface LocationResult {
+interface LocationRes {
   readonly found: boolean;
   readonly ownerNodeRid?: string;
   readonly objectGeneration?: string;
@@ -32,13 +32,13 @@ export async function runSFF7(options: ClientOptions): Promise<void> {
   const actorState = `actor-state-${suffix}`;
   const stateLength = 64 * 1024 * 1024 + (variant === 'oversize' ? 1 : 0);
 
-  const spot = await postJson<CapacityResult>(options.providerAUrl, '/capacity/spots', {
+  const spot = await postJson<CapacityRes>(options.providerAUrl, '/capacity/spots', {
     spotId,
     stateLength,
     fillByte: 0x5a
   });
   ensure(spot.status === 'created', 'SF-F7 source Spot creation failed.');
-  const actor = await postJson<CapacityResult>(options.providerAUrl, '/capacity/actors', {
+  const actor = await postJson<CapacityRes>(options.providerAUrl, '/capacity/actors', {
     actorId,
     state: actorState
   });
@@ -85,7 +85,7 @@ export async function runSFF7(options: ClientOptions): Promise<void> {
   console.log(`scenario SF-F7 variant=${variant} passed`);
 }
 
-async function probe(providerUrl: string, actorId: string): Promise<ProbeResult> {
+async function probe(providerUrl: string, actorId: string): Promise<ProbeRes> {
   return await postJson(providerUrl, '/capacity/actors/probe', { actorId });
 }
 
@@ -96,9 +96,9 @@ async function locationsOwnedBy(
   ownerRid: string
 ): Promise<boolean> {
   const rows = await Promise.all([
-    getJson<LocationResult>(options.consumerUrl,
+    getJson<LocationRes>(options.consumerUrl,
       `/location/object?kind=actor&id=${encodeURIComponent(actorId)}`),
-    getJson<LocationResult>(options.consumerUrl,
+    getJson<LocationRes>(options.consumerUrl,
       `/location/object?kind=spot&id=${encodeURIComponent(spotId)}`)
   ]);
   return rows.every(row => row.found

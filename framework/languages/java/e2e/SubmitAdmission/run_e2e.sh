@@ -5,6 +5,8 @@ umask 077
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../../.." && pwd)"
 JAVA_ROOT="$REPO_ROOT/framework/languages/java"
+source "${JAVA_ROOT}/e2e-runner-common.sh"
+zlink_e2e_initialize java "$0" "$@"
 ROLE_ROOT="$SCRIPT_DIR/Role"
 SCENARIO="${1:-all}"
 STAMP="$(date +%Y%m%d-%H%M%S)-$$"
@@ -129,7 +131,7 @@ run_gradle_with_candidate() {
   shift
   (
     cd "$JAVA_ROOT"
-    env -u ZLINK_JAVA_BINDINGS_SOURCE \
+    zlink_e2e_gradle_build_locked env -u ZLINK_JAVA_BINDINGS_SOURCE \
       ZLINK_LOCAL_PACKAGE_ROOT="$ZLINK_LOCAL_PACKAGE_ROOT" \
       ZLINK_EXPECTED_BINDING_JAR="$CANDIDATE_JAR" \
       ZLINK_EXPECTED_BINDING_SHA256="$CANDIDATE_SHA256" \
@@ -146,7 +148,7 @@ run_gradle_with_candidate() {
 build_role() {
   (
     cd "$ROLE_ROOT"
-    env -u ZLINK_JAVA_BINDINGS_SOURCE \
+    zlink_e2e_gradle_build_locked env -u ZLINK_JAVA_BINDINGS_SOURCE \
       ZLINK_LOCAL_PACKAGE_ROOT="$ZLINK_LOCAL_PACKAGE_ROOT" \
       ZLINK_EXPECTED_BINDING_JAR="$CANDIDATE_JAR" \
       ZLINK_EXPECTED_BINDING_SHA256="$CANDIDATE_SHA256" \
@@ -192,16 +194,7 @@ run_reg_03() {
 }
 
 allocate_ports() {
-  python3 - <<'PY'
-import socket
-ports = []
-for _ in range(7):
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    ports.append(sock.getsockname()[1])
-    sock.close()
-print(*ports)
-PY
+  zlink_e2e_reserve_ports 7
 }
 
 stop_pid() {

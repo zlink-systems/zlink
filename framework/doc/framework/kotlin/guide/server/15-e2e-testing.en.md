@@ -275,10 +275,10 @@ client can't confirm.
   nodes actually work
 
 ```kotlin
-// The join response arrives as a push, not the request's reply -- register the wait first, then send.
-private suspend fun joinGame(connector: ZLinkStreamConnector, roomId: String): JoinGameRes {
-    val completion = connector.waitFor(JoinGameRes::class.java).submit(JoinGameRes::class.java)
-    connector.send(JoinGameReq(roomId)).submit().await()
+// The join completion arrives as a client push -- register the wait before the one-way send.
+private suspend fun joinGame(connector: ZLinkStreamConnector, roomId: String): JoinGameNotify {
+    val completion = connector.waitFor(JoinGameNotify::class.java).submit(JoinGameNotify::class.java)
+    connector.send(JoinGameMsg(roomId)).submit().await()
     return completion.await().payload()
 }
 ```

@@ -49,7 +49,7 @@ internal sealed class ToActorScenarioContext : IDisposable
     {
         await _actorHttp.Post($"/actors/{actorId}/destroy?scenario={scenario}")
             .Body(new { })
-            .Async<DestroyActorReply>();
+            .Async<DestroyActorRes>();
     }
 
     public async Task DisconnectCallerAsync()
@@ -72,8 +72,8 @@ internal sealed class ToActorScenarioContext : IDisposable
         ulong? targetGeneration = null)
     {
         var endpoint = send ? "send" : "request";
-        var response = await PostJsonAsync<ActorCallResponse>(
-            $"/{endpoint}", new ActorCallRequest(
+        var response = await PostJsonAsync<ActorCallRes>(
+            $"/{endpoint}", new ActorCallReq(
                 scenario,
                 actorId,
                 value,
@@ -87,15 +87,15 @@ internal sealed class ToActorScenarioContext : IDisposable
     //  acceptance only and is not a way to learn whether the remote Actor
     //  exists. The scenario therefore records the outcome and leaves the
     //  verification to the evidence and authority checks that follow.
-    public async Task<ActorCallResponse> SendWithoutOutcomeAssertionAsync(
+    public async Task<ActorCallRes> SendWithoutOutcomeAssertionAsync(
         string scenario,
         string actorId,
         string value,
         string? targetNodeRid = null,
         ulong? targetGeneration = null)
     {
-        return await PostJsonAsync<ActorCallResponse>(
-            "/send", new ActorCallRequest(
+        return await PostJsonAsync<ActorCallRes>(
+            "/send", new ActorCallReq(
                 scenario,
                 actorId,
                 value,
@@ -112,8 +112,8 @@ internal sealed class ToActorScenarioContext : IDisposable
         ulong? targetGeneration = null)
     {
         var endpoint = send ? "send" : "request";
-        var response = await PostJsonAsync<ActorCallResponse>(
-            $"/{endpoint}", new ActorCallRequest(
+        var response = await PostJsonAsync<ActorCallRes>(
+            $"/{endpoint}", new ActorCallReq(
                 scenario,
                 actorId,
                 "missing",
@@ -157,8 +157,8 @@ internal sealed class ToActorScenarioContext : IDisposable
 
     public async Task AssertCachedFailureAsync(string scenario, string actorId, string expectedKind)
     {
-        var response = await PostJsonAsync<ActorCallResponse>(
-            "/cached/request", new ActorCallRequest(scenario, actorId, "failure"));
+        var response = await PostJsonAsync<ActorCallRes>(
+            "/cached/request", new ActorCallReq(scenario, actorId, "failure"));
         ZlinkStreamAssert.Ensure(response.ErrorKind == expectedKind,
             $"{scenario} expected '{expectedKind}', got '{response.ErrorKind}'.");
     }
@@ -171,13 +171,13 @@ internal sealed class ToActorScenarioContext : IDisposable
             .Body(new { })
             .Async<object>();
         var response = (await _noRouteCallerHttp.Post("/request")
-            .Body(new ActorCallRequest(
+            .Body(new ActorCallReq(
                 scenario,
                 actor.ActorId,
                 "no-route",
                 actor.NodeRid.ToString(),
                 actor.ObjectGeneration))
-            .Async<ActorCallResponse>()).Body;
+            .Async<ActorCallRes>()).Body;
         // 10.0.0 conversion table (spec 05 §13.1): an explicit route
         // disconnect removes the peer from the member snapshot, so Core
         // reports NOT_FOUND and the framework surfaces NotFound.
@@ -198,17 +198,17 @@ internal sealed class ToActorScenarioContext : IDisposable
         // recovery contract is that requests succeed once the peer readmits,
         // so poll within a bounded window instead of racing the handshake.
         var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
-        ActorCallResponse response;
+        ActorCallRes response;
         while (true)
         {
             response = (await _noRouteCallerHttp.Post("/request")
-                .Body(new ActorCallRequest(
+                .Body(new ActorCallReq(
                     scenario,
                     actor.ActorId,
                     value,
                     actor.NodeRid.ToString(),
                     actor.ObjectGeneration))
-                .Async<ActorCallResponse>()).Body;
+                .Async<ActorCallRes>()).Body;
             if (response.ErrorKind is null || DateTimeOffset.UtcNow >= deadline) break;
             await Task.Delay(100);
         }
@@ -245,13 +245,13 @@ internal sealed class ToActorScenarioContext : IDisposable
         var connector = await ConnectAsync(endpoint);
         try
         {
-            var reply = await connector.Request(new BindActorRequest(actorId))
-                .PacketName("BindActorRequest")
-                .Async<BindActorReply>();
+            var reply = await connector.Request(new BindActorReq(actorId))
+                .PacketName("BindActorReq")
+                .Async<BindActorRes>();
             ZlinkStreamAssert.Ensure(reply.ActorId == actorId, $"Actor bind reply mismatch for '{actorId}'.");
-            var probe = await connector.Request(new ActorAsk("bind-probe", actorId, "bound"))
-                .PacketName("ActorAsk")
-                .Async<ActorReply>();
+            var probe = await connector.Request(new ActorReq("bind-probe", actorId, "bound"))
+                .PacketName("ActorReq")
+                .Async<ActorRes>();
             ZlinkStreamAssert.Ensure(probe.ActorId == actorId, $"Actor bind probe mismatch for '{actorId}'.");
             return connector;
         }
@@ -271,8 +271,8 @@ internal sealed class ToActorScenarioContext : IDisposable
     {
         var received = bound.WaitFor<BoundPushNotify>().Async().AsTask();
         var reply = (await _actorHttp.Post($"/actors/{actorId}/push")
-            .Body(new BoundPushRequest(scenario, actorId, value))
-            .Async<BoundPushReply>()).Body;
+            .Body(new BoundPushReq(scenario, actorId, value))
+            .Async<BoundPushRes>()).Body;
         var notify = await received;
         ZlinkStreamAssert.Ensure(reply.Submitted, $"{scenario} bound push was not submitted.");
         ZlinkStreamAssert.Ensure(notify.Payload == new BoundPushNotify(scenario, actorId, value),
@@ -293,13 +293,13 @@ internal sealed class ToActorScenarioContext : IDisposable
         // A disconnect reaches the Actor's owner node as a relayed frame, so
         // the session side reporting the binding gone does not mean the owner
         // has seen it yet. Poll until it has.
-        BoundPushReply reply;
+        BoundPushRes reply;
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
         while (true)
         {
             reply = (await actor.Post($"/actors/{actorId}/push")
-                .Body(new BoundPushRequest(scenario, actorId, value))
-                .Async<BoundPushReply>()).Body;
+                .Body(new BoundPushReq(scenario, actorId, value))
+                .Async<BoundPushRes>()).Body;
             if (!reply.Submitted || DateTime.UtcNow >= deadline) break;
             await Task.Delay(TimeSpan.FromMilliseconds(100));
         }

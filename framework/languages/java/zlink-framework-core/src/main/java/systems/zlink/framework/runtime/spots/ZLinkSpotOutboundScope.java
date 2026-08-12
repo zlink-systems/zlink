@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.spots;
+import systems.zlink.framework.spots.ZLinkSpotRequestCall;
+import systems.zlink.framework.spots.ZLinkSpotSendCall;
 
 import java.util.function.Supplier;
 import systems.zlink.framework.channels.ZLinkPublishCall;
@@ -44,14 +46,14 @@ final class ZLinkAmbientSpotOutbound implements ZLinkSpotOutbound {
     }
 
     @Override
-    public systems.zlink.framework.spots.ZLinkSpotSendCall sendToSpot(
+    public ZLinkSpotSendCall sendToSpot(
         String spotId,
         Object message) {
         return scope.requireCurrent().sendToSpot(spotId, message);
     }
 
     @Override
-    public systems.zlink.framework.spots.ZLinkSpotRequestCall requestToSpot(
+    public ZLinkSpotRequestCall requestToSpot(
         String spotId,
         Object request) {
         return scope.requireCurrent().requestToSpot(spotId, request);

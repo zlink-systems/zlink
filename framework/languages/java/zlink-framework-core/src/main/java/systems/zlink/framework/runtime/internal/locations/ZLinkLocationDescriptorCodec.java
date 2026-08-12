@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.internal.locations;
+import java.util.Comparator;
+import java.util.Locale;
+import systems.zlink.framework.locations.ZLinkActivationConcurrency;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -69,7 +72,7 @@ public final class ZLinkLocationDescriptorCodec {
         node.put("ApplicationVersion", row.applicationVersion());
         ArrayNode capabilities = JSON.createArrayNode();
         row.objectCapabilities().stream()
-            .sorted(java.util.Comparator
+            .sorted(Comparator
                 .<ZLinkObjectCapability>comparingInt(
                     capability -> capability.objectKind().value())
                 .thenComparing(ZLinkObjectCapability::stableType))
@@ -109,7 +112,7 @@ public final class ZLinkLocationDescriptorCodec {
             row.capacity().spots()));
         ArrayNode spotTypes = JSON.createArrayNode();
         row.capacity().spotTypes().stream()
-            .sorted(java.util.Comparator
+            .sorted(Comparator
                 .<ZLinkSpotTypeCapacity>comparingInt(
                     value -> value.objectKind().value())
                 .thenComparing(ZLinkSpotTypeCapacity::stableType))
@@ -191,7 +194,7 @@ public final class ZLinkLocationDescriptorCodec {
         appendImmutableSegment(
             preimage,
             row.serverRid().toHex().toLowerCase(
-                java.util.Locale.ROOT));
+                Locale.ROOT));
         appendImmutableSegment(
             preimage,
             Long.toString(row.lifecycleGeneration()));
@@ -253,7 +256,7 @@ public final class ZLinkLocationDescriptorCodec {
         appendImmutableSegment(
             preimage,
             row.publisherRid().toHex().toLowerCase(
-                java.util.Locale.ROOT));
+                Locale.ROOT));
         appendImmutableSegment(
             preimage,
             Long.toString(row.lifecycleGeneration()));
@@ -294,7 +297,7 @@ public final class ZLinkLocationDescriptorCodec {
         appendImmutableSegment(preimage, row.meshName());
         appendImmutableSegment(
             preimage,
-            row.rid().toHex().toLowerCase(java.util.Locale.ROOT));
+            row.rid().toHex().toLowerCase(Locale.ROOT));
         appendImmutableSegment(
             preimage,
             Long.toString(row.lifecycleGeneration()));
@@ -317,7 +320,7 @@ public final class ZLinkLocationDescriptorCodec {
         appendImmutableSegment(
             preimage,
             row.objectRole().name().toLowerCase(
-                java.util.Locale.ROOT));
+                Locale.ROOT));
         appendImmutableSegment(
             preimage,
             row.entrySpotId().isPresent() ? "1" : "0");
@@ -355,7 +358,7 @@ public final class ZLinkLocationDescriptorCodec {
             appendImmutableSegment(
                 preimage,
                 capability.policy().name().toLowerCase(
-                    java.util.Locale.ROOT));
+                    Locale.ROOT));
             appendImmutableSegment(
                 preimage,
                 capability.hasSnapshotAdapter() ? "1" : "0");
@@ -396,7 +399,7 @@ public final class ZLinkLocationDescriptorCodec {
         List<ZLinkObjectCapability> values) {
         ArrayNode capabilities = JSON.createArrayNode();
         values.stream()
-            .sorted(java.util.Comparator
+            .sorted(Comparator
                 .<ZLinkObjectCapability, String>comparing(
                     capability -> objectKindToken(
                         capability.objectKind()))
@@ -410,7 +413,7 @@ public final class ZLinkLocationDescriptorCodec {
                 encoded.put(
                     "policy",
                     capability.policy().name()
-                        .toLowerCase(java.util.Locale.ROOT));
+                        .toLowerCase(Locale.ROOT));
                 encoded.put(
                     "hasSnapshotAdapter",
                     capability.hasSnapshotAdapter());
@@ -482,7 +485,7 @@ public final class ZLinkLocationDescriptorCodec {
                 deserializeCapacityUsage(
                     encodedCapacity.path("Spots")),
                 spotTypes),
-            new systems.zlink.framework.locations.ZLinkActivationConcurrency(
+            new ZLinkActivationConcurrency(
                     node.path("ActivationConcurrency")
                         .path("Active").asInt(),
                     node.path("ActivationConcurrency")

@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -15,6 +16,7 @@ namespace zlink::framework::runtime::foundation
 {
 
 using call_id_t = runtime::call_id_t;
+inline constexpr std::size_t default_operation_capacity = 4096;
 
 enum class operation_terminal_t
 {
@@ -24,6 +26,9 @@ enum class operation_terminal_t
     transport_failed,
     shutdown
 };
+
+class operation_completion_dispatcher_t;
+struct operation_completion_item_t;
 
 class operation_registry_t
 {
@@ -52,13 +57,16 @@ class operation_registry_t
     struct pending_t
     {
         clock_t::time_point deadline;
-        callback_t callback;
+        std::unique_ptr<operation_completion_item_t> completion;
     };
 
-    using entry_t = std::pair<callback_t, operation_terminal_t>;
-    bool take (const call_id_t &id, callback_t &callback);
+    bool take (
+      const call_id_t &id,
+      std::unique_ptr<operation_completion_item_t> &completion);
 
     const std::size_t _capacity;
+    std::shared_ptr<operation_completion_dispatcher_t>
+      _completion_dispatcher;
     mutable std::mutex _mutex;
     std::unordered_map<call_id_t, pending_t, id_hash_t> _pending;
     bool _closed = false;

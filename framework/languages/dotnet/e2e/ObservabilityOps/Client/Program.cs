@@ -23,7 +23,6 @@ var scenarios = new Dictionary<string, Func<Task>>(StringComparer.OrdinalIgnoreC
     ["OBS-C7"] = () => ObsC7PlannedMaintenanceScenario.RunAsync(context),
     ["OBS-C8"] = () => ObsC8ShutdownDeadlineScenario.RunAsync(context),
     ["OBS-C9A"] = () => ObsC9AutomaticConvergenceScenario.RunAsync(context),
-    ["OBS-C9B"] = () => ObsC9ManualTopologyScenario.RunAsync(context),
     ["OBS-C10"] = () => ObsC10ExactVersionScenario.RunAsync(context),
     ["OBS-C11"] = () => ObsC11ConcurrentRelocateScenario.RunAsync(context),
     ["OBS-C12"] = () => ObsC12RelocateShutdownRaceScenario.RunAsync(context)

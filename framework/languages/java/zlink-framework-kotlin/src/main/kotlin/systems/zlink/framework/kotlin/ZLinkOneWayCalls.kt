@@ -1,5 +1,11 @@
 package systems.zlink.framework.kotlin
 
+
+import systems.zlink.framework.actors.ActorRef
+import systems.zlink.framework.messaging.ZLinkMessage
+import systems.zlink.framework.streams.ZLinkSessionDispatchContext
+import systems.zlink.framework.streams.ZLinkSessionReplyCall
+import systems.zlink.framework.streams.ZLinkSessionSendCall
 import java.time.Duration
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.atomic.AtomicBoolean
@@ -371,7 +377,7 @@ private class JavaActorManager(
     ): ZLinkKotlinActorCreateCall =
         JavaActorGetOrCreateCall(manager.getOrCreate(actorId, actorType))
 
-    override suspend fun destroy(actor: systems.zlink.framework.actors.ActorRef): Boolean =
+    override suspend fun destroy(actor: ActorRef): Boolean =
         awaitFrameworkStage(manager.destroy(actor))
 }
 
@@ -447,7 +453,7 @@ private class JavaSessionClient(
 }
 
 private class JavaSessionSendCall(
-    private var call: systems.zlink.framework.streams.ZLinkSessionSendCall,
+    private var call: ZLinkSessionSendCall,
     private val terminal: KotlinSingleUse = KotlinSingleUse(),
 ) : ZLinkKotlinSessionSendCall {
     override fun metadata(key: String, value: String): ZLinkKotlinSessionSendCall =
@@ -466,7 +472,7 @@ private class JavaSessionSendCall(
 }
 
 private class JavaSessionReplyCall(
-    private var call: systems.zlink.framework.streams.ZLinkSessionReplyCall,
+    private var call: ZLinkSessionReplyCall,
     private val terminal: KotlinSingleUse = KotlinSingleUse(),
 ) : ZLinkKotlinSessionReplyCall {
     override fun compress(): ZLinkKotlinSessionReplyCall =
@@ -495,13 +501,13 @@ fun ZLinkSessionClient.kotlin(): ZLinkKotlinSessionClient = JavaSessionClient(th
 fun ZLinkSessionActor.kotlin(): ZLinkKotlinSessionActor =
     object : ZLinkKotlinSessionActor {
         override fun relay(
-            message: systems.zlink.framework.messaging.ZLinkMessage,
+            message: ZLinkMessage,
         ): ZLinkKotlinSubmissionCall =
             DeferredSubmissionCall({ this@kotlin.relay(message) })
 
         override fun relay(
-            dispatch: systems.zlink.framework.streams.ZLinkSessionDispatchContext,
-            message: systems.zlink.framework.messaging.ZLinkMessage,
+            dispatch: ZLinkSessionDispatchContext,
+            message: ZLinkMessage,
         ): ZLinkKotlinSubmissionCall =
             DeferredSubmissionCall({ this@kotlin.relay(dispatch, message) })
     }

@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.binding;
+import java.nio.ByteBuffer;
+import java.util.concurrent.ExecutionException;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -517,6 +520,64 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     @Test
+    void command42ReceivesCommand43ThroughInfrastructureDispatcher()
+        throws Exception {
+        String endpoint = "inproc://jvm-m6c-session-seal-" + System.nanoTime();
+        RoutingId sourceRid = RoutingId.from("jvm-m6c-seal-source");
+        RoutingId sessionOwnerRid = RoutingId.from("jvm-m6c-seal-owner");
+        RoutingId sessionRid = RoutingId.from("jvm-m6c-seal-session");
+        var codec = new ZLinkServiceM6BWireCodec();
+        var seal = new ZLinkServiceM6BWireCodec.SessionRelocationSeal(
+            new ZLinkServiceM6BWireCodec.RelocationIdentity(1, 2),
+            new ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
+                "coordinator", 3, sourceRid, 4, "store-v5"),
+            ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
+            new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                new systems.zlink.framework.runtime.internal.backend
+                    .ZLinkBackendActorRef(sourceRid, "actor", 6),
+                4, 10, 11),
+            new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                sessionOwnerRid, 7, "session-owner", 8, sessionRid, 9));
+        try (var context = Zlink.createContext();
+             var source = new ZLinkJavaRawMeshNode(context, "mesh");
+             var sessionOwner = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            source.setRoutingId(sourceRid);
+            source.setBind("inproc://jvm-m6c-seal-source-" + System.nanoTime());
+            sessionOwner.setRoutingId(sessionOwnerRid);
+            sessionOwner.setBind(endpoint);
+            AtomicInteger applicationDispatches = new AtomicInteger();
+            sessionOwner.startDispatch(record -> {
+                applicationDispatches.incrementAndGet();
+                record.close();
+            });
+            sessionOwner.setSessionRelocationSealHandler((actualSource, encoded) -> {
+                assertEquals(sourceRid, actualSource);
+                assertEquals(seal, codec.decodeSessionRelocationSeal(encoded));
+                return CompletableFuture.completedFuture(
+                    codec.encodeSessionRelocationSealed(
+                        new ZLinkServiceM6BWireCodec.SessionRelocationSealed(
+                            seal.relocation(), seal.coordinator(),
+                            seal.actor(), seal.session(), 23)));
+            });
+            source.start();
+            sessionOwner.start();
+            source.connectPeer(endpoint, sessionOwnerRid);
+            awaitAdmitted(source);
+
+            var sealed = codec.decodeSessionRelocationSealed(
+                source.requestSessionRelocationSeal(
+                        sessionOwnerRid,
+                        codec.encodeSessionRelocationSeal(seal),
+                        Duration.ofSeconds(2))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS));
+
+            assertEquals(seal.relocation(), sealed.relocation());
+            assertEquals(23, sealed.lastAcceptedSessionSequence());
+            assertEquals(0, applicationDispatches.get());
+        }
+    }
+
+    @Test
     void command44ReceivesCommand45ThroughInfrastructureDispatcher()
         throws Exception {
         String endpoint = "inproc://jvm-m6c-session-route-" + System.nanoTime();
@@ -554,6 +615,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                         new ZLinkServiceM6BWireCodec.SessionRelocationRouted(
                             command.relocation(), command.coordinator(),
                             command.actor(), command.session(), command.action(),
+                            ZLinkServiceM6BWireCodec
+                                .SessionRelocationRouteResult.APPLIED,
                             command.currentAuthorityOwnerGeneration(),
                             command.lastAcceptedSessionSequence())));
             });
@@ -800,7 +863,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                             systems.zlink.framework.runtime.protocol
                                 .ServiceWireConstants.COMMAND_LIVENESS_PROBE,
                             0,
-                            List.of(java.nio.ByteBuffer
+                            List.of(ByteBuffer
                                 .allocate(Long.BYTES)
                                 .putLong(1)
                                 .array()))).getFirst());
@@ -849,7 +912,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                     List.of(oversized)));
         }
 
-        List<Message> tooMany = java.util.stream.IntStream.range(0, 65)
+        List<Message> tooMany = IntStream.range(0, 65)
             .mapToObj(ignored -> Message.from(new byte[0]))
             .toList();
         try {
@@ -1132,7 +1195,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             }
 
             var failure = assertThrows(
-                java.util.concurrent.ExecutionException.class,
+                ExecutionException.class,
                 () -> request.toCompletableFuture().get(2, TimeUnit.SECONDS));
             assertTrue(failure.getCause() instanceof ZlinkRequestException);
             assertEquals(

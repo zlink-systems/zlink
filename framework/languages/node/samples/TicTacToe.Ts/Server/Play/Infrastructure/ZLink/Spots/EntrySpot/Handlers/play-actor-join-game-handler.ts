@@ -1,34 +1,31 @@
-import { zlinkEntrySpotActorRequestHandler } from '@zlink-systems/nestjs';
+import { Injectable } from '@nestjs/common';
+import { ZLinkSpotActorSend } from '@zlink-systems/framework';
 import type {
-  ZLinkEntrySpotActorRequestHandler,
+  ZLinkEntrySpotActorSendHandler,
   ZLinkMessageContext
 } from '@zlink-systems/framework';
 import { PlayActor } from '../../../Actors/play-actor';
 import { PlayEntrySpot } from '../play-entry-spot';
 import type {
-  JoinGameReq,
-  JoinGameRes,
+  JoinGameMsg,
   TicTacToeGameJoinReq
 } from '../../../../../../../Shared/Contracts/messages';
-import { GameStatus, joinGameRes } from '../../../../../../../Shared/Contracts/messages';
+import { JoinGameFailedNotify, PacketNames } from '../../../../../../../Shared/Contracts/messages';
 
-@zlinkEntrySpotActorRequestHandler({
-  actor: () => PlayActor,
-  entrySpot: () => PlayEntrySpot,
-  packetName: 'JoinGameReq'
-})
+@Injectable()
 // --8<-- [start:doc-join-defer]
 class PlayActorJoinGameHandler
-  implements ZLinkEntrySpotActorRequestHandler<PlayEntrySpot, PlayActor, JoinGameReq, JoinGameRes> {
+  implements ZLinkEntrySpotActorSendHandler<PlayEntrySpot, PlayActor, JoinGameMsg> {
+  @ZLinkSpotActorSend(PacketNames.joinGameMsg)
   async handle(
     _spot: PlayEntrySpot,
     actor: PlayActor,
     context: ZLinkMessageContext,
-    request: JoinGameReq
-  ): Promise<JoinGameRes> {
+    message: JoinGameMsg
+  ): Promise<void> {
     void context;
     const joinRequest: TicTacToeGameJoinReq = {
-      roomId: request.roomId,
+      roomId: message.roomId,
       player: {
         actorId: actor.actorId,
         displayName: actor.displayName,
@@ -36,21 +33,18 @@ class PlayActorJoinGameHandler
         wins: actor.wins
       }
     };
-    actor.context
-      .joinSpot(request.roomId, joinRequest)
-      .defer();
-    actor.roomId = request.roomId;
-    return joinGameRes({
-      roomId: request.roomId,
-      board: '.........',
-      status: GameStatus.WaitingForPlayers,
-      winner: null,
-      nextTurn: '',
-      xActorId: null,
-      oActorId: null,
-      lastMoveActorId: null,
-      lastMoveCell: null
-    });
+    actor.pendingJoinRoomId = message.roomId;
+    try {
+      actor.context
+        .joinSpot(message.roomId, joinRequest)
+        .defer();
+    } catch (error) {
+      actor.pendingJoinRoomId = undefined;
+      await actor.push(new JoinGameFailedNotify(
+        message.roomId,
+        error instanceof Error ? error.message : String(error)
+      ));
+    }
   }
 }
 // --8<-- [end:doc-join-defer]

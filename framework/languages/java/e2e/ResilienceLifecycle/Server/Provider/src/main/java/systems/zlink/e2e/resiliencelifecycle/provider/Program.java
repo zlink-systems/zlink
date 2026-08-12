@@ -1,4 +1,10 @@
 package systems.zlink.e2e.resiliencelifecycle.provider;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
+import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
@@ -60,7 +66,7 @@ public final class Program {
         ObjectMapper json,
         ZLinkRouteMeshRuntimeOptions runtimeOptions,
         ConfigurableApplicationContext applicationContext,
-        systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle drain,
+        ZLinkFrameworkLifecycle drain,
         ProviderOptions options) {
         return new EvidenceHttpServer(
             state,
@@ -115,10 +121,10 @@ public final class Program {
     }
 
     private static void installDispatchErrorHandler(ScenarioState state) {
-        java.util.logging.Logger.getLogger(
+        Logger.getLogger(
             "systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer")
-            .addHandler(new java.util.logging.Handler() {
-                @Override public void publish(java.util.logging.LogRecord record) {
+            .addHandler(new Handler() {
+                @Override public void publish(LogRecord record) {
                     var fields = diagnosticsFields(record.getMessage());
                     if (!"ERROR".equals(fields.get("outcome"))) {
                         return;
@@ -137,8 +143,8 @@ public final class Program {
             });
     }
 
-    private static java.util.Map<String, String> diagnosticsFields(String message) {
-        java.util.Map<String, String> fields = new java.util.HashMap<>();
+    private static Map<String, String> diagnosticsFields(String message) {
+        Map<String, String> fields = new HashMap<>();
         if (message == null || !message.startsWith("message flow ")) {
             return fields;
         }

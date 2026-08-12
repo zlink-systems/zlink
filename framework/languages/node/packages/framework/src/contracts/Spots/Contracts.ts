@@ -19,7 +19,7 @@ export interface ZLinkActorHandlerRegistry {
   addHandler<THandler>(handlerType: Type<THandler>, packetName?: string): this;
 }
 
-export interface ZLinkSpotHandlerRegistry {
+export interface ZLinkSpotHandlerRegistry extends ZLinkActorHandlerRegistry {
   addPacket<THandler>(handlerType: Type<THandler>): this;
   addSubscribe<THandler>(handlerType: Type<THandler>, channelName: string, topic: string): this;
 }
@@ -144,6 +144,7 @@ export interface ZLinkSpotCreateCall {
   request(request: unknown): this;
   timeout(timeoutMs: number): this;
   submit(signal?: AbortSignal): Promise<ZLinkSpotCreateResult>;
+  yield(signal?: AbortSignal): Promise<ZLinkSpotCreateResult>;
 }
 
 export interface ZLinkSpotGetOrCreateCall extends ZLinkSpotCreateCall {}

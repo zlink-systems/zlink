@@ -1075,6 +1075,14 @@ internal sealed class ZLinkCanonicalRelocationReservationOwner
         finally
         {
             completionGate.Release();
+            // The fallback gate map is keyed per reservation and previously
+            // grew without bound. Drop the entry once no holder remains (the
+            // standalone runtime's stage gates use the same policy); a racing
+            // waiter that already holds the semaphore still completes safely.
+            if (terminal is null && completionGate.CurrentCount == 1)
+                _completionGates.TryRemove(
+                    new KeyValuePair<ReservationKey, SemaphoreSlim>(
+                        key, completionGate));
         }
     }
 
@@ -1207,7 +1215,11 @@ internal sealed class ZLinkCanonicalRelocationReservationOwner
                     root.Reference,
                     root.ChecksumCrc32c,
                     envelope.CanonicalApplicationVersion,
-                    SourceCleanupState: 0),
+                    SourceCleanupState: 0)
+                {
+                    CoordinatorExpectedAuthorityStoreVersion =
+                        slot.Prepare.Coordinator.ExpectedAuthorityStoreVersion
+                },
                 envelope);
         var coordinator = new ZLinkRelocationPublicationCoordinator(
             _store, relocationStore);
@@ -2951,15 +2963,6 @@ internal sealed class ZLinkCanonicalRelocationReservationOwner
             if (!EqualityComparer<T>.Default.Equals(left[index], right[index]))
                 return false;
         return true;
-    }
-
-    private static ulong SumBytes(
-        IReadOnlyList<ZLinkServiceWireCodec.RelocationParticipantRecord> values)
-    {
-        ulong result = 0;
-        foreach (var value in values)
-            result = checked(result + value.AllowanceBytes);
-        return result;
     }
 
     private static ZLinkAuthorityKey AuthorityKey(

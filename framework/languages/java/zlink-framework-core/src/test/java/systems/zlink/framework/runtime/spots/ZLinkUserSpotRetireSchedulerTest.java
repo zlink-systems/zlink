@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.concurrent.CompletionException;
+import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -89,7 +91,7 @@ final class ZLinkUserSpotRetireSchedulerTest {
         var scheduler = new ZLinkUserSpotRetireScheduler(backend);
 
         var failure = assertThrows(
-            java.util.concurrent.CompletionException.class,
+            CompletionException.class,
             () -> scheduler.execute(new ZLinkUserSpotRetireScheduler.Request(
                     prepared(),
                     staged(),
@@ -248,12 +250,12 @@ final class ZLinkUserSpotRetireSchedulerTest {
         }
         @Override public CompletionStage<Void> restoreSpot(
             Object spot, ZLinkUserSpotAggregateStagingOwner.Request request,
-            systems.zlink.framework.actors.ZLinkRelocationCancellation token) {
+            ZLinkRelocationCancellation token) {
             return CompletableFuture.completedFuture(null);
         }
         @Override public CompletionStage<Object> prepareActor(
             ZLinkUserSpotAggregateStagingOwner.ActorParticipant participant,
-            systems.zlink.framework.actors.ZLinkRelocationCancellation token) {
+            ZLinkRelocationCancellation token) {
             return CompletableFuture.completedFuture(new Object());
         }
         @Override public void publishSpot(Object spot) { }

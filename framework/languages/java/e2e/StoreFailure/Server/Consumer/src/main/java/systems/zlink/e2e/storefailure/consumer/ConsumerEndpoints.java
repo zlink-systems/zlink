@@ -1,4 +1,12 @@
 package systems.zlink.e2e.storefailure.consumer;
+import com.sun.net.httpserver.HttpExchange;
+import java.io.OutputStream;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -29,7 +37,7 @@ public final class ConsumerEndpoints implements SmartLifecycle {
     private final ZLinkClient client;
     private final ZLinkRouteClient routes;
     private final ZLinkFrameworkLifecycle lifecycle;
-    private final java.util.function.Supplier<ZLinkLocationRuntimeQuery> locationQuery;
+    private final Supplier<ZLinkLocationRuntimeQuery> locationQuery;
     private final LocationStoreDelayState delayState;
     private final ObjectMapper json;
     private HttpServer server;
@@ -41,7 +49,7 @@ public final class ConsumerEndpoints implements SmartLifecycle {
         ZLinkClient client,
         ZLinkRouteClient routes,
         ZLinkFrameworkLifecycle lifecycle,
-        java.util.function.Supplier<ZLinkLocationRuntimeQuery> locationQuery,
+        Supplier<ZLinkLocationRuntimeQuery> locationQuery,
         LocationStoreDelayState delayState,
         ObjectMapper json) {
         this.options = options;
@@ -62,7 +70,7 @@ public final class ConsumerEndpoints implements SmartLifecycle {
             server.createContext("/health", exchange -> HttpSupport.writeJson(
                 exchange,
                 json,
-                java.util.Map.of("status", "ready", "rid", options.rid())));
+                Map.of("status", "ready", "rid", options.rid())));
             server.createContext("/profile/request", exchange -> {
                 Contracts.ProfileReq request =
                     HttpSupport.readJson(exchange, json, Contracts.ProfileReq.class);
@@ -78,8 +86,8 @@ public final class ConsumerEndpoints implements SmartLifecycle {
                 //  무응답(hang)으로 보인다. 실패도 반드시 응답으로 만든다.
                 //  안쪽 catch가 원인을 버리면 그 응답조차 "timed out"만 말하므로
                 //  마지막 오류를 잡아 두었다가 함께 돌려준다.
-                java.util.concurrent.atomic.AtomicReference<Exception> lastError =
-                    new java.util.concurrent.atomic.AtomicReference<>();
+                AtomicReference<Exception> lastError =
+                    new AtomicReference<>();
                 try {
                     Contracts.ProfileReq request =
                         HttpSupport.readJson(exchange, json, Contracts.ProfileReq.class);
@@ -102,10 +110,10 @@ public final class ConsumerEndpoints implements SmartLifecycle {
                         + " lastCause="
                         + (cause == null ? "none" : cause.toString().replace('"', '\''))
                         + "\"}";
-                    byte[] payload = body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    byte[] payload = body.getBytes(StandardCharsets.UTF_8);
                     exchange.getResponseHeaders().add("Content-Type", "application/json");
                     exchange.sendResponseHeaders(500, payload.length);
-                    try (java.io.OutputStream out = exchange.getResponseBody()) {
+                    try (OutputStream out = exchange.getResponseBody()) {
                         out.write(payload);
                     }
                 }
@@ -145,10 +153,10 @@ public final class ConsumerEndpoints implements SmartLifecycle {
                 HttpSupport.writeJson(
                     exchange,
                     json,
-                    java.util.Map.of("delayMilliseconds", delayState.delayMilliseconds()));
+                    Map.of("delayMilliseconds", delayState.delayMilliseconds()));
             });
             server.createContext("/shutdown", exchange -> {
-                HttpSupport.writeJson(exchange, json, java.util.Map.of("status", "stopping"));
+                HttpSupport.writeJson(exchange, json, Map.of("status", "stopping"));
                 HttpSupport.shutdownAsync();
             });
             server.start();
@@ -232,15 +240,15 @@ public final class ConsumerEndpoints implements SmartLifecycle {
 
     private static Throwable unwrap(Throwable error) {
         Throwable current = error;
-        while ((current instanceof java.util.concurrent.CompletionException
-                || current instanceof java.util.concurrent.ExecutionException)
+        while ((current instanceof CompletionException
+                || current instanceof ExecutionException)
             && current.getCause() != null) {
             current = current.getCause();
         }
         return current;
     }
 
-    private List<java.util.Map<String, Object>> peers() {
+    private List<Map<String, Object>> peers() {
         //  Peer 목록은 store를 직접 열거해서 얻지 않는다. 참조 lane인 `.NET`
         //  consumer도 IZLinkLocationRuntimeQuery.ListTopologyAsync를 쓴다.
         return locationQuery.get().listTopology(
@@ -249,7 +257,7 @@ public final class ConsumerEndpoints implements SmartLifecycle {
             .toCompletableFuture()
             .join()
             .items().stream()
-            .map(peer -> java.util.Map.<String, Object>of(
+            .map(peer -> Map.<String, Object>of(
                 "nodeRid", peer.nodeRid().toString(),
                 "endpoint", peer.endpoint(),
                 "ownerId", "",
@@ -260,15 +268,15 @@ public final class ConsumerEndpoints implements SmartLifecycle {
             .toList();
     }
 
-    private List<java.util.Map<String, Object>> meshPeers() {
+    private List<Map<String, Object>> meshPeers() {
         return lifecycle.routeMeshRuntime().snapshot(Contracts.CHANNEL).peers().stream()
-            .map(peer -> java.util.Map.<String, Object>of(
+            .map(peer -> Map.<String, Object>of(
                 "nodeRid", peer.nodeRid().toString(),
                 "state", peer.state().name()))
             .toList();
     }
 
-    private java.util.Map<String, Object> objectLocations(Contracts.ObjectLocationQueryReq request) {
+    private Map<String, Object> objectLocations(Contracts.ObjectLocationQueryReq request) {
         var page = locationQuery.get().listObjectLocations(
                 new ZLinkLocationObjectFilter(
                     ZLinkPlacementObjectKind.INSTANCE_SPOT,
@@ -277,15 +285,15 @@ public final class ConsumerEndpoints implements SmartLifecycle {
                 new ZLinkPageRequest(request.pageSize(), request.continuationToken()))
             .toCompletableFuture()
             .join();
-        List<java.util.Map<String, Object>> items = page.items().stream()
+        List<Map<String, Object>> items = page.items().stream()
             .map(ConsumerEndpoints::objectLocation)
             .toList();
-        return java.util.Map.of(
+        return Map.of(
             "items", items,
             "continuationToken", page.continuationToken() == null ? "" : page.continuationToken());
     }
 
-    private java.util.Map<String, Object> exactObjectLocation(String kind, String id) {
+    private Map<String, Object> exactObjectLocation(String kind, String id) {
         if (!"spot".equals(kind) || id == null || id.isBlank()) {
             throw new IllegalArgumentException("kind=spot and a non-empty id are required");
         }
@@ -293,20 +301,20 @@ public final class ConsumerEndpoints implements SmartLifecycle {
             .toCompletableFuture()
             .join();
         if (entry.isEmpty()) {
-            return java.util.Map.of("found", false);
+            return Map.of("found", false);
         }
-        return java.util.Map.of(
+        return Map.of(
             "found", true,
             "objectId", entry.get().globalId(),
             "stableType", entry.get().stableType(),
             "meshName", entry.get().meshName(),
             "ownerNodeRid", entry.get().nodeRid().toString(),
             "objectGeneration", entry.get().objectGeneration(),
-            "state", entry.get().state().name().toLowerCase(java.util.Locale.ROOT));
+            "state", entry.get().state().name().toLowerCase(Locale.ROOT));
     }
 
     private static String queryParameter(
-        com.sun.net.httpserver.HttpExchange exchange,
+        HttpExchange exchange,
         String name) {
         String query = exchange.getRequestURI().getRawQuery();
         if (query == null || query.isBlank()) {
@@ -324,8 +332,8 @@ public final class ConsumerEndpoints implements SmartLifecycle {
         return "";
     }
 
-    private static java.util.Map<String, Object> objectLocation(ZLinkLocationObjectEntry entry) {
-        return java.util.Map.of(
+    private static Map<String, Object> objectLocation(ZLinkLocationObjectEntry entry) {
+        return Map.of(
             "globalId", entry.globalId(),
             "objectGeneration", entry.objectGeneration(),
             "meshName", entry.meshName(),
@@ -334,9 +342,9 @@ public final class ConsumerEndpoints implements SmartLifecycle {
             "stableType", entry.stableType());
     }
 
-    private java.util.Map<String, Object> status() {
+    private Map<String, Object> status() {
         var status = lifecycle.monitoringLocationRuntimeQuery().getStatus().toCompletableFuture().join();
-        return java.util.Map.of(
+        return Map.of(
             "storeHealthy", status.storeHealthy(),
             "watchEnabled", status.watchEnabled(),
             "pollingIntervalMillis", status.pollingInterval().toMillis(),

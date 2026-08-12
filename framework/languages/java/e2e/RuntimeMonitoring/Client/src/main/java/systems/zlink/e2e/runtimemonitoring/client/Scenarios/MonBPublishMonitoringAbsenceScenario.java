@@ -1,4 +1,5 @@
 package systems.zlink.e2e.runtimemonitoring.client.Scenarios;
+import java.util.Locale;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -115,10 +116,10 @@ public final class MonBPublishMonitoringAbsenceScenario {
     }
 
     private static void assertForbiddenTextAbsent(String text, String source) {
-        String folded = text.toLowerCase(java.util.Locale.ROOT);
+        String folded = text.toLowerCase(Locale.ROOT);
         for (String forbidden : FORBIDDEN_NAMES) {
             MonitoringScenarioContext.ensure(
-                !folded.contains(forbidden.toLowerCase(java.util.Locale.ROOT)),
+                !folded.contains(forbidden.toLowerCase(Locale.ROOT)),
                 source + " contains removed Publish monitoring name '" + forbidden + "'");
         }
     }

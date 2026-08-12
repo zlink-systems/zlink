@@ -1,3 +1,5 @@
+using TicTacToe.Server.Play.Infrastructure.ZLink.Sessions.Handlers;
+using TicTacToe.Shared.Contracts;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Streams;
 
@@ -11,7 +13,11 @@ internal sealed class PlaySession(
 {
     public IZLinkSessionContext Context { get; } = context;
 
-    public void Configure() { }
+    public void Configure()
+    {
+        // request: authenticates the STREAM session before actor packet relay starts.
+        Context.Handlers.AddHandler<AuthenticatePlaySessionHandler>(nameof(AuthenticateReq));
+    }
 
     public ValueTask OnConnectedAsync(CancellationToken cancellationToken)
     {

@@ -1,4 +1,6 @@
 package systems.zlink.e2e.registrymessaging.provider.Handlers;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -20,11 +22,11 @@ public final class PayloadReqHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Contracts.PayloadRes> handle(
+    public CompletionStage<Contracts.PayloadRes> handle(
         Contracts.PayloadReq request,
         ZLinkMessageContext context) {
         state.record("payload-request", request.marker());
-        return java.util.concurrent.CompletableFuture.completedFuture(new Contracts.PayloadRes(
+        return CompletableFuture.completedFuture(new Contracts.PayloadRes(
             request.marker(),
             request.payload().length(),
             sha256(request.payload())));

@@ -1,5 +1,3 @@
-using System.Collections.Concurrent;
-
 namespace Zlink.Framework.Runtime.Codecs;
 
 internal sealed class ZLinkCodecRegistryBuilder :
@@ -7,29 +5,18 @@ internal sealed class ZLinkCodecRegistryBuilder :
     IZLinkCodecRegistrar,
     IZLinkMessageCodecRegistry
 {
-    private const int MaximumCachedSerializerTypes = 4_096;
-
     private readonly Dictionary<ZlinkStreamCodec, string> _contentTypesByStreamCodec =
         [];
-
-    private readonly Dictionary<string, RegisteredSerializer> _serializers =
-        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ZLinkSerializerSelectionRegistry _serializerSelections = new();
 
     private readonly Dictionary<string, ZlinkStreamCodec> _streamCodecsByContentType =
-        new(StringComparer.OrdinalIgnoreCase);
+        new(StringComparer.Ordinal);
 
-    // Registration is completed before the runtime starts. Message paths only read this cache,
-    // so first-use resolution must remain safe when several receive workers resolve one type.
-    private readonly ConcurrentDictionary<Type, SerializerResolution> _serializerByType = new();
-    private readonly ConcurrentQueue<Type> _serializerCacheOrder = new();
-    private readonly object _serializerCacheGate = new();
-    private (string ContentType, IZLinkMessageSerializer Serializer)? _singleFallbackSerializer;
-    private bool _fallbackSerializerAmbiguous;
+    private int _frozen;
     private ZLinkCodecRegistrySnapshot _snapshot = ZLinkCodecRegistrySnapshot.Empty;
 
     public IReadOnlyDictionary<string, IZLinkMessageSerializer> Serializers =>
-        _serializers.ToDictionary(entry => entry.Key, entry => entry.Value.Serializer,
-            StringComparer.OrdinalIgnoreCase);
+        _serializerSelections.Serializers;
 
     public void Use(IZLinkCodecExtension extension)
     {
@@ -56,10 +43,13 @@ internal sealed class ZLinkCodecRegistryBuilder :
         string contentType,
         ZlinkStreamCodec codec)
     {
-        if (string.IsNullOrWhiteSpace(contentType))
-            throw new ArgumentException("Stream codec content type must not be blank.", nameof(contentType));
-
-        var normalized = contentType.Trim();
+        ThrowIfFrozen();
+        var normalized = ZLinkSerializerSelectionRegistry
+            .NormalizeRegisteredContentType(contentType);
+        if (_streamCodecsByContentType.TryGetValue(normalized, out var replacedCodec))
+            _contentTypesByStreamCodec.Remove(replacedCodec);
+        if (_contentTypesByStreamCodec.TryGetValue(codec, out var replacedContentType))
+            _streamCodecsByContentType.Remove(replacedContentType);
         _streamCodecsByContentType[normalized] = codec;
         _contentTypesByStreamCodec[codec] = normalized;
         RefreshSnapshot();
@@ -71,99 +61,37 @@ internal sealed class ZLinkCodecRegistryBuilder :
         Func<Type, bool> canSerialize,
         bool isFallbackSerializer)
     {
+        ThrowIfFrozen();
         ArgumentNullException.ThrowIfNull(serializer);
         ArgumentNullException.ThrowIfNull(canSerialize);
-        if (string.IsNullOrWhiteSpace(contentType))
-            throw new ArgumentException("Custom serializer content type must not be blank.", nameof(contentType));
-
-        var normalized = contentType.Trim();
-        _serializers[normalized] = new RegisteredSerializer(serializer, canSerialize, isFallbackSerializer);
-        lock (_serializerCacheGate)
-        {
-            _serializerByType.Clear();
-            while (_serializerCacheOrder.TryDequeue(out _)) { }
-        }
-        RefreshFallbackSerializerCache();
+        _serializerSelections.Add(
+            contentType,
+            serializer,
+            canSerialize,
+            isFallbackSerializer);
         RefreshSnapshot();
     }
 
     /// <summary>
-    ///     The single registered custom serializer with its content type, or <c>null</c>
-    ///     when none is registered. Throws when more than one is registered because the
-    ///     outgoing payload serializer would then be ambiguous.
+    ///     The last registered fallback serializer with its content type, or <c>null</c>
+    ///     when none is registered.
     /// </summary>
     public (string ContentType, IZLinkMessageSerializer Serializer)? SingleCustomSerializer()
     {
-        if (_fallbackSerializerAmbiguous)
-            throw new InvalidOperationException(
-                "Payload serializer is ambiguous because more than one custom serializer is registered: "
-                + string.Join(", ", _serializers
-                    .Where(entry => entry.Value.IsFallbackSerializer)
-                    .Select(entry => entry.Key)));
-
-        return _singleFallbackSerializer;
+        return _serializerSelections.Fallback;
     }
 
     public bool TryGetSerializer(string contentType, out IZLinkMessageSerializer serializer)
     {
-        if (!string.IsNullOrEmpty(contentType) && _serializers.TryGetValue(contentType, out var found))
-        {
-            serializer = found.Serializer;
-            return true;
-        }
-
-        serializer = null!;
-        return false;
+        return _serializerSelections.TryGetExact(contentType, out serializer);
     }
 
     public bool TryResolveSerializer(Type payloadType, out string contentType, out IZLinkMessageSerializer serializer)
     {
-        if (_serializerByType.TryGetValue(payloadType, out var cached))
-        {
-            contentType = cached.ContentType;
-            serializer = cached.Serializer!;
-            return cached.Found;
-        }
-
-        string? resolvedContentType = null;
-        IZLinkMessageSerializer? resolvedSerializer = null;
-        var matches = 0;
-
-        foreach (var entry in _serializers)
-        {
-            if (!entry.Value.CanSerialize(payloadType))
-                continue;
-
-            matches++;
-            resolvedContentType = entry.Key;
-            resolvedSerializer = entry.Value.Serializer;
-            if (matches > 1)
-                break;
-        }
-
-        if (matches == 0)
-        {
-            contentType = string.Empty;
-            serializer = null!;
-            CacheSerializerResolution(
-                payloadType,
-                new SerializerResolution(false, string.Empty, null));
-            return false;
-        }
-
-        if (matches > 1)
-            throw new InvalidOperationException(
-                "Payload serializer is ambiguous for type '" + payloadType + "': "
-                + string.Join(", ", _serializers
-                    .Where(entry => entry.Value.CanSerialize(payloadType))
-                    .Select(entry => entry.Key)));
-
-        contentType = resolvedContentType!;
-        serializer = resolvedSerializer!;
-        CacheSerializerResolution(
+        return _serializerSelections.TryResolve(
             payloadType,
-            new SerializerResolution(true, contentType, serializer));
-        return true;
+            out contentType,
+            out serializer);
     }
 
     public bool TryResolveStreamCodec(string contentType, out ZlinkStreamCodec codec)
@@ -180,65 +108,26 @@ internal sealed class ZLinkCodecRegistryBuilder :
 
     internal ZLinkCodecRegistrySnapshot Snapshot() => Volatile.Read(ref _snapshot);
 
+    internal void Freeze()
+    {
+        _serializerSelections.Freeze();
+        Interlocked.Exchange(ref _frozen, 1);
+    }
+
     IZLinkMessageCodecResolver IZLinkMessageCodecRegistry.Snapshot() => Snapshot();
-
-    private sealed record RegisteredSerializer(
-        IZLinkMessageSerializer Serializer,
-        Func<Type, bool> CanSerialize,
-        bool IsFallbackSerializer);
-
-    private readonly record struct SerializerResolution(
-        bool Found,
-        string ContentType,
-        IZLinkMessageSerializer? Serializer);
-
-    private void CacheSerializerResolution(
-        Type payloadType,
-        SerializerResolution resolution)
-    {
-        lock (_serializerCacheGate)
-        {
-            if (_serializerByType.ContainsKey(payloadType))
-                return;
-
-            while (_serializerByType.Count >= MaximumCachedSerializerTypes
-                   && _serializerCacheOrder.TryDequeue(out var evictedType))
-                _serializerByType.TryRemove(evictedType, out _);
-
-            _serializerByType[payloadType] = resolution;
-            _serializerCacheOrder.Enqueue(payloadType);
-        }
-    }
-
-    private void RefreshFallbackSerializerCache()
-    {
-        _singleFallbackSerializer = null;
-        _fallbackSerializerAmbiguous = false;
-
-        foreach (var entry in _serializers)
-        {
-            if (!entry.Value.IsFallbackSerializer)
-                continue;
-
-            if (_singleFallbackSerializer is not null)
-            {
-                _fallbackSerializerAmbiguous = true;
-                _singleFallbackSerializer = null;
-                return;
-            }
-
-            _singleFallbackSerializer = (entry.Key, entry.Value.Serializer);
-        }
-    }
 
     private void RefreshSnapshot()
     {
-        var serializers = _serializers.ToDictionary(
-            entry => entry.Key,
-            entry => entry.Value.Serializer,
-            StringComparer.OrdinalIgnoreCase);
+        var serializers = _serializerSelections.Serializers;
         var contentTypes = new Dictionary<ZlinkStreamCodec, string>(_contentTypesByStreamCodec);
         Volatile.Write(ref _snapshot, new ZLinkCodecRegistrySnapshot(serializers, contentTypes));
+    }
+
+    private void ThrowIfFrozen()
+    {
+        if (Volatile.Read(ref _frozen) != 0)
+            throw new InvalidOperationException(
+                "The codec registry is immutable after Framework runtime startup.");
     }
 }
 
@@ -248,7 +137,7 @@ internal sealed class ZLinkCodecRegistrySnapshot(
     IZLinkMessageCodecResolver
 {
     internal static ZLinkCodecRegistrySnapshot Empty { get; } = new(
-        new Dictionary<string, IZLinkMessageSerializer>(StringComparer.OrdinalIgnoreCase),
+        new Dictionary<string, IZLinkMessageSerializer>(StringComparer.Ordinal),
         new Dictionary<ZlinkStreamCodec, string>());
 
     internal bool TryGetSerializer(string contentType, out IZLinkMessageSerializer serializer)

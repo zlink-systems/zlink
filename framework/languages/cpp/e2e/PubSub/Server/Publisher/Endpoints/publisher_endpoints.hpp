@@ -25,13 +25,13 @@ inline zlink::framework::http_response_t publish_from_query (
 
     /* packet_name이 주어지면 handler가 없는 negative wire 변형으로 발행한다. */
     if (packet_name != nullptr) {
-        publisher.publish (event_channel, topic->second, missing_event_msg_t{value->second})
+        publisher.publish (event_channel, topic->second, missing_event_t{value->second})
           .submit ();
     } else {
-        publisher.publish (event_channel, topic->second, event_msg_t{value->second}).submit ();
+        publisher.publish (event_channel, topic->second, event_t{value->second}).submit ();
     }
     evidence.add (std::string ("published|topic=") + topic->second + "|value=" + value->second
-                  + "|packet=" + (packet_name == nullptr ? "EventMsg" : packet_name));
+                  + "|packet=" + (packet_name == nullptr ? "Event" : packet_name));
 
     zlink::framework::http_response_t response;
     response.body = nlohmann::json{
@@ -78,7 +78,7 @@ class publish_missing_handler_t
 
     zlink::framework::http_response_t handle (const zlink::framework::http_request_t &request)
     {
-        return publish_from_query (_publisher, _evidence, request, "MissingEventMsg");
+        return publish_from_query (_publisher, _evidence, request, "MissingEvent");
     }
 
   private:

@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.LinkedHashSet;
+import java.util.Objects;
+import java.util.stream.Collectors;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -8,8 +11,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.Executors;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.logging.Level;
@@ -38,24 +43,28 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
     private final BiConsumer<String, ZLinkBackendTopicMessage> dispatch;
     private final Map<String, Set<String>> desired = new LinkedHashMap<>();
     private final Map<String, Connection> connections = new LinkedHashMap<>();
-    private final ScheduledExecutorService executor =
-        Executors.newSingleThreadScheduledExecutor(task -> {
-            Thread thread = new Thread(task, "zlink-java-manual-fanout");
-            thread.setDaemon(true);
-            return thread;
-        });
+    private final ScheduledExecutorService scheduler;
+    private final Executor infrastructureExecutor;
+    private ScheduledFuture<?> tickTask;
     private volatile boolean running;
+    private long lifecycleEpoch;
+    private boolean tickAdmitted;
     private long receiveCursor;
 
     ZLinkManualFanoutRuntime(
         ZLinkChannelBackendAdapter backend,
         ZLinkMonitoringBackendAdapter monitoring,
         ZLinkBackendContext context,
+        ScheduledExecutorService scheduler,
+        Executor infrastructureExecutor,
         BiConsumer<String, ZLinkBackendTopicMessage> dispatch) {
-        this.backend = java.util.Objects.requireNonNull(backend, "backend");
+        this.backend = Objects.requireNonNull(backend, "backend");
         this.monitoring = monitoring;
-        this.context = java.util.Objects.requireNonNull(context, "context");
-        this.dispatch = java.util.Objects.requireNonNull(dispatch, "dispatch");
+        this.context = Objects.requireNonNull(context, "context");
+        this.scheduler = Objects.requireNonNull(scheduler, "scheduler");
+        this.infrastructureExecutor = Objects.requireNonNull(
+            infrastructureExecutor, "infrastructureExecutor");
+        this.dispatch = Objects.requireNonNull(dispatch, "dispatch");
     }
 
     ZLinkBackendConnectableSocket connections(String channelName) {
@@ -79,24 +88,31 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
         Map<String, List<String>> initial;
         synchronized (this) {
             if (running) return;
+            lifecycleEpoch = Math.addExact(lifecycleEpoch, 1);
             running = true;
             initial = desired.entrySet().stream().collect(
-                java.util.stream.Collectors.toMap(
+                Collectors.toMap(
                     Map.Entry::getKey,
                     entry -> List.copyOf(entry.getValue()),
                     (left, right) -> left,
-                    java.util.LinkedHashMap::new));
+                    LinkedHashMap::new));
         }
         initial.forEach((channel, endpoints) ->
             endpoints.forEach(endpoint -> open(channel, endpoint)));
-        executor.scheduleAtFixedRate(this::tickSafely, 0, 10, TimeUnit.MILLISECONDS);
+        synchronized (this) {
+            if (running) {
+                long epoch = lifecycleEpoch;
+                tickTask = scheduler.scheduleAtFixedRate(
+                    () -> signalTick(epoch), 0, 10, TimeUnit.MILLISECONDS);
+            }
+        }
     }
 
     private void connectEndpoint(String channelName, String endpoint) {
         boolean openNow;
         synchronized (this) {
             desired.computeIfAbsent(
-                channelName, ignored -> new java.util.LinkedHashSet<>())
+                channelName, ignored -> new LinkedHashSet<>())
                 .add(endpoint);
             openNow = running;
         }
@@ -199,15 +215,37 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
         }
     }
 
-    private void tickSafely() {
-        if (!running) return;
+    private void signalTick(long epoch) {
+        synchronized (this) {
+            if (!running || lifecycleEpoch != epoch || tickAdmitted) {
+                return;
+            }
+            tickAdmitted = true;
+        }
         try {
+            infrastructureExecutor.execute(() -> runAdmittedTick(epoch));
+        } catch (RejectedExecutionException closing) {
+            synchronized (this) {
+                tickAdmitted = false;
+            }
+        }
+    }
+
+    private void runAdmittedTick(long epoch) {
+        try {
+            if (!running || lifecycleEpoch != epoch) {
+                return;
+            }
             reconcileDesired();
             receiveAvailable();
             expireConnections();
         } catch (RuntimeException failure) {
             LOGGER.log(Level.WARNING,
                 "manual fanout tick failed; the next bounded tick retries", failure);
+        } finally {
+            synchronized (this) {
+                tickAdmitted = false;
+            }
         }
     }
 
@@ -349,11 +387,15 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
     public void close() {
         List<String> ids;
         synchronized (this) {
+            if (tickTask != null) {
+                tickTask.cancel(false);
+                tickTask = null;
+            }
             running = false;
+            lifecycleEpoch = Math.addExact(lifecycleEpoch, 1);
             ids = List.copyOf(connections.keySet());
         }
         ids.forEach(this::remove);
-        executor.shutdownNow();
     }
 
     private static String connectionId(String channelName, String endpoint) {

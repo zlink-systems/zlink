@@ -5,15 +5,15 @@ export const PubSubNames = {
 } as const;
 
 export const PacketNames = {
-  eventMsg: 'EventMsg',
-  missingEventMsg: 'MissingEventMsg'
+  pubSubEvent: 'PubSubEvent',
+  missingPubSubEvent: 'MissingPubSubEvent'
 } as const;
 
-export class EventMsg {
+export class PubSubEvent {
   constructor(readonly runId: string, readonly sequence: number, readonly value: string) {}
 }
 
-export class MissingEventMsg {
+export class MissingPubSubEvent {
   constructor(readonly runId: string, readonly sequence: number, readonly value: string) {}
 }
 

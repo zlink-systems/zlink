@@ -84,7 +84,7 @@ internal static class MonBPublishMonitoringAbsenceScenario
                 await Task.Delay(250);
                 EnsureSuccess(
                     await service.Post("/spot/publish/monitor.blocker")
-                        .Body(new ProfileReq(new string('b', 1024), "mon-b1-blocker"))
+                        .Body(new ProfileEvent(new string('b', 1024), "mon-b1-blocker"))
                         .AsyncRaw(),
                     "MON-B1 blocker publish");
                 await WaitForEvidenceAsync(
@@ -101,7 +101,7 @@ internal static class MonBPublishMonitoringAbsenceScenario
 
         EnsureSuccess(
             await service.Post($"/spot/publish/{topic}")
-                .Body(new ProfileReq("publish", scenario.ToLowerInvariant()))
+                .Body(new ProfileEvent("publish", scenario.ToLowerInvariant()))
                 .AsyncRaw(),
             $"{scenario} publish");
 

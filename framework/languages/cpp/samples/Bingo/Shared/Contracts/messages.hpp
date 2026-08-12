@@ -182,6 +182,12 @@ struct bingo_room_settings_payload_t
     std::optional<std::string> observed_room_id;
 };
 
+struct bingo_room_create_req_t
+{
+    static constexpr const char *packet_name = "BingoRoomCreateReq";
+    bingo_room_settings_payload_t settings;
+};
+
 struct reserve_bingo_room_res_t
 {
     static constexpr const char *packet_name = "ReserveBingoRoomRes";
@@ -492,6 +498,16 @@ inline void from_json (const nlohmann::json &json, bingo_room_settings_payload_t
     value.max_draw_number = json_value (json, "maxDrawNumber", "max_draw_number", 75);
     value.purpose = json.value ("purpose", "Game");
     value.observed_room_id = json_optional_string (json, "observedRoomId");
+}
+
+inline void to_json (nlohmann::json &json, const bingo_room_create_req_t &value)
+{
+    json = {{"settings", value.settings}};
+}
+
+inline void from_json (const nlohmann::json &json, bingo_room_create_req_t &value)
+{
+    json.at ("settings").get_to (value.settings);
 }
 
 inline void to_json (nlohmann::json &json, const reserve_bingo_room_res_t &value)

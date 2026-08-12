@@ -1,4 +1,11 @@
 package systems.zlink.framework.runtime.spots;
+import java.security.NoSuchAlgorithmException;
+import java.util.Base64;
+import java.util.Optional;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
+import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 
 import java.security.MessageDigest;
 import java.util.List;
@@ -127,7 +134,7 @@ final class ZLinkUserSpotOperationHandler
                 var authority = authorities.decode(snapshot.payload())
                     .orElseThrow(() -> stale("invalid User Spot authority"));
                 require(
-                    authority.kind() == ZLinkServiceAuthorityPayloadCodec.Kind.USER
+                    authority.user().isPresent()
                         && authority.state() == ZLinkServiceAuthorityPayloadCodec.State.READY
                         && authority.spotId().equals(fence.spotId())
                         && authority.meshName().equals(meshName)
@@ -178,8 +185,8 @@ final class ZLinkUserSpotOperationHandler
                         new ZLinkAuthorityPut(
                             closing,
                             ZLinkAuthorityGenerationTransition.PRESERVE,
-                            java.util.Optional.empty(),
-                            java.util.Optional.empty()),
+                            Optional.empty(),
+                            Optional.empty()),
                         OPEN)
                     .thenCompose(closingWrite -> {
                         if (!(closingWrite instanceof ZLinkAuthorityStored stored)) {
@@ -290,7 +297,7 @@ final class ZLinkUserSpotOperationHandler
         var factory = factories.get(request.intent().stableType());
         require(
             factory != null
-                && authority.kind() == ZLinkServiceAuthorityPayloadCodec.Kind.USER
+                && authority.user().isPresent()
                 && authority.state() == ZLinkServiceAuthorityPayloadCodec.State.CREATING
                 && authority.spotId().equals(request.intent().spotId())
                 && authority.stableType().equals(request.intent().stableType())
@@ -317,8 +324,8 @@ final class ZLinkUserSpotOperationHandler
                 && fence.targetNodeGeneration()
                     == node.status().lifecycleGeneration()
                 && allocation.capacityBundle().equals(
-                    systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle.spot(
-                            systems.zlink.framework.locations.ZLinkPlacementObjectKind.USER_SPOT,
+                    ZLinkPlacementCapacityBundle.spot(
+                            ZLinkPlacementObjectKind.USER_SPOT,
                             request.intent().stableType(),
                             Math.toIntExact(
                                 fence.pendingCapacityDelta()))),
@@ -357,7 +364,7 @@ final class ZLinkUserSpotOperationHandler
     private static byte[] sha256(byte[] value) {
         try {
             return MessageDigest.getInstance("SHA-256").digest(value);
-        } catch (java.security.NoSuchAlgorithmException impossible) {
+        } catch (NoSuchAlgorithmException impossible) {
             throw new AssertionError(impossible);
         }
     }
@@ -368,7 +375,7 @@ final class ZLinkUserSpotOperationHandler
             throw new IllegalArgumentException(
                 "unsupported User Spot creation intent reference");
         }
-        return java.util.Base64.getUrlDecoder().decode(
+        return Base64.getUrlDecoder().decode(
             reference.substring(prefix.length()));
     }
 
@@ -400,8 +407,8 @@ final class ZLinkUserSpotOperationHandler
                 new ZLinkAuthorityPut(
                     ready,
                     ZLinkAuthorityGenerationTransition.PRESERVE,
-                    java.util.Optional.empty(),
-                    java.util.Optional.empty()),
+                    Optional.empty(),
+                    Optional.empty()),
                 OPEN)
             .thenCompose(ignored -> failed(
                 TERMINAL_INVALID_STATE,
@@ -450,8 +457,8 @@ final class ZLinkUserSpotOperationHandler
 
     private static Throwable unwrap(Throwable failure) {
         Throwable current = failure;
-        while ((current instanceof java.util.concurrent.CompletionException
-            || current instanceof java.util.concurrent.ExecutionException)
+        while ((current instanceof CompletionException
+            || current instanceof ExecutionException)
             && current.getCause() != null) {
             current = current.getCause();
         }

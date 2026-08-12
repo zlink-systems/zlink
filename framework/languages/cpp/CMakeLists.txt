@@ -104,6 +104,7 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/backend/raw_route_port.cpp
   framework/src/runtime/foundation/operation_registry.cpp
   framework/src/runtime/dispatch/offload_executor.cpp
+  framework/src/runtime/diagnostics/runtime_observation.cpp
   framework/src/runtime/messaging/async_submit_runtime.cpp
   framework/src/runtime/protocol/service_wire_codec.cpp
   framework/src/runtime/mesh/raw_mesh_node_owner.cpp
@@ -179,7 +180,6 @@ add_library(zlink_framework STATIC
   framework/src/runtime/channels/route_handler_registry.cpp
   framework/src/runtime/channels/route_internal_packet_dispatcher.cpp
   framework/src/runtime/channels/route_packet_dispatcher.cpp
-  framework/src/runtime/actors/actor_route_internal_dispatcher.cpp
   framework/src/runtime/actors/actor_gateway_runtime.cpp
   framework/src/runtime/actors/actor_client.cpp
   framework/src/runtime/configuration/builders/configuration_builder.cpp
@@ -920,7 +920,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
   target_compile_definitions(test_cpp_framework_service_wire_codec PRIVATE
-    ZLINK_BOUND_SESSION_REPLACED_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/bound-session-replaced-v1.json")
+    ZLINK_BOUND_SESSION_REPLACED_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/bound-session-replaced-v1.json"
+    ZLINK_SESSION_RELOCATION_BARRIER_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/session-relocation-barrier-v1.json")
   target_link_libraries(test_cpp_framework_service_wire_codec PRIVATE
     zlink::cpp
     Threads::Threads)
@@ -953,7 +954,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_compile_features(test_cpp_framework_operation_registry PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_operation_registry PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-  target_link_libraries(test_cpp_framework_operation_registry PRIVATE Threads::Threads)
+  target_compile_definitions(test_cpp_framework_operation_registry PRIVATE
+    ZLINK_COMPLETION_TERMINAL_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/conformance/completion-terminal-v1.json")
+  target_link_libraries(test_cpp_framework_operation_registry PRIVATE
+    Threads::Threads
+    nlohmann_json::nlohmann_json)
   add_test(NAME test_cpp_framework_operation_registry
     COMMAND test_cpp_framework_operation_registry)
   set_tests_properties(test_cpp_framework_operation_registry PROPERTIES
@@ -1312,10 +1317,16 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-regression;execution;spot;yield")
   target_include_directories(test_cpp_framework_execution PRIVATE
     ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+  target_compile_definitions(test_cpp_framework_execution PRIVATE
+    ZLINK_SERIAL_EXECUTION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/conformance/serial-execution-v1.json"
+    ZLINK_RUNTIME_OBSERVATION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/conformance/runtime-observation-v1.json")
   add_zlink_framework_test(
     test_cpp_framework_serializer_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_serializer_registry.cpp
     "framework-unit;serializer")
+  target_compile_definitions(test_cpp_framework_serializer_registry PRIVATE
+    ZLINK_CODEC_SELECTION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/conformance/codec-selection-v1.json"
+    ZLINK_PAYLOAD_OWNERSHIP_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/conformance/payload-ownership-v1.json")
   add_executable(test_cpp_framework_location_key_codec
     tests/Zlink.Framework.UnitTests/test_cpp_framework_location_key_codec.cpp)
   target_compile_features(test_cpp_framework_location_key_codec PRIVATE cxx_std_20)
@@ -2293,11 +2304,36 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES)
     zlink::http_client
     zlink::stream_connector
     zlink::stream_e2e_client)
+  add_zlink_framework_sample(
+    sample_cpp_framework_zoneworld_zone_node
+    samples/ZoneWorld/Server/ZoneNode/main.cpp
+    "framework-sample-zoneworld;framework-sample-zone-node"
+    zlink::framework
+    zlink::framework_locations_redis)
+  add_zlink_framework_sample(
+    sample_cpp_framework_zoneworld_gateway
+    samples/ZoneWorld/Server/Gateway/main.cpp
+    "framework-sample-zoneworld;framework-sample-gateway"
+    zlink::framework
+    zlink::framework_locations_redis
+    zlink::stream_connector)
+  add_zlink_framework_sample(
+    sample_cpp_framework_zoneworld_ops
+    samples/ZoneWorld/Server/Ops/main.cpp
+    "framework-sample-zoneworld;framework-sample-ops"
+    zlink::framework
+    zlink::framework_locations_redis
+    zlink::stream_connector)
+  add_executable(sample_cpp_framework_zoneworld_client
+    samples/ZoneWorld/Client/main.cpp)
+  target_link_libraries(sample_cpp_framework_zoneworld_client PRIVATE
+    zlink::stream_connector
+    zlink::stream_e2e_client)
 
   function(add_zlink_framework_sample_runner sample_name labels timeout_seconds)
     add_test(
       NAME sample_smoke_sample_cpp_framework_${sample_name}
-      COMMAND "${ZLINK_FRAMEWORK_CPP_DIR}/samples/${sample_name}/run_sample.sh")
+      COMMAND bash "${ZLINK_FRAMEWORK_CPP_DIR}/samples/${sample_name}/run_sample.sh")
     set_tests_properties(sample_smoke_sample_cpp_framework_${sample_name} PROPERTIES
       LABELS "${labels};framework-sample-smoke"
       RESOURCE_LOCK "zlink-cpp-sample-runtime"
@@ -2329,6 +2365,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES)
     SupportChat
     "framework-sample-supportchat;framework-sample-api;framework-sample-session;framework-sample-support"
     240)
+  add_zlink_framework_sample_runner(
+    ZoneWorld
+    "framework-sample-zoneworld;framework-sample-gateway;framework-sample-zone-node;framework-sample-ops"
+    420)
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS AND ZLINK_FRAMEWORK_CPP_ENABLE_COVERAGE)

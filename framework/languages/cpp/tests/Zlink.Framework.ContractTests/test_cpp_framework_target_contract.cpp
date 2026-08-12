@@ -1413,7 +1413,7 @@ int main ()
                     != std::string::npos,
                   "E2E-CP-48", "PubSub PS-C1 has no failing publisher dispatch assertion");
 
-    /* E2E-CP-31 — runner-owned RL-C2/RL-D1 scenarios have no dead client duplicates. */
+    /* E2E-CP-31 — historical runner-owned scenarios have no dead client duplicates. */
     gate.require (
       resilience_client.find ("rl_c2_topology_recovery_scenario.hpp") == std::string::npos,
       "E2E-CP-31", "ResilienceLifecycle client still includes the dead RL-C2 wrapper");
@@ -2221,10 +2221,13 @@ int main ()
       "Message Follow still relies only on the hop ceiling for loop detection");
     gate.require (
       actor_transfer_coordinator.find (
-        "found->second.old_generation != generation")
-          != std::string::npos,
+        "candidate.source_fence == source_fence")
+          != std::string::npos
+        && actor_transfer_coordinator.find (
+             "source_fence.object_generation != generation")
+             != std::string::npos,
       "CPP-FOLLOW-001",
-      "Message Follow does not preserve its exact Actor generation fence");
+      "Message Follow does not preserve its exact Actor source fence");
 
     /* CPP-LIFE-001 — a general message addresses the logical Actor or Spot.
      * Owner authority and lease remain fences, while ObjectGeneration is

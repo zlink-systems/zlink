@@ -12,6 +12,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace zlink::framework::runtime
@@ -21,6 +22,9 @@ class serial_execution_queue_t;
 
 namespace zlink::framework::detail
 {
+
+std::string_view stream_content_type (stream_codec_t codec) noexcept;
+stream_codec_t stream_codec_from_content_type (std::string_view content_type) noexcept;
 
 class stream_builder_state_t
 {
@@ -76,6 +80,12 @@ class stream_runtime_t
 
     result_t<std::vector<std::uint8_t>> encode_header (const stream_header_t &header) const;
     result_t<stream_header_t> decode_header (const std::vector<std::uint8_t> &bytes) const;
+    static result_t<void> validate_frame_representation (
+      std::size_t header_size,
+      std::uint64_t payload_size);
+    result_t<std::vector<std::uint8_t>>
+    encode_frame (const stream_header_t &header,
+                  const zlink::message_t &payload) const;
     /* Encodes the versioned session-closing control payload
      * (graceful-drain-handoff §7.1): u8 version=1, u8 reason, u16 diagnostic
      * length (network order, <=512), UTF-8 diagnostic bytes. */
@@ -104,6 +114,8 @@ class stream_runtime_t
       std::function<void (const result_t<void> &)>;
     using async_dispatch_started_t = std::function<void ()>;
     using async_dispatch_cancel_t = std::function<bool ()>;
+    using actor_binding_replaced_dispatch_t =
+      std::function<task_t<void> (stream_t &, std::string)>;
     result_t<void> dispatch_connected_async (
       packet_stream_session_t &session,
       stream_t &stream,
@@ -121,9 +133,9 @@ class stream_runtime_t
       stream_t &stream,
       async_dispatch_completion_t completion = {}) const;
     result_t<void> dispatch_actor_binding_replaced_async (
-      packet_stream_session_t &session,
       stream_t &stream,
       std::string actor_id,
+      actor_binding_replaced_dispatch_t dispatch,
       async_dispatch_completion_t completion = {}) const;
     void drain_async_dispatch (stream_t &stream) const;
     void attach_transport_writer (

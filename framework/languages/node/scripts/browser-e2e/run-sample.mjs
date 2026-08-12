@@ -103,6 +103,16 @@ async function serve(request, response, bundleBytes, definition) {
     response.end(JSON.stringify(definition.config));
     return;
   }
+  if (
+    typeof definition.completionSignalPath === 'string'
+    && typeof definition.config.lifecycleCompletionPath === 'string'
+    && requestUrl.pathname === definition.config.lifecycleCompletionPath
+  ) {
+    await waitForFile(definition.completionSignalPath, definition.timeoutMs);
+    response.writeHead(204, { 'cache-control': 'no-store' });
+    response.end();
+    return;
+  }
   const proxy = definition.proxies.find((candidate) =>
     requestUrl.pathname === candidate.prefix || requestUrl.pathname.startsWith(`${candidate.prefix}/`)
   );
@@ -111,6 +121,15 @@ async function serve(request, response, bundleBytes, definition) {
     return;
   }
   response.writeHead(404).end();
+}
+
+async function waitForFile(filePath, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(filePath)) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for browser lifecycle completion signal '${filePath}'.`);
 }
 
 async function proxyRequest(request, response, requestUrl, proxy) {

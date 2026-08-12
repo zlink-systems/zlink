@@ -146,7 +146,7 @@ export interface StageTimerStartMsg {
   readonly periodMs: number;
 }
 
-export interface SpotMsg {
+export interface SpotEvent {
   readonly marker: string;
 }
 
@@ -250,7 +250,7 @@ export interface ChannelEchoRes {
   readonly value: string;
 }
 
-export interface ChannelNotify {
+export interface ChannelMsg {
   readonly marker: string;
 }
 
@@ -313,6 +313,10 @@ export interface EnsureActorReq {
   readonly displayName: string;
   readonly nodeRid: string;
   readonly meshName?: string;
+}
+
+export interface ScenarioActorCreateReq {
+  readonly displayName?: string;
 }
 
 export interface EnsureActorRes {
@@ -657,7 +661,7 @@ export class StateReq {}
 export class StateMsg {}
 export class StageProbeReq {}
 export class StageTimerStartMsg {}
-export class SpotMsg {}
+export class SpotEvent {}
 export class SpotOutboundMsg {}
 export class SpotOutboundNegativeMsg {}
 export class SpotToSpotReq {}
@@ -665,10 +669,11 @@ export class SpotToSpotTimeoutReq {}
 export class SpotToSpotNegativeReq {}
 export class SlowSpotReq {}
 export class ChannelEchoReq {}
-export class ChannelNotify {}
+export class ChannelMsg {}
 export class CrossRoleActorPushReq {}
 export class ControlPingReq {}
 export class EnsureActorReq {}
+export class ScenarioActorCreateReq { constructor(readonly displayName?: string) {} }
 export class ScaleOutActorProbeReq {}
 export class MissingSpotReq {
   declare readonly operation: string;
@@ -680,6 +685,6 @@ export class MissingSpotMsg {
 export class MissingChannelReq {
   declare readonly value: string;
 }
-export class MissingChannelNotify {
+export class MissingChannelMsg {
   declare readonly marker: string;
 }

@@ -26,6 +26,33 @@ STREAM header's codec value is declared with the Stream Connector-owned
 `IZlinkStreamCodecRegistration`. This separation keeps the HTTP client
 from depending on the STREAM runtime or the compression package.
 
+`contentType` takes a parameter-free ASCII `type/subtype`. At startup, the registry removes
+leading and trailing SP and TAB and converts ASCII uppercase letters to lowercase. The
+result is the canonical content type used as the registry key. A parameter, whitespace
+inside the value, or a non-ASCII token causes `ArgumentException`. If the same canonical
+content type is registered again, the last serializer replaces the earlier one.
+
+A value received from the framework service wire must already be canonical. Another
+representation completes with `ZLinkFrameworkErrorKind.ProtocolError`. The HTTP client
+first parses response parameters and passes only the parameter-free media type to this
+rule.
+
+Send-side serializer selection uses the message type declared at the call site, not the
+concrete type of the instance. The three-argument overload passes this declared type to
+`canSerialize`. If more than one registration returns `true`, the serializer registered
+later is used. If no registration matches, the JSON serializer is used. When multiple
+fallback serializers are registered with the two-argument overload, the later registration
+also replaces the earlier one.
+
+The registry doesn't change after startup. Send-selection results are stored for up to
+1,024 declared types. Reaching the limit doesn't evict existing entries. Each type first
+seen afterward is re-evaluated against the registration list on every send, and its result
+isn't stored.
+
+The receive path performs an exact serializer lookup using the canonical content type from
+the wire. An unregistered or noncanonical value isn't reinterpreted as JSON and completes
+with `ZLinkFrameworkErrorKind.ProtocolError`.
+
 ```csharp
 public interface IZLinkCodecExtension
 {

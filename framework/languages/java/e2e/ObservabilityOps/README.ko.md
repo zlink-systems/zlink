@@ -43,7 +43,7 @@ framework process의 public message-flow mode와 typed request를 검증하려�
 현재 C track의 실제 selector 결과는 `OBS-C8`만 PASS이다. `OBS-C6`, `OBS-C7`, `OBS-C9A`,
 `OBS-C10`, `OBS-C11`, `OBS-C12`는 automatic topology actor relocation 중 public
 bound-session push handoff가 `one-way submission did not obtain queue capacity before the send
-deadline`로 실패하여 BLOCKED로 남겼다. `OBS-C9B`는 public relocation 결과
+deadline`로 실패하여 BLOCKED로 남겼다. 병합 전 `OBS-C9B` 실행은 public relocation 결과
 `MANUAL_TOPOLOGY_UNSUPPORTED`와 bounded Shutdown을 확인했지만 source Spot evidence가 없어
-strict verifier를 통과하지 못했으므로 PASS로 기록하지 않는다. 상세 로그와 상태는
-`feature-map.ko.md`에 기록한다.
+strict verifier를 통과하지 못했다. 이 과거 로그는 canonical `RL-F8`의 PASS 증거로 승격하지
+않는다.

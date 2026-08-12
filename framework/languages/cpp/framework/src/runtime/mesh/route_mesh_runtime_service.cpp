@@ -186,7 +186,7 @@ struct route_mesh_runtime_service_t::state_t :
         const bool terminal = snapshot.state == mesh_node_state_t::stopped
                               || snapshot.state == mesh_node_state_t::failed;
         for (const auto &observer : current)
-            observer->enqueue (snapshot, terminal);
+            observer->enqueue (snapshot.mesh_name, snapshot, terminal);
     }
 
     std::optional<mesh_node_snapshot_t>
@@ -547,7 +547,7 @@ void route_mesh_runtime_service_t::stop () noexcept
           _state->next_sequence (terminal->mesh_name);
         terminal->observed_at = std::chrono::system_clock::now ();
         for (const auto &observer : observers)
-            observer->enqueue (*terminal, true);
+            observer->enqueue (terminal->mesh_name, *terminal, true);
     }
 }
 
@@ -838,8 +838,9 @@ route_mesh_runtime_service_t::observe (
     }
     const bool terminal = initial.state == mesh_node_state_t::stopped
                           || initial.state == mesh_node_state_t::failed;
+    const auto source_key = initial.mesh_name;
     registered->enqueue (
-      std::move (initial), terminal);
+      source_key, std::move (initial), terminal);
     return std::make_unique<observation_t> (std::move (registered));
 }
 

@@ -61,7 +61,7 @@ if SELECTOR in ("all", "OBS-A2"):
         line for line in lines("session-flow.log")
         if "outcome=RECEIVED" in line
         and "surface=STREAM_SESSION" in line
-        and "packet=ObservabilityMissingPacket" in line
+        and "packet=ObservabilityMissingReq" in line
         and flow_of(line)
     ], "OBS-A2 received log missing")[-1]
     flow = flow_of(received)
@@ -70,7 +70,7 @@ if SELECTOR in ("all", "OBS-A2"):
         line for line in session
         if "outcome=ERROR" in line
         and "surface=STREAM_SESSION" in line
-        and "packet=ObservabilityMissingPacket" in line
+        and "packet=ObservabilityMissingReq" in line
     ], "OBS-A2 server dispatch error log missing")[0]
     write("OBS-A2", [("stream_inbound", received), ("stream_error", error)])
 

@@ -145,7 +145,7 @@ Framework가 자동 발급하며 고정 RID를 설정하지 않는다.
 |---|---|---|
 | ZoneId로 현재 zone owner를 찾는다. | global Spot message | global SpotId authority를 Framework가 resolve한다. [상호작용 모델 §2](../../spec/03-interaction-model.ko.md#2-공통-모델) |
 | PlayerId로 actor를 찾는다. | global Actor message | Actor location과 current owner를 application route로 노출하지 않는다. [Actor model](../../spec/14-actor-model.ko.md) |
-| zone join을 cross-node 이동으로 사용한다. | Actor Join + relocation | target owner가 다르면 Framework relocation unit이 actor를 이동시킨다. [Graceful drain §8](../../spec/28-graceful-drain-handoff.ko.md#8-unit-하나를-이전하는-순서) |
+| zone join을 cross-node 이동으로 사용한다. | Actor Join + relocation | target owner가 다르면 Framework relocation unit이 actor를 이동시킨다. [Graceful drain §8](../../spec/30-host-relocation-flow.ko.md#8-unit-하나를-이전하는-순서) |
 | 이동 중 이전 owner message를 전달한다. | Message Follow | committed target route를 사용하며 실패한 operation을 다른 owner에 재제출하지 않는다. [Object routing §2.4](../../spec/18-object-routing.ko.md#24-이전-owner-route에-도착한-message) |
 | 인접 zone에 snapshot을 전달한다. | Logical Multicast | topic과 target subscription으로 경계를 표현한다. [상호작용 모델 §5](../../spec/03-interaction-model.ko.md#5-spot-logical-multicast) |
 | 전 node 공지·점검을 보낸다. | classic fanout | publisher가 node 목록을 관리하지 않는다. [상호작용 모델 §6](../../spec/03-interaction-model.ko.md#6-classic-fanout) |
@@ -343,7 +343,7 @@ message ZoneBorderEvent {
   players: PlayerView[]
 }
 
-message EnterZoneMsg {
+message EnterZoneReq {
   playerId: string
   x: int32
   y: int32
@@ -397,7 +397,7 @@ sequenceDiagram
 
     C->>G: JoinWorldReq
     G->>A: create or get Player Actor
-    A->>Z: EnterZoneMsg(zone-nw)
+    A->>Z: EnterZoneReq(zone-nw)
     Z-->>A: EnterZoneRes
     A-->>G: JoinWorldRes(25,25)
     G-->>C: JoinWorldRes
@@ -414,7 +414,7 @@ sequenceDiagram
 
 target zone owner가 같으면 membership만 바뀌고, 다르면 같은 Player Actor가 target owner에서
 materialize되는 relocation이 발생한다. Application은 두 경우를 NodeId로 구분하지 않는다.
-두 경우 모두 EnterZoneMsg를 사용한다.
+두 경우 모두 request/reply인 `EnterZoneReq`와 `EnterZoneRes`를 사용한다.
 
 ```mermaid
 sequenceDiagram
@@ -428,7 +428,7 @@ sequenceDiagram
     C->>G: MoveMsg(target coordinate)
     G->>A: MoveMsg
     A->>A: validate adjacent zone
-    A->>T: EnterZoneMsg
+    A->>T: EnterZoneReq
     T->>N: relocation admission when owner differs
     N->>N: Capture and Restore actor state
     N-->>A: target owner ready
@@ -664,6 +664,8 @@ evidence를 검사한다. 단계별 marker는 언어별 runner가 실제로 출�
 - Actor가 좌표 권위를 소유하고 Zone Spot은 사본과 border snapshot만 소유한다.
 - 이동 rejection order, zone geometry, tick, sort와 expiry 규칙이 모든 언어에서 같다.
 - cross-node join이 같은 ActorId와 ObjectGeneration, 유지된 session binding을 보존한다.
+- 반복 relocation으로 Actor가 이전에 방문한 node로 돌아와도 같은 identity와 bound session을
+  보존한다(A→B→A round trip, ZW-B7).
 - Message Follow가 명시한 제한과 terminal error를 self-check가 확인한다.
 - border sync는 인접 topic만 사용하고 대각선 zone에는 publish하지 않는다.
 - announce와 maintenance는 classic fanout, node status는 runtime event와 explicit report를 사용한다.
@@ -673,3 +675,18 @@ evidence를 검사한다. 단계별 marker는 언어별 runner가 실제로 출�
   selection을 추가하지 않는다.
 - Ready owner 장애를 crash failover로 표시하지 않고 Unavailable 경계를 유지한다.
 - runner가 build, readiness, browser/headless self-check, evidence와 cleanup을 수행한다.
+
+### 11.1 시나리오 ID 계열
+
+self-check 시나리오 ID(`ZW-*`)는 의도별 계열로 묶인다. 각 계열은 위 완료 기준의 한 축을
+검증하며, runner의 evidence는 개별 ID를 명시한다.
+
+| 계열 | 의도 |
+| --- | --- |
+| ZW-A | 이동 기본: 입장, zone 내 이동, rejection order, 가시성, 정렬 |
+| ZW-B | relocation과 session: border sync, cross-node relocation, identity·binding 연속성 — 이전에 방문한 node로 되돌아가는 A→B→A round trip인 ZW-B7 포함 |
+| ZW-C | Ops 관찰: node status, shutdown, disconnect, spot event report |
+| ZW-D | fanout announce: 한 번의 publish가 모든 node의 subscriber와 zone spot에 도달 |
+| ZW-E | maintenance: 대상 지정 enable/disable, 입장 거부, 재시작 지속성, diagnostics |
+| ZW-F | bot: client 없는 이동, population, client push 부재, rejection 시 방향 반전 |
+| ZW-G | node identity와 교체: NodeId와 transport RID 구분, routing ID gate, replacement |

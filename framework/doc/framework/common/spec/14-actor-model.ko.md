@@ -149,10 +149,13 @@ Handler turn, 비활성 barrier와 scope는 현재 process의 메모리에만 �
 실행이나 Location Store commit 전에 process가 종료되면 이 registration과
 completion을 재생하지 않으며 source authority와 membership을 그대로 유지한다.
 
-Registration 뒤 source seal 전 도착한 payload는 barrier 뒤 Actor queue에 수락하고 cross-node relocation에서는
-accepted journal·실행 전 queue와 함께 이관한다. Source seal 이후 CAS 전과 Message Follow 구간의 payload만
-처리 방식은 서로 다르다. CAS 전 payload는 bounded ingress hold에 보관한다. CAS가 끝난 뒤 이전 owner에
-도착한 payload는 [Message Follow](01-glossary.ko.md#message-follow)로 새 owner에 전달한다.
+Registration 뒤 source를 seal하기 전에 도착한 payload는 barrier 뒤의 Actor queue가
+수락한다. Cross-node relocation에서는 이 payload도 accepted journal과 아직 실행하지 않은
+queue 작업과 함께 target으로 옮긴다.
+
+Source를 seal한 뒤에는 owner 변경 commit 전후의 처리 방식이 다르다. Commit 전 payload는
+relocation ingress hold에 보관한다. Commit이 끝난 뒤 이전 owner에 도착한 payload는
+[Message Follow](01-glossary.ko.md#message-follow)로 새 owner에 전달한다.
 
 같은 handler가 barrier를 등록한 Actor에 request를 보내고 그 reply를 기다리면,
 request는 barrier 뒤에서 기다리고 handler도 끝날 수 없어 순환 대기가 생긴다.

@@ -1,15 +1,17 @@
 package systems.zlink.e2e.spotservice.shared;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.handlers.ZLinkSpotSubscription;
 import systems.zlink.framework.spots.ZLinkSpotSubscriptionHandler;
 
 @ZLinkSpotSubscription(topic = "spot.events")
 public final class SpotEventHandler
-    implements ZLinkSpotSubscriptionHandler<UserSpot, Contracts.MeshMsg> {
+    implements ZLinkSpotSubscriptionHandler<UserSpot, Contracts.MeshEvent> {
     @Override
-    public java.util.concurrent.CompletionStage<Void> handle(
+    public CompletionStage<Void> handle(
         UserSpot spot,
-        Contracts.MeshMsg message) {
+        Contracts.MeshEvent message) {
         if (message.value().equals("publish:sm-c6-marker")) {
             String gateKey = "c6-delivery:" + spot.context().spotId();
             if (spot.context().spotId().startsWith("sm-c6-blocked-")) {
@@ -21,6 +23,6 @@ public final class SpotEventHandler
             }
         }
         spot.record("SpotMeshMsg", message.value());
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 }

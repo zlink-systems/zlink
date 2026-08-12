@@ -37,8 +37,33 @@ internal readonly struct ZLinkDispatchFlowScope(
         ILogger logger,
         ZLinkDispatchErrorReporter dispatchErrors,
         ZLinkDispatchErrorAction failureAction,
+        out object? message) =>
+        TryDecode(
+            parts,
+            messageType,
+            contentType,
+            codecs,
+            logger,
+            dispatchErrors,
+            failureAction,
+            decodeErrorSubject: null,
+            out message,
+            out _);
+
+    // decodeErrorSubject names the payload in the reported wrapper exception
+    // (e.g. "request"); passing it instead of a wrapping callback keeps the
+    // success path free of the closure the callback used to allocate.
+    public bool TryDecode(
+        IReadOnlyList<Message> parts,
+        Type messageType,
+        string contentType,
+        ZLinkCodecRegistryBuilder codecs,
+        ILogger logger,
+        ZLinkDispatchErrorReporter dispatchErrors,
+        ZLinkDispatchErrorAction failureAction,
+        string? decodeErrorSubject,
         out object? message,
-        Func<Exception, Exception>? reportException = null)
+        out ZLinkFrameworkException? decodeError)
     {
         try
         {
@@ -47,17 +72,25 @@ internal readonly struct ZLinkDispatchFlowScope(
                 messageType,
                 contentType,
                 codecs);
+            decodeError = null;
             return true;
         }
         catch (Exception ex)
         {
             message = null;
+            decodeError = decodeErrorSubject is null
+                ? null
+                : new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.ProtocolError,
+                    $"PayloadDecodeFailed: failed to decode {decodeErrorSubject} payload "
+                    + $"for '{channelName}:{packetName}'.",
+                    innerException: ex);
             PayloadDecodeFailed(
                 logger,
                 dispatchErrors,
                 failureAction,
                 ex,
-                reportException?.Invoke(ex));
+                decodeError);
             return false;
         }
     }

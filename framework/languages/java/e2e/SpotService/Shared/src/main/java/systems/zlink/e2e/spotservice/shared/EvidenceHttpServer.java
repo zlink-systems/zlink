@@ -1,4 +1,15 @@
 package systems.zlink.e2e.spotservice.shared;
+import com.sun.net.httpserver.HttpExchange;
+import java.io.IOException;
+import java.net.URLDecoder;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.stream.IntStream;
+import systems.zlink.framework.spots.ZLinkSpotCreateResult;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -124,7 +135,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                     exchange.getRequestBody(), Contracts.GatedSpotCreateReq.class);
                 state.armGate(request.spotRid());
                 spots.getOrCreate(request.spotRid(), "user")
-                    .request("a9")
+                    .request(new Contracts.SpotCreateReq("a9"))
                     .submit();
                 write(exchange, 202, "{\"started\":true}\n");
             });
@@ -154,7 +165,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 try {
                     Contracts.StateRes reply = routes.requestToSpot(
                             request.spotRid(), new Contracts.StateReq("a9-probe"))
-                        .timeout(java.time.Duration.ofSeconds(2))
+                        .timeout(Duration.ofSeconds(2))
                         .submit(Contracts.StateRes.class).toCompletableFuture().join();
                     write(exchange, 200, json.writeValueAsString(
                         new Contracts.SpotPublicationProbeRes(
@@ -181,17 +192,18 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 Contracts.AutomaticSpotBatchReq request = json.readValue(
                     exchange.getRequestBody(), Contracts.AutomaticSpotBatchReq.class);
                 int count = request.count() <= 0 ? 200 : request.count();
-                var creates = java.util.stream.IntStream.range(0, count)
-                    .mapToObj(index -> java.util.concurrent.CompletableFuture.supplyAsync(() ->
-                        spots.create("user").request("automatic-" + index)
+                var creates = IntStream.range(0, count)
+                    .mapToObj(index -> CompletableFuture.supplyAsync(() ->
+                        spots.create("user")
+                            .request(new Contracts.SpotCreateReq("automatic-" + index))
                             .submit().toCompletableFuture().join()))
                     .toList();
-                var results = creates.stream().map(java.util.concurrent.CompletableFuture::join).toList();
+                var results = creates.stream().map(CompletableFuture::join).toList();
                 int successfulRequests = 0;
                 for (var result : results) {
                     try {
                         routes.requestToSpot(result.spot().spotId(), new Contracts.StateReq("automatic"))
-                            .timeout(java.time.Duration.ofSeconds(5))
+                            .timeout(Duration.ofSeconds(5))
                             .submit(Contracts.StateRes.class).toCompletableFuture().join();
                         successfulRequests++;
                     } catch (RuntimeException ignored) {
@@ -204,14 +216,14 @@ public final class EvidenceHttpServer implements SmartLifecycle {
             server.createContext("/spot/id-boundary", exchange -> {
                 String max = "x".repeat(255);
                 List<String> ids = List.of("x", max, "Room", "room", "é", "e\u0301");
-                List<String> foundIds = new java.util.ArrayList<>();
-                List<Integer> stateValues = new java.util.ArrayList<>();
+                List<String> foundIds = new ArrayList<>();
+                List<Integer> stateValues = new ArrayList<>();
                 for (String id : ids) {
                     getOrCreateUserSpot(id);
                     var found = spots.find(id).toCompletableFuture().join().orElseThrow();
                     foundIds.add(found.spotId());
                     routes.requestToSpot(id, new Contracts.StateReq("boundary"))
-                        .timeout(java.time.Duration.ofSeconds(5))
+                        .timeout(Duration.ofSeconds(5))
                         .submit(Contracts.StateRes.class).toCompletableFuture().join();
                     stateValues.add(1);
                 }
@@ -307,7 +319,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 try {
                     var reply = actorClient.requestToActor(request.actorId(),
                             new Contracts.ActorPingReq(request.value()))
-                        .timeout(java.time.Duration.ofMillis(request.timeoutMilliseconds()))
+                        .timeout(Duration.ofMillis(request.timeoutMilliseconds()))
                         .submit(Contracts.ActorPingRes.class).toCompletableFuture().join();
                     write(exchange, 200, json.writeValueAsString(new Contracts.ActorRequestRes(
                         true, reply.actorId(), reply.value(), null)));
@@ -336,8 +348,8 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 int actorA = 0;
                 int actorB = 0;
                 for (int start = 0; start < count; start += 16) {
-                    List<java.util.concurrent.CompletableFuture<ZLinkActorCreateResult>> creates =
-                        java.util.stream.IntStream.range(start, Math.min(start + 16, count))
+                    List<CompletableFuture<ZLinkActorCreateResult>> creates =
+                        IntStream.range(start, Math.min(start + 16, count))
                             .mapToObj(index -> {
                                 String actorId = "sm-g5-actor-" + request.suffix() + "-" + index;
                                 return actors.create(actorId, "scenario")
@@ -347,8 +359,8 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                                     .toCompletableFuture();
                             })
                             .toList();
-                    java.util.concurrent.CompletableFuture.allOf(
-                        creates.toArray(java.util.concurrent.CompletableFuture[]::new)).join();
+                    CompletableFuture.allOf(
+                        creates.toArray(CompletableFuture[]::new)).join();
                     for (var create : creates) {
                         if (actorView(actorResultRef(create.join())).nodeRid().equals("play-a")) {
                             actorA++;
@@ -368,10 +380,12 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 // after that placement, the local node is the only candidate
                 // with remaining stable-type capacity.
                 meshOptions.mesh(Contracts.SPOT_MESH).setPlacementWeight(0);
-                var firstResult = spots.getOrCreate(first, "capacity").request("capacity")
+                var firstResult = spots.getOrCreate(first, "capacity")
+                    .request(new Contracts.SpotCreateReq("capacity"))
                     .submit().toCompletableFuture().join();
                 meshOptions.mesh(Contracts.SPOT_MESH).setPlacementWeight(10_000);
-                var secondResult = spots.getOrCreate(second, "capacity").request("capacity")
+                var secondResult = spots.getOrCreate(second, "capacity")
+                    .request(new Contracts.SpotCreateReq("capacity"))
                     .submit().toCompletableFuture().join();
                 write(exchange, 200, json.writeValueAsString(new Contracts.CapacityPlacementRes(
                     firstResult.spot().nodeRid().toString(), secondResult.spot().nodeRid().toString())));
@@ -386,7 +400,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                             new ZLinkFrameworkRelocationOptions(
                                 ZLinkFrameworkRelocationMode.PLANNED_MAINTENANCE,
                                 null,
-                                java.time.Duration.ofSeconds(30)))
+                                Duration.ofSeconds(30)))
                         .toCompletableFuture()
                         .join();
                     write(exchange, 200, json.writeValueAsString(
@@ -448,7 +462,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 boolean failed = fails(() -> routes.requestToSpot(
                         request.spotRid(),
                         new Contracts.MissingSpotReq("noop"))
-                    .timeout(java.time.Duration.ofSeconds(2))
+                    .timeout(Duration.ofSeconds(2))
                     .submit(Contracts.StateRes.class).toCompletableFuture().join());
                 write(exchange, 200, json.writeValueAsString(new Contracts.SpotMissingHandlerRes(
                     request.spotRid(),
@@ -504,15 +518,15 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 }
                 try {
                     spots.getOrCreate(rid, localSpotType("timer"))
-                        .request("e2e")
+                        .request(new Contracts.SpotCreateReq("e2e"))
                         .submit()
                         .toCompletableFuture()
-                        .get(5, java.util.concurrent.TimeUnit.SECONDS);
+                        .get(5, TimeUnit.SECONDS);
                 } catch (InterruptedException error) {
                     Thread.currentThread().interrupt();
                     throw new IllegalStateException("timer spot create interrupted", error);
-                } catch (java.util.concurrent.ExecutionException
-                         | java.util.concurrent.TimeoutException error) {
+                } catch (ExecutionException
+                         | TimeoutException error) {
                     throw new IllegalStateException("timer spot create failed", error);
                 }
                 write(exchange, 200, "{\"created\":true}\n");
@@ -525,32 +539,34 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 }
                 try {
                     spots.getOrCreate(rid, localSpotType("mismatched"))
+                        .request(new Contracts.SpotCreateReq("type-mismatch"))
                         .submit()
                         .toCompletableFuture()
-                        .get(5, java.util.concurrent.TimeUnit.SECONDS);
+                        .get(5, TimeUnit.SECONDS);
                     write(exchange, 500, "{\"mismatch\":false}\n");
                     return;
                 } catch (InterruptedException error) {
                     Thread.currentThread().interrupt();
                     throw new IllegalStateException("spot type mismatch interrupted", error);
-                } catch (java.util.concurrent.ExecutionException error) {
+                } catch (ExecutionException error) {
                     state.record("SpotTypeMismatch", rid, error.getCause().getMessage());
-                } catch (java.util.concurrent.TimeoutException error) {
+                } catch (TimeoutException error) {
                     throw new IllegalStateException("spot type mismatch timed out", error);
                 } catch (RuntimeException error) {
                     state.record("SpotTypeMismatch", rid, error.getMessage());
                 }
                 try {
                     spots.getOrCreate(rid, localSpotType("user"))
+                        .request(new Contracts.SpotCreateReq("type-mismatch-follow-up"))
                         .submit()
                         .toCompletableFuture()
-                        .get(5, java.util.concurrent.TimeUnit.SECONDS);
+                        .get(5, TimeUnit.SECONDS);
                     state.record("SpotTypeMismatchStateOk", rid, "existing");
                 } catch (InterruptedException error) {
                     Thread.currentThread().interrupt();
                     throw new IllegalStateException("spot type mismatch follow-up interrupted", error);
-                } catch (java.util.concurrent.ExecutionException
-                         | java.util.concurrent.TimeoutException error) {
+                } catch (ExecutionException
+                         | TimeoutException error) {
                     throw new IllegalStateException("spot type mismatch follow-up failed", error);
                 }
                 write(exchange, 200, "{\"mismatch\":true}\n");
@@ -566,18 +582,18 @@ public final class EvidenceHttpServer implements SmartLifecycle {
         }
     }
 
-    private systems.zlink.framework.spots.ZLinkSpotCreateResult getOrCreateUserSpot(String spotRid) {
+    private ZLinkSpotCreateResult getOrCreateUserSpot(String spotRid) {
         try {
             return spots.getOrCreate(spotRid, localSpotType("user"))
-                .request("e2e")
+                .request(new Contracts.SpotCreateReq("e2e"))
                 .submit()
                 .toCompletableFuture()
-                .get(5, java.util.concurrent.TimeUnit.SECONDS);
+                .get(5, TimeUnit.SECONDS);
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("spot create interrupted", error);
-        } catch (java.util.concurrent.ExecutionException
-                 | java.util.concurrent.TimeoutException error) {
+        } catch (ExecutionException
+                 | TimeoutException error) {
             throw new IllegalStateException("spot create failed", error);
         }
     }
@@ -587,7 +603,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
     }
 
     private Contracts.StateRes requestStateWithRetry(Contracts.SpotStateRouteReq request) {
-        long deadline = System.nanoTime() + java.time.Duration.ofSeconds(10).toNanos();
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
         RuntimeException lastFailure = null;
         while (System.nanoTime() < deadline) {
             try {
@@ -595,7 +611,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 return routes.requestToSpot(
                         request.spotRid(),
                         new Contracts.StateReq(op))
-                    .timeout(java.time.Duration.ofSeconds(2))
+                    .timeout(Duration.ofSeconds(2))
                     .submit(Contracts.StateRes.class).toCompletableFuture().join();
             } catch (RuntimeException error) {
                 lastFailure = error;
@@ -636,14 +652,14 @@ public final class EvidenceHttpServer implements SmartLifecycle {
         String packetName,
         Class<T> responseType,
         String operation) {
-        long deadline = System.nanoTime() + java.time.Duration.ofSeconds(10).toNanos();
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
         RuntimeException lastFailure = null;
         while (System.nanoTime() < deadline) {
             try {
                 return routes.requestToSpot(
                         spotRid,
                         packet)
-                    .timeout(java.time.Duration.ofSeconds(2))
+                    .timeout(Duration.ofSeconds(2))
                     .submit(responseType).toCompletableFuture().join();
             } catch (RuntimeException error) {
                 lastFailure = error;
@@ -673,7 +689,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
         return spots.find(spotRid)
             .thenCompose(found -> found
                 .map(spots::close)
-                .orElseGet(() -> java.util.concurrent.CompletableFuture.completedFuture(false)))
+                .orElseGet(() -> CompletableFuture.completedFuture(false)))
             .toCompletableFuture()
             .join();
     }
@@ -725,16 +741,16 @@ public final class EvidenceHttpServer implements SmartLifecycle {
         for (String part : query.split("&")) {
             String[] pair = part.split("=", 2);
             if (pair.length == 2 && name.equals(pair[0])) {
-                return java.net.URLDecoder.decode(pair[1], StandardCharsets.UTF_8);
+                return URLDecoder.decode(pair[1], StandardCharsets.UTF_8);
             }
         }
         return null;
     }
 
     private static void write(
-        com.sun.net.httpserver.HttpExchange exchange,
+        HttpExchange exchange,
         int status,
-        String value) throws java.io.IOException {
+        String value) throws IOException {
         byte[] body = value.getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(status, body.length);
         exchange.getResponseBody().write(body);

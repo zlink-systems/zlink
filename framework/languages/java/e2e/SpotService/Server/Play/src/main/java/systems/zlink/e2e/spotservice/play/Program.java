@@ -1,4 +1,11 @@
 package systems.zlink.e2e.spotservice.play;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import systems.zlink.framework.actors.ZLinkActorClient;
+import systems.zlink.framework.actors.ZLinkActorManager;
+import systems.zlink.framework.channels.ZLinkRouteClient;
+import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 
 import java.nio.file.Path;
 import java.net.URI;
@@ -69,21 +76,21 @@ public final class Program {
     }
 
     @Bean
-    com.fasterxml.jackson.databind.ObjectMapper objectMapper() {
-        return new com.fasterxml.jackson.databind.ObjectMapper();
+    ObjectMapper objectMapper() {
+        return new ObjectMapper();
     }
 
     @Bean
     EvidenceHttpServer evidenceHttpServer(
         ScenarioState state,
-        com.fasterxml.jackson.databind.ObjectMapper json,
+        ObjectMapper json,
         ZLinkSpotManager spots,
-        systems.zlink.framework.actors.ZLinkActorManager actors,
-        systems.zlink.framework.actors.ZLinkActorClient actorClient,
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
-        systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime meshRuntime,
-        systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions meshOptions,
-        ObjectProvider<systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime> frameworkRuntimes,
+        ZLinkActorManager actors,
+        ZLinkActorClient actorClient,
+        ZLinkRouteClient routes,
+        ZLinkRouteMeshRuntime meshRuntime,
+        ZLinkRouteMeshRuntimeOptions meshOptions,
+        ObjectProvider<ZLinkFrameworkRuntime> frameworkRuntimes,
         PlayOptions options) {
         return new EvidenceHttpServer(
             state,
@@ -132,7 +139,7 @@ public final class Program {
             ingressServer.addRequestHandler(
                 NoopIngressHandler.class,
                 Contracts.StateReq.class,
-                String.class);
+                Contracts.StateRes.class);
             // Spot callbacks use the same public ChannelName as a client.  The
             // process also owns the local server, so its client role loops back
             // to the advertised server endpoint.

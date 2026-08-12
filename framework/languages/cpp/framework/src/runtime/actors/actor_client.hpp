@@ -9,6 +9,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace zlink::framework::detail
@@ -21,6 +22,10 @@ namespace zlink::framework::runtime
 
 class actor_location_observer_t;
 class live_location_reader_t;
+
+bool actor_request_requires_current_spot_gate (
+  std::string_view target_spot_id,
+  bool release_turn);
 
 std::shared_ptr<actor_client_t>
 make_actor_client (live_location_reader_t &store,

@@ -1,4 +1,6 @@
 package systems.zlink.e2e.runtimemonitoring.service.handlers;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.e2e.runtimemonitoring.service.support.EvidenceState;
 import systems.zlink.e2e.runtimemonitoring.shared.Contracts;
@@ -18,11 +20,11 @@ public final class WorkReqHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Contracts.WorkRes> handle(
+    public CompletionStage<Contracts.WorkRes> handle(
         Contracts.WorkReq request,
         ZLinkMessageContext context) {
         evidence.record("work", evidence.rid(), "WorkReq", request.value());
-        return java.util.concurrent.CompletableFuture.completedFuture(new Contracts.WorkRes(
+        return CompletableFuture.completedFuture(new Contracts.WorkRes(
             "work:" + request.value(),
             routingId));
     }

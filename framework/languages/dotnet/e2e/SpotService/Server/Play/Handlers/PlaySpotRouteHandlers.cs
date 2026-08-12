@@ -26,7 +26,7 @@ internal sealed class SpotToSpotHandler(EvidenceStore evidence)
         await spot.Context.Outbound.Publish(
                 SpotServiceNames.SpotChannel,
                 SpotServiceNames.SpotMsgTopic,
-                new SpotMsg($"sm-c3-publish-{request.Marker}"))
+                new SpotEvent($"sm-c3-publish-{request.Marker}"))
             .Async(cancellationToken);
         evidence.Add(
             $"spot-to-spot|rid={evidence.Rid}|source={spot.Context.SpotId}"
@@ -126,12 +126,12 @@ internal sealed class SpotOutboundHandler(EvidenceStore evidence)
         var notifyMarker = $"notify-{request.Marker}";
         await spot.Context.Outbound.SendToChannel(
                 SpotServiceNames.ExternalClientChannel,
-                new ChannelNotify(notifyMarker))
+                new ChannelMsg(notifyMarker))
             .Async(cancellationToken);
         await spot.Context.Outbound.Publish(
                 SpotServiceNames.SpotChannel,
                 SpotServiceNames.SpotMsgTopic,
-                new SpotMsg("sm-c2-publish"))
+                new SpotEvent("sm-c2-publish"))
             .Async(cancellationToken);
         evidence.Add(
             $"spot-outbound|rid={evidence.Rid}|spot={spot.Context.SpotId}"
@@ -165,7 +165,7 @@ internal sealed class SpotOutboundNegativeHandler(EvidenceStore evidence)
 
         await spot.Context.Outbound.SendToChannel(
                 SpotServiceNames.ExternalClientChannel,
-                new MissingChannelNotify($"missing-{request.Marker}"))
+                new MissingChannelMsg($"missing-{request.Marker}"))
             .Async(cancellationToken);
         evidence.Add(
             $"spot-outbound-negative|rid={evidence.Rid}|spot={spot.Context.SpotId}"

@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <mutex>
@@ -137,6 +138,15 @@ struct serial_work_options_t
     std::size_t byte_cost = dispatch_limits::fixed_work_byte_cost;
 };
 
+using serial_submission_id_t = std::uint64_t;
+
+enum class serial_cancel_submission_outcome_t
+{
+    queued_cancelled,
+    active_cancel_requested,
+    already_terminal
+};
+
 class serial_execution_queue_t
 {
   public:
@@ -170,6 +180,13 @@ class serial_execution_queue_t
     bool try_post_async (std::string name,
                          async_work_t work,
                          serial_work_options_t options);
+    result_t<serial_submission_id_t>
+    try_post_cancellable_async (std::string name,
+                                async_work_t work,
+                                std::function<void ()> cancel,
+                                serial_work_options_t options = {});
+    serial_cancel_submission_outcome_t
+    cancel_submission (serial_submission_id_t submission_id) noexcept;
     bool post_async_wait (std::string name,
                           async_work_t work,
                           std::function<bool ()> stop_requested = {});
@@ -214,6 +231,9 @@ class serial_execution_queue_t
         serial_work_lane_t lane = serial_work_lane_t::application;
         std::size_t byte_cost = fixed_work_byte_cost;
         bool after_active_phase = false;
+        serial_submission_id_t submission_id = 0;
+        std::function<void ()> cancel;
+        std::shared_ptr<serial_turn_handle_impl_t> turn;
     };
 
     struct lane_state_t
@@ -237,6 +257,14 @@ class serial_execution_queue_t
         std::size_t byte_cost = fixed_work_byte_cost;
     };
 
+    struct active_turn_t
+    {
+        serial_submission_id_t submission_id = 0;
+        std::shared_ptr<serial_turn_handle_impl_t> turn;
+        std::function<void ()> cancel;
+        bool cancel_requested = false;
+    };
+
     bool schedule_drain_locked ();
     void drain_loop ();
     void execute_item (work_item_t item);
@@ -248,7 +276,14 @@ class serial_execution_queue_t
     bool can_enqueue_locked (const serial_work_options_t &options) const noexcept;
     bool enqueue_locked (std::string name,
                          async_work_t work,
-                         serial_work_options_t options);
+                         serial_work_options_t options,
+                         serial_submission_id_t submission_id = 0,
+                         std::function<void ()> cancel = {});
+    std::shared_ptr<serial_turn_handle_impl_t>
+    create_turn (const std::string &name,
+                 serial_work_lane_t lane,
+                 bool after_active_phase);
+    void activate_turn_locked (work_item_t &item) noexcept;
     bool has_ready_locked () const noexcept;
     work_item_t take_next_locked ();
     void report_deferred_error (const std::string &name,
@@ -264,7 +299,7 @@ class serial_execution_queue_t
     lane_state_t _application;
     lane_state_t _lifecycle;
     std::vector<deferred_work_t> _deferred_after_active;
-    std::vector<std::shared_ptr<detail::serial_turn_t>> _active_turns;
+    std::optional<active_turn_t> _active_turn;
     std::optional<serial_work_lane_t> _active_lane;
     std::size_t _active_bytes = 0;
     std::optional<std::chrono::steady_clock::time_point> _claim_started_at;
@@ -274,6 +309,7 @@ class serial_execution_queue_t
     bool _drain_scheduled = false;
     bool _draining = false;
     std::size_t _active = 0;
+    serial_submission_id_t _next_submission_id = 1;
 };
 
 } // namespace zlink::framework::runtime

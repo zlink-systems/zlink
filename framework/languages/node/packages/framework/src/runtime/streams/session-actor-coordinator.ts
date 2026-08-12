@@ -62,13 +62,15 @@ export class ZLinkSessionActorCoordinator {
     context: DefaultZLinkSessionContext,
     actorRef: ActorRef,
     signal?: AbortSignal,
-    confirmRemoteSessionBinding: boolean | 'send' = true
+    confirmRemoteSessionBinding: boolean | 'send' = true,
+    releaseSeal?: { readonly sealId: string; readonly acceptedHighWater: bigint }
   ): Promise<DefaultZLinkSessionActor> {
     return await this.replaceBindingCore(
       context,
       actorRef,
       signal,
-      confirmRemoteSessionBinding
+      confirmRemoteSessionBinding,
+      releaseSeal
     );
   }
 
@@ -76,7 +78,8 @@ export class ZLinkSessionActorCoordinator {
     context: DefaultZLinkSessionContext,
     actorRef: ActorRef,
     signal?: AbortSignal,
-    confirmRemoteSessionBinding: boolean | 'send' = true
+    confirmRemoteSessionBinding: boolean | 'send' = true,
+    releaseSeal?: { readonly sealId: string; readonly acceptedHighWater: bigint }
   ): Promise<DefaultZLinkSessionActor> {
     throwIfAborted(signal);
     if (actorRef.actorId.trim().length === 0) {
@@ -122,24 +125,56 @@ export class ZLinkSessionActorCoordinator {
     );
     const sessionActor = reuseActor
       ?? new DefaultZLinkSessionActor(this.sessionActorRuntime, boundActorRef, bindingToken);
+    const sessionIdentity = String(this.actorBindingRoutingId(context));
     sessionActor.updateRef(boundActorRef);
     if (previous === undefined) {
-      this.routes.bind(context, sessionActor, bindingToken, authorityFence);
+      if (releaseSeal !== undefined) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.ActorSessionNotBound,
+          `Actor '${actorRef.actorId}' route switch has no Session binding to release.`,
+          true
+        );
+      }
+      this.routes.bind(context, sessionActor, bindingToken, authorityFence, sessionIdentity);
+    } else if (releaseSeal !== undefined) {
+      this.routes.replaceAndReleaseSeal(
+        previous,
+        context,
+        sessionActor,
+        bindingToken,
+        releaseSeal.sealId,
+        releaseSeal.acceptedHighWater,
+        authorityFence,
+        sessionIdentity
+      );
     } else {
-      this.routes.replace(previous, context, sessionActor, bindingToken, authorityFence);
+      this.routes.replace(
+        previous,
+        context,
+        sessionActor,
+        bindingToken,
+        authorityFence,
+        sessionIdentity
+      );
     }
     if (confirmRemoteSessionBinding !== false && this.options.confirmRemoteActorSessionBinding !== undefined) {
       const waitForAcknowledgement = previous === undefined
         && confirmRemoteSessionBinding !== 'send';
-      void this.options.confirmRemoteActorSessionBinding(
+      const confirmation = this.options.confirmRemoteActorSessionBinding(
         actorRef,
         this.actorBindingRoutingId(context),
         undefined,
         { waitForAcknowledgement }
-      ).catch(() => {
+      );
+      const ignoreFailure = () => {
         // Confirmation admission is retried independently by the relay. A
         // failed notice cannot roll back the already-current binding.
-      });
+      };
+      if (waitForAcknowledgement) {
+        await confirmation.catch(ignoreFailure);
+      } else {
+        void confirmation.catch(ignoreFailure);
+      }
     }
     return sessionActor;
   }
@@ -148,18 +183,30 @@ export class ZLinkSessionActorCoordinator {
     actorRef: ActorRef,
     signal?: AbortSignal
   ): Promise<ZLinkActorSessionAuthorityFence | undefined> {
-    const resolved = await this.options.actorAuthorityFenceResolver?.(actorRef.actorId, signal);
-    if (resolved !== undefined) return resolved;
     const internal = actorRef as ActorRef & {
       readonly ownershipGeneration?: bigint;
       readonly ownerLeaseGeneration?: bigint;
+      readonly ownerNodeGeneration?: bigint;
     };
-    return internal.ownershipGeneration === undefined || internal.ownerLeaseGeneration === undefined
-      ? undefined
-      : {
-          authorityOwnerGeneration: internal.ownershipGeneration,
-          ownerLeaseGeneration: internal.ownerLeaseGeneration
-        };
+    if (internal.ownershipGeneration !== undefined
+      && internal.ownerLeaseGeneration !== undefined) {
+      const resolved = internal.ownerNodeGeneration === undefined
+        ? await this.options.actorAuthorityFenceResolver?.(actorRef.actorId, signal)
+        : undefined;
+      return {
+        authorityOwnerGeneration: internal.ownershipGeneration,
+        ownerLeaseGeneration: internal.ownerLeaseGeneration,
+        ...((internal.ownerNodeGeneration ?? resolved?.ownerNodeGeneration) === undefined
+          ? {}
+          : { ownerNodeGeneration: internal.ownerNodeGeneration ?? resolved!.ownerNodeGeneration }),
+        ...(resolved?.ownerId === undefined ? {} : { ownerId: resolved.ownerId }),
+        ...(resolved?.authorityStoreVersion === undefined
+          ? {}
+          : { authorityStoreVersion: resolved.authorityStoreVersion }),
+        ...(resolved?.actorType === undefined ? {} : { actorType: resolved.actorType })
+      };
+    }
+    return await this.options.actorAuthorityFenceResolver?.(actorRef.actorId, signal);
   }
 
   async bindOrGet(
@@ -227,7 +274,13 @@ export class ZLinkSessionActorCoordinator {
   async commitActorRoute(
     actorRef: ActorRef,
     signal?: AbortSignal,
-    options: { readonly confirmRemoteSessionBinding?: boolean | 'send' } = {}
+    options: {
+      readonly confirmRemoteSessionBinding?: boolean | 'send';
+      readonly releaseSeal?: {
+        readonly sealId: string;
+        readonly acceptedHighWater: bigint;
+      };
+    } = {}
   ): Promise<void> {
     const normalizedActorRef = normalizeActorRef(
       actorRef as ActorRef & { readonly generation?: bigint | number },
@@ -239,10 +292,33 @@ export class ZLinkSessionActorCoordinator {
       if (route === undefined) return;
       requireSameIncarnation(route.actor.ref, normalizedActorRef);
       if (routingIdsEqual(route.actor.ref.nodeRid, normalizedActorRef.nodeRid)) {
-        route.actor.updateRef(normalizedActorRef);
         const authorityFence = await this.resolveAuthorityFence(normalizedActorRef, signal);
+        if (options.releaseSeal !== undefined
+          && !this.routes.validateSeal(
+            normalizedActorRef.actorId,
+            options.releaseSeal.sealId,
+            options.releaseSeal.acceptedHighWater
+          )) {
+          throw createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+            `Actor '${normalizedActorRef.actorId}' route switch did not match its relocation seal.`,
+            true
+          );
+        }
+        route.actor.updateRef(normalizedActorRef);
         if (authorityFence !== undefined) {
           this.routes.updateAuthorityFence(normalizedActorRef.actorId, authorityFence);
+        }
+        if (options.releaseSeal !== undefined
+          && !this.routes.abortSeal(
+            normalizedActorRef.actorId,
+            options.releaseSeal.sealId
+          )) {
+          throw createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+            `Actor '${normalizedActorRef.actorId}' route switch lost its relocation seal.`,
+            true
+          );
         }
         return;
       }
@@ -250,7 +326,8 @@ export class ZLinkSessionActorCoordinator {
         route.context,
         normalizedActorRef,
         signal,
-        options.confirmRemoteSessionBinding
+        options.confirmRemoteSessionBinding,
+        options.releaseSeal
       );
     });
   }
@@ -267,7 +344,7 @@ export class ZLinkSessionActorCoordinator {
       if (
         route === undefined
         || !sameActorRef(route.actor.ref, actorRef)
-        || !routingIdsEqual(route.context.routingId, sessionRid)
+        || !routingIdsEqual(route.sessionIdentity, sessionRid)
         || bindingGenerationOf(route.actor.ref) !== bindingGeneration
       ) {
         return false;
@@ -285,6 +362,36 @@ export class ZLinkSessionActorCoordinator {
     readonly ownerLeaseGeneration: bigint;
   } | undefined {
     return this.routes.route(actorId)?.authorityFence;
+  }
+
+  sessionRouteFence(actorId: string): {
+    readonly actor: ActorRef;
+    readonly sessionRid: ActorRef['nodeRid'];
+    readonly bindingGeneration: bigint;
+    readonly authorityOwnerGeneration: bigint;
+    readonly ownerLeaseGeneration: bigint;
+    readonly acceptedHighWater: bigint;
+  } | undefined {
+    const route = this.routes.route(actorId);
+    const sessionRid = route?.sessionIdentity;
+    const authority = route?.authorityFence;
+    const actor = route?.actor.ref as (ActorRef & { readonly bindingGeneration?: bigint }) | undefined;
+    if (
+      route === undefined
+      || sessionRid === undefined
+      || authority === undefined
+      || actor?.bindingGeneration === undefined
+    ) {
+      return undefined;
+    }
+    return {
+      actor,
+      sessionRid,
+      bindingGeneration: actor.bindingGeneration,
+      authorityOwnerGeneration: authority.authorityOwnerGeneration,
+      ownerLeaseGeneration: authority.ownerLeaseGeneration,
+      acceptedHighWater: route.acceptedHighWater
+    };
   }
 
   private resolveActorRef(actor: ZLinkActor): ActorRef {

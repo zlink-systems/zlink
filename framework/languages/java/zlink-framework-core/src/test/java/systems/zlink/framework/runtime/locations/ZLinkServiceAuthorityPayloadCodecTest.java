@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
@@ -26,7 +27,11 @@ final class ZLinkServiceAuthorityPayloadCodecTest {
             17);
 
         var decoded = codec.decode(payload).orElseThrow();
-        assertEquals(ZLinkServiceAuthorityPayloadCodec.Kind.USER, decoded.kind());
+        assertInstanceOf(
+            ZLinkServiceAuthorityPayloadCodec.UserSpotAuthority.class,
+            decoded);
+        assertTrue(decoded.user().isPresent());
+        assertTrue(decoded.instance().isEmpty());
         assertEquals(ZLinkServiceAuthorityPayloadCodec.State.READY, decoded.state());
         assertEquals("game.player", decoded.stableType());
         assertEquals(spotId, decoded.spotId());
@@ -51,9 +56,11 @@ final class ZLinkServiceAuthorityPayloadCodecTest {
             RoutingId.from("node-b"),
             17)).orElseThrow();
 
-        assertEquals(
-            ZLinkServiceAuthorityPayloadCodec.Kind.INSTANCE,
-            decoded.kind());
+        assertInstanceOf(
+            ZLinkServiceAuthorityPayloadCodec.InstanceSpotAuthority.class,
+            decoded);
+        assertTrue(decoded.instance().isPresent());
+        assertTrue(decoded.user().isEmpty());
         assertEquals(
             ZLinkServiceAuthorityPayloadCodec.State.CLOSING,
             decoded.state());
@@ -122,5 +129,26 @@ final class ZLinkServiceAuthorityPayloadCodecTest {
         assertThrows(
             IllegalArgumentException.class,
             () -> ZLinkAuthorityKeyCodec.spot("\u0000"));
+    }
+
+    @Test
+    void everyLifecycleStateDecodesIntoTheSemanticSpotVariant() {
+        var codec = new ZLinkServiceAuthorityPayloadCodec();
+        for (ZLinkServiceAuthorityPayloadCodec.State state
+            : ZLinkServiceAuthorityPayloadCodec.State.values()) {
+            var user = codec.decode(codec.encodeUser(
+                state, "game.user", "user", "owner", 1,
+                "mesh", RoutingId.from("node"), 2)).orElseThrow();
+            var instance = codec.decode(codec.encodeInstance(
+                state, "game.instance", "instance", "owner", 1,
+                "mesh", RoutingId.from("node"), 2)).orElseThrow();
+
+            assertEquals(state, user.state());
+            assertTrue(user.user().isPresent());
+            assertTrue(user.instance().isEmpty());
+            assertEquals(state, instance.state());
+            assertTrue(instance.instance().isPresent());
+            assertTrue(instance.user().isEmpty());
+        }
     }
 }

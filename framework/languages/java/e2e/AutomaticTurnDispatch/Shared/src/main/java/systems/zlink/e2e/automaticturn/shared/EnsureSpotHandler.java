@@ -1,4 +1,5 @@
 package systems.zlink.e2e.automaticturn.shared;
+import java.util.concurrent.CompletableFuture;
 
 import java.time.Duration;
 import java.util.concurrent.CompletionStage;
@@ -66,24 +67,24 @@ public final class EnsureSpotHandler
             Contracts.EnsureSpotReq request,
             int attempt) {
             return spots.getOrCreate(request.spotRid(), Contracts.TARGET_SPOT)
-                .request(ZLinkMessage.of("ensure"))
+                .request(ZLinkMessage.of(new Contracts.SpotCreateReq("ensure")))
                 .submit()
                 .thenCompose(created -> {
                     String actualNode = created.spot().nodeRid().toString();
                     if (evidence.nodeRid().equals(actualNode)) {
                         evidence.record("spot-ensured", request.spotRid(), "node=" + actualNode);
-                        return java.util.concurrent.CompletableFuture.completedFuture(
+                        return CompletableFuture.completedFuture(
                             new Contracts.EnsureSpotRes(request.spotRid(), actualNode));
                     }
                     if (attempt + 1 >= MAX_PLACEMENT_ATTEMPTS) {
-                        return java.util.concurrent.CompletableFuture.failedFuture(
+                        return CompletableFuture.failedFuture(
                             new IllegalStateException(
                                 "Spot placement did not reach route node " + evidence.nodeRid()
                                     + ": actual=" + actualNode));
                     }
                     return spots.close(created.spot()).thenCompose(closed -> {
                         if (!closed) {
-                            return java.util.concurrent.CompletableFuture.failedFuture(
+                            return CompletableFuture.failedFuture(
                                 new IllegalStateException(
                                     "Spot placement cleanup was rejected: "
                                         + request.spotRid()));

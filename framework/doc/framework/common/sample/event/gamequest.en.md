@@ -35,7 +35,7 @@ completion criteria.
 
 - The client connects to the GameApi STREAM and receives current quest progress via
   JoinSessionReq/Res.
-- The server validates KillMonsterReq, CollectItemReq, and EnterAreaReq and builds gameplay events.
+- The server validates `KillMonsterReq`, `CollectItemMsg`, and `EnterAreaMsg` and builds gameplay events.
 - Events of the same PlayerId are judged in order in a single PlayerQuestSpot.
 - Quest progress is pushed via QuestProgressNotify and restored via lookup after reconnect.
 - Completion and reward decision events aren't duplicate-appended for the same source event.
@@ -204,14 +204,14 @@ message KillMonsterRes {
   eventId: string
 }
 
-message CollectItemReq {
+message CollectItemMsg {
   playerId: string
   itemId: string
   count: int32
   idempotencyKey: string
 }
 
-message EnterAreaReq {
+message EnterAreaMsg {
   playerId: string
   areaId: string
   idempotencyKey: string
@@ -368,7 +368,7 @@ sequenceDiagram
 ```
 
 `KillMonsterReq/Res`'s response returns the EventId GameApi built after accepting the action.
-`CollectItemReq` and `EnterAreaReq` are one-way actions with no response, and the progress and
+`CollectItemMsg` and `EnterAreaMsg` are one-way actions with no response, and the progress and
 completion notify after acceptance are confirmed separately. Every progress and completion notify is
 sent after PlayerQuestSpot updates the event stream and projection. Since a one-way send's
 completion doesn't mean the target handler's domain append has completed, the self-check confirms

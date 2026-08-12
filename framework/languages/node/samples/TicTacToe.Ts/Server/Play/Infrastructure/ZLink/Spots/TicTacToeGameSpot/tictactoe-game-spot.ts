@@ -1,5 +1,11 @@
 import { Injectable, Scope } from '@nestjs/common';
+import { ZLinkTimerOverrunPolicy } from '@zlink-systems/framework';
 import { TicTacToeGameTimerHandler } from './Handlers/tictactoe-game-timer-handler';
+import {
+  PlayActorCurrentGameStateHandler,
+  PlayActorPlaceMarkHandler
+} from './Handlers/play-actor-place-mark-handler';
+import { PlayActorLeaveGameHandler } from './Handlers/play-actor-leave-game-handler';
 import { TicTacToeMatch } from '../../../../Domain/TicTacToe/tictactoe-match';
 import {
   GameStatus,
@@ -9,7 +15,11 @@ import {
   playerWinMilestoneEvent
 } from '../../../../../../Shared/Contracts/messages';
 import { SampleDefaults, SampleNames } from '../../../../../Configuration/sample-settings';
-import { DeliverPlayNotification, PlayActor } from '../../Actors/play-actor';
+import {
+  DeliverPlayNotificationHandler,
+  DeliverPlayNotificationMsg,
+  PlayActor
+} from '../../Actors/play-actor';
 import type {
   ZLinkMessage,
   ZLinkSpot,
@@ -54,10 +64,23 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
   }
 
   async configure(): Promise<void> {
+    // send: JoinGameMsg returns the authoritative state through JoinGameNotify.
+    this.context.handlers.addHandler(PlayActorCurrentGameStateHandler);
+    // request: PlaceMarkReq returns PlaceMarkRes.
+    this.context.handlers.addHandler(PlayActorPlaceMarkHandler);
+    // send: LeaveGameMsg starts the explicit leave and destroy lifecycle.
+    this.context.handlers.addHandler(PlayActorLeaveGameHandler);
+    // send: internal notification delivery targets an Actor in this Room Spot.
+    this.context.handlers.addHandler(DeliverPlayNotificationHandler);
+    // timer: the Room Spot owns the public timer registration and its policy.
     this.gameTick = await this.context.addTimer(
       'game-tick',
       GameTickPeriodMs,
-      TicTacToeGameTimerHandler
+      TicTacToeGameTimerHandler,
+      {
+        overrunPolicy: ZLinkTimerOverrunPolicy.DelayNextTick,
+        stopOnUnhandledException: true
+      }
     );
   }
 
@@ -163,6 +186,16 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
     }
   }
 
+  currentState(actorId: string, roomId: string): GameState {
+    if (roomId !== this.requireRoomId()) {
+      throw new Error(`Actor requested state for a different room. roomId=${roomId}`);
+    }
+    if (!this.requireMatch().players.has(actorId)) {
+      throw new Error(`Actor '${actorId}' has not joined room '${roomId}'.`);
+    }
+    return this.requireMatch().snapshot();
+  }
+
   private async publishWinMilestone(actorId: string, before: GameState, after: GameState): Promise<void> {
     if (before.status === GameStatus.Won || after.status !== GameStatus.Won || after.winner !== actorId) {
       return;
@@ -208,7 +241,7 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
     return actorId;
   }
 
-  private async notifyActor(actorId: string, payload: ConstructorParameters<typeof DeliverPlayNotification>[0]): Promise<void> {
+  private async notifyActor(actorId: string, payload: ConstructorParameters<typeof DeliverPlayNotificationMsg>[0]): Promise<void> {
     const actor = this.actors.get(actorId);
     if (actor === undefined) {
       throw new Error(`TicTacToe actor '${actorId}' has no room membership reference.`);

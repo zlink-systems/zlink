@@ -1,4 +1,5 @@
 package systems.zlink.framework.spots;
+import systems.zlink.framework.runtime.internal.spots.ZLinkSpotIdValidator;
 
 import java.util.Objects;
 import systems.zlink.contracts.core.RoutingId;
@@ -9,7 +10,7 @@ public record SpotRef(
     String meshName,
     RoutingId nodeRid) {
     public SpotRef {
-        systems.zlink.framework.runtime.internal.spots.ZLinkSpotIdValidator
+        ZLinkSpotIdValidator
             .requireValid(spotId);
         Objects.requireNonNull(nodeRid, "nodeRid");
         if (objectGeneration <= 0) {

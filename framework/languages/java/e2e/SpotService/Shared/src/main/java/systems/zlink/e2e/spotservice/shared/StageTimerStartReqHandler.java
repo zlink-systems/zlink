@@ -1,12 +1,14 @@
 package systems.zlink.e2e.spotservice.shared;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.handlers.ZLinkSpotRequest;
 
 public final class StageTimerStartReqHandler {
     @ZLinkSpotRequest
-    public java.util.concurrent.CompletionStage<Contracts.StageTimerStartRes> handle(
+    public CompletionStage<Contracts.StageTimerStartRes> handle(
         UserSpot spot,
         Contracts.StageTimerStartReq request) {
-        return java.util.concurrent.CompletableFuture.completedFuture(spot.stage().startTimer(request));
+        return CompletableFuture.completedFuture(spot.stage().startTimer(request));
     }
 }

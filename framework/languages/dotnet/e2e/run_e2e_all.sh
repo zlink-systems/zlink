@@ -114,7 +114,7 @@ run_config() {
   set +e
   (
     cd "$SCRIPT_DIR/$config" &&
-      exec nice -n 10 timeout "${CONFIG_TIMEOUT_SECONDS}s" ./run_e2e.sh "$scenario"
+      exec nice -n 10 timeout "${CONFIG_TIMEOUT_SECONDS}s" bash ./run_e2e.sh "$scenario"
   ) &
   active_config_pid="$!"
   wait "$active_config_pid"

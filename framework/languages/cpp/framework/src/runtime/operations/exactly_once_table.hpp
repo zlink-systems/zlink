@@ -104,6 +104,12 @@ class exactly_once_table_t
         return _entries.contains (key);
     }
 
+    std::size_t size () const
+    {
+        std::lock_guard lock (_mutex);
+        return _entries.size ();
+    }
+
     bool erase (const key_type &key)
     {
         std::lock_guard lock (_mutex);

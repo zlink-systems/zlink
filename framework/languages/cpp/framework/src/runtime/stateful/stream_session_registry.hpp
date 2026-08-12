@@ -3,11 +3,15 @@
 
 #include "runtime/stateful/stateful_object_runtime.hpp"
 
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -47,11 +51,51 @@ struct stream_barrier_t
     object_ref_t actor;
 };
 
+struct stream_remote_tenure_t
+{
+    std::string actor_id;
+    std::uint64_t object_generation = 0;
+    std::uint64_t authority_owner_generation = 0;
+    std::string target_node_id;
+    std::uint64_t target_node_generation = 0;
+    std::uint64_t owner_lease_generation = 0;
+    std::uint64_t binding_generation = 0;
+
+    friend bool operator== (const stream_remote_tenure_t &,
+                            const stream_remote_tenure_t &) = default;
+};
+
+struct stream_remote_tenure_proof_t
+{
+    stream_remote_tenure_t tenure;
+    std::string owner_id;
+
+    friend bool operator== (const stream_remote_tenure_proof_t &,
+                            const stream_remote_tenure_proof_t &) = default;
+};
+
+using stream_retained_outbound_t = std::function<void (bool)>;
+
+enum class stream_outbound_admission_kind_t
+{
+    immediate,
+    retained
+};
+
+struct stream_outbound_admission_t
+{
+    stateful_error_t error = stateful_error_t::none;
+    stream_outbound_admission_kind_t kind =
+      stream_outbound_admission_kind_t::immediate;
+    std::uint64_t token = 0;
+};
+
 struct stream_route_admission_t
 {
     stateful_error_t error = stateful_error_t::none;
     std::optional<stream_binding_t> binding;
     std::uint64_t last_accepted_sequence = 0;
+    std::vector<stream_retained_outbound_t> retained_outbound;
 };
 
 struct stream_route_seal_admission_t
@@ -89,6 +133,13 @@ class stream_session_registry_t
     stateful_error_t restore (const stream_binding_t &binding);
     std::pair<stateful_error_t, std::optional<stream_dispatch_t>>
     admit_inbound (const stream_binding_t &binding);
+    std::pair<stateful_error_t, std::optional<stream_dispatch_t>>
+    admit_inbound (
+      const std::string &connection_id,
+      std::uint64_t binding_generation,
+      const std::string &actor_id,
+      std::uint64_t expected_sequence,
+      std::chrono::milliseconds timeout);
     stateful_error_t complete_inbound (const stream_dispatch_t &dispatch);
     std::pair<stateful_error_t, stream_barrier_t>
     try_seal_actor (const object_ref_t &actor);
@@ -101,6 +152,34 @@ class stream_session_registry_t
       const object_ref_t &actor,
       std::uint64_t target_node_generation,
       std::uint64_t owner_lease_generation);
+    bool remote_route_seal_ready (
+      const stream_barrier_t &barrier) const;
+    bool remote_route_sealed (const std::string &actor_id) const;
+    std::optional<stream_remote_tenure_proof_t>
+    remote_tenure_proof (
+      const std::string &actor_id,
+      std::uint64_t binding_generation,
+      std::uint64_t object_generation,
+      std::uint64_t authority_owner_generation,
+      const std::string &target_node_id,
+      std::uint64_t target_node_generation) const;
+    bool memoize_remote_tenure (
+      stream_remote_tenure_proof_t proof,
+      std::uint64_t previous_authority_owner_generation);
+    stream_outbound_admission_t admit_outbound (
+      const stream_remote_tenure_t &tenure,
+      std::optional<stream_remote_tenure_proof_t> first_proof,
+      stream_retained_outbound_t retained);
+    std::vector<stream_retained_outbound_t>
+    discard_retained_outbound (
+      const std::string &actor_id,
+      std::uint64_t binding_generation);
+    std::vector<stream_retained_outbound_t>
+    take_all_retained_outbound ();
+    /* Internal projection hook. The aggregate commits before this hook runs,
+     * and hook failure cannot veto or roll back the committed route. */
+    using route_terminal_commit_t =
+      std::function<bool (const stream_route_admission_t &)>;
     stream_route_admission_t commit_remote_route (
       const std::string &connection_id,
       std::uint64_t binding_generation,
@@ -109,13 +188,16 @@ class stream_session_registry_t
       std::uint64_t previous_authority_owner_generation,
       object_ref_t target,
       std::uint64_t target_node_generation,
-      std::uint64_t replayed_high_water);
+      std::uint64_t target_owner_lease_generation,
+      std::uint64_t replayed_high_water,
+      route_terminal_commit_t commit_terminal = {});
     stream_route_admission_t acknowledge_remote_abort (
       const std::string &connection_id,
       std::uint64_t binding_generation,
       const std::string &actor_id,
       std::uint64_t object_generation,
-      std::uint64_t current_authority_owner_generation);
+      std::uint64_t current_authority_owner_generation,
+      route_terminal_commit_t commit_terminal = {});
     bool try_seal_all ();
     void release_all () noexcept;
     void force_close_all () noexcept;
@@ -124,14 +206,35 @@ class stream_session_registry_t
       const std::string &actor_id) const;
 
   private:
+    struct retained_outbound_state_t
+    {
+        std::uint64_t token = 0;
+        stream_remote_tenure_t tenure;
+        stream_retained_outbound_t completion;
+    };
+
+    struct session_binding_aggregate_t
+    {
+        stream_binding_t binding;
+        std::uint64_t next_inbound_sequence = 1;
+        std::set<std::pair<std::uint64_t, std::uint64_t>> active_inbound;
+        std::optional<std::uint64_t> barrier_token;
+        std::optional<stream_remote_tenure_proof_t> pending_remote_tenure;
+        std::deque<retained_outbound_state_t> retained_outbound;
+        std::uint64_t next_outbound_token = 1;
+    };
+
     struct connection_state_t
     {
         stream_connection_t connection;
         std::uint64_t next_binding_generation = 1;
-        std::uint64_t next_inbound_sequence = 1;
-        std::map<std::string, stream_binding_t> bindings;
-        std::map<std::uint64_t, std::string> active_inbound;
-        std::map<std::string, std::uint64_t> barrier_tokens;
+        std::map<std::string, session_binding_aggregate_t> bindings;
+    };
+
+    struct actor_binding_locator_t
+    {
+        stream_connection_t connection;
+        std::uint64_t binding_generation = 0;
     };
 
     static bool exact_actor (const object_ref_t &left,
@@ -141,12 +244,24 @@ class stream_session_registry_t
       const object_ref_t &actor,
       std::uint64_t target_node_generation,
       std::uint64_t owner_lease_generation);
+    session_binding_aggregate_t *current_aggregate_unlocked (
+      const std::string &actor_id);
+    const session_binding_aggregate_t *current_aggregate_unlocked (
+      const std::string &actor_id) const;
+    static bool exact_tenure_target (
+      const stream_remote_tenure_t &tenure,
+      const stream_binding_t &binding);
+    bool memoize_remote_tenure_unlocked (
+      session_binding_aggregate_t &aggregate,
+      stream_remote_tenure_proof_t proof,
+      std::uint64_t previous_authority_owner_generation);
 
     authority_resolver_t _resolver;
     mutable std::mutex _mutex;
+    std::condition_variable _changed;
     std::map<std::string, connection_state_t> _connections;
     std::map<std::string, std::uint64_t> _last_connection_generation;
-    std::map<std::string, stream_binding_t> _actor_bindings;
+    std::map<std::string, actor_binding_locator_t> _actor_bindings;
     std::map<std::uint64_t, object_ref_t> _barriers;
     std::uint64_t _next_barrier_token = 1;
     bool _all_sealed = false;

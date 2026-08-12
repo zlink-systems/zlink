@@ -82,7 +82,6 @@ verify_start_order_contract() {
 }
 
 cleanup_done=0
-active_config_pid=""
 
 cleanup_resources() {
   if [[ "${cleanup_done}" == "1" ]]; then
@@ -90,10 +89,6 @@ cleanup_resources() {
   fi
   cleanup_done=1
 
-  if [[ -n "${active_config_pid}" ]] && kill -0 "${active_config_pid}" >/dev/null 2>&1; then
-    kill -TERM "${active_config_pid}" >/dev/null 2>&1 || true
-    wait "${active_config_pid}" >/dev/null 2>&1 || true
-  fi
 }
 
 on_exit() {
@@ -160,7 +155,7 @@ run_config_once() {
   local scenario="$2"
   local start_order="$3"
   local output status started_at ended_at
-  local -a runner_command=(./run_e2e.sh "${scenario}")
+  local -a runner_command=(bash ./run_e2e.sh "${scenario}")
   if uses_start_order_axis "${config}"; then
     runner_command+=("--start-order=${start_order}")
   fi
@@ -171,12 +166,9 @@ run_config_once() {
   set +e
   (
     cd "${SCRIPT_DIR}/${config}" &&
-      exec timeout "${SCENARIO_TIMEOUT_SECONDS}s" "${runner_command[@]}"
-  ) > >(tee "${output}") 2>&1 &
-  active_config_pid="$!"
-  wait "${active_config_pid}"
-  status="$?"
-  active_config_pid=""
+      timeout "${SCENARIO_TIMEOUT_SECONDS}s" "${runner_command[@]}"
+  ) 2>&1 | tee "${output}"
+  status="${PIPESTATUS[0]}"
   set -e
   ended_at="$(date +%s)"
 

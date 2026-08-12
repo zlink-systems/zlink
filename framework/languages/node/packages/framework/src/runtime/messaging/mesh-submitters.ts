@@ -16,6 +16,9 @@ interface ZLinkMeshSubmitterEntry {
 type ZLinkMeshSendTimeoutResolver = (meshName: string) => number;
 type ZLinkMeshCapacityResolver = (meshName: string) => number;
 
+const DEFAULT_STANDALONE_SEND_TIMEOUT_MS = 1000;
+const DEFAULT_STANDALONE_SEND_CAPACITY = 4096;
+
 class ZLinkMeshTerminalResult extends Error {
   constructor(readonly result: ZLinkSubmitResult) {
     super(`Mesh submit completed with '${result.status}'.`);
@@ -99,4 +102,12 @@ export class ZLinkMeshSubmitterRegistry {
     this.entries.set(meshName, entry);
     return entry;
   }
+}
+
+/** Creates the queue owner used by standalone internal runtimes without a host. */
+export function createStandaloneMeshSubmitterRegistry(): ZLinkMeshSubmitterRegistry {
+  return new ZLinkMeshSubmitterRegistry(
+    DEFAULT_STANDALONE_SEND_TIMEOUT_MS,
+    DEFAULT_STANDALONE_SEND_CAPACITY
+  );
 }

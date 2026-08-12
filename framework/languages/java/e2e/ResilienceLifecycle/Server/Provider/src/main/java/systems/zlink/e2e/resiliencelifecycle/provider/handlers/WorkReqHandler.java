@@ -1,4 +1,6 @@
 package systems.zlink.e2e.resiliencelifecycle.provider.handlers;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.e2e.resiliencelifecycle.shared.Contracts;
 import systems.zlink.e2e.resiliencelifecycle.provider.infrastructure.ScenarioState;
@@ -16,10 +18,10 @@ public final class WorkReqHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Contracts.WorkRes> handle(
+    public CompletionStage<Contracts.WorkRes> handle(
         Contracts.WorkReq request,
         ZLinkMessageContext context) {
-        return java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+        return CompletableFuture.supplyAsync(() -> {
             if (state.grayFailure() && request.value().startsWith("b6-gray-")) {
                 state.record("GrayFailureInjected", request.value());
                 throw new IllegalStateException("gray failure");

@@ -1030,8 +1030,8 @@ fun zlink() = ZLinkFrameworkConfigurer { options ->
 - **Sending to a packet with no handler (at runtime)** → **request fails with an error
   reply** (the client gets it as an exception), while **send is silently dropped.** Dropped
   means the caller gets no reply -- it doesn't mean there is no observable record. The
-  application-configured logger/telemetry provider receives a structured dispatch-error marker
-  (`no_handler` / `reply_error`/`drop`) (chapter `11. Monitoring`).
+  application-configured logger/telemetry provider receives a formal structured dispatch-error
+  record (`no_handler` / `reply_error`/`drop`) (chapter `11. Monitoring`).
 
 ## 12. Related Documents
 

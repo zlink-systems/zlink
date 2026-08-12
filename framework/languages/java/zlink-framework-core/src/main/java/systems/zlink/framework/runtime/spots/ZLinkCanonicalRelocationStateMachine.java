@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -28,12 +32,15 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkCanonicalRelocationAuthorityStateCodec;
 import systems.zlink.framework.runtime.internal.locations
+    .ZLinkDeferredJoinCompletionAuthority;
+import systems.zlink.framework.runtime.internal.locations
     .ZLinkRelocationStartupScanner;
 import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 /**
@@ -117,6 +124,24 @@ final class ZLinkCanonicalRelocationStateMachine
             candidate.sourceCleanupCompleted()
                 ? finalizeRecovery(fence, slot)
                 : CompletableFuture.completedFuture(null));
+    }
+
+    CompletionStage<Void> recoverRetainedSessionAbort(
+        ZLinkRelocationStartupScanner.RetainedSessionAbort retained) {
+        Objects.requireNonNull(retained, "retained");
+        //  SOURCE abort is authenticated by the retained wire fence, not by
+        //  the process that retransmits it. Any runtime for the same mesh can
+        //  finish the abort after the original source process restarts.
+        if (!retained.targetMeshName().equals(meshName)) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return target.recoverRetainedSessionAbort(retained);
+    }
+
+    boolean canRecoverRetainedSessionAbort(
+        ZLinkRelocationStartupScanner.RetainedSessionAbort retained) {
+        Objects.requireNonNull(retained, "retained");
+        return retained.targetMeshName().equals(meshName);
     }
 
     @Override
@@ -890,6 +915,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 if (envelope.object().kind() == objectKind
                     && envelope.object().objectId().equals(objectId)) {
                     stableType = participantType;
+                    targetSpotId = decoded.currentSpotId();
                     restorePrimary = hasState;
                 }
             } else {
@@ -931,31 +957,74 @@ final class ZLinkCanonicalRelocationStateMachine
             candidate.checksumCrc32c(),
             participants,
             recoveredSessionRoutes(
-                envelope, participants, actorStoreVersions));
+                envelope,
+                participants,
+                actorStoreVersions,
+                candidate));
     }
 
     /**
-     * Rebuilds bound-Session route fences from the durable envelope journal
-     * so finalize after a target restart re-drives the command 44/45 switch
-     * with {@code lastAccepted = max(sourceSessionSequence)} per session.
-     *
-     * <p>Recovery can restore a route only while an accepted record carrying
-     * the session source fence is still retained in the journal. Sessions
-     * whose records were pruned past the replay cursor (or that produced no
-     * accepted suffix record) cannot be reconstructed here; they are covered
-     * by the {@code lastAcceptedSessionSequence} carried on the boundSession
-     * participants of a re-read Prepare (command 40), which flows through
-     * {@link #stageRequest} instead. The route's source authority store
-     * version is the recovered snapshot version — the only durable stand-in
-     * for the pre-relocation value after a restart.</p>
+     * Rebuilds bound-Session route fences after a target restart. A direct
+     * Join completion retains the exact command-44 intent and takes priority;
+     * other aggregate relocations fall back to the greatest accepted Session
+     * source sequence still present in the durable journal.
      */
     private static List<ZLinkSpotRetireControl.SessionRouteFence>
         recoveredSessionRoutes(
             ZLinkServiceRelocationEnvelopeCodec.Envelope envelope,
             List<ZLinkSpotRetireControl.ParticipantFence> participants,
-            Map<String, String> actorStoreVersions) {
+            Map<String, String> actorStoreVersions,
+            ZLinkRelocationStartupScanner.Candidate candidate) {
         Map<String, ZLinkSpotRetireControl.SessionRouteFence> routes =
             new HashMap<>();
+        var codec = new ZLinkServiceM6BWireCodec();
+        for (byte[] encoded : ZLinkDeferredJoinCompletionAuthority
+                .retainedSessionRouteCommands(envelope)) {
+            var intent = codec.decodeSessionRelocationRouteIntent(encoded);
+            ZLinkSpotRetireControl.ParticipantFence participant =
+                participants.stream()
+                    .filter(value -> value.objectKind() == 1
+                        && value.objectId().equals(intent.actor().actorId())
+                        && value.objectGeneration()
+                            == intent.actor().generation()
+                        && value.sourceAuthorityOwnerGeneration()
+                            == intent.previousAuthorityOwnerGeneration())
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalStateException(
+                        "direct-Join Session route is outside recovered Actor inventory"));
+            var coordinator = intent.coordinator();
+            if (intent.relocation().high()
+                    != candidate.fence().aggregateId().getMostSignificantBits()
+                || intent.relocation().low()
+                    != candidate.fence().aggregateId().getLeastSignificantBits()
+                || !coordinator.ownerId().equals(candidate.sourceOwnerId())
+                || coordinator.leaseGeneration()
+                    != candidate.sourceOwnerLeaseGeneration()
+                || !coordinator.nodeRid().equals(candidate.sourceNodeRid())
+                || coordinator.nodeGeneration()
+                    != candidate.sourceNodeGeneration()
+                || !intent.targetNodeRid().equals(candidate.targetNodeRid())
+                || intent.targetNodeGeneration()
+                    != candidate.targetNodeGeneration()) {
+                throw new IllegalStateException(
+                    "direct-Join Session route differs from startup authority fence");
+            }
+            var session = intent.session();
+            routes.put(
+                participant.objectId(),
+                new ZLinkSpotRetireControl.SessionRouteFence(
+                    participant.objectId(),
+                    participant.objectGeneration(),
+                    participant.sourceAuthorityOwnerGeneration(),
+                    coordinator.expectedAuthorityStoreVersion(),
+                    session.nodeRid(),
+                    session.nodeGeneration(),
+                    session.ownerId(),
+                    session.ownerLeaseGeneration(),
+                    session.sessionRid(),
+                    session.bindingGeneration(),
+                    intent.lastAcceptedSessionSequence()));
+        }
         for (var entry : envelope.journal()) {
             int index = (int) entry.participantId() - 1;
             if (index < 0 || index >= participants.size()) {
@@ -964,6 +1033,11 @@ final class ZLinkCanonicalRelocationStateMachine
             ZLinkSpotRetireControl.ParticipantFence participant =
                 participants.get(index);
             if (participant.objectKind() != 1) {
+                continue;
+            }
+            if (routes.containsKey(participant.objectId())) {
+                //  The direct-Join completion retains command 44 itself and
+                //  therefore outranks a journal-derived approximation.
                 continue;
             }
             ZLinkActorAcceptedJournal.Record record;
@@ -982,8 +1056,8 @@ final class ZLinkCanonicalRelocationStateMachine
                     >= record.sourceSessionSequence()) {
                 continue;
             }
-            routes.put(
-                participant.objectId(),
+            putRecoveredSessionRoute(
+                routes,
                 new ZLinkSpotRetireControl.SessionRouteFence(
                     participant.objectId(),
                     participant.objectGeneration(),
@@ -1002,6 +1076,17 @@ final class ZLinkCanonicalRelocationStateMachine
         ordered.sort((left, right) -> compareUtf8(
             left.actorId(), right.actorId()));
         return List.copyOf(ordered);
+    }
+
+    private static void putRecoveredSessionRoute(
+        Map<String, ZLinkSpotRetireControl.SessionRouteFence> routes,
+        ZLinkSpotRetireControl.SessionRouteFence candidate) {
+        var existing = routes.putIfAbsent(candidate.actorId(), candidate);
+        if (existing != null && !existing.equals(candidate)) {
+            throw new IllegalStateException(
+                "recovered Actor has conflicting bound-Session route fences: "
+                    + candidate.actorId());
+        }
     }
 
     private CompletionStage<ZLinkSpotRetireControl.StageRequest> reconstruct(
@@ -1410,9 +1495,9 @@ final class ZLinkCanonicalRelocationStateMachine
         });
         CompletableFuture.delayedExecutor(
             timeout.toMillis(),
-            java.util.concurrent.TimeUnit.MILLISECONDS)
+            TimeUnit.MILLISECONDS)
             .execute(() -> result.completeExceptionally(
-                new java.util.concurrent.TimeoutException(
+                new TimeoutException(
                     operation + " timed out")));
         return result;
     }
@@ -1433,7 +1518,7 @@ final class ZLinkCanonicalRelocationStateMachine
             }
             CompletableFuture.delayedExecutor(
                 25,
-                java.util.concurrent.TimeUnit.MILLISECONDS)
+                TimeUnit.MILLISECONDS)
                 .execute(() -> attemptUntilAck(
                     targetRid, command, ack, deadline, result));
         });
@@ -1534,17 +1619,17 @@ final class ZLinkCanonicalRelocationStateMachine
         });
         CompletableFuture.delayedExecutor(
             timeout.toMillis(),
-            java.util.concurrent.TimeUnit.MILLISECONDS)
+            TimeUnit.MILLISECONDS)
             .execute(() -> result.completeExceptionally(
-                new java.util.concurrent.TimeoutException(
+                new TimeoutException(
                     operation + " timed out")));
         return result;
     }
 
     private static Throwable unwrap(Throwable failure) {
         Throwable current = failure;
-        while ((current instanceof java.util.concurrent.CompletionException
-            || current instanceof java.util.concurrent.ExecutionException)
+        while ((current instanceof CompletionException
+            || current instanceof ExecutionException)
             && current.getCause() != null) {
             current = current.getCause();
         }

@@ -51,30 +51,31 @@ internal sealed class ZLinkClientServerDispatcher(
                         channelName,
                         received.Parts,
                         header,
-                        (replyHeader, reply, replyType) =>
+                        (Self: this, replyGate, router, received, header, maximumMessageBytes),
+                        static (s, replyHeader, reply, replyType) =>
                         {
-                            Reply(
-                                replyGate,
-                                router,
-                                received,
-                                header,
+                            s.Self.Reply(
+                                s.replyGate,
+                                s.router,
+                                s.received,
+                                s.header,
                                 replyHeader,
                                 reply,
                                 replyType,
-                                maximumMessageBytes);
+                                s.maximumMessageBytes);
                             return ValueTask.CompletedTask;
                         },
-                        errorHeader =>
+                        static (s, errorHeader) =>
                         {
-                            Reply(
-                                replyGate,
-                                router,
-                                received,
-                                header,
+                            s.Self.Reply(
+                                s.replyGate,
+                                s.router,
+                                s.received,
+                                s.header,
                                 errorHeader,
                                 null,
                                 null,
-                                maximumMessageBytes);
+                                s.maximumMessageBytes);
                             return ValueTask.CompletedTask;
                         },
                         cancellationToken)

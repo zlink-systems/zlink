@@ -22,6 +22,7 @@
 #include "runtime/spots/spot_route_packets.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -67,6 +68,60 @@ struct mesh_node_host_service_t::actor_destroy_callback_gate_t
         changed.wait (lock, [this] { return active == 0; });
     }
 };
+
+application_dispatch_terminal_owner_t::application_dispatch_terminal_owner_t (
+  completion_admission_owner_t::permit_t completion_permit,
+  std::shared_ptr<inbound_dispatch_budget_t> inbound_budget,
+  std::uint64_t payload_bytes,
+  bool handler_started,
+  std::shared_ptr<detail::mesh_node_runtime_t> node,
+  std::function<void ()> complete_stateful_dispatch,
+  std::function<void ()> release_mailbox_reservation) :
+    _completion_permit (std::move (completion_permit)),
+    _inbound_budget (std::move (inbound_budget)),
+    _payload_bytes (payload_bytes),
+    _handler_started (handler_started),
+    _node (std::move (node)),
+    _complete_stateful_dispatch (std::move (complete_stateful_dispatch)),
+    _release_mailbox_reservation (std::move (release_mailbox_reservation))
+{
+}
+
+application_dispatch_terminal_owner_t::~application_dispatch_terminal_owner_t () noexcept
+{
+    settle ();
+}
+
+void application_dispatch_terminal_owner_t::settle () noexcept
+{
+    if (_settled.exchange (true, std::memory_order_acq_rel))
+        return;
+
+    invoke (_complete_stateful_dispatch);
+    invoke (_release_mailbox_reservation);
+    if (_inbound_budget)
+        _inbound_budget->completed (_payload_bytes, _handler_started);
+    _completion_permit = {};
+    if (const auto node = _node.lock ())
+        node->application_work_finished ();
+
+    _complete_stateful_dispatch = {};
+    _release_mailbox_reservation = {};
+    _node.reset ();
+    _inbound_budget.reset ();
+}
+
+void application_dispatch_terminal_owner_t::invoke (
+  const std::function<void ()> &callback) noexcept
+{
+    if (!callback)
+        return;
+    try {
+        callback ();
+    }
+    catch (...) {
+    }
+}
 
 namespace
 {
@@ -412,7 +467,6 @@ mesh_node_host_service_t::mesh_node_host_service_t (
         : std::make_shared<completion_admission_owner_t> (65'536)),
     _listener_statuses (std::move (listener_statuses))
 {
-    detail::register_spot_route_packet_serializers (serializers);
     _nodes.reserve (_registrations.size ());
     for (const auto &registration : _registrations) {
         auto node = std::make_shared<detail::mesh_node_runtime_t> (registration);
@@ -1870,8 +1924,9 @@ void mesh_node_host_service_t::start (service_provider_t &services)
 {
     try {
     _services = &services;
-    if (auto actor_gateway =
-          services.get<detail::actor_gateway_runtime_t> ()) {
+    const auto actor_gateway =
+      services.get<detail::actor_gateway_runtime_t> ();
+    if (actor_gateway) {
         actor_gateway->get ().bind_serializers (*_serializers);
     }
     _stop.store (false, std::memory_order_release);
@@ -1886,8 +1941,8 @@ void mesh_node_host_service_t::start (service_provider_t &services)
         if (!registration || !registration->spot_state)
             continue;
         const auto gate = _actor_destroy_gate;
-        detail::spot_node_runtime_t (registration->spot_state)
-          .on_destroy_actor ([this, gate] (const actor_ref_t &actor) {
+        detail::spot_node_runtime_t spot_runtime (registration->spot_state);
+        spot_runtime.on_destroy_actor ([this, gate] (const actor_ref_t &actor) {
               if (!gate->try_enter ())
                   return result_t<void>::failure (
                     framework_error_kind_t::shutting_down,
@@ -1901,7 +1956,13 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                   gate->leave ();
                   throw;
               }
-          });
+        });
+        if (actor_gateway) {
+            spot_runtime.on_actor_ref_updated (
+              [gateway = &actor_gateway->get ()] (const actor_ref_t &actor) {
+                  return gateway->update_actor_ref (actor);
+              });
+        }
     }
     auto &location_runtime =
       services.get_required<location_runtime_t> ();
@@ -2040,6 +2101,15 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                     std::string (stable_type), std::string (spot_id),
                     object_generation, authority_owner_generation,
                     std::move (close_local));
+              };
+            registration->spot_state->begin_instance_spot_close =
+              [source] (const spot_id_t &spot_id,
+                        std::string_view stable_type,
+                        std::uint64_t object_generation,
+                        std::uint64_t authority_owner_generation) {
+                  return source->native_node ().begin_instance_spot_close (
+                    std::string (stable_type), std::string (spot_id),
+                    object_generation, authority_owner_generation);
               };
             _nodes[index]->configure_instance_spot_operations (
               store, instance_relocations, *_location_owner,
@@ -2459,7 +2529,9 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                 .object_kind =
                   placement_object_kind_t::user_spot,
                 .stable_type = stable_type,
-                .usage = {}});
+                .usage = {
+                  .limit = registration->spot_state->spot_stable_type_limits.at (
+                    stable_type)}});
         }
         for (const auto &stable_type :
              registration->spot_state->snapshot.instance_spot_names) {
@@ -2490,7 +2562,9 @@ void mesh_node_host_service_t::start (service_provider_t &services)
               spot_type_capacity_t{
                 .object_kind = placement_object_kind_t::instance_spot,
                 .stable_type = stable_type,
-                .usage = {}});
+                .usage = {
+                  .limit = registration->spot_state->spot_stable_type_limits.at (
+                    stable_type)}});
         }
         std::sort (
           descriptor.object_capabilities.begin (),
@@ -2713,36 +2787,50 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                                       requires_completion_permit (record.kind)
                                         ? _completion_admission->acquire ()
                                         : completion_admission_owner_t::permit_t{};
-                                    if (requires_completion_permit (record.kind)
-                                        && !completion_permit) {
-                                        _inbound_budget->completed (
-                                          application_payload_bytes, false);
-                                        node->application_work_started ();
-                                        node->application_work_finished ();
-                                        _dispatch_gate_changed.notify_all ();
-                                        if (release_mailbox_reservation) {
-                                            release_mailbox_reservation ();
-                                        }
+                                    const bool completion_admitted =
+                                      !requires_completion_permit (record.kind)
+                                      || static_cast<bool> (completion_permit);
+                                    node->application_work_started ();
+                                    if (completion_admitted) {
+                                        _inbound_budget->handler_started (
+                                          application_payload_bytes);
+                                    }
+                                    const auto terminal = std::make_shared<
+                                      application_dispatch_terminal_owner_t> (
+                                      std::move (completion_permit),
+                                      _inbound_budget,
+                                      application_payload_bytes,
+                                      completion_admitted,
+                                      node,
+                                      complete_stateful_dispatch,
+                                      release_mailbox_reservation);
+                                    stateful_guard.dismiss ();
+                                    release_guard.dismiss ();
+                                    if (!completion_admitted) {
+                                        terminal->settle ();
                                         return;
                                     }
-                                    node->application_work_started ();
-                                    _inbound_budget->handler_started (
-                                      application_payload_bytes);
                                     try {
                                         detail::spot_node_runtime_t
                                           application_spot_runtime (
                                             registration->spot_state);
+                                        bool terminal_deferred = false;
                                         const auto framework_handled =
                                             application_spot_runtime
                                               .dispatch_mesh_record (
                                                 owner, record, parts,
-                                                *_services, *_serializers);
+                                                *_services, *_serializers,
+                                                [terminal] {
+                                                    terminal->settle ();
+                                                },
+                                                &terminal_deferred);
                                         trace_mesh_application (
                                           "framework-dispatch", record,
                                           parts.size (),
                                           framework_handled ? "handled"
                                                              : "not-handled");
-                                        if (!framework_handled) {
+                                        if (!framework_handled
+                                            && !terminal_deferred) {
                                             detail::mesh_record_dispatcher_t dispatcher (
                                               *_services, *_serializers,
                                               registration->handlers, *_filters,
@@ -2759,40 +2847,24 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                                                   "failure");
                                             }
                                         }
+                                        if (terminal_deferred)
+                                            return;
                                     }
                                     catch (const std::exception &error) {
                                         trace_mesh_application (
                                           "exception", record, parts.size (),
                                           error.what ());
-                                        _inbound_budget->completed (
-                                          application_payload_bytes, true);
-                                        node->application_work_finished ();
-                                        _dispatch_gate_changed.notify_all ();
-                                        if (release_mailbox_reservation) {
-                                            release_mailbox_reservation ();
-                                        }
+                                        terminal->settle ();
                                         return;
                                     }
                                     catch (...) {
                                         trace_mesh_application (
                                           "exception", record, parts.size (),
                                           "unknown");
-                                        _inbound_budget->completed (
-                                          application_payload_bytes, true);
-                                        node->application_work_finished ();
-                                        _dispatch_gate_changed.notify_all ();
-                                        if (release_mailbox_reservation) {
-                                            release_mailbox_reservation ();
-                                        }
+                                        terminal->settle ();
                                         return;
                                     }
-                                    _inbound_budget->completed (
-                                      application_payload_bytes, true);
-                                    node->application_work_finished ();
-                                    _dispatch_gate_changed.notify_all ();
-                                    if (release_mailbox_reservation) {
-                                        release_mailbox_reservation ();
-                                    }
+                                    terminal->settle ();
                                 });
                           if (!submitted) {
                               trace_mesh_application (
@@ -2828,6 +2900,7 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                   _inbound_budget->can_start_application_receive ());
                 detail::spot_node_runtime_t maintenance (registration->spot_state);
                 (void) maintenance.cleanup_expired_actor_admissions ();
+                (void) maintenance.poll_deferred_actor_join_completions (*_services);
                 if (count == 0)
                     (void) node->native_node ().wait_for_dispatch_activity (
                       std::chrono::milliseconds (100),
@@ -2860,14 +2933,22 @@ bool mesh_node_host_service_t::wait_for_accepted_callbacks_until (
   std::chrono::steady_clock::time_point deadline) noexcept
 {
     std::unique_lock lock (_dispatch_gate_mutex);
-    return _dispatch_gate_changed.wait_until (lock, deadline, [this] {
+    auto settled = [this] {
         if (_active_direct_dispatch != 0)
             return false;
         return std::all_of (_nodes.begin (), _nodes.end (), [] (const auto &node) {
             return node->pending_application_callbacks () == 0
-                   && node->active_application_callbacks () == 0;
+                   && node->active_application_callbacks () == 0
+                   && node->pending_transport_operations () == 0
+                   && node->active_completion_waiters () == 0;
         });
-    });
+    };
+    while (!settled () && std::chrono::steady_clock::now () < deadline) {
+        _dispatch_gate_changed.wait_until (
+          lock, std::min (deadline, std::chrono::steady_clock::now ()
+                                     + std::chrono::milliseconds (1)));
+    }
+    return settled ();
 }
 
 void mesh_node_host_service_t::visit_relocation_nodes (

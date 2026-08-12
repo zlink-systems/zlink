@@ -114,7 +114,7 @@ std::string terminal_name (const zlink::framework::result_t<void> &result)
     }
 }
 
-sa::submit_response_t response_from (
+sa::admission_res_t response_from (
   const std::string &operation_id,
   const zlink::framework::result_t<void> &result)
 {
@@ -124,7 +124,7 @@ sa::submit_response_t response_from (
             .terminal_count = 1};
 }
 
-zlink::framework::task_t<sa::submit_response_t> response_after_submit (
+zlink::framework::task_t<sa::admission_res_t> response_after_submit (
   std::string operation_id,
   zlink::framework::task_t<void> submission)
 {
@@ -140,6 +140,20 @@ zlink::framework::task_t<sa::submit_response_t> response_after_submit (
     }
 }
 
+sa::admission_msg_t as_msg (const sa::admission_req_t &request)
+{
+    return {.operation_id = request.operation_id,
+            .sequence = request.sequence,
+            .payload = request.payload};
+}
+
+sa::admission_event_t as_event (const sa::admission_req_t &request)
+{
+    return {.operation_id = request.operation_id,
+            .sequence = request.sequence,
+            .payload = request.payload};
+}
+
 class admission_handler_t
 {
   public:
@@ -151,7 +165,7 @@ class admission_handler_t
     {
     }
 
-    void handle (const sa::admission_message_t &message,
+    void handle (const sa::admission_msg_t &message,
                  const zlink::framework::route_message_context_t &)
     {
         _evidence.entered (message.operation_id);
@@ -205,7 +219,7 @@ class saturation_probe_state_t
 };
 
 zlink::framework::task_t<void> observe_saturation_request (
-  zlink::framework::task_t<sa::submit_response_t> request,
+  zlink::framework::task_t<sa::admission_res_t> request,
   saturation_probe_state_t &state)
 {
     try {
@@ -261,7 +275,7 @@ class saturation_send_handler_t
     {
     }
 
-    void handle (const sa::saturation_prime_message_t &,
+    void handle (const sa::saturation_prime_msg_t &,
                  const zlink::framework::route_message_context_t &)
     {
         _state.note_entered ();
@@ -289,8 +303,8 @@ class saturation_request_handler_t
     {
     }
 
-    sa::submit_response_t handle (
-      const sa::admission_message_t &message,
+    sa::admission_res_t handle (
+      const sa::admission_req_t &message,
       const zlink::framework::route_message_context_t &)
     {
         _state.note_entered ();
@@ -346,12 +360,12 @@ class saturation_start_handler_t
         }
         for (std::uint64_t offset = 0; offset < count; ++offset) {
             const auto index = start_index + offset;
-            auto message = sa::admission_message_t{
+            auto message = sa::admission_req_t{
               .operation_id = "saturation-" + std::to_string (index),
               .sequence = index,
               .payload = "x"};
             if (send_mode) {
-                auto prime = sa::saturation_prime_message_t{
+                auto prime = sa::saturation_prime_msg_t{
                   .operation_id = std::move (message.operation_id),
                   .sequence = message.sequence,
                   .payload = std::move (message.payload)};
@@ -370,7 +384,7 @@ class saturation_start_handler_t
                   saturation_channel_name (index),
                   std::move (message))
                 .timeout (std::chrono::milliseconds (timeout_ms))
-                .submit<sa::submit_response_t> ();
+                .submit<sa::admission_res_t> ();
             _state.note_launched ();
             _state.retain (observe_saturation_request (
               std::move (request_task), _state));
@@ -427,7 +441,7 @@ class owner_isolation_slow_send_handler_t
     {
     }
 
-    void handle (const sa::saturation_prime_message_t &,
+    void handle (const sa::saturation_prime_msg_t &,
                  const zlink::framework::route_message_context_t &)
     {
         _state.note_entered ();
@@ -455,8 +469,8 @@ class owner_isolation_slow_request_handler_t
     {
     }
 
-    sa::submit_response_t handle (
-      const sa::admission_message_t &message,
+    sa::admission_res_t handle (
+      const sa::admission_req_t &message,
       const zlink::framework::route_message_context_t &)
     {
         _state.note_entered ();
@@ -486,8 +500,8 @@ class owner_isolation_fast_request_handler_t
     {
     }
 
-    sa::submit_response_t handle (
-      const sa::admission_message_t &message,
+    sa::admission_res_t handle (
+      const sa::admission_req_t &message,
       const zlink::framework::route_message_context_t &)
     {
         _state.note_entered ();
@@ -526,7 +540,7 @@ class owner_isolation_submit_handler_t
               _routes
                 .send_to_channel (
                   sa::channel_name,
-                  sa::saturation_prime_message_t{
+                  sa::saturation_prime_msg_t{
                     .operation_id = "owner-isolation-prime",
                     .sequence = 1,
                     .payload = "x"})
@@ -545,12 +559,12 @@ class owner_isolation_submit_handler_t
             const auto response = co_await _routes
               .request_to_channel (
                 channel,
-                sa::admission_message_t{
+                sa::admission_req_t{
                   .operation_id = operation_id,
                   .sequence = 1,
                   .payload = "x"})
               .timeout (std::chrono::seconds (5))
-              .submit<sa::submit_response_t> ();
+              .submit<sa::admission_res_t> ();
             co_return zlink::framework::http_response_t{
               .body = nlohmann::json (response).dump ()};
         }
@@ -573,13 +587,13 @@ class node_submit_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::route_client_t>;
-    using request_type = sa::node_submit_request_t;
-    using reply_type = sa::submit_response_t;
+    using request_type = sa::node_submit_req_t;
+    using reply_type = sa::admission_res_t;
 
     explicit node_submit_handler_t (zlink::framework::route_client_t &routes) : _routes (routes) {}
 
-    zlink::framework::task_t<sa::submit_response_t>
-    handle (const sa::node_submit_request_t &request)
+    zlink::framework::task_t<sa::admission_res_t>
+    handle (const sa::node_submit_req_t &request)
     {
         auto operation = _routes.send_to_node (
           sa::mesh_name, zlink::routing_id_t::from (request.target_rid), request.message);
@@ -596,18 +610,18 @@ class channel_submit_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::route_client_t>;
-    using request_type = sa::admission_message_t;
-    using reply_type = sa::submit_response_t;
+    using request_type = sa::admission_req_t;
+    using reply_type = sa::admission_res_t;
 
     explicit channel_submit_handler_t (zlink::framework::route_client_t &routes) :
         _routes (routes)
     {
     }
 
-    zlink::framework::task_t<sa::submit_response_t>
-    handle (const sa::admission_message_t &message)
+    zlink::framework::task_t<sa::admission_res_t>
+    handle (const sa::admission_req_t &message)
     {
-        auto operation = _routes.send_to_channel (sa::channel_name, message);
+        auto operation = _routes.send_to_channel (sa::channel_name, as_msg (message));
         return response_after_submit (message.operation_id, operation.submit ());
     }
 
@@ -620,20 +634,20 @@ class fanout_submit_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::publisher_t>;
-    using request_type = sa::admission_message_t;
-    using reply_type = sa::submit_response_t;
+    using request_type = sa::admission_req_t;
+    using reply_type = sa::admission_res_t;
 
     explicit fanout_submit_handler_t (zlink::framework::publisher_t &publisher) :
         _publisher (publisher)
     {
     }
 
-    zlink::framework::task_t<sa::submit_response_t>
-    handle (const sa::admission_message_t &message)
+    zlink::framework::task_t<sa::admission_res_t>
+    handle (const sa::admission_req_t &message)
     {
         return response_after_submit (
           message.operation_id,
-          _publisher.publish (sa::fanout_channel, "admission", message).submit ());
+          _publisher.publish (sa::fanout_channel, "admission", as_event (message)).submit ());
     }
 
   private:
@@ -645,7 +659,7 @@ class client_server_admission_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<sa::handler_gate_t, sa::evidence_store_t>;
-    using message_type = sa::admission_message_t;
+    using message_type = sa::admission_msg_t;
 
     client_server_admission_handler_t (sa::handler_gate_t &gate,
                                        sa::evidence_store_t &evidence) :
@@ -653,7 +667,7 @@ class client_server_admission_handler_t
     {
     }
 
-    void handle (const sa::admission_message_t &message)
+    void handle (const sa::admission_msg_t &message)
     {
         _evidence.entered (message.operation_id);
         _gate.wait ();
@@ -670,18 +684,18 @@ class client_server_submit_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
-    using request_type = sa::admission_message_t;
-    using reply_type = sa::submit_response_t;
+    using request_type = sa::admission_req_t;
+    using reply_type = sa::admission_res_t;
 
     explicit client_server_submit_handler_t (zlink::framework::channel_client_t &channels) :
         _channels (channels)
     {
     }
 
-    zlink::framework::task_t<sa::submit_response_t>
-    handle (const sa::admission_message_t &message)
+    zlink::framework::task_t<sa::admission_res_t>
+    handle (const sa::admission_req_t &message)
     {
-        auto operation = _channels.send (sa::client_server_channel, message);
+        auto operation = _channels.send (sa::client_server_channel, as_msg (message));
         return response_after_submit (message.operation_id, operation.submit ());
     }
 
@@ -938,13 +952,18 @@ class admission_actor_spot_t final
     void configure () override
     {
         _context.handlers ().add_actor_send<&admission_actor_spot_t::on_admission> (
-          "admission");
+          sa::admission_msg_t::packet_name);
     }
 
     zlink::framework::task_t<zlink::framework::actor_create_response_t>
     on_create_actor (admission_actor_t &,
-                     const zlink::framework::message_t &) override
+                     const zlink::framework::message_t &request) override
     {
+        const auto create = request.decode<sa::actor_create_req_t> ();
+        if (create.actor_id.empty ()) {
+            co_return zlink::framework::actor_create_response_t::reject (
+              "AdmissionActorCreateReq requires actorId");
+        }
         co_return zlink::framework::actor_create_response_t::accept ();
     }
 
@@ -967,7 +986,7 @@ class admission_actor_spot_t final
 
     void on_admission (admission_actor_t &,
                        const zlink::framework::message_context_t &,
-                       const sa::admission_message_t &message)
+                       const sa::admission_msg_t &message)
     {
         _evidence.entered (message.operation_id);
         _evidence.completed (message.operation_id);
@@ -983,8 +1002,8 @@ class ensure_actor_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::session_actor_manager_t>;
-    using request_type = sa::actor_target_t;
-    using reply_type = sa::actor_target_t;
+    using request_type = sa::actor_ensure_req_t;
+    using reply_type = sa::actor_ensure_res_t;
 
     explicit ensure_actor_handler_t (
       zlink::framework::session_actor_manager_t &actors) :
@@ -992,10 +1011,11 @@ class ensure_actor_handler_t
     {
     }
 
-    sa::actor_target_t handle (const sa::actor_target_t &request)
+    sa::actor_ensure_res_t handle (const sa::actor_ensure_req_t &request)
     {
         auto created = _actors.get_or_create (admission_actor_type, request.actor_id,
-                                              zlink::framework::message_t {});
+          zlink::message_t::from_json (
+            sa::actor_create_req_t{.actor_id = request.actor_id}));
         if (!created) {
             throw *created.error ();
         }
@@ -1023,15 +1043,15 @@ class bound_session_submit_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::session_actor_manager_t>;
-    using request_type = sa::actor_relay_request_t;
-    using reply_type = sa::submit_response_t;
+    using request_type = sa::actor_relay_req_t;
+    using reply_type = sa::admission_res_t;
     explicit bound_session_submit_handler_t (zlink::framework::session_actor_manager_t &actors) :
         _actors (actors)
     {
     }
 
-    zlink::framework::task_t<sa::submit_response_t>
-    handle (const sa::actor_relay_request_t &request)
+    zlink::framework::task_t<sa::admission_res_t>
+    handle (const sa::actor_relay_req_t &request)
     {
         const auto actor = _actors.find (request.actor_id);
         if (!actor) {
@@ -1092,8 +1112,8 @@ class submit_admission_stream_session_t final :
       const zlink::message_t &payload) override
     {
         const auto packet_name = std::string (dispatch.packet_name);
-        if (packet_name == "admission-bind-actor") {
-            const auto target = payload.parse_json<sa::actor_target_t> ();
+        if (packet_name == sa::actor_bind_req_t::packet_name) {
+            const auto target = payload.parse_json<sa::actor_bind_req_t> ();
             zlink::framework::actor_ref_t ref (
               zlink::framework::actor_id_t (target.actor_id), target.generation,
               sa::mesh_name,
@@ -1101,7 +1121,7 @@ class submit_admission_stream_session_t final :
             auto bound = co_await _actors.bind_or_get (std::move (ref)).submit ();
             const auto &bound_ref = bound.ref ();
             stream
-              .reply_packet (zlink::message_t::from_json (sa::actor_target_t{
+              .reply_packet (zlink::message_t::from_json (sa::actor_bind_res_t{
                 .operation_id = target.operation_id,
                 .actor_id = std::string (bound_ref.actor_id ().value ()),
                 .node_rid = std::string (bound_ref.node_rid ().value ()),
@@ -1109,8 +1129,8 @@ class submit_admission_stream_session_t final :
               .submit ();
             co_return;
         }
-        if (packet_name == "admission-session-actor-relay") {
-            const auto request = payload.parse_json<sa::actor_relay_request_t> ();
+        if (packet_name == sa::actor_relay_req_t::packet_name) {
+            const auto request = payload.parse_json<sa::actor_relay_req_t> ();
             auto actor = _actors.find (request.actor_id);
             if (!actor) {
                 throw zlink::framework::framework_exception_t (
@@ -1118,19 +1138,24 @@ class submit_admission_stream_session_t final :
                   "session actor relay target was not bound");
             }
             co_await actor->relay (
-              "admission", zlink::message_t::from_json (request.message));
+              sa::admission_msg_t::packet_name,
+              zlink::message_t::from_json (request.message));
             stream
               .reply_packet (zlink::message_t::from_json (
-                sa::submit_response_t{.operation_id = request.message.operation_id,
+                sa::admission_res_t{.operation_id = request.message.operation_id,
                                       .status = "Submitted",
                                       .public_invocation_count = 1,
                                       .terminal_count = 1}))
               .submit ();
             co_return;
         }
-        if (packet_name == "admission-no-reply-token") {
-            const auto message = payload.parse_json<sa::admission_message_t> ();
-            auto invalid = stream.reply_packet (zlink::message_t::from_json (message));
+        if (packet_name == "AdmissionNoTokenMsg") {
+            const auto message = payload.parse_json<sa::admission_msg_t> ();
+            auto invalid = stream.reply_packet (zlink::message_t::from_json (
+              sa::admission_res_t{.operation_id = message.operation_id,
+                                  .status = "UnexpectedReply",
+                                  .public_invocation_count = 1,
+                                  .terminal_count = 1}));
             std::vector<std::string> terminals;
             terminals.push_back (stream_terminal (invalid.submit ().result ()));
             _state.record_reply_race (message.operation_id, std::move (terminals));
@@ -1139,20 +1164,25 @@ class submit_admission_stream_session_t final :
         if (!dispatch.can_reply) {
             co_return;
         }
-        const auto message = payload.parse_json<sa::admission_message_t> ();
-        if (packet_name == "admission-reply-sequential") {
-            auto reply = stream.reply_packet (zlink::message_t::from_json (message));
+        const auto message = payload.parse_json<sa::admission_req_t> ();
+        const auto response = sa::admission_res_t{
+          .operation_id = message.operation_id,
+          .status = "ReplyObserved",
+          .public_invocation_count = 1,
+          .terminal_count = 1};
+        if (packet_name == "AdmissionSequentialReq") {
+            auto reply = stream.reply_packet (zlink::message_t::from_json (response));
             std::vector<std::string> terminals;
             terminals.push_back (stream_terminal (reply.submit ().result ()));
             terminals.push_back (stream_terminal (reply.submit ().result ()));
             _state.record_reply_race (message.operation_id, std::move (terminals));
             co_return;
         }
-        if (packet_name != "admission-reply-race") {
+        if (packet_name != "AdmissionConcurrentReq") {
             co_return;
         }
-        auto first = stream.reply_packet (zlink::message_t::from_json (message));
-        auto second = stream.reply_packet (zlink::message_t::from_json (message));
+        auto first = stream.reply_packet (zlink::message_t::from_json (response));
+        auto second = stream.reply_packet (zlink::message_t::from_json (response));
         std::barrier start (3);
         std::vector<std::string> terminals (2);
         std::thread first_submit ([&] {
@@ -1179,13 +1209,13 @@ class stream_send_handler_t
 {
   public:
     using dependency_types = zlink::framework::dependency_list_t<stream_gateway_state_t>;
-    using request_type = sa::admission_message_t;
-    using reply_type = sa::submit_response_t;
+    using request_type = sa::admission_req_t;
+    using reply_type = sa::admission_res_t;
 
     explicit stream_send_handler_t (stream_gateway_state_t &state) : _state (state) {}
 
-    zlink::framework::task_t<sa::submit_response_t>
-    handle (const sa::admission_message_t &message)
+    zlink::framework::task_t<sa::admission_res_t>
+    handle (const sa::admission_req_t &message)
     {
         auto stream = _state.stream ();
         if (!stream) {
@@ -1193,8 +1223,9 @@ class stream_send_handler_t
               zlink::framework::framework_error_kind_t::unavailable,
               "STREAM peer is not connected");
         }
-        auto operation = stream->write_packet (zlink::message_t::from_json (message));
-        operation.packet_name ("admission");
+        auto operation = stream->write_packet (
+          zlink::message_t::from_json (as_msg (message)));
+        operation.packet_name (sa::admission_msg_t::packet_name);
         return response_after_submit (message.operation_id, operation.submit ());
     }
 
@@ -1237,13 +1268,13 @@ class stream_backpressure_handler_t
                     .body = R"({"error":"backpressure parameters are out of range"})"};
         }
         const auto message = zlink::message_t::from_json (
-          sa::admission_message_t{.operation_id = "stream-timeout-load",
+          sa::admission_msg_t{.operation_id = "stream-timeout-load",
                                   .sequence = 1,
                                   .payload = std::string (payload_bytes, 'x')});
         const auto started = std::chrono::steady_clock::now ();
         for (std::size_t index = 0; index < max_attempts; ++index) {
             auto operation = stream->write_packet (message);
-            operation.packet_name ("admission").timeout (timeout);
+            operation.packet_name (sa::admission_msg_t::packet_name).timeout (timeout);
             const auto attempt_started = std::chrono::steady_clock::now ();
             const auto result = operation.submit ().result ();
             if (!result) {
@@ -1323,8 +1354,9 @@ class stream_peer_state_t
         options.heartbeat.enabled = false;
         options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
         _connector.emplace (zlink::stream_connector::connector_factory_t::create (options));
-        _connector->on<sa::admission_message_t> (
-          "admission", [this] (const sa::admission_message_t &message) {
+        _connector->on<sa::admission_msg_t> (
+          sa::admission_msg_t::packet_name,
+          [this] (const sa::admission_msg_t &message) {
               std::lock_guard lock (_mutex);
               ++_received[message.operation_id];
           });
@@ -1334,10 +1366,10 @@ class stream_peer_state_t
               "STREAM connector could not connect to the SessionGateway");
         }
         _connector
-          ->send (sa::admission_message_t{.operation_id = "stream-session-init",
+          ->send (sa::admission_msg_t{.operation_id = "stream-session-init",
                                           .sequence = 0,
                                           .payload = "ready"})
-          .packet_name ("admission-init")
+          .packet_name ("AdmissionInitMsg")
           .submit ();
     }
 
@@ -1348,35 +1380,35 @@ class stream_peer_state_t
         }
     }
 
-    bool request_reply (const sa::admission_message_t &message, std::string packet_name)
+    bool request_reply (const sa::admission_req_t &message, std::string packet_name)
     {
         auto reply = _connector->request (message)
                        .packet_name (std::move (packet_name))
-                       .submit<sa::admission_message_t> ();
+                       .submit<sa::admission_res_t> ();
         return reply && reply.value ().operation_id == message.operation_id;
     }
 
-    void send_without_reply_token (const sa::admission_message_t &message)
+    void send_without_reply_token (const sa::admission_msg_t &message)
     {
-        _connector->send (message).packet_name ("admission-no-reply-token").submit ();
+        _connector->send (message).packet_name ("AdmissionNoTokenMsg").submit ();
     }
 
-    sa::actor_target_t bind_actor (const sa::actor_target_t &target)
+    sa::actor_bind_res_t bind_actor (const sa::actor_bind_req_t &target)
     {
         auto reply = _connector->request (target)
-                       .packet_name ("admission-bind-actor")
-                       .submit<sa::actor_target_t> ();
+                       .packet_name (sa::actor_bind_req_t::packet_name)
+                       .submit<sa::actor_bind_res_t> ();
         if (!reply) {
             throw std::runtime_error ("STREAM actor bind request failed");
         }
         return reply.value ();
     }
 
-    sa::submit_response_t relay_actor (const sa::actor_relay_request_t &request)
+    sa::admission_res_t relay_actor (const sa::actor_relay_req_t &request)
     {
         auto reply = _connector->request (request)
-                       .packet_name ("admission-session-actor-relay")
-                       .submit<sa::submit_response_t> ();
+                       .packet_name (sa::actor_relay_req_t::packet_name)
+                       .submit<sa::admission_res_t> ();
         if (!reply) {
             throw std::runtime_error ("STREAM session actor relay request failed");
         }
@@ -1400,13 +1432,13 @@ class stream_peer_request_handler_t
 {
   public:
     using dependency_types = zlink::framework::dependency_list_t<stream_peer_state_t>;
-    using request_type = sa::admission_message_t;
-    using reply_type = sa::submit_response_t;
+    using request_type = sa::admission_req_t;
+    using reply_type = sa::admission_res_t;
     explicit stream_peer_request_handler_t (stream_peer_state_t &state) : _state (state) {}
 
-    sa::submit_response_t handle (const sa::admission_message_t &message)
+    sa::admission_res_t handle (const sa::admission_req_t &message)
     {
-        if (!_state.request_reply (message, "admission-reply-race")) {
+        if (!_state.request_reply (message, "AdmissionConcurrentReq")) {
             throw std::runtime_error ("STREAM reply race did not produce the winner reply");
         }
         return {.operation_id = message.operation_id,
@@ -1423,16 +1455,16 @@ class stream_peer_sequential_reply_handler_t
 {
   public:
     using dependency_types = zlink::framework::dependency_list_t<stream_peer_state_t>;
-    using request_type = sa::admission_message_t;
-    using reply_type = sa::submit_response_t;
+    using request_type = sa::admission_req_t;
+    using reply_type = sa::admission_res_t;
     explicit stream_peer_sequential_reply_handler_t (stream_peer_state_t &state) :
         _state (state)
     {
     }
 
-    sa::submit_response_t handle (const sa::admission_message_t &message)
+    sa::admission_res_t handle (const sa::admission_req_t &message)
     {
-        if (!_state.request_reply (message, "admission-reply-sequential")) {
+        if (!_state.request_reply (message, "AdmissionSequentialReq")) {
             throw std::runtime_error ("STREAM sequential reply did not produce the first reply");
         }
         return {.operation_id = message.operation_id,
@@ -1449,13 +1481,13 @@ class stream_peer_no_token_handler_t
 {
   public:
     using dependency_types = zlink::framework::dependency_list_t<stream_peer_state_t>;
-    using request_type = sa::admission_message_t;
-    using reply_type = sa::submit_response_t;
+    using request_type = sa::admission_req_t;
+    using reply_type = sa::admission_res_t;
     explicit stream_peer_no_token_handler_t (stream_peer_state_t &state) : _state (state) {}
 
-    sa::submit_response_t handle (const sa::admission_message_t &message)
+    sa::admission_res_t handle (const sa::admission_req_t &message)
     {
-        _state.send_without_reply_token (message);
+        _state.send_without_reply_token (as_msg (message));
         return {.operation_id = message.operation_id,
                 .status = "Sent",
                 .public_invocation_count = 1,
@@ -1470,10 +1502,10 @@ class stream_peer_bind_actor_handler_t
 {
   public:
     using dependency_types = zlink::framework::dependency_list_t<stream_peer_state_t>;
-    using request_type = sa::actor_target_t;
-    using reply_type = sa::actor_target_t;
+    using request_type = sa::actor_bind_req_t;
+    using reply_type = sa::actor_bind_res_t;
     explicit stream_peer_bind_actor_handler_t (stream_peer_state_t &state) : _state (state) {}
-    sa::actor_target_t handle (const sa::actor_target_t &target)
+    sa::actor_bind_res_t handle (const sa::actor_bind_req_t &target)
     {
         return _state.bind_actor (target);
     }
@@ -1486,10 +1518,10 @@ class stream_peer_relay_actor_handler_t
 {
   public:
     using dependency_types = zlink::framework::dependency_list_t<stream_peer_state_t>;
-    using request_type = sa::actor_relay_request_t;
-    using reply_type = sa::submit_response_t;
+    using request_type = sa::actor_relay_req_t;
+    using reply_type = sa::admission_res_t;
     explicit stream_peer_relay_actor_handler_t (stream_peer_state_t &state) : _state (state) {}
-    sa::submit_response_t handle (const sa::actor_relay_request_t &request)
+    sa::admission_res_t handle (const sa::actor_relay_req_t &request)
     {
         return _state.relay_actor (request);
     }
@@ -1544,11 +1576,11 @@ void configure_mesh_role (zlink::framework::zlink_framework_options_t &framework
                    .set_object_role (zlink::framework::object_role_t::server);
     if (!options.mesh_advertise_host.empty ())
         node.set_advertise_host (options.mesh_advertise_host);
-    node.add_route_send_handler<admission_handler_t, sa::admission_message_t> ();
+    node.add_route_send_handler<admission_handler_t, sa::admission_msg_t> ();
     auto channel = mesh.channel_name (sa::channel_name);
     channel.server ()
       .set_weight (options.role == "target" ? 100 : 0)
-      .add_send_handler<admission_handler_t, sa::admission_message_t> ();
+      .add_send_handler<admission_handler_t, sa::admission_msg_t> ();
     if (!options.peer_endpoint.empty ()) {
         mesh.peer_connections ().connect (options.peer_endpoint);
     }
@@ -1596,10 +1628,10 @@ void configure_saturation_role (
             channel.server ()
               .set_weight (100)
               .add_send_handler<saturation_send_handler_t,
-                                 sa::saturation_prime_message_t> ()
+                                 sa::saturation_prime_msg_t> ()
               .add_request_handler<saturation_request_handler_t,
-                                    sa::admission_message_t,
-                                    sa::submit_response_t> ();
+                                    sa::admission_req_t,
+                                    sa::admission_res_t> ();
         } else {
             channel.client ();
         }
@@ -1643,16 +1675,16 @@ void configure_owner_isolation_role (
           .server ()
           .set_weight (100)
           .add_send_handler<owner_isolation_slow_send_handler_t,
-                             sa::saturation_prime_message_t> ()
+                             sa::saturation_prime_msg_t> ()
           .add_request_handler<owner_isolation_slow_request_handler_t,
-                                sa::admission_message_t,
-                                sa::submit_response_t> ();
+                                sa::admission_req_t,
+                                sa::admission_res_t> ();
         mesh.channel_name (owner_isolation_fast_channel)
           .server ()
           .set_weight (100)
           .add_request_handler<owner_isolation_fast_request_handler_t,
-                                sa::admission_message_t,
-                                sa::submit_response_t> ();
+                                sa::admission_req_t,
+                                sa::admission_res_t> ();
     } else {
         mesh.channel_name (sa::channel_name).client ();
         mesh.channel_name (owner_isolation_fast_channel).client ();
@@ -1698,7 +1730,7 @@ void configure_object_client_role (
     mesh.channel_name (sa::channel_name)
       .server ()
       .set_weight (0)
-      .add_send_handler<admission_handler_t, sa::admission_message_t> ();
+      .add_send_handler<admission_handler_t, sa::admission_msg_t> ();
     if (!options.peer_endpoint.empty ()) {
         mesh.peer_connections ().connect (
           zlink::routing_id_t::from (options.peer_rid), options.peer_endpoint);
@@ -1735,7 +1767,7 @@ void configure_client_server_target_role (
       .set_bind_host ("127.0.0.1")
       .listen (endpoint_port (options.client_server_endpoint))
       .add_send_handler<client_server_admission_handler_t,
-                        sa::admission_message_t> ();
+                        sa::admission_msg_t> ();
     framework.http ()
       .listen (options.http_endpoint)
       .map_health ("/health")

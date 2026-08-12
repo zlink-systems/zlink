@@ -1,4 +1,8 @@
 package systems.zlink.framework.locations.redis;
+import java.io.ByteArrayOutputStream;
+import java.util.Locale;
+import java.util.UUID;
+import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -123,7 +127,7 @@ final class ZLinkRedisLocationKeys {
                 "Entry Spot authority key is invalid",
                 error);
         }
-        var decoded = new java.io.ByteArrayOutputStream(expectedLength);
+        var decoded = new ByteArrayOutputStream(expectedLength);
         String encoded = authorityKey.substring(lengthEnd + 1);
         for (int index = 0; index < encoded.length();) {
             char item = encoded.charAt(index);
@@ -186,7 +190,7 @@ final class ZLinkRedisLocationKeys {
 
     String creationKey(String reservationId) {
         return domainBase() + ":creation:"
-            + reservationId.toLowerCase(java.util.Locale.ROOT);
+            + reservationId.toLowerCase(Locale.ROOT);
     }
 
     String creationTerminalKey(
@@ -197,14 +201,14 @@ final class ZLinkRedisLocationKeys {
             + HexFormat.of().formatHex(sourceRid) + ":"
             + operation.sourceLifecycleGeneration() + ":"
             + String.format(
-                java.util.Locale.ROOT,
+                Locale.ROOT,
                 "%016x%016x",
                 operation.operationIdHigh(),
                 operation.operationIdLow());
     }
 
     String authorityAggregateKey(
-        java.util.UUID aggregateId,
+        UUID aggregateId,
         long generation) {
         return domainBase() + ":aggregate:"
             + uuidHex(aggregateId)
@@ -214,7 +218,7 @@ final class ZLinkRedisLocationKeys {
 
     String relocationCapacityKey(String fence) {
         return domainBase() + ":relocation:"
-            + fence.replace("-", "").toLowerCase(java.util.Locale.ROOT);
+            + fence.replace("-", "").toLowerCase(Locale.ROOT);
     }
 
     String placementCapacityStateKey() {
@@ -226,14 +230,14 @@ final class ZLinkRedisLocationKeys {
     }
 
     String meshNodeDescriptorRowKey(
-        systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey key) {
+        ZLinkMeshNodeDescriptorKey key) {
         return domainBase() + ":descriptor:mesh:"
             + sha256Hex(
                 ZLinkRedisLocationKeyCodec.encodeMeshNodeKey(key));
     }
 
     String meshNodeDescriptorMetadataKey(
-        systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey key) {
+        ZLinkMeshNodeDescriptorKey key) {
         return meshNodeDescriptorMetadataKeyPrefix()
             + sha256Hex(
                 ZLinkRedisLocationKeyCodec.encodeMeshNodeKey(key));
@@ -402,7 +406,7 @@ final class ZLinkRedisLocationKeys {
         return domainBase() + ":capacity:spot-type:reserved";
     }
 
-    String scanKey(java.util.UUID scanId) {
+    String scanKey(UUID scanId) {
         return domainBase() + ":scan:" + uuidHex(scanId);
     }
 
@@ -445,7 +449,7 @@ final class ZLinkRedisLocationKeys {
     String opaqueScanKey(String scanId) {
         return domainBase() + ":opaque:scan:"
             + scanId.replace("-", "")
-                .toLowerCase(java.util.Locale.ROOT);
+                .toLowerCase(Locale.ROOT);
     }
 
     private String domainBase() {
@@ -470,9 +474,9 @@ final class ZLinkRedisLocationKeys {
         }
     }
 
-    private static String uuidHex(java.util.UUID value) {
+    private static String uuidHex(UUID value) {
         return value.toString().replace("-", "")
-            .toLowerCase(java.util.Locale.ROOT);
+            .toLowerCase(Locale.ROOT);
     }
 
 }

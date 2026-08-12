@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.instancespot.owner
 
+
+import java.util.concurrent.ExecutorService
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.sun.net.httpserver.HttpServer
 import java.util.concurrent.Executors
@@ -14,7 +16,7 @@ class OwnerEndpoints(
     private val json: ObjectMapper,
 ) : SmartLifecycle {
     private var server: HttpServer? = null
-    private var executor: java.util.concurrent.ExecutorService? = null
+    private var executor: ExecutorService? = null
 
     override fun start() {
         val http = HttpSupport.server(options.httpEndpoint)
@@ -25,10 +27,10 @@ class OwnerEndpoints(
         }
         http.createContext("/evidence") { exchange -> HttpSupport.write(exchange, json, evidence.snapshot()) }
         http.createContext("/evidence/wait") { exchange ->
-            HttpSupport.write(exchange, json, evidence.waitFor(HttpSupport.read(exchange, json, Contracts.EvidenceWaitRequest::class.java)))
+            HttpSupport.write(exchange, json, evidence.waitFor(HttpSupport.read(exchange, json, Contracts.EvidenceWaitReq::class.java)))
         }
         http.createContext("/gate") { exchange ->
-            val request = HttpSupport.read(exchange, json, Contracts.GateRequest::class.java)
+            val request = HttpSupport.read(exchange, json, Contracts.GateReq::class.java)
             gates.set(request.gateId, request.open)
             HttpSupport.write(exchange, json, request)
         }

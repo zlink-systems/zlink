@@ -12,6 +12,7 @@ import {
   ZLinkFrameworkRuntimeState,
   ZLinkObjectRole,
   ZLinkSpotKind,
+  ZLinkSpotRelocationReadinessMode,
   ZLinkTimerOverrunPolicy,
   ZLinkUserSpotExecutionMode
 } from '../../packages/framework/src/contracts';
@@ -46,11 +47,20 @@ import {
   encodeActorAuthorityIdentity
 } from '../../packages/framework/src/runtime/actors/actor-authority-publication';
 import {
+  decodeSessionRelocationRouted,
+  decodeSessionRelocationSealed,
   decodeMaintenanceReplyRelayAck,
+  encodeSessionRelocationRoute,
+  encodeSessionRelocationRouted,
+  encodeSessionRelocationSeal,
+  encodeSessionRelocationSealed,
   encodeMaintenanceReplyRelay,
   encodeMaintenanceReplyRelayAck,
   encodeServiceWireFrozenActorApplicationRecord,
   type ServiceMaintenanceReplyRelay,
+  type ServiceSessionRelocationRoute,
+  type ServiceSessionRelocationRouted,
+  type ServiceSessionRelocationSeal,
   type ServiceWireRequestSourceFence,
   type ServiceMaintenanceRelocationPrepare,
   type ServiceWireRelocationCandidate,
@@ -90,6 +100,318 @@ test('relocation identity retries zero and local collisions with all 128 entropy
   assert.equal(id, acceptedId);
   assert.deepEqual(observed, [collisionId, acceptedId]);
   assert.equal(entropy.length, 0);
+});
+
+test('production host dispatches binary commands 42 and 44 and sends canonical 43 and 45 ACKs', async () => {
+  const authority = (
+    nodeRid: string,
+    nodeGeneration: bigint,
+    authorityOwnerGeneration: bigint,
+    ownerId: string,
+    ownerLeaseGeneration: bigint,
+    storeVersion: string
+  ) => ({
+    kind: 'snapshot' as const,
+    storeVersion: { value: storeVersion },
+    payload: Buffer.alloc(0),
+    objectGeneration: 5n,
+    authorityOwnerGeneration,
+    ownerId,
+    ownerLeaseGeneration,
+    allocation: {
+      state: 'active',
+      objectKind: 'actor',
+      stableType: 'Player',
+      descriptor: { meshName: 'mesh-a', rid: nodeRid },
+      descriptorLifecycleGeneration: nodeGeneration,
+      capacity: { actors: 1, spots: 0 }
+    },
+    storeNow: new Date()
+  });
+  let currentAuthority = authority('source', 2n, 11n, 'coordinator', 3n, 'store-v17');
+  let targetDescriptorLeaseGeneration = 14n;
+  const sent: Array<{ readonly target: string; readonly bytes: Buffer }> = [];
+  const received: string[] = [];
+  const seal = {
+    relocation: { high: 7n, low: 9n },
+    coordinator: {
+      ownerId: 'coordinator', leaseGeneration: 3n,
+      nodeRid: 'source', nodeGeneration: 2n,
+      expectedAuthorityStoreVersion: 'store-v17'
+    },
+    senderRole: 'source' as const,
+    actor: {
+      actor: { nodeRid: 'source', actorId: 'actor-1', generation: 5n },
+      targetNodeGeneration: 2n,
+      authorityOwnerGeneration: 11n,
+      ownerLeaseGeneration: 3n
+    },
+    session: {
+      sessionOwnerNodeRid: 'session-owner',
+      sessionOwnerNodeGeneration: 4n,
+      sessionOwnerId: 'session-owner-id',
+      sessionOwnerLeaseGeneration: 8n,
+      sessionRid: 'session',
+      bindingGeneration: 6n
+    }
+  };
+  const route = {
+    relocation: seal.relocation,
+    coordinator: seal.coordinator,
+    senderRole: 'target' as const,
+    actor: { nodeRid: 'target', actorId: 'actor-1', generation: 5n },
+    session: seal.session,
+    route: {
+      action: 'commit' as const,
+      previousAuthorityOwnerGeneration: 11n,
+      targetAuthorityOwnerGeneration: 12n,
+      targetNodeRid: 'target',
+      targetNodeGeneration: 6n,
+      replayedHighWater: 41n
+    }
+  };
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    locationStore: () => ({ readAuthority: async () => currentAuthority } as never),
+    liveDescriptors: async () => [{
+      rid: 'target', lifecycleGeneration: 6n,
+      ownerId: 'target-owner', leaseGeneration: targetDescriptorLeaseGeneration
+    }],
+    currentOwner: () => ({ ownerId: 'session-owner-id', leaseGeneration: 8n }),
+    meshNode: () => ({
+      status: () => ({ routingId: 'session-owner', lifecycleGeneration: 4n }),
+      peers: () => [
+        { routingId: 'source', lifecycleGeneration: 2n, state: 3 },
+        { routingId: 'target', lifecycleGeneration: 6n, state: 3 }
+      ],
+      sendToNode: (target: string, bytes: Uint8Array) => {
+        sent.push({ target, bytes: Buffer.from(bytes) });
+        return SubmitResult.Ok;
+      }
+    }),
+    boundSessionRelocation: {
+      receiveSeal: async (value: ServiceSessionRelocationSeal) => {
+        received.push('seal');
+        assert.deepEqual(value, seal);
+        return {
+          relocation: value.relocation,
+          coordinator: value.coordinator,
+          actor: value.actor,
+          session: value.session,
+          lastAcceptedSessionSequence: 41n
+        };
+      },
+      receiveRoute: async (
+        value: ServiceSessionRelocationRoute,
+        targetOwnerLeaseGeneration?: bigint
+      ) => {
+        received.push('route');
+        assert.deepEqual(value, { ...route, actor: { ...route.actor, nodeRid: '' } });
+        assert.equal(targetOwnerLeaseGeneration, 14n);
+        return {
+          relocation: value.relocation,
+          coordinator: value.coordinator,
+          actor: value.actor,
+          session: value.session,
+          action: value.route.action,
+          result: 'applied',
+          currentAuthorityOwnerGeneration: 12n,
+          lastAcceptedSessionSequence: 41n
+        };
+      }
+    }
+  } as never);
+  const dispatch = async (sourceNodeRid: string, bytes: Uint8Array) => {
+    const part = Message.from(bytes);
+    try {
+      assert.equal(await runtime.tryHandleControl('mesh-a', {
+        sourceNodeRid,
+        parts: [part]
+      } as never), true);
+    } finally {
+      part.close();
+    }
+  };
+
+  await dispatch('source', encodeSessionRelocationSeal(seal));
+  assert.deepEqual(received, ['seal']);
+  assert.equal(sent[0]?.target, 'source');
+  assert.equal(decodeSessionRelocationSealed(sent[0]!.bytes)
+    .lastAcceptedSessionSequence, 41n);
+
+  currentAuthority = authority('target', 6n, 12n, 'target-owner', 14n, 'store-v18');
+  await dispatch('target', encodeSessionRelocationRoute(route));
+  assert.deepEqual(received, ['seal', 'route']);
+  assert.equal(sent[1]?.target, 'target');
+  assert.equal(decodeSessionRelocationRouted(sent[1]!.bytes).result, 'applied');
+  targetDescriptorLeaseGeneration = 15n;
+  await dispatch('target', encodeSessionRelocationRoute(route));
+  assert.deepEqual(received, ['seal', 'route', 'route']);
+  assert.equal(sent[2]?.target, 'target');
+  assert.equal(decodeSessionRelocationRouted(sent[2]!.bytes).result, 'applied');
+  await runtime.dispose();
+});
+
+test('session relocation requests single-flight exact bytes and validate late command 43 and 45 ACKs', async () => {
+  const seal: ServiceSessionRelocationSeal = {
+    relocation: { high: 7n, low: 9n },
+    coordinator: {
+      ownerId: 'coordinator', leaseGeneration: 3n,
+      nodeRid: 'source', nodeGeneration: 2n,
+      expectedAuthorityStoreVersion: 'store-v17'
+    },
+    senderRole: 'source',
+    actor: {
+      actor: { nodeRid: 'source', actorId: 'actor-1', generation: 5n },
+      targetNodeGeneration: 2n,
+      authorityOwnerGeneration: 11n,
+      ownerLeaseGeneration: 3n
+    },
+    session: {
+      sessionOwnerNodeRid: 'session-owner',
+      sessionOwnerNodeGeneration: 4n,
+      sessionOwnerId: 'session-owner-id',
+      sessionOwnerLeaseGeneration: 8n,
+      sessionRid: 'session',
+      bindingGeneration: 6n
+    }
+  };
+  const route: ServiceSessionRelocationRoute = {
+    relocation: seal.relocation,
+    coordinator: seal.coordinator,
+    senderRole: 'target',
+    actor: { nodeRid: 'target', actorId: 'actor-1', generation: 5n },
+    session: seal.session,
+    route: {
+      action: 'commit',
+      previousAuthorityOwnerGeneration: 11n,
+      targetAuthorityOwnerGeneration: 12n,
+      targetNodeRid: 'target',
+      targetNodeGeneration: 6n,
+      replayedHighWater: 41n
+    }
+  };
+  const sent: Buffer[] = [];
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    meshNode: () => ({
+      sendToNode: (_target: string, bytes: Uint8Array) => {
+        sent.push(Buffer.from(bytes));
+        return SubmitResult.Ok;
+      }
+    })
+  } as never);
+  const dispatchAck = async (bytes: Uint8Array) => {
+    const part = Message.from(bytes);
+    try {
+      return await runtime.tryHandleControl('mesh-a', {
+        sourceNodeRid: 'session-owner',
+        parts: [part]
+      } as never);
+    } finally {
+      part.close();
+    }
+  };
+  try {
+    const firstSeal = runtime.requestSessionRelocationSeal(
+      'mesh-a', 'session-owner', seal
+    );
+    const duplicateSeal = runtime.requestSessionRelocationSeal(
+      'mesh-a', 'session-owner', seal
+    );
+    assert.equal(firstSeal, duplicateSeal);
+    assert.equal(sent.length, 1);
+    await assert.rejects(
+      runtime.requestSessionRelocationSeal('mesh-a', 'session-owner', {
+        ...seal,
+        coordinator: { ...seal.coordinator, expectedAuthorityStoreVersion: 'different' }
+      }),
+      error => error instanceof Error && /different bytes or target/.test(error.message)
+    );
+    const sealed = {
+      relocation: seal.relocation,
+      coordinator: seal.coordinator,
+      actor: seal.actor,
+      session: seal.session,
+      lastAcceptedSessionSequence: 41n
+    };
+    assert.equal(await dispatchAck(encodeSessionRelocationSealed(sealed)), true);
+    assert.deepEqual(await firstSeal, sealed);
+    assert.equal(await dispatchAck(encodeSessionRelocationSealed(sealed)), true);
+    await assert.rejects(
+      dispatchAck(encodeSessionRelocationSealed({
+        ...sealed,
+        lastAcceptedSessionSequence: 42n
+      })),
+      error => error instanceof Error && /different bytes/.test(error.message)
+    );
+    const retriedSeal = runtime.requestSessionRelocationSeal(
+      'mesh-a', 'session-owner', seal
+    );
+    assert.equal(sent.length, 2);
+    assert.equal(await dispatchAck(encodeSessionRelocationSealed(sealed)), true);
+    assert.deepEqual(await retriedSeal, sealed);
+
+    const firstRoute = runtime.requestSessionRelocationRoute(
+      'mesh-a', 'session-owner', route
+    );
+    const duplicateRoute = runtime.requestSessionRelocationRoute(
+      'mesh-a', 'session-owner', route
+    );
+    assert.equal(firstRoute, duplicateRoute);
+    assert.equal(sent.length, 3);
+    const routed = {
+      relocation: route.relocation,
+      coordinator: route.coordinator,
+      // actor-ref carries actor identity only; the target route lives in
+      // command 44's route union rather than command 45's actor field.
+      actor: { ...route.actor, nodeRid: '' },
+      session: route.session,
+      action: 'commit' as const,
+      result: 'applied' as const,
+      currentAuthorityOwnerGeneration: 12n,
+      lastAcceptedSessionSequence: 41n
+    };
+    assert.equal(await dispatchAck(encodeSessionRelocationRouted(routed)), true);
+    assert.deepEqual(await firstRoute, routed);
+    assert.equal(await dispatchAck(encodeSessionRelocationRouted({
+      ...routed,
+      result: 'alreadyApplied'
+    })), true);
+    await assert.rejects(
+      dispatchAck(encodeSessionRelocationRouted({ ...routed, result: 'stale' })),
+      error => error instanceof Error && /different bytes/.test(error.message)
+    );
+    const retriedRoute = runtime.requestSessionRelocationRoute(
+      'mesh-a', 'session-owner', route
+    );
+    assert.equal(sent.length, 4);
+    const alreadyApplied = { ...routed, result: 'alreadyApplied' as const };
+    assert.equal(await dispatchAck(encodeSessionRelocationRouted(alreadyApplied)), true);
+    assert.deepEqual(await retriedRoute, alreadyApplied);
+
+    for (const [offset, result] of [
+      [1n, 'stale'],
+      [2n, 'sessionOrBindingClosed']
+    ] as const) {
+      const refusedRoute: ServiceSessionRelocationRoute = {
+        ...route,
+        relocation: { ...route.relocation, low: route.relocation.low + offset }
+      };
+      const refused = runtime.requestSessionRelocationRoute(
+        'mesh-a', 'session-owner', refusedRoute
+      );
+      const refusal: ServiceSessionRelocationRouted = {
+        ...routed,
+        relocation: refusedRoute.relocation,
+        result,
+        currentAuthorityOwnerGeneration: 999n,
+        lastAcceptedSessionSequence: 0n
+      };
+      assert.equal(await dispatchAck(encodeSessionRelocationRouted(refusal)), true);
+      assert.deepEqual(await refused, refusal);
+    }
+  } finally {
+    await runtime.dispose();
+  }
 });
 
 test('target shares an in-flight operation across exact control retries', async () => {
@@ -502,11 +824,21 @@ test('two host owners exchange canonical relocation reservation publish replay a
   assert.deepEqual(events.slice(abortStart), ['abort-actor', 'abort-spot', 'abort-capacity']);
 });
 
-test('target opens admission at command 35 pending and converges session routes without command 35 completed', async () => {
+test('target opens admission before cleanup but starts session-route convergence only after Completed', async () => {
   const events: string[] = [];
   const envelope = relocationEnvelope();
   const encodedEnvelope = encodeServiceRelocationEnvelope(envelope);
   const root = { reference: 'shared-root-open', checksumCrc32c: crc32c(encodedEnvelope) };
+  const completedEnvelope = {
+    ...envelope,
+    aggregateGeneration: envelope.aggregateGeneration + 1n,
+    sourceCleanup: 'completed' as const
+  };
+  const encodedCompletedEnvelope = encodeServiceRelocationEnvelope(completedEnvelope);
+  const completedRoot = {
+    reference: 'shared-root-open-completed',
+    checksumCrc32c: crc32c(encodedCompletedEnvelope)
+  };
   const publication = {
     phase: 'sourceCleanupPending' as const,
     reference: root.reference,
@@ -522,6 +854,15 @@ test('target opens admission at command 35 pending and converges session routes 
     [actorKey, relocationAuthority('actor', 'ActorType')]
   ]);
   const publishAuthorities = (phase: 'sourceCleanupPending' | 'sourceCleanupCompleted') => {
+    const durable = phase === 'sourceCleanupPending'
+      ? publication
+      : {
+          ...publication,
+          phase,
+          reference: completedRoot.reference,
+          checksumCrc32c: completedRoot.checksumCrc32c,
+          aggregateGeneration: completedEnvelope.aggregateGeneration
+        };
     for (const [key, current] of authorities) {
       authorities.set(key, {
         ...current,
@@ -531,7 +872,7 @@ test('target opens admission at command 35 pending and converges session routes 
         ownerLeaseGeneration: 8n,
         payload: new ServiceRelocationAuthorityPayloadCodec().publish(
           Buffer.from('authority-state'),
-          { ...publication, phase }
+          durable
         )
       });
     }
@@ -583,6 +924,8 @@ test('target opens admission at command 35 pending and converges session routes 
       read: async (reference: { readonly value: string }) =>
         reference.value === root.reference
           ? foundBlob(encodedEnvelope)
+          : reference.value === completedRoot.reference
+            ? foundBlob(encodedCompletedEnvelope)
           : { kind: 'missing' as const, storeNow: new Date() }
     }),
     currentOwner: () => ({ ownerId: 'owner-target', leaseGeneration: 8n }),
@@ -696,12 +1039,9 @@ test('target opens admission at command 35 pending and converges session routes 
   assert.equal(stage.phase, 'open');
   assert.ok(events.includes('publish-spot'));
   assert.ok(events.includes('publish-actor'));
-
-  // The command 44 -> 42 session-route chain converges in the background and
-  // the command 42 seal release never precedes the command 44 publication.
-  await waitUntil(() => events.includes('cmd42:actor-a'));
-  assert.ok(events.indexOf('cmd44:actor-a') < events.indexOf('cmd42:actor-a'));
-  assert.equal(stage.converged, true);
+  assert.equal(events.includes('cmd44:actor-a'), false);
+  assert.equal(events.includes('cmd42:actor-a'), false);
+  assert.equal(stage.converged, false);
 
   // The stage stays resident until command 35 'completed', so the recovery
   // poller short-circuits instead of restoring the same publication twice.
@@ -709,8 +1049,10 @@ test('target opens admission at command 35 pending and converges session routes 
   await target.recoverPublishedAuthority(authorities.get(spotKey)!);
   assert.equal(events.length, eventCount);
   assert.equal(internals.targetStages.size, 1);
+  assert.equal(events.includes('cmd44:actor-a'), false);
 
-  // Command 35 'completed' only performs relay and durable bookkeeping.
+  // Command 35 'completed' proves durable source cleanup and only then starts
+  // command 44 -> 42 convergence. Admission was already open above.
   publishAuthorities('sourceCleanupCompleted');
   const complete = { kind: 'complete' as const, relocation: prepare.relocation,
     targetAttemptGeneration: prepare.targetAttemptGeneration, coordinator: prepare.coordinator,
@@ -718,13 +1060,17 @@ test('target opens admission at command 35 pending and converges session routes 
     sourceCleanupState: 'completed' as const };
   const completed = await roundTrip(complete);
   assert.equal(completed.kind, 'complete');
+  assert.ok(events.includes('cmd44:actor-a'));
+  await waitUntil(() => events.includes('cmd42:actor-a'));
+  assert.ok(events.indexOf('cmd44:actor-a') < events.indexOf('cmd42:actor-a'));
+  assert.equal(stage.converged, true);
   assert.equal(internals.targetStages.size, 0);
-  assert.deepEqual(events.slice(eventCount), []);
+  assert.deepEqual(events.slice(eventCount), ['cmd44:actor-a', 'cmd42:actor-a']);
   // An exact command 35 retry after completion is answered idempotently.
   assert.deepEqual(await roundTrip(complete), completed);
   // The completed publication is remembered, so recovery stays a no-op.
   await target.recoverPublishedAuthority(authorities.get(spotKey)!);
-  assert.deepEqual(events.slice(eventCount), []);
+  assert.deepEqual(events.slice(eventCount), ['cmd44:actor-a', 'cmd42:actor-a']);
 });
 
 test('production source and target runtimes complete standalone Actor relocation end to end', async () => {
@@ -2022,7 +2368,12 @@ test('production host inventory relocates User Spot aggregate Instance Spot and 
     new RoomSpot() as RoomSpot & { identity: string },
     RoomSpot,
     events,
-    true
+    true,
+    {
+      kind: 'user',
+      executionMode: ZLinkUserSpotExecutionMode.SpotWide,
+      relocationReadiness: ZLinkSpotRelocationReadinessMode.AnyTurnBoundary
+    }
   );
   (roomActivation.spot as RoomSpot & { identity: string }).identity = 'room-a';
   const matchmakerActivation = productionSourceActivation(
@@ -2030,7 +2381,8 @@ test('production host inventory relocates User Spot aggregate Instance Spot and 
     new MatchmakerSpot() as MatchmakerSpot & { identity: string },
     MatchmakerSpot,
     events,
-    false
+    false,
+    { kind: 'instance', objectGeneration: 1n }
   );
   (matchmakerActivation.spot as MatchmakerSpot & { identity: string }).identity =
     'matchmaker-a';
@@ -2674,13 +3026,23 @@ function productionSourceActivation<T extends object>(
   spot: T,
   spotType: new () => T,
   events: string[],
-  withTimer: boolean
+  withTimer: boolean,
+  domain:
+    | {
+        readonly kind: 'user';
+        readonly executionMode: ZLinkUserSpotExecutionMode;
+        readonly relocationReadiness: ZLinkSpotRelocationReadinessMode;
+      }
+    | { readonly kind: 'instance'; readonly objectGeneration: bigint }
 ) {
   return {
     spotId,
     spot,
     spotType,
-    executionMode: ZLinkUserSpotExecutionMode.SpotWide,
+    domain,
+    executionMode: domain.kind === 'user'
+      ? domain.executionMode
+      : ZLinkUserSpotExecutionMode.SpotWide,
     async captureRelocation() {
       events.push(`source-spot-sealed:${spotId}`);
       return {

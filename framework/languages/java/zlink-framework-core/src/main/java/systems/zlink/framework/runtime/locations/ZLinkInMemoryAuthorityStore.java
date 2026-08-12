@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.locations;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityRestore;
+import systems.zlink.framework.runtime.internal.locations.ZLinkPendingObjectCreation;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -133,7 +137,7 @@ final class ZLinkInMemoryAuthorityStore {
                     nextVersion(),
                     now));
             }
-            if (mutation instanceof systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityRestore restore) {
+            if (mutation instanceof ZLinkAuthorityRestore restore) {
                 if (current == null
                     || current.allocation.state()
                         != ZLinkPlacementAllocationState.ACTIVE
@@ -600,7 +604,7 @@ final class ZLinkInMemoryAuthorityStore {
         ZLinkObjectReservation reservation,
         ZLinkCreationOperationTerminal terminal,
         ZLinkCreationTerminalState expectedState) {
-        java.util.Objects.requireNonNull(terminal, "terminal");
+        Objects.requireNonNull(terminal, "terminal");
         if (!reservation.equals(terminal.reservation())) {
             throw new IllegalArgumentException(
                 "terminal reservation must match the exact reservation");
@@ -615,10 +619,10 @@ final class ZLinkInMemoryAuthorityStore {
         }
         byte[] computed;
         try {
-            computed = java.security.MessageDigest
+            computed = MessageDigest
                 .getInstance("SHA-256")
                 .digest(terminal.terminalEnvelope());
-        } catch (java.security.NoSuchAlgorithmException impossible) {
+        } catch (NoSuchAlgorithmException impossible) {
             throw new IllegalStateException(impossible);
         }
         if (!Arrays.equals(computed, terminal.terminalSha256())) {
@@ -839,7 +843,7 @@ final class ZLinkInMemoryAuthorityStore {
                 return completed(
                     ZLinkAggregateCommitResult.ALREADY_COMMITTED);
             }
-            if (state.state == State.ABORTED) {
+            if (state.state != State.PREPARED) {
                 return completed(ZLinkAggregateCommitResult.STALE);
             }
             if (!ownerLeaseIsLive.test(state.request.targetOwner())) {
@@ -920,7 +924,17 @@ final class ZLinkInMemoryAuthorityStore {
             if (!sameAggregate(state, fence)) {
                 return completed(ZLinkAggregateAbortResult.STALE);
             }
+            if (state.state == State.ABORT_TERMINAL_CLEANUP) {
+                return completed(ZLinkAggregateAbortResult.STALE);
+            }
             if (state.state == State.ABORTED) {
+                if (state.retainedAbort) {
+                    //  The retained abort owns the completion root until the
+                    //  exact external Session terminal has been recorded.
+                    //  Generic callers treat ALREADY_ABORTED as permission
+                    //  to delete that root, so they must not observe it here.
+                    return completed(ZLinkAggregateAbortResult.STALE);
+                }
                 return completed(
                     ZLinkAggregateAbortResult.ALREADY_ABORTED);
             }
@@ -933,6 +947,188 @@ final class ZLinkInMemoryAuthorityStore {
                 state.request.capacityBundle(),
                 -1);
             return completed(ZLinkAggregateAbortResult.ABORTED);
+        }
+    }
+
+    public CompletionStage<ZLinkAggregateAbortRecoverySnapshot>
+        retainAggregateAbort(
+            ZLinkAggregateFence fence,
+            ZLinkStoreCancellation cancellation) {
+        synchronized (gate) {
+            AggregateState state = aggregates.get(fence.aggregateId());
+            if (!sameAggregate(state, fence)) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                        "aggregate abort recovery fence differs"));
+            }
+            if (state.state == State.COMMITTED) {
+                return CompletableFuture.failedFuture(
+                    new ZLinkAggregateAbortCommitWonException());
+            }
+            if (state.state == State.ABORT_TERMINAL_CLEANUP) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                        "aggregate abort terminal cleanup already started"));
+            }
+            if (state.state == State.ABORTED
+                    && !state.retainedAbort) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                        "aggregate cannot enter retained abort recovery"));
+            }
+            if (state.state != State.ABORTED) {
+                state.state = State.ABORTED;
+                state.retainedAbort = true;
+                state.storeVersion = nextVersion();
+            }
+            return completed(new ZLinkAggregateAbortRecoverySnapshot(
+                fence,
+                state.storeVersion,
+                state.request));
+        }
+    }
+
+    public CompletionStage<List<ZLinkAggregateAbortRecoverySnapshot>>
+        listRetainedAggregateAborts(
+            ZLinkStoreCancellation cancellation) {
+        synchronized (gate) {
+            return completed(aggregates.values().stream()
+                .filter(value -> value.state == State.ABORTED
+                    && value.retainedAbort)
+                .map(value -> new ZLinkAggregateAbortRecoverySnapshot(
+                    new ZLinkAggregateFence(
+                        value.request.aggregateId(),
+                        value.request.aggregateGeneration()),
+                    value.storeVersion,
+                    value.request))
+                .toList());
+        }
+    }
+
+    public CompletionStage<Optional<ZLinkAggregateAbortCleanupSnapshot>>
+        markAggregateAbortTerminal(
+        ZLinkAggregateFence fence,
+        String expectedStoreVersion,
+        String reference,
+        long checksumCrc32c,
+        ZLinkStoreCancellation cancellation) {
+        Objects.requireNonNull(fence, "fence");
+        Objects.requireNonNull(expectedStoreVersion, "expectedStoreVersion");
+        Objects.requireNonNull(reference, "reference");
+        if (expectedStoreVersion.isBlank() || reference.isBlank()) {
+            throw new IllegalArgumentException(
+                "aggregate abort terminal fence is invalid");
+        }
+        synchronized (gate) {
+            AggregateState state = aggregates.get(fence.aggregateId());
+            if (state == null) {
+                return completed(Optional.empty());
+            }
+            if (!sameAggregate(state, fence)) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                        "aggregate abort cleanup fence differs"));
+            }
+            if (state.state == State.ABORT_TERMINAL_CLEANUP) {
+                if (!reference.equals(state.abortTerminalReference)
+                    || checksumCrc32c
+                        != state.abortTerminalChecksumCrc32c) {
+                    return CompletableFuture.failedFuture(
+                        new IllegalStateException(
+                            "aggregate abort cleanup root differs"));
+                }
+                return completed(Optional.of(abortCleanupSnapshot(
+                    state, fence)));
+            }
+            if (state.state != State.ABORTED
+                || !state.retainedAbort
+                || !expectedStoreVersion.equals(state.storeVersion)) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                        "retained aggregate abort terminal CAS conflicted"));
+            }
+            adjustPending(
+                aggregateTargetAllocation(state.request),
+                state.request.capacityBundle(),
+                -1);
+            state.state = State.ABORT_TERMINAL_CLEANUP;
+            state.retainedAbort = false;
+            state.abortTerminalReference = reference;
+            state.abortTerminalChecksumCrc32c = checksumCrc32c;
+            state.storeVersion = nextVersion();
+            return completed(Optional.of(abortCleanupSnapshot(state, fence)));
+        }
+    }
+
+    public CompletionStage<List<ZLinkAggregateAbortCleanupSnapshot>>
+        listTerminalAggregateAborts(
+            ZLinkStoreCancellation cancellation) {
+        synchronized (gate) {
+            return completed(aggregates.values().stream()
+                .filter(value ->
+                    value.state == State.ABORT_TERMINAL_CLEANUP)
+                .map(value -> abortCleanupSnapshot(
+                    value,
+                    new ZLinkAggregateFence(
+                        value.request.aggregateId(),
+                        value.request.aggregateGeneration())))
+                .toList());
+        }
+    }
+
+    public CompletionStage<Boolean> cleanupTerminalAggregateAbortInventory(
+        ZLinkAggregateAbortCleanupSnapshot cleanup,
+        ZLinkStoreCancellation cancellation) {
+        Objects.requireNonNull(cleanup, "cleanup");
+        synchronized (gate) {
+            AggregateState state = aggregates.get(
+                cleanup.fence().aggregateId());
+            if (state == null) {
+                return completed(false);
+            }
+            requireAbortCleanup(state, cleanup);
+            return completed(true);
+        }
+    }
+
+    public CompletionStage<Boolean> removeTerminalAggregateAbort(
+        ZLinkAggregateAbortCleanupSnapshot cleanup,
+        ZLinkStoreCancellation cancellation) {
+        Objects.requireNonNull(cleanup, "cleanup");
+        synchronized (gate) {
+            AggregateState state = aggregates.get(
+                cleanup.fence().aggregateId());
+            if (state == null) {
+                return completed(true);
+            }
+            requireAbortCleanup(state, cleanup);
+            aggregates.remove(cleanup.fence().aggregateId());
+            return completed(true);
+        }
+    }
+
+    private static ZLinkAggregateAbortCleanupSnapshot abortCleanupSnapshot(
+        AggregateState state,
+        ZLinkAggregateFence fence) {
+        return new ZLinkAggregateAbortCleanupSnapshot(
+            fence,
+            state.storeVersion,
+            state.abortTerminalReference,
+            state.abortTerminalChecksumCrc32c);
+    }
+
+    private static void requireAbortCleanup(
+        AggregateState state,
+        ZLinkAggregateAbortCleanupSnapshot cleanup) {
+        if (!sameAggregate(state, cleanup.fence())
+            || state.state != State.ABORT_TERMINAL_CLEANUP
+            || !cleanup.storeVersion().equals(state.storeVersion)
+            || !cleanup.reference().equals(
+                state.abortTerminalReference)
+            || cleanup.checksumCrc32c()
+                != state.abortTerminalChecksumCrc32c) {
+            throw new IllegalStateException(
+                "aggregate abort cleanup tombstone differs");
         }
     }
 
@@ -1418,7 +1614,7 @@ final class ZLinkInMemoryAuthorityStore {
         ZLinkPlacementCapacityBundle requested = request.capacityBundle();
         return actors == requested.actorSlots()
             && spots == requested.spotSlots()
-            && java.util.Objects.equals(
+            && Objects.equals(
                 expectedSpotType,
                 requested.spotType().orElse(null));
     }
@@ -1707,9 +1903,9 @@ final class ZLinkInMemoryAuthorityStore {
     }
 
     private ZLinkAuthoritySnapshot snapshot(Row row, Instant now) {
-        java.util.Optional<
-            systems.zlink.framework.runtime.internal.locations.ZLinkPendingObjectCreation> pending =
-            java.util.Optional.empty();
+        Optional<
+            ZLinkPendingObjectCreation> pending =
+            Optional.empty();
         if (row.allocation.state()
                 == ZLinkPlacementAllocationState.PENDING) {
             ReservationState state = reservations.values().stream()
@@ -1720,8 +1916,8 @@ final class ZLinkInMemoryAuthorityStore {
                 .findFirst()
                 .orElse(null);
             if (state != null) {
-                pending = java.util.Optional.of(
-                    new systems.zlink.framework.runtime.internal.locations.ZLinkPendingObjectCreation(
+                pending = Optional.of(
+                    new ZLinkPendingObjectCreation(
                             state.reservation
                                 .reservationVersion(),
                             state.request
@@ -1811,7 +2007,8 @@ final class ZLinkInMemoryAuthorityStore {
         RESERVED,
         PREPARED,
         COMMITTED,
-        ABORTED
+        ABORTED,
+        ABORT_TERMINAL_CLEANUP
     }
 
     private static final class ReservationState {
@@ -1834,6 +2031,9 @@ final class ZLinkInMemoryAuthorityStore {
         private State state;
         private String storeVersion;
         private ZLinkAggregateProgress progress;
+        private boolean retainedAbort;
+        private String abortTerminalReference;
+        private long abortTerminalChecksumCrc32c;
 
         private AggregateState(
             ZLinkAggregatePrepareRequest request,

@@ -1,9 +1,12 @@
 package systems.zlink.framework.runtime.mesh;
 
 import java.time.Duration;
+import java.util.function.Consumer;
+import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshBackendAdapter;
+import systems.zlink.framework.runtime.internal.backend.ZLinkMeshApplicationReceiver;
+import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 
@@ -18,7 +21,7 @@ public final class ZLinkMeshNodeRuntime implements AutoCloseable {
         MeshNodeRegistration registration,
         ZLinkMeshBackendAdapter adapter,
         ZLinkBackendContext context) {
-        return start(registration, adapter, context, null, false);
+        return start(registration, adapter, context, null, false, null);
     }
 
     static ZLinkMeshNodeRuntime start(
@@ -31,7 +34,8 @@ public final class ZLinkMeshNodeRuntime implements AutoCloseable {
             adapter,
             context,
             applicationDispatchBudget,
-            false);
+            false,
+            null);
     }
 
     static ZLinkMeshNodeRuntime start(
@@ -39,7 +43,8 @@ public final class ZLinkMeshNodeRuntime implements AutoCloseable {
         ZLinkMeshBackendAdapter adapter,
         ZLinkBackendContext context,
         ZLinkInboundDispatchBudget applicationDispatchBudget,
-        boolean deferServiceReadyPublication) {
+        boolean deferServiceReadyPublication,
+        Consumer<ZLinkMeshDispatchRecord> receiver) {
         ZLinkInternalMeshNode node =
             adapter.createMeshNode(context, registration.meshName());
         boolean started = false;
@@ -51,10 +56,10 @@ public final class ZLinkMeshNodeRuntime implements AutoCloseable {
             node.setAdvertiseHost(registration.advertiseHost());
             node.setObjectRole(
                 registration.objectServer()
-                    ? systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.SERVER
+                    ? ZLinkMeshNodeObjectRole.SERVER
                     : registration.objectRoleEnabled()
-                        ? systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.CLIENT
-                        : systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.NONE);
+                        ? ZLinkMeshNodeObjectRole.CLIENT
+                        : ZLinkMeshNodeObjectRole.NONE);
             node.setPlacementWeight(registration.placementWeight());
             //  The HWM is an accounted byte count and stays 64-bit. The pending
             //  admission capacity is a message count, so a byte HWM larger than
@@ -77,6 +82,12 @@ public final class ZLinkMeshNodeRuntime implements AutoCloseable {
                 registration.configureRouterSocket().mailboxByteBudget());
             if (applicationDispatchBudget != null) {
                 node.setApplicationDispatchBudget(applicationDispatchBudget);
+            }
+            if (receiver instanceof ZLinkMeshApplicationReceiver applicationReceiver) {
+                node.setApplicationReceiver(applicationReceiver);
+            }
+            if (receiver != null) {
+                node.startDispatch(receiver);
             }
             registration.channelWeights().forEach((channelName, weight) -> {
                 node.addChannel(channelName);

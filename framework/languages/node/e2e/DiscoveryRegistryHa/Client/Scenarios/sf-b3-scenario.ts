@@ -5,7 +5,7 @@ import { ensure } from '../Support/scenario-assert';
 
 const INSTANCE_TIMER_PERIOD_MS = 100;
 
-interface ObjectReply {
+interface ObjectRes {
   readonly spotId: string;
   readonly operationId: string;
   readonly payload: string;
@@ -20,7 +20,7 @@ type Evidence = readonly string[];
 
 export async function runSFB3(options: ClientOptions): Promise<void> {
   const spotId = 'sf-b3-instance';
-  const baseline = await postJson<ObjectReply>(options.consumerUrl, '/object/request', {
+  const baseline = await postJson<ObjectRes>(options.consumerUrl, '/object/request', {
     spotId,
     operationId: 'sf-b3-baseline',
     payload: 'sf-b3-baseline'
@@ -50,7 +50,7 @@ export async function runSFB3(options: ClientOptions): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, INSTANCE_TIMER_PERIOD_MS * 2));
   let failed = false;
   try {
-    await postJson<ObjectReply>(options.consumerUrl, '/object/request', {
+    await postJson<ObjectRes>(options.consumerUrl, '/object/request', {
       spotId,
       operationId: 'sf-b3-after-lease',
       payload: 'sf-b3-after-lease'

@@ -1,11 +1,13 @@
 package systems.zlink.e2e.spotservice.shared;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.spots.ZLinkSpotTimerHandler;
 import systems.zlink.framework.spots.ZLinkTimerTick;
 
 public final class TimerOverrunHandler implements ZLinkSpotTimerHandler<TimerScenarioSpot> {
     @Override
-    public java.util.concurrent.CompletionStage<Void> handle(
+    public CompletionStage<Void> handle(
         TimerScenarioSpot spot,
         ZLinkTimerTick tick) {
         try {
@@ -15,6 +17,6 @@ public final class TimerOverrunHandler implements ZLinkSpotTimerHandler<TimerSce
             throw new IllegalStateException("timer overrun interrupted", error);
         }
         spot.overrunTick(tick.deliveryIndex(), tick.skippedTicks());
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 }

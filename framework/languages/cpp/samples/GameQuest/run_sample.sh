@@ -5,9 +5,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../redis-common.sh"
 CPP_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 source "$CPP_ROOT/samples/sample-build-common.sh"
-FLOW_LOG_DIR="${SCRIPT_DIR}/logs"
-mkdir -p "$FLOW_LOG_DIR"
-rm -f "$FLOW_LOG_DIR"/*.log
 zlink_cpp_sample_prepare_build "$CPP_ROOT"
 if [[ ! -x "$BIN_DIR/sample_cpp_framework_gamequest_client" && -x "$BIN_DIR/linux-ninja-debug/sample_cpp_framework_gamequest_client" ]]; then
   BIN_DIR="$BIN_DIR/linux-ninja-debug"
@@ -17,8 +14,9 @@ PIDS=()
 RUN_DIR="$(mktemp -d)"
 RUN_ID="$(basename "$RUN_DIR")-$$-${RANDOM}"
 LOG_DIR="$RUN_DIR/logs"
+FLOW_LOG_DIR="$RUN_DIR/flow-logs"
 REDIS_CONTAINER_NAME=""
-mkdir -p "$LOG_DIR"
+mkdir -p "$LOG_DIR" "$FLOW_LOG_DIR"
 
 cleanup() {
   local code=$?
@@ -49,7 +47,7 @@ cleanup() {
     fi
   done
   if [[ -n "$REDIS_CONTAINER_NAME" ]]; then
-    docker rm -fv "$REDIS_CONTAINER_NAME" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER_NAME" || true
   fi
   rm -rf "$RUN_DIR"
   if [[ "$cleanup_failed" -ne 0 && "$code" -eq 0 ]]; then
@@ -59,26 +57,7 @@ cleanup() {
 }
 trap 'cleanup; status=$?; exit "$status"' EXIT
 
-PORT_ALLOCATION_OUTPUT="$(python3 - <<'PY'
-import socket
-sockets = []
-try:
-    for _ in range(17):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-    print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
-except OSError as error:
-    print(f"SOCKETLESS {error.errno}:{error.strerror}")
-finally:
-    for sock in sockets:
-        sock.close()
-PY
-)"
-if [[ "$PORT_ALLOCATION_OUTPUT" == SOCKETLESS* ]]; then
-  echo "Failed to allocate local TCP ports for the GameQuest sample: ${PORT_ALLOCATION_OUTPUT#SOCKETLESS }" >&2
-  exit 1
-fi
+PORT_ALLOCATION_OUTPUT="$(zlink_sample_allocate_ports 17)"
 read -r GAMEQUEST_RESERVED_PORT GAMEQUEST_API_A_STREAM_PORT GAMEQUEST_API_B_STREAM_PORT GAMEQUEST_API_A_HTTP_PORT GAMEQUEST_API_B_HTTP_PORT GAMEQUEST_MISSION_A_ROUTE_PORT GAMEQUEST_MISSION_B_ROUTE_PORT GAMEQUEST_MISSION_A_SPOT_ROUTE_PORT GAMEQUEST_MISSION_B_SPOT_ROUTE_PORT GAMEQUEST_MISSION_A_SPOT_ROUTER_PORT GAMEQUEST_MISSION_B_SPOT_ROUTER_PORT GAMEQUEST_MISSION_A_SPOT_PORT GAMEQUEST_MISSION_B_SPOT_PORT GAMEQUEST_API_A_SPOT_ROUTER_PORT GAMEQUEST_API_B_SPOT_ROUTER_PORT GAMEQUEST_API_A_SPOT_ROUTE_PORT GAMEQUEST_API_B_SPOT_ROUTE_PORT <<<"$PORT_ALLOCATION_OUTPUT"
 if [[ -z "$GAMEQUEST_RESERVED_PORT" || -z "$GAMEQUEST_API_B_SPOT_ROUTER_PORT" ]]; then
   echo "Failed to allocate local TCP ports for the GameQuest sample." >&2

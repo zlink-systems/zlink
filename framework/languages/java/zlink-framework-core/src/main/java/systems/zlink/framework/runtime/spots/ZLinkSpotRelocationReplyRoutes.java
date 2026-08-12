@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.ArrayList;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -182,7 +183,7 @@ final class ZLinkSpotRelocationReplyRoutes {
             throw new IllegalArgumentException(
                 "committed target reply fence must be positive");
         }
-        List<Route> selected = new java.util.ArrayList<>();
+        List<Route> selected = new ArrayList<>();
         for (byte[] acceptedRecord : acceptedRecords) {
             var frozen = ZLinkServiceFrozenRecordCodec.decodeSpot(
                 acceptedRecord);
@@ -227,7 +228,7 @@ final class ZLinkSpotRelocationReplyRoutes {
             throw new IllegalArgumentException(
                 "committed target reply fence must be positive");
         }
-        List<Route> selected = new java.util.ArrayList<>();
+        List<Route> selected = new ArrayList<>();
         for (byte[] acceptedRecord : acceptedRecords) {
             var frozen = ZLinkServiceFrozenRecordCodec.decodeActor(
                 acceptedRecord);

@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.internal.handlers;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Set;
 
 import java.lang.reflect.Constructor;
 import java.util.LinkedHashMap;
@@ -120,9 +123,9 @@ public interface ZLinkHandlerActivator {
         public Activation openActivation() {
             Activation fallbackActivation = fallback.openActivation();
             return new Activation() {
-                private final java.util.Set<Object> borrowed =
-                    java.util.Collections.newSetFromMap(
-                        new java.util.IdentityHashMap<>());
+                private final Set<Object> borrowed =
+                    Collections.newSetFromMap(
+                        new IdentityHashMap<>());
 
                 @Override
                 public Object create(Class<?> handlerType) {

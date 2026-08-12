@@ -1,4 +1,6 @@
 package systems.zlink.stream.connector;
+import io.netty.channel.ChannelFuture;
+import java.io.EOFException;
 
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
@@ -86,10 +88,10 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
                 result.completeExceptionally(connect.cause());
                 return;
             }
-            Channel connected = ((io.netty.channel.ChannelFuture) connect).channel();
+            Channel connected = ((ChannelFuture) connect).channel();
             connection.channel = connected;
             connected.pipeline()
-                .get(io.netty.handler.ssl.SslHandler.class)
+                .get(SslHandler.class)
                 .handshakeFuture()
                 .addListener(handshake -> {
                     if (handshake.isSuccess()) {
@@ -164,7 +166,7 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
         if (current != null) {
             current.close();
         }
-        fail(new java.io.EOFException("tls transport closed"));
+        fail(new EOFException("tls transport closed"));
     }
 
     private void enqueue(ZLinkStreamWireProtocol.Frame frame) {
@@ -238,7 +240,7 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
 
         @Override
         public void channelInactive(ChannelHandlerContext context) {
-            connection.fail(new java.io.EOFException("tls transport closed"));
+            connection.fail(new EOFException("tls transport closed"));
         }
 
         @Override

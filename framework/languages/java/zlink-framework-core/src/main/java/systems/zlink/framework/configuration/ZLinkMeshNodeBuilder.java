@@ -1,4 +1,5 @@
 package systems.zlink.framework.configuration;
+import systems.zlink.contracts.core.RoutingId;
 
 import java.time.Duration;
 
@@ -16,7 +17,7 @@ public interface ZLinkMeshNodeBuilder {
     ZLinkMeshNodeBuilder setAdvertiseHost(String host);
 
     ZLinkMeshNodeBuilder setRoutingId(
-        systems.zlink.contracts.core.RoutingId routingId);
+        RoutingId routingId);
 
     ZLinkMeshNodeBuilder setRoutingIdPrefix(String prefix);
 

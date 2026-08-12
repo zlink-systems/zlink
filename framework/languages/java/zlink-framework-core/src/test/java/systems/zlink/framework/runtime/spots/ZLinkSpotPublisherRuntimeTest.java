@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.spots;
+import java.time.Duration;
+import java.util.Map;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -32,14 +35,14 @@ final class ZLinkSpotPublisherRuntimeTest {
         try (
             runtime;
             AutoCloseable ignored =
-                systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics
+                ZLinkRuntimeMetrics
                     .install(new systems.zlink.framework.runtime.internal.metrics
                         .ZLinkRuntimeMetrics.Sink() {
                         @Override
                         public void add(
                             String name,
                             long delta,
-                            java.util.Map<String, String> tags) {
+                            Map<String, String> tags) {
                             if (name.contains("multicast")
                                 || name.equals("zlink.fanout.published")) {
                                 publishMetrics.incrementAndGet();
@@ -245,7 +248,7 @@ final class ZLinkSpotPublisherRuntimeTest {
             serializer,
             new ZLinkSpotRouteMessages(serializer),
             parallelism,
-            ignored -> java.time.Duration.ofMillis(100));
+            ignored -> Duration.ofMillis(100));
         AtomicInteger proxyClose = new AtomicInteger();
         ZLinkInternalSpotNode node = (ZLinkInternalSpotNode) Proxy.newProxyInstance(
             ZLinkInternalSpotNode.class.getClassLoader(),

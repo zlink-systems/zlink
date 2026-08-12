@@ -1,4 +1,7 @@
 package systems.zlink.samples.supportchat.server.support.spots.conversationspot;
+import java.util.HashSet;
+import java.util.Objects;
+import java.util.Set;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -30,7 +33,7 @@ public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
     private final SupportActorDirectory directory;
     private final ConversationNotificationPublisher notifications;
     private final Map<String, SupportUserActor> actors = new LinkedHashMap<>();
-    private final java.util.Set<String> pendingJoins = new java.util.HashSet<>();
+    private final Set<String> pendingJoins = new HashSet<>();
     private Conversation conversation;
     private ZLinkTimer idleTimer;
 
@@ -143,15 +146,15 @@ public final class ConversationSpot implements ZLinkSpot<SupportUserActor> {
         publish(change);
         Conversation.Message message = change.events().stream()
             .map(Conversation.Event::message)
-            .filter(java.util.Objects::nonNull)
+            .filter(Objects::nonNull)
             .findFirst()
             .orElseThrow();
         return new Messages.SendChatMessageRes(
             ConversationContracts.message(message), ConversationContracts.state(change.state()));
     }
 
-    public void setTyping(SupportUserActor actor, Messages.SetTypingReq request) {
-        publish(requireConversation().setTyping(actor.participantId(), request.isTyping()));
+    public void setTyping(SupportUserActor actor, Messages.SetTypingMsg message) {
+        publish(requireConversation().setTyping(actor.participantId(), message.isTyping()));
     }
 
     public Messages.CloseConversationRes close(

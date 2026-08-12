@@ -1,4 +1,7 @@
 package systems.zlink.e2e.observabilityops.session;
+import systems.zlink.e2e.automaticturn.shared.PersistentRoomEvents;
+import systems.zlink.e2e.automaticturn.shared.PersistentRoomStateSessionHandler;
+import systems.zlink.framework.channels.ZLinkRouteClient;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Path;
@@ -84,8 +87,8 @@ public final class Program {
     DrainEvidence drainEvidence() { return new DrainEvidence(); }
 
     @Bean(destroyMethod = "close")
-    systems.zlink.e2e.automaticturn.shared.PersistentRoomEvents persistentRoomEvents(SessionOptions config) {
-        return new systems.zlink.e2e.automaticturn.shared.PersistentRoomEvents(
+    PersistentRoomEvents persistentRoomEvents(SessionOptions config) {
+        return new PersistentRoomEvents(
             config.redisLocationEndpoint(), config.locationKeyPrefix());
     }
 
@@ -135,7 +138,7 @@ public final class Program {
             String spotRid = config.sessionDrainSpot();
             if (!spotRid.isBlank()) {
                 spots.getOrCreate(spotRid, Contracts.TARGET_SPOT)
-                    .request(ZLinkMessage.of("drain-hold"))
+                    .request(ZLinkMessage.of(new Contracts.SpotCreateReq("drain-hold")))
                     .submit()
                     .toCompletableFuture().join();
             }
@@ -158,7 +161,7 @@ public final class Program {
 
     @Bean
     ScenarioReqHandler scenarioRequestHandler(
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        ZLinkRouteClient routes,
         SpotHandleResolver spots,
         EvidenceStore evidence) {
         return new ScenarioReqHandler(routes, spots, evidence);
@@ -166,98 +169,98 @@ public final class Program {
 
     @Bean
     ShutdownAwaitSessionHandlers.Wait shutdownAwaitWaitHandler(
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        ZLinkRouteClient routes,
         SpotHandleResolver spots) {
         return new ShutdownAwaitSessionHandlers.Wait(routes, spots);
     }
 
     @Bean
     ShutdownAwaitSessionHandlers.Recovery shutdownAwaitRecoveryHandler(
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        ZLinkRouteClient routes,
         SpotHandleResolver spots) {
         return new ShutdownAwaitSessionHandlers.Recovery(routes, spots);
     }
 
     @Bean
     BindActorsHandler bindActorsHandler(
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        ZLinkRouteClient routes,
         EvidenceStore evidence) {
         return new BindActorsHandler(routes, evidence);
     }
 
     @Bean
     EnsureSpotHandler ensureSpotHandler(
-        systems.zlink.framework.channels.ZLinkRouteClient routes) {
+        ZLinkRouteClient routes) {
         return new EnsureSpotHandler(routes);
     }
 
     @Bean
-    systems.zlink.e2e.automaticturn.shared.PersistentRoomStateSessionHandler persistentRoomStateSessionHandler(
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
-        systems.zlink.framework.spots.SpotHandleResolver spots) {
-        return new systems.zlink.e2e.automaticturn.shared.PersistentRoomStateSessionHandler(
+    PersistentRoomStateSessionHandler persistentRoomStateSessionHandler(
+        ZLinkRouteClient routes,
+        SpotHandleResolver spots) {
+        return new PersistentRoomStateSessionHandler(
             routes, spots);
     }
 
     @Bean
     RemoteSpotAwaitSessionHandler remoteSpotAwaitSessionHandler(
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        ZLinkRouteClient routes,
         SpotHandleResolver spots) {
         return new RemoteSpotAwaitSessionHandler(routes, spots);
     }
 
     @Bean
     SpotCommandHandler.WorkerAwait workerAwaitMsgHandler(
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        ZLinkRouteClient routes,
         SpotHandleResolver spots) {
         return new SpotCommandHandler.WorkerAwait(routes, spots);
     }
 
     @Bean
     SpotCommandHandler.Await awaitCommandHandler(
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        ZLinkRouteClient routes,
         SpotHandleResolver spots) {
         return new SpotCommandHandler.Await(routes, spots);
     }
 
     @Bean
     SpotCommandHandler.AwaitTimeout awaitTimeoutCommandHandler(
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        ZLinkRouteClient routes,
         SpotHandleResolver spots) {
         return new SpotCommandHandler.AwaitTimeout(routes, spots);
     }
 
     @Bean
     SpotCommandHandler.AwaitCancel awaitCancelCommandHandler(
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        ZLinkRouteClient routes,
         SpotHandleResolver spots) {
         return new SpotCommandHandler.AwaitCancel(routes, spots);
     }
 
     @Bean
     SpotCommandHandler.Probe probeCommandHandler(
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        ZLinkRouteClient routes,
         SpotHandleResolver spots) {
         return new SpotCommandHandler.Probe(routes, spots);
     }
 
     @Bean
     SpotCommandHandler.ProbeRequest probeRequestHandler(
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        ZLinkRouteClient routes,
         SpotHandleResolver spots) {
         return new SpotCommandHandler.ProbeRequest(routes, spots);
     }
 
     @Bean
     SpotCommandHandler.TimerStart timerStartCommandHandler(
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        ZLinkRouteClient routes,
         SpotHandleResolver spots) {
         return new SpotCommandHandler.TimerStart(routes, spots);
     }
 
     @Bean
     SpotCommandHandler.TimerStop timerStopCommandHandler(
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        ZLinkRouteClient routes,
         SpotHandleResolver spots) {
         return new SpotCommandHandler.TimerStop(routes, spots);
     }

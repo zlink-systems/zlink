@@ -73,7 +73,7 @@ class SubscriberApplication {
             installDispatchEvidence(state)
             options.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
-            options.addHandlersFromPackageOf(EventMsgHandler::class.java)
+            options.addHandlersFromPackageOf(EventHandler::class.java)
             val channel = options.addFanoutChannel(Contracts.EVENT_CHANNEL)
             if (parsedOptions.mixedMode) {
                 channel.enableSubscriber()
@@ -119,8 +119,8 @@ class SubscriberApplication {
     }
 
     @Bean
-    fun eventMsgHandler(state: EvidenceStore): EventMsgHandler =
-        EventMsgHandler(state)
+    fun eventMsgHandler(state: EvidenceStore): EventHandler =
+        EventHandler(state)
 
     @Bean
     fun locationStore(options: SubscriberOptions): ZLinkRedisLocationStore? =

@@ -10,6 +10,7 @@ import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.CreateGameHttpReq
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.CreateGameHttpRes
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.PlayNodeInfo
+import systems.zlink.samples.kotlin.tictactoe.shared.contracts.TicTacToeGameCreateReq
 
 @RestController
 class CreateGameHttpHandler(
@@ -22,6 +23,7 @@ class CreateGameHttpHandler(
         // --8<-- [start:doc-create]
         val created = spots.create("tictactoe.game")  // 이 stable type을 등록한 node가 후보가 된다.
             .inMesh(SampleNames.SpotMesh)             // Spot을 만들 mesh를 고른다.
+            .request(TicTacToeGameCreateReq(gameName, SampleNames.RequiredLevel))
             .timeout(SampleNames.RequestTimeout)
             .submit()
             .await()                                  // Kotlin의 비동기 완료 terminal이다.

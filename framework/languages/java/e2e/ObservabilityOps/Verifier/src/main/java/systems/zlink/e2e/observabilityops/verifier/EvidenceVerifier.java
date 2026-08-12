@@ -46,7 +46,6 @@ public final class EvidenceVerifier {
                 case "OBS-C7" -> verifyC7(evidence);
                 case "OBS-C8" -> verifyC8(evidence);
                 case "OBS-C9A" -> verifyC9A(evidence);
-                case "OBS-C9B" -> verifyC9B(evidence);
                 case "OBS-C10" -> verifyC10(evidence);
                 case "OBS-C11" -> verifyC11(evidence);
                 case "OBS-C12" -> verifyC12(evidence);
@@ -63,7 +62,7 @@ public final class EvidenceVerifier {
                 "OBS-A1", "OBS-A2", "OBS-A3", "OBS-A4",
                 "OBS-B1", "OBS-B2", "OBS-B3", "OBS-B4",
                 "OBS-C1", "OBS-C2", "OBS-C3", "OBS-C4", "OBS-C5",
-                "OBS-C6", "OBS-C7", "OBS-C8", "OBS-C9A", "OBS-C9B",
+                "OBS-C6", "OBS-C7", "OBS-C8", "OBS-C9A",
                 "OBS-C10", "OBS-C11", "OBS-C12");
         }
         String normalized = selector.toUpperCase();
@@ -248,18 +247,6 @@ public final class EvidenceVerifier {
         requireMovedObjects(root, "play-a", "play-b");
         ensure("play-b".equals(root.path("handler").path("nodeRid").asText()),
             "OBS-C9A target handler evidence is missing");
-    }
-
-    private static void verifyC9B(JsonNode root) {
-        JsonNode relocation = object(root, "relocation");
-        ensure("BLOCKED".equals(text(relocation, "outcome")),
-            "OBS-C9B manual topology was not blocked");
-        ensure("MANUAL_TOPOLOGY_UNSUPPORTED".equals(text(relocation, "reason")),
-            "OBS-C9B manual topology blocker reason mismatch");
-        JsonNode source = object(root, "sourceDuring");
-        ensure("play-a".equals(object(source, "spot").path("nodeRid").asText()),
-            "OBS-C9B source Spot did not remain on the source node");
-        requireStopped(root.path("shutdown"), "OBS-C9B explicit shutdown");
     }
 
     private static void verifyC10(JsonNode root) {

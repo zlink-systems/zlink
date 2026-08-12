@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import systems.zlink.contracts.core.RoutingId;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -98,7 +99,7 @@ final class ZLinkSpotDirectPublishTest {
                 "payload".getBytes(StandardCharsets.UTF_8))) {
             var publicStage = outbound.send(
                     spot,
-                    systems.zlink.contracts.core.RoutingId.from("node"),
+                    RoutingId.from("node"),
                     "spot",
                     1L,
                     payload,

@@ -6,6 +6,25 @@
 인터페이스를 고정한다. Application은 아래 builder로 구성을 선언하고, Framework는 host를 시작할 때
 그 구성이 계약에 맞는지 검사한다.
 
+`ZLinkCodecRegistrar`의 content-type에는 parameter가 없는 ASCII `type/subtype`을 전달한다.
+Registry는 startup에 값 앞뒤의 SP와 TAB을 제거하고 ASCII 대문자를 소문자로 바꾼다. 이 결과가
+registry에서 사용하는 canonical content-type이다. Parameter, 값 내부의 공백 또는 non-ASCII
+token이 있으면 `ZLinkConfigurationException`으로 거부한다. 같은 canonical content-type을 다시
+등록하면 마지막 등록이 앞의 등록을 교체한다.
+
+Framework service wire에서 받은 값은 이미 canonical content-type이어야 한다. 다른 표기의 값은
+`ZLinkFrameworkErrorKind.PROTOCOL_ERROR`로 완료한다.
+
+두 인자 `addSerializer(contentType, serializer)`는 모든 declared message type에 맞는 serializer를
+등록한다. 세 인자 overload는 송신 호출 지점의 declared `Class<?>`를 `Predicate<Class<?>>`에
+전달한다. 둘 이상의 등록이 맞으면 나중에 등록한 serializer를 사용하고, 맞는 등록이 없으면
+Framework JSON serializer를 사용한다. Runtime instance의 구체적인 subclass는 declared type을
+대신하지 않는다.
+
+Registry는 startup 뒤 바뀌지 않는다. 송신 선택 결과는 declared type 1,024개까지 저장하며, 이
+한도에 도달해도 기존 entry를 제거하지 않는다. 그 뒤 처음 보는 type은 송신할 때마다 등록
+목록을 다시 평가하고 결과를 저장하지 않는다.
+
 ```java
 public interface ZLinkFrameworkOptions {
     Duration defaultRequestTimeout();

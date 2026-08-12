@@ -1,4 +1,6 @@
 package systems.zlink.framework;
+import systems.zlink.framework.actors.ZLinkActor;
+import systems.zlink.framework.locationprovider.ZLinkRelocationStore;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -44,7 +46,7 @@ final class RelocationPublicContractTest {
                 .getReturnType());
         assertEquals(
             CompletionStage.class,
-            systems.zlink.framework.locationprovider.ZLinkRelocationStore.class
+            ZLinkRelocationStore.class
                 .getMethod(
                     "put",
                     systems.zlink.framework.locationprovider
@@ -56,7 +58,7 @@ final class RelocationPublicContractTest {
                 .getReturnType());
         assertEquals(
             CompletionStage.class,
-            systems.zlink.framework.locationprovider.ZLinkRelocationStore.class
+            ZLinkRelocationStore.class
                 .getMethod(
                     "read",
                     systems.zlink.framework.locationprovider
@@ -66,7 +68,7 @@ final class RelocationPublicContractTest {
                 .getReturnType());
         assertEquals(
             CompletionStage.class,
-            systems.zlink.framework.locationprovider.ZLinkRelocationStore.class
+            ZLinkRelocationStore.class
                 .getMethod(
                     "renew",
                     systems.zlink.framework.locationprovider
@@ -77,7 +79,7 @@ final class RelocationPublicContractTest {
                 .getReturnType());
         assertEquals(
             CompletionStage.class,
-            systems.zlink.framework.locationprovider.ZLinkRelocationStore.class
+            ZLinkRelocationStore.class
                 .getMethod(
                     "delete",
                     systems.zlink.framework.locationprovider
@@ -106,7 +108,7 @@ final class RelocationPublicContractTest {
             ZLinkActorRelocationAdapter.class
                 .getMethod(
                     "capture",
-                    systems.zlink.framework.actors.ZLinkActor.class,
+                    ZLinkActor.class,
                     ZLinkRelocationCancellation.class)
                 .getReturnType());
         assertEquals(

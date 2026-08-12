@@ -4,9 +4,9 @@ export {
 } from './channel-runtime-manager';
 export { ZLinkClientServerLocationRuntime } from './client-server-location-runtime';
 export {
-  ZLinkRuntimeChannelTransport,
   ZLinkRuntimeRouteTransport,
   type ZLinkChannelClientTransport,
+  type ZLinkChannelClientTransportSource,
   type ZLinkRouteClientTransport,
   type ZLinkSpotPublisherClientTransport
 } from './channel-transports';

@@ -37,25 +37,6 @@ function Cleanup {
     Remove-Item -Recurse -Force $RunDir -ErrorAction SilentlyContinue
 }
 
-function Reserve-Endpoints {
-    param([int]$Count)
-    $listeners = New-Object System.Collections.Generic.List[System.Net.Sockets.TcpListener]
-    $endpoints = New-Object System.Collections.Generic.List[string]
-    try {
-        while ($endpoints.Count -lt $Count) {
-            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse("127.0.0.1"), 0)
-            $listener.Start()
-            $listeners.Add($listener)
-            $endpoints.Add("127.0.0.1:$($listener.LocalEndpoint.Port)")
-        }
-        return $endpoints.ToArray()
-    } finally {
-        foreach ($listener in $listeners) {
-            $listener.Stop()
-        }
-    }
-}
-
 function Wait-Port {
     param([string]$HostName, [int]$Port, [int]$TimeoutSeconds = 60)
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
@@ -98,10 +79,8 @@ function Split-Endpoint {
 
 function Invoke-Gradle {
     param([string[]]$Arguments)
-    & $Gradle "--no-parallel" "--max-workers=1" @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Gradle failed: $($Arguments -join ' ')"
-    }
+    $buildArguments = @("--no-parallel", "--max-workers=1") + $Arguments
+    Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments $buildArguments
 }
 
 function Start-Role {
@@ -147,7 +126,7 @@ function Protect-ConfigFile {
 
 $Status = 1
 try {
-    $endpoints = Reserve-Endpoints 8
+    $endpoints = @(Get-ZlinkSampleApplicationEndpoints -Language Kotlin -Count 8)
     $apiAStream = Split-Endpoint $endpoints[0]
     $apiBStream = Split-Endpoint $endpoints[1]
     $apiAHttp = Split-Endpoint $endpoints[2]
@@ -157,7 +136,7 @@ try {
     $missionAHttp = Split-Endpoint $endpoints[6]
     $missionBHttp = Split-Endpoint $endpoints[7]
 
-    $redisInstance = Start-ZlinkSampleRedis "zlink-redis-kotlin-sample-gamequest"
+    $redisInstance = Start-ZlinkSampleRedis "zlink-redis-kotlin-sample-gamequest" -Language Kotlin
     $RedisContainerId = $redisInstance.ContainerId
     $redisEndpoint = $redisInstance.Endpoint
     $redis = Split-Endpoint $redisEndpoint
@@ -187,8 +166,16 @@ try {
 
     Push-Location "../../.."
     try {
-        & ./gradlew --no-daemon --no-parallel --max-workers=1 :zlink-framework-core:jar :zlink-framework-kotlin:jar :zlink-framework-spring-boot-starter:jar :zlink-framework-locations-redis:jar :zlink-stream-connector:jar --quiet
-        if ($LASTEXITCODE -ne 0) { throw "Framework jar build failed" }
+        Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments @(
+            "--no-daemon",
+            "--no-parallel",
+            "--max-workers=1",
+            ":zlink-framework-core:jar",
+            ":zlink-framework-kotlin:jar",
+            ":zlink-framework-spring-boot-starter:jar",
+            ":zlink-framework-locations-redis:jar",
+            ":zlink-stream-connector:jar",
+            "--quiet")
     } finally {
         Pop-Location
     }

@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CPP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/../redis-common.sh"
+zlink_cpp_e2e_acquire_run_lock "${BASH_SOURCE[0]}" "$@"
+zlink_cpp_e2e_install_cleanup_trap
 BUILD_DIR="$CPP_DIR/build"
 SCENARIO="all"
 E2E_START_ORDER="forward"
@@ -21,8 +23,6 @@ CHILD_SWEEP_SETTLE_SECONDS=1
 PROCESS_SHUTDOWN_TIMEOUT_SECONDS=45
 PROCESS_SHUTDOWN_POLL_SECONDS=0.1
 BIND_HOST="127.0.0.2"
-PORT_BASE=""
-PORT_RANGE=20000
 SKIP_BUILD=0
 INTERNAL_REDIS_ENDPOINT=""
 INTERNAL_REDIS_CONTAINER=""
@@ -38,8 +38,6 @@ while (($# > 0)); do
     --redis-container=*) INTERNAL_REDIS_CONTAINER="${1#*=}" ;;
     --skip-build) SKIP_BUILD=1 ;;
     --bind-host=*) BIND_HOST="${1#*=}" ;;
-    --port-base=*) PORT_BASE="${1#*=}" ;;
-    --port-range=*) PORT_RANGE="${1#*=}" ;;
     --gdb-roles=*) GDB_ROLES="${1#*=}" ;;
     *) echo "Unknown SpotService runner option: $1" >&2; exit 2 ;;
   esac
@@ -66,38 +64,16 @@ print(max(1, math.ceil(timeout / poll)))
 PY
 )"
 
-read -r ROUTE_A ROUTE_B ROUTE_SESSION_A ROUTE_SESSION_B ROUTE_CLIENT ROUTE_STREAM_CLIENT SPOT_A SPOT_B SPOT_SESSION_A SPOT_SESSION_B SPOT_CLIENT PUB_A PUB_B PUB_SESSION_A PUB_SESSION_B PUB_CLIENT PUBLISHER_CLIENT API_CLIENT STREAM_A STREAM_B MULTI_ROUTE_A MULTI_ROUTE_B MULTI_ROUTE_CLIENT_A MULTI_ROUTE_CLIENT_B MULTI_SPOT_A MULTI_SPOT_B MULTI_PUB_A MULTI_PUB_B STREAM_TLS_A HTTP_A HTTP_B HTTP_SESSION_A HTTP_SESSION_B HTTP_GATEWAY HTTP_MULTI_A HTTP_MULTI_B <<<"$(python3 - "$BIND_HOST" "$PORT_BASE" "$PORT_RANGE" <<'PY'
-import random
-import socket
-import sys
-
-sockets = []
-ports = []
-host, base, port_range_text = sys.argv[1:]
-port_range = int(port_range_text)
-start = int(base) if base else 10000
-stop = start + port_range if base else 30000
-available = list(range(start, stop))
-for port in random.sample(available, len(available)):
-    s = socket.socket()
-    try:
-        s.bind((host, port))
-    except OSError:
-        s.close()
-        continue
-    sockets.append(s)
-    ports.append(s.getsockname()[1])
-    if len(ports) == 36:
-        break
-if len(ports) != 36:
-    raise SystemExit(f"failed to allocate 36 local ports, allocated {len(ports)}")
-print(" ".join(f"tcp://{host}:{p}" for p in ports[:28]), end=" ")
-print(f"tls://{host}:{ports[28]}", end=" ")
-print(" ".join(f"http://{host}:{p}" for p in ports[29:]))
-for s in sockets:
-    s.close()
-PY
-)"
+read -r ROUTE_A ROUTE_B ROUTE_SESSION_A ROUTE_SESSION_B ROUTE_CLIENT \
+  ROUTE_STREAM_CLIENT SPOT_A SPOT_B SPOT_SESSION_A SPOT_SESSION_B SPOT_CLIENT \
+  PUB_A PUB_B PUB_SESSION_A PUB_SESSION_B PUB_CLIENT PUBLISHER_CLIENT API_CLIENT \
+  STREAM_A STREAM_B MULTI_ROUTE_A MULTI_ROUTE_B MULTI_ROUTE_CLIENT_A \
+  MULTI_ROUTE_CLIENT_B MULTI_SPOT_A MULTI_SPOT_B MULTI_PUB_A MULTI_PUB_B \
+  STREAM_TLS_A HTTP_A HTTP_B HTTP_SESSION_A HTTP_SESSION_B HTTP_GATEWAY \
+  HTTP_MULTI_A HTTP_MULTI_B <<<"$(zlink_cpp_e2e_allocate_endpoints_for_host \
+    "$BIND_HOST" tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp \
+    tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tls \
+    http http http http http http http)"
 
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="$SCRIPT_DIR/logs/$RUN_ID"
@@ -162,7 +138,7 @@ REDIS_HOST="${REDIS_ENDPOINT%:*}"
 REDIS_TCP_PORT="${REDIS_ENDPOINT##*:}"
 if ! zlink_redis_wait_ready "$REDIS_CONTAINER" "$REDIS_READINESS_TIMEOUT_SECONDS"; then
   if [[ -n "$REDIS_CONTAINER" && "$REDIS_CONTAINER_OWNED" == "1" ]]; then
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
     REDIS_CONTAINER=""
   fi
   exit 1
@@ -186,7 +162,7 @@ raise SystemExit(f"Timed out waiting {timeout:g}s for Redis at {host}:{port}")
 PY
 then
   if [[ -n "$REDIS_CONTAINER" && "$REDIS_CONTAINER_OWNED" == "1" ]]; then
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
     REDIS_CONTAINER=""
   fi
   exit 1
@@ -543,7 +519,7 @@ cleanup() {
     cleanup_failed=1
   fi
   if [[ -n "$REDIS_CONTAINER" && "$REDIS_CONTAINER_OWNED" == "1" ]]; then
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   rm -rf "$CONFIG_DIR"
   if [[ $code -ne 0 ]]; then
@@ -665,28 +641,7 @@ PY
 }
 
 allocate_tcp_endpoint() {
-  python3 - "$BIND_HOST" "$PORT_BASE" "$PORT_RANGE" <<'PY'
-import random
-import socket
-import sys
-
-host, base, port_range_text = sys.argv[1:]
-port_range = int(port_range_text)
-start = int(base) if base else 10000
-stop = start + port_range if base else 30000
-available = list(range(start, stop))
-for port in random.sample(available, len(available)):
-    sock = socket.socket()
-    try:
-        sock.bind((host, port))
-    except OSError:
-        sock.close()
-        continue
-    sock.close()
-    print(f"tcp://{host}:{port}")
-    raise SystemExit(0)
-raise SystemExit("failed to allocate local TCP endpoint")
-PY
+  zlink_cpp_e2e_allocate_endpoints_for_host "$BIND_HOST" tcp
 }
 
 wait_file() {
@@ -1472,7 +1427,7 @@ run_focused_from_all() {
   for attempt in 1 2; do
     child_output="$LOG_DIR/child-$scenario-attempt-$attempt.output.log"
     set +e
-    "$0" "$scenario" --skip-build --start-order="$E2E_START_ORDER" \
+    bash "$0" "$scenario" --skip-build --start-order="$E2E_START_ORDER" \
       --redis-endpoint="$REDIS_ENDPOINT" --redis-container="$REDIS_CONTAINER" \
       2>&1 | tee "$child_output"
     child_status="${PIPESTATUS[0]}"
@@ -1979,7 +1934,7 @@ assert not any((item["actor_id"] == actor or item["spot_id"] == spot)
                for item in play_b["entries"])
 print("scenario SM-B5 evidence passed")
 PY
-  grep -q "surface=spot_actor.*reason=handler_missing.*action=reply_error.*packet=MissingActorPacket" \
+  grep -q "surface=spot_actor.*reason=handler_missing.*action=reply_error.*packet=MissingActorReq" \
     "$LOG_DIR/play-a-flow.log"
   echo "spot-service e2e result=passed"
   exit 0

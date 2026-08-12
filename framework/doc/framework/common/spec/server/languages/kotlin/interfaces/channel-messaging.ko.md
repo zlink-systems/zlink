@@ -135,9 +135,19 @@ inline fun <reified TReply : Any> ZLinkKotlinRouteClient.requestToChannel(
 ): ZLinkKotlinRequestCall<TReply> =
     requestToChannel(channelName, request, TReply::class)
 
-public fun messageOf(value: Any): ZLinkMessage
+public inline fun <reified T : Any> messageOf(value: T): ZLinkMessage
+public fun messageOf(value: Any, declaredType: KClass<*>): ZLinkMessage
 public inline fun <reified T> ZLinkMessage.decode(): T
 ```
+
+첫 번째 `messageOf(...)` overload는 호출 지점의 `T`를 message의 선언 type으로 보존한다. Runtime
+instance가 subtype이더라도 codec selector는 이 선언 type을 사용한다. Java reflection이나 공통 base
+type처럼 호출 지점에서 `T`를 유지할 수 없으면 두 번째 overload에 선언 type을 명시한다.
+
+받은 message에서 첫 `decode<T>()`가 값 또는 실패를 확정한다. 이후 호출은 Java
+`ZLinkMessage.decode(Class<T>)`와 같은 단일 결과를 사용하며 serializer를 다시 호출하지 않는다.
+다른 `T`가 첫 값과 맞지 않으면 `TYPE_MISMATCH`로 끝나고, 첫 호출이 실패했다면 그 실패를
+다시 전달한다.
 
 `ZLinkKotlinRequestCall.yield()`는 Java `yield(...)`의 coroutine bridge일 뿐 임의 suspension을 Yield로
 바꾸지 않는다.
@@ -204,7 +214,8 @@ val reply = routeClient
 
 ```java
 public final class systems.zlink.framework.kotlin.ZLinkMessageExtensionsKt {
-  public static final systems.zlink.framework.messaging.ZLinkMessage messageOf(java.lang.Object);
+  public static final <T> systems.zlink.framework.messaging.ZLinkMessage messageOf(T);
+  public static final systems.zlink.framework.messaging.ZLinkMessage messageOf(java.lang.Object, kotlin.reflect.KClass<?>);
   public static final <T> T decode(systems.zlink.framework.messaging.ZLinkMessage);
 }
 public final class systems.zlink.framework.kotlin.ZLinkRouteMeshExtensionsKt {

@@ -14,8 +14,9 @@ internal sealed class ZLinkStreamSessionSerialExecutor : IAsyncDisposable
     public ZLinkStreamSessionSerialExecutor(
         object executionOwner,
         IZLinkRuntimeFailureReporter errorSink,
-        int capacity = 4096,
-        long applicationByteCapacity = 64L * 1024 * 1024)
+        int capacity = ZLinkSerialExecutionQueue.DefaultApplicationCapacity,
+        long applicationByteCapacity =
+            ZLinkSerialExecutionQueue.DefaultApplicationByteCapacity)
     {
         _queue = new ZLinkSerialExecutionQueue(
             new ZLinkRuntimeTaskRunner(errorSink, _stopSource.Token, executionOwner),

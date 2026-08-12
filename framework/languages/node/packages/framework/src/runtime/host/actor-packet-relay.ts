@@ -40,7 +40,7 @@ import {
   verifyActorMessageFollowPayload
 } from '../actors/actor-message-follow-context';
 import { streamMetadataMap } from '../actors/bound-session-wire';
-import { normalizeRoutingId, routingIdsEqual } from '../routing-id';
+import { decodeRoutingId, normalizeRoutingId, routingIdsEqual } from '../routing-id';
 import { ZLinkSubmitStatus } from '../messaging/submission-result';
 import type { DefaultZLinkSpotManager, ZLinkSpotNodeRuntimeManager } from '../spots';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
@@ -50,6 +50,7 @@ import type {
   ZLinkBoundSessionResponsePort,
   ZLinkStreamActorLookupPort
 } from '../streams/stream-binding-runtime-ports';
+import { actorSessionBindingRuntimeOwnerIfRegistered } from '../streams/actor-session-binding-runtime-owner';
 import {
   decodeStreamHeader,
   encodeStreamHeader,
@@ -61,7 +62,7 @@ import {
 } from '../streams/protocol';
 import type { MeshRouterResolver } from './mesh-router-resolver';
 import { ZLinkRemoteActorPacketTargetStore } from './remote-actor-packet-target-store';
-import type { ZLinkResolvedActorRoute, ZLinkStoreLocationResolvers } from '../locations';
+import type { ZLinkStoreLocationResolvers } from '../locations';
 
 const REMOTE_SESSION_BIND_RETRY_DEADLINE_MS = 30_000;
 const REMOTE_SESSION_BIND_RETRY_INITIAL_DELAY_MS = 25;
@@ -207,8 +208,8 @@ export class ZLinkActorPacketRelay {
             targetNodeRid: normalizeRoutingId(relay.boundSessionTargetNodeRid),
             spotId: normalizeRoutingId(relay.boundSessionSpotId)
           };
-    const header = RuntimeMessage.from(Buffer.from(relay.header, 'base64'));
-    const body = RuntimeMessage.from(Buffer.from(relay.payload, 'base64'));
+    const header = RuntimeMessage.fromOwned(Buffer.from(relay.header, 'base64'));
+    const body = RuntimeMessage.fromOwned(Buffer.from(relay.payload, 'base64'));
     let closeFrameMessages = true;
     try {
       const frameHeader = decodeStreamHeader(messageToBytes(header));
@@ -224,6 +225,9 @@ export class ZLinkActorPacketRelay {
         verifyActorMessageFollowPayload(messageFollowContext, [header, body]);
       }
       const relayNodeRid = relay.actorNodeRid ?? relay.bindingActorNodeRid;
+      const relayNodeRidHex = relay.actorNodeRid === undefined
+        ? relay.bindingActorNodeRidHex
+        : relay.actorNodeRidHex;
       const relayGeneration = relay.actorGeneration ?? relay.bindingActorGeneration;
       const fallbackActorRef = relayNodeRid === undefined
         || relayGeneration === undefined
@@ -233,7 +237,7 @@ export class ZLinkActorPacketRelay {
               actorId: relay.actorId,
               objectGeneration: BigInt(relayGeneration),
               meshName: _routeContext.meshName,
-              nodeRid: normalizeRoutingId(relayNodeRid),
+              nodeRid: decodeRoutingId(relayNodeRid, relayNodeRidHex),
               ...(relay.bindingGeneration === undefined
                 ? {}
                 : { bindingGeneration: BigInt(relay.bindingGeneration) })
@@ -242,7 +246,7 @@ export class ZLinkActorPacketRelay {
               actorId: relay.actorId,
               objectGeneration: BigInt(relayGeneration),
               meshName: _routeContext.meshName,
-              nodeRid: normalizeRoutingId(relayNodeRid),
+              nodeRid: decodeRoutingId(relayNodeRid, relayNodeRidHex),
               ...(relay.bindingGeneration === undefined
                 ? {}
                 : { bindingGeneration: BigInt(relay.bindingGeneration) })
@@ -478,23 +482,23 @@ export class ZLinkActorPacketRelay {
     payload: Message,
     signal?: AbortSignal
   ): Promise<boolean> {
-    const responseTarget = this.options.streamBindingRuntime().captureBoundSessionResponseTarget(actor);
+    const streamRuntime = this.options.streamBindingRuntime();
+    const responseTarget = streamRuntime.captureBoundSessionResponseTarget(actor);
     const localNode = this.options.spotNodeRuntime()?.primaryMeshNode;
     const localNodeRid = localNode === undefined ? undefined : String(localNode.status().routingId);
-    const resolvedRoute = await this.options.actorLocationResolver?.()
-      ?.resolveDirectActorRoute(actor.actorId, signal);
+    const storedRoute = streamRuntime.sessionRouteFence(actor.actorId);
+    const aggregateRoute = actorSessionBindingRuntimeOwnerIfRegistered(streamRuntime)
+      ?.committedRoute(actor.actorId);
+    const storedActorRef = aggregateRoute?.actor ?? storedRoute?.actor ?? actor.ref;
     if (
-      resolvedRoute !== undefined
-      && localNodeRid !== undefined
-      && routingIdsEqual(resolvedRoute.actorRef.nodeRid, localNodeRid)
+      localNodeRid !== undefined
+      && routingIdsEqual(storedActorRef.nodeRid, localNodeRid)
       && this.options.actorManager()?.getState(actor.actorId)?.actor !== undefined
     ) {
       return false;
     }
-    const remoteTarget = resolvedRoute === undefined
-      ? this.options.actorManager()?.getState(actor.actorId)?.remoteActorPacketTarget
-        ?? this.targets.cachedTargetForActor(actor)
-      : actorPacketTargetFromResolvedRoute(resolvedRoute);
+    const remoteTarget = this.options.actorManager()?.getState(actor.actorId)?.remoteActorPacketTarget
+      ?? this.targets.cachedTargetForActor(actor);
     if (remoteTarget === undefined) {
       return false;
     }
@@ -502,13 +506,24 @@ export class ZLinkActorPacketRelay {
     // error through the bound-session route after its handler reaches a
     // terminal state; the source stream must not wait for that handler.
     const returnResponse = false;
-    const header = RuntimeMessage.from(Buffer.from(encodeStreamHeader(frameHeader)));
+    const header = RuntimeMessage.fromOwned(Buffer.from(encodeStreamHeader(frameHeader)));
     let request: Record<string, unknown>;
     try {
-      const messageFollowContext = resolvedRoute === undefined
+      const authority = aggregateRoute?.authorityFence;
+      const messageFollowContext = authority?.ownerId === undefined
+          || authority.ownerNodeGeneration === undefined
         ? undefined
         : createInitialActorMessageFollowContext(
-            resolvedRoute,
+            {
+              meshName: storedActorRef.meshName,
+              actorRef: storedActorRef,
+              actorType: authority.actorType ?? '',
+              ownerNodeGeneration: authority.ownerNodeGeneration,
+              ownerId: authority.ownerId,
+              ownerLeaseGeneration: authority.ownerLeaseGeneration,
+              authorityOwnerGeneration: authority.authorityOwnerGeneration,
+              authorityStoreVersion: authority.authorityStoreVersion ?? ''
+            },
             [header, payload],
             returnResponse,
             undefined,
@@ -521,11 +536,11 @@ export class ZLinkActorPacketRelay {
         routerChannelId: remoteTarget.routerChannelId,
         boundSessionTargetNodeRid: localNodeRid === undefined ? undefined : String(localNodeRid),
         boundSessionSpotId: localNodeRid === undefined ? undefined : String(localNodeRid),
-        bindingActorRef: actor.ref,
+        bindingActorRef: storedActorRef,
         header: messageToBytes(header),
         payload: messageToBytes(payload),
         returnResponse,
-        actorRef: resolvedRoute?.actorRef,
+        actorRef: storedActorRef,
         messageFollowContext
       });
     } finally {
@@ -748,8 +763,8 @@ export class ZLinkActorPacketRelay {
       return false;
     }
     const responseTarget = this.options.streamBindingRuntime().captureBoundSessionResponseTarget(actor);
-    const header = RuntimeMessage.from(Buffer.from(encodeStreamHeader(frameHeader)));
-    const body = RuntimeMessage.from(Buffer.from(messageToBytes(payload)));
+    const header = RuntimeMessage.fromOwned(Buffer.from(encodeStreamHeader(frameHeader)));
+    const body = RuntimeMessage.fromOwned(Buffer.from(messageToBytes(payload)));
     const returnResponse = frameHeader.kind === ZLinkStreamMessageKind.Request
       && frameHeader.requestSeq !== undefined;
     try {
@@ -855,27 +870,6 @@ export class ZLinkActorPacketRelay {
     }
     return manager;
   }
-}
-
-function actorPacketTargetFromResolvedRoute(
-  route: ZLinkResolvedActorRoute
-): ZLinkRemoteActorPacketTarget {
-  if (route.spotId !== undefined) {
-    if (route.enclosingSpotRoute === undefined) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-        `Actor '${route.actorRef.actorId}' enclosing Spot authority is not Ready.`,
-        true
-      );
-    }
-    return route.enclosingSpotRoute;
-  }
-  return {
-    routerChannelId: route.meshName,
-    targetNodeRid: route.actorRef.nodeRid,
-    spotId: route.actorRef.nodeRid,
-    spotKind: ZLinkSpotKind.Entry
-  };
 }
 
 function isValidMessageFollowId(value: string | undefined): value is string {

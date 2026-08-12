@@ -1,5 +1,6 @@
-package systems.zlink.e2e.kotlin.discoveryregistryha.client.Support
+package Support
 
+import systems.zlink.e2e.kotlin.discoveryregistryha.client.Support
 data class DiscoveryApiRes(
     val operation: String,
     val reg1TopologyCount: Int,

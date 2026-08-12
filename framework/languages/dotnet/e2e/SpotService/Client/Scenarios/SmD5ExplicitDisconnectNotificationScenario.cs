@@ -91,7 +91,7 @@ internal static class SmD5ExplicitDisconnectNotificationScenario
                 "SM-D5 callback failure was retried or skipped instead of settling once.");
 
             var blockedProbe = (await sessionA.Get("/location-store/read-probe")
-                .Async<LocationStoreReadProbeSnapshot>()).Body;
+                .Async<LocationStoreReadProbeRes>()).Body;
             ZlinkStreamAssert.Ensure(
                 blockedProbe.MatchingReads == 0,
                 $"SM-D5 physical cleanup performed {blockedProbe.MatchingReads} Location Store reads.");
@@ -161,7 +161,7 @@ internal static class SmD5ExplicitDisconnectNotificationScenario
     {
         _ = await sessionA.Post("/location-store/read-probe/configure")
             .Body(new LocationStoreReadProbeReq(actorIds, blocked))
-            .Async<LocationStoreReadProbeSnapshot>();
+            .Async<LocationStoreReadProbeRes>();
     }
 
     private static async Task<string[]> WaitForEvidenceAsync(

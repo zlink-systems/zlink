@@ -134,24 +134,24 @@ internal static class ProviderEndpoints
             return Results.Ok(new { weight });
         });
         app.MapPost("/profile/route/request", async (
-            ScenarioRoutePing request,
+            ScenarioRouteReq request,
             IZLinkRouteClient route,
             CancellationToken cancellationToken) =>
         {
             var reply = await route.RequestToNode("profile.route", RoutingId.From("api-b"), request)
                 .Timeout(TimeSpan.FromSeconds(5))
-                .Async<ScenarioRoutePong>(cancellationToken);
+                .Async<ScenarioRouteRes>(cancellationToken);
             return Results.Ok(reply);
         });
         app.MapPost("/profile/route/missing", async (
-            ScenarioRoutePing request,
+            ScenarioRouteReq request,
             IZLinkRouteClient route) =>
         {
             try
             {
                 await route.RequestToNode("profile.route", RoutingId.From("missing-rid"), request)
                     .Timeout(TimeSpan.FromMilliseconds(300))
-                    .Async<ScenarioRoutePong>();
+                    .Async<ScenarioRouteRes>();
             }
             catch (ZLinkFrameworkException error) when (
                 error.Kind == ZLinkFrameworkErrorKind.NotFound)
@@ -163,7 +163,7 @@ internal static class ProviderEndpoints
                 "A request to a missing route target completed without NotFound.");
         });
         app.MapPost("/profile/route/target", async (
-            TargetedRoutePing request,
+            TargetedRouteReq request,
             IZLinkRouteClient route,
             CancellationToken cancellationToken) =>
         {
@@ -172,9 +172,9 @@ internal static class ProviderEndpoints
                 var reply = await route.RequestToNode(
                         "profile.route",
                         RoutingId.From(request.TargetRid),
-                        new ScenarioRoutePing(request.Value))
+                        new ScenarioRouteReq(request.Value))
                     .Timeout(TimeSpan.FromSeconds(5))
-                    .Async<ScenarioRoutePong>(cancellationToken);
+                    .Async<ScenarioRouteRes>(cancellationToken);
                 return Results.Ok(new ExpectedFailureRes($"UnexpectedReply:{reply.ProviderRid}"));
             }
             catch (ZLinkFrameworkException error) when (

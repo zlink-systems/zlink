@@ -38,25 +38,6 @@ function Cleanup {
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $RunDir
 }
 
-function Reserve-Ports {
-    param([int]$Count)
-    $listeners = New-Object System.Collections.Generic.List[System.Net.Sockets.TcpListener]
-    $ports = New-Object System.Collections.Generic.List[int]
-    try {
-        while ($ports.Count -lt $Count) {
-            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse("127.0.0.1"), 0)
-            $listener.Start()
-            $listeners.Add($listener)
-            $ports.Add($listener.LocalEndpoint.Port)
-        }
-        return $ports.ToArray()
-    } finally {
-        foreach ($listener in $listeners) {
-            $listener.Stop()
-        }
-    }
-}
-
 function Wait-Port {
     param([int]$Port, [int]$TimeoutSeconds = 45)
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
@@ -77,7 +58,22 @@ function Wait-Port {
     throw "Timed out waiting for port $Port"
 }
 
-function Invoke-Gradle {
+function Wait-LogContains {
+    param(
+        [string]$PathPattern,
+        [string]$Text,
+        [int]$TimeoutSeconds = 60)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (Select-String -Path $PathPattern -Pattern $Text -SimpleMatch -Quiet -ErrorAction SilentlyContinue) {
+            return
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "Timed out waiting for '$Text' in $PathPattern"
+}
+
+function Invoke-GradleRun {
     param([string[]]$Arguments)
     & $Gradle @Arguments
     if ($LASTEXITCODE -ne 0) {
@@ -110,7 +106,7 @@ function Protect-ConfigFile {
 
 $Status = 1
 try {
-    $ports = Reserve-Ports 12
+    $ports = @(Get-ZlinkSampleApplicationPorts -Language Java -Count 12)
     $ApiAPort = $ports[0]
     $ApiBPort = $ports[1]
     $ApiAChannelPort = $ports[2]
@@ -123,12 +119,14 @@ try {
     $PlayBSpotPort = $ports[9]
     $PlayAPubPort = $ports[10]
     $PlayBPubPort = $ports[11]
-    $redis = Start-ZlinkSampleRedis "zlink-redis-java-sample-tictactoe" "redis:7-alpine"
+    $redis = Start-ZlinkSampleRedis "zlink-redis-java-sample-tictactoe" `
+        "redis:7-alpine" -Language Java
     $RedisContainer = $redis.ContainerId
     $RedisEndpoint = $redis.Endpoint
     $RedisKeyPrefix = "zlink:tictactoe:${PID}:$([Guid]::NewGuid().ToString('N')):room:"
 
     $PlayChannels = "tcp://127.0.0.1:$PlayAChannelPort,tcp://127.0.0.1:$PlayBChannelPort"
+    $ApiChannels = "tcp://127.0.0.1:$ApiAChannelPort,tcp://127.0.0.1:$ApiBChannelPort"
     $PlayStreams = "tcp://127.0.0.1:$PlayAStreamPort,tcp://127.0.0.1:$PlayBStreamPort"
     function Write-ApiConfig {
         param([string]$Name, [int]$HttpPort, [int]$ChannelPort)
@@ -154,7 +152,7 @@ try {
             [int]$PeerPubPort)
         $path = Join-Path $RunDir "$Name.properties"
         @(
-        "sample.apiChannelEndpoint=tcp://127.0.0.1:$ApiAChannelPort",
+        "sample.apiChannelEndpoints=$ApiChannels",
         "sample.playChannelEndpoint=tcp://127.0.0.1:$ChannelPort",
         "sample.playEndpoint=tcp://127.0.0.1:$StreamPort",
         "sample.playEndpoints=$PlayStreams",
@@ -176,7 +174,12 @@ try {
     $PlayBConfig = Write-PlayConfig "play-b" $PlayBChannelPort $PlayBStreamPort `
         $PlayBSpotPort $PlayBPubPort $PlayASpotPort $PlayAPubPort
 
-    Invoke-Gradle @("--settings-file", "standalone.settings.gradle.kts", ":Server:installDist", ":Client:installDist", "--quiet")
+    Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments @(
+        "--settings-file",
+        "standalone.settings.gradle.kts",
+        ":Server:installDist",
+        ":Client:installDist",
+        "--quiet")
 
     Start-SampleRole "play" $PlayBConfig "play-b.log"
     Wait-Port $PlayBStreamPort
@@ -192,7 +195,13 @@ try {
     Wait-Port $ApiBPort
     Wait-Port $ApiBChannelPort
 
-    Invoke-Gradle @("--settings-file", "standalone.settings.gradle.kts", ":Client:run", "--quiet", "--args=--api-url http://127.0.0.1:$ApiAPort")
+    Invoke-GradleRun @("--settings-file", "standalone.settings.gradle.kts", ":Client:run", "--quiet", "--args=--api-url http://127.0.0.1:$ApiAPort")
+    $PlayLogs = Join-Path $LogDir "play-*.log"
+    Wait-LogContains $PlayLogs "play stream: existing actor exact identity verified."
+    foreach ($ActorId in @("player-x", "player-o")) {
+        Wait-LogContains $PlayLogs "actor: LeaveGameMsg completed. actor=$ActorId"
+        Wait-LogContains $PlayLogs "tictactoe actor destroy completed actor=$ActorId"
+    }
     Write-Host "PASS TicTacToe.Java"
     $Status = 0
 } finally {

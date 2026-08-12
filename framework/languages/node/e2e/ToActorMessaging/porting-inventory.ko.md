@@ -4,8 +4,7 @@
 
 | 공통 ID | 상태 | Node 구현 | Runner 증거 |
 |---------|------|-----------|-------------|
-| TA-A1 | implemented | `Client/main.ts`가 session stream으로 actor를 bind하고 relay push를 확인한 뒤 caller 서버의 `/send`, `/request`로 no-bind 전달이 기존 bind를 오염시키지 않는지 검증한다. | `run_e2e.sh`가 actor/session/caller/client를 실행하고 `to-actor-messaging e2e result=passed`를 출력한다. |
-| TA-A2 | implemented | `Client/main.ts`의 `TA-A2-unbound-*` 흐름이 session binding 없이 actor ref 기반 send/request를 검증한다. | `run_e2e.sh` client stdout에 scenario marker와 최종 pass marker가 남는다. |
+| TA-A1 | implemented | `Client/main.ts`가 bound·unbound Actor를 함께 만들고 direct send/request를 각각 검증한다. Bound variant의 Session binding과 push는 그대로 유지되고 unbound variant에는 binding이 생기지 않아야 한다. | `run_e2e.sh`가 actor/session/caller/client를 실행하고 `scenario TA-A1 passed`와 `to-actor-messaging e2e result=passed`를 출력한다. |
 | TA-A3 | implemented | `TA-A3-before-bind-*`는 session bind 전 no-bind send/request를 먼저 확인하고, 이후 stream bind와 relay push가 같은 actor에서 성공하는지 확인한다. | actor evidence와 client stdout을 같은 run log 아래에 남긴다. |
 | TA-A4 | implemented | `TA-A4-disconnected-*`가 stream bind를 닫은 뒤 actor row가 유지되는 상태의 send/request를 검증한다. | actor/session/caller 서버 로그와 client stdout이 runner log directory에 저장된다. |
 | TA-B1 | implemented | `TA-B1-missing*`가 없는 actor에 대해 `actorRouteNotFound`를 검증한다. | client runner가 error kind를 확인한 뒤 pass marker를 출력한다. |

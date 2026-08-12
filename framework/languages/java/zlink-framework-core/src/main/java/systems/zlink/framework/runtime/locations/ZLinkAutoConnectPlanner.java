@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.locations;
+import java.util.Locale;
 
 import java.util.HashMap;
 import java.util.List;
@@ -164,7 +165,7 @@ final class ZLinkAutoConnectPlanner {
         String identity = hasRid(peer.nodeRid())
             ? peer.nodeRid().toHex()
             : peer.endpoint();
-        return peer.role().name().toLowerCase(java.util.Locale.ROOT)
+        return peer.role().name().toLowerCase(Locale.ROOT)
             + "|"
             + identity
             + "|"

@@ -183,7 +183,8 @@ callback must be retry-safe.
 ## 2. Handler And Outbound
 
 ```ts
-export interface ZLinkSpotHandlerRegistry {
+export interface ZLinkSpotHandlerRegistry extends ZLinkActorHandlerRegistry {
+    addHandler<THandler>(handlerType: Type<THandler>, packetName?: string): this;
     addPacket<THandler>(handlerType: Type<THandler>): this;
     addSubscribe<THandler>(handlerType: Type<THandler>, channelName: string, topic: string): this;
 }

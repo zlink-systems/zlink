@@ -1,12 +1,14 @@
 package systems.zlink.e2e.spotservice.shared;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.handlers.ZLinkSpotRequest;
 
 public final class TimerActivityResHandler {
     @ZLinkSpotRequest
-    public java.util.concurrent.CompletionStage<Contracts.TimerActivityRes> handle(
+    public CompletionStage<Contracts.TimerActivityRes> handle(
         TimerScenarioSpot spot,
         String request) {
-        return java.util.concurrent.CompletableFuture.completedFuture(spot.status());
+        return CompletableFuture.completedFuture(spot.status());
     }
 }

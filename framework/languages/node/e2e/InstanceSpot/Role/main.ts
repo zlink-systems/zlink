@@ -38,13 +38,13 @@ interface RoleOptions {
   readonly redisKeyPrefix: string;
 }
 
-interface ProbeRequest {
+interface InstanceProbePayload {
   readonly spotId: string;
   readonly operationId: string;
   readonly action: string;
 }
 
-interface ProbeReply {
+interface InstanceProbeRes {
   readonly spotId: string;
   readonly operationId: string;
   readonly action: string;
@@ -58,7 +58,7 @@ interface OperationEvidence {
 }
 
 @ZLinkPacket('InstanceProbeReq')
-class InstanceProbeReq implements ProbeRequest {
+class InstanceProbeReq implements InstanceProbePayload {
   constructor(
     readonly spotId: string,
     readonly operationId: string,
@@ -67,7 +67,7 @@ class InstanceProbeReq implements ProbeRequest {
 }
 
 @ZLinkPacket('InstanceProbeMsg')
-class InstanceProbeMsg implements ProbeRequest {
+class InstanceProbeMsg implements InstanceProbePayload {
   constructor(
     readonly spotId: string,
     readonly operationId: string,
@@ -99,9 +99,9 @@ class ScenarioInstanceSpot implements ZLinkInstanceSpot {
 class InstanceProbeHandler implements ZLinkSpotRequestHandler<
   ScenarioInstanceSpot,
   InstanceProbeReq,
-  ProbeReply
+  InstanceProbeRes
 > {
-  async handle(spot: ScenarioInstanceSpot, request: InstanceProbeReq): Promise<ProbeReply> {
+  async handle(spot: ScenarioInstanceSpot, request: InstanceProbeReq): Promise<InstanceProbeRes> {
     spot.operations += 1;
     record(request.operationId, 'entered');
     record(request.operationId, 'completed');
@@ -231,13 +231,13 @@ async function handleRequest(
     }
     if (request.method === 'POST' && url.pathname === '/instance/request') {
       if (outbound === undefined) return writeJson(response, 409, { error: 'caller role is required' });
-      const body = await readJson(request) as ProbeRequest;
+      const body = await readJson(request) as InstanceProbePayload;
       const reply = await outbound
         .requestToSpot(body.spotId, new InstanceProbeReq(body.spotId, body.operationId, body.action))
         .instanceSpot(spotType)
         .inMesh(meshName)
         .timeout(5_000)
-        .submit<ProbeReply>();
+        .submit<InstanceProbeRes>();
       return writeJson(response, 200, {
         status: 'completed',
         spotId: reply.spotId,
@@ -248,7 +248,7 @@ async function handleRequest(
     }
     if (request.method === 'POST' && url.pathname === '/instance/send') {
       if (outbound === undefined) return writeJson(response, 409, { error: 'caller role is required' });
-      const body = await readJson(request) as ProbeRequest;
+      const body = await readJson(request) as InstanceProbePayload;
       await outbound
         .sendToSpot(body.spotId, new InstanceProbeMsg(body.spotId, body.operationId, body.action))
         .instanceSpot(spotType)

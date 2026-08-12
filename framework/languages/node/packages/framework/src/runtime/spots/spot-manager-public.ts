@@ -29,6 +29,10 @@ import type {
   ServiceUserSpotOperationResult
 } from '../foundation/service-stateful-runtime';
 import type { ZLinkAuthoritySnapshot } from '../../contracts/Locations';
+import {
+  captureZLinkSpotSerialTurn,
+  requireZLinkYieldTurn
+} from '../execution';
 
 export interface ZLinkPublicSpotManagerOptions {
   readonly local: DefaultZLinkSpotManager;
@@ -169,6 +173,7 @@ export class ZLinkPublicSpotManager implements ZLinkSpotManager {
       submitted: false,
       selected: new Set()
     };
+    const turn = captureZLinkSpotSerialTurn();
     const call: ZLinkSpotCreateCall = {
       inMesh: (meshName) => {
         selectOnce(state, 'inMesh');
@@ -194,7 +199,18 @@ export class ZLinkPublicSpotManager implements ZLinkSpotManager {
         generatedIdentity,
         state,
         signal
-      )
+      ),
+      yield: (signal) => {
+        const yieldTurn = requireZLinkYieldTurn(turn);
+        const pending = this.submit(
+          spotId,
+          stableType,
+          generatedIdentity,
+          state,
+          signal
+        );
+        return yieldTurn.yieldPromise(pending);
+      }
     };
     return call;
   }

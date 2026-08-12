@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.locations;
+import java.util.concurrent.CompletionStage;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -164,7 +165,7 @@ final class ZLinkAutoConnectReconcilerTest {
         private RuntimeException failure;
 
         @Override
-        public java.util.concurrent.CompletionStage<List<ZLinkAutoConnectPeer>>
+        public CompletionStage<List<ZLinkAutoConnectPeer>>
             listPeers(
                 ZLinkAutoConnectType type,
                 String meshName,

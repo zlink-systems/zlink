@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.Optional;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
+import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
@@ -13,6 +14,8 @@ import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
 import systems.zlink.framework.runtime.internal.streams.ZLinkStreamErrorPayload;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 final class ActorPacketFrames {
     private ActorPacketFrames() {
@@ -59,6 +62,54 @@ final class ActorPacketFrames {
             replyPacketName,
             Map.of());
         return Message.from(ZLinkStreamFrameCodec.encode(replyHeader, payload.toByteArray()));
+    }
+
+    static Message encodeRoutedReply(
+        ZLinkStreamHeader requestHeader,
+        LocalActorReply reply) {
+        ZLinkStreamHeader replyHeader = ZLinkStreamHeader.createResponse(
+            requestHeader,
+            reply.codec(),
+            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+            requestHeader.packetName(),
+            Map.of());
+        return Message.from(ZLinkStreamFrameCodec.encode(
+            replyHeader,
+            reply.payload().toByteArray()));
+    }
+
+    static LocalActorReply decodeRoutedReply(
+        ZLinkStreamHeader requestHeader,
+        Message frame) {
+        try {
+            ZLinkStreamFrameCodec.DecodedFrame decoded =
+                ZLinkStreamFrameCodec.tryDecode(frame.toByteArray())
+                    .orElseThrow(() -> new IllegalArgumentException(
+                        "routed Actor reply is not a STREAM frame"));
+            ZLinkStreamHeader replyHeader =
+                ZLinkStreamHeaderCodec.decodeOrPlain(decoded.header());
+            if (replyHeader.kind() != ZLinkStreamMessageKind.RESPONSE
+                || !replyHeader.requestSequence().equals(
+                    requestHeader.requestSequence())
+                || !replyHeader.correlationId().equals(
+                    requestHeader.correlationId())
+                || !replyHeader.flowId().equals(requestHeader.flowId())
+                || !replyHeader.flowOrigin().equals(
+                    requestHeader.flowOrigin())) {
+                throw new IllegalArgumentException(
+                    "routed Actor reply does not match its request fence");
+            }
+            return new LocalActorReply(
+                Message.from(decoded.body()),
+                replyHeader.codec());
+        } catch (ZLinkFrameworkException failure) {
+            throw failure;
+        } catch (RuntimeException failure) {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "routed Actor reply STREAM frame is invalid",
+                failure);
+        }
     }
 
     static Message encodeError(Header packetHeader, Throwable error) {

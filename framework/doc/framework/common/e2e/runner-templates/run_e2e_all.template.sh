@@ -3,6 +3,8 @@ set -euo pipefail
 
 # Aggregate e2e runner template.
 # It only stops the current config process and delegates Redis cleanup to it.
+# It does not acquire the language-wide lock; each config runner acquires that
+# lock, so recursive and aggregate runs remain reentrant and sequential.
 # Expected layout:
 #   e2e/redis-common.sh
 #   e2e/run_e2e_all.sh
@@ -84,7 +86,7 @@ run_config_with_retry() {
     set +e
     (
       cd "${SCRIPT_DIR}/${config}" &&
-        exec nice -n 10 timeout "${SCENARIO_TIMEOUT_SECONDS}s" ./run_e2e.sh "${scenario}"
+        exec nice -n 10 timeout "${SCENARIO_TIMEOUT_SECONDS}s" bash ./run_e2e.sh "${scenario}"
     ) > >(tee "${output}") 2>&1 &
     active_config_pid="$!"
     wait "${active_config_pid}"

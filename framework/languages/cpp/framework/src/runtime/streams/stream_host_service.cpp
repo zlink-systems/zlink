@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/streams/stream_host_service.hpp"
+#include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/transport/listener_identity.hpp"
 #include "runtime/configuration/service_scope.hpp"
 #include "runtime/dispatch/receive_batch_budget.hpp"
@@ -763,11 +764,6 @@ std::vector<std::uint8_t> read_exact (TStream &socket,
     return bytes;
 }
 
-std::vector<std::uint8_t> message_bytes (const zlink::message_t &message)
-{
-    return message.to_bytes ();
-}
-
 zlink::message_t message_from_bytes (const std::vector<std::uint8_t> &bytes)
 {
     return zlink::message_t::from (bytes);
@@ -1043,35 +1039,69 @@ class stream_host_service_t::listener_t
 
         std::mutex gate;
         zlink::routing_id_t session_rid;
-        packet_stream_session_t *session = nullptr;
         stream_t stream;
         std::map<std::string, actor_binding_t> actor_bindings;
         std::atomic_bool closing{false};
+        bool accepting_replacements = true;
         std::function<void ()> close_connection;
+        detail::stream_runtime_t::actor_binding_replaced_dispatch_t
+          dispatch_replacement;
         detail::actor_gateway_runtime_t actor_gateway;
         std::shared_ptr<detail::bound_session_replacement_handler_t>
           handler;
 
         replacement_session_state_t (
           zlink::routing_id_t session_rid_,
-          packet_stream_session_t &session_,
           stream_t stream_,
           std::function<void ()> close_connection_,
+          detail::stream_runtime_t::actor_binding_replaced_dispatch_t
+            dispatch_replacement_,
           detail::actor_gateway_runtime_t actor_gateway_) :
             session_rid (std::move (session_rid_)),
-            session (&session_),
             stream (std::move (stream_)),
             close_connection (std::move (close_connection_)),
+            dispatch_replacement (std::move (dispatch_replacement_)),
             actor_gateway (std::move (actor_gateway_))
         {
         }
 
         ~replacement_session_state_t ()
         {
-            if (handler) {
-                actor_gateway.unregister_bound_session_replacement_handler (
-                  session_rid, handler);
+            deactivate ();
+        }
+
+        void deactivate () noexcept
+        {
+            std::shared_ptr<detail::bound_session_replacement_handler_t>
+              registered;
+            {
+                const std::lock_guard lock (gate);
+                accepting_replacements = false;
+                registered = std::move (handler);
             }
+            if (!registered)
+                return;
+            try {
+                actor_gateway.unregister_bound_session_replacement_handler (
+                  session_rid, registered);
+            }
+            catch (...) {
+            }
+        }
+
+        task_t<void> dispatch_if_active (stream_t &dispatch_stream,
+                                         std::string actor_id)
+        {
+            detail::stream_runtime_t::actor_binding_replaced_dispatch_t
+              dispatch;
+            {
+                const std::lock_guard lock (gate);
+                if (!accepting_replacements || !dispatch_replacement) {
+                    return task_t<void> (result_t<void>::success ());
+                }
+                dispatch = dispatch_replacement;
+            }
+            return dispatch (dispatch_stream, std::move (actor_id));
         }
 
         bool exact (
@@ -1099,21 +1129,20 @@ class stream_host_service_t::listener_t
                                    session_actor_manager_t *actors,
                                    runtime::stateful::stream_session_registry_t *registry,
                                    std::optional<runtime::stateful::stream_connection_t>
-                                     transport_connection,
-                                   std::shared_ptr<replacement_session_state_t>
-                                     replacement) :
-            scope (std::move (scope)),
-            session (session),
+                                     transport_connection) :
+            scope (std::move (scope)), session (session),
             stream (std::move (stream)),
             actors (actors),
             registry (registry),
-            transport_connection (std::move (transport_connection)),
-            replacement (std::move (replacement))
+            transport_connection (std::move (transport_connection))
         {
         }
 
         ~stream_connection_state_t ()
         {
+            if (replacement) {
+                replacement->deactivate ();
+            }
             if (actors != nullptr) {
                 detail::session_actor_manager_access_t::disconnect (*actors);
             }
@@ -1161,7 +1190,8 @@ class stream_host_service_t::listener_t
     std::size_t active_session_count ()
     {
         std::scoped_lock lock (_active_streams_mutex, _core_sessions_mutex);
-        return _active_streams.size () + _core_sessions.size ();
+        return _active_streams.size () + _core_sessions.size ()
+               + _retired_core_sessions.size ();
     }
 
     void begin_drain_sessions ()
@@ -1466,19 +1496,19 @@ class stream_host_service_t::listener_t
         std::shared_ptr<replacement_session_state_t> replacement;
         std::mutex gate;
         bool connected = false;
+        bool closing = false;
+        bool finalized = false;
 
         core_session_t (detail::service_scope_t scope_,
                         packet_stream_session_t &session_,
                         session_actor_manager_t &actors_,
                         stream_t stream_,
-                        runtime::stateful::stream_connection_t transport_connection_,
-                        std::shared_ptr<replacement_session_state_t> replacement_) :
+                        runtime::stateful::stream_connection_t transport_connection_) :
             scope (std::move (scope_)),
             session (&session_),
             actors (&actors_),
             stream (std::move (stream_)),
-            transport_connection (std::move (transport_connection_)),
-            replacement (std::move (replacement_))
+            transport_connection (std::move (transport_connection_))
         {
         }
     };
@@ -1492,36 +1522,13 @@ class stream_host_service_t::listener_t
                                     const stream_header_t &header,
                                     const zlink::message_t &payload)
     {
-        auto encoded = _runtime.encode_header (header);
+        auto encoded = _runtime.encode_frame (header, payload);
         if (!encoded) {
             return result_t<void>::failure (
               encoded.error_kind (),
-              encoded.error () ? encoded.error ()->what () : "STREAM header encode failed");
+              encoded.error () ? encoded.error ()->what () : "STREAM frame encode failed");
         }
-
-        const auto payload_bytes = payload.to_bytes ();
-        if (encoded.value ().size () > std::numeric_limits<std::uint16_t>::max ()
-            || payload_bytes.size () > std::numeric_limits<std::uint32_t>::max ()) {
-            return result_t<void>::failure (
-              framework_error_kind_t::protocol_error,
-              "Core STREAM frame is too large");
-        }
-
-        std::vector<std::uint8_t> bytes;
-        bytes.reserve (6 + encoded.value ().size () + payload_bytes.size ());
-        const auto header_size = encoded.value ().size ();
-        bytes.push_back (static_cast<std::uint8_t> ((header_size >> 8) & 0xff));
-        bytes.push_back (static_cast<std::uint8_t> (header_size & 0xff));
-        bytes.push_back (
-          static_cast<std::uint8_t> ((payload_bytes.size () >> 24) & 0xff));
-        bytes.push_back (
-          static_cast<std::uint8_t> ((payload_bytes.size () >> 16) & 0xff));
-        bytes.push_back (
-          static_cast<std::uint8_t> ((payload_bytes.size () >> 8) & 0xff));
-        bytes.push_back (static_cast<std::uint8_t> (payload_bytes.size () & 0xff));
-        bytes.insert (bytes.end (), encoded.value ().begin (), encoded.value ().end ());
-        bytes.insert (bytes.end (), payload_bytes.begin (), payload_bytes.end ());
-        auto frame = zlink::message_t::from (bytes);
+        auto frame = zlink::message_t::from (std::move (encoded.value ()));
 
         std::lock_guard socket_lock (_core_socket_mutex);
         if (!_core_socket) {
@@ -1655,13 +1662,14 @@ class stream_host_service_t::listener_t
                         }
                         throw std::runtime_error ("Framework STREAM recv failed");
                     }
+                    detail::backend::binding_received_release_t received_release (
+                      received);
                     process_core_received (received, batch);
                     if (received.routing_id ()) {
                         trace_stream_host ("core-recv", _stream, std::nullopt,
                                            "rid=" + received.routing_id ()->to_hex () + " parts="
                                              + std::to_string (received.parts ().size ()));
                     }
-                    received.close ();
                 }
             }
             catch (...) {
@@ -1711,17 +1719,16 @@ class stream_host_service_t::listener_t
               std::nullopt, "reason=session-fence-mismatch");
             return;
         }
-        {
-            const std::lock_guard lock (state->gate);
-            if (state->closing.load (std::memory_order_acquire)
-                || !state->exact (replacement)) {
-                trace_stream_host (
-                  "actor-binding-replacement-rejected", _stream,
-                  std::nullopt, "reason=binding-fence-mismatch");
-                return;
-            }
-            state->closing.store (true, std::memory_order_release);
+        std::unique_lock admission_lock (state->gate);
+        if (!state->accepting_replacements
+            || state->closing.load (std::memory_order_acquire)
+            || !state->exact (replacement)) {
+            trace_stream_host (
+              "actor-binding-replacement-rejected", _stream,
+              std::nullopt, "reason=binding-fence-mismatch");
+            return;
         }
+        state->closing.store (true, std::memory_order_release);
         trace_stream_host (
           "actor-binding-replacement-admitted", _stream,
           std::nullopt, "actor="
@@ -1785,9 +1792,19 @@ class stream_host_service_t::listener_t
           };
         const auto submitted =
           _runtime.dispatch_actor_binding_replaced_async (
-            *state->session, state->stream,
+            state->stream,
             replacement_copy.actor_authority.actor_id,
+            [weak] (stream_t &dispatch_stream,
+                    std::string actor_id) {
+                const auto current = weak.lock ();
+                if (!current) {
+                    return task_t<void> (result_t<void>::success ());
+                }
+                return current->dispatch_if_active (
+                  dispatch_stream, std::move (actor_id));
+            },
             completed);
+        admission_lock.unlock ();
         if (!submitted)
             completed (submitted);
     }
@@ -1795,16 +1812,17 @@ class stream_host_service_t::listener_t
     std::shared_ptr<replacement_session_state_t>
     register_replacement_session (
       const zlink::routing_id_t &session_rid,
-      packet_stream_session_t &session,
       const stream_t &stream,
-      std::function<void ()> close_connection)
+      std::function<void ()> close_connection,
+      detail::stream_runtime_t::actor_binding_replaced_dispatch_t
+        dispatch_replacement)
     {
         auto actor_gateway =
           _services->get_required<detail::actor_gateway_runtime_t> ();
         auto state = std::make_shared<replacement_session_state_t> (
-          session_rid, session, stream, std::move (close_connection),
-          actor_gateway);
-        state->handler =
+          session_rid, stream, std::move (close_connection),
+          std::move (dispatch_replacement), actor_gateway);
+        auto registered =
           actor_gateway.register_bound_session_replacement_handler (
             session_rid,
             [this, weak = std::weak_ptr<replacement_session_state_t> (
@@ -1814,6 +1832,10 @@ class stream_host_service_t::listener_t
                     begin_actor_binding_replacement (
                       current, replacement);
             });
+        {
+            const std::lock_guard lock (state->gate);
+            state->handler = std::move (registered);
+        }
         return state;
     }
 
@@ -1821,8 +1843,21 @@ class stream_host_service_t::listener_t
       const runtime::stateful::stream_connection_t &transport_connection,
       const zlink::routing_id_t &session_rid,
       const actor_ref_t &actor,
-      const std::shared_ptr<replacement_session_state_t> &replacement)
+      const std::shared_ptr<replacement_session_state_t> &replacement,
+      detail::application_actor_session_bind_attempt_t bind_attempt =
+        detail::application_actor_session_bind_attempt_t::initial,
+      std::optional<std::chrono::steady_clock::time_point>
+        retry_deadline = std::nullopt)
     {
+        const auto binding_deadline = retry_deadline.value_or (
+          std::chrono::steady_clock::now () + std::chrono::seconds (5));
+        if (bind_attempt
+              == detail::application_actor_session_bind_attempt_t::retry
+            && std::chrono::steady_clock::now () >= binding_deadline) {
+            return result_t<void>::failure (
+              framework_error_kind_t::deadline_exceeded,
+              "Actor session binding deadline elapsed");
+        }
         if (!_mesh_node) {
             return result_t<void>::failure (
               framework_error_kind_t::not_configured,
@@ -1856,13 +1891,45 @@ class stream_host_service_t::listener_t
             const auto resolved =
               _mesh_node->native_node ().resolve_actor (native_actor);
             if (!resolved) {
+                const auto outcome =
+                  detail::application_actor_session_bind_outcome_t::
+                    actor_not_ready;
+                if (detail::can_retry_application_actor_session_bind (
+                      outcome, bind_attempt)) {
+                    const auto remaining =
+                      std::chrono::duration_cast<std::chrono::milliseconds> (
+                        binding_deadline
+                        - std::chrono::steady_clock::now ());
+                    if (remaining
+                        <= std::chrono::milliseconds::zero ()) {
+                        return result_t<void>::failure (
+                          framework_error_kind_t::deadline_exceeded,
+                          "Local Actor session binding deadline elapsed");
+                    }
+                    std::this_thread::sleep_for (
+                      std::min (remaining,
+                                std::chrono::milliseconds (10)));
+                    return bind_actor_session (
+                      transport_connection, session_rid, actor,
+                      replacement,
+                      detail::application_actor_session_bind_attempt_t::
+                        retry,
+                      binding_deadline);
+                }
                 return result_t<void>::failure (
-                  framework_error_kind_t::not_configured,
-                  "Framework STREAM actor authority is unavailable");
+                  framework_error_kind_t::unavailable,
+                  "Framework STREAM Actor is not ready for session binding");
+            }
+            const auto verified_actor =
+              detail::make_local_application_actor_session_ref (
+                *resolved, actor, *actor_route);
+            if (!verified_actor) {
+                return detail::propagate_failure<void> (
+                  verified_actor, "Local Actor session binding failed");
             }
             std::tie (error, binding) =
-              _mesh_node->native_node ().sessions ().bind (
-                transport_connection, *resolved,
+              _mesh_node->native_node ().sessions ().bind_remote (
+                transport_connection, verified_actor.value (),
                 actor_route->node_generation,
                 static_cast<std::uint64_t> (
                   actor_route->owner.lease_generation));
@@ -1888,7 +1955,9 @@ class stream_host_service_t::listener_t
         }
 
         result_t<void> recorded = result_t<void>::success ();
-        if (local_node->to_hex () == actor_route->node_rid.to_hex ()) {
+        std::optional<detail::application_actor_session_bind_outcome_t>
+          retryable_outcome;
+        const auto publish_session_route = [&] {
             const auto local_status = _mesh_node->native_node ().status ();
             auto actor_gateway =
               _services->get_required<detail::actor_gateway_runtime_t> ();
@@ -1904,22 +1973,23 @@ class stream_host_service_t::listener_t
                     actor_route->owner.lease_generation),
                   binding.binding_generation, 0, 0});
             if (!transition) {
-                recorded = result_t<void>::failure (
+                return result_t<void>::failure (
                   transition.error_kind (),
                   transition.error () ? transition.error ()->what ()
                                       : "bound Session route registration failed");
-            } else if (transition.value ().changed
-                       && transition.value ().previous
-                       && transition.value ().previous->session_rid
-                       && transition.value ().previous->node_generation != 0
-                       && transition.value ().previous->binding_generation != 0) {
+            }
+            if (transition.value ().changed
+                && transition.value ().previous
+                && transition.value ().previous->session_rid
+                && transition.value ().previous->node_generation != 0
+                && transition.value ().previous->binding_generation != 0) {
                 const auto &previous = *transition.value ().previous;
                 const runtime::protocol::bound_session_replaced_t notice{
                   runtime::protocol::actor_route_fence_t{
                     std::string (actor.actor_id ().value ()),
                     actor.object_generation (),
-                    local_status.routing_id ().to_bytes (),
-                    local_status.lifecycle_generation (),
+                    actor_route->node_rid.to_bytes (),
+                    actor_route->node_generation,
                     actor_route->authority_owner_generation,
                     static_cast<std::uint64_t> (
                       actor_route->owner.lease_generation)},
@@ -1948,10 +2018,49 @@ class stream_host_service_t::listener_t
                       }
                   });
             }
+            return result_t<void>::success ();
+        };
+        if (local_node->to_hex () == actor_route->node_rid.to_hex ()) {
+            recorded = publish_session_route ();
         } else {
-            recorded = _mesh_node->bind_application_actor_session (
-              actor, session_rid, binding.binding_generation,
-              *actor_route, std::chrono::seconds (5));
+            auto remaining =
+              std::chrono::duration_cast<std::chrono::milliseconds> (
+                binding_deadline - std::chrono::steady_clock::now ());
+            if (remaining <= std::chrono::milliseconds::zero ()) {
+                recorded = result_t<void>::failure (
+                  framework_error_kind_t::deadline_exceeded,
+                  "Remote Actor session binding deadline elapsed");
+            } else {
+                const auto remote_binding =
+                  _mesh_node->bind_application_actor_session (
+                    actor, session_rid, binding.binding_generation,
+                    *actor_route, remaining);
+                if (!remote_binding) {
+                    recorded = result_t<void>::failure (
+                      remote_binding.error_kind (),
+                      remote_binding.error ()
+                        ? remote_binding.error ()->what ()
+                        : "Remote Actor session binding failed");
+                } else if (
+                  remote_binding.value ()
+                  == detail::application_actor_session_bind_outcome_t::
+                    stale_route) {
+                    retryable_outcome = remote_binding.value ();
+                    recorded = result_t<void>::failure (
+                      framework_error_kind_t::invalid_operation,
+                      "Remote Actor session binding route is stale");
+                } else if (
+                  remote_binding.value ()
+                  == detail::application_actor_session_bind_outcome_t::
+                    actor_not_ready) {
+                    retryable_outcome = remote_binding.value ();
+                    recorded = result_t<void>::failure (
+                      framework_error_kind_t::unavailable,
+                      "Remote Actor session binding owner is not ready");
+                } else {
+                    recorded = publish_session_route ();
+                }
+            }
         }
         if (recorded) {
             auto actor_gateway =
@@ -1984,6 +2093,37 @@ class stream_host_service_t::listener_t
               framework_error_kind_t::internal_failure,
               "Framework STREAM actor binding rollback failed");
         }
+        if (retryable_outcome
+            && detail::can_retry_application_actor_session_bind (
+              *retryable_outcome, bind_attempt)) {
+            const auto remaining =
+              std::chrono::duration_cast<std::chrono::milliseconds> (
+                binding_deadline - std::chrono::steady_clock::now ());
+            if (remaining <= std::chrono::milliseconds::zero ()) {
+                return result_t<void>::failure (
+                  framework_error_kind_t::deadline_exceeded,
+                  "Remote Actor session binding deadline elapsed");
+            }
+            if (*retryable_outcome
+                == detail::application_actor_session_bind_outcome_t::
+                  stale_route) {
+                const auto refreshed_route =
+                  _mesh_node->wait_for_application_actor_route_change (
+                    actor, *actor_route,
+                    std::min (
+                      remaining, std::chrono::milliseconds (1000)));
+                if (!refreshed_route)
+                    return recorded;
+            } else {
+                std::this_thread::sleep_for (
+                  std::min (remaining,
+                            std::chrono::milliseconds (10)));
+            }
+            return bind_actor_session (
+              transport_connection, session_rid, actor, replacement,
+              detail::application_actor_session_bind_attempt_t::retry,
+              binding_deadline);
+        }
         return recorded;
     }
 
@@ -2008,25 +2148,37 @@ class stream_host_service_t::listener_t
         _runtime.set_session_identity (stream, rid);
         auto transport_connection =
           _mesh_node->native_node ().sessions ().open (key);
-        auto replacement = register_replacement_session (
-          rid, session, stream,
-          [this, rid] { disconnect_core_peer (
-            rid, "actor_binding_replaced"); });
         detail::session_actor_manager_access_t::attach (actors, stream);
+        auto created = std::make_shared<core_session_t> (
+          std::move (scope), session, actors, std::move (stream),
+          std::move (transport_connection));
+        auto replacement = register_replacement_session (
+          rid, created->stream,
+          [this, rid] { disconnect_core_peer (
+            rid, "actor_binding_replaced"); },
+          [weak = std::weak_ptr<core_session_t> (created)] (
+            stream_t &dispatch_stream,
+            std::string actor_id) {
+              const auto owner = weak.lock ();
+              if (!owner || owner->session == nullptr) {
+                  return task_t<void> (result_t<void>::success ());
+              }
+              return owner->session->on_actor_binding_replaced (
+                dispatch_stream, std::move (actor_id));
+          });
+        created->replacement = replacement;
         detail::session_actor_manager_access_t::bind_native (
-          actors, [this, transport_connection, rid,
+          actors, [this, transport_connection = created->transport_connection, rid,
                    replacement] (const actor_ref_t &actor) {
               return bind_actor_session (
                 transport_connection, rid, actor, replacement);
           });
         _runtime.attach_transport_writer (
-          stream, [this, rid] (const stream_header_t &header,
-                              const zlink::message_t &payload) -> result_t<void> {
+          created->stream,
+          [this, rid] (const stream_header_t &header,
+                      const zlink::message_t &payload) -> result_t<void> {
               return send_core_frame (rid, header, payload);
           });
-        auto created = std::make_shared<core_session_t> (
-          std::move (scope), session, actors, std::move (stream),
-          std::move (transport_connection), std::move (replacement));
         auto connected = _runtime.dispatch_connected_async (
           *created->session, created->stream,
           [this, created, rid] (const result_t<void> &result) {
@@ -2049,40 +2201,151 @@ class stream_host_service_t::listener_t
     void close_core_session (const zlink::routing_id_t &rid,
                              const char *close_reason) noexcept
     {
+        const auto key = core_session_key (rid);
         std::shared_ptr<core_session_t> current;
+        std::string retirement_id;
         {
             std::lock_guard lock (_core_sessions_mutex);
-            const auto found = _core_sessions.find (core_session_key (rid));
+            const auto found = _core_sessions.find (key);
             if (found == _core_sessions.end ())
                 return;
             current = std::move (found->second);
+            if (current) {
+                retirement_id = current->stream.session_id ();
+                _retired_core_sessions.emplace (retirement_id, current);
+            }
             _core_sessions.erase (found);
+            ++_core_sessions_revision;
         }
-        _core_frame_assemblers.erase (core_session_key (rid));
-        _core_frame_routing_ids.erase (core_session_key (rid));
+        _core_sessions_changed.notify_all ();
+        _core_frame_assemblers.erase (key);
+        _core_frame_routing_ids.erase (key);
         if (!current)
             return;
 
-        std::lock_guard session_lock (current->gate);
-        (void) _mesh_node->native_node ().sessions ().close (
-          current->transport_connection);
-        if (current->connected) {
-            _runtime.mark_disconnected (current->stream);
-            auto finalize = [current] (const result_t<void> &) {
-                detail::session_actor_manager_access_t::disconnect (*current->actors);
-                current->scope.close ();
-            };
+        begin_core_session_close (
+          std::move (retirement_id), std::move (current), close_reason);
+    }
+
+    void finalize_core_session (
+      const std::string &retirement_id,
+      const std::shared_ptr<core_session_t> &current) noexcept
+    {
+        if (current) {
+            const std::lock_guard session_lock (current->gate);
+            if (!current->finalized) {
+                current->finalized = true;
+                try {
+                    (void) _mesh_node->native_node ().sessions ().close (
+                      current->transport_connection);
+                }
+                catch (...) {
+                }
+                try {
+                    detail::session_actor_manager_access_t::disconnect (
+                      *current->actors);
+                }
+                catch (...) {
+                }
+                try {
+                    current->scope.close ();
+                }
+                catch (...) {
+                }
+            }
+        }
+        {
+            const std::lock_guard lock (_core_sessions_mutex);
+            const auto found = _retired_core_sessions.find (retirement_id);
+            if (found != _retired_core_sessions.end ()
+                && found->second == current) {
+                _retired_core_sessions.erase (found);
+                ++_core_sessions_revision;
+            }
+        }
+        _core_sessions_changed.notify_all ();
+    }
+
+    void begin_core_session_close (
+      std::string retirement_id,
+      std::shared_ptr<core_session_t> current,
+      const char *close_reason,
+      std::optional<stream_close_reason_t> notify_reason = std::nullopt,
+      std::string_view diagnostic = {}) noexcept
+    {
+        bool dispatch_disconnected = false;
+        {
+            const std::lock_guard session_lock (current->gate);
+            if (current->closing) {
+                return;
+            }
+            current->closing = true;
+            if (current->replacement) {
+                current->replacement->deactivate ();
+            }
+            if (notify_reason) {
+                _runtime.send_session_closing (
+                  current->stream, *notify_reason, diagnostic);
+            }
+            if (current->connected) {
+                _runtime.mark_disconnected (current->stream);
+                current->connected = false;
+                dispatch_disconnected = true;
+            }
+        }
+
+        auto finalize = [this, retirement_id, current] (const result_t<void> &) {
+            finalize_core_session (retirement_id, current);
+        };
+        if (dispatch_disconnected) {
             auto submitted = _runtime.dispatch_disconnected_async (
               *current->session, current->stream, finalize);
             if (!submitted) {
                 finalize (submitted);
+            } else {
+                record_connection_closed (close_reason);
             }
-            current->connected = false;
-            record_connection_closed (close_reason);
-            return;
+        } else {
+            finalize (result_t<void>::success ());
         }
-        detail::session_actor_manager_access_t::disconnect (*current->actors);
-        current->scope.close ();
+        {
+            const std::lock_guard lock (_core_sessions_mutex);
+            ++_core_sessions_revision;
+        }
+        _core_sessions_changed.notify_all ();
+    }
+
+    void wait_for_retired_core_sessions () noexcept
+    {
+        for (;;) {
+            std::vector<std::shared_ptr<core_session_t>> retired;
+            std::uint64_t observed_revision = 0;
+            {
+                std::lock_guard lock (_core_sessions_mutex);
+                if (_retired_core_sessions.empty ()) {
+                    return;
+                }
+                observed_revision = _core_sessions_revision;
+                retired.reserve (_retired_core_sessions.size ());
+                for (const auto &[_, session] : _retired_core_sessions) {
+                    if (session) {
+                        retired.push_back (session);
+                    }
+                }
+            }
+            for (auto &session : retired) {
+                _runtime.drain_async_dispatch (session->stream);
+            }
+            std::unique_lock lock (_core_sessions_mutex);
+            if (_retired_core_sessions.empty ()) {
+                return;
+            }
+            _core_sessions_changed.wait (
+              lock, [this, observed_revision] {
+                  return _retired_core_sessions.empty ()
+                         || _core_sessions_revision != observed_revision;
+              });
+        }
     }
 
     void disconnect_core_peer (const zlink::routing_id_t &rid,
@@ -2336,27 +2599,38 @@ class stream_host_service_t::listener_t
       std::optional<stream_close_reason_t> notify_reason = std::nullopt,
       std::string_view diagnostic = {}) noexcept
     {
-        std::map<std::string, std::shared_ptr<core_session_t>> sessions;
+        struct retiring_core_session_t
+        {
+            std::string session_key;
+            std::string retirement_id;
+            std::shared_ptr<core_session_t> session;
+        };
+        std::vector<retiring_core_session_t> sessions;
         {
             std::lock_guard lock (_core_sessions_mutex);
-            sessions.swap (_core_sessions);
-        }
-        for (auto &[_, current] : sessions) {
-            if (!current)
-                continue;
-            std::lock_guard session_lock (current->gate);
-            if (notify_reason)
-                _runtime.send_session_closing (current->stream, *notify_reason, diagnostic);
-            _runtime.drain_async_dispatch (current->stream);
-            if (current->connected) {
-                _runtime.mark_disconnected (current->stream);
-                (void) _runtime.dispatch_disconnected (*current->session, current->stream);
-                current->connected = false;
-                record_connection_closed (close_reason);
+            sessions.reserve (_core_sessions.size ());
+            for (auto &[key, current] : _core_sessions) {
+                if (!current) {
+                    continue;
+                }
+                auto retirement_id = current->stream.session_id ();
+                _retired_core_sessions.emplace (retirement_id, current);
+                sessions.push_back (
+                  retiring_core_session_t{key, std::move (retirement_id), current});
             }
-            detail::session_actor_manager_access_t::disconnect (*current->actors);
-            current->scope.close ();
+            _core_sessions.clear ();
+            ++_core_sessions_revision;
         }
+        _core_sessions_changed.notify_all ();
+        for (auto &retiring : sessions) {
+            _core_frame_assemblers.erase (retiring.session_key);
+            _core_frame_routing_ids.erase (retiring.session_key);
+            begin_core_session_close (
+              std::move (retiring.retirement_id),
+              std::move (retiring.session), close_reason,
+              notify_reason, diagnostic);
+        }
+        wait_for_retired_core_sessions ();
     }
 
     struct stream_write_wait_state_t
@@ -2841,27 +3115,16 @@ class stream_host_service_t::listener_t
                  const stream_header_t &header,
                  const zlink::message_t &payload)
     {
-        auto encoded_header = _runtime.encode_header (header);
-        if (!encoded_header) {
-            throw framework_exception_t (encoded_header.error_kind (),
-                                         encoded_header.error () ? encoded_header.error ()->what ()
-                                                                 : "STREAM header encode failed");
+        auto encoded_frame = _runtime.encode_frame (header, payload);
+        if (!encoded_frame) {
+            throw framework_exception_t (encoded_frame.error_kind (),
+                                         encoded_frame.error () ? encoded_frame.error ()->what ()
+                                                                : "STREAM frame encode failed");
         }
-        const auto payload_bytes = message_bytes (payload);
-        auto frame = std::make_shared<std::vector<std::uint8_t>> ();
-        frame->reserve (6 + encoded_header.value ().size () + payload_bytes.size ());
-        const auto header_size = encoded_header.value ().size ();
-        frame->push_back (static_cast<std::uint8_t> ((header_size >> 8) & 0xff));
-        frame->push_back (static_cast<std::uint8_t> (header_size & 0xff));
-        frame->push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 24) & 0xff));
-        frame->push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 16) & 0xff));
-        frame->push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 8) & 0xff));
-        frame->push_back (static_cast<std::uint8_t> (payload_bytes.size () & 0xff));
-        frame->insert (frame->end (), encoded_header.value ().begin (),
-                      encoded_header.value ().end ());
-        frame->insert (frame->end (), payload_bytes.begin (), payload_bytes.end ());
+        auto frame = std::make_shared<std::vector<std::uint8_t>> (
+          std::move (encoded_frame.value ()));
         trace_stream_host ("write-frame", _stream, header,
-                           "payload_bytes=" + std::to_string (payload_bytes.size ()));
+                           "payload_bytes=" + std::to_string (payload.size ()));
         const auto weak_connection = std::weak_ptr<TStream> (connection);
         const auto error = run_stream_write_operation (
           owner, *_stop,
@@ -2897,27 +3160,16 @@ class stream_host_service_t::listener_t
                       const stream_header_t &header,
                       const zlink::message_t &payload)
     {
-        auto encoded_header = _runtime.encode_header (header);
-        if (!encoded_header) {
-            throw framework_exception_t (encoded_header.error_kind (),
-                                         encoded_header.error () ? encoded_header.error ()->what ()
-                                                                 : "STREAM header encode failed");
+        auto encoded_frame = _runtime.encode_frame (header, payload);
+        if (!encoded_frame) {
+            throw framework_exception_t (encoded_frame.error_kind (),
+                                         encoded_frame.error () ? encoded_frame.error ()->what ()
+                                                                : "STREAM frame encode failed");
         }
-        const auto payload_bytes = message_bytes (payload);
-        auto frame = std::make_shared<std::vector<std::uint8_t>> ();
-        frame->reserve (6 + encoded_header.value ().size () + payload_bytes.size ());
-        const auto header_size = encoded_header.value ().size ();
-        frame->push_back (static_cast<std::uint8_t> ((header_size >> 8) & 0xff));
-        frame->push_back (static_cast<std::uint8_t> (header_size & 0xff));
-        frame->push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 24) & 0xff));
-        frame->push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 16) & 0xff));
-        frame->push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 8) & 0xff));
-        frame->push_back (static_cast<std::uint8_t> (payload_bytes.size () & 0xff));
-        frame->insert (frame->end (), encoded_header.value ().begin (),
-                      encoded_header.value ().end ());
-        frame->insert (frame->end (), payload_bytes.begin (), payload_bytes.end ());
+        auto frame = std::make_shared<std::vector<std::uint8_t>> (
+          std::move (encoded_frame.value ()));
         trace_stream_host ("write-frame", _stream, header,
-                           "payload_bytes=" + std::to_string (payload_bytes.size ()));
+                           "payload_bytes=" + std::to_string (payload.size ()));
         const auto weak_connection = std::weak_ptr<websocket_stream_t> (connection);
         const auto error = run_stream_write_operation (
           owner, *_stop,
@@ -3025,27 +3277,40 @@ class stream_host_service_t::listener_t
         std::optional<runtime::stateful::stream_connection_t>
           transport_connection;
         runtime::stateful::stream_session_registry_t *session_registry = nullptr;
-        std::shared_ptr<replacement_session_state_t> replacement;
         if (_mesh_node) {
             session_registry = &_mesh_node->native_node ().sessions ();
             transport_connection = session_registry->open (
               stream_instance.session_id ());
-            replacement = register_replacement_session (
-              session_rid, session, stream_instance,
-              [this, connection] { request_close (*connection); });
+        }
+        auto connection_state = std::make_shared<stream_connection_state_t> (
+          std::move (scope), &session, std::move (stream_instance),
+          &session_actors, session_registry,
+          std::move (transport_connection));
+        auto &stream = connection_state->stream;
+        if (_mesh_node) {
+            auto replacement = register_replacement_session (
+              session_rid, stream,
+              [this, connection] { request_close (*connection); },
+              [weak = std::weak_ptr<stream_connection_state_t> (
+                 connection_state)] (
+                stream_t &dispatch_stream,
+                std::string actor_id) {
+                  const auto current = weak.lock ();
+                  if (!current || current->session == nullptr) {
+                      return task_t<void> (result_t<void>::success ());
+                  }
+                  return current->session->on_actor_binding_replaced (
+                    dispatch_stream, std::move (actor_id));
+              });
+            connection_state->replacement = replacement;
             detail::session_actor_manager_access_t::bind_native (
               session_actors,
-              [this, connection = *transport_connection,
+              [this, connection = *connection_state->transport_connection,
                session_rid, replacement] (const actor_ref_t &actor) {
                   return bind_actor_session (
                     connection, session_rid, actor, replacement);
               });
         }
-        auto connection_state = std::make_shared<stream_connection_state_t> (
-          std::move (scope), &session, std::move (stream_instance),
-          &session_actors, session_registry,
-          std::move (transport_connection), std::move (replacement));
-        auto &stream = connection_state->stream;
         if (attach_immediate_writer) {
             _runtime.attach_transport_writer (
               stream,
@@ -3227,6 +3492,9 @@ class stream_host_service_t::listener_t
         }
         if (connected_session) {
             owner->closing.store (true, std::memory_order_release);
+            if (connection_state->replacement) {
+                connection_state->replacement->deactivate ();
+            }
             _runtime.mark_disconnected (stream);
             auto dispatch_disconnect = [this, &session, &stream, connection_state] {
                 auto completed = [this, connection_state] (const result_t<void> &) {
@@ -3350,6 +3618,10 @@ class stream_host_service_t::listener_t
     eventing::runtime_wake_timer_t _core_wake_timer;
     std::mutex _core_sessions_mutex;
     std::map<std::string, std::shared_ptr<core_session_t>> _core_sessions;
+    std::map<std::string, std::shared_ptr<core_session_t>>
+      _retired_core_sessions;
+    std::condition_variable _core_sessions_changed;
+    std::uint64_t _core_sessions_revision = 0;
     std::map<std::string, core_stream_frame_assembler_t> _core_frame_assemblers;
     std::map<std::string, zlink::routing_id_t> _core_frame_routing_ids;
     std::string _core_frame_cursor;

@@ -128,6 +128,20 @@ test('Node topology sample runners write one configuration per server role', () 
   }
 });
 
+test('Node e2e clients that import the shared HTTP client emit the configured entry point', () => {
+  for (const suite of ['ChannelEgressRouting', 'InstanceSpot', 'SubmitAdmission']) {
+    const clientRoot = path.join(root, 'e2e', suite, 'Client');
+    const tsconfig = JSON.parse(fs.readFileSync(path.join(clientRoot, 'tsconfig.json'), 'utf8'));
+    const packageJson = JSON.parse(fs.readFileSync(path.join(clientRoot, 'package.json'), 'utf8'));
+    const runner = fs.readFileSync(path.join(root, 'e2e', suite, 'run_e2e.sh'), 'utf8');
+    const emittedEntry = `dist/${suite}/Client/main.js`;
+
+    assert.equal(tsconfig.compilerOptions.rootDir, '../..', suite);
+    assert.equal(packageJson.main, emittedEntry, suite);
+    assert.match(runner, new RegExp(emittedEntry.replaceAll('/', '\\/')), suite);
+  }
+});
+
 test('Node clients that consume topology or file paths use typed configuration files', () => {
   const nodeClients = [
     'DiscoveryRegistryHa/Client/Support/client-options.ts',

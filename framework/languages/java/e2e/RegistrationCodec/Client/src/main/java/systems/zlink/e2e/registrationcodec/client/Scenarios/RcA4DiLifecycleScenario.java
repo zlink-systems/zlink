@@ -18,7 +18,7 @@ public final class RcA4DiLifecycleScenario {
             "RC-A4 singleton dependency changed between requests: " + replies);
         ScenarioAssert.ensure(replies.get(2).disposedCount() == 3,
             "RC-A4 dispose count mismatch: " + replies);
-        ScenarioAssert.waitForEvidenceValueSuffix(context.evidence(), "DI", "DiLifecycle", ":di-2");
+        ScenarioAssert.waitForEvidenceValueSuffix(context.evidence(), "DI", "DiLifecycleReq", ":di-2");
         System.out.println("scenario RC-A4 passed");
     }
 }

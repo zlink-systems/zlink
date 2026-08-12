@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.nio.ByteBuffer;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -167,7 +168,7 @@ final class ZLinkCanonicalRelocationProtocolTest {
     }
 
     private static int markerIndex(byte[] encoded, long marker) {
-        byte[] pattern = java.nio.ByteBuffer.allocate(8)
+        byte[] pattern = ByteBuffer.allocate(8)
             .putLong(marker).array();
         for (int index = 0; index <= encoded.length - 8; index++) {
             boolean matches = true;

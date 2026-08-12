@@ -11,8 +11,10 @@ import {
   EchoManualReq,
   MessagePackEchoMsg,
   MessagePackEchoReq,
+  MessagePackEchoRes,
   ProtobufEchoMsg,
   ProtobufEchoReq,
+  ProtobufEchoRes,
   RegistrationCodecNames,
   type CodecScenarioRes,
   type EchoRes
@@ -93,7 +95,7 @@ export function createMainEndpoints(evidence: EvidenceStore, channel: ZLinkRoute
       path: '/codec/protobuf',
       handle: async () => {
         const reply = await channel.requestToChannel(RegistrationCodecNames.channel, new ProtobufEchoReq('rc-b2'))
-          .submit<ProtobufEchoReq>();
+          .submit<ProtobufEchoRes>();
         await channel.sendToChannel(RegistrationCodecNames.channel, new ProtobufEchoMsg('rc-b2-send'))
           .submit();
         evidence.add(`codec-reply|codec=protobuf|value=${reply.value}`);
@@ -108,7 +110,7 @@ export function createMainEndpoints(evidence: EvidenceStore, channel: ZLinkRoute
       path: '/codec/msgpack',
       handle: async () => {
         const reply = await channel.requestToChannel(RegistrationCodecNames.channel, new MessagePackEchoReq('rc-b3'))
-          .submit<MessagePackEchoReq>();
+          .submit<MessagePackEchoRes>();
         await channel.sendToChannel(RegistrationCodecNames.channel, new MessagePackEchoMsg('cmd-rc-b3', 'rc-b3-send'))
           .submit();
         evidence.add(`codec-reply|codec=msgpack|value=${reply.value}`);
@@ -128,12 +130,12 @@ export function createMainEndpoints(evidence: EvidenceStore, channel: ZLinkRoute
           .submit();
 
         const protobuf = await channel.requestToChannel(RegistrationCodecNames.channel, new ProtobufEchoReq('rc-b2'))
-          .submit<ProtobufEchoReq>();
+          .submit<ProtobufEchoRes>();
         await channel.sendToChannel(RegistrationCodecNames.channel, new ProtobufEchoMsg('rc-b2-send'))
           .submit();
 
         const messagePack = await channel.requestToChannel(RegistrationCodecNames.channel, new MessagePackEchoReq('rc-b3'))
-          .submit<MessagePackEchoReq>();
+          .submit<MessagePackEchoRes>();
         await channel.sendToChannel(RegistrationCodecNames.channel, new MessagePackEchoMsg('cmd-rc-b3', 'rc-b3-send'))
           .submit();
 

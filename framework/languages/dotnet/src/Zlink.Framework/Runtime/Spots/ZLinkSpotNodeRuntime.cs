@@ -34,6 +34,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     private IRelocationReplyRelayTarget? _relocationReplyRelayTarget;
     private ZLinkCanonicalRelocationReservationOwner?
         _canonicalRelocationReservationOwner;
+    private ZLinkSessionRelocationBarrierOwner?
+        _sessionRelocationBarrierOwner;
     private readonly ZLinkServiceWireCodec.RequestSourceFence?
         _localRequestSource;
     private IZLinkBackendSpot? _entrySpot;
@@ -152,6 +154,15 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             _timerScheduler,
             _activationAdmission);
         _spots.StartIdleEviction();
+        if (node is IZLinkBackendSessionRelocationBarrier sessionBarrier)
+        {
+            _sessionRelocationBarrierOwner =
+                new ZLinkSessionRelocationBarrierOwner(
+                    runtime,
+                    frameworkRegistration.Locations.ResolveStore());
+            sessionBarrier.SetSessionRelocationBarrierTarget(
+                _sessionRelocationBarrierOwner);
+        }
         if (frameworkRegistration.Locations.ResolveStore() is not null
             && node is IZLinkBackendRelocationReplyRelay relayBackend)
         {
@@ -238,6 +249,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                 locationLifecycle.OwnerToken);
             node.SetInstanceSpotActivationTarget(_instanceSpotActivationTarget);
         }
+        WireNodeRouteDispatch();
     }
 
     internal ZLinkServiceWireCodec.RequestSourceFence LocalRequestSource =>
@@ -274,7 +286,21 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             .BeginStaging(relocationId, targetAttemptGeneration);
     }
 
-    internal ZLinkMeshNodeStartupState? StartupState { get; }
+    internal ZLinkMeshNodeStartupState? StartupState { get; private set; }
+
+    internal void UpdateStartupState(ZLinkMeshNodeStartupState startupState)
+    {
+        ArgumentNullException.ThrowIfNull(startupState);
+        if (StartupState is not { } current
+            || current.RoutingId != startupState.RoutingId
+            || !string.Equals(
+                current.EntrySpotId,
+                startupState.EntrySpotId,
+                StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "The finalized MeshNode startup state does not match its claim.");
+        StartupState = startupState;
+    }
 
     internal string EntrySpotId { get; }
 
@@ -494,16 +520,6 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
 
     internal ZLinkSpotOutboundTransport EntryOutbound => _entryOutbound
         ?? throw new InvalidOperationException($"SPOT node '{Name}' entry outbound transport is not initialized.");
-
-    internal bool TrySendToNodeOnce(
-        RoutingId targetNodeRid,
-        IReadOnlyList<Message> parts,
-        ReadOnlyMemory<byte> metadata = default)
-    {
-        return ZLinkSubmitFailureMapper.AcceptOrThrow(
-            Node.SendToNode(targetNodeRid, parts, SendFlags.DontWait, metadata),
-            $"node '{targetNodeRid}'");
-    }
 
     internal ValueTask<ZLinkOneWaySubmitResult> SendToNodeAsync(
         RoutingId targetNodeRid,
@@ -780,19 +796,12 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         attachment?.Dispose();
     }
 
-    public void ApplyEntrySpotIdBeforeBind()
-    {
-        if (string.IsNullOrEmpty(EntrySpotId)) return;
-
-        _entrySpot = Node.EntrySpot();
-        _entrySpot.SetRoutingId(
-            ZLinkSpotId.ToNativeRoutingId(EntrySpotId));
-    }
-
     public async ValueTask InitializeEntrySpotAsync()
     {
-        WireNodeRouteDispatch();
         _entrySpot ??= Node.EntrySpot();
+        if (!string.IsNullOrEmpty(EntrySpotId))
+            _entrySpot.SetRoutingId(
+                ZLinkSpotId.ToNativeRoutingId(EntrySpotId));
         await TrackEntrySpotLocationAsync().ConfigureAwait(false);
         if (_instanceSpotActivationTarget is not null)
             await _instanceSpotActivationTarget.RecoverAsync(_stopSource.Token)

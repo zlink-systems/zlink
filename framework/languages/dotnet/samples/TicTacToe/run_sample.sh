@@ -47,7 +47,7 @@ cleanup() {
     wait "${pid}" 2>/dev/null || true
   done
   if [[ -n "${REDIS_CONTAINER_ID}" ]]; then
-    docker rm -fv "${REDIS_CONTAINER_ID}" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "${REDIS_CONTAINER_ID}" || true
   fi
   zlink_sample_copy_evidence "${RUN_DIR}" "TicTacToe"
   if [[ "${RUN_SUCCEEDED}" == "1" ]]; then
@@ -65,8 +65,8 @@ import socket
 sockets = []
 try:
     chosen = set()
-    while len(sockets) < 8:
-        port = random.randint(48000, 60999)
+    while len(sockets) < 10:
+        port = random.randint(22100, 23999)
         if port in chosen:
             continue
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -94,6 +94,8 @@ PLAY_A_MESH_ENDPOINT="tcp://127.0.0.1:${PORTS[4]}"
 PLAY_B_MESH_ENDPOINT="tcp://127.0.0.1:${PORTS[5]}"
 PLAY_A_ENDPOINT="tcp://127.0.0.1:${PORTS[6]}"
 PLAY_B_ENDPOINT="tcp://127.0.0.1:${PORTS[7]}"
+API_A_CHANNEL_ENDPOINT="tcp://127.0.0.1:${PORTS[8]}"
+API_B_CHANNEL_ENDPOINT="tcp://127.0.0.1:${PORTS[9]}"
 API_A_CONFIG_FILE="${RUN_DIR}/appsettings.api-a.json"
 API_B_CONFIG_FILE="${RUN_DIR}/appsettings.api-b.json"
 PLAY_A_CONFIG_FILE="${RUN_DIR}/appsettings.play-a.json"
@@ -113,13 +115,14 @@ import sys
 
 api_a_path, api_b_path, play_a_path, play_b_path, client_path = sys.argv[1:]
 
-def api(instance_name, bind_url, mesh_endpoint):
+def api(instance_name, bind_url, mesh_endpoint, api_channel_listen_endpoint):
     return {
         "Sample": {
             "InstanceName": instance_name,
             "ApiBindUrl": bind_url,
             "MeshEndpoint": mesh_endpoint,
             "PeerMeshEndpoints": ["${PLAY_A_MESH_ENDPOINT}", "${PLAY_B_MESH_ENDPOINT}"],
+            "ApiChannelListenEndpoint": api_channel_listen_endpoint,
             "PlayEndpoints": ["${PLAY_A_ENDPOINT}", "${PLAY_B_ENDPOINT}"],
             "RedisEndpoint": "${REDIS_ENDPOINT}",
             "RedisKeyPrefix": "${TICTACTOE_REDIS_KEY_PREFIX}",
@@ -127,12 +130,13 @@ def api(instance_name, bind_url, mesh_endpoint):
         }
     }
 
-def play(instance_name, mesh_endpoint, peer_mesh_endpoints, play_endpoint):
+def play(instance_name, mesh_endpoint, peer_mesh_endpoints, play_endpoint, api_channel_peer_endpoints):
     return {
         "Sample": {
             "InstanceName": instance_name,
             "MeshEndpoint": mesh_endpoint,
             "PeerMeshEndpoints": peer_mesh_endpoints,
+            "ApiChannelPeerEndpoints": api_channel_peer_endpoints,
             "PlayEndpoint": play_endpoint,
             "PlayEndpoints": ["${PLAY_A_ENDPOINT}", "${PLAY_B_ENDPOINT}"],
             "RedisEndpoint": "${REDIS_ENDPOINT}",
@@ -142,10 +146,10 @@ def play(instance_name, mesh_endpoint, peer_mesh_endpoints, play_endpoint):
     }
 
 for path, settings in [
-    (api_a_path, api("api-a", "${API_A_BIND_URL}", "${API_A_MESH_ENDPOINT}")),
-    (api_b_path, api("api-b", "${API_B_BIND_URL}", "${API_B_MESH_ENDPOINT}")),
-    (play_a_path, play("play-a", "${PLAY_A_MESH_ENDPOINT}", [], "${PLAY_A_ENDPOINT}")),
-    (play_b_path, play("play-b", "${PLAY_B_MESH_ENDPOINT}", ["${PLAY_A_MESH_ENDPOINT}"], "${PLAY_B_ENDPOINT}")),
+    (api_a_path, api("api-a", "${API_A_BIND_URL}", "${API_A_MESH_ENDPOINT}", "${API_A_CHANNEL_ENDPOINT}")),
+    (api_b_path, api("api-b", "${API_B_BIND_URL}", "${API_B_MESH_ENDPOINT}", "${API_B_CHANNEL_ENDPOINT}")),
+    (play_a_path, play("play-a", "${PLAY_A_MESH_ENDPOINT}", [], "${PLAY_A_ENDPOINT}", ["${API_A_CHANNEL_ENDPOINT}", "${API_B_CHANNEL_ENDPOINT}"])),
+    (play_b_path, play("play-b", "${PLAY_B_MESH_ENDPOINT}", ["${PLAY_A_MESH_ENDPOINT}"], "${PLAY_B_ENDPOINT}", ["${API_A_CHANNEL_ENDPOINT}", "${API_B_CHANNEL_ENDPOINT}"])),
     (client_path, {"Sample": {"ApiPublicUrls": ["${API_A_PUBLIC_URL}"], "LogDirectory": "${SAMPLE_LOG_DIR}"}}),
 ]:
     with open(path, "w", encoding="utf-8") as output:
@@ -220,10 +224,12 @@ wait_port play-b-mesh "${PLAY_B_MESH_ENDPOINT}"
 start_server api-a "${SCRIPT_DIR}/Server/Api/bin/Debug/net8.0/TicTacToe.Server.Api.dll" "${API_A_CONFIG_FILE}"
 wait_port api-a-http "${API_A_BIND_URL}"
 wait_port api-a-mesh "${API_A_MESH_ENDPOINT}"
+wait_port api-a-channel "${API_A_CHANNEL_ENDPOINT}"
 
 start_server api-b "${SCRIPT_DIR}/Server/Api/bin/Debug/net8.0/TicTacToe.Server.Api.dll" "${API_B_CONFIG_FILE}"
 wait_port api-b-http "${API_B_BIND_URL}"
 wait_port api-b-mesh "${API_B_MESH_ENDPOINT}"
+wait_port api-b-channel "${API_B_CHANNEL_ENDPOINT}"
 
 dotnet run --no-build --project "${SCRIPT_DIR}/Client/TicTacToe.Client.csproj" -- \
   --config "${CLIENT_CONFIG_FILE}" >"${LOG_DIR}/client.log" 2>&1
@@ -231,6 +237,8 @@ wait_log_contains "stream inbound evidence" "stream-inbound sample=TicTacToe" "$
 wait_log_contains "stream inbound sequenced packet" "stream-inbound sample=TicTacToe .* seq=[0-9]" "${LOG_DIR}/client.log"
 wait_log_contains "stream inbound notify packet" "stream-inbound sample=TicTacToe .* name=.*Notify" "${LOG_DIR}/client.log"
 wait_log_contains "observer milestone verification" "observer-win-milestone=verified" "${LOG_DIR}/client.log"
+wait_log_contains "reconnected full game state verification" "reconnected-game-state=verified actor=player-x room=" "${LOG_DIR}/client.log"
+wait_log_contains "existing actor exact identity verification" "play stream: existing actor exact identity verified.*actor=player-x" "${LOG_DIR}"/play-*.log
 wait_log_contains "player-x leave completion" "actor: LeaveGameMsg completed. actor=player-x" "${LOG_DIR}"/play-*.log
 wait_log_contains "player-o leave completion" "actor: LeaveGameMsg completed. actor=player-o" "${LOG_DIR}"/play-*.log
 wait_log_contains "player-x actor destroy completion" "entry spot: actor destroy completed. actor=player-x" "${LOG_DIR}"/play-*.log

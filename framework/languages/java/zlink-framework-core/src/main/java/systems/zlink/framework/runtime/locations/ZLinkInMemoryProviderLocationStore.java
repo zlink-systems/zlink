@@ -1,4 +1,9 @@
 package systems.zlink.framework.runtime.locations;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.HashSet;
+import java.util.concurrent.CancellationException;
+import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -17,12 +22,12 @@ import systems.zlink.framework.locationprovider.*;
  * Atomic opaque Store used by the built-in in-memory configuration.
  */
 public final class ZLinkInMemoryProviderLocationStore
-    implements systems.zlink.framework.locationprovider.ZLinkLocationStore {
+    implements ZLinkLocationStore {
     private static final int MAXIMUM_ACTIVE_SCANS = 4096;
     private static final long MAXIMUM_ENCODED_PAGE_BYTES =
         4L * 1024 * 1024;
-    private static final java.time.Duration SCAN_RETENTION =
-        java.time.Duration.ofMinutes(1);
+    private static final Duration SCAN_RETENTION =
+        Duration.ofMinutes(1);
     private final Object gate = new Object();
     private final Clock clock;
     private final Map<String, Entry> rows = new HashMap<>();
@@ -103,7 +108,7 @@ public final class ZLinkInMemoryProviderLocationStore
             throw new IllegalArgumentException("scan limit must be 1..1000");
         }
         String prefix = Objects.requireNonNull(request.prefix(), "prefix");
-        if (prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+        if (prefix.getBytes(StandardCharsets.UTF_8).length
             > 1024) {
             throw new IllegalArgumentException(
                 "scan prefix exceeds 1024 UTF-8 bytes");
@@ -153,9 +158,9 @@ public final class ZLinkInMemoryProviderLocationStore
                 && end - offset < request.limit()) {
                 ZLinkStoreScanItem item = items.get(end);
                 long itemBytes = item.key().value().getBytes(
-                        java.nio.charset.StandardCharsets.UTF_8).length
+                        StandardCharsets.UTF_8).length
                     + item.value().version().value().getBytes(
-                        java.nio.charset.StandardCharsets.UTF_8).length
+                        StandardCharsets.UTF_8).length
                     + item.value().bytes().length;
                 if (end != offset
                     && encodedBytes + itemBytes
@@ -206,8 +211,8 @@ public final class ZLinkInMemoryProviderLocationStore
     private static void validateUniqueKeys(
         List<ZLinkStoreCondition> conditions,
         List<ZLinkStoreMutation> mutations) {
-        var conditionKeys = new java.util.HashSet<String>();
-        var mutationKeys = new java.util.HashSet<String>();
+        var conditionKeys = new HashSet<String>();
+        var mutationKeys = new HashSet<String>();
         long encodedBytes = 0;
         for (var condition : conditions) {
             String key = requireKey(condition instanceof ZLinkStoreMissingCondition value
@@ -217,7 +222,7 @@ public final class ZLinkInMemoryProviderLocationStore
                 throw new IllegalArgumentException("duplicate condition key");
             }
             encodedBytes += key.getBytes(
-                java.nio.charset.StandardCharsets.UTF_8).length;
+                StandardCharsets.UTF_8).length;
         }
         for (var mutation : mutations) {
             String key = requireKey(mutation instanceof ZLinkStorePut value
@@ -227,7 +232,7 @@ public final class ZLinkInMemoryProviderLocationStore
                 throw new IllegalArgumentException("duplicate mutation key");
             }
             encodedBytes += key.getBytes(
-                java.nio.charset.StandardCharsets.UTF_8).length;
+                StandardCharsets.UTF_8).length;
             if (mutation instanceof ZLinkStorePut put) {
                 encodedBytes += Objects.requireNonNull(put.bytes(), "bytes").length;
                 requireBytes(put.bytes());
@@ -239,7 +244,7 @@ public final class ZLinkInMemoryProviderLocationStore
                 }
             }
         }
-        var all = new java.util.HashSet<>(conditionKeys);
+        var all = new HashSet<>(conditionKeys);
         all.addAll(mutationKeys);
         if (all.size() > 2048) {
             throw new IllegalArgumentException("write exceeds 2,048 keys");
@@ -252,7 +257,7 @@ public final class ZLinkInMemoryProviderLocationStore
     private static String requireKey(ZLinkStoreKey key) {
         String value = Objects.requireNonNull(
             Objects.requireNonNull(key, "key").value(), "key.value");
-        int size = value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        int size = value.getBytes(StandardCharsets.UTF_8).length;
         if (size < 1 || size > 1024) {
             throw new IllegalArgumentException("key must be 1..1024 UTF-8 bytes");
         }
@@ -270,7 +275,7 @@ public final class ZLinkInMemoryProviderLocationStore
     private static void requireActive(ZLinkStoreCancellation cancellation) {
         if (Objects.requireNonNull(cancellation, "cancellation")
             .isCancellationRequested()) {
-            throw new java.util.concurrent.CancellationException();
+            throw new CancellationException();
         }
     }
 

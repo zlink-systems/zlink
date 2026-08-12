@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.registrymessaging.workflow.Infrastructure
 
+
+import java.util.concurrent.TimeUnit
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
@@ -57,7 +59,7 @@ class EvidenceStore(
             if (current.any { it.contains(contains) }) {
                 return current
             }
-            signal.tryAcquire(100, java.util.concurrent.TimeUnit.MILLISECONDS)
+            signal.tryAcquire(100, TimeUnit.MILLISECONDS)
         }
         return snapshot()
     }

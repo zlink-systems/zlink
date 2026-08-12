@@ -885,23 +885,12 @@ internal partial class ZLinkInMemoryLocationStore :
         }
     }
 
-    private bool IsOwnerLive(string ownerId, DateTimeOffset now) =>
-        _leases.TryGetValue(ownerId, out var lease) && lease.LeaseExpiresAt > now;
-
     private bool MatchesLiveOwnerLease(
         ZLinkLocationOwnerToken token,
         DateTimeOffset now) =>
         _leases.TryGetValue(token.OwnerId, out var lease)
         && lease.LeaseExpiresAt > now
         && lease.LeaseGeneration == token.LeaseGeneration;
-
-    private long NextOwnerLeaseGeneration()
-    {
-        if (_ownerLeaseGeneration == long.MaxValue)
-            throw new InvalidOperationException(
-                "The owner lease generation space was exhausted.");
-        return ++_ownerLeaseGeneration;
-    }
 
     private static void ValidateOwnerLeaseArguments(
         string ownerId,

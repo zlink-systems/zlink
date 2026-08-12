@@ -551,7 +551,7 @@ class transfer_entry_spot_t : public fw::entry_spot_t<transfer_actor_t>
     {
         auto &context = actor.context ();
         const auto join_timeout = actor.actor_id.rfind ("actor-join-timeout-", 0) == 0
-                                    ? std::chrono::seconds (1)
+                                    ? std::chrono::seconds (3)
                                     : std::chrono::seconds (10);
         context.join_spot (request.target_spot_id, request).timeout (join_timeout).defer ();
         co_return e2e::join_target_res_t{
@@ -675,7 +675,7 @@ class transfer_user_spot_t : public fw::spot_t<transfer_actor_t>
     {
         auto &context = actor.context ();
         const auto join_timeout = actor.actor_id.rfind ("actor-join-timeout-", 0) == 0
-                                    ? std::chrono::seconds (1)
+                                    ? std::chrono::seconds (3)
                                     : std::chrono::seconds (10);
         context.join_spot (request.target_spot_id, request).timeout (join_timeout).defer ();
         co_return e2e::join_target_res_t{
@@ -1504,6 +1504,11 @@ int run_host_impl (transfer_host_role_t host_role, int argc, char **argv)
         framework.http ()
           .configure_server ([] (fw::http_server_options_builder_t &server) {
               server.set_write_timeout (std::chrono::seconds (15));
+              // The e2e client keeps pooled connections across scenario
+              // boundaries; generous keep-alive limits stop the server from
+              // closing a connection the next scenario is about to reuse.
+              server.set_keep_alive_timeout (std::chrono::minutes (5));
+              server.set_max_keep_alive_requests (100000);
           })
           .listen (http_url)
           .map_health ("/health")

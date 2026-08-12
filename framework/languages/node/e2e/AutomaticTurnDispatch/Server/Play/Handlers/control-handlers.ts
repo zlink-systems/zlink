@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ZLinkMessage, ZLinkUserSpotExecutionMode } from '@zlink-systems/framework';
+import { ZLinkUserSpotExecutionMode } from '@zlink-systems/framework';
 import type { ZLinkActorManager, ZLinkMessageContext, ZLinkRequestHandler, ZLinkSpotManager } from '@zlink-systems/framework';
 import { ZLINK_ACTOR_MANAGER, ZLINK_SPOT_MANAGER } from '@zlink-systems/nestjs';
 import type {
@@ -11,7 +11,7 @@ import type {
   AwaitEvidenceReq,
   AwaitEvidenceWaitReq
 } from '../../../Shared/messages';
-import { AutomaticTurnDispatchNames } from '../../../Shared/messages';
+import { AutomaticTurnDispatchNames, AwaitActorCreateReq } from '../../../Shared/messages';
 import { EvidenceStore } from '../Support/evidence-store';
 import { AwaitProbeSpot } from '../Spots/await-probe-spot';
 
@@ -53,7 +53,7 @@ export class BindAwaitActorsControlHandler implements ZLinkRequestHandler<BindAw
         AutomaticTurnDispatchNames.actorType
       )
         .inMesh(AutomaticTurnDispatchNames.spotChannel)
-        .request(ZLinkMessage.from({ spotId: request.spotId }))
+        .request(new AwaitActorCreateReq(request.spotId))
         .submit();
       if (created.status === 'rejected') {
         throw new Error(`Actor '${actorId}' creation was rejected.`);

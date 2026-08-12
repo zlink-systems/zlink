@@ -2,6 +2,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../redis-common.sh"
+zlink_cpp_e2e_acquire_run_lock "${BASH_SOURCE[0]}" "$@"
+zlink_cpp_e2e_install_cleanup_trap
 CPP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BUILD_DIR="$CPP_DIR/build"
 SCENARIO="${1:-all}"
@@ -29,26 +32,8 @@ print(max(1, math.ceil(timeout / poll)))
 PY
 )"
 
-read -r API HTTP JSON_ONLY_API JSON_ONLY_HTTP INVALID REQUESTER_HTTP <<<"$(python3 - <<'PY'
-import socket
-
-sockets = []
-ports = []
-for _ in range(6):
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    sockets.append(s)
-    ports.append(s.getsockname()[1])
-print(f"tcp://127.0.0.1:{ports[0]}", end=" ")
-print(f"http://127.0.0.1:{ports[1]}", end=" ")
-print(f"tcp://127.0.0.1:{ports[2]}", end=" ")
-print(f"http://127.0.0.1:{ports[3]}", end=" ")
-print(f"tcp://127.0.0.1:{ports[4]}", end=" ")
-print(f"http://127.0.0.1:{ports[5]}")
-for s in sockets:
-    s.close()
-PY
-)"
+read -r API HTTP JSON_ONLY_API JSON_ONLY_HTTP INVALID REQUESTER_HTTP \
+  <<<"$(zlink_cpp_e2e_allocate_endpoints tcp http tcp http tcp http)"
 
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="$SCRIPT_DIR/logs/$RUN_ID"

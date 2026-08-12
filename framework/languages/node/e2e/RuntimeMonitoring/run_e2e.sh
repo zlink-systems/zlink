@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
 source "$NODE_ROOT/e2e/redis-container.sh"
+source "$NODE_ROOT/e2e/runner-common.sh"
+serialize_node_e2e_run "$0" "$@"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="$ROOT_DIR/log/$RUN_ID"
 CONFIG_DIR=""
@@ -14,20 +16,10 @@ LOCAL_READINESS_ATTEMPTS=30
 ROUTE_SETTLE_TIMEOUT_SECONDS=5
 SCENARIO_SETTLE_TIMEOUT_SECONDS=3
 HTTP_PROBE_TIMEOUT_SECONDS=3
-mkdir -p "$LOG_DIR"
 
-RESERVED_PORTS=()
 reserve_port() {
   local variable_name="$1"
-  local port
-  while true; do
-    port="$(node "$NODE_ROOT/e2e/port-picker.js")"
-    if [[ ! " ${RESERVED_PORTS[*]} " =~ " $port " ]]; then
-      RESERVED_PORTS+=("$port")
-      printf -v "$variable_name" '%s' "$port"
-      return
-    fi
-  done
+  printf -v "$variable_name" '%s' "$(allocate_port)"
 }
 
 build_package() {
@@ -78,7 +70,7 @@ cleanup() {
     fi
   done
   if [[ -n "$REDIS_CONTAINER_ID" ]]; then
-    docker rm -fv "$REDIS_CONTAINER_ID" >/dev/null 2>&1 || true
+    remove_redis_container_by_id "$REDIS_CONTAINER_ID" || true
   fi
   [[ -z "$CONFIG_DIR" ]] || rm -rf "$CONFIG_DIR"
   if [[ "$code" -ne 0 || "$background_failure" -ne 0 ]]; then
@@ -95,6 +87,7 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+mkdir -p "$LOG_DIR"
 CONFIG_DIR="$(mktemp -d)"
 chmod 700 "$CONFIG_DIR"
 
@@ -174,7 +167,7 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
-start_redis_container "zlink-redis-node-e2e-${RANDOM}-$$" -p "127.0.0.1::6379" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
+start_redis_container "zlink-redis-node-e2e-${RANDOM}-$$" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
 REDIS_ENDPOINT="$(redis_container_endpoint "$REDIS_CONTAINER_ID")"
 REDIS_KEY_PREFIX="runtime-monitoring:node:$RUN_ID"
 wait_tcp redis "tcp://$REDIS_ENDPOINT"

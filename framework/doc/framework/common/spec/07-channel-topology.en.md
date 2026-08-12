@@ -633,7 +633,7 @@ manual connection exists in the service topology a host uses, `Relocate`
 ends with `Blocked/ManualTopologyUnsupported` before changing state and
 admission. The connection order for automatic rolling replacement is
 defined by
-[Host Relocate And Shutdown](28-graceful-drain-handoff.en.md#5-selecting-a-target-matching-the-mode).
+[Complete Host Relocation Flow](30-host-relocation-flow.en.md#5-selecting-a-target-matching-the-mode).
 
 Manual peer connection and Spot/Actor location lookup are different
 features. If distributed [Spot](01-glossary.en.md#spot)/Actor addressing or
@@ -675,7 +675,7 @@ start a send or request.
 A draining MeshNode is excluded from new ChannelName selection and Logical
 Multicast remote targets. The termination rule for already-submitted work
 and RID direct is defined by
-[Graceful Drain](28-graceful-drain-handoff.en.md).
+[Graceful Drain](30-host-relocation-flow.en.md).
 
 ## 8. RouteMesh SS Message Size And Mailbox Caps
 

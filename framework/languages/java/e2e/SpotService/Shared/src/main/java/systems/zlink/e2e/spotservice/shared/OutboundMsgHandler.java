@@ -1,11 +1,13 @@
 package systems.zlink.e2e.spotservice.shared;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 
 public final class OutboundMsgHandler
     implements ZLinkSpotPacketHandler<UserSpot, Contracts.OutboundMsg> {
     @Override
-    public java.util.concurrent.CompletionStage<Void> handle(
+    public CompletionStage<Void> handle(
         UserSpot spot,
         Contracts.OutboundMsg message) {
         spot.record("SpotToSpotSend", message.value());
@@ -13,9 +15,9 @@ public final class OutboundMsgHandler
             spot.context().outbound().publish(
                 Contracts.ROUTE_CHANNEL,
                 "spot.events",
-                new Contracts.MeshMsg("publish:sm-c6-marker"))
+                new Contracts.MeshEvent("publish:sm-c6-marker"))
                 .submit();
         }
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 }

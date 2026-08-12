@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.streams;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -59,7 +61,7 @@ final class ZLinkFlowHeaderContractTest {
     void propagatedStageCompletesDependentsInsideCapturedFlowOnly() {
         ZLinkFlowContext.State first = ZLinkFlowContext.create(ZLinkFlowOrigin.INBOUND);
         CompletableFuture<String> source = new CompletableFuture<>();
-        java.util.concurrent.CompletionStage<String> propagated;
+        CompletionStage<String> propagated;
         try (ZLinkFlowContext.Scope ignored = ZLinkFlowContext.enter(first)) {
             propagated = ZLinkFlowContext.propagate(source);
         }
@@ -78,7 +80,7 @@ final class ZLinkFlowHeaderContractTest {
         try (ZLinkFlowContext.Scope ignored = ZLinkFlowContext.enter(first)) {
             var propagatedFailure = ZLinkFlowContext.propagate(failed);
             failed.completeExceptionally(new IllegalStateException("expected"));
-            assertThrows(java.util.concurrent.CompletionException.class,
+            assertThrows(CompletionException.class,
                 () -> propagatedFailure.toCompletableFuture().join());
         }
     }

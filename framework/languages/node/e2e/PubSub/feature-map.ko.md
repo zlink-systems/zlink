@@ -6,7 +6,7 @@
 | `PS-A2` | 10.0.0 전환 대상 | 기존 `PS-A2` scenario | 현재 transport filter 시나리오를 서로 다른 packet name의 typed handler가 자기 event만 정확히 한 번 처리하는 시나리오로 교체해야 한다. |
 | `PS-A3` | 구현 | `Client/Scenarios/ps-a3-late-subscriber-scenario.ts` | 차단된 transport에서 ready 전 event를 한 번 발행하고, subscriber의 실제 `ConnectionReady` 뒤 첫 event 수신과 이전 event replay 부재를 확인한다. |
 | `PS-A4` | 구현 | `Client/Scenarios/ps-a4-subscriber-reconnect-scenario.ts` | subscriber process를 유지한 채 transport를 끊고 복구해 기존 subscription 자동 재적용, disconnect 구간 non-replay, fast subscriber 지속 수신을 확인한다. |
-| `PS-B1` | 구현 | `Client/Scenarios/ps-b1-slow-subscriber-scenario.ts` | slow subscriber delay evidence와 fast subscriber tail event marker를 실제 subscriber 역할 server evidence로 확인한다. |
+| `PS-B1` | 부분 구현 | `Client/Scenarios/ps-b1-slow-subscriber-scenario.ts` | 기본 profile의 slow subscriber 격리는 구현했다. 통합된 scale profile은 E2E 구현 단계에서 같은 scenario에 추가한다. |
 | `PS-B2` | 구현 | `Client/Scenarios/ps-b2-publisher-restart-scenario.ts` | publisher를 같은 endpoint로 재시작한 뒤 기존 subscriber의 `ConnectionReady`와 첫 event 전달을 확인한다. |
 | `PS-C1` | 구현 | `Client/Scenarios/ps-c1-missing-message-name-scenario.ts` | subscriber dispatch drop evidence와 이후 정상 publish delivery marker를 실제 subscriber 역할 server evidence로 확인한다. |
 

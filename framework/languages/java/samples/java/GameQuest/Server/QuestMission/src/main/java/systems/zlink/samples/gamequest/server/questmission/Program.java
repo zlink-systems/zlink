@@ -1,4 +1,5 @@
 package systems.zlink.samples.gamequest.server.questmission;
+import java.util.concurrent.CompletionException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
@@ -141,7 +142,7 @@ public class Program {
         try {
             writeJson(exchange, json, status, body);
         } catch (IOException error) {
-            throw new java.util.concurrent.CompletionException(error);
+            throw new CompletionException(error);
         }
     }
 

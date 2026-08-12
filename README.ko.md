@@ -1,152 +1,165 @@
-[English](./README.md) | [한국어](./README.ko.md)
+[English](./README.md) | **한국어**
 
 # zlink
 
-> [libzmq](https://github.com/zeromq/libzmq) v4.3.5 기반의 현대적 메시징 라이브러리 — 핵심 패턴에 집중하고, Boost.Asio 기반 I/O와 개발 친화적 API를 제공합니다.
+> Core 메시징 엔진, 7개 언어 Bindings, 4개 언어 계열의 독립 런타임으로 구현된
+> 실시간 메시징 Framework를 함께 제공하는 멀티언어 메시징 플랫폼입니다.
 
 [![Build](https://github.com/zlink-systems/zlink/actions/workflows/build.yml/badge.svg)](https://github.com/zlink-systems/zlink/actions/workflows/build.yml)
 [![License: MPL-2.0 / FSL-1.1 / Apache-2.0](https://img.shields.io/badge/License-multiple-blue.svg)](./doc/license/README.ko.md)
 
-[공식 사이트](https://zlink-systems.github.io/zlink/ko/) · [사용자 가이드](./doc/guide/01-overview.ko.md) · [스펙](./doc/spec/README.ko.md) · [바인딩](doc/bindings/overview.ko.md) · [내부 구조](./doc/internals/architecture.ko.md) · [빌드](./doc/building/build-guide.ko.md)
+[공식 사이트](https://zlink-systems.github.io/zlink/ko/) ·
+[전체 문서](./doc/README.ko.md) ·
+[Core 가이드](./core/doc/guide/01-overview.ko.md) ·
+[Bindings 가이드](./bindings/doc/guide/README.ko.md) ·
+[Framework 가이드](./framework/doc/framework/common/guide/server/01-overview.ko.md) ·
+[빌드 가이드](./doc/building/build-guide.ko.md)
 
----
+## 한눈에 보기
 
-## 왜 zlink인가?
+zlink 저장소는 역할과 추상화 수준이 다른 세 계층으로 구성됩니다.
 
-libzmq는 강력하지만 수십 년간 축적된 복잡성을 안고 있습니다 — 레거시 프로토콜, 거의 사용되지 않는 소켓 타입, 그리고 과거 시대에 설계된 I/O 엔진.
+| 계층 | 역할 | 주요 대상 |
+|---|---|---|
+| [`core/`](./core/) | Boost.Asio 기반 네이티브 메시징 엔진과 C API | 저수준 메시징, 네이티브 통합 |
+| [`bindings/`](./bindings/) | Core를 각 언어에 맞는 API와 리소스 수명 모델로 제공 | C++, .NET, Java, Node.js, Python, Go, Rust |
+| [`framework/`](./framework/) | typed handler, Channel, RouteMesh, Spot, Actor, STREAM과 location runtime을 제공 | C++, .NET, JVM(Java/Kotlin), Node.js |
 
-**zlink는 libzmq의 핵심만 남기고 현대적으로 재구축합니다:**
-
-| | libzmq | zlink |
-|---|--------|-------|
-| **Socket Types** | 17종 (draft 포함) | **7종** — PAIR, PUB/SUB, XPUB/XSUB, DEALER/ROUTER, STREAM |
-| **I/O Engine** | 자체 poll/epoll/kqueue | **Boost.Asio** (번들, 외부 의존성 없음) |
-| **암호화** | CURVE (libsodium) | **TLS** (OpenSSL) — `tls://`, `wss://` |
-| **Transport** | 10종+ (PGM, TIPC, VMCI 등) | **6종** — `tcp`, `ipc`, `inproc`, `ws`, `wss`, `tls` |
-| **의존성** | libsodium, libbsd 등 | **OpenSSL만** |
-
----
-
-## 주요 특징
-
-### 간소화된 Core
-
-REQ/REP, PUSH/PULL, 모든 draft socket을 제거했습니다. 남은 7종의 socket type — PAIR, PUB/SUB, XPUB/XSUB, DEALER/ROUTER, STREAM — 으로 실전 메시징 패턴의 대부분을 커버하면서, 복잡성에 의한 실수를 줄입니다. STREAM 소켓은 외부 클라이언트와의 RAW 통신을 위해 tcp, tls, ws, wss transport를 지원합니다.
-현재 STREAM 기본값은 실전 처리량 기준으로 튜닝되어 있습니다: accept 동시성 `4`, 세션 스케줄링 `rr`, `SNDBUF/RCVBUF` 미지정 시 `256KB` 자동 적용. 기존 STREAM 런타임 튜닝 환경변수 대부분은 제거되고 내부 상수로 고정되었습니다.
-
-### Boost.Asio 기반 I/O Engine
-
-전체 I/O 계층을 **Boost.Asio**로 재작성했습니다 (header만 번들 — 외부 Boost 의존성 없음). 검증된 비동기 기반 위에 TLS와 WebSocket transport를 네이티브로 통합할 수 있습니다.
-
-### 네이티브 TLS & WebSocket
-
-외부 프록시 없이 암호화된 transport를 직접 지원합니다:
-
-```c
-// TLS 서버
-zlink_setsockopt(socket, ZLINK_TLS_CERT, "/path/to/cert.pem", ...);
-zlink_setsockopt(socket, ZLINK_TLS_KEY, "/path/to/key.pem", ...);
-zlink_bind(socket, "tls://*:5555");
-
-// TLS 클라이언트
-zlink_setsockopt(socket, ZLINK_TLS_CA, "/path/to/ca.pem", ...);
-zlink_connect(socket, "tls://server.example.com:5555");
+```text
+Application
+    │
+ZLink Framework
+  Channel · RouteMesh · Spot · Actor · STREAM
+    │
+Language Binding
+    │
+zlink Core
+  PAIR · PUB/SUB · XPUB/XSUB · DEALER/ROUTER · STREAM
+    │
+tcp · ipc · inproc · tls · ws · wss
 ```
 
----
+소켓과 전송을 직접 조합하려면 Core 또는 Binding에서 시작하고, 애플리케이션
+host와 DI 안에서 분산 실시간 서비스를 구성하려면 Framework에서 시작합니다.
 
-## 아키텍처
+## 언어 지원
 
-zlink는 5개의 명확히 분리된 계층으로 구성됩니다:
+### Bindings: 7개 언어
 
+zlink Core는 C API를 직접 제공합니다. 그 위에 다음 7개 언어 Binding을
+제공합니다.
+
+| 언어 | Binding 문서 | 소스 |
+|---|---|---|
+| C++ | [가이드](./bindings/doc/guide/cpp/index.ko.md) | [`bindings/cpp`](./bindings/cpp/) |
+| .NET/C# | [가이드](./bindings/doc/guide/dotnet/index.ko.md) | [`bindings/dotnet`](./bindings/dotnet/) |
+| Java | [가이드](./bindings/doc/guide/java/index.ko.md) | [`bindings/java`](./bindings/java/) |
+| Node.js/TypeScript | [가이드](./bindings/doc/guide/node/index.ko.md) | [`bindings/node`](./bindings/node/) |
+| Python | [가이드](./bindings/doc/guide/python/index.ko.md) | [`bindings/python`](./bindings/python/) |
+| Go | [가이드](./bindings/doc/guide/go/index.ko.md) | [`bindings/go`](./bindings/go/) |
+| Rust | [가이드](./bindings/doc/guide/rust/index.ko.md) | [`bindings/rust`](./bindings/rust/) |
+
+- C는 별도 Binding이 아니라 Core의 기본 public API입니다.
+- Kotlin은 Java Binding을 공유합니다.
+- JavaScript는 Node.js Binding을 공유합니다.
+
+### Framework: 4개 언어 계열, 4개 런타임 구현
+
+ZLink Framework의 service runtime은 각 언어에서 독립적으로 구현되며, 공통
+native service runtime이나 service C ABI를 공유하지 않습니다. 런타임 사이에는
+공개 계약, versioned wire protocol과 검증 fixture가 공유됩니다.
+
+| Framework 런타임 | 애플리케이션 통합 | 문서 | 소스 |
+|---|---|---|---|
+| C++ | zlink framework host | [C++ 문서](./framework/doc/framework/cpp/README.ko.md) | [`framework/languages/cpp`](./framework/languages/cpp/) |
+| .NET/C# | ASP.NET Core | [.NET 문서](./framework/doc/framework/dotnet/README.ko.md) | [`framework/languages/dotnet`](./framework/languages/dotnet/) |
+| JVM | Java/Kotlin, Spring Boot | [Java 문서](./framework/doc/framework/java/README.ko.md) · [Kotlin 문서](./framework/doc/framework/kotlin/README.ko.md) | [`framework/languages/java`](./framework/languages/java/) |
+| Node.js | TypeScript/JavaScript, NestJS | [Node.js 문서](./framework/doc/framework/node/README.ko.md) | [`framework/languages/node`](./framework/languages/node/) |
+
+따라서 Framework는 **4개 독립 런타임 구현**을 제공하며, JVM 구현은 Java와
+Kotlin을, Node.js 구현은 TypeScript와 JavaScript를 함께 지원합니다.
+
+## zlink Core
+
+Core는 [libzmq](https://github.com/zeromq/libzmq) v4.3.5에서 출발해 핵심
+메시징 패턴에 집중하도록 재구성한 네이티브 메시징 엔진입니다.
+
+- PAIR, PUB/SUB, XPUB/XSUB, DEALER/ROUTER, STREAM 소켓
+- Boost.Asio 기반 비동기 I/O
+- `tcp`, `ipc`, `inproc`, `tls`, `ws`, `wss` 전송
+- OpenSSL 기반 TLS와 WebSocket 통합
+- routing ID, socket monitoring과 backpressure
+- C API와 7개 언어 Binding에서 공유하는 메시징 의미
+
+Core를 처음 사용한다면 [Core 개요](./core/doc/guide/01-overview.ko.md),
+[소켓 패턴 선택 가이드](./core/doc/guide/03-0-socket-patterns.ko.md),
+[Core 스펙](./core/doc/spec/README.ko.md) 순서로 읽는 것을 권장합니다.
+
+## ZLink Framework
+
+ZLink Framework는 application host의 lifecycle과 DI에 실시간 메시징 계층을
+연결합니다. Spring 위에 Spring MVC가 웹 계층으로 올라가듯, ZLink Framework는
+ASP.NET Core, Spring Boot와 NestJS에 실시간 메시징 계층으로 통합됩니다. C++에서는
+framework host가 DI, 설정, HTTP hosting과 프로세스 lifecycle을 함께 제공합니다.
+
+애플리케이션은 typed handler와 client를 작성하고, Framework는 transport 연결,
+peer discovery, 위치 조회, 라우팅, 재연결, packet codec과 reply correlation을
+관리합니다.
+
+| 기능 | 용도 |
+|---|---|
+| **Channel / RouteMesh** | 논리 ChannelName으로 서버를 찾고 서버 간 요청, 응답, command와 event를 전달 |
+| **Spot** | room, stage, zone처럼 상태를 소유하는 단위를 직렬 실행 문맥에서 처리 |
+| **Actor** | 연결이나 사용자를 나타내는 상태 객체의 lifecycle, session binding과 위치 이동 처리 |
+| **STREAM** | TCP/TLS/WS/WSS 외부 client 연결의 lifecycle, framing과 packet dispatch 관리 |
+| **Location runtime** | 서비스, Spot과 Actor의 현재 위치를 발견하고 연결 상태를 유지 |
+| **Graceful drain** | 신규 작업을 제한하고 진행 중인 작업과 상태 이동을 고려해 종료 |
+
+Framework는 실시간 게임 서버, 장기 연결을 유지하는 stateful 서비스, 여러 언어로
+구성된 분산 서비스처럼 연결·상태·라우팅을 함께 관리해야 하는 시스템에 적합합니다.
+room, zone, match와 actor 기반 서비스 같은 토폴로지는 동일한 RouteMesh, Spot,
+Actor와 STREAM 조합으로 구성할 수 있습니다.
+
+더 자세한 설명은 [Framework 서버 개요](./framework/doc/framework/common/guide/server/01-overview.ko.md)를,
+정식 의미와 책임 경계는 [Framework 공통 스펙](./framework/doc/framework/common/spec/README.ko.md)을
+참고하세요.
+
+## 빠른 시작
+
+### 패키지 사용자
+
+Binding이나 Framework package를 사용하는 애플리케이션은 Core 저장소를 먼저
+빌드할 필요가 없습니다. .NET, Java, Node.js와 Go package 등은 platform native Core를
+package에 포함하며, 다른 언어도 각 가이드가 설치와 native runtime 준비 방법을
+소유합니다.
+
+- Core API를 언어별 package로 사용하려면 [Bindings 언어 선택](./bindings/doc/guide/README.ko.md)에서
+  사용할 언어의 설치 절차와 5분 예제를 확인하세요.
+- ZLink Framework를 사용하려면 [Framework 시작하기](./framework/doc/framework/common/guide/server/02-getting-started.ko.md)에서
+  C++, .NET, Java, Kotlin 또는 Node.js 탭을 선택하세요.
+- 설치 후에는 해당 언어의 sample을 실행해 package와 native runtime이 실제
+  client/server process에서 함께 동작하는지 확인하세요.
+
+### 저장소에서 Core 빌드
+
+다음 요구 사항과 명령은 zlink Core를 소스에서 빌드하는 개발자를 위한 것입니다.
+언어별 package만 사용하는 애플리케이션의 공통 선행 요구 사항이 아닙니다.
+
+#### 요구 사항
+
+- CMake 3.10 이상
+- C++17 지원 컴파일러
+- TLS/WSS를 사용할 경우 OpenSSL
+
+저장소 루트에서 다음 명령을 실행합니다.
+
+```bash
+cmake -S core -B core/build -DWITH_TLS=ON -DBUILD_TESTS=ON
+cmake --build core/build
+ctest --test-dir core/build --output-on-failure
 ```
-┌──────────────────────────────────────────────────────┐
-│  Application Layer                                    │
-│  zlink_ctx_new() · zlink_socket() · zlink_send/recv()      │
-├──────────────────────────────────────────────────────┤
-│  Socket Logic Layer                                   │
-│  PAIR · PUB/SUB · XPUB/XSUB · DEALER/ROUTER · STREAM  │
-│  라우팅 전략: lb_t(Round-robin) · fq_t · dist_t       │
-├──────────────────────────────────────────────────────┤
-│  Engine Layer (Boost.Asio)                            │
-│  asio_zmp_engine — ZMP v1.0 Protocol (8B 고정 헤더)   │
-│  Proactor 패턴 · Speculative I/O · Backpressure       │
-├──────────────────────────────────────────────────────┤
-│  Transport Layer                                      │
-│  tcp · ipc · inproc · ws — 평문                       │
-│  tls · wss             — OpenSSL 암호화               │
-├──────────────────────────────────────────────────────┤
-│  Core Infrastructure                                  │
-│  msg_t(64B 고정) · pipe_t(Lock-free YPipe)            │
-│  ctx_t(I/O Thread Pool) · session_base_t(Bridge)      │
-└──────────────────────────────────────────────────────┘
-```
 
-### 핵심 설계
-
-| 설계 원칙 | 설명 |
-|-----------|------|
-| **Zero-Copy** | 메시지 복사 최소화 — VSM(33B 이하)은 inline 저장, 대용량은 참조 카운팅 |
-| **Lock-Free** | Thread 간 통신에 YPipe(CAS 기반 FIFO) 사용, mutex 없음 |
-| **True Async** | Proactor 패턴 기반 비동기 I/O + Speculative I/O 최적화 |
-| **Protocol Agnostic** | Transport와 Protocol의 명확한 분리 — 자체 ZMP v1.0 프로토콜 사용 |
-
-### Thread 모델
-
-- **Application Thread**: `zlink_send()`/`zlink_recv()` 호출
-- **I/O Thread**: Boost.Asio `io_context` 기반 비동기 네트워크 처리
-- **Reaper Thread**: 종료된 소켓/세션의 자원 정리
-- Thread 간 통신은 Lock-free YPipe + Mailbox 시스템으로 처리
-
-> 상세한 내부 아키텍처는 [Architecture Document](./doc/internals/architecture.ko.md)를 참고하세요.
-
----
-
-## 서비스
-
-코어 소켓 계층 위에 구축된, 실전 분산 시스템을 위한 **고수준 서비스 계층**을 제공합니다:
-
-```
-┌───────────────────────────────────────────────────────┐
-│                      Application                      │
-│        Gateway (요청/응답) · SPOT (발행/구독)         │
-├───────────────────────────────────────────────────────┤
-│                Discovery (서비스 발견)                │
-├───────────────────────────────────────────────────────┤
-│               Registry (서비스 등록소)                │
-├───────────────────────────────────────────────────────┤
-│         zlink Core (7종 소켓 + 6종 Transport)         │
-└───────────────────────────────────────────────────────┘
-```
-
-| 서비스 | 설명 | 가이드 |
-|--------|------|:------:|
-| **Discovery** | Registry 클러스터 HA, Heartbeat 기반 생존 확인, Client-side 서비스 캐시 | [Discovery](./doc/guide/07-1-discovery.ko.md) |
-| **Gateway** | Discovery 기반 위치투명 요청/응답, 자동 로드밸런싱, Thread-safe 전송 | [Gateway](doc/guide/07-2-gateway.ko.md) |
-| **SPOT** | 위치투명 토픽 PUB/SUB, Discovery 기반 자동 Mesh 구성 | [SPOT](./doc/guide/07-3-spot.ko.md) |
-
-> 전체 기능 로드맵과 의존성 그래프는 [Feature Roadmap](doc/plan/feature-roadmap.ko.md)을 참고하세요.
-
----
-
-## 부가 기능
-
-| 기능 | 설명 | 가이드 |
-|------|------|:------:|
-| **Routing ID** | `zlink_routing_id_t` 표준 타입, own 16B UUID / peer 4B uint32 | [Routing ID](./doc/guide/08-routing-id.ko.md) |
-| **모니터링** | Routing-ID 기반 이벤트 식별, Polling 방식 모니터 API | [Monitoring](./doc/guide/06-monitoring.ko.md) |
-
----
-
-## 시작하기
-
-### 요구 사항
-
-- **CMake** 3.10+
-- **C++17** 컴파일러 (GCC 7+, Clang 5+, MSVC 2017+)
-- **OpenSSL** (TLS/WSS 지원)
-
-### 빌드
+플랫폼별 빌드 스크립트도 제공합니다.
 
 ```bash
 # Linux
@@ -155,131 +168,112 @@ zlink는 5개의 명확히 분리된 계층으로 구성됩니다:
 # macOS
 ./core/builds/macos/build.sh arm64 ON
 
-# Windows (PowerShell)
+# Windows PowerShell
 .\core\builds\windows\build.ps1 -Architecture x64 -RunTests "ON"
 ```
 
-### CMake 직접 빌드
+전체 옵션과 의존성은 [빌드 가이드](./doc/building/build-guide.ko.md)와
+[CMake 옵션](./doc/building/cmake-options.ko.md)을 참고하세요.
+
+### 저장소의 Core와 Bindings package 빌드
+
+WSL 개발 환경에서 현재 source revision의 Core와 first-party Bindings package를
+함께 만들려면 local package runner를 사용합니다.
 
 ```bash
-cmake -S core -B core/build/local -DWITH_TLS=ON -DBUILD_TESTS=ON
-cmake --build core/build/local
-ctest --test-dir core/build/local --output-on-failure
+# Core와 모든 first-party Binding package
+scripts/local-package/build-wsl.sh
+
+# 선택한 Binding package만 빌드
+scripts/local-package/build-wsl.sh dotnet java node
 ```
 
-### C Perf 벤치마크 빌드 규칙
+출력 위치, package provenance와 언어별 산출물은
+[local package 가이드](./scripts/local-package/README.ko.md)를 참고하세요. 이 runner는
+Core와 Bindings package를 만들며 Framework 빌드 완료를 의미하지 않습니다.
 
-`bindings/c/perf/run_benchmarks_multi.sh` 는 `build_cpp_release` 를 쓰지 않는다.
-standalone C 벤치마크 빌드는 zlink core runtime 을 `core/build` 에서 가져오기 때문에,
-성능 수치는 그 runtime 을 다시 빌드한 뒤에만 신뢰할 수 있다.
+Framework package 설치와 첫 실행은 [Framework 시작하기](./framework/doc/framework/common/guide/server/02-getting-started.ko.md)가
+안내합니다. Framework source build와 test는 matching Binding package를 준비한 뒤
+각 런타임의 source root에서 독립적으로 수행합니다:
+[C++](./framework/languages/cpp/),
+[.NET](./framework/languages/dotnet/),
+[JVM](./framework/languages/java/),
+[Node.js](./framework/languages/node/).
 
-```bash
-cmake --build core/build
-./bindings/c/perf/run_benchmarks_multi.sh --pattern SPOT_REQREP
-```
+> Core 빌드 성공, 언어별 package 빌드, clean consumer 검증과 실제 client/server
+> sample 실행은 서로 다른 검증 단계입니다. 배포 전에 사용하는 계층과 언어의
+> 빌드·테스트·sample 절차를 각각 확인하세요.
 
-이제 runner 는 실행 전에 실제 `libzlink.so` 경로를 출력하고, `core/src` 나
-`core/include` 가 `core/build` runtime 보다 더 새로우면 즉시 실패한다.
+## 샘플
 
-### CMake 옵션
+### Core와 Bindings
 
-| 옵션 | 기본값 | 설명 |
-|------|--------|------|
-| `WITH_TLS` | `ON` | OpenSSL을 통한 TLS/WSS 활성화 |
-| `BUILD_TESTS` | `ON` | 테스트 빌드 |
-| `BUILD_BENCHMARKS` | `OFF` | 벤치마크 빌드 |
-| `BUILD_SHARED` | `ON` | Shared Library 빌드 |
-| `BUILD_STATIC` | `ON` | Static Library 빌드 |
-| `ZLINK_CXX_STANDARD` | `17` | C++ 표준 (11, 14, 17, 20, 23) |
+각 Binding은 PAIR, PUB/SUB, DEALER/ROUTER, request/reply, STREAM과 monitoring의
+기본 사용법을 보여 주는 언어별 sample을 제공합니다.
 
-### OpenSSL 설치
+- [`bindings/cpp/samples`](./bindings/cpp/samples/)
+- [`bindings/dotnet/samples`](./bindings/dotnet/samples/)
+- [`bindings/java/samples`](./bindings/java/samples/)
+- [`bindings/node/samples`](./bindings/node/samples/)
+- [`bindings/python/samples`](./bindings/python/samples/)
+- [`bindings/go/samples`](./bindings/go/samples/)
+- [`bindings/rust/samples`](./bindings/rust/samples/)
 
-```bash
-# Ubuntu/Debian
-sudo apt-get install libssl-dev
+### Framework
 
-# macOS
-brew install openssl@3
+Framework sample은 단순 API 호출뿐 아니라 여러 역할의 server와 client를 실행해
+실제 업무 흐름을 검증합니다. 공통 sample 계약을 먼저 확인한 뒤 언어별 구현을
+선택하세요.
 
-# Windows (vcpkg)
-vcpkg install openssl:x64-windows
-```
+- [Framework 공통 sample](./framework/doc/framework/common/sample/README.ko.md)
+- [`framework/languages/cpp/samples`](./framework/languages/cpp/samples/)
+- [`framework/languages/dotnet/samples`](./framework/languages/dotnet/samples/)
+- [`framework/languages/java/samples`](./framework/languages/java/samples/)
+- [`framework/languages/node/samples`](./framework/languages/node/samples/)
 
----
+## 문서 찾아가기
+
+| 목적 | 문서 |
+|---|---|
+| 전체 문서 구조 확인 | [문서 네비게이션](./doc/README.ko.md) |
+| Core 사용법 | [Core 사용자 가이드](./core/doc/guide/01-overview.ko.md) |
+| Core 정식 계약 | [Core 스펙](./core/doc/spec/README.ko.md) |
+| 언어별 Binding 사용법 | [Bindings 가이드](./bindings/doc/guide/README.ko.md) |
+| Binding 정식 계약 | [Bindings 스펙](./bindings/doc/spec/README.ko.md) |
+| Framework 개념과 사용 상황 | [Framework 서버 개요](./framework/doc/framework/common/guide/server/01-overview.ko.md) |
+| Framework 정식 계약 | [Framework 공통 스펙](./framework/doc/framework/common/spec/README.ko.md) |
+| Framework 내부 구조 | [Framework internals](./framework/doc/framework/common/internals/README.ko.md) |
+| Core를 소스에서 빌드하고 테스트 | [Core 빌드 가이드](./doc/building/build-guide.ko.md) |
+| 현재 source로 Core와 Bindings local package 생성 | [Local package 가이드](./scripts/local-package/README.ko.md) |
+| Binding package 설치와 사용 | [Bindings 가이드](./bindings/doc/guide/README.ko.md) |
+| Framework package 설치와 첫 실행 | [Framework 시작하기](./framework/doc/framework/common/guide/server/02-getting-started.ko.md) |
+| Framework runtime source/build 진입점 | [C++](./framework/languages/cpp/) · [.NET](./framework/languages/dotnet/) · [JVM](./framework/languages/java/) · [Node.js](./framework/languages/node/) |
+| 릴리스 package 구성 | [패키징 가이드](./doc/building/packaging.ko.md) |
+| 라이선스 정책 | [라이선스 안내](./doc/license/README.ko.md) |
+| 보안 취약점 보고 | [보안 정책](./SECURITY.md) |
+
+가이드는 개념과 사용법을 설명하고, 스펙과 언어별 exact interface가 정식 계약을
+소유합니다. 두 내용이 다르면 스펙과 exact interface를 우선합니다.
 
 ## 지원 플랫폼
 
-| 플랫폼 | Architecture | 상태 |
-|--------|:------------:|:----:|
-| Linux | x64, ARM64 | Stable |
-| macOS | x64, ARM64 | Stable |
-| Windows | x64, ARM64 | Stable |
-
----
-
-## 성능
-
-libzmq 대비 64바이트 메시지 TCP 처리량 비교:
-
-| 패턴 | libzmq | zlink | 차이 |
-|------|-------:|------:|-----:|
-| DEALER↔DEALER | 5,936 Kmsg/s | 6,168 Kmsg/s | **+3.9%** |
-| PAIR | 6,195 Kmsg/s | 5,878 Kmsg/s | -5.1% |
-| PUB/SUB | 5,654 Kmsg/s | 5,756 Kmsg/s | **+1.8%** |
-| DEALER↔ROUTER | 5,609 Kmsg/s | 5,634 Kmsg/s | +0.4% |
-| ROUTER↔ROUTER | 5,161 Kmsg/s | 5,250 Kmsg/s | **+1.7%** |
-| ROUTER↔ROUTER (poll) | 4,405 Kmsg/s | 5,249 Kmsg/s | **+19.2%** |
-| STREAM | 1,786 Kmsg/s | 5,216 Kmsg/s | **+192%** |
-
-> 상세 분석은 [성능 리포트](doc/report/benchmark-2026-02-11.ko.md) 및 [성능 가이드](./doc/guide/10-performance.ko.md)를 참고하세요.
-
----
-
-## 문서
-
-| 문서 | 설명 |
-|------|------|
-| [문서 네비게이션](./doc/README.ko.md) | 전체 문서 목차 및 독자별 경로 |
-| [라이브러리 스펙](./doc/spec/README.ko.md) | zlink 라이브러리 스펙 (코어 + 바인딩) |
-| [사용자 가이드](./doc/guide/01-overview.ko.md) | zlink API 가이드 (12편) |
-| [바인딩 가이드](doc/bindings/overview.ko.md) | C++/Java/.NET/Node.js/Python 바인딩 |
-| [내부 아키텍처](./doc/internals/architecture.ko.md) | 시스템 아키텍처 및 내부 구현 |
-| [빌드 가이드](./doc/building/build-guide.ko.md) | 빌드, 테스트, 패키징 |
-| [Feature Roadmap](doc/plan/feature-roadmap.ko.md) | 기능 로드맵과 의존성 그래프 |
-
----
+Core는 Linux, macOS와 Windows의 x64/ARM64 빌드 경로를 제공합니다. Binding과
+Framework의 지원 runtime, package 형식과 플랫폼 제약은 각 언어 문서에서
+확인하세요.
 
 ## 라이선스
 
-이 저장소는 계층에 따라 세 라이선스를 씁니다.
+이 저장소는 계층에 따라 라이선스가 다릅니다.
 
-| 계층 | 라이선스 |
-|------|----------|
-| `core/`, `bindings/` — 메시징 엔진과 언어별 네이티브 바인딩 | [Mozilla Public License 2.0](./LICENSE) |
-| `framework/` — 상위 프레임워크(SPOT/actor, channel messaging, STREAM, drain) | [Functional Source License 1.1, ALv2 Future License](./framework/LICENSE) |
-| `framework`의 언어별 `http-client` 패키지 — 각 플랫폼에서 흔히 쓰는 HTTP 클라이언트 라이브러리(.NET `System.Net.Http`, Java/Kotlin `java.net.http`, Node `undici`, C++ Boost.Beast)를 감싼 래퍼 | Apache License 2.0 |
+| 범위 | 라이선스 |
+|---|---|
+| `core/`, `bindings/` | [Mozilla Public License 2.0](./LICENSE) |
+| `framework/` | [Functional Source License 1.1, ALv2 Future License](./framework/LICENSE) |
+| Framework 언어별 `http-client` package | Apache License 2.0 |
 
-`http-client` 패키지는 zlink가 자체 구현한 전송 계층이 아니라 허용적
-라이선스의 HTTP 클라이언트 라이브러리를 감싼 것이라 FSL 대신 Apache-2.0을
-씁니다. .NET·Node 패키지는 각자 매니페스트에 `Apache-2.0`을 직접 표기하고,
-Java·Kotlin 패키지는 공유 Gradle 배포 설정에서 이 값을 받으며, C++ 패키지는
-소스와 함께 라이선스 전문을 담아 배포합니다(CMake에는 표준 SPDX 매니페스트
-필드가 없습니다).
+세부 사용 조건, 2년 후 Apache License 2.0 전환 정책과 재배포 고지는
+[라이선스 안내](./doc/license/README.ko.md)와
+[THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)를 참고하세요.
 
-`core`/`bindings`가 MPL-2.0인 이유는 `core`가 [libzmq](https://github.com/zeromq/libzmq)
-v4.3.5(이미 MPL-2.0)에서 출발했기 때문입니다. `framework`는 FSL-1.1-ALv2로,
-내부 사용·비상업 교육/연구·라이선스 사용자를 위한 전문 서비스에 쓸 수 있고,
-그 외에도 Competing Use(경쟁 목적 사용)만 아니면 됩니다. Competing Use는
-소프트웨어 자체를 대체하거나, 우리가 이 소프트웨어로 제공 중인 다른
-제품·서비스를 대체하거나, 실질적으로 동일한 기능을 제공하는 상용 제품·서비스로
-제공하는 것을 말합니다(전체 정의는 [framework/LICENSE](./framework/LICENSE) 참고).
-자기 제품을 만들어 배포하는 것(임베드 포함)은 라이선스의 명시적 허용 목록이
-아니라 이 "Competing Use가 아니다"라는 조항으로 커버됩니다.
-`framework`의 각 릴리스는 발행일로부터 2년 뒤 자동으로 Apache License 2.0으로
-전환됩니다.
-
-서드파티 구성요소 및 바이너리 재배포 관련 고지는
-[THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)를, 정책 전반의 근거는
-[doc/license/README.ko.md](./doc/license/README.ko.md)를 참고하세요.
-
-[libzmq](https://github.com/zeromq/libzmq) 기반 — Copyright (c) 2007-2024 Contributors as noted in the [AUTHORS](./core/AUTHORS) file.
+[libzmq](https://github.com/zeromq/libzmq) 기반 — Copyright (c) 2007-2024
+Contributors as noted in [`core/AUTHORS`](./core/AUTHORS).

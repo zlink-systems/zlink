@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.spotservice.session.spots
 
+
+import systems.zlink.framework.spots.ZLinkSpotClosingContext
 import systems.zlink.e2e.kotlin.spotservice.Contracts
 import systems.zlink.e2e.kotlin.spotservice.ScenarioState
 import systems.zlink.e2e.kotlin.spotservice.session.handlers.UserActorEchoHandler
@@ -32,7 +34,7 @@ class UserSpot(
     }
 
     override suspend fun onClosingSuspending(
-        closingContext: systems.zlink.framework.spots.ZLinkSpotClosingContext,
+        closingContext: ZLinkSpotClosingContext,
     ) {
         evidence.record("SpotClosing", context.spotId(), "")
     }

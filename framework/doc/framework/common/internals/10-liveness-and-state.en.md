@@ -6,24 +6,25 @@ title: "10. Liveness And Status Publication"
 
 [Internal structure table of contents](README.en.md) · [Previous: 9. Session And Actor Binding](09-session-binding.en.md) · [Next: 11. Payload Ownership And Copy](11-message-ownership.en.md)
 
-> **What this chapter answers** — how to judge whether the peer is
-> alive, and how to publish this runtime's status outward.
+> **What this chapter answers** — how to determine whether a peer is
+> still reachable and how to publish the runtime's status.
 >
 > **Contract ownership** — the check period and judgment deadline are
 > owned by [Transport Liveness](../spec/29-transport-liveness.en.md),
 > and the status value and observer contract by
 > [Runtime Status And Operational Diagnostics](../spec/24-runtime-monitoring.en.md).
-> This chapter covers the **structure** that satisfies that contract,
-> and the mismatches actually observed across the four implementations.
+> This chapter covers the **structure** that satisfies that contract and
+> the failures that become visible when status authority is split.
 
-How to judge whether the peer is alive, and how to announce this
-runtime's current status outward. Both decisions directly determine
-"from when calls are accepted."
+This chapter explains how to determine whether a peer is still
+reachable and how to publish the runtime's current status. Both
+decisions directly affect when the runtime starts accepting
+application calls.
 
 ## 1. Liveness Is Judged By One Standard
 
-**Decision — the survival judgment for a mesh peer is owned by one
-structure across the entire runtime.**
+**Decision — one structure owns mesh-peer liveness judgment across the
+entire runtime.**
 
 The formal spec fixes the check period at **5 seconds** and the peer
 judgment deadline at **15 seconds**, and applies the same standard to
@@ -31,9 +32,9 @@ all three connection methods. This value isn't exposed by the builder
 and can't be specified differently per channel/handler/peer
 ([Transport Liveness 「2. Fixed Times And Public API Boundary」](../spec/29-transport-liveness.en.md#2-fixed-times-and-public-api-boundary)).
 
-In one implementation, this judgment is scattered across subsystems
-with each on its own period. This creates a span where the same peer
-looks alive on one side and dead on the other.
+If this judgment is scattered across subsystems that use different
+periods, one subsystem can treat a peer as available while another
+treats it as unavailable during the resulting interval.
 
 **Don't expose it as configuration.** Making the value adjustable at
 all is itself a violation of the contract above.
@@ -45,10 +46,10 @@ signal.** A business message only updates the last-received timestamp
 and doesn't extend the judgment deadline
 ([Transport Liveness 「3. RouteMesh And ClientServer」](../spec/29-transport-liveness.en.md#3-routemesh-and-clientserver)).
 
-The reason is directional asymmetry. Even while the peer keeps sending
-to me, **whether what I sent reaches the peer is unknown.** Judging
-aliveness from receiving alone treats a connection broken in only one
-direction as normal.
+The reason is directional asymmetry. Receiving messages from a peer
+doesn't show **whether messages from this node reach that peer.** Using
+receive traffic alone for liveness would treat a connection broken in
+one direction as normal.
 
 The check signal and its response never reach the application. The
 handler isn't run, and it's not included in ordinary message
@@ -85,8 +86,6 @@ This keeps connection-failure detection from leaking into object creation,
 relocation, or owner-takeover policy.
 
 ## 2. An Unready Target Isn't Blocked From Calls — It's Excluded From Candidates
-
-This is where the four implementations diverged the most.
 
 **Decision — don't block application call admission just because not
 a single peer is ready.**
@@ -128,9 +127,7 @@ flowchart LR
 
 The order of steps 3 and 5 is the crux. Publishing `serving` before
 announcing its own address lets another node treat this node as a
-candidate without knowing where to connect. One implementation
-actually switches to `serving` right after startup and does the
-preparation work afterward, violating this order.
+candidate without knowing where to connect.
 
 **Decision — the status value is a closed set.** There are seven —
 `preparing`, `serving`, `relocating`, `relocated`, `draining`,
@@ -138,21 +135,19 @@ preparation work afterward, violating this order.
 `serving`
 ([Runtime Status And Operational Diagnostics 「2.1 Host State」](../spec/24-runtime-monitoring.en.md#21-host-state)).
 
-**Decision — readiness isn't managed with just a single boolean.** One
-implementation manages it with a single global boolean, and this
-approach can't express the seven states above, nor answer "why isn't
-it ready yet."
+**Decision — readiness isn't managed with just a single boolean.** A
+single global boolean can't express the seven states above or answer
+"why isn't it ready yet."
 
 ## 4. Observation Doesn't Slow Down Processing
 
 **Decision — a status subscriber and metric collector occupy no
 execution authority.**
 
-If a slow subscriber slowed down message processing, the service would
-get slower simply because observation was turned on. The slot sent to
-a subscriber has a bound, and when it overflows, it catches up by
-**coalescing intermediate states.** Conversely, it doesn't slow down
-processing.
+A slow subscriber must not reduce message-processing throughput. Each
+subscriber therefore has bounded waiting space. When it fills, the
+runtime delivers the latest state by **coalescing intermediate states.**
+The message path doesn't wait for the subscriber.
 
 **Decision — a subscription isn't cut just because its slot
 overflowed.** It catches up only via coalescing, and the stream stays
@@ -167,10 +162,10 @@ Retaining indefinitely lets one slow subscriber exhaust runtime
 memory. A subscriber can tell there was a loss from the sequence-number
 gap and the drop count.
 
-**Decision — the published status is a snapshot copy at a specific
-moment.** Passing a live internal data structure as-is forces the
-reading side to require a lock, and that lock spreads into the
-processing path.
+**Decision — published status is a snapshot copy at a specific
+moment.** Passing the current mutable internal data structure directly
+would require readers to take a lock, affecting the message-processing
+path as well.
 
 ### Listener identity is resolved after bind
 
@@ -191,9 +186,9 @@ socket or infer an endpoint from configuration.
 **Decision — keep a bounded slot per subscriber separately, and
 coalesce intermediate-state notifications when it fills up.**
 
-When status changes frequently, sending every change as-is quickly
-fills a slow subscriber's slot. But intermediate-state notifications
-usually **only the latest matters** — in "connection count went
+When status changes frequently, sending every change quickly fills a
+slow subscriber's waiting space. For intermediate-state notifications,
+**usually only the latest matters** — in "connection count went
 3→4→5," the first two can be dropped.
 
 Even while coalescing, there are things that **must not be dropped.**
@@ -239,18 +234,25 @@ updates.
 **Decision — a value whose kind can grow unboundedly isn't put into a
 label.** Endpoint, node identifier, object ID, move identifier,
 correlation identifier, and payload fall here. Using such a value as a
-label makes the time-series count grow with object count, and the
-collector side collapses first.
+label makes the time-series count grow with object count until the
+metric collector exceeds its capacity.
 
 **Per-language discretion.** Whether subscription is push-based or
-pull-based is free. The observation standard is whether message
-processing speed is maintained when a subscriber is artificially made
-slow.
+pull-based is free, because either observes the same result once
+"subscriber callbacks run outside the lock that builds the state" above
+is honored. The observation standard is whether message processing speed
+is maintained when a subscriber is artificially made slow.
+
+Choosing the pull form takes on the same constraint as
+[7. Dispatch Loop 「5. Pick One Wake-Up Method」](07-dispatch-loop.en.md#5-pick-one-wake-up-method):
+the poll interval is the notification latency floor, so that interval is
+recorded in that language's documentation.
 
 ## 5. No Cost When Instrumentation Is Off
 
-Message-flow tracing can be turned on and off during execution. If a
-cost remains while it's off, **every message pays that cost normally.**
+Message-flow tracing can be turned on and off during execution. If work
+remains while it is off, **that cost is added to every message in normal
+operation.**
 
 **Decision — the off-state path ends with reading and branching on the
 current level.** It doesn't build a value to record, doesn't assemble
@@ -265,8 +267,8 @@ The formal spec explicitly requires this.
 > — [Message Flow Tracing 「4.1 Changing The Record Level At Runtime」](../spec/26-message-flow-tracing.en.md#41-changing-the-record-level-at-runtime)
 
 The second sentence is the crux. **An implementation that builds the
-whole value and drops it at the output stage violates the contract** —
-because the cost has already been fully paid by then.
+whole value and drops it at the output stage violates the contract.**
+Suppressing output doesn't remove the cost of building the value.
 
 **Decision — even while on, a value that doesn't need to be rebuilt
 per message is built ahead of time.** A label decided at registration
@@ -280,7 +282,7 @@ message midway. Changing it would leave half a message's record.
 
 ## 6. Result To Confirm
 
-- Mesh peer survival judgment uses one standard across the entire
+- Mesh peer liveness judgment uses one standard across the entire
   runtime.
 - The check period and judgment deadline aren't exposed as
   configuration.

@@ -1,4 +1,10 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.Objects;
+import java.util.logging.Logger;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 
 import java.time.Duration;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
@@ -44,6 +50,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
     private final ZLinkActorRuntime actors;
     private final ZLinkMessageSerializer serializer;
     private final long bindingToken;
+    private final long bindingGeneration;
     private final Predicate<RoutingId> routeReady;
     private final ZLinkSessionActorsRuntime.LocalActorDispatcher localActorDispatcher;
     private final boolean nativeSessionRelayAttached;
@@ -51,6 +58,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
     private final ZLinkSessionRelayHeaders relayHeaders;
     private final ZLinkMessageFlowTracer flow;
     private final BooleanSupplier currentBinding;
+    private final ZLinkSessionActorsRuntime.IngressAdmission ingressAdmission;
     private final ZLinkRelayMetadataPolicy metadataPolicy;
     private Runnable unbindListener = () -> {};
     private volatile boolean nativeRebound;
@@ -65,6 +73,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         ZLinkActorRuntime actors,
         ZLinkMessageSerializer serializer,
         long bindingToken,
+        long bindingGeneration,
         Predicate<RoutingId> routeReady,
         ZLinkSessionActorsRuntime.LocalActorDispatcher localActorDispatcher,
         boolean nativeSessionRelayAttached,
@@ -72,15 +81,21 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         ZLinkSessionRelayHeaders relayHeaders,
         ZLinkMessageFlowTracer flow,
         BooleanSupplier currentBinding,
+        ZLinkSessionActorsRuntime.IngressAdmission ingressAdmission,
         ZLinkRelayMetadataPolicy metadataPolicy) {
         this.stream = stream;
         this.sessionRid = sessionRid;
         this.ref = ref;
-        this.meshName = java.util.Objects.requireNonNull(meshName, "meshName");
+        this.meshName = Objects.requireNonNull(meshName, "meshName");
         this.managedActor = managedActor;
         this.actors = actors;
-        this.serializer = java.util.Objects.requireNonNull(serializer, "serializer");
+        this.serializer = Objects.requireNonNull(serializer, "serializer");
         this.bindingToken = bindingToken;
+        if (bindingGeneration <= 0) {
+            throw new IllegalArgumentException(
+                "bound Session binding generation must be positive");
+        }
+        this.bindingGeneration = bindingGeneration;
         this.routeReady = routeReady == null ? ignored -> true : routeReady;
         this.localActorDispatcher = localActorDispatcher;
         this.nativeSessionRelayAttached = nativeSessionRelayAttached;
@@ -88,6 +103,9 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         this.relayHeaders = relayHeaders;
         this.flow = flow;
         this.currentBinding = currentBinding == null ? () -> true : currentBinding;
+        this.ingressAdmission = ingressAdmission == null
+            ? operation -> operation.apply(0)
+            : ingressAdmission;
         this.metadataPolicy =
             metadataPolicy == null ? ZLinkRelayMetadataPolicy.EMPTY : metadataPolicy;
     }
@@ -123,9 +141,13 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         nativeRebound = true;
     }
 
-    CompletionStage<Void> rebindNativeActorRoute(
+    long bindingGeneration() {
+        return bindingGeneration;
+    }
+
+    CompletionStage<Void> prepareNativeActorRoute(
         ZLinkBackendActorRef targetActor,
-        java.time.Duration timeout) {
+        Duration timeout) {
         if (!ref.actorId().equals(targetActor.actorId())
             || ref.generation() != targetActor.generation()) {
             return CompletableFuture.failedFuture(
@@ -133,27 +155,37 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                     "relocation route switch requires the same Actor "
                         + "identity and generation"));
         }
-        return ZLinkBoundSessionRuntime.ignoreMissingBinding(
-                stream.unbindActor(
-                    sessionRid,
-                    ref.actorId()).submit(timeout))
-            .thenRun(() -> relocationTrace("unbind-complete", targetActor))
-            .thenCompose(ignored -> ZLinkActorRetryScheduler.waitUntilRelay(
+        return ZLinkActorRetryScheduler.waitUntilRelay(
                 timeout,
                 () -> routeReady.test(targetActor.nodeRid()),
                 () -> {},
                 () -> new TimeoutException(
                     "remote bound session route was not ready before timeout: "
-                        + targetActor.actorId())))
+                        + targetActor.actorId()))
             .thenRun(() -> relocationTrace("route-ready", targetActor))
-            .thenCompose(ignored ->
-                ZLinkBoundSessionRuntime.bindActorWithRetry(
-                    stream,
+            .thenCompose(ignored -> stream.relocateBoundActor(
                     sessionRid,
+                    ref.actorId(),
+                    bindingGeneration,
                     targetActor,
                     timeout))
             .thenRun(() -> relocationTrace("bind-complete", targetActor))
-            .thenRun(() -> rebindNativeActor(targetActor))
+            .thenCompose(ignored -> notifyRemoteBoundSession());
+    }
+
+    void commitPreparedNativeActorRoute(ZLinkBackendActorRef targetActor) {
+        rebindNativeActor(targetActor);
+    }
+
+    CompletionStage<Void> compensatePreparedNativeActorRoute(
+        ZLinkBackendActorRef sourceActor,
+        Duration timeout) {
+        return stream.relocateBoundActor(
+                sessionRid,
+                sourceActor.actorId(),
+                bindingGeneration,
+                sourceActor,
+                timeout)
             .thenCompose(ignored -> notifyRemoteBoundSession());
     }
 
@@ -161,7 +193,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         String stage,
         ZLinkBackendActorRef targetActor) {
         if ("1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"))) {
-            java.util.logging.Logger.getLogger(
+            Logger.getLogger(
                     ZLinkBoundActor.class.getName())
                 .warning("[zlink-java-stream-trace] relocation " + stage
                     + " actor=" + targetActor.actorId()
@@ -203,24 +235,34 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         Message message = ZLinkMessagePayloads.message(payload, serializer);
         byte[] payloadBytes = message.toByteArray();
         message.close();
-        if (managedActor.isPresent() && localActorDispatcher != null) {
-            return ZLinkOneWayCalls.adaptOneWay(relayLocal(header, payloadBytes));
-        }
-        return ZLinkOneWayCalls.adaptOneWay(
-            relayUsingStoredBinding(header, payloadBytes));
+        return ZLinkOneWayCalls.adaptOneWay(ingressAdmission.submit(
+            sourceSessionSequence -> {
+            if (managedActor.isPresent()
+                && localActorDispatcher != null
+                && !nativeRebound) {
+                return relayLocal(
+                    header,
+                    payloadBytes,
+                    sourceSessionSequence);
+            }
+            return relayUsingStoredBinding(
+                header,
+                payloadBytes,
+                sourceSessionSequence);
+        }));
     }
 
     private void traceRelay(ZLinkStreamHeader header) {
         if (flow == null
-            || !flow.enabled(systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome.SENT)) {
+            || !flow.enabled(ZLinkMessageFlowOutcome.SENT)) {
             return;
         }
-        flow.trace(new systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent(
-            systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome.SENT,
-            systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface.SPOT_ACTOR,
+        flow.trace(new ZLinkMessageFlowEvent(
+            ZLinkMessageFlowOutcome.SENT,
+            ZLinkDispatchErrorSurface.SPOT_ACTOR,
             header.requestSequence().isPresent()
-                ? systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind.ACTOR_REQUEST
-                : systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind.ACTOR_SEND,
+                ? ZLinkDispatchMessageKind.ACTOR_REQUEST
+                : ZLinkDispatchMessageKind.ACTOR_SEND,
             header.packetName(),
             null,
             null,
@@ -236,13 +278,18 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
 
     private CompletionStage<Void> relayLocal(
         ZLinkStreamHeader header,
-        byte[] payloadBytes) {
+        byte[] payloadBytes,
+        long sourceSessionSequence) {
         if (localActorDispatcher == null) {
             return CompletableFuture.failedFuture(new ZLinkConfigurationException(
                 "local actor dispatch requires a Spot runtime"));
         }
         Message payload = Message.from(payloadBytes);
-        return localActorDispatcher.dispatch(ref, header, payload)
+        return localActorDispatcher.dispatch(
+                ref,
+                sourceSessionSequence,
+                header,
+                payload)
             .thenCompose(reply -> {
                 if (reply.isEmpty()) {
                     return CompletableFuture.completedFuture(null);
@@ -254,21 +301,20 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
 
     private CompletionStage<Void> replyLocal(
         ZLinkStreamHeader header,
-        Message reply) {
+        ZLinkSessionActorsRuntime.LocalActorReply reply) {
         try {
             if (header.requestSequence().isEmpty()) {
-                reply.close();
                 return CompletableFuture.failedFuture(new ZLinkConfigurationException(
                     "actor reply requires a stream request sequence: "
                         + header.packetName()));
             }
             ZLinkStreamHeader replyHeader = ZLinkStreamHeader.createResponse(
                 header,
-                header.codec(),
+                reply.codec(),
                 EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
                 header.packetName(),
                 Map.of());
-            byte[] replyBytes = reply.toByteArray();
+            byte[] replyBytes = reply.payload().toByteArray();
             return ZLinkActorRetryScheduler.submitRelayUntilAccepted(
                 ZLinkSessionActorsRuntime.RELAY_SUBMIT_TIMEOUT,
                 () -> {
@@ -284,7 +330,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                     "local actor session reply was not ready before timeout: "
                         + ref.actorId()));
         } finally {
-            reply.close();
+            reply.payload().close();
         }
     }
 
@@ -296,7 +342,8 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
 
     private CompletionStage<Void> relayUsingStoredBinding(
         ZLinkStreamHeader header,
-        byte[] payloadBytes) {
+        byte[] payloadBytes,
+        long sourceSessionSequence) {
         return ZLinkActorRetryScheduler.submitStoredRelayUntilAccepted(
             ZLinkSessionActorsRuntime.RELAY_SUBMIT_TIMEOUT,
             () -> {
@@ -304,6 +351,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                     return stream.relayBoundActor(
                         sessionRid,
                         ref.actorId(),
+                        sourceSessionSequence,
                         header,
                         List.of(payloadPart),
                         SendFlags.DONT_WAIT);
@@ -320,7 +368,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
     }
 
     CompletionStage<Void> notifyDisconnected(Duration timeout) {
-        java.util.Objects.requireNonNull(timeout, "timeout");
+        Objects.requireNonNull(timeout, "timeout");
         CompletableFuture<Void> result;
         boolean bindingCurrent;
         synchronized (this) {
@@ -350,7 +398,14 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                 timeout.toMillis(),
                 TimeUnit.MILLISECONDS)
             .handle((ignored, notifyError) -> notifyError)
-            .thenCompose(notifyError -> stream.unbindActor(sessionRid, ref.actorId())
+            //  The disconnect notification can complete inline inside the
+            //  transport's reply callback, still inside the native router
+            //  submit that carried it. Submitting the unbind request from that
+            //  frame re-enters the same socket while its non-reentrant public
+            //  API sync is held and livelocks the service pump (observed as a
+            //  shutdown hang that ends in SIGKILL). Always hop off the
+            //  completing thread before the unbind submit.
+            .thenComposeAsync(notifyError -> stream.unbindActor(sessionRid, ref.actorId())
                 .submit(timeout)
                 .handle((ignored, unbindError) -> {
                     if (notifyError != null) {

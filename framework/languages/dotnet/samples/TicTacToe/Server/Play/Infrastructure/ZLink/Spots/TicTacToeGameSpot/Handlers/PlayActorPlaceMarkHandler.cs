@@ -5,7 +5,6 @@ using Zlink.Framework.Contracts.Spots;
 
 namespace TicTacToe.Server.Play.Infrastructure.ZLink.Spots.TicTacToeGameSpot.Handlers;
 
-[ZLinkSpotActorRequestHandler(nameof(PlaceMarkReq))]
 // --8<-- [start:doc-actor-packet-handler]
 internal sealed class PlayActorPlaceMarkHandler(ILogger<PlayActorPlaceMarkHandler> logger)
     : IZLinkSpotActorRequestHandler<TicTacToeGame, PlayActor, PlaceMarkReq, PlaceMarkRes>

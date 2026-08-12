@@ -1,4 +1,7 @@
 package systems.zlink.e2e.registrymessaging.provider.Endpoints;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 import java.time.Duration;
 import java.util.List;
@@ -10,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.beans.factory.ObjectProvider;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.e2e.registrymessaging.provider.Infrastructure.ScenarioState;
+import systems.zlink.e2e.registrymessaging.provider.Infrastructure.ProfileGate;
 import systems.zlink.e2e.registrymessaging.shared.Contracts;
 import systems.zlink.e2e.registrymessaging.shared.FailureEvidence;
 import systems.zlink.framework.channels.ZLinkClient;
@@ -48,21 +52,21 @@ public final class ProviderEndpoints {
     }
 
     @GetMapping("/health")
-    public java.util.Map<String, String> health() {
-        return java.util.Map.of("status", "ready", "rid", state.providerRid());
+    public Map<String, String> health() {
+        return Map.of("status", "ready", "rid", state.providerRid());
     }
 
     @GetMapping("/route/status")
-    public java.util.Map<String, Object> routeStatus() {
+    public Map<String, Object> routeStatus() {
         var snapshot = drain.routeMeshRuntime().snapshot(Contracts.ROUTE_CHANNEL);
-        return java.util.Map.of(
+        return Map.of(
             "meshName", snapshot.meshName(),
             "ready", snapshot.isReady(),
             "readyPeerCount", snapshot.readyPeerCount(),
             "peers", snapshot.peers().stream()
-                .map(peer -> java.util.Map.<String, Object>of(
+                .map(peer -> Map.<String, Object>of(
                     "nodeRid", peer.nodeRid().toString(),
-                    "state", peer.state().name().toLowerCase(java.util.Locale.ROOT)))
+                    "state", peer.state().name().toLowerCase(Locale.ROOT)))
                 .toList());
     }
 
@@ -79,7 +83,7 @@ public final class ProviderEndpoints {
             .toCompletableFuture().join();
         state.record("IdentityCreate", request.marker() + ":" + result.actorState()
             + ":" + result.spotState());
-        return java.util.concurrent.CompletableFuture.completedFuture(result);
+        return CompletableFuture.completedFuture(result);
     }
 
     @PostMapping("/identity/ping")
@@ -114,29 +118,29 @@ public final class ProviderEndpoints {
     }
 
     @PostMapping("/profile/gate/reset")
-    public java.util.Map<String, String> resetProfileGate(
-        systems.zlink.e2e.registrymessaging.provider.Infrastructure.ProfileGate gate) {
+    public Map<String, String> resetProfileGate(
+        ProfileGate gate) {
         gate.reset();
-        return java.util.Map.of("status", "closed");
+        return Map.of("status", "closed");
     }
 
     @PostMapping("/profile/gate/release")
-    public java.util.Map<String, String> releaseProfileGate(
-        systems.zlink.e2e.registrymessaging.provider.Infrastructure.ProfileGate gate) {
+    public Map<String, String> releaseProfileGate(
+        ProfileGate gate) {
         gate.open();
-        return java.util.Map.of("status", "released");
+        return Map.of("status", "released");
     }
 
     @PostMapping("/evidence/clear")
-    public java.util.Map<String, String> clearEvidence() {
+    public Map<String, String> clearEvidence() {
         state.clear();
-        return java.util.Map.of("status", "cleared");
+        return Map.of("status", "cleared");
     }
 
     @PostMapping("/admin/drain")
-    public CompletionStage<java.util.Map<String, String>> drain() {
+    public CompletionStage<Map<String, String>> drain() {
         return drain.shutdown(Duration.ofSeconds(30))
-            .thenApply(result -> java.util.Map.of(
+            .thenApply(result -> Map.of(
                 "result", result.outcome() == systems.zlink.framework.runtime.host
                     .ZLinkFrameworkTerminationOutcome.STOPPED ? "Drained" : "ForceStopped"));
     }
@@ -153,10 +157,10 @@ public final class ProviderEndpoints {
     }
 
     @PostMapping("/profile/command")
-    public java.util.Map<String, String> profileCommand(@RequestBody Contracts.ProfileMsg command) {
+    public Map<String, String> profileCommand(@RequestBody Contracts.ProfileMsg command) {
         client.sendToChannel(Contracts.API_CHANNEL, command)
             .submit();
-        return java.util.Map.of("status", "sent");
+        return Map.of("status", "sent");
     }
 
     @PostMapping("/profile/route/request")

@@ -3,6 +3,7 @@ using System.Diagnostics.Metrics;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Streams;
 
 using Zlink.Framework.Runtime.Identifiers;
@@ -1307,6 +1308,158 @@ public sealed class SessionActorCoordinatorTests
 
         Assert.Equal(2, stream.Writes.Count);
         Assert.Equal(new byte[] { 7, 8, 9 }, stream.Writes[1].Payload);
+    }
+
+    [Fact]
+    public async Task Canonical_Seal_Retries_Target_Push_Until_Command_44_Commits()
+    {
+        var runtime = CreateRuntime();
+        runtime.Registration.Locations.UseInMemoryStores = true;
+        var store = runtime.Registration.Locations.ResolveStore()!;
+        var targetNode = RoutingId.From("actor-node-canonical-target");
+        const ulong targetNodeGeneration = 2;
+        var targetOwner = await store.ClaimLiveOwnerAsync(
+            "target-owner-canonical-push",
+            TimeSpan.FromMinutes(5));
+        _ = Assert.IsType<ZLinkAuthoritySnapshot>(
+            await AuthorityLocationTestFixture.PublishActorAsync(
+                store,
+                new ZLinkResolvedActorLocation(
+                    "actors",
+                    "actor-route-canonical-primer",
+                    "player",
+                    new ActorRef(
+                        "actor-route-canonical-primer",
+                        1,
+                        "actors",
+                        targetNode),
+                    targetNode,
+                    targetNodeGeneration,
+                    "entry:canonical-target",
+                    1,
+                    ZLinkSpotKind.Entry,
+                    0,
+                    targetOwner.OwnerId,
+                    targetOwner.LeaseGeneration,
+                    default,
+                    0)));
+        var targetAuthoritySnapshot = Assert.IsType<ZLinkAuthoritySnapshot>(
+            await AuthorityLocationTestFixture.PublishActorAsync(
+                store,
+                new ZLinkResolvedActorLocation(
+                    "actors",
+                    "actor-route-canonical",
+                    "player",
+                    new ActorRef(
+                        "actor-route-canonical",
+                        1,
+                        "actors",
+                        targetNode),
+                    targetNode,
+                    targetNodeGeneration,
+                    "entry:canonical-target",
+                    1,
+                    ZLinkSpotKind.Entry,
+                    0,
+                    targetOwner.OwnerId,
+                    targetOwner.LeaseGeneration,
+                    default,
+                    0)));
+        var stream = new TestStream(RoutingId.From("session-route-canonical"));
+        var context = CreateSessionContext(runtime, stream);
+        var source = new ActorRef(
+            "actor-route-canonical",
+            targetAuthoritySnapshot.ObjectGeneration,
+            "actors",
+            RoutingId.From("actor-node-canonical-source"));
+        _ = await context.ActorCoordinator.BindOrGetActorAsync(
+            context,
+            source,
+            CancellationToken.None);
+        Assert.True(runtime.TryGetSessionActorBinding(source.ActorId, out var identity));
+
+        var relocationId = new ZLinkServiceWireCodec.RelocationWireId(101, 103);
+        var seal = new ZLinkServiceWireCodec.SessionRelocationSealRecord(
+            relocationId,
+            new ZLinkServiceWireCodec.RelocationCoordinatorFence(
+                "source-owner",
+                identity.OwnerLeaseGeneration,
+                source.NodeRid,
+                identity.TargetNodeGeneration,
+                "store-canonical-push"),
+            1,
+            new ZLinkServiceWireCodec.SessionActorRouteFenceRecord(
+                new ZLinkServiceWireCodec.SessionActorIdentityRecord(
+                    source.ActorId,
+                    source.ObjectGeneration),
+                source.NodeRid,
+                identity.TargetNodeGeneration,
+                identity.AuthorityOwnerGeneration,
+                identity.OwnerLeaseGeneration),
+            new ZLinkServiceWireCodec.SessionOwnerFenceRecord(
+                identity.SessionOwnerNodeRid,
+                identity.SessionOwnerNodeGeneration,
+                identity.SessionOwnerId,
+                identity.SessionOwnerLeaseGeneration,
+                identity.Context.RoutingId!.Value,
+                identity.BindingGeneration));
+        var sealedRecord = await runtime.SealCanonicalSessionActorRouteAsync(
+            seal,
+            CancellationToken.None);
+
+        var targetAuthority = targetAuthoritySnapshot.AuthorityOwnerGeneration;
+        var targetOwnerLease = checked((ulong)targetOwner.LeaseGeneration);
+        Assert.True(targetAuthority > identity.AuthorityOwnerGeneration);
+        var relay = new ZLinkRemoteSessionPushRelay(
+            source.ActorId,
+            source.ObjectGeneration,
+            identity.MeshName,
+            targetNode.ToHex(),
+            targetNodeGeneration,
+            targetAuthority,
+            targetOwnerLease,
+            identity.BindingToken,
+            identity.BindingGeneration,
+            identity.SessionOwnerNodeGeneration,
+            identity.Context.RoutingId.Value.ToHex(),
+            [7, 8, 9]);
+
+        var pending = runtime.DeliverRemoteSessionPushAsync(
+                relay,
+                relay.Frame,
+                targetNode,
+                CancellationToken.None)
+            .AsTask();
+        Assert.False(pending.IsCompleted);
+        Assert.Empty(stream.Writes);
+
+        var command44 = new ZLinkServiceWireCodec.SessionRelocationRouteRecord(
+            relocationId,
+            seal.Coordinator,
+            2,
+            seal.Actor.Actor,
+            seal.Session,
+            ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord.Commit(
+                identity.AuthorityOwnerGeneration,
+                targetAuthority,
+                targetNode,
+                targetNodeGeneration,
+                sealedRecord.LastAcceptedSessionSequence));
+        var routed = runtime.RouteCanonicalSessionActor(
+            command44,
+            new ZLinkSessionRelocationAuthenticatedRoute(
+                targetNode,
+                targetNodeGeneration,
+                identity.MeshName,
+                targetAuthority,
+                targetOwnerLease));
+
+        Assert.Equal(
+            ZLinkServiceWireCodec.SessionRelocationRouteResult.Applied,
+            routed.Result);
+        await pending.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Single(stream.Writes);
+        Assert.Equal(new byte[] { 7, 8, 9 }, stream.Writes[0].Payload);
     }
 
     [Fact]

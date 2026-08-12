@@ -1,4 +1,14 @@
 package systems.zlink.framework.runtime.channels;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.LockSupport;
+import java.util.stream.Collectors;
+import systems.zlink.contracts.errors.ZlinkCloseException;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -60,9 +70,9 @@ final class ZLinkChannelSocketRegistry {
     private long clientServerControlCursor;
     private boolean unmanagedBackendClientMode;
     private static final long CLIENT_SERVER_PROBE_INTERVAL_NANOS =
-        java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        TimeUnit.SECONDS.toNanos(5);
     private static final long CLIENT_SERVER_DEADLINE_NANOS =
-        java.util.concurrent.TimeUnit.SECONDS.toNanos(15);
+        TimeUnit.SECONDS.toNanos(15);
 
     void registerChannel(ChannelRegistration registration) {
         registrations.put(registration.name(), registration);
@@ -112,7 +122,7 @@ final class ZLinkChannelSocketRegistry {
 
     synchronized ZLinkBackendDealerSocket clientForOutbound(String channelName) {
         Set<ClientServerConnection> physical =
-            java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+            Collections.newSetFromMap(new IdentityHashMap<>());
         physical.addAll(clientServerConnections.values());
         List<ClientServerConnection> admitted = physical
             .stream()
@@ -122,7 +132,7 @@ final class ZLinkChannelSocketRegistry {
                 && connection.descriptor().state()
                     == systems.zlink.framework.runtime.host
                         .ZLinkFrameworkRuntimeState.SERVING)
-            .sorted(java.util.Comparator.comparing(
+            .sorted(Comparator.comparing(
                 ClientServerConnection::connectionId))
             .toList();
         Map<String, ClientServerConnection> distinct =
@@ -133,7 +143,7 @@ final class ZLinkChannelSocketRegistry {
                 connection);
         }
         List<ClientServerConnection> eligible = distinct.values().stream()
-            .sorted(java.util.Comparator.comparing(
+            .sorted(Comparator.comparing(
                 connection -> connection.descriptor().serverRid().toHex()))
             .toList();
         long total = 0;
@@ -153,7 +163,7 @@ final class ZLinkChannelSocketRegistry {
                 ignored -> new HashMap<>());
         Set<String> eligibleServerIds = eligible.stream()
             .map(connection -> connection.descriptor().serverRid().toHex())
-            .collect(java.util.stream.Collectors.toSet());
+            .collect(Collectors.toSet());
         currentByServer.keySet().removeIf(
             serverId -> !eligibleServerIds.contains(serverId));
         ClientServerConnection selectedConnection = null;
@@ -203,9 +213,9 @@ final class ZLinkChannelSocketRegistry {
             if (remaining <= 0) {
                 return null;
             }
-            java.util.concurrent.locks.LockSupport.parkNanos(
+            LockSupport.parkNanos(
                 Math.min(
-                    java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(
+                    TimeUnit.MILLISECONDS.toNanos(
                         READY_POLL_INTERVAL_MILLIS),
                     remaining));
             if (Thread.currentThread().isInterrupted()) {
@@ -438,7 +448,7 @@ final class ZLinkChannelSocketRegistry {
 
     synchronized int clientServerPhysicalConnectionCount() {
         Set<ClientServerConnection> physical =
-            java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+            Collections.newSetFromMap(new IdentityHashMap<>());
         physical.addAll(clientServerConnections.values());
         return physical.size();
     }
@@ -446,9 +456,9 @@ final class ZLinkChannelSocketRegistry {
     synchronized List<ClientServerTargetSnapshot>
         clientServerTargetSnapshots(String channelName) {
         Map<String, ClientServerTargetSnapshot> targets =
-            new java.util.LinkedHashMap<>();
+            new LinkedHashMap<>();
         Set<ClientServerConnection> physical =
-            java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+            Collections.newSetFromMap(new IdentityHashMap<>());
         physical.addAll(clientServerConnections.values());
         for (ClientServerConnection connection : physical) {
             ZLinkClientServerServerDescriptor descriptor =
@@ -524,7 +534,7 @@ final class ZLinkChannelSocketRegistry {
                 new ZLinkClientServerServerDescriptor(
                     entry.getKey(),
                     serverRoutingIds.get(entry.getKey()),
-                    java.util.concurrent.ThreadLocalRandom.current()
+                    ThreadLocalRandom.current()
                         .nextLong(1, Long.MAX_VALUE),
                     1,
                     endpoint,
@@ -534,14 +544,14 @@ final class ZLinkChannelSocketRegistry {
                     "default",
                     ownerId,
                     1,
-                    java.time.Instant.EPOCH));
+                    Instant.EPOCH));
         }
     }
 
     boolean tryHandleClientServerControl(
         String channelName,
         ZLinkBackendRouterSocket router,
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived received) {
+        ZLinkBackendReceived received) {
         if (received.parts().isEmpty()) {
             return false;
         }
@@ -625,12 +635,12 @@ final class ZLinkChannelSocketRegistry {
         List<ClientServerServerPeer> serverPeers;
         synchronized (this) {
             Set<ClientServerConnection> physical =
-                java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+                Collections.newSetFromMap(new IdentityHashMap<>());
             physical.addAll(clientServerConnections.values());
             clientConnections = new ArrayList<>(physical);
             serverPeers = List.copyOf(clientServerServerPeers.values());
         }
-        clientConnections.sort(java.util.Comparator.comparing(
+        clientConnections.sort(Comparator.comparing(
             ClientServerConnection::connectionId));
         int connectionCount = clientConnections.size();
         int connectionStart = connectionCount == 0
@@ -1105,7 +1115,7 @@ final class ZLinkChannelSocketRegistry {
     }
 
     void closeSpotRouteBridges() {
-        closeAll(spotRouteBridges.values(), java.util.Collections.newSetFromMap(
+        closeAll(spotRouteBridges.values(), Collections.newSetFromMap(
             new IdentityHashMap<>()));
         spotRouteBridges.clear();
     }
@@ -1119,20 +1129,25 @@ final class ZLinkChannelSocketRegistry {
         // DEALER it observes. Draining ownedSockets in insertion order would
         // close the DEALER before its monitor.
         Set<ClientServerConnection> physical =
-            java.util.Collections.newSetFromMap(new IdentityHashMap<>());
-        List<ZLinkBackendObject> owned;
+            Collections.newSetFromMap(new IdentityHashMap<>());
         synchronized (this) {
             physical.addAll(clientServerConnections.values());
-            owned = List.copyOf(ownedSockets);
             clientServerConnections.clear();
             clientServerServerDescriptors.clear();
             clientServerServerPeers.clear();
-            ownedSockets.clear();
         }
         for (ClientServerConnection connection : physical) {
             closeClientServerPhysical(connection);
         }
-        closeAll(owned, java.util.Collections.newSetFromMap(
+        List<ZLinkBackendObject> owned;
+        synchronized (this) {
+            // closeClientServerPhysical removes its monitor and DEALER from
+            // the owned set. Snapshot only after that ordered close so the
+            // generic drain cannot close either physical object a second time.
+            owned = List.copyOf(ownedSockets);
+            ownedSockets.clear();
+        }
+        closeAll(owned, Collections.newSetFromMap(
             new IdentityHashMap<>()));
     }
 
@@ -1266,9 +1281,9 @@ final class ZLinkChannelSocketRegistry {
         if (advertiseHost == null || advertiseHost.isBlank()) {
             return endpoint;
         }
-        java.net.URI value = java.net.URI.create(endpoint);
+        URI value = URI.create(endpoint);
         try {
-            return new java.net.URI(
+            return new URI(
                 value.getScheme(),
                 value.getUserInfo(),
                 advertiseHost,
@@ -1276,7 +1291,7 @@ final class ZLinkChannelSocketRegistry {
                 value.getPath(),
                 value.getQuery(),
                 value.getFragment()).toString();
-        } catch (java.net.URISyntaxException invalid) {
+        } catch (URISyntaxException invalid) {
             throw new IllegalArgumentException(
                 "Invalid ClientServer advertise host.", invalid);
         }
@@ -1304,13 +1319,13 @@ final class ZLinkChannelSocketRegistry {
         if (advertiseHost == null || advertiseHost.isBlank()) {
             return endpoint;
         }
-        java.net.URI value = java.net.URI.create(endpoint);
+        URI value = URI.create(endpoint);
         try {
-            return new java.net.URI(
+            return new URI(
                 value.getScheme(), value.getUserInfo(), advertiseHost,
                 value.getPort(), value.getPath(), value.getQuery(), value.getFragment())
                 .toString();
-        } catch (java.net.URISyntaxException invalid) {
+        } catch (URISyntaxException invalid) {
             throw new IllegalArgumentException(
                 "Invalid Fanout advertise host.", invalid);
         }
@@ -1323,7 +1338,7 @@ final class ZLinkChannelSocketRegistry {
             if (closeable != null && closed.add(closeable)) {
                 try {
                     closeable.close();
-                } catch (systems.zlink.contracts.errors.ZlinkCloseException ignored) {
+                } catch (ZlinkCloseException ignored) {
                 }
             }
         }
@@ -1351,7 +1366,7 @@ final class ZLinkChannelSocketRegistry {
     private static final class ClientServerConnection {
         private final String connectionId;
         private final Object transportLock = new Object();
-        private final Set<String> aliases = new java.util.HashSet<>();
+        private final Set<String> aliases = new HashSet<>();
         private ZLinkClientServerServerDescriptor descriptor;
         private final ZLinkBackendDealerSocket dealer;
         private ZLinkBackendSocketMonitor monitor;

@@ -188,6 +188,16 @@ export class ZLinkLocalNativeActorJoin {
             ? undefined
             : operationIdentityKey(completionOperationId)
         );
+        prepared.onSourceLeaveSubmitted(() => this.publishSourceLeaveTerminal(
+          node,
+          completions,
+          target.targetNodeRid,
+          actor.context.actorId,
+          requireTransferId(transferId),
+          true,
+          timeoutMs,
+          undefined
+        ));
         await prepared.reserveTarget(target, signal);
         requestPayload = Buffer.from(JSON.stringify(buildRemoteActorJoinRequestPayload({
           actorId: actor.context.actorId,
@@ -310,13 +320,9 @@ export class ZLinkLocalNativeActorJoin {
         actorMeshName
       );
       try {
-        // The Core leave callback is a late lifecycle notification. Waiting
-        // for it before changing Actor authority deadlocks the remote Join:
-        // the target waits for this source terminal before publishing its
-        // ownership, while Core emits the source leave after the source
-        // authority commit. The source handoff remains held by the transfer
-        // coordinator; only the authority transition moves ahead of the
-        // callback. Source shell cleanup is deferred until that callback.
+        // Core emits source leave only after the authority transition. The
+        // registered notifier releases target completion after the callback
+        // is submitted; its result remains source cleanup work.
         await prepared?.commitAuthority(target, nativeTargetActorRef, signal);
       } catch (error) {
         await this.publishSourceLeaveTerminal(
@@ -336,17 +342,8 @@ export class ZLinkLocalNativeActorJoin {
         );
         throw error;
       }
-      await this.publishSourceLeaveTerminal(
-        node,
-        completions,
-        target.targetNodeRid,
-        actor.context.actorId,
-        requireTransferId(transferId),
-        true,
-        timeoutMs,
-        signal
-      );
       prepared?.commit(target, nativeTargetActorRef, []);
+      await prepared?.sourceLeaveSubmitted;
       try {
         await this.options.remoteActivationWaiter?.(
           actor.context.actorId,
@@ -518,6 +515,16 @@ export class ZLinkLocalNativeActorJoin {
             ? undefined
             : operationIdentityKey(completionOperationId)
         );
+        prepared.onSourceLeaveSubmitted(() => this.publishSourceLeaveTerminal(
+          node,
+          completions,
+          spotRouteTarget!.targetNodeRid,
+          actor.context.actorId,
+          requireTransferId(transferId),
+          true,
+          timeoutMs,
+          undefined
+        ));
         await prepared.reserveTarget(spotRouteTarget, signal);
         requestPayload = Buffer.from(JSON.stringify(buildRemoteActorJoinRequestPayload({
           actorId: actor.context.actorId,
@@ -651,17 +658,8 @@ export class ZLinkLocalNativeActorJoin {
         admissionReply?.close();
         throw error;
       }
-      await this.publishSourceLeaveTerminal(
-        node,
-        completions,
-        spotRouteTarget!.targetNodeRid,
-        actor.context.actorId,
-        requireTransferId(transferId),
-        true,
-        timeoutMs,
-        signal
-      );
       prepared?.commit(spotRouteTarget!, nativeTargetActorRef, []);
+      await prepared?.sourceLeaveSubmitted;
       try {
         await this.options.remoteActivationWaiter?.(
           actor.context.actorId,

@@ -6,6 +6,12 @@ The Kotlin package shares the JVM service runtime with Java. The
 documents below fix, per feature, the scope where Java types are used
 as-is and the Kotlin-only coroutine/DSL signatures.
 
+Kotlin codec extensions use the Java `ZLinkCodecRegistrar` without changing its contract.
+The Kotlin DSL applies the same normalization to registrations: it removes leading and
+trailing SP and TAB, converts ASCII uppercase letters to lowercase, and rejects parameters,
+internal whitespace, and non-ASCII tokens. A wire value must already be a canonical
+`type/subtype`, and Kotlin provides no separate fallback.
+
 - [Common Runtime](common-runtime.en.md)
 - [Configuration And Host](configuration-host.en.md)
 - [Channel Messaging](channel-messaging.en.md)

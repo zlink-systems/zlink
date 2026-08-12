@@ -1,5 +1,6 @@
 package systems.zlink.e2e.pubsub.subscriber.Endpoints;
 
+import com.sun.net.httpserver.HttpExchange;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
@@ -142,16 +143,16 @@ public final class OperationalEndpoints implements SmartLifecycle {
                     long timeoutMillis = longQuery(query, "timeoutMillis", 15_000L);
                     var snapshot = switch (query.getOrDefault("kind", "event")) {
                         case "any-event" -> evidence.waitFor(
-                            entry -> "EventMsg".equals(entry.marker())
+                            entry -> "Event".equals(entry.marker())
                                 && query.getOrDefault("scenario", "").equals(entry.scenario()),
                             timeoutMillis);
                         case "event" -> evidence.waitFor(
-                            entry -> "EventMsg".equals(entry.marker())
+                            entry -> "Event".equals(entry.marker())
                                 && query.getOrDefault("scenario", "").equals(entry.scenario())
                                 && entry.sequence() == intQuery(query, "sequence", Integer.MIN_VALUE),
                             timeoutMillis);
                         case "sequence-at-least" -> evidence.waitFor(
-                            entry -> "EventMsg".equals(entry.marker())
+                            entry -> "Event".equals(entry.marker())
                                 && query.getOrDefault("scenario", "").equals(entry.scenario())
                                 && entry.sequence() >= intQuery(query, "minSequence", Integer.MAX_VALUE),
                             timeoutMillis);
@@ -240,7 +241,7 @@ public final class OperationalEndpoints implements SmartLifecycle {
         return value;
     }
 
-    private void writeJson(com.sun.net.httpserver.HttpExchange exchange, Object value) {
+    private void writeJson(HttpExchange exchange, Object value) {
         try {
             byte[] body = json.writeValueAsBytes(value);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
@@ -253,7 +254,7 @@ public final class OperationalEndpoints implements SmartLifecycle {
     }
 
     private static void writeText(
-        com.sun.net.httpserver.HttpExchange exchange,
+        HttpExchange exchange,
         int status,
         String value) {
         try {

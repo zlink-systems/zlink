@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import './m6b-execution-policy.contract';
+import './m6b-serial-execution-conformance.contract';
 import './m6b-user-spot-terminal-replay.contract';
 
 import { Message, RequestResult, SubmitResult } from '@zlink-systems/zlink';
@@ -24,6 +25,9 @@ import {
 import {
   ZLinkNodeRawMeshBackend
 } from '../../packages/framework/src/runtime/backend/node/node-raw-mesh-backend';
+import {
+  ZLinkNodeRawBindingPort
+} from '../../packages/framework/src/runtime/backend/node/node-raw-binding-port';
 import type {
   RawServiceIngressRecord,
   RawServiceMeshRuntime
@@ -126,7 +130,6 @@ import {
 } from '../../packages/framework/src/contracts';
 import {
   createInternalFrameworkException,
-  internalFrameworkErrorCode,
   ZLinkFrameworkInternalErrorKind,
   internalFrameworkErrorKind
 } from '../../packages/framework/src/runtime/framework-errors-internal';
@@ -1216,7 +1219,8 @@ test('Spot and Actor wire records preserve identity and reject malformed records
     {
       actor: target,
       targetNodeGeneration: 3n,
-      authorityOwnerGeneration: 5n
+      authorityOwnerGeneration: 5n,
+      ownerLeaseGeneration: 6n
     },
     12n,
     source,
@@ -1229,7 +1233,8 @@ test('Spot and Actor wire records preserve identity and reject malformed records
     target: {
       actor: target,
       targetNodeGeneration: 3n,
-      authorityOwnerGeneration: 5n
+      authorityOwnerGeneration: 5n,
+      ownerLeaseGeneration: 6n
     },
     boundSession: {
       sessionRid: 'session-a',
@@ -1316,7 +1321,8 @@ test('outbound stateful routes use resolved authority generations and never obje
   runtime.rememberActorRoute({
     actor,
     targetNodeGeneration: 7n,
-    authorityOwnerGeneration: 11n
+    authorityOwnerGeneration: 11n,
+    ownerLeaseGeneration: 13n
   });
   assert.equal(runtime.sendToActor(actor, 7n, actor.generation, payload), SubmitResult.Ok);
   const actorHeader = decodeStatefulHeader(sent.at(-1)!.parts[0]!);
@@ -1452,7 +1458,8 @@ test('remote Actor request receives CapacityExceeded when mailbox admission fail
       encodeActorHeader('actorRequest', {
         actor: actor.ref,
         targetNodeGeneration: 3n,
-        authorityOwnerGeneration: actor.authorityOwnerGeneration
+        authorityOwnerGeneration: actor.authorityOwnerGeneration,
+        ownerLeaseGeneration: 3n
       }, 91n),
       payload
     ]
@@ -2069,8 +2076,10 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
       ownerLeaseGeneration: target.ownerLeaseGeneration
     });
     assert.equal(sendFollow.queuedMessages, 1);
+    assert.equal(sendFollow.originalOperation.low, 1n);
     assert.equal(sendFollow.originalReplyRouteId, 0n);
   }
+  const callerFollowCount = relayed.filter(record => record.target === 'caller').length;
 
   assert.equal(ingress?.({
     command: M6bServiceWireCommand.spotRequest,
@@ -2087,14 +2096,11 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
     terminalResult: RequestResult.Ok,
     failureCode: 0
   });
-  const requestFollow = decodeStatefulHeader(
-    relayed.filter(record => record.target === 'caller').at(-1)!.parts[0]!
+  assert.equal(
+    relayed.filter(record => record.target === 'caller').length,
+    callerFollowCount,
+    'the exact source/target route sends one Message Follow notification'
   );
-  assert.equal(requestFollow.kind, 'messageFollow');
-  if (requestFollow.kind === 'messageFollow') {
-    assert.equal(requestFollow.originalOperation.low, 17n);
-    assert.equal(requestFollow.originalReplyRouteId, 17n);
-  }
 
   runtime.restoreSpotAuthority('abort-room', 'user_spot', 'Room', 6n, 11n);
   const abortSource = {
@@ -2119,17 +2125,13 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
   runtime.close();
 });
 
-test('Spot Message Follow reports bounded admission exhaustion as CapacityExceeded', () => {
+test('Spot Message Follow does not impose a record-count or stored-byte admission bound', () => {
   let ingress:
     ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
       .RawServiceIngressRecord) => unknown) | undefined;
-  const replies: Buffer[][] = [];
   const raw = {
     setServiceIngress(handler: typeof ingress) {
       ingress = handler;
-    },
-    replyService(_record: unknown, parts: readonly Buffer[]) {
-      replies.push([...parts]);
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'node-a', 3n);
@@ -2144,35 +2146,24 @@ test('Spot Message Follow reports bounded admission exhaustion as CapacityExceed
   };
   runtime.rememberSpotRoute(source);
   assert.ok(runtime.sealSpotMessageFollowIngress(source));
-  const internals = runtime as unknown as {
-    spotMessageFollow: Map<string, { queuedCount: number }>;
-  };
-  const state = [...internals.spotMessageFollow.values()][0];
-  assert.ok(state);
-  state.queuedCount = 1_024;
-  const payload = encodeApplicationPayload({
-    packetName: 'Overflow',
+  const smallPayload = encodeApplicationPayload({
+    packetName: 'Held',
     contentType: 'application/octet-stream',
-    payload: Buffer.from('payload')
+    payload: Buffer.alloc(17 * 1024)
   });
-
-  assert.equal(ingress?.({
-    command: M6bServiceWireCommand.spotRequest,
-    flags: 0,
-    sourceRoutingId: 'caller',
-    sourceRoute: Buffer.from('reply-route'),
-    requestSequence: 17n,
-    parts: [encodeSpotHeader('spotRequest', 'source-spot', source, 91n), payload]
-  }), 'infrastructure');
-  assert.equal(replies.length, 1);
-  assert.deepEqual(decodeStatefulReply(replies[0]![0]!, 91n, 'spotRequest'), {
-    correlation: 91n,
-    terminalResult: RequestResult.Rejected,
-    failureCode: internalFrameworkErrorCode(createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
-      'expected'
-    )) + 1
-  });
+  for (let index = 0; index < 1_025; index += 1) {
+    assert.equal(ingress?.({
+      command: M6bServiceWireCommand.spotSend,
+      flags: 0,
+      sourceRoutingId: 'caller',
+      parts: [encodeSpotHeader('spotSend', 'source-spot', source), smallPayload]
+    }), 'application');
+  }
+  const state = [...(runtime as unknown as {
+    spotMessageFollow: Map<string, { queuedCount: number; queuedBytes: number }>;
+  }).spotMessageFollow.values()][0];
+  assert.equal(state?.queuedCount, 1_025);
+  assert.ok((state?.queuedBytes ?? 0) > 16 * 1024 * 1024);
   runtime.close();
 });
 
@@ -2294,7 +2285,8 @@ test('retained peer routes may submit while endpoint convergence reports not rea
   runtime.rememberActorRoute({
     actor,
     targetNodeGeneration: 7n,
-    authorityOwnerGeneration: 11n
+    authorityOwnerGeneration: 11n,
+    ownerLeaseGeneration: 13n
   });
 
   const result = runtime.sendToActor(actor, 7n, 5n, {
@@ -2311,7 +2303,24 @@ test('retained peer routes may submit while endpoint convergence reports not rea
 
 test('global Spot and Actor identities fence stale generations and retain stable type', () => {
   const registry = new ServiceStatefulRegistry('node-a', 4n);
+  const entry = registry.createEntrySpot();
+  assert.equal(entry.kind, 'entry');
+  assert.equal(entry.stableType, 'entry');
+  assert.equal(registry.closeSpot(entry.ref), false);
+  assert.throws(
+    () => registry.restoreSpot(
+      { spotId: 'another-entry', generation: 4n },
+      'entry',
+      'entry',
+      4n
+    ),
+    /identity is fixed/
+  );
   const spotV1 = registry.createSpot('spot-a', 'user', 'Room');
+  assert.equal(spotV1.kind, 'user');
+  const instance = registry.createSpot('instance-a', 'instance', 'TenantWorker');
+  assert.equal(instance.kind, 'instance');
+  assert.equal(registry.closeSpot(instance.ref), true);
   const actorV1 = registry.createActor('actor-a', 'Player', spotV1.ref);
   assert.equal(registry.closeSpot(spotV1.ref), false);
   registry.destroyActor(actorV1.ref);
@@ -3892,7 +3901,8 @@ test('bound session transition wire format fences the binding generation', () =>
     {
       actor: { nodeRid: 'node-a', actorId: 'actor-a', generation: 2n },
       targetNodeGeneration: 4n,
-      authorityOwnerGeneration: 6n
+      authorityOwnerGeneration: 6n,
+      ownerLeaseGeneration: 7n
     },
     'session-a',
     { state: 'tombstone', retiredGeneration: 9n }
@@ -3903,7 +3913,8 @@ test('bound session transition wire format fences the binding generation', () =>
     actor: {
       actor: { nodeRid: 'node-a', actorId: 'actor-a', generation: 2n },
       targetNodeGeneration: 4n,
-      authorityOwnerGeneration: 6n
+      authorityOwnerGeneration: 6n,
+      ownerLeaseGeneration: 7n
     },
     sessionRid: 'session-a',
     binding: { state: 'tombstone', retiredGeneration: 9n }
@@ -4028,7 +4039,8 @@ test('bound-session replacement is one-way, retries admission, and fences a late
   const actorRoute = {
     actor,
     targetNodeGeneration: 3n,
-    authorityOwnerGeneration: actorRuntime.actor(actor.actorId)!.authorityOwnerGeneration
+    authorityOwnerGeneration: actorRuntime.actor(actor.actorId)!.authorityOwnerGeneration,
+    ownerLeaseGeneration: 3n
   };
   oldSessionRuntime.rememberActorRoute(actorRoute);
   newSessionRuntime.rememberActorRoute(actorRoute);
@@ -4144,7 +4156,8 @@ test('bound-session replacement is one-way, retries admission, and fences a late
       {
         actor,
         targetNodeGeneration: 3n,
-        authorityOwnerGeneration: actorRuntime.actor(actor.actorId)!.authorityOwnerGeneration
+        authorityOwnerGeneration: actorRuntime.actor(actor.actorId)!.authorityOwnerGeneration,
+        ownerLeaseGeneration: 3n
       },
       'old-rid',
       { state: 'tombstone', retiredGeneration: oldBinding.bindingGeneration }
@@ -4188,7 +4201,8 @@ test('mailbox saturation reports dropped actor binding control records', () => {
     {
       actor: actor.ref,
       targetNodeGeneration: 3n,
-      authorityOwnerGeneration: actor.authorityOwnerGeneration
+      authorityOwnerGeneration: actor.authorityOwnerGeneration,
+      ownerLeaseGeneration: 3n
     },
     'session-a',
     { state: 'active', generation: 9n }
@@ -4965,7 +4979,11 @@ test('concurrent Instance activation CAS loser joins Ready and returns the winne
 test('raw backend dispatches Spot requests and Actor sends through M6B owners', async () => {
   const nonce = `${process.pid}-${Date.now()}`;
   const endpoint = `ipc:///tmp/zlink-m6b-node-${nonce}.sock`;
-  const backend = new ZLinkNodeRawMeshBackend('m6b-mesh', 'm6b-node');
+  const backend = new ZLinkNodeRawMeshBackend(
+    'm6b-mesh',
+    'm6b-node',
+    new ZLinkNodeRawBindingPort()
+  );
   backend.setBind(endpoint);
   backend.start();
   const instanceRoute = {
@@ -5096,15 +5114,32 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     assert.deepEqual(bindCompletion.operationId, bindOperation);
     assert.equal(bindCompletion.terminalResult, RequestResult.Ok);
     const binding = sessionService.bindings('session-a')[0]!;
+    const actorFence = {
+      targetNodeGeneration: backend.status().lifecycleGeneration,
+      authorityOwnerGeneration: actor.generation,
+      ownerLeaseGeneration: 37n
+    };
     assert.equal(
-      backend.sendActorBoundSession(actor, binding.bindingGeneration, Buffer.from('session-message')),
+      backend.sendActorBoundSession(
+        actor,
+        binding.bindingGeneration,
+        Buffer.from('session-message'),
+        undefined,
+        actorFence
+      ),
       SubmitResult.Ok
     );
     assert.deepEqual(delivered.map(value => value.toString()), ['session-message']);
     streamState.disconnected = true;
     assert.doesNotThrow(() => {
       assert.equal(
-        backend.sendActorBoundSession(actor, binding.bindingGeneration, Buffer.from('late-session-message')),
+        backend.sendActorBoundSession(
+          actor,
+          binding.bindingGeneration,
+          Buffer.from('late-session-message'),
+          undefined,
+          actorFence
+        ),
         SubmitResult.InvalidState
       );
     });
@@ -5235,18 +5270,11 @@ test('public SpotId call reaches production host Missing Instance placement with
     }) as never,
     defaultRequestTimeoutMs: 5_000
   });
-  const outbound = new DefaultZLinkSpotOutbound(
-    new ZLinkSpotSerialExecutor(),
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    'mesh',
-    undefined,
-    address
-  );
+  const outbound = new DefaultZLinkSpotOutbound({
+    serial: new ZLinkSpotSerialExecutor(),
+    meshName: 'mesh',
+    addressTransport: address
+  });
 
   class Notice {
     readonly text = 'hello';

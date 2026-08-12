@@ -12,7 +12,7 @@ interface LatencySample {
   readonly latencyMs: number;
 }
 
-interface WorkerResult {
+interface WorkerRes {
   readonly requests: number;
   readonly sends: number;
   readonly samples: readonly LatencySample[];
@@ -69,7 +69,7 @@ async function runWorker(
   runId: string,
   startedAt: number,
   deadline: number
-): Promise<WorkerResult> {
+): Promise<WorkerRes> {
   const samples: LatencySample[] = [];
   let sequence = 0;
   while (Date.now() < deadline) {

@@ -12,7 +12,7 @@ import {
   DefaultZLinkChannelClient,
   DefaultZLinkFanoutClient,
   DefaultZLinkSpotPublisherClient,
-  type ZLinkChannelClientTransport,
+  type ZLinkChannelClientTransportSource,
   type ZLinkRouteClientTransport,
   type ZLinkDispatchErrorSink,
   type ZLinkSpotPublisherClientTransport
@@ -39,7 +39,7 @@ import type { ZLinkRuntimeAdmissionGate } from '../admission';
 
 export interface ZLinkSpotRuntimeOptionsFactoryOptions {
   readonly registration: ZLinkFrameworkRegistration;
-  readonly channelTransport: ZLinkChannelClientTransport;
+  readonly channelTransport: ZLinkChannelClientTransportSource;
   readonly routeTransport: ZLinkRouteClientTransport & ZLinkSpotRoutedTransport;
   readonly addressTransport: ZLinkSpotAddressTransport;
   readonly spotPublisherTransport: ZLinkSpotPublisherClientTransport;

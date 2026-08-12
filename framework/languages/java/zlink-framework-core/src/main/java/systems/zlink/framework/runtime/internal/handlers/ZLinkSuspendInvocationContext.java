@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.handlers;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import java.util.Objects;
 import java.util.function.Predicate;
@@ -191,9 +192,9 @@ public final class ZLinkSuspendInvocationContext {
         private final boolean yieldAllowed;
         private final boolean relocationReadyAllowed;
         private final Predicate<String> memberActor;
-        private final java.util.concurrent.atomic.AtomicBoolean
+        private final AtomicBoolean
             relocationReadyDeferred =
-                new java.util.concurrent.atomic.AtomicBoolean();
+                new AtomicBoolean();
 
         public ApplicationExecution(
             String spotId,

@@ -10,10 +10,7 @@ import type {
   ZLinkRemoteActorPacketTarget
 } from '../actors';
 import type { ZLinkStreamActorLookupPort } from '../streams/stream-binding-runtime-ports';
-import {
-  decodeRemoteActorPacketTarget,
-  sessionActorPacketTargetKey
-} from '../actors/actor-packet-relay-wire';
+import { decodeRemoteActorPacketTarget } from '../actors/actor-packet-relay-wire';
 import { normalizeRoutingId as normalizeRuntimeRoutingId } from '../routing-id';
 import type { MeshRouterResolver } from './mesh-router-resolver';
 import { routingIdsEqual } from '../routing-id';
@@ -26,10 +23,21 @@ export interface ZLinkRemoteActorPacketTargetStoreOptions {
   readonly spotRouterChannelIdForMesh: (meshName: string) => string;
 }
 
+interface ZLinkSessionActorPacketTargetCacheEntry {
+  readonly routeKey: string;
+  readonly target: ZLinkRemoteActorPacketTarget;
+}
+
 export class ZLinkRemoteActorPacketTargetStore {
-  private readonly sessionActorPacketTargets = new WeakMap<ZLinkSessionActor, ZLinkRemoteActorPacketTarget>();
+  private readonly sessionActorPacketTargets =
+    new WeakMap<ZLinkSessionActor, ZLinkSessionActorPacketTargetCacheEntry>();
   private readonly sessionActorPacketTargetsByActor = new Map<string, ZLinkRemoteActorPacketTarget>();
-  private readonly sessionActorPacketTargetsByActorId = new Map<string, ZLinkRemoteActorPacketTarget>();
+  private readonly sessionActorPacketTargetsByActorId =
+    new Map<string, ZLinkSessionActorPacketTargetCacheEntry>();
+  private readonly sessionActorPacketTargetOwners = new Map<string, {
+    readonly actors: Set<ZLinkSessionActor>;
+    readonly keys: Set<string>;
+  }>();
 
   constructor(private readonly options: ZLinkRemoteActorPacketTargetStoreOptions) {}
 
@@ -42,19 +50,11 @@ export class ZLinkRemoteActorPacketTargetStore {
       }
       const sessionActor = this.options.streamBindingRuntime().find(actorId);
       if (sessionActor !== undefined) {
-        this.sessionActorPacketTargets.set(sessionActor, actorPacketTarget);
-        this.sessionActorPacketTargetsByActor.set(
-          sessionActorPacketTargetKey(sessionActor),
-          actorPacketTarget
-        );
+        this.rememberSessionActorTarget(sessionActor, actorPacketTarget);
       }
-      this.sessionActorPacketTargetsByActorId.set(actorId, actorPacketTarget);
       return;
     }
-    if (typeof state?.setRemoteActorPacketTarget === 'function') {
-      state.setRemoteActorPacketTarget(undefined);
-    }
-    this.sessionActorPacketTargetsByActorId.delete(actorId);
+    this.clear(actorId);
   }
 
   decodeFromWire(value: unknown): ZLinkRemoteActorPacketTarget | undefined {
@@ -67,23 +67,25 @@ export class ZLinkRemoteActorPacketTargetStore {
       state.setRemoteActorPacketTarget(undefined);
     }
     this.sessionActorPacketTargetsByActorId.delete(actorId);
-    const sessionActor = this.options.streamBindingRuntime().find(actorId);
-    if (sessionActor !== undefined) {
-      this.sessionActorPacketTargets.delete(sessionActor);
-      this.sessionActorPacketTargetsByActor.delete(sessionActorPacketTargetKey(sessionActor));
-    }
-    const actorRef = state?.nativeActorRef;
-    if (actorRef !== undefined) {
-      this.sessionActorPacketTargetsByActor.delete(
-        `${String(actorRef.nodeRid)}:${actorId}:${String(actorRef.generation)}`
-      );
+    const owner = this.sessionActorPacketTargetOwners.get(actorId);
+    if (owner !== undefined) {
+      for (const actor of owner.actors) {
+        this.sessionActorPacketTargets.delete(actor);
+      }
+      for (const key of owner.keys) {
+        this.sessionActorPacketTargetsByActor.delete(key);
+      }
+      this.sessionActorPacketTargetOwners.delete(actorId);
     }
   }
 
   cachedTargetForActor(actor: ZLinkSessionActor): ZLinkRemoteActorPacketTarget | undefined {
-    return this.sessionActorPacketTargets.get(actor)
-      ?? this.sessionActorPacketTargetsByActor.get(sessionActorPacketTargetKey(actor))
-      ?? this.sessionActorPacketTargetsByActorId.get(actor.actorId)
+    const routeKey = sessionActorPacketTargetTenureKey(actor);
+    const actorEntry = this.sessionActorPacketTargets.get(actor);
+    const actorIdEntry = this.sessionActorPacketTargetsByActorId.get(actor.actorId);
+    return (actorEntry?.routeKey === routeKey ? actorEntry.target : undefined)
+      ?? this.sessionActorPacketTargetsByActor.get(routeKey)
+      ?? (actorIdEntry?.routeKey === routeKey ? actorIdEntry.target : undefined)
       ?? this.targetForActorRef(actor.ref);
   }
 
@@ -163,10 +165,42 @@ export class ZLinkRemoteActorPacketTargetStore {
     if (typeof state?.setRemoteActorPacketTarget === 'function') {
       state.setRemoteActorPacketTarget(target);
     }
-    this.sessionActorPacketTargets.set(actor, target);
-    this.sessionActorPacketTargetsByActor.set(sessionActorPacketTargetKey(actor), target);
-    this.sessionActorPacketTargetsByActorId.set(actor.actorId, target);
+    this.rememberSessionActorTarget(actor, target);
   }
+
+  private rememberSessionActorTarget(
+    actor: ZLinkSessionActor,
+    target: ZLinkRemoteActorPacketTarget
+  ): void {
+    let owner = this.sessionActorPacketTargetOwners.get(actor.actorId);
+    if (owner === undefined) {
+      owner = { actors: new Set(), keys: new Set() };
+      this.sessionActorPacketTargetOwners.set(actor.actorId, owner);
+    }
+    const key = sessionActorPacketTargetTenureKey(actor);
+    const entry = { routeKey: key, target };
+    owner.actors.add(actor);
+    owner.keys.add(key);
+    this.sessionActorPacketTargets.set(actor, entry);
+    this.sessionActorPacketTargetsByActor.set(key, target);
+    this.sessionActorPacketTargetsByActorId.set(actor.actorId, entry);
+  }
+}
+
+function sessionActorPacketTargetTenureKey(actor: ZLinkSessionActor): string {
+  const ref = actor.ref as ActorRef & {
+    readonly bindingGeneration?: bigint;
+    readonly ownershipGeneration?: bigint;
+    readonly ownerLeaseGeneration?: bigint;
+  };
+  return [
+    String(ref.nodeRid),
+    actor.actorId,
+    String(ref.objectGeneration),
+    ref.bindingGeneration?.toString() ?? '',
+    ref.ownershipGeneration?.toString() ?? '',
+    ref.ownerLeaseGeneration?.toString() ?? ''
+  ].join(':');
 }
 
 function validateSpotId(value: string): SpotId {

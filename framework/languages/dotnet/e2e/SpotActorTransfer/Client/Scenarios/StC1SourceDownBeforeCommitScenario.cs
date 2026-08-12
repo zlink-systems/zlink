@@ -24,7 +24,7 @@ internal static class StC1SourceDownBeforeCommitScenario
         ]);
 
         await context.CrashNodeAAndWaitUnavailableAsync();
-        JoinResponse? response = null;
+        JoinRawRes? response = null;
         try
         {
             response = await joinTask.WaitAsync(TimeSpan.FromSeconds(3));

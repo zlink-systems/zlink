@@ -23,6 +23,11 @@ internal static class ZLinkTelemetry
         return Activity.Current?.Id ?? Guid.NewGuid().ToString("N");
     }
 
+    public static bool IsSubmitAdmissionTracingEnabled(string operationId) =>
+        !string.IsNullOrEmpty(operationId)
+        && Volatile.Read(ref _diagnosticsLevel) != (int)ZLinkDiagnosticsLevel.Off
+        && ActivitySource.HasListeners();
+
     public static void TraceSubmitAdmission(
         string operationId,
         string eventName,

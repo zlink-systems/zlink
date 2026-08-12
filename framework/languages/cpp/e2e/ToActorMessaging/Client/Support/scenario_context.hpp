@@ -157,7 +157,7 @@ zlink::http_client::client_t make_http (const std::string &base_url)
       .build ();
 }
 
-e2e::actor_call_response_t call (zlink::http_client::client_t &caller,
+e2e::actor_call_res_t call (zlink::http_client::client_t &caller,
                                  const std::string &endpoint,
                                  const std::string &scenario,
                                  const std::string &actor_id,
@@ -231,15 +231,15 @@ void require_session_evidence (const std::vector<e2e::actor_evidence_t> &evidenc
     throw std::runtime_error (actor_id + " has no " + kind + " evidence for " + gateway_rid);
 }
 
-e2e::actor_call_response_t call (zlink::http_client::client_t &caller,
+e2e::actor_call_res_t call (zlink::http_client::client_t &caller,
                                  const std::string &endpoint,
                                  const std::string &scenario,
                                  const std::string &actor_id,
                                  const std::string &value)
 {
     return caller.post (endpoint)
-      .body (e2e::actor_call_request_t{scenario, actor_id, value})
-      .submit<e2e::actor_call_response_t> ().result ().value ().body;
+      .body (e2e::actor_call_req_t{scenario, actor_id, value})
+      .submit<e2e::actor_call_res_t> ().result ().value ().body;
 }
 
 void ensure_actor (zlink::http_client::client_t &actor,
@@ -247,8 +247,8 @@ void ensure_actor (zlink::http_client::client_t &actor,
                    const std::string &actor_id)
 {
     const auto response = actor.post ("/ensure")
-                            .body (e2e::actor_call_request_t{scenario, actor_id, "ensure"})
-                            .submit<e2e::actor_call_response_t> ().result ().value ().body;
+                            .body (e2e::actor_call_req_t{scenario, actor_id, "ensure"})
+                            .submit<e2e::actor_call_res_t> ().result ().value ().body;
     require (response.error_kind.empty (), scenario + " ensure failed: " + response.error_kind);
     require (response.result == "ensured", scenario + " ensure returned " + response.result);
 }
@@ -258,7 +258,7 @@ void wait_until_ready (zlink::http_client::client_t &caller,
                        const std::string &actor_id)
 {
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (20);
-    e2e::actor_call_response_t response;
+    e2e::actor_call_res_t response;
     while (std::chrono::steady_clock::now () < deadline) {
         response = call (caller, "/request", scenario, actor_id, "ready");
         if (response.error_kind.empty () && response.result == "reply:ready") {
@@ -289,12 +289,12 @@ void recreate_ready (zlink::http_client::client_t &actor,
                      const std::string &actor_id)
 {
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (20);
-    e2e::actor_call_response_t ensure_response;
-    e2e::actor_call_response_t ready_response;
+    e2e::actor_call_res_t ensure_response;
+    e2e::actor_call_res_t ready_response;
     while (std::chrono::steady_clock::now () < deadline) {
         ensure_response = actor.post ("/ensure")
-                            .body (e2e::actor_call_request_t{scenario, actor_id, "ensure"})
-                            .submit<e2e::actor_call_response_t> ().result ().value ().body;
+                            .body (e2e::actor_call_req_t{scenario, actor_id, "ensure"})
+                            .submit<e2e::actor_call_res_t> ().result ().value ().body;
         if (ensure_response.error_kind.empty ()) {
             ready_response = call (caller, "/request", scenario + "-ready", actor_id, "ready");
             if (ready_response.error_kind.empty () && ready_response.result == "reply:ready") {
@@ -411,7 +411,7 @@ void require_location (zlink::http_client::client_t &caller,
                        const std::string &expected)
 {
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (10);
-    e2e::actor_call_response_t response;
+    e2e::actor_call_res_t response;
     while (std::chrono::steady_clock::now () < deadline) {
         response = call (caller, "/location", scenario, actor_id, "observe");
         if (response.error_kind.empty () && response.result == expected) {

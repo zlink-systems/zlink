@@ -24,10 +24,8 @@
 | RL-B5 | `Client/Scenarios/RlB5DrainInflightScenario.cs` | `Client/Scenarios/rl-b5-drain-inflight-scenario.ts` | done | runtime drain 중 in-flight slow reply 보존. PASS: `logs/20260703-211853-78546` |
 | RL-B6 | `Client/Scenarios/RlB6GrayFaultScenario.cs` | `Client/Scenarios/rl-b6-gray-fault-scenario.ts` | done | gray failure and recovery. PASS: `logs/20260703-211853-78546` |
 | RL-C1 | `Client/Scenarios/RlC1ClientHostLifecycleScenario.cs` | `Client/Scenarios/rl-c1-client-host-lifecycle-scenario.ts` | done | short-lived client host lifecycle. PASS: `logs/20260703-211853-78546` |
-| RL-C2 | `Client/Scenarios/RlC2TopologyRecoveryScenario.cs` | `Client/Scenarios/rl-c2-topology-recovery-scenario.ts` | done | crash stale topology cleanup and recovery. PASS: `logs/20260703-211853-78546` |
 | RL-C3 | `Client/Scenarios/RlC3NodePauseRecoveryScenario.cs` | `Client/Scenarios/rl-c3-node-pause-recovery-scenario.ts` | done | node down/recovery simulation. PASS: `logs/20260703-211853-78546` |
 | RL-C4 | `Client/Scenarios/RlC4RegistryOutageScenario.cs` | `Client/Scenarios/rl-c4-store-outage-scenario.ts` | done | Redis location store outage and recovery. PASS: `logs/20260703-211853-78546` |
-| RL-D1 | `Client/Scenarios/RlD1HighFanoutScenario.cs` | `Client/Scenarios/rl-d1-high-fanout-scenario.ts` | done | 8 subscriber × 120 event fanout. PASS: `logs/20260715-075646-2279409` |
 | RL-D2 | `Client/Scenarios/RlD2ObserverFaultScenario.cs` | `Client/Scenarios/rl-d2-observer-fault-scenario.ts` | done | observer failure isolation과 public runtime error sink의 정확한 1회 event를 검증했다. PASS: `log/20260729-162800-3166911` |
 | RL-D3 | `Client/Scenarios/RlD3DispatchErrorEvidenceScenario.cs` | `Client/Scenarios/rl-d3-dispatch-error-evidence-scenario.ts` | done | dispatch-error evidence. PASS: `logs/20260703-211853-78546` |
 | RL-D4 | `Client/Scenarios/RlD4MissingRequestHandlerScenario.cs` | `Client/Scenarios/rl-d4-missing-request-handler-scenario.ts` | done | decoded error round-trip + raw Error/Response header gate. PASS: `logs/20260715-080129-2299877` |
@@ -43,7 +41,7 @@
 | `Shared/Messages.cs`, `Shared/ResilienceLifecycle.Shared.csproj` | `Shared/messages.ts` | shared | done | profile request/reply, command, evidence wait, payload, failure result 계약 포팅 |
 | `Client/Program.cs`, `Client/ResilienceLifecycle.Client.csproj` | `Client/main.ts`, `Client/package.json`, `Client/tsconfig.json` | client-entry/project | done | scenario 선택과 실행 앱 구현. default `all`에 RL-B5 포함 |
 | `Client/Support/*` | `Client/Support/` | support | done | options, assertion, HTTP/process helper 포팅 |
-| `Client/Scenarios/*.cs` | `Client/Scenarios/` | scenario | done | RL-A1~RL-A5/RL-B1~RL-B6/RL-C1~RL-C4/RL-D1~RL-D5 구현 |
+| `Client/Scenarios/*.cs` | `Client/Scenarios/` | scenario | done | RL-A1~RL-A5/RL-B1~RL-B6/RL-C1~RL-C4/RL-D2~RL-D5 구현 |
 | topology 관측 | `Server/Consumer/` | consumer | done | 실제 request consumer가 public location runtime query로 peer row를 함께 제공한다. 별도 probe 역할은 두지 않는다. |
 | `Server/Provider/*` | `Server/Provider/` | provider-role | done | provider handler, evidence, fault injection, shutdown, crash, runtime drain/restore/weight endpoint 구현 |
 | `Server/Consumer/*` | `Server/Consumer/` | consumer-role | done | location store consumer request/send host, timeout/no-retry endpoint, short-lived client endpoint 구현 |

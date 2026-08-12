@@ -1,4 +1,13 @@
 package systems.zlink.framework.runtime.streams;
+import java.util.Objects;
+import java.util.function.BiFunction;
+import java.util.function.Function;
+import java.util.function.Supplier;
+import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
@@ -44,12 +53,15 @@ import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.configuration.ZLinkMetadataPolicyRegistration;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
@@ -88,7 +100,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final ZLinkHandlerActivator handlerFactory;
     private final Executor handlerExecutor;
     private final Executor serialExecutor;
-    private final systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer flow;
+    private final ZLinkMessageFlowTracer flow;
     private final List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers;
     private final ZLinkStreamCodec defaultCodec;
     private final ZLinkStreamCompressionCodec compressionCodec;
@@ -207,27 +219,27 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         ZLinkRuntimeEventDispatcher eventDispatcher,
         ZLinkBackendContext context,
         boolean ownsContext,
-        java.util.function.BiFunction<
+        BiFunction<
             ZLinkBackendObject,
             ZLinkBackendAdmissionKey,
-            java.util.function.BiFunction<
-                java.util.function.Supplier<Boolean>,
+            BiFunction<
+                Supplier<Boolean>,
                 Runnable,
                 CompletionStage<Void>>> admission) {
         if (registration.streamNodes().isEmpty()) {
             throw new ZLinkConfigurationException("at least one stream node is required");
         }
-        this.registration = java.util.Objects.requireNonNull(
+        this.registration = Objects.requireNonNull(
             registration, "registration");
         this.serializer = serializer;
         this.actors = actors;
         this.meshNodes = Map.copyOf(meshNodes);
         this.handlerFactory = handlerFactory;
-        this.handlerExecutor = ZLinkFlowContext.propagating(java.util.Objects.requireNonNull(
+        this.handlerExecutor = ZLinkFlowContext.propagating(Objects.requireNonNull(
             registration.handlerExecutor(),
             "handlerExecutor"));
         this.serialExecutor = registration.serialExecutor();
-        this.flow = new systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer(
+        this.flow = new ZLinkMessageFlowTracer(
             registration.dispatchOptions(), handlerFactory, this.handlerExecutor, eventDispatcher);
         this.suspendHandlerInvokers = registration.suspendHandlerInvokers();
         this.defaultCodec = defaultCodec(registration);
@@ -257,7 +269,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             });
         ZLinkStreamBackendAdapter streamAdapter =
             backendFactory.createStreamAdapter(adapterOptions);
-        this.context = java.util.Objects.requireNonNull(context, "context");
+        this.context = Objects.requireNonNull(context, "context");
         this.ownsContext = ownsContext;
         for (StreamNodeRegistration streamNode : registration.streamNodes()) {
             String actorMeshName = streamNode.actorDispatchEnabled()
@@ -373,9 +385,15 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         var codec = new systems.zlink.framework.runtime.internal.service
             .ZLinkServiceM6BWireCodec();
         var command = codec.decodeSessionRelocationRoute(command44);
-        if (!command.targetNodeRid().equals(transportSource)) {
+        RoutingId expectedSource = command.action()
+                == systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceM6BWireCodec
+                    .SessionRelocationRouteAction.COMMIT
+            ? command.targetNodeRid()
+            : command.coordinator().nodeRid();
+        if (!expectedSource.equals(transportSource)) {
             return CompletableFuture.failedFuture(new ZLinkConfigurationException(
-                "command 44 transport source differs from target Actor owner"));
+                "command 44 transport source differs from its sender fence"));
         }
         List<SessionState> matches;
         synchronized (sessions) {
@@ -394,6 +412,111 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     }
 
     /**
+     * Command 42 endpoint. The relocation source addresses the seal to this
+     * Session owner; the sender fence is the Actor owner node the binding
+     * still points at (senderRole `source`) or the coordinator node
+     * (senderRole `coordinator`), mirroring the C++ admission check in
+     * `raw_mesh_node_owner.cpp:2937-2960`.
+     */
+    public CompletionStage<byte[]> handleSessionRelocationSeal(
+        RoutingId transportSource,
+        byte[] command42) {
+        var codec = new systems.zlink.framework.runtime.internal.service
+            .ZLinkServiceM6BWireCodec();
+        var command = codec.decodeSessionRelocationSeal(command42);
+        RoutingId expectedSource = command.senderRole()
+                == systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceM6BWireCodec.RelocationRole.SOURCE
+            ? command.actor().actor().nodeRid()
+            : command.coordinator().nodeRid();
+        if (!expectedSource.equals(transportSource)) {
+            return CompletableFuture.failedFuture(new ZLinkConfigurationException(
+                "command 42 transport source differs from the sender fence"));
+        }
+        List<SessionState> matches;
+        synchronized (sessions) {
+            matches = sessions.values().stream()
+                .filter(state -> state.routingId().equals(
+                    command.session().sessionRid()))
+                .toList();
+        }
+        if (matches.size() != 1) {
+            return CompletableFuture.failedFuture(new ZLinkConfigurationException(
+                "command 42 requires one exact local Session"));
+        }
+        return matches.getFirst().context()
+            .applyRelocationSealCommand(command)
+            .thenApply(codec::encodeSessionRelocationSealed);
+    }
+
+    public boolean handleBoundSessionSend(
+        RoutingId sourceNodeRid,
+        long sourceNodeGeneration,
+        ZLinkServiceM6BWireCodec.BoundSessionSend command,
+        ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
+        List<? extends BoundSessionSendOwner> owners;
+        synchronized (sessions) {
+            owners = sessions.values().stream()
+                .map(SessionState::actorRuntime)
+                .filter(Objects::nonNull)
+                .map(SessionBoundSessionSendOwner::new)
+                .toList();
+        }
+        return dispatchBoundSessionSend(
+            owners, sourceNodeRid, sourceNodeGeneration, command, payload);
+    }
+
+    static boolean dispatchBoundSessionSend(
+        List<? extends BoundSessionSendOwner> owners,
+        RoutingId sourceNodeRid,
+        long sourceNodeGeneration,
+        ZLinkServiceM6BWireCodec.BoundSessionSend command,
+        ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
+        List<? extends BoundSessionSendOwner> matches = owners.stream()
+            .filter(owner -> owner.matches(
+                sourceNodeRid, sourceNodeGeneration, command))
+            .toList();
+        return matches.size() == 1
+            && matches.getFirst().accept(
+                sourceNodeRid, sourceNodeGeneration, command, payload);
+    }
+
+    interface BoundSessionSendOwner {
+        boolean matches(
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            ZLinkServiceM6BWireCodec.BoundSessionSend command);
+
+        boolean accept(
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            ZLinkServiceM6BWireCodec.BoundSessionSend command,
+            ZLinkServiceM6AWireCodec.ApplicationPayload payload);
+    }
+
+    private record SessionBoundSessionSendOwner(
+        ZLinkSessionActorsRuntime runtime) implements BoundSessionSendOwner {
+        @Override
+        public boolean matches(
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            ZLinkServiceM6BWireCodec.BoundSessionSend command) {
+            return runtime.matchesBoundSessionSend(
+                sourceNodeRid, sourceNodeGeneration, command);
+        }
+
+        @Override
+        public boolean accept(
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            ZLinkServiceM6BWireCodec.BoundSessionSend command,
+            ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
+            return runtime.acceptBoundSessionSend(
+                sourceNodeRid, sourceNodeGeneration, command, payload);
+        }
+    }
+
+    /**
      * Handles the one-way boundSessionReplaced notice without putting it in a
      * user application mailbox. The callback is started on the Session's
      * serial lane, while its completion and both close timers are observed by
@@ -403,8 +526,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         RoutingId transportSource,
         systems.zlink.framework.runtime.internal.service
             .ZLinkServiceM6BWireCodec.BoundSessionReplaced replacement) {
-        java.util.Objects.requireNonNull(transportSource, "transportSource");
-        java.util.Objects.requireNonNull(replacement, "replacement");
+        Objects.requireNonNull(transportSource, "transportSource");
+        Objects.requireNonNull(replacement, "replacement");
         var actor = replacement.actorAuthority().actor();
         var retired = replacement.retiredSession();
         if (!transportSource.equals(actor.nodeRid())) {
@@ -1036,7 +1159,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         ZLinkFlowContext.State incomingFlow = streamHeader.flowId().isPresent()
             ? new ZLinkFlowContext.State(streamHeader.flowId().orElseThrow(),
                 streamHeader.flowOrigin().orElseThrow())
-            : (flow.enabled(systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome.RECEIVED)
+            : (flow.enabled(ZLinkMessageFlowOutcome.RECEIVED)
                 ? ZLinkFlowContext.create(ZLinkFlowOrigin.INBOUND)
                 : null);
         if (streamHeader.kind() != ZLinkStreamMessageKind.CONTROL
@@ -1072,14 +1195,14 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             return CompletableFuture.completedFuture(null);
         }
         state.markApplicationReceived();
-        if (flow.enabled(systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome.RECEIVED)) {
+        if (flow.enabled(ZLinkMessageFlowOutcome.RECEIVED)) {
             String corr = ZLinkStreamCorrelations.forTrace(dispatchHeader);
-            flow.trace(new systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent(
-                systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome.RECEIVED,
-                systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface.STREAM_SESSION,
+            flow.trace(new ZLinkMessageFlowEvent(
+                ZLinkMessageFlowOutcome.RECEIVED,
+                ZLinkDispatchErrorSurface.STREAM_SESSION,
                 dispatchHeader.requestSequence().isPresent()
-                    ? systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind.REQUEST
-                    : systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind.SEND,
+                    ? ZLinkDispatchMessageKind.REQUEST
+                    : ZLinkDispatchMessageKind.SEND,
                 dispatchHeader.packetName(), null, null, corr, null, null, null, null,
                 null, null, null, null,
                 incomingFlow == null ? null : incomingFlow.flowId(),
@@ -1091,7 +1214,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             compressionCodec));
         ZLinkMessage sessionPayload = ZLinkMessage.fromEncoded(
             ZLinkMessagePayloads.encoded(payloadCopy),
-            serializer);
+            ZLinkCodecRegistration.serializerForReceivedStreamCodec(
+                serializer, dispatchHeader.codec()));
         long payloadBytes = payloadCopy.size();
         payloadCopy.close();
         trace("stream-node dispatch-enqueue node=" + streamNode.name()
@@ -1529,7 +1653,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     }
 
     private <T> CompletionStage<T> executeHandler(
-        java.util.function.Supplier<CompletionStage<T>> operation) {
+        Supplier<CompletionStage<T>> operation) {
         CompletableFuture<CompletionStage<T>> entered = new CompletableFuture<>();
         ZLinkFlowContext.State capturedFlow = ZLinkFlowContext.current();
         try {
@@ -1537,7 +1661,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 try (ZLinkFlowContext.Scope ignored = capturedFlow == null
                     ? () -> { }
                     : ZLinkFlowContext.enter(capturedFlow)) {
-                    entered.complete(java.util.Objects.requireNonNull(
+                    entered.complete(Objects.requireNonNull(
                         operation.get(), "handler result"));
                 } catch (RuntimeException ex) {
                     entered.completeExceptionally(ex);
@@ -1549,7 +1673,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         // The session queue owns callback ordering. Keep its turn until the
         // handler stage reaches its terminal result so callbacks from one
         // STREAM session cannot overlap.
-        return entered.thenCompose(java.util.function.Function.identity());
+        return entered.thenCompose(Function.identity());
     }
 
     private CompletionStage<Void> disconnectSessionStage(SessionState state) {

@@ -1,4 +1,4 @@
-// SA-E2E-09: RouteMesh Channel send deadline을 적용한다 시나리오를 검증한다.
+// SA-E2E-09: Channel topology별 send deadline을 적용한다 시나리오를 검증한다.
 import {
   emit,
   ensure,

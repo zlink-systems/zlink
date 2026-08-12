@@ -276,7 +276,7 @@ public class SpotServiceScenarioContext {
 
     protected static <T> void awaitUnchecked(
         ZLinkStreamConnector connector,
-        java.util.concurrent.CompletionStage<T> stage) {
+        CompletionStage<T> stage) {
         try {
             stage.toCompletableFuture().join();
         } catch (Exception error) {

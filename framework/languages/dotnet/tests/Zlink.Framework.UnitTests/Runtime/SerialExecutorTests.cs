@@ -226,8 +226,11 @@ public sealed class SerialExecutorTests
     public async Task TargetCutoverRunsPreviousOwnerMessageFollowBeforeDirectIngress()
     {
         await using var queue = CreateQueue(CancellationToken.None);
-        var seal = await queue.SealRelocationAsync(CancellationToken.None);
         var executionOrder = new ConcurrentQueue<int>();
+        var activeStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseActive = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
 
         ZLinkSerialWorkItem Post(int value, bool followed)
         {
@@ -246,17 +249,46 @@ public sealed class SerialExecutorTests
             return item;
         }
 
-        var directFirst = Post(1, followed: false);
-        var followed = Post(2, followed: true);
-        var directSecond = Post(3, followed: false);
+        Assert.Equal(
+            ZLinkAcceptedWorkAdmission.Accepted,
+            queue.TryPostAccepted(
+                new byte[] { 0 },
+                async _ =>
+                {
+                    activeStarted.TrySetResult();
+                    await releaseActive.Task.ConfigureAwait(false);
+                    executionOrder.Enqueue(0);
+                },
+                static () => { },
+                out var active));
+        await activeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            var captured = Post(1, followed: false);
+            var sealTask = queue.SealRelocationAsync(
+                CancellationToken.None).AsTask();
+            Assert.False(sealTask.IsCompleted);
+            releaseActive.TrySetResult();
+            var seal = await sealTask.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.True(queue.TryOpenRelocationAfterMessageFollow(seal));
-        await Task.WhenAll(
-            directFirst.Completion,
-            followed.Completion,
-            directSecond.Completion).WaitAsync(TimeSpan.FromSeconds(5));
+            var directFirst = Post(2, followed: false);
+            var followed = Post(3, followed: true);
+            var directSecond = Post(4, followed: false);
 
-        Assert.Equal(new[] { 2, 1, 3 }, executionOrder);
+            Assert.True(queue.TryOpenRelocationAfterMessageFollow(seal));
+            await Task.WhenAll(
+                active.Completion,
+                captured.Completion,
+                directFirst.Completion,
+                followed.Completion,
+                directSecond.Completion).WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(new[] { 0, 1, 3, 2, 4 }, executionOrder);
+        }
+        finally
+        {
+            releaseActive.TrySetResult();
+        }
     }
 
     [Fact]
@@ -290,28 +322,23 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
-    public async Task RelocationIngressHoldRemainsOpenUntilCommitAndIsBounded()
+    public async Task RelocationIngressHoldDoesNotApplyFormerCountBound()
     {
         await using var queue = CreateQueue(CancellationToken.None);
         var seal = await queue.SealRelocationAsync(CancellationToken.None);
-        for (var index = 0; index < 1_024; index++)
+        for (var index = 0; index < 1_025; index++)
             Assert.Equal(ZLinkAcceptedWorkAdmission.Accepted, queue.TryPostAccepted(
                 new byte[] { 7 },
                 static _ => ValueTask.CompletedTask,
                 static () => { },
                 out _));
-        Assert.Equal(ZLinkAcceptedWorkAdmission.RelocationMoving, queue.TryPostAccepted(
-            new byte[] { 8 },
-            static _ => ValueTask.CompletedTask,
-            static () => { },
-            out _));
 
         Assert.True(queue.TryCommitRelocation(seal, out var held));
-        Assert.Equal(1_024, held.Count);
+        Assert.Equal(1_025, held.Count);
     }
 
     [Fact]
-    public async Task RelocationIngressHoldRejectsPayloadPastByteBound()
+    public async Task RelocationIngressHoldDoesNotApplyFormerByteBound()
     {
         await using var queue = CreateQueue(CancellationToken.None);
         var seal = await queue.SealRelocationAsync(CancellationToken.None);
@@ -320,14 +347,14 @@ public sealed class SerialExecutorTests
             static _ => ValueTask.CompletedTask,
             static () => { },
             out _));
-        Assert.Equal(ZLinkAcceptedWorkAdmission.RelocationMoving, queue.TryPostAccepted(
+        Assert.Equal(ZLinkAcceptedWorkAdmission.Accepted, queue.TryPostAccepted(
             new byte[] { 1 },
             static _ => ValueTask.CompletedTask,
             static () => { },
             out _));
 
         Assert.True(queue.TryCommitRelocation(seal, out var held));
-        Assert.Single(held);
+        Assert.Equal(2, held.Count);
     }
 
     [Fact]

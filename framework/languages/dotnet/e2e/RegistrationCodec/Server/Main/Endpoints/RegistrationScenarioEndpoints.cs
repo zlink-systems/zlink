@@ -1,4 +1,3 @@
-using Google.Protobuf.WellKnownTypes;
 using RegistrationCodec.Shared;
 using Zlink.Framework.Contracts.Channels;
 
@@ -47,13 +46,16 @@ internal static class RegistrationScenarioEndpoints
             await channel.SendToChannel(RegistrationCodecNames.Channel, new JsonEchoMsg("cmd-rc-b1", "rc-b1-send")).Async(cancellationToken);
 
             var protobuf = await channel
-                .RequestToChannel(RegistrationCodecNames.Channel, new StringValue { Value = "rc-b2" })
-                .Async<StringValue>(cancellationToken);
-            await channel.SendToChannel(RegistrationCodecNames.Channel, new StringValue { Value = "rc-b2-send" }).Async(cancellationToken);
+                .RequestToChannel(RegistrationCodecNames.Channel, new ProtobufEchoReq { Value = "rc-b2" })
+                .Async<ProtobufEchoRes>(cancellationToken);
+            await channel.SendToChannel(
+                    RegistrationCodecNames.Channel,
+                    new ProtobufEchoMsg { Value = "rc-b2-send" })
+                .Async(cancellationToken);
 
             var packed = await channel
                 .RequestToChannel(RegistrationCodecNames.Channel, new PackedEchoReq { Value = "rc-b3" })
-                .Async<PackedEchoReq>(cancellationToken);
+                .Async<PackedEchoRes>(cancellationToken);
             await channel.SendToChannel(RegistrationCodecNames.Channel,
                     new PackedEchoMsg { CommandId = "cmd-rc-b3", Value = "rc-b3-send" }).Async(cancellationToken);
 

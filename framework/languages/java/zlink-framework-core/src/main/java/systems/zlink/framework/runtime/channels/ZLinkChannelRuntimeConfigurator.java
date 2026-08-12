@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.UUID;
+import systems.zlink.contracts.core.RoutingId;
 
 import java.util.function.BiConsumer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
@@ -61,10 +63,10 @@ final class ZLinkChannelRuntimeConfigurator {
         }
         ZLinkBackendRouterSocket router = backend.createRouterSocket(context);
         router.setChannelName(channel.name());
-        systems.zlink.contracts.core.RoutingId serverRoutingId =
+        RoutingId serverRoutingId =
             channel.routingId() == null
-                ? systems.zlink.contracts.core.RoutingId.from(
-                    java.util.UUID.randomUUID())
+                ? RoutingId.from(
+                    UUID.randomUUID())
                 : channel.routingId();
         router.setRoutingId(serverRoutingId);
         applyServerSocketOptions(channel, router);
@@ -83,10 +85,10 @@ final class ZLinkChannelRuntimeConfigurator {
         if (channel.publisherEnabled()) {
             ZLinkBackendPublisherSocket publisher = backend.createPublisherSocket(context);
             publisher.setChannelName(channel.name());
-            systems.zlink.contracts.core.RoutingId publisherRoutingId =
+            RoutingId publisherRoutingId =
                 channel.routingId() == null
-                    ? systems.zlink.contracts.core.RoutingId.from(
-                        channel.routingIdPrefix() + "-" + java.util.UUID.randomUUID())
+                    ? RoutingId.from(
+                        channel.routingIdPrefix() + "-" + UUID.randomUUID())
                     : channel.routingId();
             publisher.setRoutingId(publisherRoutingId);
             for (String endpoint : channel.publisherBinds()) {

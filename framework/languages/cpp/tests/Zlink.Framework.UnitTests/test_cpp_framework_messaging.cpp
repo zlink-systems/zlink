@@ -76,8 +76,6 @@ int main ()
 
     {
         zlink::framework::serializer_registry_t serializers;
-        zlink::framework::detail::
-          register_spot_route_packet_serializers (serializers);
         const auto packet_serializer =
           serializers.get<zlink::framework::detail::
                             spot_actor_packet_route_request_t> ();
@@ -85,11 +83,58 @@ int main ()
           zlink::framework::detail::spot_actor_packet_route_request_t{
             .payload = {0, 1, 2, 253, 254, 255}});
         const auto packet_json = nlohmann::json::parse (packet_wire.to_string ());
-        if (!packet_json.at ("payload").is_string ()
+        if (packet_serializer.content_type () != "application/json"
+            || !packet_json.at ("payload").is_string ()
             || packet_json.at ("payload").get<std::string> () != "AAEC/f7/"
             || packet_serializer.deserialize (packet_wire).payload
                  != std::vector<std::uint8_t> ({0, 1, 2, 253, 254, 255})) {
             return 154;
+        }
+        auto duplicate_field_wire = packet_wire.to_string ();
+        duplicate_field_wire.insert (
+          duplicate_field_wire.size () - 1,
+          R"(,"payload":"AA==")");
+        try {
+            (void) packet_serializer.deserialize (
+              zlink::framework::encoded_payload_t::from_string (
+                duplicate_field_wire));
+            return 158;
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            if (error.kind ()
+                != zlink::framework::framework_error_kind_t::protocol_error)
+                return 159;
+        }
+        const auto actor_node = zlink::routing_id_t::from ("actor-node-b");
+        const auto fenced_packet = packet_serializer.deserialize (
+          packet_serializer.serialize (
+            zlink::framework::detail::spot_actor_packet_route_request_t{
+              .actor_node_rid = actor_node.to_string (),
+              .actor_type = "player",
+              .actor_id = "actor-1",
+              .actor_generation = 7,
+              .actor_node_generation = 11,
+              .actor_authority_owner_generation = 13,
+              .actor_owner_lease_generation = 17,
+              .spot_id = "spot-b",
+              .packet_name_value = "ProbeReq",
+              .message_follow_hop_count = 1,
+              .payload = {1}}));
+        if (fenced_packet.actor_node_generation != 11
+            || fenced_packet.actor_authority_owner_generation != 13
+            || fenced_packet.actor_owner_lease_generation != 17
+            || fenced_packet.message_follow_hop_count != 1) {
+            return 156;
+        }
+        auto incomplete_fence = packet_json;
+        incomplete_fence["messageFollowHopCount"] = 1;
+        try {
+            (void) packet_serializer.deserialize (
+              zlink::framework::encoded_payload_t::from_string (
+                incomplete_fence.dump ()));
+            return 157;
+        }
+        catch (const std::exception &) {
         }
         for (const auto *invalid_payload : {"AQ=", "A===", "AB==", "AQ=A"}) {
             auto invalid_json = packet_json;
@@ -139,48 +184,34 @@ int main ()
                       .completion_root_reference =
                         "join-root",
                       .completion_root_checksum =
-                        0x12345678}));
+                        0x12345678,
+                      .source_spot_id = "source-spot",
+                      .session_relocation_route = {3, 5, 8}}));
         if (commit_root.completion_root_reference
               != "join-root"
             || commit_root.completion_root_checksum
-                 != 0x12345678) {
+                 != 0x12345678
+            || commit_root.source_spot_id != "source-spot"
+            || commit_root.session_relocation_route
+                 != std::vector<std::uint8_t> ({3, 5, 8})) {
             return 151;
         }
-        auto oversized_count =
+        //  The handoff backlog has no record-count or stored-size bound, so a
+        //  large backlog round-trips instead of being rejected.
+        auto large_backlog =
           zlink::framework::detail::spot_actor_commit_route_request_t{};
-        oversized_count.handoff_backlog.resize (
-          zlink::framework::runtime::protocol::messageFollowMessages + 1);
-        for (auto &packet : oversized_count.handoff_backlog)
+        large_backlog.handoff_backlog.resize (2048);
+        for (auto &packet : large_backlog.handoff_backlog)
             packet.packet_name_value = "handoff";
-        try {
-            (void) serializers
-              .get<zlink::framework::detail::spot_actor_commit_route_request_t> ()
-              .deserialize (
-                serializers
-                  .get<zlink::framework::detail::spot_actor_commit_route_request_t> ()
-                  .serialize (oversized_count));
+        const auto round_tripped =
+          serializers
+            .get<zlink::framework::detail::spot_actor_commit_route_request_t> ()
+            .deserialize (
+              serializers
+                .get<zlink::framework::detail::spot_actor_commit_route_request_t> ()
+                .serialize (large_backlog));
+        if (round_tripped.handoff_backlog.size () != 2048) {
             return 152;
-        }
-        catch (const std::exception &) {
-        }
-
-        auto oversized_bytes =
-          zlink::framework::detail::spot_actor_commit_route_request_t{};
-        oversized_bytes.handoff_backlog.push_back (
-          zlink::framework::detail::spot_actor_handoff_packet_t{
-            .packet_name_value = "handoff",
-            .payload = std::vector<std::uint8_t> (
-              zlink::framework::runtime::protocol::messageFollowBytes + 1)});
-        try {
-            (void) serializers
-              .get<zlink::framework::detail::spot_actor_commit_route_request_t> ()
-              .deserialize (
-                serializers
-                  .get<zlink::framework::detail::spot_actor_commit_route_request_t> ()
-                  .serialize (oversized_bytes));
-            return 153;
-        }
-        catch (const std::exception &) {
         }
     }
     {

@@ -107,7 +107,6 @@ test('node topology samples implement the common sample role layout', () => {
       'Server/Matchmaking/bingo-match-reservation-store.ts',
       'Server/Play/Infrastructure/ZLink/Actors/player-actor.ts',
       'Server/Play/Infrastructure/ZLink/Actors/player-actor-factory.ts',
-      'Server/Play/Infrastructure/ZLink/Handlers/ensure-player-actor-handler.ts',
       'Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/Handlers/bingo-room-timer-handler.ts',
       'Server/Play/Infrastructure/ZLink/Spots/EntrySpot/Handlers/match-bingo-actor-handler.ts',
       'Server/Play/Infrastructure/ZLink/Spots/EntrySpot/Handlers/observe-bingo-events-handler.ts',
@@ -145,7 +144,6 @@ test('node topology samples implement the common sample role layout', () => {
       'Server/Support/Infrastructure/ZLink/Actors/support-user-actor-factory.ts',
       'Server/Support/Infrastructure/ZLink/Spots/ConversationSpot/Notifications/conversation-event-mapper.ts',
       'Server/Support/Infrastructure/ZLink/Spots/ConversationSpot/Notifications/support-notification-publisher.ts',
-      'Server/Support/Infrastructure/ZLink/Spots/ConversationSpot/conversation-create-request.ts',
       'Server/Support/Infrastructure/ZLink/Spots/EntrySpot/support-entry-spot.ts',
       'Server/Support/Infrastructure/ZLink/Spots/ConversationSpot/conversation-spot.ts',
       'Server/Support/Infrastructure/ZLink/Spots/ConversationSpot/Handlers/conversation-idle-timer-handler.ts',
@@ -281,7 +279,6 @@ test('node Bingo and TicTacToe samples implement Entry Spot actor lifecycle flow
     bingoRoom: readSample('Bingo.Ts', 'Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo-room-spot.ts'),
     bingoAllocator: readSample('Bingo.Ts', 'Server/Matchmaking/bingo-match-reservation-store.ts'),
     bingoAllocate: readSample('Bingo.Ts', 'Server/Matchmaking/bingo-matchmaker.ts'),
-    bingoEnsureActor: readSample('Bingo.Ts', 'Server/Play/Infrastructure/ZLink/Handlers/ensure-player-actor-handler.ts'),
     bingoApiMatch: readSample('Bingo.Ts', 'Server/Api/Handlers/match-bingo-handler.ts'),
     bingoActorMatch: readSample('Bingo.Ts', 'Server/Play/Infrastructure/ZLink/Spots/EntrySpot/Handlers/match-bingo-actor-handler.ts'),
     bingoActorLifecycle: readSample('Bingo.Ts', 'Server/Play/Infrastructure/ZLink/Actors/player-actor-lifecycle-handlers.ts'),
@@ -304,7 +301,6 @@ test('node Bingo and TicTacToe samples implement Entry Spot actor lifecycle flow
     ['Bingo API match', files.bingoApiMatch, 'ZLINK_SPOT_OUTBOUND'],
     ['Bingo API match', files.bingoApiMatch, '.instanceSpot(SampleNames.matchmakerSpotType)'],
     ['Bingo allocate', files.bingoAllocate, 'ReserveBingoRoomHandler'],
-    ['Bingo ensure actor', files.bingoEnsureActor, 'ZLINK_ACTOR_MANAGER'],
     ['Bingo actor match', files.bingoActorMatch, '.joinSpot(matched.roomId'],
     ['Bingo entry', files.bingoEntry, 'onCreateActor'],
     ['Bingo entry', files.bingoEntry, 'onJoinedActor'],
@@ -315,7 +311,7 @@ test('node Bingo and TicTacToe samples implement Entry Spot actor lifecycle flow
     ['TicTacToe module', files.ticTacToeModule, '.addSpotFactory(\n            SampleNames.gameSpotType,\n            TicTacToeGameSpot,'],
     ['TicTacToe create', files.ticTacToeCreate, '.create(SampleNames.gameSpotType)'],
     ['TicTacToe create', files.ticTacToeCreate, '.inMesh(SampleNames.playSpotNode)'],
-    ['TicTacToe actor join', files.ticTacToeActorJoin, '.joinSpot(request.roomId, joinRequest)'],
+    ['TicTacToe actor join', files.ticTacToeActorJoin, '.joinSpot(message.roomId, joinRequest)'],
     ['TicTacToe entry', files.ticTacToeEntry, 'onCreateActor'],
     ['TicTacToe entry', files.ticTacToeEntry, 'onJoinedActor'],
     ['TicTacToe entry', files.ticTacToeEntry, 'destroyActor(actor'],
@@ -962,7 +958,7 @@ test('TicTacToe TypeScript sample implements the common game state contract', ()
     [match, 'this.status = GameStatus.InProgress'],
     [match, 'this.status = GameStatus.Won'],
     [match, 'this.status = GameStatus.TurnTimedOut'],
-    [joinHandler, '.joinSpot(request.roomId, joinRequest)'],
+    [joinHandler, '.joinSpot(message.roomId, joinRequest)'],
     [moveHandler, 'spot.placeMark(actor.actorId, request.cell)'],
     [gameSpot, 'gameStateNotify(state)'],
     [playActor, 'this.context.boundSession'],
@@ -1293,12 +1289,17 @@ test('node client scenarios follow the common sample document order', () => {
     "client1.request(authenticateReq('player-x'))",
     "client2.request(authenticateReq('player-o'))",
     '3. Host joins by explicit RoomId',
-    'client1.request(joinGameReq(game.roomId))',
-    "stateOf(client1Join).roomId === game.roomId",
+    'const client1JoinedState = client1',
+    '.waitFor<JoinGameNotify>(PacketNames.joinGameNotify)',
+    '.send(new JoinGameMsg(game.roomId))',
+    '.packetName(PacketNames.joinGameMsg)',
     'client1State.payload.state.xActorId === client1Auth.player.actorId',
     'client1SawClient2Join',
     '4-6. Guest joins by the same RoomId',
-    'client2.request(joinGameReq(game.roomId))',
+    'const client2JoinedState = client2',
+    '.waitFor<JoinGameNotify>(PacketNames.joinGameNotify)',
+    '.send(new JoinGameMsg(game.roomId))',
+    '.packetName(PacketNames.joinGameMsg)',
     'client2State.payload.state.oActorId === client2Auth.player.actorId',
     'client1Running.payload.state.nextTurn === GameMarks.x',
     '7. Each move response is matched with the opponent notify',
@@ -1510,7 +1511,7 @@ test('node samples keep contracts separate from sample configuration and applica
   assert.deepEqual(violations, []);
 });
 
-test('all Node samples use automatic handler registration', () => {
+test('Node samples use automatic handlers except TicTacToe manual registration', () => {
   const apiMain = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Api', 'main.ts'), 'utf8');
   const playMain = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Play', 'main.ts'), 'utf8');
   const apiModule = fs.readFileSync(path.join(samplesRoot, 'TicTacToe.Ts', 'Server', 'Api', 'tictactoe-api-module.ts'), 'utf8');
@@ -1547,6 +1548,38 @@ test('all Node samples use automatic handler registration', () => {
     'Handlers',
     'tictactoe-game-timer-handler.ts'
   ), 'utf8');
+  const playEntrySpot = fs.readFileSync(path.join(
+    samplesRoot,
+    'TicTacToe.Ts',
+    'Server',
+    'Play',
+    'Infrastructure',
+    'ZLink',
+    'Spots',
+    'EntrySpot',
+    'play-entry-spot.ts'
+  ), 'utf8');
+  const gameSpot = fs.readFileSync(path.join(
+    samplesRoot,
+    'TicTacToe.Ts',
+    'Server',
+    'Play',
+    'Infrastructure',
+    'ZLink',
+    'Spots',
+    'TicTacToeGameSpot',
+    'tictactoe-game-spot.ts'
+  ), 'utf8');
+  const sessionFactory = fs.readFileSync(path.join(
+    samplesRoot,
+    'TicTacToe.Ts',
+    'Server',
+    'Play',
+    'Infrastructure',
+    'ZLink',
+    'Sessions',
+    'play-session-factory.ts'
+  ), 'utf8');
   const bingoPlayModule = fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Play', 'bingo-play-module.ts'), 'utf8');
   const bingoTimerHandler = fs.readFileSync(path.join(
     samplesRoot,
@@ -1566,14 +1599,28 @@ test('all Node samples use automatic handler registration', () => {
   const required = [
     [nestPackage, 'export function zlinkRequestHandler'],
     [nestPackage, 'export function zlinkSpotTimerHandler'],
-    [apiModule, 'zlinkModule(__dirname'],
-    [apiModule, ".addHandlerGroup('api')"],
-    [apiHandler, "@zlinkRequestHandler('api', PacketNames.authenticatePlayerReq)"],
+    [apiModule, 'zlinkModule({'],
+    [apiModule, 'disableImplicitHandlerAutoRegistration()'],
+    [apiModule, '.addRequestHandler(PacketNames.authenticatePlayerReq, AuthenticatePlayerHandler)'],
+    [apiHandler, '@Injectable()'],
     [playModule, 'objectServer.addSpotFactory('],
-    [playModule, 'zlinkModule(__dirname'],
-    [playHandler, '@zlinkEntrySpotActorRequestHandler({'],
+    [playModule, 'zlinkModule({'],
+    [playModule, 'disableImplicitHandlerAutoRegistration()'],
+    [playHandler, '@ZLinkSpotActorSend(PacketNames.joinGameMsg)'],
+    [playEntrySpot, 'this.context.handlers.addHandler(PlayActorJoinGameHandler)'],
+    [playEntrySpot, 'this.context.handlers.addHandler(PlayActorObserveMilestoneHandler)'],
+    [playEntrySpot, 'this.context.handlers.addHandler(DeliverPlayNotificationEntryHandler)'],
+    [playEntrySpot, 'this.context.handlers.addSubscribe('],
+    [playEntrySpot, 'PlayerWinMilestoneEventHandler,'],
+    [gameSpot, 'this.context.handlers.addHandler(PlayActorCurrentGameStateHandler)'],
+    [gameSpot, 'this.context.handlers.addHandler(PlayActorPlaceMarkHandler)'],
+    [gameSpot, 'this.context.handlers.addHandler(PlayActorLeaveGameHandler)'],
+    [gameSpot, 'this.context.handlers.addHandler(DeliverPlayNotificationHandler)'],
+    [gameSpot, 'this.context.addTimer('],
+    [gameSpot, 'TicTacToeGameTimerHandler,'],
+    [sessionFactory, 'context.handlers.addHandler(AuthenticatePlaySessionHandler)'],
     [ticTacToeTimerHandler, 'class TicTacToeGameTimerHandler'],
-    [ticTacToeTimerHandler, '@zlinkSpotTimerHandler({'],
+    [ticTacToeTimerHandler, '@Injectable()'],
     [bingoTimerHandler, 'class BingoRoomTimerHandler'],
     [bingoTimerHandler, '@zlinkSpotTimerHandler({'],
     [fs.readFileSync(path.join(samplesRoot, 'Bingo.Ts', 'Server', 'Api', 'bingo-api-module.ts'), 'utf8'), '.addHandlerGroup(\'api\')'],
@@ -1590,6 +1637,27 @@ test('all Node samples use automatic handler registration', () => {
     .filter(([content, text]) => !content.includes(text))
     .map(([, text]) => text);
   const violations = [];
+  const apiProviderSection = apiModule.slice(apiModule.lastIndexOf('providers: ['));
+  if (!apiProviderSection.includes('AuthenticatePlayerHandler,')) {
+    violations.push('TicTacToe.Ts:api:AuthenticatePlayerHandler provider');
+  }
+  const playProviderSection = playModule.slice(playModule.lastIndexOf('providers: ['));
+  for (const handlerType of [
+    'AuthenticatePlaySessionHandler',
+    'DeliverPlayNotificationEntryHandler',
+    'DeliverPlayNotificationHandler',
+    'PlayActorCurrentGameStateHandler',
+    'PlayActorJoinGameHandler',
+    'PlayActorLeaveGameHandler',
+    'PlayActorObserveMilestoneHandler',
+    'PlayActorPlaceMarkHandler',
+    'PlayerWinMilestoneEventHandler',
+    'TicTacToeGameTimerHandler'
+  ]) {
+    if (!playProviderSection.includes(`${handlerType},`)) {
+      violations.push(`TicTacToe.Ts:play:${handlerType} provider`);
+    }
+  }
   if (nestPackage.includes('export function zlinkHandlers')) {
     violations.push('@zlink-systems/nestjs:zlinkHandlers');
   }
@@ -1632,6 +1700,9 @@ test('all Node samples use automatic handler registration', () => {
     }
   }
   for (const sample of requiredSamples) {
+    if (sample === 'TicTacToe.Ts') {
+      continue;
+    }
     for (const file of sampleSourceFiles(path.join(samplesRoot, sample))) {
       const content = fs.readFileSync(file, 'utf8');
       if (/\.add(?:Request|Send|Publish)Handler\(/.test(content)
@@ -1651,6 +1722,26 @@ test('all Node samples use automatic handler registration', () => {
       ) {
         violations.push(`${relativePath(samplesRoot, file)}:automatic-discovery-disabled`);
       }
+    }
+  }
+
+  for (const file of sampleSourceFiles(path.join(samplesRoot, 'TicTacToe.Ts', 'Server'))) {
+    const content = fs.readFileSync(file, 'utf8');
+    if (/zlinkModule\(__dirname|@zlink(?:Request|Send|Publish|Spot|EntrySpot)[A-Za-z]*Handler/.test(content)) {
+      violations.push(`${relativePath(samplesRoot, file)}:implicit-handler-discovery`);
+    }
+    if (/\.addHandlerGroup\(/.test(content)) {
+      violations.push(`${relativePath(samplesRoot, file)}:handler-group-discovery`);
+    }
+  }
+  for (const [label, content, comments] of [
+    ['api', apiModule, ['// request:']],
+    ['entry', playEntrySpot, ['// send:', '// request:', '// subscribe:']],
+    ['room', gameSpot, ['// send:', '// request:', '// timer:']],
+    ['session', sessionFactory, ['// request:']]
+  ]) {
+    for (const comment of comments) {
+      if (!content.includes(comment)) violations.push(`TicTacToe.Ts:${label}:${comment}`);
     }
   }
 
@@ -1716,12 +1807,16 @@ test('TicTacToe keeps manual topology on one physical MeshNode per process', () 
   for (const module of [apiModule, playModule]) {
     assert.equal((module.match(/\.addRouteMesh\(/g) ?? []).length, 1);
     assert.match(module, /addRouteMesh\(SampleNames\.playSpotNode\)/);
-    assert.match(module, /channel\(SampleNames\.apiChannel\)/);
+    assert.match(module, /addClientServerChannel\(SampleNames\.apiChannel\)/);
     assert.match(module, /peerConnections\(\)\.connect\(/);
+    assert.doesNotMatch(module, /mesh\.channel\(SampleNames\.apiChannel\)/);
   }
-  assert.match(apiModule, /\.addHandlerGroup\('api'\)/);
+  assert.match(apiModule, /\.addRequestHandler\(PacketNames\.authenticatePlayerReq, AuthenticatePlayerHandler\)/);
   assert.match(apiModule, /mesh\.objects\(\)\.client\(\)/);
+  assert.match(apiModule, /\.listen\(config\.apiSpotEndpoint\)/);
   assert.match(playModule, /objectServer\.addSpotFactory\(/);
+  assert.match(playModule, /apiChannel\.connect\(endpoint\)/);
+  assert.match(playModule, /if \(config\.playIndex === 0\)/);
   assert.match(createGame, /\.create\(SampleNames\.gameSpotType\)/);
   assert.doesNotMatch(createGame, /requestToChannel|ownerPlayEndpoint|NodeRid/);
   assert.match(authenticate, /requestToChannel\(\s*SampleNames\.apiChannel/);
@@ -1818,8 +1913,8 @@ test('Bingo TypeScript sample normalizes wire room settings before creating room
   ), 'utf8');
 
   assert.match(roomModels, /function roomSettingsFromPayload/);
-  assert.match(roomSpot, /const settings = request\.decode<BingoRoomSettingsInput>/);
-  assert.match(roomSpot, /roomSettingsFromPayload\(settings\)/);
+  assert.match(roomSpot, /const create = request\.decode<BingoRoomCreateReq>/);
+  assert.match(roomSpot, /roomSettingsFromPayload\(create\.settings\)/);
   assert.doesNotMatch(roomSpot, /protobufSerializer\.deserialize/);
 });
 
@@ -1930,7 +2025,7 @@ test('Bingo TypeScript sample exposes spot actor contracts explicitly', () => {
   assert.deepEqual(violations, []);
 });
 
-test('node TypeScript samples schedule actor destroy in Entry Spot without mutable lifecycle actors', () => {
+test('node TypeScript samples schedule actor destroy in Entry Spot with sample-owned intent', () => {
   const cases = [
     {
       sample: 'Bingo.Ts',
@@ -1967,8 +2062,34 @@ test('node TypeScript samples schedule actor destroy in Entry Spot without mutab
     if (userSpot.includes('destroyActor')) {
       missing.push(`${sample.sample}:userSpot:destroyActor`);
     }
-    for (const forbidden of ['destroyAfterEntrySpotJoin', 'markForDestroyAfterRoomLeave', 'markDisconnected']) {
-      if (actor.includes(forbidden)) missing.push(`${sample.sample}:actor:${forbidden}`);
+    if (sample.sample === 'TicTacToe.Ts' || sample.sample === 'Bingo.Ts') {
+      const relocation = fs.readFileSync(path.join(
+        samplesRoot,
+        sample.sample,
+        'Server', 'Play', 'Infrastructure', 'ZLink', 'Actors',
+        sample.sample === 'TicTacToe.Ts'
+          ? 'play-actor-relocation-adapter.ts'
+          : 'player-actor-relocation-adapter.ts'
+      ), 'utf8');
+      const leaveHandler = fs.readFileSync(path.join(
+        samplesRoot,
+        sample.sample,
+        'Server', 'Play', 'Infrastructure', 'ZLink',
+        ...(sample.sample === 'TicTacToe.Ts'
+          ? ['Spots', 'TicTacToeGameSpot', 'Handlers', 'play-actor-leave-game-handler.ts']
+          : ['Actors', 'player-actor-lifecycle-handlers.ts'])
+      ), 'utf8');
+      for (const [label, content, text] of [
+        ['actor', actor, 'destroyAfterEntrySpotJoin'],
+        ['actor', actor, 'markForDestroyAfterRoomLeave'],
+        ['entrySpot', entrySpot, sample.sample === 'TicTacToe.Ts'
+          ? 'actor.destroyAfterEntrySpotJoin'
+          : 'actor.consumeDestroyAfterEntrySpotJoin()'],
+        ['leaveHandler', leaveHandler, 'actor.markForDestroyAfterRoomLeave()'],
+        ['relocation', relocation, 'destroyAfterEntrySpotJoin']
+      ]) {
+        if (!content.includes(text)) missing.push(`${sample.sample}:${label}:${text}`);
+      }
     }
     assert.match(userSpot, /onJoinedActor\(actor: [A-Za-z]+Actor/);
     assert.match(userSpot, /onLeaveActor\(actor: [A-Za-z]+Actor/);
@@ -2005,13 +2126,37 @@ test('node sample wrappers delegate shared mechanics and sample-specific orchest
 test('node shared sample runner isolates Redis and application ports without Docker volumes', () => {
   const runner = fs.readFileSync(path.join(samplesRoot, 'run-sample.mjs'), 'utf8');
 
-  assert.match(runner, /'create', '--name', name, '--tmpfs', '\/data', '-p', '127\.0\.0\.1::6379'/);
-  assert.match(runner, /docker'\), \['rm', '-fv', redisContainer\]/);
+  assert.match(runner, /const redisPortRange = \{ min: 28000, max: 28099 \}/);
+  assert.match(runner, /const applicationPortRange = \{ min: 28100, max: 29999 \}/);
+  assert.match(runner, /const dockerCommandTimeoutMs = 10_000/);
+  assert.match(runner, /'create', '--name', name, '--tmpfs', '\/data', '-p', `127\.0\.0\.1:\$\{port\}:6379`/);
+  assert.match(runner, /\.NetworkSettings\.Ports \"6379\/tcp\"/);
+  assert.match(runner, /'inspect', '-f', '\{\{\.State\.Running\}\}'/);
+  assert.match(runner, /running !== 'true'/);
+  assert.match(runner, /publishedPort !== String\(port\)/);
+  assert.match(runner, /mismatchedContainer = redisContainer/);
+  assert.match(runner, /function removeRedisAttempt\(containerId, name\)/);
+  assert.match(runner, /'inspect', '--type', 'container', '-f', '\{\{\.Id\}\}', name/);
+  assert.match(runner, /\^\[0-9a-f\]\{12,64\}\$/);
+  assert.match(runner, /timeout: executable === 'docker' \? dockerCommandTimeoutMs : undefined/);
+  assert.match(runner, /stdio: 'ignore', timeout: dockerCommandTimeoutMs/);
+  assert.match(runner, /removeRedisAttempt\(redisContainer, ''\)/);
   assert.match(runner, /reserveBrowserSafePort/);
-  assert.match(runner, /30000 \+ Math\.floor\(Math\.random\(\) \* 10000\)/);
+  assert.match(runner, /reserveLeasedPort\(applicationPortRange, 'application'\)/);
+  assert.match(runner, /path\.join\(os\.tmpdir\(\), 'zlink-sample-port-leases'\)/);
   assert.match(runner, /fs\.openSync\(leasePath, 'wx', 0o600\)/);
   assert.match(runner, /for \(const leasePath of portLeases\.values\(\)\) fs\.rmSync/);
   assert.match(runner, /printLogs\(\)/);
+  const signalHandlerOffset = runner.indexOf("for (const signal of ['SIGINT', 'SIGTERM'])");
+  const mainInvocationOffset = runner.indexOf('await main();');
+  const mainBody = runner.slice(
+    runner.indexOf('async function main()'),
+    runner.indexOf('function createContext'));
+  assert.ok(signalHandlerOffset >= 0 && mainInvocationOffset > signalHandlerOffset,
+    'signal cleanup must be registered before main creates owned resources');
+  assert.match(mainBody, /try \{\s+runDir = fs\.mkdtempSync/,
+    'run directory creation must be inside the cleanup-protected main scope');
+  assert.doesNotMatch(runner, /127\.0\.0\.1::6379/);
   assert.doesNotMatch(runner, /127\.0\.0\.1:\d{4,5}/);
 });
 
@@ -2038,6 +2183,10 @@ test('framework aggregate runners never remove Redis containers or processes own
     assert.doesNotMatch(content, /zlink_redis_cleanup_scope|docker ps -a|pkill\s/,
       `${label} must only clean resources created by its own sample or E2E run`);
   }
+
+  assert.match(shellRunner, /\[\[ ! -f "\$\{runner\}" \]\]/);
+  assert.match(shellRunner, /bash "\$\{runner\}"/);
+  assert.doesNotMatch(shellRunner, /chmod|\[\[ ! -x/);
 });
 
 test('node samples keep only contracts and shared sample configuration under Shared', () => {

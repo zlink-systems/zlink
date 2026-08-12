@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.internal.service;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -276,9 +278,9 @@ public final class ZLinkServiceTopologyRegistry {
         Map<String, Long> currentByNode = selectionCurrents.computeIfAbsent(
             key,
             ignored -> new HashMap<>());
-        java.util.Set<String> eligibleIds = ordered.stream()
+        Set<String> eligibleIds = ordered.stream()
             .map(value -> value.peer().descriptor().nodeRoutingId().toString())
-            .collect(java.util.stream.Collectors.toSet());
+            .collect(Collectors.toSet());
         currentByNode.keySet().removeIf(id -> !eligibleIds.contains(id));
 
         WeightedPeer selected = null;

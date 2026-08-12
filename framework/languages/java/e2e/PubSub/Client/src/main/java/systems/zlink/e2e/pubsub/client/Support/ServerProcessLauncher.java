@@ -1,4 +1,5 @@
 package systems.zlink.e2e.pubsub.client.Support;
+import java.util.Arrays;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -227,7 +228,7 @@ public final class ServerProcessLauncher {
         }
         throw new IllegalStateException(
             "timed out waiting for publisher row present=" + present
-                + ": " + java.util.Arrays.toString(latest));
+                + ": " + Arrays.toString(latest));
     }
 
     private ManagedProcess start(String name, Path bin, String config) {

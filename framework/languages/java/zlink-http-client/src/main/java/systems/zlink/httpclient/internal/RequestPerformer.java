@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient.internal;
+import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 
 import java.io.InputStream;
 import java.net.URI;
@@ -75,7 +77,7 @@ public final class RequestPerformer {
         Duration remaining = remaining(deadlineNanos);
         if (remaining == null) {
             return CompletableFuture.failedFuture(
-                new java.net.http.HttpTimeoutException("HTTP request attempt timed out"));
+                new HttpTimeoutException("HTTP request attempt timed out"));
         }
         boolean keepAuthorization = origin.equals(RedirectPolicy.originOf(current));
         HttpRequest request = buildRequest(
@@ -95,7 +97,7 @@ public final class RequestPerformer {
         Supplier<byte[]> bodyProvider,
         int redirectsLeft,
         long deadlineNanos,
-        java.net.http.HttpResponse<InputStream> response) {
+        HttpResponse<InputStream> response) {
         int status = response.statusCode();
         if (options.cookies()) {
             for (String setCookie : response.headers().allValues("set-cookie")) {
@@ -119,7 +121,7 @@ public final class RequestPerformer {
         if (remaining == null) {
             closeQuietly(response.body());
             return CompletableFuture.failedFuture(
-                new java.net.http.HttpTimeoutException("HTTP request attempt timed out"));
+                new HttpTimeoutException("HTTP request attempt timed out"));
         }
         long bodyReadMillis = Math.max(1L, remaining.toMillis());
         InputStream bodyStream = response.body();

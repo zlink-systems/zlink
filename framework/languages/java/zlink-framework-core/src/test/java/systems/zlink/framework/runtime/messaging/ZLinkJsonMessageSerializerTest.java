@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.messaging;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -39,7 +40,7 @@ final class ZLinkJsonMessageSerializerTest {
             assertEquals("18446744073709551615", decoded.unsigned64());
             assertEquals(GoldenState.Ready, decoded.state());
             assertEquals(List.of((byte) 1, (byte) 2),
-                java.util.stream.IntStream.range(0, decoded.bytes().length)
+                IntStream.range(0, decoded.bytes().length)
                     .mapToObj(index -> decoded.bytes()[index])
                     .toList());
         }

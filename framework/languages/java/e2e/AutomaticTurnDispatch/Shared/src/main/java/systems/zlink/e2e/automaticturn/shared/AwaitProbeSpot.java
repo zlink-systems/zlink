@@ -1,4 +1,5 @@
 package systems.zlink.e2e.automaticturn.shared;
+import java.util.List;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -122,7 +123,7 @@ public final class AwaitProbeSpot implements ZLinkSpot<AwaitActor> {
 
     @Override
     public CompletionStage<ZLinkSpotCreateResponse> onCreate(ZLinkMessage request) {
-        java.util.List<String> events = persistentEvents.replay(context.spotId());
+        List<String> events = persistentEvents.replay(context.spotId());
         persistentEventCount = events.size();
         persistentValue = events.isEmpty() ? "" : events.get(events.size() - 1);
         replayed = !events.isEmpty();
@@ -133,7 +134,7 @@ public final class AwaitProbeSpot implements ZLinkSpot<AwaitActor> {
 
     public synchronized Contracts.PersistentRoomStateRes persistentState(
         Contracts.PersistentRoomStateReq request) {
-        java.util.List<String> events = request.append()
+        List<String> events = request.append()
             ? persistentEvents.appendAndReplay(context.spotId(), request.value())
             : persistentEvents.replay(context.spotId());
         persistentEventCount = events.size();

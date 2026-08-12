@@ -1,4 +1,5 @@
 package systems.zlink.samples.deliverydispatch.server.courierspotnode.handlers;
+import systems.zlink.framework.actors.ActorRefSnapshot;
 
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.actors.ActorRef;
@@ -27,7 +28,7 @@ public final class EnsureCourierActorHandler
             .submit()
             .thenApply(actor -> new Messages.EnsureCourierActorRes(
                 request.courierId(),
-                systems.zlink.framework.actors.ActorRefSnapshot.from(requireActor(actor))));
+                ActorRefSnapshot.from(requireActor(actor))));
     }
 
     private static ActorRef requireActor(ZLinkActorCreateResult result) {

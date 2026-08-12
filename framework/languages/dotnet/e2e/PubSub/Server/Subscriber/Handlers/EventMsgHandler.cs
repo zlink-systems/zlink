@@ -5,10 +5,10 @@ using Zlink.Framework.Contracts.Handlers;
 namespace PubSub.Server.Subscriber.Handlers;
 
 internal sealed class EventMsgHandler(EvidenceStore evidence, HandlerDelayOptions delayOptions)
-    : IZLinkFanoutHandler<EventMsg>
+    : IZLinkFanoutHandler<PublishedValueEvent>
 {
     public async ValueTask HandleAsync(
-        EventMsg message,
+        PublishedValueEvent message,
         CancellationToken cancellationToken)
     {
         var topic = message.Value == "ignored"
@@ -26,10 +26,10 @@ internal sealed class EventMsgHandler(EvidenceStore evidence, HandlerDelayOption
         if (topic == PubSubNames.MainTopic)
             evidence.Add(
                 $"event|rid={evidence.Rid}|run={message.RunId}|topic={topic}"
-                + $"|seq={message.Sequence}|value={message.Value}|packet={nameof(EventMsg)}");
+                + $"|seq={message.Sequence}|value={message.Value}|packet={nameof(PublishedValueEvent)}");
         else
             evidence.Add(
                 $"ignored|rid={evidence.Rid}|run={message.RunId}|topic={topic}"
-                + $"|seq={message.Sequence}|value={message.Value}|packet={nameof(EventMsg)}");
+                + $"|seq={message.Sequence}|value={message.Value}|packet={nameof(PublishedValueEvent)}");
     }
 }

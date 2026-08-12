@@ -95,7 +95,6 @@ internal sealed class ZLinkSpotRouteDispatcher(
             object? message;
             if (descriptor.IsRequest)
             {
-                ZLinkFrameworkException? decodeError = null;
                 if (!scope.TryDecode(
                         received.Parts,
                         descriptor.MessageType,
@@ -104,11 +103,9 @@ internal sealed class ZLinkSpotRouteDispatcher(
                         _logger,
                         dispatchErrors,
                         ZLinkDispatchErrorAction.ReplyError,
+                        "SPOT route request",
                         out message,
-                        ex => decodeError = new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.ProtocolError,
-                        $"PayloadDecodeFailed: failed to decode SPOT route request payload for '{channelName}:{header.MessageName}'.",
-                        innerException: ex)))
+                        out var decodeError))
                 {
                     await ReplyErrorAsync(
                             received, header, decodeError!, completionPermit,

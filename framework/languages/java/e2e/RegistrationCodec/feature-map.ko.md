@@ -27,7 +27,7 @@
 | RC-A5 | 구현 | Client HTTP driver가 server endpoint를 호출하고 `useFilter`로 등록한 두 handler filter의 before/after 순서를 evidence로 확인한다. |
 | RC-A6 | 구현 | Client scenario가 duplicate packet registration server role을 시작하고 startup failure를 확인한다. |
 | RC-B1 | 구현 | JSON DTO request/send 왕복과 handler context의 `application/json` content-type evidence를 확인한다. |
-| RC-B2 | 구현 | `StringValue` DTO가 Protobuf codec으로 왕복하고 handler context의 `application/x-protobuf` content-type evidence를 확인한다. |
+| RC-B2 | 구현 | `ProtobufEchoReq/Res/Msg`가 Protobuf codec으로 왕복하고 handler context의 `application/x-protobuf` content-type evidence를 확인한다. |
 | RC-B3 | 구현 | typed MessagePack codec factory로 지정한 DTO가 왕복하고 handler context의 `application/x-msgpack` content-type evidence를 확인한다. |
 | RC-B4 | 구현 | JSON fallback, Protobuf predicate codec, typed MessagePack codec을 한 host에 같이 등록하고 세 content-type evidence가 함께 남는지 확인한다. |
 | RC-B5 | 구현 | Client HTTP driver가 codec requester endpoint를 호출해 json-only peer에 Protobuf request를 보내고 public error와 정상 JSON recovery를 검증한다. |

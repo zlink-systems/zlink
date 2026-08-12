@@ -137,38 +137,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                         typeof(IZLinkRouteSendHandler<ZLinkRemoteActorReplyRelay>),
                         ZLinkMessageKind.Command,
                         ZLinkRemoteActorReplyProtocol.PacketName)))
-                .Append(ToRouteDescriptor(
-                    ZLinkHandlerScanner.CreateExplicitRouteInterfaceDescriptor(
-                        typeof(ZLinkSessionRouteSealHandler),
-                        typeof(IZLinkRouteRequestHandler<
-                            ZLinkSessionRouteSealRequest,
-                            ZLinkSessionRouteSealReply>),
-                        ZLinkMessageKind.Request,
-                        ZLinkSessionRouteCommitProtocol.SealPacketName)))
-                .Append(ToRouteDescriptor(
-                    ZLinkHandlerScanner.CreateExplicitRouteInterfaceDescriptor(
-                        typeof(ZLinkSessionRouteAbortHandler),
-                        typeof(IZLinkRouteRequestHandler<
-                            ZLinkSessionRouteAbortRequest,
-                            ZLinkSessionRouteSealReply>),
-                        ZLinkMessageKind.Request,
-                        ZLinkSessionRouteCommitProtocol.AbortPacketName)))
-                .Append(ToRouteDescriptor(
-                    ZLinkHandlerScanner.CreateExplicitRouteInterfaceDescriptor(
-                        typeof(ZLinkSessionRouteCommitHandler),
-                        typeof(IZLinkRouteRequestHandler<
-                            ZLinkSessionRouteCommitRequest,
-                            ZLinkSessionRouteCommitReply>),
-                        ZLinkMessageKind.Request,
-                        ZLinkSessionRouteCommitProtocol.PacketName)))
-                .Append(ToRouteDescriptor(
-                    ZLinkHandlerScanner.CreateExplicitRouteInterfaceDescriptor(
-                        typeof(ZLinkSessionRouteUnsealHandler),
-                        typeof(IZLinkRouteRequestHandler<
-                            ZLinkSessionRouteUnsealRequest,
-                            ZLinkSessionRouteCommitReply>),
-                        ZLinkMessageKind.Request,
-                        ZLinkSessionRouteCommitProtocol.UnsealPacketName)))
                 ;
         var routeDescriptors = descriptors.ToArray();
         var channelEndpoints = BuildChannelEndpoints(registration, spotNode).ToArray();
@@ -238,18 +206,37 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
 
     internal bool TryDispatch(ZLinkBackendRouteReceived received)
     {
-        if (TryGetOrderedActorRelayKey(received, out var actorId))
+        // Decode the header once here; every later stage (relay-key probe,
+        // infrastructure check, dispatch) reuses it instead of re-parsing the
+        // same bytes. A malformed header stays null so DispatchAsync can own
+        // the protocol-error reporting.
+        ZLinkEnvelopeHeader? header = null;
+        if (received.Parts.Count > 0)
         {
-            return TryDispatchOrderedActorRelay(actorId, received);
+            try
+            {
+                header = ZLinkEnvelopeCodec.DecodeHeader(received.Parts);
+            }
+            catch
+            {
+                // Normal dispatch owns malformed-frame reporting.
+            }
+        }
+
+        if (header is not null
+            && TryGetOrderedActorRelayKey(received, header, out var actorId))
+        {
+            return TryDispatchOrderedActorRelay(actorId, received, header);
         }
 
         return _taskRunner.TryRunDetached(
             "mesh-node-route-dispatch",
-            ct => DispatchAsync(received, ct));
+            ct => DispatchAsync(received, header, ct));
     }
 
     private bool TryGetOrderedActorRelayKey(
         ZLinkBackendRouteReceived received,
+        ZLinkEnvelopeHeader header,
         out ZLinkActorId actorId)
     {
         actorId = default;
@@ -258,7 +245,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
 
         try
         {
-            var header = ZLinkEnvelopeCodec.DecodeHeader(received.Parts);
             if (header.Kind != ZLinkMessageKind.Command
                 || !string.Equals(
                     header.MessageName,
@@ -269,6 +255,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             var relay = ZLinkEnvelopeCodec.DecodeBody(
                     received.Parts,
                     typeof(ZLinkRemoteActorFrameRelay),
+                    header.ContentType,
                     _codecs)
                 as ZLinkRemoteActorFrameRelay;
             if (string.IsNullOrWhiteSpace(relay?.ActorId))
@@ -288,7 +275,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
 
     private bool TryDispatchOrderedActorRelay(
         ZLinkActorId actorId,
-        ZLinkBackendRouteReceived received)
+        ZLinkBackendRouteReceived received,
+        ZLinkEnvelopeHeader header)
     {
         Task prior;
         var completion = new TaskCompletionSource(
@@ -306,6 +294,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                 ct => DispatchOrderedActorRelayAsync(
                     actorId,
                     received,
+                    header,
                     prior,
                     completion,
                     ct)))
@@ -318,6 +307,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
     private async ValueTask DispatchOrderedActorRelayAsync(
         ZLinkActorId actorId,
         ZLinkBackendRouteReceived received,
+        ZLinkEnvelopeHeader header,
         Task prior,
         TaskCompletionSource completion,
         CancellationToken cancellationToken)
@@ -325,7 +315,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         try
         {
             await prior.ConfigureAwait(false);
-            await DispatchAsync(received, cancellationToken).ConfigureAwait(false);
+            await DispatchAsync(received, header, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -346,12 +336,14 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
 
     private async ValueTask DispatchAsync(
         ZLinkBackendRouteReceived received,
+        ZLinkEnvelopeHeader? decodedHeader,
         CancellationToken cancellationToken)
     {
         received.StartDispatch();
         using (received)
         using (var completionPermit = received.CanReply
-                   && !IsInfrastructureRelay(received)
+                   && !(decodedHeader is not null
+                        && IsInfrastructureRelay(received, decodedHeader))
                    ? await _completionAdmission.AcquireResponderAsync(cancellationToken)
                        .ConfigureAwait(false)
                    : null)
@@ -365,7 +357,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             ZLinkEnvelopeHeader header;
             try
             {
-                header = ZLinkEnvelopeCodec.DecodeHeader(received.Parts);
+                header = decodedHeader
+                         ?? ZLinkEnvelopeCodec.DecodeHeader(received.Parts);
                 ZLinkEnvelopeCodec.ValidateDispatchHeader(header);
             }
             catch (ZLinkEnvelopeProtocolException protocolError)
@@ -422,33 +415,13 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
     }
 
     private static bool IsInfrastructureRelay(
-        ZLinkBackendRouteReceived received)
-    {
-        if (received.Parts.Count == 0) return false;
-        try
-        {
-            return IsInfrastructureRelay(
-                received, ZLinkEnvelopeCodec.DecodeHeader(received.Parts));
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static bool IsInfrastructureRelay(
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader header) =>
         received.ChannelName is null
-        && ((header.Kind == ZLinkMessageKind.Command
-             && header.MessageName is ZLinkRemoteSessionPushProtocol.PacketName
-                 or ZLinkRemoteActorFrameProtocol.PacketName
-                 or ZLinkRemoteActorReplyProtocol.PacketName)
-            || (header.Kind == ZLinkMessageKind.Request
-                && header.MessageName is ZLinkSessionRouteCommitProtocol.PacketName
-                    or ZLinkSessionRouteCommitProtocol.SealPacketName
-                    or ZLinkSessionRouteCommitProtocol.AbortPacketName
-                    or ZLinkSessionRouteCommitProtocol.UnsealPacketName));
+        && header.Kind == ZLinkMessageKind.Command
+        && header.MessageName is ZLinkRemoteSessionPushProtocol.PacketName
+            or ZLinkRemoteActorFrameProtocol.PacketName
+            or ZLinkRemoteActorReplyProtocol.PacketName;
 
     private async ValueTask DispatchNodeRouteAsync(
         ZLinkBackendRouteReceived received,
@@ -590,9 +563,11 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                         channelName,
                         received.Parts,
                         header,
-                        (replyHeader, reply, replyType) =>
-                            SubmitEnvelopeAsync(received, replyHeader, reply, replyType, completionPermit!, cancellationToken),
-                        errorHeader => SubmitEnvelopeAsync(received, errorHeader, null, null, completionPermit!, cancellationToken),
+                        (Self: this, received, Permit: completionPermit!, cancellationToken),
+                        static (s, replyHeader, reply, replyType) =>
+                            s.Self.SubmitEnvelopeAsync(s.received, replyHeader, reply, replyType, s.Permit, s.cancellationToken),
+                        static (s, errorHeader) =>
+                            s.Self.SubmitEnvelopeAsync(s.received, errorHeader, null, null, s.Permit, s.cancellationToken),
                         cancellationToken,
                         received.Metadata,
                         received.SourceNodeRid)

@@ -512,20 +512,7 @@ int main (int argc, char **argv)
             "gamequest-" + topology.api_name + "-spot"))
           .set_object_role (object_role_t::server)
           .listen (topology.selected_api_spot_route_endpoint ());
-        /* GameApi hosts the player Entry Spot and also sends gameplay and
-         * projection requests to either QuestMission owner. Keep both
-         * object-server peers in the same public RouteMesh path so owner
-         * placement is resolved by the Framework runtime. */
-        gamequest.peer_connections ().connect (
-          zlink::routing_id_t::from ("gamequest-mission-a-spot"),
-          topology.mission_a_spot_route_endpoint);
-        gamequest.peer_connections ().connect (
-          zlink::routing_id_t::from ("gamequest-mission-b-spot"),
-          topology.mission_b_spot_route_endpoint);
-        /* Location Store discovery owns the peer set for this shared
-         * RouteMesh. Do not add a one-time API-to-API manual connection:
-         * manual endpoints are excluded from discovery reconciliation and a
-         * startup race could otherwise leave a required peer disconnected. */
+        /* Location Store discovery owns every peer in this shared RouteMesh. */
         gamequest
           .add_entry_spot<player_entry_spot_t> ([store_ptr] (
                                                   entry_spot_context_t context) {

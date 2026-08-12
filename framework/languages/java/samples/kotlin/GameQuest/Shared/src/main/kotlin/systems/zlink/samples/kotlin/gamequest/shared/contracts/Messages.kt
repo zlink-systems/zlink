@@ -18,12 +18,10 @@ object QuestStatuses {
 
 data class KillMonsterReq(val playerId: String, val monsterId: String, val areaId: String?, val idempotencyKey: String)
 data class KillMonsterRes(val eventId: String)
-data class CollectItemReq(val playerId: String, val itemId: String, val count: Int, val idempotencyKey: String)
-data class CollectItemRes(val eventId: String)
+data class CollectItemMsg(val playerId: String, val itemId: String, val count: Int, val idempotencyKey: String)
 data class CompleteMissionReq(val playerId: String, val missionId: String, val idempotencyKey: String)
 data class CompleteMissionRes(val eventId: String)
-data class EnterAreaReq(val playerId: String, val areaId: String, val idempotencyKey: String)
-data class EnterAreaRes(val eventId: String)
+data class EnterAreaMsg(val playerId: String, val areaId: String, val idempotencyKey: String)
 data class UnlockFeatureReq(val playerId: String, val featureId: String, val idempotencyKey: String)
 data class UnlockFeatureRes(val eventId: String)
 data class JoinSessionReq(val playerId: String)
@@ -147,7 +145,7 @@ data class StoredQuestEvent(
     val createdAtUnixMs: Long,
 )
 
-data class QuestProcessingRes(
+data class QuestProcessingMsg(
     val eventId: String,
     val playerId: String,
     val projection: List<QuestProgress>,

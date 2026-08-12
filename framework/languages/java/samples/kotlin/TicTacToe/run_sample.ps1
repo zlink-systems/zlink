@@ -41,25 +41,6 @@ function Cleanup {
     }
 }
 
-function Reserve-Ports {
-    param([int]$Count)
-    $listeners = New-Object System.Collections.Generic.List[System.Net.Sockets.TcpListener]
-    $ports = New-Object System.Collections.Generic.List[int]
-    try {
-        while ($ports.Count -lt $Count) {
-            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse("127.0.0.1"), 0)
-            $listener.Start()
-            $listeners.Add($listener)
-            $ports.Add($listener.LocalEndpoint.Port)
-        }
-        return $ports.ToArray()
-    } finally {
-        foreach ($listener in $listeners) {
-            $listener.Stop()
-        }
-    }
-}
-
 function Endpoint-Host {
     param([string]$Endpoint)
     $value = $Endpoint -replace '^tcp://', '' -replace '^http://', '' -replace '^redis://', ''
@@ -108,10 +89,8 @@ function Wait-LogContains {
 
 function Invoke-Gradle {
     param([string[]]$Arguments)
-    & $Gradle "--no-parallel" "--max-workers=1" @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Gradle failed: $($Arguments -join ' ')"
-    }
+    $buildArguments = @("--no-parallel", "--max-workers=1") + $Arguments
+    Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments $buildArguments
 }
 
 function Start-SampleRole {
@@ -125,7 +104,7 @@ function Start-SampleRole {
 
 $Status = 1
 try {
-    $ports = Reserve-Ports 15
+    $ports = @(Get-ZlinkSampleApplicationPorts -Language Kotlin -Count 15)
     $ApiAHttpPort = $ports[0]
     $ApiBHttpPort = $ports[1]
     $ApiAChannelPort = $ports[2]
@@ -139,13 +118,15 @@ try {
     $PlayAPubPort = $ports[12]
     $PlayBPubPort = $ports[13]
 
-    $redis = Start-ZlinkSampleRedis "zlink-redis-kotlin-sample-tictactoe" "redis:7-alpine"
+    $redis = Start-ZlinkSampleRedis "zlink-redis-kotlin-sample-tictactoe" `
+        "redis:7-alpine" -Language Kotlin
     $RedisContainer = $redis.ContainerId
     $redisEndpoint = $redis.Endpoint
     Wait-Endpoint "redis" $redisEndpoint
     $redisKeyPrefix = "zlink:tictactoe-kotlin:${PID}:$([Guid]::NewGuid().ToString('N')):room:"
 
     $commonPlayChannels = "tcp://127.0.0.1:${PlayAChannelPort},tcp://127.0.0.1:${PlayBChannelPort}"
+    $commonApiChannels = "tcp://127.0.0.1:${ApiAChannelPort},tcp://127.0.0.1:${ApiBChannelPort}"
     $commonPlayStreams = "tcp://127.0.0.1:${PlayAStreamPort},tcp://127.0.0.1:${PlayBStreamPort}"
     $commonSpots = "tcp://127.0.0.1:${PlayASpotPort},tcp://127.0.0.1:${PlayBSpotPort}"
     $commonPubs = "tcp://127.0.0.1:${PlayAPubPort},tcp://127.0.0.1:${PlayBPubPort}"
@@ -159,6 +140,7 @@ try {
         "sample.apiBindUrl=http://127.0.0.1:$ApiAHttpPort",
         "sample.apiPublicUrl=http://127.0.0.1:$ApiAHttpPort",
         "sample.apiChannelEndpoint=tcp://127.0.0.1:$ApiAChannelPort",
+        "sample.apiChannelEndpoints=$commonApiChannels",
         "sample.playChannelEndpoint=tcp://127.0.0.1:$PlayAChannelPort",
         "sample.playChannelEndpoints=$commonPlayChannels",
         "sample.playEndpoint=tcp://127.0.0.1:$PlayAStreamPort",
@@ -230,10 +212,19 @@ try {
     if (-not (Select-String -Path $clientLog -Pattern "observer-win-milestone=verified actor=player-x wins=100" -Quiet)) {
         throw "Observer milestone marker was not found."
     }
+    if (-not (Select-String -Path $clientLog -Pattern "reconnected-game-state=verified actor=player-x room=" -SimpleMatch -Quiet)) {
+        throw "Reconnected full game state marker was not found."
+    }
     if (-not (Select-String -Path $clientLog -Pattern "tictactoe completed" -Quiet)) {
         throw "Completion marker was not found."
     }
-    if (-not (Select-String -Path (Join-Path $FlowLogDir "*.log") -Pattern "message flow" -Quiet -ErrorAction SilentlyContinue)) {
+    $PlayLogs = Join-Path $LogDir "play-*.log"
+    Wait-LogContains $PlayLogs "play stream: existing actor exact identity verified."
+    foreach ($ActorId in @("player-x", "player-o")) {
+        Wait-LogContains $PlayLogs "actor: LeaveGameMsg completed. actor=$ActorId"
+        Wait-LogContains $PlayLogs "tictactoe actor destroy completed actor=$ActorId"
+    }
+    if (-not (Select-String -Path (Join-Path $LogDir "*.log") -Pattern "message flow" -Quiet -ErrorAction SilentlyContinue)) {
         throw "Message flow evidence was not found."
     }
     Write-Host "PASS TicTacToe.Kotlin"

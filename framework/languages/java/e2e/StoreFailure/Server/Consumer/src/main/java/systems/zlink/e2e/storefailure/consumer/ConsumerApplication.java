@@ -1,4 +1,7 @@
 package systems.zlink.e2e.storefailure.consumer;
+import systems.zlink.framework.channels.ZLinkClient;
+import systems.zlink.framework.channels.ZLinkRouteClient;
+import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
@@ -77,9 +80,9 @@ public final class ConsumerApplication {
     @Bean
     ConsumerEndpoints consumerEndpoints(
         ConsumerOptions options,
-        systems.zlink.framework.channels.ZLinkClient client,
-        systems.zlink.framework.channels.ZLinkRouteClient routes,
-        systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle lifecycle,
+        ZLinkClient client,
+        ZLinkRouteClient routes,
+        ZLinkFrameworkLifecycle lifecycle,
         LocationStoreDelayState delayState,
         ObjectMapper json) {
         return new ConsumerEndpoints(

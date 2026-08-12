@@ -58,7 +58,8 @@ import {
   ZLinkFrameworkException,
   ZLinkSpotRelocationReadinessMode,
   ZLinkSpotRelocationReadyOutcome,
-  ZLinkTimerOverrunPolicy
+  ZLinkTimerOverrunPolicy,
+  ZLinkUserSpotExecutionMode
 } from '../../packages/framework/src/contracts';
 import { ZLinkSpotActivation } from '../../packages/framework/src/runtime/spots/spot-activation-state';
 import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';
@@ -79,14 +80,157 @@ import {
   decodeMaintenanceReplyRelay,
   decodeMaintenanceReplyRelayAck,
   decodeMaintenanceRelocationControl,
+  decodeSessionRelocationRoute,
+  decodeSessionRelocationRouted,
+  decodeSessionRelocationSeal,
+  decodeSessionRelocationSealed,
   decodeServiceWireFrozenRecord,
   encodeMaintenanceRelocationControl,
   encodeMaintenanceReplyRelay,
   encodeMaintenanceReplyRelayAck,
+  encodeSessionRelocationRoute,
+  encodeSessionRelocationRouted,
+  encodeSessionRelocationSeal,
+  encodeSessionRelocationSealed,
   encodeServiceWireFrozenRecord,
   type ServiceMaintenanceRelocationControl,
   type ServiceMaintenanceRelocationControlData
 } from '../../packages/framework/src/runtime/foundation/service-stateful-wire-codec';
+import {
+  decodeRoutingId,
+  encodeRoutingIdStorageHex
+} from '../../packages/framework/src/runtime/routing-id';
+
+test('commands 42-45 match the shared Session relocation barrier golden bytes', () => {
+  const fixture = JSON.parse(readFileSync(
+    '../../runtime/protocol/golden/session-relocation-barrier-v1.json',
+    'utf8'
+  )) as {
+    readonly identity: Readonly<Record<string, string>>;
+    readonly canonical: readonly {
+      readonly name: string;
+      readonly command: number;
+      readonly decoded: Readonly<Record<string, string>>;
+      readonly hex: string;
+    }[];
+  };
+  const identity = fixture.identity;
+  for (const entry of fixture.canonical) {
+    const bytes = Buffer.from(entry.hex, 'hex');
+    assert.equal(bytes[3], entry.command, entry.name);
+    let value: ReturnType<typeof decodeSessionRelocationSeal>
+      | ReturnType<typeof decodeSessionRelocationSealed>
+      | ReturnType<typeof decodeSessionRelocationRoute>
+      | ReturnType<typeof decodeSessionRelocationRouted>;
+    let reencoded: Buffer;
+    switch (entry.name) {
+      case 'sessionRelocationSeal':
+        value = decodeSessionRelocationSeal(bytes);
+        reencoded = encodeSessionRelocationSeal(value);
+        assert.equal(value.senderRole, entry.decoded.senderRole);
+        assert.equal(value.actor.authorityOwnerGeneration.toString(),
+          entry.decoded.authorityOwnerGeneration);
+        assert.equal(value.actor.ownerLeaseGeneration.toString(),
+          entry.decoded.ownerLeaseGeneration);
+        break;
+      case 'sessionRelocationSealed':
+        value = decodeSessionRelocationSealed(bytes);
+        reencoded = encodeSessionRelocationSealed(value);
+        assert.equal(value.lastAcceptedSessionSequence.toString(),
+          entry.decoded.lastAcceptedSessionSequence);
+        break;
+      case 'sessionRelocationRouteCommit':
+      case 'sessionRelocationRouteAbort':
+        value = decodeSessionRelocationRoute(bytes);
+        reencoded = encodeSessionRelocationRoute(value);
+        assert.equal(value.senderRole, entry.decoded.senderRole);
+        assert.equal(value.route.action, entry.decoded.action);
+        if (value.route.action === 'commit') {
+          assert.equal(value.route.previousAuthorityOwnerGeneration.toString(),
+            entry.decoded.previousAuthorityOwnerGeneration);
+          assert.equal(value.route.targetAuthorityOwnerGeneration.toString(),
+            entry.decoded.targetAuthorityOwnerGeneration);
+          assert.equal(value.route.replayedHighWater.toString(),
+            entry.decoded.replayedHighWater);
+        } else {
+          assert.equal(value.route.currentAuthorityOwnerGeneration.toString(),
+            entry.decoded.currentAuthorityOwnerGeneration);
+        }
+        break;
+      case 'sessionRelocationRoutedCommit':
+      case 'sessionRelocationRoutedAbort':
+        value = decodeSessionRelocationRouted(bytes);
+        reencoded = encodeSessionRelocationRouted(value);
+        assert.equal(value.action, entry.decoded.action);
+        assert.equal(value.result, entry.decoded.result);
+        assert.equal(value.currentAuthorityOwnerGeneration.toString(),
+          entry.decoded.currentAuthorityOwnerGeneration);
+        assert.equal(value.lastAcceptedSessionSequence.toString(),
+          entry.decoded.lastAcceptedSessionSequence);
+        break;
+      default:
+        assert.fail(`Unknown Session relocation fixture '${entry.name}'.`);
+    }
+    assert.equal(reencoded.toString('hex'), entry.hex, entry.name);
+    assert.equal(value.relocation.high.toString(), identity.relocationHigh, entry.name);
+    assert.equal(value.relocation.low.toString(), identity.relocationLow, entry.name);
+    assert.equal(value.coordinator.ownerId, identity.coordinatorOwnerId, entry.name);
+    assert.equal(value.coordinator.leaseGeneration.toString(),
+      identity.coordinatorLeaseGeneration, entry.name);
+    const actor = 'targetNodeGeneration' in value.actor ? value.actor.actor : value.actor;
+    assert.equal(actor.actorId, identity.actorId, entry.name);
+    assert.equal(actor.generation.toString(), identity.objectGeneration, entry.name);
+    assert.equal(value.session.sessionRid, identity.sessionRid, entry.name);
+    assert.equal(value.session.bindingGeneration.toString(), identity.bindingGeneration, entry.name);
+    assert.throws(() => {
+      switch (entry.command) {
+        case 42: decodeSessionRelocationSeal(bytes.subarray(0, bytes.length - 1)); break;
+        case 43: decodeSessionRelocationSealed(bytes.subarray(0, bytes.length - 1)); break;
+        case 44: decodeSessionRelocationRoute(bytes.subarray(0, bytes.length - 1)); break;
+        case 45: decodeSessionRelocationRouted(bytes.subarray(0, bytes.length - 1)); break;
+      }
+    }, `${entry.name} truncated`);
+  }
+});
+
+test('stateful service wire separates opaque routing IDs from canonical UTF-8 text', () => {
+  const fixture = JSON.parse(readFileSync(
+    '../../runtime/protocol/golden/session-relocation-barrier-v1.json',
+    'utf8'
+  )) as { readonly canonical: readonly { readonly command: number; readonly hex: string }[] };
+  const sealBytes = Buffer.from(
+    fixture.canonical.find(entry => entry.command === 42)!.hex,
+    'hex'
+  );
+  const seal = decodeSessionRelocationSeal(sealBytes);
+  const opaqueNodeRid = decodeRoutingId('opaque-node', 'ff00fe');
+  const roundTrip = decodeSessionRelocationSeal(encodeSessionRelocationSeal({
+    ...seal,
+    coordinator: {
+      ...seal.coordinator,
+      nodeRid: opaqueNodeRid as never
+    }
+  }));
+  assert.equal(
+    encodeRoutingIdStorageHex(roundTrip.coordinator.nodeRid as never),
+    'ff00fe'
+  );
+
+  const ownerId = 'canonical-utf8-owner';
+  const malformed = Buffer.from(encodeSessionRelocationSeal({
+    ...seal,
+    coordinator: { ...seal.coordinator, ownerId }
+  }));
+  const ownerOffset = malformed.indexOf(Buffer.from(ownerId, 'utf8'));
+  assert.ok(ownerOffset > 0);
+  malformed[ownerOffset] = 0xff;
+  assert.throws(
+    () => decodeSessionRelocationSeal(malformed),
+    error => error instanceof Error
+      && error.name === 'ServiceWireProtocolError'
+      && /coordinatorOwnerId/.test(error.message)
+  );
+});
 
 const relocationControlFixtureValues = (): readonly ServiceMaintenanceRelocationControl[] => {
   const base = {
@@ -166,6 +310,11 @@ test('ApplicationSignaled relocation consumes one deferred boundary and reports 
   const activation = new ZLinkSpotActivation({
     meshName: 'mesh-a',
     spotId: 'spot-a',
+    domain: {
+      kind: 'user',
+      executionMode: ZLinkUserSpotExecutionMode.SpotWide,
+      relocationReadiness: ZLinkSpotRelocationReadinessMode.ApplicationSignaled
+    },
     spotType: class {} as never,
     spot: {
       async onRelocationReadyCompleted(completion: { outcome: ZLinkSpotRelocationReadyOutcome }) {
@@ -173,7 +322,6 @@ test('ApplicationSignaled relocation consumes one deferred boundary and reports 
       }
     } as never,
     serial,
-    relocationReadiness: ZLinkSpotRelocationReadinessMode.ApplicationSignaled,
     timers: {} as never,
     actorHandlers: {} as never,
     handlers: {} as never
@@ -224,10 +372,14 @@ test('ApplicationSignaled relocation consumes one deferred boundary and reports 
   const anyTurn = new ZLinkSpotActivation({
     meshName: 'mesh-a',
     spotId: 'spot-b',
+    domain: {
+      kind: 'user',
+      executionMode: ZLinkUserSpotExecutionMode.SpotWide,
+      relocationReadiness: ZLinkSpotRelocationReadinessMode.AnyTurnBoundary
+    },
     spotType: class {} as never,
     spot: {} as never,
     serial: new ZLinkSpotSerialExecutor(true),
-    relocationReadiness: ZLinkSpotRelocationReadinessMode.AnyTurnBoundary,
     timers: {} as never,
     actorHandlers: {} as never,
     handlers: {} as never
@@ -244,6 +396,11 @@ test('ApplicationSignaled defer without active relocation completes before the n
   const activation = new ZLinkSpotActivation({
     meshName: 'mesh-a',
     spotId: 'spot-ready-without-relocation',
+    domain: {
+      kind: 'user',
+      executionMode: ZLinkUserSpotExecutionMode.SpotWide,
+      relocationReadiness: ZLinkSpotRelocationReadinessMode.ApplicationSignaled
+    },
     spotType: class {} as never,
     spot: {
       async onRelocationReadyCompleted(
@@ -253,7 +410,6 @@ test('ApplicationSignaled defer without active relocation completes before the n
       }
     } as never,
     serial,
-    relocationReadiness: ZLinkSpotRelocationReadinessMode.ApplicationSignaled,
     timers: {} as never,
     actorHandlers: {} as never,
     handlers: {} as never
@@ -1102,6 +1258,7 @@ test('restart recovery atomically takes over expired PerActor Spot and Actor aut
 
 test('Retire preflight precedes publication and ready units use bounded permits', async () => {
   const events: string[] = [];
+  const states: string[] = [];
   let active = 0;
   let peak = 0;
   const runtime = new ServiceMaintenanceRuntime({
@@ -1116,6 +1273,7 @@ test('Retire preflight precedes publication and ready units use bounded permits'
       events.push('force');
     }
   });
+  runtime.observe(snapshot => states.push(snapshot.state));
   for (let index = 0; index < 4; index++) {
     runtime.enqueue({
       id: `unit-${index}`,
@@ -1133,6 +1291,16 @@ test('Retire preflight precedes publication and ready units use bounded permits'
   assert.equal(terminal.state, 'completed');
   assert.equal(peak, 2);
   assert.deepEqual(events.slice(0, 3), ['preflight', 'retiring', 'draining']);
+  assert.deepEqual(states.slice(0, 4), [
+    'serving',
+    'serving',
+    'serving',
+    'serving'
+  ]);
+  assert.ok(states.includes('preparing'));
+  assert.ok(states.includes('retiring'));
+  assert.ok(states.includes('draining'));
+  assert.equal(states.at(-1), 'completed');
 });
 
 test('shutdown intent lets admitted relocation finish without starting a queued unit', async () => {
@@ -1435,7 +1603,7 @@ test('mailbox seal captures queued work, holds new ingress, and restores or rela
   mailbox.close();
 });
 
-test('relocation ingress hold applies the per-owner 1024 message and 16 MiB bounds', () => {
+test('relocation ingress hold adds no relocation-specific message or byte cap', () => {
   const byCount = new ServiceMailbox({
     applicationMessages: 2048,
     applicationBytes: 32 * 1024 * 1024,
@@ -1452,11 +1620,11 @@ test('relocation ingress hold applies the per-owner 1024 message and 16 MiB boun
   }
   assert.equal(
     byCount.tryEnqueue(mailboxRecord('spot:count', 'application', 'overflow')),
-    false
+    true
   );
   assert.equal(byCount.abortRelocation(countSeal), true);
   const restored = byCount.tryClaim('application', 2048, 32 * 1024 * 1024);
-  assert.equal(restored?.records.length, 1024);
+  assert.equal(restored?.records.length, 1025);
   assert.ok(restored);
   assert.equal(byCount.release(restored), true);
   byCount.close();
@@ -1478,8 +1646,8 @@ test('relocation ingress hold applies the per-owner 1024 message and 16 MiB boun
     owner: 'spot:bytes',
     domain: 'application',
     parts: [Buffer.alloc(1)]
-  }), false);
-  assert.equal(byBytes.commitRelocation(byteSeal)?.length, 1);
+  }), true);
+  assert.equal(byBytes.commitRelocation(byteSeal)?.length, 2);
   byBytes.close();
 });
 

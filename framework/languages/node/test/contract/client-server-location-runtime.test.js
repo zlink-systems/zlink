@@ -15,6 +15,7 @@ const clientServerWire = require(
 const submissionResult = require(
   '../../packages/framework/dist/runtime/messaging/submission-result'
 );
+const routingIds = require('../../packages/framework/dist/runtime/routing-id');
 
 function descriptor(owner, overrides = {}) {
   return {
@@ -44,6 +45,76 @@ function stores(store) {
     ownerLeaseStore: store
   };
 }
+
+test('ClientServer service wire preserves opaque server RID bytes and rejects malformed UTF-8 text', () => {
+  const owner = { token: { ownerId: 'owner', leaseGeneration: 1n } };
+  const opaqueRid = routingIds.decodeRoutingId('opaque-server', 'ff00fe');
+  const admitted = clientServerWire.decodeClientServerControl(
+    clientServerWire.encodeClientServerAdmit(
+      descriptor(owner, { serverRid: opaqueRid }),
+      4096
+    )
+  );
+  assert.equal(admitted.kind, 'admit');
+  assert.equal(routingIds.encodeRoutingIdStorageHex(admitted.admission.serverRid), 'ff00fe');
+
+  const channelName = 'canonical-utf8-channel';
+  const malformed = Buffer.from(clientServerWire.encodeClientServerHello({
+    channelName,
+    securityIdentity: 'cluster-a',
+    normalizedEffectiveMaxMessageBytes: 4096
+  }));
+  const channelOffset = malformed.indexOf(Buffer.from(channelName, 'utf8'));
+  assert.ok(channelOffset > 0);
+  malformed[channelOffset] = 0xff;
+  assert.throws(
+    () => clientServerWire.decodeClientServerControl(malformed),
+    error => error.name === 'ZLinkClientServerServiceWireError'
+      && /channelName/.test(error.message)
+  );
+
+  assert.throws(
+    () => clientServerWire.encodeClientServerHello({
+      channelName: 'nul\0channel',
+      securityIdentity: 'cluster-a',
+      normalizedEffectiveMaxMessageBytes: 4096
+    }),
+    error => error.name === 'ZLinkClientServerServiceWireError'
+      && /channelName/.test(error.message)
+  );
+  assert.throws(
+    () => clientServerWire.encodeClientServerHello({
+      channelName: '\ud800',
+      securityIdentity: 'cluster-a',
+      normalizedEffectiveMaxMessageBytes: 4096
+    }),
+    error => error.name === 'ZLinkClientServerServiceWireError'
+      && /canonical UTF-8/.test(error.message)
+  );
+
+  const nulText = Buffer.from(clientServerWire.encodeClientServerHello({
+    channelName: 'nul-channel',
+    securityIdentity: 'cluster-a',
+    normalizedEffectiveMaxMessageBytes: 4096
+  }));
+  const nulOffset = nulText.indexOf(Buffer.from('nul-channel', 'utf8'));
+  assert.ok(nulOffset > 0);
+  nulText[nulOffset] = 0;
+  assert.throws(
+    () => clientServerWire.decodeClientServerControl(nulText),
+    error => error.name === 'ZLinkClientServerServiceWireError'
+      && /channelName/.test(error.message)
+  );
+
+  assert.throws(
+    () => clientServerWire.encodeClientServerAdmit(
+      descriptor(owner, { serverRid: { toHex: () => 'aa'.repeat(256) } }),
+      4096
+    ),
+    error => error.name === 'ZLinkClientServerServiceWireError'
+      && /serverRid/.test(error.message)
+  );
+});
 
 test('dedicated ClientServer descriptor store fences immutable identity and mutable revision', async () => {
   const store = new internal.ZLinkInMemoryLocationStore(

@@ -41,13 +41,9 @@ internal sealed class ZLinkHandlerDispatcher(
                 return await ZLinkHandlerInvocationEngine.InvokeAsync(
                         handler,
                         descriptor.Invoker,
-                        3,
-                        arguments =>
-                        {
-                            arguments[0] = message;
-                            arguments[1] = context;
-                            arguments[2] = ct;
-                        })
+                        message,
+                        context,
+                        ct)
                     .ConfigureAwait(false);
             },
             cancellationToken);
@@ -63,6 +59,16 @@ internal sealed class ZLinkHandlerDispatcher(
         await using var scope = scopeFactory.CreateAsyncScope();
         await using var instances =
             new ZLinkScopedHandlerInstanceOwner(scope.ServiceProvider);
+        if (registration.Filters.Count == 0)
+        {
+            // No filters registered (the common configuration): invoke the
+            // handler directly instead of building the filter pipeline's
+            // closures for an empty chain.
+            var direct = await invokeHandler(instances, cancellationToken)
+                .ConfigureAwait(false);
+            return new ZLinkHandlerDispatchResult(true, direct);
+        }
+
         object? result = null;
         var handlerInvoked = false;
         var filterContext = new ZLinkHandlerFilterContext(context, dispatchKind);

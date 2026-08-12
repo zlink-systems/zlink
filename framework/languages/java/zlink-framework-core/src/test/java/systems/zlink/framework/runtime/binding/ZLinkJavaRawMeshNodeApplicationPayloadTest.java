@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.binding;
+import java.nio.charset.StandardCharsets;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -19,7 +21,7 @@ final class ZLinkJavaRawMeshNodeApplicationPayloadTest {
     @Test
     void typedActorRequestUsesFrameworkMultipartAndRestoresAllParts() {
         byte[] body = "{\"actorId\":\"actor-1\"}".getBytes(
-            java.nio.charset.StandardCharsets.UTF_8);
+            StandardCharsets.UTF_8);
         ZLinkStreamHeader request = new ZLinkStreamHeader(
             ZLinkStreamMessageKind.REQUEST,
             ZLinkStreamCodec.JSON,
@@ -34,7 +36,7 @@ final class ZLinkJavaRawMeshNodeApplicationPayloadTest {
                 List.of(header, payload));
 
             assertEquals(
-                systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                ServiceWireConstants
                     .FRAMEWORK_MULTIPART_PACKET_NAME,
                 wirePayload.packetName());
             List<Message> decoded =
@@ -79,7 +81,7 @@ final class ZLinkJavaRawMeshNodeApplicationPayloadTest {
                 List.of(packetName, payload));
 
             assertEquals(
-                systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                ServiceWireConstants
                     .FRAMEWORK_MULTIPART_PACKET_NAME,
                 wirePayload.packetName());
             List<Message> decoded =

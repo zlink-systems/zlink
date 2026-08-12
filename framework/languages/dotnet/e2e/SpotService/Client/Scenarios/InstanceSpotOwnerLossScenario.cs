@@ -1,3 +1,4 @@
+// Verifies a Ready instance Spot stays unavailable after its owner is lost.
 using SpotService.Client.Support;
 using SpotService.Shared;
 using Zlink.Framework.Contracts.Errors;
@@ -14,8 +15,8 @@ internal static class InstanceSpotOwnerLossScenario
     {
         var spotId = $"instance-is-e2e-05-{Guid.NewGuid():N}";
         var initial = (await playA.Post("/instance/cold-request")
-            .Body(new InstanceColdRequestReq(spotId, "ready"))
-            .Async<InstanceColdRequestRes>()).Body;
+            .Body(new InstanceColdProbeReq(spotId, "ready"))
+            .Async<InstanceColdProbeRes>()).Body;
         ZlinkStreamAssert.Ensure(initial.Succeeded, "IS-E2E-05 initial request failed.");
         var owner = initial.NodeRid.StartsWith("play-a", StringComparison.Ordinal)
             ? "play-a"
@@ -46,14 +47,20 @@ internal static class InstanceSpotOwnerLossScenario
         ZlinkStreamAssert.Ensure(unavailable.ObjectGeneration == ready.ObjectGeneration,
             "IS-E2E-05 owner loss changed the object generation.");
 
-        var afterCrash = (await survivor.Post("/instance/cold-request")
-            .Body(new InstanceColdRequestReq(spotId, "after-ready-crash"))
-            .Async<InstanceColdRequestRes>()).Body;
-        ZlinkStreamAssert.Ensure(!afterCrash.Succeeded,
-            "IS-E2E-05 request unexpectedly succeeded after Ready owner loss.");
+        using var boundedFailure = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var requests = Enumerable.Range(0, 32).Select(async index =>
+            (await survivor.Post("/instance/cold-request")
+                .Body(new InstanceColdProbeReq(spotId, $"after-ready-crash-{index}"))
+                .Async<InstanceColdProbeRes>(boundedFailure.Token)).Body);
+        var afterCrash = await Task.WhenAll(requests);
         ZlinkStreamAssert.Ensure(
-            afterCrash.ErrorKind == ZLinkFrameworkErrorKind.Unavailable.ToString(),
-            $"IS-E2E-05 expected Unavailable, got {afterCrash.ErrorKind}.");
+            afterCrash.Length == 32 && afterCrash.All(result => !result.Succeeded),
+            "IS-E2E-05 concurrent request unexpectedly succeeded after Ready owner loss.");
+        ZlinkStreamAssert.Ensure(
+            afterCrash.All(result =>
+                result.ErrorKind == ZLinkFrameworkErrorKind.Unavailable.ToString()),
+            $"IS-E2E-05 expected only Unavailable terminals, got"
+            + $" [{string.Join(", ", afterCrash.Select(result => result.ErrorKind).Distinct())}].");
         Console.WriteLine(
             $"operation InstanceSpot.owner-loss passed|spot={spotId}"
             + $"|generation={ready.ObjectGeneration}");

@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.configuration;
+import java.util.concurrent.atomic.AtomicReference;
 
 import systems.zlink.framework.configuration.ZLinkDiagnosticsOptions;
 import systems.zlink.framework.configuration.ZLinkDispatchOptions;
@@ -122,7 +123,7 @@ public final class ZLinkDispatchOptionsRegistration implements ZLinkDispatchOpti
         private boolean includeMessageSizes = true;
         // Shared, runtime-mutable mode cell installed by the host at start; shared
         // across surfaces so setMessageFlowMode flips it live. Null before install.
-        private volatile java.util.concurrent.atomic.AtomicReference<ZLinkMessageFlowLogMode> liveMode;
+        private volatile AtomicReference<ZLinkMessageFlowLogMode> liveMode;
 
         public ZLinkMessageFlowLogMode messageFlow() {
             return messageFlow;
@@ -139,17 +140,17 @@ public final class ZLinkDispatchOptionsRegistration implements ZLinkDispatchOpti
         // Runtime code reads the live override through the registration owner. It is
         // not part of the application-facing diagnostics view.
         public ZLinkMessageFlowLogMode effectiveMessageFlow() {
-            java.util.concurrent.atomic.AtomicReference<ZLinkMessageFlowLogMode> cell = liveMode;
+            AtomicReference<ZLinkMessageFlowLogMode> cell = liveMode;
             return cell != null ? cell.get() : messageFlow;
         }
 
-        public java.util.concurrent.atomic.AtomicReference<ZLinkMessageFlowLogMode> liveMode() {
+        public AtomicReference<ZLinkMessageFlowLogMode> liveMode() {
             return liveMode;
         }
 
         // Install the shared live-mode cell (host wiring for the runtime toggle).
         public void installLiveMode(
-            java.util.concurrent.atomic.AtomicReference<ZLinkMessageFlowLogMode> cell) {
+            AtomicReference<ZLinkMessageFlowLogMode> cell) {
             liveMode = cell;
         }
 

@@ -17,8 +17,8 @@ internal static class RmC2TargetedRouteScenario
         var marker = $"rm-c2-{Guid.NewGuid():N}";
 
         var reply = (await providerA.Post("/profile/route/request")
-            .Body(new ScenarioRoutePing(marker))
-            .Async<ScenarioRoutePong>()).Body;
+            .Body(new ScenarioRouteReq(marker))
+            .Async<ScenarioRouteRes>()).Body;
         ZlinkStreamAssert.Ensure(reply.ProviderRid == "api-b", "RM-C2 targeted route request should reach api-b.");
         ZlinkStreamAssert.Ensure(reply.Value == $"route:{marker}", "RM-C2 route reply value mismatch.");
 
@@ -34,7 +34,7 @@ internal static class RmC2TargetedRouteScenario
             "RM-C2 targeted route evidence did not match api-b only.");
 
         var missing = (await providerA.Post("/profile/route/missing")
-            .Body(new ScenarioRoutePing("missing"))
+            .Body(new ScenarioRouteReq("missing"))
             .Async<ExpectedFailureRes>()).Body;
         ZlinkStreamAssert.Ensure(
             missing.ErrorKind == nameof(ZLinkFrameworkErrorKind.NotFound),

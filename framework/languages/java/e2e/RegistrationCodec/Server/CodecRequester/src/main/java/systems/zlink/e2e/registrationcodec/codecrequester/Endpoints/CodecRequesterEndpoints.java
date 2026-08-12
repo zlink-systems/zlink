@@ -1,7 +1,10 @@
 package systems.zlink.e2e.registrationcodec.codecrequester.Endpoints;
+import com.sun.net.httpserver.HttpExchange;
+import java.io.IOException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.protobuf.StringValue;
+import systems.zlink.e2e.registrationcodec.shared.protobuf.ProtobufEchoReq;
+import systems.zlink.e2e.registrationcodec.shared.protobuf.ProtobufEchoRes;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -65,9 +68,9 @@ public final class CodecRequesterEndpoints implements SmartLifecycle {
     private CompletionStage<Contracts.CodecMismatchProbeRes> protobufRequest() {
         return client.requestToChannel(
                     Contracts.CHANNEL,
-                    StringValue.of("rc-b5"))
+                    ProtobufEchoReq.newBuilder().setValue("rc-b5").build())
                 .timeout(Duration.ofSeconds(2))
-                .submit(StringValue.class)
+                .submit(ProtobufEchoRes.class)
             .handle((reply, error) -> error == null
                 ? new Contracts.CodecMismatchProbeRes(false, null, reply.getValue())
                 : new Contracts.CodecMismatchProbeRes(
@@ -94,7 +97,7 @@ public final class CodecRequesterEndpoints implements SmartLifecycle {
     }
 
     private void writeJson(
-        com.sun.net.httpserver.HttpExchange exchange,
+        HttpExchange exchange,
         CompletionStage<?> response) {
         response.whenComplete((value, error) -> {
             try {
@@ -106,13 +109,13 @@ public final class CodecRequesterEndpoints implements SmartLifecycle {
                     ? error.getCause()
                     : error;
                 writeError(exchange, cause);
-            } catch (java.io.IOException writeFailure) {
+            } catch (IOException writeFailure) {
                 exchange.close();
             }
         });
     }
 
-    private void writeJson(com.sun.net.httpserver.HttpExchange exchange, Object value) throws java.io.IOException {
+    private void writeJson(HttpExchange exchange, Object value) throws IOException {
         if (!"POST".equals(exchange.getRequestMethod())) {
             byte[] body = "method not allowed\n".getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(405, body.length);
@@ -133,8 +136,8 @@ public final class CodecRequesterEndpoints implements SmartLifecycle {
     }
 
     private static void writeError(
-        com.sun.net.httpserver.HttpExchange exchange,
-        Throwable error) throws java.io.IOException {
+        HttpExchange exchange,
+        Throwable error) throws IOException {
         byte[] body = error.toString().getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(500, body.length);
         exchange.getResponseBody().write(body);

@@ -1,4 +1,5 @@
 package systems.zlink.framework.testkit;
+import java.time.Duration;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
@@ -48,7 +49,7 @@ final class RuntimeTestSupport {
     }
 
     static void awaitClosed(FakeZLinkBackendAdapterFactory backendFactory, long contextCount) {
-        long deadline = System.nanoTime() + java.time.Duration.ofSeconds(2).toNanos();
+        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
         while (System.nanoTime() < deadline) {
             if (backendFactory.calls().stream().filter("close.context"::equals).count() >= contextCount) {
                 return;

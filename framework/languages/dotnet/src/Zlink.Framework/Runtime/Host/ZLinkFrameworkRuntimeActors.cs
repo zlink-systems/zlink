@@ -1,5 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
+using System.Buffers.Binary;
 using System.Runtime.ExceptionServices;
+using Zlink.Framework.Runtime.Backend.DotNet;
+using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Host;
@@ -13,120 +16,127 @@ internal sealed partial class ZLinkFrameworkRuntime
     internal ZLinkActorMessageFollower ActorMessageFollower
         => _actorMessageFollower;
 
-    internal ValueTask<ZLinkSessionRouteSealReply> RequestSessionRouteSealAsync(
-        string meshName,
-        RoutingId sessionOwnerNode,
-        ZLinkSessionRouteSealRequest request,
-        CancellationToken cancellationToken) =>
-        RequestSessionRouteControlAsync<
-            ZLinkSessionRouteSealRequest,
-            ZLinkSessionRouteSealReply>(
-            meshName,
-            sessionOwnerNode,
-            request,
-            cancellationToken);
-
-    internal ValueTask<ZLinkSessionRouteSealReply> RequestSessionRouteAbortAsync(
-        string meshName,
-        RoutingId sessionOwnerNode,
-        ZLinkSessionRouteAbortRequest request,
-        CancellationToken cancellationToken) =>
-        RequestSessionRouteControlAsync<
-            ZLinkSessionRouteAbortRequest,
-            ZLinkSessionRouteSealReply>(
-            meshName,
-            sessionOwnerNode,
-            request,
-            cancellationToken);
-
-    internal ValueTask<ZLinkSessionRouteCommitReply> RequestSessionRouteCommitAsync(
-        string meshName,
-        RoutingId sessionOwnerNode,
-        ZLinkSessionRouteCommitRequest request,
-        CancellationToken cancellationToken) =>
-        RequestSessionRouteControlAsync<
-            ZLinkSessionRouteCommitRequest,
-            ZLinkSessionRouteCommitReply>(
-            meshName,
-            sessionOwnerNode,
-            request,
-            cancellationToken);
-
-    internal ValueTask<ZLinkSessionRouteCommitReply> RequestSessionRouteUnsealAsync(
-        string meshName,
-        RoutingId sessionOwnerNode,
-        ZLinkSessionRouteUnsealRequest request,
-        CancellationToken cancellationToken) =>
-        RequestSessionRouteControlAsync<
-            ZLinkSessionRouteUnsealRequest,
-            ZLinkSessionRouteCommitReply>(
-            meshName,
-            sessionOwnerNode,
-            request,
-            cancellationToken);
-
-    private async ValueTask<TReply> RequestSessionRouteControlAsync<TRequest, TReply>(
-        string meshName,
-        RoutingId sessionOwnerNode,
-        TRequest request,
-        CancellationToken cancellationToken)
+    internal async ValueTask<
+        ZLinkServiceWireCodec.SessionRelocationSealedRecord>
+        SealSessionRelocationAsync(
+            string meshName,
+            RoutingId sessionOwnerNode,
+            ZLinkServiceWireCodec.SessionRelocationSealRecord seal,
+            CancellationToken cancellationToken)
     {
-        var timeout = Registration.DefaultRequestTimeout;
-        //  Traced at the send side; the receiving node's handler traces its own
-        //  entry, so a stall shows which side never moved.
-        ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"route_control_sent target={sessionOwnerNode} type={typeof(TRequest).Name}");
-        var packetName = ZLinkMessageNameResolver.ResolveFromMessage(request);
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken);
-        deadline.CancelAfter(timeout);
-        var retryDelay = TimeSpan.FromMilliseconds(10);
-        while (true)
+        var node = GetMeshNodeRuntime(meshName).Node;
+        if (sessionOwnerNode == node.RoutingId)
+            return await SealCanonicalSessionActorRouteAsync(
+                    seal,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        if (node is not IZLinkBackendSessionRelocationBarrier barrier)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InvalidOperation,
+                "The MeshNode backend does not provide framework-service-v12 session relocation.",
+                ZLinkRetryAdvice.DoNotRetry);
+        return await barrier.SealSessionRelocationAsync(
+                sessionOwnerNode,
+                seal,
+                Registration.DefaultRequestTimeout,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    internal async ValueTask<
+        ZLinkServiceWireCodec.SessionRelocationRoutedRecord>
+        RouteSessionRelocationAsync(
+            string meshName,
+        RoutingId sessionOwnerNode,
+        ZLinkServiceWireCodec.SessionRelocationRouteRecord route,
+        ulong expectedSealedHighWater,
+        CancellationToken cancellationToken,
+        ZLinkSessionRelocationAuthenticatedRoute? acceptedLocalAuthority = null)
+    {
+        var node = GetMeshNodeRuntime(meshName).Node;
+        if (sessionOwnerNode == node.RoutingId)
         {
-            var header = ZLinkClientCallCodec.CreateEnvelope(
-                ZLinkMessageKind.Request,
-                meshName,
-                packetName,
-                timeout);
-            var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
-                header,
-                request,
-                Registration.Codecs);
-            try
+            var senderNodeRid = route.Route.Action
+                == ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit
+                    ? route.Route.TargetNodeRid
+                    : route.Coordinator.NodeRid;
+            var senderNodeGeneration = route.Route.Action
+                == ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit
+                    ? route.Route.TargetNodeGeneration
+                    : route.Coordinator.NodeGeneration;
+            var expectedAuthorityOwnerGeneration = route.Route.Action
+                == ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit
+                    ? route.Route.TargetAuthorityOwnerGeneration
+                    : route.Route.CurrentAuthorityOwnerGeneration;
+            ulong authorityOwnerGeneration;
+            ulong ownerLeaseGeneration;
+            if (acceptedLocalAuthority is { } accepted)
             {
-                var reply = await GetMeshNodeRuntime(meshName)
-                    .RequestToNodeAsync(
-                        sessionOwnerNode,
-                        parts,
-                        timeout,
-                        deadline.Token)
-                    .ConfigureAwait(false);
-                return ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
-                    reply,
-                    "Session route control reply is empty.",
-                    $"Session route control request '{packetName}' failed.",
-                    Registration.Codecs);
+                if (accepted.NodeRid != senderNodeRid
+                    || accepted.NodeGeneration != senderNodeGeneration
+                    || !string.Equals(
+                        accepted.MeshName,
+                        meshName,
+                        StringComparison.Ordinal)
+                    || accepted.AuthorityOwnerGeneration
+                    != expectedAuthorityOwnerGeneration
+                    || accepted.OwnerLeaseGeneration == 0)
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.InvalidOperation,
+                        "The accepted local command 44 proof changed its Actor authority fence.",
+                        ZLinkRetryAdvice.DoNotRetry);
+                authorityOwnerGeneration =
+                    accepted.AuthorityOwnerGeneration;
+                ownerLeaseGeneration = accepted.OwnerLeaseGeneration;
             }
-            catch (ZLinkFrameworkException error)
-                when (error.Kind == ZLinkFrameworkErrorKind.Unavailable
-                      && error.RetryAdvice == ZLinkRetryAdvice.RetryAfterBackoff
-                      && !deadline.IsCancellationRequested)
+            else
             {
-                await Task.Delay(retryDelay, deadline.Token)
-                    .ConfigureAwait(false);
-                retryDelay = TimeSpan.FromMilliseconds(
-                    Math.Min(retryDelay.TotalMilliseconds * 2, 100));
+                if (senderNodeRid != node.RoutingId
+                    || node is not IZLinkBackendLocalActorAuthorityReader authority
+                    || !authority.TryGetLocalActorAuthority(
+                        new ZLinkBackendActorRef(
+                            senderNodeRid,
+                            route.Actor.ActorId,
+                            route.Actor.ObjectGeneration),
+                        out authorityOwnerGeneration,
+                        out ownerLeaseGeneration)
+                    || authorityOwnerGeneration
+                    != expectedAuthorityOwnerGeneration)
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.InvalidOperation,
+                        "The local command 44 sender lacks an exact Actor authority fence.",
+                        ZLinkRetryAdvice.DoNotRetry);
             }
-            catch (OperationCanceledException)
-                when (!cancellationToken.IsCancellationRequested
-                      && deadline.IsCancellationRequested)
-            {
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.DeadlineExceeded,
-                    $"Session route control request '{packetName}' did not reach its owner before the deadline.",
-                    ZLinkRetryAdvice.RetryAfterBackoff);
-            }
+            var response = RouteCanonicalSessionActor(
+                route,
+                new ZLinkSessionRelocationAuthenticatedRoute(
+                    senderNodeRid,
+                    senderNodeGeneration,
+                    meshName,
+                    authorityOwnerGeneration,
+                    ownerLeaseGeneration));
+            if (response.Result is (ZLinkServiceWireCodec
+                        .SessionRelocationRouteResult.Applied
+                    or ZLinkServiceWireCodec
+                        .SessionRelocationRouteResult.AlreadyApplied)
+                && response.LastAcceptedSessionSequence
+                != expectedSealedHighWater)
+                throw new InvalidDataException(
+                    "Command 45 did not echo the exact command 43 high-water.");
+            return response;
         }
+        if (node is not IZLinkBackendSessionRelocationBarrier barrier)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InvalidOperation,
+                "The MeshNode backend does not provide framework-service-v12 session relocation.",
+                ZLinkRetryAdvice.DoNotRetry);
+        return await barrier.RouteSessionRelocationAsync(
+                sessionOwnerNode,
+                route,
+                expectedSealedHighWater,
+                Registration.DefaultRequestTimeout,
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     internal ValueTask<ZLinkActorJoinResult> JoinActorAsync(
@@ -433,24 +443,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                 && peer.State == MeshPeerState.Admitted));
     }
 
-    internal static async ValueTask<bool> WaitForExactPeerReadinessAsync(
-        Func<bool> isReady,
-        TimeSpan pollingInterval,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            while (!isReady())
-                await Task.Delay(pollingInterval, cancellationToken)
-                    .ConfigureAwait(false);
-            return true;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            return false;
-        }
-    }
-
     internal static string? ResolveActorDrainMeshName(
         ZLinkFrameworkRegistration registration,
         string actorType)
@@ -605,9 +597,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                 if (!import.Owned)
                 {
                     // A duplicate admission request only observes the
-                    // already published preparation. It must not run the
-                    // target lifecycle before source cutover; that work belongs
-                    // to the separate completion request.
+                    // already published preparation. Target lifecycle work
+                    // belongs to the separate completion request.
                     return await import.Preparation.WaitAsync(cancellationToken)
                         .ConfigureAwait(false);
                 }
@@ -653,7 +644,11 @@ internal sealed partial class ZLinkFrameworkRuntime
                         $"Actor '{actorId}' relocation session route has incomplete fencing identity.");
                 actorState.StageRelocationSessionRoute(
                     request.HandoffId,
-                    boundRoute);
+                    boundRoute,
+                    boundRoute.IsBound
+                        ? ZLinkRemoteActorJoinPackets
+                            .DecodeSessionRelocationContext(request)
+                        : default);
                 await PrepareTransferredActorTargetAsync(
                         target,
                         creation.Actor,
@@ -788,8 +783,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                 $"Actor '{request.ActorId}' published authority identity is unreadable.",
                 retryAdvice: ZLinkRetryAdvice.DoNotRetry);
         var actorState = GetOrCreateActorState(request.ActorId);
-        Task<(ZLinkSessionRouteCommitRequest Request, RoutingId SessionOwnerNode)?>?
-            sessionRouteCommitTask = null;
 
         try
         {
@@ -806,98 +799,50 @@ internal sealed partial class ZLinkFrameworkRuntime
                     LocationLifecycle,
                     request.ActorId)
                 .ActorOwnership;
-            var durablePhase = await actorLocations
-                .ReadTransferredActorAuthorityPhaseAsync(
-                    request.ActorId,
-                    actorRef.ToNative(publishedActorAuthority.MeshName),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            var authorityWasNormalized = false;
-            ZLinkAuthoritySnapshot? normalizedSnapshot = null;
-            ZLinkActorRelocationAuthorityPayload? durablePayload = null;
-            if (durablePhase is { } durable)
-            {
-                durablePayload = durable.Phase;
-                if (durable.Phase.RelocationId != relocationId
-                    || durable.Phase.Phase
-                    is < ZLinkActorRelocationAuthorityPhase.Completed)
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.Unavailable,
-                        $"Actor '{request.ActorId}' source cleanup has not reached durable Completed.");
-            }
-            else
-            {
-                var normalizedRead = await authorityStore.ReadAuthorityAsync(
-                        ZLinkActorAuthorityPayloadCodec.AuthorityKey(
-                            request.ActorId),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                authorityWasNormalized =
-                    normalizedRead is ZLinkAuthorityReadResult.Found normalized
-                    && IsCompletedCanonicalActorRelocation(
-                        normalized.Snapshot,
-                        publishedReference);
-                if (authorityWasNormalized
-                    && normalizedRead is ZLinkAuthorityReadResult.Found found)
-                    normalizedSnapshot = found.Snapshot;
-                if (!authorityWasNormalized)
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.Unavailable,
-                        $"Actor '{request.ActorId}' source cleanup has not reached durable Completed.");
-            }
-            if (normalizedSnapshot is { } adoptedSnapshot)
-                actorLocations.UpdateTrackedSnapshot(
-                    request.ActorId,
-                    adoptedSnapshot);
-            var authorityWasSteady = authorityWasNormalized
-                                     || durablePayload?.Phase
-                                     == ZLinkActorRelocationAuthorityPhase.Steady;
+            if (!ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
+                    publishedFound.Snapshot.Payload.Span,
+                    out var canonical)
+                || canonical.RelocationHigh
+                   != BinaryPrimitives.ReadUInt64BigEndian(
+                       relocationId.ToByteArray(bigEndian: true).AsSpan(0, 8))
+                || canonical.RelocationLow
+                   != BinaryPrimitives.ReadUInt64BigEndian(
+                       relocationId.ToByteArray(bigEndian: true).AsSpan(8, 8))
+                || !string.Equals(
+                    canonical.RelocationReference,
+                    publishedReference,
+                    StringComparison.Ordinal)
+                || !IsCompletedCanonicalActorRelocation(
+                    publishedFound.Snapshot,
+                    publishedReference))
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    $"Actor '{request.ActorId}' target completion authority is not ready.",
+                    ZLinkRetryAdvice.RetryAfterBackoff);
             var recoveryBoundRoute =
-                durablePayload?.BoundSessionRoute.IsBound == true
-                    ? durablePayload.BoundSessionRoute
-                    : ZLinkRemoteActorJoinPackets.DecodeBoundSessionRoute(
-                        request);
+                ZLinkRemoteActorJoinPackets.DecodeBoundSessionRoute(request);
             if (recoveryBoundRoute.IsBound
                 && !actorState.TryGetStagedRelocationSessionRoute(
                     request.HandoffId,
                     out _))
             {
                 var committedAuthority = publishedActorAuthority;
-                if (durablePayload is not null
-                    && !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                        durablePayload.ApplicationPayload.Span,
-                        out committedAuthority))
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.DataLost,
-                        $"Actor '{request.ActorId}' committed authority identity is unreadable.",
-                        retryAdvice: ZLinkRetryAdvice.DoNotRetry);
                 actorState.StageRelocationSessionRoute(
                     request.HandoffId,
-                    recoveryBoundRoute);
+                    recoveryBoundRoute,
+                    ZLinkRemoteActorJoinPackets
+                        .DecodeSessionRelocationContext(request));
                 actorState.MarkRelocationSessionAuthorityCommitted(
                     request.HandoffId,
                     actorRef,
                     publishedFound.Snapshot.AuthorityOwnerGeneration,
-                    committedAuthority.MeshName,
+                    ZLinkMeshName.FromBoundary(
+                        committedAuthority.MeshName,
+                        nameof(committedAuthority.MeshName)),
                     committedAuthority.NodeGeneration,
                     committedAuthority.OwnerLeaseGeneration);
-            }
-            // The target temporary queue remains closed to application
-            // dispatch, but its bound-session route update must not wait for
-            // the joined callback. Otherwise a callback gate can keep the
-            // session route sealed and prevent frames from reaching that
-            // temporary queue (common spec 20 section 5).
-            if (actorState.TryGetCommittedRelocationSessionRoute(
-                    request.HandoffId,
-                    out _))
-            {
-                ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"session_route_update_started actor={request.ActorId}");
-                sessionRouteCommitTask = CommitAndUnsealSessionRouteAsync(
-                        actorState,
-                        request.HandoffId,
-                        cancellationToken)
-                    .AsTask();
+                actorState.RequireRelocationSessionRouteTerminal(
+                    request.HandoffId);
             }
             try
             {
@@ -913,19 +858,10 @@ internal sealed partial class ZLinkFrameworkRuntime
                 // Authority has already moved. A target lifecycle failure is
                 // therefore terminal at the target and must not make the
                 // source reopen or roll back its old membership.
-                var terminalFailure = lifecycleFailure;
-                var routeFailure = await ObserveSessionRouteCommitTaskAsync(
-                        sessionRouteCommitTask,
-                        "actor-session-route-update-after-lifecycle-failure")
-                    .ConfigureAwait(false);
-                if (routeFailure is not null)
-                    terminalFailure = new AggregateException(
-                        lifecycleFailure,
-                        routeFailure);
                 await DeliverFailedTransferredActorJoinAsync(
                         actorState,
                         request,
-                        terminalFailure,
+                        lifecycleFailure,
                         cancellationToken)
                     .ConfigureAwait(false);
                 if (ownsRecordedCompletion)
@@ -935,7 +871,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 }
                 LogActorHandoff(
                     $"handoff_completion_failed_after_commit actor={request.ActorId} "
-                    + $"kind={MapPostCommitActorJoinFailure(terminalFailure)}");
+                    + $"kind={MapPostCommitActorJoinFailure(lifecycleFailure)}");
                 return;
             }
             var canonicalMaintenance = actorState.Handoff
@@ -975,7 +911,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             }
             if (canonicalMaintenance)
             {
-                await actorState.Handoff.WaitForTargetCompletionAsync(
+                await actorState.Handoff.WaitForTargetReplayCompletionAsync(
                         cancellationToken)
                     .ConfigureAwait(false);
             }
@@ -988,44 +924,28 @@ internal sealed partial class ZLinkFrameworkRuntime
                         cancellationToken)
                     .ConfigureAwait(false);
             }
-            var sessionRouteCommit = sessionRouteCommitTask is null
-                ? null
-                : await sessionRouteCommitTask.ConfigureAwait(false);
+            var sessionRouteCommitted = await CommitSessionRouteAsync(
+                    actorState,
+                    request.HandoffId,
+                    cancellationToken)
+                .ConfigureAwait(false);
             LogActorHandoff(
-                $"session_route_commit_{(sessionRouteCommit is null ? "not_required" : "acknowledged")} "
+                $"session_route_commit_{(sessionRouteCommitted ? "acknowledged" : "not_required")} "
                 + $"actor={request.ActorId}");
-            if (!authorityWasSteady)
-                await actorLocations.AdvanceTransferredActorAuthorityPhaseAsync(
-                        request.ActorId,
-                        actorRef.ToNative(publishedActorAuthority.MeshName),
-                        relocationId,
-                        ZLinkActorRelocationAuthorityPhase.Completed,
-                        ZLinkActorRelocationAuthorityPhase.Steady,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-            if (!authorityWasNormalized)
-                await actorLocations.NormalizeTransferredActorAuthorityAsync(
-                        request.ActorId,
-                        actorRef.ToNative(publishedActorAuthority.MeshName),
-                        relocationId,
-                        cancellationToken)
-                    .ConfigureAwait(false);
             actorState.Handoff.Complete(request.HandoffId);
-            {
-                var released = await new ZLinkRelocationPublicationCoordinator(
-                            authorityStore,
-                            relocationStore)
-                        .ReleasePublishedAsync(
-                            ZLinkActorAuthorityPayloadCodec.AuthorityKey(
-                                request.ActorId),
-                            publishedReference,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                if (released is { } releasedSnapshot)
-                    actorLocations.UpdateTrackedSnapshot(
-                        request.ActorId,
-                        releasedSnapshot);
-            }
+            var released = await new ZLinkRelocationPublicationCoordinator(
+                        authorityStore,
+                        relocationStore)
+                    .ReleasePublishedAsync(
+                        ZLinkActorAuthorityPayloadCodec.AuthorityKey(
+                            request.ActorId),
+                        publishedReference,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            if (released is { } releasedSnapshot)
+                actorLocations.UpdateTrackedSnapshot(
+                    request.ActorId,
+                    releasedSnapshot);
             if (ownsRecordedCompletion)
             {
                 _actorHandoffAdmissions.RecordCompletion(request, spotId);
@@ -1036,17 +956,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
         catch (Exception handoffFailure)
         {
-            var routeFailure = await ObserveSessionRouteCommitTaskAsync(
-                    sessionRouteCommitTask,
-                    "actor-session-route-update-after-handoff-failure")
-                .ConfigureAwait(false);
             if (ownsRecordedCompletion)
                 _actorHandoffAdmissions.CancelCompletion(request, spotId);
-            if (routeFailure is not null
-                && !ReferenceEquals(routeFailure, handoffFailure))
-                handoffFailure = new AggregateException(
-                    handoffFailure,
-                    routeFailure);
             ExceptionDispatchInfo.Capture(handoffFailure).Throw();
             throw;
         }
@@ -1105,20 +1016,17 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken)
     {
         //  이미 다른 경로가 끝냈으면 commit이 null이라 그대로 no-op이다.
-        var commit = await CommitAndUnsealSessionRouteAsync(
+        var commit = await CommitSessionRouteAsync(
                 actorState,
                 handoffId,
                 cancellationToken)
             .ConfigureAwait(false);
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"relocation_session_route commit={(commit is null ? "none" : "present")} "
+            $"relocation_session_route commit={(commit ? "present" : "none")} "
             + $"actor={actorState.ActorId} handoff={handoffId}");
     }
 
-    private async ValueTask<(
-        ZLinkSessionRouteCommitRequest Request,
-        RoutingId SessionOwnerNode)?>
-        CommitAndUnsealSessionRouteAsync(
+    private async ValueTask<bool> CommitSessionRouteAsync(
             ZLinkActorRuntimeState actorState,
             string handoffId,
             CancellationToken cancellationToken)
@@ -1128,23 +1036,13 @@ internal sealed partial class ZLinkFrameworkRuntime
                 handoffId,
                 cancellationToken)
             .ConfigureAwait(false);
-        if (commit is not { } completedRoute)
-            return null;
-
-        await UnsealCompletedSessionRouteAsync(
-                completedRoute.Request,
-                completedRoute.SessionOwnerNode,
-                cancellationToken)
-            .ConfigureAwait(false);
-        // Keep the pending target route until the session owner confirms the
-        // seal is removed. This preserves the exact request for a retry when
-        // commit succeeded but unseal did not.
-        actorState.CompleteRelocationSessionRoute(handoffId);
-        return completedRoute;
+        if (!commit)
+            return false;
+        return true;
     }
 
     private static async ValueTask<Exception?> ObserveSessionRouteCommitTaskAsync(
-        Task<(ZLinkSessionRouteCommitRequest Request, RoutingId SessionOwnerNode)?>? task,
+        Task<bool>? task,
         string operation)
     {
         if (task is null)
@@ -1161,10 +1059,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
     }
 
-    private async ValueTask<(
-        ZLinkSessionRouteCommitRequest Request,
-        RoutingId SessionOwnerNode)?>
-        CommitCompletedSessionRouteAsync(
+    private async ValueTask<bool> CommitCompletedSessionRouteAsync(
         ZLinkActorRuntimeState actorState,
         string handoffId,
         CancellationToken cancellationToken)
@@ -1172,145 +1067,52 @@ internal sealed partial class ZLinkFrameworkRuntime
         if (!actorState.TryGetCommittedRelocationSessionRoute(
                 handoffId,
                 out var pending))
-            return null;
+            return false;
 
         var route = pending.Route;
-        var targetActor = pending.TargetActor
-                          ?? throw new InvalidOperationException(
-                              "Session route commit requires a target Actor ref.");
-        var request = new ZLinkSessionRouteCommitRequest(
-            actorState.ActorId,
-            route.BindingToken!,
-            route.BindingGeneration,
-            route.ObjectGeneration,
-            route.AuthorityOwnerGeneration,
-            pending.TargetAuthorityOwnerGeneration,
-            route.MeshName!,
-            pending.TargetMeshName?.Value
-            ?? throw new InvalidOperationException(
-                "Session route commit requires a target mesh."),
-            route.TargetNodeGeneration,
-            pending.TargetNodeGeneration,
-            route.OwnerLeaseGeneration,
-            pending.TargetOwnerLeaseGeneration,
-            route.SessionOwnerNodeGeneration,
-            route.AcceptedHighWater,
-            handoffId,
-            targetActor.NodeRid.ToHex());
-
         var meshName = route.MeshName
                        ?? throw new ZLinkFrameworkException(
                            ZLinkFrameworkErrorKind.NotFound,
                            $"Actor '{actorState.ActorId}' session route has no Mesh.");
         var sessionOwnerNode = route.NodeRid!.Value;
-        var localNode = GetMeshNodeRuntime(meshName).Node.RoutingId;
-        ZLinkSessionRouteCommitReply reply;
-        if (sessionOwnerNode == localNode)
-        {
-            var result = CommitSessionActorRoute(
-                new ZLinkSessionRouteCommit(
-                    request.ActorId,
-                    request.BindingToken,
-                    request.BindingGeneration,
-                    request.ObjectGeneration,
-                    request.PreviousAuthorityOwnerGeneration,
-                    request.TargetAuthorityOwnerGeneration,
-                    request.PreviousMeshName,
-                    request.TargetMeshName,
-                    request.PreviousTargetNodeGeneration,
-                    request.TargetNodeGeneration,
-                    request.PreviousOwnerLeaseGeneration,
-                    request.TargetOwnerLeaseGeneration,
-                    request.SessionOwnerNodeGeneration,
-                    request.AcceptedHighWater,
-                    request.HandoffId,
-                    targetActor.ToNative(request.TargetMeshName)));
-            reply = new ZLinkSessionRouteCommitReply(
-                result.Acknowledged,
-                result.AcceptedHighWater);
-        }
-        else
-        {
-            reply = await RequestSessionRouteCommitAsync(
-                    meshName,
-                    sessionOwnerNode,
-                    request,
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
+        var command44 = actorState.FreezeRelocationSessionRouteTerminal(
+            handoffId);
+        var acceptedTarget = pending.TargetActor
+                             ?? throw new InvalidOperationException(
+                                 "A committed session route requires a target Actor proof.");
+        var acceptedTargetMesh = pending.TargetMeshName
+                                 ?? throw new InvalidOperationException(
+                                     "A committed session route requires a target Mesh proof.");
+        var reply = await RouteSessionRelocationAsync(
+                meshName,
+                sessionOwnerNode,
+                command44,
+                command44.Route.ReplayedHighWater,
+                cancellationToken,
+                new ZLinkSessionRelocationAuthenticatedRoute(
+                    acceptedTarget.NodeRid,
+                    pending.TargetNodeGeneration,
+                    acceptedTargetMesh.Value,
+                    pending.TargetAuthorityOwnerGeneration,
+                    pending.TargetOwnerLeaseGeneration))
+            .ConfigureAwait(false);
 
-        if (!reply.Acknowledged
-            || reply.AcceptedHighWater < route.AcceptedHighWater)
+        if (reply.Result is not (
+                ZLinkServiceWireCodec.SessionRelocationRouteResult.Applied
+                or ZLinkServiceWireCodec.SessionRelocationRouteResult.AlreadyApplied)
+            || reply.LastAcceptedSessionSequence
+            != command44.Route.ReplayedHighWater
+            || reply.CurrentAuthorityOwnerGeneration
+            != pending.TargetAuthorityOwnerGeneration)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 $"Actor '{actorState.ActorId}' session route commit was fenced by its binding identity.");
 
-        return (request, sessionOwnerNode);
-    }
-
-    private async ValueTask UnsealCompletedSessionRouteAsync(
-        ZLinkSessionRouteCommitRequest request,
-        RoutingId sessionOwnerNode,
-        CancellationToken cancellationToken)
-    {
-        var meshName = request.PreviousMeshName;
-        var localNode = GetMeshNodeRuntime(meshName).Node.RoutingId;
-        bool acknowledged;
-        if (sessionOwnerNode == localNode)
-        {
-            acknowledged = UnsealCommittedSessionActorRoute(
-                new ZLinkSessionRouteCommit(
-                    request.ActorId,
-                    request.BindingToken,
-                    request.BindingGeneration,
-                    request.ObjectGeneration,
-                    request.PreviousAuthorityOwnerGeneration,
-                    request.TargetAuthorityOwnerGeneration,
-                    request.PreviousMeshName,
-                    request.TargetMeshName,
-                    request.PreviousTargetNodeGeneration,
-                    request.TargetNodeGeneration,
-                    request.PreviousOwnerLeaseGeneration,
-                    request.TargetOwnerLeaseGeneration,
-                    request.SessionOwnerNodeGeneration,
-                    request.AcceptedHighWater,
-                    request.HandoffId,
-                    new ActorRef(
-                        request.ActorId,
-                        request.ObjectGeneration,
-                        request.TargetMeshName,
-                        RoutingId.FromHex(request.TargetNodeRid))));
-        }
-        else
-        {
-            var reply = await RequestSessionRouteUnsealAsync(
-                    meshName,
-                    sessionOwnerNode,
-                    new ZLinkSessionRouteUnsealRequest(
-                        request.ActorId,
-                        request.BindingToken,
-                        request.BindingGeneration,
-                        request.ObjectGeneration,
-                        request.PreviousAuthorityOwnerGeneration,
-                        request.TargetAuthorityOwnerGeneration,
-                        request.PreviousMeshName,
-                        request.TargetMeshName,
-                        request.PreviousTargetNodeGeneration,
-                        request.TargetNodeGeneration,
-                        request.PreviousOwnerLeaseGeneration,
-                        request.TargetOwnerLeaseGeneration,
-                        request.SessionOwnerNodeGeneration,
-                        request.AcceptedHighWater,
-                        request.HandoffId,
-                        request.TargetNodeRid),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            acknowledged = reply.Acknowledged;
-        }
-        if (!acknowledged)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.InvalidOperation,
-                $"Actor '{request.ActorId}' session ingress could not unseal before steady normalization.");
+        actorState.CompleteRelocationSessionRoute(
+            handoffId,
+            command44,
+            reply);
+        return true;
     }
 
     private void SchedulePublishedActorRelocationRecovery(
@@ -1632,6 +1434,19 @@ internal sealed partial class ZLinkFrameworkRuntime
                                  out var handoffId)
                              && handoffId
                              == candidate.Envelope.AggregateId;
+        //  A canonical authority row persists no inventory digest: decoding it
+        //  synthesizes the all-zero placeholder (see
+        //  ZLinkRelocationAuthorityPayloadCodec.TryDecode), while the immutable
+        //  root's envelope carries the real digest. Requiring byte equality here
+        //  failed every canonical remote Join recovery as DataLost, which
+        //  permanently killed the aggregate's recovery watch. The row already
+        //  pins the root through its reference and CRC32C (checked when the
+        //  root is read back), so the digest comparison applies only when the
+        //  reference actually carries one — mirroring ValidateRoot and the Spot
+        //  retire normalizer, which skip the digest for canonical publications.
+        var referenceDigestIsSentinel =
+            !candidate.Reference.InventoryDigest.Span.ContainsAnyExcept(
+                (byte)0);
         RoutingId sourceNodeRid;
         try
         {
@@ -1665,6 +1480,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             + $"env_ref_id={candidate.Envelope.AggregateId == candidate.Reference.AggregateId} "
             + $"env_ref_gen={candidate.Envelope.AggregateGeneration == candidate.Reference.AggregateGeneration} "
             + $"env_ref_digest={candidate.Envelope.InventoryDigest.Span.SequenceEqual(candidate.Reference.InventoryDigest.Span)} "
+            + $"ref_digest_sentinel={referenceDigestIsSentinel} "
             + $"env_digest={Convert.ToHexString(candidate.Envelope.InventoryDigest.Span)[..16]} "
             + $"ref_digest={Convert.ToHexString(candidate.Reference.InventoryDigest.Span)[..16]} "
             + $"env_len={candidate.Envelope.InventoryDigest.Length} ref_len={candidate.Reference.InventoryDigest.Length}");
@@ -1699,8 +1515,9 @@ internal sealed partial class ZLinkFrameworkRuntime
                != candidate.Reference.AggregateId
             || candidate.Envelope.AggregateGeneration
                != candidate.Reference.AggregateGeneration
-            || !candidate.Envelope.InventoryDigest.Span.SequenceEqual(
-                candidate.Reference.InventoryDigest.Span))
+            || !referenceDigestIsSentinel
+               && !candidate.Envelope.InventoryDigest.Span.SequenceEqual(
+                   candidate.Reference.InventoryDigest.Span))
             throw RemoteJoinRecoveryMismatch(
                 wire.ActorId,
                 "participant or aggregate identity");
@@ -2263,6 +2080,27 @@ internal sealed partial class ZLinkFrameworkRuntime
                         throw new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.Rejected,
                             $"Actor type '{request.ActorType}' relocation policy is not registered on the target node.");
+                    //  Acquire the inbound permit before reserving capacity.
+                    //  A reservation that is made and then aborted advances
+                    //  the Actor's authority generation, so answering `busy`
+                    //  after reserving invalidates the source's own retry: it
+                    //  resends the same fence and the target then reports
+                    //  `authority changed during target reservation`. Taking
+                    //  the permit first leaves a refused admission with no
+                    //  state change, so the retry succeeds unchanged.
+                    if (!_relocationPermits.TryAcquire(
+                            ZLinkRelocationPermitRequest.Inbound(
+                                request.PredictedPayloadBytes,
+                                restore: relocation.PolicyKind == 2),
+                            out var reservationLease))
+                    {
+                        throw new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.Unavailable,
+                            $"Actor '{request.ActorId}' target relocation admission is busy.");
+                    }
+                    var permitOwned = false;
+                    try
+                    {
                     var capacityRequest =
                         new ZLinkRelocationCapacityReservationRequest(
                             Guid.ParseExact(request.HandoffId, "N"),
@@ -2334,24 +2172,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                         throw new ZLinkRelocationDataLostException(
                             $"Actor '{request.ActorId}' target reservation returned an invalid authority generation.");
                     }
-                    if (!_relocationPermits.TryAcquire(
-                            ZLinkRelocationPermitRequest.Inbound(
-                                request.PredictedPayloadBytes,
-                                restore: relocation.PolicyKind == 2),
-                            out var reservationLease))
-                    {
-                        await _actorHandoffAdmissions
-                            .OwnAndAbortCapacityAsync(
-                                request,
-                                spotId,
-                                capacityFence,
-                                default,
-                                ct)
-                            .ConfigureAwait(false);
-                        throw new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.Unavailable,
-                            $"Actor '{request.ActorId}' target relocation admission is busy.");
-                    }
                     var reservation = new ZLinkActorRelocationReservation(
                         Guid.NewGuid().ToString("N"),
                         request.PredictedPayloadBytes,
@@ -2405,6 +2225,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                         }
                         ZLinkFrameworkDebugLog.SpotDiscovery(
                             $"admit_reply_built actor={request.ActorId} accepted=true");
+                        permitOwned = true;
                         return new ZLinkActorHandoffAdmissionDecision(
                             ZLinkRemoteActorJoinPackets.CreateAdmissionReply(
                                 true,
@@ -2426,7 +2247,17 @@ internal sealed partial class ZLinkFrameworkRuntime
                                     reservationLease,
                                     ct)
                                 .ConfigureAwait(false);
+                        permitOwned = true;
                         throw;
+                    }
+                    }
+                    finally
+                    {
+                        //  Every path that leaves before the decision owns the
+                        //  lease must return the permit, or one refused
+                        //  admission starves every later one.
+                        if (!permitOwned)
+                            reservationLease.Dispose();
                     }
                 },
                 cancellationToken)
@@ -3581,6 +3412,37 @@ internal sealed partial class ZLinkFrameworkRuntime
             request,
             cancellationToken);
 
+    internal ValueTask<
+        ZLinkServiceWireCodec.SessionRelocationSealedRecord>
+        SealCanonicalSessionActorRouteAsync(
+            ZLinkServiceWireCodec.SessionRelocationSealRecord request,
+            CancellationToken cancellationToken) =>
+        _actorBoundSessionCoordinator.SealCanonicalSessionRouteAsync(
+            request,
+            cancellationToken);
+
+    internal ZLinkServiceWireCodec.SessionRelocationRoutedRecord
+        RouteCanonicalSessionActor(
+            ZLinkServiceWireCodec.SessionRelocationRouteRecord request,
+            ZLinkSessionRelocationAuthenticatedRoute authenticatedRoute) =>
+        _actorBoundSessionCoordinator.RouteCanonicalSession(
+            request,
+            authenticatedRoute);
+
+    internal ValueTask<ZLinkServiceWireCodec.SessionRelocationRoutedRecord>
+        RouteCanonicalSessionActorAsync(
+            ZLinkServiceWireCodec.SessionRelocationRouteRecord request,
+            ZLinkSessionRelocationAuthenticatedRoute authenticatedCandidate,
+            Func<CancellationToken,
+                ValueTask<ZLinkSessionRelocationAuthenticatedRoute>>
+                resolveAuthority,
+            CancellationToken cancellationToken) =>
+        _actorBoundSessionCoordinator.RouteCanonicalSessionAsync(
+            request,
+            authenticatedCandidate,
+            resolveAuthority,
+            cancellationToken);
+
     internal void CompleteAcceptedSessionActorFrame(
         string actorId,
         string bindingToken)
@@ -4021,40 +3883,22 @@ internal sealed partial class ZLinkFrameworkRuntime
                 $"Actor '{actorId}' direct relay request-source identity is stale.");
     }
 
-    /// <summary>Session-node entry for a relayed remote push: delivers the
-    /// encoded frame to the still-bound local session, retrying backpressured
-    /// writes within the request timeout (a stale binding drops the push per
-    /// spec 31 §6).</summary>
     internal async ValueTask DeliverRemoteSessionPushAsync(
         ZLinkRemoteSessionPushRelay identity,
         byte[] frame,
         RoutingId sourceNodeRid,
         CancellationToken cancellationToken)
     {
-        var deadline = DateTime.UtcNow + Registration.DefaultRequestTimeout;
-        ZLinkActorBoundSessionCoordinator.RemotePushDelivery? previousDelivery = null;
-        while (true)
-        {
-            var delivery = _actorBoundSessionCoordinator.DeliverLocalSessionFrame(
+        var delivery = await _actorBoundSessionCoordinator
+            .AdmitRemoteSessionFrameAsync(
                 identity,
                 frame,
-                sourceNodeRid);
-            if (delivery != ZLinkActorBoundSessionCoordinator.RemotePushDelivery.NoBinding
-                || previousDelivery != delivery)
-                ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"session_push_delivery_result actor={identity.ActorId} "
-                    + $"result={delivery} source_node={sourceNodeRid}");
-            previousDelivery = delivery;
-            // Backpressure and the transient release→bind gap of a rebind
-            // both retry; a definite different-session binding drops the
-            // push (spec 31 §6).
-            var retryable = delivery
-                is ZLinkActorBoundSessionCoordinator.RemotePushDelivery.Backpressured
-                or ZLinkActorBoundSessionCoordinator.RemotePushDelivery.NoBinding;
-            if (!retryable || DateTime.UtcNow >= deadline) return;
-            await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken)
-                .ConfigureAwait(false);
-        }
+                sourceNodeRid,
+                cancellationToken)
+            .ConfigureAwait(false);
+        ZLinkFrameworkDebugLog.SpotDiscovery(
+            $"session_push_delivery_result actor={identity.ActorId} "
+            + $"result={delivery} source_node={sourceNodeRid}");
     }
 
     /// <summary>Actor-node relay for a push whose bound session lives on

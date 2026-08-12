@@ -10,6 +10,7 @@ SAMPLE_RUNNERS=(
   SupportChat/run_sample.sh
   GameQuest/run_sample.sh
   ShoppingMall/run_sample.sh
+  ZoneWorld/run_sample.sh
 )
 
 SELECTED_RUNNERS=()
@@ -45,7 +46,7 @@ fi
 
 run_sample() {
   local runner="$1"
-  "$SCRIPT_DIR/$runner"
+  bash "$SCRIPT_DIR/$runner"
 }
 
 for runner in "${SELECTED_RUNNERS[@]}"; do

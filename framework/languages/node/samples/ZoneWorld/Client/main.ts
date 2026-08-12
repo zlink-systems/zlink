@@ -6,12 +6,21 @@ import {
   zlinkStreamJsonCodec
 } from '@zlink-systems/stream-connector';
 import type { ZlinkStreamConnector } from '@zlink-systems/stream-connector';
-import { AnnounceWorldReq, JoinWorldReq, MoveMsg, PacketNames, WatchNodesReq } from '../Shared/contracts';
+import {
+  ActorLocationProbeReq,
+  AnnounceWorldReq,
+  MessageFollowProbeReq,
+  MessageFollowProbeMsg,
+  MoveMsg,
+  PacketNames,
+  WatchNodesReq
+} from '../Shared/contracts';
 import { NodeIds, ZoneIds, ZoneWorldSpec } from '../Shared/spec';
 import { readConfigPath, validateConfiguration } from '../Server/Configuration/configuration';
 import type {
+  ActorLocationProbeRes,
   AnnounceWorldRes,
-  JoinWorldRes,
+  MessageFollowProbeRes,
   MoveRejectedNotify,
   NodeStatusNotify,
   WatchNodesRes,
@@ -19,6 +28,7 @@ import type {
   ZoneChangedNotify,
   ZoneStateNotify
 } from '../Shared/contracts';
+import { joinAndWaitForOwnedState } from './join-readiness';
 
 async function main(): Promise<void> {
   const path = readConfigPath(process.argv.slice(2));
@@ -30,10 +40,7 @@ async function main(): Promise<void> {
   const ops = createConnector(config.client.opsEndpoint);
   try {
     await gateway.connect();
-    const joined = await gateway
-      .request(new JoinWorldReq('player-a1'))
-      .packetName(PacketNames.joinWorldReq)
-      .submit<JoinWorldRes>();
+    const joined = await joinAndWaitForOwnedState(gateway, 'player-a1');
     zlinkStreamAssert.ensure(joined.playerId === 'player-a1', 'ZW-A1 player id mismatch.');
     zlinkStreamAssert.ensure(joined.zoneId === ZoneIds.northWest, 'ZW-A1 spawn zone mismatch.');
     zlinkStreamAssert.ensure(joined.nodeId === NodeIds.west, 'ZW-A1 spawn node mismatch.');
@@ -66,10 +73,7 @@ async function main(): Promise<void> {
     console.log('scenario ZW-A5 passed');
 
     await second.connect();
-    const joinedSecond = await second
-      .request(new JoinWorldReq('player-a3'))
-      .packetName(PacketNames.joinWorldReq)
-      .submit<JoinWorldRes>();
+    const joinedSecond = await joinAndWaitForOwnedState(second, 'player-a3');
     zlinkStreamAssert.ensure(joinedSecond.error === null, 'ZW-A3 second player join was rejected.');
     const expectedPlayers = ['player-a1', 'player-a3'];
     const [firstView, secondView] = await Promise.all([
@@ -114,9 +118,45 @@ async function main(): Promise<void> {
     zlinkStreamAssert.ensure(internal.payload.nodeId === NodeIds.west, 'ZW-B3 node id changed.');
     console.log('scenario ZW-B3 passed');
 
+    // Arm the adjacent-zone observer before the producer crosses the node
+    // boundary. Publish is a one-way event and is not replayed to a consumer
+    // that becomes ready after the event has already been delivered.
+    await westObserver.connect();
+    const westJoined = await joinAndWaitForOwnedState(westObserver, 'player-b1-west');
+    // JoinWorldRes describes the accepted target. The first owned-zone state
+    // push proves that join commit and the bound-session route are ready before
+    // the observer starts submitting movement messages.
+    await walkTo(
+      westObserver,
+      westJoined.playerId,
+      { x: westJoined.x, y: westJoined.y },
+      45,
+      25
+    );
+    const adjacentViewTask = westObserver
+      .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
+      .where((message) => message.payload.players.some((player) =>
+        player.playerId === joined.playerId && player.zoneId === ZoneIds.northEast))
+      .timeout(10_000)
+      .submit();
+
     console.log('scenario ZW-B2 preparing cross-node move');
     position = await walkTo(gateway, joined.playerId, position, 49, 25);
     console.log('scenario ZW-B2 source position ready');
+    // ZW-B5/ZW-B6 arm before the relocation: capture the actor's identity on
+    // the source owner and prime the Gateway's Actor route so the probe sent
+    // right after the move enters the previous owner's route.
+    const beforeRelocation = await probeActor(gateway, joined.playerId);
+    zlinkStreamAssert.ensure(beforeRelocation.error === null, 'ZW-B5 pre-relocation probe failed.');
+    zlinkStreamAssert.ensure(
+      beforeRelocation.actorId === joined.playerId,
+      'ZW-B5 pre-relocation probe resolved a different actor.'
+    );
+    const primed = await probeMessageFollow(gateway, joined.playerId, 'zw-b6-prime', 'route-prime');
+    zlinkStreamAssert.ensure(
+      primed.error === null && primed.probeId === 'zw-b6-prime' && primed.payload === 'route-prime',
+      'ZW-B6 route prime changed the payload or reply correlation.'
+    );
     const transferredTask = gateway
       .waitFor<ZoneChangedNotify>(PacketNames.zoneChangedNotify)
       .where((message) => message.payload.zoneId === ZoneIds.northEast)
@@ -128,26 +168,47 @@ async function main(): Promise<void> {
     zlinkStreamAssert.ensure(transferred.payload.transferred, 'ZW-B2 cross-node move did not transfer the actor.');
     zlinkStreamAssert.ensure(transferred.payload.nodeId === NodeIds.east, 'ZW-B2 target node mismatch.');
     await moveAndWait(gateway, joined.playerId, 55, 25);
+    const adjacentView = await adjacentViewTask;
     console.log('scenario ZW-B2 target position ready');
     console.log('scenario ZW-B2 passed');
 
-    await westObserver.connect();
-    const westJoined = await westObserver
-      .request(new JoinWorldReq('player-b1-west'))
-      .packetName(PacketNames.joinWorldReq)
-      .submit<JoinWorldRes>();
-    await walkTo(
-      westObserver,
-      westJoined.playerId,
-      { x: westJoined.x, y: westJoined.y },
-      45,
-      25
+    // ZW-B5: the cross-node move relocated the actor without changing its
+    // identity. The operational probe resolves the same ActorId with the same
+    // ObjectGeneration on a different owner node.
+    const afterRelocation = await probeActor(gateway, joined.playerId);
+    zlinkStreamAssert.ensure(afterRelocation.error === null, 'ZW-B5 post-relocation probe failed.');
+    zlinkStreamAssert.ensure(afterRelocation.actorId === joined.playerId, 'ZW-B5 relocation changed the ActorId.');
+    zlinkStreamAssert.ensure(
+      afterRelocation.objectGeneration === beforeRelocation.objectGeneration,
+      'ZW-B5 relocation changed the ObjectGeneration.'
     );
-    const adjacentView = await westObserver
-      .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
-      .where((message) => message.payload.players.some((player) => player.playerId === joined.playerId))
-      .timeout(10_000)
+    zlinkStreamAssert.ensure(
+      afterRelocation.nodeRid !== beforeRelocation.nodeRid,
+      'ZW-B5 relocation did not change the current owner node.'
+    );
+    console.log('scenario ZW-B5 passed');
+
+    // ZW-B6: messages submitted right after the relocation may enter the
+    // previous owner via the primed route; Message Follow must deliver them to
+    // the committed target exactly once and answer with the payload intact.
+    await gateway
+      .send(new MessageFollowProbeMsg(joined.playerId, 'zw-b6-one-way', 'one-way-payload'))
+      .packetName(PacketNames.messageFollowProbeMsg)
       .submit();
+    const followed = await probeMessageFollow(gateway, joined.playerId, 'zw-b6-request', 'request-payload');
+    zlinkStreamAssert.ensure(
+      followed.error === null && followed.probeId === 'zw-b6-request' && followed.payload === 'request-payload',
+      'ZW-B6 the followed request lost its payload or reply correlation.'
+    );
+    // The documented terminal bound: with no route at all there is nothing to
+    // follow, so the probe ends with a terminal error instead of retrying.
+    const unroutable = await probeMessageFollow(gateway, 'player-b6-missing', 'zw-b6-missing', 'missing-payload');
+    zlinkStreamAssert.ensure(
+      unroutable.error !== null,
+      'ZW-B6 a probe without an actor route must end with a terminal error.'
+    );
+    console.log('scenario ZW-B6 passed');
+
     zlinkStreamAssert.ensure(
       adjacentView.payload.players.some((player) =>
         player.playerId === joined.playerId && player.zoneId === ZoneIds.northEast),
@@ -171,6 +232,41 @@ async function main(): Promise<void> {
       );
     }
     console.log('scenario ZW-B1 passed');
+
+    // ZW-B7: repeated relocation round trip (A -> B -> A). The same player
+    // crosses the same boundary back to the original node. Receiving the
+    // ZoneChangedNotify and the settling ZoneStateNotify on the same
+    // still-bound gateway connection is the binding-continuity evidence.
+    position = await walkTo(gateway, joined.playerId, { x: 55, y: 25 }, 52, 25);
+    const returnedTask = gateway
+      .waitFor<ZoneChangedNotify>(PacketNames.zoneChangedNotify)
+      .where((message) => message.payload.zoneId === ZoneIds.northWest)
+      .submit();
+    const resettledTask = gateway
+      .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
+      .where((message) => message.payload.zoneId === ZoneIds.northWest
+        && message.payload.players.some((player) =>
+          player.playerId === joined.playerId && player.x === 48 && player.y === 25))
+      .submit();
+    await gateway.send(new MoveMsg(48, 25)).packetName(PacketNames.moveMsg).submit();
+    const returned = await returnedTask;
+    zlinkStreamAssert.ensure(returned.payload.playerId === joined.playerId, 'ZW-B7 return relocation changed the actor id.');
+    zlinkStreamAssert.ensure(returned.payload.transferred, 'ZW-B7 return move did not transfer the actor.');
+    zlinkStreamAssert.ensure(returned.payload.nodeId === NodeIds.west, 'ZW-B7 return target node mismatch.');
+    await resettledTask;
+    position = { x: 48, y: 25 };
+    const afterReturn = await probeActor(gateway, joined.playerId);
+    zlinkStreamAssert.ensure(afterReturn.error === null, 'ZW-B7 post-return probe failed.');
+    zlinkStreamAssert.ensure(afterReturn.actorId === joined.playerId, 'ZW-B7 round trip changed the ActorId.');
+    zlinkStreamAssert.ensure(
+      afterReturn.objectGeneration === beforeRelocation.objectGeneration,
+      'ZW-B7 round trip changed the ObjectGeneration.'
+    );
+    zlinkStreamAssert.ensure(
+      afterReturn.nodeRid === beforeRelocation.nodeRid,
+      'ZW-B7 round trip did not return the actor to its original owner node.'
+    );
+    console.log('scenario ZW-B7 passed');
 
     await ops.connect();
     const nodes = await ops
@@ -234,6 +330,25 @@ function createConnector(endpoint: string): ZlinkStreamConnector {
     waitTimeoutMs: 10_000,
     heartbeat: { enabled: false }
   });
+}
+
+async function probeActor(client: ZlinkStreamConnector, actorId: string): Promise<ActorLocationProbeRes> {
+  return await client
+    .request(new ActorLocationProbeReq(actorId))
+    .packetName(PacketNames.actorLocationProbeReq)
+    .submit<ActorLocationProbeRes>();
+}
+
+async function probeMessageFollow(
+  client: ZlinkStreamConnector,
+  actorId: string,
+  probeId: string,
+  payload: string
+): Promise<MessageFollowProbeRes> {
+  return await client
+    .request(new MessageFollowProbeReq(actorId, probeId, payload))
+    .packetName(PacketNames.messageFollowProbeReq)
+    .submit<MessageFollowProbeRes>();
 }
 
 function waitForPlayers(client: ZlinkStreamConnector, playerIds: readonly string[]) {

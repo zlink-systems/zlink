@@ -65,6 +65,9 @@ public final class Contracts {
         String state) {
     }
 
+    public record SpotCreateReq(String reason) {
+    }
+
     public record PlacementWeightReq(int weight) {
     }
 
@@ -307,7 +310,7 @@ public final class Contracts {
     public record OutboundMsg(String value) {
     }
 
-    public record MeshMsg(String value) {
+    public record MeshEvent(String value) {
     }
 
     public record TimerActivityReq(String value) {

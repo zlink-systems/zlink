@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -220,10 +221,10 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
             "security",
             "owner",
             1,
-            java.time.Instant.now());
+            Instant.now());
     }
 
-    //  BLK-043 acceptance. The spec unit gate of 28-graceful-drain-handoff §7
+    //  BLK-043 acceptance. The spec unit gate of 30-host-relocation-flow §7
     //  belongs to ZLinkRelocationPermitPool, which admits at the turn boundary
     //  where the actual payload is known. executePlan must therefore not bound
     //  the units a second time: a unit waiting on its own turn boundary must

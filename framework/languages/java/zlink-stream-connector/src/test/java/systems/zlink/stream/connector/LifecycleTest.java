@@ -1,4 +1,6 @@
 package systems.zlink.stream.connector;
+import java.net.URI;
+import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -114,7 +116,7 @@ final class LifecycleTest {
         int port = reservePort();
         TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer(port);
         ZLinkStreamConnectorOptions options = new ZLinkStreamConnectorOptions(
-            java.net.URI.create("tcp://127.0.0.1:" + port),
+            URI.create("tcp://127.0.0.1:" + port),
             ZLinkStreamDispatchMode.IMMEDIATE,
             Duration.ofSeconds(1),
             ZLinkStreamConnectorOptions.UNLIMITED_RECONNECT_ATTEMPTS,
@@ -217,7 +219,7 @@ final class LifecycleTest {
                     .toCompletableFuture()
                     .join());
 
-            assertTrue(ex.getCause() instanceof java.util.concurrent.TimeoutException);
+            assertTrue(ex.getCause() instanceof TimeoutException);
             assertEquals(0, connector.pendingDispatchCount());
             } finally {
                 ConnectorTestAwait.await(connector.close());
@@ -298,7 +300,7 @@ final class LifecycleTest {
                     .toCompletableFuture()
                     .join());
 
-            assertTrue(ex.getCause() instanceof java.util.concurrent.TimeoutException);
+            assertTrue(ex.getCause() instanceof TimeoutException);
             assertTrue(ex.getCause().getMessage().contains("Heartbeat"));
             } finally {
                 ConnectorTestAwait.await(connector.close());
@@ -309,7 +311,7 @@ final class LifecycleTest {
     @Test
     void reconnectEnabledRejectsZeroMaxAttempts() {
         ZLinkStreamConnectorOptions options = new ZLinkStreamConnectorOptions(
-            java.net.URI.create("tcp://127.0.0.1:1"),
+            URI.create("tcp://127.0.0.1:1"),
             ZLinkStreamDispatchMode.IMMEDIATE,
             Duration.ofMillis(100),
             0,

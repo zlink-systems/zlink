@@ -4,6 +4,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 source "../../runner-common.sh"
+zlink_sample_configure_port_pool java
 ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kts)
 
 if rg -n 'System\.(getProperty|getenv)' Server Client --glob '*.java'; then
@@ -137,37 +138,10 @@ deliverydispatch_cleanup() {
 
 trap deliverydispatch_cleanup EXIT
 
-reserve_ports() {
-  python3 - <<'PY'
-import random
-import socket
-reserved = []
-try:
-    chosen = set()
-    while len(reserved) < 13:
-        host = "127.0.0.1"
-        port = random.randint(20000, 29999)
-        if port in chosen:
-            continue
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            sock.bind((host, port))
-        except OSError:
-            sock.close()
-            continue
-        chosen.add(port)
-        reserved.append((host, port, sock))
-    print(" ".join(f"{host}:{port}" for host, port, _ in reserved))
-finally:
-    for _, _, sock in reserved:
-        sock.close()
-PY
-}
-
 build_framework_jars() {
   (
     cd ../../..
-    ./gradlew --no-daemon \
+    zlink_sample_gradle_locked ./gradlew --no-daemon --no-parallel --max-workers=1 \
       :zlink-framework-core:jar \
       :zlink-framework-spring-boot-starter:jar \
       :zlink-framework-locations-redis:jar \
@@ -176,7 +150,8 @@ build_framework_jars() {
   )
 }
 
-read -r tracking customer_stream courier_stream dispatch_http dispatch_spot dispatch_channel customer_spot customer_router tracking_spot_router tracking_spot_pub courier_node1_spot courier_node2_spot courier_session_spot < <(reserve_ports)
+read -r tracking customer_stream courier_stream dispatch_http dispatch_spot dispatch_channel customer_spot customer_router tracking_spot_router tracking_spot_pub courier_node1_spot courier_node2_spot courier_session_spot \
+  <<<"$(zlink_sample_reserve_endpoints 13)"
 
 endpoint_host() { echo "${1%:*}"; }
 endpoint_port() { echo "${1##*:}"; }

@@ -6,6 +6,13 @@
 
 Handler metadata is an immutable snapshot.
 
+The first typed `Decode<T>()` on a received `ZLinkMessage` fixes either a value or a
+failure. Later `Decode<T>()` calls reuse that outcome and do not invoke the serializer
+again. A type cast fails if a later `T` cannot accept the first value.
+`Decode<ReadOnlyMemory<byte>>()` returns a read-only view owned by the framework, while
+`Decode<byte[]>()` returns a new caller-owned copy. Neither raw access fixes the typed
+outcome.
+
 ```csharp
 public sealed class ZLinkMessage
 {

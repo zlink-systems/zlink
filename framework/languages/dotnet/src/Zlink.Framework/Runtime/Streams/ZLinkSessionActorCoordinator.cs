@@ -2,6 +2,7 @@ namespace Zlink.Framework.Runtime.Streams;
 
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Identifiers;
 
 internal sealed class ZLinkSessionActorCoordinator(
@@ -541,7 +542,9 @@ internal sealed class ZLinkSessionActorCoordinator(
         var route = actorRef.Route;
         var sessionNode = runtime.GetMeshNodeRuntime(route.MeshName.Value);
         var sessionNodeRid = sessionNode.Node.RoutingId;
-        var headerBytes = ZLinkStreamProtocolDefaults.EncodeHeader(header).ToArray();
+        // EncodeHeader returns a freshly allocated buffer; Message.From accepts
+        // the memory directly, so copying it into another array is waste.
+        var headerBytes = ZLinkStreamProtocolDefaults.EncodeHeader(header);
         var bodyBytes = payload.ToArray();
         var target = route.Ref.ToBackend();
         var operationId = sessionNode.Node.AllocateOperationId();

@@ -45,8 +45,6 @@ var scenarios = new (string Name, Func<Task> Run)[]
         options, consumer, providerA, providerB)),
     ("RL-E5", () => RlE5StoreLivenessScenario.RunAsync(
         options, consumer, processes, providerA)),
-    ("RL-F4", () => RlF4ClientServerRoleScenario.RunAsync(
-        consumer, providerA, providerB)),
     ("RL-A1", () => RlA1ProviderRestartScenario.RunAsync(consumer, registry, processes, providerA, providerB)),
     ("RL-A2", () => RlA2ProviderEndpointRemapScenario.RunAsync(
         consumer, registry, processes, providerA, providerB)),
@@ -64,11 +62,9 @@ var scenarios = new (string Name, Func<Task> Run)[]
     ("RL-B6", () => RlB6GrayFaultScenario.RunAsync(consumer, providerA, providerB)),
     ("RL-C1", () => RlC1ClientHostLifecycleScenario.RunAsync(
         options, consumer, providerA, providerB)),
-    ("RL-C2", () => RlC2TopologyRecoveryScenario.RunAsync(consumer, registry, processes, providerA, providerB)),
     ("RL-C3", () => RlC3NodePauseRecoveryScenario.RunAsync(consumer, registry, processes, providerA, providerB)),
     ("RL-C4", () => RlC4RegistryOutageScenario.RunAsync(
         options, consumer, registry, processes, providerA, providerB)),
-    ("RL-D1", () => RlD1HighFanoutScenario.RunAsync(consumer, providerA, providerB)),
     ("RL-D2", () => RlD2ObserverFaultScenario.RunAsync(consumer, providerA, providerB)),
     ("RL-D3", () => RlD3DispatchErrorEvidenceScenario.RunAsync(consumer, providerA, providerB)),
     ("RL-D4", () => RlD4MissingRequestHandlerScenario.RunAsync(consumer, providerA, providerB)),

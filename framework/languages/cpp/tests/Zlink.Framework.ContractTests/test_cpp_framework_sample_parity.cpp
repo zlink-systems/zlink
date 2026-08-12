@@ -24,12 +24,14 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace
@@ -71,6 +73,25 @@ bool contains_any (const std::string &content, const std::vector<std::string> &p
     });
 }
 
+std::string collapse_whitespace (const std::string &content)
+{
+    std::string result;
+    result.reserve (content.size ());
+    bool pending_space = false;
+    for (const auto character : content) {
+        if (std::isspace (static_cast<unsigned char> (character)) != 0) {
+            pending_space = !result.empty ();
+            continue;
+        }
+        if (pending_space) {
+            result.push_back (' ');
+            pending_space = false;
+        }
+        result.push_back (character);
+    }
+    return result;
+}
+
 std::vector<std::filesystem::path> sample_source_files ()
 {
     std::vector<std::filesystem::path> files;
@@ -103,6 +124,7 @@ TEST (CppFrameworkSampleParity, BingoUsesDotNetSamplePacketSurface)
     EXPECT_STREQ (sample_names_t::number_drawn_packet, "BingoNumberDrawnNotify");
     EXPECT_STREQ (sample_names_t::game_ended_packet, "BingoGameEndedNotify");
     EXPECT_STREQ (bingo_reward_acquired_event_t::packet_name, "BingoRewardAcquiredEvent");
+    EXPECT_STREQ (bingo_room_create_req_t::packet_name, "BingoRoomCreateReq");
 
     authenticate_player_handler_t auth;
     const auto authenticated = auth.handle ({"player-1"});
@@ -114,6 +136,10 @@ TEST (CppFrameworkSampleParity, BingoUsesDotNetSamplePacketSurface)
     const reserve_bingo_room_res_t allocated{
       "two-player-room-1",
       {"Bingo Room 1", bingo_sample_modes_t::two_player, 2, 15, "Game", ""}};
+    const auto create_wire =
+      nlohmann::json (bingo_room_create_req_t{allocated.settings});
+    ASSERT_TRUE (create_wire.contains ("settings"));
+    EXPECT_EQ (create_wire.at ("settings").at ("roomName"), "Bingo Room 1");
 
     player_actor_factory_t actor_factory;
     const auto player_actor =
@@ -362,16 +388,34 @@ TEST (CppFrameworkSampleParity, TicTacToeUsesDotNetSamplePacketSurface)
 
     EXPECT_STREQ (sample_names_t::game_state_packet, "GameStateNotify");
     EXPECT_STREQ (sample_names_t::player_joined_packet, "PlayerJoinedNotify");
+    EXPECT_STREQ (player_actor_create_req_t::packet_name, "PlayerActorCreateReq");
+    EXPECT_STREQ (tictactoe_game_create_req_t::packet_name, "TicTacToeGameCreateReq");
+    EXPECT_STREQ (tictactoe_game_join_req_t::packet_name, "TicTacToeGameJoinReq");
+    EXPECT_STREQ (tictactoe_game_join_res_t::packet_name, "TicTacToeGameJoinRes");
+    EXPECT_STREQ (join_game_msg_t::packet_name, "JoinGameMsg");
+    EXPECT_STREQ (join_game_notify_t::packet_name, "JoinGameNotify");
     EXPECT_STREQ (player_win_milestone_event_t::packet_name, "PlayerWinMilestoneEvent");
 
     const auto contracts = read_file (
       cpp_language_root () / "samples/TicTacToe/Shared/Contracts/messages.hpp");
     EXPECT_EQ (contracts.find ("GameEndedNotify"), std::string::npos)
       << "the terminal state must use GameStateNotify instead of an extra client push";
+    EXPECT_EQ (contracts.find ("actor_location_t"), std::string::npos)
+      << "the sample must not expose an unused Actor location wire type";
+    EXPECT_EQ (contracts.find ("JoinGameReq"), std::string::npos);
+    EXPECT_EQ (contracts.find ("JoinGameRes"), std::string::npos);
+    EXPECT_EQ (contracts.find ("CreateGameReq"), std::string::npos);
 
     authenticate_player_handler_t auth;
     const auto authenticated = auth.handle ({sample_names_t::x_actor_id});
-    ASSERT_TRUE (authenticated.accepted);
+    ASSERT_EQ (authenticated.player.actor_id, sample_names_t::x_actor_id);
+    const auto authenticated_wire = nlohmann::json (authenticated);
+    EXPECT_EQ (authenticated_wire.size (), 1U);
+    EXPECT_TRUE (authenticated_wire.contains ("player"));
+    const auto state_wire = nlohmann::json (
+      game_state_notify_t{tictactoe_state_t{"room-1"}});
+    EXPECT_EQ (state_wire.size (), 1U);
+    EXPECT_TRUE (state_wire.contains ("state"));
 
     sample_topology_t topology;
     const create_game_http_res_t created{
@@ -886,11 +930,43 @@ TEST (CppFrameworkSampleParity, SampleHostsUseFrameworkOptionsSurface)
     }
 }
 
+TEST (CppFrameworkSampleParity, NonTicTacToeServersUseLocationDiscovery)
+{
+    const auto samples_root = cpp_language_root () / "samples";
+    for (const auto *sample : {
+           "Bingo", "DeliveryDispatch", "GameQuest", "ShoppingMall", "SupportChat",
+           "ZoneWorld"}) {
+        const auto server_root = samples_root / sample / "Server";
+        ASSERT_TRUE (std::filesystem::is_directory (server_root)) << server_root;
+        for (const auto &entry : std::filesystem::recursive_directory_iterator (server_root)) {
+            if (!entry.is_regular_file ()) {
+                continue;
+            }
+            const auto path = entry.path ();
+            if (!has_suffix (path, ".cpp") && !has_suffix (path, ".hpp")) {
+                continue;
+            }
+            const auto source = read_file (path);
+            EXPECT_EQ (source.find (".connect ("), std::string::npos)
+              << path << " must discover RouteMesh and channel peers through the location store";
+            EXPECT_EQ (source.find (".connect("), std::string::npos)
+              << path << " must discover RouteMesh and channel peers through the location store";
+        }
+
+        const auto location_store = server_root / "Configuration/location_store.hpp";
+        ASSERT_TRUE (std::filesystem::is_regular_file (location_store)) << location_store;
+        EXPECT_NE (read_file (location_store).find ("add_location_store ("),
+                   std::string::npos)
+          << sample << " must register its location store";
+    }
+}
+
 TEST (CppFrameworkSampleParity, PublicSampleNamesDoNotUseVariantSuffixes)
 {
     const auto samples_root = cpp_language_root () / "samples";
     const std::vector<std::string> expected_samples{
-      "Bingo", "TicTacToe", "DeliveryDispatch", "GameQuest", "SupportChat", "ShoppingMall"};
+      "Bingo",       "TicTacToe",    "DeliveryDispatch", "GameQuest",
+      "SupportChat", "ShoppingMall", "ZoneWorld"};
 
     for (const auto &sample : expected_samples) {
         EXPECT_TRUE (std::filesystem::is_directory (samples_root / sample))
@@ -1127,31 +1203,39 @@ TEST (CppFrameworkSampleParity, SampleReadmesDescribePublicExecutablesAndRunnerS
       << "DeliveryDispatch Dispatch worker must own the offer deadline and sweep expired offers";
 }
 
-TEST (CppFrameworkSampleParity, CommonSampleSpecsDocumentActorDestroyLifecycle)
+TEST (CppFrameworkSampleParity, CommonSampleSpecsSeparateDisconnectFromExplicitDestroy)
 {
     const auto root = repository_root ();
-    const std::vector<std::string> common_specs{
-      "framework/doc/framework/common/sample/bingo/README.ko.md",
-      "framework/doc/framework/common/sample/tictactoe/README.ko.md"};
+    const auto bingo = collapse_whitespace (read_file (
+      root / "framework/doc/framework/common/sample/bingo/README.ko.md"));
+    const auto tictactoe = collapse_whitespace (read_file (
+      root / "framework/doc/framework/common/sample/tictactoe/README.ko.md"));
 
-    for (const auto &spec_path : common_specs) {
-        const auto spec = read_file (root / spec_path);
-        EXPECT_NE (spec.find ("`onCreateActor`를 한 번 호출"), std::string::npos)
-          << spec_path << " must document actor creation lifecycle";
-        EXPECT_NE (spec.find ("`leaveActor`로 actor를 room에서 내보낸다"), std::string::npos)
-          << spec_path << " must document room leave before destroy";
-        EXPECT_NE (spec.find ("Entry Spot context의 `destroyActor`를 호출한다"), std::string::npos)
-          << spec_path << " must document Entry Spot-owned destroy";
-        EXPECT_NE (spec.find ("`destroyActor`는 `onLeaveActor`나 다른 lifecycle callback을 "
-                              "호출하지 않고"),
-                   std::string::npos)
-          << spec_path << " must document destroy callback isolation";
-        EXPECT_NE (spec.find ("disconnect cleanup만으로 actor destroy가 실행되지 않는다"),
-                   std::string::npos)
-          << spec_path << " must document disconnect isolation";
-        EXPECT_NE (spec.find ("actor를 즉시 destroy하지 않는다"), std::string::npos)
-          << spec_path << " must keep disconnect separate from actor lifetime";
-    }
+    EXPECT_NE (bingo.find ("Disconnect는 Actor를 destroy하거나 room membership을 바꾸지 "
+                           "않는다."),
+               std::string::npos)
+      << "Bingo disconnect notification must not imply leave or destroy";
+    EXPECT_NE (bingo.find ("각 player actor에 \"Entry Spot으로 돌아오면 destroy한다\"는 표시"),
+               std::string::npos)
+      << "Bingo cleanup must record destroy intent for each Actor";
+    EXPECT_NE (bingo.find ("Entry Spot context의 `destroyActor`를 호출한다"), std::string::npos)
+      << "Bingo must document Entry Spot-owned destroy evidence";
+
+    EXPECT_NE (tictactoe.find ("disconnected lifecycle callback을 실행한 뒤 binding을 정리한다. "
+                               "이 동작은 Actor를 destroy하거나 Room membership을 변경하지 "
+                               "않는다."),
+               std::string::npos)
+      << "TicTacToe disconnect notification must not imply leave or destroy";
+    EXPECT_NE (tictactoe.find ("message를 보낸 Actor에 destroy 표시를 남기고 public leave를 "
+                               "호출한다."),
+               std::string::npos)
+      << "TicTacToe cleanup must record destroy intent for each Actor";
+    EXPECT_NE (tictactoe.find ("Entry Spot이 `destroyActor`를 호출한다"), std::string::npos)
+      << "TicTacToe must document Entry Spot-owned destroy evidence";
+    EXPECT_NE (tictactoe.find ("`LeaveGameMsg`는 one-way이므로 client의 send 완료만으로 destroy "
+                               "완료를 판단하지 않는다."),
+               std::string::npos)
+      << "TicTacToe one-way send completion must remain separate from destroy evidence";
 }
 
 TEST (CppFrameworkSampleParity, BingoUsesProtobufCodecSurface)
@@ -1203,9 +1287,13 @@ TEST (CppFrameworkSampleParity, TicTacToeInventoryAndRunnersMatchCommonRedisCont
     EXPECT_EQ (inventory.find ("| gap |"), std::string::npos)
       << "TicTacToe inventory must not leave unresolved gaps";
 
+    EXPECT_NE (shell_runner.find ("zlink_redis_start_scoped_assign"),
+               std::string::npos)
+      << "the Bash runner must provision Redis through the shared lifecycle helper";
+    EXPECT_NE (powershell_runner.find ("Start-ZlinkSampleRedis"),
+               std::string::npos)
+      << "the PowerShell runner must provision Redis through the shared lifecycle helper";
     for (const auto *runner_content : {&shell_runner, &powershell_runner}) {
-        EXPECT_NE (runner_content->find ("docker"), std::string::npos)
-          << "TicTacToe runners must provision their own Redis container";
         EXPECT_NE (runner_content->find ("TICTACTOE_CPP_REDIS_KEY_PREFIX"),
                    std::string::npos)
           << "TicTacToe runners must pass an isolated Redis key prefix";
@@ -1423,12 +1511,17 @@ TEST (CppFrameworkSampleParity, TicTacToeHostsUseManualEndpointScaleOutWithActor
 {
     const auto tictactoe_root = cpp_language_root () / "samples/TicTacToe";
     const auto api_factory = read_file (tictactoe_root / "Server/Api/api_server_host_factory.hpp");
+    const auto store_configuration =
+      read_file (tictactoe_root / "Server/Configuration/location_store.hpp");
     const auto client = read_file (tictactoe_root / "Client/tictactoe_client_scenario.hpp");
     const auto client_main = read_file (tictactoe_root / "Client/main.cpp");
     const auto create_game_handler =
       read_file (tictactoe_root / "Server/Api/Handlers/create_game_http_handler.hpp");
     const auto play_factory =
       read_file (tictactoe_root / "Server/Play/play_server_host_factory.hpp");
+    const auto game_spot = read_file (
+      tictactoe_root
+      / "Server/Play/Infrastructure/ZLink/Spots/TicTacToeGameSpot/tictactoe_game_spot.hpp");
 
     EXPECT_FALSE (std::filesystem::exists (tictactoe_root / "Server/Session"));
     EXPECT_FALSE (std::filesystem::exists (tictactoe_root / "Server/Registry"));
@@ -1451,6 +1544,13 @@ TEST (CppFrameworkSampleParity, TicTacToeHostsUseManualEndpointScaleOutWithActor
     EXPECT_NE (play_factory.find ("api_client.connect (endpoint)"),
                std::string::npos);
     EXPECT_NE (play_factory.find ("options.add_route_mesh"), std::string::npos);
+    EXPECT_NE (store_configuration.find ("options.add_location_store"), std::string::npos);
+    EXPECT_NE (store_configuration.find ("options.add_relocation_store"), std::string::npos);
+    EXPECT_NE (play_factory.find ("add_sample_relocation_store (options, topology)"),
+               std::string::npos)
+      << "relocatable Player Actors require the Play host Relocation Store";
+    EXPECT_EQ (api_factory.find ("add_sample_relocation_store"), std::string::npos)
+      << "the Object Client API host only requires the Location Store";
     EXPECT_NE (play_factory.find (".add_entry_spot<tictactoe_entry_spot_t> ("),
                std::string::npos);
     EXPECT_NE (play_factory.find ("[] (entry_spot_context_t context)"), std::string::npos);
@@ -1505,8 +1605,14 @@ TEST (CppFrameworkSampleParity, TicTacToeHostsUseManualEndpointScaleOutWithActor
     EXPECT_EQ (client.find (".json ()"), std::string::npos);
     EXPECT_EQ (client.find ("create_room (options)"), std::string::npos);
     EXPECT_EQ (client.find ("static create_game_http_res_t create_room"), std::string::npos);
-    EXPECT_NE (client.find ("connector_options.endpoint = owner_endpoint"),
+    EXPECT_NE (client.find ("connector_options.endpoint = host_endpoint"),
                std::string::npos);
+    EXPECT_NE (client.find ("guest_connector_options.endpoint = guest_endpoint"),
+               std::string::npos);
+    EXPECT_EQ (client.find ("owner_endpoint"), std::string::npos)
+      << "the selected ingress endpoints are not Room ownership evidence";
+    EXPECT_EQ (client.find ("premature_terminal_state"), std::string::npos)
+      << "LeaveGameMsg is sent only after the terminal reconnect check";
     EXPECT_NE (client.find ("observe_milestone_req_t"), std::string::npos);
     EXPECT_NE (client.find ("win_milestone_notify_t"), std::string::npos);
     EXPECT_NE (client.find (".request (client1_auth_request)"), std::string::npos);
@@ -1515,6 +1621,20 @@ TEST (CppFrameworkSampleParity, TicTacToeHostsUseManualEndpointScaleOutWithActor
     EXPECT_EQ (client.find ("client1, client1_auth_request"), std::string::npos);
     EXPECT_NE (client.find (".async<authenticate_res_t> ()"), std::string::npos);
     EXPECT_NE (client.find ("client2.wait_for<game_state_notify_t> ()"), std::string::npos);
+    EXPECT_NE (client.find ("client1.wait_for<join_game_notify_t> ()"),
+               std::string::npos);
+    EXPECT_NE (client.find ("client1_join_request = join_game_msg_t"),
+               std::string::npos);
+    EXPECT_NE (game_spot.find (
+                 ".add_actor_send<&tictactoe_game_spot_t::confirm_joined_game> ()"),
+               std::string::npos);
+    EXPECT_NE (client.find (
+                 "reconnected_auth.player.actor_id == client1_auth.player.actor_id"),
+               std::string::npos);
+    EXPECT_NE (client.find (
+                 "same_state (reconnected_join.state, client1_winning_move.state)"),
+               std::string::npos);
+    EXPECT_EQ (client.find ("run_recreate_check"), std::string::npos);
     EXPECT_EQ (client.find ("tictactoe-client.log"), std::string::npos);
     EXPECT_EQ (client.find ("std::ofstream"), std::string::npos);
 }
@@ -1840,6 +1960,253 @@ TEST (CppFrameworkSampleParity, SamplesDoNotHandRollCodecs)
 
     EXPECT_TRUE (violations.empty ()) << "hand-rolled codec:\n"
                                       << testing::PrintToString (violations);
+}
+
+TEST (CppFrameworkSampleParity, CppRunnerPortsAndRedisAreLanguageIsolated)
+{
+    const auto sample_root = cpp_language_root () / "samples";
+    const auto sample_helper = read_file (sample_root / "redis-common.sh");
+    EXPECT_NE (sample_helper.find ("ZLINK_CPP_SAMPLE_REDIS_PORT_MIN=20000"),
+               std::string::npos);
+    EXPECT_NE (sample_helper.find ("ZLINK_CPP_SAMPLE_REDIS_PORT_MAX=20099"),
+               std::string::npos);
+    EXPECT_NE (sample_helper.find ("ZLINK_CPP_SAMPLE_APP_PORT_MIN=20100"),
+               std::string::npos);
+    EXPECT_NE (sample_helper.find ("ZLINK_CPP_SAMPLE_APP_PORT_MAX=21999"),
+               std::string::npos);
+    EXPECT_NE (sample_helper.find ("zlink_sample_allocate_paired_ports"),
+               std::string::npos);
+    EXPECT_NE (sample_helper.find ("20100 20999 1000"), std::string::npos);
+    EXPECT_NE (sample_helper.find ("^[0-9a-f]{12,64}$"), std::string::npos);
+    EXPECT_NE (sample_helper.find ("zlink_redis_remove_attempt"), std::string::npos);
+    EXPECT_NE (sample_helper.find ("zlink_redis_is_bind_conflict"), std::string::npos);
+    EXPECT_EQ (sample_helper.find ("127.0.0.1::6379"), std::string::npos);
+
+    const auto powershell_helper = read_file (sample_root / "redis-common.ps1");
+    EXPECT_NE (powershell_helper.find ("ExclusiveAddressUse = $true"),
+               std::string::npos);
+    EXPECT_NE (powershell_helper.find ("Invoke-ZlinkSampleDockerCommand"),
+               std::string::npos);
+    EXPECT_NE (powershell_helper.find ("WaitForExit($TimeoutSeconds * 1000)"),
+               std::string::npos);
+    EXPECT_NE (powershell_helper.find ("^[0-9a-f]{12,64}$"), std::string::npos);
+    EXPECT_NE (powershell_helper.find ("Remove-ZlinkSampleRedisAttempt"),
+               std::string::npos);
+
+    const std::vector<std::pair<std::string, std::string>> shell_runners{
+      {"Bingo/run_sample.sh", "zlink_sample_allocate_paired_ports"},
+      {"DeliveryDispatch/run_sample.sh", "zlink_sample_allocate_paired_ports"},
+      {"GameQuest/run_sample.sh", "zlink_sample_allocate_ports"},
+      {"ShoppingMall/run_sample.sh", "zlink_sample_allocate_ports"},
+      {"SupportChat/run_sample.sh", "zlink_sample_allocate_ports"},
+      {"TicTacToe/run_sample.sh", "zlink_sample_allocate_ports"},
+      {"ZoneWorld/run_sample.sh", "zlink_sample_allocate_ports"}};
+    for (const auto &[relative, allocator] : shell_runners) {
+        const auto runner = read_file (sample_root / relative);
+        EXPECT_NE (runner.find ("redis-common.sh"), std::string::npos) << relative;
+        EXPECT_NE (runner.find (allocator), std::string::npos) << relative;
+        EXPECT_EQ (runner.find ("127.0.0.1::6379"), std::string::npos) << relative;
+        EXPECT_EQ (runner.find ("docker rm -fv"), std::string::npos) << relative;
+    }
+
+    const auto bingo_ps = read_file (sample_root / "Bingo/run_sample.ps1");
+    const auto tictactoe_ps = read_file (sample_root / "TicTacToe/run_sample.ps1");
+    EXPECT_NE (bingo_ps.find ("Get-ZlinkSamplePorts -Count $Count -Paired"),
+               std::string::npos);
+    EXPECT_NE (tictactoe_ps.find ("Get-ZlinkSamplePorts -Count $Count"),
+               std::string::npos);
+    EXPECT_EQ (bingo_ps.find ("TcpListener]::new"), std::string::npos);
+    EXPECT_EQ (tictactoe_ps.find ("TcpListener]::new"), std::string::npos);
+
+    const auto shell_aggregate = read_file (sample_root / "run_samples.sh");
+    const auto powershell_aggregate = read_file (sample_root / "run_samples.ps1");
+    EXPECT_NE (shell_aggregate.find ("bash \"$SCRIPT_DIR/$runner\""),
+               std::string::npos);
+    EXPECT_NE (powershell_aggregate.find ("ZoneWorld/run_sample.sh"),
+               std::string::npos);
+}
+
+TEST (CppFrameworkSampleParity, CppZoneWorldRunnerRequiresContinuityEvidence)
+{
+    const auto runner = read_file (cpp_language_root () / "samples/ZoneWorld/run_sample.sh");
+    for (const char *required : {
+           "zoneworld=completed",
+           "zoneworld-relocation=completed",
+           "zoneworld-border=completed",
+           "zoneworld-ops=completed",
+           "scenario ZW-A3 passed",
+           "scenario ZW-A5 passed",
+           "scenario ZW-B2 passed",
+           "scenario ZW-B6 passed",
+           "scenario ZW-B7 passed",
+           "scenario ZW-C1 passed",
+           "scenario ZW-D1 passed",
+           "curl --max-time 30 -fsS -X POST -H 'content-type: application/json' -d '{}'",
+           "bootstrap-bots",
+           "zoneworld-actor-joined.*player=bot-",
+           "zoneworld-bot-move player=bot-",
+           "zoneworld-border-received",
+           "zoneworld-zone-ready",
+           "PASS ZoneWorld.Cpp",
+           "zoneworld sample result=passed"}) {
+        EXPECT_NE (runner.find (required), std::string::npos) << required;
+    }
+}
+
+TEST (CppFrameworkSampleParity, CppE2eRunnersUseOneLockAndAssignedPortPool)
+{
+    const auto e2e_root = cpp_language_root () / "e2e";
+    const auto helper = read_file (e2e_root / "redis-common.sh");
+    EXPECT_NE (helper.find ("ZLINK_CPP_E2E_REDIS_PORT_MIN=30000"),
+               std::string::npos);
+    EXPECT_NE (helper.find ("ZLINK_CPP_E2E_REDIS_PORT_MAX=30099"),
+               std::string::npos);
+    EXPECT_NE (helper.find ("ZLINK_CPP_E2E_APP_PORT_MIN=30100"),
+               std::string::npos);
+    EXPECT_NE (helper.find ("ZLINK_CPP_E2E_APP_PORT_MAX=31999"),
+               std::string::npos);
+    EXPECT_NE (helper.find ("/tmp/zlink-framework-cpp-e2e.lock"),
+               std::string::npos);
+    EXPECT_NE (helper.find ("flock --exclusive --close"), std::string::npos);
+    EXPECT_NE (helper.find ("zlink_cpp_e2e_allocate_ports"), std::string::npos);
+    EXPECT_NE (helper.find ("zlink_cpp_e2e_install_cleanup_trap"),
+               std::string::npos);
+    EXPECT_NE (helper.find ("ZLINK_CPP_E2E_OWNED_REDIS_IDS"),
+               std::string::npos);
+    EXPECT_NE (helper.find ("ZLINK_CPP_E2E_OWNED_REDIS_IDS+=(\"${container_id}\")"),
+               std::string::npos);
+    const auto cleanup_dispatch_begin = helper.find ("zlink_cpp_e2e_cleanup_dispatch() {");
+    const auto cleanup_dispatch_end = helper.find (
+      "zlink_cpp_e2e_install_cleanup_trap() {", cleanup_dispatch_begin);
+    ASSERT_NE (cleanup_dispatch_begin, std::string::npos);
+    ASSERT_NE (cleanup_dispatch_end, std::string::npos);
+    const auto cleanup_dispatch = helper.substr (
+      cleanup_dispatch_begin, cleanup_dispatch_end - cleanup_dispatch_begin);
+    EXPECT_EQ (cleanup_dispatch.find ("REDIS_CONTAINER"), std::string::npos)
+      << "early cleanup must never infer ownership from an external container variable";
+    EXPECT_NE (helper.find ("^[0-9a-f]{12,64}$"), std::string::npos);
+    EXPECT_NE (helper.find ("zlink_redis_remove_attempt"), std::string::npos);
+    EXPECT_NE (helper.find ("zlink_redis_is_bind_conflict"), std::string::npos);
+    EXPECT_EQ (helper.find ("TMPDIR"), std::string::npos);
+    EXPECT_EQ (helper.find ("127.0.0.1::6379"), std::string::npos);
+
+    const std::vector<std::string> configurations{
+      "AutomaticTurnDispatch", "ChannelEgressRouting", "DiscoveryRegistryHa",
+      "InstanceSpot",          "ObservabilityOps",      "PubSub",
+      "RegistrationCodec",     "RegistryMessaging",     "RelocationRetry",
+      "ResilienceLifecycle",   "RuntimeMonitoring",     "SpotActorTransfer",
+      "SpotService",           "SubmitAdmission",       "ToActorMessaging"};
+    for (const auto &configuration : configurations) {
+        const auto relative = configuration + "/run_e2e.sh";
+        const auto runner = read_file (e2e_root / relative);
+        const auto lock = runner.find ("zlink_cpp_e2e_acquire_run_lock");
+        const auto cleanup_trap = runner.find ("zlink_cpp_e2e_install_cleanup_trap");
+        ASSERT_NE (lock, std::string::npos) << relative;
+        ASSERT_NE (cleanup_trap, std::string::npos) << relative;
+        EXPECT_LT (lock, cleanup_trap) << relative;
+        auto first_owned_resource = runner.size ();
+        for (const auto *token : {"mktemp", "mkdir -p", "zlink_cpp_e2e_allocate_",
+                                  "zlink_redis_start_scoped_assign"}) {
+            const auto position = runner.find (token, cleanup_trap + 1);
+            if (position != std::string::npos) {
+                first_owned_resource = std::min (first_owned_resource, position);
+            }
+        }
+        EXPECT_LT (cleanup_trap, first_owned_resource) << relative;
+        EXPECT_EQ (runner.find ("bind((\"127.0.0.1\", 0))"), std::string::npos)
+          << relative;
+        EXPECT_EQ (runner.find ("range(10000, 30000)"), std::string::npos)
+          << relative;
+        EXPECT_EQ (runner.find ("docker rm -fv"), std::string::npos) << relative;
+    }
+
+    const std::vector<std::string> redis_backed_configurations{
+      "AutomaticTurnDispatch", "ChannelEgressRouting", "DiscoveryRegistryHa",
+      "InstanceSpot",          "ObservabilityOps",      "PubSub",
+      "RegistryMessaging",     "RelocationRetry",       "ResilienceLifecycle",
+      "RuntimeMonitoring",     "SpotActorTransfer",     "SpotService",
+      "SubmitAdmission",       "ToActorMessaging"};
+    for (const auto &configuration : redis_backed_configurations) {
+        const auto relative = configuration + "/run_e2e.sh";
+        const auto runner = read_file (e2e_root / relative);
+        EXPECT_NE (runner.find ("zlink_redis_start_scoped_assign"),
+                   std::string::npos)
+          << relative << " must own its isolated Redis container";
+        EXPECT_EQ (runner.find ("127.0.0.1:6379"), std::string::npos)
+          << relative << " must not depend on an external default Redis endpoint";
+        EXPECT_EQ (runner.find ("127.0.0.1::6379"), std::string::npos)
+          << relative << " must not use Docker dynamic host-port publication";
+    }
+    const auto instance_spot = read_file (e2e_root / "InstanceSpot/run_e2e.sh");
+    const auto channel_egress = read_file (
+      e2e_root / "ChannelEgressRouting/run_e2e.sh");
+    EXPECT_NE (instance_spot.find (
+                 "REDIS_KEY_PREFIX=\"zlink:cpp:e2e:instance-spot:${RUN_ID}:\""),
+               std::string::npos);
+    EXPECT_EQ (instance_spot.find ("\"keyPrefix\": \"zlink:e2e:instance-spot\""),
+               std::string::npos);
+    EXPECT_NE (channel_egress.find (
+                 "REDIS_KEY_PREFIX=\"zlink:cpp:e2e:channel-egress:${RUN_ID}:\""),
+               std::string::npos);
+    EXPECT_EQ (channel_egress.find (
+                 "\"keyPrefix\": \"zlink:e2e:channel-egress\""),
+               std::string::npos);
+
+    const auto nested = read_file (
+      e2e_root / "RegistryMessaging/run_rm_a7_global_identity.sh");
+    EXPECT_NE (nested.find ("zlink_cpp_e2e_acquire_run_lock"), std::string::npos);
+    EXPECT_NE (nested.find ("zlink_cpp_e2e_allocate_endpoints"), std::string::npos);
+    EXPECT_NE (nested.find ("zlink_redis_remove_by_id \"$REDIS_CONTAINER\""),
+               std::string::npos);
+    EXPECT_EQ (nested.find ("zlink_redis_stop_scoped"), std::string::npos);
+    EXPECT_EQ (nested.find ("bind((\"127.0.0.1\", 0))"), std::string::npos);
+
+    const auto automatic_turn = read_file (
+      e2e_root / "AutomaticTurnDispatch/run_e2e.sh");
+    const auto observability = read_file (e2e_root / "ObservabilityOps/run_e2e.sh");
+    const auto discovery = read_file (e2e_root / "DiscoveryRegistryHa/run_e2e.sh");
+    const auto monitoring = read_file (e2e_root / "RuntimeMonitoring/run_e2e.sh");
+    const auto resilience = read_file (e2e_root / "ResilienceLifecycle/run_e2e.sh");
+    const auto expect_bounded_docker_command = [] (const std::string &source,
+                                                    const std::string &command) {
+        std::istringstream lines (source);
+        std::string line;
+        while (std::getline (lines, line)) {
+            if (line.find ("docker " + command) != std::string::npos) {
+                EXPECT_NE (line.find ("timeout -k 2s"), std::string::npos)
+                  << "unbounded Docker command: " << line;
+            }
+        }
+    };
+    EXPECT_NE (automatic_turn.find ("zlink_redis_remove_by_id \"$REDIS_CONTAINER\""),
+               std::string::npos);
+    EXPECT_EQ (automatic_turn.find ("docker rm -f"), std::string::npos);
+    EXPECT_NE (observability.find ("timeout -k 2s 15s docker exec"),
+               std::string::npos);
+    EXPECT_NE (discovery.find ("timeout -k 2s 5s docker inspect"),
+               std::string::npos);
+    EXPECT_EQ (discovery.find ("--scan --pattern"), std::string::npos)
+      << "cleanup must not mutate an external Redis endpoint";
+    EXPECT_EQ (resilience.find ("--scan --pattern"), std::string::npos)
+      << "cleanup must not mutate an external Redis endpoint";
+    expect_bounded_docker_command (observability, "exec");
+    expect_bounded_docker_command (discovery, "inspect");
+    for (const auto *runner : {&monitoring, &resilience}) {
+        EXPECT_NE (runner->find ("timeout -k 2s 10s docker pause"),
+                   std::string::npos);
+        EXPECT_NE (runner->find ("timeout -k 2s 10s docker unpause"),
+                   std::string::npos);
+        expect_bounded_docker_command (*runner, "pause");
+        expect_bounded_docker_command (*runner, "unpause");
+    }
+
+    const auto aggregate = read_file (e2e_root / "run_e2e_all.sh");
+    EXPECT_EQ (aggregate.find ("zlink_cpp_e2e_acquire_run_lock"),
+               std::string::npos);
+    EXPECT_NE (aggregate.find ("runner_command=(bash ./run_e2e.sh"),
+               std::string::npos);
+    EXPECT_EQ (aggregate.find ("active_config_pid"), std::string::npos);
+    EXPECT_EQ (aggregate.find ("2>&1 &"), std::string::npos);
 }
 
 int main (int argc, char **argv)

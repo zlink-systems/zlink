@@ -11,6 +11,34 @@ don't add public behavior. The two document sets link to each other so they can
 be read together, but remain separate so implementation detail isn't mistaken
 for a user guarantee.
 
+## Verification Runner Isolation
+
+Samples and E2E suites for multiple language implementations of the same contract
+must be runnable concurrently on one host. This is a contract-verification
+environment rule, not public API behavior. A run that needs Redis does not share
+one instance per language or separate only by Redis database number. It creates a
+dedicated Docker Redis container and key prefix for every run.
+
+Samples use the language-specific `20000-29999` ranges defined by the
+[sample runner isolation standard](../sample/README.en.md#the-sample-run-script-and-redis-isolation-standard).
+E2E uses the language-specific `30000-39999` ranges defined by the
+[E2E runner execution contract](../e2e/README.en.md#27-run_e2e-execution-contract).
+The tables in those documents own the exact non-overlapping Redis host-port and
+application-listener ranges.
+
+A standalone config runner and every config runner invoked by an aggregate run
+share a language-wide whole-run lock, so actual config E2E processes execute
+sequentially within one language. The aggregate runner itself stays lock-free,
+so two aggregate runs may alternate at config boundaries, but their actual
+config processes never overlap. The same E2E can run concurrently in different
+languages because language-specific port ranges, per-run Redis endpoints,
+temporary configuration, log directories, and cleanup targets are separate. Java
+and Kotlin share some Gradle output, so a build-only lock shared by sample and E2E
+runners serializes only Gradle execution. This lock is shared within one runner
+execution environment. Running WSL Bash and Windows PowerShell against the same
+checkout at the same time is unsupported because they use different
+operating-system lock namespaces.
+
 ## Authoring Standards And Shared Terms
 
 - [Spec writing guide](../../../../../doc/principal/documentation/spec-writing-guide.ko.md)
@@ -60,8 +88,9 @@ for a user guarantee.
 - [25 Runtime metric names and labels](25-runtime-metrics.en.md) — defines only metric names, units, and bounded labels.
 - [26 Message flow tracing](26-message-flow-tracing.en.md) — defines the phases, outcomes, and trace attributes of a single message.
 - [27 Request correlation and causal flow](27-flow-correlation.en.md) — defines the generation and propagation of the correlation ID and flow ID.
-- [28 Host Relocate and Shutdown](28-graceful-drain-handoff.en.md) — defines the two relocation modes and the shutdown lifecycle.
+- [28 Complete Actor and Spot relocation flow](28-relocation-flow.en.md) — defines the owner transition, queue merge, Location Store CAS, and Session route order shared by all four runtimes.
 - [29 Transport liveness](29-transport-liveness.en.md)
+- [30 Complete Host Relocation Flow](30-host-relocation-flow.en.md) — defines the complete lifecycle in which a Host fixes relocation units, moves them in batch order, returns `Relocated`, retains Message Follow, and finishes with `Shutdown`.
 - [31 Failure handling and failover scope](31-failure-failover-policy.en.md) — defines the automatic-recovery boundary for target reselection, reconnect, creation recovery, and stateful relocation.
 - [32 Framework error model](32-framework-error-model.en.md) — defines the shared `ErrorKind`, Send/Request completion conditions, and the boundary of an application's retry decision.
 

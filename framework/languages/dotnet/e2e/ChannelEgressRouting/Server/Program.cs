@@ -95,8 +95,8 @@ builder.Services.AddZLinkFramework(framework =>
                 .SetBindHost("127.0.0.1")
                 .SetAdvertiseHost("127.0.0.1")
                 .SetWeight(options.WorkflowWeight)
-                .AddRequestHandler<ChannelProbeRequestHandler, ChannelProbeRequest, ChannelProbeReply>()
-                .AddSendHandler<ChannelProbeCommandHandler, ChannelProbeCommand>();
+                .AddRequestHandler<ChannelProbeRequestHandler, ChannelProbeReq, ChannelProbeRes>()
+                .AddSendHandler<ChannelProbeCommandHandler, ChannelProbeMsg>();
         }
 
         if (options.InvalidMode == "duplicate-workflow-client")
@@ -175,7 +175,7 @@ app.MapPost("/client-server/{channel}/weight/{weight:int}", (
     return Results.Ok(new { channel, weight });
 });
 app.MapPost("/request", async (
-    RouteInvokeRequest request,
+    RouteRequestInvokeReq request,
     IZLinkRouteClient routes,
     CancellationToken cancellationToken) =>
 {
@@ -185,25 +185,25 @@ app.MapPost("/request", async (
         var reply = await routes
             .RequestToChannel(
                 request.Channel,
-                new ChannelProbeRequest(request.Id, request.Mode))
+                new ChannelProbeReq(request.Id, request.Mode))
             .Timeout(TimeSpan.FromSeconds(1))
-            .Async<ChannelProbeReply>(cancellationToken);
-        return Results.Ok(new RouteInvokeResult(
+            .Async<ChannelProbeRes>(cancellationToken);
+        return Results.Ok(new RouteRequestInvokeRes(
             true, null, reply, timer.ElapsedMilliseconds));
     }
     catch (ZLinkFrameworkException error)
     {
-        return Results.Ok(new RouteInvokeResult(
+        return Results.Ok(new RouteRequestInvokeRes(
             false, error.Kind.ToString(), null, timer.ElapsedMilliseconds));
     }
     catch (Exception error) when (error is TimeoutException or OperationCanceledException)
     {
-        return Results.Ok(new RouteInvokeResult(
+        return Results.Ok(new RouteRequestInvokeRes(
             false, error.GetType().Name, null, timer.ElapsedMilliseconds));
     }
 });
 app.MapPost("/send", async (
-    RouteInvokeRequest request,
+    RouteSendInvokeReq request,
     IZLinkRouteClient routes,
     CancellationToken cancellationToken) =>
 {
@@ -212,14 +212,14 @@ app.MapPost("/send", async (
     {
         await routes.SendToChannel(
                 request.Channel,
-                new ChannelProbeCommand(request.Id))
+                new ChannelProbeMsg(request.Id))
             .Async(cancellationToken);
-        return Results.Ok(new SendInvokeResult(
+        return Results.Ok(new RouteSendInvokeRes(
             true, null, timer.ElapsedMilliseconds));
     }
     catch (ZLinkFrameworkException error)
     {
-        return Results.Ok(new SendInvokeResult(
+        return Results.Ok(new RouteSendInvokeRes(
             false, error.Kind.ToString(), timer.ElapsedMilliseconds));
     }
 });
@@ -273,7 +273,7 @@ app.MapGet("/locations", async (
 if (options.Role is "session" or "play" || options.WorkflowServer)
 {
 app.MapPost("/objects/actors", async (
-    ChannelActorCreateRequest request,
+    ChannelActorCreateReq request,
     IZLinkActorManager actors,
     CancellationToken cancellationToken) =>
 {
@@ -288,13 +288,13 @@ app.MapPost("/objects/actors", async (
         ZLinkActorCreateResult.Created created => created.Actor,
         _ => throw new InvalidOperationException("Actor creation was rejected.")
     };
-    return Results.Ok(new ChannelActorCreateReply(
+    return Results.Ok(new ChannelActorCreateRes(
         actor.ActorId,
         actor.NodeRid.ToString(),
         actor.ObjectGeneration));
 });
 app.MapPost("/objects/spots", async (
-    ChannelSpotCreateRequest request,
+    ChannelSpotCreateReq request,
     IZLinkSpotManager spots,
     CancellationToken cancellationToken) =>
 {
@@ -305,74 +305,74 @@ app.MapPost("/objects/spots", async (
         .Async(cancellationToken);
     if (result.State == ZLinkSpotCreateState.Rejected)
         throw new InvalidOperationException("Spot creation was rejected.");
-    return Results.Ok(new ChannelSpotCreateReply(
+    return Results.Ok(new ChannelSpotCreateRes(
         result.Spot.SpotId,
         result.Spot.NodeRid.ToString(),
         result.Spot.ObjectGeneration));
 });
 app.MapPost("/objects/actors/{actorId}/probe", async (
     string actorId,
-    ChannelObjectProbeRequest request,
+    ChannelObjectProbeReq request,
     IZLinkActorClient actors,
     CancellationToken cancellationToken) =>
     Results.Ok(await actors
         .RequestToActor(actorId, request)
         .Timeout(TimeSpan.FromSeconds(5))
-        .Async<ChannelObjectProbeReply>(cancellationToken)));
+        .Async<ChannelObjectProbeRes>(cancellationToken)));
 app.MapPost("/objects/spots/{spotId}/probe", async (
     string spotId,
-    ChannelObjectProbeRequest request,
+    ChannelObjectProbeReq request,
     IZLinkSpotClient spots,
     CancellationToken cancellationToken) =>
     Results.Ok(await spots
         .RequestToSpot(spotId, request)
         .Timeout(TimeSpan.FromSeconds(5))
-        .Async<ChannelObjectProbeReply>(cancellationToken)));
+        .Async<ChannelObjectProbeRes>(cancellationToken)));
 app.MapPost("/objects/actors/{actorId}/workflow", async (
     string actorId,
-    ChannelSpotWorkflowRequest request,
+    ChannelSpotWorkflowReq request,
     IZLinkActorClient actors,
     CancellationToken cancellationToken) =>
     Results.Ok(await actors
         .RequestToActor(actorId, request)
         .Timeout(TimeSpan.FromSeconds(5))
-        .Async<ChannelSpotWorkflowReply>(cancellationToken)));
+        .Async<ChannelSpotWorkflowRes>(cancellationToken)));
 app.MapPost("/objects/actors/{actorId}/join", async (
     string actorId,
-    ChannelActorJoinRequest request,
+    ChannelActorJoinReq request,
     IZLinkActorClient actors,
     CancellationToken cancellationToken) =>
     Results.Ok(await actors
         .RequestToActor(actorId, request)
         .Timeout(TimeSpan.FromSeconds(5))
-        .Async<ChannelActorJoinReply>(cancellationToken)));
+        .Async<ChannelActorJoinRes>(cancellationToken)));
 app.MapPost("/objects/actors/{actorId}/bound-push", async (
     string actorId,
-    ChannelBoundPushRequest request,
+    ChannelBoundPushReq request,
     IZLinkActorClient actors,
     CancellationToken cancellationToken) =>
     Results.Ok(await actors
         .RequestToActor(actorId, request)
         .Timeout(TimeSpan.FromSeconds(5))
-        .Async<ChannelBoundPushReply>(cancellationToken)));
+        .Async<ChannelBoundPushRes>(cancellationToken)));
 app.MapPost("/objects/state-address", async (
-    ChannelObjectScenarioRequest request,
+    ChannelObjectScenarioReq request,
     IZLinkRouteClient routes,
     CancellationToken cancellationToken) =>
 {
     var reply = await routes
         .RequestToChannel(
             ChannelEgressNames.Workflow,
-            new ChannelProbeRequest(
+            new ChannelProbeReq(
                 request.Id,
                 $"state-address:{request.ActorId}:{request.SpotId}"))
         .Timeout(TimeSpan.FromSeconds(5))
-        .Async<ChannelProbeReply>(cancellationToken);
+        .Async<ChannelProbeRes>(cancellationToken);
     return Results.Ok(reply);
 });
 app.MapPost("/objects/nodes/{nodeRid}/probe", async (
     string nodeRid,
-    ChannelObjectProbeRequest request,
+    ChannelObjectProbeReq request,
     IZLinkRouteClient routes,
     CancellationToken cancellationToken) =>
     Results.Ok(await routes
@@ -381,7 +381,7 @@ app.MapPost("/objects/nodes/{nodeRid}/probe", async (
             RoutingId.From(nodeRid),
             request)
         .Timeout(TimeSpan.FromSeconds(5))
-        .Async<ChannelProbeReply>(cancellationToken)));
+        .Async<ChannelProbeRes>(cancellationToken)));
 }
 app.MapPost("/shutdown", (
     IHostApplicationLifetime lifetime) =>
@@ -422,8 +422,8 @@ static void RegisterMesh(
     {
         mesh.AddRouteRequestHandler<
             ChannelNodeProbeHandler,
-            ChannelObjectProbeRequest,
-            ChannelProbeReply>();
+            ChannelObjectProbeReq,
+            ChannelProbeRes>();
     }
     if (objectServer)
     {
@@ -448,8 +448,8 @@ static void RegisterMesh(
     foreach (var channelName in servers)
     {
         mesh.Channel(channelName).Server()
-            .AddRequestHandler<ChannelProbeRequestHandler, ChannelProbeRequest, ChannelProbeReply>()
-            .AddSendHandler<ChannelProbeCommandHandler, ChannelProbeCommand>();
+            .AddRequestHandler<ChannelProbeRequestHandler, ChannelProbeReq, ChannelProbeRes>()
+            .AddSendHandler<ChannelProbeCommandHandler, ChannelProbeMsg>();
     }
 
     foreach (var channelName in clients)

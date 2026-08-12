@@ -77,19 +77,19 @@ public sealed class PlayerSession(
         if (dispatch.PacketName == nameof(MessageFollowProbeReq))
         {
             var request = payload.Decode<MessageFollowProbeReq>();
-            if (dispatch.CanReply)
-            {
-                var reply = await actors
-                    .RequestToActor(request.ActorId, request)
-                    .Async<MessageFollowProbeRes>(cancellationToken);
-                await Context.Client.Reply(reply).Async(cancellationToken);
-            }
-            else
-            {
-                await actors
-                    .SendToActor(request.ActorId, request)
-                    .Async(cancellationToken);
-            }
+            var reply = await actors
+                .RequestToActor(request.ActorId, request)
+                .Async<MessageFollowProbeRes>(cancellationToken);
+            await Context.Client.Reply(reply).Async(cancellationToken);
+            return;
+        }
+
+        if (dispatch.PacketName == nameof(MessageFollowProbeMsg))
+        {
+            var message = payload.Decode<MessageFollowProbeMsg>();
+            await actors
+                .SendToActor(message.ActorId, message)
+                .Async(cancellationToken);
             return;
         }
 

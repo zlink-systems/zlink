@@ -1,5 +1,6 @@
 package systems.zlink.e2e.kotlin.registrationcodec.codecrequester.endpoints
 
+import com.sun.net.httpserver.HttpExchange
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
@@ -45,7 +46,7 @@ class CodecRequesterHttpServer(
     override fun isRunning(): Boolean = running
 
     private fun write(
-        exchange: com.sun.net.httpserver.HttpExchange,
+        exchange: HttpExchange,
         result: CompletionStage<*>,
     ) {
         result.whenComplete { value, error ->

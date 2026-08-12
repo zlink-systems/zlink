@@ -565,8 +565,8 @@ Entry Spot, `PerActor` User Spot, Entry Spot Actor, Node·Channel handler와 own
 밖의 client에서 `Yield`를 호출하면 operation을 제출하거나 turn을 반환하지 않고
 `InvalidOperation`으로 완료한다.
 
-`Yield`는 Channel·Spot·Actor request와 CPU·I/O worker call에만 제공한다. Actor join, Actor·Spot
-create/get-or-create, send, publish, timer 등록, close와 destroy에는 제공하지 않는다.
+`Yield`는 Channel·Spot·Actor request, CPU·I/O worker call과 Actor·Spot create·get-or-create call에
+제공한다. Actor join, send, publish, timer 등록, close와 destroy에는 제공하지 않는다.
 
 Reply를 새로운 Spot message로 다시 전달하지 않는다.
 
@@ -956,7 +956,7 @@ subscription은 Logical Multicast가 현재 node에서 message를 전달할 Spot
 One-way와 request가 완료되는 조건은
 [04 비동기 실행 정책](05-async-execution-policy.ko.md)이 정의한다.
 Spot을 종료할 때 전체 처리 순서는
-[54 Graceful Drain](28-graceful-drain-handoff.ko.md)이 정의한다.
+[54 Graceful Drain](30-host-relocation-flow.ko.md)이 정의한다.
 
 ## 7. Metadata와 관측
 

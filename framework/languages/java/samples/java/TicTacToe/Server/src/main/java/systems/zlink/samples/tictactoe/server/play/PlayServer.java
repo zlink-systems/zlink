@@ -9,6 +9,7 @@ import systems.zlink.samples.tictactoe.server.configuration.PlaySettings;
 import systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.actors.PlayActorFactory;
 import systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.actors.PlayActorRelocationAdapter;
 import systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.actors.PlayActor;
+import systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.sessions.handlers.AuthenticatePlaySessionHandler;
 import systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.spots.entryspot.PlayEntrySpot;
 import systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.spots.tictactoegamespot.TicTacToeGame;
 import systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.sessions.PlaySession;
@@ -22,10 +23,12 @@ public final class PlayServer {
             SampleLogging.configure(settings, "play");
             options.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.DETAILED);
-            options.addHandlersFromPackageOf(PlayServer.class);
-            options.addClientServerChannel(SampleNames.ApiChannel)
-                .client()
-                .connect(settings.apiChannelEndpoint());
+            var apiClient = options.addClientServerChannel(SampleNames.ApiChannel)
+                .client();
+            for (String endpoint : settings.apiChannelEndpoints()) {
+                // Api A와 Api B를 모두 수동 등록하고 request마다 가용 endpoint를 선택한다.
+                apiClient.connect(endpoint);
+            }
             ZLinkMeshNodeBuilder node = options.addRouteMesh(SampleNames.SpotMesh);
             String routeEndpoint = settings.routeEndpoint().isBlank()
                 ? settings.spotEndpoint()
@@ -50,7 +53,9 @@ public final class PlayServer {
             options.addStreamNode(SampleNames.PlayStream)
                 .bind(settings.playEndpoint())
                 .enableActorDispatch()
-                .registerSession(PlaySession.class);
+                .registerSession(PlaySession.class)
+                // request: STREAM AuthenticateReq를 처리하고 AuthenticateRes를 reply한다.
+                .addSessionPacketHandler(AuthenticatePlaySessionHandler.class);
         };
     }
 }

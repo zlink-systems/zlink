@@ -21,6 +21,7 @@ title: "Python Bindings Public Contract"
 |---|---|
 | [Scope](#scope) | The list of public Python types that represent Core resources |
 | [Package surface](#package-surface) | The boundary between the public factories and the private area |
+| [Byte HWM and Auto-HWM](#byte-hwm-and-auto-hwm) | Mapping between Python `int` and Core `uint64_t` byte HWM |
 | [Ownership and lifetime](#ownership-and-lifetime) | Ownership/release rules for native handles, messages, and Received |
 | [Callback surface](#callback-surface) | The public callback paths, and the primitives that stay unexposed |
 | [Send/receive and no-data](#sendreceive-and-no-data) | How submit and no-data are represented, and how native failures are delivered |
@@ -58,6 +59,27 @@ The main factories are `create_context()`, `create_pair_socket()`,
 `create_poller()`, `create_timer()`, `create_received()`, and the
 `create_message` family. The exact Python signatures are governed jointly
 by the contract module in the same directory and the public header.
+
+## Byte HWM and Auto-HWM
+
+Core owns HWM calculation and queue admission. Python
+`send_high_water_mark` and `receive_high_water_mark` are byte-valued `int`
+properties and accept only the non-negative `uint64_t` range. The binding
+passes each value to Core as an exact 8-byte option, and a getter returns
+Core's 64-bit value as a Python `int`. `0` means unlimited.
+
+`ContextOptions.auto_hwm_msg_unit_bytes` is a planning unit passed to Core.
+Core multiplies the selected message-slot count by this value to calculate the
+planned byte HWM. It is neither an average message size nor the actual
+admission charge. Setting a directional HWM makes that direction a manual
+override and excludes it from automatic HWM recalculation.
+
+Core decides backpressure when the accounted bytes retained by a pipe reach
+the applied HWM. The Python binding does not recount messages and passes the
+native result through the existing submit and error contract. Planned,
+applied, and deferred HWM and in-flight usage in `MonitorStatus` are byte-valued
+Python `int` fields. Only pending-message fields and
+`auto_hwm_socket_message_slots` are count diagnostics.
 
 ## Ownership and lifetime
 

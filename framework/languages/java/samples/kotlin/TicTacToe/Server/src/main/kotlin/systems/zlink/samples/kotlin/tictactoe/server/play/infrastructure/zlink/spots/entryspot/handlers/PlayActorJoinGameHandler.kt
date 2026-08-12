@@ -6,7 +6,7 @@ import systems.zlink.framework.handlers.ZLinkSpotActorSend
 import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.actors.PlayActor
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.spots.entryspot.PlayEntrySpot
-import systems.zlink.samples.kotlin.tictactoe.shared.contracts.JoinGameReq
+import systems.zlink.samples.kotlin.tictactoe.shared.contracts.JoinGameMsg
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.TicTacToeGameJoinReq
 
 @ZLinkHandlerGroup(SampleNames.PlayActor)
@@ -17,7 +17,7 @@ class PlayActorJoinGameHandler {
         entrySpot: PlayEntrySpot,
         actor: PlayActor,
         context: ZLinkMessageContext,
-        request: JoinGameReq,
+        request: JoinGameMsg,
     ) {
         actor.trackDeferredJoin(request.roomId)
         actor.context()

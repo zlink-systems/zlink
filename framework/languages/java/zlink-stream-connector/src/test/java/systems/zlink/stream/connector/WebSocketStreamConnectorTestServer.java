@@ -1,4 +1,6 @@
 package systems.zlink.stream.connector;
+import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 
 import java.io.BufferedReader;
 import java.io.Closeable;
@@ -85,16 +87,16 @@ final class WebSocketStreamConnectorTestServer implements Closeable {
         return new ZLinkStreamConnectorOptions(
             endpoint(),
             dispatchMode,
-            java.time.Duration.ofSeconds(1),
+            Duration.ofSeconds(1),
             1,
-            java.time.Duration.ofSeconds(1),
+            Duration.ofSeconds(1),
             64 * 1024,
             false,
-            java.time.Duration.ofMillis(25),
-            java.time.Duration.ofMillis(500),
+            Duration.ofMillis(25),
+            Duration.ofMillis(500),
             true,
-            java.time.Duration.ofMillis(10),
-            java.time.Duration.ofMillis(250),
+            Duration.ofMillis(10),
+            Duration.ofMillis(250),
             2.0);
     }
 
@@ -125,7 +127,7 @@ final class WebSocketStreamConnectorTestServer implements Closeable {
     }
 
     private Socket socket() {
-        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (System.nanoTime() < deadline) {
             Socket socket = current;
             if (socket != null && !socket.isClosed()) {

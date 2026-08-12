@@ -1,4 +1,5 @@
 package systems.zlink.framework.locations.redis;
+import systems.zlink.framework.locations.ZLinkCapacityUsage;
 
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationDescriptorCodec;
 
@@ -132,8 +133,8 @@ class ZLinkRedisLocationRowJsonTest {
                 Optional.empty(),
                 100,
                 new ZLinkPlacementCapacity(
-                    new systems.zlink.framework.locations.ZLinkCapacityUsage(0, 0, 10_000),
-                    new systems.zlink.framework.locations.ZLinkCapacityUsage(0, 0, 128),
+                    new ZLinkCapacityUsage(0, 0, 10_000),
+                    new ZLinkCapacityUsage(0, 0, 128),
                     List.of()),
                 new ZLinkActivationConcurrency(0, 128),
                 Optional.empty(),

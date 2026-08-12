@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CPP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/../redis-common.sh"
+zlink_cpp_e2e_acquire_run_lock "${BASH_SOURCE[0]}" "$@"
+zlink_cpp_e2e_install_cleanup_trap
 BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-$CPP_DIR/build-redis-vcpkg}"
 SCENARIO="${1:-all}"
 HEARTBEAT_MS=1000
@@ -54,41 +56,23 @@ normalize_scenario() {
 }
 
 pick_loopback_port() {
-  python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
+  zlink_cpp_e2e_allocate_ports 1
 }
 
 SCENARIO="$(normalize_scenario "$SCENARIO")"
 
 if [[ "$SCENARIO" == "all" ]]; then
   for scenario in SF-A1 SF-A2 SF-B1 SF-B2 SF-C1 SF-C2 SF-D1 SF-D2 SF-D3 SF-E1; do
-    "$0" "$scenario"
+    bash "$0" "$scenario"
   done
   echo "store-failure c++ e2e result=passed"
   exit 0
 fi
 
-read -r API_A API_B API_B_REPLACEMENT API_C HTTP_A HTTP_B HTTP_B_REPLACEMENT HTTP_C HTTP_CONSUMER <<<"$(python3 - <<'PY'
-import socket
-
-sockets = []
-ports = []
-for _ in range(9):
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    sockets.append(sock)
-    ports.append(sock.getsockname()[1])
-print(" ".join(f"tcp://127.0.0.1:{p}" for p in ports[:4]), end=" ")
-print(" ".join(f"http://127.0.0.1:{p}" for p in ports[4:9]))
-for sock in sockets:
-    sock.close()
-PY
-)"
+read -r API_A API_B API_B_REPLACEMENT API_C HTTP_A HTTP_B \
+  HTTP_B_REPLACEMENT HTTP_C HTTP_CONSUMER \
+  <<<"$(zlink_cpp_e2e_allocate_endpoints \
+    tcp tcp tcp tcp http http http http http)"
 
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="$SCRIPT_DIR/logs/$RUN_ID"
@@ -227,10 +211,7 @@ cleanup() {
     fi
   done
   if [[ -n "$REDIS_CONTAINER" && "$REDIS_OWNED" == "1" ]]; then
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
-  elif [[ -n "${REDIS_ENDPOINT:-}" ]] && command -v redis-cli >/dev/null 2>&1; then
-    redis-cli -h "${REDIS_ENDPOINT%:*}" -p "${REDIS_ENDPOINT##*:}" --scan --pattern "$REDIS_KEY_PREFIX*" 2>/dev/null \
-      | xargs -r redis-cli -h "${REDIS_ENDPOINT%:*}" -p "${REDIS_ENDPOINT##*:}" DEL >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   rm -rf "$CONFIG_DIR"
   if [[ $code -ne 0 ]]; then
@@ -289,13 +270,12 @@ PY
   return 1
 }
 
-redis_port="$(pick_loopback_port)"
 zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
-  "zlink-redis-cpp-e2e-discoveryregistryha" "redis:7-alpine" \
-  "127.0.0.1:${redis_port}:6379"
+  "zlink-redis-cpp-e2e-discoveryregistryha" "redis:7-alpine"
+REDIS_PUBLISHED_BINDING="127.0.0.1:${redis_port}:6379"
 REDIS_ENDPOINT="127.0.0.1:${redis_port}"
 REDIS_OWNED=1
-echo "redis endpoint=$REDIS_ENDPOINT (container $REDIS_CONTAINER)"
+echo "redis endpoint=$REDIS_ENDPOINT binding=$REDIS_PUBLISHED_BINDING (container $REDIS_CONTAINER)"
 
 wait_tcp "${REDIS_ENDPOINT%:*}" "${REDIS_ENDPOINT##*:}" redis
 echo "redis key prefix=$REDIS_KEY_PREFIX"
@@ -407,7 +387,8 @@ start_consumer() {
 
 start_sf_b2_replacement() {
   (
-    while [[ "$(docker inspect -f '{{.State.Running}}' "$REDIS_CONTAINER" 2>/dev/null || true)" == "true" ]]; do
+    while [[ "$(timeout -k 2s 5s docker inspect -f '{{.State.Running}}' \
+      "$REDIS_CONTAINER" 2>/dev/null || true)" == "true" ]]; do
       sleep "$LOCAL_READINESS_POLL_SECONDS"
     done
     kill -9 "$API_B_PID" >/dev/null 2>&1 || true

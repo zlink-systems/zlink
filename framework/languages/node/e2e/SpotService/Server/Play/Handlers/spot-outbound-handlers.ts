@@ -13,10 +13,10 @@ import type {
 } from '../../../Shared/messages';
 import {
   ChannelEchoReq,
-  ChannelNotify,
-  MissingChannelNotify,
+  ChannelMsg,
+  MissingChannelMsg,
   MissingChannelReq,
-  SpotMsg,
+  SpotEvent,
   SpotServiceNames,
   spotServicePacket
 } from '../../../Shared/messages';
@@ -41,11 +41,11 @@ export class SpotOutboundHandler implements ZLinkSpotPacketHandler<ScenarioUserS
     const notifyMarker = `notify-${request.marker}`;
     await spot.context.outbound
       .sendToChannel(SpotServiceNames.externalClientChannel,
-        spotServicePacket(ChannelNotify, { marker: notifyMarker }))
+        spotServicePacket(ChannelMsg, { marker: notifyMarker }))
       .submit();
     await spot.context.outbound
       .publish(SpotServiceNames.spotChannel, SpotServiceNames.spotEventTopic,
-        spotServicePacket(SpotMsg, { marker: 'sm-c2-publish' }))
+        spotServicePacket(SpotEvent, { marker: 'sm-c2-publish' }))
       .submit();
     this.evidence.add(
       `spot-outbound|rid=${this.evidence.rid}|spot=${spot.context.spotId}`
@@ -77,7 +77,7 @@ export class SpotOutboundNegativeHandler implements ZLinkSpotPacketHandler<Scena
     }
     await spot.context.outbound
       .sendToChannel(SpotServiceNames.externalClientChannel,
-        spotServicePacket(MissingChannelNotify, { marker: `missing-${request.marker}` }))
+        spotServicePacket(MissingChannelMsg, { marker: `missing-${request.marker}` }))
       .submit();
     this.evidence.add(
       `spot-outbound-negative|rid=${this.evidence.rid}|spot=${spot.context.spotId}|requestFailed=${requestFailed ? 'True' : 'False'}`
@@ -86,10 +86,10 @@ export class SpotOutboundNegativeHandler implements ZLinkSpotPacketHandler<Scena
 }
 
 @Injectable()
-export class SpotMsgHandler implements ZLinkSpotSubscriptionHandler<ScenarioUserSpot, SpotMsg> {
+export class SpotEventHandler implements ZLinkSpotSubscriptionHandler<ScenarioUserSpot, SpotEvent> {
   constructor(private readonly evidence: EvidenceStore) {}
 
-  async handle(spot: ScenarioUserSpot, event: SpotMsg, context: ZLinkPublishMessageContext): Promise<void> {
+  async handle(spot: ScenarioUserSpot, event: SpotEvent, context: ZLinkPublishMessageContext): Promise<void> {
     void context;
     this.evidence.add(`spot-msg|rid=${this.evidence.rid}|spot=${spot.context.spotId}|marker=${event.marker}`);
   }

@@ -37,12 +37,12 @@ builder.Services.AddZLinkFramework(framework =>
         var routerSocket = mesh.ConfigureRouterSocket();
         routerSocket.SendHighWaterMark = 1;
         routerSocket.ReceiveHighWaterMark = 1;
-        mesh.AddRouteSendHandler<NodeAdmissionHandler, AdmissionMessage>();
-        mesh.AddRouteRequestHandler<NodeReadyHandler, RouteReadyRequest, RouteReadyReply>();
+        mesh.AddRouteSendHandler<NodeAdmissionHandler, AdmissionMsg>();
+        mesh.AddRouteRequestHandler<NodeReadyHandler, RouteReadyReq, RouteReadyRes>();
         var channel = mesh.Channel(SubmitAdmissionNames.Channel).Server();
         channel.SetWeight(100);
-        channel.AddSendHandler<ChannelAdmissionHandler, AdmissionMessage>();
-        channel.AddRequestHandler<ChannelReadyHandler, RouteReadyRequest, RouteReadyReply>();
+        channel.AddSendHandler<ChannelAdmissionHandler, AdmissionMsg>();
+        channel.AddRequestHandler<ChannelReadyHandler, RouteReadyReq, RouteReadyRes>();
 
         if (!string.IsNullOrWhiteSpace(options.PeerEndpoint))
         {
@@ -105,14 +105,14 @@ if (options.Role == "caller")
         var reply = await routes.RequestToNode(
                 SubmitAdmissionNames.Mesh,
                 RoutingId.From(targetRid),
-                new RouteReadyRequest(marker))
-            .Async<RouteReadyReply>(cancellationToken);
+                new RouteReadyReq(marker))
+            .Async<RouteReadyRes>(cancellationToken);
         return Results.Ok(reply);
     });
 
     app.MapPost("/submit/node/{targetRid}", async (
         string targetRid,
-        AdmissionMessage message,
+        AdmissionMsg message,
         IZLinkRouteClient routes,
         OperationEvidenceStore evidence,
         CancellationToken cancellationToken) =>
@@ -127,7 +127,7 @@ if (options.Role == "caller")
             .Metadata("scenario", message.OperationId)
             .Async(cancellationToken);
         evidence.Terminal(message.OperationId, family, targetRid, "Submitted");
-        return Results.Ok(new SubmitResponse(message.OperationId, family, "Submitted", 1, 1));
+        return Results.Ok(new SubmitRes(message.OperationId, family, "Submitted", 1, 1));
     });
 
     app.MapPost("/submit/fill/node/{targetRid}", async (
@@ -156,14 +156,14 @@ if (options.Role == "caller")
                 .ConfigureAwait(false);
             if (candidate.Pending
                 || candidate.TerminalStatus != "Submitted")
-                return Results.Ok(new FillResponse(
+                return Results.Ok(new FillRes(
                     candidate.OperationId,
                     candidate.Pending,
                     sequence + 1,
                     candidate.TerminalStatus));
         }
 
-        return Results.Ok(new FillResponse(string.Empty, false, operationCount, null));
+        return Results.Ok(new FillRes(string.Empty, false, operationCount, null));
     });
 
     app.MapPost("/admin/cancel/{operationId}", (
@@ -172,7 +172,7 @@ if (options.Role == "caller")
         cancellations.Cancel(operationId) ? Results.Ok() : Results.NotFound());
 
     app.MapPost("/submit/channel", async (
-        AdmissionMessage message,
+        AdmissionMsg message,
         IZLinkRouteClient routes,
         OperationEvidenceStore evidence,
         CancellationToken cancellationToken) =>
@@ -184,12 +184,12 @@ if (options.Role == "caller")
                 message)
             .Async(cancellationToken);
         evidence.Terminal(message.OperationId, family, SubmitAdmissionNames.Channel, "Submitted");
-        return Results.Ok(new SubmitResponse(message.OperationId, family, "Submitted", 1, 1));
+        return Results.Ok(new SubmitRes(message.OperationId, family, "Submitted", 1, 1));
     });
 
     app.MapPost("/submit/pre-cancelled/{targetRid}", async (
         string targetRid,
-        AdmissionMessage message,
+        AdmissionMsg message,
         IZLinkRouteClient routes,
         OperationEvidenceStore evidence) =>
     {
@@ -206,13 +206,13 @@ if (options.Role == "caller")
                 .Metadata("scenario", message.OperationId)
                 .Async(cancellation.Token);
             evidence.Terminal(message.OperationId, family, targetRid, "Submitted");
-            return Results.Ok(new CancellationResponse(
+            return Results.Ok(new CancellationRes(
                 message.OperationId, "Submitted", string.Empty, 1, 0, 1));
         }
         catch (OperationCanceledException exception)
         {
             evidence.Terminal(message.OperationId, family, targetRid, "Cancelled");
-            return Results.Ok(new CancellationResponse(
+            return Results.Ok(new CancellationRes(
                 message.OperationId, "Cancelled", exception.GetType().Name, 1, 0, 1));
         }
     });
@@ -229,19 +229,19 @@ if (options.Role == "caller")
         cancellation.Cancel();
         try
         {
-            await routes.SendToNode<AdmissionMessage>(
+            await routes.SendToNode<AdmissionMsg>(
                     SubmitAdmissionNames.Mesh,
                     RoutingId.From(targetRid),
                     null!)
                 .Async(cancellation.Token);
             evidence.Terminal(operationId, family, targetRid, "Submitted");
-            return Results.Ok(new CancellationResponse(
+            return Results.Ok(new CancellationRes(
                 operationId, "Submitted", string.Empty, 1, 1, 1));
         }
         catch (Exception exception)
         {
             evidence.Terminal(operationId, family, targetRid, exception.GetType().Name);
-            return Results.Ok(new CancellationResponse(
+            return Results.Ok(new CancellationRes(
                 operationId, "Invalid", exception.GetType().Name, 1, 1, 1));
         }
     });
@@ -290,7 +290,7 @@ if (options.Role == "caller")
             await routes.SendToNode(
                     SubmitAdmissionNames.Mesh,
                     rid,
-                    new AdmissionMessage(
+                    new AdmissionMsg(
                         $"object-client-send-{Guid.NewGuid():N}",
                         1,
                         "send"))
@@ -299,10 +299,10 @@ if (options.Role == "caller")
             await routes.RequestToNode(
                     SubmitAdmissionNames.Mesh,
                     rid,
-                    new RouteReadyRequest("object-client-request"))
-                .Async<RouteReadyReply>(cancellationToken));
+                    new RouteReadyReq("object-client-request"))
+                .Async<RouteReadyRes>(cancellationToken));
         var after = runtime.GetStatus(SubmitAdmissionNames.Mesh);
-        return Results.Ok(new NodeTargetOutcome(
+        return Results.Ok(new NodeTargetOutcomeRes(
             send,
             request,
             before.Peers.Count,
@@ -332,7 +332,7 @@ if (options.Role == "object-client")
             new ZLinkLocationTopologyFilter(SubmitAdmissionNames.Mesh),
             cancellationToken: cancellationToken);
         var row = AssertSingle(rows.Items);
-        return Results.Ok(new ObjectClientIdentity(
+        return Results.Ok(new ObjectClientIdentityRes(
             row.NodeRid.ToString(),
             row.Endpoint));
     });
@@ -341,7 +341,7 @@ if (options.Role == "object-client")
 if (options.Role == "publisher")
 {
     app.MapPost("/submit/fanout", async (
-        AdmissionMessage message,
+        AdmissionEvent message,
         IZLinkFanoutClient fanout,
         OperationEvidenceStore evidence,
         CancellationToken cancellationToken) =>
@@ -354,7 +354,7 @@ if (options.Role == "publisher")
                 message)
             .Async(cancellationToken);
         evidence.Terminal(message.OperationId, family, "subscriber-zero", "Submitted");
-        return Results.Ok(new SubmitResponse(message.OperationId, family, "Submitted", 1, 1));
+        return Results.Ok(new SubmitRes(message.OperationId, family, "Submitted", 1, 1));
     });
 }
 
@@ -423,7 +423,7 @@ static async Task<FillCandidate> StartFillCandidateAsync(
     await start.ConfigureAwait(false);
     using var activity = new System.Diagnostics.Activity("submit-admission-fill").Start();
     var operationId = $"fill-{Guid.NewGuid():N}";
-    var empty = new AdmissionMessage(operationId, sequence, string.Empty);
+    var empty = new AdmissionMsg(operationId, sequence, string.Empty);
     var jsonOptions = new System.Text.Json.JsonSerializerOptions(
         System.Text.Json.JsonSerializerDefaults.Web);
     var envelopeBytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(empty, jsonOptions).Length;

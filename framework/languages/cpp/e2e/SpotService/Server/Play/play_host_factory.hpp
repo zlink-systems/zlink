@@ -233,7 +233,7 @@ inline int run_play_server (int argc, char **argv)
             route
               .add_route_request_handler<ensure_actor_handler_t,
                                           e2e::ensure_actor_req_t,
-                                          e2e::ensure_actor_res_t> ("EnsureActor")
+                                          e2e::ensure_actor_res_t> ("EnsureActorReq")
               .add_route_request_handler<channel_echo_handler_t,
                                           e2e::channel_echo_req_t,
                                           e2e::channel_echo_res_t> (

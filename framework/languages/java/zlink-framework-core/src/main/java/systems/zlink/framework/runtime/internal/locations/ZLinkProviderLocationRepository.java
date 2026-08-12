@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.internal.locations;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -13,15 +16,15 @@ import systems.zlink.framework.runtime.internal.locations.*;
  * location records.
  */
 public final class ZLinkProviderLocationRepository
-    implements systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository {
-    private final systems.zlink.framework.locationprovider.ZLinkLocationStore
+    implements ZLinkLocationRepository {
+    private final ZLinkLocationStore
         provider;
     private final ZLinkProviderOwnerLeaseRepository owners;
     private final ZLinkProviderDescriptorRepository descriptors;
     private final ZLinkProviderAuthorityRepository authority;
 
     public ZLinkProviderLocationRepository(
-        systems.zlink.framework.locationprovider.ZLinkLocationStore provider) {
+        ZLinkLocationStore provider) {
         this.provider = Objects.requireNonNull(provider, "provider");
         this.owners = new ZLinkProviderOwnerLeaseRepository(provider);
         this.descriptors = new ZLinkProviderDescriptorRepository(provider);
@@ -256,9 +259,62 @@ public final class ZLinkProviderLocationRepository
     }
 
     @Override
-    public CompletionStage<java.util.List<ZLinkAggregateProgressSnapshot>>
+    public CompletionStage<List<ZLinkAggregateProgressSnapshot>>
         listAggregateProgress(ZLinkStoreCancellation cancellation) {
         return authority.listAggregateProgress(cancellation);
+    }
+
+    @Override
+    public CompletionStage<ZLinkAggregateAbortRecoverySnapshot>
+        retainAggregateAbort(
+            ZLinkAggregateFence fence,
+            ZLinkStoreCancellation cancellation) {
+        return authority.retainAggregateAbort(fence, cancellation);
+    }
+
+    @Override
+    public CompletionStage<List<ZLinkAggregateAbortRecoverySnapshot>>
+        listRetainedAggregateAborts(
+            ZLinkStoreCancellation cancellation) {
+        return authority.listRetainedAggregateAborts(cancellation);
+    }
+
+    @Override
+    public CompletionStage<Optional<ZLinkAggregateAbortCleanupSnapshot>>
+        markAggregateAbortTerminal(
+        ZLinkAggregateFence fence,
+        String expectedStoreVersion,
+        String reference,
+        long checksumCrc32c,
+        ZLinkStoreCancellation cancellation) {
+        return authority.markAggregateAbortTerminal(
+            fence,
+            expectedStoreVersion,
+            reference,
+            checksumCrc32c,
+            cancellation);
+    }
+
+    @Override
+    public CompletionStage<List<ZLinkAggregateAbortCleanupSnapshot>>
+        listTerminalAggregateAborts(
+            ZLinkStoreCancellation cancellation) {
+        return authority.listTerminalAggregateAborts(cancellation);
+    }
+
+    @Override
+    public CompletionStage<Boolean> cleanupTerminalAggregateAbortInventory(
+        ZLinkAggregateAbortCleanupSnapshot cleanup,
+        ZLinkStoreCancellation cancellation) {
+        return authority.cleanupTerminalAggregateAbortInventory(
+            cleanup, cancellation);
+    }
+
+    @Override
+    public CompletionStage<Boolean> removeTerminalAggregateAbort(
+        ZLinkAggregateAbortCleanupSnapshot cleanup,
+        ZLinkStoreCancellation cancellation) {
+        return authority.removeTerminalAggregateAbort(cleanup, cancellation);
     }
 
     @Override
@@ -279,11 +335,11 @@ public final class ZLinkProviderLocationRepository
     @Override
     public CompletionStage<OptionalLong> getMeshNodeChangeStamp(
         String meshName) {
-        return java.util.concurrent.CompletableFuture.completedFuture(
+        return CompletableFuture.completedFuture(
             OptionalLong.empty());
     }
 
-    public systems.zlink.framework.locationprovider.ZLinkLocationStore
+    public ZLinkLocationStore
         provider() {
         return provider;
     }

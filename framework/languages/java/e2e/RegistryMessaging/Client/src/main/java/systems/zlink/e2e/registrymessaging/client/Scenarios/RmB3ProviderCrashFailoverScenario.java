@@ -23,10 +23,10 @@ public final class RmB3ProviderCrashFailoverScenario {
                 providerAHttp.post("/profile/gate/reset").submitRaw().toCompletableFuture().join();
 
                 String inFlightValue = "rm-b3-inflight-" + Long.toUnsignedString(System.nanoTime());
-                CompletionStage<Contracts.RequestOutcome> inFlight = requester
+                CompletionStage<Contracts.ProfileCallRes> inFlight = requester
                     .post("/profile/request/outcome")
                     .body(new Contracts.ProfileReq(inFlightValue))
-                    .submit(Contracts.RequestOutcome.class)
+                    .submit(Contracts.ProfileCallRes.class)
                     .thenApply(response -> response.body());
                 ScenarioAssert.waitEvidence(providerAHttp, "ProfileReqStarted|rid=api-a|value=" + inFlightValue);
 
@@ -35,7 +35,7 @@ public final class RmB3ProviderCrashFailoverScenario {
                 cluster.waitPeerCount(requester, 2);
                 providerA.process().crash();
 
-                Contracts.RequestOutcome transition = inFlight.toCompletableFuture().join();
+                Contracts.ProfileCallRes transition = inFlight.toCompletableFuture().join();
                 ScenarioAssert.that(transition.failed()
                         && isFinitePublicFailure(transition.errorKind()),
                     "RM-B3 in-flight request did not finish with one bounded public terminal: "
@@ -50,10 +50,10 @@ public final class RmB3ProviderCrashFailoverScenario {
                 cluster.waitPeerCount(requester, 1);
                 for (int index = 0; index < 20; index++) {
                     String value = "rm-b3-after-" + index;
-                    Contracts.RequestOutcome reply = requester
+                    Contracts.ProfileCallRes reply = requester
                         .post("/profile/request/outcome")
                         .body(new Contracts.ProfileReq(value))
-                        .submit(Contracts.RequestOutcome.class)
+                        .submit(Contracts.ProfileCallRes.class)
                         .toCompletableFuture().join().body();
                     ScenarioAssert.that(!reply.failed() && "api-b".equals(reply.providerRid()),
                         "RM-B3 new request did not use provider B: " + value + " -> " + reply);

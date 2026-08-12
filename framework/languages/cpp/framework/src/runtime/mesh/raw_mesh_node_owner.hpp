@@ -365,6 +365,8 @@ class raw_mesh_node_owner_t
     static foundation::call_id_t operation_id (
       std::uint64_t lifecycle_generation,
       std::uint64_t correlation);
+    std::uint64_t take_reply_route_id_locked (
+      std::optional<std::uint64_t> requested = std::nullopt);
     std::uint64_t next_operation_sequence ();
     bool request_to_target (
       const std::vector<std::uint8_t> &target_routing_id,
@@ -472,7 +474,12 @@ class raw_mesh_node_owner_t
       _expected_peers;
     raw_mesh_connection_candidates_t _connections;
     std::set<std::string> _outbound_endpoints;
-    std::uint64_t _next_correlation = 1;
+    std::map<std::string, std::vector<std::uint8_t>>
+      _session_relocation_seal_requests;
+    std::map<std::string, std::vector<std::uint8_t>>
+      _session_relocation_route_requests;
+    std::uint64_t _next_reply_route_id = 1;
+    std::uint64_t _next_operation_sequence = 1;
     bool _closed = false;
 };
 

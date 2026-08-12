@@ -414,9 +414,6 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         }
     }
 
-    internal void ReopenRetireAdmissionsAfterRollback() =>
-        _ = TryReopenRetireAdmissionsAfterRollback();
-
     internal bool TryReopenRetireAdmissionsAfterRollback()
     {
         var expectedGeneration = Volatile.Read(ref _relocationFenceGeneration);
@@ -609,8 +606,10 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             return new ZLinkRuntimeOperationLease(this, countsRequest: true);
         }
 
+        ZLinkFrameworkComponentState admitted;
         lock (_operationGate)
-            return EnterOperationUnderLock(countAsRequest);
+            admitted = AdmitOperationUnderLock(countAsRequest);
+        return AttachOperation(admitted, countAsRequest);
     }
 
     /// <summary>
@@ -630,6 +629,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             return new ZLinkRuntimeOperationLease();
         }
 
+        ZLinkFrameworkComponentState admitted;
         lock (_operationGate)
         {
             if (Volatile.Read(ref _lifecyclePhase) != (int)ZLinkRuntimeLifecyclePhase.Running
@@ -638,11 +638,10 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                     "ZLink framework runtime is not accepting operations.");
             _activeOperations++;
             _operationEpoch++;
-            var previous = AmbientOperation.Value;
-            var ownership = new ZLinkRuntimeOperationOwnership(this, state);
-            AmbientOperation.Value = ownership;
-            return new ZLinkRuntimeOperationLease(this, ownership, previous, false);
+            admitted = state;
         }
+
+        return AttachOperation(admitted, countAsRequest: false);
     }
 
     internal ZLinkRuntimeOperationLease RetainOperationForBackgroundWork()
@@ -697,6 +696,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             return true;
         }
 
+        ZLinkFrameworkComponentState admitted;
         lock (_operationGate)
         {
             if (_drainAdmission.IsSealed
@@ -715,9 +715,11 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 lease = new ZLinkRuntimeOperationLease();
                 return true;
             }
-            lease = EnterOperationUnderLock(countAsRequest);
-            return true;
+            admitted = AdmitOperationUnderLock(countAsRequest);
         }
+
+        lease = AttachOperation(admitted, countAsRequest);
+        return true;
     }
 
     internal async ValueTask ExecuteOperationAsync(Func<ValueTask> operation)
@@ -875,6 +877,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         {
             if (Volatile.Read(ref _lifecyclePhase) == (int)ZLinkRuntimeLifecyclePhase.Running) return;
 
+            Registration.Codecs.Freeze();
             Volatile.Write(ref _lifecyclePhase, (int)ZLinkRuntimeLifecyclePhase.Starting);
             try
             {
@@ -1134,7 +1137,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         }
     }
 
-    private ZLinkRuntimeOperationLease EnterOperationUnderLock(bool countAsRequest)
+    private ZLinkFrameworkComponentState AdmitOperationUnderLock(bool countAsRequest)
     {
         //  네 조건을 한 문장으로 뭉치면 호출자는 admission seal인지, 아직 기동
         //  중인지, owner lease가 닫힌 것인지 구분할 수 없다. 조사할 때마다 여기에
@@ -1156,6 +1159,17 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         _activeOperations++;
         _operationEpoch++;
         if (countAsRequest) _activeRequests++;
+        return state;
+    }
+
+    // Runs outside _operationGate: the ownership/lease allocations and the
+    // AsyncLocal write (an execution-context copy) touch only caller-local
+    // state, and the admission counters incremented under the gate already
+    // keep drain from completing before the lease is attached.
+    private ZLinkRuntimeOperationLease AttachOperation(
+        ZLinkFrameworkComponentState state,
+        bool countAsRequest)
+    {
         var previous = AmbientOperation.Value;
         var ownership = new ZLinkRuntimeOperationOwnership(this, state);
         AmbientOperation.Value = ownership;

@@ -10,9 +10,9 @@ import systems.zlink.samples.tictactoe.shared.contracts.AuthenticateRes;
 import systems.zlink.samples.tictactoe.shared.contracts.CreateGameHttpReq;
 import systems.zlink.samples.tictactoe.shared.contracts.CreateGameHttpRes;
 import systems.zlink.samples.tictactoe.shared.contracts.GameStateNotify;
-import systems.zlink.samples.tictactoe.shared.contracts.JoinGameReq;
-import systems.zlink.samples.tictactoe.shared.contracts.JoinGameRes;
-import systems.zlink.samples.tictactoe.shared.contracts.LeaveGameReq;
+import systems.zlink.samples.tictactoe.shared.contracts.JoinGameMsg;
+import systems.zlink.samples.tictactoe.shared.contracts.JoinGameNotify;
+import systems.zlink.samples.tictactoe.shared.contracts.LeaveGameMsg;
 import systems.zlink.samples.tictactoe.shared.contracts.ObserveMilestoneReq;
 import systems.zlink.samples.tictactoe.shared.contracts.ObserveMilestoneRes;
 import systems.zlink.samples.tictactoe.shared.contracts.PlaceMarkReq;
@@ -42,6 +42,8 @@ public final class TicTacToeClientScenario {
             game.playEndpoints().get(1), "guest");
         ZLinkStreamConnector observer = playerConnector(
             game.playEndpoints().get(1), "observer");
+        ZLinkStreamConnector reconnectedHost = null;
+        boolean hostClosed = false;
 
         try {
             host.connect().submit().toCompletableFuture().join();
@@ -91,11 +93,11 @@ public final class TicTacToeClientScenario {
                 return CompletableFuture.completedFuture(null);
             });
 
-            var hostJoinCompletion = host.waitFor(JoinGameRes.class)
-                .submit(JoinGameRes.class);
-            host.send(new JoinGameReq(game.roomId())).submit()
+            var hostJoinCompletion = host.waitFor(JoinGameNotify.class)
+                .submit(JoinGameNotify.class);
+            host.send(new JoinGameMsg(game.roomId())).submit()
                 .toCompletableFuture().join();
-            JoinGameRes hostJoin = hostJoinCompletion
+            JoinGameNotify hostJoin = hostJoinCompletion
                 .toCompletableFuture().join().payload();
             ensure(hostJoin.state().roomId().equals(game.roomId()));
             ensure("WaitingForPlayers".equals(hostJoin.state().status()));
@@ -113,11 +115,11 @@ public final class TicTacToeClientScenario {
                         && options.oActorId().equals(message.payload().state().oActorId()))
                 .submit(GameStateNotify.class);
 
-            var guestJoinCompletion = guest.waitFor(JoinGameRes.class)
-                .submit(JoinGameRes.class);
-            guest.send(new JoinGameReq(game.roomId())).submit()
+            var guestJoinCompletion = guest.waitFor(JoinGameNotify.class)
+                .submit(JoinGameNotify.class);
+            guest.send(new JoinGameMsg(game.roomId())).submit()
                 .toCompletableFuture().join();
-            JoinGameRes guestJoin = guestJoinCompletion
+            JoinGameNotify guestJoin = guestJoinCompletion
                 .toCompletableFuture().join().payload();
             ensure(guestJoin.state().roomId().equals(game.roomId()));
             ensure("InProgress".equals(guestJoin.state().status()));
@@ -150,8 +152,6 @@ public final class TicTacToeClientScenario {
             ensure(options.xActorId().equals(hostMove1Notify.state().lastMoveActorId()));
             ensure(Integer.valueOf(0).equals(hostMove1Notify.state().lastMoveCell()));
 
-            guest.send(new LeaveGameReq(game.roomId()))
-                .submit().toCompletableFuture().join();
             var hostSawGuestMove1 = host
                 .waitFor(GameStateNotify.class)
                 .where(GameStateNotify.class,
@@ -244,15 +244,50 @@ public final class TicTacToeClientScenario {
                 + milestone.actorId()
                 + " wins=" + milestone.wins());
 
-            java.util.concurrent.CompletableFuture.allOf(
-                host.send(new LeaveGameReq(game.roomId()))
+            // Closing this connector removes the session binding. A distinct
+            // connector must authenticate and bind the existing Actor again.
+            host.close().submit().toCompletableFuture().join();
+            hostClosed = true;
+            reconnectedHost = playerConnector(
+                game.playEndpoints().get(0), "reconnected-host");
+            reconnectedHost.connect().submit().toCompletableFuture().join();
+            AuthenticateRes reconnectedAuth = reconnectedHost
+                .request(new AuthenticateReq(options.xActorId()))
+                .submit(AuthenticateRes.class).toCompletableFuture().join();
+            ensure(reconnectedAuth.player().equals(hostAuth.player()));
+
+            // JoinGameMsg stays one-way on reconnect. Register the public
+            // wait before send so a fast current-session push cannot be missed.
+            var reconnectedJoinCompletion = reconnectedHost
+                .waitFor(JoinGameNotify.class)
+                .where(JoinGameNotify.class,
+                    message -> game.roomId().equals(message.payload().state().roomId()))
+                .submit(JoinGameNotify.class);
+            reconnectedHost.send(new JoinGameMsg(game.roomId()))
+                .submit().toCompletableFuture().join();
+            JoinGameNotify reconnectedJoin = reconnectedJoinCompletion
+                .toCompletableFuture().join().payload();
+            ensure(reconnectedJoin.state().equals(hostWin.state()));
+            System.out.println("reconnected-game-state=verified actor="
+                + reconnectedAuth.player().actorId()
+                + " room=" + game.roomId());
+
+            // LeaveGameMsg is one-way. The runners wait for the separate
+            // leave and Entry Spot destroy lifecycle evidence.
+            CompletableFuture.allOf(
+                reconnectedHost.send(new LeaveGameMsg(game.roomId()))
                     .submit().toCompletableFuture(),
-                guest.send(new LeaveGameReq(game.roomId()))
+                guest.send(new LeaveGameMsg(game.roomId()))
                     .submit().toCompletableFuture())
                 .join();
             System.out.println("tictactoe completed");
         } finally {
-            host.close().submit().toCompletableFuture().join();
+            if (!hostClosed) {
+                host.close().submit().toCompletableFuture().join();
+            }
+            if (reconnectedHost != null) {
+                reconnectedHost.close().submit().toCompletableFuture().join();
+            }
             guest.close().submit().toCompletableFuture().join();
             observer.close().submit().toCompletableFuture().join();
         }

@@ -1,0 +1,1053 @@
+{
+  "fixture": "zlink.framework.bound-session-relocation",
+  "version": 1,
+  "behaviorFixture": "framework/runtime/conformance/relocation-behavior-v1.json",
+  "wireGolden": "framework/runtime/protocol/golden/session-relocation-barrier-v1.json",
+  "behaviorBranch": "boundSessionRoute",
+  "contractProfiles": [
+    "actorJoin",
+    "actorHostHandoff",
+    "perActorUserSpot",
+    "spotWideUserSpot"
+  ],
+  "enabledProfiles": ["actorJoin"],
+  "eventProjection": {
+    "sealAccepted": "sourceAdmissionSealed",
+    "callbackPushSubmitted": "applicationOperationSubmitted",
+    "routeApplied": "sessionRouteConverged",
+    "routeTerminal": "sessionRouteTerminalDelivered"
+  },
+  "ownershipModel": {
+    "actorTenure": {
+      "owner": "locationAuthority",
+      "proof": "immutableCommittedActorTenure",
+      "fields": [
+        "actorId",
+        "objectGeneration",
+        "nodeRid",
+        "nodeGeneration",
+        "authorityOwnerGeneration",
+        "ownerLeaseGeneration"
+      ],
+      "downstreamReauthorization": false,
+      "projectionPolicy": "applyCommittedProofOnly"
+    },
+    "sessionBinding": {
+      "owner": "sessionBindingAggregate",
+      "owns": [
+        "sessionIdentity",
+        "bindingGeneration",
+        "acceptedHighWater",
+        "activeFrames",
+        "sealIdentity",
+        "postSealIngress",
+        "preRouteTargetOutbound",
+        "committedActorRoute",
+        "routeTerminalFingerprint",
+        "pendingReplyClaims"
+      ],
+      "sealWaitsForPreSealActiveFrames": true,
+      "postSealIngressOwner": "sessionBindingAggregate",
+      "routeSwitchLinearizationOwner": "sessionBindingAggregate",
+      "duplicateControlPolicy": "idempotentExactFingerprint"
+    },
+    "messageFollow": {
+      "owner": "previousOwnerMessageFollowRegistry",
+      "exactLeaseRecordFields": [
+        "leaseIdentity",
+        "exactSourceTenure",
+        "exactTargetTenure",
+        "hopAndVisitedOwners",
+        "retainedBudget",
+        "expiry"
+      ],
+      "relayRecordFields": [
+        "leaseIdentity",
+        "exactSourceTenure",
+        "exactTargetTenure",
+        "originalOperationIdentity",
+        "originalReplyCapability",
+        "visitedOwners",
+        "remainingBudget",
+        "expiry"
+      ],
+      "owns": [
+        "exactSourceTenure",
+        "exactTargetTenure",
+        "hopAndVisitedOwners",
+        "retainedBudget",
+        "expiry",
+        "originalOperationAndReply"
+      ],
+      "noticeCompletionRequiredForDelivery": false,
+      "sessionRouteTerminalRemovesLease": false
+    },
+    "routeResolver": {
+      "owner": "meshNodeRouteResolver",
+      "authority": false,
+      "cacheIsHintOnly": true,
+      "noticePolicy": "bestEffortExactSourceInvalidation",
+      "sameCallResubmitAfterStale": false
+    },
+    "targetOutbound": {
+      "producer": "targetActorEmitter",
+      "producerSubmissionWindow": "targetPostCommitLifecycle",
+      "producerPendingRecordFields": [
+        "outboundIdentity",
+        "authenticatedProducerNodeRid",
+        "authenticatedProducerNodeGeneration",
+        "actorTenureCandidate",
+        "targetNodeRid",
+        "targetNodeGeneration",
+        "sessionIdentity",
+        "bindingGeneration",
+        "payloadFingerprint"
+      ],
+      "outboundIdentitySource": "sessionBindingAggregateArrival",
+      "outboundIdentityIsWireField": false,
+      "outboundIdentitySupportsDuplicateSuppression": false,
+      "preAdmissionPendingOwner": "sessionBindingAggregate",
+      "producerRetainsAfterTransportAcceptance": false,
+      "admissionOwner": "sessionBindingAggregate",
+      "admissionFence": "boundSessionPacket",
+      "relocationPhaseAllowListRequired": false,
+      "admissionEligibility": [
+        "sessionAlive",
+        "authenticatedProducerMatchesCandidateTarget",
+        "immutableAcceptedTargetProofMatchesCandidateTenure",
+        "exactSessionIdentity",
+        "exactBindingGeneration",
+        "nextSessionOwnerAdmissionSequence"
+      ],
+      "releasedDeliveryEligibility": [
+        "sessionAlive",
+        "exactSessionIdentity",
+        "exactBindingGeneration",
+        "sessionOwnerAdmissionSequenceOrder",
+        "admittedEntryOwnership",
+        "actorTenureInRouteAppliedTenures"
+      ],
+      "identicalPayloadPolicy": "eachAuthenticatedOneWayArrivalIsADistinctAdmission",
+      "immutableTargetProofAcceptedBeforeAdmission": true,
+      "admissionMayCompleteAfterExactRouteTerminal": true,
+      "staleAdmissionSettlement": "rejectAndSettleWithoutDelivery",
+      "admissionMayCompleteAfterRouteApply": true,
+      "retentionOwnerAfterAdmission": "sessionBindingAggregate",
+      "producerRetainsAfterAdmission": false,
+      "admissionIsBounded": true,
+      "mayShareQueueWithPostSealIngress": false,
+      "retentionOwnerMayReauthorizeActorTenure": false,
+      "fifoOwner": "sessionBindingAggregate",
+      "fifoSequenceSource": "sessionOwnerAdmissionOrder",
+      "fifoSequenceBeginsAt": "sessionOwnerAdmission",
+      "physicalDeliveryBeforeRouteApply": false,
+      "releaseAfterAtomicRouteApply": "fifoExactlyOnce",
+      "shutdownSettlement": "releaseAndFailExactlyOnce"
+    },
+    "routeConvergence": {
+      "owner": "relocationRouteConvergenceOwner",
+      "retryOwner": "sameRelocationRouteConvergenceOwner",
+      "retryUntil": "exactRouteTerminalOrShutdown",
+      "detachedBestEffortAllowed": false,
+      "exactRouteTerminalGatesSuccessor": true,
+      "routeApplyMayReleaseTrafficBeforeExactTerminal": true
+    },
+    "targetProofAcquisition": {
+      "localCommittedProofStoreReadCount": 0,
+      "remoteMissingProofStoreReadCount": 1,
+      "identicalConcurrentRemoteRequestsShareSingleFlight": true,
+      "missingRemoteProofFailsBeforeAggregateMutation": true
+    }
+  },
+  "supportMilestones": {
+    "M0": {
+      "profiles": ["actorJoin"],
+      "boundSessionCount": 0,
+      "maxActiveRelocationsPerLogicalObject": 1,
+      "requiresQuiescentApplicationTraffic": true,
+      "allowedTraffic": [],
+      "activeReplyBacklogCount": 0,
+      "existingMessageFollowLeaseCount": 0,
+      "newExactMessageFollowLeaseRequired": true,
+      "positiveRouteCacheMaxAgeMilliseconds": 0,
+      "positiveRouteCacheAllowed": false,
+      "successorRelocationAllowed": false,
+      "requiresHealthySameVersionPeers": true,
+      "restartFallbackEnabled": false
+    },
+    "M1": {
+      "profiles": ["actorJoin"],
+      "inherits": "M0",
+      "overrides": [
+        "allowedTraffic",
+        "boundSessionCount",
+        "requiresQuiescentApplicationTraffic"
+      ],
+      "boundSessionCount": 1,
+      "maxActiveRelocationsPerLogicalObject": 1,
+      "requiresQuiescentApplicationTraffic": false,
+      "activeReplyBacklogCount": 0,
+      "concurrentBindUnbindCloseAllowed": false,
+      "sessionOwnerOwnsIngressAndHighWater": true,
+      "sessionOwnerOwnsPostCommitPreRouteOutbound": true,
+      "receiverRequiresFullImmutableFence": true,
+      "receiverMayReauthorizeAgainstLocalMirrors": false,
+      "allowedTraffic": [
+        "preSealAcceptedActiveFrame",
+        "postSealBoundSessionIngress",
+        "targetPostCommitLifecycleOutboundOneWay"
+      ]
+    },
+    "M2": {
+      "profiles": ["actorJoin"],
+      "inherits": "M1",
+      "overrides": [
+        "allowedTraffic",
+        "positiveRouteCacheAllowed",
+        "positiveRouteCacheMaxAgeMilliseconds",
+        "successorRelocationAllowed"
+      ],
+      "journey": "ownerA-to-ownerB-to-ownerA",
+      "allowedTraffic": [
+        "preSealAcceptedActiveFrame",
+        "postSealBoundSessionIngress",
+        "targetPostCommitLifecycleOutboundOneWay",
+        "boundActorRequestReply"
+      ],
+      "maxActiveRelocationsPerLogicalObject": 1,
+      "successorRelocationAllowed": true,
+      "successorAdmissionAfterPredecessorRouteTerminal": true,
+      "sameObjectGenerationAllowed": true,
+      "distinctOwnerTenuresRequired": true,
+      "positiveRouteCacheAllowed": true,
+      "positiveRouteCacheMaxAgeMilliseconds": null,
+      "delayedNoticeCorrectnessRequired": true,
+      "latePredecessorNoticePolicy": "exactSourceCacheCompareAndRemoveOnly"
+    },
+    "M3": {
+      "status": "deferred",
+      "profiles": [
+        "actorHostHandoff",
+        "perActorUserSpot",
+        "spotWideUserSpot",
+        "instanceSpot"
+      ],
+      "deferredVariants": ["sessionOwnerIsRelocationTarget"],
+      "requiredBeforeEnable": [
+        "profileSpecificLifecycleModel",
+        "liveReplyBacklogModel",
+        "crashAndRestartRecoveryModel",
+        "multiParticipantConformanceGate"
+      ]
+    }
+  },
+  "modelExecutionPolicy": {
+    "effectiveConstraintsAppliedToActions": [
+      "boundSessionCount",
+      "maxActiveRelocationsPerLogicalObject",
+      "requiresQuiescentApplicationTraffic",
+      "allowedTraffic",
+      "existingMessageFollowLeaseCount",
+      "newExactMessageFollowLeaseRequired",
+      "positiveRouteCacheMaxAgeMilliseconds",
+      "positiveRouteCacheAllowed",
+      "successorRelocationAllowed"
+    ],
+    "environmentPreconditionsValidatedButNotSynthesized": [
+      "activeReplyBacklogCount",
+      "requiresHealthySameVersionPeers",
+      "restartFallbackEnabled"
+    ],
+    "supportedTrafficComesFromEffectiveMilestone": true
+  },
+  "modelRecords": {
+    "sessionBinding": {
+      "sessionIdentity": "session-actor-1",
+      "bindingGeneration": 1
+    },
+    "relocations": {
+      "relocation-1": {
+        "targetOwner": "ownerB",
+        "targetTenure": "ownerB#1",
+        "targetNodeRid": "node-B",
+        "targetNodeGeneration": 19,
+        "sealIdentity": "seal-1",
+        "acceptedHighWater": 11,
+        "actionAndResult": "routeApply:success",
+        "routeTerminalFingerprint": "terminal-1",
+        "messageFollowLeaseIdentity": "follow-lease-1"
+      },
+      "relocation-2": {
+        "targetOwner": "ownerA",
+        "targetTenure": "ownerA#2",
+        "targetNodeRid": "node-A",
+        "targetNodeGeneration": 11,
+        "sealIdentity": "seal-2",
+        "acceptedHighWater": 19,
+        "actionAndResult": "routeApply:success",
+        "routeTerminalFingerprint": "terminal-2",
+        "messageFollowLeaseIdentity": "follow-lease-2"
+      }
+    },
+    "messageFollowLeases": {
+      "follow-lease-1": {
+        "leaseIdentity": "follow-lease-1",
+        "exactSourceTenure": "ownerA#0",
+        "exactTargetTenure": "ownerB#1",
+        "hopAndVisitedOwners": ["ownerA"],
+        "retainedBudget": 8,
+        "expiry": 100
+      },
+      "follow-lease-2": {
+        "leaseIdentity": "follow-lease-2",
+        "exactSourceTenure": "ownerB#1",
+        "exactTargetTenure": "ownerA#2",
+        "hopAndVisitedOwners": ["ownerB"],
+        "retainedBudget": 8,
+        "expiry": 200
+      }
+    },
+    "messageFollowRelayCandidates": {
+      "relay-1-exact": {
+        "leaseIdentity": "follow-lease-1",
+        "exactSourceTenure": "ownerA#0",
+        "exactTargetTenure": "ownerB#1",
+        "originalOperationIdentity": "request-through-ownerA-cache",
+        "originalReplyCapability": "reply-through-ownerA-cache",
+        "visitedOwners": ["ownerA"],
+        "remainingBudget": 7,
+        "expiry": 100
+      },
+      "relay-1-target-visited": {
+        "leaseIdentity": "follow-lease-1",
+        "exactSourceTenure": "ownerA#0",
+        "exactTargetTenure": "ownerB#1",
+        "originalOperationIdentity": "request-through-ownerA-cache",
+        "originalReplyCapability": "reply-through-ownerA-cache",
+        "visitedOwners": ["ownerA", "ownerB"],
+        "remainingBudget": 7,
+        "expiry": 100
+      },
+      "relay-1-duplicate-visited": {
+        "leaseIdentity": "follow-lease-1",
+        "exactSourceTenure": "ownerA#0",
+        "exactTargetTenure": "ownerB#1",
+        "originalOperationIdentity": "request-through-ownerA-cache",
+        "originalReplyCapability": "reply-through-ownerA-cache",
+        "visitedOwners": ["ownerA", "ownerA"],
+        "remainingBudget": 7,
+        "expiry": 100
+      },
+      "relay-1-budget-exhausted": {
+        "leaseIdentity": "follow-lease-1",
+        "exactSourceTenure": "ownerA#0",
+        "exactTargetTenure": "ownerB#1",
+        "originalOperationIdentity": "request-through-ownerA-cache",
+        "originalReplyCapability": "reply-through-ownerA-cache",
+        "visitedOwners": ["ownerA"],
+        "remainingBudget": 0,
+        "expiry": 100
+      },
+      "relay-1-expired": {
+        "leaseIdentity": "follow-lease-1",
+        "exactSourceTenure": "ownerA#0",
+        "exactTargetTenure": "ownerB#1",
+        "originalOperationIdentity": "request-through-ownerA-cache",
+        "originalReplyCapability": "reply-through-ownerA-cache",
+        "visitedOwners": ["ownerA"],
+        "remainingBudget": 7,
+        "expiry": 5
+      }
+    },
+    "routeTerminalCandidates": {
+      "terminal-1-exact": {
+        "relocationIdentity": "relocation-1",
+        "actorTenure": "ownerB#1",
+        "sessionIdentity": "session-actor-1",
+        "bindingGeneration": 1,
+        "sealIdentity": "seal-1",
+        "acceptedHighWater": 11,
+        "actionAndResult": "routeApply:success",
+        "terminalFingerprint": "terminal-1"
+      },
+      "terminal-1-wrong-binding": {
+        "relocationIdentity": "relocation-1",
+        "actorTenure": "ownerB#1",
+        "sessionIdentity": "session-actor-1",
+        "bindingGeneration": 0,
+        "sealIdentity": "seal-1",
+        "acceptedHighWater": 11,
+        "actionAndResult": "routeApply:success",
+        "terminalFingerprint": "terminal-1"
+      },
+      "terminal-1-conflict": {
+        "relocationIdentity": "relocation-1",
+        "actorTenure": "ownerB#1",
+        "sessionIdentity": "session-actor-1",
+        "bindingGeneration": 1,
+        "sealIdentity": "seal-1",
+        "acceptedHighWater": 11,
+        "actionAndResult": "routeApply:success",
+        "terminalFingerprint": "terminal-conflict"
+      },
+      "terminal-2-exact": {
+        "relocationIdentity": "relocation-2",
+        "actorTenure": "ownerA#2",
+        "sessionIdentity": "session-actor-1",
+        "bindingGeneration": 1,
+        "sealIdentity": "seal-2",
+        "acceptedHighWater": 19,
+        "actionAndResult": "routeApply:success",
+        "terminalFingerprint": "terminal-2"
+      }
+    }
+  },
+  "transitionModel": {
+    "states": [
+      "stableSource",
+      "sealing",
+      "targetCommitted",
+      "targetReady",
+      "authorityCompleted",
+      "routeConverging",
+      "routeAppliedAwaitingTerminal",
+      "stableTarget",
+      "stopped"
+    ],
+    "boundSessionTransitions": [
+      ["stableSource", "sealing"],
+      ["sealing", "stableSource"],
+      ["sealing", "targetCommitted"],
+      ["targetCommitted", "targetReady"],
+      ["targetReady", "authorityCompleted"],
+      ["authorityCompleted", "routeConverging"],
+      ["routeConverging", "routeAppliedAwaitingTerminal"],
+      ["routeAppliedAwaitingTerminal", "stableTarget"],
+      ["stableTarget", "sealing"]
+    ],
+    "unboundTransitions": [
+      ["stableSource", "sealing"],
+      ["sealing", "stableSource"],
+      ["sealing", "targetCommitted"],
+      ["targetCommitted", "targetReady"],
+      ["targetReady", "authorityCompleted"],
+      ["authorityCompleted", "stableTarget"],
+      ["stableTarget", "sealing"]
+    ],
+    "shutdownAllowedFrom": [
+      "stableSource",
+      "sealing",
+      "targetCommitted",
+      "targetReady",
+      "authorityCompleted",
+      "routeConverging",
+      "routeAppliedAwaitingTerminal",
+      "stableTarget"
+    ],
+    "preCommitAbortReturnsTo": "stableSource",
+    "postCommitRollbackAllowed": false,
+    "maxActiveBarriersPerLogicalObject": 1,
+    "successorStartsBeforePredecessorTerminal": false,
+    "successorEventuallyStartsAfterPredecessorTerminalWhenRuntimeAndSessionRemainAvailable": true,
+    "duplicateTransitionMutatesState": false
+  },
+  "modelScenarios": [
+    {
+      "name": "M0-unbound-actor-join-completes-with-one-exact-follow-lease",
+      "milestone": "M0",
+      "profile": "actorJoin",
+      "actions": [
+        "beginRelocation:relocation-1:ownerB",
+        "commitTarget",
+        "publishTargetReady",
+        "completeAuthority",
+        "completeUnboundRelocation"
+      ],
+      "expected": {
+        "state": "stableTarget",
+        "currentOwner": "ownerB",
+        "currentTenure": "ownerB#1",
+        "activeBarrierCount": 0,
+        "messageFollowLeaseCount": 1,
+        "messageFollowLeaseIdentities": ["follow-lease-1"],
+        "routeApplyCount": 0,
+        "routeTerminalCount": 0
+      }
+    },
+    {
+      "name": "M1-route-apply-preserves-pre-and-post-apply-outbound-and-ingress-fifo",
+      "milestone": "M1",
+      "profile": "actorJoin",
+      "actions": [
+        "acceptPreSealActiveFrame:frame-1",
+        "beginRelocation:relocation-1:ownerB",
+        "observeSealWaitingForActiveFrames",
+        "submitPostSealIngress:request-1",
+        "completePreSealActiveFrame:frame-1",
+        "commitTarget",
+        "targetEmitterSubmitsLifecycleOutbound:push-1:node-B:19:ownerB#1:node-B:19:session-actor-1:1:1",
+        "targetEmitterSubmitsLifecycleOutbound:push-2:node-B:19:ownerB#1:node-B:19:session-actor-1:1:2",
+        "publishTargetReady",
+        "completeAuthority",
+        "beginRouteConvergence",
+        "routeAttempt:transientFailure",
+        "routeAttempt:transientFailure",
+        "sessionOwnerAdmitsTargetOutbound:push-1:node-B:19:ownerB#1:node-B:19:session-actor-1:1:1",
+        "routeAttempt:apply:route-1",
+        "sessionOwnerAdmitsTargetOutbound:push-2:node-B:19:ownerB#1:node-B:19:session-actor-1:1:2",
+        "submitPostSealIngress:request-2",
+        "duplicateRouteApply:route-1",
+        "conflictingRouteApply:route-conflict",
+        "deliverReleasedOutbound",
+        "deliverReleasedIngress",
+        "rejectRouteTerminal:terminal-1-wrong-binding",
+        "receiveRouteTerminal:terminal-1-exact",
+        "duplicateRouteTerminal:terminal-1-exact",
+        "conflictingRouteTerminal:terminal-1-conflict"
+      ],
+      "expected": {
+        "state": "stableTarget",
+        "currentOwner": "ownerB",
+        "currentTenure": "ownerB#1",
+        "activeBarrierCount": 0,
+        "activeFrameCount": 0,
+        "acceptedActiveFrameCount": 1,
+        "completedActiveFrameCount": 1,
+        "sealWaitingObservationCount": 1,
+        "producerPendingOutboundCount": 0,
+        "emitterSubmissionOrder": ["push-1", "push-2"],
+        "outboundAdmissionOrder": ["push-1", "push-2"],
+        "retainedOutboundCount": 0,
+        "releasedOutboundCount": 0,
+        "retainedIngressCount": 0,
+        "releasedIngressCount": 0,
+        "outboundDeliveryOrder": ["push-1", "push-2"],
+        "ingressDeliveryOrder": ["request-1", "request-2"],
+        "routeAttemptCount": 3,
+        "routeApplyCount": 1,
+        "duplicateRouteApplyCount": 1,
+        "routeApplyConflictCount": 1,
+        "routeTerminalFenceRejectCount": 1,
+        "routeTerminalCount": 1,
+        "duplicateTerminalCount": 1,
+        "routeTerminalConflictCount": 1,
+        "messageFollowLeaseIdentities": ["follow-lease-1"]
+      }
+    },
+    {
+      "name": "M1-post-terminal-current-tenure-late-admission-delivers-once",
+      "milestone": "M1",
+      "profile": "actorJoin",
+      "actions": [
+        "beginRelocation:relocation-1:ownerB",
+        "commitTarget",
+        "targetEmitterSubmitsLifecycleOutbound:push-before-terminal:node-B:19:ownerB#1:node-B:19:session-actor-1:1:1",
+        "targetEmitterSubmitsLifecycleOutbound:push-after-terminal:node-B:19:ownerB#1:node-B:19:session-actor-1:1:2",
+        "publishTargetReady",
+        "completeAuthority",
+        "beginRouteConvergence",
+        "sessionOwnerAdmitsTargetOutbound:push-before-terminal:node-B:19:ownerB#1:node-B:19:session-actor-1:1:1",
+        "routeAttempt:apply:route-1",
+        "receiveRouteTerminal:terminal-1-exact",
+        "sessionOwnerAdmitsTargetOutbound:push-after-terminal:node-B:19:ownerB#1:node-B:19:session-actor-1:1:2",
+        "deliverReleasedOutbound"
+      ],
+      "expected": {
+        "state": "stableTarget",
+        "activeBarrierCount": 0,
+        "retainedOutboundCount": 0,
+        "releasedOutboundCount": 0,
+        "producerPendingOutboundCount": 0,
+        "emitterSubmissionOrder": ["push-before-terminal", "push-after-terminal"],
+        "outboundAdmissionOrder": ["push-before-terminal", "push-after-terminal"],
+        "outboundDeliveryOrder": ["push-before-terminal", "push-after-terminal"],
+        "outboundAdmissionAcceptedCount": 2,
+        "routeApplyCount": 1,
+        "routeTerminalCount": 1,
+        "messageFollowLeaseIdentities": ["follow-lease-1"]
+      }
+    },
+    {
+      "name": "M1-route-converging-identical-payloads-are-distinct-admissions",
+      "milestone": "M1",
+      "profile": "actorJoin",
+      "actions": [
+        "beginRelocation:relocation-1:ownerB",
+        "commitTarget",
+        "targetEmitterSubmitsLifecycleOutbound:push-identical-1:node-B:19:ownerB#1:node-B:19:session-actor-1:1:same-payload",
+        "targetEmitterSubmitsLifecycleOutbound:push-identical-2:node-B:19:ownerB#1:node-B:19:session-actor-1:1:same-payload",
+        "publishTargetReady",
+        "completeAuthority",
+        "beginRouteConvergence",
+        "sessionOwnerAdmitsTargetOutbound:push-identical-1:node-B:19:ownerB#1:node-B:19:session-actor-1:1:same-payload",
+        "sessionOwnerAdmitsTargetOutbound:push-identical-2:node-B:19:ownerB#1:node-B:19:session-actor-1:1:same-payload",
+        "routeAttempt:apply:route-1",
+        "deliverReleasedOutbound",
+        "receiveRouteTerminal:terminal-1-exact"
+      ],
+      "expected": {
+        "state": "stableTarget",
+        "activeBarrierCount": 0,
+        "producerPendingOutboundCount": 0,
+        "emitterSubmissionOrder": ["push-identical-1", "push-identical-2"],
+        "outboundAdmissionOrder": ["push-identical-1", "push-identical-2"],
+        "outboundDeliveryOrder": ["push-identical-1", "push-identical-2"],
+        "outboundAdmissionAcceptedCount": 2,
+        "routeApplyCount": 1,
+        "routeTerminalCount": 1,
+        "messageFollowLeaseIdentities": ["follow-lease-1"]
+      }
+    },
+    {
+      "name": "M1-authenticated-producer-must-match-target-candidate-before-proof",
+      "milestone": "M1",
+      "profile": "actorJoin",
+      "actions": [
+        "beginRelocation:relocation-1:ownerB",
+        "commitTarget",
+        "rejectTargetOutboundTransport:push-forged-rid:node-X:19:ownerB#1:node-B:19:session-actor-1:1:forged-rid:authenticatedProducerNodeMismatch",
+        "rejectTargetOutboundTransport:push-forged-generation:node-B:18:ownerB#1:node-B:19:session-actor-1:1:forged-generation:authenticatedProducerNodeMismatch",
+        "publishTargetReady",
+        "completeAuthority",
+        "beginRouteConvergence",
+        "routeAttempt:apply:route-1",
+        "receiveRouteTerminal:terminal-1-exact"
+      ],
+      "expected": {
+        "state": "stableTarget",
+        "activeBarrierCount": 0,
+        "producerPendingOutboundCount": 0,
+        "emitterSubmissionOrder": [],
+        "outboundAdmissionOrder": [],
+        "outboundDeliveryOrder": [],
+        "transportAdmissionRejectCounts": {
+          "authenticatedProducerNodeMismatch": 2
+        },
+        "transportRejectedSettlementOrder": [
+          "push-forged-rid",
+          "push-forged-generation"
+        ],
+        "routeApplyCount": 1,
+        "routeTerminalCount": 1,
+        "messageFollowLeaseIdentities": ["follow-lease-1"]
+      }
+    },
+    {
+      "name": "M1-accepted-proof-must-match-the-pending-target-node",
+      "milestone": "M1",
+      "profile": "actorJoin",
+      "actions": [
+        "beginRelocation:relocation-1:ownerB",
+        "commitTarget",
+        "targetEmitterSubmitsLifecycleOutbound:push-proof-mismatch:node-X:23:ownerB#1:node-X:23:session-actor-1:1:proof-mismatch",
+        "publishTargetReady",
+        "completeAuthority",
+        "beginRouteConvergence",
+        "rejectSessionOwnerAdmission:push-proof-mismatch:node-X:23:ownerB#1:node-X:23:session-actor-1:1:proof-mismatch:targetProofMismatch",
+        "routeAttempt:apply:route-1",
+        "receiveRouteTerminal:terminal-1-exact"
+      ],
+      "expected": {
+        "state": "stableTarget",
+        "activeBarrierCount": 0,
+        "producerPendingOutboundCount": 0,
+        "emitterSubmissionOrder": ["push-proof-mismatch"],
+        "outboundAdmissionOrder": [],
+        "outboundDeliveryOrder": [],
+        "outboundAdmissionRejectCounts": {
+          "targetProofMismatch": 1
+        },
+        "producerRejectedSettlementOrder": ["push-proof-mismatch"],
+        "routeApplyCount": 1,
+        "routeTerminalCount": 1,
+        "messageFollowLeaseIdentities": ["follow-lease-1"]
+      }
+    },
+    {
+      "name": "M1-precommit-abort-restores-ingress-and-never-retains-restore-outbound",
+      "milestone": "M1",
+      "profile": "actorJoin",
+      "actions": [
+        "beginRelocation:relocation-1:ownerB",
+        "submitPreCommitOutbound",
+        "submitPostSealIngress:request-abort",
+        "abortBeforeCommit:abort-1",
+        "deliverReleasedIngress",
+        "duplicateAbort:abort-1",
+        "conflictingAbort:abort-conflict"
+      ],
+      "expected": {
+        "state": "stableSource",
+        "currentOwner": "ownerA",
+        "currentTenure": "ownerA#0",
+        "activeBarrierCount": 0,
+        "preCommitUnavailableCount": 1,
+        "retainedOutboundCount": 0,
+        "retainedIngressCount": 0,
+        "ingressDeliveryOrder": ["request-abort"],
+        "duplicateAbortCount": 1,
+        "abortConflictCount": 1,
+        "messageFollowLeaseIdentities": []
+      }
+    },
+    {
+      "name": "M1-pre-route-apply-shutdown-settles-each-retained-owner-once",
+      "milestone": "M1",
+      "profile": "actorJoin",
+      "actions": [
+        "beginRelocation:relocation-1:ownerB",
+        "submitPostSealIngress:request-shutdown",
+        "commitTarget",
+        "targetEmitterSubmitsLifecycleOutbound:push-shutdown:node-B:19:ownerB#1:node-B:19:session-actor-1:1:1",
+        "observeSessionOwnerAdmissionPending:push-shutdown:node-B:19:ownerB#1:node-B:19:session-actor-1:1:1:targetProofPending",
+        "publishTargetReady",
+        "shutdown",
+        "duplicateShutdown"
+      ],
+      "expected": {
+        "state": "stopped",
+        "sessionAlive": false,
+        "activeBarrierCount": 0,
+        "queuedSuccessorCount": 0,
+        "retainedOutboundCount": 0,
+        "retainedIngressCount": 0,
+        "producerPendingOutboundCount": 0,
+        "outboundFailureOrder": [],
+        "ingressFailureOrder": ["request-shutdown"],
+        "outboundSettlementOrder": [],
+        "producerPendingFailureOrder": ["push-shutdown"],
+        "targetProofPendingObservationCount": 1,
+        "ingressSettlementOrder": ["request-shutdown"],
+        "shutdownCount": 1,
+        "duplicateShutdownCount": 1,
+        "messageFollowLeaseIdentities": ["follow-lease-1"]
+      }
+    },
+    {
+      "name": "M1-post-route-apply-shutdown-settles-released-fifo-once",
+      "milestone": "M1",
+      "profile": "actorJoin",
+      "actions": [
+        "beginRelocation:relocation-1:ownerB",
+        "submitPostSealIngress:request-before-apply",
+        "commitTarget",
+        "targetEmitterSubmitsLifecycleOutbound:push-before-apply:node-B:19:ownerB#1:node-B:19:session-actor-1:1:1",
+        "targetEmitterSubmitsLifecycleOutbound:push-after-apply:node-B:19:ownerB#1:node-B:19:session-actor-1:1:2",
+        "publishTargetReady",
+        "completeAuthority",
+        "beginRouteConvergence",
+        "sessionOwnerAdmitsTargetOutbound:push-before-apply:node-B:19:ownerB#1:node-B:19:session-actor-1:1:1",
+        "routeAttempt:apply:route-1",
+        "sessionOwnerAdmitsTargetOutbound:push-after-apply:node-B:19:ownerB#1:node-B:19:session-actor-1:1:2",
+        "submitPostSealIngress:request-after-apply",
+        "duplicateRouteApply:route-1",
+        "shutdown",
+        "duplicateShutdown"
+      ],
+      "expected": {
+        "state": "stopped",
+        "sessionAlive": false,
+        "activeBarrierCount": 0,
+        "retainedOutboundCount": 0,
+        "releasedOutboundCount": 0,
+        "producerPendingOutboundCount": 0,
+        "emitterSubmissionOrder": ["push-before-apply", "push-after-apply"],
+        "outboundAdmissionOrder": ["push-before-apply", "push-after-apply"],
+        "retainedIngressCount": 0,
+        "releasedIngressCount": 0,
+        "outboundFailureOrder": ["push-before-apply", "push-after-apply"],
+        "ingressFailureOrder": ["request-before-apply", "request-after-apply"],
+        "outboundSettlementOrder": ["push-before-apply", "push-after-apply"],
+        "ingressSettlementOrder": ["request-before-apply", "request-after-apply"],
+        "routeApplyCount": 1,
+        "duplicateRouteApplyCount": 1,
+        "routeTerminalCount": 0,
+        "shutdownCount": 1,
+        "duplicateShutdownCount": 1,
+        "messageFollowLeaseIdentities": ["follow-lease-1"]
+      }
+    },
+    {
+      "name": "M2-successor-sealing-keeps-current-tenure-late-admission-eligible",
+      "milestone": "M2",
+      "profile": "actorJoin",
+      "actions": [
+        "beginRelocation:relocation-1:ownerB",
+        "commitTarget",
+        "targetEmitterSubmitsLifecycleOutbound:push-during-successor-seal:node-B:19:ownerB#1:node-B:19:session-actor-1:1:1",
+        "publishTargetReady",
+        "completeAuthority",
+        "beginRouteConvergence",
+        "routeAttempt:apply:route-1",
+        "requestSuccessor:relocation-2:ownerA",
+        "receiveRouteTerminal:terminal-1-exact",
+        "admitSuccessor",
+        "sessionOwnerAdmitsTargetOutbound:push-during-successor-seal:node-B:19:ownerB#1:node-B:19:session-actor-1:1:1",
+        "deliverReleasedOutbound"
+      ],
+      "expected": {
+        "state": "sealing",
+        "currentOwner": "ownerB",
+        "currentTenure": "ownerB#1",
+        "activeBarrierCount": 1,
+        "producerPendingOutboundCount": 0,
+        "outboundAdmissionOrder": ["push-during-successor-seal"],
+        "outboundDeliveryOrder": ["push-during-successor-seal"],
+        "outboundAdmissionAcceptedCount": 1,
+        "retainedOutboundCount": 0,
+        "releasedOutboundCount": 0,
+        "routeApplyCount": 1,
+        "routeTerminalCount": 1,
+        "messageFollowLeaseIdentities": ["follow-lease-1"]
+      }
+    },
+    {
+      "name": "M2-admitted-predecessor-delivers-after-successor-commit",
+      "milestone": "M2",
+      "profile": "actorJoin",
+      "actions": [
+        "beginRelocation:relocation-1:ownerB",
+        "commitTarget",
+        "targetEmitterSubmitsLifecycleOutbound:push-admitted-predecessor:node-B:19:ownerB#1:node-B:19:session-actor-1:1:1",
+        "publishTargetReady",
+        "completeAuthority",
+        "beginRouteConvergence",
+        "sessionOwnerAdmitsTargetOutbound:push-admitted-predecessor:node-B:19:ownerB#1:node-B:19:session-actor-1:1:1",
+        "routeAttempt:apply:route-1",
+        "requestSuccessor:relocation-2:ownerA",
+        "receiveRouteTerminal:terminal-1-exact",
+        "admitSuccessor",
+        "commitTarget",
+        "deliverReleasedOutbound"
+      ],
+      "expected": {
+        "state": "targetCommitted",
+        "currentOwner": "ownerA",
+        "currentTenure": "ownerA#2",
+        "activeBarrierCount": 1,
+        "producerPendingOutboundCount": 0,
+        "emitterSubmissionOrder": ["push-admitted-predecessor"],
+        "outboundAdmissionOrder": ["push-admitted-predecessor"],
+        "outboundDeliveryOrder": ["push-admitted-predecessor"],
+        "outboundSettlementOrder": ["push-admitted-predecessor"],
+        "outboundAdmissionAcceptedCount": 1,
+        "retainedOutboundCount": 0,
+        "releasedOutboundCount": 0,
+        "routeApplyCount": 1,
+        "routeTerminalCount": 1,
+        "messageFollowLeaseIdentities": ["follow-lease-1", "follow-lease-2"]
+      }
+    },
+    {
+      "name": "M2-successor-commit-rejects-stale-predecessor-outbound-admission",
+      "milestone": "M2",
+      "profile": "actorJoin",
+      "actions": [
+        "beginRelocation:relocation-1:ownerB",
+        "commitTarget",
+        "publishTargetReady",
+        "completeAuthority",
+        "beginRouteConvergence",
+        "routeAttempt:apply:route-1",
+        "requestSuccessor:relocation-2:ownerA",
+        "receiveRouteTerminal:terminal-1-exact",
+        "admitSuccessor",
+        "commitTarget",
+        "targetEmitterSubmitsLifecycleOutbound:push-stale-predecessor:node-B:19:ownerB#1:node-B:19:session-actor-1:1:1",
+        "rejectSessionOwnerAdmission:push-stale-predecessor:node-B:19:ownerB#1:node-B:19:session-actor-1:1:1:staleActorTenure"
+      ],
+      "expected": {
+        "state": "targetCommitted",
+        "currentOwner": "ownerA",
+        "currentTenure": "ownerA#2",
+        "activeBarrierCount": 1,
+        "producerPendingOutboundCount": 0,
+        "emitterSubmissionOrder": ["push-stale-predecessor"],
+        "outboundAdmissionOrder": [],
+        "outboundDeliveryOrder": [],
+        "outboundAdmissionAcceptedCount": 0,
+        "outboundAdmissionRejectCounts": {
+          "staleActorTenure": 1
+        },
+        "producerRejectedSettlementOrder": ["push-stale-predecessor"],
+        "retainedOutboundCount": 0,
+        "releasedOutboundCount": 0,
+        "routeApplyCount": 1,
+        "routeTerminalCount": 1,
+        "messageFollowLeaseIdentities": ["follow-lease-1", "follow-lease-2"]
+      }
+    },
+    {
+      "name": "M2-exact-source-notice-removes-matching-route-cache-once",
+      "milestone": "M2",
+      "profile": "actorJoin",
+      "actions": [
+        "compareAndRemoveRouteCache:ownerA#0:removed"
+      ],
+      "expected": {
+        "state": "stableSource",
+        "routeCachePresent": false,
+        "routeCacheRemovalCount": 1,
+        "routeCachePreserveCount": 0,
+        "messageFollowLeaseIdentities": []
+      }
+    },
+    {
+      "name": "M2-round-trip-serializes-successor-and-ignores-late-predecessor-notice",
+      "milestone": "M2",
+      "profile": "actorJoin",
+      "actions": [
+        "beginRelocation:relocation-1:ownerB",
+        "commitTarget",
+        "publishTargetReady",
+        "completeAuthority",
+        "beginRouteConvergence",
+        "routeAttempt:apply:route-1",
+        "requestSuccessor:relocation-2:ownerA",
+        "observeSuccessorBlocked",
+        "rejectMessageFollowRelay:relay-1-target-visited:targetAlreadyVisited",
+        "rejectMessageFollowRelay:relay-1-duplicate-visited:duplicateVisitedOwner",
+        "rejectMessageFollowRelay:relay-1-budget-exhausted:budgetExhausted",
+        "rejectMessageFollowRelay:relay-1-expired:expired",
+        "followedRequest:relay-1-exact:request-through-ownerA-cache:reply-through-ownerA-cache",
+        "receiveRouteTerminal:terminal-1-exact",
+        "admitSuccessor",
+        "commitTarget",
+        "publishTargetReady",
+        "completeAuthority",
+        "beginRouteConvergence",
+        "routeAttempt:apply:route-2",
+        "receiveRouteTerminal:terminal-2-exact",
+        "refreshRouteCacheToCurrentTenure",
+        "compareAndRemoveRouteCache:ownerA#0:preserved",
+        "postRoundTripRequest:request-current-owner"
+      ],
+      "expected": {
+        "state": "stableTarget",
+        "currentOwner": "ownerA",
+        "currentTenure": "ownerA#2",
+        "activeBarrierCount": 0,
+        "queuedSuccessorCount": 0,
+        "messageFollowLeaseCount": 2,
+        "messageFollowLeaseIdentities": ["follow-lease-1", "follow-lease-2"],
+        "messageFollowRelayKeys": [
+          "follow-lease-1|request-through-ownerA-cache|reply-through-ownerA-cache"
+        ],
+        "messageFollowRelayAcceptedCount": 1,
+        "messageFollowRelayRejectCounts": {
+          "targetAlreadyVisited": 1,
+          "duplicateVisitedOwner": 1,
+          "budgetExhausted": 1,
+          "expired": 1
+        },
+        "followedRequestOwners": ["ownerB"],
+        "postRoundTripRequestOwners": ["ownerA"],
+        "routeCacheTenure": "ownerA#2",
+        "routeCachePresent": true,
+        "routeCacheRefreshCount": 1,
+        "routeCacheRemovalCount": 0,
+        "routeCachePreserveCount": 1,
+        "successorBlockedObservationCount": 1,
+        "routeApplyCount": 2,
+        "routeTerminalCount": 2,
+        "routeTerminalConflictCount": 0
+      }
+    }
+  ],
+  "applicationBoundary": {
+    "restoreBeforeOwnershipCommit": {
+      "boundSessionSendResult": "unavailable",
+      "physicalDeliveryCount": 0,
+      "retainedPayloadCount": 0
+    },
+    "postCommitLifecycleBeforeRouteApply": {
+      "targetEmitterSubmitResult": "producerPendingUntilAdmission",
+      "boundSessionOneWayAdmission": "retained",
+      "physicalDeliveryCount": 0,
+      "actorTurnWaitsForPhysicalDelivery": false,
+      "retentionOwner": "sessionBindingAggregate"
+    },
+    "afterAtomicRouteApply": {
+      "delayedSessionOwnerAdmissionJoinsReleasedFifo": true,
+      "retainedReleaseCount": 1,
+      "eventualPhysicalDeliveryCount": 1,
+      "routeTerminalRequiredForRelease": false,
+      "duplicateRouteApplyAdditionalReleaseCount": 0
+    },
+    "afterExactRouteTerminal": {
+      "successorAdmissionAllowed": true,
+      "currentTenureDelayedOutboundAdmission": "appendToReleasedFifo",
+      "stalePredecessorOutboundAdmission": "rejectAndSettleWithoutDelivery",
+      "admittedPredecessorAfterSuccessorCommit": "deliverFromSessionBindingAggregateWithoutActorTenureReauthorization",
+      "duplicateTerminalAdditionalDeliveryCount": 0
+    }
+  },
+  "hardFenceBoundaries": {
+    "wireIngress": [
+      "authenticatedPeer",
+      "targetNodeGeneration",
+      "actorId",
+      "objectGeneration"
+    ],
+    "routeCommit": [
+      "actorTenure",
+      "sessionIdentity",
+      "bindingGeneration",
+      "sealIdentity",
+      "acceptedHighWater"
+    ],
+    "routeTerminal": [
+      "relocationIdentity",
+      "actorTenure",
+      "sessionIdentity",
+      "bindingGeneration",
+      "sealIdentity",
+      "acceptedHighWater",
+      "actionAndResult",
+      "terminalFingerprint"
+    ],
+    "boundSessionPacket": [
+      "actorTenureCandidate",
+      "targetNodeRid",
+      "targetNodeGeneration",
+      "sessionIdentity",
+      "bindingGeneration"
+    ],
+    "messageFollowRelay": [
+      "exactSourceTenure",
+      "exactTargetTenure",
+      "originalOperationIdentity",
+      "originalReplyCapability",
+      "visitedOwners",
+      "remainingBudget",
+      "expiry"
+    ],
+    "replyTerminal": [
+      "originalOperationIdentity",
+      "originalReplyCapability",
+      "sessionIdentity",
+      "bindingGeneration"
+    ]
+  },
+  "trafficScenarios": {
+    "actorJoinLifecycle": "target-lifecycle-callback-bound-session-push",
+    "genericTarget": "target-bound-session-push-before-route-convergence"
+  },
+  "terminalScenario": "duplicate-success-terminal",
+  "invariants": {
+    "trafficSubmittedWhileSealedIsRetained": true,
+    "deliveryBeforeRouteApply": 0,
+    "routeApplyReleasesRetainedTrafficExactlyOnce": true,
+    "routeTerminalGatesSuccessorAdmission": true,
+    "duplicateRouteTerminalAdditionalDelivery": 0,
+    "sameKeyDifferentTerminalFingerprintMutatesState": false,
+    "successorRelocationFence": [
+      "relocationId",
+      "bindingGeneration",
+      "sessionIdentity"
+    ],
+    "latePredecessorTerminalAffectsSuccessor": false,
+    "publicJoinCompletionWaitsForRouteTerminal": false,
+    "sameCallResubmitCount": 0
+  }
+}

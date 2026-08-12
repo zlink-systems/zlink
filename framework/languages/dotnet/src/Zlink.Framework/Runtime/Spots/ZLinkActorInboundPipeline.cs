@@ -204,32 +204,6 @@ internal sealed class ZLinkActorInboundPipeline(
         }
     }
 
-    internal async ValueTask DispatchCanonicalReplayAsync(
-        ZLinkSpotActorFrameBatch frames,
-        Func<ZLinkSpotActorFrame, ZLinkActorReply?, CancellationToken, ValueTask>
-            completeFrame,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(completeFrame);
-        try
-        {
-            for (var i = 0; i < frames.Count; i++)
-            {
-                using var frame = frames[i];
-                await DispatchFrameAsync(
-                        frame,
-                        cancellationToken,
-                        allowCapture: false,
-                        completeCanonicalReplay: completeFrame)
-                    .ConfigureAwait(false);
-            }
-        }
-        finally
-        {
-            frames.Dispose();
-        }
-    }
-
     internal Task QueueCanonicalReplayAsync(
         ZLinkSpotActorFrameBatch frames,
         Func<ZLinkSpotActorFrame, ZLinkActorReply?, CancellationToken, ValueTask>
@@ -327,7 +301,8 @@ internal sealed class ZLinkActorInboundPipeline(
             capture = allowCapture
                 ? state.Handoff.TryCapture(
                     frame,
-                    () => EnsureRelocationReplyRoute(runtime, frame))
+                    runtime,
+                    static (rt, fr) => EnsureRelocationReplyRoute(rt, fr))
                 : ZLinkActorHandoffCaptureResult.NotSealed;
         }
         catch (ZLinkActorHandoffRejectedException)
@@ -476,7 +451,8 @@ internal sealed class ZLinkActorInboundPipeline(
             {
                 retryCapture = state.Handoff.TryCapture(
                     frame,
-                    () => EnsureRelocationReplyRoute(runtime, frame));
+                    runtime,
+                    static (rt, fr) => EnsureRelocationReplyRoute(rt, fr));
             }
             catch (ZLinkActorHandoffRejectedException)
             {

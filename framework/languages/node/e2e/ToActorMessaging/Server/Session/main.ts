@@ -17,7 +17,7 @@ import {
   ActorPushReq,
   type BindActorReq,
   type BindActorRes,
-  type SessionBindingSnapshot
+  type SessionBindingRes
 } from '../../Shared/messages';
 import { closeHttpServer, startHttpServer } from '../Support/http-server';
 import { createLocationTopologyRoute } from '../Support/location-topology-route';
@@ -42,7 +42,7 @@ class SessionBindingRegistry {
     }
   }
 
-  snapshot(actorId: string): SessionBindingSnapshot {
+  snapshot(actorId: string): SessionBindingRes {
     const sessionId = this.sessionByActor.get(actorId);
     return { actorId, sessionIds: sessionId === undefined ? [] : [sessionId] };
   }
@@ -54,7 +54,7 @@ class ToActorSession implements ZLinkSession {
   constructor(readonly context: ZLinkSessionContext) {}
 
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage, signal?: AbortSignal): Promise<void> {
-    if (dispatch.packetName === PacketNames.bindActor) {
+    if (dispatch.packetName === PacketNames.bindActorReq) {
       const request = payload.decode<BindActorReq>(Object as never);
       await this.context.actors.bindOrGet({
         actorId: request.actor.actorId,
@@ -72,7 +72,7 @@ class ToActorSession implements ZLinkSession {
       return;
     }
 
-    if (dispatch.packetName === PacketNames.actorPush) {
+    if (dispatch.packetName === PacketNames.actorPushReq) {
       const request = payload.decode(ActorPushReq);
       const actor = this.context.actors.find(request.actorId);
       if (actor === undefined) {

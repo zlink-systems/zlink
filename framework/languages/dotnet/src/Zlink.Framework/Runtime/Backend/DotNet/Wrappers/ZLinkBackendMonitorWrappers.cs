@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
+
 namespace Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 
 internal sealed class ZLinkBackendSocketMonitorWrapper(ISocketMonitor nativeMonitor) : IZLinkBackendSocketMonitor

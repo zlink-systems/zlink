@@ -655,7 +655,7 @@ public sealed class AutoConnectReconcilerTests
             preparing,
             runtime,
             resolvers,
-            new RecordingExecutor(),
+            new RecordingAutoConnectExecutor(),
             options,
             time,
             initiallyPublished: true,
@@ -706,7 +706,7 @@ public sealed class AutoConnectReconcilerTests
             local,
             runtime,
             resolvers,
-            new RecordingExecutor(),
+            new RecordingAutoConnectExecutor(),
             options,
             time,
             initiallyPublished: true,
@@ -892,7 +892,7 @@ public sealed class AutoConnectReconcilerTests
         var tracker = new ZLinkOwnerLeaseTracker(store, options, time);
         var resolvers = new ZLinkStoreLocationResolvers(
             store, tracker, new ZLinkObservedLocationGenerations());
-        var executor = new RecordingExecutor();
+        var executor = new RecordingAutoConnectExecutor();
 
         // An EnableClient() dealer has neither a routing id nor an endpoint:
         // it cannot be keyed, so it publishes no row — but it must dial.
@@ -958,7 +958,7 @@ public sealed class AutoConnectReconcilerTests
         var resolvers = new ZLinkStoreLocationResolvers(
             store, tracker, new ZLinkObservedLocationGenerations());
         var failable = new FailablePeerResolver(resolvers);
-        var executor = new RecordingExecutor();
+        var executor = new RecordingAutoConnectExecutor();
         var local = new ZLinkAutoConnectLocal(
             ZLinkLocationAutoConnectType.ClientServer, Mesh("play"), ZLinkLocationRole.Dealer,
             RoutingId.From("local"), "tcp://l:1");
@@ -982,7 +982,7 @@ public sealed class AutoConnectReconcilerTests
         ZLinkInMemoryLocationStore Store,
         ZLinkLocationRuntime Runtime,
         FailablePeerResolver PeerResolver,
-        RecordingExecutor Executor,
+        RecordingAutoConnectExecutor Executor,
         ZLinkAutoConnectReconciler Reconciler,
         ManualTimeProvider Time)
     {
@@ -1034,20 +1034,5 @@ public sealed class AutoConnectReconcilerTests
                 await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return await inner.ListLiveMeshNodesAsync(meshName, cancellationToken);
         }
-    }
-
-    private sealed class RecordingExecutor : IZLinkAutoConnectExecutor
-    {
-        public List<ZLinkAutoConnectTarget> Connected { get; } = [];
-
-        public List<ZLinkAutoConnectTarget> Disconnected { get; } = [];
-
-        public bool ConnectSucceeds { get; set; } = true;
-
-        public bool DisconnectSucceeds { get; set; } = true;
-
-        public bool Connect(ZLinkAutoConnectTarget target) { Connected.Add(target); return ConnectSucceeds; }
-
-        public bool Disconnect(ZLinkAutoConnectTarget target) { Disconnected.Add(target); return DisconnectSucceeds; }
     }
 }

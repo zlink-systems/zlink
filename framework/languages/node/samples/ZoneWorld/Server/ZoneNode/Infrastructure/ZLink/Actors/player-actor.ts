@@ -68,7 +68,7 @@ class PlayerActor implements ZLinkActor {
   }
 }
 
-class DeliverZoneNotification {
+class DeliverZoneNotificationMsg {
   readonly packetName: string;
 
   constructor(readonly payload: unknown) {
@@ -81,10 +81,10 @@ class DeliverZoneNotification {
 @zlinkSpotActorSendHandler({
   spot: () => ZoneSpot,
   actor: () => PlayerActor,
-  packetName: 'DeliverZoneNotification'
+  packetName: 'DeliverZoneNotificationMsg'
 })
-class DeliverZoneNotificationHandler {
-  async handle(_spot: ZoneSpot, actor: PlayerActor, _context: ZLinkMessageContext, message: DeliverZoneNotification): Promise<void> {
+class DeliverZoneNotificationMsgHandler {
+  async handle(_spot: ZoneSpot, actor: PlayerActor, _context: ZLinkMessageContext, message: DeliverZoneNotificationMsg): Promise<void> {
     const value = message.payload as Record<string, unknown>;
     switch (message.packetName) {
       case 'ZoneStateNotify':
@@ -111,4 +111,4 @@ class DeliverZoneNotificationHandler {
   }
 }
 
-export { DeliverZoneNotification, DeliverZoneNotificationHandler, PlayerActor };
+export { DeliverZoneNotificationMsg, DeliverZoneNotificationMsgHandler, PlayerActor };

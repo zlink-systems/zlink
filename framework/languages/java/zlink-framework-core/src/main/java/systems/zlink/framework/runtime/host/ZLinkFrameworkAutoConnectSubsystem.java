@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.host;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
@@ -10,21 +13,21 @@ final class ZLinkFrameworkAutoConnectSubsystem {
     private ZLinkFrameworkAutoConnectSubsystem() {
     }
 
-    static java.util.concurrent.CompletionStage<Void> start(
+    static CompletionStage<Void> start(
         ZLinkLocationAutoConnectHost locationAutoConnectHost,
         ZLinkFrameworkRegistration registration,
         ZLinkChannelRuntime channels,
         ZLinkMeshNodesRuntime meshNodes,
         ZLinkSpotRuntime spots) {
         if (locationAutoConnectHost == null) {
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
 
         return locationAutoConnectHost.start(
             registration,
             channels,
-            meshNodes == null ? java.util.Map.of() : meshNodes.nodesByName(),
-            spots == null ? java.util.Map.of() : spots.nodesByName(),
+            meshNodes == null ? Map.of() : meshNodes.nodesByName(),
+            spots == null ? Map.of() : spots.nodesByName(),
             spots);
     }
 }

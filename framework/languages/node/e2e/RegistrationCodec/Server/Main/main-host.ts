@@ -14,9 +14,11 @@ import { ZLINK_ROUTE_CLIENT, ZLinkModule, zlinkFramework } from '@zlink-systems/
 import {
   MessagePackEchoMsg,
   MessagePackEchoReq,
+  MessagePackEchoRes,
   PacketNames,
   ProtobufEchoMsg,
   ProtobufEchoReq,
+  ProtobufEchoRes,
   RegistrationCodecNames
 } from '../../Shared/messages';
 import { validateServerOptions, type ServerOptions } from './Configuration/server-options';
@@ -92,11 +94,15 @@ function createMainModule(hostOptions: MainHostOptions): Function {
                   // sample's two non-JSON DTO families disjoint without exposing a selector API.
                   const protobufSerializer = {
                     ...createProtobufMessageSerializer(),
-                    canSerialize: (value: unknown) => value instanceof ProtobufEchoReq || value instanceof ProtobufEchoMsg
+                    canSerialize: (value: unknown) => value instanceof ProtobufEchoReq
+                      || value instanceof ProtobufEchoRes
+                      || value instanceof ProtobufEchoMsg
                   };
                   const messagePackSerializer = {
                     ...createMessagePackSerializer(),
-                    canSerialize: (value: unknown) => value instanceof MessagePackEchoReq || value instanceof MessagePackEchoMsg
+                    canSerialize: (value: unknown) => value instanceof MessagePackEchoReq
+                      || value instanceof MessagePackEchoRes
+                      || value instanceof MessagePackEchoMsg
                   };
                   codecs
                     .addSerializer(ZLINK_PROTOBUF_CONTENT_TYPE, protobufSerializer)

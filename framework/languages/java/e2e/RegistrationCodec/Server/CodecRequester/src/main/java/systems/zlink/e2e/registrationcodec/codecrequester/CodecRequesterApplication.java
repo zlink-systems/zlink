@@ -1,4 +1,5 @@
 package systems.zlink.e2e.registrationcodec.codecrequester;
+import systems.zlink.framework.channels.ZLinkClient;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Path;
@@ -41,7 +42,7 @@ public final class CodecRequesterApplication {
     CodecRequesterEndpoints codecRequesterEndpoints(
         CodecRequesterOptions options,
         ObjectMapper json,
-        systems.zlink.framework.channels.ZLinkClient client) {
+        ZLinkClient client) {
         return new CodecRequesterEndpoints(options, json, client);
     }
 

@@ -66,7 +66,7 @@ struct join_target_req_t
 
 struct deferred_join_msg_t
 {
-    static constexpr const char *packet_name = "DeferredJoin";
+    static constexpr const char *packet_name = "DeferredJoinMsg";
     std::string scenario;
     std::string target_spot_id;
 };
@@ -91,7 +91,7 @@ struct probe_req_t
 
 struct handoff_packet_msg_t
 {
-    static constexpr const char *packet_name = "HandoffPacket";
+    static constexpr const char *packet_name = "HandoffPacketMsg";
     std::string scenario;
     std::string marker;
 };

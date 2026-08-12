@@ -13,7 +13,7 @@ public final class LateSubscriberScenario {
         ScenarioAssert.ensure(
             !ScenarioAssert.hasEvent(late, "prelate", 0),
             "PS-A3 late subscriber received replayed pre-late event");
-        context.publisher().publish("all", new Contracts.EventMsg("ps-a3", 1, "after-late"));
+        context.publisher().publish("all", new Contracts.Event("ps-a3", 1, "after-late"));
         ScenarioAssert.waitForEvent(context.evidence(), "sub-3", "ps-a3", 1);
         System.out.println("scenario PS-A3 passed");
     }

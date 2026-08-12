@@ -2,7 +2,7 @@ import type { ProfileRes, ProfileReq } from '../../Shared/messages';
 import { getJson, getStatus, postJson } from '../../../http-client';
 import { ensure } from './scenario-assert';
 
-interface PeerLocationResult {
+interface PeerLocationRes {
   readonly routingId?: string;
   readonly rid?: string;
   readonly endpoint?: string;
@@ -64,7 +64,7 @@ export async function waitForAnyProviderTraffic(
     }
     await delay(250);
   }
-  const descriptors = await getJson<PeerLocationResult[]>(
+  const descriptors = await getJson<PeerLocationRes[]>(
     consumerUrl,
     '/location/peers'
   ).catch(() => []);
@@ -77,7 +77,7 @@ export async function waitForAnyProviderTraffic(
 export async function waitPeerPresent(peerLocationUrl: string, rid: string): Promise<void> {
   const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
-    const entries = await getJson<PeerLocationResult[]>(peerLocationUrl, '/location/peers');
+    const entries = await getJson<PeerLocationRes[]>(peerLocationUrl, '/location/peers');
     if (entries.some((entry) => entry.routingId === rid || entry.rid === rid)) {
       return;
     }
@@ -89,7 +89,7 @@ export async function waitPeerPresent(peerLocationUrl: string, rid: string): Pro
 export async function waitPeerEndpointPresent(peerLocationUrl: string, rid: string, endpoint: string): Promise<void> {
   const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
-    const entries = await getJson<PeerLocationResult[]>(peerLocationUrl, '/location/peers');
+    const entries = await getJson<PeerLocationRes[]>(peerLocationUrl, '/location/peers');
     if (entries.some((entry) => (entry.routingId === rid || entry.rid === rid) && entry.endpoint === endpoint)) {
       return;
     }
@@ -101,7 +101,7 @@ export async function waitPeerEndpointPresent(peerLocationUrl: string, rid: stri
 export async function waitPeerAbsent(peerLocationUrl: string, rid: string): Promise<void> {
   const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
-    const entries = await getJson<PeerLocationResult[]>(peerLocationUrl, '/location/peers');
+    const entries = await getJson<PeerLocationRes[]>(peerLocationUrl, '/location/peers');
     if (!entries.some((entry) => entry.routingId === rid || entry.rid === rid)) {
       return;
     }
@@ -113,7 +113,7 @@ export async function waitPeerAbsent(peerLocationUrl: string, rid: string): Prom
 export async function waitPeerEndpointAbsent(peerLocationUrl: string, endpoint: string): Promise<void> {
   const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
-    const entries = await getJson<PeerLocationResult[]>(peerLocationUrl, '/location/peers');
+    const entries = await getJson<PeerLocationRes[]>(peerLocationUrl, '/location/peers');
     if (!entries.some((entry) => entry.endpoint === endpoint)) {
       return;
     }

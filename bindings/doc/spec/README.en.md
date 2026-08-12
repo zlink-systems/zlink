@@ -1437,6 +1437,12 @@ is the baseline.
 
 #### Auto-HWM And SpotNode Options
 
+- Core owns HWM calculation and queue admission. A binding only maps Core
+  options and monitoring results to language-specific types; it does not count
+  messages or recalculate an HWM.
+- `ZLINK_OPT_SNDHWM` and `ZLINK_OPT_RCVHWM` limit the accounted bytes actually
+  retained by each directional pipe. Their manual default is `4,096,000 bytes`,
+  and `0` means unlimited. The values are not queue message-count limits.
 - `ZLINK_CTX_OPT_AUTO_HWM_PROFILE` and
   `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES` must be exposed by every
   binding as a typed context option. The profile value is one of
@@ -1449,6 +1455,56 @@ is the baseline.
   effective message bytes, applied HWM, the recent recalculation reason
   enum, deferred shrink, and blocked ratio are all part of the public
   snapshot contract.
+
+##### HWM Calculation And Admission
+
+`ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES` is not a message-size limit. It is a byte
+planning input passed to Core's automatic HWM planner. Core selects a
+message-slot count from the profile, socket role, and observed connection
+count, then calculates the byte HWM as follows.
+
+```text
+planned HWM bytes = selected message slots * planning unit bytes
+```
+
+A context planning unit of `0` selects `1,024 bytes` for STREAM and
+`4,096 bytes` for every other raw socket. An explicit raw-socket value applies
+only to that socket's calculation. The planning unit is not an observed average
+message size, and Core does not charge every message as though it had that fixed
+size.
+
+Automatic HWM applies a planned value only to sockets without a manual
+directional HWM override. Connection-count changes trigger recalculation
+through debounce and bucket hysteresis. If a new HWM is below the bytes already
+retained, Core keeps the queued messages and defers application until retention
+falls below the new limit.
+
+Core decides write admission by accumulating the accounted bytes of frames
+retained by a pipe. Once those bytes reach the HWM, later writes receive
+backpressure until byte credit returns. An empty pipe may admit one complete
+message larger than its HWM, after which later writes are limited again. This
+exception does not apply to an incomplete multipart message.
+
+`auto_hwm_socket_message_slots`, `snd_pending_msgs`, and `rcv_pending_msgs` are
+count diagnostics, not admission inputs. Planned, applied, and deferred HWM
+values and `snd_bytes_in_flight` and `rcv_bytes_in_flight` use bytes. A binding
+preserves Core monitoring ABI v2 values and validity flags.
+
+Each binding maps HWM values as follows.
+
+| Binding | Public representation | Core mapping rule |
+|---|---|---|
+| C | `uint64_t` | Passes an exact 8-byte option value. |
+| C++ | `byte_count_t` | Passes its internal `uint64_t` byte value as an exact 8-byte option value. |
+| .NET | `ulong` | Preserves the full `uint64_t` range. |
+| Java/Kotlin | `long` | Treats all 64 bits as unsigned and passes them unchanged. |
+| Node.js | `bigint` | Accepts `0` through `2^64-1` and passes exactly 8 bytes. |
+| Python | `int` | Accepts only the non-negative `uint64_t` range and passes exactly 8 bytes. |
+| Go | `int` | Accepts `0` through platform `MaxInt`, then converts to `uint64`; a read above `MaxInt` returns an overflow error. |
+| Rust | `u64` | Preserves the same range as `uint64_t`. |
+
+##### SpotNode HWM Options
+
 - A SPOT node option name follows core's public enum as-is. A binding
   does not expose a directional HWM option or a delivery-queue
   hard-limit option. What it exposes is the four admission options
@@ -1463,8 +1519,7 @@ is the baseline.
   does not expose this value on a socket/SpotNode/Spot public facade — it
   exposes only the context option as the canonical API. A SPOT node or
   SPOT handle cannot set the raw socket's shared option; calling it fails
-  with `EINVAL`. This value is not a message-size limit — it's the
-  planning unit used to turn an auto-HWM budget into a slot count.
+  with `EINVAL`.
   A dispatch-worker option adjusts only the size of the callback worker
   pool owned by `SpotNode`, and does not mean `ZLINK_IO_THREADS` or a
   data-plane thread count. `min` must be at least 1, and `max` must be at

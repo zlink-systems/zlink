@@ -5,6 +5,11 @@
 Kotlin package는 Java와 JVM service runtime을 공유한다. 아래 문서는 Java type을 그대로 쓰는 범위와 Kotlin
 전용 coroutine·DSL signature를 기능별로 고정한다.
 
+Kotlin의 codec extension은 Java `ZLinkCodecRegistrar`를 그대로 사용한다. Kotlin DSL의 등록
+값에도 Java와 같은 정규화 규칙을 적용한다. 값 앞뒤의 SP와 TAB을 제거하고 ASCII 대문자를
+소문자로 바꾸며, parameter·값 내부 공백·non-ASCII token은 거부한다. Wire에서는 이미
+canonical인 `type/subtype`만 허용하며, Kotlin만의 별도 fallback은 제공하지 않는다.
+
 - [공통 runtime](common-runtime.ko.md)
 - [구성과 host](configuration-host.ko.md)
 - [Channel messaging](channel-messaging.ko.md)

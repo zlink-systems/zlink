@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.configuration;
+import java.time.Duration;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.configuration.ZLinkEndpointConnections;
@@ -8,7 +9,7 @@ public interface RouteMeshChannelBuilder {
 
     RouteMeshChannelBuilder setRoutingId(RoutingId routingId);
 
-    RouteMeshChannelBuilder setDefaultRequestTimeout(java.time.Duration timeout);
+    RouteMeshChannelBuilder setDefaultRequestTimeout(Duration timeout);
 
     RouteMeshChannelBuilder enableClient();
 

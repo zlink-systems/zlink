@@ -1,4 +1,12 @@
 package systems.zlink.e2e.automaticturn.shared;
+import com.sun.net.httpserver.HttpExchange;
+import io.micrometer.core.instrument.Statistic;
+import java.io.IOException;
+import java.util.function.Function;
+import java.util.function.Supplier;
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -27,11 +35,11 @@ public final class EvidenceHttpServer implements SmartLifecycle {
     private final String endpoint;
     private final MeterRegistry metrics;
     private final ZLinkFrameworkLifecycle drain;
-    private final java.util.function.Supplier<ZLinkLocationRuntimeQuery> locations;
+    private final Supplier<ZLinkLocationRuntimeQuery> locations;
     private final DrainEvidence drainEvidence;
-    private final java.util.function.Function<systems.zlink.contracts.core.RoutingId,
+    private final Function<RoutingId,
         CompletionStage<Boolean>> closeSpot;
-    private final java.util.function.Supplier<CompletionStage<String>> routeProbe;
+    private final Supplier<CompletionStage<String>> routeProbe;
     private final ZLinkRouteMeshRuntimeOptions meshOptions;
     private volatile CompletionStage<ZLinkFrameworkTerminationResult> drainResult;
     private HttpServer server;
@@ -55,11 +63,11 @@ public final class EvidenceHttpServer implements SmartLifecycle {
         String endpoint,
         MeterRegistry metrics,
         ZLinkFrameworkLifecycle drain,
-        java.util.function.Supplier<ZLinkLocationRuntimeQuery> locations,
+        Supplier<ZLinkLocationRuntimeQuery> locations,
         DrainEvidence drainEvidence,
-        java.util.function.Function<systems.zlink.contracts.core.RoutingId,
+        Function<RoutingId,
             CompletionStage<Boolean>> closeSpot,
-        java.util.function.Supplier<CompletionStage<String>> routeProbe) {
+        Supplier<CompletionStage<String>> routeProbe) {
         this(evidence, json, endpoint, metrics, drain, locations, drainEvidence,
             closeSpot, routeProbe, null);
     }
@@ -70,11 +78,11 @@ public final class EvidenceHttpServer implements SmartLifecycle {
         String endpoint,
         MeterRegistry metrics,
         ZLinkFrameworkLifecycle drain,
-        java.util.function.Supplier<ZLinkLocationRuntimeQuery> locations,
+        Supplier<ZLinkLocationRuntimeQuery> locations,
         DrainEvidence drainEvidence,
-        java.util.function.Function<systems.zlink.contracts.core.RoutingId,
+        Function<RoutingId,
             CompletionStage<Boolean>> closeSpot,
-        java.util.function.Supplier<CompletionStage<String>> routeProbe,
+        Supplier<CompletionStage<String>> routeProbe,
         ZLinkRouteMeshRuntimeOptions meshOptions) {
         this.evidence = evidence;
         this.json = json;
@@ -144,7 +152,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 json.writeValueAsString(metricSnapshot())));
             server.createContext("/metrics-ready", exchange -> write(
                 exchange,
-                Boolean.toString(systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.enabled())));
+                Boolean.toString(ZLinkRuntimeMetrics.enabled())));
             server.createContext("/drain/start", exchange -> {
                 if (drain == null) {
                     write(exchange, "{\"accepted\":false}");
@@ -163,7 +171,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 }
                 String spotRid = queryValue(exchange.getRequestURI().getRawQuery(), "spotRid");
                 boolean closed = closeSpot.apply(
-                    systems.zlink.contracts.core.RoutingId.from(spotRid))
+                    RoutingId.from(spotRid))
                     .toCompletableFuture().join();
                 write(exchange, "{\"closed\":" + closed + "}");
             });
@@ -219,10 +227,10 @@ public final class EvidenceHttpServer implements SmartLifecycle {
             try {
                 ZLinkFrameworkTerminationResult result = current.toCompletableFuture().join();
                 snapshot.put("result", result.outcome()
-                    == systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome.STOPPED
+                    == ZLinkFrameworkTerminationOutcome.STOPPED
                         ? "drained" : "force_stopped");
                 if (result.outcome()
-                    == systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome.FORCE_STOPPED) {
+                    == ZLinkFrameworkTerminationOutcome.FORCE_STOPPED) {
                     snapshot.put("reason", result.reason().name().toLowerCase());
                 }
             } catch (RuntimeException error) {
@@ -250,11 +258,11 @@ public final class EvidenceHttpServer implements SmartLifecycle {
         return "";
     }
 
-    private java.util.List<Map<String, Object>> metricSnapshot() {
+    private List<Map<String, Object>> metricSnapshot() {
         if (metrics == null) {
-            return java.util.List.of();
+            return List.of();
         }
-        java.util.List<Map<String, Object>> rows = new ArrayList<>();
+        List<Map<String, Object>> rows = new ArrayList<>();
         for (Meter meter : metrics.getMeters()) {
             Map<String, Object> row = new LinkedHashMap<>();
             String name = meter.getId().getName();
@@ -267,7 +275,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
             double value = 0;
             long count = 0;
             for (var measurement : meter.measure()) {
-                if (measurement.getStatistic() == io.micrometer.core.instrument.Statistic.COUNT) {
+                if (measurement.getStatistic() == Statistic.COUNT) {
                     count = Math.round(measurement.getValue());
                 }
                 value = Math.max(value, measurement.getValue());
@@ -300,8 +308,8 @@ public final class EvidenceHttpServer implements SmartLifecycle {
     }
 
     private static void write(
-        com.sun.net.httpserver.HttpExchange exchange,
-        String value) throws java.io.IOException {
+        HttpExchange exchange,
+        String value) throws IOException {
         byte[] body = value.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().add("Content-Type", "application/json");
         exchange.sendResponseHeaders(200, body.length);

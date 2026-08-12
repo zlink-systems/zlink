@@ -4,19 +4,11 @@ umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/../redis-common.sh"
+zlink_dotnet_e2e_acquire_run_lock "$0" "$@"
 
 # Some ST-F handoff markers are runtime diagnostics behind this gate. Message
 # Follow completion uses public terminal and application-handler evidence
 # instead of runtime log markers.
-# Builds and process fixtures share output directories. Serialize complete
-# runner invocations so concurrent scenarios cannot corrupt or invalidate
-# each other's evidence.
-RUNNER_LOCK="${TMPDIR:-/tmp}/zlink-spot-actor-transfer-e2e.lock"
-exec 9>"$RUNNER_LOCK"
-flock -w 600 9 || {
-  echo "timed out waiting for the SpotActorTransfer runner lock" >&2
-  exit 1
-}
 
 if [[ "$#" -eq 0 ]]; then
   SCENARIO="all"
@@ -44,13 +36,7 @@ OWNER_LEASE_TTL_SECONDS=10
 REPLACEMENT_READY_TIMEOUT_SECONDS=$((OWNER_LEASE_TTL_SECONDS + 20))
 
 pick_port() {
-  python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
+  zlink_dotnet_e2e_allocate_ports 1
 }
 
 pids=()
@@ -68,7 +54,7 @@ cleanup() {
   done
   wait "${pids[@]:-}" >/dev/null 2>&1 || true
   if [[ -n "$REDIS_CONTAINER" ]]; then
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   if [[ "$code" -ne 0 ]]; then
     echo "E2E failed. Logs: $LOG_DIR" >&2

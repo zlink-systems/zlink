@@ -264,8 +264,8 @@ class channel_probe_handler_t
                                                     role_options_t,
                                                     fw::channel_client_t,
                                                     fw::route_client_t>;
-    using request_type = e2e::channel_probe_request_t;
-    using reply_type = e2e::channel_probe_reply_t;
+    using request_type = e2e::channel_probe_req_t;
+    using reply_type = e2e::channel_probe_res_t;
 
     channel_probe_handler_t (evidence_store_t &evidence,
                              role_state_t &state,
@@ -353,8 +353,8 @@ class workflow_spot_handler_t
 {
   public:
     using dependency_types = fw::dependency_list_t<evidence_store_t>;
-    using request_type = e2e::spot_workflow_request_t;
-    using reply_type = e2e::spot_workflow_reply_t;
+    using request_type = e2e::spot_workflow_req_t;
+    using reply_type = e2e::spot_workflow_res_t;
 
     explicit workflow_spot_handler_t (evidence_store_t &evidence) : _evidence (evidence) {}
 
@@ -375,7 +375,7 @@ class channel_probe_send_handler_t
 {
   public:
     using dependency_types = fw::dependency_list_t<evidence_store_t>;
-    using message_type = e2e::channel_probe_message_t;
+    using message_type = e2e::channel_probe_msg_t;
 
     explicit channel_probe_send_handler_t (evidence_store_t &evidence) : _evidence (evidence) {}
 
@@ -413,8 +413,8 @@ class route_channel_probe_handler_t
     {
     }
 
-    fw::task_t<e2e::channel_probe_reply_t>
-    handle (const e2e::channel_probe_request_t &request,
+    fw::task_t<e2e::channel_probe_res_t>
+    handle (const e2e::channel_probe_req_t &request,
             const fw::route_message_context_t &context)
     {
         return _handler.handle (request, context);
@@ -434,7 +434,7 @@ class route_channel_probe_send_handler_t
     {
     }
 
-    void handle (const e2e::channel_probe_message_t &message,
+    void handle (const e2e::channel_probe_msg_t &message,
                  const fw::route_message_context_t &context)
     {
         _handler.handle (message, context);
@@ -461,7 +461,7 @@ class config12_instance_spot_t final : public fw::instance_spot_t
     void configure () override
     {
         _context.handlers ().add_handler<&config12_instance_spot_t::handle_request> (
-          e2e::spot_workflow_request_t::packet_name);
+          e2e::spot_workflow_req_t::packet_name);
     }
 
     fw::task_t<void> on_initialize () override
@@ -478,17 +478,17 @@ class config12_instance_spot_t final : public fw::instance_spot_t
         co_return;
     }
 
-    fw::task_t<e2e::spot_workflow_reply_t>
-    handle_request (const e2e::spot_workflow_request_t &request)
+    fw::task_t<e2e::spot_workflow_res_t>
+    handle_request (const e2e::spot_workflow_req_t &request)
     {
         const auto spot = _context.spot_id ();
         _evidence.add ("spot-handler-start|spot=" + spot + "|id=" + request.id);
         const auto workflow = co_await _context.outbound ()
                                 .request (std::string (e2e::workflow_channel),
-                                         e2e::spot_workflow_request_t{
+                                         e2e::spot_workflow_req_t{
                                            request.id + "-workflow", request.timer_name})
                                 .timeout (std::chrono::seconds (5))
-                                .submit<e2e::spot_workflow_reply_t> ();
+                                .submit<e2e::spot_workflow_res_t> ();
         (void) workflow;
         _evidence.add ("spot-workflow-reply|spot=" + spot + "|id=" + request.id);
         auto timer = _context.add_timer<config12_timer_handler_t> (
@@ -497,7 +497,7 @@ class config12_instance_spot_t final : public fw::instance_spot_t
         _evidence.add ("spot-timer-start|spot=" + spot + "|id=" + request.id
                        + "|sequence=handler-start,workflow-reply,handler-end,timer-start");
         _evidence.add ("spot-handler-end|spot=" + spot + "|id=" + request.id);
-        co_return e2e::spot_workflow_reply_t{
+        co_return e2e::spot_workflow_res_t{
           .id = request.id,
           .sequence = {"handler-start", "workflow-reply", "handler-end"}};
     }
@@ -507,10 +507,10 @@ class config12_instance_spot_t final : public fw::instance_spot_t
         const auto spot = _context.spot_id ();
         const auto workflow = co_await _context.outbound ()
                                 .request (std::string (e2e::workflow_channel),
-                                         e2e::spot_workflow_request_t{
+                                         e2e::spot_workflow_req_t{
                                            spot + "-timer-workflow", tick.name})
                                 .timeout (std::chrono::seconds (5))
-                                .submit<e2e::spot_workflow_reply_t> ();
+                                .submit<e2e::spot_workflow_res_t> ();
         (void) workflow;
         _evidence.add ("spot-timer-workflow-reply|spot=" + spot + "|timer=" + tick.name);
         _evidence.add ("spot-timer-end|spot=" + spot + "|timer=" + tick.name
@@ -550,20 +550,20 @@ class request_handler_t
         try {
             const auto body = nlohmann::json::parse (request.body);
             const auto channel = body.at ("channel").get<std::string> ();
-            const auto message = e2e::channel_probe_request_t{
+            const auto message = e2e::channel_probe_req_t{
               body.at ("id").get<std::string> (), body.value ("mode", "echo")};
             const auto timeout = message.mode == "hold"
                                    ? std::chrono::seconds (20)
                                    : std::chrono::seconds (5);
-            e2e::channel_probe_reply_t reply;
+            e2e::channel_probe_res_t reply;
             if (channel == e2e::workflow_channel) {
                 reply = co_await _channels.request_to_channel (channel, message)
                           .timeout (timeout)
-                          .submit<e2e::channel_probe_reply_t> ();
+                          .submit<e2e::channel_probe_res_t> ();
             } else {
                 reply = co_await _routes.request_to_channel (channel, message)
                           .timeout (timeout)
-                          .submit<e2e::channel_probe_reply_t> ();
+                          .submit<e2e::channel_probe_res_t> ();
             }
             co_return json_response ({ {"succeeded", true}, {"reply", reply} });
         }
@@ -598,7 +598,7 @@ class send_handler_t
         try {
             const auto body = nlohmann::json::parse (request.body);
             const auto channel = body.at ("channel").get<std::string> ();
-            const auto message = e2e::channel_probe_message_t{body.at ("id").get<std::string> ()};
+            const auto message = e2e::channel_probe_msg_t{body.at ("id").get<std::string> ()};
             if (channel == e2e::workflow_channel) {
                 co_await _channels.send_to_channel (channel, message).submit ();
             } else {
@@ -837,11 +837,11 @@ class spot_workflow_http_handler_t
         try {
             const auto reply = co_await _routes
                                  .request_to_spot (spot_id,
-                                                   e2e::spot_workflow_request_t{id, id + "-timer"})
+                                                   e2e::spot_workflow_req_t{id, id + "-timer"})
                                  .instance_spot (std::string (e2e::spot_type))
                                  .in_mesh (std::string (e2e::game_mesh))
                                  .timeout (std::chrono::seconds (5))
-                                 .submit<e2e::spot_workflow_reply_t> ();
+                                 .submit<e2e::spot_workflow_res_t> ();
             co_return json_response ({ {"succeeded", true}, {"reply", reply} });
         }
         catch (const fw::framework_exception_t &error) {
@@ -876,10 +876,10 @@ void configure_route_channels (fw::mesh_node_builder_t &mesh,
     for (const auto &channel : servers) {
         auto server = mesh.channel_name (channel).server ();
         server.add_request_handler<route_channel_probe_handler_t,
-                                   e2e::channel_probe_request_t,
-                                   e2e::channel_probe_reply_t> ();
+                                   e2e::channel_probe_req_t,
+                                   e2e::channel_probe_res_t> ();
         server.add_send_handler<route_channel_probe_send_handler_t,
-                                e2e::channel_probe_message_t> ();
+                                e2e::channel_probe_msg_t> ();
     }
     for (const auto &channel : clients) {
         mesh.channel_name (channel).client ();
@@ -992,13 +992,13 @@ int main (int argc, char **argv)
                       .listen (endpoint_port (options.workflow_endpoint))
                       .set_weight (options.workflow_weight)
                       .add_request_handler<channel_probe_handler_t,
-                                           e2e::channel_probe_request_t,
-                                           e2e::channel_probe_reply_t> ()
+                                           e2e::channel_probe_req_t,
+                                           e2e::channel_probe_res_t> ()
                       .add_request_handler<workflow_spot_handler_t,
-                                           e2e::spot_workflow_request_t,
-                                           e2e::spot_workflow_reply_t> ()
+                                           e2e::spot_workflow_req_t,
+                                           e2e::spot_workflow_res_t> ()
                       .add_send_handler<channel_probe_send_handler_t,
-                                        e2e::channel_probe_message_t> ();
+                                        e2e::channel_probe_msg_t> ();
                 }
                 if (options.invalid_mode == "duplicate-workflow-client") {
                     workflow.client ();

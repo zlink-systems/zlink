@@ -15,8 +15,8 @@ public final class RcB1JsonCodecScenario {
             .json();
         ScenarioAssert.ensure("echo:json-request".equals(jsonReply.value()) && "json".equals(jsonReply.handler()),
             "RC-B1 request mismatch");
-        ScenarioAssert.waitForEvidence(context.evidence(), "ContentType", "JsonEcho", "application/json");
-        ScenarioAssert.waitForEvidence(context.evidence(), "Send", "JsonEcho", "json-send");
+        ScenarioAssert.waitForEvidence(context.evidence(), "ContentType", "JsonEchoReq", "application/json");
+        ScenarioAssert.waitForEvidence(context.evidence(), "Send", "JsonEchoMsg", "json-send");
         System.out.println("scenario RC-B1 passed");
     }
 }

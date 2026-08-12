@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.spotservice.play.endpoints
 
+
+import java.util.concurrent.ExecutorService
 import systems.zlink.e2e.kotlin.spotservice.ScenarioState
 import systems.zlink.e2e.kotlin.spotservice.Contracts
 import systems.zlink.e2e.kotlin.spotservice.play.spots.TimerScenarioSpot
@@ -35,7 +37,7 @@ class EvidenceHttpServer(
     private val meshOptions: ZLinkRouteMeshRuntimeOptions,
 ) : SmartLifecycle {
     private var server: HttpServer? = null
-    private var executor: java.util.concurrent.ExecutorService? = null
+    private var executor: ExecutorService? = null
     private var running = false
 
     override fun start() {
@@ -123,7 +125,7 @@ class EvidenceHttpServer(
                     }
                     routes.sendToSpot(request.spotRid, message)
                         .submit()
-                    writeJson(exchange, 200, Contracts.AckRes(true))
+                    writeJson(exchange, 200, Contracts.CommandSubmitRes(true))
                 }
             }
             nextServer.createContext("/spot/stage/request") { exchange ->
@@ -186,14 +188,14 @@ class EvidenceHttpServer(
                     val request = readJson(exchange, Contracts.SpotOutboundCommandReq::class.java)
                     routes.sendToSpot(
                         "room-a",
-                        Contracts.SpotToSpotCommandReq(request.spotRid, request.value)
+                        Contracts.SpotToSpotMsg(request.spotRid, request.value)
                     )
                         .submit()
                     state.waitUntilContainsAll(
                         listOf("SpotToSpotSend", request.value),
                         Duration.ofSeconds(10)
                     )
-                    writeJson(exchange, 200, Contracts.AckRes(true))
+                    writeJson(exchange, 200, Contracts.CommandSubmitRes(true))
                 }
             }
             nextServer.createContext("/route/ping") { exchange ->
@@ -235,7 +237,11 @@ class EvidenceHttpServer(
                     return@createContext
                 }
                 try {
-                    createSpot(rid, localSpotType("timer"), ZLinkMessage.of("e2e"))
+                    createSpot(
+                        rid,
+                        localSpotType("timer"),
+                        Contracts.SpotCreateReq("e2e"),
+                    )
                 } catch (error: InterruptedException) {
                     Thread.currentThread().interrupt()
                     throw IllegalStateException("timer spot create interrupted", error)
@@ -253,7 +259,11 @@ class EvidenceHttpServer(
                     return@createContext
                 }
                 try {
-                    createSpot(rid, localSpotType("user"), ZLinkMessage.of("admin"))
+                    createSpot(
+                        rid,
+                        localSpotType("user"),
+                        Contracts.SpotCreateReq("admin"),
+                    )
                 } catch (error: InterruptedException) {
                     Thread.currentThread().interrupt()
                     throw IllegalStateException("user spot create interrupted", error)
@@ -271,7 +281,11 @@ class EvidenceHttpServer(
                     return@createContext
                 }
                 try {
-                    createSpot(rid, localSpotType("mismatched"), ZLinkMessage.of("admin"))
+                    createSpot(
+                        rid,
+                        localSpotType("mismatched"),
+                        Contracts.SpotCreateReq("admin"),
+                    )
                 } catch (error: InterruptedException) {
                     Thread.currentThread().interrupt()
                     throw IllegalStateException("alternate spot create interrupted", error)
@@ -340,13 +354,11 @@ class EvidenceHttpServer(
     private fun createSpot(
         spotId: String,
         stableType: String,
-        request: Any? = null,
+        request: Contracts.SpotCreateReq = Contracts.SpotCreateReq("e2e"),
     ): ZLinkSpotCreateResult {
-        var call = spots.getOrCreate(spotId, stableType)
-        if (request != null) {
-            call = call.request(request)
-        }
-        return call.submit()
+        return spots.getOrCreate(spotId, stableType)
+            .request(request)
+            .submit()
             .toCompletableFuture()
             .get(5, TimeUnit.SECONDS)
     }

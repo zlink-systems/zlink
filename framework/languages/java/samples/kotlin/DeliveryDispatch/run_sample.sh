@@ -53,6 +53,7 @@ for host in "${coroutine_hosts[@]}"; do
 done
 
 source "../../runner-common.sh"
+zlink_sample_configure_port_pool kotlin
 ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kts)
 
 pids=()
@@ -83,19 +84,10 @@ print_logs() {
 
 trap cleanup EXIT
 
-reserve_ports() {
-  local base=$((20000 + ((RANDOM + $$) % 1000) * 12 % 9000))
-  local endpoints=()
-  for offset in $(seq 0 11); do
-    endpoints+=("127.0.0.1:$((base + offset))")
-  done
-  echo "${endpoints[*]}"
-}
-
 build_framework_jars() {
   (
     cd ../../..
-    ./gradlew --no-daemon \
+    zlink_sample_gradle_locked ./gradlew --no-daemon --no-parallel --max-workers=1 \
       :zlink-framework-core:jar \
       :zlink-framework-spring-boot-starter:jar \
       :zlink-framework-locations-redis:jar \
@@ -104,7 +96,8 @@ build_framework_jars() {
   )
 }
 
-read -r tracking tracking_spot customer_stream courier_stream dispatch_http dispatch_spot dispatch_channel customer_spot customer_router courier_node1_spot courier_node2_spot courier_session_spot < <(reserve_ports)
+read -r tracking tracking_spot customer_stream courier_stream dispatch_http dispatch_spot dispatch_channel customer_spot customer_router courier_node1_spot courier_node2_spot courier_session_spot \
+  <<<"$(zlink_sample_reserve_endpoints 12)"
 
 endpoint_host() { echo "${1%:*}"; }
 endpoint_port() { echo "${1##*:}"; }

@@ -46,7 +46,7 @@ internal static class SubscriberHostFactory
             // subscriber names the publisher endpoint explicitly.
             var subscriber = framework.AddFanoutChannel(PubSubNames.Channel)
                 .Connect(options.PublisherEndpoint);
-            subscriber.AddHandler<EventMsgHandler, EventMsg>("EventMsg");
+            subscriber.AddHandler<EventMsgHandler, PublishedValueEvent>("PublishedValueEvent");
         });
         var app = builder.Build();
         app.MapOperationalEndpoints("subscriber", options.Rid);

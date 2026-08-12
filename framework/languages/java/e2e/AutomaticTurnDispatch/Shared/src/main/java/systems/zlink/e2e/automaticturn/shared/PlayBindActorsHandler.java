@@ -31,7 +31,7 @@ public final class PlayBindActorsHandler
         Contracts.BindActorsReq request,
         ZLinkRouteMessageContext context) {
         return spots.getOrCreate(request.spotRid(), Contracts.TARGET_SPOT)
-            .request(ZLinkMessage.of("bind"))
+            .request(ZLinkMessage.of(new Contracts.ActorCreateReq("bind")))
             .submit()
             .thenCompose(created -> bind(request.spotRid(), request.actorA()))
             .thenCompose(actorA -> bind(request.spotRid(), request.actorB())
@@ -42,7 +42,7 @@ public final class PlayBindActorsHandler
 
     private CompletionStage<ActorRef> bind(String spotRid, String actorId) {
         return actors.getOrCreate(actorId, Contracts.ACTOR_TYPE)
-            .request(ZLinkMessage.of("bind"))
+            .request(ZLinkMessage.of(new Contracts.ActorCreateReq("bind")))
             .submit()
             .thenApply(PlayBindActorsHandler::requireActor)
             .thenApply(actor -> {

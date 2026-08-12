@@ -1210,6 +1210,99 @@ void verify_fixed_drain_callback_barrier ()
     assert (node->active_application_callbacks () == 0);
 }
 
+void verify_deferred_application_terminal_ownership ()
+{
+    using namespace zlink::framework;
+    namespace runtime = zlink::framework::runtime;
+
+    auto registration = make_node (
+      "tcp://127.0.0.1:0", "deferred-terminal-owner");
+    auto node =
+      std::make_shared<detail::mesh_node_runtime_t> (registration);
+    auto budget = std::make_shared<runtime::inbound_dispatch_budget_t> (1024);
+    auto admission =
+      std::make_shared<runtime::completion_admission_owner_t> (1);
+    constexpr std::uint64_t payload_bytes = 64;
+
+    budget->received (payload_bytes);
+    budget->handler_started (payload_bytes);
+    node->application_work_enqueued ();
+    node->application_work_started ();
+    auto completion_permit = admission->acquire ();
+    assert (completion_permit);
+
+    auto stateful_completed = std::make_shared<std::atomic_bool> (false);
+    std::atomic_int stateful_null_completions{0};
+    std::atomic_int stateful_replies{0};
+    std::atomic_int mailbox_releases{0};
+    auto complete_stateful =
+      [stateful_completed, &stateful_null_completions] {
+          if (!stateful_completed->exchange (true, std::memory_order_acq_rel))
+              ++stateful_null_completions;
+      };
+    auto late_reply = [stateful_completed, &stateful_replies] {
+        if (stateful_completed->exchange (true, std::memory_order_acq_rel))
+            return false;
+        ++stateful_replies;
+        return true;
+    };
+    auto terminal =
+      std::make_shared<runtime::application_dispatch_terminal_owner_t> (
+        std::move (completion_permit), budget, payload_bytes, true, node,
+        complete_stateful, [&mailbox_releases] { ++mailbox_releases; });
+
+    const auto held_budget = budget->snapshot ();
+    assert (held_budget.pending_payload_bytes == payload_bytes);
+    assert (held_budget.active_payload_bytes == payload_bytes);
+    assert (admission->snapshot ().pending_completion_sends == 1);
+    assert (node->pending_application_callbacks () == 0);
+    assert (node->active_application_callbacks () == 1);
+    assert (late_reply ());
+    assert (stateful_replies.load () == 1);
+    assert (stateful_null_completions.load () == 0);
+
+    terminal->settle ();
+    terminal->settle ();
+    terminal.reset ();
+    const auto released_budget = budget->snapshot ();
+    assert (released_budget.pending_payload_bytes == 0);
+    assert (released_budget.active_payload_bytes == 0);
+    assert (admission->snapshot ().pending_completion_sends == 0);
+    assert (node->pending_application_callbacks () == 0);
+    assert (node->active_application_callbacks () == 0);
+    assert (mailbox_releases.load () == 1);
+    assert (stateful_replies.load () == 1);
+    assert (stateful_null_completions.load () == 0);
+
+    // An inline terminal uses the same owner and therefore settles every
+    // obligation once even when its destructor runs immediately afterwards.
+    budget->received (payload_bytes);
+    budget->handler_started (payload_bytes);
+    node->application_work_enqueued ();
+    node->application_work_started ();
+    auto inline_completed = std::make_shared<std::atomic_bool> (false);
+    std::atomic_int inline_stateful{0};
+    std::atomic_int inline_mailbox{0};
+    {
+        auto inline_terminal =
+          std::make_shared<runtime::application_dispatch_terminal_owner_t> (
+            admission->acquire (), budget, payload_bytes, true, node,
+            [inline_completed, &inline_stateful] {
+                if (!inline_completed->exchange (
+                      true, std::memory_order_acq_rel)) {
+                    ++inline_stateful;
+                }
+            },
+            [&inline_mailbox] { ++inline_mailbox; });
+        inline_terminal->settle ();
+    }
+    assert (inline_stateful.load () == 1);
+    assert (inline_mailbox.load () == 1);
+    assert (budget->snapshot ().pending_payload_bytes == 0);
+    assert (admission->snapshot ().pending_completion_sends == 0);
+    assert (node->active_application_callbacks () == 0);
+}
+
 #if defined(__unix__)
 int run_cross_process_delivery ()
 {
@@ -1727,6 +1820,7 @@ int main ()
     verify_slow_observer_does_not_block_stop ();
     verify_object_client_registration_boundary ();
     verify_fixed_drain_callback_barrier ();
+    verify_deferred_application_terminal_ownership ();
     verify_descriptor_retire_order_and_pre_seal_rollback ();
     verify_local_node_submit_bridge ();
 #if defined(__unix__)

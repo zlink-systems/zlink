@@ -11,10 +11,9 @@
 #include <zlink/Contracts/Core/routing_id.hpp>
 #include <zlink/Contracts/Messaging/message.hpp>
 
-#include <cstdlib>
-#include <iostream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 namespace zlink::framework::detail
@@ -22,19 +21,6 @@ namespace zlink::framework::detail
 
 namespace
 {
-
-void trace_actor_transfer_target (std::string_view stage,
-                                  std::string_view actor_id,
-                                  std::string_view transfer_id = {})
-{
-    const auto *enabled = std::getenv ("ZLINK_CPP_AUTO_CONNECT_TRACE");
-    if (enabled == nullptr || *enabled == '\0') {
-        return;
-    }
-    std::cerr << "zlink actor-transfer stage=" << stage
-              << " actor=" << actor_id
-              << " transfer=" << transfer_id << '\n';
-}
 
 constexpr std::string_view actor_relay_kind_metadata_key = "__zlink.actorRelayKind";
 constexpr std::string_view actor_relay_kind_send = "send";
@@ -108,12 +94,14 @@ spot_route_internal_dispatcher_t::dispatch_send (const route_received_packet_t &
                                                               : "actor route send body missing");
     }
     try {
-        if (body && received.parts.items ().size () > 0) {
-            const auto header = runtime::messaging::envelope_codec_t{}
-              .decode_header (received.parts);
-            if (header
-                && header.value ().message_name
-                     == spot_multicast_route_send_t::packet_name) {
+        const auto header = runtime::messaging::envelope_codec_t{}
+          .decode_header (received.parts);
+        if (!header) {
+            return detail::propagate_failure<void> (
+              header, "SPOT route send header is invalid");
+        }
+        if (header.value ().message_name
+              == spot_multicast_route_send_t::packet_name) {
                 auto request = _serializers
                   ->get<spot_multicast_route_send_t> ()
                   .deserialize (detail::encoded_payload_from_raw (body.value ()));
@@ -126,7 +114,6 @@ spot_route_internal_dispatcher_t::dispatch_send (const route_received_packet_t &
                          ? result_t<void>::success ()
                          : detail::propagate_failure<void> (
                              dispatched, "SPOT multicast route dispatch failed");
-            }
         }
         auto request = _serializers->get<actor_bound_session_route_request_t> ().deserialize (
           detail::encoded_payload_from_raw (body.value ()));
@@ -184,6 +171,529 @@ result_t<actor_gateway_runtime_t> spot_route_internal_dispatcher_t::bind_actor_r
     return result_t<actor_gateway_runtime_t>::success (std::move (actor_gateway));
 }
 
+bool spot_route_internal_dispatcher_t::dispatch_request_async (
+  const route_received_packet_t &received,
+  const runtime::messaging::envelope_header_t &header,
+  service_provider_t &services,
+  std::function<void (result_t<zlink::message_t>)> completion) const
+{
+    if (!completion
+        || header.message_name
+             != spot_actor_commit_route_request_t::packet_name) {
+        return false;
+    }
+
+    const auto body =
+      runtime::messaging::envelope_codec_t{}.decode_body (received.parts);
+    if (!body) {
+        return false;
+    }
+    try {
+        auto request =
+          _serializers->get<spot_actor_commit_route_request_t> ().deserialize (
+            detail::encoded_payload_from_raw (body.value ()));
+        if (request.prepare && !request.finalize) {
+            return false;
+        }
+        dispatch_actor_commit_request (
+          std::move (request), received, header, services,
+          std::move (completion));
+        return true;
+    }
+    catch (...) {
+        /* The synchronous compatibility path owns malformed packets because
+         * the finalize flag cannot be trusted until deserialization succeeds. */
+        return false;
+    }
+}
+
+void spot_route_internal_dispatcher_t::dispatch_actor_commit_request (
+  spot_actor_commit_route_request_t request,
+  const route_received_packet_t &received,
+  const runtime::messaging::envelope_header_t &header,
+  service_provider_t &services,
+  std::function<void (result_t<zlink::message_t>)> completion) const
+{
+    if (!completion)
+        return;
+
+    struct completion_state_t
+    {
+        std::mutex mutex;
+        bool settled = false;
+        std::function<void (result_t<zlink::message_t>)> callback;
+    };
+    auto completion_state = std::make_shared<completion_state_t> ();
+    completion_state->callback = std::move (completion);
+    auto complete =
+      [completion_state] (result_t<zlink::message_t> result) mutable {
+          std::function<void (result_t<zlink::message_t>)> callback;
+          {
+              std::lock_guard lock (completion_state->mutex);
+              if (completion_state->settled)
+                  return;
+              completion_state->settled = true;
+              callback = std::move (completion_state->callback);
+          }
+          if (callback) {
+              try {
+                  callback (std::move (result));
+              }
+              catch (...) {
+                  /* The request already reached its terminal callback. */
+              }
+          }
+      };
+
+    try {
+        auto actor_ref = actor_ref_from_spot_route (request);
+        auto runtime = _runtime;
+        std::optional<runtime::protocol::session_relocation_route_t>
+          session_relocation_route;
+        if (!request.session_relocation_route.empty ()) {
+            session_relocation_route =
+              runtime::protocol::decode_session_relocation_route (
+                request.session_relocation_route);
+            const auto &route = *session_relocation_route;
+            if (request.source_spot_id.empty ()
+                || route.sender_role
+                     != runtime::protocol::relocation_role_t::target
+                || route.route.action
+                     != runtime::protocol::
+                          session_relocation_route_action_t::commit
+                || route.actor.actor_id != request.actor_id
+                || route.actor.object_generation
+                     != request.actor_generation
+                || route.route.previous_authority_owner_generation
+                     != request.actor_authority_owner_generation
+                || route.route.target_authority_owner_generation
+                     != request.actor_authority_owner_generation + 1
+                || zlink::routing_id_t::from (
+                     route.route.target_node_routing_id)
+                     .to_string ()
+                     != runtime.node_rid ().value ()
+                || route.route.target_node_generation
+                     != request.target_node_lifecycle_generation
+                || !runtime.stage_session_relocation_route (
+                     request.transfer_id,
+                     request.session_relocation_route,
+                     request.actor_type,
+                     request.target_owner_lease_generation)) {
+                complete (result_t<zlink::message_t>::failure (
+                  framework_error_kind_t::protocol_error,
+                  "remote Actor Session relocation route is stale"));
+                return;
+            }
+        }
+        std::uint64_t committed_authority_owner_generation = 0;
+        /* A finalize retry and a late completion-only leg after the target
+         * converged from durable state both terminate on the completed commit. */
+        if (request.finalize) {
+            const auto completed =
+              runtime.completed_remote_actor_commit (
+                request.transfer_id, actor_ref,
+                spot_id_t (request.target_spot_id));
+            if (completed) {
+                if (request.completion_only
+                    && session_relocation_route
+                    && !runtime.activate_session_relocation_route (
+                      request.transfer_id)) {
+                    complete (result_t<zlink::message_t>::failure (
+                      framework_error_kind_t::unavailable,
+                      "Session relocation route retry was not activated"));
+                    return;
+                }
+                complete (result_t<zlink::message_t>::success (
+                  detail::encoded_payload_to_raw (
+                    _serializers
+                      ->get<spot_actor_join_route_reply_t> ()
+                      .serialize (
+                        make_spot_actor_join_route_reply (*completed)))));
+                return;
+            }
+        }
+        auto actor_gateway = _actor_gateway;
+        if (!request.core_transfer
+            && !request.completion_only) {
+            auto bound = bind_actor_route (actor_ref, header, received);
+            if (!bound) {
+                complete (detail::propagate_failure<zlink::message_t> (
+                  bound, "actor session route binding failed"));
+                return;
+            }
+            actor_gateway = std::move (bound.value ());
+        }
+        if (!request.completion_root_reference.empty ()
+            || request.completion_root_checksum != 0) {
+            complete (result_t<zlink::message_t>::failure (
+              framework_error_kind_t::protocol_error,
+              "remote Actor Join completion roots are process-local"));
+            return;
+        }
+        std::vector<handoff_packet_t> handoff_backlog;
+        handoff_backlog.reserve (request.handoff_backlog.size ());
+        for (auto &packet : request.handoff_backlog) {
+            handoff_backlog.push_back (handoff_packet_t{
+              std::move (packet.packet_name_value), std::move (packet.payload),
+              std::move (packet.content_type), std::move (packet.metadata),
+              packet.is_request});
+        }
+        const auto activate_core_transfer =
+          [&] (std::uint64_t authority_owner_generation) -> result_t<void> {
+              auto native = runtime.native_node ();
+              if (!native) {
+                  return result_t<void>::failure (
+                    framework_error_kind_t::internal_failure,
+                    "target Core MeshNode is unavailable");
+              }
+              const auto &target_spot = request.target_spot_id;
+              runtime::host::actor_transfer_prepare_t transfer_prepare{
+                .role = runtime::host::actor_transfer_role_t::target,
+                .transfer_id = request.transfer_id,
+                .actor = runtime::host::public_host_runtime_t::remote_actor_ref (
+                  zlink::routing_id_t::from (request.actor_node_rid),
+                  request.actor_id, request.actor_generation),
+                .source_spot_id = target_spot,
+                .target_spot_id = target_spot,
+                .target_node_rid = native->status ().routing_id ()};
+              runtime::host::actor_transfer_token_t transfer_token;
+              runtime::host::actor_transfer_prepare_result_t transfer_result{
+                transfer_prepare.actor, 0};
+              try {
+                  const auto target_spot_object =
+                    native->resolve_spot (target_spot);
+                  if (!target_spot_object) {
+                      return result_t<void>::failure (
+                        framework_error_kind_t::not_found,
+                        "target Spot authority is unavailable");
+                  }
+                  if (authority_owner_generation == 0) {
+                      return result_t<void>::failure (
+                        framework_error_kind_t::protocol_error,
+                        "Actor authority owner generation is invalid");
+                  }
+                  (void) native->create_reserved_actor (
+                    request.actor_type,
+                    runtime::stateful::object_ref_t{
+                      runtime::stateful::object_kind_t::actor,
+                      request.actor_id,
+                      request.actor_generation,
+                      authority_owner_generation,
+                      target_spot_object->mesh_name,
+                      native->status ().routing_id ().to_string ()});
+              }
+              catch (const std::exception &error) {
+                  return result_t<void>::failure (
+                    framework_error_kind_t::internal_failure, error.what ());
+              }
+              const auto core_prepared = native->prepare_actor_transfer (
+                transfer_prepare, transfer_token, transfer_result);
+              if (!core_prepared) {
+                  return result_t<void>::failure (
+                    framework_error_kind_t::internal_failure,
+                    "target Framework Actor relocation prepare failed");
+              }
+              const auto next_membership_epoch =
+                transfer_result.membership_epoch + 1;
+              const auto core_committed =
+                transfer_token.commit (next_membership_epoch);
+              const auto core_activated =
+                core_committed && transfer_token.activate ();
+              if (!core_activated) {
+                  return result_t<void>::failure (
+                    framework_error_kind_t::internal_failure,
+                    "target Framework Actor relocation activation failed");
+              }
+              runtime.record_core_actor_transfer_activation (
+                request.actor_id, next_membership_epoch);
+              return result_t<void>::success ();
+          };
+        if (request.finalize && !request.completion_only) {
+            if (request.target_owner_lease_generation
+                  > static_cast<std::uint64_t> (
+                    std::numeric_limits<std::int64_t>::max ())) {
+                complete (result_t<zlink::message_t>::failure (
+                  framework_error_kind_t::protocol_error,
+                  "remote Actor target owner lease generation is invalid"));
+                return;
+            }
+            const auto authority_committed =
+              runtime.commit_remote_actor_authority (
+                request.transfer_id,
+                actor_ref,
+                spot_id_t (request.target_spot_id),
+                request.target_spot_generation,
+                request.actor_authority_owner_generation,
+                request.source_mesh_name,
+                request.target_mesh_name,
+                request.target_node_lifecycle_generation,
+                location_owner_token_t{
+                  request.target_owner_id,
+                  static_cast<std::int64_t> (
+                    request.target_owner_lease_generation)},
+                relocation_capacity_fence_t{
+                  request.relocation_capacity_fence},
+                &committed_authority_owner_generation);
+            if (!authority_committed) {
+                complete (detail::propagate_failure<zlink::message_t> (
+                  authority_committed,
+                  "remote Actor authority commit failed"));
+                return;
+            }
+            if (session_relocation_route
+                && !runtime.commit_session_relocation_route_authority (
+                  request.transfer_id,
+                  committed_authority_owner_generation)) {
+                complete (result_t<zlink::message_t>::failure (
+                  framework_error_kind_t::unavailable,
+                  "committed Session relocation authority was not retained"));
+                return;
+            }
+            if (request.core_transfer) {
+                const auto core_activated = activate_core_transfer (
+                  committed_authority_owner_generation);
+                if (!core_activated) {
+                    complete (detail::propagate_failure<zlink::message_t> (
+                      core_activated,
+                      "target Framework Actor relocation activation failed"));
+                    return;
+                }
+            }
+        }
+
+        if (request.finalize && !request.completion_only
+            && session_relocation_route) {
+            const auto &route = *session_relocation_route;
+            const auto session_owner_is_relocation_target =
+              route.session_owner_node_routing_id
+              == route.route.target_node_routing_id;
+            if (!session_owner_is_relocation_target) {
+                const auto staged_actor =
+                  ::zlink::framework::detail::actor_ref_access_t::make (
+                    runtime.node_rid (), request.actor_type,
+                    request.actor_id, request.actor_generation);
+                const auto staged =
+                  actor_gateway.record_bound_session_route (
+                    staged_actor,
+                    zlink::routing_id_t::from (
+                      route.session_owner_node_routing_id),
+                    zlink::routing_id_t::from (
+                      route.session_routing_id),
+                    route.session_owner_node_generation,
+                    committed_authority_owner_generation,
+                    request.target_owner_lease_generation,
+                    route.binding_generation, 0,
+                    route.route.replayed_high_water);
+                if (!staged) {
+                    complete (detail::propagate_failure<
+                      zlink::message_t> (
+                      staged,
+                      "target bound Session route staging failed"));
+                    return;
+                }
+            }
+        }
+
+        const bool prepare = request.prepare;
+        const bool completion_only = request.completion_only;
+        const auto transfer_id = request.transfer_id;
+        const auto bound_session_node_rid = request.bound_session_node_rid;
+        const auto bound_session_rid = request.bound_session_rid;
+        const auto target_owner_lease_generation =
+          request.target_owner_lease_generation;
+        const auto runtime_owner = runtime.weak_state ();
+        const auto actor_gateway_owner = actor_gateway.weak_state ();
+        auto route_client = _route_client;
+        auto *serializers = _serializers;
+        auto complete_committed =
+          [runtime_owner, actor_gateway_owner,
+           route_client = std::move (route_client), serializers,
+           session_relocation_route,
+           committed_authority_owner_generation, prepare, completion_only,
+           transfer_id, bound_session_node_rid, bound_session_rid,
+           target_owner_lease_generation, channel_name = header.channel_name,
+           complete] (result_t<actor_join_reply_t> committed) mutable {
+              try {
+                  if (!committed) {
+                      complete (detail::propagate_failure<zlink::message_t> (
+                        committed, "remote actor commit failed"));
+                      return;
+                  }
+                  auto runtime_state = runtime_owner.lock ();
+                  auto gateway_state = actor_gateway_owner.lock ();
+                  if (!runtime_state || !gateway_state || serializers == nullptr) {
+                      complete (result_t<zlink::message_t>::failure (
+                        framework_error_kind_t::shutting_down,
+                        "remote Actor commit owner was released before reply publication"));
+                      return;
+                  }
+                  spot_node_runtime_t runtime (std::move (runtime_state));
+                  actor_gateway_runtime_t actor_gateway (
+                    std::move (gateway_state));
+                  spot_route_internal_dispatcher_t self (
+                    runtime, actor_gateway, route_client, *serializers);
+                  if (!prepare) {
+                      const auto session_owner_is_relocation_target =
+                        session_relocation_route
+                        && session_relocation_route
+                             ->session_owner_node_routing_id
+                             == session_relocation_route
+                                  ->route.target_node_routing_id;
+                      if (!session_owner_is_relocation_target) {
+                          const auto actor_ref_updated =
+                            actor_gateway.update_actor_ref (
+                              committed.value ().actor);
+                          if (!actor_ref_updated) {
+                              complete (result_t<zlink::message_t>::failure (
+                                actor_ref_updated.error_kind (),
+                                actor_ref_updated.error ()
+                                  ? actor_ref_updated.error ()->what ()
+                                  : "remote actor ref update failed"));
+                              return;
+                          }
+                          if (!bound_session_node_rid.empty ()) {
+                              auto bound = self.bind_actor_session_route (
+                                actor_gateway, committed.value ().actor,
+                                self._runtime.actor_route_transport_name ()
+                                  .value_or (channel_name),
+                                zlink::routing_id_t::from (
+                                  bound_session_node_rid),
+                                bound_session_rid.empty ()
+                                  ? std::nullopt
+                                  : std::make_optional (
+                                      zlink::routing_id_t::from (
+                                        bound_session_rid)),
+                                true);
+                              if (!bound) {
+                                  complete (detail::propagate_failure<
+                                    zlink::message_t> (
+                                    bound,
+                                    "actor bound session route binding failed"));
+                                  return;
+                              }
+                          }
+                      }
+                      if (session_relocation_route
+                          && !session_owner_is_relocation_target) {
+                          const auto &route = *session_relocation_route;
+                          const auto target_authority_owner_generation =
+                            committed_authority_owner_generation != 0
+                              ? committed_authority_owner_generation
+                              : route.route
+                                  .target_authority_owner_generation;
+                          const auto recorded =
+                            actor_gateway.record_bound_session_route (
+                              committed.value ().actor,
+                              zlink::routing_id_t::from (
+                                route.session_owner_node_routing_id),
+                              zlink::routing_id_t::from (
+                                route.session_routing_id),
+                              route.session_owner_node_generation,
+                              target_authority_owner_generation,
+                              target_owner_lease_generation,
+                              route.binding_generation, 0,
+                              route.route.replayed_high_water);
+                          if (!recorded) {
+                              complete (detail::propagate_failure<
+                                zlink::message_t> (
+                                recorded,
+                                "target bound Session route publication failed"));
+                              return;
+                          }
+                      }
+                  }
+                  if (completion_only
+                      && session_relocation_route
+                      && !runtime.activate_session_relocation_route (
+                        transfer_id)) {
+                      complete (result_t<zlink::message_t>::failure (
+                        framework_error_kind_t::unavailable,
+                        "Session relocation route retry was not activated"));
+                      return;
+                  }
+                  complete (result_t<zlink::message_t>::success (
+                    detail::encoded_payload_to_raw (
+                      self._serializers
+                        ->get<spot_actor_join_route_reply_t> ()
+                        .serialize (make_spot_actor_join_route_reply (
+                          committed.value ())))));
+              }
+              catch (const framework_exception_t &error) {
+                  complete (
+                    detail::result_access_t::failure<zlink::message_t> (
+                      error));
+              }
+              catch (const std::exception &error) {
+                  complete (result_t<zlink::message_t>::failure (
+                    framework_error_kind_t::protocol_error,
+                    std::string ("SPOT route request decode failed: ")
+                      + error.what ()));
+              }
+          };
+
+        if (request.finalize) {
+            runtime.finalize_remote_actor_to_spot_async (
+              request.transfer_id, actor_ref,
+              spot_id_t (request.target_spot_id),
+              std::move (handoff_backlog), services, &actor_gateway,
+              request.finalize_timeout_ms == 0
+                ? std::nullopt
+                : std::make_optional (
+                    std::chrono::steady_clock::now ()
+                    + std::chrono::milliseconds (
+                      request.finalize_timeout_ms)),
+              request.defer_completion, request.completion_only,
+              std::move (complete_committed));
+            return;
+        }
+
+        if (!request.prepare) {
+            auto prepared = runtime.prepare_remote_actor_to_spot (
+              request.transfer_id, actor_ref,
+              spot_id_t (request.target_spot_id),
+              zlink::message_t::from (request.transfer_state),
+              actor_gateway.actor_context (actor_ref), true);
+            if (!prepared) {
+                complete_committed (std::move (prepared));
+                return;
+            }
+            runtime.finalize_remote_actor_to_spot_async (
+              request.transfer_id, actor_ref,
+              spot_id_t (request.target_spot_id),
+              std::move (handoff_backlog), services, &actor_gateway,
+              request.finalize_timeout_ms == 0
+                ? std::nullopt
+                : std::make_optional (
+                    std::chrono::steady_clock::now ()
+                    + std::chrono::milliseconds (
+                      request.finalize_timeout_ms)),
+              request.defer_completion, request.completion_only,
+              std::move (complete_committed));
+            return;
+        }
+
+        auto committed =
+          request.prepare
+            ? runtime.prepare_remote_actor_to_spot (
+                request.transfer_id, actor_ref,
+                spot_id_t (request.target_spot_id),
+                zlink::message_t::from (request.transfer_state),
+                actor_gateway.actor_context (actor_ref), true)
+            : result_t<actor_join_reply_t>::failure (
+                framework_error_kind_t::protocol_error,
+                "remote Actor commit shape is invalid");
+        complete_committed (std::move (committed));
+    }
+    catch (const framework_exception_t &error) {
+        complete (detail::result_access_t::failure<zlink::message_t> (error));
+    }
+    catch (const std::exception &error) {
+        complete (result_t<zlink::message_t>::failure (
+          framework_error_kind_t::protocol_error,
+          std::string ("SPOT route request decode failed: ") + error.what ()));
+    }
+}
+
 result_t<zlink::message_t> spot_route_internal_dispatcher_t::dispatch_request (
   const route_received_packet_t &received,
   const runtime::messaging::envelope_header_t &header,
@@ -217,8 +727,6 @@ result_t<zlink::message_t> spot_route_internal_dispatcher_t::dispatch_request (
         if (header.message_name == spot_actor_admission_route_request_t::packet_name) {
             auto request = _serializers->get<spot_actor_admission_route_request_t> ().deserialize (
               detail::encoded_payload_from_raw (body.value ()));
-            trace_actor_transfer_target ("admission-received", request.actor_id,
-                                         request.transfer_id);
             auto runtime = _runtime;
             auto admitted = runtime.admit_remote_actor_to_spot (
               request.transfer_id, actor_ref_from_spot_route (request),
@@ -231,339 +739,29 @@ result_t<zlink::message_t> spot_route_internal_dispatcher_t::dispatch_request (
             if (!admitted) {
                 return detail::propagate_failure<zlink::message_t> (admitted, "remote actor admission failed");
             }
-            const auto completion_root =
-              runtime.pending_join_completion_root (
-                request.transfer_id);
             const auto reply = spot_actor_admission_route_reply_t{
               .accepted = admitted.value ().accepted,
               .payload =
                 admitted.value ().reply
                   ? detail::message_to_raw (*admitted.value ().reply, *_serializers).to_bytes ()
                   : std::vector<std::uint8_t>{},
-              .completion_root_reference =
-                completion_root
-                  ? completion_root->reference
-                  : std::string{},
-              .completion_root_checksum =
-                completion_root
-                  ? completion_root->checksum_crc32c
-                  : 0};
-            trace_actor_transfer_target ("admission-replying", request.actor_id,
-                                         request.transfer_id);
+              .completion_root_reference = {},
+              .completion_root_checksum = 0};
             return result_t<zlink::message_t>::success (detail::encoded_payload_to_raw (
               _serializers->get<spot_actor_admission_route_reply_t> ().serialize (reply)));
         }
         if (header.message_name == spot_actor_commit_route_request_t::packet_name) {
-            auto request = _serializers->get<spot_actor_commit_route_request_t> ().deserialize (
-              detail::encoded_payload_from_raw (body.value ()));
-            trace_actor_transfer_target ("commit-received", request.actor_id, request.transfer_id);
-            if (std::getenv ("ZLINK_CPP_AUTO_CONNECT_TRACE") != nullptr) {
-                std::cerr << "zlink actor-transfer flags actor=" << request.actor_id
-                          << " transfer=" << request.transfer_id
-                          << " finalize=" << request.finalize
-                          << " prepare=" << request.prepare
-                          << " completionOnly=" << request.completion_only
-                          << " coreTransfer=" << request.core_transfer
-                          << " rootBytes=" << request.completion_root_reference.size ()
-                          << " rootChecksum=" << request.completion_root_checksum << '\n';
-            }
-            auto actor_ref = actor_ref_from_spot_route (request);
-            auto runtime = _runtime;
-            std::uint64_t committed_authority_owner_generation = 0;
-            if (request.finalize && !request.completion_only) {
-                const auto completed =
-                  runtime.completed_remote_actor_commit (
-                    request.transfer_id, actor_ref,
-                    spot_id_t (request.target_spot_id));
-                if (completed) {
-                    trace_actor_transfer_target (
-                      "commit-replying", request.actor_id,
-                      request.transfer_id);
-                    return result_t<zlink::message_t>::success (
-                      detail::encoded_payload_to_raw (
-                        _serializers
-                          ->get<spot_actor_join_route_reply_t> ()
-                          .serialize (
-                            make_spot_actor_join_route_reply (
-                              *completed))));
-                }
-            }
-            auto actor_gateway = _actor_gateway;
-            if (!request.core_transfer) {
-                auto bound = bind_actor_route (actor_ref, header, received);
-                if (!bound) {
-                    return detail::propagate_failure<zlink::message_t> (
-                      bound, "actor session route binding failed");
-                }
-                actor_gateway = std::move (bound.value ());
-            }
-            trace_actor_transfer_target ("commit-route-bound", request.actor_id,
-                                         request.transfer_id);
-            trace_actor_transfer_target ("commit-root-check-start", request.actor_id,
-                                         request.transfer_id);
-            const auto recovered_completion =
-              !request.completion_root_reference.empty ()
-              && !runtime.pending_join_completion_root (
-                   request.transfer_id);
-            trace_actor_transfer_target ("commit-root-check-done", request.actor_id,
-                                         request.transfer_id);
-            if (!request.completion_root_reference.empty ()
-                || request.completion_root_checksum != 0) {
-                trace_actor_transfer_target ("commit-root-restore-start", request.actor_id,
-                                             request.transfer_id);
-                const auto restored = runtime.restore_pending_join_completion (
-                  request.transfer_id, actor_ref,
-                  spot_id_t (request.target_spot_id),
-                  zlink::framework::runtime::stateful::
-                    durable_join_completion_root_t{
-                    request.completion_root_reference,
-                    request.completion_root_checksum});
-                if (!restored) {
-                    return detail::propagate_failure<zlink::message_t> (
-                      restored,
-                      "remote Actor completion root validation failed");
-                }
-                trace_actor_transfer_target ("commit-root-restore-done", request.actor_id,
-                                             request.transfer_id);
-            }
-            std::vector<handoff_packet_t> handoff_backlog;
-            handoff_backlog.reserve (request.handoff_backlog.size ());
-            for (auto &packet : request.handoff_backlog) {
-                handoff_backlog.push_back (handoff_packet_t{
-                  std::move (packet.packet_name_value), std::move (packet.payload),
-                  std::move (packet.content_type), std::move (packet.metadata),
-                  packet.is_request});
-            }
-            const auto activate_core_transfer =
-              [&] (std::uint64_t authority_owner_generation) -> result_t<void> {
-                  trace_actor_transfer_target ("core-activate-start", request.actor_id,
-                                               request.transfer_id);
-                  auto native = runtime.native_node ();
-                  if (!native) {
-                      return result_t<void>::failure (
-                        framework_error_kind_t::internal_failure,
-                        "target Core MeshNode is unavailable");
-                  }
-                  const auto &target_spot = request.target_spot_id;
-                  runtime::host::actor_transfer_prepare_t transfer_prepare{
-                    .role = runtime::host::actor_transfer_role_t::target,
-                    .transfer_id = request.transfer_id,
-                    .actor = runtime::host::public_host_runtime_t::remote_actor_ref (
-                      zlink::routing_id_t::from (request.actor_node_rid),
-                      request.actor_id, request.actor_generation),
-                    .source_spot_id = target_spot,
-                    .target_spot_id = target_spot,
-                    .target_node_rid = native->status ().routing_id ()};
-                  runtime::host::actor_transfer_token_t transfer_token;
-                  runtime::host::actor_transfer_prepare_result_t transfer_result{
-                    transfer_prepare.actor, 0};
-                  try {
-                      const auto target_spot_object = native->resolve_spot (target_spot);
-                      if (!target_spot_object) {
-                          return result_t<void>::failure (
-                            framework_error_kind_t::not_found,
-                            "target Spot authority is unavailable");
-                      }
-                      if (authority_owner_generation == 0) {
-                          return result_t<void>::failure (
-                            framework_error_kind_t::protocol_error,
-                            "Actor authority owner generation is invalid");
-                      }
-                      (void) native->create_reserved_actor (
-                        request.actor_type,
-                        runtime::stateful::object_ref_t{
-                          runtime::stateful::object_kind_t::actor,
-                          request.actor_id,
-                          request.actor_generation,
-                          authority_owner_generation,
-                          target_spot_object->mesh_name,
-                          native->status ().routing_id ().to_string ()});
-                      trace_actor_transfer_target ("core-actor-created", request.actor_id,
-                                                   request.transfer_id);
-                  }
-                  catch (const std::exception &error) {
-                      return result_t<void>::failure (
-                        framework_error_kind_t::internal_failure,
-                        error.what ());
-                  }
-                  const auto core_prepared = native->prepare_actor_transfer (
-                    transfer_prepare, transfer_token, transfer_result);
-                  trace_actor_transfer_target ("core-prepare-returned", request.actor_id,
-                                               request.transfer_id);
-                  if (!core_prepared) {
-                      return result_t<void>::failure (
-                        framework_error_kind_t::internal_failure,
-                        "target Framework Actor relocation prepare failed");
-                  }
-                  const auto next_membership_epoch =
-                    transfer_result.membership_epoch + 1;
-                  const auto core_committed = transfer_token.commit (next_membership_epoch);
-                  const auto core_activated =
-                    core_committed && transfer_token.activate ();
-                  trace_actor_transfer_target ("core-activate-returned", request.actor_id,
-                                               request.transfer_id);
-                  if (!core_activated) {
-                      return result_t<void>::failure (
-                        framework_error_kind_t::internal_failure,
-                        "target Framework Actor relocation activation failed");
-                  }
-                  runtime.record_core_actor_transfer_activation (
-                    request.actor_id, next_membership_epoch);
-                  return result_t<void>::success ();
-              };
-            if (request.finalize && !request.bound_session_node_rid.empty ()) {
-                trace_actor_transfer_target ("commit-bound-session-start", request.actor_id,
-                                             request.transfer_id);
-                const auto target_actor_ref = ::zlink::framework::detail::actor_ref_access_t::make (
-                  runtime.node_rid (), std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
-                  std::string (actor_ref.actor_id ().value ()), actor_ref.object_generation ());
-                const auto actor_ref_updated =
-                  actor_gateway.update_actor_ref (target_actor_ref);
-                trace_actor_transfer_target ("commit-bound-session-ref-updated", request.actor_id,
-                                             request.transfer_id);
-                if (!actor_ref_updated) {
-                    return result_t<zlink::message_t>::failure (
-                      actor_ref_updated.error_kind (),
-                      actor_ref_updated.error () ? actor_ref_updated.error ()->what ()
-                                                 : "remote actor ref update failed");
-                }
-                auto bound = bind_actor_session_route (
-                  actor_gateway, target_actor_ref,
-                  _runtime.actor_route_transport_name ().value_or (header.channel_name),
-                  zlink::routing_id_t::from (request.bound_session_node_rid),
-                  request.bound_session_rid.empty ()
-                        ? std::nullopt
-                        : std::make_optional (
-                            zlink::routing_id_t::from (request.bound_session_rid)),
-                  true);
-                if (!bound) {
-                    return detail::propagate_failure<zlink::message_t> (
-                      bound, "actor bound session route binding failed");
-                }
-                trace_actor_transfer_target ("commit-bound-session-bound", request.actor_id,
-                                             request.transfer_id);
-            }
-            if (request.finalize && recovered_completion) {
-                const auto replacement_prepared =
-                  runtime.prepare_remote_actor_to_spot (
-                    request.transfer_id,
-                    actor_ref,
-                    spot_id_t (request.target_spot_id),
-                    zlink::message_t::from (
-                      request.transfer_state),
-                    actor_gateway.actor_context (actor_ref),
-                    true);
-                if (!replacement_prepared) {
-                    return detail::propagate_failure<
-                      zlink::message_t> (
-                      replacement_prepared,
-                      "replacement target Actor prepare failed");
-                }
-            }
-            if (request.finalize && !request.completion_only) {
-                trace_actor_transfer_target ("commit-authority-start", request.actor_id,
-                                             request.transfer_id);
-                if (request.target_owner_lease_generation
-                      > static_cast<std::uint64_t> (
-                        std::numeric_limits<std::int64_t>::max ())) {
-                    return result_t<zlink::message_t>::failure (
-                      framework_error_kind_t::protocol_error,
-                      "remote Actor target owner lease generation is invalid");
-                }
-                const auto authority_committed =
-                  runtime.commit_remote_actor_authority (
-                    request.transfer_id,
-                    actor_ref,
-                    spot_id_t (request.target_spot_id),
-                    request.target_spot_generation,
-                    request.actor_authority_owner_generation,
-                    request.source_mesh_name,
-                    request.target_mesh_name,
-                    request.target_node_lifecycle_generation,
-                    location_owner_token_t{
-                      request.target_owner_id,
-                      static_cast<std::int64_t> (
-                        request.target_owner_lease_generation)},
-                    relocation_capacity_fence_t{
-                      request.relocation_capacity_fence},
-                    &committed_authority_owner_generation);
-                if (!authority_committed) {
-                    return detail::propagate_failure<zlink::message_t> (
-                      authority_committed,
-                      "remote Actor authority commit failed");
-                }
-                if (request.core_transfer) {
-                    const auto core_activated =
-                      activate_core_transfer (committed_authority_owner_generation);
-                    if (!core_activated) {
-                        return detail::propagate_failure<zlink::message_t> (
-                          core_activated,
-                          "target Framework Actor relocation activation failed");
-                    }
-                }
-                trace_actor_transfer_target ("commit-authority-done", request.actor_id,
-                                             request.transfer_id);
-            }
-            trace_actor_transfer_target ("commit-finalize-call", request.actor_id,
-                                         request.transfer_id);
-            auto committed = request.finalize
-                               ? runtime.finalize_remote_actor_to_spot (
-                                   request.transfer_id, actor_ref,
-                                   spot_id_t (request.target_spot_id),
-                                   std::move (handoff_backlog), services, &actor_gateway,
-                                   request.finalize_timeout_ms == 0
-                                     ? std::nullopt
-                                     : std::make_optional (
-                                         std::chrono::steady_clock::now ()
-                                         + std::chrono::milliseconds (
-                                           request.finalize_timeout_ms)),
-                                   request.defer_completion,
-                                   request.completion_only)
-                             : request.prepare
-                               ? runtime.prepare_remote_actor_to_spot (
-                                   request.transfer_id, actor_ref,
-                                   spot_id_t (request.target_spot_id),
-                                   zlink::message_t::from (request.transfer_state),
-                                   actor_gateway.actor_context (actor_ref), true)
-                               : runtime.commit_remote_actor_to_spot (
-                                   request.transfer_id, actor_ref,
-                                   spot_id_t (request.target_spot_id),
-                                   zlink::message_t::from (request.transfer_state),
-                                   actor_gateway.actor_context (actor_ref),
-                                   std::move (handoff_backlog), &services);
-            trace_actor_transfer_target ("commit-applied", request.actor_id, request.transfer_id);
-            if (!committed) {
-                return detail::propagate_failure<zlink::message_t> (committed, "remote actor commit failed");
-            }
-            if (!request.prepare) {
-                const auto actor_ref_updated =
-                  actor_gateway.update_actor_ref (committed.value ().actor);
-                if (!actor_ref_updated) {
-                    return result_t<zlink::message_t>::failure (
-                      actor_ref_updated.error_kind (),
-                      actor_ref_updated.error () ? actor_ref_updated.error ()->what ()
-                                                 : "remote actor ref update failed");
-                }
-                if (!request.bound_session_node_rid.empty ()) {
-                    auto bound = bind_actor_session_route (
-                      actor_gateway, committed.value ().actor,
-                      _runtime.actor_route_transport_name ().value_or (header.channel_name),
-                      zlink::routing_id_t::from (request.bound_session_node_rid),
-                      request.bound_session_rid.empty ()
-                        ? std::nullopt
-                        : std::make_optional (
-                            zlink::routing_id_t::from (request.bound_session_rid)),
-                      true);
-                    if (!bound) {
-                        return detail::propagate_failure<zlink::message_t> (
-                          bound, "actor bound session route binding failed");
-                    }
-                }
-            }
-            trace_actor_transfer_target ("commit-replying", request.actor_id, request.transfer_id);
-            return result_t<zlink::message_t>::success (detail::encoded_payload_to_raw (
-              _serializers->get<spot_actor_join_route_reply_t> ().serialize (
-                make_spot_actor_join_route_reply (committed.value ()))));
+            auto request =
+              _serializers->get<spot_actor_commit_route_request_t> ().deserialize (
+                detail::encoded_payload_from_raw (body.value ()));
+            detail::task_completion_source_t<zlink::message_t> completion;
+            auto result = completion.task ();
+            dispatch_actor_commit_request (
+              std::move (request), received, header, services,
+              [completion] (result_t<zlink::message_t> value) mutable {
+                  completion.complete (std::move (value));
+              });
+            return result.result ();
         }
         if (header.message_name == actor_bound_session_route_request_t::packet_name) {
             auto request = _serializers->get<actor_bound_session_route_request_t> ().deserialize (
@@ -592,6 +790,18 @@ result_t<zlink::message_t> spot_route_internal_dispatcher_t::dispatch_request (
               detail::encoded_payload_from_raw (body.value ()));
             auto runtime = _runtime;
             auto actor_ref = actor_ref_from_spot_route (request);
+            const auto message_follow_target =
+              request.message_follow_hop_count == 0
+                ? std::optional<zlink::framework::runtime::protocol::
+                    actor_route_fence_t>{}
+                : std::make_optional (
+                    zlink::framework::runtime::protocol::actor_route_fence_t{
+                      request.actor_id,
+                      request.actor_generation,
+                      zlink::routing_id_t::from (request.actor_node_rid).to_bytes (),
+                      request.actor_node_generation,
+                      request.actor_authority_owner_generation,
+                      request.actor_owner_lease_generation});
             spot_inbound_message_t metadata;
             metadata.content_type = request.content_type;
             metadata.values = request.metadata;
@@ -612,7 +822,8 @@ result_t<zlink::message_t> spot_route_internal_dispatcher_t::dispatch_request (
             auto relayed = runtime.manager ().relay_actor_packet (
               actor_ref, actor_gateway.actor_context (actor_ref), message_kind,
               request.packet_name_value, zlink::message_t::from (request.payload), services,
-              *_serializers, std::move (metadata));
+              *_serializers, std::move (metadata),
+              message_follow_target ? &*message_follow_target : nullptr);
             if (!relayed) {
                 return detail::propagate_failure<zlink::message_t> (relayed, "remote actor packet failed");
             }

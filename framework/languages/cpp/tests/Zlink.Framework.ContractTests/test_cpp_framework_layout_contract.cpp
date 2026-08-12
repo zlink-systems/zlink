@@ -555,7 +555,6 @@ bool sample_and_e2e_code_does_not_read_the_environment (const std::filesystem::p
             if (ext != ".hpp" && ext != ".cpp" && ext != ".sh") {
                 continue;
             }
-
             std::ifstream input (entry.path ());
             std::string line;
             std::size_t line_no = 0;

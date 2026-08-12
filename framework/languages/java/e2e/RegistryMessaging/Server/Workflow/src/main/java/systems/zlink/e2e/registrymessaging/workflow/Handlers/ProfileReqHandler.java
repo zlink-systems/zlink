@@ -1,4 +1,6 @@
 package systems.zlink.e2e.registrymessaging.workflow.Handlers;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.e2e.registrymessaging.workflow.Infrastructure.ScenarioState;
 import systems.zlink.e2e.registrymessaging.shared.Contracts;
@@ -16,7 +18,7 @@ public final class ProfileReqHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Contracts.ProfileRes> handle(
+    public CompletionStage<Contracts.ProfileRes> handle(
         Contracts.ProfileReq request,
         ZLinkMessageContext context) {
         if (request.value().startsWith("slow")) {
@@ -28,7 +30,7 @@ public final class ProfileReqHandler
             }
         }
         state.record("ProfileReq", request.value());
-        return java.util.concurrent.CompletableFuture.completedFuture(new Contracts.ProfileRes(
+        return CompletableFuture.completedFuture(new Contracts.ProfileRes(
             "profile:" + request.value(),
             state.providerRid(),
             state.instanceId()));

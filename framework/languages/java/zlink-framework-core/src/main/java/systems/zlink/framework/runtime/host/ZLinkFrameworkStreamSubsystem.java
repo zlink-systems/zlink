@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.host;
+import java.util.Map;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
+import systems.zlink.framework.runtime.mesh.ZLinkMeshNodesRuntime;
 
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
@@ -24,8 +27,8 @@ final class ZLinkFrameworkStreamSubsystem {
         ZLinkMessageSerializer serializer,
         ZLinkHandlerActivator.MutableServices runtimeHandlers,
         ZLinkRuntimeEventDispatcher eventDispatcher,
-        systems.zlink.framework.runtime.mesh.ZLinkMeshNodesRuntime meshNodes,
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext backendContext,
+        ZLinkMeshNodesRuntime meshNodes,
+        ZLinkBackendContext backendContext,
         ZLinkSpotRuntime spots,
         ZLinkActorRuntime actors) {
         ZLinkStreamRuntime streams = options.registration().streamNodes().isEmpty()
@@ -34,7 +37,7 @@ final class ZLinkFrameworkStreamSubsystem {
                 backendFactory,
                 adapterOptions,
                 options.registration(),
-                spots == null ? java.util.Map.of() : spots.nodesByName(),
+                spots == null ? Map.of() : spots.nodesByName(),
                 meshNodes.nodesByName(),
                 serializer,
                 actors,

@@ -41,7 +41,7 @@ game server.
 | A dispatch system | [DeliveryDispatch](#5-deliverydispatch--building-a-dispatch-system) | Create a request → pick a fulfiller → reassign on no response → deliver to the party involved |
 | An order-processing system | [ShoppingMall](#6-shoppingmall--building-an-order-processing-system) | Lossless event sourcing written as sequential code, with no orchestration layer |
 | A quest/mission progression system | [GameQuest](#7-gamequest--building-a-quest-progression-system) | Owner processing that trades loss tolerance for real-time-ness |
-| A zone-sharded MMORPG with ops control | [ZoneWorld](#8-zoneworld--building-a-zone-sharded-mmorpg-and-ops-control) — provided in `.NET` and Node.js only | Which surface to pick when doing something across multiple nodes |
+| A zone-sharded MMORPG with ops control | [ZoneWorld](#8-zoneworld--building-a-zone-sharded-mmorpg-and-ops-control) — a common target sample in every language | Which surface to pick when doing something across multiple nodes |
 
 To pick by feature instead, look at the [01. Overview](01-overview.en.md)'s introduction order first.
 
@@ -50,7 +50,8 @@ decision criteria clear.
 
 - **TicTacToe ↔ Bingo** — the same real-time game shown once with manual connect/manual
   registration, and once with auto-connect/auto-registration; once with Play owning the
-  session directly, and once with a separate gateway.
+  session directly, and once with a separate gateway. Because C++ has no handler scanner, it
+  registers handlers directly in both samples, but follows the same connection rule.
 - **ShoppingMall ↔ GameQuest** — the same owner Spot/event sourcing shown once for a domain
   that needs zero loss, and once for a domain that tolerates loss and corrects for it.
 
@@ -59,10 +60,10 @@ decision criteria clear.
 **The smallest real-time game server configuration**, handling a two-player match with 2
 `Api`s and 2 `Play`s. It's also **the only sample that writes endpoints directly instead of
 handing peer connections to the location store.** Even so, the Location Store still resolves
-which node a room and actor currently live on here too — what's manual is **the connection
-between nodes**, not **object location lookup.** It's also the only sample that registers
-handlers directly in configuration code without scanning, which makes it a good place to see
-how the rest fits together once you strip away the part the framework normally automates.
+which node currently owns a room or actor — what's manual is **the connection between nodes**,
+not **object location lookup.** In managed languages, it's also the only sample that registers
+handlers directly in configuration code without scanning. C++ registers handlers directly in
+every sample, but uses manual connections only in TicTacToe.
 
 ```mermaid
 %%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
@@ -346,10 +347,9 @@ into a separate tier.
 
 ## 8. ZoneWorld — Building A Zone-Sharded MMORPG And Ops Control
 
-> Unlike the previous seven samples, ZoneWorld exists only in `.NET` and Node.js. The other
-> six are shared across all five languages. To see the same topic in another language, read
-> this chapter's explanation and the common scenario document, and refer to the code in one
-> of these two languages.
+> ZoneWorld is a common sample implemented by all five framework languages. Each implementation
+> follows this chapter and the common scenario for topology, actor relocation, operations
+> fanout, and browser verification.
 
 The world is split into zones, shared across several `ZoneNode`s, and which node owns which
 zone is decided by the Location Store together with the framework. When a player crosses a
@@ -399,7 +399,8 @@ UI**, so you can watch the boundary crossing and node maintenance-mode switch ha
 - Paired chapters: [07-actor-spot](07-actor-spot.en.md) (relocation),
   [11. Monitoring](11-monitoring.en.md), [12-operations](12-operations.en.md)
 - Scenario: [ZoneWorld](../../../common/sample/zoneworld/README.en.md) · payload JSON
-- The server is provided in multiple languages sharing one browser client.
+- The server and runner are provided in all five languages and share the business behavior and
+  verification criteria. The .NET and Node.js browser smoke uses the same TypeScript client.
 
 ## 9. Running It
 
@@ -415,8 +416,8 @@ framework/languages/node/samples/Bingo.Ts/run_sample.sh
 framework/languages/node/samples/run_samples.sh TicTacToe Bingo
 ```
 
-`run_samples.sh` handles the 6 server samples. ZoneWorld, which needs a browser UI, runs
-separately via `ZoneWorld/run_sample.sh`.
+Every language's `run_samples.sh` runs all seven server samples, including ZoneWorld.
+To run only ZoneWorld, invoke `ZoneWorld/run_sample.sh` from that language's sample root.
 
 ## 10. Related Documents
 

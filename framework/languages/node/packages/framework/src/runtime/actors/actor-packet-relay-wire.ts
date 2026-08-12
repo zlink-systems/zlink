@@ -84,6 +84,7 @@ export function encodeMessageFollowRemoteActorPacketRelayPayload(input: {
   readonly header: string;
   readonly payload: string;
   readonly actorNodeRid: string;
+  readonly actorNodeRidHex?: string;
   readonly actorGeneration: string;
   readonly returnResponse: boolean;
   readonly messageFollowContext: ZLinkActorMessageFollowContext;

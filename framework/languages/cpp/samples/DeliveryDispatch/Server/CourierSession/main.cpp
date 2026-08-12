@@ -114,12 +114,6 @@ int main (int argc, char **argv)
         actor_mesh.listen (topology.courier_session_spot_router_endpoint)
           .channel_name (sample_names_t::courier_actor_discovery)
           .client ();
-        actor_mesh.peer_connections ().connect (
-          zlink::routing_id_t::from (sample_names_t::courier_actor_instance_1),
-          topology.courier_actor_node_1_router_endpoint);
-        actor_mesh.peer_connections ().connect (
-          zlink::routing_id_t::from (sample_names_t::courier_actor_instance_2),
-          topology.courier_actor_node_2_router_endpoint);
         options.add_stream_node (sample_names_t::courier_stream_node)
           .bind (topology.courier_stream_endpoint)
           .register_session<courier_session_t> ();

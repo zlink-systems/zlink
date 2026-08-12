@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../runner-common.sh"
+zlink_sample_configure_port_pool kotlin
 ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kts)
 cd "${SCRIPT_DIR}"
 
@@ -114,7 +115,7 @@ EOF
 chmod 0600 "${api_config}" "${session_config}" "${support_config}"
 
 cd "${SCRIPT_DIR}"
-../../gradlew --settings-file standalone.settings.gradle.kts --no-daemon --no-parallel --max-workers=1 \
+zlink_sample_gradle_locked ../../gradlew --settings-file standalone.settings.gradle.kts --no-daemon --no-parallel --max-workers=1 \
   :Server:Api:installDist \
   :Server:Session:installDist \
   :Server:Support:installDist \

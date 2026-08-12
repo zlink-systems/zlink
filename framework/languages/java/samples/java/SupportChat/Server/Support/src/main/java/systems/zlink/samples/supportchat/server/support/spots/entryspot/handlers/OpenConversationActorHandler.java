@@ -1,4 +1,5 @@
 package systems.zlink.samples.supportchat.server.support.spots.entryspot.handlers;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
 import systems.zlink.framework.ZLinkMessageContext;
@@ -15,7 +16,7 @@ public final class OpenConversationActorHandler
         Messages.OpenConversationReq,
         Messages.OpenConversationRes> {
     @Override
-    public java.util.concurrent.CompletionStage<Messages.OpenConversationRes> handle(
+    public CompletionStage<Messages.OpenConversationRes> handle(
         SupportEntrySpot spot,
         SupportUserActor actor,
         ZLinkMessageContext context,

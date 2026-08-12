@@ -100,14 +100,14 @@ export class ZLinkSpotActorAdmissionCoordinator {
         commitTransferredActor: (actor, backlog) => this.commitTransferredActorTransaction(activation, actor, backlog)
       },
       packets: {
-        handle: (actorId, parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) =>
+        handle: (delivery) =>
           this.dispatchActorPacket(
             activation,
-            actorId,
-            parts,
-            returnResponse,
-            remoteBoundSessionTarget,
-            fallbackActorRef
+            delivery.actorId,
+            delivery.parts,
+            delivery.returnResponse,
+            delivery.remoteBoundSessionTarget,
+            delivery.fallbackActorRef
           ),
         bindRemoteSession: (actor, sourceNodeRid, sourceSessionRid) => {
           const node = this.options.nativeSpotNodeProvider?.(activation.meshName);

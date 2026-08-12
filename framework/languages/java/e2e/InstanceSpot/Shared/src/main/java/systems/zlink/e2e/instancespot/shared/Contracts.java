@@ -10,12 +10,12 @@ public final class Contracts {
     private Contracts() {
     }
 
-    public record InstanceRequest(
+    public record InstanceReq(
         String spotId,
         String operationId,
         String payload,
         long timeoutMilliseconds) {
-        public InstanceRequest {
+        public InstanceReq {
             required(spotId, "spotId");
             required(operationId, "operationId");
             payload = payload == null ? "" : payload;
@@ -25,37 +25,37 @@ public final class Contracts {
         }
     }
 
-    public record InstanceSend(
+    public record InstanceMsg(
         String spotId,
         String operationId,
         String payload) {
-        public InstanceSend {
+        public InstanceMsg {
             required(spotId, "spotId");
             required(operationId, "operationId");
             payload = payload == null ? "" : payload;
         }
     }
 
-    public record CloseRequest(
+    public record CloseMsg(
         String spotId,
         String operationId,
         String gateId) {
-        public CloseRequest {
+        public CloseMsg {
             required(spotId, "spotId");
             required(operationId, "operationId");
             gateId = gateId == null ? "" : gateId;
         }
     }
 
-    public record GateRequest(
+    public record GateReq(
         String gateId,
         boolean open) {
-        public GateRequest {
+        public GateReq {
             required(gateId, "gateId");
         }
     }
 
-    public record InstanceReply(
+    public record InstanceRes(
         String spotId,
         String operationId,
         String payload,
@@ -65,25 +65,25 @@ public final class Contracts {
         long handlerSequence) {
     }
 
-    public record RequestOutcome(
+    public record InstanceCallRes(
         boolean succeeded,
-        InstanceReply reply,
+        InstanceRes reply,
         String errorKind,
         String errorMessage) {
     }
 
-    public record SendOutcome(
+    public record SendSubmitRes(
         boolean succeeded,
         String errorKind,
         String errorMessage) {
     }
 
-    public record ConcurrentRequest(
+    public record ConcurrentReq(
         String spotId,
         int count,
         String operationPrefix,
         long timeoutMilliseconds) {
-        public ConcurrentRequest {
+        public ConcurrentReq {
             required(spotId, "spotId");
             if (count <= 0 || count > 128) {
                 throw new IllegalArgumentException("count must be between 1 and 128");
@@ -95,14 +95,14 @@ public final class Contracts {
         }
     }
 
-    public record ConcurrentOutcome(
-        List<RequestOutcome> outcomes) {
-        public ConcurrentOutcome {
+    public record ConcurrentRes(
+        List<InstanceCallRes> outcomes) {
+        public ConcurrentRes {
             outcomes = List.copyOf(outcomes);
         }
     }
 
-    public record EvidenceEvent(
+    public record EvidenceEntry(
         long sequence,
         String kind,
         String spotId,
@@ -118,17 +118,17 @@ public final class Contracts {
     public record EvidenceSnapshot(
         String rid,
         String lifecycleId,
-        List<EvidenceEvent> events) {
+        List<EvidenceEntry> events) {
         public EvidenceSnapshot {
             events = List.copyOf(events);
         }
     }
 
-    public record EvidenceWaitRequest(
+    public record EvidenceWaitReq(
         String kind,
         String operationId,
         long timeoutMilliseconds) {
-        public EvidenceWaitRequest {
+        public EvidenceWaitReq {
             kind = kind == null ? "" : kind;
             operationId = operationId == null ? "" : operationId;
             if (timeoutMilliseconds <= 0) {
@@ -137,12 +137,12 @@ public final class Contracts {
         }
     }
 
-    public record EvidenceWaitResult(
+    public record EvidenceWaitRes(
         boolean found,
         EvidenceSnapshot snapshot) {
     }
 
-    public record LookupOutcome(
+    public record LookupRes(
         boolean found,
         String spotId,
         long objectGeneration,

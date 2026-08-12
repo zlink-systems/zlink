@@ -1,4 +1,6 @@
 package systems.zlink.e2e.registrymessaging.objectclient;
+import java.util.Locale;
+import java.util.concurrent.CompletionException;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -43,12 +45,12 @@ public final class ObjectClientEndpoints {
             .map(peer -> {
                 Map<String, Object> value = new LinkedHashMap<>();
                 value.put("rid", peer.nodeRid().toString());
-                value.put("state", peer.state().name().toLowerCase(java.util.Locale.ROOT));
+                value.put("state", peer.state().name().toLowerCase(Locale.ROOT));
                 value.put("ready", peer.state() == ZLinkPeerState.READY);
                 value.put(
                     "lastFailure",
                     peer.unavailableReason()
-                        .map(reason -> reason.name().toLowerCase(java.util.Locale.ROOT))
+                        .map(reason -> reason.name().toLowerCase(Locale.ROOT))
                         .orElse(""));
                 return value;
             })
@@ -63,12 +65,12 @@ public final class ObjectClientEndpoints {
 
     @PostMapping("/rm-a3/node-direct")
     public CompletionStage<Map<String, String>> nodeDirect(
-        @RequestBody NodeDirectRequest request) {
+        @RequestBody NodeDirectReq request) {
         RoutingId target = RoutingId.from(request.targetRid());
         var send = routes.sendToNode(
                 Program.meshName(),
                 target,
-                new Contracts.RouteReq("rm-a3-send"))
+                new Contracts.RouteMsg("rm-a3-send"))
             .submit()
             .handle((ignored, failure) -> errorKind(failure));
         var requestCall = routes.requestToNode(
@@ -89,7 +91,7 @@ public final class ObjectClientEndpoints {
 
     private static ZLinkFrameworkErrorKind errorKind(Throwable failure) {
         Throwable current = failure;
-        while (current instanceof java.util.concurrent.CompletionException
+        while (current instanceof CompletionException
             && current.getCause() != null) {
             current = current.getCause();
         }
@@ -101,8 +103,8 @@ public final class ObjectClientEndpoints {
             current);
     }
 
-    public record NodeDirectRequest(String targetRid) {
-        public NodeDirectRequest {
+    public record NodeDirectReq(String targetRid) {
+        public NodeDirectReq {
             if (targetRid == null || targetRid.isBlank()) {
                 throw new IllegalArgumentException("targetRid is required");
             }

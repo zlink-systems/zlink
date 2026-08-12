@@ -1,4 +1,5 @@
 package systems.zlink.e2e.observabilityops.delay;
+import java.net.URI;
 
 import java.nio.file.Path;
 import org.springframework.boot.WebApplicationType;
@@ -42,7 +43,7 @@ public final class Program {
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.addClientServerChannel(Contracts.DELAY_CHANNEL)
                 .server()
-                .listen(java.net.URI.create(config.delayEndpoint()).getPort())
+                .listen(URI.create(config.delayEndpoint()).getPort())
                 .addRequestHandler(
                     DelayHandler.class,
                     Contracts.DelayReq.class,

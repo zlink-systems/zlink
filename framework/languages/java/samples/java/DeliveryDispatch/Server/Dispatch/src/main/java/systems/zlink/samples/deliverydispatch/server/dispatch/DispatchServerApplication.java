@@ -1,4 +1,6 @@
 package systems.zlink.samples.deliverydispatch.server.dispatch;
+import systems.zlink.framework.actors.ZLinkActorClient;
+import systems.zlink.framework.channels.ZLinkClient;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -73,8 +75,8 @@ public final class DispatchServerApplication {
 
     @Bean
     DispatchWorker dispatchWorker(
-        systems.zlink.framework.channels.ZLinkClient channels,
-        systems.zlink.framework.actors.ZLinkActorClient actors,
+        ZLinkClient channels,
+        ZLinkActorClient actors,
         DeliveryOfferStore offers) {
         return new DispatchWorker(channels, actors, offers);
     }

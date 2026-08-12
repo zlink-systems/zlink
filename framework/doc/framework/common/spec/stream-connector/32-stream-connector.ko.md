@@ -192,7 +192,7 @@ control frame은 `Raw` codec, request sequence 없음, metadata 없음, flow fla
 
 `session-closing`은 서버가 세션을 닫기 직전에 보내는 control packet이며, client는 이를 읽어
 `closeReason`을 확정한다
-([Host Relocate와 Shutdown §9](../28-graceful-drain-handoff.ko.md#9-대기-중인-message-timer와-session을-옮긴다)).
+([Host relocation 전체 흐름 §9](../30-host-relocation-flow.ko.md#9-대기-중인-message-timer와-session을-옮긴다)).
 
 ```text
 +------------+-------------------+----------------+--------------------+
@@ -434,7 +434,7 @@ public metric provider 또는 sink에 게시한다. E2E와 application은 그 pr
 | `TransportError` | transport 수준 실패로 끊겼다 |
 
 `ServerDrain`을 받은 client는 이 값을 보고 **재접속과 백오프를 결정한다**
-([Host Relocate와 Shutdown §9](../28-graceful-drain-handoff.ko.md#9-대기-중인-message-timer와-session을-옮긴다)). **서버가 대체 endpoint를
+([Host relocation 전체 흐름 §9](../30-host-relocation-flow.ko.md#9-대기-중인-message-timer와-session을-옮긴다)). **서버가 대체 endpoint를
 지정하는 기능은 이 계약에 포함하지 않는다.**
 
 언어별 문서는 이 사유를 표현하는 **타입 이름과 노출 방식**(속성인지 이벤트 인자인지)만

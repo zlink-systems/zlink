@@ -383,10 +383,10 @@ physical route로 도착한 message를 current owner에 전달한다. Message Fo
 target AuthorityOwnerGeneration과 owner fence를 exact 검증한다. Target owner generation은 hop마다 증가하며
 최대 8 hops다.
 
-Message Follow route 하나의 대기열은 1024 messages와 16 MiB 이하이며 negotiated message
-bound도 지킨다. Message Follow는 original operation ID, generation, payload와 reply route를
-보존한다. Route 없음·만료와 loop는 `Unavailable`, generation mismatch는 `InvalidOperation`, bound 초과는
-`CapacityExceeded`로 끝난다. Failed application operation을 Store에서 찾은 owner에게 다시
+Message Follow route 하나의 대기열에는 message 수와 저장 크기 어느 쪽에도 상한을 두지 않으며
+negotiated message bound는 지킨다. Message Follow는 original operation ID, generation, payload와
+reply route를 보존한다. Route 없음·만료와 loop는 `Unavailable`, generation mismatch는
+`InvalidOperation`으로 끝난다. Failed application operation을 Store에서 찾은 owner에게 다시
 제출하지 않으며 다음 call만 fresh resolve를 수행한다.
 
 이 generation 검사는 relocation route가 같은 incarnation에 속하는지 확인한다. Spot direct
@@ -402,10 +402,13 @@ authority commit 뒤 `ToSpot`, Actor Create와 Join은 target으로 보낸다. �
 source에 남은 Actor의 `ToActor` route는 해당 Actor의 current owner를 계속 가리킨다.
 Actor가 이전될 때마다 Actor별 source→target Message Follow route를 설치한다.
 
-Relocation unit을 seal한 뒤 source route로 도착한 ingress는 bounded hold에 넣고 application handler를 실행하지
-않는다. Owner commit 전 abort에서는 source queue에 arrival order로 복원하고, commit 뒤에는 Message Follow route와
-같은 operation ID·generation·reply route를 유지해 target으로 relay한다. Permit을 기다리는 `Relocating` unit은 seal된
-상태가 아니므로 기존 [owner route](01-glossary.ko.md#owner-route)에서 application message와 timer를 계속 수락한다.
+Relocation unit을 seal한 뒤 source route로 도착한 ingress는 relocation hold에 보관하며,
+application handler는 실행하지 않는다. Owner commit 전에 abort하면 보관한 ingress를 도착
+순서대로 source queue에 되돌린다. Commit 뒤에는 operation ID, generation과 reply route를
+그대로 유지하여 Message Follow route로 target에 relay한다.
+
+Permit을 기다리는 `Relocating` unit은 아직 seal되지 않았다. 따라서 기존
+[owner route](01-glossary.ko.md#owner-route)에서 application message와 timer를 계속 수락한다.
 
 ## 7. Close와 generation 경계
 
@@ -471,8 +474,9 @@ Original send·request를 maintenance target에 새 operation으로 자동 재�
 
 - Object role Mesh 후보가 없거나 여러 개인 create와 cold activation은 §3·§4의 typed error로 끝난다.
 - Ready authority가 없으면 `NotFound`, exact generation이 다르면 `InvalidOperation`, [owner fence](01-glossary.ko.md#owner-fence)가 다르면 `Unavailable`이다.
-- `Closing`, relocation seal 이후 또는 `Draining` owner는 신규 admission을 거부한다. `Relocating`이지만 아직 seal하지
-  않은 unit은 기존 owner admission을 유지한다.
+- `Closing` 또는 `Draining` owner는 신규 admission을 거부한다. Relocation seal 이후 source route로
+  도착한 ingress는 거부하지 않고 relocation hold에 보관한다. `Relocating`이지만 아직 seal하지 않은
+  unit은 기존 owner admission을 유지한다.
 - Request failure를 다른 Spot ID, MeshName이나 owner로 우회하지 않는다.
 - Expired owner는 신규 message·timer admission과 location update를 수행할 수 없다.
 
@@ -507,7 +511,8 @@ label로 사용하지 않는다.
 - Store의 현재 authority와 일치하지 않는 local Instance에는 message를 전달하지
   않는다. 생성 권한을 얻지 못한 target은 별도 instance를 만들지 않는다.
 - Missing, Creating과 Store failure를 negative cache하지 않는다.
-- Message Follow가 committed route와 bounded queue만 사용하고 operation identity를 보존한다.
+- Message Follow는 commit된 route만 사용한다. Relay queue에는 relocation 전용 record 수나
+  byte 상한을 두지 않으며 operation identity를 그대로 보존한다.
 - Close가 exact generation을 검사하고 새 incarnation으로 retarget하지 않는다.
 - User Spot Close가 active membership을 숨겨서 정리하지 않는다.
 - Remote User Spot Close가 exact `SpotRef`, owner generation, `StoreVersion`과 target

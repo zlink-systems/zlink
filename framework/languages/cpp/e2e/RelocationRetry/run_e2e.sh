@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CPP_DIR="$(cd "$ROOT_DIR/../.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-$CPP_DIR/build}"
 source "$ROOT_DIR/../redis-common.sh"
+zlink_cpp_e2e_acquire_run_lock "${BASH_SOURCE[0]}" "$@"
+zlink_cpp_e2e_install_cleanup_trap
 
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="$ROOT_DIR/logs/$RUN_ID"
@@ -28,7 +30,7 @@ cleanup() {
   done
   wait "$source_pid" "$target_pid" >/dev/null 2>&1 || true
   if [[ -n "$REDIS_CONTAINER" ]]; then
-    docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   if [[ -d "$WORK_DIR" && "$WORK_DIR" == /tmp/zlink-cpp-relocation-retry.* ]]; then
     find "$WORK_DIR" -xdev -mindepth 1 -delete

@@ -649,7 +649,8 @@ raw_client_server_client_t::raw_client_server_client_t (
   raw_client_server_client_options_t options) :
     _options (std::move (options)),
     _operations (
-      std::make_shared<foundation::operation_registry_t> (4096))
+      std::make_shared<foundation::operation_registry_t> (
+        foundation::default_operation_capacity))
 {
     if (_options.client_routing_id.empty ()
         || _options.admission.channel_name.empty ()
@@ -1079,12 +1080,15 @@ bool raw_client_server_client_t::request (
         channel = _options.admission.channel_name;
         endpoint = _options.expected_server.advertised_endpoint;
         lifecycle = _options.expected_server.lifecycle_generation;
-        correlation = _next_correlation++;
-        if (correlation == 0 || _next_correlation == 0) {
-            _next_correlation = 1;
+        if (_next_correlation == 0) {
             throw std::overflow_error (
               "ClientServer correlation is exhausted");
         }
+        correlation = _next_correlation;
+        _next_correlation =
+          correlation == std::numeric_limits<std::uint64_t>::max ()
+            ? 0
+            : correlation + 1;
     }
     trace_client_server_lazy (
       "client-request-submit",

@@ -52,7 +52,7 @@ learn about relocation.
 
 | Implementation difference | Current state |
 |---|---|
-| Session Actor binding replacement | The Kotlin bridge does not yet connect the suspending callback or the non-blocking 100 ms close timer. The JVM runtime owns command 51 codec implementation. |
+| Session Actor binding replacement | None. The Kotlin bridge connects the suspending callback (`onActorBindingReplacedSuspending`), and the JVM runtime provides the command 51 codec and the non-blocking 100 ms close timer. |
 
 ## STREAM Socket Message Size
 

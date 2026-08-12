@@ -124,8 +124,10 @@ public sealed partial class RegressionTests
         Assert.Contains("LastSourceEventId", messages, StringComparison.Ordinal);
         Assert.Contains("apiAStream.Request(new JoinSessionReq", clientScenario, StringComparison.Ordinal);
         Assert.Contains("apiAStream.Request(new KillMonsterReq", clientScenario, StringComparison.Ordinal);
-        Assert.Contains("apiAStream.Send(new EnterAreaReq", clientScenario, StringComparison.Ordinal);
-        Assert.Contains("apiBStream.Send(new CollectItemReq", clientScenario, StringComparison.Ordinal);
+        Assert.Contains("apiAStream.Send(new EnterAreaMsg", clientScenario, StringComparison.Ordinal);
+        Assert.Contains("apiBStream.Send(new CollectItemMsg", clientScenario, StringComparison.Ordinal);
+        Assert.DoesNotContain("record EnterAreaReq", messages, StringComparison.Ordinal);
+        Assert.DoesNotContain("record CollectItemReq", messages, StringComparison.Ordinal);
         Assert.DoesNotContain("UnlockFeatureReq", messages, StringComparison.Ordinal);
         Assert.DoesNotContain("CompleteMissionReq", messages, StringComparison.Ordinal);
         Assert.DoesNotContain("UnlockFeatureReq", clientScenario, StringComparison.Ordinal);
@@ -151,7 +153,16 @@ public sealed partial class RegressionTests
         Assert.Contains("await actor.RelayAsync(payload, cancellationToken)", session, StringComparison.Ordinal);
         Assert.Contains("BindOrGetAsync(actor, cancellationToken)", sessionHandlers, StringComparison.Ordinal);
         Assert.Contains("actor.Context.BoundSession", playerSessionActor, StringComparison.Ordinal);
-        Assert.Contains("ZLinkSpotActorSendHandler(nameof(QuestProgressNotify))", playerSessionActor,
+        Assert.Contains("ZLinkSpotActorSendHandler(nameof(QuestProgressMsg))", playerSessionActor,
+            StringComparison.Ordinal);
+        Assert.Contains("new QuestProgressNotify(message.PlayerId, message.Progress)", playerSessionActor,
+            StringComparison.Ordinal);
+        Assert.Contains("new QuestProgressMsg(playerId, progress)", progressNotifier,
+            StringComparison.Ordinal);
+        Assert.Contains("ZLinkSpotActorSendHandler(nameof(QuestCompletedMsg))", playerSessionActor,
+            StringComparison.Ordinal);
+        Assert.Contains("new QuestCompletedNotify(", playerSessionActor, StringComparison.Ordinal);
+        Assert.Contains("new QuestCompletedMsg(playerId, completed, true)", progressNotifier,
             StringComparison.Ordinal);
         Assert.DoesNotContain("BindSessionAsync", gameApiStore, StringComparison.Ordinal);
         Assert.DoesNotContain("ReadBindingHistoryAsync", gameApiStore, StringComparison.Ordinal);

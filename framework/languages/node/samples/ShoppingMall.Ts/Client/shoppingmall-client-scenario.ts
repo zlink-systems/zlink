@@ -11,7 +11,7 @@ import type {
   StartOrderRes
 } from '../Shared/Contracts/messages';
 
-type VersionFenceResult = {
+type VersionFenceRes = {
   rejected: boolean;
   expectedVersion: number;
   actualVersion: number;
@@ -91,7 +91,7 @@ class ShoppingMallClientScenario {
     console.log('shoppingmall-effect-interruption=completed');
 
     const fence = await apiA.post(`/self-check/workflow/${success.state.orderId}/verify-fence`)
-      .fetch<VersionFenceResult>();
+      .fetch<VersionFenceRes>();
     zlinkStreamAssert.ensure(fence.rejected, 'Sample scenario assertion failed.');
     zlinkStreamAssert.ensure(fence.actualVersion > fence.expectedVersion, 'Sample scenario assertion failed.');
     console.log('shoppingmall-version-fence=completed');

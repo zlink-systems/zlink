@@ -26,10 +26,10 @@ internal sealed class ChannelEchoHandler(EvidenceStore evidence)
 
 [ZLinkHandlerGroup("client")]
 internal sealed class ChannelNotifyHandler(EvidenceStore evidence)
-    : IZLinkSendHandler<ChannelNotify>
+    : IZLinkSendHandler<ChannelMsg>
 {
     public ValueTask HandleAsync(
-        ChannelNotify message,
+        ChannelMsg message,
         IZLinkMessageContext context,
         CancellationToken cancellationToken)
     {

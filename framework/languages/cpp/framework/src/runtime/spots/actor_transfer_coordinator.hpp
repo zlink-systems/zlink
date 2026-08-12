@@ -5,14 +5,16 @@
 #include <zlink/framework/contracts/errors/result.hpp>
 
 #include "runtime/actors/actor_ref_access.hpp"
+#include "runtime/protocol/service_wire_codec.hpp"
+#include "runtime/spots/message_follow_suppression_registry.hpp"
 
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <condition_variable>
 #include <map>
 #include <mutex>
 #include <optional>
-#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -40,9 +42,16 @@ struct pending_actor_admission_t
     std::uint64_t completion_operation_id_high = 0;
     std::uint64_t completion_operation_id_low = 0;
     std::optional<message_t> admission_reply;
-    std::optional<message_t> completion_reply;
-    std::string completion_root_reference;
-    std::uint32_t completion_root_checksum = 0;
+    std::vector<std::uint8_t> session_relocation_route;
+    std::string session_relocation_actor_type;
+    std::uint64_t session_relocation_target_owner_lease_generation = 0;
+    std::uint64_t session_relocation_committed_authority_owner_generation = 0;
+    // Deferred-commit completion-loss window: the target process retains the
+    // admitted OperationId and reply while the completion-only leg is still
+    // outstanding. next_completion_poll_at paces process-local convergence.
+    bool commit_finalized = false;
+    bool completion_poll_due = false;
+    std::chrono::steady_clock::time_point next_completion_poll_at{};
 
     bool matches_prepare (const actor_ref_t &actor,
                           const spot_id_t &source_spot,
@@ -57,10 +66,16 @@ struct expired_actor_admission_t
     pending_actor_admission_t admission;
 };
 
+struct deferred_actor_completion_t
+{
+    std::string transfer_id;
+    pending_actor_admission_t admission;
+};
+
 struct removed_actor_message_follow_t
 {
     std::string actor_key;
-    std::uint64_t old_generation = 0;
+    runtime::protocol::actor_route_fence_t source_fence;
     std::string transfer_id;
 };
 
@@ -68,6 +83,8 @@ struct actor_message_follow_target_t
 {
     actor_ref_t actor;
     spot_route_t route;
+    runtime::protocol::actor_route_fence_t source_fence;
+    runtime::protocol::actor_route_fence_t target_fence;
 };
 
 // One in-flight actor packet preserved while its actor is moving (spot-actor
@@ -117,21 +134,32 @@ struct actor_move_completion_t
     bool completed = false;
 };
 
-inline constexpr std::size_t actor_handoff_backlog_max_messages = 1024;
-inline constexpr std::size_t actor_handoff_backlog_max_bytes = 16u * 1024u * 1024u;
+
+// Deferred-commit completion-loss convergence: the pace of the process-local
+// re-poll, and how long a converged commit stays visible so a late
+// completion-only leg still terminates idempotently.
+inline constexpr std::chrono::milliseconds
+  actor_deferred_completion_retry_interval{250};
+inline constexpr std::chrono::seconds actor_deferred_completion_retention{30};
 
 enum class handoff_append_result_t
 {
     appended,
     not_moving,
-    duplicate_request,
-    capacity_exceeded
+    duplicate_request
 };
 
 class actor_transfer_coordinator_t
 {
   public:
-    bool try_reserve_source (const std::string &actor_key);
+    // The reservation may carry the transfer ID that the deferred join will
+    // use, so packets preserved before transfer-out already emit their
+    // handoff markers under the final transfer correlation.
+    bool try_reserve_source (
+      const std::string &actor_key,
+      std::string transfer_id = {},
+      std::chrono::milliseconds terminal_wait =
+        std::chrono::milliseconds::zero ());
     bool try_begin_local (const std::string &actor_key);
     bool try_begin_source_remote (const std::string &actor_key, std::string transfer_id = {});
     void cancel_move (const std::string &actor_key);
@@ -142,7 +170,7 @@ class actor_transfer_coordinator_t
     std::optional<std::chrono::steady_clock::duration>
     complete_move (const std::string &actor_key);
     // Completes a source move while atomically taking packets that arrived
-    // after the first handoff snapshot. The caller relays that bounded batch
+    // after the first handoff snapshot. The caller relays the retained batch
     // after the owner transition without leaving a race between queue drain
     // and move completion.
     actor_move_completion_t complete_move_and_take_backlog (const std::string &actor_key);
@@ -156,40 +184,58 @@ class actor_transfer_coordinator_t
     std::optional<std::string> transfer_id (const std::string &actor_key) const;
 
     // In-flight handoff (spot-actor spec §10). Packets are preserved in arrival
-    // order until the commit path drains them into the commit request. The
-    // result identifies a full temporary queue so the caller can return
-    // Unavailable for requests and drop one-way operations.
+    // order until the commit path drains them into the commit request.
     handoff_append_result_t try_append_backlog (const std::string &actor_key,
                                                 handoff_packet_t packet);
+    // Stages one source-retained batch without allowing live target traffic to
+    // interleave between its packets. The exact committing transfer owns the
+    // append or the whole batch is rejected.
+    bool stage_commit_backlog (const std::string &transfer_id,
+                               std::vector<handoff_packet_t> backlog);
     std::vector<handoff_packet_t> take_backlog (const std::string &actor_key);
 
-    // Message Follow route lifetime (§10.4): activated when the source confirms
-    // the target commit, refreshed on re-transfer (at most one entry per actor),
-    // and removed after the configured duration so retained state cannot pile up.
+    // Message Follow route lifetime (§10.4): each committed source fence keeps
+    // its own bounded route until the configured duration expires. Rapid
+    // repeated relocations can retain more than one source fence for one Actor.
     void activate_message_follow (const std::string &actor_key,
-                                  std::uint64_t old_generation,
+                                  runtime::protocol::actor_route_fence_t source_fence,
                                   actor_ref_t target_actor,
                                   spot_route_t target_route,
+                                  runtime::protocol::actor_route_fence_t target_fence,
                                   std::chrono::steady_clock::time_point remove_at,
                                   std::string transfer_id = {});
-    bool can_follow_stale_generation (const std::string &actor_key,
-                                      std::uint64_t generation) const;
-    std::optional<actor_message_follow_target_t>
-    message_follow_target (const std::string &actor_key, std::uint64_t generation) const;
+    bool matches_message_follow_source (
+      const std::string &actor_key,
+      const runtime::protocol::actor_route_fence_t &source_fence) const;
+    std::optional<actor_message_follow_target_t> message_follow_target (
+      const std::string &actor_key,
+      const runtime::protocol::actor_route_fence_t &source_fence) const;
+    bool has_message_follow_route (const std::string &actor_key) const;
     result_t<std::optional<actor_message_follow_target_t>>
     try_acquire_message_follow (const std::string &actor_key,
                                 std::uint64_t generation,
                                 std::size_t payload_bytes,
-                                std::size_t hop_count);
+                                std::size_t hop_count,
+                                const runtime::protocol::actor_route_fence_t &source_fence);
     void release_message_follow (const std::string &actor_key,
-                                 std::uint64_t generation,
+                                 const runtime::protocol::actor_route_fence_t &source_fence,
                                  std::size_t payload_bytes) noexcept;
-    bool mark_message_follow_notified (
+    bool try_begin_message_follow_notification (
       const std::string &actor_key,
-      std::uint64_t generation,
-      std::vector<std::uint8_t> source_node_routing_id);
+      const runtime::protocol::actor_route_fence_t &source_fence,
+      const runtime::protocol::actor_route_fence_t &target_fence);
+    bool complete_message_follow_notification (
+      const std::string &actor_key,
+      const runtime::protocol::actor_route_fence_t &source_fence,
+      const runtime::protocol::actor_route_fence_t &target_fence,
+      bool transport_accepted);
     std::vector<removed_actor_message_follow_t>
     remove_expired_message_follow (std::chrono::steady_clock::time_point now);
+    std::optional<removed_actor_message_follow_t>
+    remove_message_follow (
+      const std::string &actor_key,
+      const runtime::protocol::actor_route_fence_t &source_fence,
+      const runtime::protocol::actor_route_fence_t &target_fence);
 
     bool try_add_admission (std::string transfer_id, pending_actor_admission_t admission);
     std::optional<pending_actor_admission_t> admission (
@@ -205,12 +251,38 @@ class actor_transfer_coordinator_t
       const std::string &transfer_id,
       const actor_ref_t &source_actor,
       const spot_id_t &target_spot_id) const;
-    bool update_completion_root (
+    // Atomically closes the exact target move, publishes its completed
+    // admission, and transfers every retained packet to the active Actor turn.
+    // A missing value means the transfer or generation fence no longer matches.
+    std::optional<std::vector<handoff_packet_t>>
+    complete_commit_and_take_backlog (const std::string &transfer_id,
+                                      const actor_ref_t &source_actor,
+                                      const spot_id_t &target_spot_id);
+    bool stage_session_relocation_route (
       const std::string &transfer_id,
-      std::string reference,
-      std::uint32_t checksum);
+      std::vector<std::uint8_t> route,
+      std::string actor_type,
+      std::uint64_t target_owner_lease_generation);
+    bool commit_session_relocation_route_authority (
+      const std::string &transfer_id,
+      std::uint64_t authority_owner_generation);
+    bool complete_session_relocation_route_terminal (
+      const std::string &transfer_id,
+      const std::string &actor_type,
+      const std::vector<std::uint8_t> &route,
+      std::uint64_t target_owner_lease_generation);
+    std::optional<pending_actor_admission_t>
+    session_relocation_admission (const std::string &transfer_id) const;
     void fail_commit (const std::string &transfer_id, bool reconcile);
     void complete_commit (const std::string &transfer_id);
+    // Deferred-commit convergence (completion-loss window): marks a commit
+    // whose completion-only leg is still outstanding, and returns the
+    // process-local admissions whose join window elapsed without that leg.
+    // Each returned attempt re-arms after the retry interval; the admission
+    // deadline is extended so a late leg stays idempotent.
+    bool mark_commit_finalized (const std::string &transfer_id);
+    std::vector<deferred_actor_completion_t>
+    due_deferred_completions (std::chrono::steady_clock::time_point now);
     std::vector<expired_actor_admission_t>
     cleanup_expired (std::chrono::steady_clock::time_point now);
     std::size_t pending_count () const;
@@ -227,23 +299,49 @@ class actor_transfer_coordinator_t
 
     struct message_follow_route_t
     {
-        std::uint64_t old_generation = 0;
+        runtime::protocol::actor_route_fence_t source_fence;
         actor_ref_t target_actor;
         spot_route_t target_route;
+        runtime::protocol::actor_route_fence_t target_fence;
         std::chrono::steady_clock::time_point remove_at;
         std::string transfer_id;
         std::size_t in_flight_messages = 0;
         std::size_t in_flight_bytes = 0;
-        std::set<std::vector<std::uint8_t>> notified_sources;
+        message_follow_suppression_key_t suppression_key;
     };
 
+    struct session_route_terminal_fingerprint_t
+    {
+        std::string actor_key;
+        std::string transfer_id;
+        std::string actor_type;
+        std::vector<std::uint8_t> route;
+        std::uint64_t target_owner_lease_generation = 0;
+        std::chrono::steady_clock::time_point admission_deadline;
+
+        friend bool operator== (
+          const session_route_terminal_fingerprint_t &,
+          const session_route_terminal_fingerprint_t &) = default;
+    };
+
+    void stage_session_route_terminal_gate_unlocked (
+      const std::string &transfer_id,
+      const pending_actor_admission_t &admission);
+    bool has_pending_session_route_terminal_unlocked (
+      const std::string &actor_key) const;
+
     mutable std::mutex _mutex;
+    std::condition_variable _changed;
     std::map<std::string, move_state_t> _moves;
     std::map<std::string, pending_actor_admission_t> _admissions;
     std::map<std::string, pending_actor_admission_t> _completed_admissions;
+    std::map<std::string, session_route_terminal_fingerprint_t>
+      _pending_session_route_terminals;
+    std::map<std::string, session_route_terminal_fingerprint_t>
+      _completed_session_route_terminals;
     std::map<std::string, std::vector<handoff_packet_t>> _backlogs;
-    std::map<std::string, std::size_t> _backlog_bytes;
-    std::map<std::string, message_follow_route_t> _message_follow_routes;
+    std::map<std::string, std::vector<message_follow_route_t>> _message_follow_routes;
+    message_follow_suppression_registry_t _message_follow_suppression;
     std::uint64_t _next_transfer_id = 1;
 };
 

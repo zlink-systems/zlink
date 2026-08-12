@@ -12,7 +12,7 @@ Redis 없이 manual endpoint로만 연결하므로 아래 PS-A1~C1은 manual 회
 | PS-A2 | 구현 | 서로 다른 packet name의 typed handler가 각 event를 한 번씩 처리하고 다른 handler가 처리하지 않은 marker를 확인한다. |
 | PS-A3 | 구현 | 늦게 시작한 subscriber의 `ConnectionReady` 뒤 발행분 수신과 연결 전 발행분 non-replay를 확인한다. |
 | PS-A4 | 구현 | 같은 subscriber process에서 외부 TCP fault proxy로 `Disconnected`·`ConnectionReady`를 만들고, 복구 뒤 수신과 disconnect 구간 non-replay를 확인한다. |
-| PS-B1 | 구현 | 한 subscriber handler의 처리 지연 중에도 다른 subscriber가 계속 수신하는 marker를 확인한다. |
+| PS-B1 | 구현 | 한 subscriber handler가 처리 지연 중일 때 나머지 subscriber가 baseline과 bounded 120-event fanout load의 tail marker를 계속 수신하는지 확인한다. |
 | PS-B2 | 구현 | 정상 종료한 publisher를 같은 manual endpoint로 재시작하고, 기존 subscriber의 `Disconnected`·`ConnectionReady`와 복구 뒤 수신 marker를 확인한다. |
 | PS-C1 | 구현 | 미등록 packet name의 `no_handler`·`drop` marker와 이후 정상 event 수신을 확인한다. |
 

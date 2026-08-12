@@ -280,6 +280,9 @@ public sealed partial class RegressionTests
         Assert.DoesNotContain("Remove-SampleRedisScope", helper, StringComparison.Ordinal);
         Assert.DoesNotContain("Remove-SampleRedisScope", aggregate, StringComparison.Ordinal);
         Assert.Contains("Remove-SampleRedisContainer", helper, StringComparison.Ordinal);
+        Assert.Matches(
+            @"(?s)function Remove-SampleRedisContainer \{.*?if \(\$ContainerId -notmatch '\^\[0-9a-f\]\{12,64\}\$'\) \{ return \}.*?Invoke-SampleDockerCommand -Arguments @\(\""rm\"", \""-fv\"", \$ContainerId\)",
+            helper);
     }
 
     [Fact]
@@ -428,7 +431,7 @@ public sealed partial class RegressionTests
         Assert.DoesNotMatch("(?:public|internal)\\s+IZlinkStreamConnector\\s+\\w+", context);
 
         var scenarioFiles = Directory.EnumerateFiles(scenarios, "Td*.cs").OrderBy(path => path).ToArray();
-        Assert.Equal(32, scenarioFiles.Length);
+        Assert.Equal(30, scenarioFiles.Length);
         foreach (var path in scenarioFiles)
         {
             var source = File.ReadAllText(path);
@@ -531,6 +534,141 @@ public sealed partial class RegressionTests
             foreach (var marker in forbidden)
                 Assert.DoesNotContain(marker, source, StringComparison.Ordinal);
         }
+    }
+
+    [Fact]
+    public void DotnetSampleRunnersSeparateCheckedRedisAndApplicationPorts()
+    {
+        var sampleRoot = Path.Combine(ResolveDotnetRoot(), "samples");
+        var samples = new[]
+        {
+            "TicTacToe",
+            "Bingo",
+            "SupportChat",
+            "ShoppingMall",
+            "DeliveryDispatch",
+            "GameQuest",
+            "ZoneWorld"
+        };
+
+        foreach (var sample in samples)
+        {
+            var shellRunner = File.ReadAllText(Path.Combine(
+                sampleRoot,
+                sample,
+                "run_sample.sh"));
+            Assert.Single(
+                Regex.Matches(
+                    shellRunner,
+                    @"random\.randint\(22100, 23999\)").Cast<Match>());
+            Assert.Single(
+                Regex.Matches(
+                    shellRunner,
+                    Regex.Escape(
+                        "sock.bind((\"127.0.0.1\", port))")).Cast<Match>());
+            Assert.DoesNotContain(
+                "sock.bind((\"127.0.0.1\", 0))",
+                shellRunner,
+                StringComparison.Ordinal);
+            Assert.Contains("redis-common.sh", shellRunner,
+                StringComparison.Ordinal);
+            Assert.Contains("zlink_redis_start_scoped_assign", shellRunner,
+                StringComparison.Ordinal);
+            Assert.Contains("zlink_redis_remove_by_id", shellRunner,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("docker rm -fv", shellRunner,
+                StringComparison.Ordinal);
+
+            var powershellRunner = File.ReadAllText(Path.Combine(
+                sampleRoot,
+                sample,
+                "run_sample.ps1"));
+            if (sample == "ZoneWorld")
+                Assert.Contains("run_sample.sh", powershellRunner,
+                    StringComparison.Ordinal);
+            else
+            {
+                Assert.Contains("New-SamplePorts", powershellRunner,
+                    StringComparison.Ordinal);
+                Assert.Contains("Start-SampleRedisContainer", powershellRunner,
+                    StringComparison.Ordinal);
+            }
+        }
+
+        var powershellHelper = File.ReadAllText(Path.Combine(
+            sampleRoot,
+            "sample_runner.ps1"));
+        Assert.Contains("$applicationMinimumPort = 22100", powershellHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("$applicationMaximumPort = 23999", powershellHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("$firstPort -lt $applicationMinimumPort", powershellHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("$lastPort -gt $applicationMaximumPort", powershellHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("[System.Net.IPAddress]::Loopback,", powershellHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("$port)", powershellHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("$listener.Server.ExclusiveAddressUse = $true",
+            powershellHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("$listener.Start()", powershellHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("Configured sample port $port is unavailable.",
+            powershellHelper,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("[System.Net.IPAddress]::Loopback, 0",
+            powershellHelper,
+            StringComparison.Ordinal);
+
+        var shellRedisHelper = File.ReadAllText(Path.Combine(
+            sampleRoot,
+            "redis-common.sh"));
+        Assert.Contains("local redis_min_port=22000", shellRedisHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("local redis_max_port=22099", shellRedisHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("sock.bind((\"127.0.0.1\", int(sys.argv[1])))",
+            shellRedisHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("-p \"127.0.0.1:${port}:6379\"", shellRedisHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("zlink_redis_remove_attempt", shellRedisHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("zlink_redis_remove_by_id", shellRedisHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("[[ \"${container_id}\" =~ ^[0-9a-f]{12,64}$ ]] || return 1",
+            shellRedisHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("timeout -k 2s \"${docker_timeout_seconds}s\" docker rm -fv",
+            shellRedisHelper,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("127.0.0.1::6379", shellRedisHelper,
+            StringComparison.Ordinal);
+
+        Assert.Contains("$redisMinimumPort = 22000", powershellHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("$redisMaximumPort = 22099", powershellHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("Test-SampleTcpPortAvailable -Port $port",
+            powershellHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("127.0.0.1:$($port):6379", powershellHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("Remove-SampleRedisAttempt", powershellHelper,
+            StringComparison.Ordinal);
+        Assert.Matches(
+            @"(?s)function Remove-SampleRedisContainer \{.*?if \(\$ContainerId -notmatch '\^\[0-9a-f\]\{12,64\}\$'\) \{ return \}.*?Invoke-SampleDockerCommand -Arguments @\(\""rm\"", \""-fv\"", \$ContainerId\)",
+            powershellHelper);
+        Assert.Matches(
+            @"(?s)Invoke-SampleDockerCommand -Arguments @\(\s*""create"".*?catch \{\s*Remove-SampleRedisAttempt -Name \$name -ContainerId \$containerId",
+            powershellHelper);
+        Assert.Matches(
+            @"(?s)Invoke-SampleDockerCommand -Arguments @\(\s*""start"", \$containerId\).*?catch \{\s*Remove-SampleRedisAttempt -Name \$name -ContainerId \$containerId",
+            powershellHelper);
+        Assert.DoesNotContain("127.0.0.1::6379", powershellHelper,
+            StringComparison.Ordinal);
     }
 
     [Fact]

@@ -53,6 +53,7 @@ public crate API.
 | [Contract category map](#contract-category-map) | Category → module mapping |
 | [Standard interface rules](#standard-interface-rules) | recv signatures, builder start methods, naming constraints |
 | [Crate layout](#crate-layout) | The classification of public modules |
+| [Byte HWM and Auto-HWM](#byte-hwm-and-auto-hwm) | Mapping between Rust `u64` and Core byte HWM |
 | [Required capability coverage](#required-capability-coverage) | The user-facing capabilities that must be guaranteed once aligned |
 | [Spot Get-Or-Create](#spot-get-or-create) | The `get_or_create_spot` contract |
 | [Receive and Subscribe shape](#receive-and-subscribe-shape) | Storage reuse, distinguishing no-data |
@@ -348,6 +349,26 @@ The crate must expose clear public modules or re-exports.
 
 The public crate may re-export frequently used types at the crate root,
 but keeps private FFI modules private.
+
+## Byte HWM and Auto-HWM
+
+Core owns HWM calculation and queue admission.
+`CommonSocketOptions::set_send_high_water_mark(u64)` and
+`set_receive_high_water_mark(u64)` pass byte values losslessly to Core's exact
+8-byte options. Their getters return Core's full `uint64_t` range as `u64`.
+`0` means unlimited.
+
+`ContextOptions::set_auto_hwm_msg_unit_bytes(u64)` sets a Core planner input.
+Core multiplies the selected message-slot count by the planning unit to
+calculate the planned byte HWM. Setting a directional HWM makes that direction
+a manual override and excludes it from automatic HWM recalculation.
+
+Core decides backpressure when the accounted bytes retained by a pipe reach
+the applied HWM. The Rust binding does not recount messages and maps Core's
+result through its `Result`-based operation contract. Planned, applied, and
+deferred HWM and in-flight usage in `MonitorStatus` are `u64` bytes. Only
+pending-message fields and `auto_hwm_socket_message_slots` are count
+diagnostics.
 
 ## Required capability coverage
 

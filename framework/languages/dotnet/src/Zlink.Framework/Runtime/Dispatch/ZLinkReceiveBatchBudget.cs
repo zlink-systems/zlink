@@ -36,8 +36,8 @@ internal static class ZLinkReceiveBatchBudget
     internal static long MeasureParts(IReadOnlyList<Message> parts)
     {
         long total = 0;
-        foreach (var part in parts)
-            total = checked(total + Math.Max(part.Size, 0));
+        for (var index = 0; index < parts.Count; index++)
+            total = checked(total + Math.Max(parts[index].Size, 0));
         return total;
     }
 

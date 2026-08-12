@@ -1,4 +1,5 @@
 package systems.zlink.e2e.registrymessaging.workflow.Endpoints;
+import java.util.Map;
 
 import java.time.Duration;
 import java.util.List;
@@ -42,8 +43,8 @@ public final class WorkflowEndpoints {
     }
 
     @GetMapping("/health")
-    public java.util.Map<String, String> health() {
-        return java.util.Map.of("status", "ready", "rid", state.providerRid());
+    public Map<String, String> health() {
+        return Map.of("status", "ready", "rid", state.providerRid());
     }
 
     @GetMapping("/evidence")
@@ -94,9 +95,9 @@ public final class WorkflowEndpoints {
     }
 
     @PostMapping("/evidence/clear")
-    public java.util.Map<String, String> clearEvidence() {
+    public Map<String, String> clearEvidence() {
         state.clear();
-        return java.util.Map.of("status", "cleared");
+        return Map.of("status", "cleared");
     }
 
     @PostMapping("/evidence/wait")

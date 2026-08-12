@@ -1,4 +1,5 @@
 package systems.zlink.e2e.storefailure.provider;
+import systems.zlink.framework.channels.ZLinkFanoutClient;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
@@ -95,7 +96,7 @@ public final class ProviderApplication {
         ProviderOptions options,
         ProviderEvidenceStore evidence,
         ObjectMapper json,
-        ObjectProvider<systems.zlink.framework.channels.ZLinkFanoutClient> fanout) {
+        ObjectProvider<ZLinkFanoutClient> fanout) {
         return new ProviderEndpoints(options, evidence, json, fanout);
     }
 }

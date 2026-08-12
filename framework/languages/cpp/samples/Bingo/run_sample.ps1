@@ -70,59 +70,15 @@ function Cleanup([int]$Status) {
         }
     }
     if ($RedisContainer) {
-        & docker rm -fv $RedisContainer 2>$null | Out-Null
+        Remove-ZlinkSampleRedis $RedisContainer
     }
     Print-Logs $Status
     return $Status
 }
 
 function Reserve-Endpoints([int]$Count) {
-    if ($env:BINGO_BASE_PORT) {
-        $basePort = [int]$env:BINGO_BASE_PORT
-        $fixed = New-Object System.Collections.Generic.List[string]
-        for ($i = 1; $i -le $Count; $i++) {
-            $fixed.Add("127.0.0.1:$($basePort + $i)")
-        }
-        return $fixed.ToArray()
-    }
-
-    $listeners = New-Object System.Collections.Generic.List[System.Net.Sockets.TcpListener]
-    $endpoints = New-Object System.Collections.Generic.List[string]
-    $used = [System.Collections.Generic.HashSet[int]]::new()
-    $blocked = [System.Collections.Generic.HashSet[int]]::new()
-    try {
-        while ($endpoints.Count -lt $Count) {
-            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse("127.0.0.1"), 0)
-            $listener.Start()
-            $port = [int]$listener.LocalEndpoint.Port
-            $ctrlPort = $port + 1000
-            if ($ctrlPort -gt 65535 -or $used.Contains($port) -or $blocked.Contains($port) -or
-                $used.Contains($ctrlPort) -or $blocked.Contains($ctrlPort)) {
-                $listener.Stop()
-                continue
-            }
-            $ctrl = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse("127.0.0.1"), $ctrlPort)
-            try {
-                $ctrl.Start()
-            } catch {
-                $listener.Stop()
-                continue
-            } finally {
-                if ($ctrl) {
-                    $ctrl.Stop()
-                }
-            }
-            [void]$used.Add($port)
-            [void]$blocked.Add($ctrlPort)
-            $listeners.Add($listener)
-            $endpoints.Add("127.0.0.1:$port")
-        }
-        return $endpoints.ToArray()
-    } finally {
-        foreach ($listener in $listeners) {
-            $listener.Stop()
-        }
-    }
+    return @(Get-ZlinkSamplePorts -Count $Count -Paired |
+        ForEach-Object { "127.0.0.1:$_" })
 }
 
 function Split-Endpoint([string]$Endpoint) {

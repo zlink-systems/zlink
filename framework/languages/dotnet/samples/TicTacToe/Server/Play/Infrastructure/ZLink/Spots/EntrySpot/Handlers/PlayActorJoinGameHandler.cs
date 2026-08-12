@@ -6,20 +6,19 @@ using Zlink.Framework.Contracts.Spots;
 
 namespace TicTacToe.Server.Play.Infrastructure.ZLink.Spots.EntrySpot.Handlers;
 
-[ZLinkSpotActorSendHandler(nameof(JoinGameReq))]
 // --8<-- [start:doc-join-defer]
 internal sealed class PlayActorJoinGameHandler(ILogger<PlayActorJoinGameHandler> logger)
-    : IZLinkEntrySpotActorSendHandler<PlayEntrySpot, PlayActor, JoinGameReq>
+    : IZLinkEntrySpotActorSendHandler<PlayEntrySpot, PlayActor, JoinGameMsg>
 {
     public ValueTask HandleAsync(
         PlayEntrySpot entrySpot,
         PlayActor actor,
         IZLinkMessageContext context,
-        JoinGameReq message,
+        JoinGameMsg message,
         CancellationToken cancellationToken)
     {
         logger.LogInformation(
-            "actor: JoinGameReq received. actor={ActorId}, roomId={RoomId}",
+            "actor: JoinGameMsg received. actor={ActorId}, roomId={RoomId}",
             actor.ActorId,
             message.RoomId);
 

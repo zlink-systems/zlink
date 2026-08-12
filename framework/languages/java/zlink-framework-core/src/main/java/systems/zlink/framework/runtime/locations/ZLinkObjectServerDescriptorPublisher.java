@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.locations;
+import java.util.Map;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -23,7 +24,7 @@ public final class ZLinkObjectServerDescriptorPublisher {
     private final ZLinkLocationRepository store;
     private final ZLinkLocationRuntime runtime;
     private final ZLinkFrameworkRegistration registration;
-    private final java.util.Map<String, ZLinkInternalMeshNode> nodes;
+    private final Map<String, ZLinkInternalMeshNode> nodes;
     private final AtomicLong revision = new AtomicLong(1);
     private final AtomicLong lastPublishedLeaseGeneration =
         new AtomicLong(-1L);
@@ -32,11 +33,11 @@ public final class ZLinkObjectServerDescriptorPublisher {
         ZLinkLocationRepository store,
         ZLinkLocationRuntime runtime,
         ZLinkFrameworkRegistration registration,
-        java.util.Map<String, ZLinkInternalMeshNode> nodes) {
+        Map<String, ZLinkInternalMeshNode> nodes) {
         this.store = store;
         this.runtime = runtime;
         this.registration = registration;
-        this.nodes = java.util.Map.copyOf(nodes);
+        this.nodes = Map.copyOf(nodes);
     }
 
     public CompletionStage<Void> publish(ZLinkFrameworkRuntimeState state) {

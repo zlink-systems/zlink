@@ -12,10 +12,10 @@ internal sealed class ChannelProbeRequestHandler(
     IZLinkRouteClient routes,
     IZLinkActorClient actors,
     IZLinkSpotClient spots)
-    : IZLinkRequestHandler<ChannelProbeRequest, ChannelProbeReply>
+    : IZLinkRequestHandler<ChannelProbeReq, ChannelProbeRes>
 {
-    public async ValueTask<ChannelProbeReply> HandleAsync(
-        ChannelProbeRequest request,
+    public async ValueTask<ChannelProbeRes> HandleAsync(
+        ChannelProbeReq request,
         IZLinkMessageContext context,
         CancellationToken cancellationToken)
     {
@@ -34,14 +34,14 @@ internal sealed class ChannelProbeRequestHandler(
             var spotReply = await spots
                 .RequestToSpot(
                     spotId,
-                    new ChannelObjectProbeRequest($"{request.Id}-spot"))
-                .Async<ChannelObjectProbeReply>(cancellationToken);
+                    new ChannelObjectProbeReq($"{request.Id}-spot"))
+                .Async<ChannelObjectProbeRes>(cancellationToken);
             downstream.Add($"spot:{spotReply.SpotId}:{spotReply.NodeRid}");
             var actorReply = await actors
                 .RequestToActor(
                     actorId,
-                    new ChannelObjectProbeRequest($"{request.Id}-actor"))
-                .Async<ChannelObjectProbeReply>(cancellationToken);
+                    new ChannelObjectProbeReq($"{request.Id}-actor"))
+                .Async<ChannelObjectProbeRes>(cancellationToken);
             downstream.Add(
                 $"actor:{actorReply.ActorId}:{actorReply.SpotId}:{actorReply.NodeRid}");
         }
@@ -52,19 +52,19 @@ internal sealed class ChannelProbeRequestHandler(
             var audit = await routes
                 .RequestToChannel(
                     ChannelEgressNames.Audit,
-                    new ChannelProbeRequest($"{request.Id}-audit"))
-                .Async<ChannelProbeReply>(cancellationToken);
+                    new ChannelProbeReq($"{request.Id}-audit"))
+                .Async<ChannelProbeRes>(cancellationToken);
             downstream.Add($"{audit.Role}:{audit.Channel}");
 
             var workflow = await routes
                 .RequestToChannel(
                     ChannelEgressNames.Workflow,
-                    new ChannelProbeRequest($"{request.Id}-workflow"))
-                .Async<ChannelProbeReply>(cancellationToken);
+                    new ChannelProbeReq($"{request.Id}-workflow"))
+                .Async<ChannelProbeRes>(cancellationToken);
             downstream.Add($"{workflow.Role}:{workflow.Channel}");
         }
 
-        return new ChannelProbeReply(
+        return new ChannelProbeRes(
             request.Id,
             options.Role.StartsWith("workflow", StringComparison.Ordinal)
                 ? options.Rid
@@ -77,10 +77,10 @@ internal sealed class ChannelProbeRequestHandler(
 internal sealed class ChannelProbeCommandHandler(
     RoleOptions options,
     EvidenceStore evidence)
-    : IZLinkSendHandler<ChannelProbeCommand>
+    : IZLinkSendHandler<ChannelProbeMsg>
 {
     public ValueTask HandleAsync(
-        ChannelProbeCommand message,
+        ChannelProbeMsg message,
         IZLinkMessageContext context,
         CancellationToken cancellationToken)
     {

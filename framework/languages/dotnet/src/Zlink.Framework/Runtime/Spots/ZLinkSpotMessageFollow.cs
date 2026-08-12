@@ -22,7 +22,8 @@ internal sealed class ZLinkSpotMessageFollow(
 {
     private readonly ZLinkBoundedIngressAdmission _admission =
         admission ?? new ZLinkBoundedIngressAdmission();
-    private int _messageFollowNoticeClaimed;
+    private readonly ZLinkMessageFollowSuppressionRegistry _suppression =
+        new(capacity: 1);
 
     internal RoutingId TargetNodeRid { get; } = targetNodeRid;
     internal ulong ObjectGeneration { get; } = objectGeneration;
@@ -80,14 +81,14 @@ internal sealed class ZLinkSpotMessageFollow(
     internal (int Records, long Bytes) AdmissionSnapshot() =>
         _admission.Snapshot();
 
-    internal bool TryClaimMessageFollowNotice() =>
-        Interlocked.CompareExchange(
-            ref _messageFollowNoticeClaimed,
-            1,
-            0) == 0;
+    internal bool TryBeginMessageFollowNotice(ZLinkMessageFollowFence fence) =>
+        _suppression.TryBegin(fence);
 
-    internal void ReleaseMessageFollowNoticeClaim() =>
-        Volatile.Write(ref _messageFollowNoticeClaimed, 0);
+    internal void MarkMessageFollowNoticeSent(ZLinkMessageFollowFence fence) =>
+        _suppression.MarkSent(fence);
+
+    internal void AbortMessageFollowNotice(ZLinkMessageFollowFence fence) =>
+        _suppression.Abort(fence);
 
     internal async ValueTask WaitForExpiryAndDrainAsync(
         CancellationToken cancellationToken)
@@ -97,6 +98,7 @@ internal sealed class ZLinkSpotMessageFollow(
             await Task.Delay(remaining, cancellationToken).ConfigureAwait(false);
         await _admission.CloseAndWaitForEmptyAsync(cancellationToken)
             .ConfigureAwait(false);
+        _suppression.ExpireAll();
     }
 
     internal sealed class AdmissionLease(

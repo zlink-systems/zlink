@@ -1,4 +1,6 @@
 package systems.zlink.e2e.kotlin.automaticturn;
+import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
 
 import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
@@ -24,12 +26,12 @@ public final class EntryActorJoinAwaitHandler {
         actor.context()
             .joinSpot(request.targetSpotRid(),
                 new Contracts.DelayReq(request.requestId(), 350))
-            .timeout(java.time.Duration.ofSeconds(10))
+            .timeout(Duration.ofSeconds(10))
             .defer();
         String completed = value + ";joined=deferred";
         evidence.record(request.requestId(), "actor-join-await-resumed", completed);
         evidence.record(request.requestId(), "actor-join-await-completed", completed);
-        return java.util.concurrent.CompletableFuture.completedFuture(new Contracts.ActorRes(
+        return CompletableFuture.completedFuture(new Contracts.ActorRes(
             "ATD-B3",
             request.requestId(),
             actor.context().actorId(),

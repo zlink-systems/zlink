@@ -492,22 +492,25 @@ relocation, observed serially?
   active count across all nodes is 1.
 - Contract basis: [Async Execution Policy](../spec/05-async-execution-policy.en.md)
 
-#### ST-G2 User Spot Aggregate Capacity
+#### ST-G2 Apply User Spot Aggregate Capacity All-Or-None
 
 Priority: `P0`
 
 A `SpotWide` relocation must fit the Spot and all its Actors, as a single unit, into target capacity.
 
-**Verification question:** If capacity is short, is the source kept instead of moving only some
-Actors?
+**Verification question:** If Spot, Actor, or stable-type capacity is short, does the whole aggregate
+stay at the source, moving to the target only when every bucket is sufficient?
 
-- Starting condition: The source Host contains the SpotWide unit, and every other candidate lacks
-  capacity for the full aggregate, leaving no eligible target.
-- Procedure: Public Host Relocate is called without a target argument, and after the terminal, a state request is sent to each
-  Actor.
-- Verification: Relocate ends in a capacity failure, and every Actor request returns existing state
-  at the source.
-- Contract basis: [Relocation Units And Concurrency Limits](../spec/28-graceful-drain-handoff.en.md#7-relocation-units-and-concurrency-limits)
+- Starting condition: For the same-sized SpotWide aggregate, prepare fresh source/target variants
+  with a short Spot slot, a short Actor slot, a short stable-type slot, and all capacity sufficient.
+- Procedure: In each variant, call public Host Relocate without a target argument, then send state
+  requests to the Spot and every Actor after the terminal.
+- Verification: Each short variant returns a capacity-blocker result; public locations, Spot state,
+  and all Actor state remain at the source with the same generations. In the sufficient variant, the
+  Spot and every Actor process at the target with the same pre-move state and generations. A partial
+  member move is not allowed.
+- Contract basis: [Relocation Units And Concurrency Limits](../spec/30-host-relocation-flow.en.md#7-relocation-units-and-concurrency-limits)
+  and [SpotWide User Spot](../spec/30-host-relocation-flow.en.md#85-spotwide-user-spot)
 
 #### ST-G3 Host Relocation With A PerActor Spot
 
@@ -540,8 +543,8 @@ during a Spot move?
   Relocate call, which has no target argument.
 - Verification: The successful sequence order is preserved per Actor, and the same operation ID does
   not duplicate across source and target.
-- Contract basis: [SpotWide User Spot Handoff](../spec/28-graceful-drain-handoff.en.md#85-spotwide-user-spot)
-  and [Moving Pending Messages](../spec/28-graceful-drain-handoff.en.md#9-moving-pending-messages-timers-and-sessions)
+- Contract basis: [SpotWide User Spot Handoff](../spec/30-host-relocation-flow.en.md#85-spotwide-user-spot)
+  and [Moving Pending Messages](../spec/30-host-relocation-flow.en.md#9-moving-pending-messages-timers-and-sessions)
 
 #### ST-G5 Relocation Interruption Measurement
 
@@ -575,7 +578,7 @@ and target?
   gate is opened.
 - Verification: The existing handler finishes at the source, and the follow-up runs exactly once at
   the target. The combined active count never exceeds 1.
-- Contract basis: [SpotWide User Spot Handoff](../spec/28-graceful-drain-handoff.en.md#85-spotwide-user-spot)
+- Contract basis: [SpotWide User Spot Handoff](../spec/30-host-relocation-flow.en.md#85-spotwide-user-spot)
 
 ### Track H — Deferred Join And Handler Context
 

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient.internal;
+import java.util.concurrent.ThreadLocalRandom;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -27,7 +28,7 @@ final class RetryPolicy {
     // Fixed delays synchronize retries from many clients against an ailing server.
     private static long delayMillisFor(int attempt) {
         long ceiling = Math.min(1000L, 50L << Math.min(attempt, 5));
-        return java.util.concurrent.ThreadLocalRandom.current().nextLong(ceiling + 1);
+        return ThreadLocalRandom.current().nextLong(ceiling + 1);
     }
 
     private final Executor executor;

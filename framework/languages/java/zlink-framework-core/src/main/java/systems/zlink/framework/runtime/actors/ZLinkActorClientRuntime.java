@@ -1,4 +1,16 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.LinkedHashMap;
+import java.util.Objects;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiFunction;
+import java.util.function.Supplier;
+import systems.zlink.contracts.sockets.RequestResult;
+import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
@@ -22,10 +34,12 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers.ActorRoute;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
+import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.runtime.messaging.ZLinkPacketNames;
 
@@ -41,17 +55,17 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     private static final Duration FALLBACK_ROUTE_RETRY_TIMEOUT = Duration.ofSeconds(5);
     private static final int MAX_RUNTIME_READY_WAITERS = 4096;
 
-    private final java.util.function.Supplier<ZLinkInternalSpotNode> spotNode;
+    private final Supplier<ZLinkInternalSpotNode> spotNode;
     private final ZLinkStoreLocationResolvers locations;
     private final ZLinkMessageSerializer serializer;
     private final Duration defaultTimeout;
     private final ZLinkOneWayCalls oneWayCalls;
     private final CompletionStage<Void> runtimeReady;
-    private final java.util.concurrent.atomic.AtomicInteger
-        runtimeReadyWaiters = new java.util.concurrent.atomic.AtomicInteger();
+    private final AtomicInteger
+        runtimeReadyWaiters = new AtomicInteger();
 
     public ZLinkActorClientRuntime(
-        java.util.function.Supplier<ZLinkInternalSpotNode> spotNode,
+        Supplier<ZLinkInternalSpotNode> spotNode,
         ZLinkStoreLocationResolvers locations,
         ZLinkMessageSerializer serializer,
         Duration defaultTimeout) {
@@ -67,15 +81,15 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     }
 
     public ZLinkActorClientRuntime(
-        java.util.function.Supplier<ZLinkInternalSpotNode> spotNode,
+        Supplier<ZLinkInternalSpotNode> spotNode,
         ZLinkStoreLocationResolvers locations,
         ZLinkMessageSerializer serializer,
         Duration defaultTimeout,
-        java.util.function.BiFunction<
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject,
+        BiFunction<
+            ZLinkBackendObject,
             ZLinkBackendAdmissionKey,
-            java.util.function.BiFunction<
-                java.util.function.Supplier<Boolean>,
+            BiFunction<
+                Supplier<Boolean>,
                 Runnable,
                 CompletionStage<Void>>> admission) {
         this(
@@ -88,24 +102,24 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     }
 
     public ZLinkActorClientRuntime(
-        java.util.function.Supplier<ZLinkInternalSpotNode> spotNode,
+        Supplier<ZLinkInternalSpotNode> spotNode,
         ZLinkStoreLocationResolvers locations,
         ZLinkMessageSerializer serializer,
         Duration defaultTimeout,
-        java.util.function.BiFunction<
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject,
+        BiFunction<
+            ZLinkBackendObject,
             ZLinkBackendAdmissionKey,
-            java.util.function.BiFunction<
-                java.util.function.Supplier<Boolean>,
+            BiFunction<
+                Supplier<Boolean>,
                 Runnable,
                 CompletionStage<Void>>> admission,
         CompletionStage<Void> runtimeReady) {
-        this.spotNode = java.util.Objects.requireNonNull(spotNode, "spotNode");
-        this.locations = java.util.Objects.requireNonNull(locations, "locations");
-        this.serializer = java.util.Objects.requireNonNull(serializer, "serializer");
+        this.spotNode = Objects.requireNonNull(spotNode, "spotNode");
+        this.locations = Objects.requireNonNull(locations, "locations");
+        this.serializer = Objects.requireNonNull(serializer, "serializer");
         this.defaultTimeout = defaultTimeout == null ? Duration.ZERO : defaultTimeout;
         this.oneWayCalls = new ZLinkOneWayCalls(admission);
-        this.runtimeReady = java.util.Objects.requireNonNull(
+        this.runtimeReady = Objects.requireNonNull(
             runtimeReady,
             "runtimeReady");
     }
@@ -220,8 +234,8 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                 "framework startup admission capacity is exhausted"));
         }
         CompletableFuture<Void> result = new CompletableFuture<>();
-        java.util.concurrent.atomic.AtomicBoolean released =
-            new java.util.concurrent.atomic.AtomicBoolean();
+        AtomicBoolean released =
+            new AtomicBoolean();
         Runnable release = () -> {
             if (released.compareAndSet(false, true)) {
                 runtimeReadyWaiters.decrementAndGet();
@@ -241,7 +255,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
             && !effectiveTimeout.isNegative()) {
             CompletableFuture.delayedExecutor(
                 effectiveTimeout.toNanos(),
-                java.util.concurrent.TimeUnit.NANOSECONDS).execute(() -> {
+                TimeUnit.NANOSECONDS).execute(() -> {
                     release.run();
                     result.completeExceptionally(new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
@@ -296,14 +310,15 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         Map<String, String> metadata) {
         ZLinkStreamHeader header = new ZLinkStreamHeader(
             kind,
-            ZLinkStreamCodec.JSON,
+            ZLinkPayloadEncoding.streamCodec(
+                serializer, message, ZLinkStreamCodec.JSON),
             EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
             requestSeq,
             packetName,
             Map.copyOf(metadata));
         Message headerPart = Message.from(ZLinkStreamHeaderCodec.encode(header));
         Message payloadPart = ZLinkMessagePayloads.message(
-            systems.zlink.framework.messaging.ZLinkMessage.of(message),
+            ZLinkMessage.of(message),
             serializer);
         return List.of(headerPart, payloadPart);
     }
@@ -354,7 +369,11 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                     invalidPayload);
             }
         }
-        return ZLinkMessagePayloads.deserialize(serializer, payload, replyType);
+        return ZLinkMessagePayloads.deserialize(
+            ZLinkCodecRegistration.serializerForReceivedStreamCodec(
+                serializer, header.codec()),
+            payload,
+            replyType);
     }
 
     private RuntimeException mapBackendException(Throwable error, String operationName) {
@@ -439,10 +458,10 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         }
         Throwable cause = frameworkError.getCause();
         if (cause instanceof ZlinkRequestException request) {
-            return request.getResult() == systems.zlink.contracts.sockets.RequestResult.NOT_CONNECTED;
+            return request.getResult() == RequestResult.NOT_CONNECTED;
         }
         if (cause instanceof ZlinkSubmitException submit) {
-            return submit.getResult() == systems.zlink.contracts.sockets.SubmitResult.NOT_CONNECTED;
+            return submit.getResult() == SubmitResult.NOT_CONNECTED;
         }
         return false;
     }
@@ -477,12 +496,12 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     }
 
     private final class SendCall implements ZLinkActorSendCall {
-        private final java.util.concurrent.atomic.AtomicBoolean submitGate =
-            new java.util.concurrent.atomic.AtomicBoolean();
+        private final AtomicBoolean submitGate =
+            new AtomicBoolean();
         private final String actorId;
         private final Object message;
         private String packetName;
-        private final Map<String, String> metadata = new java.util.LinkedHashMap<>();
+        private final Map<String, String> metadata = new LinkedHashMap<>();
 
         SendCall(String actorId, Object message) {
             this.actorId = requireActorId(actorId);
@@ -498,8 +517,8 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         @Override
         public ZLinkActorSendCall metadata(String key, String value) {
             metadata.put(
-                java.util.Objects.requireNonNull(key, "key"),
-                java.util.Objects.requireNonNull(value, "value"));
+                Objects.requireNonNull(key, "key"),
+                Objects.requireNonNull(value, "value"));
             return this;
         }
 
@@ -517,10 +536,10 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     private final class RequestCall implements ZLinkActorRequestCall {
         private final String actorId;
         private final Object request;
-        private final java.util.concurrent.atomic.AtomicBoolean submitGate =
-            new java.util.concurrent.atomic.AtomicBoolean();
+        private final AtomicBoolean submitGate =
+            new AtomicBoolean();
         private String packetName;
-        private final Map<String, String> metadata = new java.util.LinkedHashMap<>();
+        private final Map<String, String> metadata = new LinkedHashMap<>();
         private Duration timeout;
 
         RequestCall(String actorId, Object request) {
@@ -537,8 +556,8 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         @Override
         public ZLinkActorRequestCall metadata(String key, String value) {
             metadata.put(
-                java.util.Objects.requireNonNull(key, "key"),
-                java.util.Objects.requireNonNull(value, "value"));
+                Objects.requireNonNull(key, "key"),
+                Objects.requireNonNull(value, "value"));
             return this;
         }
 
@@ -558,7 +577,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
             systems.zlink.framework.runtime.internal.handlers
                 .ZLinkSuspendInvocationContext.rejectSameActorWait(
                     actorId);
-            return systems.zlink.framework.execution.ZLinkAsyncSerialQueue.manageCurrent(
+            return ZLinkAsyncSerialQueue.manageCurrent(
                 requestAsync(
                     actorId, packetName, request, metadata, timeout, replyType));
         }
@@ -567,13 +586,13 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         public <TReply> CompletionStage<TReply> yield(Class<TReply> replyType) {
             systems.zlink.framework.runtime.internal.handlers
                 .ZLinkSuspendInvocationContext.requireYieldAllowed("Actor request");
-            return systems.zlink.framework.execution.ZLinkAsyncSerialQueue
+            return ZLinkAsyncSerialQueue
                 .yieldCurrent(submit(replyType));
         }
     }
 
     private static String requireActorId(String actorId) {
-        java.util.Objects.requireNonNull(actorId, "actorId");
+        Objects.requireNonNull(actorId, "actorId");
         if (actorId.isBlank() || actorId.indexOf('\0') >= 0) {
             throw new IllegalArgumentException("actorId is required");
         }

@@ -1,4 +1,5 @@
 package systems.zlink.e2e.registrymessaging.client.Scenarios;
+import java.util.Arrays;
 
 import systems.zlink.e2e.registrymessaging.client.Support.ScenarioAssert;
 import systems.zlink.e2e.registrymessaging.shared.Contracts;
@@ -20,14 +21,14 @@ public final class RmC5MissingPacketScenario {
             .body(new Contracts.ProfileMsg("missing-send"))
             .submit(Object.class).toCompletableFuture().join().body();
         String[] requestEvidence = ScenarioAssert.waitAnyEvidence(providerA, providerB, "MissingProfileReq");
-        ScenarioAssert.that(java.util.Arrays.stream(requestEvidence)
+        ScenarioAssert.that(Arrays.stream(requestEvidence)
                 .anyMatch(line -> line.contains("dispatch-error")
                     && line.contains("HANDLER_MISSING")
                     && line.contains("REPLY_ERROR")
                     && line.contains("MissingProfileReq")),
             "RM-C5 missing request dispatch-error evidence missing");
         String[] sendEvidence = ScenarioAssert.waitAnyEvidence(providerA, providerB, "MissingProfileMsg");
-        ScenarioAssert.that(java.util.Arrays.stream(sendEvidence)
+        ScenarioAssert.that(Arrays.stream(sendEvidence)
                 .anyMatch(line -> line.contains("dispatch-error")
                     && line.contains("HANDLER_MISSING")
                     && line.contains("DROP")

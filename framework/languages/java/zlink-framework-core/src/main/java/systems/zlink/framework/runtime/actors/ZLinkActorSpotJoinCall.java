@@ -1,4 +1,12 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.logging.Logger;
+import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.spots.SpotHandleResolver;
+import systems.zlink.framework.spots.ZLinkSpotKind;
 
 import java.time.Duration;
 import java.util.List;
@@ -8,6 +16,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
@@ -22,6 +32,8 @@ import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorJoinCall;
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
@@ -40,14 +52,18 @@ import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolv
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
+import systems.zlink.framework.runtime.internal.locations
+    .ZLinkAggregateAbortCommitWonException;
+import systems.zlink.framework.runtime.internal.locations
+    .ZLinkDeferredJoinCompletionAuthority;
 import systems.zlink.framework.spots.SpotHandle;
 import systems.zlink.framework.spots.ZLinkSpot;
 
 final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
     private static final boolean STREAM_TRACE =
         "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
-    private static final java.util.logging.Logger LOGGER =
-        java.util.logging.Logger.getLogger(ZLinkActorSpotJoinCall.class.getName());
+    private static final Logger LOGGER =
+        Logger.getLogger(ZLinkActorSpotJoinCall.class.getName());
     private final ZLinkActorRuntime.DefaultActorContext context;
     private final String spotId;
     private final Message request;
@@ -64,10 +80,101 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
     private final AtomicBoolean messageFollowInstalled = new AtomicBoolean();
     private final AtomicBoolean acceptedCompletionDeliveredOnTarget =
         new AtomicBoolean();
+    private final AtomicBoolean targetReleasesCompletionAfterSessionRouteHandoff =
+        new AtomicBoolean();
     private final AtomicReference<ZLinkDeferredJoinAcceptedRecovery.Manifest>
         acceptedCompletionManifest = new AtomicReference<>();
     private final AtomicReference<CompletionStage<Void>>
         deferredSourceCleanup = new AtomicReference<>();
+
+    /** Retains an unknown committed-authority lookup until one exact read
+     * returns either a committed target or a definitive empty result. */
+    static final class CommittedLookupRecovery<T> {
+        private final Supplier<CompletionStage<Optional<T>>> lookup;
+        private final Duration retryDelay;
+        private final BooleanSupplier stopped;
+        private final CompletableFuture<Optional<T>> result =
+            new CompletableFuture<>();
+        private final AtomicBoolean started = new AtomicBoolean();
+
+        CommittedLookupRecovery(
+            Supplier<CompletionStage<Optional<T>>> lookup,
+            Duration retryDelay,
+            BooleanSupplier stopped) {
+            this.lookup = Objects.requireNonNull(lookup, "lookup");
+            this.retryDelay = Objects.requireNonNull(retryDelay, "retryDelay");
+            this.stopped = Objects.requireNonNull(stopped, "stopped");
+        }
+
+        CompletionStage<Optional<T>> start() {
+            if (started.compareAndSet(false, true)) {
+                attempt();
+                scheduleStopCheck();
+            }
+            return result;
+        }
+
+        private void attempt() {
+            if (result.isDone() || stopIfRequired()) {
+                return;
+            }
+            CompletionStage<Optional<T>> current;
+            try {
+                current = Objects.requireNonNull(
+                    lookup.get(), "committed authority lookup stage");
+            } catch (RuntimeException unavailable) {
+                retry();
+                return;
+            }
+            current.whenComplete((committed, failure) -> {
+                if (result.isDone()) {
+                    return;
+                }
+                if (failure != null || committed == null) {
+                    retry();
+                } else {
+                    result.complete(committed);
+                }
+            });
+        }
+
+        private void retry() {
+            if (result.isDone() || stopIfRequired()) {
+                return;
+            }
+            long delayMillis = Math.max(1L, retryDelay.toMillis());
+            CompletableFuture.delayedExecutor(delayMillis, TimeUnit.MILLISECONDS)
+                .execute(this::attempt);
+        }
+
+        private void scheduleStopCheck() {
+            if (result.isDone() || stopIfRequired()) {
+                return;
+            }
+            long delayMillis = Math.max(1L, retryDelay.toMillis());
+            CompletableFuture.delayedExecutor(delayMillis, TimeUnit.MILLISECONDS)
+                .execute(() -> {
+                    if (!result.isDone() && !stopIfRequired()) {
+                        scheduleStopCheck();
+                    }
+                });
+        }
+
+        private boolean stopIfRequired() {
+            boolean stop;
+            try {
+                stop = stopped.getAsBoolean();
+            } catch (RuntimeException unavailable) {
+                return false;
+            }
+            if (stop) {
+                result.completeExceptionally(new ZLinkConfigurationException(
+                    "RelocationFailed: Actor runtime stopped while committed "
+                        + "authority recovery was unresolved"));
+            }
+            return stop;
+        }
+    }
 
     ZLinkActorSpotJoinCall(
         ZLinkActorRuntime.DefaultActorContext context,
@@ -217,10 +324,35 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         ZLinkActorJoinOperationId operationId,
         long deadlineNanos) {
         rejectSameGateWait();
+        Duration remaining = remainingTimeout(deadlineNanos);
+        if (remaining == null) {
+            return CompletableFuture.failedFuture(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    "Actor join deadline elapsed before admission"));
+        }
+        return services.actors().awaitDirectJoinPredecessor(
+                context.actorRef(), remaining)
+            .thenCompose(ignored -> executeAfterPredecessor(
+                operationId, deadlineNanos));
+    }
+
+    private CompletionStage<ZLinkActorJoinOutcome> executeAfterPredecessor(
+        ZLinkActorJoinOperationId operationId,
+        long deadlineNanos) {
+        Duration remaining = remainingTimeout(deadlineNanos);
+        if (remaining == null) {
+            return CompletableFuture.failedFuture(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    "Actor join deadline elapsed at predecessor gate"));
+        }
         traceJoinSent();
         Message requestPart = Message.from(request);
         ZLinkSpot<?> localSpot = services.spotResolver().apply(spotId);
-        if (localSpot == null && services.routedTransport() != null
+        if (localSpot == null
+            && (services.routedTransport() != null
+                || services.transferTransport() != null)
             && (internalRouteChannel != null || services.remoteAddressResolver() != null)) {
             return manage(joinRemoteRoutedSpot(requestPart, operationId, deadlineNanos)
                 .whenComplete((ignored, error) -> requestPart.close())
@@ -244,7 +376,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                         spotId,
                         address.spotGeneration(),
                         List.of(requestPart),
-                        timeout)
+                        remaining)
                         .whenComplete((ignored, joinError) ->
                             requestPart.close());
                 } catch (RuntimeException dispatchError) {
@@ -288,6 +420,11 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                         ZLinkFrameworkErrorKind kind = cause instanceof ZLinkFrameworkException framework
                             ? framework.kind()
                             : ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
+                        //  A deferred Join that ends in `Failed` reports only
+                        //  an error kind to the application. Trace the cause on
+                        //  the message flow so the failure carries the same
+                        //  flow identity as the Join that produced it.
+                        traceJoinFailed(kind, cause);
                         return (ZLinkActorJoinCompletion) new ZLinkActorJoinCompletion.Failed(
                             operationId,
                             kind);
@@ -397,7 +534,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
     }
 
     private static <T> CompletionStage<T> manage(CompletionStage<T> stage) {
-        return systems.zlink.framework.execution.ZLinkAsyncSerialQueue.manageCurrent(stage);
+        return ZLinkAsyncSerialQueue.manageCurrent(stage);
     }
 
     private void rejectSameGateWait() {
@@ -425,6 +562,25 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                 "JoinSpot", null, null, null, null,
                 spotId.toString(), context.actorRef().actorId(), null));
         }
+    }
+
+    private void traceJoinFailed(ZLinkFrameworkErrorKind kind, Throwable cause) {
+        if (services.flow() == null) {
+            return;
+        }
+        services.flow().traceLazy(
+            ZLinkMessageFlowOutcome.ERROR,
+            () -> new ZLinkMessageFlowEvent(
+                ZLinkMessageFlowOutcome.ERROR,
+                ZLinkDispatchErrorSurface.SPOT_ACTOR,
+                ZLinkDispatchMessageKind.ACTOR_REQUEST,
+                "JoinSpot", null, null, null, null,
+                spotId == null ? null : spotId.toString(),
+                context.actorRef().actorId(), null,
+                ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
+                ZLinkDispatchErrorAction.REPLY_ERROR,
+                kind.name(),
+                cause == null ? null : cause.toString()));
     }
 
     private void traceJoinReplyReceived(Throwable error) {
@@ -507,16 +663,16 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         Supplier<CompletionStage<Void>> cleanup = () -> rebound
             .thenCompose(ignored -> {
                 CompletionStage<
-                    java.util.Optional<ZLinkStoreLocationResolvers.ActorRoute>>
+                    Optional<ZLinkStoreLocationResolvers.ActorRoute>>
                     targetRoute = retainMessageFollowSource
                             && !sourceCleanupWasStarted
                         ? services.actors().resolveMessageFollowTargetRoute(
                             result.actor(),
-                            java.util.Objects.requireNonNull(
+                            Objects.requireNonNull(
                                 messageFollowAddress.get(),
                                 "committed Message Follow address"))
                         : CompletableFuture.completedFuture(
-                            java.util.Optional.empty());
+                            Optional.empty());
                 return targetRoute.thenCompose(route -> {
                     if (requiresMessageFollowTargetRoute(
                         retainMessageFollowSource,
@@ -549,15 +705,17 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                         && messageFollowInstalled.compareAndSet(false, true)) {
                         services.actors().retainMessageFollowSource(
                             context.actor(), sourceActorRef, result.actor(),
-                            java.util.Objects.requireNonNull(
+                            Objects.requireNonNull(
                                 messageFollowAddress.get(),
                                 "committed Message Follow address"),
                             toMessageFollowActorRoute(route.orElseThrow()));
                     }
-                    return services.actors()
-                        .completeDeferredJoinAcceptedSourceCleanup(
-                            acceptedCompletionManifest.get(),
-                            result.actor());
+                    return targetReleasesCompletionAfterSessionRouteHandoff.get()
+                        ? CompletableFuture.completedFuture(null)
+                        : services.actors()
+                            .completeDeferredJoinAcceptedSourceCleanup(
+                                acceptedCompletionManifest.get(),
+                                result.actor());
                 });
             });
         if (retainMessageFollowSource
@@ -602,7 +760,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                     spotId,
                     0L,
                     0L,
-                    systems.zlink.framework.spots.ZLinkSpotKind.ENTRY))
+                    ZLinkSpotKind.ENTRY))
                 : resolveHandle(services.remoteAddressResolver(), spotId)
             .thenCompose(services.remoteAddressResolver()::resolve)
             .thenApply(address -> address.map(value -> explicitTargetNode == null
@@ -624,8 +782,9 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                 internalTargetNode.toString(),
                 0L,
                 0L,
-                systems.zlink.framework.spots.ZLinkSpotKind.ENTRY));
+                ZLinkSpotKind.ENTRY));
         return resolved.thenCompose(target -> {
+                rememberResolvedSpotAuthority(target);
                 messageFollowAddress.set(target);
                 ZLinkBackendActorRef currentActorRef = context.actorRef();
                 String actorType = actorTypeOrEmpty(currentActorRef.actorId());
@@ -676,6 +835,20 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                     throw error;
                 }
             });
+    }
+
+    private void rememberResolvedSpotAuthority(SpotTransportAddress target) {
+        if (target.spotGeneration() <= 0
+            || target.authorityOwnerGeneration() <= 0
+            || target.ownerLeaseGeneration() <= 0) {
+            return;
+        }
+        services.spotNode().entrySpot().rememberSpotAuthority(
+            target.targetNodeRid(),
+            target.spotId(),
+            target.spotGeneration(),
+            target.authorityOwnerGeneration(),
+            target.ownerLeaseGeneration());
     }
 
     private CompletionStage<ZLinkBackendActorJoinResult> commitRemoteTransfer(
@@ -732,9 +905,12 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                 actor,
                 currentActorRef,
                 address.targetNodeRid(),
-                coreId)
-            .thenCompose(sessionRouteCommand44 ->
-                services.actors().beginRemoteMove(actor)
+                coreId,
+                operationId != null)
+            .thenCompose(sessionRoute -> {
+                targetReleasesCompletionAfterSessionRouteHandoff.set(
+                    sessionRoute.seal() != null);
+                return services.actors().beginRemoteMove(actor)
             .thenCompose(ignored -> services.actors().transferOut(actor))
             .thenApply(transfer -> {
                     List<ZLinkActorHandoffPacket> backlog =
@@ -761,7 +937,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                             transferState.toByteArray(),
                             canonicalJournal(commit.backlog()),
                             admissionReply.toByteArray(),
-                            sessionRouteCommand44);
+                            sessionRoute.command44());
                 return completionManifest.thenCompose(manifest -> {
                     acceptedCompletionManifest.set(manifest);
                     services.actors().traceActorTransferMarker(
@@ -808,7 +984,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                                 corePrepared == null ? 0L
                                     : corePrepared.result().reserveByteCount()),
                             manifest,
-                            sessionRouteCommand44);
+                            sessionRoute.command44());
                     commitRetryTemplate.set(commitParts.stream()
                         .map(Message::from)
                         .toList());
@@ -874,6 +1050,15 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                         if (restoreError != null) {
                             cause.addSuppressed(unwrap(restoreError));
                         }
+                        return null;
+                    }).thenCompose(ignored ->
+                        abortPreparedDirectJoinSessionRoute(
+                            acceptedCompletionManifest.get(),
+                            sessionRoute))
+                    .handle((ignored, abortError) -> {
+                        if (abortError != null) {
+                            cause.addSuppressed(unwrap(abortError));
+                        }
                         throw new CompletionException(cause);
                     });
                 }
@@ -922,9 +1107,11 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                         sourceCoreCommitted,
                         operationId,
                         committedBacklog,
-                        cause,
-                        deadlineNanos));
-            }))
+                        acceptedCompletionManifest.get(),
+                        sessionRoute,
+                        cause));
+            });
+            })
             .whenComplete((ignored, error) ->
                 commitRetryTemplate.get().forEach(Message::close));
     }
@@ -950,8 +1137,11 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
             address.targetNodeRid(),
             sourceActorRef.actorId(),
             sourceActorRef.generation());
+        // The lifecycle boundary permits one-way source leave submission. Its
+        // completion or failure is not part of Join completion. Durable source
+        // cleanup still follows the target's explicit Ready publication.
         return services.actors()
-            .awaitDeferredJoinTargetCompletion(
+            .awaitDeferredJoinTargetLifecycleCompleted(
                 manifest,
                 targetActorRef,
                 timeout)
@@ -959,6 +1149,15 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                 context.actor(),
                 sourceLeft,
                 transferId))
+            .thenCompose(ignored -> services.actors()
+                .markDeferredJoinSourceLeaveSubmitted(
+                    manifest,
+                    targetActorRef))
+            .thenCompose(ignored -> services.actors()
+                .awaitDeferredJoinTargetCompletion(
+                    manifest,
+                    targetActorRef,
+                    timeout))
             .thenCompose(ignored ->
                 ZLinkActorRetryScheduler.retryRouteUntil(
                     timeout,
@@ -1042,11 +1241,11 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
     }
 
     private static List<
-        systems.zlink.framework.execution.ZLinkAsyncSerialQueue.QueuedRecord>
+        ZLinkAsyncSerialQueue.QueuedRecord>
         canonicalJournal(List<ZLinkActorHandoffPacket> backlog) {
         return backlog.stream()
             .map(packet ->
-                new systems.zlink.framework.execution.ZLinkAsyncSerialQueue
+                new ZLinkAsyncSerialQueue
                     .QueuedRecord(
                         packet.arrivalIndex(),
                         systems.zlink.framework.runtime.streams
@@ -1086,6 +1285,13 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
     private CompletionStage<List<Message>> requestTransfer(
         SpotTransportAddress address,
         List<Message> parts) {
+        if (services.transferTransport() != null) {
+            return services.transferTransport().request(
+                address,
+                parts,
+                timeout,
+                internalRouteChannel != null);
+        }
         if (internalRouteChannel == null) {
             Message packetName = Message.from(parts.getFirst());
             Message envelope = ZLinkActorEntryTransferEnvelope.encode(parts);
@@ -1157,11 +1363,11 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
             return CompletableFuture.completedFuture(null);
         }
         List<ZLinkActorHandoffPacket> packets =
-            new java.util.ArrayList<>(
+            new ArrayList<>(
                 committedBacklog.size() + lateBacklog.size());
         packets.addAll(committedBacklog);
         packets.addAll(lateBacklog);
-        packets.sort(java.util.Comparator.comparingLong(
+        packets.sort(Comparator.comparingLong(
             ZLinkActorHandoffPacket::arrivalIndex));
         // The target's accepted-journal fence makes this replay idempotent if
         // the original commit reached the target but its reply was lost.
@@ -1257,28 +1463,39 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
             AtomicBoolean sourceCoreCommitted,
             ZLinkActorJoinOperationId operationId,
             AtomicReference<List<ZLinkActorHandoffPacket>> committedBacklog,
-            Throwable cause,
-            long deadlineNanos) {
-        Duration remaining = remainingTimeout(deadlineNanos);
-        CompletionStage<java.util.Optional<systems.zlink.framework.actors.ActorRef>>
-            committedStage;
-        if (remaining == null) {
-            committedStage = CompletableFuture.completedFuture(
-                java.util.Optional.empty());
-        } else {
-            committedStage = ZLinkActorRetryScheduler.retryRouteUntilPresent(
-                remaining,
-                () -> services.actors().findCommittedRemoteActor(
-                    currentActorRef.actorId(),
-                    address.targetNodeRid(),
-                    currentActorRef.generation()));
-        }
-        return committedStage.thenCompose(committed -> {
+            ZLinkDeferredJoinAcceptedRecovery.Manifest completionManifest,
+            ZLinkActorRuntime.DirectJoinSessionRouteCommand sessionRoute,
+            Throwable cause) {
+        return claimDeferredJoinAbortUntilKnown(completionManifest)
+            .thenCompose(retained -> {
+            if (retained.isPresent()) {
+                //  The Aborted authority CAS is the decision point. A lookup
+                //  observed just before this CAS cannot race a later commit.
+                return abortRetainedDirectJoinSessionRoute(
+                        retained.orElseThrow(), sessionRoute)
+                    .thenCompose(ignored -> {
+                        admissionReply.close();
+                        abortCoreTransfer(corePrepared);
+                        failPackets(committedBacklog.get(), cause);
+                        services.actors().failRemoteMove(actor, cause);
+                        return CompletableFuture.failedFuture(cause);
+                    });
+            }
+            //  The commit CAS won. Only now may the source interpret target
+            //  authority; an empty read cannot authorize SOURCE abort.
+            return recoverCommittedLookupUntilKnown(
+                    currentActorRef,
+                    address.targetNodeRid())
+                .thenCompose(committed -> {
             if (committed.isEmpty()) {
+                ZLinkConfigurationException disappeared =
+                    new ZLinkConfigurationException(
+                        "committed direct-Join authority disappeared before recovery");
+                cause.addSuppressed(disappeared);
                 admissionReply.close();
-                abortCoreTransfer(corePrepared);
                 failPackets(committedBacklog.get(), cause);
-                services.actors().failRemoteMove(actor, cause);
+                notifySourceAfterTargetCommit(actor, sourceLeft, transferId);
+                services.actors().completeRemoteMove(actor);
                 return CompletableFuture.failedFuture(cause);
             }
             notifySourceAfterTargetCommit(actor, sourceLeft, transferId);
@@ -1319,7 +1536,97 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                     services.actors().failRemoteMove(actor, installCause);
                     return CompletableFuture.failedFuture(installCause);
                 });
+                });
         });
+    }
+
+    private CompletionStage<Optional<
+        ZLinkDeferredJoinCompletionAuthority.RetainedAbort>>
+        claimDeferredJoinAbortUntilKnown(
+            ZLinkDeferredJoinAcceptedRecovery.Manifest manifest) {
+        CompletableFuture<Optional<
+            ZLinkDeferredJoinCompletionAuthority.RetainedAbort>> result =
+                new CompletableFuture<>();
+        class Attempt implements Runnable {
+            @Override
+            public void run() {
+                if (result.isDone()) {
+                    return;
+                }
+                if (services.actors().relocationRecoveryStopped()) {
+                    result.completeExceptionally(new ZLinkConfigurationException(
+                        "direct-Join abort claim stopped during runtime drain"));
+                    return;
+                }
+                CompletionStage<ZLinkDeferredJoinCompletionAuthority.RetainedAbort>
+                    claim;
+                try {
+                    claim = services.actors().retainDeferredJoinAbort(manifest);
+                } catch (RuntimeException failure) {
+                    retry(failure);
+                    return;
+                }
+                claim.whenComplete((retained, failure) -> {
+                    if (failure == null) {
+                        result.complete(Optional.of(retained));
+                        return;
+                    }
+                    Throwable known = unwrap(failure);
+                    if (known instanceof ZLinkAggregateAbortCommitWonException) {
+                        result.complete(Optional.empty());
+                    } else {
+                        retry(known);
+                    }
+                });
+            }
+
+            private void retry(Throwable failure) {
+                if (result.isDone()) {
+                    return;
+                }
+                if (services.actors().relocationRecoveryStopped()) {
+                    result.completeExceptionally(failure);
+                    return;
+                }
+                ZLinkActorRetryScheduler.scheduleRoute(this);
+            }
+        }
+        new Attempt().run();
+        return result;
+    }
+
+    private CompletionStage<Void> abortPreparedDirectJoinSessionRoute(
+        ZLinkDeferredJoinAcceptedRecovery.Manifest manifest,
+        ZLinkActorRuntime.DirectJoinSessionRouteCommand sessionRoute) {
+        if (sessionRoute.seal() == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return services.actors().retainDeferredJoinAbort(manifest)
+            .thenCompose(retained -> abortRetainedDirectJoinSessionRoute(
+                retained, sessionRoute));
+    }
+
+    private CompletionStage<Void> abortRetainedDirectJoinSessionRoute(
+        ZLinkDeferredJoinCompletionAuthority.RetainedAbort retained,
+        ZLinkActorRuntime.DirectJoinSessionRouteCommand sessionRoute) {
+        return services.actors().abortDirectJoinSessionRoute(
+                sessionRoute, retained)
+            .thenCompose(ignored -> services.actors()
+                .completeDeferredJoinAbort(retained));
+    }
+
+    private CompletionStage<Optional<systems.zlink.framework.actors.ActorRef>>
+        recoverCommittedLookupUntilKnown(
+            ZLinkBackendActorRef sourceActor,
+            RoutingId targetNodeRid) {
+        return new CommittedLookupRecovery<>(
+            () -> services.actors().findCommittedRemoteActor(
+                sourceActor.actorId(),
+                targetNodeRid,
+                sourceActor.generation()),
+            Duration.ofMillis(20),
+            services.actors()::relocationRecoveryStopped)
+            .start();
     }
 
     private CompletionStage<Void> forwardHandoffPackets(
@@ -1367,7 +1674,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                             throw new CompletionException(error);
                         }
                         if ("1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"))) {
-                            java.util.logging.Logger.getLogger(
+                            Logger.getLogger(
                                     ZLinkActorSpotJoinCall.class.getName())
                                 .warning("[zlink-java-stream-trace] late backlog reply"
                                     + " parts=" + replyParts.size()
@@ -1380,8 +1687,8 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                         packet.complete(replyParts.isEmpty()
                             || ZLinkActorSpotRoutePackets
                                 .isHandoffDirectReplyAck(replyParts.get(0))
-                            ? java.util.Optional.empty()
-                            : java.util.Optional.of(
+                            ? Optional.empty()
+                            : Optional.of(
                                 Message.from(replyParts.get(0))));
                         return null;
                     } finally {
@@ -1425,8 +1732,8 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                 ZLinkActorHandoffPacket packet = backlog.get(index);
                 Message response = replyParts.get(index + 1);
                 packet.complete(response.toByteArray().length == 0
-                    ? java.util.Optional.empty()
-                    : java.util.Optional.of(Message.from(response)));
+                    ? Optional.empty()
+                    : Optional.of(Message.from(response)));
                 packet.close();
             }
             Message commitReply = reply.reply();
@@ -1519,13 +1826,13 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
             spotId,
             0L,
             0L,
-            systems.zlink.framework.spots.ZLinkSpotKind.USER);
+            ZLinkSpotKind.USER);
     }
 
     private static CompletionStage<SpotHandle> resolveHandle(
         SpotTransportAddressResolver resolver,
         String spotId) {
-        if (!(resolver instanceof systems.zlink.framework.spots.SpotHandleResolver handles)) {
+        if (!(resolver instanceof SpotHandleResolver handles)) {
             return CompletableFuture.failedFuture(new ZLinkConfigurationException(
                 "SPOT transport resolver does not provide opaque handles"));
         }
@@ -1538,11 +1845,21 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         CompletionStage<Void> renew(ZLinkActor actor, String spotId);
     }
 
+    @FunctionalInterface
+    interface TransferTransport {
+        CompletionStage<List<Message>> request(
+            SpotTransportAddress address,
+            List<Message> parts,
+            Duration timeout,
+            boolean internalRoute);
+    }
+
     record Services(
         ZLinkInternalSpotNode spotNode,
         Function<String, ZLinkSpot<?>> spotResolver,
         SpotTransportAddressResolver remoteAddressResolver,
         ZLinkChannelRuntime routedTransport,
+        TransferTransport transferTransport,
         Function<String, String> actorTypes,
         ZLinkMessageSerializer serializer,
         ZLinkMessageFlowTracer flow,

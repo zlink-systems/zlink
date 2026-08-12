@@ -1,4 +1,5 @@
 package systems.zlink.stream.connector;
+import java.util.function.Supplier;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -168,7 +169,7 @@ final class ZLinkStreamReceiveDispatcher {
             header.metadata(),
             flow.flowId(),
             flowOrigin);
-        java.util.function.Supplier<CompletionStage<Void>> dispatch = () -> {
+        Supplier<CompletionStage<Void>> dispatch = () -> {
             // The registered list is a CopyOnWriteArrayList. Its iterator already
             // provides the snapshot required while callbacks may register or
             // remove handlers, so copying it again for every received message

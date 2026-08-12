@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.concurrent.CompletionException;
+import java.util.logging.Logger;
+import java.util.zip.CRC32C;
+import systems.zlink.contracts.core.RoutingId;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -39,8 +43,8 @@ import systems.zlink.framework.runtime.internal.locations
 final class ZLinkDeferredJoinAcceptedRecovery {
     private static final boolean STREAM_TRACE =
         "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
-    private static final java.util.logging.Logger LOGGER =
-        java.util.logging.Logger.getLogger(ZLinkDeferredJoinAcceptedRecovery.class.getName());
+    private static final Logger LOGGER =
+        Logger.getLogger(ZLinkDeferredJoinAcceptedRecovery.class.getName());
     private static final int FORMAT_VERSION = 1;
     private static final int CURSOR_COMMITTED = 1;
     private static final Duration RETENTION = Duration.ofHours(24);
@@ -95,7 +99,7 @@ final class ZLinkDeferredJoinAcceptedRecovery {
         ZLinkBackendActorRef actor,
         String actorType,
         String targetSpotId,
-        systems.zlink.contracts.core.RoutingId targetNodeRid,
+        RoutingId targetNodeRid,
         boolean restoreSnapshot,
         byte[] applicationState,
         List<ZLinkAsyncSerialQueue.QueuedRecord> acceptedJournal,
@@ -131,7 +135,8 @@ final class ZLinkDeferredJoinAcceptedRecovery {
                 value.fence().aggregateGeneration()));
     }
 
-    CompletionStage<Long> commitPrepared(
+    CompletionStage<ZLinkDeferredJoinCompletionAuthority.CommittedActorTenure>
+        commitPrepared(
         Manifest manifest,
         ZLinkBackendActorRef actor) {
         if (authorityJournal == null || !manifest.hasAggregateFence()) {
@@ -184,6 +189,93 @@ final class ZLinkDeferredJoinAcceptedRecovery {
                 manifest.operationIdLow()),
             actor,
             timeout);
+    }
+
+    CompletionStage<Void> awaitTargetLifecycleCompleted(
+        Manifest manifest,
+        ZLinkBackendActorRef actor,
+        Duration timeout) {
+        if (authorityJournal == null || !manifest.hasAggregateFence()) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException(
+                    "direct Actor Join relocation fence is missing"));
+        }
+        return authorityJournal.awaitTargetLifecycleCompleted(
+            new UUID(
+                manifest.aggregateIdHigh(),
+                manifest.aggregateIdLow()),
+            manifest.aggregateGeneration(),
+            new ZLinkActorJoinOperationId(
+                manifest.operationIdHigh(),
+                manifest.operationIdLow()),
+            actor,
+            timeout);
+    }
+
+    CompletionStage<Void> awaitSourceLeaveSubmitted(
+        Manifest manifest,
+        ZLinkBackendActorRef actor,
+        Duration timeout) {
+        if (authorityJournal == null || !manifest.hasAggregateFence()) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException(
+                    "direct Actor Join relocation fence is missing"));
+        }
+        return authorityJournal.awaitSourceLeaveSubmitted(
+            new UUID(
+                manifest.aggregateIdHigh(),
+                manifest.aggregateIdLow()),
+            manifest.aggregateGeneration(),
+            new ZLinkActorJoinOperationId(
+                manifest.operationIdHigh(),
+                manifest.operationIdLow()),
+            actor,
+            timeout);
+    }
+
+    CompletionStage<Void> markTargetLifecycleCompleted(
+        Manifest manifest,
+        ZLinkBackendActorRef actor) {
+        if (authorityJournal == null || !manifest.hasAggregateFence()) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException(
+                    "direct Actor Join relocation fence is missing"));
+        }
+        return authorityJournal.markTargetLifecycleCompleted(
+            new ZLinkActorJoinOperationId(
+                manifest.operationIdHigh(),
+                manifest.operationIdLow()),
+            actor);
+    }
+
+    CompletionStage<Void> markSourceLeaveSubmitted(
+        Manifest manifest,
+        ZLinkBackendActorRef actor) {
+        if (authorityJournal == null || !manifest.hasAggregateFence()) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException(
+                    "direct Actor Join relocation fence is missing"));
+        }
+        return authorityJournal.markSourceLeaveSubmitted(
+            new ZLinkActorJoinOperationId(
+                manifest.operationIdHigh(),
+                manifest.operationIdLow()),
+            actor);
+    }
+
+    CompletionStage<Void> publishTargetReady(
+        Manifest manifest,
+        ZLinkBackendActorRef actor) {
+        if (authorityJournal == null || !manifest.hasAggregateFence()) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException(
+                    "direct Actor Join relocation fence is missing"));
+        }
+        return authorityJournal.publishTargetReady(
+            new ZLinkActorJoinOperationId(
+                manifest.operationIdHigh(),
+                manifest.operationIdLow()),
+            actor);
     }
 
     CompletionStage<Void> awaitSourceCleanup(
@@ -240,6 +332,58 @@ final class ZLinkDeferredJoinAcceptedRecovery {
                 manifest.aggregateIdLow()),
             manifest.aggregateGeneration(),
             manifest.reference());
+    }
+
+    CompletionStage<ZLinkDeferredJoinCompletionAuthority.RetainedAbort>
+        abortPreparedRetainingRoot(Manifest manifest) {
+        if (authorityJournal == null || !manifest.hasAggregateFence()) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException(
+                    "direct Actor Join relocation fence is missing"));
+        }
+        return authorityJournal.abortPreparedRetainingRoot(
+            new UUID(
+                manifest.aggregateIdHigh(),
+                manifest.aggregateIdLow()),
+            manifest.aggregateGeneration(),
+            manifest.reference(),
+            manifest.checksumCrc32c());
+    }
+
+    CompletionStage<Void> completeRetainedAbort(
+        ZLinkDeferredJoinCompletionAuthority.RetainedAbort retained) {
+        if (authorityJournal == null) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException(
+                    "direct Actor Join relocation recovery is unavailable"));
+        }
+        return authorityJournal.completeRetainedAbort(retained);
+    }
+
+    CompletionStage<Void> renewRetainedAbort(
+        ZLinkDeferredJoinCompletionAuthority.RetainedAbort retained) {
+        if (authorityJournal == null) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException(
+                    "direct Actor Join relocation recovery is unavailable"));
+        }
+        return authorityJournal.renewRetainedAbort(retained);
+    }
+
+    CompletionStage<Void> renewCompletionRoot(
+        Manifest manifest,
+        ZLinkBackendActorRef currentActor) {
+        if (authorityJournal == null || manifest == null
+            || !manifest.hasAggregateFence() || currentActor == null) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException(
+                    "direct Actor Join relocation fence is missing"));
+        }
+        var operationId = new ZLinkActorJoinOperationId(
+            manifest.operationIdHigh(), manifest.operationIdLow());
+        return authorityJournal.recover(operationId, currentActor)
+            .thenCompose(current -> authorityJournal.renewCompletionRoot(
+                current.reference(), current.checksumCrc32c()));
     }
 
     private CompletionStage<Manifest> prepareLegacy(
@@ -344,7 +488,7 @@ final class ZLinkDeferredJoinAcceptedRecovery {
 
     private static boolean isCanonicalRootMissing(Throwable error) {
         Throwable current = error;
-        while (current instanceof java.util.concurrent.CompletionException
+        while (current instanceof CompletionException
             && current.getCause() != null) {
             current = current.getCause();
         }
@@ -363,7 +507,8 @@ final class ZLinkDeferredJoinAcceptedRecovery {
             new ZLinkActorJoinOperationId(
                 manifest.operationIdHigh(),
                 manifest.operationIdLow());
-        return authorityJournal.restore(
+        CompletionStage<ZLinkDeferredJoinCompletionAuthority.Published> restored =
+            authorityJournal.restore(
                 manifest.reference(),
                 manifest.checksumCrc32c(),
                 operationId,
@@ -374,13 +519,22 @@ final class ZLinkDeferredJoinAcceptedRecovery {
                         manifest.reference(),
                         operationId,
                         currentActor)
-                    : CompletableFuture.failedFuture(error))
-            .thenCompose(restored -> authorityJournal.advance(
-                restored,
-                currentActor,
-                2))
+                    : CompletableFuture.failedFuture(error));
+        CompletionStage<ZLinkDeferredJoinCompletionAuthority.Published> admitted =
+            manifest.hasAggregateFence()
+                ? restored.thenCompose(current -> current.cursor() >= 2
+                    ? CompletableFuture.completedFuture(current)
+                    : CompletableFuture.failedFuture(
+                        new IllegalStateException(
+                            "target lifecycle did not complete before Join completion")))
+                : restored.thenCompose(current -> authorityJournal.advance(
+                    current,
+                    currentActor,
+                    2));
+        int deliveredCursor = 3;
+        return admitted
             .thenCompose(committed -> {
-                if (committed.cursor() == 3) {
+                if (committed.cursor() == deliveredCursor) {
                     return CompletableFuture.completedFuture(committed);
                 }
                 ZLinkActor actor = actorResolver.apply(committed.actorId());
@@ -421,7 +575,7 @@ final class ZLinkDeferredJoinAcceptedRecovery {
                     .thenCompose(ignored -> authorityJournal.advance(
                         committed,
                         currentActor,
-                        3));
+                        deliveredCursor));
             })
             .thenApply(deliveredRoot -> null);
     }
@@ -513,7 +667,7 @@ final class ZLinkDeferredJoinAcceptedRecovery {
     }
 
     private static long crc32c(byte[] payload) {
-        java.util.zip.CRC32C checksum = new java.util.zip.CRC32C();
+        CRC32C checksum = new CRC32C();
         checksum.update(payload, 0, payload.length);
         return checksum.getValue();
     }

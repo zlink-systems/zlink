@@ -170,16 +170,6 @@ internal sealed partial class ZLinkFrameworkRuntime
             .ConfigureAwait(false);
     }
 
-    internal async ValueTask<ZLinkSpotActivation?> GetSpotActivationByRidAsync(
-        string spotId,
-        CancellationToken cancellationToken)
-    {
-        using var operation = EnterOperation();
-        var state = await GetStartedStateForRoutingAsync(cancellationToken)
-            .ConfigureAwait(false);
-        return _spots.GetActivationBySpotId(state, spotId);
-    }
-
     public async ValueTask<IReadOnlyList<ZLinkSpotInfo>> ListAsync(
         CancellationToken cancellationToken = default)
     {
@@ -241,11 +231,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                 && node.Registration.ActorFactories.Count > 0);
     }
 
-    internal IZLinkBackendSpotNode GetActorClientSpotNode()
-    {
-        return GetActorClientSpotNodeRuntime().Node;
-    }
-
     /// <summary>Any router-capable node, or null before startup — the
     /// bound-session relay planes live on the router plane even on hosts
     /// without local actor factories (a session host binding remote actors).</summary>
@@ -273,38 +258,6 @@ internal sealed partial class ZLinkFrameworkRuntime
         var state = GetOrStartState();
         if (state.RouteMeshNodesByChannel.TryGetValue(channelName, out var nodeRuntime))
             return nodeRuntime;
-
-        // Registration is a startup contract, but the internal publisher
-        // surface still permits a diagnostic registration to be added after
-        // startup. Preserve that compatibility on the cold miss path without
-        // putting a scan or lock on the normal channel-send path.
-        ZLinkSpotNodeRuntime? lateMatch = null;
-        foreach (var registration in Registration.SpotNodes.Values)
-        {
-            var matches = false;
-            foreach (var membership in registration.ChannelMemberships)
-            {
-                if (string.Equals(
-                        membership.ChannelName,
-                        channelName,
-                        StringComparison.Ordinal))
-                {
-                    matches = true;
-                    break;
-                }
-            }
-            if (!matches
-                || !state.SpotNodes.TryGetValue(
-                    registration.SpotNodeName,
-                    out var candidate))
-                continue;
-            if (lateMatch is not null && !ReferenceEquals(lateMatch, candidate))
-                throw new ZLinkConfigurationException(
-                    $"ChannelName '{channelName}' resolves to more than one process-local RouteMesh.");
-            lateMatch = candidate;
-        }
-        if (lateMatch is not null)
-            return lateMatch;
 
         throw new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.NotFound,
@@ -360,22 +313,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                 relocationReplay,
                 cancellationToken);
         });
-    }
-
-    internal async ValueTask NotifyEntrySpotActorJoinedAsync(
-        IZLinkActor actor,
-        RoutingId? targetNodeRid = null,
-        CancellationToken cancellationToken = default)
-    {
-        using var operation = EnterOperation();
-        if (_state is null) return;
-
-        await _spots.EntrySpotActors.NotifyJoinedAsync(
-                _state,
-                actor,
-                targetNodeRid,
-                cancellationToken)
-            .ConfigureAwait(false);
     }
 
     internal async ValueTask<ZLinkActorCreateResponse> NotifyEntrySpotActorCreatedAsync(

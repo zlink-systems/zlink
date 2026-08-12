@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.concurrent.CompletionException;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -298,7 +299,7 @@ final class ZLinkInstanceSpotActivation
                         .thenApply(closed -> {
                             closeResources();
                             if (failure != null) {
-                                throw new java.util.concurrent.CompletionException(
+                                throw new CompletionException(
                                     failure);
                             }
                             return closed;

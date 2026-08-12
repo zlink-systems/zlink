@@ -5,7 +5,6 @@ using Zlink.Framework.Contracts.Spots;
 
 namespace TicTacToe.Server.Play.Infrastructure.ZLink.Spots.EntrySpot.Handlers;
 
-[ZLinkSpotActorRequestHandler(nameof(ObserveMilestoneReq))]
 internal sealed class PlayActorObserveMilestoneHandler(
     ILogger<PlayActorObserveMilestoneHandler> logger)
     : IZLinkEntrySpotActorRequestHandler<PlayEntrySpot, PlayActor, ObserveMilestoneReq, ObserveMilestoneRes>

@@ -45,9 +45,6 @@ snapshot을 사용한다. 10.0.0에서는 `ZLinkRouteMeshRuntimeOptions.channel(
   provider-b의 정상 reply가 계속 유지되고 follow-up request가 성공하는지 확인한다.
 - `RL-C1`: 같은 Consumer role이 반복 request 뒤 follow-up request를 보내 public 경로의 client
   lifecycle cleanup을 관측한다.
-- `RL-C2`: provider-b 강제 종료 뒤 public location topology에서 stale descriptor가 제외되고, 정상
-  provider-a로 request가 수렴하는지 확인한다. provider-b 재기동 뒤 같은 endpoint row와 traffic
-  복구도 함께 검증한다.
 - `RL-C3`: provider-a 정지 구간의 public 실패와 재기동 후 topology 회복, 후속 request 성공을
   같은 restart orchestration에서 확인한다.
 - `RL-C4`: runner가 실행별 Redis location store를 시작하고, Client support가 store를 일시 중지한
@@ -84,5 +81,5 @@ snapshot을 사용한다. 10.0.0에서는 `ZLinkRouteMeshRuntimeOptions.channel(
 다음 공통 scenario에는 Java actual fixture와 runner selector가 없다.
 
 - `RL-E1`, `RL-E2`, `RL-E3`, `RL-E4`, `RL-E5`
-- `RL-F1`, `RL-F2`, `RL-F3`, `RL-F4`, `RL-F5`, `RL-F6`, `RL-F7`
+- `RL-F1`, `RL-F3`, `RL-F5`, `RL-F6`, `RL-F7`
 - `RL-F8`, `RL-F9`, `RL-F10`, `RL-F11`, `RL-F12`, `RL-F13`, `RL-F14`

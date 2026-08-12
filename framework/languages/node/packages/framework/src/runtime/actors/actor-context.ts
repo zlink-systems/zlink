@@ -19,6 +19,13 @@ import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message
 import { type ZLinkMessageSerializer } from '../../contracts';
 import { ZLinkConfigurationException } from '../configuration';
 import {
+  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
+  ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
+  ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
+  ZLinkDispatchErrorSurface,
+  ZLinkDispatchMessageKind
+} from '../../contracts/Dispatch/ZLinkDispatchOptions';
+import {
   encodeFrameworkPayloadMessage
 } from '../messaging/payload-codec';
 import {
@@ -259,7 +266,7 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
             : await this.turn.yieldFrameworkPromise(pending);
         } catch (error) {
           this.state.endDeferredJoin();
-          await notifyJoinFailure(this.actor, operationId, error);
+          await notifyJoinFailure(this.actor, operationId, error, this.coordinator);
           await this.coordinator.abortDeferredJoin?.(this.actor, this.state, operationId)
             .catch(() => undefined);
           return;
@@ -380,7 +387,7 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
             : await this.turn.yieldFrameworkPromise(pending);
         } catch (error) {
           this.state.endDeferredJoin();
-          await notifyJoinFailure(this.actor, operationId, error);
+          await notifyJoinFailure(this.actor, operationId, error, this.coordinator);
           await this.coordinator.abortDeferredJoin?.(this.actor, this.state, operationId)
             .catch(() => undefined);
           return;
@@ -503,7 +510,8 @@ async function notifyJoinCompletion(
 async function notifyJoinFailure(
   actor: ZLinkActor,
   operationId: { readonly high: bigint; readonly low: bigint },
-  error: unknown
+  error: unknown,
+  coordinator?: ZLinkActorJoinCoordinator
 ): Promise<void> {
   console.error(`actor join failure actor=${actor.context.actorId}`, error);
   const frameworkError = error instanceof ZLinkFrameworkException
@@ -514,6 +522,22 @@ async function notifyJoinFailure(
         false,
         error
       );
+  //  The completion carries only an error kind, so trace the cause on the
+  //  message flow under the same flow id as the Join that produced it.
+  coordinator?.messageFlow?.()?.traceLazy(
+    ZLinkMessageFlowOutcome.Error,
+    () => ({
+      outcome: ZLinkMessageFlowOutcome.Error,
+      surface: ZLinkDispatchErrorSurface.SpotActor,
+      messageKind: ZLinkDispatchMessageKind.ActorRequest,
+      packetName: 'JoinSpot',
+      actorId: actor.context.actorId,
+      errorReason: ZLinkDispatchErrorReason.HandlerException,
+      errorAction: ZLinkDispatchErrorAction.ReplyError,
+      errorType: String(frameworkError.kind),
+      errorMessage: String(error)
+    })
+  );
   await actor.onJoinCompleted?.({
     status: 'failed',
     operationId,

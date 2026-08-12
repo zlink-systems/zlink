@@ -215,7 +215,7 @@ public sealed class UserSpotExecutionSchedulerTests
     }
 
     [Fact]
-    public async Task SpotWide_SameGateAwaitIsRejectedBeforeSubmission()
+    public async Task SpotWide_SameOwnerRequestsRequireTheMatchingTerminator()
     {
         using var errorSink = new ZLinkRuntimeErrorSink();
         await using var executor = CreateExecutor(errorSink, ZLinkUserSpotExecutionMode.SpotWide);
@@ -227,7 +227,16 @@ public sealed class UserSpotExecutionSchedulerTests
             {
                 AssertInvalid(() =>
                 {
-                    ZLinkApplicationExecutionContext.RejectActorRequestWhenSameClaim("actor-1");
+                    ZLinkApplicationExecutionContext.ValidateActorRequest(
+                        "actor-1",
+                        ZLinkNestedRequestTerminator.Async);
+                    Interlocked.Increment(ref attempts);
+                });
+                AssertInvalid(() =>
+                {
+                    ZLinkApplicationExecutionContext.ValidateActorRequest(
+                        "actor-1",
+                        ZLinkNestedRequestTerminator.Yield);
                     Interlocked.Increment(ref attempts);
                 });
                 using (ZLinkApplicationExecutionContext.Push(
@@ -240,14 +249,24 @@ public sealed class UserSpotExecutionSchedulerTests
                     AssertInvalid(() =>
                     {
                         ZLinkApplicationExecutionContext
-                            .RejectActorRequestWhenSameClaim("actor-2");
+                            .ValidateActorRequest(
+                                "actor-2",
+                                ZLinkNestedRequestTerminator.Async);
                         Interlocked.Increment(ref attempts);
                     });
+                ZLinkApplicationExecutionContext.ValidateActorRequest(
+                    "actor-2",
+                    ZLinkNestedRequestTerminator.Yield);
                 AssertInvalid(() =>
                 {
-                    ZLinkApplicationExecutionContext.RejectSpotRequestWhenSameGate("test-spot");
+                    ZLinkApplicationExecutionContext.ValidateSpotRequest(
+                        "test-spot",
+                        ZLinkNestedRequestTerminator.Async);
                     Interlocked.Increment(ref attempts);
                 });
+                ZLinkApplicationExecutionContext.ValidateSpotRequest(
+                    "test-spot",
+                    ZLinkNestedRequestTerminator.Yield);
                 AssertInvalid(() =>
                 {
                     ZLinkApplicationExecutionContext.RejectActorJoinWhenSameGate("another-spot");
@@ -259,6 +278,70 @@ public sealed class UserSpotExecutionSchedulerTests
             CancellationToken.None);
 
         Assert.Equal(0, Volatile.Read(ref attempts));
+    }
+
+    [Fact]
+    public async Task SameOwnerPreflightExpiresWithTheHandlerClaim()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        await using var executor = CreateExecutor(
+            errorSink,
+            ZLinkUserSpotExecutionMode.SpotWide);
+        var releaseDetached = NewSignal();
+        ZLinkApplicationExecutionScope? captured = null;
+        Task<Exception?>? inheritedValidation = null;
+
+        await executor.ExecuteActorAsync(
+            "actor-1",
+            (_, _, _) =>
+            {
+                captured = ZLinkApplicationExecutionContext.Current;
+                inheritedValidation = Task.Run(async () =>
+                {
+                    await releaseDetached.Task.ConfigureAwait(false);
+                    return (Exception?)Record.Exception(() =>
+                        ZLinkApplicationExecutionContext.ValidateActorRequest(
+                            "actor-1",
+                            ZLinkNestedRequestTerminator.Async,
+                            captured));
+                });
+                return ValueTask.CompletedTask;
+            },
+            0,
+            CancellationToken.None);
+
+        Assert.NotNull(captured);
+        Assert.Null(Record.Exception(() =>
+            ZLinkApplicationExecutionContext.ValidateActorRequest(
+                "actor-1",
+                ZLinkNestedRequestTerminator.Async,
+                captured)));
+        Assert.Null(Record.Exception(() =>
+            ZLinkApplicationExecutionContext.ValidateSpotRequest(
+                "test-spot",
+                ZLinkNestedRequestTerminator.Async,
+                captured)));
+        releaseDetached.TrySetResult();
+        Assert.Null(await inheritedValidation!.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
+    public async Task ExactSameSpotAsyncRejectsBeforeRouteLookup()
+    {
+        using var scope = ZLinkApplicationExecutionContext.Push(
+            new ZLinkApplicationExecutionScope(
+                "spot-A",
+                ZLinkUserSpotExecutionMode.SpotWide,
+                ActorId: null,
+                YieldAllowed: true));
+        var call = new ZLinkInstanceSpotRequestCall<object>(
+            null!,
+            "spot-A",
+            new object());
+
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await call.Async<object>());
+        Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, error.Kind);
     }
 
     [Fact]

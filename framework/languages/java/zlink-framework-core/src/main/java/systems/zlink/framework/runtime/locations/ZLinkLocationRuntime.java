@@ -1,4 +1,12 @@
 package systems.zlink.framework.runtime.locations;
+import java.time.Instant;
+import java.util.Map;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseGenerationExhausted;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -22,8 +30,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     private final Duration heartbeatInterval;
     private final ScheduledExecutorService heartbeatExecutor;
     private final Object stateGate = new Object();
-    private final java.util.concurrent.atomic.AtomicBoolean heartbeatInFlight =
-        new java.util.concurrent.atomic.AtomicBoolean();
+    private final AtomicBoolean heartbeatInFlight =
+        new AtomicBoolean();
     private ScheduledFuture<?> heartbeatTask;
     private ScheduledFuture<?> initialClaimRetryTask;
     private CompletableFuture<Void> startupCompletion;
@@ -31,7 +39,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     private boolean started;
     private volatile boolean ownerLeaseHealthy;
     private volatile String lastError;
-    private volatile java.time.Instant ownerLeaseRenewedAt;
+    private volatile Instant ownerLeaseRenewedAt;
     private volatile ZLinkLocationOwnerToken ownerToken;
     private volatile ZLinkLocationOwnerToken recoveryPreviousOwnerToken;
     private volatile boolean ownerLeaseRecoveryPending;
@@ -120,7 +128,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         return lastError;
     }
 
-    public java.time.Instant ownerLeaseRenewedAt() {
+    public Instant ownerLeaseRenewedAt() {
         return ownerLeaseRenewedAt;
     }
 
@@ -225,7 +233,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         return stores.ownerLeaseStore()
             .claimOwnerLease(ownerId, ownerLeaseTtl)
             .thenCompose(result -> {
-                if (result instanceof systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed claimed) {
+                if (result instanceof ZLinkOwnerLeaseClaimed claimed) {
                     ownerToken = claimed.token();
                     recordSuccessfulRenewal(claimed.storeNow());
                     nextOwnerLeaseRenewalNanos =
@@ -234,7 +242,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                 }
                 return CompletableFuture.failedFuture(
                     new IllegalStateException(
-                        result instanceof systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseGenerationExhausted
+                        result instanceof ZLinkOwnerLeaseGenerationExhausted
                             ? "owner lease generation is exhausted"
                             : "owner lease is already claimed"));
             });
@@ -314,17 +322,17 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         long expected = nextOwnerLeaseRenewalNanos;
         if (expected != 0L) {
             long lateNanos = Math.max(0L, System.nanoTime() - expected);
-            systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.record(
+            ZLinkRuntimeMetrics.record(
                 "zlink.location.owner_lease.renew.lateness",
-                java.time.Duration.ofNanos(lateNanos),
-                java.util.Map.of());
+                Duration.ofNanos(lateNanos),
+                Map.of());
         }
         renewOwnerLeaseOnce().whenComplete((ignored, failure) -> heartbeatInFlight.set(false));
     }
 
-    private void recordSuccessfulRenewal(java.time.Instant storeNow) {
+    private void recordSuccessfulRenewal(Instant storeNow) {
         synchronized (stateGate) {
-            java.time.Instant previous = ownerLeaseRenewedAt;
+            Instant previous = ownerLeaseRenewedAt;
             ownerLeaseRenewedAt = previous == null || storeNow.isAfter(previous)
                 ? storeNow
                 : previous.plusNanos(1L);
@@ -342,8 +350,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
 
     private static String failureMessage(Throwable failure) {
         Throwable current = failure;
-        while ((current instanceof java.util.concurrent.CompletionException
-            || current instanceof java.util.concurrent.ExecutionException)
+        while ((current instanceof CompletionException
+            || current instanceof ExecutionException)
             && current.getCause() != null) {
             current = current.getCause();
         }

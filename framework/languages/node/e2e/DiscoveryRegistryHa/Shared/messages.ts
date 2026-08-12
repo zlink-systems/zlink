@@ -52,6 +52,32 @@ export class FanoutEvent {
   constructor(readonly value: string, readonly marker?: string) {}
 }
 
+export interface CapacityActorCreateReq {
+  readonly actorId: string;
+  readonly state?: string;
+}
+
+export class Config6ActorCreateReq {
+  constructor(readonly state: string) {}
+}
+
+export interface CapacitySpotCreateReq {
+  readonly spotId: string;
+  readonly failFactory?: boolean;
+  readonly state?: string;
+  readonly stateLength?: number;
+  readonly fillByte?: number;
+}
+
+export class Config6UserSpotCreateReq {
+  constructor(
+    readonly failFactory: boolean,
+    readonly state: string,
+    readonly stateLength?: number,
+    readonly fillByte?: number
+  ) {}
+}
+
 export const ObjectSpotType = 'Config6InstanceSpot';
 
 @ZLinkPacket('ObjectReq')

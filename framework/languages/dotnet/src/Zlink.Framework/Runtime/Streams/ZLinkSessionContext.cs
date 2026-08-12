@@ -45,9 +45,6 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
 
     internal ZLinkCodecRegistryBuilder Codecs => Runtime.Registration.Codecs;
     internal IZlinkStreamCompressionCodec? CompressionCodec => Runtime.Registration.StreamCompressionCodec;
-
-    internal ZlinkStreamHeader? CurrentDispatchHeader =>
-        _currentDispatch?.RuntimeState as ZlinkStreamHeader;
     internal ZLinkSessionDispatchContext? CurrentDispatchContext => _currentDispatch;
 
     public string SessionId => _stream.SessionId;

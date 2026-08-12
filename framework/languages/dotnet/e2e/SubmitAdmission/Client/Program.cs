@@ -72,13 +72,13 @@ internal sealed class ScenarioRunner(ClientOptions options)
     private async Task CancellationAsync()
     {
         var valid = Next("pre-cancelled");
-        var cancelled = await PostJsonAsync<CancellationResponse>(
+        var cancelled = await PostJsonAsync<CancellationRes>(
             $"{options.CallerUrl}/submit/pre-cancelled/{options.TargetRid}", valid);
         Require(cancelled.Outcome == "Cancelled" && cancelled.TerminalCount == 1,
             $"pre-cancelled terminal mismatch: {cancelled}");
 
         var invalidId = $"invalid-{Guid.NewGuid():N}";
-        var invalid = await PostJsonAsync<CancellationResponse>(
+        var invalid = await PostJsonAsync<CancellationRes>(
             $"{options.CallerUrl}/submit/invalid-pre-cancelled/{options.TargetRid}?operationId={invalidId}",
             new { });
         Require(invalid.Outcome == "Invalid" && invalid.InvalidInvocationCount == 1,
@@ -102,7 +102,7 @@ internal sealed class ScenarioRunner(ClientOptions options)
         Require(localEvidence.HandlerEnteredCount == 1 && remoteEvidence.HandlerEnteredCount == 1,
             "local and remote direct dispatch did not each enter one handler");
 
-        var objectClient = await PostJsonAsync<NodeTargetOutcome>(
+        var objectClient = await PostJsonAsync<NodeTargetOutcomeRes>(
             $"{options.CallerUrl}/submit/node-target-outcome/{options.ObjectClientRid}",
             new { });
         Require(
@@ -124,8 +124,8 @@ internal sealed class ScenarioRunner(ClientOptions options)
 
     private async Task FanoutWithoutSubscriberAsync()
     {
-        var result = await PostJsonAsync<SubmitResponse>(
-            $"{options.PublisherUrl}/submit/fanout", Next("fanout-zero"));
+        var result = await PostJsonAsync<SubmitRes>(
+            $"{options.PublisherUrl}/submit/fanout", NextEvent("fanout-zero"));
         AssertStatus(result, "Submitted");
     }
 
@@ -151,12 +151,12 @@ internal sealed class ScenarioRunner(ClientOptions options)
             "submit or handler terminal count was not exactly one");
     }
 
-    private async Task<SubmitResponse> SubmitNodeAsync(string targetRid, AdmissionMessage message) =>
-        await PostJsonAsync<SubmitResponse>(
+    private async Task<SubmitRes> SubmitNodeAsync(string targetRid, AdmissionMsg message) =>
+        await PostJsonAsync<SubmitRes>(
             $"{options.CallerUrl}/submit/node/{targetRid}", message);
 
-    private async Task<SubmitResponse> SubmitChannelAsync(AdmissionMessage message) =>
-        await PostJsonAsync<SubmitResponse>(
+    private async Task<SubmitRes> SubmitChannelAsync(AdmissionMsg message) =>
+        await PostJsonAsync<SubmitRes>(
             $"{options.CallerUrl}/submit/channel", message);
 
     private async Task WaitRouteReadyAsync()
@@ -180,10 +180,10 @@ internal sealed class ScenarioRunner(ClientOptions options)
         throw new TimeoutException("Route did not become ready within 3 seconds.", last);
     }
 
-    private async Task<OperationEvidence> WaitEvidenceAsync(
+    private async Task<OperationEvidenceRes> WaitEvidenceAsync(
         string baseUrl,
         string operationId,
-        Func<OperationEvidence, bool> condition)
+        Func<OperationEvidenceRes, bool> condition)
     {
         var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(3);
         while (DateTimeOffset.UtcNow < deadline)
@@ -192,7 +192,7 @@ internal sealed class ScenarioRunner(ClientOptions options)
             var response = await http.Get($"/evidence/{operationId}").AsyncRaw();
             if (response.Status is >= 200 and < 300)
             {
-                var evidence = JsonSerializer.Deserialize<OperationEvidence>(
+                var evidence = JsonSerializer.Deserialize<OperationEvidenceRes>(
                     response.Body,
                     new JsonSerializerOptions(JsonSerializerDefaults.Web));
                 if (evidence is not null && condition(evidence)) return evidence;
@@ -229,10 +229,13 @@ internal sealed class ScenarioRunner(ClientOptions options)
         return (uri.GetLeftPart(UriPartial.Authority), uri.PathAndQuery);
     }
 
-    private static AdmissionMessage Next(string marker) =>
+    private static AdmissionMsg Next(string marker) =>
         new($"{marker}-{Guid.NewGuid():N}", 1, new string('x', 128));
 
-    private static void AssertStatus(SubmitResponse response, string expected) =>
+    private static AdmissionEvent NextEvent(string marker) =>
+        new($"{marker}-{Guid.NewGuid():N}", 1, new string('x', 128));
+
+    private static void AssertStatus(SubmitRes response, string expected) =>
         Require(response.Status == expected
                 && response.PublicInvocationCount == 1
                 && response.TerminalCount == 1,

@@ -428,7 +428,8 @@ class codec_registration_context_t
 {
   public:
     explicit codec_registration_context_t (serializer_registry_t &serializers) :
-        _serializers (&serializers)
+        _serializers (&serializers),
+        _registration (serializers.begin_registration ())
     {
     }
 
@@ -438,13 +439,15 @@ class codec_registration_context_t
                     typename serializer_t<TPayload>::deserialize_fn_t deserialize,
                     std::string content_type = "application/octet-stream")
     {
-        _serializers->template add<TPayload> (std::move (serialize), std::move (deserialize),
-                                              std::move (content_type));
+        _serializers->template add_for_registration<TPayload> (
+          std::move (serialize), std::move (deserialize),
+          std::move (content_type), _registration);
         return *this;
     }
 
   private:
     serializer_registry_t *_serializers;
+    std::size_t _registration;
 };
 
 class codec_options_builder_t

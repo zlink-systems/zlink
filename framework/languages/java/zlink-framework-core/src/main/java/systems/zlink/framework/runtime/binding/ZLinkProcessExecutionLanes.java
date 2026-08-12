@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.binding;
+import java.util.Objects;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -41,7 +42,7 @@ final class ZLinkProcessExecutionLanes {
 
         @Override
         public void execute(Runnable command) {
-            pending.add(java.util.Objects.requireNonNull(command, "command"));
+            pending.add(Objects.requireNonNull(command, "command"));
             schedule();
         }
 

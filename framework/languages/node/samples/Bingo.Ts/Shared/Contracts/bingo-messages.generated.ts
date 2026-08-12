@@ -118,6 +118,14 @@ export class BingoRewardAnnouncedNotify {
   }
 }
 
+export class BingoRoomCreateReq {
+  settings!: BingoRoomSettingsPayload;
+
+  constructor(values: MessageValues<BingoRoomCreateReq>) {
+    Object.assign(this, values);
+  }
+}
+
 export class BingoRoomJoinReq {
   roomId!: string;
   actorId!: string;
@@ -166,27 +174,49 @@ export class BingoRoomState {
   }
 }
 
-export class DestroyBingoActor {
+export class DeliverBingoGameEndedMsg {
+  notification!: BingoGameEndedNotify;
 
-  constructor(values: MessageValues<DestroyBingoActor>) {
+  constructor(values: MessageValues<DeliverBingoGameEndedMsg>) {
     Object.assign(this, values);
   }
 }
 
-export class EnsurePlayerActorReq {
-  actorId!: string;
-  displayName!: string;
+export class DeliverBingoGameStartedMsg {
+  notification!: BingoGameStartedNotify;
 
-  constructor(values: MessageValues<EnsurePlayerActorReq>) {
+  constructor(values: MessageValues<DeliverBingoGameStartedMsg>) {
     Object.assign(this, values);
   }
 }
 
-export class EnsurePlayerActorRes {
-  actorId!: string;
-  actorType!: string;
+export class DeliverBingoNumberDrawnMsg {
+  notification!: BingoNumberDrawnNotify;
 
-  constructor(values: MessageValues<EnsurePlayerActorRes>) {
+  constructor(values: MessageValues<DeliverBingoNumberDrawnMsg>) {
+    Object.assign(this, values);
+  }
+}
+
+export class DeliverBingoRewardAnnouncedMsg {
+  notification!: BingoRewardAnnouncedNotify;
+
+  constructor(values: MessageValues<DeliverBingoRewardAnnouncedMsg>) {
+    Object.assign(this, values);
+  }
+}
+
+export class DeliverPlayerJoinedMsg {
+  notification!: PlayerJoinedNotify;
+
+  constructor(values: MessageValues<DeliverPlayerJoinedMsg>) {
+    Object.assign(this, values);
+  }
+}
+
+export class DestroyBingoActorMsg {
+
+  constructor(values: MessageValues<DestroyBingoActorMsg>) {
     Object.assign(this, values);
   }
 }
@@ -209,9 +239,9 @@ export class GetPlayerRecordRes {
   }
 }
 
-export class LeaveFinishedBingoRoom {
+export class LeaveFinishedBingoRoomMsg {
 
-  constructor(values: MessageValues<LeaveFinishedBingoRoom>) {
+  constructor(values: MessageValues<LeaveFinishedBingoRoomMsg>) {
     Object.assign(this, values);
   }
 }
@@ -263,6 +293,15 @@ export class ObserveBingoEventsRes {
   subscribed!: boolean;
 
   constructor(values: MessageValues<ObserveBingoEventsRes>) {
+    Object.assign(this, values);
+  }
+}
+
+export class PlayerActorCreateReq {
+  actorId!: string;
+  displayName!: string;
+
+  constructor(values: MessageValues<PlayerActorCreateReq>) {
     Object.assign(this, values);
   }
 }
@@ -375,22 +414,27 @@ export const BingoGeneratedMessageConstructors = {
   BingoPlayerState,
   BingoRewardAcquiredEvent,
   BingoRewardAnnouncedNotify,
+  BingoRoomCreateReq,
   BingoRoomJoinReq,
   BingoRoomJoinRes,
   BingoRoomSettingsPayload,
   BingoRoomState,
-  DestroyBingoActor,
-  EnsurePlayerActorReq,
-  EnsurePlayerActorRes,
+  DeliverBingoGameEndedMsg,
+  DeliverBingoGameStartedMsg,
+  DeliverBingoNumberDrawnMsg,
+  DeliverBingoRewardAnnouncedMsg,
+  DeliverPlayerJoinedMsg,
+  DestroyBingoActorMsg,
   GetPlayerRecordReq,
   GetPlayerRecordRes,
-  LeaveFinishedBingoRoom,
+  LeaveFinishedBingoRoomMsg,
   MatchBingoApiReq,
   MatchBingoApiRes,
   MatchBingoReq,
   MatchBingoRes,
   ObserveBingoEventsReq,
   ObserveBingoEventsRes,
+  PlayerActorCreateReq,
   PlayerActorTransferState,
   PlayerJoinedNotify,
   ReportBingoResultReq,
@@ -693,6 +737,15 @@ const bingoDescriptors: Readonly<Partial<Record<string, readonly BingoFieldDescr
       "optional": false
     }
   ],
+  "BingoRoomCreateReq": [
+    {
+      "number": 1,
+      "name": "settings",
+      "kind": "message:BingoRoomSettingsPayload",
+      "repeated": false,
+      "optional": false
+    }
+  ],
   "BingoRoomJoinReq": [
     {
       "number": 1,
@@ -841,39 +894,52 @@ const bingoDescriptors: Readonly<Partial<Record<string, readonly BingoFieldDescr
       "optional": false
     }
   ],
-  "DestroyBingoActor": [],
-  "EnsurePlayerActorReq": [
+  "DeliverBingoGameEndedMsg": [
     {
       "number": 1,
-      "name": "actorId",
-      "kind": "string",
-      "repeated": false,
-      "optional": false
-    },
-    {
-      "number": 2,
-      "name": "displayName",
-      "kind": "string",
+      "name": "notification",
+      "kind": "message:BingoGameEndedNotify",
       "repeated": false,
       "optional": false
     }
   ],
-  "EnsurePlayerActorRes": [
+  "DeliverBingoGameStartedMsg": [
     {
       "number": 1,
-      "name": "actorId",
-      "kind": "string",
-      "repeated": false,
-      "optional": false
-    },
-    {
-      "number": 2,
-      "name": "actorType",
-      "kind": "string",
+      "name": "notification",
+      "kind": "message:BingoGameStartedNotify",
       "repeated": false,
       "optional": false
     }
   ],
+  "DeliverBingoNumberDrawnMsg": [
+    {
+      "number": 1,
+      "name": "notification",
+      "kind": "message:BingoNumberDrawnNotify",
+      "repeated": false,
+      "optional": false
+    }
+  ],
+  "DeliverBingoRewardAnnouncedMsg": [
+    {
+      "number": 1,
+      "name": "notification",
+      "kind": "message:BingoRewardAnnouncedNotify",
+      "repeated": false,
+      "optional": false
+    }
+  ],
+  "DeliverPlayerJoinedMsg": [
+    {
+      "number": 1,
+      "name": "notification",
+      "kind": "message:PlayerJoinedNotify",
+      "repeated": false,
+      "optional": false
+    }
+  ],
+  "DestroyBingoActorMsg": [],
   "GetPlayerRecordReq": [
     {
       "number": 1,
@@ -906,7 +972,7 @@ const bingoDescriptors: Readonly<Partial<Record<string, readonly BingoFieldDescr
       "optional": false
     }
   ],
-  "LeaveFinishedBingoRoom": [],
+  "LeaveFinishedBingoRoomMsg": [],
   "MatchBingoApiReq": [
     {
       "number": 1,
@@ -978,6 +1044,22 @@ const bingoDescriptors: Readonly<Partial<Record<string, readonly BingoFieldDescr
       "number": 1,
       "name": "subscribed",
       "kind": "bool",
+      "repeated": false,
+      "optional": false
+    }
+  ],
+  "PlayerActorCreateReq": [
+    {
+      "number": 1,
+      "name": "actorId",
+      "kind": "string",
+      "repeated": false,
+      "optional": false
+    },
+    {
+      "number": 2,
+      "name": "displayName",
+      "kind": "string",
       "repeated": false,
       "optional": false
     }

@@ -1,4 +1,5 @@
 package systems.zlink.framework.testkit;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -43,7 +44,7 @@ final class FrameworkModuleBoundaryTest {
 
         Set<String> actualModules = EXPECTED_MODULES.stream()
             .filter(module -> Files.isDirectory(root.resolve(module)))
-            .collect(java.util.stream.Collectors.toSet());
+            .collect(Collectors.toSet());
 
         assertEquals(EXPECTED_MODULES, actualModules);
     }

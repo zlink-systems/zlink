@@ -12,9 +12,9 @@ Application은 `relocate()`를 호출할 때 목적을 반드시 지정한다. `
 version의 다른 node로 object를 이전한 뒤 현재 host를 점검하거나 재시작할 때 사용한다.
 `rolling_update`는 application이 지정한 더 높은 version으로만 object를 이전할 때 사용한다.
 
-기존 `retire()`, `drain()`과 `await_drained()`는 공개 interface에서 제거한다. `stop()`과
-`request_stop()`은 host의 `shutdown()`을 시작한다. MeshName을 받는 component lifecycle operation은
-제공하지 않는다.
+공개 interface에는 `retire()`, `drain()`과 `await_drained()`가 없다. `stop()`과
+`request_stop()`은 host의 `shutdown()`을 시작한다. MeshName을 받는 component lifecycle
+operation은 제공하지 않는다.
 
 ```cpp
 namespace zlink::framework {
@@ -562,6 +562,15 @@ public:
     metadata_policy_builder_t &allow_actor_to_session(std::string key);
 };
 
+class codec_registration_context_t {
+public:
+    template <typename TPayload>
+    codec_registration_context_t &add_serializer(
+      typename serializer_t<TPayload>::serialize_fn_t serialize,
+      typename serializer_t<TPayload>::deserialize_fn_t deserialize,
+      std::string content_type = "application/octet-stream");
+};
+
 class codec_options_builder_t {
 public:
     template <typename TExtension>
@@ -626,6 +635,26 @@ public:
 
 } // namespace zlink::framework
 ```
+
+`codec_options_builder_t::use(extension)`은 host를 시작하기 전에 extension의
+`register_framework_codecs(codec_registration_context_t&)`를 호출한다. Extension은
+`add_serializer<TPayload>(...)`로 serializer를 등록한다. 이때 compile-time template argument
+`TPayload`가 송신 codec 선택에 사용하는 declared payload descriptor다. 실제 instance의 runtime
+type으로 다시 고르지 않는다. 이 type에 custom serializer가 없으면 기본 JSON 경로를 사용한다.
+
+`content_type`에는 parameter가 없는 ASCII `type/subtype`을 전달한다. Registry는 앞뒤 SP와 TAB을
+제거하고 ASCII 대문자를 소문자로 바꾼 canonical content-type을 key로 사용한다. 같은 canonical
+content-type을 다시 등록하면 나중 등록이 앞의 등록을 교체한다. Parameter, 값 내부의 공백,
+non-ASCII 문자 또는 비어 있는 token은 `framework_error_kind_t::protocol_error`다.
+
+Host startup이 끝나면 registry는 바뀌지 않는다. 이후 등록 시도는
+`framework_error_kind_t::invalid_operation`이다. 송신 선택 결과는 declared payload descriptor
+1,024개까지 저장한다. 한도에 도달해도 기존 entry를 제거하지 않는다. 그 뒤 처음 보는 type은
+송신할 때마다 registry를 다시 확인하며 결과를 저장하지 않는다.
+
+수신 경로는 wire에서 받은 canonical content-type을 registry key와 정확히 비교한다. 등록되지
+않았거나 canonical form이 아닌 값은 JSON으로 다시 해석하지 않고
+`framework_error_kind_t::protocol_error`로 완료한다.
 
 `http_options_builder_t`의 snapshot 생성과 validation 실행은 host startup 내부 책임이며 public
 interface가 아니다. application은 위 builder method로만 HTTP 설정을 구성한다.
@@ -937,7 +966,7 @@ One-way activation 실패는 별도 계기를 만들지 않고 `zlink.mesh_node.
 
 미등록 메시지와 dispatch 실패는 application이 구성한 표준 logger·telemetry provider에
 `event_id=zlink.dispatch_error`, `outcome=failed`인 structured record로 기록한다.
-Channel별, Spot별 진단 provider 등록은 이 버전의 공개 계약이 아니다. request 실패는 reply path가 있으면
+Channel별, Spot별 진단 provider 등록은 공개 계약에 포함하지 않는다. request 실패는 reply path가 있으면
 error reply 로 끝나고, local actor call 처럼 reply frame 이 없는 경로는 `task_t` 또는 pending operation
 을 Framework error로 완료한다. one-way 실패는 drop되지만 기본 structured log와 counter를 남긴다.
 
@@ -1063,7 +1092,7 @@ configuration 등록 표면이 소유한다.
 - RouteMesh ChannelName과 classic fanout channel은 서로 다른 namespace와 socket 계약이다.
 - Spot·Actor 등록은 owner `mesh_node_builder_t`에 둔다.
 
-drain 중 claim 진행의 의미는 [Graceful Drain §5](../../../../28-graceful-drain-handoff.ko.md)가 소유한다.
+drain 중 claim 진행의 의미는 [Graceful Drain §5](../../../../30-host-relocation-flow.ko.md)가 소유한다.
 
 ## 9. Configuration 조회
 

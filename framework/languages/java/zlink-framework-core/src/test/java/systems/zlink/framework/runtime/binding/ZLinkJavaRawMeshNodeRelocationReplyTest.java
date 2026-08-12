@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.binding;
+import java.util.Optional;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -56,13 +59,13 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
             target.setBind(targetEndpoint);
             source.setPeerAuthorityResolver(
                 (mesh, rid, generation) -> CompletableFuture.completedFuture(
-                    java.util.Optional.of(
+                    Optional.of(
                         new systems.zlink.framework.runtime.internal.backend
                             .ZLinkInternalMeshNode.PeerAuthorityFence(
                                 rid, generation, "peer-owner", 1))));
             target.setPeerAuthorityResolver(
                 (mesh, rid, generation) -> CompletableFuture.completedFuture(
-                    java.util.Optional.of(
+                    Optional.of(
                         new systems.zlink.framework.runtime.internal.backend
                             .ZLinkInternalMeshNode.PeerAuthorityFence(
                                 rid, generation, "peer-owner", 1))));
@@ -129,7 +132,7 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                         List.of(payload),
                         Duration.ofSeconds(10))
                     .toCompletableFuture().get(10, TimeUnit.SECONDS);
-            } catch (java.util.concurrent.ExecutionException failure) {
+            } catch (ExecutionException failure) {
                 assertTrue(handlerCalled.get(),
                     "command 33 did not reach the source handler");
                 throw failure;
@@ -151,7 +154,7 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                     List.of(payload),
                     Duration.ofMillis(100));
             var collision = assertThrows(
-                java.util.concurrent.ExecutionException.class,
+                ExecutionException.class,
                 () -> target.requestRelocationReplyRelay(
                         sourceRid,
                         expectedSource,
@@ -161,11 +164,11 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                     .toCompletableFuture().get(1, TimeUnit.SECONDS));
             assertTrue(collision.getCause() instanceof IllegalStateException);
             var timeout = assertThrows(
-                java.util.concurrent.ExecutionException.class,
+                ExecutionException.class,
                 () -> waiting.toCompletableFuture()
                     .get(1, TimeUnit.SECONDS));
             assertTrue(timeout.getCause()
-                instanceof java.util.concurrent.TimeoutException);
+                instanceof TimeoutException);
 
             source.setRelocationReplyRelayHandler(
                 (transportSource, command, frames) ->
@@ -179,7 +182,7 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                                 expectedSource,
                                 1))));
             var wrongRoute = assertThrows(
-                java.util.concurrent.ExecutionException.class,
+                ExecutionException.class,
                 () -> target.requestRelocationReplyRelay(
                         sourceRid,
                         expectedSource,
@@ -188,7 +191,7 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                         Duration.ofMillis(100))
                     .toCompletableFuture().get(1, TimeUnit.SECONDS));
             assertTrue(wrongRoute.getCause()
-                instanceof java.util.concurrent.TimeoutException);
+                instanceof TimeoutException);
 
             source.setRelocationReplyRelayHandler(
                 (transportSource, command, frames) ->
@@ -207,7 +210,7 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                                         source.lifecycleGeneration() + 1),
                                 1))));
             var stale = assertThrows(
-                java.util.concurrent.ExecutionException.class,
+                ExecutionException.class,
                 () -> target.requestRelocationReplyRelay(
                         sourceRid,
                         expectedSource,
@@ -216,7 +219,7 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                         Duration.ofMillis(100))
                     .toCompletableFuture().get(1, TimeUnit.SECONDS));
             assertTrue(stale.getCause()
-                instanceof java.util.concurrent.TimeoutException);
+                instanceof TimeoutException);
         }
     }
 
@@ -242,13 +245,13 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
             target.setBind(targetEndpoint);
             landing.setPeerAuthorityResolver(
                 (mesh, rid, generation) -> CompletableFuture.completedFuture(
-                    java.util.Optional.of(
+                    Optional.of(
                         new systems.zlink.framework.runtime.internal.backend
                             .ZLinkInternalMeshNode.PeerAuthorityFence(
                                 rid, generation, "peer-owner", 1))));
             target.setPeerAuthorityResolver(
                 (mesh, rid, generation) -> CompletableFuture.completedFuture(
-                    java.util.Optional.of(
+                    Optional.of(
                         new systems.zlink.framework.runtime.internal.backend
                             .ZLinkInternalMeshNode.PeerAuthorityFence(
                                 rid, generation, "peer-owner", 1))));
@@ -318,7 +321,7 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                                         41),
                                 1))));
             var wrongFence = assertThrows(
-                java.util.concurrent.ExecutionException.class,
+                ExecutionException.class,
                 () -> target.requestRelocationReplyRelay(
                         landingRid,
                         expectedSource,
@@ -327,12 +330,12 @@ final class ZLinkJavaRawMeshNodeRelocationReplyTest {
                         Duration.ofMillis(200))
                     .toCompletableFuture().get(2, TimeUnit.SECONDS));
             assertTrue(wrongFence.getCause()
-                instanceof java.util.concurrent.TimeoutException);
+                instanceof TimeoutException);
 
             //  A landing that is not an admitted peer never receives the
             //  relay; the pending fence fails or expires without an ACK.
             var wrongLanding = assertThrows(
-                java.util.concurrent.ExecutionException.class,
+                ExecutionException.class,
                 () -> target.requestRelocationReplyRelay(
                         RoutingId.from("jvm-reply-absent"),
                         expectedSource,

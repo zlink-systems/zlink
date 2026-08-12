@@ -35,7 +35,7 @@ public final class GameQuestClientScenario {
             if (message.payload().playerId().equals("player-bob")) {
                 aliceSawBobProgress.incrementAndGet();
             }
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         });
 
         CompletionStage<ZLinkStreamMessage<Messages.QuestProgressNotify>> firstProgress =
@@ -99,15 +99,13 @@ public final class GameQuestClientScenario {
             .request(new Messages.CompleteMissionReq("player-alice", "tutorial", "mission-tutorial"))
             .submit(Messages.CompleteMissionRes.class).toCompletableFuture().join();
         ensure(tutorial.eventId().equals("player-alice-mission-tutorial"));
-        Messages.EnterAreaRes ruins = apiAStream
-            .request(new Messages.EnterAreaReq("player-alice", "ruins", "enter-ruins"))
-            .submit(Messages.EnterAreaRes.class).toCompletableFuture().join();
-        ensure(ruins.eventId().equals("player-alice-enter-ruins"));
+        apiAStream.send(new Messages.EnterAreaMsg(
+                "player-alice", "ruins", "enter-ruins"))
+            .submit().toCompletableFuture().join();
 
-        Messages.CollectItemRes offlineItem = apiAStream
-            .request(new Messages.CollectItemReq("player-bob", "healing-herb", 1, "herb-1"))
-            .submit(Messages.CollectItemRes.class).toCompletableFuture().join();
-        ensure(offlineItem.eventId().equals("player-bob-herb-1"));
+        apiAStream.send(new Messages.CollectItemMsg(
+                "player-bob", "healing-herb", 1, "herb-1"))
+            .submit().toCompletableFuture().join();
         waitForProjection("player-bob", Messages.QuestIds.HerbGathering, 1);
         Messages.GetQuestProgressRes offlineProgress = apiAStream
             .request(new Messages.GetQuestProgressReq("player-bob"))
@@ -126,10 +124,9 @@ public final class GameQuestClientScenario {
                 .where(Messages.QuestCompletedNotify.class, message ->
                     message.payload().progress().questId().equals(Messages.QuestIds.HerbGathering))
                 .submit(Messages.QuestCompletedNotify.class);
-        Messages.CollectItemRes onlineItem = apiBStream
-            .request(new Messages.CollectItemReq("player-bob", "healing-herb", 4, "herb-2"))
-            .submit(Messages.CollectItemRes.class).toCompletableFuture().join();
-        ensure(onlineItem.eventId().equals("player-bob-herb-2"));
+        apiBStream.send(new Messages.CollectItemMsg(
+                "player-bob", "healing-herb", 4, "herb-2"))
+            .submit().toCompletableFuture().join();
         Messages.QuestCompletedNotify herbPush = herbCompleted.toCompletableFuture().join().payload();
         ensure(herbPush.playerId().equals("player-bob"));
         ensure(herbPush.rewardGranted());
@@ -187,9 +184,9 @@ public final class GameQuestClientScenario {
                         message.payload().playerId().equals("player-alice")
                             && message.payload().progress().questId().equals(Messages.QuestIds.HerbGathering))
                     .submit(Messages.QuestProgressNotify.class);
-            reconnectedStream.request(new Messages.CollectItemReq(
+            reconnectedStream.send(new Messages.CollectItemMsg(
                     "player-alice", "healing-herb", 1, "reconnect-herb-1"))
-                .submit(Messages.CollectItemRes.class).toCompletableFuture().join();
+                .submit().toCompletableFuture().join();
             ensure(reconnectedProgress.toCompletableFuture().join().payload().progress().currentCount() == 1);
         } finally {
             reconnectedStream.close().submit().toCompletableFuture().join();
@@ -224,14 +221,12 @@ public final class GameQuestClientScenario {
     private void verifyScaleOut(
         ZLinkStreamConnector apiAStream,
         ZLinkStreamConnector apiBStream) {
-        CompletableFuture.allOf(
-            apiAStream.connect().submit().toCompletableFuture(),
-            apiBStream.connect().submit().toCompletableFuture()).join();
-        CompletableFuture.allOf(
-            apiAStream.request(new Messages.JoinSessionReq("player-scale-a"))
-                .submit(Messages.JoinSessionRes.class).toCompletableFuture(),
-            apiBStream.request(new Messages.JoinSessionReq("player-scale-b"))
-                .submit(Messages.JoinSessionRes.class).toCompletableFuture()).join();
+        apiAStream.connect().submit().toCompletableFuture().join();
+        apiBStream.connect().submit().toCompletableFuture().join();
+        apiAStream.request(new Messages.JoinSessionReq("player-scale-a"))
+            .submit(Messages.JoinSessionRes.class).toCompletableFuture().join();
+        apiBStream.request(new Messages.JoinSessionReq("player-scale-b"))
+            .submit(Messages.JoinSessionRes.class).toCompletableFuture().join();
 
         CompletableFuture<ZLinkStreamMessage<Messages.QuestProgressNotify>> progressA =
             apiAStream.waitFor(Messages.QuestProgressNotify.class)
@@ -247,10 +242,10 @@ public final class GameQuestClientScenario {
             .request(new Messages.KillMonsterReq(
                 "player-scale-a", "wolf", "forest", "scale-kill-1"))
             .submit(Messages.KillMonsterRes.class).toCompletableFuture();
-        CompletableFuture<Messages.CollectItemRes> requestB = apiBStream
-            .request(new Messages.CollectItemReq(
+        CompletableFuture<Void> requestB = apiBStream
+            .send(new Messages.CollectItemMsg(
                 "player-scale-b", "healing-herb", 1, "scale-herb-1"))
-            .submit(Messages.CollectItemRes.class).toCompletableFuture();
+            .submit().toCompletableFuture();
 
         CompletableFuture.allOf(requestA, requestB, progressA, progressB).join();
         ensure(progressA.join().payload().progress().currentCount() == 1);

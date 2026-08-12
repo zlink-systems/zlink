@@ -97,28 +97,6 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         }
     }
 
-    // String values are accepted only at the legacy test/configuration boundary;
-    // the ownership domain itself receives typed identifiers.
-    public ValueTask<ZLinkActorClaimActivation<TActor>> ExecuteActorClaimThenActivateAsync<TActor>(
-        string meshName,
-        string actorType,
-        string actorId,
-        RoutingId nodeRid,
-        Func<CancellationToken, ValueTask>? deactivate,
-        Func<CancellationToken, ValueTask<TActor>> activate,
-        CancellationToken cancellationToken,
-        ZLinkActorClaimMode claimMode = ZLinkActorClaimMode.NewOwner)
-        where TActor : class =>
-        ExecuteActorClaimThenActivateAsync(
-            ZLinkMeshName.FromBoundary(meshName, nameof(meshName)),
-            actorType,
-            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
-            nodeRid,
-            deactivate,
-            activate,
-            cancellationToken,
-            claimMode);
-
     private async ValueTask<ZLinkActorClaimResult> ClaimActorCoreAsync(
         ZLinkMeshName meshName,
         string actorType,
@@ -204,15 +182,6 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 cancellationToken)
             .ConfigureAwait(false);
     }
-
-    public ValueTask PublishActorRefAsync(
-        string actorId,
-        ActorRef actorRef,
-        CancellationToken cancellationToken = default) =>
-        PublishActorRefAsync(
-            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
-            actorRef,
-            cancellationToken);
 
     internal async ValueTask AdoptCommittedActorAuthorityAsync(
         ZLinkActorId actorId,
@@ -660,7 +629,11 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                     relocationReference.Reference,
                     relocationReference.ChecksumCrc32c,
                     0,
-                    0),
+                    0)
+                {
+                    CoordinatorExpectedAuthorityStoreVersion =
+                        snapshot.StoreVersion
+                },
                 relocationRoot);
 
         var committed = false;
@@ -1060,13 +1033,6 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         await releaseTask.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public ValueTask ReleaseActorAsync(
-        string actorId,
-        CancellationToken cancellationToken = default) =>
-        ReleaseActorAsync(
-            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
-            cancellationToken);
-
     /// <summary>
     /// Releases the source side of a committed actor move with the source
     /// authority snapshot as a fallback fence. Ownership-loss notification
@@ -1125,15 +1091,6 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         }
     }
 
-    internal ValueTask ReleaseActorAfterMoveAsync(
-        string actorId,
-        ZLinkAuthoritySnapshot expectedSourceSnapshot,
-        CancellationToken cancellationToken = default) =>
-        ReleaseActorAfterMoveAsync(
-            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
-            expectedSourceSnapshot,
-            cancellationToken);
-
     internal bool OwnsActor(ZLinkActorId actorId)
     {
         lock (_gate)
@@ -1141,9 +1098,6 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             return _actors.ContainsKey(actorId);
         }
     }
-
-    internal bool OwnsActor(string actorId) =>
-        OwnsActor(ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
 
     internal void ResetGeneration()
     {
@@ -1502,32 +1456,6 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         {
             tracked.WriteGate.Release();
         }
-    }
-
-    private static bool CanRetryTransferredActorCommit(
-        ZLinkAuthorityReadResult current,
-        ZLinkAuthoritySnapshot expectedSnapshot,
-        ZLinkActorAuthorityPayload expectedAuthority)
-    {
-        return current is ZLinkAuthorityReadResult.Found found
-               && found.Snapshot.ObjectGeneration
-               == expectedSnapshot.ObjectGeneration
-               && found.Snapshot.AuthorityOwnerGeneration
-               == expectedSnapshot.AuthorityOwnerGeneration
-               && TryDecodeCurrentActorAuthority(
-                   found.Snapshot.Payload.Span,
-                   out var authority)
-               && authority.NodeRid == expectedAuthority.NodeRid
-               && authority.NodeGeneration == expectedAuthority.NodeGeneration
-               && authority.OwnerLeaseGeneration
-               == expectedAuthority.OwnerLeaseGeneration
-               && authority.CurrentSpotGeneration
-               == expectedAuthority.CurrentSpotGeneration
-               && authority.CurrentSpotKind == expectedAuthority.CurrentSpotKind
-               && string.Equals(
-                   authority.CurrentSpotId,
-                   expectedAuthority.CurrentSpotId,
-                   StringComparison.Ordinal);
     }
 
     private static bool IsTransferredAuthority(

@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.handlers;
+import java.util.Objects;
 
 import java.util.IdentityHashMap;
 import java.util.Map;
@@ -20,8 +21,8 @@ public final class ZLinkActorHandlerInstances {
     public static synchronized void bind(
         ZLinkActor actor,
         ZLinkHandlerInstanceOwner owner) {
-        java.util.Objects.requireNonNull(actor, "actor");
-        java.util.Objects.requireNonNull(owner, "owner");
+        Objects.requireNonNull(actor, "actor");
+        Objects.requireNonNull(owner, "owner");
         ZLinkHandlerInstanceOwner previous = OWNERS.get(actor);
         if (previous != null && previous != owner) {
             throw new IllegalStateException(
@@ -42,7 +43,7 @@ public final class ZLinkActorHandlerInstances {
         ZLinkActor actor,
         Class<?> handlerType) {
         ZLinkHandlerInstanceOwner owner = OWNERS.get(
-            java.util.Objects.requireNonNull(actor, "actor"));
+            Objects.requireNonNull(actor, "actor"));
         if (owner == null) {
             throw new IllegalStateException(
                 "Actor handler owner is unavailable: "

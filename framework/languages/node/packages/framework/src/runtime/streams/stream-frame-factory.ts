@@ -220,9 +220,9 @@ export function decompressStreamPayload(
 
 const defaultStreamMessageFactory: ZLinkStreamFrameMessageFactorySource = {
   createTextMessage(payload: string): Message {
-    return ZLinkBindingMessage.from(Buffer.from(payload));
+    return ZLinkBindingMessage.fromOwned(Buffer.from(payload));
   },
   createBinaryMessage(payload: Uint8Array): Message {
-    return ZLinkBindingMessage.from(Buffer.from(payload));
+    return ZLinkBindingMessage.fromOwned(Buffer.from(payload));
   }
 };

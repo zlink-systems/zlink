@@ -63,6 +63,8 @@ import type {
   ServiceActorRef,
   ServiceSpotState
 } from '../../foundation/service-stateful-registry';
+import { serviceSessionBindingIngressPortIfRegistered } from
+  '../../foundation/service-session-binding-ingress-port';
 import type {
   ServiceActorCreateRecord,
   ServiceDirectSpotRouteFence,
@@ -91,10 +93,11 @@ import type {
 } from '../../../contracts';
 import type {
   ZLinkBackendActorRef,
+  ZLinkBackendActorSessionSendFence,
   ZLinkBackendObjectPlacement,
   ZLinkBackendMeshNode
 } from '../contracts';
-import type { ZLinkRawBindingPort } from './node-raw-binding-port';
+import type { ZLinkRawBindingPort } from '../raw-binding-port';
 
 const MULTIPART_PACKET_NAME = SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME;
 const MULTIPART_CONTENT_TYPE = SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
@@ -194,7 +197,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   constructor(
     private readonly meshName: string,
     routingId: string | undefined,
-    private readonly bindingPort?: ZLinkRawBindingPort
+    private readonly bindingPort: ZLinkRawBindingPort
   ) {
     if (meshName.length === 0) throw new TypeError('MeshName must be non-empty.');
     if (routingId === undefined || routingId.length === 0) {
@@ -421,8 +424,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord,
       'kind'
     >
-  ): void {
-    this.requireStateful().sendMessageFollowNotification(targetNodeRid, record);
+  ): boolean {
+    return this.requireStateful().sendMessageFollowNotification(targetNodeRid, record);
   }
 
   shutdown(_timeoutMs: number): RequestResultValue {
@@ -1241,12 +1244,15 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   sendActorBoundSession(
     actor: ZLinkBackendActorRef,
     expectedBindingGeneration: bigint,
-    parts: MessageLike | readonly MessageLike[]
+    parts: MessageLike | readonly MessageLike[],
+    _flags?: number,
+    actorFence?: ZLinkBackendActorSessionSendFence
   ): SubmitResultValue {
     return this.requireStateful().sendBoundSession(
       actor,
       expectedBindingGeneration,
-      encodeMultipart(parts)
+      encodeMultipart(parts),
+      actorFence
     ) as SubmitResultValue;
   }
 
@@ -1791,7 +1797,7 @@ class RawStreamSessionService implements StreamSessionService {
   }
 
   status() {
-    const bindings = this.allBindings();
+    const bindings = this.stateful.allSessionBindings();
     return {
       state: this.state,
       lifecycleGeneration: 1n,
@@ -1835,7 +1841,8 @@ class RawStreamSessionService implements StreamSessionService {
         actor,
         timeoutMs,
         (targetSessionRid, payloadFrame) => this.deliver(targetSessionRid, payloadFrame),
-        onBindingReplaced
+        onBindingReplaced,
+        serviceSessionBindingIngressPortIfRegistered(this)
       )
     );
   }
@@ -1896,10 +1903,6 @@ class RawStreamSessionService implements StreamSessionService {
       this.sessionTargets.delete(sessionRid);
       return false;
     }
-  }
-
-  private allBindings() {
-    return this.stateful.allSessionBindings();
   }
 
   private requireStarted(): void {
@@ -1990,7 +1993,8 @@ class MailboxClaim implements RawClaim {
         throw error;
       }
       const nextParts = decoded.parts.length;
-      const nextBytes = decoded.parts.reduce((sum, part) => sum + part.size(), 0);
+      let nextBytes = 0;
+      for (const part of decoded.parts) nextBytes += part.size();
       if (
         records.length >= capacity.messageCapacity
         || parts + nextParts > capacity.partCapacity
@@ -2250,15 +2254,18 @@ function statefulOperationFailure(error: unknown): RawServiceRequestResult {
 function encodeMultipart(parts: MessageLike | readonly MessageLike[]) {
   const values = Array.isArray(parts) ? parts : [parts];
   if (values.length === 0) throw new TypeError('Multipart payload must contain at least one part.');
-  const bytes = values.map(messageBytes);
-  const size = 4 + bytes.reduce((sum, part) => sum + 4 + part.byteLength, 0);
+  //  messageBytesView aliases the caller's buffer; the parts are consumed
+  //  synchronously by the copy loop below and never retained.
+  const bytes = values.map(messageBytesView);
+  let size = 4;
+  for (const part of bytes) size += 4 + part.byteLength;
   const payload = Buffer.alloc(size);
   payload.writeUInt32BE(bytes.length, 0);
   let offset = 4;
   for (const part of bytes) {
     payload.writeUInt32BE(part.byteLength, offset);
     offset += 4;
-    part.copy(payload, offset);
+    payload.set(part, offset);
     offset += part.byteLength;
   }
   return {
@@ -2354,13 +2361,6 @@ function decodeMultipartBuffers(payload: Uint8Array): Buffer[] {
     throw new ServiceWireProtocolError('Multipart payload has trailing bytes.');
   }
   return result;
-}
-
-function messageBytes(value: MessageLike): Buffer {
-  if (typeof value === 'object' && 'data' in value) {
-    return Buffer.from(value.data());
-  }
-  return Buffer.from(value);
 }
 
 function messageBytesView(value: MessageLike): Uint8Array {

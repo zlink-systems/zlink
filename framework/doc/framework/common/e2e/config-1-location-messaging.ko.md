@@ -305,25 +305,6 @@ message를 각각 한 번 기록하는가.
 - 세부 동작: [Channel messaging §3.1](../spec/08-channel-messaging.ko.md)과
   [오류 모델 §5](../spec/32-framework-error-model.ko.md)를 검증한다.
 
-#### RM-C3 같은 weight의 provider에 request를 분산한다
-
-우선순위: `P0`
-
-같은 Channel을 제공하는 ready provider가 둘이면 Framework는 둘 중 하나를 각 operation의 target으로
-선택한다. 요청마다 정확히 번갈아 선택하는 순서는 공개 계약이 아니므로 전체 처리 횟수와 두 provider의
-참여 여부로 판정한다.
-
-**검증 질문:** 같은 weight의 provider 두 개에 request를 보내면 두 provider가 모두 처리하고 전체
-handler 횟수가 request 수와 일치하는가.
-
-- 시작 조건: A와 B가 weight `100`인 ready Channel target이다.
-- 절차: Client가 서로 다른 marker를 가진 profile 조회 400개를 보낸다.
-- 검증: 두 provider의 고유 marker 합은 400이고 중복 marker는 없다. 각 provider는 전체 request의
-  35~65%인 140~260개를 처리한다. Client는 reply 400개를 받는다. 요청별 정확한 교대 순서는
-  assertion으로 사용하지 않는다.
-- 세부 동작: [Channel messaging §3.2](../spec/08-channel-messaging.ko.md)의
-  select-one 계약을 검증한다.
-
 #### RM-C4 Timeout 뒤 late reply를 버린다
 
 우선순위: `P0`
@@ -366,24 +347,24 @@ provider가 받은 dispatch 결과를 application evidence에 기록한다.
   [오류 모델 §4](../spec/32-framework-error-model.ko.md)와
   [message-flow tracing §3.1](../spec/26-message-flow-tracing.ko.md)을 검증한다.
 
-#### RM-C7 Weight에 따라 provider 선택 비율을 정한다
+#### RM-C7 Weight profile에 따라 provider를 선택한다
 
-우선순위: `P1`
+우선순위: `P0`
 
-Application은 같은 Channel을 제공하는 provider의 선택 비율을 startup weight로 정할 수 있다. 이
-scenario는 두 provider를 처음부터 다른 weight로 시작하여 runtime 전파 시점을 별도로 기다리지 않고
-장기 선택 비율을 검증한다.
+Application은 같은 Channel을 제공하는 provider의 선택 순서와 비율을 startup weight로 정한다. 같은
+public 선택 계약을 equal-weight와 weighted profile에서 함께 검증한다.
 
-**검증 질문:** A의 weight를 `300`, B의 weight를 `100`으로 설정하면 충분한 request에서 A가 전체의
-약 75%를 처리하는가.
+**검증 질문:** Ready provider A와 B가 `100:100` 또는 `300:100` weight로 시작하면 smooth weighted
+round-robin의 결정적 순서로 모든 request를 중복 없이 처리하는가.
 
-- 시작 조건: A는 startup weight `300`, B는 startup weight `100`으로 시작하며 둘 다 ready target이다.
-- 절차: Client가 서로 다른 marker를 가진 profile 조회 800개를 보낸다.
-- 검증: 두 provider의 고유 marker 합은 800이고 중복 marker는 없다. A는 전체 request의 65~85%인
-  520~680개를 처리한다. Client는 reply 800개를 받는다. 정확한 요청별 순서나 정확히 3:1인 결과는
-  요구하지 않는다.
+- 시작 조건: 두 profile을 fresh runtime에서 각각 실행한다. Equal profile은 A와 B가 `100:100`,
+  weighted profile은 `300:100`이며 둘 다 ready target이다. 후보 식별자 순서를 evidence에 기록한다.
+- 절차: Equal profile에서 서로 다른 marker의 profile 조회 400개, weighted profile에서 800개를 보낸다.
+- 검증: 각 profile에서 provider의 고유 marker 합과 client reply 수가 request 수와 같고 중복 marker가
+  없다. Equal profile은 후보 식별자 순서에 따른 정확한 교대를, weighted profile은 spec의 smooth
+  weighted round-robin이 정한 정확한 `3:1` 주기와 요청별 순서를 따른다.
 - 세부 동작: [Channel messaging §3.2](../spec/08-channel-messaging.ko.md)의
-  positive weight 장기 선택 비율을 검증한다. 실행 중 weight 제외·복원은
+  deterministic smooth weighted round-robin을 검증한다. 실행 중 weight 제외·복원은
   [Config 5 RL-B4](config-5-resilience-lifecycle.ko.md)가 검증한다.
 
 #### RM-C8 RouteMesh SS payload 무결성을 검증한다
@@ -438,7 +419,7 @@ message 수신을 멈춘다. Handler가 완료되어 pending payload가 HWM보�
 ## 5. 완료 조건
 
 - `P0` scenario인 RM-A1, RM-A2, RM-A3, RM-A4, RM-A7, RM-B1, RM-B2, RM-B3, RM-C1, RM-C2,
-  RM-C3, RM-C4와 RM-C5가 모두 통과한다.
+  RM-C4, RM-C5와 RM-C7이 모두 통과한다.
 - 각 scenario는 client 결과와 역할 server evidence를 함께 사용한다. Public status가 필요한 판정은
   해당 runtime을 소유한 consumer 또는 provider 역할 server가 읽은 immutable snapshot이나 status
   stream을 사용한다.

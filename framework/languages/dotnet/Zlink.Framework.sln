@@ -369,8 +369,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZoneWorld.Server.Ops", "sam
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Bingo.Server.Matchmaking", "samples\Bingo\Server\Matchmaking\Bingo.Server.Matchmaking.csproj", "{148A0D0B-D832-4D27-AFD3-226E3F787BD4}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Zlink.Framework.M5FoundationTests", "tests\Zlink.Framework.M5FoundationTests\Zlink.Framework.M5FoundationTests.csproj", "{1E3302F6-4A87-48F8-9E84-E7F5A47C44BB}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -1629,18 +1627,6 @@ Global
 		{148A0D0B-D832-4D27-AFD3-226E3F787BD4}.Release|x64.Build.0 = Release|Any CPU
 		{148A0D0B-D832-4D27-AFD3-226E3F787BD4}.Release|x86.ActiveCfg = Release|Any CPU
 		{148A0D0B-D832-4D27-AFD3-226E3F787BD4}.Release|x86.Build.0 = Release|Any CPU
-		{1E3302F6-4A87-48F8-9E84-E7F5A47C44BB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{1E3302F6-4A87-48F8-9E84-E7F5A47C44BB}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{1E3302F6-4A87-48F8-9E84-E7F5A47C44BB}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{1E3302F6-4A87-48F8-9E84-E7F5A47C44BB}.Debug|x64.Build.0 = Debug|Any CPU
-		{1E3302F6-4A87-48F8-9E84-E7F5A47C44BB}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{1E3302F6-4A87-48F8-9E84-E7F5A47C44BB}.Debug|x86.Build.0 = Debug|Any CPU
-		{1E3302F6-4A87-48F8-9E84-E7F5A47C44BB}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{1E3302F6-4A87-48F8-9E84-E7F5A47C44BB}.Release|Any CPU.Build.0 = Release|Any CPU
-		{1E3302F6-4A87-48F8-9E84-E7F5A47C44BB}.Release|x64.ActiveCfg = Release|Any CPU
-		{1E3302F6-4A87-48F8-9E84-E7F5A47C44BB}.Release|x64.Build.0 = Release|Any CPU
-		{1E3302F6-4A87-48F8-9E84-E7F5A47C44BB}.Release|x86.ActiveCfg = Release|Any CPU
-		{1E3302F6-4A87-48F8-9E84-E7F5A47C44BB}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -1824,6 +1810,5 @@ Global
 		{6CA262BF-C8AC-48F0-95CA-2CA097503831} = {AE2239DD-76F7-F114-298F-EF0D91ABC766}
 		{97FE21CD-6EE6-4A51-BC05-8B410081AE1B} = {AE2239DD-76F7-F114-298F-EF0D91ABC766}
 		{148A0D0B-D832-4D27-AFD3-226E3F787BD4} = {F28D6758-5B3A-90DF-2680-2EF6D2BDA728}
-		{1E3302F6-4A87-48F8-9E84-E7F5A47C44BB} = {F3E5F8A1-DEF5-4540-A4B0-73ABB7129801}
 	EndGlobalSection
 EndGlobal

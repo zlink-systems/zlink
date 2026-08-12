@@ -1,4 +1,6 @@
 package systems.zlink.e2e.observabilityops.a5.server;
+import java.io.IOException;
+import java.net.URLDecoder;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
@@ -54,7 +56,7 @@ public final class HttpServer implements SmartLifecycle {
         }
     }
 
-    private void setMode(HttpExchange exchange) throws java.io.IOException {
+    private void setMode(HttpExchange exchange) throws IOException {
         ZLinkMessageFlowLogMode mode = ZLinkMessageFlowLogMode.valueOf(
             query(exchange, "value"));
         runtime().setMessageFlowMode(mode);
@@ -62,15 +64,15 @@ public final class HttpServer implements SmartLifecycle {
             runtime().messageFlowMode().name(), evidence.snapshot().size())));
     }
 
-    private void request(HttpExchange exchange) throws java.io.IOException {
+    private void request(HttpExchange exchange) throws IOException {
         try {
-            Contracts.ProbeReply reply = routes.requestToChannel(
+            Contracts.ProbeRes reply = routes.requestToChannel(
                     Contracts.CHANNEL,
-                    new Contracts.ProbeRequest(
+                    new Contracts.ProbeReq(
                         query(exchange, "value"),
                         Boolean.parseBoolean(query(exchange, "fail"))))
                 .timeout(Duration.ofSeconds(5))
-                .submit(Contracts.ProbeReply.class)
+                .submit(Contracts.ProbeRes.class)
                 .toCompletableFuture()
                 .join();
             write(exchange, json.writeValueAsString(reply));
@@ -79,7 +81,7 @@ public final class HttpServer implements SmartLifecycle {
         }
     }
 
-    private void flowSnapshot(HttpExchange exchange) throws java.io.IOException {
+    private void flowSnapshot(HttpExchange exchange) throws IOException {
         int after = Integer.parseInt(queryOrDefault(exchange, "after", "0"));
         List<FlowEvidence.FlowEvent> events = evidence.snapshot();
         int start = Math.max(0, Math.min(after, events.size()));
@@ -103,7 +105,7 @@ public final class HttpServer implements SmartLifecycle {
         for (String part : query.split("&")) {
             String[] pair = part.split("=", 2);
             if (pair.length == 2 && name.equals(pair[0])) {
-                return java.net.URLDecoder.decode(pair[1], StandardCharsets.UTF_8);
+                return URLDecoder.decode(pair[1], StandardCharsets.UTF_8);
             }
         }
         return fallback;
@@ -121,12 +123,12 @@ public final class HttpServer implements SmartLifecycle {
         return runtimeProvider.getObject();
     }
 
-    private static void write(HttpExchange exchange, String body) throws java.io.IOException {
+    private static void write(HttpExchange exchange, String body) throws IOException {
         write(exchange, 200, body);
     }
 
     private static void write(HttpExchange exchange, int status, String body)
-        throws java.io.IOException {
+        throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "application/json");
         exchange.sendResponseHeaders(status, bytes.length);

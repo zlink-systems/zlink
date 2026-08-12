@@ -11,6 +11,7 @@ import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleSetting
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.actors.PlayActorFactory
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.actors.PlayActorRelocationAdapter
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.actors.PlayActor
+import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.sessions.handlers.AuthenticatePlaySessionHandler
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.spots.entryspot.PlayEntrySpot
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.spots.tictactoegamespot.TicTacToeGame
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.sessions.PlaySession
@@ -20,13 +21,14 @@ object PlayServer {
         ZLinkFrameworkConfigurer { options ->
             SampleLogging.configure(settings, "play")
             options.useCoroutineHandlers(Dispatchers.Default)
-            options.addHandlersFromPackageOf(PlayServer::class.java)
             options.configureDispatch {
                 messageFlow(ZLinkMessageFlowLogMode.NORMAL)
             }
-            options.addClientServerChannel(SampleNames.ApiChannel)
-                .client()
-                .connect(settings.apiChannelEndpoint)
+            val apiClient = options.addClientServerChannel(SampleNames.ApiChannel).client()
+            settings.apiChannelEndpoints.forEach { endpoint ->
+                // Api A와 Api B를 모두 수동 등록하고 request마다 가용 endpoint를 선택한다.
+                apiClient.connect(endpoint)
+            }
             val node = options.addRouteMesh(SampleNames.SpotMesh)
             val routeEndpoint = settings.routeEndpoint.ifBlank { settings.spotEndpoint }
 
@@ -51,5 +53,7 @@ object PlayServer {
                 .bind(settings.playEndpoint)
                 .enableActorDispatch()
                 .registerSession(PlaySession::class.java)
+                // request: STREAM AuthenticateReq를 처리하고 AuthenticateRes를 reply한다.
+                .addSessionPacketHandler(AuthenticatePlaySessionHandler::class.java)
         }
 }

@@ -1,4 +1,7 @@
 package systems.zlink.samples.bingo.server.play.infrastructure.zlink.actors;
+import java.io.IOException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import systems.zlink.framework.actors.ZLinkActorRelocationAdapter;
@@ -9,23 +12,23 @@ public final class PlayerActorRelocationAdapter
     private static final ObjectMapper JSON = new ObjectMapper();
 
     @Override
-    public java.util.concurrent.CompletionStage<byte[]> capture(
+    public CompletionStage<byte[]> capture(
         PlayerActor actor,
         ZLinkRelocationCancellation cancellation) {
         try {
-            return java.util.concurrent.CompletableFuture.completedFuture(
+            return CompletableFuture.completedFuture(
                 JSON.writeValueAsBytes(new TransferState(
                     actor.displayName(),
                     actor.roomId(),
                     actor.destroyAfterEntrySpotJoin(),
                     actor.disconnected())));
-        } catch (java.io.IOException error) {
-            return java.util.concurrent.CompletableFuture.failedFuture(error);
+        } catch (IOException error) {
+            return CompletableFuture.failedFuture(error);
         }
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> restore(
+    public CompletionStage<Void> restore(
         PlayerActor actor,
         byte[] state,
         ZLinkRelocationCancellation cancellation) {
@@ -41,9 +44,9 @@ public final class PlayerActorRelocationAdapter
             if (transferred.disconnected()) {
                 actor.markDisconnected();
             }
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
-        } catch (java.io.IOException error) {
-            return java.util.concurrent.CompletableFuture.failedFuture(error);
+            return CompletableFuture.completedFuture(null);
+        } catch (IOException error) {
+            return CompletableFuture.failedFuture(error);
         }
     }
 

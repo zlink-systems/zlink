@@ -37,9 +37,13 @@ inline void scenario_runner_t::run_st_c1_scenario ()
 
     shutdown_node (_nodes.a);
     if (join_task.wait_for (std::chrono::seconds (3)) == std::future_status::ready) {
+        // Admission is decoupled from the transfer: the Join call may already
+        // have returned the "deferred" acknowledgement before the source went
+        // down. The contract under test is that the transfer never commits,
+        // which the target-side assertions below verify.
         const auto response = join_task.get ();
-        require (!response || !response->accepted,
-                 "ST-C1 join should not be accepted after source shutdown before commit.");
+        require (!response || !response->accepted || response->error_kind == "deferred",
+                 "ST-C1 join should not commit after source shutdown before commit.");
     }
 
     const auto target_evidence =

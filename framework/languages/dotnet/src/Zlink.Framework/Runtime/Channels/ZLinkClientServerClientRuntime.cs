@@ -1,3 +1,4 @@
+using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Channels;
@@ -807,10 +808,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         return;
                 Socket.Connect(_endpoint);
             }
-            // The monitor normally starts admission. This delayed fallback
-            // covers a connection that became ready before the monitor
-            // subscriber observed its first event without submitting a native
-            // request against a pipe that is still being established.
+            // Native monitor delivery can race the first connected edge. The
+            // adapter schedules the same fenced admission attempt so readiness
+            // does not depend on which binding notification arrives first.
             ScheduleAdmissionRetry();
         }
 

@@ -1,4 +1,5 @@
 package systems.zlink.e2e.toactormessaging.caller;
+import java.util.Map;
 
 import java.time.Duration;
 import java.nio.file.Path;
@@ -55,30 +56,30 @@ public final class Program {
         boot("http create");
         JsonHttp http = new JsonHttp(config.callerHttpEndpoint());
         boot("http route health");
-        http.get("/health", () -> java.util.Map.of("status", "ok"));
+        http.get("/health", () -> Map.of("status", "ok"));
         http.get("/route-status", () -> {
             boolean ready = meshRuntime.snapshot(Contracts.SPOT_MESH).peers().stream()
                 .anyMatch(peer -> peer.nodeRid().toString().equals(config.actorRouteRid())
                     && (peer.state() == ZLinkPeerState.READY
                         || peer.state() == ZLinkPeerState.NOT_REQUIRED));
-            return new Contracts.RouteStatus(ready, config.actorRouteRid());
+            return new Contracts.RouteStatusRes(ready, config.actorRouteRid());
         });
         boot("http route send");
-        http.postAsync("/send", Contracts.ActorCallRequest.class, request ->
+        http.postAsync("/send", Contracts.ActorCallReq.class, request ->
             actorRef(actorRefs, request.actorId()).thenApply(actorRef -> {
                 actors.sendToActor(
                     actorRef.actorId(),
-                    new Contracts.ActorNotify(request.scenario(), request.actorId(), request.value())).submit();
-                return Contracts.ActorCallResponse.ok(request.scenario(), request.actorId(), "sent");
+                    new Contracts.ActorMsg(request.scenario(), request.actorId(), request.value())).submit();
+                return Contracts.ActorCallRes.ok(request.scenario(), request.actorId(), "sent");
             }).exceptionally(error -> failed(request, error)));
         boot("http route request");
-        http.postAsync("/request", Contracts.ActorCallRequest.class, request ->
+        http.postAsync("/request", Contracts.ActorCallReq.class, request ->
             actorRef(actorRefs, request.actorId()).thenCompose(actorRef -> actors.requestToActor(
                     actorRef.actorId(),
-                    new Contracts.ActorAsk(request.scenario(), request.actorId(), request.value()))
+                    new Contracts.ActorReq(request.scenario(), request.actorId(), request.value()))
                 .timeout(Duration.ofSeconds(5))
-                .submit(Contracts.ActorReply.class))
-                .thenApply(reply -> Contracts.ActorCallResponse.ok(
+                .submit(Contracts.ActorRes.class))
+                .thenApply(reply -> Contracts.ActorCallRes.ok(
                     request.scenario(), request.actorId(), reply.value()))
                 .exceptionally(error -> failed(request, error)));
         boot("http start");
@@ -119,20 +120,20 @@ public final class Program {
         System.out.println("[boot] role=caller step=" + step);
     }
 
-    private static Contracts.ActorCallResponse failed(
-        Contracts.ActorCallRequest request,
+    private static Contracts.ActorCallRes failed(
+        Contracts.ActorCallReq request,
         Throwable ex) {
         return failed(request.scenario(), request.actorId(), ex);
     }
 
-    private static Contracts.ActorCallResponse failed(
+    private static Contracts.ActorCallRes failed(
         String scenario,
         String actorId,
         Throwable ex) {
         Throwable current = ex;
         while (current.getCause() != null) {
             if (current instanceof ZLinkFrameworkException frameworkError) {
-                return Contracts.ActorCallResponse.failed(
+                return Contracts.ActorCallRes.failed(
                     scenario,
                     actorId,
                     frameworkError.kind().name());
@@ -140,12 +141,12 @@ public final class Program {
             current = current.getCause();
         }
         if (current instanceof ZLinkFrameworkException frameworkError) {
-            return Contracts.ActorCallResponse.failed(
+            return Contracts.ActorCallRes.failed(
                 scenario,
                 actorId,
                 frameworkError.kind().name());
         }
-        return Contracts.ActorCallResponse.failed(scenario, actorId, current.getClass().getSimpleName());
+        return Contracts.ActorCallRes.failed(scenario, actorId, current.getClass().getSimpleName());
     }
 
     private static CompletionStage<ActorRef> actorRef(ZLinkActorDirectory actors, String actorId) {

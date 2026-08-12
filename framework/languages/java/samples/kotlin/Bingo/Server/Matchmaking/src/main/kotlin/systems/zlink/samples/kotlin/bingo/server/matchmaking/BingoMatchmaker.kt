@@ -1,5 +1,7 @@
 package systems.zlink.samples.kotlin.bingo.server.matchmaking
 
+
+import java.util.concurrent.CompletionStage
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicInteger
@@ -15,7 +17,7 @@ class BingoMatchmaker(
 
     override fun context(): ZLinkInstanceSpotContext = instanceContext
 
-    override fun onInitialize(): java.util.concurrent.CompletionStage<Void> =
+    override fun onInitialize(): CompletionStage<Void> =
         instanceContext.addTimer(
             "matchmaker-idle-close",
             IdleCheckPeriod,

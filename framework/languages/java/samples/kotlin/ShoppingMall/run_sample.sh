@@ -17,6 +17,7 @@ if rg -n 'LockSupport\.parkNanos' \
 fi
 
 source "../../runner-common.sh"
+zlink_sample_configure_port_pool kotlin
 ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kts)
 
 pids=()
@@ -46,48 +47,10 @@ print_logs() {
 
 trap cleanup EXIT
 
-reserve_ports() {
-  python3 - <<'PY'
-import random
-import socket
-import sys
-reserved = []
-try:
-    chosen = set()
-    attempts = 0
-    while len(reserved) < 4 and attempts < 1000:
-        attempts += 1
-        host = "127.0.0.1"
-        port = random.randint(48000, 60999)
-        key = (host, port)
-        if key in chosen:
-            continue
-        sockets = []
-        try:
-            sock4 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock4.bind((host, port))
-            sockets.append(sock4)
-        except OSError:
-            for sock in sockets:
-                sock.close()
-            continue
-        chosen.add(key)
-        reserved.append((host, port, sockets))
-    if len(reserved) < 4:
-        print("unable to reserve local TCP ports", file=sys.stderr)
-        sys.exit(1)
-    print(" ".join(f"{host}:{port}" for host, port, _ in reserved))
-finally:
-    for _, _, sockets in reserved:
-        for sock in sockets:
-            sock.close()
-PY
-}
-
 build_framework_jars() {
   (
     cd ../../..
-    ./gradlew --no-daemon \
+    zlink_sample_gradle_locked ./gradlew --no-daemon \
       --no-parallel \
       --max-workers=1 \
       :zlink-framework-core:jar \
@@ -98,7 +61,7 @@ build_framework_jars() {
   )
 }
 
-read -r -a reserved_endpoints < <(reserve_ports)
+read -r -a reserved_endpoints <<<"$(zlink_sample_reserve_endpoints 4)"
 if [[ "${#reserved_endpoints[@]}" -ne 4 ]]; then
   echo "Failed to reserve sample ports." >&2
   exit 1

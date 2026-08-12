@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.internal.service;
 
+import org.junit.jupiter.api.Assertions;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -207,10 +208,10 @@ final class ZLinkM6ARuntimeContractTest {
             new ZLinkServiceNodeDescriptor.Channel(
                 "maximum",
                 10_000).weight());
-        org.junit.jupiter.api.Assertions.assertThrows(
+        Assertions.assertThrows(
             IllegalArgumentException.class,
             () -> new ZLinkServiceNodeDescriptor.Channel("negative", -1));
-        org.junit.jupiter.api.Assertions.assertThrows(
+        Assertions.assertThrows(
             IllegalArgumentException.class,
             () -> new ZLinkServiceNodeDescriptor.Channel(
                 "too-large",
@@ -334,6 +335,32 @@ final class ZLinkM6ARuntimeContractTest {
         assertEquals(
             List.of(peer),
             liveness.tick(Duration.ofSeconds(26).toNanos()).timedOutNodes());
+    }
+
+    @Test
+    void livenessReprobesQuicklyUntilTheFirstAck() {
+        var liveness = new ZLinkServiceLivenessRegistry(
+            Duration.ofSeconds(5), Duration.ofSeconds(15));
+        RoutingId peer = RoutingId.from("peer-first-ack");
+        liveness.admit(peer, "pipe", 0);
+        assertTrue(liveness.requestProbe(peer, "pipe", 0));
+
+        var first = liveness.tick(0);
+        assertEquals(1, first.probes().size());
+        long probe = first.probes().getFirst().probeId();
+        //  A lost first probe gates every outbound bound-session send, so the
+        //  pre-ready retransmit must not wait a full probe interval.
+        var fastRetry = liveness.tick(
+            ZLinkServiceLivenessRegistry.NOT_READY_PROBE_RETRY.toNanos());
+        assertEquals(probe, fastRetry.probes().getFirst().probeId());
+
+        long ackNanos = Duration.ofMillis(300).toNanos();
+        assertTrue(liveness.acknowledge(peer, "pipe", probe, ackNanos));
+        //  Once ready, probing returns to the configured interval.
+        assertTrue(liveness.tick(
+            ackNanos + Duration.ofSeconds(1).toNanos()).probes().isEmpty());
+        assertEquals(1, liveness.tick(
+            ackNanos + Duration.ofSeconds(5).toNanos()).probes().size());
     }
 
     @Test

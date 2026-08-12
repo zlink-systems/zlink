@@ -18,8 +18,7 @@
 | SA-E2E-06 | 미구현 | Source admission barrier와 독립 `EvidenceCollector` process, admission-closed marker가 필요하다. |
 | SA-E2E-07 | 부분 구현 | 유효 call의 pre-cancel은 `OperationCanceledException` terminal 한 번이며 null message validation은 pre-cancel보다 먼저 실패한다. Logical Multicast commit 전·후 barrier가 남아 있다. |
 | SA-E2E-08 | 부분 구현 | Local·remote RID-direct가 모두 `Submitted`이고 동일한 metadata와 handler dispatch pipeline으로 각각 한 번 처리된다. 별도 Object Client와 manual Ready connection을 만든 뒤 Node-direct Send·Request가 모두 `NotFound`이고 peer 수와 Ready peer 수가 변하지 않음을 Linux actual-process에서 확인했다. 증거는 `logs/20260728-154231-1164570/`에 있다. Pending·deadline의 transport attempt·commit observer는 남아 있다. |
-| SA-E2E-09 | 부분 구현 | ChannelName ready route가 public invocation·terminal 한 번의 `Submitted`임을 process topology에서 확인한다. Pending deadline·member reselection evidence는 아직 없다. |
-| SA-E2E-10 | source 구현·process 미검증 | .NET에 reviewed ClientServer Channel public builder와 runtime route가 source·contract·unit test에 존재한다. 실제 three-process selector와 terminal/evidence 검증은 아직 없다. RouteMesh helper로 대체하지 않는다. |
+| SA-E2E-09 | 부분 구현 | RouteMesh ChannelName ready route가 public invocation·terminal 한 번의 `Submitted`임을 process topology에서 확인한다. ClientServer Channel public builder와 runtime route는 source·contract·unit test에 존재하지만 실제 별도 topology selector가 없다. 두 topology의 pending deadline·capacity 회복·timeout evidence도 아직 없다. RouteMesh helper로 ClientServer variant를 대체하지 않는다. |
 | SA-E2E-11 | 미구현 | Spot create·handle generation과 local mailbox gate를 같은 runner에 아직 연결하지 않았다. |
 | SA-E2E-12 | 미구현 | Actor owner·handle generation과 local mailbox gate를 같은 runner에 아직 연결하지 않았다. |
 | SA-E2E-13 | 미구현 | Logical Multicast executor direct handoff observer와 `PublishSnapshotBarrier`가 없다. 별도 publish transport나 raw frame으로 대체하지 않는다. |

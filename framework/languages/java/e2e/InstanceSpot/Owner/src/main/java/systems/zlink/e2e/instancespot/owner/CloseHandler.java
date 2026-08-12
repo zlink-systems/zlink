@@ -6,11 +6,11 @@ import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 
 public final class CloseHandler implements ZLinkSpotPacketHandler<
     ProbeSpot,
-    Contracts.CloseRequest> {
+    Contracts.CloseMsg> {
     @Override
     public CompletionStage<Void> handle(
         ProbeSpot spot,
-        Contracts.CloseRequest request) {
+        Contracts.CloseMsg request) {
         return spot.gates().await(request.gateId()).thenCompose(ignored ->
             spot.context().close().thenAccept(closed -> spot.evidence().record(
                 "CLOSE_RESULT",

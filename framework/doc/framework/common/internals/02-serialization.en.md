@@ -12,12 +12,11 @@ title: "2. Spot · Actor Execution Serialization — Splitting Queue And Executi
 > **Contract ownership** — the public contract for the queue and the unit
 > of execution is owned by [the Actor model](../spec/14-actor-model.en.md)
 > and [the Stage wrapper on Spot](../spec/17-stage-wrapper-on-spot.en.md).
-> This chapter covers the **structure** that satisfies that contract, and
-> the mismatches actually observed across the four implementations.
+> This chapter covers the **structure** that satisfies that contract and
+> the failures that become visible when serialization breaks.
 
-The structure that lets an application handler get away with having no
-synchronization code. It's also the spot that was actually mismatched
-most often across the four implementations.
+This structure lets an application handler change state safely without
+adding its own synchronization code.
 
 ## 1. The Core Decision — Separate Where You Line Up From The Authority To Run
 
@@ -61,8 +60,8 @@ flowchart TB
 
 ### What Happens When This Structure Is Missed
 
-It can go wrong in two directions, and both have actually been
-observed.
+Missing this structure breaks serialization or queue ownership in the
+following two ways.
 
 | Wrong structure | Result |
 |---|---|
@@ -91,22 +90,19 @@ with its own constraints.
 
 ### Pitfall 1 — Handing Work Off Between Threads Rules Out Thread-Bound Storage {#trap-1-thread-local-storage}
 
-It's possible to guarantee execution authority as "only one at a time"
-while **not fixing which thread it runs on**. One actual implementation
-takes this approach. In this case, two consecutive pieces of work run
+Execution authority can guarantee "only one at a time" while **not
+fixing which thread it runs on**. In this case, two consecutive pieces of work run
 on different threads, so any state placed in thread-bound storage
 between the two pieces of work disappears.
 
-The approach itself isn't a problem. The problem shows up when another
-language's implementation is ported over as-is — if the original
-assumed a fixed thread and put context into thread-local storage, the
-ported version breaks silently.
+The approach itself isn't a problem. Porting code that assumes a fixed
+thread and stores context in thread-local storage makes the context
+disappear when the next work item runs on another thread.
 
 ### Pitfall 2 — Running In Place When The Queue Is Full Erases Seriality
 
-An actual defect observed in one implementation. When the queue is
-full, it must be treated as a submission failure, but **substituting
-it with running right there instead** makes it run concurrently with
+When the queue is full, it must be treated as a submission failure.
+**Substituting it with running right there instead** makes it run concurrently with
 work already in progress. The premise of serial execution collapses
 entirely, and since this path only triggers under high load, it's also
 hard to reproduce.
@@ -142,9 +138,8 @@ observation.
 
 ### Pitfall 3 — Opening A Cut-In Path Makes Order Guarantee Conditional
 
-One implementation has a path that inserts work at the **front** of
-the queue. There's only one caller and its use is limited, but the
-moment this path exists, the property "what was enqueued first runs
+If any path inserts work at the **front** of the queue, the property
+"what was enqueued first runs
 first" stops being unconditional and becomes conditional. A reader
 has to check every path for whether it cuts in before they can reason
 about order.
@@ -161,6 +156,12 @@ Concretely, keep **two FIFO lanes** per owner.
 | application lane | Business payload, timer callback | Two axes: count and bytes |
 | lifecycle lane | join · leave · relocation · lifecycle control | A separate bound **not shared** with the application lane |
 
+The default admission limits are 1,024 items and 64 MiB for the application lane, and
+128 items and 4 MiB for the lifecycle lane. An application work item's byte reservation
+includes its payload and a fixed retained cost of 256 bytes per item. In both lanes, a work
+item keeps its reservation after leaving the queue and while it is running; the reservation
+is returned only at handler terminal completion.
+
 At a turn boundary, which lane to run is decided by a single atomic
 judgment. If both are ready, the lifecycle lane goes first
 ([Actor Model 「3. Actor Queue」](../spec/14-actor-model.en.md#3-actor-queue)).
@@ -173,6 +174,10 @@ are involved here.
 | owner occupancy bound | Between different owners | Time |
 | lifecycle consecutive-execution bound | Between the two lanes of the same owner | Number of turns the lifecycle lane was picked consecutively |
 
+The default owner-occupancy time budget is 10 ms, and the lifecycle lane may be selected
+for at most 8 consecutive turns. The time budget is checked at the boundary after one
+handler finishes.
+
 Even if a turn is given up due to hitting the owner occupancy bound, if
 both lanes are still ready when this owner's turn comes back around,
 the same priority rule picks lifecycle again. So a **yield debt** is
@@ -184,20 +189,19 @@ conditions are defined by
 [Actor Model 「3. Actor Queue」](../spec/14-actor-model.en.md#3-actor-queue).
 
 With this rule, even if lifecycle work keeps arriving without a break,
-**an application turn eventually gets picked at the handler
-boundary.** "Within how many ms" isn't guaranteed yet — the value of
-the occupancy bound isn't fixed, and this contract doesn't cover the
-case where one running handler goes over the bound.
+**an application turn eventually gets picked at the handler boundary.** The 10 ms value
+does not interrupt a running handler. One handler may run longer than 10 ms, so this rule
+does not guarantee a maximum wait time for an application turn.
 
 The order within each lane is exactly the order accepted. **Neither
-lane has front insertion.** All four of your implementations currently
-fake priority with front insertion or queue reordering, and this
-approach makes the order guarantee within the same lane conditional.
+lane has front insertion.** Expressing priority through front insertion
+or queue reordering makes the order guarantee within the same lane
+conditional.
 
 ### Pitfall 4 — Post-Processing Overlaps The Next Turn
 
-An actual defect observed in one implementation. When work finishes,
-deferred post-processing runs, and the order was as follows.
+Deferred post-processing can overlap the next turn when it runs in the
+following order after work finishes.
 
 1. Clear the in-progress mark.
 2. If anything remains in the queue, **schedule the next run.**
@@ -215,37 +219,39 @@ avoid touching that owner's state.
 
 ### Pitfall 5 — Decide Reentrancy One Way Or The Other
 
-One implementation **runs right there without going through the queue
-if execution is already in progress within that authority.** This is
-intentional design — it avoids a deadlock from a call waiting on
-itself.
+**Running right there without going through the queue when execution is
+already in progress within that authority** can avoid a deadlock from a
+call waiting on itself.
 
 But this is an observable difference in meaning. Allowing reentrancy
 lets a nested call run **as part of the current work** and finish
-before other work already in the queue. In an implementation that
-doesn't allow it, the same code either deadlocks or runs in a
-different order.
+before other work already in the queue. Without one fixed reentrancy
+rule, the same code either deadlocks or runs in a different order.
 
 **Decision — don't allow reentrancy.** This isn't a choice but a spec
-rule — a call that waits for a request requiring the same gate, or
-waits for a request sent to itself, is **rejected with
-`InvalidOperation` before submission**
+rule. A call that keeps the current turn while waiting for a result that
+requires the same gate, or an Actor waiting for a request it sent to
+itself, is **rejected with `InvalidOperation` before submission**
 ([Stage Wrapper On Spot 「5. Timer」](../spec/17-stage-wrapper-on-spot.en.md#5-timer)).
+When an eligible `SpotWide` User Spot or Instance Spot call selects
+`Yield`, it first releases the current shared gate, so this isn't
+reentrancy. Its completion continuation enters at the back of the
+original queue as a new turn.
 
 **What's prohibited is the public operation.** Split out exactly what's
 prohibited as follows.
 
 | Call | Verdict |
 |---|---|
-| A handler sends a public request to its own Spot · Actor and waits for the result | **Prohibited.** `InvalidOperation` before submission |
-| A handler waits on a different target that requires the same gate | **Prohibited.** Same verdict |
+| A handler sends a public request to its own Actor and waits for the result | **Prohibited.** The Actor queue claim remains held even after `Yield`, so `InvalidOperation` before submission |
+| A handler uses a terminal that keeps the current turn while waiting on its own Spot or another target that requires the same gate | **Prohibited.** `InvalidOperation` before submission |
+| An eligible `SpotWide`/Instance context waits with `Yield` on a request or Actor/Spot create/get-or-create call | Allowed. Releases the shared gate and resumes in a new turn at the back of the queue |
 | The runtime internally composes an execution context to run a handler | Allowed. This isn't a submission of new work |
 | A handler submits work to its own target without waiting for the result | Allowed. It's appended to the back of the queue |
 
-One implementation has a path that runs right there without going
-through the queue if execution is already in progress within that
-authority. Whether this path touches the first two rows of the table
-above needs to be checked exhaustively.
+If an in-authority shortcut exists, every public submission path must
+be checked to ensure that it cannot bypass the first two rows of the
+table above.
 
 "Before submission" matters. If it fails after the request has gone
 out, only a side effect is left remotely and the caller receives a
@@ -259,10 +265,10 @@ in the queue, so the ordering semantics differ per implementation.
 Spot count.**
 
 How execution authority is built is free, but **attaching a dedicated
-execution resource per authority is not allowed.** One implementation
-keeps two dedicated workers per Spot — at least two were needed to
-avoid a return-wait blocking on itself. Two per room means 20,000 for
-10,000 rooms.
+execution resource per authority is not allowed.** Two workers per Spot
+require 20,000 workers for 10,000 Spots. Using two only masks a returned
+task waiting on the same worker; it does not remove the resource growth
+proportional to Spot count.
 
 Splitting only the authority over shared execution resources doesn't
 have this problem. Authority is "the right to run this owner's work
@@ -289,16 +295,16 @@ holds the authority. Only the enqueuing side needs protection.
 operation.** If no work is currently running, acquiring authority is
 just flipping one mark. Only under contention does it go into a queue.
 
-Without these two, every message grabs a lock twice — in a hot room,
-that becomes the throughput ceiling as-is.
+Without these two, every message acquires a lock twice. For a frequently
+used Spot, this lock cost determines the throughput ceiling.
 
 ## 5. The Cache Cost Of Handing Off Work
 
 The approach explained in [Pitfall 1](#trap-1-thread-local-storage)
 has no correctness problem, but it has a cost. When two consecutive
 pieces of work run on different execution resources, that Spot's state
-is left only in the cache of the previous resource. If one room
-handles thousands of operations per second, this cost accumulates.
+is left only in the cache of the previous resource. If one Spot handles
+thousands of operations per second, the cache-miss cost accumulates.
 
 | Approach | State cache | Resource utilization |
 |---|---|---|
@@ -346,7 +352,7 @@ resume, or **the unit gets sealed for a move**, it ends in failure
 instead of resuming. A move merely *starting* isn't enough to stop it
 — existing messages and timers keep being processed until sealing
 ([Stage Wrapper On Spot 「5. Timer」](../spec/17-stage-wrapper-on-spot.en.md#5-timer),
-[Host Relocate And Shutdown 「12. Admission Per State」](../spec/28-graceful-drain-handoff.en.md#12-admission-per-state)).
+[Complete Host Relocation Flow 「12. Admission Per State」](../spec/30-host-relocation-flow.en.md#12-admission-per-state)).
 
 ### The Design Constraint This Produces
 

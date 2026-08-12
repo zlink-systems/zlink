@@ -11,19 +11,19 @@ internal sealed class ChannelBindActorHandler(
     IZLinkActorManager actors)
     : IZLinkSessionPacketHandler<
         IZLinkSessionContext,
-        ChannelBindActorRequest>
+        ChannelBindActorReq>
 {
     public async ValueTask HandleAsync(
         IZLinkSessionContext context,
         ZLinkSessionDispatchContext dispatch,
-        ChannelBindActorRequest request,
+        ChannelBindActorReq request,
         CancellationToken cancellationToken)
     {
         var actor = await actors.FindAsync(request.ActorId, cancellationToken)
                     ?? throw new InvalidOperationException(
                         $"Actor '{request.ActorId}' was not found.");
         await context.Actors.BindOrGetAsync(actor, cancellationToken);
-        await context.Client.Reply(new ChannelBindActorReply(
+        await context.Client.Reply(new ChannelBindActorRes(
                 actor.ActorId,
                 actor.NodeRid.ToString(),
                 actor.ObjectGeneration))

@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -46,7 +48,7 @@ final class ZLinkAcceptedJournalReplayerTest {
             },
             request -> CompletableFuture.completedFuture(Optional.empty()),
             new ZLinkAcceptedJournalReplayer.ReplyRelay() {
-                @Override public java.util.concurrent.CompletionStage<Void>
+                @Override public CompletionStage<Void>
                     completeSpot(
                         ZLinkSpotAcceptedJournal.Record request,
                         long acceptedSequence,
@@ -56,7 +58,7 @@ final class ZLinkAcceptedJournalReplayerTest {
                     assertArrayEquals(new byte[] {9}, reply.get(0));
                     return CompletableFuture.completedFuture(null);
                 }
-                @Override public java.util.concurrent.CompletionStage<Void>
+                @Override public CompletionStage<Void>
                     completeActor(
                         ZLinkActorAcceptedJournal.Record request,
                         long acceptedSequence,
@@ -105,7 +107,7 @@ final class ZLinkAcceptedJournalReplayerTest {
                     Optional.of(new byte[] {7}));
             },
             new ZLinkAcceptedJournalReplayer.ReplyRelay() {
-                @Override public java.util.concurrent.CompletionStage<Void>
+                @Override public CompletionStage<Void>
                     completeSpot(
                         ZLinkSpotAcceptedJournal.Record request,
                         long acceptedSequence,
@@ -113,7 +115,7 @@ final class ZLinkAcceptedJournalReplayerTest {
                     return CompletableFuture.failedFuture(
                         new AssertionError("unexpected Spot reply"));
                 }
-                @Override public java.util.concurrent.CompletionStage<Void>
+                @Override public CompletionStage<Void>
                     completeActor(
                         ZLinkActorAcceptedJournal.Record request,
                         long acceptedSequence,
@@ -129,7 +131,7 @@ final class ZLinkAcceptedJournalReplayerTest {
             .toCompletableFuture().join();
 
         assertThrows(
-            java.util.concurrent.CompletionException.class,
+            CompletionException.class,
             () -> replayer.replay("actor:actor-b",
                     new ZLinkAsyncSerialQueue.QueuedRecord(1, encoded))
                 .toCompletableFuture().join());

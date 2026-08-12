@@ -13,13 +13,31 @@ export interface ServiceActorRef {
   readonly generation: bigint;
 }
 
-export interface ServiceSpotState {
+interface ServiceSpotStateBase {
   readonly ref: ServiceSpotRef;
-  readonly kind: ServiceSpotKind;
   readonly stableType: string;
   readonly authorityOwnerGeneration: bigint;
   readonly state: 'ready' | 'closing';
 }
+
+export interface ServiceEntrySpotState extends ServiceSpotStateBase {
+  readonly kind: 'entry';
+  readonly stableType: 'entry';
+  readonly state: 'ready';
+}
+
+export interface ServiceUserSpotState extends ServiceSpotStateBase {
+  readonly kind: 'user';
+}
+
+export interface ServiceInstanceSpotState extends ServiceSpotStateBase {
+  readonly kind: 'instance';
+}
+
+export type ServiceSpotState =
+  | ServiceEntrySpotState
+  | ServiceUserSpotState
+  | ServiceInstanceSpotState;
 
 export interface ServiceActorState {
   readonly ref: ServiceActorRef;
@@ -110,7 +128,7 @@ export class ServiceStatefulRegistry {
 
   createSpot(
     spotId: string,
-    kind: ServiceSpotKind = 'user',
+    kind: Exclude<ServiceSpotKind, 'entry'> = 'user',
     stableType: string = kind
   ): ServiceSpotState {
     requireText(spotId, 'spotId');
@@ -128,13 +146,12 @@ export class ServiceStatefulRegistry {
     }
     const generation = (this.spotGenerations.get(spotId) ?? 0n) + 1n;
     this.spotGenerations.set(spotId, generation);
-    const created: ServiceSpotState = Object.freeze({
-      ref: Object.freeze({ spotId, generation }),
+    const created = createSpotState(
+      { spotId, generation },
       kind,
       stableType,
-      authorityOwnerGeneration: generation,
-      state: 'ready'
-    });
+      generation
+    );
     this.spotTypes.set(spotId, Object.freeze({ kind, stableType }));
     this.spots.set(spotId, created);
     return created;
@@ -154,6 +171,12 @@ export class ServiceStatefulRegistry {
     requirePositive(ref.generation, 'spot.generation');
     requireText(stableType, 'stableType');
     requirePositive(authorityOwnerGeneration, 'authorityOwnerGeneration');
+    if (kind === 'entry'
+      && (ref.spotId !== this.nodeRid
+        || ref.generation !== this.nodeGeneration
+        || stableType !== 'entry')) {
+      throw new TypeError('Entry Spot identity is fixed by the owning node lifecycle.');
+    }
     const current = this.spots.get(ref.spotId);
     if (current !== undefined && current.ref.generation > ref.generation) {
       throw new ServiceStaleGenerationError('spot', ref.spotId);
@@ -162,13 +185,12 @@ export class ServiceStatefulRegistry {
     if (assigned !== undefined && (assigned.kind !== kind || assigned.stableType !== stableType)) {
       throw new TypeError(`Spot '${ref.spotId}' is assigned to another kind or type.`);
     }
-    const restored: ServiceSpotState = Object.freeze({
-      ref: Object.freeze({ ...ref }),
+    const restored = createSpotState(
+      ref,
       kind,
       stableType,
-      authorityOwnerGeneration,
-      state: 'ready'
-    });
+      authorityOwnerGeneration
+    );
     this.spotGenerations.set(
       ref.spotId,
       max(this.spotGenerations.get(ref.spotId) ?? 0n, ref.generation)
@@ -188,6 +210,7 @@ export class ServiceStatefulRegistry {
 
   closeSpot(ref: ServiceSpotRef): boolean {
     const current = this.requireSpot(ref);
+    if (current.kind === 'entry') return false;
     for (const actor of this.actors.values()) {
       if (
         actor.spot.spotId === ref.spotId
@@ -515,6 +538,30 @@ export class ServiceStatefulRegistry {
       actor: actor.ref,
       membershipEpoch: actor.membershipEpoch
     }));
+  }
+}
+
+function createSpotState(
+  ref: ServiceSpotRef,
+  kind: ServiceSpotKind,
+  stableType: string,
+  authorityOwnerGeneration: bigint
+): ServiceSpotState {
+  const base = {
+    ref: Object.freeze({ ...ref }),
+    authorityOwnerGeneration,
+    state: 'ready' as const
+  };
+  switch (kind) {
+    case 'entry':
+      if (stableType !== 'entry') {
+        throw new TypeError('Entry Spot stable type must be entry.');
+      }
+      return Object.freeze({ ...base, kind, stableType });
+    case 'user':
+      return Object.freeze({ ...base, kind, stableType });
+    case 'instance':
+      return Object.freeze({ ...base, kind, stableType });
   }
 }
 

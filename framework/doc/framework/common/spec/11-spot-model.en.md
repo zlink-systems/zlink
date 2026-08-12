@@ -63,7 +63,7 @@ needs it.
 
 The common stages of host relocation and the per-Spot-kind sequence diagrams are
 defined by
-[Graceful Drain And Handoff §8](28-graceful-drain-handoff.en.md#8-the-order-for-relocating-one-unit).
+[Graceful Drain And Handoff §8](30-host-relocation-flow.en.md#8-the-order-for-relocating-one-unit).
 
 The framework decides which queue to wait for execution on, based on the work's
 target. Direct packets and timer callbacks delivered to all three Spot kinds go
@@ -616,7 +616,7 @@ The exact full interface and lifecycle callbacks are owned by the
 | [21 MeshNode](13-mesh-node.en.md) | Object role, Entry Spot and factory registration, placement capability |
 | [23 Spot And Actor Membership](15-spot-actor.en.md) | Actor creation, Entry/User Spot membership, and callback/commit order |
 | [24 Spot Address Messaging](16-spot-address-messaging.en.md) | User/Instance Spot ID, creation, cold activation, route, and close |
-| [54 Host Relocate, Shutdown And Handoff](28-graceful-drain-handoff.en.md) | Shutdown, relocation, and recovery order for all three Spot kinds |
+| [54 Host Relocate, Shutdown And Handoff](30-host-relocation-flow.en.md) | Shutdown, relocation, and recovery order for all three Spot kinds |
 
 ## 9. Verification Requirements
 

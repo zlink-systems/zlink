@@ -10,6 +10,7 @@ using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Streams;
+using Zlink.Framework.LocationProvider;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -81,13 +82,14 @@ public sealed class StandaloneActorRelocationRuntimeTests
         HostedRecoveryActorFactory.Reset();
         var suffix = Guid.NewGuid().ToString("N");
         var endpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
-        var store = new ZLinkInMemoryLocationStore();
+        var locationProvider = new ZLinkInMemoryProviderLocationStore();
+        var store = new ZLinkProviderLocationRepository(locationProvider);
         var relocationStore = new ProgressRelocationStore();
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
         {
             options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
-            options.AddLocationStore(store);
+            options.AddLocationStore(locationProvider);
             options.AddRelocationStore(relocationStore);
             options.AddRouteMesh("mesh")
                 .Listen(endpoint)
@@ -1986,13 +1988,14 @@ public sealed class StandaloneActorRelocationRuntimeTests
         HostedRecoveryActorFactory.Reset();
         var suffix = Guid.NewGuid().ToString("N");
         var endpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
-        var store = new ZLinkInMemoryLocationStore();
+        var locationProvider = new ZLinkInMemoryProviderLocationStore();
+        var store = new ZLinkProviderLocationRepository(locationProvider);
         var relocationStore = new ProgressRelocationStore();
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
         {
             options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
-            options.AddLocationStore(store);
+            options.AddLocationStore(locationProvider);
             options.AddRelocationStore(relocationStore);
             options.AddRouteMesh("mesh")
                 .Listen(endpoint)
@@ -2318,7 +2321,7 @@ public sealed class StandaloneActorRelocationRuntimeTests
 
     private static async ValueTask<(ZLinkMeshNodeDescriptor Descriptor,
         ZLinkLocationOwnerToken Owner)> PublishActorNodeAsync(
-        ZLinkInMemoryLocationStore store,
+        IZLinkLocationRepository store,
         string ownerId,
         RoutingId rid,
         ulong lifecycleGeneration)
@@ -2642,11 +2645,74 @@ public sealed class StandaloneActorRelocationRuntimeTests
     }
 
     private sealed class ProgressRelocationStore(
-        bool contentAddressed = false) : IZLinkRelocationRepository
+        bool contentAddressed = false) :
+        IZLinkRelocationRepository,
+        IZLinkRelocationStore
     {
         private int _next;
         internal System.Collections.Concurrent.ConcurrentDictionary<string, byte[]>
             Payloads { get; } = [];
+
+        public ValueTask<ZLinkBlobPutResult> PutAsync(
+            ZLinkBlobReference reference,
+            ReadOnlyMemory<byte> payload,
+            TimeSpan retention,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var now = DateTimeOffset.UtcNow;
+            var expiresAt = now + retention;
+            if (Payloads.TryGetValue(reference.Value, out var current))
+            {
+                return ValueTask.FromResult<ZLinkBlobPutResult>(
+                    current.AsSpan().SequenceEqual(payload.Span)
+                        ? new ZLinkBlobPutResult.AlreadyStored(expiresAt, now)
+                        : new ZLinkBlobPutResult.Conflict(now));
+            }
+            return ValueTask.FromResult<ZLinkBlobPutResult>(
+                Payloads.TryAdd(reference.Value, payload.ToArray())
+                    ? new ZLinkBlobPutResult.Stored(expiresAt, now)
+                    : new ZLinkBlobPutResult.Conflict(now));
+        }
+
+        public ValueTask<ZLinkBlobReadResult> ReadAsync(
+            ZLinkBlobReference reference,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var now = DateTimeOffset.UtcNow;
+            return ValueTask.FromResult<ZLinkBlobReadResult>(
+                Payloads.TryGetValue(reference.Value, out var payload)
+                    ? new ZLinkBlobReadResult.Found(
+                        payload,
+                        now + TimeSpan.FromHours(24),
+                        now)
+                    : new ZLinkBlobReadResult.Missing(now));
+        }
+
+        public ValueTask<ZLinkBlobRenewResult> RenewAsync(
+            ZLinkBlobReference reference,
+            TimeSpan retention,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var now = DateTimeOffset.UtcNow;
+            return ValueTask.FromResult<ZLinkBlobRenewResult>(
+                Payloads.ContainsKey(reference.Value)
+                    ? new ZLinkBlobRenewResult.Renewed(
+                        now + retention,
+                        now)
+                    : new ZLinkBlobRenewResult.Missing(now));
+        }
+
+        public ValueTask DeleteAsync(
+            ZLinkBlobReference reference,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Payloads.TryRemove(reference.Value, out _);
+            return ValueTask.CompletedTask;
+        }
 
         public ValueTask<ZLinkRelocationStored> PutRelocationAsync(
             ReadOnlyMemory<byte> payload, TimeSpan retention,

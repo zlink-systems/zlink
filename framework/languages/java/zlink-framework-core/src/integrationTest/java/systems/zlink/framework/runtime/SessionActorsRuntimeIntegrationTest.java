@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime;
+import java.util.Map;
+import java.util.concurrent.TimeoutException;
+import systems.zlink.framework.actors.ZLinkActorCreateResult;
+import systems.zlink.framework.channels.ZLinkRequestHandler;
 
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
@@ -335,12 +339,12 @@ final class SessionActorsRuntimeIntegrationTest {
     private static String awaitActorRelay(
         String expected,
         long timeout,
-        TimeUnit unit) throws InterruptedException, java.util.concurrent.TimeoutException {
+        TimeUnit unit) throws InterruptedException, TimeoutException {
         long deadline = System.nanoTime() + unit.toNanos(timeout);
         while (true) {
             long remaining = deadline - System.nanoTime();
             if (remaining <= 0) {
-                throw new java.util.concurrent.TimeoutException();
+                throw new TimeoutException();
             }
             String received = actorRelayRequests.poll(remaining, TimeUnit.NANOSECONDS);
             if (expected.equals(received)) {
@@ -364,7 +368,7 @@ final class SessionActorsRuntimeIntegrationTest {
                     new String(payloadBytes, StandardCharsets.UTF_8))));
             long remaining = deadline - System.nanoTime();
             if (remaining <= 0) {
-                throw new java.util.concurrent.TimeoutException();
+                throw new TimeoutException();
             }
             String received = actorRelayRequests.poll(
                 Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(100)),
@@ -384,7 +388,7 @@ final class SessionActorsRuntimeIntegrationTest {
         String packetName,
         ZLinkMessage payload) {
         ZLinkSessionActorsRuntime.enterRelayDispatch(
-            new ZLinkStreamHeader(packetName, java.util.Map.of(), Optional.empty()));
+            new ZLinkStreamHeader(packetName, Map.of(), Optional.empty()));
         try {
             actor.relay(payload).toCompletableFuture().join();
         } finally {
@@ -394,7 +398,7 @@ final class SessionActorsRuntimeIntegrationTest {
 
     @ZLinkHandlerGroup("play-channel")
     public static final class EnsureActorHandler
-        implements systems.zlink.framework.channels.ZLinkRequestHandler<
+        implements ZLinkRequestHandler<
             EnsureActorRequest,
             String> {
         @Override
@@ -404,11 +408,11 @@ final class SessionActorsRuntimeIntegrationTest {
             return channelActors.get().getOrCreate(request.actorId(), "player")
                 .submit()
                 .thenApply(result -> switch (result) {
-                    case systems.zlink.framework.actors.ZLinkActorCreateResult.Created created ->
+                    case ZLinkActorCreateResult.Created created ->
                         created.actor().actorId();
-                    case systems.zlink.framework.actors.ZLinkActorCreateResult.Existing existing ->
+                    case ZLinkActorCreateResult.Existing existing ->
                         existing.actor().actorId();
-                    case systems.zlink.framework.actors.ZLinkActorCreateResult.Rejected rejected ->
+                    case ZLinkActorCreateResult.Rejected rejected ->
                         throw new IllegalStateException(
                             "actor creation rejected: " + rejected.reply());
                 });

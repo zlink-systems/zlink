@@ -48,7 +48,7 @@ message ReportBingoResultRes {
   int32 losses = 3;
 }
 
-message EnsurePlayerActorReq {
+message PlayerActorCreateReq {
   string actor_id = 1;
   string display_name = 2;
   reserved 3;
@@ -94,6 +94,10 @@ message BingoRoomSettingsPayload {
   int32 max_draw_number = 4;
   string purpose = 5;
   optional string observed_room_id = 6;
+}
+
+message BingoRoomCreateReq {
+  BingoRoomSettingsPayload settings = 1;
 }
 
 message BingoRoomJoinReq {

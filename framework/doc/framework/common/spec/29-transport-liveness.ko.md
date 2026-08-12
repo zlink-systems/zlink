@@ -4,7 +4,7 @@ title: "Transport 연결 상태 확인"
 
 # Transport 연결 상태 확인
 
-[스펙 목차](README.ko.md) · [이전: Host Relocate와 Shutdown](28-graceful-drain-handoff.ko.md) · [다음: 장애 대응과 failover 범위](31-failure-failover-policy.ko.md)
+[스펙 목차](README.ko.md) · [이전: Actor와 Spot relocation 전체 흐름](28-relocation-flow.ko.md) · [다음: Host relocation 전체 흐름](30-host-relocation-flow.ko.md)
 
 > **이 장이 정의하는 것** — remote service connection의 사용 가능 여부를 계속 확인하고
 > 끊기면 다시 연결하는 방법.

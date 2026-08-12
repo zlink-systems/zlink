@@ -1,6 +1,7 @@
 package systems.zlink.e2e.kotlin.registrationcodec.codecrequester
 
-import com.google.protobuf.StringValue
+import systems.zlink.e2e.kotlin.registrationcodec.protobuf.ProtobufEchoReq
+import systems.zlink.e2e.kotlin.registrationcodec.protobuf.ProtobufEchoRes
 import java.time.Duration
 import java.util.concurrent.CompletionStage
 import systems.zlink.e2e.kotlin.registrationcodec.Contracts
@@ -17,9 +18,12 @@ class CodecRequesterProbe(
             .submit(JsonEchoRes::class.java)
 
     fun requestProtobuf(): CompletionStage<CodecMismatchProbeRes> =
-        client.requestToChannel(Contracts.CHANNEL, StringValue.of("protobuf-mismatch"))
+        client.requestToChannel(
+                Contracts.CHANNEL,
+                ProtobufEchoReq.newBuilder().setValue("protobuf-mismatch").build(),
+            )
                 .timeout(Duration.ofSeconds(2))
-                .submit(StringValue::class.java)
+                .submit(ProtobufEchoRes::class.java)
             .handle { reply, error ->
                 if (error == null) CodecMismatchProbeRes(false, null, reply.value)
                 else CodecMismatchProbeRes(true, error.javaClass.simpleName, null)

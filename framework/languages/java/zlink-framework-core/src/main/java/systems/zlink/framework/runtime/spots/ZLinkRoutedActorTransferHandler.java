@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Optional;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -13,6 +14,7 @@ import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.actors.ZLinkActorEntryTransferEnvelope;
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
+import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
@@ -126,7 +128,7 @@ final class ZLinkRoutedActorTransferHandler {
         List<Message> replies,
         ZLinkBackendActorRef actorRef,
         ZLinkActorSpotRoutePackets.WireHandoffPacket packet,
-        java.util.Optional<Message> reply) {
+        Optional<Message> reply) {
         try {
             if (packet.replyRoute() == null || reply.isEmpty()) {
                 replies.add(reply.map(Message::from)
@@ -134,7 +136,12 @@ final class ZLinkRoutedActorTransferHandler {
                 return replies;
             }
             host.replyTransferredRequestDirect(
-                actorRef, packet.header(), packet.replyRoute(), reply);
+                actorRef,
+                packet.header(),
+                packet.replyRoute(),
+                reply.map(message -> new LocalActorReply(
+                    message,
+                    packet.header().codec())));
             replies.add(Message.from(new byte[0]));
             return replies;
         } finally {

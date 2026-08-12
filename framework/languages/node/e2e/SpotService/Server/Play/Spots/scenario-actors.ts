@@ -15,7 +15,7 @@ import type {
   SnapshotRes,
   SnapshotReq
 } from '../../../Shared/messages';
-import { ActorPushNotify } from '../../../Shared/messages';
+import { ActorPushNotify, ScenarioActorCreateReq } from '../../../Shared/messages';
 import type {
   ZLinkActor,
   ZLinkActorCreateResponse,
@@ -44,23 +44,23 @@ export class ScenarioActor implements ZLinkActor {
   }
 }
 
-class InitializeScenarioActor {
+class InitializeScenarioActorMsg {
   constructor(readonly displayName: string) {}
 }
 
 @zlinkEntrySpotActorSendHandler({
   actor: () => ScenarioActor,
   entrySpot: () => ScenarioEntrySpot,
-  packetName: 'InitializeScenarioActor'
+  packetName: 'InitializeScenarioActorMsg'
 })
 export class InitializeScenarioActorHandler
-  implements ZLinkEntrySpotActorSendHandler<ScenarioEntrySpot, ScenarioActor, InitializeScenarioActor> {
-  @ZLinkSpotActorSend('InitializeScenarioActor')
+  implements ZLinkEntrySpotActorSendHandler<ScenarioEntrySpot, ScenarioActor, InitializeScenarioActorMsg> {
+  @ZLinkSpotActorSend('InitializeScenarioActorMsg')
   async handle(
     _spot: ZLinkEntrySpot<ScenarioActor>,
     actor: ScenarioActor,
     _context: ZLinkMessageContext,
-    message: InitializeScenarioActor
+    message: InitializeScenarioActorMsg
   ): Promise<void> {
     actor.displayName = message.displayName;
   }
@@ -81,7 +81,7 @@ export class ScenarioEntrySpot implements ZLinkEntrySpot<ScenarioActor> {
   }
 
   async onCreateActor(actor: ScenarioActor, createRequest: ZLinkMessage): Promise<ZLinkActorCreateResponse> {
-    const request = createRequest.decode<Partial<EnsureActorReq>>(Object as never);
+    const request = createRequest.decode<ScenarioActorCreateReq>(ScenarioActorCreateReq);
     if (typeof request.displayName === 'string') {
       actor.displayName = request.displayName;
     }

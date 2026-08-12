@@ -1,4 +1,5 @@
 package systems.zlink.samples.shoppingmall.server.shared.domain;
+import java.util.Map;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -127,7 +128,7 @@ public final class OrderDomain {
     }
 
     public record StoreEvidence(
-        java.util.Map<String, List<String>> eventsByOrder,
+        Map<String, List<String>> eventsByOrder,
         int paymentFailureCount,
         int releasedReservationCount,
         int startedIdempotencyCount) {

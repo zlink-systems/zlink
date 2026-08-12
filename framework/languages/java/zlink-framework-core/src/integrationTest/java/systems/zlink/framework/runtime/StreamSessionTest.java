@@ -1,4 +1,12 @@
 package systems.zlink.framework.runtime;
+import java.util.EnumSet;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
+import systems.zlink.framework.actors.ZLinkActorCreateResult;
+import systems.zlink.framework.streams.ZLinkStreamCodec;
+import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
@@ -447,11 +455,11 @@ final class StreamSessionTest {
                     .submit()
                     .thenCompose(result -> {
                         var actor = switch (result) {
-                            case systems.zlink.framework.actors.ZLinkActorCreateResult.Created created ->
+                            case ZLinkActorCreateResult.Created created ->
                                 created.actor();
-                            case systems.zlink.framework.actors.ZLinkActorCreateResult.Existing existing ->
+                            case ZLinkActorCreateResult.Existing existing ->
                                 existing.actor();
-                            case systems.zlink.framework.actors.ZLinkActorCreateResult.Rejected rejected ->
+                            case ZLinkActorCreateResult.Rejected rejected ->
                                 throw new IllegalStateException(
                                     "actor creation rejected: " + rejected.reply());
                         };
@@ -471,13 +479,13 @@ final class StreamSessionTest {
 
     private static byte[] requestHeader(long requestSeq, String packetName) {
         return ZLinkStreamHeaderCodec.encode(new ZLinkStreamHeader(
-            systems.zlink.framework.streams.ZLinkStreamMessageKind.REQUEST,
-            systems.zlink.framework.streams.ZLinkStreamCodec.RAW,
-            java.util.EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-            java.util.Optional.of(requestSeq),
+            ZLinkStreamMessageKind.REQUEST,
+            ZLinkStreamCodec.RAW,
+            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+            Optional.of(requestSeq),
             packetName,
-            java.util.Map.of(),
-            java.util.Optional.empty()));
+            Map.of(),
+            Optional.empty()));
     }
 
     private static byte[] frame(byte[] header, byte[] body) {
@@ -566,9 +574,9 @@ final class StreamSessionTest {
         assertEquals(expectedBody, new String(body, StandardCharsets.UTF_8));
     }
 
-    private static void assertEventually(java.util.function.BooleanSupplier condition)
+    private static void assertEventually(BooleanSupplier condition)
         throws Exception {
-        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(3);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
         while (System.nanoTime() < deadline) {
             if (condition.getAsBoolean()) {
                 return;

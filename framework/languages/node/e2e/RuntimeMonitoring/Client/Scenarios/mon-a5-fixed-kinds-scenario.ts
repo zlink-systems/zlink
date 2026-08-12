@@ -51,7 +51,11 @@ export async function runMonA5(options: ClientOptions): Promise<void> {
 
 async function docker(verb: 'pause' | 'unpause', container: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn('docker', [verb, container], { stdio: 'ignore' });
+    const child = spawn('docker', [verb, container], {
+      stdio: 'ignore',
+      timeout: 10_000,
+      killSignal: 'SIGKILL'
+    });
     child.once('exit', (code) => {
       if (code === 0) resolve();
       else reject(new Error(`docker ${verb} ${container} failed with exit code ${code}`));

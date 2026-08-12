@@ -1,4 +1,6 @@
 package systems.zlink.samples.supportchat.server.api.handlers;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
@@ -10,10 +12,10 @@ import systems.zlink.samples.supportchat.shared.contracts.Messages;
 public final class AuthenticateUserHandler
     implements ZLinkRequestHandler<Messages.AuthenticateUserReq, Messages.AuthenticateUserRes> {
     @Override
-    public java.util.concurrent.CompletionStage<Messages.AuthenticateUserRes> handle(
+    public CompletionStage<Messages.AuthenticateUserRes> handle(
         Messages.AuthenticateUserReq request,
         ZLinkMessageContext context) {
-        return java.util.concurrent.CompletableFuture.completedFuture(switch (request.accessToken()) {
+        return CompletableFuture.completedFuture(switch (request.accessToken()) {
             case "customer-1" -> accepted("customer-1", "Customer 1", SampleNames.Roles.Customer);
             case "customer-2" -> accepted("customer-2", "Customer 2", SampleNames.Roles.Customer);
             case "customer-3" -> accepted("customer-3", "Customer 3", SampleNames.Roles.Customer);

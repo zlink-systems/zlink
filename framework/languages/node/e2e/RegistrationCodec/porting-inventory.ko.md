@@ -6,15 +6,13 @@
 
 | Scenario | .NET 기준 파일 | Node.js 대상 파일 | 상태 | 비고 |
 |----------|----------------|-------------------|------|------|
-| `RC-A1` | `Client/Scenarios/AutoRegistrationScenario.cs` | `Client/Scenarios/AutoRegistrationScenario.ts` | done | decorator/provider discovery 기반 request/send |
-| `RC-A2` | `Client/Scenarios/AttributeRegistrationScenario.cs` | `Client/Scenarios/AttributeRegistrationScenario.ts` | done | Node decorator 기반 request/send. .NET method attribute와 언어별 표면이 다르다. |
+| `RC-A1` | `Client/Scenarios/AutoRegistrationScenario.cs` | `Client/Scenarios/AutoRegistrationScenario.ts` | done | provider discovery와 Node decorator variant의 request/send를 한 canonical scenario에서 검증한다. |
 | `RC-A3` | `Client/Scenarios/ManualRegistrationScenario.cs` | `Client/Scenarios/ManualRegistrationScenario.ts` | done | builder 명시 등록 request/send |
 | `RC-A4` | `Client/Scenarios/RcA4DiLifecycleScenario.cs` | `Client/Scenarios/RcA4DiLifecycleScenario.ts`, `Server/Main/Handlers/di-echo-handler.ts`, `Server/Main/Infrastructure/lifecycle-probes.ts` | done | singleton/scoped id evidence를 검증했다. Node/Nest public `ModuleRef`는 dispatch 뒤 context dispose API를 제공하지 않으므로 dispose counter를 완료 조건에 넣지 않는다. 최신 확인: `logs/20260702-065333-61321` |
 | `RC-A5` | `Client/Scenarios/RcA5FilterOrderingScenario.cs` | `Client/Scenarios/RcA5FilterOrderingScenario.ts` | done | public `filters` registration option으로 filter ordering 확인 |
 | `RC-A6` | `Client/Scenarios/InvalidRegistrationScenario.cs` | `Client/Scenarios/InvalidRegistrationScenario.ts` | done | duplicate packet startup failure |
 | `RC-B1` | `Client/Scenarios/RcB1JsonCodecScenario.cs` | `Client/Scenarios/RcB1JsonCodecScenario.ts` | done | Main role에서 JSON content-type round-trip |
-| `RC-B2` | `Client/Scenarios/RcB2ProtobufCodecScenario.cs` | `Client/Scenarios/RcB2ProtobufCodecScenario.ts`, `Server/Main/Endpoints/main-endpoints.ts` | done | `.NET`과 같은 Main role의 전역 codec registry에서 Protobuf content-type 확인. 최신 확인: `logs/20260702-065333-61321` |
-| `RC-B3` | `Client/Scenarios/RcB3MessagePackCodecScenario.cs` | `Client/Scenarios/RcB3MessagePackCodecScenario.ts`, `Server/Main/Endpoints/main-endpoints.ts` | done | `.NET`과 같은 Main role의 전역 codec registry에서 MessagePack content-type 확인. 최신 확인: `logs/20260702-065333-61321` |
+| `RC-B2` | `Client/Scenarios/RcB2ProtobufCodecScenario.cs` | `Client/Scenarios/RcB2ProtobufCodecScenario.ts`, `Server/Main/Endpoints/main-endpoints.ts` | done | Main role의 전역 codec registry에서 Protobuf와 MessagePack variant를 함께 확인한다. 최신 확인: `logs/20260702-065333-61321` |
 | `RC-B4` | `Client/Scenarios/RcB4CodecCoexistenceScenario.cs` | `Client/Scenarios/RcB4CodecCoexistenceScenario.ts`, `Server/Main/Endpoints/main-endpoints.ts` | done | 한 host에서 JSON/Protobuf/MessagePack serializer를 함께 등록하고 payload class별 content-type을 검증했다. 최신 확인: `logs/20260702-065333-61321` |
 | `RC-B5` | `Client/Scenarios/CodecMismatchScenario.cs` | `Client/Scenarios/CodecMismatchScenario.ts` | done | Protobuf requester와 JSON-only peer mismatch/recovery |
 
@@ -82,10 +80,10 @@
 분리와 singleton 안정성이다. 내부 wrapper 저장소를 직접 지우는 방식이나 테스트 전용 adapter는 완료 근거로
 쓰지 않는다.
 `RC-B2`는 Node Protobuf extension의 public content-type을 공통 문서가 요구하는 `application/x-protobuf`로
-맞춘다. 검증은 `.NET` 기준과 같은 Main role의 전역 codec registry에서 수행하며, 별도 Protobuf-only peer
-role은 두지 않는다.
+맞추고 MessagePack variant도 같은 scenario에서 검증한다. 검증은 Main role의 전역 codec registry에서
+수행하며, 별도 codec 전용 peer role은 두지 않는다.
 
-Node framework serializer는 `canSerialize` public predicate를 선택적으로 제공할 수 있다. `RC-B3`와
+Node framework serializer는 `canSerialize` public predicate를 선택적으로 제공할 수 있다. `RC-B2`와
 `RC-B4`는 Main host에 Protobuf와 MessagePack serializer를 함께 등록하고, 각 serializer가 맡을 payload
 class를 predicate로 선언한 뒤 JSON fallback과 함께 검증한다. 이 경로는 raw frame 생성이나 수동 serialize
 helper를 쓰지 않는다.

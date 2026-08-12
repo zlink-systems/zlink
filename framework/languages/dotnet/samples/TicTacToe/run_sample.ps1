@@ -34,7 +34,7 @@ function Wait-LogContains {
 try {
     $TICTACTOE_REDIS_KEY_PREFIX = "tictactoe:dotnet:${RunId}:"
 
-    $ports = New-SamplePorts -Count 8 -BasePort 0
+    $ports = New-SamplePorts -Count 10 -BasePort 0
 
     $apiABindUrl = "http://127.0.0.1:$($ports[0])"
     $apiBBindUrl = "http://127.0.0.1:$($ports[1])"
@@ -46,6 +46,8 @@ try {
     $playBMeshEndpoint = "tcp://127.0.0.1:$($ports[5])"
     $playAEndpoint = "tcp://127.0.0.1:$($ports[6])"
     $playBEndpoint = "tcp://127.0.0.1:$($ports[7])"
+    $apiAChannelEndpoint = "tcp://127.0.0.1:$($ports[8])"
+    $apiBChannelEndpoint = "tcp://127.0.0.1:$($ports[9])"
     $apiAConfigFile = Join-Path $RunDir "appsettings.api-a.json"
     $apiBConfigFile = Join-Path $RunDir "appsettings.api-b.json"
     $playAConfigFile = Join-Path $RunDir "appsettings.play-a.json"
@@ -61,7 +63,8 @@ try {
         param(
             [string]$InstanceName,
             [string]$ApiBindUrl,
-            [string]$MeshEndpoint
+            [string]$MeshEndpoint,
+            [string]$ApiChannelListenEndpoint
         )
 
         @{
@@ -70,6 +73,7 @@ try {
                 ApiBindUrl = $ApiBindUrl
                 MeshEndpoint = $MeshEndpoint
                 PeerMeshEndpoints = @($playAMeshEndpoint, $playBMeshEndpoint)
+                ApiChannelListenEndpoint = $ApiChannelListenEndpoint
                 PlayEndpoints = @($playAEndpoint, $playBEndpoint)
                 RedisEndpoint = $redisEndpoint
                 RedisKeyPrefix = $TICTACTOE_REDIS_KEY_PREFIX
@@ -78,11 +82,12 @@ try {
         }
     }
     function New-TicTacToePlaySettings {
-    param(
-        [string]$InstanceName,
-        [string]$MeshEndpoint,
+        param(
+            [string]$InstanceName,
+            [string]$MeshEndpoint,
             [string[]]$PeerMeshEndpoints,
-            [string]$PlayEndpoint
+            [string]$PlayEndpoint,
+            [string[]]$ApiChannelPeerEndpoints
         )
 
         @{
@@ -90,6 +95,7 @@ try {
                 InstanceName = $InstanceName
                 MeshEndpoint = $MeshEndpoint
                 PeerMeshEndpoints = $PeerMeshEndpoints
+                ApiChannelPeerEndpoints = $ApiChannelPeerEndpoints
                 PlayEndpoint = $PlayEndpoint
                 PlayEndpoints = @($playAEndpoint, $playBEndpoint)
                 RedisEndpoint = $redisEndpoint
@@ -98,10 +104,10 @@ try {
             }
         }
     }
-    New-TicTacToeApiSettings -InstanceName "api-a" -ApiBindUrl $apiABindUrl -MeshEndpoint $apiAMeshEndpoint | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 -Path $apiAConfigFile
-    New-TicTacToeApiSettings -InstanceName "api-b" -ApiBindUrl $apiBBindUrl -MeshEndpoint $apiBMeshEndpoint | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 -Path $apiBConfigFile
-    New-TicTacToePlaySettings -InstanceName "play-a" -MeshEndpoint $playAMeshEndpoint -PeerMeshEndpoints @() -PlayEndpoint $playAEndpoint | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 -Path $playAConfigFile
-    New-TicTacToePlaySettings -InstanceName "play-b" -MeshEndpoint $playBMeshEndpoint -PeerMeshEndpoints @($playAMeshEndpoint) -PlayEndpoint $playBEndpoint | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 -Path $playBConfigFile
+    New-TicTacToeApiSettings -InstanceName "api-a" -ApiBindUrl $apiABindUrl -MeshEndpoint $apiAMeshEndpoint -ApiChannelListenEndpoint $apiAChannelEndpoint | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 -Path $apiAConfigFile
+    New-TicTacToeApiSettings -InstanceName "api-b" -ApiBindUrl $apiBBindUrl -MeshEndpoint $apiBMeshEndpoint -ApiChannelListenEndpoint $apiBChannelEndpoint | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 -Path $apiBConfigFile
+    New-TicTacToePlaySettings -InstanceName "play-a" -MeshEndpoint $playAMeshEndpoint -PeerMeshEndpoints @() -PlayEndpoint $playAEndpoint -ApiChannelPeerEndpoints @($apiAChannelEndpoint, $apiBChannelEndpoint) | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 -Path $playAConfigFile
+    New-TicTacToePlaySettings -InstanceName "play-b" -MeshEndpoint $playBMeshEndpoint -PeerMeshEndpoints @($playAMeshEndpoint) -PlayEndpoint $playBEndpoint -ApiChannelPeerEndpoints @($apiAChannelEndpoint, $apiBChannelEndpoint) | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 -Path $playBConfigFile
     @{ Sample = @{ ApiPublicUrls = @($apiAPublicUrl); LogDirectory = $LogDir } } | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 -Path $clientConfigFile
 
     Invoke-SampleDotnetBuild (Join-Path $ScriptDir "TicTacToe.sln")
@@ -119,10 +125,12 @@ try {
     Start-SampleDotnetAssembly -Name "api-a" -Project (Join-Path $ScriptDir "Server/Api/TicTacToe.Server.Api.csproj") -LogDirectory $LogDir -Arguments @("--config", $apiAConfigFile) | Out-Null
     Wait-SampleTcpEndpoint "api-a-http" $apiABindUrl
     Wait-SampleTcpEndpoint "api-a-mesh" $apiAMeshEndpoint
+    Wait-SampleTcpEndpoint "api-a-channel" $apiAChannelEndpoint
 
     Start-SampleDotnetAssembly -Name "api-b" -Project (Join-Path $ScriptDir "Server/Api/TicTacToe.Server.Api.csproj") -LogDirectory $LogDir -Arguments @("--config", $apiBConfigFile) | Out-Null
     Wait-SampleTcpEndpoint "api-b-http" $apiBBindUrl
     Wait-SampleTcpEndpoint "api-b-mesh" $apiBMeshEndpoint
+    Wait-SampleTcpEndpoint "api-b-channel" $apiBChannelEndpoint
 
     $clientLog = Join-Path $LogDir "client.log"
     Invoke-SampleDotnetRun -Project (Join-Path $ScriptDir "Client/TicTacToe.Client.csproj") -Arguments @("--config", $clientConfigFile) *> $clientLog
@@ -130,7 +138,9 @@ try {
     Wait-LogContains $clientLog "stream-inbound sample=TicTacToe .* seq=[0-9]" "TicTacToe sequenced stream-inbound response marker"
     Wait-LogContains $clientLog "stream-inbound sample=TicTacToe .* name=.*Notify" "TicTacToe stream-inbound push marker"
     Wait-LogContains $clientLog "observer-win-milestone=verified" "TicTacToe observer win milestone notification"
+    Wait-LogContains $clientLog "reconnected-game-state=verified actor=player-x room=" "TicTacToe reconnected full game state"
     $playLogs = Join-Path $LogDir "play-*.log"
+    Wait-LogContains $playLogs "play stream: existing actor exact identity verified.*actor=player-x" "TicTacToe existing actor exact identity"
     Wait-LogContains $playLogs "actor: LeaveGameMsg completed. actor=player-x" "TicTacToe player-x LeaveGameMsg completion"
     Wait-LogContains $playLogs "actor: LeaveGameMsg completed. actor=player-o" "TicTacToe player-o LeaveGameMsg completion"
     Wait-LogContains $playLogs "entry spot: actor destroy completed. actor=player-x" "TicTacToe player-x destroy completion"

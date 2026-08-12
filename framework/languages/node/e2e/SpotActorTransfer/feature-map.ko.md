@@ -29,7 +29,7 @@ connector를 사용한다. 아래 표는 정식 시나리오 ID를 한 행씩 �
 | `ST-F5` | 구현 | A→B→C relocation 동안 보류한 one-way와 request가 두 Message Follow route를 순서대로 거쳐 final owner에서 각각 한 번 처리된다. 두 hop의 operation ID, ObjectGeneration, deadline, correlation, reply route와 checksum은 같고 authority generation은 `1→2→3`, hop count는 `1→2`다. Expiry 뒤 request는 세 owner의 handler를 실행하지 않는다. Fresh 증거 `log/20260728-104100-140606`, stderr 0 bytes다. |
 | `ST-F6` | 구현 | 실제 callback, location 또는 stream evidence로 검증한 대상: request correlation과 caller timeout 뒤 late reply 격리. Track F 로그: `log/20260710-200221-3864800`. |
 | `ST-G1` | 미구현 | SpotWide·PerActor의 yielded continuation과 모든 실행 lane을 포함한 relocation barrier E2E가 없다. |
-| `ST-G2` | 미구현 | 큰 participant inventory와 typed capacity aggregate all-or-none E2E가 없다. |
+| `ST-G2` | 부분 구현 | 기존 aggregate capacity fixture를 canonical config로 옮겨 Spot·Actor·stable-type 부족 세 variant와 sufficient variant를 다시 연결해야 한다. |
 | `ST-G3` | 미구현 | PerActor Spot authority 선전환과 Actor별 source·target route 분할 E2E가 없다. |
 | `ST-G4` | 미구현 | relocation 중 `ToActor` Message Follow와 target queue 순서를 검증하는 E2E가 없다. |
 | `ST-G5` | 미구현 | Entry·PerActor Actor relocation interruption 목표와 초과 뒤 계속 진행을 검증하는 E2E가 없다. |

@@ -10,6 +10,7 @@
 #include "runtime/streams/stream_runtime.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <arpa/inet.h>
 #include <cerrno>
 #include <chrono>
@@ -22,6 +23,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
@@ -262,6 +264,163 @@ class delayed_reply_session_t final : public zlink::framework::packet_stream_ses
     std::condition_variable _continuation_ready;
     std::deque<std::function<void ()>> _continuations;
     zlink::framework::detail::task_completion_source_t<void> _resume;
+};
+
+class shutdown_session_control_t final
+{
+  public:
+    shutdown_session_control_t () :
+        _resume ([this] (std::function<void ()> continuation) {
+            {
+                const std::lock_guard lock (_mutex);
+                _continuations.push_back (std::move (continuation));
+            }
+            _changed.notify_all ();
+        })
+    {
+    }
+
+    zlink::framework::task_t<void> wait_for_release ()
+    {
+        return _resume.task ();
+    }
+
+    void release ()
+    {
+        _resume.complete (zlink::framework::result_t<void>::success ());
+        std::function<void ()> continuation;
+        {
+            std::unique_lock lock (_mutex);
+            _changed.wait (lock, [this] { return !_continuations.empty (); });
+            continuation = std::move (_continuations.front ());
+            _continuations.pop_front ();
+        }
+        continuation ();
+    }
+
+    void record_connected () { record (_connected, "connected"); }
+    void record_packet_entered () { record (_packet_entered, "packet-entered"); }
+    void record_packet_terminal () { record (_packet_terminal, "packet-terminal"); }
+    void record_disconnected () { record (_disconnected, "disconnected"); }
+    void record_destroyed () { record (_destroyed, "destroyed"); }
+
+    bool wait_packet_entered () { return wait_for (_packet_entered, 1); }
+
+    std::size_t connected () const noexcept
+    {
+        return _connected.load (std::memory_order_acquire);
+    }
+
+    std::size_t packet_entered () const noexcept
+    {
+        return _packet_entered.load (std::memory_order_acquire);
+    }
+
+    std::size_t packet_terminal () const noexcept
+    {
+        return _packet_terminal.load (std::memory_order_acquire);
+    }
+
+    std::size_t disconnected () const noexcept
+    {
+        return _disconnected.load (std::memory_order_acquire);
+    }
+
+    std::size_t destroyed () const noexcept
+    {
+        return _destroyed.load (std::memory_order_acquire);
+    }
+
+    std::vector<std::string> lifecycle () const
+    {
+        const std::lock_guard lock (_mutex);
+        return _lifecycle;
+    }
+
+  private:
+    void record (std::atomic_size_t &counter, std::string event)
+    {
+        {
+            const std::lock_guard lock (_mutex);
+            _lifecycle.push_back (std::move (event));
+            counter.fetch_add (1, std::memory_order_release);
+        }
+        _changed.notify_all ();
+    }
+
+    bool wait_for (const std::atomic_size_t &counter, std::size_t count)
+    {
+        std::unique_lock lock (_mutex);
+        return _changed.wait_for (
+          lock, std::chrono::seconds (2),
+          [&counter, count] {
+              return counter.load (std::memory_order_acquire) >= count;
+          });
+    }
+
+    mutable std::mutex _mutex;
+    std::condition_variable _changed;
+    std::deque<std::function<void ()>> _continuations;
+    std::vector<std::string> _lifecycle;
+    zlink::framework::detail::task_completion_source_t<void> _resume;
+    std::atomic_size_t _connected{0};
+    std::atomic_size_t _packet_entered{0};
+    std::atomic_size_t _packet_terminal{0};
+    std::atomic_size_t _disconnected{0};
+    std::atomic_size_t _destroyed{0};
+};
+
+class shutdown_failure_session_t final
+  : public zlink::framework::packet_stream_session_t
+{
+  public:
+    explicit shutdown_failure_session_t (
+      std::shared_ptr<shutdown_session_control_t> control) :
+        _control (std::move (control))
+    {
+    }
+
+    ~shutdown_failure_session_t () override
+    {
+        _control->record_destroyed ();
+    }
+
+    zlink::framework::task_t<void> on_connected (
+      zlink::framework::stream_t &) override
+    {
+        _control->record_connected ();
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_disconnected (
+      zlink::framework::stream_t &) override
+    {
+        _control->record_disconnected ();
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_error (
+      zlink::framework::stream_t &,
+      const zlink::framework::stream_error_t &) override
+    {
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_packet (
+      zlink::framework::stream_t &,
+      const zlink::framework::session_message_context_t &,
+      const zlink::message_t &) override
+    {
+        _control->record_packet_entered ();
+        co_await _control->wait_for_release ();
+        _control->record_packet_terminal ();
+        throw zlink::framework::framework_exception_t (
+          zlink::framework::framework_error_kind_t::internal_failure,
+          "shutdown packet failure");
+    }
+
+  private:
+    std::shared_ptr<shutdown_session_control_t> _control;
 };
 
 class prefix_stream_compression_codec_t final
@@ -599,6 +758,21 @@ int main ()
     using zlink::framework::detail::stream_header_flags_t;
     using zlink::framework::detail::stream_message_kind_t;
 
+    const auto codec_mapping_is_consistent = [] (stream_codec_t codec,
+                                                 std::string_view content_type) {
+        return zlink::framework::detail::stream_content_type (codec) == content_type
+               && zlink::framework::detail::stream_codec_from_content_type (content_type)
+                    == codec;
+    };
+    if (!codec_mapping_is_consistent (stream_codec_t::raw, "application/octet-stream")
+        || !codec_mapping_is_consistent (stream_codec_t::json, "application/json")
+        || !codec_mapping_is_consistent (stream_codec_t::message_pack,
+                                         "application/x-msgpack")
+        || !codec_mapping_is_consistent (stream_codec_t::protobuf,
+                                         "application/x-protobuf")) {
+        return 81;
+    }
+
     struct stream_dispatch_executor_guard_t
     {
         stream_dispatch_executor_guard_t ()
@@ -722,6 +896,70 @@ int main ()
         || runtime.encode_header (too_large_metadata).error_kind ()
              != framework_error_kind_t::protocol_error) {
         return 21;
+    }
+    zlink::framework::detail::stream_metadata_t maximum_frame_metadata;
+    maximum_frame_metadata.with ("k", std::string (65522, 'x'));
+    zlink::framework::detail::stream_header_t maximum_frame_header (
+      stream_message_kind_t::send, stream_codec_t::json,
+      stream_header_flags_t::none, std::nullopt, "x",
+      maximum_frame_metadata);
+    const auto maximum_encoded_header =
+      runtime.encode_header (maximum_frame_header);
+    if (!maximum_encoded_header
+        || maximum_encoded_header.value ().size ()
+             != std::numeric_limits<std::uint16_t>::max ()) {
+        return 282;
+    }
+    const auto maximum_encoded_frame = runtime.encode_frame (
+      maximum_frame_header, zlink::message_t::from (std::string ("p")));
+    if (!maximum_encoded_frame
+        || maximum_encoded_frame.value ().size ()
+             != 6 + std::numeric_limits<std::uint16_t>::max () + 1
+        || maximum_encoded_frame.value ()[0] != 0xff
+        || maximum_encoded_frame.value ()[1] != 0xff
+        || maximum_encoded_frame.value ()[2] != 0
+        || maximum_encoded_frame.value ()[3] != 0
+        || maximum_encoded_frame.value ()[4] != 0
+        || maximum_encoded_frame.value ()[5] != 1
+        || maximum_encoded_frame.value ().back () != 'p') {
+        return 283;
+    }
+
+    zlink::framework::detail::stream_metadata_t overflowing_frame_metadata;
+    overflowing_frame_metadata.with ("k", std::string (65523, 'x'));
+    zlink::framework::detail::stream_header_t overflowing_frame_header (
+      stream_message_kind_t::send, stream_codec_t::json,
+      stream_header_flags_t::none, std::nullopt, "x",
+      overflowing_frame_metadata);
+    const auto overflowing_encoded_header =
+      runtime.encode_header (overflowing_frame_header);
+    const auto overflowing_encoded_frame = runtime.encode_frame (
+      overflowing_frame_header, zlink::message_t::from (std::string ("p")));
+    if (overflowing_encoded_header
+        || overflowing_encoded_header.error_kind ()
+             != framework_error_kind_t::protocol_error
+        || overflowing_encoded_frame
+        || overflowing_encoded_frame.error_kind ()
+             != framework_error_kind_t::protocol_error) {
+        return 284;
+    }
+
+    const auto maximum_payload_representation =
+      zlink::framework::detail::stream_runtime_t::
+        validate_frame_representation (
+          0, std::numeric_limits<std::uint32_t>::max ());
+    const auto overflowing_payload_representation =
+      zlink::framework::detail::stream_runtime_t::
+        validate_frame_representation (
+          0,
+          static_cast<std::uint64_t> (
+            std::numeric_limits<std::uint32_t>::max ())
+            + 1);
+    if (!maximum_payload_representation
+        || overflowing_payload_representation
+        || overflowing_payload_representation.error_kind ()
+             != framework_error_kind_t::protocol_error) {
+        return 285;
     }
     const std::vector<std::vector<std::uint8_t>> invalid_headers{
       {},
@@ -961,6 +1199,108 @@ int main ()
         || runtime.written_payloads (async_stream).size () != 1
         || runtime.written_payloads (async_stream)[0].to_string () != "async-payload") {
         return 234;
+    }
+
+    /* Actor binding replacement is queued behind the same session lane. A
+     * normal callback retains its owner through completion and executes once. */
+    auto replacement_stream = runtime.open_session ("client-stream");
+    auto replacement_owner = std::make_shared<int> (1);
+    const auto replacement_owner_weak = std::weak_ptr<int> (replacement_owner);
+    auto replacement_calls = std::make_shared<std::atomic_size_t> (0);
+    std::promise<zlink::framework::result_t<void>> replacement_completion_source;
+    auto replacement_completion = replacement_completion_source.get_future ();
+    const auto replacement_submitted =
+      runtime.dispatch_actor_binding_replaced_async (
+        replacement_stream, "actor-exact-once",
+        [owner = replacement_owner, replacement_calls] (
+          zlink::framework::stream_t &,
+          std::string actor_id) {
+            if (*owner == 1 && actor_id == "actor-exact-once") {
+                replacement_calls->fetch_add (1, std::memory_order_relaxed);
+            }
+            return zlink::framework::task_t<void> (
+              zlink::framework::result_t<void>::success ());
+        },
+        [&replacement_completion_source] (
+          const zlink::framework::result_t<void> &result) {
+            replacement_completion_source.set_value (result);
+        });
+    replacement_owner.reset ();
+    if (!replacement_submitted
+        || replacement_completion.wait_for (std::chrono::seconds (2))
+             != std::future_status::ready
+        || !replacement_completion.get ()) {
+        return 286;
+    }
+    runtime.drain_async_dispatch (replacement_stream);
+    if (replacement_calls->load (std::memory_order_relaxed) != 1
+        || !replacement_owner_weak.expired ()) {
+        return 287;
+    }
+
+    /* Teardown first disables replacement admission. Even when an earlier
+     * packet keeps the serial turn, the queued replacement must not enter a
+     * released session owner after close. */
+    auto replacement_race_stream = runtime.open_session ("client-stream");
+    delayed_reply_session_t replacement_blocker;
+    std::promise<zlink::framework::result_t<void>> blocker_completion_source;
+    auto blocker_completion = blocker_completion_source.get_future ();
+    const auto blocker_submitted = runtime.dispatch_packet_async (
+      replacement_blocker, replacement_race_stream, request_header,
+      zlink::message_t::from (std::string ("replacement-blocker")),
+      [&blocker_completion_source] (
+        const zlink::framework::result_t<void> &result) {
+          blocker_completion_source.set_value (result);
+      });
+    if (!blocker_submitted) {
+        return 288;
+    }
+    replacement_blocker.wait_until_suspended ();
+    auto replacement_admission = std::make_shared<std::atomic_bool> (true);
+    auto closing_owner = std::make_shared<int> (2);
+    const auto closing_owner_weak = std::weak_ptr<int> (closing_owner);
+    auto closed_session_calls = std::make_shared<std::atomic_size_t> (0);
+    std::promise<zlink::framework::result_t<void>> closed_completion_source;
+    auto closed_completion = closed_completion_source.get_future ();
+    const auto closed_submitted =
+      runtime.dispatch_actor_binding_replaced_async (
+        replacement_race_stream, "actor-close-race",
+        [weak = closing_owner_weak, replacement_admission,
+         closed_session_calls] (zlink::framework::stream_t &,
+                                std::string) {
+            if (!replacement_admission->load (std::memory_order_acquire)) {
+                return zlink::framework::task_t<void> (
+                  zlink::framework::result_t<void>::success ());
+            }
+            if (weak.lock ()) {
+                closed_session_calls->fetch_add (
+                  1, std::memory_order_relaxed);
+            }
+            return zlink::framework::task_t<void> (
+              zlink::framework::result_t<void>::success ());
+        },
+        [&closed_completion_source] (
+          const zlink::framework::result_t<void> &result) {
+            closed_completion_source.set_value (result);
+        });
+    if (!closed_submitted) {
+        return 289;
+    }
+    replacement_admission->store (false, std::memory_order_release);
+    closing_owner.reset ();
+    replacement_blocker.resume ();
+    if (blocker_completion.wait_for (std::chrono::seconds (2))
+          != std::future_status::ready
+        || !blocker_completion.get ()
+        || closed_completion.wait_for (std::chrono::seconds (2))
+             != std::future_status::ready
+        || !closed_completion.get ()) {
+        return 290;
+    }
+    runtime.drain_async_dispatch (replacement_race_stream);
+    if (closed_session_calls->load (std::memory_order_relaxed) != 0
+        || !closing_owner_weak.expired ()) {
+        return 291;
     }
 
     auto fluent_stream = runtime.open_session ("client-stream");
@@ -1566,6 +1906,18 @@ int main ()
     zlink::framework::handler_registry_t core_handlers;
     zlink::framework::serializer_registry_t core_serializers;
     zlink::framework::zlink_builder_t core_zlink;
+    core_services.add_singleton<
+      zlink::framework::detail::actor_gateway_runtime_t> ();
+    core_services.add_factory<zlink::framework::session_actor_manager_t> (
+      [] (zlink::framework::service_provider_t &provider) {
+          return std::make_unique<
+            zlink::framework::session_actor_manager_t> (
+            provider
+              .get_required<
+                zlink::framework::detail::actor_gateway_runtime_t> ()
+              .manager ());
+      },
+      zlink::framework::service_lifetime_t::scoped);
     zlink::framework::zlink_framework_options_t core_options (
       core_services, core_handlers, core_serializers, core_zlink);
     core_options.add_route_mesh ("core-stream-mesh")
@@ -1575,6 +1927,14 @@ int main ()
       .bind ("tcp://127.0.0.1:" + std::to_string (core_stream_port))
       .register_session ("core-session");
     core_options.apply ();
+    auto shutdown_session_control =
+      std::make_shared<shutdown_session_control_t> ();
+    core_services.add_factory<shutdown_failure_session_t> (
+      [shutdown_session_control] (zlink::framework::service_provider_t &) {
+          return std::make_unique<shutdown_failure_session_t> (
+            shutdown_session_control);
+      },
+      zlink::framework::service_lifetime_t::scoped);
     auto core_provider = core_services.build_provider ();
     auto core_mesh = zlink::framework::detail::mesh_node_runtime_t::from (
       core_zlink, "core-stream-mesh");
@@ -1585,22 +1945,98 @@ int main ()
     core_mesh->start ();
     auto core_stream_runtime =
       zlink::framework::detail::stream_runtime_t::from (core_zlink);
-    sample_session_t core_session;
     zlink::framework::runtime::stream_host_service_t core_host (
       core_stream_runtime, core_stream_runtime.snapshots (),
       {{"core-session",
-        [&core_session] (zlink::framework::service_provider_t &)
-          -> zlink::framework::packet_stream_session_t & { return core_session; }}},
+        [] (zlink::framework::service_provider_t &provider)
+          -> zlink::framework::packet_stream_session_t & {
+            return provider.get_required<shutdown_failure_session_t> ();
+        }}},
       core_mesh);
     core_host.start (core_provider);
+
+    zlink::stream_connector::connector_options_t core_connector_options;
+    core_connector_options.endpoint =
+      "tcp://127.0.0.1:" + std::to_string (core_stream_port);
+    core_connector_options.connect_timeout = std::chrono::seconds (2);
+    core_connector_options.reconnect.enabled = false;
+    auto core_connector =
+      zlink::stream_connector::connector_factory_t::create (
+        core_connector_options);
+    if (!core_connector.connect ()) {
+        core_host.stop ();
+        core_mesh->stop ();
+        return 292;
+    }
+    std::optional<zlink::stream_connector::result_t<zlink::message_t>>
+      shutdown_request_result;
+    std::thread shutdown_request_thread ([&] {
+        shutdown_request_result =
+          core_connector
+            .request (zlink::stream_connector::packet_t{
+              .name = "shutdown.blocked",
+              .codec = zlink::stream_connector::codec_t::raw,
+              .payload = zlink::message_t::from ("shutdown-payload")})
+            .timeout (std::chrono::seconds (3))
+            .submit<zlink::message_t> ();
+    });
+    if (!shutdown_session_control->wait_packet_entered ()) {
+        (void) core_connector.close ();
+        shutdown_request_thread.join ();
+        core_host.stop ();
+        core_mesh->stop ();
+        return 293;
+    }
+
+    std::promise<void> core_stop_entered_source;
+    auto core_stop_entered = core_stop_entered_source.get_future ();
+    std::promise<void> core_stop_completed_source;
+    auto core_stop_completed = core_stop_completed_source.get_future ();
     const auto core_stop_started = std::chrono::steady_clock::now ();
-    core_host.stop ();
+    std::thread core_stop_thread ([&] {
+        core_stop_entered_source.set_value ();
+        core_host.stop ();
+        core_stop_completed_source.set_value ();
+    });
+    core_stop_entered.wait ();
+    const bool stop_overtook_packet =
+      core_stop_completed.wait_for (std::chrono::milliseconds (100))
+      == std::future_status::ready;
+    shutdown_session_control->release ();
+    const bool core_stop_finished =
+      core_stop_completed.wait_for (std::chrono::seconds (2))
+      == std::future_status::ready;
+    core_stop_thread.join ();
     const auto core_stop_elapsed =
       std::chrono::duration_cast<std::chrono::milliseconds> (
         std::chrono::steady_clock::now () - core_stop_started);
+    shutdown_request_thread.join ();
+    (void) core_connector.close ();
     core_mesh->stop ();
-    if (core_stop_elapsed > std::chrono::seconds (2)) {
-        return 38;
+    if (stop_overtook_packet || !core_stop_finished
+        || core_stop_elapsed > std::chrono::seconds (2)) {
+        return 294;
+    }
+    if (shutdown_session_control->connected () != 1) {
+        return 295;
+    }
+    if (shutdown_session_control->packet_entered () != 1) {
+        return 296;
+    }
+    if (shutdown_session_control->packet_terminal () != 1) {
+        return 297;
+    }
+    if (shutdown_session_control->disconnected () != 1) {
+        return 298;
+    }
+    if (shutdown_session_control->destroyed () != 1) {
+        return 299;
+    }
+    if (shutdown_session_control->lifecycle ()
+        != std::vector<std::string>{"connected", "packet-entered",
+                                    "packet-terminal", "disconnected",
+                                    "destroyed"}) {
+        return 300;
     }
     return 0;
 }

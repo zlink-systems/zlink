@@ -1,4 +1,5 @@
 package systems.zlink.samples.bingo.server.matchmaking;
+import java.util.concurrent.CompletionStage;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -23,7 +24,7 @@ public final class BingoMatchmaker implements ZLinkInstanceSpot {
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onInitialize() {
+    public CompletionStage<Void> onInitialize() {
         return context.addTimer(
                 "matchmaker-idle-close",
                 IDLE_CHECK_PERIOD,

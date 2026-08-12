@@ -402,19 +402,24 @@ Actor handler가 `Yield`한 continuation도 같은 Actor turn의 일부다. Relo
 - 검증: Final state가 정해진 두 변경과 follow-up을 모두 포함하고 handler active count는 전체 node에서 1이다.
 - 계약 근거: [비동기 실행 정책](../spec/05-async-execution-policy.ko.md)
 
-#### ST-G2 User Spot aggregate capacity
+#### ST-G2 User Spot aggregate capacity를 all-or-none으로 적용한다
 
 우선순위: `P0`
 
 `SpotWide` relocation은 Spot과 그 Actor 전체를 하나의 단위로 target capacity에 맞춰야 한다.
 
-**검증 질문:** Capacity가 부족하면 일부 Actor만 이동하지 않고 source가 유지되는가.
+**검증 질문:** Spot, Actor 또는 stable-type capacity 중 하나라도 부족하면 aggregate 전체가 source에
+유지되고 모두 충분할 때만 target으로 이동하는가.
 
-- 시작 조건: Source Host에는 해당 SpotWide unit이 있고, 다른 candidate의 capacity는 aggregate 전체를 받기에
-  부족하여 eligible target이 없다.
-- 절차: Target 인자 없는 public Host Relocate를 호출하고 terminal 뒤 각 Actor에 state request를 보낸다.
-- 검증: Relocate는 capacity failure로 끝나며 모든 Actor request는 source에서 기존 state를 반환한다.
-- 계약 근거: [Relocation unit과 실행량 제한](../spec/28-graceful-drain-handoff.ko.md#7-relocation-unit과-실행량-제한)
+- 시작 조건: 같은 크기의 SpotWide aggregate에 대해 Spot slot 부족, Actor slot 부족, stable-type slot 부족과
+  all-sufficient target variant를 fresh source·target으로 각각 준비한다.
+- 절차: 각 variant에서 target 인자 없는 public Host Relocate를 호출하고 terminal 뒤 Spot과 각 Actor에 state
+  request를 보낸다.
+- 검증: 부족 variant는 capacity blocker result로 끝나며 public locations, Spot state와 모든 Actor state가
+  source에 같은 generation으로 유지된다. Sufficient variant는 Spot과 모든 Actor가 target에서 이동 전과
+  같은 state와 generation으로 처리된다. 일부 member만 이동한 결과는 허용하지 않는다.
+- 계약 근거: [Relocation unit과 실행량 제한](../spec/30-host-relocation-flow.ko.md#7-relocation-unit과-실행량-제한)과
+  [SpotWide User Spot](../spec/30-host-relocation-flow.ko.md#85-spotwide-user-spot)
 
 #### ST-G3 PerActor Spot의 host relocation
 
@@ -442,8 +447,8 @@ SpotWide relocation 중 Actor ID로 보낸 message도 해당 Actor의 이동 순
 - 시작 조건: SpotWide Spot에 여러 Actor와 sequence handler가 있다.
 - 절차: 해당 source Host의 target 인자 없는 public Host Relocate 중 각 Actor에 고유 sequence messages를 보낸다.
 - 검증: 각 Actor별 성공 sequence 순서가 유지되고 동일 operation ID가 source와 target에 중복되지 않는다.
-- 계약 근거: [SpotWide User Spot handoff](../spec/28-graceful-drain-handoff.ko.md#85-spotwide-user-spot)과
-  [대기 중인 message 이전](../spec/28-graceful-drain-handoff.ko.md#9-대기-중인-message-timer와-session을-옮긴다)
+- 계약 근거: [SpotWide User Spot handoff](../spec/30-host-relocation-flow.ko.md#85-spotwide-user-spot)과
+  [대기 중인 message 이전](../spec/30-host-relocation-flow.ko.md#9-대기-중인-message-timer와-session을-옮긴다)
 
 #### ST-G5 Relocation interruption measurement
 
@@ -470,7 +475,7 @@ SpotWide relocation은 현재 application turn이 끝난 뒤 시작하고 target
 - 시작 조건: Spot handler가 Application gate에서 대기한다.
 - 절차: Handler 진입 뒤 target 인자 없는 public Host Relocate와 follow-up request를 시작하고 gate를 연다.
 - 검증: 기존 handler는 source에서 끝나고 follow-up은 target에서 한 번 실행된다. 전체 active count는 1을 넘지 않는다.
-- 계약 근거: [SpotWide User Spot handoff](../spec/28-graceful-drain-handoff.ko.md#85-spotwide-user-spot)
+- 계약 근거: [SpotWide User Spot handoff](../spec/30-host-relocation-flow.ko.md#85-spotwide-user-spot)
 
 ### Track H — Deferred Join과 handler context
 

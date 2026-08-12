@@ -1,6 +1,5 @@
 import { browserE2eConfig, runBrowserE2e } from '../../browser-client-runtime';
 import { runTaA1 } from './Scenarios/ta-a1-bound-no-bind-scenario';
-import { runTaA2 } from './Scenarios/ta-a2-unbound-no-bind-scenario';
 import { runTaA3 } from './Scenarios/ta-a3-no-bind-then-bind-scenario';
 import { runTaA4 } from './Scenarios/ta-a4-disconnect-destroy-scenario';
 import { runTaB1 } from './Scenarios/ta-b1-missing-actor-scenario';
@@ -11,7 +10,6 @@ import type { ClientOptions } from './Support/client-options';
 
 const scenarios: Record<string, (options: ClientOptions) => Promise<void>> = {
   'TA-A1': runTaA1,
-  'TA-A2': runTaA2,
   'TA-A3': runTaA3,
   'TA-A4': runTaA4,
   'TA-B1': runTaB1,

@@ -1,4 +1,5 @@
 package systems.zlink.e2e.registrymessaging.consumer;
+import java.time.Duration;
 
 import java.nio.file.Path;
 import org.springframework.boot.WebApplicationType;
@@ -40,7 +41,7 @@ public final class Program {
             options.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.configureLocations()
-                .setPollingInterval(java.time.Duration.ofMillis(250));
+                .setPollingInterval(Duration.ofMillis(250));
 
             String mode = consumer.consumerMode();
             var channel = options.addClientServerChannel(Contracts.API_CHANNEL);

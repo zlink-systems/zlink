@@ -8,18 +8,26 @@ import {
   closeMeshCompletion,
   type ZLinkMeshCompletionTable
 } from './mesh-completion-table';
+import { routingIdsEqual } from '../routing-id';
 
 export function meshActorSessionNodeAdapter(
   node: ZLinkBackendMeshNode,
   completions?: ZLinkMeshCompletionTable
 ): ZLinkBackendActorSessionNode {
   return {
-    sendActorBoundSession(actor, expectedBindingGeneration, parts, flags) {
+    actorNodeGeneration(actor) {
+      const status = node.status();
+      return routingIdsEqual(status.routingId, actor.nodeRid)
+        ? status.lifecycleGeneration
+        : undefined;
+    },
+    sendActorBoundSession(actor, expectedBindingGeneration, parts, flags, actorFence) {
       const result = node.sendActorBoundSession(
         actor,
         expectedBindingGeneration,
         parts as never,
-        flags
+        flags,
+        actorFence
       ) as unknown as SubmitResult;
       switch (result) {
         case SubmitResult.Ok:

@@ -13,6 +13,7 @@
     "configureLocations",
     "configureNetwork",
     "configureStreamCompression",
+    "disableImplicitHandlerAutoRegistration",
     "options",
     "setActorTransferTimeout",
     "setApplicationVersion",

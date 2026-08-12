@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.actors;
+import java.time.Duration;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
@@ -31,7 +33,7 @@ import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
-    private static final java.time.Duration DEFAULT_TIMEOUT = java.time.Duration.ofSeconds(30);
+    private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
     static final String REMOTE_BOUND_SESSION_BIND_PACKET_NAME =
         "zlink.framework.actor.bound_session.bind";
     private final ZLinkBackendStreamSocket stream;
@@ -90,7 +92,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
 
     CompletionStage<Void> rebindNativeActor(
         ZLinkBackendActorRef targetActor,
-        java.time.Duration timeout) {
+        Duration timeout) {
         if (!actorId.equals(targetActor.actorId())) {
             return CompletableFuture.failedFuture(new ZLinkConfigurationException(
                 "bound session actor id mismatch: " + actorId));
@@ -119,7 +121,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
 
     private CompletionStage<Void> awaitRouteReady(
         ZLinkBackendActorRef targetActor,
-        java.time.Duration timeout) {
+        Duration timeout) {
         return ZLinkActorRetryScheduler.waitUntilRelay(
             timeout,
             () -> routeReady.test(targetActor.nodeRid()),
@@ -131,7 +133,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
 
     private CompletionStage<Void> relayBoundSessionBindWithRetry(
         ZLinkStreamHeader header,
-        java.time.Duration timeout) {
+        Duration timeout) {
         return ZLinkActorRetryScheduler.submitRelayUntilAccepted(
             timeout,
             () -> {
@@ -153,11 +155,11 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
         ZLinkBackendStreamSocket stream,
         RoutingId sessionRid,
         ZLinkBackendActorRef targetActor,
-        java.time.Duration timeout) {
+        Duration timeout) {
         return ZLinkActorRetryScheduler.bindRelayUntilAccepted(
             timeout,
             () -> stream.bindActor(sessionRid, targetActor)
-                .submit(java.time.Duration.ofSeconds(2)),
+                .submit(Duration.ofSeconds(2)),
             ignored -> false,
             ZLinkActorSubmitFaults::retryableBoundSessionBindFailure);
     }
@@ -173,6 +175,12 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
 
     @Override
     public ZLinkBoundSessionSendCall send(Object message) {
+        ZLinkBoundSessionSendOptions options =
+            ZLinkBoundSessionSendOptions.createForPayload(
+                serializer,
+                message,
+                ZLinkPayloadEncoding.resolvePacketName(message),
+                defaultCodec);
         ZLinkPayloadEncoding.EncodedPayload encoded =
             ZLinkPayloadEncoding.encode(serializer, message);
         return new SendCall(
@@ -180,7 +188,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
             sessionRid,
             actorId,
             encoded.payload(),
-            ZLinkBoundSessionSendOptions.create(encoded.packetName(), defaultCodec),
+            options,
             metadataPolicy,
             actorRuntime.oneWayCalls());
     }
@@ -203,7 +211,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
         ZLinkBoundSessionSendOptions options,
         ZLinkRelayMetadataPolicy metadataPolicy,
         ZLinkOneWayCalls oneWayCalls,
-        java.util.concurrent.atomic.AtomicBoolean submitGate)
+        AtomicBoolean submitGate)
         implements ZLinkBoundSessionSendCall {
         SendCall(
             ZLinkBackendStreamSocket stream,
@@ -214,7 +222,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
             ZLinkRelayMetadataPolicy metadataPolicy,
             ZLinkOneWayCalls oneWayCalls) {
             this(stream, sessionRid, actorId, payload, options, metadataPolicy, oneWayCalls,
-                new java.util.concurrent.atomic.AtomicBoolean());
+                new AtomicBoolean());
         }
         public ZLinkBoundSessionSendCall packetName(String packetName) {
             return new SendCall(

@@ -3,6 +3,7 @@
 
 package systems.zlink.framework.kotlin
 
+import kotlinx.coroutines.CancellationException
 import java.util.concurrent.Flow.Publisher
 import java.util.concurrent.Flow.Subscriber
 import java.util.concurrent.Flow.Subscription
@@ -26,7 +27,7 @@ fun <T> Publisher<T>.asFlow(): Flow<T> = callbackFlow {
                 subscriptionRef.get()?.request(1)
             }
             close()
-        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {
             close(failure)

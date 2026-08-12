@@ -130,18 +130,19 @@ If a Ready owner terminates, the Framework does not automatically pick another n
 or create a new incarnation of the same ID. A new request cannot be used until the Application has
 explicitly completed Close and re-create.
 
-**Verification question:** After the previous owner terminates, does the new request end in a
-bounded `Unavailable` without running on another owner?
+**Verification question:** After the previous owner terminates, do both single and concurrent
+requests each end in bounded `Unavailable` without running on another owner?
 
 - Starting condition: The Spot is Ready on owner A, and domain state is stored in the external
   store. Another node, B, provides the same type but is not this Spot's owner.
-- Procedure: A is crashed, and after public liveness/owner-lease status becomes invalid, a request is
-  sent. Whether the Location Store authority record is automatically deleted is not judged in this
+- Procedure: Crash A and wait until public liveness/owner-lease status becomes invalid. In fresh
+  fixtures, send one single-caller request and then two concurrent requests from separate callers.
+  Whether the Location Store authority record is automatically deleted is not judged in this
   scenario.
-- Verification: The request ends exactly once in `Unavailable`. Neither A nor B has handler/factory
-  evidence for that operation ID, and the Framework does not automatically create a new generation.
-  Explicit recreate and rebind are confirmed separately in `IS-E2E-08` and application recovery
-  scenarios.
+- Verification: The single request and both concurrent requests each end exactly once in
+  `Unavailable`. Neither A nor B has handler/factory evidence for any operation ID, and the Framework
+  does not automatically create a new generation. Explicit recreate and rebind are confirmed
+  separately in `IS-E2E-08` and application recovery scenarios.
 - Contract basis: [Failure And Failover](../spec/31-failure-failover-policy.en.md)
 
 #### IS-E2E-06 A Creating-Owner Crash Respects The Same Generation's Recovery Boundary
@@ -183,7 +184,7 @@ restored at the target?
   preserved. An operation ID accepted before the relocation is also processed exactly once across
   all evidence.
 - Contract basis: [Location Runtime](../spec/21-location-runtime.en.md) and
-  [Graceful Drain And Handoff](../spec/28-graceful-drain-handoff.en.md)
+  [Graceful Drain And Handoff](../spec/30-host-relocation-flow.en.md)
 
 #### IS-E2E-08 Close And Reactivate
 
@@ -201,23 +202,6 @@ instance?
 - Verification: The new factory instance ID differs from the previous value, and the handler runs
   exactly once on the new instance.
 - Contract basis: [Location Runtime](../spec/21-location-runtime.en.md)
-
-#### IS-E2E-09 Concurrent Requests After A Ready-Owner Crash Do Not Auto-Switch
-
-Priority: `P0`
-
-Even if multiple callers request at the same time after a Ready owner is invalidated, the Framework
-does not automatically create a new owner and factory.
-
-**Verification question:** After the crash, do concurrent requests each end in a bounded failure with
-no automatic takeover?
-
-- Starting condition: The previous owner crash has been invalidated in public liveness/owner-lease
-  status, and no Application recreate has run.
-- Procedure: Two callers concurrently send requests to the same ID.
-- Verification: Both requests each end exactly once in `Unavailable`, with no handler/factory
-  evidence on any owner.
-- Contract basis: [Failure And Failover](../spec/31-failure-failover-policy.en.md)
 
 #### IS-E2E-10 No Automatic Owner Even After A Stale Owner Resumes
 
@@ -567,7 +551,7 @@ no duplication?
 - Verification: Relocate and the request each end in exactly one terminal, and the request handler
   runs exactly once, on either A or B alone.
 - Contract basis: [Location Runtime](../spec/21-location-runtime.en.md) and
-  [Graceful Drain And Handoff](../spec/28-graceful-drain-handoff.en.md)
+  [Graceful Drain And Handoff](../spec/30-host-relocation-flow.en.md)
 
 #### IS-E2E-30 Multi-Mesh Concurrent Relocate
 
@@ -585,7 +569,7 @@ Concurrent host Relocate calls for the same Spot must not produce two owners.
 - Verification: Variant A callers join the shared operation and receive the same terminal. Variant B
   ends the incompatible call once in `Blocked/OperationInProgress` without changing the first option.
   Both variants finish with one Ready owner, and the follow-up request runs only there.
-- Contract basis: [Graceful Drain — Concurrent Calls And Cancellation](../spec/28-graceful-drain-handoff.en.md#6-concurrent-calls-and-cancellation)
+- Contract basis: [Graceful Drain — Concurrent Calls And Cancellation](../spec/30-host-relocation-flow.en.md#6-concurrent-calls-and-cancellation)
 
 #### IS-E2E-31 Remote Selection Loser
 

@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRAMEWORK_DIR="$(cd "$ROOT_DIR/../.." && pwd)"
 source "$ROOT_DIR/../redis-common.sh"
+zlink_cpp_e2e_acquire_run_lock "${BASH_SOURCE[0]}" "$@"
+zlink_cpp_e2e_install_cleanup_trap
 BUILD_DIR="$FRAMEWORK_DIR/build"
 SCENARIO="${1:-all}"
 SCENARIO_LOWER="$(printf '%s' "$SCENARIO" | tr '[:upper:]' '[:lower:]')"
@@ -67,44 +69,9 @@ allocate_role_endpoints() {
     PLAY_B_HTTP PLAY_B_CONTROL PLAY_B_SPOT_ROUTE PLAY_B_SPOT_ROUTER PLAY_B_SPOT_PUB \
     SESSION_A_HTTP SESSION_A_STREAM SESSION_A_SPOT_ROUTER SESSION_A_SPOT_PUB \
     SESSION_B_HTTP SESSION_B_STREAM SESSION_B_SPOT_ROUTER SESSION_B_SPOT_PUB \
-    EXTERNAL_API_HTTP <<<"$(python3 - <<'PY'
-import socket
-
-sockets = []
-ports = []
-host = "127.0.0.1"
-for _ in range(23):
-    sock = socket.socket()
-    sock.bind((host, 0))
-    sockets.append(sock)
-    ports.append(sock.getsockname()[1])
-print(f"http://{host}:{ports[0]}", end=" ")
-print(f"tcp://{host}:{ports[1]}", end=" ")
-print(f"http://{host}:{ports[2]}", end=" ")
-print(f"tcp://{host}:{ports[3]}", end=" ")
-print(f"http://{host}:{ports[4]}", end=" ")
-print(f"tcp://{host}:{ports[5]}", end=" ")
-print(f"tcp://{host}:{ports[6]}", end=" ")
-print(f"tcp://{host}:{ports[7]}", end=" ")
-print(f"tcp://{host}:{ports[8]}", end=" ")
-print(f"http://{host}:{ports[9]}", end=" ")
-print(f"tcp://{host}:{ports[10]}", end=" ")
-print(f"tcp://{host}:{ports[11]}", end=" ")
-print(f"tcp://{host}:{ports[12]}", end=" ")
-print(f"tcp://{host}:{ports[13]}", end=" ")
-print(f"http://{host}:{ports[14]}", end=" ")
-print(f"tcp://{host}:{ports[15]}", end=" ")
-print(f"tcp://{host}:{ports[16]}", end=" ")
-print(f"tcp://{host}:{ports[17]}", end=" ")
-print(f"http://{host}:{ports[18]}", end=" ")
-print(f"tcp://{host}:{ports[19]}", end=" ")
-print(f"tcp://{host}:{ports[20]}", end=" ")
-print(f"tcp://{host}:{ports[21]}", end=" ")
-print(f"http://{host}:{ports[22]}")
-for sock in sockets:
-    sock.close()
-PY
-)"
+    EXTERNAL_API_HTTP <<<"$(zlink_cpp_e2e_allocate_endpoints \
+      http tcp http tcp http tcp tcp tcp tcp http tcp tcp tcp tcp \
+      http tcp tcp tcp http tcp tcp tcp http)"
 }
 
 # 샘플 러너와 build 디렉터리를 공유한다. 여기서 BUILD_SAMPLES를 끄면 그 cache가 남아
@@ -190,7 +157,7 @@ cleanup() {
       cleanup_failed=1
     fi
   done
-  docker rm -f "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+  zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   rm -rf "$CONFIG_DIR"
   if [[ $code -ne 0 ]]; then
     echo "E2E failed. Logs: $LOG_DIR" >&2

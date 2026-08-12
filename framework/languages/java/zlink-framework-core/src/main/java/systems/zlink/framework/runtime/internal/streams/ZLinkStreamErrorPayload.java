@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.internal.streams;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -92,8 +94,8 @@ public final class ZLinkStreamErrorPayload {
         Throwable current = failure == null
             ? new IllegalStateException("handler failed")
             : failure;
-        while ((current instanceof java.util.concurrent.CompletionException
-                || current instanceof java.util.concurrent.ExecutionException)
+        while ((current instanceof CompletionException
+                || current instanceof ExecutionException)
             && current.getCause() != null) {
             current = current.getCause();
         }

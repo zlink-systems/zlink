@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient;
+import java.util.concurrent.Executors;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -48,7 +49,7 @@ final class TestSupport {
         try {
             HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             // Multi-threaded executor so concurrent requests are not serialized by the test server.
-            server.setExecutor(java.util.concurrent.Executors.newCachedThreadPool());
+            server.setExecutor(Executors.newCachedThreadPool());
             server.createContext("/", handler);
             server.start();
             int port = server.getAddress().getPort();

@@ -1,4 +1,8 @@
 package systems.zlink.framework.testkit;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -82,7 +86,22 @@ final class SampleReleaseGateContractTest {
             + "(addHandler|addPacket|addActorPacket|addActorSend|addActorRequest|addSubscribe)\\s*\\(");
     private static final Pattern KOTLIN_MANUAL_SPOT_HANDLER_REGISTRATION =
         Pattern.compile("(?s)handlers\\(\\)\\s*\\.\\s*addHandler\\s*<");
-
+    private static final Pattern ONE_WAY_CALL_WITH_REQUEST_SUFFIX = Pattern.compile(
+        "(?s)\\.(?:send|sendToActor|sendToSpot|sendToChannel)\\s*\\(\\s*"
+            + "(?:new\\s+)?(?:[A-Za-z0-9_]+\\.)*"
+            + "[A-Z][A-Za-z0-9]*(?:Req|Res|Event)\\s*\\(");
+    private static final Pattern REQUEST_CALL_WITH_ONE_WAY_SUFFIX = Pattern.compile(
+        "(?s)\\.(?:request|requestToActor|requestToSpot|requestToChannel)\\s*\\(\\s*"
+            + "(?:new\\s+)?(?:[A-Za-z0-9_]+\\.)*"
+            + "[A-Z][A-Za-z0-9]*(?:Msg|Notify|Event)\\s*\\(");
+    private static final Pattern INTERNAL_SEND_WITH_NOTIFY_SUFFIX = Pattern.compile(
+        "(?s)\\.(?:sendToActor|sendToSpot|sendToChannel)\\s*\\(\\s*"
+            + "(?:new\\s+)?(?:[A-Za-z0-9_]+\\.)*"
+            + "[A-Z][A-Za-z0-9]*Notify\\s*\\(");
+    private static final Pattern PUBLISH_CALL_WITH_NON_EVENT_SUFFIX = Pattern.compile(
+        "(?s)\\.(?:publish|publishToSpot|publishToFanout)\\s*\\(\\s*"
+            + "(?:new\\s+)?(?:[A-Za-z0-9_]+\\.)*"
+            + "[A-Z][A-Za-z0-9]*(?:Req|Res|Msg|Notify)\\s*\\(");
     @Test
     void requiredSamplesExposeExecutableEntryPoints() throws IOException {
         Path samplesRoot = samplesRoot();
@@ -97,6 +116,8 @@ final class SampleReleaseGateContractTest {
         assertTrue(aggregateRunner.contains("ZLINK_LIBRARY_PATH")
                 && aggregateRunner.contains("core/build/lib/libzlink.so"),
             "aggregate sample runner must use the local core runtime when it is available");
+        assertTrue(aggregateRunner.contains("bash \"$script\""),
+            "aggregate sample runner must invoke non-executable sample scripts through Bash");
         String aggregatePowerShellRunner = Files.readString(samplesRoot.resolve("run_samples.ps1"));
         assertTrue(aggregatePowerShellRunner.contains("ZLINK_LIBRARY_PATH")
                 && aggregatePowerShellRunner.contains("core/build/lib/libzlink.so"),
@@ -118,8 +139,14 @@ final class SampleReleaseGateContractTest {
                     "missing build.gradle.kts for " + sampleName);
                 assertTrue(Files.isRegularFile(sampleRoot.resolve("run_sample.sh")),
                     "missing run_sample.sh for " + sampleName);
-                assertTrue(Files.isExecutable(sampleRoot.resolve("run_sample.sh")),
-                    "run_sample.sh must be executable for " + sampleName);
+                if (sample.equals("TicTacToe")) {
+                    assertFalse(Files.isExecutable(sampleRoot.resolve("run_sample.sh")),
+                        "TicTacToe run_sample.sh must retain its non-executable release mode for "
+                            + sampleName);
+                } else {
+                    assertTrue(Files.isExecutable(sampleRoot.resolve("run_sample.sh")),
+                        "run_sample.sh must be executable for " + sampleName);
+                }
                 String runner = Files.readString(sampleRoot.resolve("run_sample.sh"));
                 assertTrue(runner.contains("--settings-file standalone.settings.gradle.kts"),
                     "run_sample.sh must use standalone settings for " + sampleName);
@@ -146,11 +173,53 @@ final class SampleReleaseGateContractTest {
         for (String needle : List.of(
                 "docker create",
                 "--tmpfs /data",
-                "127.0.0.1::6379",
+                "127.0.0.1:${host_port}:6379",
                 "docker start",
                 "docker inspect",
-                "docker rm -fv")) {
+                "docker rm -fv",
+                "zlink_sample_reserve_ports_in_range 1",
+                "for ((offset=0; offset<range_size; offset++))",
+                "published_port",
+                "\"${published_port}\" != \"${host_port}\"",
+                "zlink_redis_remove_attempt \"${container_id}\" \"${name}\"",
+                "docker inspect --type container",
+                "[[ \"${container_id}\" =~ ^[0-9a-f]{12,64}$ ]] || return 1",
+                "timeout -k 2s \"${docker_timeout_seconds}s\" docker rm -fv",
+                "address already in use|port is already allocated|failed to bind host port")) {
             assertTrue(helper.contains(needle), "Redis helper must contain " + needle);
+        }
+        assertFalse(helper.contains("127.0.0.1::6379"),
+            "Bash Redis helper must not request a dynamic Docker host port");
+        try (Stream<Path> paths = Files.walk(samplesRoot())) {
+            for (Path runner : paths
+                    .filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().equals("run_sample.sh"))
+                    .toList()) {
+                String source = Files.readString(runner);
+                assertFalse(source.contains("docker rm -fv"),
+                    runner + " must delegate exact-ID Redis cleanup to the shared helper");
+                for (String line : source.lines().toList()) {
+                    String trimmed = line.trim();
+                    boolean shortCommand = Stream.of(
+                            "docker pause ", "docker unpause ", "docker stop ",
+                            "docker start ", "docker inspect ", "docker exec ")
+                        .anyMatch(trimmed::contains);
+                    assertTrue(!shortCommand || trimmed.contains("timeout "),
+                        runner + " has an unbounded short Docker control command: " + trimmed);
+                }
+            }
+        }
+        for (String poolBoundary : List.of(
+                "ZLINK_SAMPLE_REDIS_PORT_MIN=24000",
+                "ZLINK_SAMPLE_REDIS_PORT_MAX=24099",
+                "ZLINK_SAMPLE_APP_PORT_MIN=24100",
+                "ZLINK_SAMPLE_APP_PORT_MAX=25999",
+                "ZLINK_SAMPLE_REDIS_PORT_MIN=26000",
+                "ZLINK_SAMPLE_REDIS_PORT_MAX=26099",
+                "ZLINK_SAMPLE_APP_PORT_MIN=26100",
+                "ZLINK_SAMPLE_APP_PORT_MAX=27999")) {
+            assertTrue(helper.contains(poolBoundary),
+                "Bash sample helper must define " + poolBoundary);
         }
 
         String powerShellHelper = Files.readString(samplesRoot().resolve("redis-common.ps1"));
@@ -158,18 +227,61 @@ final class SampleReleaseGateContractTest {
                 "ProcessStartInfo",
                 "WaitForExit",
                 "redis-cli", "ping",
-                "create", "--tmpfs", "127.0.0.1::6379",
-                "start", "inspect", "rm", "-fv")) {
+                "create", "--tmpfs", "127.0.0.1:${hostPort}:6379",
+                "start", "inspect", "rm", "-fv",
+                "Remove-ZlinkSampleRedisAttempt",
+                "inspect", "--type", "container", "{{.Id}}",
+                "^[0-9a-f]{12,64}$",
+                "Test-ZlinkSampleTcpPortAvailable",
+                "for ($offset = 0; $offset -lt $rangeSize; $offset++)",
+                "address already in use|port is already allocated|failed to bind host port")) {
             assertTrue(powerShellHelper.contains(needle),
                 "PowerShell Redis helper must contain " + needle);
         }
+        assertFalse(powerShellHelper.contains("127.0.0.1::6379"),
+            "PowerShell Redis helper must not request a dynamic Docker host port");
+        assertTrue(powerShellHelper.contains(
+                "Remove-ZlinkSampleRedisAttempt -ContainerId \"\" -Name $name"),
+            "PowerShell Redis create timeout must resolve and remove the exact attempt");
+        assertTrue(Pattern.compile(
+                "(?s)function Remove-ZlinkSampleRedis \\{.*?"
+                    + "if \\(\\$ContainerId -match '\\^\\[0-9a-f\\]\\{12,64\\}\\$'\\).*?"
+                    + "Invoke-ZlinkDockerCommand -Arguments @\\(\\\"rm\\\", \\\"-fv\\\", \\$ContainerId\\)")
+                .matcher(powerShellHelper)
+                .find(),
+            "PowerShell final Redis cleanup must accept only an exact container ID");
+        assertTrue(Pattern.compile(
+                "(?s)Invoke-ZlinkDockerCommand -Arguments @\\(\\s*\\\"start\\\", \\$containerId.*?"
+                    + "catch \\{\\s*Remove-ZlinkSampleRedisAttempt -ContainerId \\$containerId -Name \\$name")
+                .matcher(powerShellHelper)
+                .find(),
+            "PowerShell Redis start timeout must remove the exact attempt");
+        for (String poolBoundary : List.of(
+                "RedisMinimum = 24000",
+                "RedisMaximum = 24099",
+                "ApplicationMinimum = 24100",
+                "ApplicationMaximum = 25999",
+                "RedisMinimum = 26000",
+                "RedisMaximum = 26099",
+                "ApplicationMinimum = 26100",
+                "ApplicationMaximum = 27999")) {
+            assertTrue(powerShellHelper.contains(poolBoundary),
+                "PowerShell sample helper must define " + poolBoundary);
+        }
+        String exclusiveBind = "ExclusiveAddressUse = $true";
+        assertTrue(powerShellHelper.indexOf(exclusiveBind) != powerShellHelper.lastIndexOf(exclusiveBind),
+            "PowerShell helper must use exclusive bind checks for application and Redis ports");
 
+        List<String> bashSamples = Stream.concat(REQUIRED_SAMPLES.stream(), Stream.of("ZoneWorld"))
+            .distinct()
+            .sorted()
+            .toList();
         for (String language : REQUIRED_LANGUAGES) {
-            for (String sample : REQUIRED_SAMPLES) {
+            for (String sample : bashSamples) {
                 Path runnerPath = samplesRoot().resolve(language).resolve(sample).resolve("run_sample.sh");
                 String runner = Files.readString(runnerPath);
                 String expectedScope = "zlink-redis-" + language + "-sample-"
-                    + sample.toLowerCase(java.util.Locale.ROOT);
+                    + sample.toLowerCase(Locale.ROOT);
                 assertTrue(runner.contains("zlink_redis_start_scoped_assign"),
                     language + "/" + sample + " must create its own Redis container");
                 assertTrue(runner.contains(expectedScope),
@@ -207,13 +319,177 @@ final class SampleReleaseGateContractTest {
     }
 
     @Test
+    void sampleRunnerPortsAreVerifiedBeforeRoleStart() throws IOException {
+        List<String> samples = Stream.concat(REQUIRED_SAMPLES.stream(), Stream.of("ZoneWorld"))
+            .sorted()
+            .toList();
+
+        for (String language : REQUIRED_LANGUAGES) {
+            for (String sample : samples) {
+                Path runnerPath = samplesRoot().resolve(language).resolve(sample).resolve("run_sample.sh");
+                String runner = Files.readString(runnerPath);
+                boolean usesCommonAllocator = runner.contains("zlink_sample_reserve_ports")
+                    || runner.contains("zlink_sample_reserve_endpoints");
+
+                assertTrue(usesCommonAllocator,
+                    language + "/" + sample
+                        + " must use the shared OS bind-checked application port allocator");
+                assertTrue(runner.contains("zlink_sample_configure_port_pool " + language),
+                    language + "/" + sample + " must select its language-specific port pool");
+                assertFalse(runner.contains("reserve_ports()"),
+                    language + "/" + sample + " must not bypass the shared port allocator");
+                assertFalse(Pattern.compile("(?m)^\\s*local\\s+base=\\$\\(\\(")
+                        .matcher(runner).find(),
+                    language + "/" + sample
+                        + " must not derive an unchecked consecutive application port block");
+
+                Path powerShellRunnerPath = runnerPath.resolveSibling("run_sample.ps1");
+                if (Files.isRegularFile(powerShellRunnerPath)) {
+                    String powerShellRunner = Files.readString(powerShellRunnerPath);
+                    String powerShellLanguage = language.equals("java") ? "Java" : "Kotlin";
+                    boolean usesPowerShellCommonAllocator = powerShellRunner.contains(
+                            "Get-ZlinkSampleApplicationPorts -Language " + powerShellLanguage)
+                        || powerShellRunner.contains(
+                            "Get-ZlinkSampleApplicationEndpoints -Language " + powerShellLanguage);
+                    assertTrue(usesPowerShellCommonAllocator,
+                        language + "/" + sample
+                            + " PowerShell runner must use the shared OS bind-checked application port allocator");
+                    assertTrue(powerShellRunner.contains("Start-ZlinkSampleRedis")
+                            && powerShellRunner.contains("-Language " + powerShellLanguage),
+                        language + "/" + sample
+                            + " PowerShell runner must select its language-specific Redis port pool");
+                    assertFalse(powerShellRunner.contains("function Reserve-Ports")
+                            || powerShellRunner.contains("function Reserve-Endpoints")
+                            || powerShellRunner.contains("TcpListener"),
+                        language + "/" + sample
+                            + " PowerShell runner must not bypass the shared port allocator");
+                }
+            }
+        }
+    }
+
+    @Test
+    void bashSampleBuildsUseOneSharedGradleLock() throws IOException {
+        Path commonRunner = samplesRoot().resolve("runner-common.sh");
+        String helper = Files.readString(commonRunner);
+        for (String needle : List.of(
+                "zlink_sample_gradle_locked",
+                "/tmp/zlink-framework-java-kotlin-sample-gradle.lock",
+                "flock --exclusive --close")) {
+            assertTrue(helper.contains(needle), "Gradle lock helper must contain " + needle);
+        }
+
+        Pattern unlockedGradle = Pattern.compile(
+            "(?m)^\\s*(?!zlink_sample_gradle_locked\\b)(?:\\.\\.?/)*gradlew\\b");
+        List<String> samples = Stream.concat(REQUIRED_SAMPLES.stream(), Stream.of("ZoneWorld"))
+            .distinct()
+            .sorted()
+            .toList();
+        for (String language : REQUIRED_LANGUAGES) {
+            for (String sample : samples) {
+                Path runnerPath = samplesRoot().resolve(language).resolve(sample).resolve("run_sample.sh");
+                String runner = Files.readString(runnerPath);
+                assertFalse(unlockedGradle.matcher(runner).find(),
+                    language + "/" + sample + " must use the shared Gradle flock wrapper");
+            }
+        }
+
+        String aggregateRunner = Files.readString(samplesRoot().resolve("run_samples.sh"));
+        assertFalse(unlockedGradle.matcher(aggregateRunner).find(),
+            "aggregate Bash sample gate must use the shared Gradle flock wrapper");
+    }
+
+    @Test
+    void powerShellSampleBuildsUseOneSharedGradleLock() throws IOException {
+        String helper = Files.readString(samplesRoot().resolve("redis-common.ps1"));
+        for (String needle : List.of(
+                "Invoke-ZlinkSampleGradleBuild",
+                "zlink-framework-java-kotlin-sample-gradle.lock",
+                "[System.IO.FileShare]::None")) {
+            assertTrue(helper.contains(needle),
+                "PowerShell Gradle lock helper must contain " + needle);
+        }
+
+        Pattern unlockedDirectBuild = Pattern.compile(
+            "(?im)^\\s*&\\s+(?:\\$Gradle|\\./gradlew)"
+                + "(?:[^\\r\\n]*`\\r?\\n)*[^\\r\\n]*"
+                + "(?:installDist|frameworkJar|contractTest|fakeBackendTest|:jar)");
+        List<String> samples = Stream.concat(REQUIRED_SAMPLES.stream(), Stream.of("ZoneWorld"))
+            .distinct()
+            .sorted()
+            .toList();
+        for (String language : REQUIRED_LANGUAGES) {
+            for (String sample : samples) {
+                Path runnerPath = samplesRoot().resolve(language).resolve(sample).resolve("run_sample.ps1");
+                if (!Files.isRegularFile(runnerPath)) {
+                    continue;
+                }
+                String runner = Files.readString(runnerPath);
+                assertTrue(runner.contains("Invoke-ZlinkSampleGradleBuild"),
+                    language + "/" + sample
+                        + " PowerShell runner must use the shared Gradle build lock");
+                assertFalse(unlockedDirectBuild.matcher(runner).find(),
+                    language + "/" + sample
+                        + " PowerShell runner must not invoke a build task outside the shared lock");
+            }
+        }
+
+        String aggregateRunner = Files.readString(samplesRoot().resolve("run_samples.ps1"));
+        assertTrue(aggregateRunner.contains("Invoke-ZlinkSampleGradleBuild"),
+            "aggregate PowerShell sample gate must use the shared Gradle build lock");
+        assertFalse(aggregateRunner.contains("Invoke-Checked $Gradle"),
+            "aggregate PowerShell sample gate must not bypass the shared Gradle build lock");
+    }
+
+    @Test
     void commonSampleMessageNamesRemainVisibleInJavaAndKotlinSources() throws IOException {
         Path javaTicTacToe = samplesRoot().resolve("java/TicTacToe");
         Path kotlinTicTacToe = samplesRoot().resolve("kotlin/TicTacToe");
-        assertSourceContains(javaTicTacToe, ".java", "LeaveGameReq");
-        assertSourceContains(kotlinTicTacToe, ".kt", "LeaveGameReq");
-        assertSourceDoesNotContain(javaTicTacToe, ".java", "LeaveGameMsg");
-        assertSourceDoesNotContain(kotlinTicTacToe, ".kt", "LeaveGameMsg");
+        assertSourceContains(javaTicTacToe, ".java", "LeaveGameMsg");
+        assertSourceContains(kotlinTicTacToe, ".kt", "LeaveGameMsg");
+        assertSourceContains(javaTicTacToe, ".java", "TicTacToeGameCreateReq");
+        assertSourceContains(kotlinTicTacToe, ".kt", "TicTacToeGameCreateReq");
+        assertSourceContains(javaTicTacToe, ".java", "PlayerActorCreateReq");
+        assertSourceContains(kotlinTicTacToe, ".kt", "PlayerActorCreateReq");
+        assertSourceContains(javaTicTacToe, ".java", "PlayerWinMilestoneEvent");
+        assertSourceContains(kotlinTicTacToe, ".kt", "PlayerWinMilestoneEvent");
+        assertSourceContains(javaTicTacToe, ".java", "JoinGameFailedNotify");
+        assertSourceContains(kotlinTicTacToe, ".kt", "JoinGameFailedNotify");
+        assertSourceContains(javaTicTacToe, ".java", "JoinGameMsg");
+        assertSourceContains(kotlinTicTacToe, ".kt", "JoinGameMsg");
+        assertSourceContains(javaTicTacToe, ".java", "JoinGameNotify");
+        assertSourceContains(kotlinTicTacToe, ".kt", "JoinGameNotify");
+        assertSourceDoesNotContain(javaTicTacToe, ".java", "public record JoinGameReq(");
+        assertSourceDoesNotContain(kotlinTicTacToe, ".kt", "data class JoinGameReq(");
+        assertSourceDoesNotContain(javaTicTacToe, ".java", "public record JoinGameRes(");
+        assertSourceDoesNotContain(kotlinTicTacToe, ".kt", "data class JoinGameRes(");
+        assertSourceDoesNotContain(javaTicTacToe, ".java", "LeaveGameReq");
+        assertSourceDoesNotContain(kotlinTicTacToe, ".kt", "LeaveGameReq");
+        assertSourceDoesNotContain(javaTicTacToe, ".java", "PlayerWinMilestoneMsg");
+        assertSourceDoesNotContain(kotlinTicTacToe, ".kt", "PlayerWinMilestoneMsg");
+        assertSourceDoesNotContain(javaTicTacToe, ".java", ".request(authenticated.player())");
+        assertSourceDoesNotContain(kotlinTicTacToe, ".kt", ".request(authenticated.player)");
+
+        Path javaBingo = samplesRoot().resolve("java/Bingo");
+        Path kotlinBingo = samplesRoot().resolve("kotlin/Bingo");
+        assertSourceContains(javaBingo.resolve("Shared"), ".java", "Messages.BingoRoomCreateReq");
+        assertSourceContains(kotlinBingo.resolve("Shared"), ".kt", "BingoRoomCreateReq");
+        assertSourceContains(javaBingo.resolve("Client"), ".java",
+            ".request(BingoMessages.matchBingoReq(");
+        assertSourceContains(kotlinBingo.resolve("Client"), ".kt",
+            ".request(MatchBingoReq(");
+        assertSourceDoesNotContain(javaBingo.resolve("Client"), ".java",
+            ".send(BingoMessages.matchBingoReq(");
+        assertSourceDoesNotContain(kotlinBingo.resolve("Client"), ".kt",
+            ".send(MatchBingoReq(");
+        assertSourceContains(javaBingo.resolve("Server/Api"), ".java",
+            ".request(BingoMessages.bingoRoomCreateReq(");
+        assertSourceContains(kotlinBingo.resolve("Server/Api"), ".kt",
+            ".request(BingoRoomCreateReq(");
+        assertSourceDoesNotContain(javaBingo, ".java",
+            "decode(Messages.BingoRoomSettingsPayload.class)");
+        assertSourceDoesNotContain(kotlinBingo, ".kt",
+            "decode(BingoRoomSettingsPayload::class.java)");
 
         Path javaDelivery = samplesRoot().resolve("java/DeliveryDispatch");
         for (String messageName : List.of(
@@ -262,7 +538,7 @@ final class SampleReleaseGateContractTest {
                 "SetAgentAvailableReq", "SetAgentAvailableRes",
                 "JoinConversationReq", "JoinConversationRes",
                 "SendChatMessageReq", "SendChatMessageRes",
-                "SetTypingReq", "CloseConversationReq", "CloseConversationRes",
+                "SetTypingMsg", "CloseConversationReq", "CloseConversationRes",
                 "ParticipantJoinedNotify", "ConversationAssignedNotify",
                 "ChatMessageNotify", "TypingChangedNotify",
                 "ConversationIdleNotify", "ConversationClosedNotify")) {
@@ -273,21 +549,22 @@ final class SampleReleaseGateContractTest {
         assertSourceContains(kotlinSupportChat.resolve("Shared"), ".kt", "ActorRefSnapshot");
         for (String obsoleteName : List.of(
                 "ActorRefWire", "JoinConversationSupportReq", "SendChatMessageSupportReq",
-                "SetTypingSupportReq", "CloseConversationSupportReq", "ServerAssertionRequest")) {
+                "SetTypingSupportReq", "SetTypingReq", "CloseConversationSupportReq",
+                "ServerAssertionRequest")) {
             assertSourceDoesNotContain(javaSupportChat, ".java", obsoleteName);
             assertSourceDoesNotContain(kotlinSupportChat, ".kt", obsoleteName);
         }
         String javaSupportContracts = Files.readString(javaSupportChat.resolve(
             "Shared/src/main/java/systems/zlink/samples/supportchat/shared/contracts/Messages.java"));
         assertTrue(javaSupportContracts.contains("record SendChatMessageReq(String text)")
-                && javaSupportContracts.contains("record SetTypingReq(boolean isTyping)")
+                && javaSupportContracts.contains("record SetTypingMsg(boolean isTyping)")
                 && javaSupportContracts.contains("record CloseConversationReq(String reason)"),
             "Java conversation-scoped payloads must route ConversationId through metadata");
         String kotlinSupportContracts = Files.readString(kotlinSupportChat.resolve(
             "Shared/src/main/kotlin/systems/zlink/samples/kotlin/supportchat/shared/contracts/Messages.kt"));
         assertTrue(Pattern.compile("(?s)data class SendChatMessageReq\\(\\s*val text: String,?\\s*\\)")
                 .matcher(kotlinSupportContracts).find()
-                && Pattern.compile("(?s)data class SetTypingReq\\(\\s*val isTyping: Boolean,?\\s*\\)")
+                && Pattern.compile("(?s)data class SetTypingMsg\\(\\s*val isTyping: Boolean,?\\s*\\)")
                     .matcher(kotlinSupportContracts).find()
                 && Pattern.compile("(?s)data class CloseConversationReq\\(\\s*val reason: String\\?,?\\s*\\)")
                     .matcher(kotlinSupportContracts).find(),
@@ -297,8 +574,105 @@ final class SampleReleaseGateContractTest {
         Path kotlinGameQuest = samplesRoot().resolve("kotlin/GameQuest");
         assertSourceContains(javaGameQuest.resolve("Shared"), ".java", "GameplayMsg");
         assertSourceContains(kotlinGameQuest.resolve("Shared"), ".kt", "GameplayMsg");
+        for (String messageName : List.of("CollectItemMsg", "EnterAreaMsg")) {
+            assertSourceContains(javaGameQuest.resolve("Shared"), ".java", messageName);
+            assertSourceContains(kotlinGameQuest.resolve("Shared"), ".kt", messageName);
+        }
+        assertSourceContains(kotlinGameQuest.resolve("Shared"), ".kt", "QuestProcessingMsg");
+        for (String obsoleteName : List.of(
+                "CollectItemReq", "CollectItemRes", "EnterAreaReq", "EnterAreaRes")) {
+            assertSourceDoesNotContain(javaGameQuest, ".java", obsoleteName);
+            assertSourceDoesNotContain(kotlinGameQuest, ".kt", obsoleteName);
+        }
+        assertSourceDoesNotContain(kotlinGameQuest, ".kt", "QuestProcessingRes");
+        assertSourceContains(javaGameQuest.resolve("Client"), ".java",
+            ".send(new Messages.CollectItemMsg(");
+        assertSourceContains(kotlinGameQuest.resolve("Client"), ".kt",
+            ".send(CollectItemMsg(");
         assertSourceDoesNotContain(javaGameQuest, ".java", "GameplayEventEnvelope");
         assertSourceDoesNotContain(kotlinGameQuest, ".kt", "GameplayEventEnvelope");
+
+        for (String messageName : List.of(
+                "CourierDecisionMsg", "ReassignDeliveryMsg",
+                "ServerAssertionReq", "ServerAssertionRes")) {
+            assertSourceContains(javaDelivery.resolve("Shared"), ".java", messageName);
+        }
+        for (String obsoleteName : List.of(
+                "CourierDecision(", "ReassignDelivery(",
+                "ServerAssertionRequest", "ServerAssertionResponse")) {
+            assertSourceDoesNotContain(javaDelivery, ".java", obsoleteName);
+        }
+
+        Path javaShoppingMall = samplesRoot().resolve("java/ShoppingMall");
+        assertSourceContains(javaShoppingMall.resolve("Shared"), ".java", "RunOrderWorkflowMsg");
+        assertSourceDoesNotContain(javaShoppingMall, ".java", "RunOrderWorkflowCommand");
+
+        Path javaZoneWorld = samplesRoot().resolve("java/ZoneWorld");
+        Path kotlinZoneWorld = samplesRoot().resolve("kotlin/ZoneWorld");
+        assertSourceContains(javaZoneWorld.resolve("Shared"), ".java", "EnterZoneReq");
+        assertSourceContains(kotlinZoneWorld.resolve("Shared"), ".kt", "EnterZoneReq");
+        assertSourceDoesNotContain(javaZoneWorld, ".java", "EnterZoneMsg");
+        assertSourceDoesNotContain(kotlinZoneWorld, ".kt", "EnterZoneMsg");
+    }
+
+    @Test
+    void sampleAndE2eWireCallSitesUseDirectionSuffixes() throws IOException {
+        Path javaSpotService = frameworkJavaRoot().resolve("e2e/SpotService");
+        assertSourceContains(javaSpotService.resolve("Client"), ".java",
+            ".request(new Contracts.LeaveActorReq(");
+        assertSourceContains(javaSpotService.resolve("Shared"), ".java",
+            "@ZLinkSpotActorRequest(packetName = \"LeaveActorReq\")");
+        assertSourceContains(javaSpotService.resolve("Shared"), ".java",
+            "new Contracts.LeaveActorRes(");
+        assertSourceDoesNotContain(javaSpotService, ".java",
+            ".send(new Contracts.LeaveActorReq(");
+
+        Map<Path, List<String>> offenders = new LinkedHashMap<>();
+        for (Path root : List.of(
+                samplesRoot().resolve("java"),
+                samplesRoot().resolve("kotlin"),
+                frameworkJavaRoot().resolve("e2e"),
+                frameworkJavaRoot().resolve("e2e-kotlin"))) {
+            try (Stream<Path> files = Files.walk(root)) {
+                files.filter(Files::isRegularFile)
+                    .filter(SampleReleaseGateContractTest::isSampleSource)
+                    .map(path -> Map.entry(path, wireCallSiteViolations(path)))
+                    .filter(entry -> !entry.getValue().isEmpty())
+                    .forEach(entry -> offenders.put(entry.getKey(), entry.getValue()));
+            }
+        }
+        assertTrue(offenders.isEmpty(),
+            "wire call sites must use Req/Res for request/reply, Msg for one-way send, "
+                + "Notify for client push, and Event only for publish: " + offenders);
+    }
+
+    @Test
+    void zoneWorldRunnersRequireReplacementAndLifecycleContinuityEvidence() throws IOException {
+        for (String language : List.of("java", "kotlin")) {
+            Path sampleRoot = samplesRoot().resolve(language).resolve("ZoneWorld");
+            String script = Files.readString(sampleRoot.resolve("run_sample.sh"));
+
+            for (String requiredText : List.of(
+                    "zoneworld=completed",
+                    "zoneworld server evidence=completed",
+                    "scenario ZW-E5 armed",
+                    "scenario ZW-C3 armed",
+                    "scenario ZW-C2 passed",
+                    "scenario ZW-C3 passed",
+                    "scenario ZW-E5 passed",
+                    "scenario ZW-G3 ready",
+                    "scenario ZW-G3 announced id=",
+                    "scenario ZW-G3 identity passed old=$zone_b_routing_id new=$replacement_routing_id",
+                    "scenario ZW-G3 serves",
+                    "scenario ZW-G3 passed",
+                    "fanout announcement delivered node=zone-node-2 id=${announcement_id}",
+                    "maintenance restored node=zone-node-2 enabled=true",
+                    "topology=ready node=zone-node-2",
+                    "node status observed\\. node=zone-node-2, rid=.*, registered=true")) {
+                assertTrue(script.contains(requiredText),
+                    language + "/ZoneWorld runner must prove continuity marker '" + requiredText + "'");
+            }
+        }
     }
 
     @Test
@@ -364,7 +738,7 @@ final class SampleReleaseGateContractTest {
                 .filter(SampleReleaseGateContractTest::isSampleSource)
                 .map(path -> Map.entry(path, forbiddenLines(path)))
                 .filter(entry -> !entry.getValue().isEmpty())
-                .collect(java.util.stream.Collectors.toMap(
+                .collect(Collectors.toMap(
                     Map.Entry::getKey,
                     Map.Entry::getValue));
 
@@ -374,7 +748,7 @@ final class SampleReleaseGateContractTest {
 
     @Test
     void kotlinSamplesAndE2eUseAddHandlerReifiedRegistrationOnly() throws IOException {
-        Map<Path, List<String>> offenders = new java.util.LinkedHashMap<>();
+        Map<Path, List<String>> offenders = new LinkedHashMap<>();
         for (Path root : List.of(samplesRoot().resolve("kotlin"), frameworkJavaRoot().resolve("e2e-kotlin"))) {
             try (Stream<Path> files = Files.walk(root)) {
                 files
@@ -394,42 +768,44 @@ final class SampleReleaseGateContractTest {
 
     @Test
     void javaSamplesUseAutomaticSpotHandlerRegistration() throws IOException {
-        Map<Path, List<String>> offenders = new java.util.LinkedHashMap<>();
+        Map<Path, List<String>> offenders = new LinkedHashMap<>();
         try (Stream<Path> files = Files.walk(samplesRoot().resolve("java"))) {
             files
                 .filter(Files::isRegularFile)
                 .filter(path -> path.toString().endsWith(".java"))
                 .filter(SampleReleaseGateContractTest::isSampleSource)
+                .filter(path -> !isTicTacToeSampleSource(path))
                 .map(path -> Map.entry(path, javaManualSpotHandlerRegistrations(path)))
                 .filter(entry -> !entry.getValue().isEmpty())
                 .forEach(entry -> offenders.put(entry.getKey(), entry.getValue()));
         }
 
         assertTrue(offenders.isEmpty(),
-            "Java samples must use addHandlersFromPackageOf automatic registration: "
+            "Java samples except TicTacToe must use automatic Spot handler registration: "
                 + offenders);
     }
 
     @Test
     void kotlinSamplesUseAutomaticSpotHandlerRegistration() throws IOException {
-        Map<Path, List<String>> offenders = new java.util.LinkedHashMap<>();
+        Map<Path, List<String>> offenders = new LinkedHashMap<>();
         try (Stream<Path> files = Files.walk(samplesRoot().resolve("kotlin"))) {
             files
                 .filter(Files::isRegularFile)
                 .filter(path -> path.toString().endsWith(".kt"))
                 .filter(SampleReleaseGateContractTest::isSampleSource)
+                .filter(path -> !isTicTacToeSampleSource(path))
                 .map(path -> Map.entry(path, kotlinManualSpotHandlerRegistrations(path)))
                 .filter(entry -> !entry.getValue().isEmpty())
                 .forEach(entry -> offenders.put(entry.getKey(), entry.getValue()));
         }
 
         assertTrue(offenders.isEmpty(),
-            "Kotlin samples must use addHandlersFromPackageOf automatic registration: "
+            "Kotlin samples except TicTacToe must use automatic Spot handler registration: "
                 + offenders);
     }
 
     @Test
-    void kotlinTicTacToeUsesAutomaticHandlerRegistration() throws IOException {
+    void kotlinTicTacToeUsesManualHandlerRegistration() throws IOException {
         String apiSource = sampleKotlinSource(
             "TicTacToe",
             "Server/src/main/kotlin",
@@ -456,10 +832,12 @@ final class SampleReleaseGateContractTest {
             "systems/zlink/samples/kotlin/tictactoe/server/api/handlers/CreateGameHttpHandler.kt");
 
         assertAll(
-            () -> assertTrue(apiSource.contains("addHandlersFromPackageOf")),
-            () -> assertFalse(apiSource.contains("addRequestHandler(")),
-            () -> assertTrue(playSource.contains("addHandlersFromPackageOf")),
-            () -> assertFalse(playSource.contains("addRequestHandler(")),
+            () -> assertFalse(apiSource.contains("addHandlersFromPackageOf")),
+            () -> assertTrue(apiSource.contains("addRequestHandler(")),
+            () -> assertTrue(apiSource.contains("AuthenticatePlayerHandler::class.java")),
+            () -> assertFalse(playSource.contains("addHandlersFromPackageOf")),
+            () -> assertTrue(playSource.contains("addSessionPacketHandler(")),
+            () -> assertTrue(playSource.contains("settings.apiChannelEndpoints.forEach")),
             () -> assertTrue(playSource.contains("addRouteMesh(SampleNames.SpotMesh)")),
             () -> assertFalse(playSource.contains("addSpotMesh(")),
             () -> assertTrue(playSource.contains("node.listen(routeEndpoint)")),
@@ -467,10 +845,21 @@ final class SampleReleaseGateContractTest {
             () -> assertTrue(playSource.contains("node.peerConnections().connect(")),
             () -> assertFalse(playSource.contains("configureEntrySpot()")),
             () -> assertTrue(playSource.contains(".enableActorDispatch()")),
-            () -> assertFalse(entrySpotSource.contains("handlers().add")),
-            () -> assertFalse(gameSpotSource.contains("handlers().add")),
+            () -> assertTrue(entrySpotSource.contains(
+                "context.handlers().addHandler<PlayActorJoinGameHandler>()")),
+            () -> assertTrue(entrySpotSource.contains(
+                "context.handlers().addHandler<PlayActorObserveMilestoneHandler>()")),
+            () -> assertTrue(entrySpotSource.contains(
+                "context.handlers().addHandler<PlayerWinMilestoneEventHandler>()")),
+            () -> assertTrue(gameSpotSource.contains(
+                "context.handlers().addHandler<PlayActorGetCurrentGameStateHandler>()")),
+            () -> assertTrue(gameSpotSource.contains(
+                "context.handlers().addHandler<PlayActorPlaceMarkHandler>()")),
+            () -> assertTrue(gameSpotSource.contains(
+                "context.handlers().addHandler<PlayActorLeaveGameHandler>()")),
+            () -> assertTrue(gameSpotSource.contains("TicTacToeGameTimerHandler::class.java")),
             () -> assertTrue(authHandlerSource.contains(
-                "ZLinkSuspendingRequestHandler<AuthenticatePlayerReq, AuthenticatePlayerRes>")),
+                "ZLinkRequestHandler<AuthenticatePlayerReq, AuthenticatePlayerRes>")),
             () -> assertTrue(createHandlerSource.contains("ZLinkSpotManager")),
             () -> assertTrue(createHandlerSource.contains(".create(\"tictactoe.game\")")));
     }
@@ -479,7 +868,7 @@ final class SampleReleaseGateContractTest {
     @Test
     void officialDocsKeepActorDestroyEntryOwned() throws IOException {
         List<Path> docs = officialActorDestroyDocs();
-        List<String> offenders = new java.util.ArrayList<>();
+        List<String> offenders = new ArrayList<>();
         List<String> forbidden = List.of(
             "DestroyActorAsync",
             "destroyActorAsync",
@@ -529,7 +918,7 @@ final class SampleReleaseGateContractTest {
                         .filter(SampleReleaseGateContractTest::isServerRoleSource)
                         .map(path -> Map.entry(path, forbiddenDirectServerStarts(path)))
                         .filter(entry -> !entry.getValue().isEmpty())
-                        .collect(java.util.stream.Collectors.toMap(
+                        .collect(Collectors.toMap(
                             Map.Entry::getKey,
                             Map.Entry::getValue));
 
@@ -612,7 +1001,9 @@ final class SampleReleaseGateContractTest {
             "systems/zlink/samples/tictactoe/server/play/infrastructure/zlink/actors/PlayActor.java",
             "systems/zlink/samples/tictactoe/server/play/infrastructure/zlink/actors/PlayActorFactory.java",
             paths.playSpot("entryspot", "PlayEntrySpot"),
+            paths.playSpotHandler("entryspot", "PlayerWinMilestoneEventHandler"),
             paths.playSpot("tictactoegamespot", "TicTacToeGame"),
+            paths.playSpotHandler("tictactoegamespot", "PlayActorGetCurrentGameStateHandler"),
             paths.playSpotHandler("tictactoegamespot", "PlayActorPlaceMarkHandler"),
             paths.playSpotHandler("tictactoegamespot", "TicTacToeGameTimerHandler"),
             "systems/zlink/samples/tictactoe/server/play/infrastructure/zlink/sessions/PlaySession.java"));
@@ -625,11 +1016,15 @@ final class SampleReleaseGateContractTest {
             "systems/zlink/samples/tictactoe/shared/contracts/AuthenticateRes.java",
             "systems/zlink/samples/tictactoe/shared/contracts/CreateGameHttpReq.java",
             "systems/zlink/samples/tictactoe/shared/contracts/CreateGameHttpRes.java",
-            "systems/zlink/samples/tictactoe/shared/contracts/JoinGameReq.java",
-            "systems/zlink/samples/tictactoe/shared/contracts/JoinGameRes.java",
+            "systems/zlink/samples/tictactoe/shared/contracts/JoinGameMsg.java",
+            "systems/zlink/samples/tictactoe/shared/contracts/JoinGameNotify.java",
+            "systems/zlink/samples/tictactoe/shared/contracts/JoinGameFailedNotify.java",
+            "systems/zlink/samples/tictactoe/shared/contracts/LeaveGameMsg.java",
             "systems/zlink/samples/tictactoe/shared/contracts/PlaceMarkReq.java",
             "systems/zlink/samples/tictactoe/shared/contracts/PlaceMarkRes.java",
             "systems/zlink/samples/tictactoe/shared/contracts/PlayerJoinedNotify.java",
+            "systems/zlink/samples/tictactoe/shared/contracts/PlayerWinMilestoneEvent.java",
+            "systems/zlink/samples/tictactoe/shared/contracts/TicTacToeGameCreateReq.java",
             "systems/zlink/samples/tictactoe/shared/contracts/TicTacToeGameJoinReq.java",
             "systems/zlink/samples/tictactoe/shared/contracts/TicTacToeGameJoinRes.java"));
         assertTrue(sampleFileContains("java", "TicTacToe", "Client/src/main/java",
@@ -776,6 +1171,7 @@ final class SampleReleaseGateContractTest {
                 && createGameHandlerSource.contains("ZLinkSpotManager")
                 && createGameHandlerSource.contains(".create(\"tictactoe.game\")")
                 && createGameHandlerSource.contains(".inMesh(SampleNames.SpotMesh)")
+                && createGameHandlerSource.contains("new TicTacToeGameCreateReq(")
                 && createGameHandlerSource.contains(".timeout(SampleNames.RequestTimeout)")
                 && createGameHandlerSource.contains(".submit()")
                 && !createGameHandlerSource.contains(".requestToChannel(")
@@ -786,7 +1182,7 @@ final class SampleReleaseGateContractTest {
             "TicTacToe Client role must use the public stream connector for play requests");
         assertTrue(clientSource.contains("new AuthenticateReq(options.xActorId())")
                 && clientSource.contains("public final class TicTacToeClientScenario")
-                && clientSource.contains("new JoinGameReq(game.roomId())")
+                && clientSource.contains("new JoinGameMsg(game.roomId())")
                 && clientSource.contains("new PlaceMarkReq(3)")
                 && clientSource.contains("new PlaceMarkReq(4)")
                 && clientSource.contains("new PlaceMarkReq(2)")
@@ -796,6 +1192,11 @@ final class SampleReleaseGateContractTest {
                 && clientSource.contains(".submit(AuthenticateRes.class)")
                 && clientSource.contains(".request(new PlaceMarkReq(2))")
                 && clientSource.contains(".submit(PlaceMarkRes.class)")
+                && clientSource.contains(
+                    "var reconnectedJoinCompletion = reconnectedHost")
+                && clientSource.contains(".waitFor(JoinGameNotify.class)")
+                && clientSource.contains("reconnectedHost.send(new JoinGameMsg(game.roomId()))")
+                && !clientSource.contains(".request(new JoinGameMsg(")
                 && clientSource.contains("\"Won\".equals(hostWin.state().status())")
                 && clientSource.contains("options.xActorId().equals(hostWin.state().winner())")
                 && clientSource.contains("host.close().submit()")
@@ -827,6 +1228,21 @@ final class SampleReleaseGateContractTest {
                 && clientProgramSource.contains("tictactoe=completed")
                 && !clientProgramSource.contains("writeTo(System.out)"),
             "TicTacToe direct client must use fluent wait and avoid returning a result DTO");
+        assertTrue(clientSource.contains(
+                    "var hostJoinCompletion = host.waitFor(JoinGameNotify.class)")
+                && clientSource.contains(
+                    "var guestJoinCompletion = guest.waitFor(JoinGameNotify.class)")
+                && clientSource.indexOf(
+                    "var hostJoinCompletion = host.waitFor(JoinGameNotify.class)")
+                    < clientSource.indexOf("host.send(new JoinGameMsg(game.roomId()))")
+                && clientSource.indexOf(
+                    "var guestJoinCompletion = guest.waitFor(JoinGameNotify.class)")
+                    < clientSource.indexOf("guest.send(new JoinGameMsg(game.roomId()))")
+                && clientSource.indexOf(
+                    "var reconnectedJoinCompletion = reconnectedHost")
+                    < clientSource.indexOf(
+                        "reconnectedHost.send(new JoinGameMsg(game.roomId()))"),
+            "TicTacToe Java client must register every JoinGameNotify wait before one-way JoinGameMsg send");
         assertFalse(clientSource.contains("systems.zlink.samples.tictactoe.server."),
             "TicTacToe Client role must not import server implementation");
         assertFalse(clientSource.contains("TicTacToeGameDirectory"),
@@ -836,28 +1252,31 @@ final class SampleReleaseGateContractTest {
                 && apiSource.contains("addRouteMesh(SampleNames.SpotMesh)")
                 && apiSource.contains("mesh.objects().client()")
                 && apiSource.contains("mesh.peerConnections().connect(endpoint)")
-                && apiSource.contains("addHandlersFromPackageOf(ApiServer.class)")
-                && apiSource.contains(".addHandlerGroup(\"api\")")
-                && !apiSource.contains("addRequestHandler("),
-            "TicTacToe Api role must discover handlers and create Spots through an Object Client RouteMesh");
+                && !apiSource.contains("addHandlersFromPackageOf")
+                && apiSource.contains(".addRequestHandler(")
+                && apiSource.contains("AuthenticatePlayerHandler.class")
+                && apiSource.contains("AuthenticatePlayerReq.class")
+                && apiSource.contains("AuthenticatePlayerRes.class"),
+            "TicTacToe Api role must register its request handler explicitly and create Spots through an Object Client RouteMesh");
         assertTrue(authHandlerSource.contains("implements ZLinkRequestHandler<")
                 && authHandlerSource.contains("@ZLinkHandlerGroup(\"api\")")
                 && !authHandlerSource.contains("@ZLinkRequest")
                 && createGameHandlerSource.contains("@RequestBody")
                 && createGameHandlerSource.contains("CreateGameHttpReq")
                 && createGameHandlerSource.contains("CreateGameHttpRes"),
-            "TicTacToe direct Api handlers must use framework discovery and HTTP create-game mapping");
+            "TicTacToe direct Api handlers must retain typed metadata and HTTP create-game mapping");
         assertTrue(playSource.contains(".addRouteMesh(")
                 && !playSource.contains(".addSpotMesh("),
             "TicTacToe direct sample must expose the Play Spot role through RouteMesh");
-        assertTrue(playSource.contains("addHandlersFromPackageOf(PlayServer.class)")
+        assertTrue(!playSource.contains("addHandlersFromPackageOf")
                 && !playSource.contains("addRequestHandler(")
-                && playSource.contains("settings.apiChannelEndpoint()")
+                && playSource.contains("settings.apiChannelEndpoints()")
+                && playSource.contains("apiClient.connect(endpoint)")
+                && playSource.contains("addSessionPacketHandler(AuthenticatePlaySessionHandler.class)")
                 && playSource.contains("settings.routeEndpoint()")
                 && playSource.contains("settings.spotEndpoint()")
-                && playSource.contains("settings.playEndpoint()")
-                && !playSource.contains("addHandlerGroup("),
-            "TicTacToe Play role must discover channel, Spot, actor, and session handlers automatically");
+                && playSource.contains("settings.playEndpoint()"),
+            "TicTacToe Play role must connect both Api endpoints and register its session handler explicitly");
         String gameJoinReqSource = sampleJavaSource(
             "TicTacToe",
             "Shared/src/main/java",
@@ -895,6 +1314,27 @@ final class SampleReleaseGateContractTest {
                 && !playSessionSource.contains("joinSpot(RoutingId.fromHex")
                 && !playSessionSource.contains("split(\"\\\\|\")"),
             "TicTacToe Play stream session must authenticate through the Api role and relay actor packets");
+        assertTrue(entrySpotSource.contains(
+                "context.handlers().addHandler(PlayActorJoinGameHandler.class)")
+                && entrySpotSource.contains(
+                    "context.handlers().addHandler(PlayActorObserveMilestoneHandler.class)")
+                && entrySpotSource.contains(
+                    "context.handlers().addHandler(PlayerWinMilestoneEventHandler.class)")
+                && gameSpotSource.contains(
+                    "context.handlers().addHandler(PlayActorGetCurrentGameStateHandler.class)")
+                && gameSpotSource.contains(
+                    "context.handlers().addHandler(PlayActorPlaceMarkHandler.class)")
+                && gameSpotSource.contains(
+                    "context.handlers().addHandler(PlayActorLeaveGameHandler.class)"),
+            "TicTacToe Java must register every Entry Spot and Room Spot handler explicitly");
+        assertTrue(entrySpotSource.contains("// send: JoinGameMsg")
+                && entrySpotSource.contains("// request: ObserveMilestoneReq")
+                && entrySpotSource.contains("// subscribe: PlayerWinMilestoneEvent")
+                && gameSpotSource.contains("// send: reconnect JoinGameMsg")
+                && gameSpotSource.contains("// request: PlaceMarkReq")
+                && gameSpotSource.contains("// send: LeaveGameMsg")
+                && gameSpotSource.contains("// timer: TicTacToeGameTimerHandler"),
+            "TicTacToe Java manual registrations must identify send, request, subscribe, and timer roles");
         assertTrue(gameJoinReqSource.contains("String roomId")
                 && gameJoinReqSource.contains("PlayerInfo player")
                 && gameJoinResSource.contains("GameState state"),
@@ -911,7 +1351,10 @@ final class SampleReleaseGateContractTest {
                 && playActorJoinHandlerSource.contains("trackDeferredJoin")
                 && playActorJoinHandlerSource.contains(".defer()")
                 && playActorSource.contains("onJoinCompleted(")
-                && playActorSource.contains("new JoinGameRes")
+                && playActorSource.contains("new JoinGameNotify")
+                && playActorSource.contains(
+                    "new JoinGameFailedNotify(roomId, \"Rejected\")")
+                && playActorSource.contains("roomId, failed.kind().name()")
                 && playPlaceMarkHandlerSource.contains("TicTacToeGame spot")
                 && playPlaceMarkHandlerSource.contains("ZLinkMessageContext context")
                 && playPlaceMarkHandlerSource.contains("PlaceMarkReq request"),
@@ -930,12 +1373,13 @@ final class SampleReleaseGateContractTest {
                 && matchDomainSource.contains("resetTurnDeadline(")
                 && gameSpotSource.contains("tick()")
                 && gameSpotSource.contains("onCreate(ZLinkMessage request)")
-                && gameSpotSource.contains("markCreated(ZLinkMessage request)")
+                && gameSpotSource.contains("markCreated(TicTacToeGameCreateReq request)")
                 && gameSpotSource.contains("ensureCreated()")
                 && gameCreatedHandlerSource.contains("handle(")
                 && gameCreatedHandlerSource.contains("ZLinkMessage request")
                 && gameCreatedHandlerSource.contains("ZLinkSpotCreateResponse.accept()")
-                && gameCreatedHandlerSource.contains("game.markCreated(request)")
+                && gameCreatedHandlerSource.contains(
+                    "request.decode(TicTacToeGameCreateReq.class)")
                 && gameTimerHandlerSource.contains("implements ZLinkSpotTimerHandler<TicTacToeGame>")
                 && gameTimerHandlerSource.contains("spot.tick()"),
             "TicTacToe game Spot must mirror the .NET lifecycle, timer, and turn-timeout API usage");
@@ -1002,7 +1446,9 @@ final class SampleReleaseGateContractTest {
             "systems/zlink/samples/kotlin/tictactoe/server/play/infrastructure/zlink/actors/PlayActor.kt",
             "systems/zlink/samples/kotlin/tictactoe/server/play/infrastructure/zlink/actors/PlayActorFactory.kt",
             paths.playSpot("entryspot", "PlayEntrySpot"),
+            paths.playSpotHandler("entryspot", "PlayerWinMilestoneEventHandler"),
             paths.playSpot("tictactoegamespot", "TicTacToeGame"),
+            paths.playSpotHandler("tictactoegamespot", "PlayActorGetCurrentGameStateHandler"),
             paths.playSpotHandler("tictactoegamespot", "PlayActorPlaceMarkHandler"),
             paths.playSpotHandler("tictactoegamespot", "TicTacToeGameTimerHandler"),
             "systems/zlink/samples/kotlin/tictactoe/server/play/infrastructure/zlink/sessions/PlaySession.kt",
@@ -1095,10 +1541,12 @@ final class SampleReleaseGateContractTest {
                 || playProgramSource.contains("ZLinkFramework.start"),
             "Kotlin TicTacToe Server roles must rely on Spring lifecycle keep-alive instead of direct framework execution");
         assertTrue(apiSource.contains("ZLinkFrameworkConfigurer")
-                && apiSource.contains("addHandlersFromPackageOf(ApiServer::class.java)")
+                && !apiSource.contains("addHandlersFromPackageOf")
+                && apiSource.contains("addRequestHandler(")
                 && !apiSource.contains("ZLinkMessagePackCodec")
                 && playSource.contains("ZLinkFrameworkConfigurer")
-                && playSource.contains("addHandlersFromPackageOf(PlayServer::class.java)")
+                && !playSource.contains("addHandlersFromPackageOf")
+                && playSource.contains("addSessionPacketHandler(")
                 && !playSource.contains("ZLinkMessagePackCodec")
                 && !serverBuildSource.contains("zlink-framework-codec-msgpack")
                 && apiHostFactorySource.contains("@SpringBootApplication")
@@ -1111,7 +1559,7 @@ final class SampleReleaseGateContractTest {
                 && playHostFactorySource.contains(".web(WebApplicationType.NONE)")
                 && playHostFactorySource.contains("setKeepAlive(true)")
                 && playHostFactorySource.contains("PlayServer.configure(settings)"),
-            "Kotlin TicTacToe Api and Play hosts must use automatic handler discovery and the default JSON codec");
+            "Kotlin TicTacToe Api and Play hosts must use explicit handler registration and the default JSON codec");
         assertTrue(settingsSource.contains("@ConfigurationProperties(\"sample\")")
                 && settingsSource.contains("--config")
                 && settingsSource.contains("sample.apiBindUrl")
@@ -1140,9 +1588,9 @@ final class SampleReleaseGateContractTest {
             "Kotlin TicTacToe direct client must create games through the HTTP API path");
         assertTrue(playAuthHandlerSource.contains("AuthenticatePlayerReq(request.accessToken)")
                 && playAuthHandlerSource.contains(".submit(AuthenticatePlayerRes::class.java)")
-                && authHandlerSource.contains("ZLinkSuspendingRequestHandler<AuthenticatePlayerReq, AuthenticatePlayerRes>")
-                && authHandlerSource.contains("override suspend fun handle(")
-                && authHandlerSource.contains("): AuthenticatePlayerRes"),
+                && authHandlerSource.contains("ZLinkRequestHandler<AuthenticatePlayerReq, AuthenticatePlayerRes>")
+                && authHandlerSource.contains("override fun handle(")
+                && authHandlerSource.contains("CompletionStage<AuthenticatePlayerRes>"),
             "Kotlin TicTacToe direct Play session AuthenticatePlayer path must use typed request and response contracts");
         assertTrue(createGameHandlerSource.contains("@RestController")
                 && createGameHandlerSource.contains("@PostMapping(\"/games\")")
@@ -1152,6 +1600,7 @@ final class SampleReleaseGateContractTest {
                 && createGameHandlerSource.contains("ZLinkSpotManager")
                 && createGameHandlerSource.contains(".create(\"tictactoe.game\")")
                 && createGameHandlerSource.contains(".inMesh(SampleNames.SpotMesh)")
+                && createGameHandlerSource.contains("TicTacToeGameCreateReq(")
                 && createGameHandlerSource.contains(".timeout(SampleNames.RequestTimeout)")
                 && createGameHandlerSource.contains(".submit()")
                 && !createGameHandlerSource.contains(".requestToChannel(")
@@ -1165,18 +1614,21 @@ final class SampleReleaseGateContractTest {
                 && clientSource.contains("hostStream.close().await()")
                 && clientSource.contains("guestStream.close().await()")
                 && !clientSource.contains(".submit(AuthenticateRes::class.java)")
-                && !clientSource.contains(".submit(JoinGameRes::class.java)")
+                && !clientSource.contains(".submit(JoinGameNotify::class.java)")
                 && !clientSource.contains(".submit(PlaceMarkRes::class.java)"),
             "Kotlin TicTacToe client scenario must use coroutine connector wrappers for request calls");
         assertTrue(clientSource.contains(".request(AuthenticateReq(options.xActorId)).awaitReply<AuthenticateRes>()")
                 && clientSource.contains("AuthenticateReq(options.xActorId)")
-                && clientSource.contains("JoinGameReq(game.roomId)")
+                && clientSource.contains("JoinGameMsg(game.roomId)")
                 && clientSource.contains("PlaceMarkReq(3)")
                 && clientSource.contains("PlaceMarkReq(4)")
                 && clientSource.contains("PlaceMarkReq(2)")
                 && clientSource.contains("URI.create(endpoint)")
                 && clientSource.contains("ensure(hostWin.state.status == \"Won\")")
                 && clientSource.contains("ensure(hostWin.state.winner == options.xActorId)")
+                && clientSource.contains("freshHostStream.waitFor<JoinGameNotify>()")
+                && clientSource.contains("freshHostStream.send(JoinGameMsg(game.roomId)).await()")
+                && !clientSource.contains(".request(JoinGameMsg(")
                 && clientSource.contains("ZLinkStreamJson.codec()")
                 && !clientSource.contains("ZLinkMessagePackCodec.request")
                 && !clientSource.contains(FORBIDDEN_TICTACTOE_RESULT)
@@ -1199,6 +1651,23 @@ final class SampleReleaseGateContractTest {
                 && clientProgramSource.contains("TicTacToeClientScenario().run(clientOptions)")
                 && !clientProgramSource.contains("writeTo(System.out)"),
             "Kotlin TicTacToe direct client must subscribe to typed stream notifications without returning a result DTO");
+        assertTrue(clientSource.contains(
+                    "val xJoinWait = hostStream.waitFor<JoinGameNotify>()")
+                && clientSource.contains(
+                    "val oJoinWait = guestStream.waitFor<JoinGameNotify>()")
+                && clientSource.contains(
+                    "val reconnectedJoinWait = freshHostStream.waitFor<JoinGameNotify>()")
+                && clientSource.indexOf(
+                    "val xJoinWait = hostStream.waitFor<JoinGameNotify>()")
+                    < clientSource.indexOf("hostStream.send(JoinGameMsg(game.roomId)).await()")
+                && clientSource.indexOf(
+                    "val oJoinWait = guestStream.waitFor<JoinGameNotify>()")
+                    < clientSource.indexOf("guestStream.send(JoinGameMsg(game.roomId)).await()")
+                && clientSource.indexOf(
+                    "val reconnectedJoinWait = freshHostStream.waitFor<JoinGameNotify>()")
+                    < clientSource.indexOf(
+                        "freshHostStream.send(JoinGameMsg(game.roomId)).await()"),
+            "Kotlin TicTacToe client must register every JoinGameNotify wait before one-way JoinGameMsg send");
         assertFalse(clientSource.contains("systems.zlink.samples.kotlin.tictactoe.server."),
             "Kotlin TicTacToe Client role must not import server implementation");
         assertFalse(clientSource.contains("TicTacToeGameDirectory"),
@@ -1208,30 +1677,32 @@ final class SampleReleaseGateContractTest {
                 && apiSource.contains("addRouteMesh(SampleNames.SpotMesh)")
                 && apiSource.contains("mesh.objects().client()")
                 && apiSource.contains("mesh.peerConnections().connect(endpoint)")
-                && apiSource.contains("addHandlersFromPackageOf(ApiServer::class.java)")
-                && apiSource.contains("addHandlerGroup(\"api\")")
-                && !apiSource.contains("addRequestHandler("),
-            "Kotlin TicTacToe Api must discover handlers and create Spots through an Object Client RouteMesh");
+                && !apiSource.contains("addHandlersFromPackageOf")
+                && apiSource.contains("addRequestHandler(")
+                && apiSource.contains("AuthenticatePlayerHandler::class.java"),
+            "Kotlin TicTacToe Api must register its request handler explicitly and create Spots through an Object Client RouteMesh");
         assertTrue(authHandlerSource.contains("@ZLinkHandlerGroup(\"api\")")
                 && !authHandlerSource.contains("@ZLinkRequest(packetName = \"AuthenticatePlayerReq\")")
                 && createGameHandlerSource.contains("@RequestBody")
                 && createGameHandlerSource.contains("CreateGameHttpReq")
                 && createGameHandlerSource.contains("CreateGameHttpRes"),
-            "Kotlin TicTacToe direct Api handlers must use annotation-based auth and HTTP create-game mapping");
+            "Kotlin TicTacToe direct Api handlers must retain typed metadata and HTTP create-game mapping");
         assertTrue(playSource.contains(".addRouteMesh(")
                 && !playSource.contains(".addSpotMesh("),
             "Kotlin TicTacToe direct sample must expose the Play Spot role through RouteMesh");
-        assertTrue(playSource.contains("addHandlersFromPackageOf(PlayServer::class.java)")
+        assertTrue(!playSource.contains("addHandlersFromPackageOf")
                 && !playSource.contains("addRequestHandler(")
-                && playSource.contains("settings.apiChannelEndpoint")
+                && playSource.contains("settings.apiChannelEndpoints.forEach")
+                && playSource.contains("apiClient.connect(endpoint)")
+                && playSource.contains("addSessionPacketHandler(AuthenticatePlaySessionHandler::class.java)")
                 && playSource.contains("settings.routeEndpoint")
                 && playSource.contains("settings.playEndpoint")
                 && playSource.contains("node.listen(routeEndpoint)")
                 && playSource.contains("node.channelName(SampleNames.PlayNode)")
                 && playSource.contains("node.peerConnections().connect(")
                 && !playSource.contains("addHandlerGroup(SampleNames.PlayHandlerGroup)"),
-            "Kotlin TicTacToe Play role must discover Spot, actor, and session handlers automatically");
-        assertTrue(clientSource.contains("JoinGameReq(game.roomId)")
+            "Kotlin TicTacToe Play role must connect both Api endpoints and register its session handler explicitly");
+        assertTrue(clientSource.contains("JoinGameMsg(game.roomId)")
                 && !clientSource.contains("TicTacToeGameJoinReq"),
             "Kotlin TicTacToe client must use client-facing JoinGame contracts only");
         String playActorJoinHandlerSource = sampleKotlinSource(
@@ -1259,6 +1730,27 @@ final class SampleReleaseGateContractTest {
                 && !playSessionSource.contains("joinSpot(RoutingId.fromHex")
                 && !playSessionSource.contains("split(\"|\")"),
             "Kotlin TicTacToe Play stream session must authenticate through the Api role and relay actor packets");
+        assertTrue(entrySpotSource.contains(
+                "context.handlers().addHandler<PlayActorJoinGameHandler>()")
+                && entrySpotSource.contains(
+                    "context.handlers().addHandler<PlayActorObserveMilestoneHandler>()")
+                && entrySpotSource.contains(
+                    "context.handlers().addHandler<PlayerWinMilestoneEventHandler>()")
+                && gameSpotSource.contains(
+                    "context.handlers().addHandler<PlayActorGetCurrentGameStateHandler>()")
+                && gameSpotSource.contains(
+                    "context.handlers().addHandler<PlayActorPlaceMarkHandler>()")
+                && gameSpotSource.contains(
+                    "context.handlers().addHandler<PlayActorLeaveGameHandler>()"),
+            "Kotlin TicTacToe must register every Entry Spot and Room Spot handler explicitly");
+        assertTrue(entrySpotSource.contains("// send: JoinGameMsg")
+                && entrySpotSource.contains("// request: ObserveMilestoneReq")
+                && entrySpotSource.contains("// subscribe: PlayerWinMilestoneEvent")
+                && gameSpotSource.contains("// send: reconnect JoinGameMsg")
+                && gameSpotSource.contains("// request: PlaceMarkReq")
+                && gameSpotSource.contains("// send: LeaveGameMsg")
+                && gameSpotSource.contains("// timer: TicTacToeGameTimerHandler"),
+            "Kotlin TicTacToe manual registrations must identify send, request, subscribe, and timer roles");
         assertTrue(gameSpotSource.contains("override suspend fun onActorJoinSuspending(")
                 && gameSpotSource.contains("request: ZLinkMessage")
                 && gameSpotSource.contains("ZLinkSpotActorJoinResult.accept")
@@ -1271,7 +1763,10 @@ final class SampleReleaseGateContractTest {
                 && playActorJoinHandlerSource.contains("trackDeferredJoin")
                 && playActorJoinHandlerSource.contains(".defer()")
                 && playActorSource.contains("override fun onJoinCompleted(")
-                && playActorSource.contains("send(JoinGameRes(reply.state))")
+                && playActorSource.contains("send(JoinGameNotify(reply.state))")
+                && playActorSource.contains(
+                    "JoinGameFailedNotify(roomId.orEmpty(), \"Rejected\")")
+                && playActorSource.contains("completion.kind().name")
                 && playPlaceMarkHandlerSource.contains("spot: TicTacToeGame")
                 && playPlaceMarkHandlerSource.contains("context: ZLinkMessageContext")
                 && playPlaceMarkHandlerSource.contains("request: PlaceMarkReq")
@@ -1291,11 +1786,12 @@ final class SampleReleaseGateContractTest {
                 && gameMatchSource.contains("resetTurnDeadline")
                 && gameSpotSource.contains("suspend fun tick()")
                 && gameSpotSource.contains("override suspend fun onCreateSuspending(request: ZLinkMessage)")
-                && gameSpotSource.contains("fun markCreated(request: ZLinkMessage)")
+                && gameSpotSource.contains("fun markCreated(request: TicTacToeGameCreateReq)")
                 && gameSpotSource.contains("ensureCreated()")
                 && gameCreatedHandlerSource.contains("fun handle(")
                 && gameCreatedHandlerSource.contains("request: ZLinkMessage")
-                && gameCreatedHandlerSource.contains("game.markCreated(request)")
+                && gameCreatedHandlerSource.contains(
+                    "request.decode(TicTacToeGameCreateReq::class.java)")
                 && gameTimerHandlerSource.contains("ZLinkSuspendingSpotTimerHandler<TicTacToeGame>")
                 && gameTimerHandlerSource.contains("spot.tick()"),
             "Kotlin TicTacToe game Spot must mirror the .NET lifecycle, timer, and turn-timeout API usage");
@@ -1999,7 +2495,7 @@ final class SampleReleaseGateContractTest {
     }
 
     private static List<Path> officialActorDestroyDocs() throws IOException {
-        List<Path> docs = new java.util.ArrayList<>();
+        List<Path> docs = new ArrayList<>();
         for (String relativeRoot : List.of("../../doc/framework/java/guide", "../../doc/framework/java/spec", "../../doc/framework/java/internals")) {
             Path root = frameworkJavaRoot().resolve(relativeRoot);
             if (!Files.exists(root)) {
@@ -2166,6 +2662,12 @@ final class SampleReleaseGateContractTest {
         return pathText.endsWith(".java") || pathText.endsWith(".kt");
     }
 
+    private static boolean isTicTacToeSampleSource(Path path) {
+        String pathText = path.toString().replace('\\', '/');
+        return pathText.contains("/samples/java/TicTacToe/")
+            || pathText.contains("/samples/kotlin/TicTacToe/");
+    }
+
     private static void assertSourceContains(Path root, String extension, String expected) throws IOException {
         try (Stream<Path> files = Files.walk(root)) {
             boolean found = files
@@ -2276,6 +2778,25 @@ final class SampleReleaseGateContractTest {
                 .results()
                 .map(match -> match.group().replaceAll("\\s+", " "))
                 .toList();
+        } catch (IOException ex) {
+            throw new IllegalStateException("failed to read " + path, ex);
+        }
+    }
+
+    private static List<String> wireCallSiteViolations(Path path) {
+        try {
+            String content = Files.readString(path);
+            List<String> violations = new ArrayList<>();
+            for (Pattern pattern : List.of(
+                    ONE_WAY_CALL_WITH_REQUEST_SUFFIX,
+                    REQUEST_CALL_WITH_ONE_WAY_SUFFIX,
+                    INTERNAL_SEND_WITH_NOTIFY_SUFFIX,
+                    PUBLISH_CALL_WITH_NON_EVENT_SUFFIX)) {
+                pattern.matcher(content).results()
+                    .map(match -> match.group().replaceAll("\\s+", " "))
+                    .forEach(violations::add);
+            }
+            return violations;
         } catch (IOException ex) {
             throw new IllegalStateException("failed to read " + path, ex);
         }

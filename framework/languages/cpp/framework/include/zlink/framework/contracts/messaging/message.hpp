@@ -4,8 +4,10 @@
 #include <zlink/Contracts/Messaging/message.hpp>
 #include <zlink/framework/contracts/codecs/serializer.hpp>
 
+#include <exception>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <typeindex>
 #include <type_traits>
@@ -60,6 +62,7 @@ class message_t
         wrapped._encoder = [typed_value] (const serializer_registry_t &serializers) {
             return serializers.template get<value_type> ().serialize (*typed_value);
         };
+        wrapped._decode = std::make_shared<decode_state_t> ();
         return wrapped;
     }
 
@@ -70,11 +73,7 @@ class message_t
             return *static_cast<const value_type *> (_value.get ());
         }
         const auto &serializers = require_serializers ();
-        return with_encoded_payload (
-          serializers,
-          [&] (const encoded_payload_t &payload) {
-              return serializers.template get<value_type> ().deserialize (payload);
-          });
+        return decode_encoded<value_type> (serializers);
     }
 
     template <typename TValue> TValue decode (const serializer_registry_t &serializers) const
@@ -83,18 +82,14 @@ class message_t
         if (_value && _type == std::type_index (typeid (value_type))) {
             return *static_cast<const value_type *> (_value.get ());
         }
-        return with_encoded_payload (
-          serializers,
-          [&] (const encoded_payload_t &payload) {
-              return serializers.template get<value_type> ().deserialize (payload);
-          });
+        return decode_encoded<value_type> (serializers);
     }
 
-    bool encoded () const noexcept { return _encoded.has_value (); }
+    bool encoded () const noexcept { return static_cast<bool> (_raw_payload); }
     bool empty () const noexcept
     {
-        if (_encoded) {
-            return _encoded->empty ();
+        if (_raw_payload) {
+            return _raw_payload->encoded.empty ();
         }
         return !_value;
     }
@@ -124,9 +119,81 @@ class message_t
                                const serializer_registry_t *serializers = nullptr)
     {
         message_t wrapped;
-        wrapped._encoded = encoded_payload_t::from_raw (message);
+        auto raw_payload = std::make_shared<raw_payload_state_t> ();
+        raw_payload->message = std::move (message);
+        raw_payload->encoded = encoded_payload_t::from_raw (
+          raw_payload->message);
+        wrapped._raw_payload = std::move (raw_payload);
+        wrapped._decode = std::make_shared<decode_state_t> ();
         wrapped._serializers = serializers;
         return wrapped;
+    }
+
+    struct raw_payload_state_t
+    {
+        zlink::message_t message;
+        encoded_payload_t encoded;
+    };
+
+    struct decode_state_t
+    {
+        std::mutex gate;
+        bool attempted = false;
+        std::type_index type{typeid (void)};
+        std::shared_ptr<const void> value;
+        std::exception_ptr failure;
+    };
+
+    template <typename TValue>
+    TValue decode_encoded (const serializer_registry_t &serializers) const
+    {
+        using value_type = std::remove_cvref_t<TValue>;
+        if (!_decode) {
+            return with_encoded_payload (
+              serializers,
+              [&] (const encoded_payload_t &payload) {
+                  return serializers.template get<value_type> ().deserialize (
+                    payload);
+              });
+        }
+
+        std::lock_guard lock (_decode->gate);
+        if (_decode->attempted) {
+            if (_decode->failure)
+                std::rethrow_exception (_decode->failure);
+            if (_decode->type != std::type_index (typeid (value_type))) {
+                throw framework_exception_t (
+                  framework_error_kind_t::protocol_error,
+                  "framework message was already decoded as another payload type");
+            }
+            if constexpr (std::is_copy_constructible_v<value_type>) {
+                return *static_cast<const value_type *> (
+                  _decode->value.get ());
+            }
+            throw framework_exception_t (
+              framework_error_kind_t::protocol_error,
+              "decoded framework message payload is not copy constructible");
+        }
+
+        _decode->attempted = true;
+        _decode->type = std::type_index (typeid (value_type));
+        try {
+            auto decoded = with_encoded_payload (
+              serializers,
+              [&] (const encoded_payload_t &payload) {
+                  return serializers.template get<value_type> ().deserialize (
+                    payload);
+              });
+            if constexpr (std::is_copy_constructible_v<value_type>) {
+                _decode->value = std::make_shared<const value_type> (decoded);
+            }
+            return decoded;
+        }
+        catch (...) {
+            _decode->value.reset ();
+            _decode->failure = std::current_exception ();
+            throw;
+        }
     }
 
     template <typename TVisitor>
@@ -138,8 +205,9 @@ class message_t
           std::invoke_result_t<TVisitor, const encoded_payload_t &>;
         static_assert (!std::is_reference_v<result_type>,
                        "encoded payload visitor result must own its value");
-        if (_encoded) {
-            return std::forward<TVisitor> (visitor) (*_encoded);
+        if (_raw_payload) {
+            return std::forward<TVisitor> (visitor) (
+              _raw_payload->encoded);
         }
         encoded_payload_t encoded;
         if (!_value) {
@@ -169,7 +237,8 @@ class message_t
           [] (const encoded_payload_t &payload) { return payload.to_raw (); });
     }
 
-    std::optional<encoded_payload_t> _encoded;
+    std::shared_ptr<raw_payload_state_t> _raw_payload;
+    std::shared_ptr<decode_state_t> _decode;
     std::shared_ptr<const void> _value;
     std::type_index _type = std::type_index (typeid (void));
     std::function<encoded_payload_t (const serializer_registry_t &)> _encoder;

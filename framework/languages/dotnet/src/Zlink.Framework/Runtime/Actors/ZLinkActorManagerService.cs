@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Spots;
@@ -252,6 +253,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         var contentReference = ZLinkInlineCreationIntentCodec.Encode(applicationPayload);
         var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
         var reservationRefreshAttempt = 0;
+        var joinRetryAttempt = 0;
         while (true)
         {
             var target = ZLinkWeightedSelector.Select(
@@ -340,6 +342,11 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                     .ConfigureAwait(false);
                 if (joined is not null)
                     return joined;
+                await DelayJoinRetryAsync(
+                        actorId,
+                        joinRetryAttempt++,
+                        deadline.Token)
+                    .ConfigureAwait(false);
                 continue;
             }
             if (!createOnly
@@ -356,6 +363,11 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                     .ConfigureAwait(false);
                 if (joined is not null)
                     return joined;
+                await DelayJoinRetryAsync(
+                        actorId,
+                        joinRetryAttempt++,
+                        deadline.Token)
+                    .ConfigureAwait(false);
                 continue;
             }
             if (reserve is ZLinkObjectReserveResult.Conflict(
@@ -666,6 +678,24 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         };
     }
 
+
+    //  A join that observes an existing authority it can neither join (dead
+    //  owner) nor reclaim (recovery-required fence) previously spun through
+    //  reserve->join->null with no log and no backoff until the caller's
+    //  deadline. Trace and back off so the cycle is visible and cheap.
+    private static async ValueTask DelayJoinRetryAsync(
+        string actorId,
+        int attempt,
+        CancellationToken cancellationToken)
+    {
+        ZLinkFrameworkDebugLog.SpotDiscovery(
+            $"actor_join_retry actor={actorId} attempt={attempt}");
+        var backoffMilliseconds = 1 << Math.Min(attempt, 8);
+        await Task.Delay(
+                TimeSpan.FromMilliseconds(backoffMilliseconds),
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
 }
 
 internal abstract class ZLinkActorCreateCallBase

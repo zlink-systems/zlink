@@ -1,4 +1,10 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
@@ -250,7 +256,7 @@ public final class ZLinkMeshApplicationDispatcher
 
     @Override
     public int submitLocalNodeSend(
-        systems.zlink.contracts.core.RoutingId sourceNodeRid,
+        RoutingId sourceNodeRid,
         byte[] metadataBytes,
         List<Message> parts) {
         Namespace namespace = namespaces.get(NODE_NAMESPACE);
@@ -297,7 +303,7 @@ public final class ZLinkMeshApplicationDispatcher
                     if (claim != null) {
                         claim.close();
                     }
-                    return java.util.concurrent.CompletableFuture.failedFuture(failure);
+                    return CompletableFuture.failedFuture(failure);
                 }
             });
             if (!accepted) {
@@ -443,7 +449,7 @@ public final class ZLinkMeshApplicationDispatcher
                             });
                         } catch (RuntimeException failure) {
                             permit.close();
-                            return java.util.concurrent.CompletableFuture
+                            return CompletableFuture
                                 .<Void>failedFuture(failure);
                         }
                     })
@@ -525,12 +531,12 @@ public final class ZLinkMeshApplicationDispatcher
         ReplyToken token,
         Throwable error) {
         Throwable cause = error;
-        while ((cause instanceof java.util.concurrent.CompletionException
-            || cause instanceof java.util.concurrent.ExecutionException)
+        while ((cause instanceof CompletionException
+            || cause instanceof ExecutionException)
             && cause.getCause() != null) {
             cause = cause.getCause();
         }
-        systems.zlink.framework.errors.ZLinkFrameworkErrorKind kind =
+        ZLinkFrameworkErrorKind kind =
             ZLinkChannelDispatchReporter.frameworkErrorKind(cause);
         replyAndClose(
             record,
@@ -599,7 +605,7 @@ public final class ZLinkMeshApplicationDispatcher
     private static Namespace routeNamespace(
         List<MeshNodeRegistration.DispatchHandler> handlers,
         int sendPendingCapacity,
-        java.util.concurrent.Executor executor) {
+        Executor executor) {
         Namespace namespace = new Namespace(sendPendingCapacity, executor);
         for (MeshNodeRegistration.DispatchHandler handler : handlers) {
             String packetName = ZLinkPacketNames.resolve(handler.messageType());
@@ -627,7 +633,7 @@ public final class ZLinkMeshApplicationDispatcher
         List<MeshNodeRegistration.DispatchHandler> handlers,
         List<String> handlerGroups,
         ZLinkScannedHandlerCatalog scannedHandlers,
-        java.util.concurrent.Executor executor) {
+        Executor executor) {
         Namespace namespace = new Namespace(Integer.MAX_VALUE, executor);
         Set<String> groups = handlerGroups.isEmpty()
             ? Set.of(channelName)
@@ -696,7 +702,7 @@ public final class ZLinkMeshApplicationDispatcher
 
         Namespace(
             int sendPendingCapacity,
-            java.util.concurrent.Executor executor) {
+            Executor executor) {
             sendQueue = new ZLinkAsyncSerialQueue(
                 executor, false, sendPendingCapacity);
             requestQueue = new ZLinkAsyncSerialQueue(executor, false);

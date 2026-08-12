@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
@@ -69,6 +71,12 @@ final class ZLinkRoutedBoundSessionRuntime implements ZLinkBoundSession {
 
     @Override
     public ZLinkBoundSessionSendCall send(Object message) {
+        ZLinkBoundSessionSendOptions options =
+            ZLinkBoundSessionSendOptions.createForPayload(
+                serializer,
+                message,
+                ZLinkPayloadEncoding.resolvePacketName(message),
+                defaultCodec);
         ZLinkPayloadEncoding.EncodedPayload encoded =
             ZLinkPayloadEncoding.encode(serializer, message);
         return new SendCall(
@@ -80,7 +88,7 @@ final class ZLinkRoutedBoundSessionRuntime implements ZLinkBoundSession {
             actorRef,
             encoded.payload(),
             timeout,
-            ZLinkBoundSessionSendOptions.create(encoded.packetName(), defaultCodec),
+            options,
             metadataPolicy);
     }
 
@@ -100,7 +108,7 @@ final class ZLinkRoutedBoundSessionRuntime implements ZLinkBoundSession {
     @Override
     public CompletionStage<Void> disconnect() {
         actorRuntime.clearSessionBinding(actor, bindingToken);
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     private static CompletionStage<Void> sendFrame(
@@ -137,7 +145,7 @@ final class ZLinkRoutedBoundSessionRuntime implements ZLinkBoundSession {
         }
         wireParts.forEach(Message::close);
         parts.forEach(Message::close);
-        return java.util.concurrent.CompletableFuture.failedFuture(
+        return CompletableFuture.failedFuture(
             new ZLinkConfigurationException(
                 "routed actor bound session requires an exact RouteMesh channel"));
     }
@@ -153,7 +161,7 @@ final class ZLinkRoutedBoundSessionRuntime implements ZLinkBoundSession {
         Duration timeout,
         ZLinkBoundSessionSendOptions options,
         ZLinkRelayMetadataPolicy metadataPolicy,
-        java.util.concurrent.atomic.AtomicBoolean submitGate)
+        AtomicBoolean submitGate)
         implements ZLinkBoundSessionSendCall {
         SendCall(
             ZLinkBackendSpot sourceEntrySpot,
@@ -168,7 +176,7 @@ final class ZLinkRoutedBoundSessionRuntime implements ZLinkBoundSession {
             ZLinkRelayMetadataPolicy metadataPolicy) {
             this(sourceEntrySpot, routedTransport, routeChannelName, targetNodeRid,
                 targetEntrySpotId, actorRef, payload, timeout, options, metadataPolicy,
-                new java.util.concurrent.atomic.AtomicBoolean());
+                new AtomicBoolean());
         }
         public ZLinkBoundSessionSendCall packetName(String packetName) {
             return new SendCall(

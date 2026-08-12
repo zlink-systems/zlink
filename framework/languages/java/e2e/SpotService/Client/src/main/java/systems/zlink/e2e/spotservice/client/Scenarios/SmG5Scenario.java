@@ -1,4 +1,5 @@
 package systems.zlink.e2e.spotservice.client.Scenarios;
+import java.time.Duration;
 
 import java.util.UUID;
 import systems.zlink.e2e.spotservice.shared.Contracts;
@@ -23,7 +24,7 @@ public final class SmG5Scenario extends SpotServiceScenarioContext {
         for (int batch = 0; batch < 8; batch++) {
             Contracts.PlacementBatchRes result = postJson(options().httpAEndpoint(), "/placement/batch",
                 new Contracts.PlacementBatchReq(suffix + "-" + batch, 100),
-                Contracts.PlacementBatchRes.class, java.time.Duration.ofMinutes(2));
+                Contracts.PlacementBatchRes.class, Duration.ofMinutes(2));
             actorPlayA += result.actorPlayA();
             actorPlayB += result.actorPlayB();
             ensure(result.spotCount() == 0, "SM-G5A created a Spot during Actor placement");

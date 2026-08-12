@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.internal.locations;
+import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -66,7 +67,7 @@ final class ZLinkProviderRelocationRepositoryTest {
                 reference.value(), payload.clone());
             if (previous != null) {
                 return CompletableFuture.completedFuture(
-                    java.util.Arrays.equals(previous, payload)
+                    Arrays.equals(previous, payload)
                         ? new ZLinkBlobAlreadyStored(now.plus(retention), now)
                         : new ZLinkBlobConflict(now));
             }

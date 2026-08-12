@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/e2e-redis-common.sh"
+zlink_e2e_initialize kotlin "$0" "$@"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/e2e-kotlin-config.sh"
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
@@ -57,7 +58,7 @@ if [[ "${SCENARIO}" != "all" && "${ZLINK_SPOT_SERVICE_RETRY_CHILD:-0}" != "1" &&
   for attempt in 1 2 3; do
     : >"${output}"
     set +e
-    timeout 900s env ZLINK_SPOT_SERVICE_RETRY_CHILD=1 "${SCRIPT_PATH}" "${SCENARIO}" 2>&1 | tee "${output}"
+    timeout 900s env ZLINK_SPOT_SERVICE_RETRY_CHILD=1 bash "${SCRIPT_PATH}" "${SCENARIO}" 2>&1 | tee "${output}"
     status="${PIPESTATUS[0]}"
     set -e
     if [[ "${status}" == "0" ]]; then
@@ -89,7 +90,7 @@ if [[ "${SCENARIO}" == "all" && "${ZLINK_SPOT_SERVICE_ALL_CHILD:-0}" != "1" ]]; 
     for attempt in 1 2 3; do
       : >"${output}"
       set +e
-      timeout 900s env ZLINK_SPOT_SERVICE_ALL_CHILD=1 "${SCRIPT_PATH}" "${child_group}" 2>&1 | tee "${output}"
+      timeout 900s env ZLINK_SPOT_SERVICE_ALL_CHILD=1 bash "${SCRIPT_PATH}" "${child_group}" 2>&1 | tee "${output}"
       status="${PIPESTATUS[0]}"
       set -e
       if [[ "${status}" == "0" ]]; then
@@ -160,7 +161,7 @@ cleanup() {
     fi
   done
   if [[ -n "${redis_container}" ]]; then
-    docker rm -fv "${redis_container}" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "${redis_container}" || true
   fi
   wait >/dev/null 2>&1 || true
   exit "${status}"
@@ -168,95 +169,23 @@ cleanup() {
 trap cleanup EXIT
 
 reserve_ports() {
-  python3 - <<'PY'
-import socket
-sockets = []
-ports = []
-try:
-    for _ in range(16):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        ports.append(sock.getsockname()[1])
-    print(" ".join(f"tcp://127.0.0.1:{port}" for port in ports[:14]), end=" ")
-    print(" ".join(f"http://127.0.0.1:{port}" for port in ports[14:]))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  zlink_e2e_reserve_mixed_endpoints 14 2
 }
 
 reserve_client_endpoints() {
-  python3 - <<'PY'
-import socket
-sockets = []
-endpoints = []
-try:
-    for _ in range(2):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        endpoints.append(f"tcp://127.0.0.1:{sock.getsockname()[1]}")
-    print(" ".join(endpoints))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  zlink_e2e_reserve_mixed_endpoints 2 0
 }
 
 reserve_session_endpoints() {
-  python3 - <<'PY'
-import socket
-sockets = []
-ports = []
-try:
-    for _ in range(3):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        ports.append(sock.getsockname()[1])
-    print(f"tcp://127.0.0.1:{ports[0]} tcp://127.0.0.1:{ports[1]} http://127.0.0.1:{ports[2]}")
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  zlink_e2e_reserve_mixed_endpoints 2 1
 }
 
 reserve_gateway_endpoints() {
-  python3 - <<'PY'
-import socket
-sockets = []
-ports = []
-try:
-    for _ in range(2):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        ports.append(sock.getsockname()[1])
-    print(f"tcp://127.0.0.1:{ports[0]} http://127.0.0.1:{ports[1]}")
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  zlink_e2e_reserve_mixed_endpoints 1 1
 }
 
 reserve_multinode_endpoints() {
-  python3 - <<'PY'
-import socket
-sockets = []
-ports = []
-try:
-    for _ in range(6):
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        sockets.append(sock)
-        ports.append(sock.getsockname()[1])
-    print(" ".join(f"tcp://127.0.0.1:{port}" for port in ports[:4]), end=" ")
-    print(" ".join(f"http://127.0.0.1:{port}" for port in ports[4:]))
-finally:
-    for sock in sockets:
-        sock.close()
-PY
+  zlink_e2e_reserve_mixed_endpoints 4 2
 }
 
 port_of() {
@@ -320,7 +249,7 @@ generate_tls_cert() {
 }
 
 zlink_redis_start_scoped_assign redis_container redis_port \
-  "zlink-redis-kotlin-e2e" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}" "127.0.0.1::6379"
+  "zlink-redis-kotlin-e2e" "${ZLINK_REDIS_IMAGE:-redis:7.2-alpine}"
 redis_endpoint="127.0.0.1:${redis_port}"
 export ZLINK_KOTLIN_E2E_REDIS_LOCATION_ENDPOINT="${redis_endpoint}"
 redis_host="${redis_endpoint%:*}"
@@ -328,7 +257,9 @@ redis_port="${redis_endpoint##*:}"
 wait_tcp "${redis_host}" "${redis_port}" redis
 
 gradle_run() {
-  ../../gradlew --project-cache-dir "${ZLINK_KOTLIN_E2E_GRADLE_CACHE}" --no-daemon --no-parallel --max-workers=1 "$@" --quiet
+  zlink_e2e_gradle_build_locked ../../gradlew \
+    --project-cache-dir "${ZLINK_KOTLIN_E2E_GRADLE_CACHE}" \
+    --no-daemon --no-parallel --max-workers=1 "$@" --quiet
 }
 
 role_bin() {
@@ -396,8 +327,14 @@ start_play() {
 }
 
 start_session() {
-  read -r SPOT_SESSION_A STREAM_SESSION_A HTTP_SESSION_A <<<"$(reserve_session_endpoints)"
-  read -r SPOT_SESSION_B STREAM_SESSION_B HTTP_SESSION_B <<<"$(reserve_session_endpoints)"
+  local -a session_ports=()
+  zlink_e2e_assign_unique_ports session_ports 6
+  SPOT_SESSION_A="tcp://127.0.0.1:${session_ports[0]}"
+  STREAM_SESSION_A="tcp://127.0.0.1:${session_ports[1]}"
+  HTTP_SESSION_A="http://127.0.0.1:${session_ports[2]}"
+  SPOT_SESSION_B="tcp://127.0.0.1:${session_ports[3]}"
+  STREAM_SESSION_B="tcp://127.0.0.1:${session_ports[4]}"
+  HTTP_SESSION_B="http://127.0.0.1:${session_ports[5]}"
   ZLINK_KOTLIN_E2E_NODE_RID="session-a" \
   ZLINK_KOTLIN_E2E_ROUTE_A_ENDPOINT="${ROUTE_A}" \
   ZLINK_KOTLIN_E2E_ROUTE_B_ENDPOINT="${ROUTE_B}" \

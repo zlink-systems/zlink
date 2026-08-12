@@ -10,6 +10,10 @@ import {
   SERVICE_WIRE_REQUIRED_CAPABILITY,
   ServiceWireCommand
 } from './service-wire-constants.generated';
+import {
+  decodeCanonicalServiceWireText,
+  encodeCanonicalServiceWireText
+} from './service-wire-binary-primitives';
 
 const PREFIX_SIZE = 5;
 const MAX_U32 = 0xffff_ffff;
@@ -416,10 +420,6 @@ export function decodeHeader(frame: Uint8Array): ServiceWireHeader {
   return { command: frame[3]!, flags: frame[4]! };
 }
 
-export function requiredServiceCapability(): string {
-  return M6A_SERVICE_WIRE_REQUIRED_CAPABILITY;
-}
-
 function prefix(command: number): Buffer {
   return Buffer.from([
     M6A_SERVICE_WIRE_MAGIC[0],
@@ -457,18 +457,12 @@ function encodeU64(value: bigint): Buffer {
 }
 
 function encodeText8(value: string, field: string): Buffer {
-  const bytes = Buffer.from(value, 'utf8');
-  if (bytes.byteLength === 0 || bytes.byteLength > 0xff || value.includes('\0')) {
-    fail(`${field} must be bounded non-empty UTF-8 without NUL.`);
-  }
+  const bytes = encodeCanonicalServiceWireText(value, field, 0xff, fail);
   return concat(Buffer.of(bytes.byteLength), bytes);
 }
 
 function encodeText16(value: string, field: string): Buffer {
-  const bytes = Buffer.from(value, 'utf8');
-  if (bytes.byteLength === 0 || bytes.byteLength > 4096 || value.includes('\0')) {
-    fail(`${field} must be bounded non-empty UTF-8 without NUL.`);
-  }
+  const bytes = encodeCanonicalServiceWireText(value, field, 4096, fail);
   return concat(encodeU16(bytes.byteLength), bytes);
 }
 
@@ -640,11 +634,7 @@ class Reader {
 }
 
 function decodeText(bytes: Buffer, field: string): string {
-  const value = bytes.toString('utf8');
-  if (value.includes('\uFFFD') || value.includes('\0') || Buffer.from(value).compare(bytes) !== 0) {
-    fail(`${field} is not canonical UTF-8.`);
-  }
-  return value;
+  return decodeCanonicalServiceWireText(bytes, field, fail);
 }
 
 function fail(message: string): never {

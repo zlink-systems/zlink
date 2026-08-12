@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/backend/raw_route_port.hpp"
+#include "runtime/backend/raw_binding_adapter.hpp"
 
 #include <zlink/Contracts/Messaging/operation_contracts.hpp>
 #include <zlink/Contracts/Messaging/received.hpp>
@@ -12,47 +13,6 @@
 
 namespace zlink::framework::detail::backend
 {
-namespace
-{
-
-raw_message_t copy_parts (const std::vector<zlink::message_t> &parts)
-{
-    raw_message_t result;
-    result.reserve (parts.size ());
-    for (const auto &part : parts) {
-        result.push_back (part.to_bytes ());
-    }
-    return result;
-}
-
-std::vector<zlink::message_t> materialize_parts (const raw_message_t &parts)
-{
-    std::vector<zlink::message_t> result;
-    result.reserve (parts.size ());
-    for (const auto &part : parts) {
-        result.push_back (zlink::message_t::from (part));
-    }
-    return result;
-}
-
-raw_request_result_t map_request_result (zlink::request_result_t result) noexcept
-{
-    switch (result) {
-        case zlink::request_result_t::ok:
-            return raw_request_result_t::ok;
-        case zlink::request_result_t::timed_out:
-            return raw_request_result_t::timed_out;
-        case zlink::request_result_t::not_connected:
-            return raw_request_result_t::not_connected;
-        case zlink::request_result_t::terminated:
-            return raw_request_result_t::terminated;
-        default:
-            return raw_request_result_t::failed;
-    }
-}
-
-} // namespace
-
 raw_route_port_t::raw_route_port_t (zlink::router_socket_t &socket,
                                     std::mutex *shared_socket_mutex,
                                     zlink::poll_event_flag_t receive_events,
@@ -85,7 +45,7 @@ zlink::submit_result_t raw_route_port_t::send_result (
     if (_socket == nullptr) {
         return zlink::submit_result_t::terminated;
     }
-    auto messages = materialize_parts (parts);
+    auto messages = materialize_binding_parts (parts);
     auto operation = std::move (_socket->send (zlink::routing_id_t::from (target_routing_id)))
                        .message (messages[0]);
     for (std::size_t index = 1; index < messages.size (); ++index) {
@@ -122,7 +82,7 @@ bool raw_route_port_t::send_completion_control (
     if (_socket == nullptr) {
         return false;
     }
-    const auto messages = materialize_parts (parts);
+    const auto messages = materialize_binding_parts (parts);
     try {
         return _socket->try_send_completion_control (
           zlink::routing_id_t::from (target_routing_id), messages);
@@ -147,7 +107,7 @@ void raw_route_port_t::set_completion_control_handler (
       [handler = std::move (handler)] (
         const zlink::routing_id_t &source,
         std::vector<zlink::message_t> parts) mutable {
-          handler (source.to_bytes (), copy_parts (parts));
+          handler (source.to_bytes (), copy_binding_parts (parts));
       });
 }
 
@@ -163,7 +123,7 @@ bool raw_route_port_t::request (const raw_bytes_t &target_routing_id,
     if (_socket == nullptr) {
         return false;
     }
-    auto messages = materialize_parts (parts);
+    auto messages = materialize_binding_parts (parts);
     auto operation = std::move (_socket->request (zlink::routing_id_t::from (target_routing_id)))
                        .message (messages[0]);
     for (std::size_t index = 1; index < messages.size (); ++index) {
@@ -173,7 +133,8 @@ bool raw_route_port_t::request (const raw_bytes_t &target_routing_id,
         return std::move (operation).timeout (timeout).submit (
           [callback = std::move (callback)] (zlink::request_result_t result,
                                              std::vector<zlink::message_t> reply) mutable {
-              callback (map_request_result (result), copy_parts (reply));
+              callback (map_binding_request_result (result),
+                        copy_binding_parts (reply));
           });
     }
     catch (const zlink::submit_error_t &) {
@@ -236,13 +197,13 @@ std::optional<raw_received_t> raw_route_port_t::receive_if_ready (
           + std::to_string (result) + " and errno "
           + std::to_string (errno));
     }
+    binding_received_release_t received_release (_received);
     if (!_received.routing_id ()) {
         throw std::runtime_error ("raw ROUTER receive omitted source routing id");
     }
     auto source_routing_id = _received.routing_id ()->to_bytes ();
     auto request_sequence = _received.request_seq ();
-    auto parts = copy_parts (_received.parts ());
-    _received.close ();
+    auto parts = copy_binding_parts (_received.parts ());
     return raw_received_t{std::move (source_routing_id), request_sequence, std::move (parts)};
 }
 
@@ -260,7 +221,7 @@ bool raw_route_port_t::reply (const raw_received_t &request, const raw_message_t
     if (_socket == nullptr) {
         return false;
     }
-    auto messages = materialize_parts (parts);
+    auto messages = materialize_binding_parts (parts);
     auto operation = std::move (_socket->reply (
                                   zlink::routing_id_t::from (request.source_routing_id),
                                   *request.request_sequence))

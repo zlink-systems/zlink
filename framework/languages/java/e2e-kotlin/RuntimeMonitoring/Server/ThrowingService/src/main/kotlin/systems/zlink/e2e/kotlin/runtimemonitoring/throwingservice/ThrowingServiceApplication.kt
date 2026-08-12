@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.runtimemonitoring.throwingservice
 
+
+import java.net.URI
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.boot.WebApplicationType
 import org.springframework.boot.autoconfigure.SpringBootApplication
@@ -44,7 +46,7 @@ class ThrowingServiceApplication {
 
 
             options.addHandlersFromPackageOf(WorkRequestHandler::class.java)
-            val apiEndpoint = java.net.URI.create(
+            val apiEndpoint = URI.create(
                 Env.get("e2e.api.endpoint"),
             )
             options.addClientServerChannel(Contracts.CHANNEL)

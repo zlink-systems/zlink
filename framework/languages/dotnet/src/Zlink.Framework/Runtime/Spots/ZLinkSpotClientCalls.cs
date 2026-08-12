@@ -148,6 +148,8 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
     TRequest request) : IZLinkRequestCall, IZLinkSpotRequestCall
 {
     private readonly ZLinkCallMetadata _metadata = new();
+    private readonly ZLinkApplicationExecutionScope? _executionScope =
+        ZLinkApplicationExecutionContext.Current;
     private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
     private TimeSpan? _timeout;
     private bool _instanceIntent = true;
@@ -227,15 +229,28 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
     }
 
     public ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default) =>
-        ExecuteAsync<TReply>(cancellationToken);
+        ExecuteAsync<TReply>(
+            ZLinkNestedRequestTerminator.Async,
+            cancellationToken);
 
     public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default) =>
         ZLinkApplicationExecutionContext
             .RequireYieldTurn(_turn, "Instance Spot request")
-            .YieldFrameworkCallAsync(ExecuteAsync<TReply>, cancellationToken);
+            .YieldFrameworkCallAsync(
+                token => ExecuteAsync<TReply>(
+                    ZLinkNestedRequestTerminator.Yield,
+                    token),
+                cancellationToken);
 
-    private async ValueTask<TReply> ExecuteAsync<TReply>(CancellationToken cancellationToken)
+    private async ValueTask<TReply> ExecuteAsync<TReply>(
+        ZLinkNestedRequestTerminator terminator,
+        CancellationToken cancellationToken)
     {
+        if (_exactSpotIdCall)
+            ZLinkApplicationExecutionContext.ValidateSpotRequest(
+                target.SpotId,
+                terminator,
+                _executionScope);
         if (_meshSelected && !_instanceIntent)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
@@ -253,6 +268,7 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
             {
                 return await RequestExistingAsync<TReply>(
                         handle,
+                        terminator,
                         Remaining(deadline),
                         cancellationToken)
                     .ConfigureAwait(false);
@@ -334,13 +350,21 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
 
     private async ValueTask<TReply> RequestExistingAsync<TReply>(
         ZLinkResolvedSpotHandle handle,
+        ZLinkNestedRequestTerminator terminator,
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
+        ZLinkApplicationExecutionContext.ValidateSpotRequest(
+            handle.Snapshot.SpotId,
+            terminator,
+            _executionScope);
         var call = new ZLinkRouteSpotRequestCall<TRequest>(runtime, handle, request);
         call.Timeout(timeout);
         call.Metadata(new ZLinkMessageMetadata(_metadata.Snapshot()));
-        return await call.Async<TReply>(cancellationToken).ConfigureAwait(false);
+        return await call.ExecuteAfterTerminatorAsync<TReply>(
+                terminator,
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private static bool IsAuthorityTransitionConflict(
@@ -360,156 +384,6 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
                 ZLinkRetryAdvice.RetryAfterBackoff);
         return remaining;
     }
-}
-
-internal sealed class ZLinkRoutedSpotSendCall<TMessage>(
-    IZLinkCurrentSpotActivation activation,
-    ZLinkResolvedSpotHandle target,
-    TMessage message) : IZLinkSendCall
-{
-    private readonly ZLinkCallMetadata _metadata = new();
-    private readonly ZLinkOneWayCallGate _submission = new("Spot send");
-
-    public IZLinkSendCall Metadata(string key, string value)
-    {
-        _metadata.Set(key, value);
-        return this;
-    }
-
-    public IZLinkSendCall Metadata(ZLinkMessageMetadata metadata)
-    {
-        _metadata.Merge(metadata);
-        return this;
-    }
-
-    public async ValueTask Async(
-        CancellationToken cancellationToken = default)
-    {
-        _submission.Claim();
-        cancellationToken.ThrowIfCancellationRequested();
-        // One-way sends use the current snapshot once and never retry; a
-        // retry could duplicate a packet that was already delivered.
-        var snapshot = target.Snapshot;
-        var header = ZLinkClientCallCodec.CreateEnvelope(
-            ZLinkMessageKind.Command,
-            activation.ChannelName,
-            ZLinkMessageNameResolver.ResolveFromMessage(message));
-        var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(header, message, activation.Codecs);
-        try
-        {
-            var result = await activation.OutboundEndpoint.SendToSpotAsync(
-                    snapshot.RouterChannelId,
-                    snapshot.NodeRid,
-                    snapshot.SpotId,
-                    (ulong)snapshot.Generation,
-                    snapshot.NodeGeneration,
-                    snapshot.AuthorityOwnerGeneration,
-                    snapshot.OwnerLeaseGeneration,
-                    parts,
-                    cancellationToken,
-                    _metadata.Encode())
-                .ConfigureAwait(false);
-            ZLinkOneWaySubmitOutcome.EnsureAccepted(
-                result,
-                "Spot send",
-                ZLinkFrameworkErrorKind.NotFound);
-        }
-        catch (ZLinkFrameworkException error)
-            when (ZLinkSpotHandleRequestExecution.IsStaleRoute(error))
-        {
-            target.InvalidateRoute();
-            throw;
-        }
-    }
-}
-
-internal sealed class ZLinkRoutedSpotRequestCall<TRequest>(
-    IZLinkCurrentSpotActivation activation,
-    ZLinkResolvedSpotHandle target,
-    TRequest request) : IZLinkRequestCall
-{
-    private readonly ZLinkCallMetadata _metadata = new();
-    private readonly ZLinkApplicationExecutionScope? _executionScope =
-        ZLinkApplicationExecutionContext.Current;
-    private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
-    private TimeSpan? _timeout;
-
-    public IZLinkRequestCall Timeout(TimeSpan timeout)
-    {
-        ZLinkRequestTimeoutValidation.Validate(timeout, nameof(timeout));
-        _timeout = timeout;
-        return this;
-    }
-
-    public IZLinkRequestCall Metadata(string key, string value)
-    {
-        _metadata.Set(key, value);
-        return this;
-    }
-
-    public IZLinkRequestCall Metadata(ZLinkMessageMetadata metadata)
-    {
-        _metadata.Merge(metadata);
-        return this;
-    }
-
-    public ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default)
-    {
-        ZLinkApplicationExecutionContext.RejectSpotRequestWhenSameGate(
-            target.Snapshot.SpotId,
-            _executionScope);
-        return ExecuteAsync<TReply>(cancellationToken);
-    }
-
-    public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default)
-    {
-        ZLinkApplicationExecutionContext.RejectSpotRequestWhenSameGate(
-            target.Snapshot.SpotId,
-            _executionScope);
-        return ZLinkApplicationExecutionContext
-            .RequireYieldTurn(_turn, "Spot request")
-            .YieldFrameworkCallAsync(ExecuteAsync<TReply>, cancellationToken);
-    }
-
-    private async ValueTask<TReply> ExecuteAsync<TReply>(CancellationToken cancellationToken)
-    {
-        var timeout = _timeout ?? activation.DefaultRequestTimeout;
-        var reply = await ZLinkSpotHandleRequestExecution.ExecuteAsync(
-                target,
-                snapshot =>
-                {
-                    var header = ZLinkClientCallCodec.CreateEnvelope(
-                        ZLinkMessageKind.Request,
-                        activation.ChannelName,
-                        ZLinkMessageNameResolver.ResolveFromMessage(request),
-                        timeout);
-                    var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
-                        header,
-                        request,
-                        activation.Codecs);
-                    return activation.OutboundEndpoint.RequestToSpotAsync(
-                        snapshot.RouterChannelId,
-                        snapshot.NodeRid,
-                        snapshot.SpotId,
-                        (ulong)snapshot.Generation,
-                        snapshot.NodeGeneration,
-                        snapshot.AuthorityOwnerGeneration,
-                        snapshot.OwnerLeaseGeneration,
-                        parts,
-                        timeout,
-                        cancellationToken,
-                        _metadata.Encode());
-                },
-                cancellationToken)
-            .ConfigureAwait(false);
-        return ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
-            reply,
-            "SPOT request reply is empty.",
-            "SPOT request failed.",
-            activation.Codecs);
-    }
-
-
 }
 
 internal sealed class ZLinkCurrentSpotSendCall<TMessage>(

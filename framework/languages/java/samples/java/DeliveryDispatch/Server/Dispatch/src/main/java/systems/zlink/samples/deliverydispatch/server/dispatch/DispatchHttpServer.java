@@ -1,4 +1,5 @@
 package systems.zlink.samples.deliverydispatch.server.dispatch;
+import java.util.Map;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
@@ -46,13 +47,13 @@ public final class DispatchHttpServer implements AutoCloseable {
             write(exchange, 405, "");
             return;
         }
-        Messages.ServerAssertionRequest request =
-            json.readValue(exchange.getRequestBody(), Messages.ServerAssertionRequest.class);
+        Messages.ServerAssertionReq request =
+            json.readValue(exchange.getRequestBody(), Messages.ServerAssertionReq.class);
         queue.assertServerEvidence(request).whenComplete((response, error) -> {
             try {
                 if (error != null) {
                     write(exchange, 500, json.writeValueAsString(
-                        java.util.Map.of("error", error.getMessage())));
+                        Map.of("error", error.getMessage())));
                 } else {
                     write(exchange, response.passed() ? 200 : 500,
                         json.writeValueAsString(response));

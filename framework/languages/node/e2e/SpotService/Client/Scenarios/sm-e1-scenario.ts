@@ -1,4 +1,4 @@
-// SM-E1: Handler 없는 Spot request를 기록한다 시나리오를 검증한다.
+// SM-E1: Handler 없는 Actor·Spot request를 기록한다 시나리오를 검증한다.
 import type {
   CreateSpotRes,
   CreateSpotReq,
@@ -11,8 +11,10 @@ import type {
 import type { ClientOptions } from '../Support/client-options';
 import { postJson } from '../../../http-client';
 import { ensure } from '../Support/scenario-assert';
+import { runActorMissingHandlerVariant } from '../Support/sm-e1-actor-missing-handler-variant';
 
 export async function runSmE1(options: ClientOptions): Promise<void> {
+  await runActorMissingHandlerVariant(options);
   const spotId = `spot-sm-e1-${Date.now()}`;
   const created = await postJson<CreateSpotRes>(options.playAUrl, '/spot/create', {
     spotId

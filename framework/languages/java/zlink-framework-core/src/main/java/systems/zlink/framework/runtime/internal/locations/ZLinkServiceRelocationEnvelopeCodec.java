@@ -768,7 +768,7 @@ public final class ZLinkServiceRelocationEnvelopeCodec {
                 throw new IllegalStateException(
                     "journal entry does not contain a frozen operation");
             }
-            return java.util.Arrays.copyOfRange(
+            return Arrays.copyOfRange(
                 rawEntry, 16, rawEntry.length);
         }
     }

@@ -17,7 +17,6 @@ import { runOBSC6 } from './Scenarios/obs-c6-scenario.js';
 import { runOBSC7 } from './Scenarios/obs-c7-scenario.js';
 import { runOBSC8 } from './Scenarios/obs-c8-scenario.js';
 import { runOBSC9A } from './Scenarios/obs-c9a-scenario.js';
-import { runOBSC9B } from './Scenarios/obs-c9b-scenario.js';
 import { runOBSC10 } from './Scenarios/obs-c10-scenario.js';
 import { runOBSC11 } from './Scenarios/obs-c11-scenario.js';
 import { runOBSC12 } from './Scenarios/obs-c12-scenario.js';
@@ -41,7 +40,6 @@ const scenarios: Readonly<Record<string, () => Promise<void>>> = {
   'OBS-C7': runOBSC7,
   'OBS-C8': runOBSC8,
   'OBS-C9A': runOBSC9A,
-  'OBS-C9B': runOBSC9B,
   'OBS-C10': runOBSC10,
   'OBS-C11': runOBSC11,
   'OBS-C12': runOBSC12,

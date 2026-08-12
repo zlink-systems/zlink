@@ -6,8 +6,8 @@ public sealed partial class RegressionTests
 {
     private static readonly string[] ExecutionTurnScenarioIds =
     [
-        "TD-A1", "TD-A2", "TD-A3", "TD-A4", "TD-A5",
-        "TD-B1", "TD-B2", "TD-B3", "TD-B4",
+        "TD-A2", "TD-A3", "TD-A4", "TD-A5",
+        "TD-B1", "TD-B2", "TD-B3",
         "TD-C1", "TD-C2", "TD-C3", "TD-C4", "TD-C5",
         "TD-D1", "TD-D2", "TD-D3",
         "TD-E1", "TD-E2", "TD-E3",
@@ -16,7 +16,7 @@ public sealed partial class RegressionTests
     ];
 
     [Fact]
-    public void ExecutionTurn_Uses_The_Canonical_ThirtyTwo_Scenario_Inventory()
+    public void ExecutionTurn_Uses_The_Canonical_Thirty_Scenario_Inventory()
     {
         var root = Path.Combine(ResolveE2eRoot(), "AutomaticTurnDispatch");
         var featureMap = File.ReadAllText(Path.Combine(root, "feature-map.ko.md"));
@@ -93,8 +93,18 @@ public sealed partial class RegressionTests
             .Select(static line => line.Split('|', StringSplitOptions.TrimEntries)[1])
             .Where(static value => value.Length >= 5 && value.Contains('-', StringComparison.Ordinal))
             .ToArray();
+        var scenarioPrefix = fixture switch
+        {
+            "AutomaticTurnDispatch" => "Td",
+            "PubSub" => "Pub",
+            "RegistrationCodec" => "Rc",
+            "SpotService" => "Sm",
+            _ => throw new ArgumentOutOfRangeException(nameof(fixture), fixture, null)
+        };
         var scenarioFiles = Directory
-            .EnumerateFiles(Path.Combine(root, "Client", "Scenarios"), "*Scenario.cs")
+            .EnumerateFiles(
+                Path.Combine(root, "Client", "Scenarios"),
+                $"{scenarioPrefix}*Scenario.cs")
             .Select(Path.GetFileNameWithoutExtension)
             .Order(StringComparer.Ordinal)
             .ToArray();

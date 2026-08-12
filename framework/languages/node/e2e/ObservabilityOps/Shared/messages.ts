@@ -3,11 +3,11 @@ export const ObservabilityOpsNames = {
   actorTypeStateful: 'transfer-stateful',
   packetJoin: 'JoinTargetReq',
   packetProbe: 'ProbeReq',
-  packetHandoff: 'HandoffProbe',
+  packetHandoff: 'HandoffProbeMsg',
   packetBoundPush: 'BoundPushReq',
   packetBoundNotify: 'BoundPushNotify',
   packetBindActor: 'BindActorSessionReq',
-  packetSessionKeepAlive: 'SessionKeepAlive'
+  packetSessionKeepAlive: 'SessionKeepAliveMsg'
 } as const;
 
 export interface ActorCreateReq { actorId: string; actorType: string; stateVersion: number }
@@ -46,8 +46,15 @@ export class ProbeReq {
     readonly requestTimeoutMs?: number
   ) {}
 }
-export class HandoffProbe extends ProbeReq {}
-export class SessionKeepAlive {
+export class HandoffProbeMsg {
+  constructor(
+    readonly scenario: string,
+    readonly marker: string,
+    readonly delayMs?: number,
+    readonly requestTimeoutMs?: number
+  ) {}
+}
+export class SessionKeepAliveMsg {
   constructor(readonly scenario: string) {}
 }
 export interface ProbeRes {
@@ -117,6 +124,6 @@ export interface WorkflowApplyRes {
   readonly replayed: boolean;
 }
 
-export class WorkflowProjected {
+export class WorkflowProjectedEvent {
   constructor(readonly orderId: string, readonly value: number, readonly sourceRid: string) {}
 }

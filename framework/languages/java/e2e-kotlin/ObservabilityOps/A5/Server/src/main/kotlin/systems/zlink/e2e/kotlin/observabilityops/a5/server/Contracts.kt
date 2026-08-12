@@ -5,8 +5,8 @@ object Contracts {
     const val HANDLER_GROUP = "observability-ops-kotlin-a5"
 
     @JvmRecord
-    data class ProbeRequest(val value: String, val fail: Boolean)
+    data class ProbeReq(val value: String, val fail: Boolean)
 
     @JvmRecord
-    data class ProbeReply(val value: String)
+    data class ProbeRes(val value: String)
 }

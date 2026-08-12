@@ -197,11 +197,12 @@ Moving an Actor or Spot to another node follows this order.
    confirm them.
 4. Once the Location Store's `Captured` record points at this payload, the source sends a
    Restore request to the target.
-5. On receiving the request, the target first registers a relocation temporary queue. The
-   source keeps relaying ingress hold messages and later messages arriving on the old
-   route to this queue.
-6. The target reads only the payload the Location Store points to and restores it into an
-   instance not yet exposed externally. Once Restore finishes, the Location Store changes
+5. On receiving the request, the target first registers a relocation temporary queue,
+   reads only the payload the Location Store points to, and restores it into an instance
+   not yet exposed externally. Once Restore finishes, it reports relay reception ready.
+   The source then relays its ingress hold and sends cutover one-way on the same ordered
+   connection.
+6. After receiving cutover, or 1,000ms after the relay-ready reply, the target changes
    owner, membership, and capacity together in one step, only if the version first read
    is unchanged. This method is called compare-and-set, abbreviated
    [CAS](01-glossary.en.md#compare-and-set).
@@ -209,8 +210,8 @@ Moving an Actor or Spot to another node follows this order.
    put into the real object queue first, then the temporary queue's work moves in behind
    it. The temporary queue registration is removed, dispatch switches over, and
    application message processing starts.
-8. The source keeps the ingress hold original until the target signals the switchover is
-   complete. Once the switchover completes and source cleanup finishes, the Location Store
+8. The source waits for no completion reply after sending cutover and keeps Message
+   Follow. Once source cleanup finishes, the Location Store
    first records that use of that data has ended. Then the data is deleted from the
    Relocation Store.
 
@@ -221,24 +222,33 @@ sequenceDiagram
     participant L as Location Store
     participant T as Target runtime
 
-    S->>L: confirm the current owner and record version
-    S->>B: store state and queue payload
-    S->>L: record the payload location and checksum as Captured
-    S->>T: send a Restore request
-    T->>T: register a relocation temporary queue
-    S->>T: keep relaying ingress hold messages
-    T->>T: hold messages in the temporary queue
-    T->>L: read the payload location recorded in Captured
-    T->>B: read the payload and Restore into an instance not yet exposed
-    T->>L: record the target attempt and readiness as Prepared
-    T-->>S: signal target Restore readiness
-    T->>L: CAS owner and membership to the target
-    T->>T: move temporary work behind existing work and switch dispatch
-    L-->>S: signal the confirmed target owner
-    T-->>S: signal temporary queue switchover complete
-    S->>S: remove the ingress hold original the target queue accepted
-    T->>L: record the end of stored-data use
-    T->>B: delete the relocation payload
+    S->>L: [request] read current owner, membership, and record version
+    L-->>S: [reply] source fence and current record version
+    S->>B: [request] store state and queue payload
+    B-->>S: [reply] storage location and checksum
+    S->>L: [request] record payload location and checksum as Captured
+    L-->>S: [reply] Captured result
+    S->>T: [request] install temporary queue, Restore payload, prepare relay without dispatch
+    T->>T: [local] register a relocation temporary queue
+    T->>L: [request] read the Captured payload location
+    L-->>T: [reply] payload location
+    T->>B: [request] read payload
+    B-->>T: [reply] payload
+    T->>T: [local] Restore into an instance not yet exposed
+    T->>L: [request] record target attempt and Prepared
+    L-->>T: [reply] Prepared result
+    T-->>S: [reply] temporary queue, Restore, and Prepared ready · source still owner
+    S->>T: [send/request relay] ingress hold
+    T->>T: [local] hold messages in the temporary queue
+    S->>T: [send] cutover · pre-boundary relay sent
+    T->>L: [request] CAS owner/membership if the first-read source fence still matches
+    L-->>T: [reply] target owner/membership CAS result
+    T->>T: [local] merge queues and switch dispatch
+    S->>S: [local] remove the accepted ingress-hold original
+    T->>L: [request] record end of stored-data use
+    L-->>T: [reply] record result
+    T->>B: [request] delete relocation payload
+    B-->>T: [reply] delete result
 ```
 
 The two Stores aren't bundled into one distributed transaction or 2PC. Data is prepared
@@ -251,8 +261,8 @@ Relocation Store usage is as follows.
 |---|---|
 | Same-node Actor join | Changes only membership in the Location Store and doesn't create a relocation payload. |
 | `DisableRelocation` cross-node move | Rejected before Capture. |
-| `RecreateOnRelocation` cross-node Actor/Spot move | Stores the accepted journal and recovery payload without application state. |
-| `PreserveStateWith` cross-node Actor/Spot move | Stores application state, accepted journal, and recovery payload. |
+| `RecreateOnRelocation` cross-node Actor/Spot move | Stores the not-yet-executed queue/timers and recovery payload without application state. |
+| `PreserveStateWith` cross-node Actor/Spot move | Stores application state, the not-yet-executed queue/timers, and recovery payload. |
 | Actor/User Spot move for host maintenance | Stores per-target state and incomplete work. |
 | Cross-node Actor `JoinSpot`/`JoinEntrySpot` | Stores a payload matching the moving Actor's policy. |
 | Processing a message while first creating an Instance Spot | Stores creation info and the first message together. Used even when policy is `DisableRelocation`. |
@@ -733,7 +743,7 @@ period. An invalid configuration is a configuration error.
 The previous owner only uses the source→target information recorded when the move
 completed — it doesn't re-read the Store. The new owner's `AuthorityOwnerGeneration` must
 be greater than the previous value, and forwarding continues for at most 8 hops. The
-amount retainable per move is 1,024 messages and 16 MiB. The existing operation ID,
+amount retainable per move has no bound. The existing operation ID,
 `ObjectGeneration`, payload, and reply route are kept unchanged. A cycle is `Unavailable`,
 a generation mismatch is `InvalidOperation`, and exceeding the limit is
 `CapacityExceeded`.
@@ -778,12 +788,17 @@ separate from this enumeration and answers only by ActorId/SpotId.
 
 ## 7. Moving An Actor Or User Spot To Another Node
 
+The single source for the shared source/target handoff and queue order is
+[Complete Actor And Spot Relocation Flow](28-relocation-flow.en.md). This section
+specifies the records, generations, and target-only CAS conditions owned by the Location
+Store.
+
 This section defines the order for moving an Entry Spot Actor, a `PerActor` User Spot's
 Actor, or a `SpotWide` User Spot aggregate from a source node to a target node. The state
 where the runtime is proceeding with shutdown and not accepting new work is called
 [`Shutdown`](01-glossary.en.md#shutdown). Host-wide target selection and the completion
 conditions for `Relocate` and `Shutdown` are defined by
-[Host Relocation And Shutdown](28-graceful-drain-handoff.en.md).
+[Complete Host Relocation Flow](30-host-relocation-flow.en.md).
 
 The framework follows this order for each relocation target.
 
@@ -793,12 +808,16 @@ The framework follows this order for each relocation target.
    Store.
 4. Secures target capacity and sends a Restore request. The target first registers a
    relocation temporary queue, then restores application state. Incoming messages during
-   this time are held in the temporary queue, and the handler isn't run.
-5. Changes owner, membership, capacity, and the restore-data location together in one
-   Location Store request.
-6. Completes the needed lifecycle callbacks and puts the saved existing work and
-   temporary-queue work into the real queue, in order. Removes the temporary queue
-   registration, switches dispatch, and processes new messages.
+   this time are held in the temporary queue, and the handler isn't run. Once target
+   reports relay reception ready, source relays the ingress hold on the same ordered TCP
+   connection and sends cutover one-way after the current prefix. Later messages keep
+   entering the post-marker span.
+5. After Restore, cutover receipt or the 1,000ms fallback lets target CAS owner, membership,
+   capacity, and the restore-data location together in one Location Store request. The
+   source doesn't perform this CAS.
+6. A target whose CAS succeeds puts saved existing work and relayed work into the real
+   queue in order and opens dispatch. It sends no completion reply to source. For a bound
+   Actor, target runtime sends Session owner a one-way route update.
 
 If it fails before step 5, the source remains owner. If it fails after step 5, the source
 isn't guessed to be owner again and rolled back. Only while the same target process is
@@ -874,12 +893,18 @@ only recorded as `Completed` once the last Actor and source relay finish.
 
 ### 7.2 Which Node Is Owner At Each Stage
 
+Only the prepared target performs the Location Store CAS that changes ownership from
+source to target. Neither the source nor the Session owner writes the Location Store
+based on target selection or a timeout. The target doesn't start the CAS until Restore,
+temporary queue registration, and cutover receipt or the 1,000ms fallback have all completed. If
+the CAS fails, it doesn't open application dispatch.
+
 | Stage | Recognized owner and target condition |
 |---|---|
 | `Preparing`, `Captured` | Source is owner. The first `Captured` has no target information. After finishing storing restore data, already-secured target information can be linked to the same move. |
 | `Prepared` | Source is owner. Target attempt number, target owner lease, target node, secured space, and restore-data location must all be present. |
 | `Committed` through `Completed` | The exactly recorded target is owner. Keeps the same target attempt number, secured space, and restore data. |
-| `Aborted` | Source is owner. Doesn't accept new application work until cancellation delivery, cleanup, and progress-info removal finish. |
+| `Aborted` | For cancellation before cutover, source is owner. Doesn't accept new application work until cleanup and progress-info removal finish. |
 
 An Actor move that doesn't change User Spot membership changes owner with a single
 `NewOwner` CAS. Re-preparing on the same target process only replaces the target attempt
@@ -908,13 +933,13 @@ rejected before storing state.
 
 Target factory and `Restore` finish before recording `Prepared`. The exact order of
 callback and queue is defined by
-[Host Relocation](28-graceful-drain-handoff.en.md#8-the-order-for-relocating-one-unit).
+[Host Relocation](30-host-relocation-flow.en.md#8-the-order-for-relocating-one-unit).
 
 ### 7.3 When Stored Restore Data Becomes The Official Data
 
 Queue stopping, concurrent move count, payload composition, and timer/Session handling
 are defined by
-[Host Relocation §§7-9](28-graceful-drain-handoff.en.md#7-relocation-units-and-concurrency-limits).
+[Host Relocation §§7-9](30-host-relocation-flow.en.md#7-relocation-units-and-execution-order).
 Payload size, splitting, and retention are defined by
 [Relocation Store](23-relocation-store-redis.en.md#3-reference-and-storage-size). This
 section only defines which data the Location Store recognizes as the basis for restore.
@@ -925,7 +950,7 @@ section only defines which data the Location Store recognizes as the basis for r
 | `Captured` | Data location in the Relocation Store, checksum, and list content checksum | The whole data must exist with sufficient remaining retention. |
 | `Prepared` | Target attempt number, target owner information, and secured space | Target's Restore readiness and relocation temporary queue registration must finish. |
 | Owner change | Target owner, membership, space in use, and the same restore-data location | Restore must finish and the CAS for one object or the whole User Spot must succeed. |
-| `Completed` | Count of entries that finished target-dispatch switchover and reply delivery through the previous owner | The stored total entry count must match and the delivery-pending count must be 0. |
+| `Completed` | Target dispatch and required lifecycle are open, and required Session route updates were sent | Doesn't wait for a source completion reply or for all relay through the previous address to end. Message Follow handles late relay. |
 
 ```mermaid
 sequenceDiagram
@@ -934,19 +959,29 @@ sequenceDiagram
     participant L as Location Store
     participant T as Target
 
-    S->>L: record Preparing
-    S->>B: store restore data and re-verify it
-    S->>L: record the data location and checksum as Captured
-    S->>T: send a Restore request
-    T->>T: register a relocation temporary queue
-    S->>T: keep relaying ingress hold messages
-    T->>L: read the current owner and data location
-    T->>B: read the specified data and Restore
-    T->>L: record target info and Prepared
-    T-->>S: signal target Restore readiness
-    T->>L: change owner, membership, and space together
-    T->>T: move temporary work to the real queue and switch dispatch
-    T->>L: record Completed once restore and cleanup finish
+    S->>L: [request] record Preparing
+    L-->>S: [reply] Preparing result
+    S->>B: [request] store and verify restore data
+    B-->>S: [reply] storage location and checksum
+    S->>L: [request] record data location and checksum as Captured
+    L-->>S: [reply] Captured result
+    S->>T: [request] install temporary queue, Restore named payload, prepare relay without dispatch
+    T->>T: [local] register a relocation temporary queue
+    T->>L: [request] read current owner and data location
+    L-->>T: [reply] current record
+    T->>B: [request] read specified data
+    B-->>T: [reply] restore data
+    T->>T: [local] Restore
+    T->>L: [request] record target info and Prepared
+    L-->>T: [reply] Prepared result
+    T-->>S: [reply] temporary queue, Restore, and Prepared ready · source still owner
+    S->>T: [send/request relay] ingress hold
+    S->>T: [send] cutover · pre-boundary relay sent
+    T->>L: [request] CAS owner/membership/space if source fence still matches
+    L-->>T: [reply] target owner/membership/space CAS result
+    T->>T: [local] merge queues and open dispatch
+    T->>L: [request] record Completed
+    L-->>T: [reply] record result
 ```
 
 The target only uses data pointed to by the Location Store. If the payload checksum or
@@ -1040,9 +1075,9 @@ result. The target keeps delivering on the current route. If the `Relocate` dead
 passes while the source owner lease is still valid, it's `ForceStopped`. In this case
 payload and reply bytes are retained for 24 hours.
 
-### 7.6 Cancellation Before The Owner Change
+### 7.6 Cancellation Before Cutover
 
-Canceling before the owner change follows this order.
+Canceling before sending cutover follows this order.
 
 1. The source keeps not accepting new work.
 2. Records `Aborted` in the Location Store.
@@ -1053,17 +1088,35 @@ Canceling before the owner change follows this order.
    info.
 6. The source starts accepting new work again.
 
-Since a Session Actor location update message wasn't sent before the owner change, no
+Since a Session Actor location update message wasn't sent before cutover, no
 cancellation message or response wait is needed either. The source must not accept new
 work before `Aborted` is recorded.
+
+After cutover, this procedure doesn't restore source. A failed target CAS removes the
+target object and queue, while the Session cleans under its own timeout.
 
 ## 8. When A Store Response Isn't Received
 
 If the framework doesn't receive the result of a Store request, it doesn't guess success
-or failure. It re-checks the Store with the same key and first-read version. The exact
-return values and input limits of provider functions are defined by
+or failure. It re-checks the Store with the same key and first-read version. This rule
+applies to the Location Store CAS performed by the target. Cutover and Session route
+update are one-way, so there is no source completion reply. Source doesn't update the
+Location Store on the target's behalf. The exact return values
+and input limits of provider functions are defined by
 [Location Store](22-location-store-redis.en.md) and
 [Relocation Store](23-relocation-store-redis.en.md).
+
+The retry deadline for relocation CAS is the validity deadline already carried by the
+relocation payload and Restore operation. On a retryable failure or indeterminate
+response, target repeats read/CAS with the same source fence and `RelocationId`. Exact
+target ownership converges to success. A different valid owner or generation ends the
+stale relocation immediately.
+
+If target ownership isn't confirmed before Restore validity expires, target records a
+`location_update_failed` Error and removes the prepared Actor or Spot, temporary queue,
+and relocation state. It neither opens application dispatch nor sends a Session route
+update. A late Store response for a terminal `RelocationId` doesn't reactivate the
+object.
 
 During `StoreFailureGrace`, the last fully-read descriptor list is kept. Connection
 status judgment for already-established transport connections continues, but no new
@@ -1104,7 +1157,7 @@ source, or guess and use a different payload.
 ## 9. Cleaning Up Store Records When A Host Shuts Down
 
 The state and final result of host commands are defined by
-[Host Relocation And Shutdown](28-graceful-drain-handoff.en.md). This section only
+[Complete Host Relocation Flow](30-host-relocation-flow.en.md). This section only
 defines the order in which the Location runtime cleans up Store records and in-process
 resources.
 
@@ -1137,15 +1190,15 @@ framework owns.
 | Whole User Spot move | When changing owner, only the space the new owner will use is secured. When clearing completion info, owner, generation, membership, and space are kept. An invalid combination doesn't change the Store. |
 | Deletion | Confirms the current owner lease and space in use, and handles location-record deletion and space reduction together. |
 | Instance Spot first creation | The source doesn't pre-create an owner. Only one target runs the factory. The first message and recovery info are stored before `Ready`. |
-| Location cache and previous-owner delivery | `Missing`, `Creating`, and Store errors aren't cached. The cache doesn't exceed the owner's new-work-acceptance deadline. Delivery is at most 8 hops, 1,024 messages, and 16 MiB. |
+| Location cache and previous-owner delivery | `Missing`, `Creating`, and Store errors aren't cached. The cache doesn't exceed the owner's new-work-acceptance deadline. Delivery is at most 8 hops, with no retained-amount bound. |
 | Relocation stages | Follows the owner rules and target attempt number of §7.2. A previous target attempt can't change owner or receive new messages. |
-| Relay before the owner change | The target keeps receiving source messages after registering the current target attempt's temporary queue. On an abort before commit, the temporary queue is discarded and the source original is kept. The source doesn't remove the hold original until it receives target dispatch switchover completion. |
+| Relay before the owner change | The target keeps receiving source messages after registering the current target attempt's temporary queue. On an abort before commit, the temporary queue is discarded and the source original is kept. After cutover, source changes the hold to Message Follow and removes the original after the defined duration. |
 | Membership | An Entry Spot member Actor move and a whole User Spot move each change the needed owner and membership together, in one step. |
 | Completion result | Distinguishes `OperationId` and `ReplyRouteId`. The stored entry count must match the Location Store's entry count, and payload use doesn't end before reply delivery through the previous owner or owner-lease termination. |
 | Order of the two Stores | Storing and verifying payload comes before the Location Store CAS. Ending reference use in the Location Store comes before payload deletion. |
 | Data loss | If the payload is permanently missing or the checksum/list checksum differs, it's `DataLost`. Not rolled back to the source. |
-| Move cancellation | No Session location update or cancellation message is sent before the owner change. Records `Aborted`, discards the target temporary queue, then reopens the source queue. |
-| Store failure | During the grace period, only new discovery connections are blocked — the owner deadline isn't extended. A Store request whose result wasn't received is re-checked with the same key and version. |
+| Move cancellation | Before cutover, no Session location update or cancellation message is sent. Records `Aborted`, discards the target temporary queue, then reopens source queue. After cutover, source queue doesn't reopen. |
+| Store failure | During the grace period, only new discovery connections are blocked — the owner deadline isn't extended. Relocation CAS retries with the same key, version, and fence until Restore validity expires. On expiry, target removes the object and queue and sends no Session update. |
 
 Permit, queue, timer, Session handoff, and host final-result verification are defined by
-[Host Relocation contract test](28-graceful-drain-handoff.en.md#14-contract-test-verification-requirements).
+[Host Relocation contract test](30-host-relocation-flow.en.md#14-contract-test-verification-requirements).

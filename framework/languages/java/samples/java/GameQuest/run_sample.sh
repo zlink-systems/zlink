@@ -4,7 +4,35 @@ set +m
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/../../runner-common.sh"
+zlink_sample_configure_port_pool java
 ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kts)
+
+RUN_DIR=""
+LOG_DIR=""
+REDIS_CONTAINER=""
+pids=()
+
+on_exit() {
+  local status="$?"
+  trap - EXIT
+  if [[ "$status" != "0" && -n "${LOG_DIR}" ]]; then
+    for log in "$LOG_DIR"/*.log; do
+      [[ -f "$log" ]] || continue
+      echo "===== $log =====" >&2
+      tail -n 200 "$log" >&2 || true
+    done
+  fi
+  cleanup
+  if [[ -n "${RUN_DIR}" ]]; then
+    if [[ "${ZLINK_SAMPLE_KEEP_RUN_DIR:-0}" == "1" ]]; then
+      echo "runDir=$RUN_DIR"
+    else
+      rm -rf "$RUN_DIR"
+    fi
+  fi
+  exit "$status"
+}
+trap on_exit EXIT
 
 RUN_DIR="$(mktemp -d)"
 chmod 0700 "${RUN_DIR}"
@@ -27,32 +55,10 @@ mission_b_http="http://127.0.0.1:${mission_b_http_port}"
 mission_a_router="tcp://127.0.0.1:${mission_a_router_port}"
 mission_b_router="tcp://127.0.0.1:${mission_b_router_port}"
 
-REDIS_CONTAINER=""
 zlink_redis_start_scoped_assign REDIS_CONTAINER REDIS_PORT \
   "zlink-redis-java-sample-gamequest" "redis:7.2-alpine"
 redis_endpoint="127.0.0.1:${REDIS_PORT}"
 redis_key_prefix="gamequest:java:$(date +%s):$$:"
-
-pids=()
-on_exit() {
-  local status="$?"
-  trap - EXIT
-  if [[ "$status" != "0" ]]; then
-    for log in "$LOG_DIR"/*.log; do
-      [[ -f "$log" ]] || continue
-      echo "===== $log =====" >&2
-      tail -n 200 "$log" >&2 || true
-    done
-  fi
-  cleanup
-  if [[ "${ZLINK_SAMPLE_KEEP_RUN_DIR:-0}" == "1" ]]; then
-    echo "runDir=$RUN_DIR"
-  else
-    rm -rf "$RUN_DIR"
-  fi
-  exit "$status"
-}
-trap on_exit EXIT
 
 write_role_config() {
   local path="$1"
@@ -133,7 +139,7 @@ grep -q 'gamequest-scale-out=completed' \
   Client/src/main/java/systems/zlink/samples/gamequest/client/GameQuestClientScenario.java
 (
   cd ../../..
-  ./gradlew --no-daemon \
+  zlink_sample_gradle_locked ./gradlew --no-daemon --no-parallel --max-workers=1 \
     :zlink-framework-core:jar \
     :zlink-framework-spring-boot-starter:jar \
     :zlink-framework-locations-redis:jar \

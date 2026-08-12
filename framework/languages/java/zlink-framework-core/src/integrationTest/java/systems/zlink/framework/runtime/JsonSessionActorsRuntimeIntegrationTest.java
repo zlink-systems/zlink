@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime;
+import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -75,12 +76,12 @@ final class JsonSessionActorsRuntimeIntegrationTest {
 
     public static final class DefaultJsonActorSendHandler {
         @ZLinkSpotActorSend
-        public java.util.concurrent.CompletionStage<Void> handle(
+        public CompletionStage<Void> handle(
             SessionActorsRuntimeIntegrationTest.PlayerActor actor,
             JsonRelaySend request) {
             SessionActorsRuntimeIntegrationTest.actorRelayRequests.offer(
                 actor.context().actorId() + ":" + request.value());
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
     }
 
@@ -92,7 +93,7 @@ final class JsonSessionActorsRuntimeIntegrationTest {
         while (true) {
             long remaining = deadline - System.nanoTime();
             if (remaining <= 0) {
-                throw new java.util.concurrent.TimeoutException();
+                throw new TimeoutException();
             }
             String received = SessionActorsRuntimeIntegrationTest.actorRelayRequests.poll(
                 remaining,

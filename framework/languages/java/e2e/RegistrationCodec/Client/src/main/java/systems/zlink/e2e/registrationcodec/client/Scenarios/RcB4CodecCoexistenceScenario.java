@@ -10,16 +10,16 @@ public final class RcB4CodecCoexistenceScenario {
 
     public static void run(ScenarioContext context) {
         context.server().post("/codec/roundtrip").submit(Contracts.CodecScenarioRes.class).toCompletableFuture().join().body();
-        ScenarioAssert.waitForEvidence(context.evidence(), "ContentType", "JsonEcho", "application/json");
+        ScenarioAssert.waitForEvidence(context.evidence(), "ContentType", "JsonEchoReq", "application/json");
         ScenarioAssert.waitForEvidence(
             context.evidence(),
             "ContentType",
-            "ProtobufEcho",
+            "ProtobufEchoReq",
             "application/x-protobuf");
         ScenarioAssert.waitForEvidence(
             context.evidence(),
             "ContentType",
-            "MsgpackEcho",
+            "PackedEchoReq",
             "application/x-msgpack");
         System.out.println("scenario RC-B4 passed");
     }

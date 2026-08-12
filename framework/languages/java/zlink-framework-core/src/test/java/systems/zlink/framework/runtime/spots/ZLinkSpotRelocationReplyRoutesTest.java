@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -194,7 +195,7 @@ final class ZLinkSpotRelocationReplyRoutesTest {
                 parts -> {
                     assertArrayEquals(new byte[] {7}, parts.getFirst());
                     replies.incrementAndGet();
-                    return java.util.concurrent.CompletableFuture
+                    return CompletableFuture
                         .completedFuture(null);
                 },
                 () -> released.set(true))

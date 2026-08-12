@@ -293,14 +293,11 @@ application payload를 실행하지 않는다. Source의 `OnLeaveActor` notifica
 
 Bound Session 유무와 관계없이 target의 `OnJoinedActor` callback이 끝나면 target Actor가
 Join completion callback으로 `Accepted` 결과를 받는다. 이 callback이 끝난 뒤 target Actor가
-대기 중인 message를 처리한다. Bound Session이 있으면 Join completion callback 뒤 target
-runtime이 Session owner에 `sessionActorLocationUpdateReqMsg`를 send하여
-binding route와 current `ActorRef` 위치 snapshot 갱신을 요청한다. 이 갱신은 Join completion과
-Actor message 처리를 막지 않는다. Session owner가 갱신을 마치면
-`sessionActorLocationUpdateResMsg`를 별도의 send message로 반환한다. Target runtime은 응답이
-없으면 같은 요청을 다시 보내며, 응답을 받거나 Session 또는 binding이 종료될 때까지 갱신을
-계속 시도한다. 갱신 전의 route로 도착한 message는 source의 Message Follow route가 target
-Actor에 전달한다.
+대기 중인 message를 처리한다. Bound Session이 있으면 relocation을 시작하기 전에 Session
+owner가 해당 binding을 seal한다. Target 준비와 target-only Location Store CAS가 끝난 뒤
+Session owner는 binding route와 current `ActorRef` 위치 snapshot을 target으로 바꾸고 seal을
+해제한다. Session은 target을 선택하거나 Location Store를 변경하지 않는다. 갱신 전의 route로
+도착한 message는 source의 Message Follow route가 target Actor에 전달한다.
 
 Same-node와 cross-node Join의 completion, `OperationId`, optional reply와 retry cursor는
 현재 source와 target process가 실행되는 동안만 보존한다. Relocation Store payload는 정상
@@ -317,6 +314,10 @@ Cross-node `Accepted`의 Relocation manifest에도 별도 field로 저장한다.
 | `Accepted` | 위치 변경을 commit한 target Actor가 받는다. Same-target no-op에서는 현재 Actor가 받는다. | Current `ActorRef`와 target User Spot의 `OnActorJoin` callback이 반환한 optional reply를 받는다. |
 | `Rejected` | 기존 source Actor가 받는다. | Target User Spot의 `OnActorJoin` callback이 반환한 optional reply를 받는다. |
 | `Failed` | Commit 전에는 source Actor가 받는다. Commit 뒤 같은 target runtime에서 실패하면 target Actor가 받을 수 있다. Process가 종료되면 다른 runtime에서 callback을 다시 실행하지 않는다. | Typed Framework error kind를 받는다. |
+
+Target은 queue 개방과 lifecycle 완료 뒤 source에 별도의 완료 reply를 보내지 않는다. Source는
+cutover를 one-way로 보낸 뒤 Message Follow 정리를 진행한다. Bound Actor라면 target runtime이
+Session owner에 target route 적용과 seal 해제를 one-way로 알린다.
 
 `Failed`가 전달하는 error kind는 실패 지점을 다음과 같이 구분한다. Target의
 `OnActorJoin` callback이 정상적으로 거절한 결과는 오류가 아니므로 `Failed`가 아니라
@@ -417,6 +418,11 @@ source User Spot에서 `OnLeaveActor`를 실행한다.
 
 ### 4.2 다른 node의 Spot으로 Actor를 Join하는 순서
 
+Owner 전환, ordered relay, target queue 병합과 Location Store CAS의 전체 순서는
+[Actor와 Spot relocation 전체 흐름](28-relocation-flow.ko.md)이 단일 기준이다. 이 절은 그
+공통 흐름에서 Actor Join에만 필요한 target admission, membership과 lifecycle callback을
+정의한다.
+
 Actor handler가 `JoinSpot(...)` 또는 `JoinEntrySpot(...)`을 호출한 뒤 반환된 call 객체에서
 `Defer()`를 호출하면 Framework는 handler가 정상적으로 끝난 뒤 다음 순서로 Join을 실행한다.
 
@@ -436,26 +442,24 @@ Actor handler가 `JoinSpot(...)` 또는 `JoinEntrySpot(...)`을 호출한 뒤 �
    Actor로 들어오는 message는 application instance를 찾지 않고 temporary queue에 넣는다.
    Target은 Actor를 만들고 application state와 저장된 기존 queue를 읽지만 아직 application
    작업을 실행하지 않는다.
-5. Source seal 뒤에 도착한 message는 source runtime의 크기가 제한된 `ingress hold`에
-   보관한다. Source runtime은 Restore 요청을 보낸 뒤 hold의 message와 이후 이전 route로
-   들어오는 message를 target으로 relay한다. Target dispatcher는 이 message도 같은 temporary
-   queue에 넣는다.
-6. Target이 Actor Restore를 마치면 target membership, owner, capacity와 generation을
-   `LocationStore`에서 한 번에 갱신한다. 이 commit이 성공하면 target이 새 owner가 된다.
-   Source는 target의 dispatch 전환 완료를 받을 때까지 hold의 원본을 유지한다.
-7. Commit 뒤 Target Spot의 `OnJoinedActor`를 호출하고 source Spot에는 `OnLeaveActor`를
-   one-way으로 보낸다. 이어서 Actor의 Join completion callback을 호출한다. Completion callback이
-   끝나면 저장된 기존 Actor 작업을 실제 Actor queue에 먼저 넣고 temporary queue의 작업을 그
-   뒤에 옮긴다. 이어서 temporary queue 등록을 제거하고 기존 dispatch 경로로 전환한다. 이
-   전환이 끝난 뒤 target Actor가 message를 처리한다. Session 위치 갱신 응답은 Actor message
-   처리를 막지 않는다.
-8. Actor가 Session에 bind되어 있으면 target runtime이 Join completion callback을 호출한 뒤
-   Session owner에 `sessionActorLocationUpdateReqMsg`를 send한다. Session owner는 해당 Actor의
-   binding route와 current `ActorRef` 위치 snapshot을 target 위치로 atomic하게 바꾸고
-   `sessionActorLocationUpdateResMsg`를 send한다. 최초 send 후 1초가 지나도 응답이 없으면
-   target runtime이 같은 요청을 처음으로 다시 보낸다. 이후 재전송 간격은 1초, 2초, 4초, 5초이며
-   그 뒤에는 5초를 유지한다. 같은 요청을 여러 번 받아도 Session owner는 같은 결과를
-   유지해야 한다. 같은 Session의 다른 Actor route와 physical STREAM connection은 바꾸지 않는다.
+5. Source seal 뒤에 도착한 message는 source runtime의 `ingress hold`에 보관한다. 이
+   hold에는 relocation 자체가 정하는 record 수나 byte 상한이 없다. Target이 temporary queue와
+   Restore 준비 완료를 알리면 source runtime은 hold의 message를 같은 ordered TCP connection으로
+   relay한다. Target dispatcher는 이 message를 같은 temporary queue에 넣는다.
+6. Source는 relay lane의 현재 prefix를 보낸 뒤 같은 connection에 cutover를 one-way로
+   보낸다. 이후 도착한 message는 boundary 뒤 구간에 넣으므로 mailbox가 비기를 기다리지 않는다.
+   Target은 Actor Restore 뒤 cutover를 받으면 membership, owner,
+   capacity와 generation을 `LocationStore`에서 한 번에 CAS한다. 이 CAS는 target만 수행한다.
+   Relay 준비 reply 뒤 1,000ms 동안 cutover가 오지 않아도 Warning을 기록하고 CAS를 진행한다.
+   성공하면 target이 새 owner가 되고, 실패하면 target queue를 열지 않는다.
+7. CAS 뒤 Target Spot의 `OnJoinedActor`를 호출하고 source Spot에는 `OnLeaveActor`를
+   one-way으로 보낸다. 이어서 Actor의 Join completion callback을 호출한다. 저장된 기존 Actor
+   작업을 실제 Actor queue에 먼저 넣고 relay된 작업을 그 뒤에 옮긴 다음 dispatch를 연다.
+   Target은 이 준비가 끝난 뒤 source에 완료 reply를 보내지 않는다.
+8. Actor가 Session에 bind되어 있으면 target runtime이 CAS와 queue 개방 뒤 Session owner에 target
+   route 적용과 seal 해제를 one-way로 알린다. Session owner는 기본 3,000ms의
+   `SessionRelocationSealTimeout` 안에 exact update를 받으면 route를 바꾸고 held message를 제출한
+   뒤 seal을 해제한다. Timeout이면 physical STREAM connection을 종료하고 Session state를 정리한다.
 
 `Accepted`와 `Rejected`는 동시에 발생하지 않는 서로 다른 결과이므로 다이어그램에서
 `alt`로 나눈다. Bound Session이 있는지는 선택 사항이므로 그 부분만 `opt`로 표시한다.
@@ -475,37 +479,42 @@ sequenceDiagram
     participant TargetActor as Target Actor
     participant SessionOwner as Session owner
 
-    Handler->>SourceRuntime: JoinSpot(...) 호출 뒤 반환 객체에서 Defer() 호출
-    Handler-->>SourceRuntime: Handler 정상 종료
+    Handler->>SourceRuntime: [local] JoinSpot(...) 호출 뒤 반환 객체에서 Defer() 호출
+    Handler-->>SourceRuntime: [local] Handler 정상 종료
     Note over SourceRuntime,TargetSpot: 아래 흐름은 target이 User Spot인 경우
-    SourceRuntime->>TargetSpot: OnActorJoin 호출
+    SourceRuntime->>TargetSpot: [request] OnActorJoin · target Spot에 Actor 수용 여부 결정 요청
     alt Accepted
-        TargetSpot-->>SourceRuntime: Accepted와 optional reply 반환
-        SourceRuntime->>SourceActor: source Actor 새 message 차단
-        SourceRuntime->>RelocationStore: state와 현재 queue 저장
-        SourceRuntime->>TargetRuntime: Actor restore 요청 먼저 전송
-        TargetRuntime->>TargetTemp: Actor relocation temporary queue 등록
-        TargetRuntime->>TargetActor: Actor 생성과 application state Restore
-        SourceRuntime->>TargetRuntime: ingress hold message relay
-        TargetRuntime->>TargetTemp: temporary queue에 message 추가
-        TargetRuntime->>LocationStore: membership·owner·capacity·generation 갱신
-        LocationStore-->>TargetRuntime: target owner 확정
-        TargetRuntime->>TargetSpot: OnJoinedActor 호출
-        SourceRuntime-)SourceSpot: OnLeaveActor 호출 (one-way)
-        TargetRuntime->>TargetActor: Join completion callback에 Accepted 전달
-        TargetRuntime->>TargetQueue: 기존 작업 뒤 temporary queue 작업 이동
-        TargetRuntime->>TargetTemp: temporary queue 제거 후 기존 dispatch로 전환
-        TargetRuntime-->>SourceRuntime: dispatch 전환 완료 알림
-        TargetQueue->>TargetActor: queue 순서대로 message 처리
+        TargetSpot-->>SourceRuntime: [reply] Actor 수용 Accepted와 optional application reply
+        SourceRuntime->>SourceActor: [local] source Actor 새 message 차단
+        SourceRuntime->>RelocationStore: [request] Actor state·미실행 queue·timer 저장
+        RelocationStore-->>SourceRuntime: [reply] payload 위치와 내용 확인값 확정
+        SourceRuntime->>TargetRuntime: [request] temporary queue 설치·Actor Restore 후 relay 준비
+        TargetRuntime->>TargetTemp: [local] Actor relocation temporary queue 등록
+        TargetRuntime->>TargetActor: [local] Actor 생성과 application state Restore
+        TargetRuntime-->>SourceRuntime: [reply] Actor Restore·temporary queue 준비 완료 · source owner 유지
+        SourceRuntime->>TargetRuntime: [send/request relay] ingress hold
+        TargetRuntime->>TargetTemp: [local] temporary queue에 message 추가
+        alt cutover가 1,000ms 안에 도착
+            SourceRuntime->>TargetRuntime: [send] cutover · boundary 전 relay 전송 완료
+        else relay 준비 reply 뒤 1,000ms 동안 cutover 없음
+            TargetRuntime->>TargetRuntime: [local] cutover_timeout Warning · fallback 진행
+        end
+        TargetRuntime->>LocationStore: [request] source fence가 같으면 membership·owner를 target으로 CAS
+        LocationStore-->>TargetRuntime: [reply] target membership·owner CAS 성공
+        TargetRuntime->>TargetSpot: [local] OnJoinedActor 호출
+        SourceRuntime-)SourceSpot: [send] OnLeaveActor
+        TargetRuntime->>TargetActor: [local] Join completion callback에 Accepted 전달
+        TargetRuntime->>TargetQueue: [local] 기존 작업 뒤 temporary queue 작업 이동
+        TargetRuntime->>TargetTemp: [local] temporary queue 제거 후 기존 dispatch로 전환
+        TargetQueue->>TargetActor: [local] queue 순서대로 message 처리
         opt bound session이 있으면
-            TargetRuntime-)SessionOwner: sessionActorLocationUpdateReqMsg send
-            SessionOwner->>SessionOwner: binding route와 current ActorRef snapshot 교체
-            SessionOwner-)TargetRuntime: sessionActorLocationUpdateResMsg send
-            Note over TargetRuntime,SessionOwner: ResMsg가 없으면 같은 ReqMsg를 1초, 1초, 2초, 4초, 이후 5초 간격으로 재전송
+            TargetRuntime->>SessionOwner: [send] exact binding route 적용·held 제출·seal 해제
+            SessionOwner->>SessionOwner: [local] binding route와 current ActorRef snapshot 교체
+            Note over TargetRuntime,SessionOwner: timeout이면 physical Session 종료 · late update는 Warning
         end
     else Rejected
-        TargetSpot-->>SourceRuntime: Rejected와 optional reply 반환
-        SourceRuntime->>SourceActor: 기존 source membership 유지
+        TargetSpot-->>SourceRuntime: [reply] Actor 수용 Rejected와 optional application reply
+        SourceRuntime->>SourceActor: [local] 기존 source membership 유지
     end
 ```
 
@@ -514,8 +523,9 @@ sequenceDiagram
 보내므로 commit 전 실패에서는 호출하지 않는다. Restore 요청을 받은 target은 relocation
 temporary queue를 먼저 등록한다. 그동안 도착한 message와 request는 temporary queue에서
 기다리며 실제 Actor queue로 옮기기 전에는 실행하지 않는다. Target commit 뒤에 실패하면
-source로 rollback하지 않는다. 같은 target process가 실행 중일 때만 deadline 안에서 다시
-시도하며, process가 종료되면 relocation을 자동으로 이어받지 않는다.
+source로 rollback하지 않는다. 같은 target process가
+실행 중일 때만 deadline 안에서 다시 시도하며, process가 종료되면 relocation을 자동으로
+이어받지 않는다.
 
 Commit 전에 reject, timeout, `Capture`·`Restore` failure 또는 aggregate commit conflict가
 발생하면 target application instance를 공개하지 않는다. Target이 받은 relay record는 staging
@@ -528,16 +538,19 @@ process가 종료되면 다른 runtime이 자동 복구하지 않는다.
 
 [ObjectGeneration](01-glossary.ko.md#objectgeneration)은 그대로 유지한다. Cross-node 이동으로
 owner가 바뀌므로 `AuthorityOwnerGeneration`만 증가한다. Target Context는 기존
-`ObjectGeneration`과 새 owner generation을 사용한다. Bounded aggregate commit이 성공하면
+`ObjectGeneration`과 새 owner generation을 사용한다. Location Store CAS가 성공하면
 Source Context가 더 이상 operation을 실행하지 못하도록 차단한다.
 
 `Defer()` 뒤 source seal 전에 도착한 message는 현재 Actor queue와 함께
-`RelocationStore`에 저장한다. Source seal 뒤 도착한 message는 크기가 제한된 ingress hold에
-임시로 보관한다. Source runtime은 hold의 record와 이후 이전 route로 들어오는 record를 target
-temporary queue로 계속 relay한다. Commit 전에 중단하면 hold의 record를 도착 순서대로
-source queue에 되돌리고 target temporary queue를 폐기한다. Commit이 성공하면 저장된 기존
-작업 뒤에 temporary queue의 record를 옮긴다. Source는 target의 dispatch 전환 완료를 받은 뒤
-hold 원본을 제거한다.
+`RelocationStore`에 저장한다. Source seal 뒤 도착한 message는 ingress hold에 임시로
+보관한다. 이 hold에는 relocation 전용 record 수나 byte 상한이 없다.
+
+Source runtime은 hold의 record와 이후 이전 route로 들어오는 record를 target temporary
+queue로 계속 relay한다. Commit 전에 중단하면 hold의 record를 도착 순서대로 source queue에
+되돌리고 target temporary queue를 폐기한다. Commit이 성공하면 저장된 기존 작업 뒤에
+temporary queue의 record를 옮긴다. Source는 target의 완료 reply를 기다리지 않는다. Cutover를
+보낸 뒤 ingress hold를 Message Follow relay로 전환하고 정해진 Message Follow 기간이 끝나면
+원본을 제거한다.
 
 Application이 요청한 User Spot join에서는 target User Spot의 `OnActorJoin`으로 먼저
 admission을 결정한다. Cross-node Join에서는 restore 요청과 source relay 뒤 target restore와
@@ -606,8 +619,9 @@ generic state type, serialization profile과 message codec을 relocation adapter
 Store에는 application bytes를 그대로 opaque payload로 저장하고 Framework root manifest·chunk·checksum만
 Framework가 검증한다.
 
-`Capture`가 한 participant에 대해 반환하는 byte sequence는 최대 64 MiB다. 빈 byte sequence는 유효한
-application state이고 null result는 adapter contract 위반이다. Callback이 성공하면 Framework가 결과를 즉시
+`Capture`가 반환하는 byte sequence에는 relocation이 별도 크기 상한을 추가하지 않는다.
+Relocation Store와 transport가 일반 payload에 적용하는 크기 제한은 그대로 적용한다. 빈 byte
+sequence는 유효한 application state이고 null result는 adapter contract 위반이다. Callback이 성공하면 Framework가 결과를 즉시
 복사하거나 소유권을 넘겨받으므로 application은 그 뒤 결과를 바꾸지 않는다. `Restore`에 전달한 bytes는 callback이
 완료될 때까지만 유효하고 callback이 보관하려면 직접 복사해야 한다.
 
@@ -621,7 +635,7 @@ Policy와 adapter registration은 startup 뒤 바뀌지 않는다.
 
 Host relocation에서 Entry Spot Actor, `PerActor`·`SpotWide` User Spot과 Instance Spot을
 옮기는 정확한 단계와 sequence diagram은
-[Graceful drain과 handoff §8](28-graceful-drain-handoff.ko.md#8-unit-하나를-이전하는-순서)이
+[Graceful drain과 handoff §8](30-host-relocation-flow.ko.md#8-unit-하나를-이전하는-순서)이
 정의한다.
 
 ## 6. User Spot과 member Actor를 함께 이동하는 maintenance aggregate
@@ -668,24 +682,19 @@ flowchart LR
 따른다. Actor별 membership record는 해당 aggregate를 가리키며 relocation 때 owner를
 하나씩 공개하지 않는다.
 
-1. Spot queue turn 경계에서 aggregate의 active unit, callback과 예상 payload byte permit을 모두 얻은 뒤 source
-   User Spot의 join·leave와 모든 participant admission을 reversible하게 seal한다.
+1. Spot queue turn 경계에서 source User Spot의 join·leave와 모든 participant application
+   admission을 reversible하게 seal한다.
 2. Exact participant inventory를 immutable tree로 저장하고 root·count·digest를 검증한다.
-3. 모든 relocation 구성, target type·state 보존 adapter capability와 active·pending capacity를 preflight한다.
-4. `PreserveStateWith` participant의 모든 state, 실행하지 않은 message queue, accepted journal과 timer logical
-   registration·pending tick을 capture하고 target reservation·factory·restore를 admission이 닫힌 상태로 준비한다.
-5. Location Store의 단일 CAS가 aggregate owner, generation, inventory root와 capacity를
-   전환한다. 이 CAS가 성공하면 Spot과 모든 member Actor가 함께 새 owner를 사용한다.
-6. Authority commit 뒤 target lifecycle callback, accepted message·journal replay와 Framework timer 자동
-   복원을 끝내고 target User Spot과 member Actor가 message를 처리하기 시작한다. Aggregate에
-   포함된 bound Actor마다 target runtime이 Session owner에
-   `sessionActorLocationUpdateReqMsg`를 send하여 해당 route를 target으로 바꾸도록 요청한다. Route
-   switch와 함께 각 bound-session의 current Actor location snapshot도 같은 ActorId·ObjectGeneration을
-   유지한 채 target MeshName·NodeRid로 갱신한다. 같은 Session의 aggregate 밖 Actor route와 physical
-   STREAM connection은 유지한다. Session owner는 갱신을 마치면
-   `sessionActorLocationUpdateResMsg`를 send한다. 응답이 없으면 target runtime은 최초 send
-   1초 뒤부터 1초, 2초, 4초, 5초 간격으로 같은 요청을 다시 보내고 이후에는 5초 간격을
-   유지한다. 응답을 기다리는 동안에도 target User Spot과 member Actor는 message를 처리한다.
+3. 모든 relocation 구성과 target type·state 보존 adapter capability를 확인한다.
+4. `PreserveStateWith` participant의 state, 실행하지 않은 message queue와 timer logical
+   registration·pending tick을 capture하고 target factory·restore를 admission이 닫힌 상태로 준비한다.
+5. 준비를 끝낸 target이 Location Store의 단일 CAS로 aggregate owner, generation과 inventory
+   root를 전환한다. 이 CAS가 성공하면 Spot과 모든 member Actor가 함께 새 owner를 사용한다.
+6. Authority commit 뒤 target lifecycle callback, 저장한 message replay와 Framework timer 자동
+   복원을 끝내고 target User Spot과 member Actor가 message를 처리하기 시작한다. Bound Actor의
+   target runtime은 bound Actor마다 Session owner에 target route 적용과 seal 해제를 one-way로
+   알린다. Session owner는 exact update를 받으면 route를 바꾸고 seal을 해제한다. 같은 Session에서
+   aggregate 밖 Actor의 route와 physical STREAM connection은 유지한다.
 
 4번의 restore는 5번 aggregate commit 전에 끝나야 한다. `SpotWide` User Spot
 aggregate는 logical membership을 그대로 이동하므로 member Actor에 대한 application
@@ -707,7 +716,7 @@ activation 뒤 SpotId를 다시 지정하지 않는다.
 Spot authority commit 뒤 새 `ToSpot`, Actor Create와 Join은 target으로 보낸다.
 Source shell은 이미 source에 남은 Actor의 handler와 relocation control만 실행한다.
 각 Actor는 독립된 relocation unit이며 Actor queue를 seal한 뒤 state, 실행하지 않은
-queue, accepted journal, timer, session binding route와 bound-session current Actor location
+queue, timer와 bound-session current Actor location
 snapshot을 target으로 옮긴다. Snapshot은 같은 ActorId·ObjectGeneration을 유지하고 target
 MeshName·NodeRid를 제공한다. Actor별
 owner CAS가 성공하면 이전 owner로 도착한 message를 같은 operation identity,
@@ -729,9 +738,11 @@ application은 다음 round나 match를 여기서 시작할 수 있다.
 ## 7. 실패 처리 범위
 
 Commit 전 failure는 `Aborted` CAS, route와 source location snapshot 취소 확인, relocation
-root·reservation 정리와 source 상태 복원을 끝낸 뒤 source admission을 다시 연다. Location
-Store 변경 결과를 받지 못하면 성공이나 실패를 추측하지 않는다. 같은 authority를 다시
-읽어 owner가 source임을 확인하기 전에는 source admission을 열지 않는다.
+root·reservation 정리와 source 상태 복원을 끝낸 뒤 source admission을 다시 연다. Cutover 뒤
+Location Store 변경 결과를 받지 못하면 target은 성공이나 실패를 추측하지 않고 같은 authority를
+다시 읽는다. Exact target owner가 아니면 Restore 유효시간까지 같은 fence로 retry한다. 그 안에
+owner 변경을 확인하지 못하면 `location_update_failed`를 기록하고 target Actor 또는 Spot과
+temporary queue를 제거하며 Session route update를 보내지 않는다.
 
 `Capture`가 실패하면 relocation payload를 현재 authority에 연결하지 않는다. `Restore`가
 실패하면 target staging instance와 temporary queue를 폐기한다. 같은 source와 target process가
@@ -743,8 +754,8 @@ Owner와 membership commit 뒤 failure는 source rollback 조건이 아니다. �
 실행 중이면 target admission을 닫은 상태로 lifecycle callback이나 dispatch 전환을 deadline
 안에서 다시 시도할 수 있다. Source나 target process가 종료되면 다른 runtime이 relocation을
 이어받지 않는다. Commit 뒤 target이 종료되면 authority는 target을 유지하지만 object는
-unavailable 상태가 된다. 자동 target replacement와 process 재시작 뒤 relocation 재개는 차기
-version에서 별도로 정의한다.
+unavailable 상태가 된다. 자동 target replacement와 process 재시작 뒤 relocation 재개는 이
+계약의 범위 밖이다.
 
 같은 process 안의 재시도 때문에 factory, `Restore`와 lifecycle callback은 두 번 이상 호출될
 수 있다. Callback은 같은 object generation과 입력을 다시 받아도 수렴해야 하며 exactly-once
@@ -754,58 +765,38 @@ admission deadline 때문에 message, timer, phase update와 cleanup을 수행�
 
 ## 8. Message Follow
 
-Commit 뒤 source는 `MessageFollowDuration` 안에서 committed source→target Message Follow route만 사용해 stale route를
-relay한다. Relay는 Store를 읽거나 application handler를 실행하지 않으며 original operation ID, generation,
-payload와 reply route를 보존한다. Bound Session의 `sessionRelocationRouteUpdate`가 진행 중이면
-해당 Actor의 Message Follow route도 `sessionActorLocationUpdateResMsg`를 받거나
-`MessageFollowDuration`이 끝나면 제거한다. Session 위치 갱신 재전송은 target runtime이 별도로
-계속하므로 Message Follow route를 무기한 유지하지 않으며 source host의 Shutdown도 이 응답을
-기다리지 않는다. Route가 만료된 뒤 이전 route로 도착한 request는 `Unavailable`로 끝난다.
+Commit 뒤 source는 `MessageFollowDuration` 안에서 이전 주소로 도착한 message를 committed
+target으로 relay한다. Relay는 Store를 읽거나 application handler를 실행하지 않으며 original
+operation identity, generation, payload와 reply route를 유지한다. Route duration이 끝난 뒤 이전
+주소로 도착한 request는 `Unavailable`로 끝난다.
 
-Message Follow route는 global key, ObjectGeneration, source·target AuthorityOwnerGeneration과 [owner fence](01-glossary.ko.md#owner-fence)를 exact 검증한다.
-Owner generation은 hop마다 증가하며 최대 8 hops다. Route 하나의 queue는 1024 messages와 16 MiB 이하이고
-negotiated message bound도 지킨다. Message Follow duration 만료, route 없음과 loop는 `Unavailable`, generation
-mismatch는 `InvalidOperation`, bound 초과는 `CapacityExceeded`다. Framework는 failed operation을 fresh owner에게 hidden retry하지 않는다.
-이 `ObjectGeneration` 검사는 relocation route가 같은 incarnation에 속하는지 확인한다. 일반
-Actor·Spot message의 target은 logical ID이며 generation mismatch로 handler target을 제한하지 않는다.
+Message Follow는 Session route update를 기다리기 위한 재전송 queue가 아니다. Target이
+Session route update를 보내더라도, 이미 이전 주소로 전송된 server message를 처리하기
+위해 정해진 기간 동안 유지한다. 서로 다른 connection의 message 사이에 전역 순서는 보장하지
+않는다.
 
-User Spot aggregate의 Spot과 member Actor Message Follow route는 같은 commit generation에서 등록한다.
+## 9. Bound Session
 
-## 9. Bound session
+Actor가 이동해도 physical STREAM connection, Session identity와 ObjectGeneration은 유지된다.
+Relocation을 시작하기 전에 Session owner가 해당 Actor binding을 seal하고 Session request와
+push를 보관한다.
 
-Actor가 이동해도 physical STREAM connection, session identity와 ObjectGeneration은
-유지된다. Owner·membership commit과 Actor 복원을 마치면 target Actor는 message 처리를
-시작한다. Join으로 이동했다면 target runtime은 Join completion callback을 먼저 호출한다.
-그 뒤 target runtime은 Session owner에 `sessionActorLocationUpdateReqMsg`를 send하여 해당
-Actor의 [binding route](01-glossary.ko.md#binding-route)와 current `ActorRef` 위치 snapshot을
-target으로 바꾸도록 요청한다. Session owner는
-[binding token](01-glossary.ko.md#binding-token), AuthorityOwnerGeneration과 sequence
-barrier를 검증한 뒤 두 값을 atomic하게 갱신하고
-`sessionActorLocationUpdateResMsg`를 send한다. 한 Session에 Actor가 여러 개 bind되어
-있어도 이동하지 않은 Actor의 route는 바꾸지 않는다.
+Target은 Actor·Spot 준비 뒤 cutover를 받거나 1,000ms fallback이 끝나면 Location Store CAS를
+수행한다. CAS, target queue 개방과 lifecycle 완료 뒤 target runtime이 Session owner에 one-way
+route update를 보낸다. Session owner는 exact update를 받으면 binding route와 current `ActorRef`
+location snapshot을 target으로 바꾸고, 보관한 Session message를 제출한 뒤 seal을 해제한다.
+`SessionRelocationSealTimeout`의 기본값은 3,000ms이며 timeout이면 physical Session을 종료한다.
+Session은 target을 선택하거나 Location Store를 변경하지 않는다.
 
-Route switch가 성공하면 bound-session API가 반환하는 current `ActorRef` location snapshot도
-같은 전환에 맞춰 갱신한다. 반환된 snapshot은 `ActorId`와 `ObjectGeneration`을 유지하고 target
-`MeshName`과 `NodeRid`를 제공한다. 각 `ActorRef` 값은 immutable snapshot이지만
-`IZLinkSessionActor.Ref`, `ZLinkSessionActor.ref()`와 같은 bound-session accessor는 route switch
-뒤 current snapshot을 반환해야 한다. Application은 Actor relocation을 알기 위해 rebind하지 않는다.
+Session owner는 current Session identity, binding generation, ActorId·ObjectGeneration과
+relocation identity만 검증한다. AuthorityOwnerGeneration, numeric high-water 또는 Actor
+Location mirror를 다시 검증하지 않는다. Transport peer와 node generation은 transport 경계가,
+owner 변경은 target의 Location Store CAS가 각각 한 번 검증한다.
 
-두 message는 transport의 동기 request/reply가 아니라 서로 독립된 send packet이다. Target
-runtime은 응답을 기다리지 않고 Actor message 처리와 Join completion을 진행한다.
-`sessionActorLocationUpdateResMsg`를 받지 못하면 1초 뒤 같은
-`sessionActorLocationUpdateReqMsg`를 처음으로 다시 보낸다. 그 뒤에도 응답이 없으면
-1초, 2초, 4초, 5초 간격으로 다시 보내며 이후에는 5초 간격을 유지한다. Session owner는
-동일한 relocation ID와 binding generation을 가진 요청을 idempotent하게 처리한다. 응답을
-받기 전이라도 Message Follow route는 `MessageFollowDuration`까지만 이전 route로 도착한
-message를 Target Actor에 전달한다. 그 뒤에는 request가 `Unavailable`로 끝나지만 target runtime의
-위치 갱신 재전송은 실행 중인 target runtime이 계속한다. Target runtime이 종료되면 다른
-runtime이 같은 요청의 재전송을 자동으로 이어받지 않는다.
-이전 owner generation, binding token과 sequence의 packet, reply, push와 close는 current
-binding에 적용하지 않는다. Route update는 bound ObjectGeneration이 같은 relocation에만
-허용하며 같은 ActorId의 새 incarnation은 explicit bind가 필요하다.
-
-두 message의 field, 중복 처리와 재전송 중단 조건은
-[Session–Actor dispatch §5.1](20-session-actor-dispatch.ko.md#51-session-actor-위치-갱신-message)이
+Late·duplicate cutover 또는 Session route update는 Warning만 남기고 route, seal 또는 authority를
+다시 바꾸지 않는다. Same Session의 다른 Actor route와 physical connection은 영향을 받지 않는다.
+정확한 Session route 계약은
+[Session–Actor dispatch §5](20-session-actor-dispatch.ko.md#5-actor-relocation-route-barrier)가
 정의한다.
 
 ## 10. 구현 및 contract test 검증 요구
@@ -854,7 +845,7 @@ binding에 적용하지 않는다. Route update는 bound ObjectGeneration이 같
   completion idempotency에만 사용하고 `RelocationId`,
   reservation ID와 aggregate commit ID를 재사용하지 않는다.
 - `Defer()` 뒤 source seal 전 message는 barrier 뒤 Actor queue에 두고, seal 뒤
-  message만 [bounded ingress hold](01-glossary.ko.md#relocation-ingress-hold)에 보관한다.
+  message만 [relocation ingress hold](01-glossary.ko.md#relocation-ingress-hold)에 보관한다.
 - Cross-node Join의 Target dispatcher가 Actor instance보다 먼저 relocation temporary queue를
   등록한다. Restore 중 message는 이 queue에서 application handler를 실행하지 않는다.
 - 저장한 기존 Actor 작업을 실제 Actor queue에 먼저 넣고 temporary queue의 작업을 그 뒤에
@@ -867,11 +858,12 @@ binding에 적용하지 않는다. Route update는 bound ObjectGeneration이 같
   지키고 completion callback 뒤에 일반 message를 실행한다.
 - `PreserveStateWith`는 handler 종료 경계의 application state와 Framework queue·timer를
   복원하고, `RecreateOnRelocation`은 application state 없이 Framework queue·timer만 복원한다.
-- User Spot과 member Actor가
-  [bounded aggregate commit](01-glossary.ko.md#bounded-aggregate-commit)의
-  generation 하나로 함께 전환된다.
+- User Spot과 member Actor는 target이 실행하는 Location Store conditional batch CAS 한 번으로
+  함께 전환된다.
 - Commit 뒤 failure가 participant 일부를 source로 rollback하지 않는다.
-- Message Follow가 bounded committed route만 사용하고 [operation identity](01-glossary.ko.md#operation-identity)를 보존한다.
-- Bound STREAM connection은 이동하지 않으며 authority generation과 sequence barrier로 해당 Actor의
-  binding route와 bound-session current location snapshot만 target으로 바뀐다. ActorId·ObjectGeneration은
-  유지한다.
+- Message Follow는 commit된 route만 사용한다. Relay queue에는 relocation 전용 record 수나
+  byte 상한을 두지 않으며, [operation identity](01-glossary.ko.md#operation-identity)를
+  그대로 보존한다.
+- Bound STREAM connection은 이동하지 않는다. Session owner 한 곳에서 current Session, binding
+  generation과 relocation identity를 확인하고 해당 Actor route와 location snapshot만 target으로
+  바꾼다. ActorId·ObjectGeneration은 유지한다.

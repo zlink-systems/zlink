@@ -23,7 +23,6 @@
 | OBS-C7 | source 구현·process 미검증 | 동일 version target으로 planned maintenance를 완료한 뒤 명시적으로 `Shutdown`하는지 검증한다. |
 | OBS-C8 | source 구현·process 미검증 | bounded gate로 closing callback을 막고 deadline, cleanup cancellation과 forced teardown을 검증한다. |
 | OBS-C9A | source 구현·process 미검증 | `ObsC9AutomaticConvergenceScenario`가 target readiness 뒤 relocation 결과, workload authority와 후속 traffic을 aggregate selector로 검사한다. fresh actual-process runner 실행 log와 physical readiness evidence를 추가해야 한다. |
-| OBS-C9B | source 구현·process 미검증 | `ObsC9ManualTopologyScenario`가 manual topology의 Relocate blocker, source readiness와 workload continuity를 aggregate selector로 검사한다. fresh actual-process runner 실행 log와 physical readiness evidence를 추가해야 한다. |
 | OBS-C10 | source 구현·process 미검증 | 같은 topology에서 exact version filter가 placement weight보다 먼저 적용되는지 검증한다. |
 | OBS-C11 | 부분 source 구현·process 미검증 | 같은 Relocate intent 합류와 다른 option 차단을 검증한다. Readiness 전용 gate는 아직 source gap이다. |
 | OBS-C12 | 부분 source 구현·process 미검증 | 합류 waiter cancellation과 concurrent Shutdown terminal replay를 검증한다. Readiness 전용 gate는 아직 source gap이다. |
@@ -31,6 +30,6 @@
 ## 실행 구조
 
 `Server/Session`, `Server/Play`, `Server/Workflow`는 각 역할을 별도 프로세스로 실행한다.
-`Client/Scenarios`와 runner에는 OBS-A1~C12 source가 등록되어 있다. 아직 process 검증 전이므로
-완료 증거가 아니다. OBS-C9의 physical readiness gate와 네 manual topology 반복, OBS-C11·C12의
+`Client/Scenarios`와 runner에는 현재 common Config 11 source가 등록되어 있다. 아직 process 검증 전이므로
+완료 증거가 아니다. OBS-C9A의 physical readiness gate와 OBS-C11·C12의
 target readiness 전용 gate를 추가하고 전체 runner를 실행해야 Config 11 완료로 판정한다.

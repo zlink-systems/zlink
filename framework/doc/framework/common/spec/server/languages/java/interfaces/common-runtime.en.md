@@ -1,6 +1,6 @@
 # Java Common Runtime Public Interface
 
-[Interface table of contents](README.en.md) · [Host Relocation And Termination Contract](../../../../28-graceful-drain-handoff.en.md)
+[Interface table of contents](README.en.md) · [Host Relocation And Termination Contract](../../../../30-host-relocation-flow.en.md)
 
 This document fixes the public types expressing host execution state,
 object relocation, termination request, and common async operations in
@@ -353,6 +353,7 @@ public interface systems.zlink.framework.ZLinkHandlerFilter {
 }
 public interface systems.zlink.framework.ZLinkMessageSerializer {
   public abstract <T> systems.zlink.framework.ZLinkEncodedPayload serialize(T);
+  public default <T> systems.zlink.framework.ZLinkEncodedPayload serialize(T, java.lang.Class<?>);
   public abstract <T> T deserialize(systems.zlink.framework.ZLinkEncodedPayload, java.lang.Class<T>);
   public default void prepare(java.lang.Class<?>);
 }
@@ -393,6 +394,12 @@ public exception doesn't provide whether it's retryable.
 
 ## Serializer And Error Public Signature
 
+The first `decode(Class<T>)` on a received `ZLinkMessage` fixes either a value or a failure.
+A later call with the same type returns the same value without invoking the serializer
+again. A call with another type also does not deserialize again and ends with
+`TYPE_MISMATCH` if that type cannot accept the first value. If the first call failed, that
+failure is delivered again.
+
 ```java
 public final class systems.zlink.framework.ZLinkEncodedPayload {
   public static systems.zlink.framework.ZLinkEncodedPayload from(byte[]);
@@ -405,8 +412,10 @@ public final class systems.zlink.framework.errors.ZLinkConfigurationException ex
 public final class systems.zlink.framework.messaging.ZLinkMessage {
   public static systems.zlink.framework.messaging.ZLinkMessage empty();
   public static systems.zlink.framework.messaging.ZLinkMessage of(java.lang.Object);
+  public static systems.zlink.framework.messaging.ZLinkMessage of(java.lang.Object, java.lang.Class<?>);
   public static systems.zlink.framework.messaging.ZLinkMessage fromEncoded(systems.zlink.framework.ZLinkEncodedPayload, systems.zlink.framework.ZLinkMessageSerializer);
   public boolean isEmpty();
+  public java.lang.Class<?> declaredType();
   public <T> T decode(java.lang.Class<T>);
   public systems.zlink.framework.ZLinkEncodedPayload toEncodedPayload(systems.zlink.framework.ZLinkMessageSerializer);
 }

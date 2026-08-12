@@ -764,6 +764,17 @@ public class CommonSocketOptions {
 }
 ```
 
+`autoHwmMessageUnitBytes(...)`는 Core planner 입력이다. Core가 선택한 message
+slot 수에 이 값을 곱해 planned byte HWM을 계산한다. Caller가 `sendHwm(...)`이나
+`recvHwm(...)`을 설정한 방향은 수동 override가 되며 이후 Auto-HWM 재계산이
+그 값을 변경하지 않는다.
+
+Java 바인딩은 queue의 message나 payload를 다시 세지 않는다. Core pipe의 실제
+accounted byte가 applied HWM에 도달하면 native submit 결과가 backpressure를
+나타내고, Java operation은 기존 result·timeout 계약에 따라 이를 전달한다.
+`long` 값 `0`은 무제한이다. 음수로 보이는 `long` 값도 unsigned 64-bit HWM으로
+전달되므로 caller는 unsigned 비교와 문자열 변환을 사용해야 한다.
+
 - `MonitorStatus` record는 native `zlink_monitor_status_t` ABI version 2와 같은 field를 제공한다.
 - Planned, applied, deferred HWM과 in-flight 사용량은 unsigned `long` byte 값이다.
 - Deferred 값은 대응하는 `autoHwmDeferredSendHwmValid()` 또는 `autoHwmDeferredRecvHwmValid()`가 `true`일 때만 유효하다.

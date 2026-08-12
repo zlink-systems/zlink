@@ -47,7 +47,7 @@ public sealed record AdvanceWorkflowReq(string Marker);
 public sealed record AdvanceWorkflowRes(string WorkflowRid, string NodeRid, int Version, string State);
 public sealed record ReadWorkflowReq;
 public sealed record ReadWorkflowRes(string WorkflowRid, string NodeRid, int Version, string State);
-public sealed record WorkflowSignalReq(string Marker);
+public sealed record WorkflowSignalMsg(string Marker);
 public sealed record DiagnosticsBeforeReq(string Marker);
 public sealed record DiagnosticsOffReq(string Marker);
 public sealed record DiagnosticsErrorsReq(string Marker);

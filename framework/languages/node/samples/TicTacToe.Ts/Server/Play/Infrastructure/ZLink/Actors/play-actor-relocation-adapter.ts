@@ -6,6 +6,8 @@ interface PlayActorTransferState {
   readonly level: number;
   readonly wins: number;
   readonly roomId?: string;
+  readonly pendingJoinRoomId?: string;
+  readonly destroyAfterEntrySpotJoin?: boolean;
 }
 
 // --8<-- [start:doc-relocation-adapter]
@@ -15,7 +17,9 @@ class PlayActorRelocationAdapter implements ZLinkActorRelocationAdapter<PlayActo
       displayName: actor.displayName,
       level: actor.level,
       wins: actor.wins,
-      roomId: actor.roomId
+      roomId: actor.roomId,
+      pendingJoinRoomId: actor.pendingJoinRoomId,
+      destroyAfterEntrySpotJoin: actor.destroyAfterEntrySpotJoin
     } satisfies PlayActorTransferState));
   }
 
@@ -25,6 +29,8 @@ class PlayActorRelocationAdapter implements ZLinkActorRelocationAdapter<PlayActo
     actor.level = restored.level;
     actor.wins = restored.wins;
     actor.roomId = restored.roomId;
+    actor.pendingJoinRoomId = restored.pendingJoinRoomId;
+    actor.destroyAfterEntrySpotJoin = restored.destroyAfterEntrySpotJoin === true;
   }
 }
 // --8<-- [end:doc-relocation-adapter]

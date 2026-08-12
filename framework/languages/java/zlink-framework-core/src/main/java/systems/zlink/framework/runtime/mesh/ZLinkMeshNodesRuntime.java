@@ -59,14 +59,9 @@ public final class ZLinkMeshNodesRuntime implements AutoCloseable {
                     adapter,
                     context,
                     applicationDispatchBudget,
-                    deferServiceReadyPublication);
+                    deferServiceReadyPublication,
+                    receiver);
                 started.add(runtime);
-                if (receiver != null) {
-                    if (receiver instanceof ZLinkMeshApplicationReceiver applicationReceiver) {
-                        runtime.node().setApplicationReceiver(applicationReceiver);
-                    }
-                    runtime.node().startDispatch(receiver);
-                }
             }
             return new ZLinkMeshNodesRuntime(started);
         } catch (RuntimeException failure) {

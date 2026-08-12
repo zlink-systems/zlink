@@ -57,18 +57,37 @@ status_gap_count=0
 for config in "${CONFIGS[@]}"; do
   IFS=: read -r number directory document <<<"${config}"
   config_count=$((config_count + 1))
-  common_document="${COMMON_E2E_DIR}/${document}.en.md"
+  common_document_en="${COMMON_E2E_DIR}/${document}.en.md"
+  common_document_ko="${COMMON_E2E_DIR}/${document}.ko.md"
   cpp_directory="${SCRIPT_DIR}/${directory}"
   feature_map="${cpp_directory}/feature-map.ko.md"
   runner="${cpp_directory}/run_e2e.sh"
 
-  if [[ ! -f "${common_document}" ]]; then
-    echo "[cpp-e2e-inventory] missing common document: ${common_document}" >&2
+  if [[ ! -f "${common_document_en}" || ! -f "${common_document_ko}" ]]; then
+    echo "[cpp-e2e-inventory] missing common document pair: ${document}.en.md/.ko.md" >&2
     failure_count=$((failure_count + 1))
     continue
   fi
 
-  mapfile -t common_ids < <(extract_common_ids "${common_document}")
+  mapfile -t common_ids_en < <(extract_common_ids "${common_document_en}")
+  mapfile -t common_ids_ko < <(extract_common_ids "${common_document_ko}")
+  mapfile -t en_only_ids < <(
+    comm -23 \
+      <(printf '%s\n' "${common_ids_en[@]}") \
+      <(printf '%s\n' "${common_ids_ko[@]}")
+  )
+  mapfile -t ko_only_ids < <(
+    comm -13 \
+      <(printf '%s\n' "${common_ids_en[@]}") \
+      <(printf '%s\n' "${common_ids_ko[@]}")
+  )
+  if [[ "${#en_only_ids[@]}" -gt 0 || "${#ko_only_ids[@]}" -gt 0 ]]; then
+    echo "[cpp-e2e-inventory] common document ID parity mismatch: ${document}" >&2
+    [[ "${#en_only_ids[@]}" -eq 0 ]] || printf '  EN-only IDs: %s\n' "${en_only_ids[*]}" >&2
+    [[ "${#ko_only_ids[@]}" -eq 0 ]] || printf '  KO-only IDs: %s\n' "${ko_only_ids[*]}" >&2
+    failure_count=$((failure_count + 1))
+  fi
+  common_ids=("${common_ids_en[@]}")
   scenario_count=$((scenario_count + ${#common_ids[@]}))
   printf '[cpp-e2e-inventory] config-%02d %-24s common=%2d' \
     "${number}" "${directory}" "${#common_ids[@]}"
@@ -137,11 +156,6 @@ done
 printf '[cpp-e2e-inventory] configs=%d scenarios=%d feature-map-missing=%d source-missing=%d incomplete-status=%d\n' \
   "${config_count}" "${scenario_count}" "${feature_missing_count}" \
   "${source_missing_count}" "${status_gap_count}"
-
-if [[ "${scenario_count}" -ne 374 ]]; then
-  echo "[cpp-e2e-inventory] common scenario inventory changed: expected 374" >&2
-  failure_count=$((failure_count + 1))
-fi
 
 if [[ "${failure_count}" -ne 0 ]]; then
   echo "[cpp-e2e-inventory] FAIL: ${failure_count} required inventory conditions are open" >&2

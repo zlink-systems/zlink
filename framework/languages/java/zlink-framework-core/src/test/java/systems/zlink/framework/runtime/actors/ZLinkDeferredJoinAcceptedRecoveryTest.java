@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.actors;
+import java.nio.charset.StandardCharsets;
+import java.util.zip.CRC32C;
 
 import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore;
 import systems.zlink.framework.runtime.internal.locations
@@ -57,7 +59,7 @@ final class ZLinkDeferredJoinAcceptedRecoveryTest {
         ZLinkDeferredJoinAcceptedRecovery.Manifest manifest = recovery.prepare(
                 operation,
                 actorRef,
-                "\"accepted\"".getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                "\"accepted\"".getBytes(StandardCharsets.UTF_8))
             .toCompletableFuture()
             .join();
         RecordingActor actor = new RecordingActor("actor-a");
@@ -179,7 +181,7 @@ final class ZLinkDeferredJoinAcceptedRecoveryTest {
             String reference = "root-" + sequence.incrementAndGet();
             roots.put(reference, payload.clone());
             Instant now = Instant.now();
-            java.util.zip.CRC32C checksum = new java.util.zip.CRC32C();
+            CRC32C checksum = new CRC32C();
             checksum.update(payload, 0, payload.length);
             return CompletableFuture.completedFuture(new ZLinkRelocationStored(
                 reference,

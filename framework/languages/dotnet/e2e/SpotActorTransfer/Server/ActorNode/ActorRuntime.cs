@@ -419,7 +419,7 @@ namespace SpotActorTransfer.ActorNode
             Context.Handlers.AddActorPacket<ProbeHandler, TransferActor>(
                 nameof(ProbeReq));
             Context.Handlers.AddActorPacket<HandoffPacketHandler, TransferActor>(
-                nameof(HandoffPacket));
+                nameof(HandoffMsg));
             Context.Handlers.AddActorPacket<BoundPushHandler, TransferActor>(
                 nameof(BoundPushReq));
         }
@@ -659,15 +659,15 @@ namespace SpotActorTransfer.ActorNode
         }
     }
 
-    [ZLinkSpotActorSendHandler(nameof(HandoffPacket))]
+    [ZLinkSpotActorSendHandler(nameof(HandoffMsg))]
     internal sealed class HandoffPacketHandler(EvidenceStore evidence)
-        : IZLinkSpotActorSendHandler<TransferUserSpot, TransferActor, HandoffPacket>
+        : IZLinkSpotActorSendHandler<TransferUserSpot, TransferActor, HandoffMsg>
     {
         public ValueTask HandleAsync(
             TransferUserSpot spot,
             TransferActor actor,
             IZLinkMessageContext context,
-            HandoffPacket message,
+            HandoffMsg message,
             CancellationToken cancellationToken)
         {
             _ = spot;
@@ -684,15 +684,15 @@ namespace SpotActorTransfer.ActorNode
         }
     }
 
-    [ZLinkSpotActorSendHandler(nameof(HandoffPacket))]
+    [ZLinkSpotActorSendHandler(nameof(HandoffMsg))]
     internal sealed class EntryHandoffPacketHandler(EvidenceStore evidence)
-        : IZLinkEntrySpotActorSendHandler<TransferEntrySpot, TransferActor, HandoffPacket>
+        : IZLinkEntrySpotActorSendHandler<TransferEntrySpot, TransferActor, HandoffMsg>
     {
         public ValueTask HandleAsync(
             TransferEntrySpot entrySpot,
             TransferActor actor,
             IZLinkMessageContext context,
-            HandoffPacket message,
+            HandoffMsg message,
             CancellationToken cancellationToken)
         {
             _ = entrySpot;

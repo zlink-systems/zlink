@@ -1,4 +1,9 @@
 package systems.zlink.framework.runtime.locations;
+import java.security.MessageDigest;
+import java.util.OptionalLong;
+import java.util.concurrent.atomic.AtomicBoolean;
+import systems.zlink.framework.locations.ZLinkPageRequest;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDeleted;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -175,7 +180,7 @@ class ZLinkInMemoryLocationStoreTest {
             List.of(renewed),
             store.listFanoutPublishers(
                     "events",
-                    systems.zlink.framework.locations.ZLinkPageRequest
+                    ZLinkPageRequest
                         .firstPage())
                 .toCompletableFuture().get().items());
         assertEquals(
@@ -299,7 +304,7 @@ class ZLinkInMemoryLocationStoreTest {
             ZLinkAuthoritySnapshot.class,
             store.read(key, () -> false).toCompletableFuture().get());
         assertInstanceOf(
-            systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDeleted.class,
+            ZLinkAuthorityDeleted.class,
             store.compareExchange(
                     key,
                     new ZLinkAuthorityExpectFound(active.storeVersion()),
@@ -509,7 +514,7 @@ class ZLinkInMemoryLocationStoreTest {
     @Test
     void restoreRequiresExactOwnerButDoesNotRequireALiveLease()
         throws Exception {
-        var leaseLive = new java.util.concurrent.atomic.AtomicBoolean(true);
+        var leaseLive = new AtomicBoolean(true);
         ZLinkInMemoryAuthorityStore store = new ZLinkInMemoryAuthorityStore(
             Clock.fixed(NOW, ZoneOffset.UTC),
             ignored -> leaseLive.get(),
@@ -566,20 +571,20 @@ class ZLinkInMemoryLocationStoreTest {
             "mesh-entry-00000000-0000-4000-8000-000000000077");
 
         assertEquals(
-            java.util.OptionalLong.empty(),
+            OptionalLong.empty(),
             store.getMeshNodeChangeStamp("mesh")
                 .toCompletableFuture().get());
         store.updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
             .toCompletableFuture().get();
         assertEquals(
-            java.util.OptionalLong.of(1),
+            OptionalLong.of(1),
             store.getMeshNodeChangeStamp("mesh")
                 .toCompletableFuture().get());
         store.removeMeshNode(
                 new ZLinkMeshNodeDescriptorKey("mesh", NODE_A), owner)
             .toCompletableFuture().get();
         assertEquals(
-            java.util.OptionalLong.of(2),
+            OptionalLong.of(2),
             store.getMeshNodeChangeStamp("mesh")
                 .toCompletableFuture().get());
     }
@@ -748,7 +753,7 @@ class ZLinkInMemoryLocationStoreTest {
             reservation,
             state,
             envelope,
-            java.security.MessageDigest
+            MessageDigest
                 .getInstance("SHA-256")
                 .digest(envelope),
             NOW.plus(Duration.ofMinutes(5)));
@@ -799,7 +804,7 @@ class ZLinkInMemoryLocationStoreTest {
         ZLinkInMemoryLocationStore store) throws Exception {
         return store.listMeshNodes(
                 "mesh",
-                systems.zlink.framework.locations.ZLinkPageRequest
+                ZLinkPageRequest
                     .firstPage())
             .toCompletableFuture().get().items().getFirst();
     }

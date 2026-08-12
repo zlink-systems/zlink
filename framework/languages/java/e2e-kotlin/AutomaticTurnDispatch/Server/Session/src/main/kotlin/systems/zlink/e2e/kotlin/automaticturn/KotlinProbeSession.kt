@@ -39,7 +39,7 @@ class KotlinProbeSession(
 
     override suspend fun onActorBindingReplacedSuspending(actorId: String) {
         sessionContext.client()
-            .send(Contracts.ActorBindingReplacedNotice(actorId))
+            .send(Contracts.ActorBindingReplacedNotify(actorId))
             .submit()
             .await()
     }

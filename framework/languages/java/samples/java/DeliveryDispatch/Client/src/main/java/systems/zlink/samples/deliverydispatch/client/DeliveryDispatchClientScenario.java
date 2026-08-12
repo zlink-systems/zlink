@@ -89,7 +89,7 @@ public final class DeliveryDispatchClientScenario {
             })
             .thenCompose(message -> {
                 Messages.OfferDeliveryNotify courierOffer = message.payload();
-                return courier.send(new Messages.CourierDecision(
+                return courier.send(new Messages.CourierDecisionMsg(
                     courierOffer.deliveryId(), courierOffer.courierId(), true, null)).submit();
             })
             .thenCompose(ignored -> statuses)
@@ -152,7 +152,7 @@ public final class DeliveryDispatchClientScenario {
             .thenCompose(ignored -> secondOffer)
             .thenCompose(message -> {
                 Messages.OfferDeliveryNotify acceptedOffer = message.payload();
-                return courierB.send(new Messages.CourierDecision(
+                return courierB.send(new Messages.CourierDecisionMsg(
                     acceptedOffer.deliveryId(), acceptedOffer.courierId(), true, null)).submit();
             })
             .thenCompose(ignored -> statuses)
@@ -179,8 +179,8 @@ public final class DeliveryDispatchClientScenario {
     private CompletionStage<Void> assertServerEvidence() {
         return post(
             "/self-check/assert",
-            new Messages.ServerAssertionRequest("delivery-success", "delivery-reassign"),
-            Messages.ServerAssertionResponse.class).thenAccept(response -> {
+            new Messages.ServerAssertionReq("delivery-success", "delivery-reassign"),
+            Messages.ServerAssertionRes.class).thenAccept(response -> {
                 ZLinkStreamAssert.ensure(response.passed(), "server delivery evidence failed");
                 System.out.println(SampleNames.ServerEvidenceMarker);
             });

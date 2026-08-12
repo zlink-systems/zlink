@@ -40,20 +40,20 @@ public final class MonitoringEntrySpot implements ZLinkEntrySpot<MonitoringActor
     public static final class DestroyHandler implements ZLinkEntrySpotActorRequestHandler<
         MonitoringEntrySpot,
         MonitoringActor,
-        Contracts.PlacementActorDestroyRequest,
-        Contracts.PlacementActorDestroyResponse> {
+        Contracts.PlacementActorDestroyReq,
+        Contracts.PlacementActorDestroyRes> {
         @Override
-        public CompletionStage<Contracts.PlacementActorDestroyResponse> handle(
+        public CompletionStage<Contracts.PlacementActorDestroyRes> handle(
             MonitoringEntrySpot entrySpot,
             MonitoringActor actor,
             ZLinkMessageContext messageContext,
-            Contracts.PlacementActorDestroyRequest request) {
+            Contracts.PlacementActorDestroyReq request) {
             if (!actor.context().actorId().equals(request.actorId())) {
                 return CompletableFuture.failedFuture(
                     new IllegalArgumentException("actor id does not match request"));
             }
             return entrySpot.context().destroyActor(actor).thenApply(
-                ignored -> new Contracts.PlacementActorDestroyResponse(
+                ignored -> new Contracts.PlacementActorDestroyRes(
                     request.actorId(), true));
         }
     }

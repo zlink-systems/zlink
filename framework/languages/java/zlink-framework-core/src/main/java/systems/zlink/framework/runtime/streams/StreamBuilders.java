@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.streams;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
 
 import systems.zlink.framework.configuration.ZLinkStreamNodeBuilder;
 import systems.zlink.framework.configuration.ZLinkStreamSocketConfig;
@@ -47,7 +48,7 @@ public final class StreamBuilders {
         @Override
         public ZLinkStreamNodeBuilder bind(int port) {
             if (port < 0 || port > 65_535) {
-                throw new systems.zlink.framework.errors.ZLinkConfigurationException(
+                throw new ZLinkConfigurationException(
                     "stream listen port must be between 0 and 65535");
             }
             listenPort = port;
@@ -82,7 +83,7 @@ public final class StreamBuilders {
 
         private static String requireHost(String host, String label) {
             if (host == null || host.isBlank()) {
-                throw new systems.zlink.framework.errors.ZLinkConfigurationException(
+                throw new ZLinkConfigurationException(
                     "stream " + label + " must not be empty");
             }
             return host;

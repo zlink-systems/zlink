@@ -1,4 +1,6 @@
 package systems.zlink.e2e.observabilityops.trigger;
+import java.util.concurrent.CompletionException;
+import systems.zlink.stream.connector.ZLinkStreamConnectionState;
 
 import java.time.Duration;
 import java.net.URI;
@@ -47,7 +49,7 @@ public final class TriggerOperations {
             connector.connect().submit().toCompletableFuture().get();
             try {
                 connector.request(new ZLinkStreamEncodedPayload(
-                        "ObservabilityMissingPacket",
+                        "ObservabilityMissingReq",
                         Message.from(new byte[] {(byte) 0xff, 0x00}),
                         Map.of(),
                         ZLinkStreamCodec.RAW))
@@ -55,7 +57,7 @@ public final class TriggerOperations {
                     .submit()
                     .toCompletableFuture().join();
                 throw new IllegalStateException("missing packet unexpectedly succeeded");
-            } catch (java.util.concurrent.CompletionException expected) {
+            } catch (CompletionException expected) {
                 System.out.println("OBS-A2 missing-handler reply=" + expected.getCause().getClass().getSimpleName());
             }
         } finally {
@@ -98,7 +100,7 @@ public final class TriggerOperations {
                 .submit(Void.class)
                 .toCompletableFuture().join();
             throw new IllegalStateException("force reconnect request unexpectedly received a reply");
-        } catch (java.util.concurrent.CompletionException expected) {
+        } catch (CompletionException expected) {
             // Closing the server-side session fails the pending request and starts automatic reconnect.
         }
     }
@@ -135,13 +137,13 @@ public final class TriggerOperations {
     private static void probeLifecycle(ZLinkStreamConnector connector) {
         try {
             connector.request(new ZLinkStreamEncodedPayload(
-                    "MetricsLifecycleProbe",
+                    "MetricsLifecycleProbeReq",
                     Message.from(new byte[] {1}),
                     Map.of(),
                     ZLinkStreamCodec.RAW))
                 .timeout(Duration.ofSeconds(5))
                 .submit().toCompletableFuture().join();
-        } catch (java.util.concurrent.CompletionException expected) {
+        } catch (CompletionException expected) {
             // The missing-handler error proves the application session processed the frame.
         }
     }
@@ -155,7 +157,7 @@ public final class TriggerOperations {
             connector.connect().submit().toCompletableFuture().join();
             for (int i = 0; i < 8192; i++) {
                 connector.send(new ZLinkStreamEncodedPayload(
-                    "ReaderFreeTraffic",
+                    "ReaderFreeTrafficMsg",
                     Message.from(new byte[] {(byte) (i & 0xff)}),
                     Map.of(),
                     ZLinkStreamCodec.RAW)).submit();
@@ -163,13 +165,13 @@ public final class TriggerOperations {
             }
             try {
                 connector.request(new ZLinkStreamEncodedPayload(
-                        "ReaderFreeProbe",
+                        "ReaderFreeProbeReq",
                         Message.from(new byte[] {1}),
                         Map.of(),
                         ZLinkStreamCodec.RAW))
                     .timeout(Duration.ofSeconds(20))
                     .submit().toCompletableFuture().join();
-            } catch (java.util.concurrent.CompletionException expected) {
+            } catch (CompletionException expected) {
                 messagingAccurate = true;
             }
             new ObjectMapper().writeValue(output.toFile(), Map.of(
@@ -208,7 +210,7 @@ public final class TriggerOperations {
             String closeReason = disconnected.get(15, TimeUnit.SECONDS);
             new ObjectMapper().writeValue(output.toFile(), Map.of("closeReason", closeReason));
         } finally {
-            if (connector.state() != systems.zlink.stream.connector.ZLinkStreamConnectionState.CLOSED) {
+            if (connector.state() != ZLinkStreamConnectionState.CLOSED) {
                 connector.close().submit().toCompletableFuture().join();
             }
         }

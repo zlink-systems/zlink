@@ -298,8 +298,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
         string meshName,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        const int capacity = 1024;
-        var (hub, observer) = SubscribeMonitor(meshName, capacity);
+        var (hub, observer) = SubscribeMonitor(meshName);
         try
         {
             await foreach (var status in observer.ReadAllAsync(cancellationToken)
@@ -315,8 +314,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
     private (
         MonitorHub Hub,
         ZLinkObservationQueue<ZLinkRouteMeshStatus> Observer) SubscribeMonitor(
-        string meshName,
-        int capacity)
+        string meshName)
     {
         lock (_monitorGate)
         {
@@ -325,7 +323,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
                     nameof(ZLinkRouteMeshRuntimeService));
             var nodeRuntime = _runtime.GetMeshNodeRuntime(meshName);
             var hub = GetOrCreateHub(meshName, nodeRuntime);
-            return (hub, hub.Subscribe(capacity));
+            return (hub, hub.Subscribe());
         }
     }
 
@@ -741,12 +739,11 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
                     .ToArray();
         }
 
-        public ZLinkObservationQueue<ZLinkRouteMeshStatus> Subscribe(int capacity)
+        public ZLinkObservationQueue<ZLinkRouteMeshStatus> Subscribe()
         {
             var observer = new ZLinkObservationQueue<ZLinkRouteMeshStatus>(
-                capacity,
-                static status => status.Sequence,
-                "route_mesh");
+                static status => status.MeshName,
+                eventName: "route_mesh");
             var status = _owner.GetStatus(_meshName.Value);
             lock (_gate)
             {

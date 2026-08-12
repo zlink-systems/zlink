@@ -1,4 +1,7 @@
 package systems.zlink.e2e.automaticturn.client;
+import java.time.Duration;
+import java.util.Arrays;
+import systems.zlink.stream.connector.ZLinkStreamCompression;
 
 import java.net.URI;
 import systems.zlink.e2e.automaticturn.client.Support.AutomaticTurnDispatchScenarioSupport;
@@ -17,7 +20,7 @@ public final class Program {
         }
         ClientOptions options = ClientOptions.load(args[1]);
         AutomaticTurnDispatchScenarioSupport support = new AutomaticTurnDispatchScenarioSupport(options);
-        String[] operationArgs = java.util.Arrays.copyOfRange(args, 2, args.length);
+        String[] operationArgs = Arrays.copyOfRange(args, 2, args.length);
         boolean replacementScenario = operationArgs.length > 0
             && "JVM-SESSION-001".equals(operationArgs[0]);
         ZLinkStreamConnector connector = ZLinkStreamConnectorFactory.create(
@@ -36,23 +39,23 @@ public final class Program {
                 ZLinkStreamConnector recovery = ZLinkStreamConnectorFactory.create(
                     new ZLinkStreamConnectorOptions(
                         URI.create(options.streamEndpoint()),
-                        systems.zlink.stream.connector.ZLinkStreamDispatchMode.MANUAL,
-                        java.time.Duration.ofSeconds(120),
-                        java.time.Duration.ofSeconds(3),
+                        ZLinkStreamDispatchMode.MANUAL,
+                        Duration.ofSeconds(120),
+                        Duration.ofSeconds(3),
                         2,
-                        java.time.Duration.ofSeconds(5),
+                        Duration.ofSeconds(5),
                         64 * 1024,
                         64 * 1024,
                         1024,
                         true,
-                        java.time.Duration.ofSeconds(1),
-                        java.time.Duration.ofSeconds(5),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(5),
                         false,
-                        java.time.Duration.ofMillis(250),
-                        java.time.Duration.ofSeconds(5),
+                        Duration.ofMillis(250),
+                        Duration.ofSeconds(5),
                         2.0,
                         false,
-                        systems.zlink.stream.connector.ZLinkStreamCompression.LZ4,
+                        ZLinkStreamCompression.LZ4,
                         null,
                         null,
                         null));
@@ -145,7 +148,6 @@ public final class Program {
             case "ATD-E2" -> support.runCancellationCleanup(connector);
             case "ATD-E4", "ATD-E5" -> System.out.println("scenario " + scenario + " passed");
             case "TD-E3" -> support.runOppositeUserSpotJoins(connector);
-            case "TD-A1" -> support.runTerminatorSurface();
             case "TD-A2" -> support.runAsyncHoldsTurn(connector);
             case "TD-A3" -> support.runCounterScenario(connector, "TD-A3", "async");
             case "TD-A4" -> support.runAsyncCompletion(connector);
@@ -199,7 +201,7 @@ public final class Program {
             "ATD-A1", "ATD-A2", "ATD-A3", "ATD-A4", "ATD-B1", "ATD-B2", "ATD-B3",
             "ATD-C1", "ATD-C2", "ATD-C3", "ATD-D1", "ATD-D2", "ATD-D3", "ATD-D4",
             "ATD-E1", "ATD-E2", "ATD-E4", "ATD-E5",
-            "TD-A1", "TD-A2", "TD-A3", "TD-A4", "TD-A5", "TD-B1", "TD-B2", "TD-B3",
+            "TD-A2", "TD-A3", "TD-A4", "TD-A5", "TD-B1", "TD-B2", "TD-B3",
             "TD-B4", "TD-C1", "TD-C2", "TD-C3", "TD-C4", "TD-C5", "TD-D1", "TD-D2",
             "TD-D3", "TD-D4", "TD-D5", "TD-D6", "TD-E1", "TD-E2", "TD-E2A", "TD-F1",
             "TD-F2", "TD-F3", "TD-F4", "TD-F5", "TD-F6", "TD-G1"

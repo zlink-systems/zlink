@@ -418,20 +418,31 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
 
     public ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default)
     {
-        ZLinkApplicationExecutionContext.RejectSpotRequestWhenSameGate(
-            target.Snapshot.SpotId,
-            _executionScope);
-        return ExecuteAsync<TReply>(cancellationToken);
+        return ExecuteAfterTerminatorAsync<TReply>(
+            ZLinkNestedRequestTerminator.Async,
+            cancellationToken);
     }
 
     public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default)
     {
-        ZLinkApplicationExecutionContext.RejectSpotRequestWhenSameGate(
+        ZLinkApplicationExecutionContext.ValidateSpotRequest(
             target.Snapshot.SpotId,
+            ZLinkNestedRequestTerminator.Yield,
             _executionScope);
         return ZLinkApplicationExecutionContext
             .RequireYieldTurn(_turn, "Spot request")
             .YieldFrameworkCallAsync(ExecuteAsync<TReply>, cancellationToken);
+    }
+
+    internal ValueTask<TReply> ExecuteAfterTerminatorAsync<TReply>(
+        ZLinkNestedRequestTerminator terminator,
+        CancellationToken cancellationToken)
+    {
+        ZLinkApplicationExecutionContext.ValidateSpotRequest(
+            target.Snapshot.SpotId,
+            terminator,
+            _executionScope);
+        return ExecuteAsync<TReply>(cancellationToken);
     }
 
     private async ValueTask<TReply> ExecuteAsync<TReply>(CancellationToken cancellationToken)

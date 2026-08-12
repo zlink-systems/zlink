@@ -1,6 +1,7 @@
 import { Inject } from '@nestjs/common';
 import { ZLINK_ACTOR_CLIENT, ZLINK_ACTOR_MANAGER } from '@zlink-systems/nestjs';
 import {
+  DeliverQuestNotificationMsg,
   QuestCompletedNotify,
   QuestProgressNotify
 } from '../../../../Shared/Contracts/messages';
@@ -26,12 +27,12 @@ class PlayerQuestNotifier {
     for (const changed of progress) {
       await this.actors.sendToActor(
         actor.actorId,
-        new QuestProgressNotify(playerId, changed)
+        new DeliverQuestNotificationMsg(new QuestProgressNotify(playerId, changed))
       ).submit();
       if (completedQuestIds.includes(changed.questId)) {
         await this.actors.sendToActor(
           actor.actorId,
-          new QuestCompletedNotify(playerId, changed, true)
+          new DeliverQuestNotificationMsg(new QuestCompletedNotify(playerId, changed, true))
         ).submit();
       }
     }

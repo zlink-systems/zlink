@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -327,7 +328,7 @@ final class ZLinkDefaultSpotContextTest {
             DefaultSpotContext context = host.userContext(
                 ZLinkUserSpotExecutionMode.SPOT_WIDE);
             CompletableFuture<Void> firstRelease = new CompletableFuture<>();
-            List<String> order = new java.util.concurrent.CopyOnWriteArrayList<>();
+            List<String> order = new CopyOnWriteArrayList<>();
 
             CompletionStage<Void> first = context.enqueueDispatch(() -> {
                 order.add("first");

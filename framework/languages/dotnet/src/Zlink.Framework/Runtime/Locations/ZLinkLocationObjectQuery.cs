@@ -75,9 +75,9 @@ internal sealed class ZLinkLocationObjectQuery(
         var items = new List<ZLinkLocationObjectEntry>(result.Value.Items.Count);
         foreach (var authority in result.Value.Items)
         {
-            if (!MatchesKind(authority.Snapshot.Allocation.ObjectKind, filter.ObjectKind)
-                || !TryGetGlobalId(authority, filter.ObjectKind, out var globalId))
+            if (!MatchesKind(authority.Snapshot.Allocation.ObjectKind, filter.ObjectKind))
                 continue;
+            var globalId = GetGlobalId(authority, filter.ObjectKind);
             var entry = await ProjectAsync(
                     globalId,
                     authority.Snapshot,
@@ -149,13 +149,28 @@ internal sealed class ZLinkLocationObjectQuery(
         }
     }
 
-    private static bool TryGetGlobalId(
+    private static string GetGlobalId(
         ZLinkAuthorityEntry authority,
-        ZLinkLocationObjectKind kind,
-        out string globalId) =>
-        kind == ZLinkLocationObjectKind.Actor
-            ? ZLinkActorAuthorityPayloadCodec.TryGetActorId(authority.Key, out globalId)
-            : ZLinkUserSpotAuthorityPayloadCodec.TryGetSpotId(authority.Key, out globalId);
+        ZLinkLocationObjectKind kind)
+    {
+        try
+        {
+            if (kind == ZLinkLocationObjectKind.Actor)
+                return ZLinkAuthorityKeyCodec.DecodeActor(authority.Key);
+
+            var spotId = ZLinkAuthorityKeyCodec.DecodeSpot(authority.Key);
+            return ZLinkSpotId.IsValid(spotId)
+                ? spotId
+                : throw new InvalidDataException(
+                    "The authority key contains an invalid spot identifier.");
+        }
+        catch (InvalidDataException error)
+        {
+            throw Unavailable(
+                "The object location store contains a noncanonical authority key.",
+                error);
+        }
+    }
 
     private static bool MatchesKind(
         ZLinkPlacementObjectKind stored,

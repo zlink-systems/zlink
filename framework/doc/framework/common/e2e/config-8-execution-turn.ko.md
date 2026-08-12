@@ -50,22 +50,6 @@ handler evidence를 함께 확인하고, file log와 scheduler timing은 성공 
 
 ### Track A — Async는 현재 turn을 유지
 
-#### TD-A1 One-way send 완료는 handler 완료를 기다리지 않는다
-
-우선순위: `P0`
-
-One-way send는 outbound admission까지만 기다린다. Remote handler가 끝날 때까지 send가 pending이면 request와
-같은 완료 의미가 된다.
-
-**검증 질문:** Remote handler가 application signal에서 대기해도 send가 먼저 완료되는가.
-
-- 시작 조건: Delay handler가 marker를 받은 뒤 release signal까지 reply 없이 대기하도록 구성한다.
-- 절차: Play node가 delay Channel로 one-way send를 제출한다. Send terminal을 확인한 뒤 handler evidence를
-  읽고 release signal을 보낸다.
-- 검증: Send는 handler release 전에 정상 terminal을 반환한다. Handler는 marker를 한 번 처리한다.
-- 세부 동작: [오류 모델 §4](../spec/32-framework-error-model.ko.md)의 send 완료를
-  검증한다.
-
 #### TD-A2 Async 대기 중 같은 Spot의 다음 callback을 시작하지 않는다
 
 우선순위: `P0`
@@ -135,21 +119,25 @@ Timer callback도 같은 Spot turn을 사용한다. Async handler가 turn을 유
 
 ### Track B — Yield와 shared Spot gate 반환
 
-#### TD-B1 Yield 대기 중 같은 Spot의 callback을 실행한다
+#### TD-B1 Yield 대기 중 같은 Spot의 request·timer callback을 실행한다
 
 우선순위: `P0`
 
 `Yield`를 사용하는 이유는 remote 작업을 기다리는 동안 같은 Spot의 다른 업무를 진행하기 위해서다.
 
-**검증 질문:** Yield request가 대기하는 동안 같은 Spot의 probe callback이 완료되는가.
+**검증 질문:** Yield request가 대기하는 동안 같은 Spot의 probe request와 due timer callback이 각각
+완료되는가.
 
-- 시작 조건: `SpotWide` User Spot의 delay request가 release signal을 기다린다.
-- 절차: 첫 handler가 Yield-held 상태가 된 뒤 같은 Spot에 probe request를 보낸다. Probe reply를 확인한 뒤
-  delay reply를 해제한다.
-- 검증: Evidence 순서는 `yield-released, probe-started, probe-completed, yield-resumed,
-  yield-completed`다.
-- 세부 동작: [비동기 실행 정책 §1.1](../spec/05-async-execution-policy.ko.md)을
-  검증한다.
+- 시작 조건: `SpotWide` User Spot의 delay request가 release signal을 기다린다. Request variant는 같은
+  Spot의 probe handler를, timer variant는 one-shot timer를 준비한다.
+- 절차: Fresh fixture에서 각 variant를 실행한다. 첫 handler가 Yield-held 상태가 된 뒤 request variant는
+  probe request와 reply를 완료하고, timer variant는 bounded evidence wait로 due callback 완료를 확인한다.
+  그 뒤 delay reply를 해제한다.
+- 검증: Request variant 순서는 `yield-released, probe-started, probe-completed, yield-resumed,
+  yield-completed`다. Timer variant 순서는 `yield-released, timer-started, timer-completed,
+  yield-resumed`이며 timer 완료를 fixed sleep으로 추정하지 않는다.
+- 세부 동작: [비동기 실행 정책 §1.1](../spec/05-async-execution-policy.ko.md)의 shared Spot gate 반환과
+  [§5](../spec/05-async-execution-policy.ko.md)의 timer application turn을 검증한다.
 
 #### TD-B2 Yield continuation은 기존 queue 순서를 따른다
 
@@ -185,21 +173,6 @@ Yield 전에 읽은 Spot 상태는 다른 callback이 바꿀 수 있다. “Lost
   그대로 쓰지 않는다.
 - 세부 동작: [Handler turn과 claim](../spec/05-async-execution-policy.ko.md#3-handler-turn과-claim)과
   [`Yield` 시 gate와 claim](../spec/05-async-execution-policy.ko.md#yield-시-gate와-claim)을
-  검증한다.
-
-#### TD-B4 Yield 대기 중 timer callback을 실행한다
-
-우선순위: `P0`
-
-Yield는 shared Spot gate를 반납하므로 due timer가 remote request 대기 뒤로 밀리지 않아야 한다.
-
-**검증 질문:** Yield-held 구간에 one-shot timer가 실행되는가.
-
-- 시작 조건: `SpotWide` User Spot에 one-shot timer를 등록하고 delay reply는 보류한다.
-- 절차: Handler가 Yield-held 상태가 된 뒤 timer evidence를 bounded polling한다. Timer 완료 뒤 delay
-  reply를 해제한다.
-- 검증: Evidence 순서는 `yield-released, timer-started, timer-completed, yield-resumed`다.
-- 세부 동작: [비동기 실행 정책 §5](../spec/05-async-execution-policy.ko.md)을
   검증한다.
 
 ### Track C — Worker 종류와 Spot turn을 분리
@@ -556,7 +529,7 @@ Shutdown은 신규 admission을 닫고 이미 수락한 callback을 host deadlin
 - 검증: 신규 request는 `ShuttingDown`이다. 기존 await는 reply 또는 shutdown deadline 결과 중 하나로 한
   번만 끝나며 Host는 bounded terminal state가 된다.
 - 세부 동작: [Cancellation과 shutdown](../spec/05-async-execution-policy.ko.md#4-cancellation과-shutdown)과
-  [Shutdown과 Relocate의 경쟁](../spec/28-graceful-drain-handoff.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
+  [Shutdown과 Relocate의 경쟁](../spec/30-host-relocation-flow.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
 
 #### TD-F6 Wait-for cycle을 timeout 전에 거부한다
 

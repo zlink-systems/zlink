@@ -1,4 +1,5 @@
 package systems.zlink.e2e.instancespot.owner;
+import java.util.Map;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -37,26 +38,26 @@ public final class OwnerEndpoints implements SmartLifecycle {
             server.createContext("/health", exchange -> HttpSupport.writeJson(
                 exchange,
                 json,
-                java.util.Map.of(
+                Map.of(
                     "status", "ready",
                     "rid", options.rid(),
                     "lifecycleId", options.lifecycleId())));
             server.createContext("/evidence", exchange -> HttpSupport.writeJson(
                 exchange, json, evidence.snapshot()));
             server.createContext("/evidence/wait", exchange -> {
-                Contracts.EvidenceWaitRequest request = HttpSupport.readJson(
-                    exchange, json, Contracts.EvidenceWaitRequest.class);
+                Contracts.EvidenceWaitReq request = HttpSupport.readJson(
+                    exchange, json, Contracts.EvidenceWaitReq.class);
                 HttpSupport.writeJson(exchange, json, evidence.waitFor(request));
             });
             server.createContext("/gate", exchange -> {
-                Contracts.GateRequest request = HttpSupport.readJson(
-                    exchange, json, Contracts.GateRequest.class);
+                Contracts.GateReq request = HttpSupport.readJson(
+                    exchange, json, Contracts.GateReq.class);
                 gates.set(request.gateId(), request.open());
                 HttpSupport.writeJson(exchange, json, request);
             });
             server.createContext("/shutdown", exchange -> {
                 HttpSupport.writeJson(
-                    exchange, json, java.util.Map.of("status", "stopping"));
+                    exchange, json, Map.of("status", "stopping"));
                 HttpSupport.shutdownAsync();
             });
             server.start();

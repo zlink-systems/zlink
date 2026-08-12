@@ -1,4 +1,5 @@
 package systems.zlink.stream.connector;
+import java.io.EOFException;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -72,7 +73,7 @@ final class ZLinkWebSocketTransportConnection
 
     @Override
     public CompletionStage<?> onClose(WebSocket socket, int statusCode, String reason) {
-        fail(new java.io.EOFException("websocket closed"));
+        fail(new EOFException("websocket closed"));
         return CompletableFuture.completedFuture(null);
     }
 
@@ -119,7 +120,7 @@ final class ZLinkWebSocketTransportConnection
         if (current != null) {
             current.abort();
         }
-        fail(new java.io.EOFException("websocket closed"));
+        fail(new EOFException("websocket closed"));
     }
 
     private void enqueue(ZLinkStreamWireProtocol.Frame frame) {

@@ -64,7 +64,7 @@ public final class CourierSession implements ZLinkSession {
             if (handled) {
                 return CompletableFuture.completedFuture(null);
             }
-            Messages.CourierDecision decision = payload.decode(Messages.CourierDecision.class);
+            Messages.CourierDecisionMsg decision = payload.decode(Messages.CourierDecisionMsg.class);
             ZLinkSessionActor actor = context.actors().find(decision.courierId())
                 .orElseThrow(() -> new IllegalStateException(
                     "Courier actor is not bound: " + decision.courierId()));

@@ -270,20 +270,20 @@ public sealed class ActorHandoffTests
     }
 
     [Fact]
-    public void SourceIngressHold_Uses1024RecordsAnd16MiBContractDefaults()
+    public void SourceIngressHold_DoesNotApplyFormerVolumeDefaults()
     {
         Assert.Equal(
-            1_024,
+            int.MaxValue,
             ZLinkBoundedIngressAdmission.SourceIngressHoldRecordCapacity);
         Assert.Equal(
-            16L * 1024 * 1024,
+            long.MaxValue,
             ZLinkBoundedIngressAdmission.SourceIngressHoldByteCapacity);
 
         var admission = new ZLinkBoundedIngressAdmission();
-        for (var record = 0; record < 1_024; record++)
+        for (var record = 0; record < 1_025; record++)
             Assert.True(admission.TryAcquire(1));
-        Assert.False(admission.TryAcquire(0));
-        Assert.Equal((1_024, 1_024L), admission.Snapshot());
+        Assert.True(admission.TryAcquire(16L * 1024 * 1024 + 1));
+        Assert.Equal((1_026, 16L * 1024 * 1024 + 1_026), admission.Snapshot());
     }
 
     [Fact]
@@ -943,7 +943,7 @@ public sealed class ActorHandoffTests
             "handoff-1",
             new ZLinkBackendActorRef(targetNode, "actor-1", 7),
             targetAuthorityOwnerGeneration: 12,
-            targetMeshName: "play",
+            targetMeshName: ZLinkMeshName.FromBoundary("play", "targetMeshName"),
             targetNodeGeneration: 5,
             targetOwnerLeaseGeneration: 9);
         state.RecordRelocatedSessionAccepted(sessionRid);
@@ -999,7 +999,7 @@ public sealed class ActorHandoffTests
             "handoff-1",
             new ZLinkBackendActorRef(targetNode, "actor-1", 7),
             targetAuthorityOwnerGeneration: 12,
-            targetMeshName: "play",
+            targetMeshName: ZLinkMeshName.FromBoundary("play", "targetMeshName"),
             targetNodeGeneration: 5,
             targetOwnerLeaseGeneration: 9);
 
@@ -1043,7 +1043,7 @@ public sealed class ActorHandoffTests
             "handoff-1",
             new ZLinkBackendActorRef(targetNode, "actor-1", 7),
             targetAuthorityOwnerGeneration: 12,
-            targetMeshName: "play",
+            targetMeshName: ZLinkMeshName.FromBoundary("play", "targetMeshName"),
             targetNodeGeneration: 5,
             targetOwnerLeaseGeneration: 9);
 
@@ -1102,7 +1102,7 @@ public sealed class ActorHandoffTests
             "handoff-1",
             new ZLinkBackendActorRef(targetNode, "actor-1", 7),
             targetAuthorityOwnerGeneration: 12,
-            targetMeshName: "play",
+            targetMeshName: ZLinkMeshName.FromBoundary("play", "targetMeshName"),
             targetNodeGeneration: 5,
             targetOwnerLeaseGeneration: 9);
 
@@ -1137,7 +1137,7 @@ public sealed class ActorHandoffTests
             "handoff-1",
             new ZLinkBackendActorRef(targetNode, "actor-1", 7),
             targetAuthorityOwnerGeneration: 12,
-            targetMeshName: "play",
+            targetMeshName: ZLinkMeshName.FromBoundary("play", "targetMeshName"),
             targetNodeGeneration: 5,
             targetOwnerLeaseGeneration: 9);
 
@@ -1597,7 +1597,7 @@ public sealed class ActorHandoffTests
     }
 
     [Fact]
-    public async Task TargetAuthorityCommit_ReturnsPreparationBeforeJoinedNotification()
+    public async Task TargetAuthorityCommit_DoesNotReturnPreparationBeforeJoinedNotification()
     {
         var state = new ZLinkActorRuntimeState("actor-1");
         var commit = CommitRequest("handoff-commit-boundary", []);
@@ -1607,14 +1607,20 @@ public sealed class ActorHandoffTests
         var reply = ZLinkRemoteActorJoinPackets.CreateJoinReply(
             true,
             ActorRef("node-b", 7));
+        Assert.Throws<InvalidOperationException>(() =>
+            state.Handoff.AcceptCommittedPreparation(
+                "handoff-commit-boundary",
+                reply));
+
+        Assert.False(preparation.IsCompleted);
+        Assert.True(state.Handoff.IsAuthorityCommitted("handoff-commit-boundary"));
+        Assert.True(state.Handoff.TryBeginJoinedNotification("handoff-commit-boundary"));
+        state.Handoff.CompleteJoinedNotification("handoff-commit-boundary");
         state.Handoff.AcceptCommittedPreparation(
             "handoff-commit-boundary",
             reply);
 
         Assert.Same(reply, await preparation);
-        Assert.True(state.Handoff.IsAuthorityCommitted("handoff-commit-boundary"));
-        Assert.True(state.Handoff.TryBeginJoinedNotification("handoff-commit-boundary"));
-        state.Handoff.CompleteJoinedNotification("handoff-commit-boundary");
     }
 
     [Fact]

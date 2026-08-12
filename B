@@ -1,0 +1,8 @@
+43:  '../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec'
+53:} = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
+2794:test('M2 actorJoin A-to-B-to-A successor seal waits until predecessor exact terminal', async () => {
+2795:  const actorId = 'actor-serialized-round-trip';
+3576:test('remote actor packet target refresh replaces the session actor cache after a Spot transfer', () => {
+3601:  assert.equal(String(store.cachedTargetForActor(actor).spotId), 'zone-sw');
+4206:    /^[0-9a-f]{64}$/
+4596:    'an A-to-B-to-A ref change must not resurrect the old A packet-target key'

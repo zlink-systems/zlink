@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.messaging;
+import java.nio.charset.StandardCharsets;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.JsonGenerator;
@@ -83,7 +84,7 @@ public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer 
                 "failed to deserialize JSON message as "
                     + type.getName()
                     + " payload="
-                    + new String(bytes, java.nio.charset.StandardCharsets.UTF_8),
+                    + new String(bytes, StandardCharsets.UTF_8),
                 ex);
         }
     }

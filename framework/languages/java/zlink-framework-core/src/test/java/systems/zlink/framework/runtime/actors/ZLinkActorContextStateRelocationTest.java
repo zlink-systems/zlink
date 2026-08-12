@@ -1,7 +1,9 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.concurrent.CompletionStage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -66,6 +68,32 @@ final class ZLinkActorContextStateRelocationTest {
     }
 
     @Test
+    void importsSessionOwnerFenceAcrossTargetBindingRecreation() {
+        RoutingId actorNode = RoutingId.from("actor-node");
+        RoutingId sessionOwner = RoutingId.from("session-owner");
+        RoutingId session = RoutingId.from("session-a");
+        var state = new ZLinkActorContextState(
+            new ZLinkBackendActorRef(actorNode, "actor-a", 7),
+            "mesh",
+            "entry-a");
+
+        state.bindSession(new TestBoundSession(), sessionOwner, session);
+        long localBindingToken = state.bindSession(
+            new TestBoundSession(),
+            sessionOwner,
+            session,
+            41,
+            9);
+
+        var imported = state.boundSessionSourceSnapshot();
+        assertEquals(41, imported.bindingGeneration());
+        assertEquals(9, imported.sessionSequence());
+        assertNotEquals(41, localBindingToken);
+        assertEquals(10, state.nextBoundSessionSource().sessionSequence());
+        assertTrue(state.clearBoundSession(localBindingToken));
+    }
+
+    @Test
     void failedMoveClearsMovingStateAndCompletesTheMoveStageExceptionally() {
         var state = new ZLinkActorContextState(
             new ZLinkBackendActorRef(RoutingId.from("source"), "actor-a", 7),
@@ -91,7 +119,7 @@ final class ZLinkActorContextStateRelocationTest {
             throw new UnsupportedOperationException();
         }
 
-        @Override public java.util.concurrent.CompletionStage<Void> disconnect() {
+        @Override public CompletionStage<Void> disconnect() {
             return CompletableFuture.completedFuture(null);
         }
     }

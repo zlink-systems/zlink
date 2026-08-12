@@ -1,4 +1,6 @@
 package systems.zlink.e2e.registrymessaging.client.Scenarios;
+import java.util.Arrays;
+import java.util.Map;
 
 import systems.zlink.e2e.registrymessaging.client.Support.ScenarioAssert;
 import systems.zlink.e2e.registrymessaging.shared.Contracts;
@@ -19,9 +21,9 @@ public final class RmA1DiscoveryRequestScenario {
         ScenarioAssert.that(reply.providerRid().equals("api-a") || reply.providerRid().equals("api-b"),
             "RM-A1 provider rid mismatch");
 
-        java.util.Map[] peers = discoveryConsumer.get("/locations/peers")
-            .submit(java.util.Map[].class).toCompletableFuture().join().body();
-        long readyProviders = java.util.Arrays.stream(peers)
+        Map[] peers = discoveryConsumer.get("/locations/peers")
+            .submit(Map[].class).toCompletableFuture().join().body();
+        long readyProviders = Arrays.stream(peers)
             .filter(entry -> Contracts.API_CHANNEL.equals(entry.get("meshName")))
             .filter(entry -> "ROUTER".equals(entry.get("role")))
             .count();
@@ -29,7 +31,7 @@ public final class RmA1DiscoveryRequestScenario {
         String[] evidence = ScenarioAssert.concat(
             ScenarioAssert.evidence(providerA),
             ScenarioAssert.evidence(providerB));
-        ScenarioAssert.that(java.util.Arrays.stream(evidence)
+        ScenarioAssert.that(Arrays.stream(evidence)
                 .anyMatch(line -> line.contains("ProfileReq") && line.contains("rm-a1")),
             "RM-A1 provider evidence missing");
         System.out.println("scenario RM-A1 passed");

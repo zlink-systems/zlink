@@ -40,7 +40,7 @@ internal static class StF5MessageFollowRouteRemovalScenario
         var chained = context.SendFromNodeAsync(
             caller,
             actorId,
-            new HandoffPacket(scenario, chainMarker));
+            new HandoffMsg(scenario, chainMarker));
         await context.WaitExternalTransportDeliveryAsync(chainOperation);
         var expired = context.ProbeFromNodeAsync(
             caller,

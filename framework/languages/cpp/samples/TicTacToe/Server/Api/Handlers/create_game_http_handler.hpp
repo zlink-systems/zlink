@@ -38,7 +38,8 @@ class create_game_http_handler_t
         auto room = co_await _spots.create (sample_names_t::match_spot) // 이 stable type을 등록한 node가 후보가 된다.
                       .in_mesh (sample_names_t::game_spot_node)         // Spot을 만들 mesh를 고른다.
                       .creation_request (                               // 새 Spot의 생성 callback에 전달할 최초 설정이다.
-                        create_game_req_t{game_name, sample_names_t::required_level})
+                        tictactoe_game_create_req_t{
+                          game_name, sample_names_t::required_level})
                       .submit ();                                       // C++의 비동기 완료 terminal이다.
         // --8<-- [end:doc-create]
         _logger.info (std::string ("reply ") + create_game_http_res_t::packet_name);

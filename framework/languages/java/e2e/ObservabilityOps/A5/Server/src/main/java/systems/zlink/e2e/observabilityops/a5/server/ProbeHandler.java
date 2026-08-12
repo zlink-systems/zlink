@@ -6,16 +6,16 @@ import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
 
 public final class ProbeHandler implements ZLinkRequestHandler<
-    Contracts.ProbeRequest,
-    Contracts.ProbeReply> {
+    Contracts.ProbeReq,
+    Contracts.ProbeRes> {
     @Override
-    public CompletionStage<Contracts.ProbeReply> handle(
-        Contracts.ProbeRequest request,
+    public CompletionStage<Contracts.ProbeRes> handle(
+        Contracts.ProbeReq request,
         ZLinkMessageContext context) {
         if (request.fail()) {
             return CompletableFuture.failedFuture(
                 new IllegalStateException("observability probe handler failure"));
         }
-        return CompletableFuture.completedFuture(new Contracts.ProbeReply(request.value()));
+        return CompletableFuture.completedFuture(new Contracts.ProbeRes(request.value()));
     }
 }

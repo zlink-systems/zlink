@@ -291,6 +291,9 @@ used is owned by the socket that call uses.
 The last row is an especially easy place to get confused. **A reply doesn't use the request
 timeout the caller specified.** Just because the client decided to wait 5 seconds doesn't
 mean the server's reply submission waits 5 seconds.
+A STREAM one-way send can use a per-call timeout modifier to shorten this wait. It never extends the
+socket timeout; the earlier deadline wins, with no late admission or replay afterward. This modifier
+does not apply to a reply.
 
 If unspecified, each path uses 1 second. The value is rounded up to milliseconds and must be
 `1` or greater — `0`, a negative number, or infinity are **rejected at host startup** —

@@ -27,11 +27,10 @@ import { runSFF10 } from './Scenarios/sf-f10-scenario';
 import { runSFF11 } from './Scenarios/sf-f11-scenario';
 import { runSFG1 } from './Scenarios/sf-g1-scenario';
 import { runSFG2 } from './Scenarios/sf-g2-scenario';
-import { runSFG3 } from './Scenarios/sf-g3-scenario';
 
 async function main(): Promise<void> {
   const options = parseClientOptions(process.argv.slice(2));
-  if (!['SF-A1', 'SF-A2', 'SF-B1', 'SF-B2', 'SF-B3', 'SF-C1', 'SF-C2', 'SF-C3', 'SF-C4', 'SF-C5', 'SF-C5A', 'SF-D1', 'SF-D2', 'SF-D3', 'SF-E1', 'SF-F1', 'SF-F2', 'SF-F3', 'SF-F4', 'SF-F5', 'SF-F6', 'SF-F7', 'SF-F8', 'SF-F9', 'SF-F10', 'SF-F11', 'SF-G1', 'SF-G2', 'SF-G3', 'all'].includes(options.scenario)) {
+  if (!['SF-A1', 'SF-A2', 'SF-B1', 'SF-B2', 'SF-B3', 'SF-C1', 'SF-C2', 'SF-C3', 'SF-C4', 'SF-C5', 'SF-C5A', 'SF-D1', 'SF-D2', 'SF-D3', 'SF-E1', 'SF-F1', 'SF-F2', 'SF-F3', 'SF-F4', 'SF-F5', 'SF-F6', 'SF-F7', 'SF-F8', 'SF-F9', 'SF-F10', 'SF-F11', 'SF-G1', 'SF-G2', 'all'].includes(options.scenario)) {
     throw new Error(`Unsupported scenario '${options.scenario}'.`);
   }
   const scenarios: Readonly<Record<string, () => Promise<void>>> = {
@@ -45,7 +44,7 @@ async function main(): Promise<void> {
     'SF-F4': () => runSFF4(options), 'SF-F5': () => runSFF5(options), 'SF-F6': () => runSFF6(options),
     'SF-F7': () => runSFF7(options), 'SF-F8': () => runSFF8(options), 'SF-F9': () => runSFF9(options),
     'SF-F10': () => runSFF10(options), 'SF-F11': () => runSFF11(options),
-    'SF-G1': () => runSFG1(options), 'SF-G2': () => runSFG2(options), 'SF-G3': () => runSFG3(options)
+    'SF-G1': () => runSFG1(options), 'SF-G2': () => runSFG2(options)
   };
   const selected = options.scenario.toLowerCase() === 'all'
     ? Object.keys(scenarios)

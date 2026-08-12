@@ -65,7 +65,9 @@ const NodeAlertKinds = {
 } as const;
 
 const ZoneWorldErrors = {
-  nodeUnavailable: 'NodeUnavailable'
+  nodeUnavailable: 'NodeUnavailable',
+  actorNotFound: 'ActorNotFound',
+  actorUnavailable: 'ActorUnavailable'
 } as const;
 
 type ZoneId = typeof ZoneIds[keyof typeof ZoneIds];

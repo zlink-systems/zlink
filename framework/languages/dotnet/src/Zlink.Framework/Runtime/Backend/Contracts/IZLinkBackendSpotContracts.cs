@@ -48,6 +48,10 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
     // bind and channels are applied (spec 21 §3). Idempotent.
     void Start();
 
+    // Activates pull dispatch only after the framework has installed every
+    // node, spot, Actor, and service-operation ingress owner. Idempotent.
+    void ActivateIngress() { }
+
     void ApplyRoleConfig(
         IZLinkSpotPublisherConfig? publisher,
         IZLinkSpotSubscriberConfig? subscriber);
@@ -362,6 +366,27 @@ internal interface IZLinkBackendCanonicalRelocationReservation
         ZLinkServiceWireCodec.RelocationWireId relocationId,
         ulong targetAttemptGeneration,
         ZLinkServiceWireCodec.RelocationCoordinatorFence coordinator);
+}
+
+internal interface IZLinkBackendSessionRelocationBarrier
+{
+    void SetSessionRelocationBarrierTarget(
+        ISessionRelocationBarrierTarget target);
+
+    ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord>
+        SealSessionRelocationAsync(
+            RoutingId sessionOwnerNodeRid,
+            ZLinkServiceWireCodec.SessionRelocationSealRecord seal,
+            TimeSpan timeout,
+            CancellationToken cancellationToken);
+
+    ValueTask<ZLinkServiceWireCodec.SessionRelocationRoutedRecord>
+        RouteSessionRelocationAsync(
+            RoutingId sessionOwnerNodeRid,
+            ZLinkServiceWireCodec.SessionRelocationRouteRecord route,
+            ulong expectedSealedHighWater,
+            TimeSpan timeout,
+            CancellationToken cancellationToken);
 }
 
 internal interface IZLinkBackendSpot : IAsyncDisposable

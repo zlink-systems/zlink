@@ -97,7 +97,7 @@ internal static class ConsumerHostFactory
                 framework.AddClientServerChannel("rm-a3-client-server").Client();
                 framework.AddFanoutChannel("rm-a3-fanout")
                     .EnableSubscriber()
-                    .AddHandler<RmA3FanoutProbeHandler, ProfileMsg>();
+                    .AddHandler<RmA3FanoutProbeHandler, ProfileEvent>();
             }
 
             var manualEndpoints = options.ProviderEndpoints ?? [];
@@ -145,10 +145,10 @@ internal static class ConsumerHostFactory
     }
 }
 
-internal sealed class RmA3FanoutProbeHandler : IZLinkFanoutHandler<ProfileMsg>
+internal sealed class RmA3FanoutProbeHandler : IZLinkFanoutHandler<ProfileEvent>
 {
     public ValueTask HandleAsync(
-        ProfileMsg message,
+        ProfileEvent message,
         CancellationToken cancellationToken) =>
         ValueTask.CompletedTask;
 }

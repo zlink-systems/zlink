@@ -1,4 +1,7 @@
 package systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.spots.tictactoegamespot;
+import java.util.ArrayList;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
@@ -15,6 +18,7 @@ import systems.zlink.framework.spots.ZLinkTimer;
 import systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.actors.PlayActor;
 import systems.zlink.samples.tictactoe.server.configuration.SampleNames;
 import systems.zlink.samples.tictactoe.server.play.domain.tictactoe.TicTacToeMatch;
+import systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.spots.tictactoegamespot.handlers.PlayActorGetCurrentGameStateHandler;
 import systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.spots.tictactoegamespot.handlers.PlayActorLeaveGameHandler;
 import systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.spots.tictactoegamespot.handlers.PlayActorPlaceMarkHandler;
 import systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.spots.tictactoegamespot.handlers.TicTacToeGameCreatedHandler;
@@ -24,7 +28,8 @@ import systems.zlink.samples.tictactoe.shared.contracts.GameStateNotify;
 import systems.zlink.samples.tictactoe.shared.contracts.PlaceMarkRes;
 import systems.zlink.samples.tictactoe.shared.contracts.PlayerInfo;
 import systems.zlink.samples.tictactoe.shared.contracts.PlayerJoinedNotify;
-import systems.zlink.samples.tictactoe.shared.contracts.PlayerWinMilestoneMsg;
+import systems.zlink.samples.tictactoe.shared.contracts.PlayerWinMilestoneEvent;
+import systems.zlink.samples.tictactoe.shared.contracts.TicTacToeGameCreateReq;
 import systems.zlink.samples.tictactoe.shared.contracts.TicTacToeGameJoinReq;
 import systems.zlink.samples.tictactoe.shared.contracts.TicTacToeGameJoinRes;
 
@@ -36,7 +41,7 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
     private final String roomId;
     private final TicTacToeMatch match;
     private ZLinkTimer gameTick;
-    private boolean created;
+    private TicTacToeGameCreateReq definition;
     private final TicTacToeGameCreatedHandler createdHandler;
     private final ObjectMapper json;
     private final Map<String, TicTacToeGameJoinReq> pendingJoins = new HashMap<>();
@@ -50,6 +55,12 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
         this.match = new TicTacToeMatch(roomId);
         this.createdHandler = createdHandler;
         this.json = json;
+        // send: reconnect JoinGameMsg에 current session push로 응답한다.
+        context.handlers().addHandler(PlayActorGetCurrentGameStateHandler.class);
+        // request: PlaceMarkReq에 갱신된 GameState를 반환한다.
+        context.handlers().addHandler(PlayActorPlaceMarkHandler.class);
+        // send: LeaveGameMsg를 처리하고 terminal game의 Actor를 Entry Spot으로 보낸다.
+        context.handlers().addHandler(PlayActorLeaveGameHandler.class);
     }
 
     public String roomId() {
@@ -62,12 +73,12 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<ZLinkSpotCreateResponse> onCreate(ZLinkMessage request) {
-        return java.util.concurrent.CompletableFuture.completedFuture(createdHandler.handle(this, request));
+    public CompletionStage<ZLinkSpotCreateResponse> onCreate(ZLinkMessage request) {
+        return CompletableFuture.completedFuture(createdHandler.handle(this, request));
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
+    public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
         String actorId,
         ZLinkMessage request) {
         TicTacToeGameJoinReq joinRequest = request.decode(TicTacToeGameJoinReq.class);
@@ -76,39 +87,40 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
         }
         validateJoin(joinRequest.roomId(), joinRequest.player());
         if (!match.canJoin(actorId)) {
-            return java.util.concurrent.CompletableFuture.completedFuture(
+            return CompletableFuture.completedFuture(
                 ZLinkSpotActorJoinResult.reject(new TicTacToeGameJoinRes(match.snapshot())));
         }
         TicTacToeMatch.JoinResult preview = match.previewJoin(actorId);
         pendingJoins.put(actorId, joinRequest);
-        return java.util.concurrent.CompletableFuture.completedFuture(
+        return CompletableFuture.completedFuture(
             ZLinkSpotActorJoinResult.accept(new TicTacToeGameJoinRes(preview.state())));
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onJoinedActor(PlayActor actor) {
+    public CompletionStage<Void> onJoinedActor(PlayActor actor) {
         TicTacToeGameJoinReq joinRequest = pendingJoins.remove(actor.actorId());
         if (joinRequest == null) {
             throw new IllegalStateException("joined actor does not have a pending admission");
         }
         join(actor, joinRequest.roomId(), joinRequest.player());
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onLeaveActor(PlayActor actor) {
+    public CompletionStage<Void> onLeaveActor(PlayActor actor) {
         actors.removeIf(existing -> existing.actorId().equals(actor.actorId()));
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onDisconnectActor(PlayActor actor) {
+    public CompletionStage<Void> onDisconnectActor(PlayActor actor) {
         actor.markDisconnected();
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onInitialize() {
+    public CompletionStage<Void> onInitialize() {
+        // timer: TicTacToeGameTimerHandler가 turn timeout을 주기적으로 확인한다.
         return context.addTimer(
                 "game-tick",
                 GAME_TICK_PERIOD,
@@ -118,18 +130,21 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onClosing() {
+    public CompletionStage<Void> onClosing() {
         if (gameTick != null) {
             return gameTick.cancel();
         }
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
-    public void markCreated(ZLinkMessage request) {
-        if (!request.isEmpty()) {
-            throw new IllegalArgumentException("tic-tac-toe game creation does not accept payload");
+    public void markCreated(TicTacToeGameCreateReq request) {
+        if (request.gameName() == null || request.gameName().isBlank()) {
+            throw new IllegalArgumentException("game name is required");
         }
-        created = true;
+        if (request.requiredLevel() < 0) {
+            throw new IllegalArgumentException("required level must not be negative");
+        }
+        definition = request;
     }
 
     public TicTacToeGameJoinRes join(PlayActor actor, String roomId, PlayerInfo player) {
@@ -153,7 +168,7 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
         if (!this.roomId.equals(roomId)) {
             throw new IllegalStateException("join request room id does not match game room");
         }
-        if (player.level() < SampleNames.RequiredLevel) {
+        if (player.level() < definition.requiredLevel()) {
             throw new IllegalStateException("player level does not satisfy room requirement");
         }
     }
@@ -179,28 +194,43 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
         return actors.stream().anyMatch(actor -> actor.actorId().equals(actorId));
     }
 
+    public GameState currentState(PlayActor actor, String requestedRoomId) {
+        String joinedRoomId = actor.requireJoinedGame();
+        if (!joinedRoomId.equals(requestedRoomId)) {
+            throw new IllegalStateException(
+                "actor is joined to '" + joinedRoomId + "', not '"
+                    + requestedRoomId + "'");
+        }
+        if (!hasPlayer(actor.actorId())) {
+            throw new IllegalStateException(
+                "actor '" + actor.actorId() + "' is not a member of room '"
+                    + requestedRoomId + "'");
+        }
+        return snapshot();
+    }
+
     public GameState snapshot() {
         ensureCreated();
         return match.snapshot();
     }
 
-    public java.util.concurrent.CompletionStage<Void> tick() {
+    public CompletionStage<Void> tick() {
         ensureCreated();
         GameState timedOut = match.timeOutCurrentTurn(Instant.now());
         if (timedOut == null) {
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
         broadcast(timedOut, null);
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     private void ensureCreated() {
-        if (!created) {
+        if (definition == null) {
             throw new IllegalStateException("tic-tac-toe game has not completed creation");
         }
     }
 
-    private final List<PlayActor> actors = new java.util.ArrayList<>();
+    private final List<PlayActor> actors = new ArrayList<>();
 
     private void broadcast(GameState state, String excludedActorId) {
         actors.stream()
@@ -245,12 +275,12 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
             || "TurnTimedOut".equals(state.status());
     }
 
-    public java.util.concurrent.CompletionStage<Void> leaveGame(PlayActor actor, String roomId) {
+    public CompletionStage<Void> leaveGame(PlayActor actor, String roomId) {
         if (!this.roomId.equals(roomId)) {
             throw new IllegalStateException("leave request room id does not match game room");
         }
         if (!isTerminal(snapshot())) {
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
         actor.markForDestroyAfterRoomLeave();
         return context.leaveActor(actor);
@@ -272,7 +302,7 @@ public final class TicTacToeGame implements ZLinkSpot<PlayActor> {
         }
         context.outbound()
             .publish(SampleNames.PlayNode, SampleNames.PlayerMilestoneTopic,
-                new PlayerWinMilestoneMsg(
+                new PlayerWinMilestoneEvent(
                 after.roomId(),
                 actor.actorId(),
                 player.displayName(),

@@ -1,14 +1,16 @@
 package systems.zlink.e2e.spotservice.shared;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.spots.ZLinkSpotTimerHandler;
 import systems.zlink.framework.spots.ZLinkTimerTick;
 
 public final class IdleCloseTimerHandler implements ZLinkSpotTimerHandler<TimerScenarioSpot> {
     @Override
-    public java.util.concurrent.CompletionStage<Void> handle(
+    public CompletionStage<Void> handle(
         TimerScenarioSpot spot,
         ZLinkTimerTick tick) {
         spot.idleTick();
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 }

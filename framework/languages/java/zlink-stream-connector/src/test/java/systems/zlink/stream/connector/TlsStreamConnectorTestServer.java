@@ -1,4 +1,6 @@
 package systems.zlink.stream.connector;
+import java.net.InetSocketAddress;
+import java.util.concurrent.TimeUnit;
 
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
@@ -128,11 +130,11 @@ final class TlsStreamConnectorTestServer implements Closeable {
     }
 
     private int port() {
-        return ((java.net.InetSocketAddress) serverChannel.localAddress()).getPort();
+        return ((InetSocketAddress) serverChannel.localAddress()).getPort();
     }
 
     private Channel awaitClientChannel() {
-        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (System.nanoTime() < deadline) {
             Channel channel = clientChannel;
             if (channel != null && channel.isActive()) {

@@ -1,5 +1,8 @@
 package systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.sessions.handlers;
+import java.util.concurrent.CompletionStage;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
@@ -12,10 +15,14 @@ import systems.zlink.samples.tictactoe.shared.contracts.AuthenticatePlayerReq;
 import systems.zlink.samples.tictactoe.shared.contracts.AuthenticatePlayerRes;
 import systems.zlink.samples.tictactoe.shared.contracts.AuthenticateReq;
 import systems.zlink.samples.tictactoe.shared.contracts.AuthenticateRes;
+import systems.zlink.samples.tictactoe.shared.contracts.PlayerActorCreateReq;
 
 // --8<-- [start:doc-session-auth]
 public final class AuthenticatePlaySessionHandler
     implements ZLinkTypedSessionPacketHandler<ZLinkSessionContext, AuthenticateReq> {
+    private static final Logger LOGGER = LoggerFactory.getLogger(
+        AuthenticatePlaySessionHandler.class);
+
     private final ZLinkActorManager actors;
     private final ZLinkClient channels;
 
@@ -32,7 +39,7 @@ public final class AuthenticatePlaySessionHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> handle(
+    public CompletionStage<Void> handle(
         ZLinkSessionContext context,
         ZLinkSessionDispatchContext dispatch,
         AuthenticateReq request) {
@@ -47,12 +54,32 @@ public final class AuthenticatePlaySessionHandler
             .submit(AuthenticatePlayerRes.class)
             .thenCompose(authenticated -> actors.getOrCreate(
                     authenticated.player().actorId(), SampleNames.PlayActor)
-                .request(authenticated.player())
+                .request(new PlayerActorCreateReq(authenticated.player()))
                 .submit()
-                .thenCompose(result -> context.actors().bind(requireActor(result)))
-                .thenRun(() -> context.client()
-                    .reply(new AuthenticateRes(authenticated.player()))
-                    .submit()));
+                .thenCompose(result -> {
+                    ActorRef resolvedActor = requireActor(result);
+                    return context.actors().bind(requireActor(result))
+                        .thenCompose(boundActor -> {
+                            if (!boundActor.ref().equals(resolvedActor)) {
+                                throw new IllegalStateException(
+                                    "Bound ActorRef does not match the resolved ActorRef for '"
+                                        + authenticated.player().actorId() + "'.");
+                            }
+                            if (result instanceof ZLinkActorCreateResult.Existing) {
+                                LOGGER.info(
+                                    "play stream: existing actor exact identity verified. "
+                                        + "sessionId={}, actor={}, generation={}, mesh={}, nodeRid={}",
+                                    context.sessionId(),
+                                    boundActor.actorId(),
+                                    boundActor.ref().objectGeneration(),
+                                    boundActor.ref().meshName(),
+                                    boundActor.ref().nodeRid());
+                            }
+                            return context.client()
+                                .reply(new AuthenticateRes(authenticated.player()))
+                                .submit();
+                        });
+                }));
     }
 
     private static ActorRef requireActor(ZLinkActorCreateResult result) {

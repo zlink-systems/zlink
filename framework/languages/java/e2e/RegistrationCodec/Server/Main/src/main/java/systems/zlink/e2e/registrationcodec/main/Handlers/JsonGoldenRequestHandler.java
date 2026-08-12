@@ -20,8 +20,8 @@ public final class JsonGoldenRequestHandler
         Contracts.JsonGoldenReq request,
         ZLinkMessageContext context) {
         String contentType = context.contentType().orElse("");
-        state.record("Request", "JsonGolden", request.value());
-        state.record("ContentType", "JsonGolden", contentType);
+        state.record("Request", "JsonGoldenReq", request.value());
+        state.record("ContentType", "JsonGoldenReq", contentType);
         return CompletableFuture.completedFuture(new Contracts.JsonGoldenRes(
             "Ada Lovelace",
             "ready",

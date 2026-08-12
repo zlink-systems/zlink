@@ -4,7 +4,7 @@ import type { ClientOptions } from '../Support/client-options';
 import { ensure } from '../Support/scenario-assert';
 import { setScenarioGate } from '../Support/relocation-fixture';
 
-interface ObjectReply {
+interface ObjectRes {
   readonly spotId: string;
   readonly operationId: string;
   readonly payload: string;
@@ -50,8 +50,8 @@ async function request(
   spotId: string,
   operationId: string,
   payload: string
-): Promise<ObjectReply> {
-  return await postJsonWithin<ObjectReply>(options.consumerUrl, '/object/request', {
+): Promise<ObjectRes> {
+  return await postJsonWithin<ObjectRes>(options.consumerUrl, '/object/request', {
     spotId,
     operationId,
     payload

@@ -1,5 +1,6 @@
 package systems.zlink.framework.kotlin
 
+import org.junit.jupiter.api.Assertions
 import java.util.Optional
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit

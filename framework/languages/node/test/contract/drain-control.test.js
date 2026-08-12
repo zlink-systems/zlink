@@ -97,17 +97,14 @@ test('deadline uses the closed snake_case force reason and terminal event exactl
     kind: 'forceStopped',
     reason: 'deadline_exceeded'
   });
-  const first = await observed.next();
-  const second = await observed.next();
-  assert.equal(first.done, false);
-  assert.equal(second.done, false);
+  const terminal = await observed.next();
+  assert.equal(terminal.done, false);
   await observed.return();
-  const events = [first.value.status, second.value.status];
-  assert.deepEqual(events.map((event) => event.state), [
-    framework.ZLinkTopologyState.Stopping,
-    framework.ZLinkTopologyState.Failed
-  ]);
-  assert.equal(events.filter((event) => event.state === framework.ZLinkTopologyState.Failed).length, 1);
+  assert.equal(terminal.value.status.state, framework.ZLinkTopologyState.Failed);
+  assert.deepEqual(terminal.value.loss, {
+    coalescedCount: 1n,
+    discardedTerminalCount: 0n
+  });
 });
 
 test('drain classifies publish, owner cleanup, and teardown failures with closed snake_case reasons', async () => {

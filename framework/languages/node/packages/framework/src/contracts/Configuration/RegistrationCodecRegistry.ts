@@ -2,15 +2,20 @@ import type {
   ZLinkCodecExtension,
   ZLinkCodecRegistrar,
   ZLinkCodecRegistryBuilder,
+  ZLinkMessageTypeSelector,
   ZLinkMessageSerializer
 } from '../Codecs';
-import { ZLinkConfigurationException } from './ConfigurationException';
 import type {
   ZLinkCodecRegistration,
   ZLinkCodecRegistryOptions,
   ZLinkCodecSerializerRegistration,
   ZLinkStreamCodecRegistration
 } from './RegistrationTypes';
+import { normalizeCodecContentType } from './CodecContentType';
+import {
+  matchEveryDeclaredMessageType,
+  rememberCodecSerializerSelections
+} from './CodecSerializerSelection';
 
 export interface MutableCodecRegistryOptions {
   serializers: ZLinkCodecSerializerRegistration[];
@@ -27,10 +32,40 @@ export function createCodecRegistry(
 }
 
 export class RegistrationCodecRegistryBuilder implements ZLinkCodecRegistryBuilder, ZLinkCodecRegistrar {
-  constructor(private readonly options: MutableCodecRegistryOptions = { serializers: [], streamCodecs: [] }) {}
+  private readonly options: MutableCodecRegistryOptions;
+
+  constructor(options: MutableCodecRegistryOptions = { serializers: [], streamCodecs: [] }) {
+    this.options = options;
+    const serializers = [...options.serializers];
+    const streamCodecs = [...options.streamCodecs];
+    options.serializers.length = 0;
+    options.streamCodecs.length = 0;
+    for (const entry of serializers) {
+      if (entry.canSerialize === undefined) {
+        this.addSerializer(entry.contentType, entry.serializer);
+      } else {
+        this.addSerializer(entry.contentType, entry.serializer, entry.canSerialize);
+      }
+    }
+    for (const entry of streamCodecs) {
+      this.addStreamCodec(entry.contentType, entry.codec);
+    }
+  }
 
   get registeredSerializers(): ReadonlyMap<string, ZLinkMessageSerializer> {
-    return new Map(this.options.serializers.map((entry) => [entry.contentType, entry.serializer]));
+    const serializers = new Map(
+      this.options.serializers.map((entry) => [entry.contentType, entry.serializer])
+    );
+    const selections = new Map(
+      this.options.serializers.map((entry) => [
+        entry.contentType,
+        {
+          selector: entry.canSerialize ?? matchEveryDeclaredMessageType,
+          fallback: entry.canSerialize === undefined
+        }
+      ])
+    );
+    return rememberCodecSerializerSelections(serializers, selections);
   }
 
   get registeredStreamCodecs(): ReadonlyMap<string, unknown> {
@@ -53,15 +88,22 @@ export class RegistrationCodecRegistryBuilder implements ZLinkCodecRegistryBuild
     return this;
   }
 
-  addSerializer(contentType: string, serializer: ZLinkMessageSerializer): this {
+  addSerializer(contentType: string, serializer: ZLinkMessageSerializer): this;
+  addSerializer(
+    contentType: string,
+    serializer: ZLinkMessageSerializer,
+    canSerialize: ZLinkMessageTypeSelector
+  ): this;
+  addSerializer(
+    contentType: string,
+    serializer: ZLinkMessageSerializer,
+    canSerialize?: ZLinkMessageTypeSelector
+  ): this {
     const normalized = normalizeCodecContentType(contentType);
     const existing = this.options.serializers.findIndex((entry) => entry.contentType === normalized);
-    const registration = { contentType: normalized, serializer };
-    if (existing >= 0) {
-      this.options.serializers[existing] = registration;
-    } else {
-      this.options.serializers.push(registration);
-    }
+    const registration = { contentType: normalized, serializer, canSerialize };
+    if (existing >= 0) this.options.serializers.splice(existing, 1);
+    this.options.serializers.push(registration);
     return this;
   }
 
@@ -69,19 +111,8 @@ export class RegistrationCodecRegistryBuilder implements ZLinkCodecRegistryBuild
     const normalized = normalizeCodecContentType(contentType);
     const existing = this.options.streamCodecs.findIndex((entry) => entry.contentType === normalized);
     const registration = { contentType: normalized, codec };
-    if (existing >= 0) {
-      this.options.streamCodecs[existing] = registration;
-    } else {
-      this.options.streamCodecs.push(registration);
-    }
+    if (existing >= 0) this.options.streamCodecs.splice(existing, 1);
+    this.options.streamCodecs.push(registration);
     return this;
   }
-}
-
-function normalizeCodecContentType(contentType: string): string {
-  const normalized = contentType.trim();
-  if (normalized.length === 0) {
-    throw new ZLinkConfigurationException('Codec content type must not be empty.');
-  }
-  return normalized;
 }

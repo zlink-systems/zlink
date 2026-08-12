@@ -14,6 +14,8 @@ public sealed class TicTacToeClientScenario(ILogger logger)
     // 4. Join the host to the empty room, then connect the guest and verify join/start pushes.
     // 5. Play a deterministic move sequence where player X wins the top row.
     // 6. Verify the guest sees the final state and the observer receives the win milestone.
+    // 7. Disconnect the host, authenticate it on a fresh connection, and verify the full room state.
+    // 8. Send one-way leave messages and let the server record both actor-destroy completions.
     public async ValueTask RunAsync(
         TicTacToeClientOptions options,
         CancellationToken cancellationToken = default)
@@ -189,22 +191,49 @@ public sealed class TicTacToeClientScenario(ILogger logger)
             observerSawMilestone.Payload.ActorId,
             observerSawMilestone.Payload.Wins);
 
-        var client1Leave = await client1.Request(new LeaveGameMsg(room.RoomId))
-            .Async<LeaveGameRes>(cancellationToken);
-        ZlinkStreamAssert.Ensure(client1Leave.Completed, "Assertion failed: client1Leave.Completed");
-        var client2Leave = await client2.Request(new LeaveGameMsg(room.RoomId))
-            .Async<LeaveGameRes>(cancellationToken);
-        ZlinkStreamAssert.Ensure(client2Leave.Completed, "Assertion failed: client2Leave.Completed");
+        await client1.Close.Async(cancellationToken);
+
+        await using var reconnectedClient =
+            TicTacToeClientConnections.CreateStreamClient(
+                hostPlayEndpoint,
+                options,
+                "reconnected-host",
+                logger);
+        await reconnectedClient.Connect.Async(cancellationToken);
+
+        var reconnectedAuthentication = await reconnectedClient
+            .Request(new AuthenticateReq(options.XActorId))
+            .Async<AuthenticateRes>(cancellationToken);
+        ZlinkStreamAssert.Ensure(
+            reconnectedAuthentication.Player == client1Authentication.Player,
+            "Assertion failed: reconnectedAuthentication.Player == client1Authentication.Player");
+
+        var reconnectedJoin = await JoinGameAsync(
+            reconnectedClient,
+            room.RoomId,
+            cancellationToken);
+        ZlinkStreamAssert.Ensure(
+            reconnectedJoin.State == client1FinalMove.State,
+            "Assertion failed: reconnectedJoin.State == client1FinalMove.State");
+        logger.LogInformation(
+            "reconnected-game-state=verified actor={0} room={1}",
+            reconnectedAuthentication.Player.ActorId,
+            room.RoomId);
+
+        await reconnectedClient.Send(new LeaveGameMsg(room.RoomId))
+            .Async(cancellationToken);
+        await client2.Send(new LeaveGameMsg(room.RoomId))
+            .Async(cancellationToken);
     }
 
-    private static async ValueTask<JoinGameRes> JoinGameAsync(
+    private static async ValueTask<JoinGameNotify> JoinGameAsync(
         IZlinkStreamConnector connector,
         string roomId,
         CancellationToken cancellationToken)
     {
-        var completion = connector.WaitFor<JoinGameRes>()
+        var completion = connector.WaitFor<JoinGameNotify>()
             .Async(cancellationToken);
-        await connector.Send(new JoinGameReq(roomId))
+        await connector.Send(new JoinGameMsg(roomId))
             .Async(cancellationToken);
         return (await completion).Payload;
     }

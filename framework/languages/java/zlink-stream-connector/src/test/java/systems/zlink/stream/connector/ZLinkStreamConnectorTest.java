@@ -1,4 +1,6 @@
 package systems.zlink.stream.connector;
+import java.util.Arrays;
+import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -36,8 +38,8 @@ final class ZLinkStreamConnectorTest {
     void transportSurfaceMatchesContract() throws Exception {
         Class<?> transport = Class.forName("systems.zlink.stream.connector.ZLinkStreamTransport");
         assertEquals(
-            java.util.List.of("TCP", "TLS", "WEB_SOCKET", "WEB_SOCKET_SECURE"),
-            java.util.Arrays.stream(transport.getEnumConstants())
+            List.of("TCP", "TLS", "WEB_SOCKET", "WEB_SOCKET_SECURE"),
+            Arrays.stream(transport.getEnumConstants())
                 .map(Object::toString)
                 .toList());
     }
@@ -130,13 +132,13 @@ final class ZLinkStreamConnectorTest {
         assertEquals(
             ZLinkTypedStreamRequestCall.class,
             ZLinkStreamConnector.class.getMethod("request", Object.class).getReturnType());
-        assertTrue(java.util.Arrays.stream(ZLinkStreamSendCall.class.getMethods())
+        assertTrue(Arrays.stream(ZLinkStreamSendCall.class.getMethods())
             .anyMatch(method -> method.getName().equals("packetName")));
-        assertTrue(java.util.Arrays.stream(ZLinkStreamRequestCall.class.getMethods())
+        assertTrue(Arrays.stream(ZLinkStreamRequestCall.class.getMethods())
             .anyMatch(method -> method.getName().equals("packetName")));
-        assertFalse(java.util.Arrays.stream(ZLinkStreamRequestCall.class.getMethods())
+        assertFalse(Arrays.stream(ZLinkStreamRequestCall.class.getMethods())
             .anyMatch(method -> method.getName().equals("await")));
-        assertFalse(java.util.Arrays.stream(ZLinkStreamConnector.class.getMethods())
+        assertFalse(Arrays.stream(ZLinkStreamConnector.class.getMethods())
             .anyMatch(method -> method.getName().equals("await")));
     }
 
@@ -181,7 +183,7 @@ final class ZLinkStreamConnectorTest {
                 assertEquals("Ping", message.packetName());
                 assertEquals("42", message.metadata().get("seq"));
                 message.payload().payload().close();
-                return java.util.concurrent.CompletableFuture.completedFuture(null);
+                return CompletableFuture.completedFuture(null);
             });
 
             ConnectorTestAwait.await(connector.connect());
@@ -1130,7 +1132,7 @@ final class ZLinkStreamConnectorTest {
                     .toCompletableFuture()
                     .join());
 
-            assertTrue(ex.getCause() instanceof java.util.concurrent.TimeoutException);
+            assertTrue(ex.getCause() instanceof TimeoutException);
             assertEquals(0, connector.pendingDispatchCount());
         }
     }
@@ -1159,12 +1161,12 @@ final class ZLinkStreamConnectorTest {
 
             AutoCloseable stateRegistration = connector.onConnectionStateChanged(state -> {
                 states.add(state);
-                return java.util.concurrent.CompletableFuture.completedFuture(null);
+                return CompletableFuture.completedFuture(null);
             });
             AutoCloseable disconnectedRegistration = connector.onDisconnected(event -> {
                 assertEquals(ZLinkStreamCloseReason.CLIENT_CLOSE, event.closeReason());
                 disconnected.incrementAndGet();
-                return java.util.concurrent.CompletableFuture.completedFuture(null);
+                return CompletableFuture.completedFuture(null);
             });
 
             ConnectorTestAwait.await(connector.connect());
@@ -1230,7 +1232,7 @@ final class ZLinkStreamConnectorTest {
             AtomicReference<ZLinkStreamError> received = new AtomicReference<>();
             connector.onErrorReceived(error -> {
                 received.set(error);
-                return java.util.concurrent.CompletableFuture.completedFuture(null);
+                return CompletableFuture.completedFuture(null);
             });
 
             ConnectorTestAwait.await(connector.connect());
@@ -1256,7 +1258,7 @@ final class ZLinkStreamConnectorTest {
             AtomicReference<ZLinkStreamError> received = new AtomicReference<>();
             connector.onErrorReceived(error -> {
                 received.set(error);
-                return java.util.concurrent.CompletableFuture.completedFuture(null);
+                return CompletableFuture.completedFuture(null);
             });
 
             ConnectorTestAwait.await(connector.connect());
@@ -1322,7 +1324,7 @@ final class ZLinkStreamConnectorTest {
             AtomicReference<ZLinkStreamError> received = new AtomicReference<>();
             connector.onErrorReceived(error -> {
                 received.set(error);
-                return java.util.concurrent.CompletableFuture.completedFuture(null);
+                return CompletableFuture.completedFuture(null);
             });
             connector.on("Ping", message -> {
                 throw new IllegalStateException("boom");
@@ -1387,7 +1389,7 @@ final class ZLinkStreamConnectorTest {
         try {
             assertThrows(IllegalArgumentException.class,
                 () -> connector.on("$zlink.heartbeat", message ->
-                    java.util.concurrent.CompletableFuture.completedFuture(null)));
+                    CompletableFuture.completedFuture(null)));
             assertThrows(IllegalArgumentException.class,
                 () -> connector.send(payload("$zlink.send", "hello")));
             assertThrows(IllegalArgumentException.class,
@@ -1406,7 +1408,7 @@ final class ZLinkStreamConnectorTest {
 
             assertThrows(IllegalArgumentException.class,
                 () -> connector.on(tooLong, message ->
-                    java.util.concurrent.CompletableFuture.completedFuture(null)));
+                    CompletableFuture.completedFuture(null)));
             assertThrows(IllegalArgumentException.class,
                 () -> connector.send(payload(tooLong, "hello")));
             assertThrows(IllegalArgumentException.class,

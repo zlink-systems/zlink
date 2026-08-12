@@ -18,4 +18,12 @@ public enum ZLinkFrameworkRuntimeState {
     public int wireValue() {
         return wireValue;
     }
+
+    boolean isReadyState() {
+        return this == SERVING;
+    }
+
+    boolean acceptsWork(boolean admissionOpen) {
+        return isReadyState() && admissionOpen;
+    }
 }

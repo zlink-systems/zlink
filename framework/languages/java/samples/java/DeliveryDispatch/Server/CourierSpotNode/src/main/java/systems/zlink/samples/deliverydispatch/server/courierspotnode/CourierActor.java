@@ -11,7 +11,7 @@ import systems.zlink.samples.deliverydispatch.shared.contracts.Messages;
 /**
  * A courier. It pushes the offer to whoever holds this courier's stream session and its turn ends
  * there — it does not wait for the answer, and there is nothing left here that could wait (common
- * sample spec section 7.4). The answer arrives later as a {@code CourierDecision} from the session,
+ * sample spec section 7.4). The answer arrives later as a {@code CourierDecisionMsg} from the session,
  * and the only thing the actor has to remember in between is which attempt the offer belonged to,
  * so the decision can be paired with it.
  */

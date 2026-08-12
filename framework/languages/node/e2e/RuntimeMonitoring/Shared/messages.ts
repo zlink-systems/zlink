@@ -21,12 +21,16 @@ export class ProfileReq {
   ) {}
 }
 
-export class MonitoringPublish {
+export class MonitoringEvent {
   constructor(
     readonly marker: string,
     readonly blocker?: string
   ) {}
 }
+
+export class MonitoringSpotCreateReq {}
+
+export class MonitoringActorCreateReq {}
 
 export interface ProfileRes {
   readonly value: string;

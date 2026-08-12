@@ -327,7 +327,7 @@ export function createPlayEndpoints(
         const snapshot = await evidence.waitUntil((entries) =>
           countNew(entries, before, `spot-outbound-negative|rid=${evidence.rid}|spot=${request.spotId}|requestFailed=True`) >= 1
           && countNew(entries, before, 'dispatch-error|surface=channel|kind=request|reason=no_handler|action=reply_error|packet=MissingChannelReq') >= 1
-          && countNew(entries, before, 'dispatch-error|surface=channel|kind=send|reason=no_handler|action=drop|packet=MissingChannelNotify') >= 1,
+          && countNew(entries, before, 'dispatch-error|surface=channel|kind=send|reason=no_handler|action=drop|packet=MissingChannelMsg') >= 1,
           10000);
         return {
           spotId: request.spotId,

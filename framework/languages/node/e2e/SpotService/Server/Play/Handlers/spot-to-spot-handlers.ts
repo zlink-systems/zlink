@@ -15,7 +15,7 @@ import {
   MissingSpotMsg,
   MissingSpotReq,
   SlowSpotReq,
-  SpotMsg,
+  SpotEvent,
   SpotServiceNames,
   StateMsg,
   StateReq,
@@ -44,7 +44,7 @@ export class SpotToSpotHandler implements ZLinkSpotRequestHandler<ScenarioUserSp
       .submit();
     await spot.context.outbound
       .publish(SpotServiceNames.spotChannel, SpotServiceNames.spotEventTopic,
-        spotServicePacket(SpotMsg, { marker: `sm-c3-publish-${request.marker}` }))
+        spotServicePacket(SpotEvent, { marker: `sm-c3-publish-${request.marker}` }))
       .submit();
     this.evidence.add(
       `spot-to-spot|rid=${this.evidence.rid}|source=${spot.context.spotId}`

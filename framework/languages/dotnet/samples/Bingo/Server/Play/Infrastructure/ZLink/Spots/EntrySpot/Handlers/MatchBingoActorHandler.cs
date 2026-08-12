@@ -10,9 +10,9 @@ namespace Bingo.Server.Play.Infrastructure.ZLink.Spots.EntrySpot.Handlers;
 
 internal sealed class MatchBingoActorHandler(
     ILogger<MatchBingoActorHandler> logger)
-    : IZLinkEntrySpotActorSendHandler<BingoEntrySpot, PlayerActor, MatchBingoReq>
+    : IZLinkEntrySpotActorRequestHandler<BingoEntrySpot, PlayerActor, MatchBingoReq, MatchBingoRes>
 {
-    public async ValueTask HandleAsync(
+    public async ValueTask<MatchBingoRes> HandleAsync(
         BingoEntrySpot entrySpot,
         PlayerActor actor,
         IZLinkMessageContext context,
@@ -45,5 +45,25 @@ internal sealed class MatchBingoActorHandler(
             .Defer();
         logger.LogInformation("match: actor join scheduled. actor={ActorId}, room={RoomId}", actor.ActorId,
             matched.RoomId);
+
+        var state = new BingoRoomState
+        {
+            RoomId = matched.RoomId,
+            Status = BingoRoomStatuses.WaitingForPlayers,
+            HostActorId = actor.ActorId,
+            CanStart = false
+        };
+        state.Players.Add(new BingoPlayerState
+        {
+            ActorId = actor.ActorId,
+            DisplayName = actor.DisplayName,
+            Seat = 0,
+            IsHost = true
+        });
+        return new MatchBingoRes
+        {
+            RoomId = matched.RoomId,
+            State = state
+        };
     }
 }

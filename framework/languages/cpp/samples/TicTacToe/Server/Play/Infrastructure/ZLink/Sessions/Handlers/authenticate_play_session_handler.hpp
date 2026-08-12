@@ -41,18 +41,17 @@ class authenticate_play_session_handler_t
         auto authenticated =
           co_await _client.request (sample_names_t::api_channel, authenticate_request)
             .submit<authenticate_player_res_t> ();
-        if (!authenticated.accepted || authenticated.player.actor_id.empty ()) {
+        if (authenticated.player.actor_id.empty ()) {
             co_return result_t<session_actor_t>::failure (framework_error_kind_t::internal_failure,
-                                                          authenticated.reason.empty ()
-                                                            ? "Player authentication failed."
-                                                            : authenticated.reason);
+                                                          "Player authentication failed.");
         }
 
         /* 공통 sample spec §13: 인증 응답의 PlayerInfo.ActorId로 actor를 만들고, 같은
          * PlayerInfo를 actor 생성 payload로 실어 보낸다(별도 EnsurePlayerActor 계약 없음). */
         const auto &player = authenticated.player;
         auto located = actors.get_or_create (
-          sample_names_t::actor_type, player.actor_id, player);
+          sample_names_t::actor_type, player.actor_id,
+          player_actor_create_req_t{player});
         if (!located) {
             co_return result_t<session_actor_t>::failure (framework_error_kind_t::internal_failure,
                                                           "Player actor could not be located.");

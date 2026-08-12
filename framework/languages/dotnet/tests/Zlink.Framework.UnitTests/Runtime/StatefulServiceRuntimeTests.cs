@@ -15,6 +15,7 @@ using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Spots;
 using Zlink.Framework.Runtime.Timers;
+using Zlink.Framework.LocationProvider;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -576,6 +577,7 @@ public sealed class StatefulServiceRuntimeTests
                         dispatched.TrySetResult(true);
                 }
             });
+        pump.EnsureStarted();
 
         await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal(2, dispatchCount);
@@ -627,6 +629,7 @@ public sealed class StatefulServiceRuntimeTests
                         dispatched.TrySetResult(true);
                 }
             });
+        pump.EnsureStarted();
 
         await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal([1, 2], receivedValues.ToArray());
@@ -2299,7 +2302,7 @@ public sealed class StatefulServiceRuntimeTests
     [Fact]
     public async Task InstanceSpotMonitoringIncludesPreparedActivation()
     {
-        var relocationStore = new TestRelocationStore();
+        var relocationStore = new InMemoryRelocationStore();
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
         {
@@ -2356,7 +2359,7 @@ public sealed class StatefulServiceRuntimeTests
     public async Task InstanceSpotIdleInspectionRotatesWithABoundedBatch()
     {
         const string stableType = "Tests.IdleBatchInstanceSpot";
-        var relocationStore = new TestRelocationStore();
+        var relocationStore = new InMemoryRelocationStore();
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
         {
@@ -2484,7 +2487,7 @@ public sealed class StatefulServiceRuntimeTests
         var targetEndpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
         var sourceEndpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
         const string stableType = "Tests.ProductionUserSpot";
-        var relocationStore = new TestRelocationStore();
+        var relocationStore = new InMemoryRelocationStore();
 
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
@@ -2811,7 +2814,8 @@ public sealed class StatefulServiceRuntimeTests
     {
         ProductionUserSpot.Reset();
         var suffix = Guid.NewGuid().ToString("N");
-        var locationStore = new ZLinkInMemoryLocationStore();
+        var locationProvider = new ZLinkInMemoryProviderLocationStore();
+        var locationStore = new ZLinkProviderLocationRepository(locationProvider);
         var sourceRid = RoutingId.From($"public-source-{suffix}");
         var targetRid = RoutingId.From($"public-target-{suffix}");
         var sourceEndpoint = $"tcp://127.0.0.1:{FindFreeTcpPort()}";
@@ -2826,7 +2830,7 @@ public sealed class StatefulServiceRuntimeTests
             services.AddZLinkFramework(options =>
             {
                 options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
-                options.AddLocationStore(locationStore);
+                options.AddLocationStore(locationProvider);
                 var node = options.AddRouteMesh("objects")
                     .Listen(endpoint)
                     .SetRoutingIdPrefix(rid.ToString())
@@ -3664,18 +3668,130 @@ public sealed class StatefulServiceRuntimeTests
         Assert.Equal(0, target.RetainedUserSpotOperationCount);
     }
 
+    [Fact]
+    public async Task RemoteUserSpotExpiryRejectsReplayAfterWallClockRollback()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        var deadlineTime = new AdjustableTimeProvider(DateTimeOffset.UtcNow);
+        await using var source = NewNode(context, "rollback-source");
+        await using var target = NewNode(
+            context,
+            "rollback-target",
+            TimeSpan.FromMilliseconds(50),
+            deadlineTime);
+        var suffix = Guid.NewGuid().ToString("N");
+        var sourceEndpoint = $"inproc://rollback-source-{suffix}";
+        var targetEndpoint = $"inproc://rollback-target-{suffix}";
+        source.SetBind(sourceEndpoint);
+        target.SetBind(targetEndpoint);
+        source.ConnectPeer(targetEndpoint, target.RoutingId);
+        target.ConnectPeer(sourceEndpoint, source.RoutingId);
+        var operationTarget = new RecordingUserSpotOperationTarget();
+        target.SetUserSpotOperationTarget(operationTarget);
+        source.Start();
+        target.Start();
+        await WaitUntilAsync(
+            () => source.Status().AdmittedPeerCount == 1
+                  && target.Status().AdmittedPeerCount == 1);
+
+        var targetGeneration = target.Status().LifecycleGeneration;
+        var reservation = new ObjectReservationFence(
+            "rollback-reservation",
+            "rollback-store",
+            109,
+            113,
+            target.RoutingId,
+            targetGeneration,
+            "rollback-owner",
+            127,
+            1);
+        var deadline = checked(
+            (ulong)deadlineTime.GetUtcNow().AddMilliseconds(50)
+                .ToUnixTimeMilliseconds());
+        Assert.Equal(
+            SubmitResult.Ok,
+            source.CreateUserSpot(
+                target.RoutingId,
+                "rollback-spot",
+                "Sample.RollbackSpot",
+                reservation,
+                deadline,
+                out var operationId,
+                TimeSpan.FromSeconds(2)));
+        await WaitUntilAsync(() =>
+            source.Status().PendingInfrastructureMessages > 0);
+        _ = DrainRecords(source);
+        Assert.Equal(1, operationTarget.CreateCount);
+        Assert.Equal(1, target.RetainedUserSpotOperationCount);
+
+        var replay = new ZLinkServiceWireCodec.UserSpotOperationRecord(
+            ServiceWireConstants.Command.UserSpotCreate,
+            new UserSpotCreateOperation(
+                131,
+                operationId,
+                source.RoutingId,
+                source.Status().LifecycleGeneration,
+                "rollback-spot",
+                "Sample.RollbackSpot",
+                reservation,
+                deadline),
+            default);
+
+        deadlineTime.Advance(
+            wallClock: TimeSpan.FromHours(-1),
+            monotonic: TimeSpan.FromMilliseconds(100));
+        await WaitUntilAsync(() => target.RetainedUserSpotOperationCount == 0);
+        Assert.Equal(
+            SubmitResult.Ok,
+            source.ResubmitUserSpotOperation(target.RoutingId, replay));
+        await Task.Delay(TimeSpan.FromMilliseconds(100));
+
+        Assert.Equal(1, operationTarget.CreateCount);
+        Assert.Equal(0, target.RetainedUserSpotOperationCount);
+    }
+
     private static ZLinkManagedMeshNode NewNode(
         IContext context,
         string rid,
-        TimeSpan? remoteUserSpotTerminalRetention = null)
+        TimeSpan? remoteUserSpotTerminalRetention = null,
+        TimeProvider? deadlineTimeProvider = null)
     {
         var node = new ZLinkManagedMeshNode(
             context,
             "mesh",
             remoteUserSpotTerminalRetention:
-                remoteUserSpotTerminalRetention);
+                remoteUserSpotTerminalRetention,
+            deadlineTimeProvider: deadlineTimeProvider);
         node.SetRoutingId(RoutingId.From(rid));
         return node;
+    }
+
+    private sealed class AdjustableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private readonly object _gate = new();
+        private DateTimeOffset _utcNow = utcNow;
+        private long _timestamp;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            lock (_gate) return _utcNow;
+        }
+
+        public override long GetTimestamp()
+        {
+            lock (_gate) return _timestamp;
+        }
+
+        internal void Advance(TimeSpan wallClock, TimeSpan monotonic)
+        {
+            lock (_gate)
+            {
+                _utcNow += wallClock;
+                _timestamp += monotonic.Ticks;
+            }
+        }
     }
 
     private sealed class RecordingReplyRelayTarget(
@@ -4079,75 +4195,4 @@ public sealed class StatefulServiceRuntimeTests
     }
 
     private sealed record ProductionCreateReply(string Value);
-
-    private sealed class TestRelocationStore : IZLinkRelocationRepository
-    {
-        private readonly Dictionary<string, byte[]> _payloads =
-            new(StringComparer.Ordinal);
-
-        public ValueTask<ZLinkRelocationStored> PutRelocationAsync(
-            ReadOnlyMemory<byte> payload,
-            TimeSpan retention,
-            CancellationToken cancellationToken = default)
-        {
-            var bytes = payload.ToArray();
-            var reference = Convert.ToHexString(
-                System.Security.Cryptography.SHA256.HashData(bytes));
-            _payloads[reference] = bytes;
-            var now = DateTimeOffset.UtcNow;
-            return ValueTask.FromResult(new ZLinkRelocationStored(
-                reference,
-                Zlink.Framework.Runtime.Locations.ZLinkCrc32C.Compute(bytes),
-                now + retention,
-                now));
-        }
-
-        public ValueTask<ZLinkRelocationStored> PutRelocationAtAsync(
-            string reference,
-            ReadOnlyMemory<byte> payload,
-            TimeSpan retention,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var bytes = payload.ToArray();
-            if (_payloads.TryGetValue(reference, out var current)
-                && !current.AsSpan().SequenceEqual(bytes))
-                throw new InvalidDataException("Relocation reference collision.");
-            _payloads[reference] = bytes;
-            var now = DateTimeOffset.UtcNow;
-            return ValueTask.FromResult(new ZLinkRelocationStored(
-                reference,
-                Zlink.Framework.Runtime.Locations.ZLinkCrc32C.Compute(bytes),
-                now + retention,
-                now));
-        }
-
-        public ValueTask<ZLinkRelocationReadResult> GetRelocationAsync(
-            string reference,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult<ZLinkRelocationReadResult>(
-                _payloads.TryGetValue(reference, out var payload)
-                    ? new ZLinkRelocationReadResult.Found(payload)
-                    : new ZLinkRelocationReadResult.Missing());
-
-        public ValueTask<ZLinkRelocationRenewResult> RenewRelocationAsync(
-            string reference,
-            TimeSpan retention,
-            CancellationToken cancellationToken = default)
-        {
-            var now = DateTimeOffset.UtcNow;
-            return ValueTask.FromResult<ZLinkRelocationRenewResult>(
-                _payloads.ContainsKey(reference)
-                    ? new ZLinkRelocationRenewResult.Renewed(now + retention, now)
-                    : new ZLinkRelocationRenewResult.Missing());
-        }
-
-        public ValueTask<ZLinkRelocationDeleteResult> DeleteRelocationAsync(
-            string reference,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult(
-                _payloads.Remove(reference)
-                    ? ZLinkRelocationDeleteResult.Deleted
-                    : ZLinkRelocationDeleteResult.Missing);
-    }
 }

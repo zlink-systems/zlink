@@ -69,9 +69,9 @@ public sealed record StateReq(string Operation, int Delta);
 
 public sealed record StateRes(string SpotRid, string NodeRid, int Value);
 
-public sealed record InstanceColdRequestReq(string SpotId, string OperationId);
+public sealed record InstanceColdProbeReq(string SpotId, string OperationId);
 
-public sealed record InstanceColdRequestRes(
+public sealed record InstanceColdProbeRes(
     string SpotId,
     string OperationId,
     bool Succeeded,
@@ -87,9 +87,9 @@ public sealed record InstanceColdSendRes(
     bool Accepted,
     string ErrorKind);
 
-public sealed record InstanceColdRequest(string OperationId);
+public sealed record InstanceColdReq(string OperationId);
 
-public sealed record InstanceColdSend(string OperationId);
+public sealed record InstanceColdMsg(string OperationId);
 
 public sealed record InstanceLocationReq(string SpotId);
 
@@ -155,9 +155,9 @@ public sealed record SpotStageTimerReq(string SpotRid, string Name, int PeriodMs
 
 public sealed record SpotStageTimerRes(string SpotRid, string Name, bool Started, string[] Evidence);
 
-public sealed record SpotMsg(string Marker);
+public sealed record SpotEvent(string Marker);
 
-public sealed record SpotBackpressureMsg(
+public sealed record SpotBackpressureEvent(
     string Marker,
     int Sequence,
     string Payload,
@@ -195,11 +195,11 @@ public sealed record ChannelEchoReq(string Value);
 
 public sealed record ChannelEchoRes(string Value);
 
-public sealed record ChannelNotify(string Marker);
+public sealed record ChannelMsg(string Marker);
 
 public sealed record MissingChannelReq(string Value);
 
-public sealed record MissingChannelNotify(string Marker);
+public sealed record MissingChannelMsg(string Marker);
 
 public sealed record CreateSpotReq(string SpotRid);
 
@@ -330,7 +330,7 @@ public sealed record LocationStoreReadProbeReq(
     string[] ActorIds,
     bool Blocked);
 
-public sealed record LocationStoreReadProbeSnapshot(
+public sealed record LocationStoreReadProbeRes(
     long MatchingReads,
     bool Blocked,
     string[] ActorIds);

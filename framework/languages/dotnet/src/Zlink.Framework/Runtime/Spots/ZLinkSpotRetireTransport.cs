@@ -40,22 +40,6 @@ internal sealed record ZLinkSpotRetireHeldRecord(
 internal sealed class ZLinkCanonicalRelocationDurablyAbortedException(
     string message) : Exception(message);
 
-internal sealed record ZLinkCanonicalHeldIngress(
-    Guid AggregateId,
-    ulong AggregateGeneration,
-    string SpotId,
-    ulong ObjectGeneration,
-    ulong SourceAuthorityOwnerGeneration,
-    ulong TargetAuthorityOwnerGeneration,
-    ulong SourceNodeLifecycleGeneration,
-    string SourceOwnerId,
-    ulong SourceOwnerLeaseGeneration,
-    ulong TargetNodeLifecycleGeneration,
-    string TargetOwnerId,
-    ulong TargetOwnerLeaseGeneration,
-    int HopCount,
-    ZLinkSpotRetireHeldRecord[] Records);
-
 /// <summary>
 /// Implements both the source service-wire client and target staging journal.
 /// Target state is keyed by aggregate fence, so duplicate Stage/Publish/Abort
@@ -1010,84 +994,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         }
     }
 
-    internal async ValueTask<bool> ApplyCanonicalHeldIngressAsync(
-        ZLinkCanonicalHeldIngress message,
-        RoutingId sourceNodeRid,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var relayDigest = SHA256.HashData(
-            JsonSerializer.SerializeToUtf8Bytes(message));
-        var fence = new ZLinkAggregateFence(
-            message.AggregateId,
-            message.AggregateGeneration);
-        await CleanupExpiredAsync().ConfigureAwait(false);
-        if (!_staged.TryGetValue(fence, out var entry))
-            return false;
-        if (entry is TargetStageTombstone terminal)
-            return terminal.MatchesRelay(sourceNodeRid, relayDigest);
-        if (entry is not TargetStage stage
-            || stage.AbortState != TargetStageAbortState.Staged
-            || Volatile.Read(ref stage.AuthorityPublished) == 0
-            || stage.SourceNodeRid != sourceNodeRid
-            || stage.Spot.Activation.SpotId != message.SpotId
-            || stage.Spot.Activation.ObjectGeneration
-               != message.ObjectGeneration
-            || stage.SourceAuthorityOwnerGeneration
-               != message.SourceAuthorityOwnerGeneration
-            || stage.TargetAuthorityOwnerGeneration
-               != message.TargetAuthorityOwnerGeneration
-            || stage.SourceNodeLifecycleGeneration
-               != message.SourceNodeLifecycleGeneration
-            || stage.SourceOwner.OwnerId != message.SourceOwnerId
-            || stage.SourceOwner.LeaseGeneration <= 0
-            || checked((ulong)stage.SourceOwner.LeaseGeneration)
-               != message.SourceOwnerLeaseGeneration
-            || stage.TargetNodeLifecycleGeneration
-               != message.TargetNodeLifecycleGeneration
-            || stage.TargetOwnerLeaseGeneration
-               != message.TargetOwnerLeaseGeneration
-            || runtime.LocationLifecycle?.OwnerToken is not { } targetOwner
-            || targetOwner.OwnerId != message.TargetOwnerId
-            || targetOwner.LeaseGeneration <= 0
-            || checked((ulong)targetOwner.LeaseGeneration)
-               != message.TargetOwnerLeaseGeneration
-            || message.SourceAuthorityOwnerGeneration
-               is 0 or > long.MaxValue
-            || message.TargetAuthorityOwnerGeneration
-               is 0 or > long.MaxValue
-            || message.TargetAuthorityOwnerGeneration
-               <= message.SourceAuthorityOwnerGeneration
-            || message.HopCount is < 1 or > 8)
-            return false;
-
-        ValidateHeldRecords(message.Records);
-        lock (stage.HeldGate)
-        {
-            if (stage.HeldRelayDigest is { } prior
-                && !prior.AsSpan().SequenceEqual(relayDigest))
-                return false;
-            stage.HeldRelayDigest ??= relayDigest;
-        }
-        if (!TrySetHeldRecords(stage, message.Records))
-            return false;
-        await FinalizeStageAsync(
-                stage,
-                normalizeAuthority: false,
-                cancellationToken)
-            .ConfigureAwait(false);
-        await CompleteInboundThenNormalizeAsync(stage, cancellationToken)
-            .ConfigureAwait(false);
-        return true;
-    }
-
     internal static void ValidateHeldRecords(
         IReadOnlyList<ZLinkSpotRetireHeldRecord> records)
     {
-        if (records.Count > 1_024)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Rejected,
-                "A Spot relocation held-ingress queue cannot exceed 1,024 messages.");
         long bytes = 0;
         ulong previous = 0;
         foreach (var record in records)
@@ -1098,10 +1007,6 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     "Held Spot ingress sequences must be strictly increasing.");
             previous = record.AcceptedSequence;
             bytes = checked(bytes + record.Payload.LongLength);
-            if (bytes > 16L * 1024 * 1024)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Rejected,
-                    "A Spot relocation held-ingress queue cannot exceed 16 MiB.");
         }
     }
 
@@ -1389,6 +1294,8 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 stage,
                 cancellationToken)
             .ConfigureAwait(false);
+        Volatile.Write(ref stage.SourceCleanupCompleted, 1);
+        runtime.ScheduleRelocationSessionRouteConvergence(stage);
         await NormalizeAuthorityAsync(
                 stage,
                 cancellationToken,
@@ -1805,6 +1712,11 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     : null,
                 cancellationToken)
             .ConfigureAwait(false);
+        if (normalizeAuthority)
+        {
+            Volatile.Write(ref stage.SourceCleanupCompleted, 1);
+            runtime.ScheduleRelocationSessionRouteConvergence(stage);
+        }
         if (stage.Envelope.CanonicalLogicalStream.IsEmpty)
             return;
         // Admission opens from the publish path once the queue merge is
@@ -2970,6 +2882,11 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         TargetStage stage,
         TargetStageTerminalOutcome outcome)
     {
+        if (outcome == TargetStageTerminalOutcome.Completed
+            && Volatile.Read(ref stage.Published) != 0
+            && (Volatile.Read(ref stage.SourceCleanupCompleted) == 0
+                || Volatile.Read(ref stage.SessionRoutesConverged) == 0))
+            return;
         var fence = new ZLinkAggregateFence(
             stage.Envelope.AggregateId,
             stage.Envelope.AggregateGeneration);
@@ -3136,6 +3053,7 @@ internal sealed record TargetStage(
     public int AuthorityPublished;
     public int Published;
     public int AdmissionOpened;
+    public int SourceCleanupCompleted;
     public int SessionRoutesConverged;
     public Task? AdmissionDrainTask;
     public int ReplayedJobCount;

@@ -1,10 +1,13 @@
 package systems.zlink.samples.bingo.server.play.infrastructure.zlink.actors;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
-import systems.zlink.samples.bingo.shared.contracts.BingoMessages;
 import systems.zlink.samples.bingo.shared.contracts.Messages;
 
 public final class PlayerActor implements ZLinkActor {
@@ -13,8 +16,8 @@ public final class PlayerActor implements ZLinkActor {
     private String displayName;
     private String roomId = "";
     private String pendingRoomId;
-    private final java.util.Set<ZLinkActorJoinOperationId>
-        completedJoinOperations = new java.util.HashSet<>();
+    private final Set<ZLinkActorJoinOperationId>
+        completedJoinOperations = new HashSet<>();
     private boolean destroyAfterEntrySpotJoin;
     private boolean disconnected;
 
@@ -53,7 +56,7 @@ public final class PlayerActor implements ZLinkActor {
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onJoinCompleted(
+    public CompletionStage<Void> onJoinCompleted(
         ZLinkActorJoinCompletion completion) {
         ZLinkActorJoinOperationId operationId = completion
             instanceof ZLinkActorJoinCompletion.Accepted accepted
@@ -62,13 +65,13 @@ public final class PlayerActor implements ZLinkActor {
                     ? rejected.operationId()
                     : ((ZLinkActorJoinCompletion.Failed) completion).operationId();
         if (!completedJoinOperations.add(operationId)) {
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
 
         String matchedRoomId = pendingRoomId;
         pendingRoomId = null;
         if (!(completion instanceof ZLinkActorJoinCompletion.Accepted accepted)) {
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
 
         Messages.BingoRoomJoinRes joined = accepted.reply()
@@ -77,9 +80,7 @@ public final class PlayerActor implements ZLinkActor {
             matchedRoomId = joined.getState().getRoomId();
         }
         joinRoom(matchedRoomId);
-        return context.boundSession()
-            .send(BingoMessages.matchBingoRes(matchedRoomId, joined.getState()))
-            .submit();
+        return CompletableFuture.completedFuture(null);
     }
 
     public String roomId() {
@@ -102,7 +103,7 @@ public final class PlayerActor implements ZLinkActor {
         disconnected = true;
     }
 
-    public java.util.concurrent.CompletionStage<Void> push(Object message) {
+    public CompletionStage<Void> push(Object message) {
         return context.boundSession()
             .send(message)
             .submit();

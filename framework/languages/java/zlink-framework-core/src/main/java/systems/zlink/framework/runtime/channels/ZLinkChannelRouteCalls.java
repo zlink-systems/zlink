@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.channels;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
@@ -84,7 +85,7 @@ import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 
 
 final class RouteSendCall implements ZLinkSendCall {
-    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
+    private final AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final ZLinkBackendRouterSocket router;
     private final RoutingId target;
@@ -110,7 +111,7 @@ final class RouteSendCall implements ZLinkSendCall {
         Optional<String> packetName,
         String contentType) {
         this(runtime, router, target, payload, packetName, contentType,
-            new java.util.concurrent.atomic.AtomicBoolean());
+            new AtomicBoolean());
     }
 
     private RouteSendCall(
@@ -120,7 +121,7 @@ final class RouteSendCall implements ZLinkSendCall {
         Message payload,
         Optional<String> packetName,
         String contentType,
-        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        AtomicBoolean submitGate) {
         this.submitGate = submitGate;
         this.runtime = runtime;
         this.router = router;
@@ -169,7 +170,7 @@ final class RouteSendCall implements ZLinkSendCall {
 }
 
 final class RouteRequestCall implements ZLinkRequestCall {
-    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
+    private final AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final String channelName;
     private final ZLinkBackendRouterSocket router;
@@ -201,7 +202,7 @@ final class RouteRequestCall implements ZLinkRequestCall {
         Duration timeout,
         String contentType) {
         this(runtime, channelName, router, target, payload, packetName, timeout,
-            contentType, new java.util.concurrent.atomic.AtomicBoolean());
+            contentType, new AtomicBoolean());
     }
 
     private RouteRequestCall(
@@ -213,7 +214,7 @@ final class RouteRequestCall implements ZLinkRequestCall {
         Optional<String> packetName,
         Duration timeout,
         String contentType,
-        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        AtomicBoolean submitGate) {
         this.submitGate = submitGate;
         this.runtime = runtime;
         this.channelName = channelName;
@@ -291,7 +292,7 @@ final class RouteRequestCall implements ZLinkRequestCall {
         } finally {
             requestParts.forEach(Message::close);
         }
-        return systems.zlink.framework.execution.ZLinkAsyncSerialQueue.manageCurrent(result);
+        return ZLinkAsyncSerialQueue.manageCurrent(result);
     }
 
     @Override
@@ -303,7 +304,7 @@ final class RouteRequestCall implements ZLinkRequestCall {
 }
 
 final class MeshNodeRouteSendCall implements ZLinkSendCall {
-    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
+    private final AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final ZLinkInternalSpotNode node;
     private final RoutingId target;
@@ -332,7 +333,7 @@ final class MeshNodeRouteSendCall implements ZLinkSendCall {
         String contentType,
         ZLinkApplicationMetadata metadata) {
         this(runtime, node, target, payload, packetName, contentType, metadata,
-            new java.util.concurrent.atomic.AtomicBoolean());
+            new AtomicBoolean());
     }
 
     private MeshNodeRouteSendCall(
@@ -343,7 +344,7 @@ final class MeshNodeRouteSendCall implements ZLinkSendCall {
         Optional<String> packetName,
         String contentType,
         ZLinkApplicationMetadata metadata,
-        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        AtomicBoolean submitGate) {
         this.submitGate = submitGate;
         this.runtime = runtime;
         this.node = node;
@@ -397,7 +398,7 @@ final class MeshNodeRouteSendCall implements ZLinkSendCall {
                 () -> submitLocal(node, target, metadata.encode(), sendParts),
                 () -> sendParts.forEach(Message::close));
         }
-        java.util.Optional<Integer> classified =
+        Optional<Integer> classified =
             node.classifyNodeSendTarget(target);
         if (classified.isPresent()) {
             sendParts.forEach(Message::close);
@@ -437,7 +438,7 @@ final class MeshNodeRouteSendCall implements ZLinkSendCall {
 }
 
 final class MeshChannelRouteSendCall implements ZLinkSendCall {
-    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
+    private final AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final String channelName;
     private final ZLinkInternalSpotNode node;
@@ -471,7 +472,7 @@ final class MeshChannelRouteSendCall implements ZLinkSendCall {
         String contentType,
         ZLinkApplicationMetadata metadata) {
         this(runtime, channelName, node, payload, packetName, contentType, metadata,
-            new java.util.concurrent.atomic.AtomicBoolean());
+            new AtomicBoolean());
     }
 
     private MeshChannelRouteSendCall(
@@ -482,7 +483,7 @@ final class MeshChannelRouteSendCall implements ZLinkSendCall {
         Optional<String> packetName,
         String contentType,
         ZLinkApplicationMetadata metadata,
-        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        AtomicBoolean submitGate) {
         this.submitGate = submitGate;
         this.runtime = runtime;
         this.channelName = channelName;
@@ -520,7 +521,7 @@ final class MeshChannelRouteSendCall implements ZLinkSendCall {
         if (duplicate != null) {
             return duplicate;
         }
-        java.util.Optional<Integer> classified =
+        Optional<Integer> classified =
             node.classifyChannelTarget(channelName);
         if (classified.isPresent()) {
             payload.close();
@@ -541,7 +542,7 @@ final class MeshChannelRouteSendCall implements ZLinkSendCall {
 }
 
 final class MeshChannelRouteRequestCall implements ZLinkRequestCall {
-    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
+    private final AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final String channelName;
     private final ZLinkInternalSpotNode node;
@@ -579,7 +580,7 @@ final class MeshChannelRouteRequestCall implements ZLinkRequestCall {
         String contentType,
         ZLinkApplicationMetadata metadata) {
         this(runtime, channelName, node, payload, packetName, timeout, contentType,
-            metadata, new java.util.concurrent.atomic.AtomicBoolean());
+            metadata, new AtomicBoolean());
     }
 
     private MeshChannelRouteRequestCall(
@@ -591,7 +592,7 @@ final class MeshChannelRouteRequestCall implements ZLinkRequestCall {
         Duration timeout,
         String contentType,
         ZLinkApplicationMetadata metadata,
-        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        AtomicBoolean submitGate) {
         this.submitGate = submitGate;
         this.runtime = runtime;
         this.channelName = channelName;
@@ -639,7 +640,7 @@ final class MeshChannelRouteRequestCall implements ZLinkRequestCall {
         }
         CompletableFuture<TReply> result = new CompletableFuture<>();
         runtime.track(result, timeout);
-        java.util.Optional<Integer> classified =
+        Optional<Integer> classified =
             node.classifyChannelTarget(channelName);
         if (classified.isPresent()) {
             payload.close();
@@ -648,20 +649,20 @@ final class MeshChannelRouteRequestCall implements ZLinkRequestCall {
                     + " status=" + classified.orElseThrow());
             result.completeExceptionally(
                 ZLinkOneWayCalls.failureForStatus(classified.orElseThrow()));
-            return systems.zlink.framework.execution.ZLinkAsyncSerialQueue
+            return ZLinkAsyncSerialQueue
                 .manageCurrent(result);
         }
         long deadline = System.nanoTime() + timeout.toNanos();
         result.whenComplete((ignored, failure) -> payload.close());
         submitAttempt(replyType, result, deadline, payload);
-        return systems.zlink.framework.execution.ZLinkAsyncSerialQueue.manageCurrent(result);
+        return ZLinkAsyncSerialQueue.manageCurrent(result);
     }
 
     @Override
     public <TReply> CompletionStage<TReply> yield(Class<TReply> replyType) {
         systems.zlink.framework.runtime.internal.handlers
             .ZLinkSuspendInvocationContext.requireYieldAllowed("Channel request");
-        return systems.zlink.framework.execution.ZLinkAsyncSerialQueue
+        return ZLinkAsyncSerialQueue
             .yieldCurrent(submit(replyType));
     }
 
@@ -718,7 +719,7 @@ final class MeshChannelRouteRequestCall implements ZLinkRequestCall {
 }
 
 final class MeshNodeRouteRequestCall implements ZLinkRequestCall {
-    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
+    private final AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final String channelName;
     private final ZLinkInternalSpotNode node;
@@ -760,7 +761,7 @@ final class MeshNodeRouteRequestCall implements ZLinkRequestCall {
         String contentType,
         ZLinkApplicationMetadata metadata) {
         this(runtime, channelName, node, target, payload, packetName, timeout, contentType,
-            metadata, new java.util.concurrent.atomic.AtomicBoolean());
+            metadata, new AtomicBoolean());
     }
 
     private MeshNodeRouteRequestCall(
@@ -773,7 +774,7 @@ final class MeshNodeRouteRequestCall implements ZLinkRequestCall {
         Duration timeout,
         String contentType,
         ZLinkApplicationMetadata metadata,
-        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        AtomicBoolean submitGate) {
         this.submitGate = submitGate;
         this.runtime = runtime;
         this.channelName = channelName;
@@ -833,7 +834,7 @@ final class MeshNodeRouteRequestCall implements ZLinkRequestCall {
                 target.toString(), null, null, null));
         }
         try {
-            java.util.Optional<Integer> classified =
+            Optional<Integer> classified =
                 node.classifyNodeSendTarget(target);
             if (classified.isPresent()) {
                 int status = classified.orElseThrow();
@@ -889,7 +890,7 @@ final class MeshNodeRouteRequestCall implements ZLinkRequestCall {
         } finally {
             requestParts.forEach(Message::close);
         }
-        return systems.zlink.framework.execution.ZLinkAsyncSerialQueue.manageCurrent(result);
+        return ZLinkAsyncSerialQueue.manageCurrent(result);
     }
 
     @Override

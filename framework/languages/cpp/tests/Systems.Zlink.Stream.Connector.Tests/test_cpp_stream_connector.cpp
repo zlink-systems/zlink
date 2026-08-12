@@ -151,6 +151,118 @@ class async_write_connection_t final : public zlink::stream_connector::detail::s
     bool _fail_write = false;
 };
 
+class held_async_write_connection_t final :
+    public zlink::stream_connector::detail::stream_connection_t
+{
+  public:
+    bool is_open () const override { return _open; }
+
+    std::size_t available (boost::system::error_code &error) override
+    {
+        error.clear ();
+        return 0;
+    }
+
+    std::size_t read_some (
+      std::uint8_t *, std::size_t,
+      boost::system::error_code &error) override
+    {
+        error = boost::asio::error::would_block;
+        return 0;
+    }
+
+    void async_read_some (
+      std::size_t,
+      std::function<void (
+        boost::system::error_code,
+        std::vector<std::uint8_t>)> completion) override
+    {
+        std::lock_guard lock (_mutex);
+        _read_completion = std::move (completion);
+    }
+
+    void write (const std::vector<std::uint8_t> &bytes) override
+    {
+        std::lock_guard lock (_mutex);
+        ++_direct_writes;
+        _overlapped = _overlapped
+                      || static_cast<bool> (_write_completion);
+        _written.push_back (bytes);
+    }
+
+    void async_write (
+      std::vector<std::uint8_t> bytes,
+      std::function<void (boost::system::error_code)> completion) override
+    {
+        std::lock_guard lock (_mutex);
+        _overlapped = _overlapped
+                      || static_cast<bool> (_write_completion);
+        _written.push_back (std::move (bytes));
+        _write_completion = std::move (completion);
+    }
+
+    void complete_write ()
+    {
+        std::function<void (boost::system::error_code)> completion;
+        {
+            std::lock_guard lock (_mutex);
+            completion = std::move (_write_completion);
+        }
+        if (completion)
+            completion ({});
+    }
+
+    std::size_t write_count () const
+    {
+        std::lock_guard lock (_mutex);
+        return _written.size ();
+    }
+
+    std::size_t direct_write_count () const
+    {
+        std::lock_guard lock (_mutex);
+        return _direct_writes;
+    }
+
+    bool overlapped () const
+    {
+        std::lock_guard lock (_mutex);
+        return _overlapped;
+    }
+
+    std::vector<std::uint8_t> written (std::size_t index) const
+    {
+        std::lock_guard lock (_mutex);
+        return _written.at (index);
+    }
+
+    void shutdown_and_close () override
+    {
+        std::lock_guard lock (_mutex);
+        _open = false;
+        _read_completion = {};
+        _write_completion = {};
+    }
+
+    void close (boost::system::error_code &error) override
+    {
+        shutdown_and_close ();
+        error.clear ();
+    }
+
+  private:
+    mutable std::mutex _mutex;
+    bool _open = true;
+    bool _overlapped = false;
+    std::size_t _direct_writes = 0;
+    std::vector<std::vector<std::uint8_t>> _written;
+    std::function<void (
+      boost::system::error_code,
+      std::vector<std::uint8_t>)> _read_completion;
+    std::function<void (boost::system::error_code)>
+      _write_completion;
+};
+
 class early_reply_connection_t final : public zlink::stream_connector::detail::stream_connection_t
 {
   public:
@@ -677,6 +789,111 @@ int main ()
             || !state->pending_writes.empty () || state->write_in_progress) {
             return 145;
         }
+    }
+
+    {
+        auto state = std::make_shared<
+          zlink::stream_connector::detail::connector_state_t> (
+            zlink::stream_connector::connector_options_t{});
+        auto connection =
+          std::make_shared<held_async_write_connection_t> ();
+        {
+            std::lock_guard<std::mutex> lock (
+              state->transport_mutex);
+            state->connection = connection;
+            state->pending_writes.push_back (
+              zlink::stream_connector::detail::pending_write_t{
+                std::vector<std::uint8_t>{'f', 'i', 'r', 's', 't'},
+                {}});
+        }
+        zlink::stream_connector::detail::change_state (
+          state,
+          zlink::stream_connector::connection_state_t::connected);
+        zlink::stream_connector::detail::resume_pending_writes_after_connect (
+          state);
+        const auto first_started = [&] {
+            const auto deadline =
+              std::chrono::steady_clock::now ()
+              + std::chrono::seconds (1);
+            while (connection->write_count () != 1
+                   && std::chrono::steady_clock::now () < deadline) {
+                std::this_thread::sleep_for (
+                  std::chrono::milliseconds (1));
+            }
+            return connection->write_count () == 1;
+        } ();
+        const auto submitted =
+          zlink::stream_connector::detail::submit_send (
+            state,
+            zlink::stream_connector::packet_t{
+              .name = "serialized.after.request",
+              .payload = zlink::message_t::from (
+                std::string ("second"))});
+        if (!first_started || !submitted
+            || connection->direct_write_count () != 0
+            || connection->overlapped ()
+            || connection->write_count () != 1) {
+            return 240;
+        }
+
+        connection->complete_write ();
+        const auto second_started = [&] {
+            const auto deadline =
+              std::chrono::steady_clock::now ()
+              + std::chrono::seconds (1);
+            while (connection->write_count () != 2
+                   && std::chrono::steady_clock::now () < deadline) {
+                std::this_thread::sleep_for (
+                  std::chrono::milliseconds (1));
+            }
+            return connection->write_count () == 2;
+        } ();
+        if (!second_started || connection->direct_write_count () != 0
+            || connection->overlapped ()
+            || connection->written (0)
+                 != std::vector<std::uint8_t>{'f', 'i', 'r', 's', 't'}) {
+            return 241;
+        }
+        const auto encoded = connection->written (1);
+        std::string encoded_text (
+          encoded.begin (), encoded.end ());
+        const auto frame = try_read_server_frame (encoded_text);
+        if (!frame
+            || frame->header.kind
+                 != zlink::stream_connector::message_kind_t::send
+            || frame->header.name != "serialized.after.request") {
+            return 242;
+        }
+        connection->complete_write ();
+        const auto settled_deadline =
+          std::chrono::steady_clock::now ()
+          + std::chrono::seconds (1);
+        while (std::chrono::steady_clock::now ()
+                 < settled_deadline) {
+            const auto settled = [&] {
+                std::lock_guard<std::mutex> lock (
+                  state->transport_mutex);
+                return !state->active_write
+                       && state->pending_writes.empty ()
+                       && !state->write_in_progress
+                       && state->sent_packets.size () == 1;
+            } ();
+            if (settled)
+                break;
+            std::this_thread::sleep_for (
+              std::chrono::milliseconds (1));
+        }
+        {
+            std::lock_guard<std::mutex> lock (
+              state->transport_mutex);
+            if (state->active_write
+                || !state->pending_writes.empty ()
+                || state->write_in_progress
+                || state->sent_packets.size () != 1) {
+                return 243;
+            }
+        }
+        connection->shutdown_and_close ();
     }
 
     {
@@ -1695,7 +1912,15 @@ int main ()
         zlink::message_t::from (std::string (128, 'a'))})
       .compress ()
       .submit ();
-    const bool compressible_large_send_accepted = runtime.sent_packets ().size () == 2;
+    const auto compressible_large_send_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (runtime.sent_packets ().size () != 2
+           && std::chrono::steady_clock::now ()
+                < compressible_large_send_deadline) {
+        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+    }
+    const bool compressible_large_send_accepted =
+      runtime.sent_packets ().size () == 2;
     if (!compressible_large_send_accepted) {
         connector
           .send (zlink::stream_connector::packet_t{
@@ -3722,7 +3947,17 @@ int main ()
         reconnect_success_server_thread.join ();
         return 67;
     }
+    auto reconnect_success_runtime =
+      zlink::stream_connector::detail::connector_runtime_t::from (
+        reconnect_success_connector);
     reconnect_success_connector.send (login_request_t{}).submit ();
+    const auto reconnect_success_send_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (reconnect_success_runtime.sent_packets ().empty ()
+           && std::chrono::steady_clock::now ()
+                < reconnect_success_send_deadline) {
+        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+    }
     reconnect_success_connector.close ();
     reconnect_success_server_thread.join ();
     if (!reconnect_success_send_seen) {

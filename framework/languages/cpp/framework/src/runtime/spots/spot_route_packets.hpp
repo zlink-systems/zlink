@@ -5,6 +5,7 @@
 #include <zlink/framework/contracts/actors/actor.hpp>
 
 #include "runtime/actors/actor_ref_access.hpp"
+#include "runtime/protocol/service_wire_codec.hpp"
 #include <zlink/framework/contracts/codecs/serializer.hpp>
 
 #include <cstdint>
@@ -81,8 +82,10 @@ struct spot_actor_commit_route_request_t
     std::string target_owner_id;
     std::uint64_t target_owner_lease_generation = 0;
     std::string relocation_capacity_fence;
+    std::string source_spot_id;
     std::string bound_session_node_rid;
     std::string bound_session_rid;
+    std::vector<std::uint8_t> session_relocation_route;
     std::vector<std::uint8_t> transfer_state;
     std::vector<spot_actor_handoff_packet_t> handoff_backlog;
     bool core_transfer = false;
@@ -131,6 +134,9 @@ struct spot_actor_packet_route_request_t
     std::string actor_type;
     std::string actor_id;
     std::uint64_t actor_generation = 0;
+    std::uint64_t actor_node_generation = 0;
+    std::uint64_t actor_authority_owner_generation = 0;
+    std::uint64_t actor_owner_lease_generation = 0;
     std::string spot_id;
     std::string packet_name_value;
     std::string content_type = "application/json";
@@ -194,6 +200,38 @@ struct actor_bound_session_route_reply_t
     bool accepted = true;
 };
 
+// These declarations make the framework's normal typed JSON serializer the
+// single codec path for internal Spot route packets. Definitions stay in the
+// implementation file with the wire-field validation.
+void to_json (nlohmann::json &json, const spot_multicast_route_send_t &value);
+void from_json (const nlohmann::json &json, spot_multicast_route_send_t &value);
+void to_json (nlohmann::json &json, const spot_actor_admission_route_request_t &value);
+void from_json (const nlohmann::json &json, spot_actor_admission_route_request_t &value);
+void to_json (nlohmann::json &json, const spot_actor_admission_route_reply_t &value);
+void from_json (const nlohmann::json &json, spot_actor_admission_route_reply_t &value);
+void to_json (nlohmann::json &json, const spot_actor_handoff_packet_t &value);
+void from_json (const nlohmann::json &json, spot_actor_handoff_packet_t &value);
+void to_json (nlohmann::json &json, const spot_actor_commit_route_request_t &value);
+void from_json (const nlohmann::json &json, spot_actor_commit_route_request_t &value);
+void to_json (nlohmann::json &json, const spot_actor_join_route_request_t &value);
+void from_json (const nlohmann::json &json, spot_actor_join_route_request_t &value);
+void to_json (nlohmann::json &json, const spot_actor_join_route_reply_t &value);
+void from_json (const nlohmann::json &json, spot_actor_join_route_reply_t &value);
+void to_json (nlohmann::json &json, const spot_actor_packet_route_request_t &value);
+void from_json (const nlohmann::json &json, spot_actor_packet_route_request_t &value);
+void to_json (nlohmann::json &json, const spot_actor_packet_route_reply_t &value);
+void from_json (const nlohmann::json &json, spot_actor_packet_route_reply_t &value);
+void to_json (nlohmann::json &json, const spot_actor_disconnect_route_request_t &value);
+void from_json (const nlohmann::json &json, spot_actor_disconnect_route_request_t &value);
+void to_json (nlohmann::json &json, const spot_actor_disconnect_route_reply_t &value);
+void from_json (const nlohmann::json &json, spot_actor_disconnect_route_reply_t &value);
+void to_json (nlohmann::json &json, const actor_bound_session_route_request_t &value);
+void from_json (const nlohmann::json &json, actor_bound_session_route_request_t &value);
+void to_json (nlohmann::json &json, const actor_bound_session_bind_route_request_t &value);
+void from_json (const nlohmann::json &json, actor_bound_session_bind_route_request_t &value);
+void to_json (nlohmann::json &json, const actor_bound_session_route_reply_t &value);
+void from_json (const nlohmann::json &json, actor_bound_session_route_reply_t &value);
+
 result_t<zlink::message_t> encode_actor_bound_session_frame (
   stream_codec_t codec,
   std::string packet_name,
@@ -219,7 +257,10 @@ make_spot_actor_packet_route_request (const actor_ref_t &actor_ref,
                                       spot_id_t spot_id,
                                       std::string_view packet_name,
                                       const zlink::message_t &payload,
-                                      const spot_inbound_message_t &metadata);
+                                      const spot_inbound_message_t &metadata,
+                                      std::optional<runtime::protocol::
+                                        actor_route_fence_t> target_fence =
+                                        std::nullopt);
 
 actor_ref_t actor_ref_from_spot_route (const spot_actor_packet_route_request_t &request);
 
@@ -237,7 +278,5 @@ actor_bound_session_route_request_t make_actor_bound_session_route_request (
 actor_ref_t actor_ref_from_bound_session_route (const actor_bound_session_route_request_t &request);
 actor_ref_t
 actor_ref_from_bound_session_route (const actor_bound_session_bind_route_request_t &request);
-
-void register_spot_route_packet_serializers (serializer_registry_t &serializers);
 
 } // namespace zlink::framework::detail

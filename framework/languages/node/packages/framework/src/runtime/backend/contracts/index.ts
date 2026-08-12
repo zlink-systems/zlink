@@ -45,18 +45,10 @@ import type {
   ServiceUserSpotCloseRecord,
   ServiceUserSpotCreateRecord
 } from '../../foundation/service-stateful-wire-codec';
-
-export type ZLinkBackendSpotNodeMode = number;
-export const ZLINK_BACKEND_SPOT_NODE_MODE_PUBSUB = 1 as ZLinkBackendSpotNodeMode;
-export const ZLINK_BACKEND_SPOT_NODE_MODE_ROUTED = 2 as ZLinkBackendSpotNodeMode;
-export const ZLINK_BACKEND_SPOT_NODE_MODE_ALL = 3 as ZLinkBackendSpotNodeMode;
-export const ZLINK_BACKEND_SPOT_ROUTE_BRIDGE_ROUTE_ONLY = 0x00000001;
 export const ZLINK_BACKEND_SPOT_ROUTE_BRIDGE_ROUTE_WITH_CHANNEL_INBOUND = 0x00000003;
 
 export type ZLinkBackendMeshNodeStatus = MeshNodeStatus;
 export type ZLinkBackendMeshPeerEntry = MeshPeerEntry;
-export type ZLinkBackendReadyBatch = ReadyBatch;
-export type ZLinkBackendReceiveBatch = ReceiveBatch;
 
 export type ZLinkBackendObjectPlacement =
   | {
@@ -99,7 +91,7 @@ export interface ZLinkBackendMeshNode {
       import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord,
       'kind'
     >
-  ): void;
+  ): boolean;
   shutdown(timeoutMs: number): RequestResult;
   close(): void;
   addChannelName(name: string): void;
@@ -340,7 +332,8 @@ export interface ZLinkBackendMeshNode {
     actor: ZLinkBackendActorRef,
     expectedBindingGeneration: bigint,
     parts: MessageLike | readonly MessageLike[],
-    flags?: number
+    flags?: number,
+    actorFence?: ZLinkBackendActorSessionSendFence
   ): SubmitResult;
   closeActorBoundSession(
     actor: ZLinkBackendActorRef,
@@ -379,12 +372,20 @@ export interface ZLinkBackendActorRef {
   readonly generation: bigint;
 }
 
+export interface ZLinkBackendActorSessionSendFence {
+  readonly targetNodeGeneration: bigint;
+  readonly authorityOwnerGeneration: bigint;
+  readonly ownerLeaseGeneration: bigint;
+}
+
 export interface ZLinkBackendActorSessionNode {
+  actorNodeGeneration?(actor: ZLinkBackendActorRef): bigint | undefined;
   sendActorBoundSession(
     actor: ZLinkBackendActorRef,
     expectedBindingGeneration: bigint,
     parts: readonly Message[],
-    flags: number
+    flags: number,
+    actorFence?: ZLinkBackendActorSessionSendFence
   ): ZLinkSubmitResult;
   closeActorBoundSession(
     actor: ZLinkBackendActorRef,
@@ -422,16 +423,6 @@ export type ZLinkBackendActorJoinEntrySpotCallback = (
   result: ZLinkBackendActorJoinEntrySpotResult,
   parts: readonly Message[]
 ) => void;
-
-export interface ZLinkBackendActorPart {
-  readonly actor: ZLinkBackendActorRef;
-  readonly sourceNodeRid: RoutingId;
-  readonly sourceSessionRid: RoutingId;
-  readonly requestId: bigint;
-  readonly flags: number;
-  readonly message: Message;
-  readonly more: boolean;
-}
 
 export interface ZLinkBackendActorRecvInfo {
   readonly actor: ZLinkBackendActorRef;
@@ -686,7 +677,8 @@ export interface ZLinkBackendSpotNode extends ZLinkBackendObject {
     actor: ZLinkBackendActorRef,
     expectedBindingGeneration: bigint,
     parts: readonly Message[],
-    flags: ZLinkBackendSendFlags
+    flags: ZLinkBackendSendFlags,
+    actorFence?: ZLinkBackendActorSessionSendFence
   ): boolean;
   sendToActor(
     actor: ZLinkBackendActorRef,

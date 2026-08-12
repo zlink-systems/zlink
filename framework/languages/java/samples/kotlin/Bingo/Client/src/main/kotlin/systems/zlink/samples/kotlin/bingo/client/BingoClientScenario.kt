@@ -47,10 +47,7 @@ class BingoClientScenario {
                 .within(Duration.ofMillis(400))
                 .await()
         }
-        val client1MatchWait = client1.waitFor<MatchBingoRes>()
-            .let { wait -> async(start = CoroutineStart.UNDISPATCHED) { wait.await() } }
-        client1.send(MatchBingoReq("two-player")).await()
-        val client1Match = client1MatchWait.await().payload()
+        val client1Match = client1.request(MatchBingoReq("two-player")).awaitReply<MatchBingoRes>()
         ensure(client1Match.state.status == "WaitingForPlayers")
         ensure(client1Match.state.hostActorId == client1Auth.actorId)
         client1NoSelfJoin.await()
@@ -72,6 +69,9 @@ class BingoClientScenario {
         val client1Started = async(start = CoroutineStart.UNDISPATCHED) {
             client1.waitFor<BingoGameStartedNotify>().await()
         }
+        val client2Started = async(start = CoroutineStart.UNDISPATCHED) {
+            client2.waitFor<BingoGameStartedNotify>().await()
+        }
 
         val client2Auth = client2.request(AuthenticateReq("player-2")).awaitReply<AuthenticateRes>()
         ensure(client2Auth.actorId == "player-2")
@@ -82,12 +82,9 @@ class BingoClientScenario {
                 .within(Duration.ofMillis(400))
                 .await()
         }
-        val client2MatchWait = client2.waitFor<MatchBingoRes>()
-            .let { wait -> async(start = CoroutineStart.UNDISPATCHED) { wait.await() } }
-        client2.send(MatchBingoReq("two-player")).await()
-        val client2Match = client2MatchWait.await().payload()
+        val client2Match = client2.request(MatchBingoReq("two-player")).awaitReply<MatchBingoRes>()
         ensure(client2Match.roomId == client1Match.roomId)
-        ensure(client2Match.state.status == "Running")
+        ensure(client2Match.state.status == "WaitingForPlayers")
 
         val join = client1SawClient2Join.await().payload()
         ensure(join.actorId == client2Auth.actorId)
@@ -96,6 +93,7 @@ class BingoClientScenario {
             setOf(client1Auth.actorId, client2Auth.actorId))
         client2NoSelfJoin.await()
         ensure(client1Started.await().payload().state.status == "Running")
+        ensure(client2Started.await().payload().state.status == "Running")
 
         val client2Card = client2.request(SubmitBingoCardReq(client2Match.roomId, BingoClientCards.Player2)).awaitReply<SubmitBingoCardRes>()
         ensure(client2Card.state.status == "Running")

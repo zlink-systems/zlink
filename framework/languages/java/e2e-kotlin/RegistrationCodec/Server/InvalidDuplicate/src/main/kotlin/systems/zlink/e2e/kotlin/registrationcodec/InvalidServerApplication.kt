@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.registrationcodec
 
+
+import java.net.URI
 import org.springframework.boot.ApplicationArguments
 import org.springframework.boot.WebApplicationType
 import org.springframework.boot.autoconfigure.SpringBootApplication
@@ -23,7 +25,7 @@ class InvalidServerApplication {
     @Bean
     fun invalidFramework(serverOptions: ServerOptions): ZLinkFrameworkConfigurer =
         ZLinkFrameworkConfigurer { options ->
-            val endpoint = java.net.URI.create(serverOptions.serverEndpoint)
+            val endpoint = URI.create(serverOptions.serverEndpoint)
             val server = options.addClientServerChannel(Contracts.CHANNEL)
                 .server()
                 .setBindHost(endpoint.host)

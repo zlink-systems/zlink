@@ -3,7 +3,7 @@ import { getJson, postJson, postJsonWithin } from '../../../http-client';
 import type { ClientOptions } from '../Support/client-options';
 import { ensure } from '../Support/scenario-assert';
 
-interface LocationReply {
+interface LocationRes {
   readonly found: boolean;
   readonly ownerNodeRid?: string;
   readonly objectGeneration?: string;
@@ -137,8 +137,8 @@ async function location(
   options: ClientOptions,
   kind: 'actor' | 'spot',
   id: string
-): Promise<LocationReply> {
-  return await getJson<LocationReply>(
+): Promise<LocationRes> {
+  return await getJson<LocationRes>(
     options.consumerUrl,
     `/location/object?kind=${kind}&id=${encodeURIComponent(id)}`
   );

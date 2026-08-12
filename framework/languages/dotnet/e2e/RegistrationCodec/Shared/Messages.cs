@@ -8,7 +8,7 @@ public static class RegistrationCodecNames
     public const string Channel = "reg-codec";
 }
 
-[ZLinkPacket("EchoAttr")]
+[ZLinkPacket("EchoAttrReq")]
 public sealed record EchoAttrReq(string Value);
 
 public sealed record EchoRes(string Value, string ContentType);
@@ -16,25 +16,25 @@ public sealed record EchoRes(string Value, string ContentType);
 [ZLinkPacket("EchoAttrMsg")]
 public sealed record EchoAttrMsg(string CommandId, string Value);
 
-[ZLinkPacket("EchoDi")]
+[ZLinkPacket("EchoDiReq")]
 public sealed record EchoDiReq(string Value);
 
-[ZLinkPacket("EchoAuto")]
+[ZLinkPacket("EchoAutoReq")]
 public sealed record EchoAutoReq(string Value);
 
 [ZLinkPacket("EchoAutoMsg")]
 public sealed record EchoAutoMsg(string CommandId, string Value);
 
-[ZLinkPacket("EchoManual")]
+[ZLinkPacket("EchoManualReq")]
 public sealed record EchoManualReq(string Value);
 
 [ZLinkPacket("EchoManualMsg")]
 public sealed record EchoManualMsg(string CommandId, string Value);
 
-[ZLinkPacket("EchoJson")]
+[ZLinkPacket("JsonEchoReq")]
 public sealed record JsonEchoReq(string Value);
 
-[ZLinkPacket("EchoJsonMsg")]
+[ZLinkPacket("JsonEchoMsg")]
 public sealed record JsonEchoMsg(string CommandId, string Value);
 
 public sealed record CodecMismatchProbeRes(
@@ -42,7 +42,7 @@ public sealed record CodecMismatchProbeRes(
     string? FailureType,
     string? Value);
 
-[ZLinkPacket("JsonGolden")]
+[ZLinkPacket("JsonGoldenReq")]
 public sealed record JsonGoldenReq(
     string DisplayName,
     string Status,
@@ -67,14 +67,21 @@ public sealed record EvidenceWaitReq(
     int TimeoutMilliseconds = 10000);
 
 [MessagePackObject]
-[ZLinkPacket("EchoMessagePack")]
+[ZLinkPacket("PackedEchoReq")]
 public sealed class PackedEchoReq
 {
     [Key(0)] public string Value { get; set; } = string.Empty;
 }
 
 [MessagePackObject]
-[ZLinkPacket("EchoMessagePackMsg")]
+[ZLinkPacket("PackedEchoRes")]
+public sealed class PackedEchoRes
+{
+    [Key(0)] public string Value { get; set; } = string.Empty;
+}
+
+[MessagePackObject]
+[ZLinkPacket("PackedEchoMsg")]
 public sealed class PackedEchoMsg
 {
     [Key(0)] public string CommandId { get; set; } = string.Empty;

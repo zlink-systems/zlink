@@ -22,8 +22,9 @@ public final class BingoRoomSettingsInitializer {
                 0,
                 SampleTimings.DrawPeriod.toMillis());
         }
-        Messages.BingoRoomSettingsPayload settings =
-            request.decode(Messages.BingoRoomSettingsPayload.class);
+        Messages.BingoRoomCreateReq createRequest =
+            request.decode(Messages.BingoRoomCreateReq.class);
+        Messages.BingoRoomSettingsPayload settings = createRequest.getSettings();
         return new BingoRoomModels.BingoRoomSettings(
             settings.getRoomName(),
             settings.getMode(),

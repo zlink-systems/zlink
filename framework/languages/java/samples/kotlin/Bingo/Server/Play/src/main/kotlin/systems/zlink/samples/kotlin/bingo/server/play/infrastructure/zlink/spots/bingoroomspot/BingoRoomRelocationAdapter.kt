@@ -1,5 +1,7 @@
 package systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.spots.bingoroomspot
 
+
+import java.util.concurrent.CancellationException
 import com.fasterxml.jackson.databind.ObjectMapper
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
@@ -37,7 +39,7 @@ class BingoRoomRelocationAdapter(
 
     private fun ensureActive(cancellation: ZLinkRelocationCancellation) {
         if (cancellation.isCancellationRequested) {
-            throw java.util.concurrent.CancellationException(
+            throw CancellationException(
                 "Bingo room relocation was cancelled",
             )
         }

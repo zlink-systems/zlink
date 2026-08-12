@@ -2,9 +2,9 @@ import {
   PacketNames,
   QuestIds,
   QuestStatuses,
-  collectItemReq,
+  collectItemMsg,
   completeMissionReq,
-  enterAreaReq,
+  enterAreaMsg,
   getQuestProgressReq,
   joinSessionReq,
   killMonsterReq,
@@ -15,9 +15,7 @@ import type { BrowserHttpClient } from '../../browser-client-runtime';
 import { zlinkStreamAssert } from '@zlink-systems/stream-connector';
 import type { ZlinkStreamConnector } from '@zlink-systems/stream-connector';
 import type {
-  CollectItemRes,
   CompleteMissionRes,
-  EnterAreaRes,
   GameQuestServerAssertRes,
   GetGameplaySnapshotRes,
   GetQuestProgressRes,
@@ -58,13 +56,9 @@ class GameQuestClientScenario {
       .submit<KillMonsterRes>(signal);
     zlinkStreamAssert.ensure(wrongArea.eventId === 'player-alice-kill-wrong-area', 'Sample scenario assertion failed.');
     await apiAStream.expectNone(PacketNames.questProgressNotify).within(250).run(signal);
-    await zlinkStreamAssert.expectFailure(
-      async () => {
-        await apiBStream.request(collectItemReq('player-bob', 'healing-herb', -1, 'invalid-negative-count'), Object)
-          .packetName(PacketNames.collectItemReq)
-          .submit<CollectItemRes>(signal);
-      }
-    );
+    await apiBStream.send(collectItemMsg('player-bob', 'healing-herb', -1, 'invalid-negative-count'))
+      .packetName(PacketNames.collectItemMsg)
+      .submit();
     await apiBStream.expectNone(PacketNames.questProgressNotify).within(250).run(signal);
 
     const firstProgress = apiAStream.waitFor<QuestProgressNotify>(PacketNames.questProgressNotify)
@@ -73,16 +67,15 @@ class GameQuestClientScenario {
     const firstHerbProgress = apiBStream.waitFor<QuestProgressNotify>(PacketNames.questProgressNotify)
       .where((message) => message.payload.playerId === 'player-bob')
       .submit(signal);
-    const [firstKill, offlineItem] = await Promise.all([
+    const [firstKill] = await Promise.all([
       apiAStream.request(killMonsterReq('player-alice', 'wolf', 'forest', 'kill-1'), Object)
         .packetName(PacketNames.killMonsterReq)
         .submit<KillMonsterRes>(signal),
-      apiBStream.request(collectItemReq('player-bob', 'healing-herb', 1, 'herb-1'), Object)
-        .packetName(PacketNames.collectItemReq)
-        .submit<CollectItemRes>(signal)
+      apiBStream.send(collectItemMsg('player-bob', 'healing-herb', 1, 'herb-1'))
+        .packetName(PacketNames.collectItemMsg)
+        .submit()
     ]);
     zlinkStreamAssert.ensure(firstKill.eventId === 'player-alice-kill-1', 'Sample scenario assertion failed.');
-    zlinkStreamAssert.ensure(offlineItem.eventId === 'player-bob-herb-1', 'Sample scenario assertion failed.');
     const firstProgressPush = await firstProgress;
     const firstHerbPush = await firstHerbProgress;
     zlinkStreamAssert.ensure(firstProgressPush.payload.progress.questId === QuestIds.FirstHunt, 'Sample scenario assertion failed.');
@@ -147,10 +140,9 @@ class GameQuestClientScenario {
     const afterCloseFirstHunt = requireQuest(closeSync.updatedQuests, QuestIds.FirstHunt);
     zlinkStreamAssert.ensure(afterCloseFirstHunt.currentCount >= beforeDeactivate.currentCount, 'Sample scenario assertion failed.');
 
-    const earlyRuins = await apiBReconnectStream.request(enterAreaReq('player-alice', 'ruins', 'enter-ruins-too-early'), Object)
-      .packetName(PacketNames.enterAreaReq)
-      .submit<EnterAreaRes>(signal);
-    zlinkStreamAssert.ensure(earlyRuins.eventId === 'player-alice-enter-ruins-too-early', 'Sample scenario assertion failed.');
+    await apiBReconnectStream.send(enterAreaMsg('player-alice', 'ruins', 'enter-ruins-too-early'))
+      .packetName(PacketNames.enterAreaMsg)
+      .submit();
     const beforeTutorial = await getStreamProjection(apiBReconnectStream, 'player-alice', signal);
     zlinkStreamAssert.ensure(beforeTutorial.every((progress) => progress.questId !== QuestIds.RuinsExplorer), 'Sample scenario assertion failed.');
 
@@ -176,10 +168,9 @@ class GameQuestClientScenario {
     zlinkStreamAssert.ensure(ruinsBeforeFinalStep.status === QuestStatuses.Active, 'Sample scenario assertion failed.');
     console.log('gamequest-rehydrate=completed');
     const ruinsCompleted = waitForQuestCompletion(apiBReconnectStream, QuestIds.RuinsExplorer, signal);
-    const ruins = await apiBReconnectStream.request(enterAreaReq('player-alice', 'ruins', 'enter-ruins'), Object)
-      .packetName(PacketNames.enterAreaReq)
-      .submit<EnterAreaRes>(signal);
-    zlinkStreamAssert.ensure(ruins.eventId === 'player-alice-enter-ruins', 'Sample scenario assertion failed.');
+    await apiBReconnectStream.send(enterAreaMsg('player-alice', 'ruins', 'enter-ruins'))
+      .packetName(PacketNames.enterAreaMsg)
+      .submit();
     // Observe the existing projection through a typed request after the
     // one-way gameplay action before waiting for its actor notification.
     await getStreamProjection(apiBReconnectStream, 'player-alice', signal);
@@ -196,10 +187,9 @@ class GameQuestClientScenario {
     zlinkStreamAssert.ensure(bobProgress.some((p) => p.questId === QuestIds.HerbGathering && p.currentCount === 1), 'Sample scenario assertion failed.');
 
     const herbCompleted = waitForQuestCompletion(apiBStream, QuestIds.HerbGathering, signal);
-    const onlineItem = await apiBStream.request(collectItemReq('player-bob', 'healing-herb', 4, 'herb-2'), Object)
-      .packetName(PacketNames.collectItemReq)
-      .submit<CollectItemRes>(signal);
-    zlinkStreamAssert.ensure(onlineItem.eventId === 'player-bob-herb-2', 'Sample scenario assertion failed.');
+    await apiBStream.send(collectItemMsg('player-bob', 'healing-herb', 4, 'herb-2'))
+      .packetName(PacketNames.collectItemMsg)
+      .submit();
     const herbPush = await herbCompleted;
     zlinkStreamAssert.ensure(herbPush.payload.playerId === 'player-bob', 'Sample scenario assertion failed.');
     zlinkStreamAssert.ensure(herbPush.payload.rewardGranted, 'Sample scenario assertion failed.');

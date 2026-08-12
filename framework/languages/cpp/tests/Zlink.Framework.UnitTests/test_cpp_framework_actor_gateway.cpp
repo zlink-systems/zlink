@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <future>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -197,6 +198,218 @@ int stale_session_unbind_preserves_rebind ()
             || state->bound_session_sinks.count ("actor-1") != 0) {
             return 2;
         }
+    }
+    return 0;
+}
+
+int replaced_session_find_is_exact_and_disconnects_once ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t gateway (state);
+    auto old_session = gateway.manager ();
+    auto current_session = gateway.manager ();
+    session_actor_manager_access_t::attach (old_session, stream_t{});
+    session_actor_manager_access_t::attach (current_session, stream_t{});
+    const auto actor = test_actor_ref ("actor-node", "player", "actor-replaced", 1);
+
+    (void) old_session.bind (actor).submit ().result ().value ();
+    (void) current_session.bind (actor).submit ().result ().value ();
+    int disconnected = 0;
+    gateway.on_disconnect ([&] (const actor_ref_t &) {
+        ++disconnected;
+        return result_t<void>::success ();
+    });
+
+    if (old_session.find ("actor-replaced"))
+        return 1;
+    session_actor_manager_access_t::disconnect (old_session);
+    if (!gateway.actor_bound ("actor-replaced")
+        || gateway.actor_disconnected ("actor-replaced")
+        || disconnected != 0) {
+        return 2;
+    }
+
+    auto current = current_session.find ("actor-replaced");
+    if (!current || !current->notify_disconnected ().result ()
+        || disconnected != 1 || !gateway.actor_disconnected ("actor-replaced")) {
+        return 3;
+    }
+    session_actor_manager_access_t::disconnect (current_session);
+    return disconnected == 1 ? 0 : 4;
+}
+
+int direct_rebind_publication_is_atomic_and_old_disconnect_is_fenced ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t gateway (state);
+    auto old_session = gateway.manager ();
+    auto new_session = gateway.manager ();
+    zlink_builder_t builder;
+    builder.stream ("direct-rebind").bind ("tcp://127.0.0.1:0");
+    auto runtime = stream_runtime_t::from (builder);
+    auto old_stream = runtime.open_session ("direct-rebind");
+    auto new_stream = runtime.open_session ("direct-rebind");
+    const auto old_session_id = old_stream.session_id ();
+    const auto new_session_id = new_stream.session_id ();
+    if (old_session_id == new_session_id)
+        return 1;
+    session_actor_manager_access_t::attach (
+      old_session, std::move (old_stream));
+    session_actor_manager_access_t::attach (
+      new_session, std::move (new_stream));
+
+    const auto actor =
+      test_actor_ref ("actor-node", "player", "direct-rebind-actor", 1);
+    auto old_binding = old_session.bind (actor).submit ().result ();
+    if (!old_binding)
+        return 2;
+    auto stale_handle = std::move (old_binding.value ());
+    std::uint64_t old_token = 0;
+    {
+        const std::lock_guard lock (state->mutex);
+        old_token = state->actors_by_id.at ("direct-rebind-actor").binding_token;
+    }
+
+    std::promise<void> binder_entered_source;
+    auto binder_entered = binder_entered_source.get_future ();
+    std::promise<void> release_binder_source;
+    auto release_binder = release_binder_source.get_future ();
+    session_actor_manager_access_t::bind_native (
+      new_session,
+      [&] (const actor_ref_t &) {
+          binder_entered_source.set_value ();
+          release_binder.wait ();
+          return result_t<void>::success ();
+      });
+    std::optional<result_t<session_actor_t>> rebound;
+    std::thread rebind_thread ([&] {
+        rebound = new_session.bind (actor).submit ().result ();
+    });
+    binder_entered.wait ();
+
+    int disconnected = 0;
+    gateway.on_disconnect ([&] (const actor_ref_t &) {
+        ++disconnected;
+        return result_t<void>::success ();
+    });
+    const auto stale_disconnect = stale_handle.notify_disconnected ().result ();
+    if (stale_disconnect
+        || stale_disconnect.error_kind ()
+             != framework_error_kind_t::not_configured
+        || disconnected != 0 || old_session.find ("direct-rebind-actor")) {
+        release_binder_source.set_value ();
+        rebind_thread.join ();
+        return 3;
+    }
+    {
+        const std::lock_guard lock (state->mutex);
+        const auto &record = state->actors_by_id.at ("direct-rebind-actor");
+        if (!record.bound || record.disconnected
+            || record.binding_session_id != new_session_id
+            || record.binding_token == 0 || record.binding_token == old_token
+            || !record.bound_session_stream_sink) {
+            release_binder_source.set_value ();
+            rebind_thread.join ();
+            return 4;
+        }
+    }
+
+    release_binder_source.set_value ();
+    rebind_thread.join ();
+    if (!rebound || !*rebound || !new_session.find ("direct-rebind-actor")
+        || !gateway.actor_bound ("direct-rebind-actor")
+        || gateway.actor_disconnected ("direct-rebind-actor")
+        || disconnected != 0) {
+        return 5;
+    }
+    std::uint64_t committed_token = 0;
+    {
+        const std::lock_guard lock (state->mutex);
+        committed_token =
+          state->actors_by_id.at ("direct-rebind-actor").binding_token;
+    }
+    session_actor_manager_access_t::bind_native (
+      new_session,
+      [] (const actor_ref_t &) {
+          return result_t<void>::failure (
+            framework_error_kind_t::unavailable,
+            "deterministic native binding rejection");
+      });
+    const auto rejected = new_session.bind (actor).submit ().result ();
+    if (rejected
+        || rejected.error_kind () != framework_error_kind_t::unavailable
+        || !new_session.find ("direct-rebind-actor")) {
+        return 6;
+    }
+    {
+        const std::lock_guard lock (state->mutex);
+        const auto &record = state->actors_by_id.at ("direct-rebind-actor");
+        if (!record.bound || record.disconnected
+            || record.binding_session_id != new_session_id
+            || record.binding_token != committed_token
+            || !record.bound_session_stream_sink) {
+            return 7;
+        }
+    }
+    return 0;
+}
+
+int destroyed_or_recreated_actor_ignores_stale_disconnect_handle ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t gateway (state);
+    auto old_session = gateway.manager ();
+    auto new_session = gateway.manager ();
+    zlink_builder_t builder;
+    builder.stream ("destroy-recreate").bind ("tcp://127.0.0.1:0");
+    auto runtime = stream_runtime_t::from (builder);
+    session_actor_manager_access_t::attach (
+      old_session, runtime.open_session ("destroy-recreate"));
+    session_actor_manager_access_t::attach (
+      new_session, runtime.open_session ("destroy-recreate"));
+
+    const auto original =
+      test_actor_ref ("actor-node", "player", "recreated-actor", 1);
+    auto original_result = old_session.bind (original).submit ().result ();
+    if (!original_result)
+        return 1;
+    auto stale_handle = std::move (original_result.value ());
+    int disconnected = 0;
+    gateway.on_disconnect ([&] (const actor_ref_t &) {
+        ++disconnected;
+        return result_t<void>::success ();
+    });
+    if (!gateway.destroy_actor (original)
+        || !stale_handle.notify_disconnected ().result ()
+        || disconnected != 0) {
+        return 2;
+    }
+
+    const auto recreated =
+      test_actor_ref ("actor-node", "player", "recreated-actor", 2);
+    auto recreated_result = new_session.bind (recreated).submit ().result ();
+    if (!recreated_result)
+        return 3;
+    const auto stale_after_recreate =
+      stale_handle.notify_disconnected ().result ();
+    if (stale_after_recreate
+        || (stale_after_recreate.error_kind ()
+              != framework_error_kind_t::not_configured
+            && stale_after_recreate.error_kind ()
+                 != framework_error_kind_t::invalid_operation)
+        || disconnected != 0 || !gateway.actor_bound ("recreated-actor")
+        || gateway.actor_disconnected ("recreated-actor")
+        || !new_session.find ("recreated-actor")) {
+        return 4;
     }
     return 0;
 }
@@ -443,11 +656,23 @@ int route_update_preserves_object_generation ()
     if (!original_binding.relay ("packet", zlink::message_t{}).result ()
         || relay_routes.size () != 1
         || relay_routes.front ().node_rid ().value ()
-             != relocated.node_rid ().value ()) {
+             != original.node_rid ().value ()) {
         return 5;
     }
-    if (!unaffected_binding.relay ("packet", zlink::message_t{}).result ()
+    if (!original_binding.notify_disconnected ().result ()
+        || !gateway.update_actor_ref (relocated)) {
+        return 7;
+    }
+    auto relocated_binding =
+      manager.bind (relocated).submit ().result ().value ();
+    if (!relocated_binding.relay ("packet", zlink::message_t{}).result ()
         || relay_routes.size () != 2
+        || relay_routes.back ().node_rid ().value ()
+             != relocated.node_rid ().value ()) {
+        return 8;
+    }
+    if (!unaffected_binding.relay ("packet", zlink::message_t{}).result ()
+        || relay_routes.size () != 3
         || relay_routes.back ().node_rid ().value ()
              != unaffected.node_rid ().value ()) {
         return 6;
@@ -461,7 +686,7 @@ int route_update_preserves_object_generation ()
     if (rejected_bind || rejected_bind.error_kind ()
                            != framework_error_kind_t::invalid_operation)
         return 3;
-    const auto disconnected = original_binding.notify_disconnected ().result ();
+    const auto disconnected = relocated_binding.notify_disconnected ().result ();
     if (!disconnected || gateway.actor_bound ("actor-route")) {
         return 4;
     }
@@ -560,6 +785,46 @@ int bound_session_route_preserves_private_fences ()
     }
     const auto advanced = gateway.bound_session_route (actor);
     return advanced && advanced->session_sequence == 29 ? 0 : 3;
+}
+
+int bound_session_send_does_not_publish_caller_location ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    serializer_registry_t serializers;
+    state->serializers = &serializers;
+    actor_gateway_runtime_t gateway (state);
+    const auto source = test_actor_ref (
+      "source-node", "player", "send-route-owner", 7);
+    const auto target = test_actor_ref (
+      "target-node", "player", "send-route-owner", 7);
+    std::atomic_int sends{0};
+    if (!gateway.bind_session_sink (
+          source,
+          [&sends] (std::string, stream_codec_t, const zlink::message_t &) {
+              ++sends;
+              return task_t<void> (result_t<void>::success ());
+          })) {
+        return 1;
+    }
+
+    auto sent = gateway.actor_context (target)
+                  .bound_session ()
+                  .send (std::string ("push"))
+                  .submit ()
+                  .result ();
+    if (!sent || sends.load () != 1) {
+        return 2;
+    }
+    const std::lock_guard lock (state->mutex);
+    const auto found = state->actors_by_id.find ("send-route-owner");
+    if (found == state->actors_by_id.end ()
+        || found->second.ref.node_rid ().value () != "source-node") {
+        return 3;
+    }
+    return 0;
 }
 
 int bound_session_ref_normalization_preserves_type_and_rejects_conflicts ()
@@ -743,7 +1008,7 @@ int bound_session_transition_is_atomic_and_idempotent ()
     const actor_bound_session_route_t first{
       zlink::routing_id_t::from (std::string ("session-owner-a")),
       zlink::routing_id_t::from (std::string ("session-a")),
-      1, 2, 3, 4, 5, 0, 9};
+      1, 2, 3, 4, 5, 7, 9};
     const auto installed =
       gateway.record_bound_session_route_transition (actor, first);
     if (!installed || !installed.value ().changed
@@ -756,10 +1021,31 @@ int bound_session_transition_is_atomic_and_idempotent ()
       gateway.record_bound_session_route_transition (
         actor, same_identity);
     if (!idempotent || idempotent.value ().changed
-        || idempotent.value ().previous)
+        || idempotent.value ().previous
+        || !idempotent.value ().current
+        || idempotent.value ().current->binding_token != 7
+        || idempotent.value ().current->session_sequence != 9)
         return 3;
 
-    auto second = first;
+    auto authority_update = first;
+    authority_update.authority_owner_generation = 11;
+    authority_update.owner_lease_generation = 13;
+    authority_update.binding_token = 0;
+    authority_update.session_sequence = 0;
+    const auto retained =
+      gateway.record_bound_session_route_transition (
+        test_actor_ref ("actor-target", "game.actor", "actor-a", 1),
+        authority_update);
+    const auto retained_route = gateway.bound_session_route (actor);
+    if (!retained || retained.value ().changed
+        || retained.value ().previous || !retained_route
+        || retained_route->authority_owner_generation != 11
+        || retained_route->owner_lease_generation != 13
+        || retained_route->binding_token != 7
+        || retained_route->session_sequence != 9)
+        return 4;
+
+    auto second = authority_update;
     second.session_rid = zlink::routing_id_t::from (
       std::string ("session-b"));
     second.binding_generation = 6;
@@ -769,9 +1055,140 @@ int bound_session_transition_is_atomic_and_idempotent ()
         || !replaced.value ().previous
         || replaced.value ().previous->session_rid
              != first.session_rid
-        || replaced.value ().previous->binding_generation != 5)
+        || replaced.value ().previous->binding_generation != 5
+        || replaced.value ().previous->authority_owner_generation != 11
+        || replaced.value ().previous->session_sequence != 9)
+        return 5;
+
+    return 0;
+}
+
+int authority_only_route_update_keeps_physical_session_current ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t gateway (state);
+    const auto source = test_actor_ref (
+      "actor-source", "game.actor", "actor-physical", 7);
+    const auto target = test_actor_ref (
+      "actor-target", "game.actor", "actor-physical", 7);
+    const auto session_owner = zlink::routing_id_t::from (
+      std::string ("session-owner"));
+    const auto session_rid = zlink::routing_id_t::from (
+      std::string ("session-rid"));
+    std::atomic_int source_sink_calls{0};
+    std::atomic_int target_sink_calls{0};
+    const auto source_sink = [&source_sink_calls] (
+                               std::string, stream_codec_t,
+                               const zlink::message_t &) {
+        ++source_sink_calls;
+        return task_t<void> (result_t<void>::success ());
+    };
+    const auto target_sink = [&target_sink_calls] (
+                               std::string, stream_codec_t,
+                               const zlink::message_t &) {
+        ++target_sink_calls;
+        return task_t<void> (result_t<void>::success ());
+    };
+
+    const actor_bound_session_route_t initial{
+      session_owner, session_rid, 7, 17, 19, 23, 29, 31, 37};
+    const auto installed = gateway.replace_session_route (
+      source, source_sink, initial, stream_codec_t::message_pack);
+    if (!installed || !installed.value ().changed
+        || installed.value ().previous)
+        return 1;
+
+    auto relocated = initial;
+    relocated.authority_owner_generation = 41;
+    relocated.owner_lease_generation = 43;
+    relocated.binding_token = 0;
+    relocated.session_sequence = 0;
+    const auto updated = gateway.replace_session_route (
+      target, target_sink, relocated, stream_codec_t::message_pack);
+    const auto current = gateway.bound_session_route (target);
+    if (!updated || updated.value ().changed
+        || updated.value ().previous || !current
+        || current->authority_owner_generation != 41
+        || current->owner_lease_generation != 43
+        || current->binding_token != 31
+        || current->session_sequence != 37
+        || !gateway.actor_bound ("actor-physical")
+        || gateway.actor_disconnected ("actor-physical"))
+        return 2;
+    const auto dispatched = gateway.dispatch_bound_session_send (
+      target, "AuthorityChangedNotify", stream_codec_t::message_pack,
+      zlink::message_t{});
+    if (!dispatched || source_sink_calls.load () != 0
+        || target_sink_calls.load () != 1)
+        return 3;
+
+    auto replacement = relocated;
+    replacement.session_rid = zlink::routing_id_t::from (
+      std::string ("replacement-session"));
+    replacement.binding_generation = 47;
+    const auto replaced = gateway.replace_session_route (
+      target, target_sink, replacement, stream_codec_t::message_pack);
+    if (!replaced || !replaced.value ().changed
+        || !replaced.value ().previous
+        || replaced.value ().previous->session_rid != session_rid
+        || replaced.value ().previous->binding_generation != 29)
         return 4;
 
+    auto local_state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t local_gateway (local_state);
+    zlink_builder_t builder;
+    builder.stream ("authority-stream-sink").bind ("tcp://127.0.0.1:0");
+    auto runtime = stream_runtime_t::from (builder);
+    auto stream = runtime.open_session ("authority-stream-sink");
+    std::atomic_int local_stream_calls{0};
+    std::atomic_int replacement_sink_calls{0};
+    runtime.attach_transport_writer (
+      stream,
+      [&local_stream_calls] (const stream_header_t &,
+                             const zlink::message_t &) {
+          ++local_stream_calls;
+          return result_t<void>::success ();
+      });
+    local_gateway.bind_session_stream (
+      "actor-local-stream", stream, stream_codec_t::message_pack,
+      "physical-session", 53,
+      test_actor_ref ("actor-source", "game.actor",
+                      "actor-local-stream", 59));
+    const actor_bound_session_route_t local_initial{
+      session_owner, session_rid, 59, 61, 67, 71, 73, 53, 79};
+    const auto local_installed = local_gateway.record_bound_session_route (
+      test_actor_ref ("actor-source", "game.actor",
+                      "actor-local-stream", 59),
+      session_owner, session_rid, 61, 67, 71, 73, 53, 79);
+    if (!local_installed)
+        return 5;
+    auto local_relocated = local_initial;
+    local_relocated.authority_owner_generation = 83;
+    local_relocated.owner_lease_generation = 89;
+    local_relocated.binding_token = 0;
+    local_relocated.session_sequence = 0;
+    const auto local_updated = local_gateway.replace_session_route (
+      test_actor_ref ("actor-target", "game.actor",
+                      "actor-local-stream", 59),
+      [&replacement_sink_calls] (std::string, stream_codec_t,
+                                 const zlink::message_t &) {
+          ++replacement_sink_calls;
+          return task_t<void> (result_t<void>::success ());
+      },
+      local_relocated, stream_codec_t::message_pack);
+    if (!local_updated || local_updated.value ().changed)
+        return 6;
+    const auto local_dispatched = local_gateway.dispatch_bound_session_send (
+      test_actor_ref ("actor-target", "game.actor",
+                      "actor-local-stream", 59),
+      "AuthorityChangedNotify", stream_codec_t::message_pack,
+      zlink::message_t{});
+    if (!local_dispatched || local_stream_calls.load () != 1
+        || replacement_sink_calls.load () != 0)
+        return 7;
     return 0;
 }
 
@@ -780,7 +1197,8 @@ int bound_session_relay_admission_is_exact_and_monotonic ()
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
 
-    actor_gateway_runtime_t gateway;
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t gateway (state);
     const auto actor = test_actor_ref ("actor-owner", "game.actor", "relay-actor", 3);
     if (!gateway.bind_session_sink (
           actor, [] (std::string, stream_codec_t, const zlink::message_t &) {
@@ -794,19 +1212,86 @@ int bound_session_relay_admission_is_exact_and_monotonic ()
                                              7, 11, 13, 17, 0, 0)) {
         return 2;
     }
-    if (!gateway.admit_session_relay (actor, session_owner, session_rid, 17, 1))
+    if (!gateway.begin_session_relay_completion (
+          actor, session_owner, session_rid, 17, 1))
         return 3;
+    if (!gateway.admit_session_relay (actor, session_owner, session_rid, 17, 1))
+        return 4;
+    if (!gateway.complete_session_relay (
+          actor, session_owner, session_rid, 17, 1)) {
+        return 5;
+    }
+    if (gateway.complete_session_relay (
+          actor, session_owner, session_rid, 17, 1))
+        return 6;
     if (gateway.admit_session_relay (actor, session_owner, session_rid, 17, 1)
         || gateway.admit_session_relay (actor, session_owner, session_rid, 17, 3)
         || gateway.admit_session_relay (
           actor, zlink::routing_id_t::from (std::string ("other-owner")),
           session_rid, 17, 2)) {
-        return 4;
+        return 7;
     }
+    if (!gateway.begin_session_relay_completion (
+          actor, session_owner, session_rid, 17, 2))
+        return 8;
     if (!gateway.admit_session_relay (actor, session_owner, session_rid, 17, 2))
-        return 5;
+        return 9;
+    if (!gateway.complete_session_relay (
+          actor, session_owner, session_rid, 17, 2)
+        || gateway.complete_session_relay (
+          actor, session_owner, session_rid, 17, 4)) {
+        return 10;
+    }
     const auto route = gateway.bound_session_route (actor);
-    return route && route->session_sequence == 2 ? 0 : 6;
+    if (!route || route->session_sequence != 2)
+        return 11;
+
+    if (!gateway.begin_session_relay_completion (
+          actor, session_owner, session_rid, 17, 3))
+        return 12;
+    if (!gateway.destroy_actor (actor))
+        return 13;
+    if (gateway.complete_session_relay (
+          actor, zlink::routing_id_t::from (std::string ("other-owner")),
+          session_rid, 17, 3))
+        return 14;
+    if (!gateway.complete_session_relay (
+          actor, session_owner, session_rid, 17, 3))
+        return 15;
+    {
+        const std::lock_guard lock (state->mutex);
+        if (!state->active_session_relay_completions.empty ())
+            return 16;
+    }
+    if (gateway.complete_session_relay (
+          actor, session_owner, session_rid, 17, 3)
+        || gateway.begin_session_relay_completion (
+          actor, session_owner, session_rid, 17, 4))
+        return 17;
+
+    if (!gateway.bind_session_sink (
+          actor, [] (std::string, stream_codec_t, const zlink::message_t &) {
+              return task_t<void> (result_t<void>::success ());
+          })
+        || !gateway.record_bound_session_route (
+          actor, session_owner, session_rid, 7, 11, 13, 17, 0, 0)
+        || !gateway.begin_session_relay_completion (
+          actor, session_owner, session_rid, 17, 1))
+        return 18;
+    {
+        const std::lock_guard lock (state->mutex);
+        state->actors_by_id.at ("relay-actor")
+          .bound_session_route->session_sequence = 3;
+    }
+    if (gateway.complete_session_relay (
+          actor, session_owner, session_rid, 17, 1))
+        return 19;
+    {
+        const std::lock_guard lock (state->mutex);
+        if (!state->active_session_relay_completions.empty ())
+            return 20;
+    }
+    return 0;
 }
 
 int session_relay_queue_is_ordered_without_blocking_other_actors ()
@@ -898,6 +1383,11 @@ int main ()
         transition != 0) {
         return 130 + transition;
     }
+    if (const auto route_update =
+          authority_only_route_update_keeps_physical_session_current ();
+        route_update != 0) {
+        return 180 + route_update;
+    }
     if (const auto identity = actor_identity_validation_is_bounded_and_utf8_exact ();
         identity != 0) {
         return 120 + identity;
@@ -911,6 +1401,11 @@ int main ()
           bound_session_route_preserves_private_fences ();
         route_fence != 0) {
         return 100 + route_fence;
+    }
+    if (const auto bound_send =
+          bound_session_send_does_not_publish_caller_location ();
+        bound_send != 0) {
+        return 95 + bound_send;
     }
     if (const auto normalized =
           bound_session_ref_normalization_preserves_type_and_rejects_conflicts ();
@@ -928,6 +1423,20 @@ int main ()
     }
     if (const auto stale = stale_session_unbind_preserves_rebind (); stale != 0) {
         return stale;
+    }
+    if (const auto replaced = replaced_session_find_is_exact_and_disconnects_once ();
+        replaced != 0) {
+        return 10 + replaced;
+    }
+    if (const auto atomic_rebind =
+          direct_rebind_publication_is_atomic_and_old_disconnect_is_fenced ();
+        atomic_rebind != 0) {
+        return 160 + atomic_rebind;
+    }
+    if (const auto stale_destroy =
+          destroyed_or_recreated_actor_ignores_stale_disconnect_handle ();
+        stale_destroy != 0) {
+        return 170 + stale_destroy;
     }
     if (const auto exact = exact_session_generation_mismatch_is_invalid_operation (); exact != 0) {
         return exact;

@@ -1,0 +1,60 @@
+{
+  "fixture": "zlink.framework.runtime-state",
+  "version": 1,
+  "publicStates": [
+    { "name": "preparing", "wireValue": 0, "isReady": false },
+    { "name": "serving", "wireValue": 1, "isReady": true },
+    { "name": "relocating", "wireValue": 2, "isReady": false },
+    { "name": "relocated", "wireValue": 3, "isReady": false },
+    { "name": "draining", "wireValue": 4, "isReady": false },
+    { "name": "stopped", "wireValue": 5, "isReady": false },
+    { "name": "error", "wireValue": 6, "isReady": false }
+  ],
+  "authorityInvariants": {
+    "publicStateIsSingleReadinessAuthority": true,
+    "independentMutableReadinessAuthority": false,
+    "publicIsReadyDerivedOnlyFromState": true,
+    "acceptingWorkFormula": "stateIsServingAndAdmissionOpen",
+    "topologyReadinessIsSeparateProjection": true,
+    "contextProjectionCanChangePublicState": false
+  },
+  "startupPrerequisites": [
+    "endpointBound",
+    "actualAddressPublished",
+    "requiredPeersAdmitted",
+    "handlerAndObjectRuntimeReady"
+  ],
+  "acceptingWorkScenarios": [
+    { "state": "serving", "admissionOpen": true, "expected": true },
+    { "state": "serving", "admissionOpen": false, "expected": false },
+    { "state": "preparing", "admissionOpen": true, "expected": false },
+    { "state": "relocating", "admissionOpen": true, "expected": false },
+    { "state": "draining", "admissionOpen": true, "expected": false },
+    { "state": "error", "admissionOpen": true, "expected": false }
+  ],
+  "maintenanceAdmissionProjection": {
+    "preparing": "preparing",
+    "serving": "serving",
+    "relocating": "retiring",
+    "relocated": "retiring",
+    "draining": "draining",
+    "stopped": "stopped",
+    "error": "error"
+  },
+  "discoveryAvailabilityProjection": {
+    "preparing": "preparing",
+    "serving": "serving",
+    "relocating": "retiring",
+    "relocated": "retiring",
+    "draining": "retiring",
+    "stopped": "stopped",
+    "error": "error",
+    "transportOnlyState": "disconnected"
+  },
+  "topologyScenarios": [
+    { "hostState": "serving", "readyTargetCount": 1, "isReady": true },
+    { "hostState": "serving", "readyTargetCount": 0, "isReady": false },
+    { "hostState": "relocating", "readyTargetCount": 1, "isReady": false },
+    { "hostState": "draining", "readyTargetCount": 1, "isReady": false }
+  ]
+}

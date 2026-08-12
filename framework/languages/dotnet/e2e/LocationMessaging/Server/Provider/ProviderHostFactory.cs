@@ -104,7 +104,7 @@ internal static class ProviderHostFactory
                     route.SetRoutingIdPrefix($"{options.Rid}-route");
                 }
 
-                route.AddRouteRequestHandler<RoutePingHandler, ScenarioRoutePing, ScenarioRoutePong>("ScenarioRoutePing");
+                route.AddRouteRequestHandler<RoutePingHandler, ScenarioRouteReq, ScenarioRouteRes>("ScenarioRouteReq");
             }
         });
         var app = builder.Build();

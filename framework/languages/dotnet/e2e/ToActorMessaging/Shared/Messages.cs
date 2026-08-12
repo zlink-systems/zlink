@@ -1,10 +1,10 @@
 namespace ToActorMessaging.Shared;
 
-public sealed record ActorNotify(string Scenario, string ActorId, string Value);
+public sealed record ActorMsg(string Scenario, string ActorId, string Value);
 
-public sealed record ActorAsk(string Scenario, string ActorId, string Value);
+public sealed record ActorReq(string Scenario, string ActorId, string Value);
 
-public sealed record ActorReply(string Scenario, string ActorId, string Value);
+public sealed record ActorRes(string Scenario, string ActorId, string Value);
 
 public sealed record ActorEvidence(
     string Scenario,
@@ -16,26 +16,26 @@ public sealed record ActorEvidence(
     string? PacketName = null,
     string? RequestId = null);
 
-public sealed record ActorCallRequest(
+public sealed record ActorCallReq(
     string Scenario,
     string ActorId,
     string Value,
     string? TargetNodeRid = null,
     ulong? TargetGeneration = null);
 
-public sealed record ActorCallResponse(string Scenario, string ActorId, string Result, string? ErrorKind = null);
+public sealed record ActorCallRes(string Scenario, string ActorId, string Result, string? ErrorKind = null);
 
-public sealed record DestroyActorRequest(string ActorId, string Scenario);
+public sealed record DestroyActorReq(string ActorId, string Scenario);
 
-public sealed record DestroyActorReply(string ActorId, bool Destroyed);
+public sealed record DestroyActorRes(string ActorId, bool Destroyed);
 
-public sealed record BindActorRequest(string ActorId);
+public sealed record BindActorReq(string ActorId);
 
-public sealed record BindActorReply(string ActorId, string NodeRid, ulong Generation);
+public sealed record BindActorRes(string ActorId, string NodeRid, ulong Generation);
 
-public sealed record BoundPushRequest(string Scenario, string ActorId, string Value);
+public sealed record BoundPushReq(string Scenario, string ActorId, string Value);
 
-public sealed record BoundPushReply(
+public sealed record BoundPushRes(
     string ActorId,
     string Value,
     bool Submitted,

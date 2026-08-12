@@ -1,5 +1,12 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient;
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStreamReader;
+import java.net.InetAddress;
+import java.util.Base64;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -465,7 +472,7 @@ final class HttpClientContractTest {
     @Test
     void retriesRetriableTransportFailure() throws Exception {
         AtomicInteger connections = new AtomicInteger();
-        ServerSocket serverSocket = new ServerSocket(0, 0, java.net.InetAddress.getLoopbackAddress());
+        ServerSocket serverSocket = new ServerSocket(0, 0, InetAddress.getLoopbackAddress());
         Thread serverThread = new Thread(() -> {
             while (!serverSocket.isClosed()) {
                 try {
@@ -535,7 +542,7 @@ final class HttpClientContractTest {
     private void runCompressionTest(boolean gzip) throws Exception {
         String payload = "{\"id\":42,\"name\":\"Compressed\"}";
         TestSupport.Server server = TestSupport.httpServer(exchange -> {
-            var buffer = new java.io.ByteArrayOutputStream();
+            var buffer = new ByteArrayOutputStream();
             try (OutputStream compressor = gzip
                 ? new GZIPOutputStream(buffer)
                 : new DeflaterOutputStream(buffer)) {
@@ -568,7 +575,7 @@ final class HttpClientContractTest {
             try (ZLinkHttpClient bearer = ZLinkHttpClient.create(server.baseUrl()).bearerToken("tok-9").build()) {
                 bearer.get("/b").submitRaw().toCompletableFuture().join();
             }
-            assertEquals("Basic " + java.util.Base64.getEncoder().encodeToString("aria:secret".getBytes(StandardCharsets.UTF_8)), seen.get(0));
+            assertEquals("Basic " + Base64.getEncoder().encodeToString("aria:secret".getBytes(StandardCharsets.UTF_8)), seen.get(0));
             assertEquals("Bearer tok-9", seen.get(1));
         } finally {
             server.closeable().close();
@@ -640,11 +647,11 @@ final class HttpClientContractTest {
     @Test
     void bodyReadUsesTheRemainingRequestDeadline() throws Exception {
         ServerSocket serverSocket = new ServerSocket(
-            0, 0, java.net.InetAddress.getLoopbackAddress());
+            0, 0, InetAddress.getLoopbackAddress());
         Thread serverThread = new Thread(() -> {
             try (Socket socket = serverSocket.accept()) {
-                java.io.BufferedReader request = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
+                BufferedReader request = new BufferedReader(
+                    new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
                 String line;
                 while ((line = request.readLine()) != null && !line.isEmpty()) {
                     // Consume the request headers before writing the response.
@@ -672,7 +679,7 @@ final class HttpClientContractTest {
                 () -> client.get("/stalled")
                     .submitRaw()
                     .toCompletableFuture()
-                    .orTimeout(2, java.util.concurrent.TimeUnit.SECONDS)
+                    .orTimeout(2, TimeUnit.SECONDS)
                     .join());
             assertTrue(error.getCause() instanceof ZLinkFrameworkException);
         } finally {
@@ -706,7 +713,7 @@ final class HttpClientContractTest {
         });
         try (ZLinkHttpClient client = ZLinkHttpClient.create(server.baseUrl()).build()) {
             long start = System.nanoTime();
-            List<java.util.concurrent.CompletableFuture<RawHttpResponse>> futures = new ArrayList<>();
+            List<CompletableFuture<RawHttpResponse>> futures = new ArrayList<>();
             for (int i = 0; i < 20; i++) {
                 futures.add(client.get("/r").submitRaw().toCompletableFuture());
             }

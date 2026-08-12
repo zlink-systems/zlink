@@ -13,6 +13,7 @@ import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.channels.ZLinkPublishMessageContext;
@@ -37,7 +38,8 @@ final class ZLinkSpotHandlerInvoker {
         Map<String, String> metadata,
         Function<Class<?>, Object> handlers,
         String failureMessage) {
-        Object message = deserialize(payload, registration.messageType());
+        Object message = deserialize(
+            payload, registration.messageType(), contentType);
         ZLinkMessageContext context =
             new ZLinkSpotActorSendHandlerContext(
                 registration.packetName(), contentType, metadata);
@@ -92,7 +94,8 @@ final class ZLinkSpotHandlerInvoker {
         Map<String, String> metadata,
         Function<Class<?>, Object> handlers,
         String failureMessage) {
-        Object message = deserialize(payload, registration.messageType());
+        Object message = deserialize(
+            payload, registration.messageType(), contentType);
         ZLinkMessageContext context =
             new ZLinkSpotActorRequestHandlerContext(
                 registration.packetName(), contentType, metadata);
@@ -117,7 +120,9 @@ final class ZLinkSpotHandlerInvoker {
                 handlers,
                 failureMessage);
         return reply.thenApply(value ->
-            Optional.of(ZLinkMessagePayloads.message(serializer.serialize(value))));
+            Optional.of(ZLinkMessagePayloads.message(
+                ZLinkCodecRegistration.serializeForDeclaredType(
+                    serializer, value, registration.replyType()))));
     }
 
     CompletionStage<Optional<Message>> invokeActorRequest(
@@ -166,7 +171,8 @@ final class ZLinkSpotHandlerInvoker {
         String contentType,
         Map<String, String> metadata,
         Function<Class<?>, Object> handlers) {
-        Object message = deserialize(payload, registration.messageType());
+        Object message = deserialize(
+            payload, registration.messageType(), contentType);
         ZLinkMessageContext context = new ZLinkSpotSendHandlerContext(
             registration.packetName(), contentType, metadata);
         try {
@@ -219,7 +225,8 @@ final class ZLinkSpotHandlerInvoker {
         String contentType,
         Map<String, String> metadata,
         Function<Class<?>, Object> handlers) {
-        Object message = deserialize(payload, registration.messageType());
+        Object message = deserialize(
+            payload, registration.messageType(), contentType);
         ZLinkMessageContext context = new ZLinkSpotRequestHandlerContext(
             registration.packetName(), contentType, metadata);
         try {
@@ -237,7 +244,9 @@ final class ZLinkSpotHandlerInvoker {
                     new Object[] {spot, message, context},
                     suspendHandlerInvokers);
             return stage.thenApply(reply ->
-                ZLinkMessagePayloads.message(serializer.serialize(reply)));
+                ZLinkMessagePayloads.message(
+                    ZLinkCodecRegistration.serializeForDeclaredType(
+                        serializer, reply, registration.replyType())));
         } catch (RuntimeException ex) {
             return failed(
                 "failed to invoke SPOT request handler: "
@@ -275,7 +284,47 @@ final class ZLinkSpotHandlerInvoker {
         String contentType,
         Map<String, String> metadata,
         Function<Class<?>, Object> handlers) {
-        Object message = deserialize(payload, registration.messageType());
+        Object message = deserializeSubscription(
+            registration, payloadOwner(payload, contentType));
+        return invokeSubscriptionDecoded(
+            registration,
+            spot,
+            channelName,
+            topic,
+            source,
+            message,
+            contentType,
+            metadata,
+            handlers);
+    }
+
+    ZLinkInboundPayloadOwner payloadOwner(
+        Message payload,
+        String contentType) {
+        ZLinkMessageSerializer selected = contentType == null
+            ? serializer
+            : ZLinkCodecRegistration.serializerForReceivedContentType(
+                serializer, contentType);
+        return new ZLinkInboundPayloadOwner(payload, selected);
+    }
+
+    Object deserializeSubscription(
+        SpotSubscriptionHandlerRegistration registration,
+        ZLinkInboundPayloadOwner payload) {
+        return payload.deserialize(registration.messageType());
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    CompletionStage<Void> invokeSubscriptionDecoded(
+        SpotSubscriptionHandlerRegistration registration,
+        Object spot,
+        String channelName,
+        String topic,
+        Optional<String> source,
+        Object message,
+        String contentType,
+        Map<String, String> metadata,
+        Function<Class<?>, Object> handlers) {
         ZLinkPublishMessageContext context = new ZLinkSpotPublishHandlerContext(
             channelName,
             registration.packetName(),
@@ -420,8 +469,15 @@ final class ZLinkSpotHandlerInvoker {
         }
     }
 
-    private Object deserialize(Message payload, Class<?> messageType) {
-        return ZLinkMessagePayloads.deserialize(serializer, payload, messageType);
+    private Object deserialize(
+        Message payload,
+        Class<?> messageType,
+        String contentType) {
+        ZLinkMessageSerializer selected = contentType == null
+            ? serializer
+            : ZLinkCodecRegistration.serializerForReceivedContentType(
+                serializer, contentType);
+        return ZLinkMessagePayloads.deserialize(selected, payload, messageType);
     }
 
     private static <T> CompletionStage<T> failed(String message, RuntimeException error) {

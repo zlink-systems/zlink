@@ -409,7 +409,7 @@ protocol frame을 직접 읽어 성공을 판정하지 않는다. 공개 결과�
 
 이렇게 쓴다.
 
-> 세부 동작: [Host Relocate와 Shutdown §12](../../../framework/doc/framework/common/spec/28-graceful-drain-handoff.ko.md#12-state별-admission)의
+> 세부 동작: [Host Relocate와 Shutdown §12](../../../framework/doc/framework/common/spec/30-host-relocation-flow.ko.md#12-state별-admission)의
 > 신규 admission 차단과 이미 수락한 request의 완료 경계를 검증한다.
 
 이렇게 쓰지 않는다.

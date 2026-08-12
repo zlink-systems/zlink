@@ -54,13 +54,13 @@ public final class Contracts {
         long timeoutMillis) {
     }
 
-    public record MessageFollowSendReq(String scenario, String marker) {
+    public record MessageFollowMsg(String scenario, String marker) {
     }
 
     public record SendAtRefReq(
         String nodeRid,
         long generation,
-        MessageFollowSendReq message) {
+        MessageFollowMsg message) {
     }
 
     public record ProbeRes(
@@ -127,6 +127,6 @@ public final class Contracts {
     public record EvidenceSnapshot(List<Evidence> entries) {
     }
 
-    public record ErrorResponse(String error) {
+    public record ErrorRes(String error) {
     }
 }

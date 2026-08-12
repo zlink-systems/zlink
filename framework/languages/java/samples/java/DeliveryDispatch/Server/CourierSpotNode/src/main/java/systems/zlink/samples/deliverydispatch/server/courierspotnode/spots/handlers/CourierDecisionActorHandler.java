@@ -20,7 +20,7 @@ public final class CourierDecisionActorHandler
     implements ZLinkEntrySpotActorSendHandler<
         CourierEntrySpot,
         CourierActor,
-        Messages.CourierDecision> {
+        Messages.CourierDecisionMsg> {
     private final ZLinkClient channels;
 
     public CourierDecisionActorHandler(ZLinkClient channels) {
@@ -32,7 +32,7 @@ public final class CourierDecisionActorHandler
         CourierEntrySpot entrySpot,
         CourierActor actor,
         ZLinkMessageContext context,
-        Messages.CourierDecision message) {
+        Messages.CourierDecisionMsg message) {
         Optional<Integer> attempt = actor.takeOfferedAttempt(message.deliveryId());
         if (attempt.isEmpty()) {
             System.err.println("deliverydispatch courier-actor: decision for an unknown offer"

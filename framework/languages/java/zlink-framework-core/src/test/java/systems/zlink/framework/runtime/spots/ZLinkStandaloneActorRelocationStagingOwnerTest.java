@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -63,11 +64,15 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
                     new byte[0],
                     List.of()))
             .toCompletableFuture().join();
+        AtomicReference<Throwable> stagedFailure = new AtomicReference<>();
+        assertTrue(owner.acceptIngress(
+            staged, new byte[] {1}, null, stagedFailure::set));
 
         owner.discard(staged).toCompletableFuture().join();
 
         assertFalse(backend.visible);
         assertTrue(backend.discarded);
+        assertInstanceOf(IllegalStateException.class, stagedFailure.get());
         assertThrows(IllegalStateException.class, () -> owner.publish(staged));
     }
 
@@ -107,7 +112,7 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
             "actor-a",
             23,
             "actor.request",
-            java.util.Map.of("trace", "a"),
+            Map.of("trace", "a"),
             new byte[] {1, 2});
         byte[] root = ZLinkCanonicalActorRelocationEnvelope.encode(
             relocationId,

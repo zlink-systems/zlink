@@ -1,4 +1,51 @@
 package systems.zlink.framework.runtime.locations;
+import java.util.Optional;
+import systems.zlink.framework.locationprovider.ZLinkLocationStore;
+import systems.zlink.framework.locationprovider.ZLinkStoreKey;
+import systems.zlink.framework.locations.ZLinkObjectCapability;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateAbortResult;
+import systems.zlink.framework.runtime.internal.locations
+    .ZLinkAggregateAbortCleanupSnapshot;
+import systems.zlink.framework.runtime.internal.locations
+    .ZLinkAggregateAbortRecoverySnapshot;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateCommitResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareRequest;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateProgress;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateProgressSnapshot;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateProgressWriteResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectation;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMutation;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanCursor;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityWriteResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationIdentity;
+import systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationTerminal;
+import systems.zlink.framework.runtime.internal.locations.ZLinkCreationTerminalReadResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectAbortResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectCommitResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectRejectResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservation;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservationRequest;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectReserveResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimConflict;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseFound;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseGenerationExhausted;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseMissing;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReadResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReleaseResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewStale;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewed;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityAbortResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityFence;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReservationRequest;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReserveResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -39,7 +86,7 @@ import systems.zlink.framework.locations.ZLinkSpotTypeCapacity;
 
 public final class ZLinkInMemoryLocationStore
     implements ZLinkLocationRepository,
-        systems.zlink.framework.locationprovider.ZLinkLocationStore {
+        ZLinkLocationStore {
 
     private final Object gate = new Object();
     private final Clock clock;
@@ -75,7 +122,7 @@ public final class ZLinkInMemoryLocationStore
     @Override
     public CompletionStage<systems.zlink.framework.locationprovider
         .ZLinkStoreReadResult> read(
-            systems.zlink.framework.locationprovider.ZLinkStoreKey key,
+            ZLinkStoreKey key,
             systems.zlink.framework.locationprovider
                 .ZLinkStoreCancellation cancellation) {
         return opaque.read(key, cancellation);
@@ -102,52 +149,52 @@ public final class ZLinkInMemoryLocationStore
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult> read(
+    public CompletionStage<ZLinkAuthorityReadResult> read(
         String key,
-        systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation cancellation) {
+        ZLinkStoreCancellation cancellation) {
         return authority.read(key, cancellation);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityWriteResult>
+    public CompletionStage<ZLinkAuthorityWriteResult>
         compareExchange(
             String key,
-            systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectation expectation,
-            systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMutation mutation,
-            systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation cancellation) {
+            ZLinkAuthorityExpectation expectation,
+            ZLinkAuthorityMutation mutation,
+            ZLinkStoreCancellation cancellation) {
         return authority.compareExchange(key, expectation, mutation, cancellation);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanResult> list(
+    public CompletionStage<ZLinkAuthorityScanResult> list(
         String prefix,
-        java.util.Optional<systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanCursor> cursor,
+        Optional<ZLinkAuthorityScanCursor> cursor,
         int limit,
-        systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation cancellation) {
+        ZLinkStoreCancellation cancellation) {
         return authority.list(prefix, cursor, limit, cancellation);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkObjectReserveResult> reserve(
-        systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservationRequest request,
-        systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation cancellation) {
+    public CompletionStage<ZLinkObjectReserveResult> reserve(
+        ZLinkObjectReservationRequest request,
+        ZLinkStoreCancellation cancellation) {
         return authority.reserve(request, cancellation);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkObjectCommitResult> commit(
-        systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservation reservation,
+    public CompletionStage<ZLinkObjectCommitResult> commit(
+        ZLinkObjectReservation reservation,
         byte[] readyPayload,
-        systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation cancellation) {
+        ZLinkStoreCancellation cancellation) {
         return authority.commit(reservation, readyPayload, cancellation);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkObjectCommitResult> commit(
-        systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservation reservation,
+    public CompletionStage<ZLinkObjectCommitResult> commit(
+        ZLinkObjectReservation reservation,
         byte[] readyPayload,
-        systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationTerminal terminal,
-        systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation cancellation) {
+        ZLinkCreationOperationTerminal terminal,
+        ZLinkStoreCancellation cancellation) {
         return authority.commit(
             reservation,
             readyPayload,
@@ -156,107 +203,160 @@ public final class ZLinkInMemoryLocationStore
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkObjectRejectResult> reject(
-        systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservation reservation,
-        systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationTerminal terminal,
-        systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation cancellation) {
+    public CompletionStage<ZLinkObjectRejectResult> reject(
+        ZLinkObjectReservation reservation,
+        ZLinkCreationOperationTerminal terminal,
+        ZLinkStoreCancellation cancellation) {
         return authority.reject(reservation, terminal, cancellation);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkObjectAbortResult> abort(
-        systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservation reservation,
-        systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation cancellation) {
+    public CompletionStage<ZLinkObjectAbortResult> abort(
+        ZLinkObjectReservation reservation,
+        ZLinkStoreCancellation cancellation) {
         return authority.abort(reservation, cancellation);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkObjectAbortResult> abort(
-        systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservation reservation,
-        systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationTerminal terminal,
-        systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation cancellation) {
+    public CompletionStage<ZLinkObjectAbortResult> abort(
+        ZLinkObjectReservation reservation,
+        ZLinkCreationOperationTerminal terminal,
+        ZLinkStoreCancellation cancellation) {
         return authority.abort(reservation, terminal, cancellation);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkCreationTerminalReadResult>
+    public CompletionStage<ZLinkCreationTerminalReadResult>
         readCreationTerminal(
-            systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationIdentity operation,
-            systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation cancellation) {
+            ZLinkCreationOperationIdentity operation,
+            ZLinkStoreCancellation cancellation) {
         return authority.readCreationTerminal(operation, cancellation);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReserveResult>
+    public CompletionStage<ZLinkRelocationCapacityReserveResult>
         reserveRelocationCapacity(
-            systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReservationRequest request,
-            systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation cancellation) {
+            ZLinkRelocationCapacityReservationRequest request,
+            ZLinkStoreCancellation cancellation) {
         return authority.reserveRelocationCapacity(request, cancellation);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityAbortResult>
+    public CompletionStage<ZLinkRelocationCapacityAbortResult>
         abortRelocationCapacity(
-            systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityFence fence,
-            systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation cancellation) {
+            ZLinkRelocationCapacityFence fence,
+            ZLinkStoreCancellation cancellation) {
         return authority.abortRelocationCapacity(fence, cancellation);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareResult>
+    public CompletionStage<ZLinkAggregatePrepareResult>
         prepareAggregate(
-            systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareRequest request,
-            systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation cancellation) {
+            ZLinkAggregatePrepareRequest request,
+            ZLinkStoreCancellation cancellation) {
         return authority.prepareAggregate(request, cancellation);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkAggregateCommitResult>
+    public CompletionStage<ZLinkAggregateCommitResult>
         commitAggregate(
-            systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence fence,
-            systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation cancellation) {
+            ZLinkAggregateFence fence,
+            ZLinkStoreCancellation cancellation) {
         return authority.commitAggregate(fence, cancellation);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkAggregateAbortResult>
+    public CompletionStage<ZLinkAggregateAbortResult>
         abortAggregate(
-            systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence fence,
-            systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation cancellation) {
+            ZLinkAggregateFence fence,
+            ZLinkStoreCancellation cancellation) {
         return authority.abortAggregate(fence, cancellation);
     }
 
     @Override
-    public CompletionStage<java.util.Optional<systems.zlink.framework.runtime.internal.locations.ZLinkAggregateProgressSnapshot>>
+    public CompletionStage<Optional<ZLinkAggregateProgressSnapshot>>
         readAggregateProgress(
-            systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence fence,
-            systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation cancellation) {
+            ZLinkAggregateFence fence,
+            ZLinkStoreCancellation cancellation) {
         return authority.readAggregateProgress(fence, cancellation);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkAggregateProgressWriteResult>
+    public CompletionStage<ZLinkAggregateProgressWriteResult>
         compareExchangeAggregateProgress(
-            systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence fence,
+            ZLinkAggregateFence fence,
             String expectedStoreVersion,
-            systems.zlink.framework.runtime.internal.locations.ZLinkAggregateProgress progress,
-            systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation cancellation) {
+            ZLinkAggregateProgress progress,
+            ZLinkStoreCancellation cancellation) {
         return authority.compareExchangeAggregateProgress(
             fence, expectedStoreVersion, progress, cancellation);
     }
 
     @Override
-    public CompletionStage<java.util.List<systems.zlink.framework.runtime.internal.locations.ZLinkAggregateProgressSnapshot>>
+    public CompletionStage<List<ZLinkAggregateProgressSnapshot>>
         listAggregateProgress(
-            systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation cancellation) {
+            ZLinkStoreCancellation cancellation) {
         return authority.listAggregateProgress(cancellation);
     }
 
     @Override
-    public CompletionStage<Boolean> removeAggregateProgress(
-        systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence fence,
+    public CompletionStage<ZLinkAggregateAbortRecoverySnapshot>
+        retainAggregateAbort(
+            ZLinkAggregateFence fence,
+            ZLinkStoreCancellation cancellation) {
+        return authority.retainAggregateAbort(fence, cancellation);
+    }
+
+    @Override
+    public CompletionStage<List<ZLinkAggregateAbortRecoverySnapshot>>
+        listRetainedAggregateAborts(
+            ZLinkStoreCancellation cancellation) {
+        return authority.listRetainedAggregateAborts(cancellation);
+    }
+
+    @Override
+    public CompletionStage<Optional<ZLinkAggregateAbortCleanupSnapshot>>
+        markAggregateAbortTerminal(
+        ZLinkAggregateFence fence,
         String expectedStoreVersion,
-        systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation cancellation) {
+        String reference,
+        long checksumCrc32c,
+        ZLinkStoreCancellation cancellation) {
+        return authority.markAggregateAbortTerminal(
+            fence,
+            expectedStoreVersion,
+            reference,
+            checksumCrc32c,
+            cancellation);
+    }
+
+    @Override
+    public CompletionStage<List<ZLinkAggregateAbortCleanupSnapshot>>
+        listTerminalAggregateAborts(
+            ZLinkStoreCancellation cancellation) {
+        return authority.listTerminalAggregateAborts(cancellation);
+    }
+
+    @Override
+    public CompletionStage<Boolean> cleanupTerminalAggregateAbortInventory(
+        ZLinkAggregateAbortCleanupSnapshot cleanup,
+        ZLinkStoreCancellation cancellation) {
+        return authority.cleanupTerminalAggregateAbortInventory(
+            cleanup, cancellation);
+    }
+
+    @Override
+    public CompletionStage<Boolean> removeTerminalAggregateAbort(
+        ZLinkAggregateAbortCleanupSnapshot cleanup,
+        ZLinkStoreCancellation cancellation) {
+        return authority.removeTerminalAggregateAbort(cleanup, cancellation);
+    }
+
+    @Override
+    public CompletionStage<Boolean> removeAggregateProgress(
+        ZLinkAggregateFence fence,
+        String expectedStoreVersion,
+        ZLinkStoreCancellation cancellation) {
         return authority.removeAggregateProgress(
             fence, expectedStoreVersion, cancellation);
     }
@@ -594,7 +694,7 @@ public final class ZLinkInMemoryLocationStore
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimResult>
+    public CompletionStage<ZLinkOwnerLeaseClaimResult>
         claimOwnerLease(
         String ownerId,
         Duration leaseTtl) {
@@ -602,31 +702,31 @@ public final class ZLinkInMemoryLocationStore
             Instant now = clock.instant();
             LeaseRow current = leases.get(ownerId);
             if (current != null && current.expiresAt().isAfter(now)) {
-                return completed(new systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimConflict());
+                return completed(new ZLinkOwnerLeaseClaimConflict());
             }
             if (ownerLeaseGeneration == Long.MAX_VALUE) {
-                return completed(new systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseGenerationExhausted());
+                return completed(new ZLinkOwnerLeaseGenerationExhausted());
             }
             ZLinkLocationOwnerToken token = new ZLinkLocationOwnerToken(
                 ownerId,
                 ++ownerLeaseGeneration);
             Instant expiresAt = now.plus(leaseTtl);
             leases.put(ownerId, new LeaseRow(token, expiresAt));
-            return completed(new systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed(token, expiresAt, now));
+            return completed(new ZLinkOwnerLeaseClaimed(token, expiresAt, now));
         }
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReadResult>
+    public CompletionStage<ZLinkOwnerLeaseReadResult>
         readOwnerLease(String ownerId) {
         synchronized (gate) {
             Instant now = clock.instant();
             LeaseRow current = leases.get(ownerId);
             if (current == null || !current.expiresAt().isAfter(now)) {
                 leases.remove(ownerId);
-                return completed(new systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseMissing());
+                return completed(new ZLinkOwnerLeaseMissing());
             }
-            return completed(new systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseFound(
+            return completed(new ZLinkOwnerLeaseFound(
                     current.token(),
                     current.expiresAt(),
                     now));
@@ -634,7 +734,7 @@ public final class ZLinkInMemoryLocationStore
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewResult>
+    public CompletionStage<ZLinkOwnerLeaseRenewResult>
         renewOwnerLease(
             ZLinkLocationOwnerToken token,
             Duration leaseTtl) {
@@ -644,16 +744,16 @@ public final class ZLinkInMemoryLocationStore
             if (current == null
                 || !current.expiresAt().isAfter(now)
                 || !current.token().equals(token)) {
-                return completed(new systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewStale());
+                return completed(new ZLinkOwnerLeaseRenewStale());
             }
             Instant expiresAt = now.plus(leaseTtl);
             leases.put(token.ownerId(), new LeaseRow(token, expiresAt));
-            return completed(new systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewed(expiresAt, now));
+            return completed(new ZLinkOwnerLeaseRenewed(expiresAt, now));
         }
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReleaseResult>
+    public CompletionStage<ZLinkOwnerLeaseReleaseResult>
         releaseOwnerLease(ZLinkLocationOwnerToken token) {
         synchronized (gate) {
             Instant now = clock.instant();
@@ -665,10 +765,10 @@ public final class ZLinkInMemoryLocationStore
                     && !current.expiresAt().isAfter(now)) {
                     leases.remove(token.ownerId());
                 }
-                return completed(systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReleaseResult.STALE);
+                return completed(ZLinkOwnerLeaseReleaseResult.STALE);
             }
             leases.remove(token.ownerId());
-            return completed(systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReleaseResult.RELEASED);
+            return completed(ZLinkOwnerLeaseReleaseResult.RELEASED);
         }
     }
 
@@ -985,8 +1085,8 @@ public final class ZLinkInMemoryLocationStore
     }
 
     private static boolean hasSameImmutableCapabilities(
-        List<systems.zlink.framework.locations.ZLinkObjectCapability> current,
-        List<systems.zlink.framework.locations.ZLinkObjectCapability> candidate) {
+        List<ZLinkObjectCapability> current,
+        List<ZLinkObjectCapability> candidate) {
         if (current.size() != candidate.size()) {
             return false;
         }

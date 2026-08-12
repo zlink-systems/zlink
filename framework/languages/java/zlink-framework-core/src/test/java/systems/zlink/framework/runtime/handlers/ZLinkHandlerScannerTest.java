@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.handlers;
+import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -221,7 +222,7 @@ final class ZLinkHandlerScannerTest {
         assertEquals(ZLinkScannedHandlerKind.TIMER, timer.kind());
         assertEquals(TestSpot.class, timer.spotType());
         assertEquals("heartbeat", timer.timerName());
-        assertEquals(java.time.Duration.ofMillis(250), timer.timerPeriod());
+        assertEquals(Duration.ofMillis(250), timer.timerPeriod());
     }
 
     @Test

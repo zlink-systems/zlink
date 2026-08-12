@@ -1,18 +1,17 @@
-import { zlinkEntrySpotActorSendHandler, zlinkSpotActorSendHandler } from '@zlink-systems/nestjs';
+import { zlinkSpotActorSendHandler } from '@zlink-systems/nestjs';
 import type { ZLinkActor, ZLinkActorContext, ZLinkMessageContext } from '@zlink-systems/framework';
-import { BingoEntrySpot } from '../Spots/EntrySpot/bingo-entry-spot';
 import { BingoRoomSpot } from '../Spots/BingoRoomSpot/bingo-room-spot';
 import {
-  BingoGameEndedNotify,
-  BingoGameStartedNotify,
-  BingoNumberDrawnNotify,
-  BingoRewardAnnouncedNotify,
-  EnsurePlayerActorReq,
-  PlayerJoinedNotify
+  DeliverBingoGameEndedMsg,
+  DeliverBingoGameStartedMsg,
+  DeliverBingoNumberDrawnMsg,
+  DeliverBingoRewardAnnouncedMsg,
+  DeliverPlayerJoinedMsg
 } from '../../../../../Shared/Contracts/bingo-messages.generated';
 
 class PlayerActor implements ZLinkActor {
   readonly context!: ZLinkActorContext;
+  destroyAfterEntrySpotJoin = false;
   private nextSeq = 0;
 
   constructor(
@@ -27,47 +26,50 @@ class PlayerActor implements ZLinkActor {
       .metadata('seq', String(this.nextSeq))
       .submit();
   }
-}
 
-@zlinkEntrySpotActorSendHandler({ entrySpot: () => BingoEntrySpot, actor: () => PlayerActor, packetName: 'EnsurePlayerActorReq' })
-class InitializePlayerActorHandler {
-  async handle(_spot: BingoEntrySpot, actor: PlayerActor, _context: ZLinkMessageContext, message: EnsurePlayerActorReq): Promise<void> {
-    actor.displayName = message.displayName;
+  markForDestroyAfterRoomLeave(): void {
+    this.destroyAfterEntrySpotJoin = true;
+  }
+
+  consumeDestroyAfterEntrySpotJoin(): boolean {
+    const destroy = this.destroyAfterEntrySpotJoin;
+    this.destroyAfterEntrySpotJoin = false;
+    return destroy;
   }
 }
 
-@zlinkSpotActorSendHandler({ spot: () => BingoRoomSpot, actor: () => PlayerActor, packetName: 'PlayerJoinedNotify' })
+@zlinkSpotActorSendHandler({ spot: () => BingoRoomSpot, actor: () => PlayerActor, packetName: 'DeliverPlayerJoinedMsg' })
 class PlayerJoinedNotificationHandler {
-  async handle(_spot: BingoRoomSpot, actor: PlayerActor, _context: ZLinkMessageContext, message: PlayerJoinedNotify): Promise<void> {
-    await actor.push(message);
+  async handle(_spot: BingoRoomSpot, actor: PlayerActor, _context: ZLinkMessageContext, message: DeliverPlayerJoinedMsg): Promise<void> {
+    await actor.push(message.notification);
   }
 }
 
-@zlinkSpotActorSendHandler({ spot: () => BingoRoomSpot, actor: () => PlayerActor, packetName: 'BingoGameStartedNotify' })
+@zlinkSpotActorSendHandler({ spot: () => BingoRoomSpot, actor: () => PlayerActor, packetName: 'DeliverBingoGameStartedMsg' })
 class BingoGameStartedNotificationHandler {
-  async handle(_spot: BingoRoomSpot, actor: PlayerActor, _context: ZLinkMessageContext, message: BingoGameStartedNotify): Promise<void> {
-    await actor.push(message);
+  async handle(_spot: BingoRoomSpot, actor: PlayerActor, _context: ZLinkMessageContext, message: DeliverBingoGameStartedMsg): Promise<void> {
+    await actor.push(message.notification);
   }
 }
 
-@zlinkSpotActorSendHandler({ spot: () => BingoRoomSpot, actor: () => PlayerActor, packetName: 'BingoNumberDrawnNotify' })
+@zlinkSpotActorSendHandler({ spot: () => BingoRoomSpot, actor: () => PlayerActor, packetName: 'DeliverBingoNumberDrawnMsg' })
 class BingoNumberDrawnNotificationHandler {
-  async handle(_spot: BingoRoomSpot, actor: PlayerActor, _context: ZLinkMessageContext, message: BingoNumberDrawnNotify): Promise<void> {
-    await actor.push(message);
+  async handle(_spot: BingoRoomSpot, actor: PlayerActor, _context: ZLinkMessageContext, message: DeliverBingoNumberDrawnMsg): Promise<void> {
+    await actor.push(message.notification);
   }
 }
 
-@zlinkSpotActorSendHandler({ spot: () => BingoRoomSpot, actor: () => PlayerActor, packetName: 'BingoGameEndedNotify' })
+@zlinkSpotActorSendHandler({ spot: () => BingoRoomSpot, actor: () => PlayerActor, packetName: 'DeliverBingoGameEndedMsg' })
 class BingoGameEndedNotificationHandler {
-  async handle(_spot: BingoRoomSpot, actor: PlayerActor, _context: ZLinkMessageContext, message: BingoGameEndedNotify): Promise<void> {
-    await actor.push(message);
+  async handle(_spot: BingoRoomSpot, actor: PlayerActor, _context: ZLinkMessageContext, message: DeliverBingoGameEndedMsg): Promise<void> {
+    await actor.push(message.notification);
   }
 }
 
-@zlinkSpotActorSendHandler({ spot: () => BingoRoomSpot, actor: () => PlayerActor, packetName: 'BingoRewardAnnouncedNotify' })
+@zlinkSpotActorSendHandler({ spot: () => BingoRoomSpot, actor: () => PlayerActor, packetName: 'DeliverBingoRewardAnnouncedMsg' })
 class BingoRewardAnnouncedNotificationHandler {
-  async handle(_spot: BingoRoomSpot, actor: PlayerActor, _context: ZLinkMessageContext, message: BingoRewardAnnouncedNotify): Promise<void> {
-    await actor.push(message);
+  async handle(_spot: BingoRoomSpot, actor: PlayerActor, _context: ZLinkMessageContext, message: DeliverBingoRewardAnnouncedMsg): Promise<void> {
+    await actor.push(message.notification);
   }
 }
 
@@ -76,7 +78,6 @@ export {
   BingoGameStartedNotificationHandler,
   BingoNumberDrawnNotificationHandler,
   BingoRewardAnnouncedNotificationHandler,
-  InitializePlayerActorHandler,
   PlayerJoinedNotificationHandler,
   PlayerActor
 };

@@ -306,16 +306,26 @@ export class DefaultZLinkSpotManager {
     string,
     Promise<ZLinkSpotActivation>
   >();
+  //  Parallel index keyed by `${meshName}\0${spotId}` so per-activation
+  //  callbacks (isInstanceMaterializing, sibling-generation lookups) resolve
+  //  in O(1) instead of scanning every pending key.
+  private readonly pendingInstanceMaterializationsByPrefix = new Map<
+    string,
+    Map<string, Promise<ZLinkSpotActivation>>
+  >();
   private readonly instanceActivationGates = new Map<string, {
     readonly meshName: string;
     readonly limit: number;
     active: number;
+    //  Tombstone slots + head cursor keep abort O(1) and admit O(1) amortized
+    //  instead of indexOf/splice + shift scans under a cancellation storm.
     readonly waiters: Array<{
       resolve: (release: () => void) => void;
       reject: (error: unknown) => void;
       signal?: AbortSignal;
       abort?: () => void;
-    }>;
+    } | undefined>;
+    waiterHead: number;
   }>();
   private readonly pendingInstanceCloses = new Map<string, Promise<boolean>>();
   private readonly pendingInstanceTerminals = new Map<string, number>();
@@ -401,27 +411,21 @@ export class DefaultZLinkSpotManager {
         this.scheduleIdleSweep();
       },
       releaseLocation: (activation, meshName, spotId) => {
-        if (!this.isInstanceFactory(meshName, activation.spotType)) {
+        if (activation.domain.kind === 'user') {
           return this.locationClaim.release(meshName, spotId);
         }
         const currentApplication = this.options.instanceSpotApplicationTargetProvider?.(
           meshName,
           spotId
         );
-        if (
-          activation.objectGeneration !== undefined
-          && currentApplication !== undefined
-          && currentApplication.objectGeneration !== activation.objectGeneration
-        ) {
+        if (currentApplication !== undefined
+          && currentApplication.objectGeneration !== activation.domain.objectGeneration) {
           // A superseded local application must not release the authority row
           // that now belongs to the newer object generation.
           return Promise.resolve();
         }
         const key = `${meshName}\0${String(spotId)}`;
-        const objectGeneration = activation.objectGeneration;
-        if (objectGeneration === undefined) {
-          return Promise.resolve();
-        }
+        const objectGeneration = activation.domain.objectGeneration;
         if (this.pendingInstanceTerminals.has(key)) {
           this.deferInstanceAuthorityRelease(key, objectGeneration);
           return Promise.resolve();
@@ -597,8 +601,10 @@ export class DefaultZLinkSpotManager {
 
       let pending = this.pendingInstanceMaterializations.get(materializationKey);
       if (pending === undefined) {
-        const otherPending = [...this.pendingInstanceMaterializations.entries()]
-          .find(([pendingKey]) => pendingKey.startsWith(`${materializationPrefix}\0`))?.[1];
+        const siblings = this.pendingInstanceMaterializationsByPrefix.get(materializationPrefix);
+        const otherPending = siblings === undefined
+          ? undefined
+          : siblings.values().next().value;
         if (otherPending !== undefined) {
           await awaitWithAbort(otherPending, signal);
           continue;
@@ -624,9 +630,22 @@ export class DefaultZLinkSpotManager {
             }
           );
         this.pendingInstanceMaterializations.set(materializationKey, pending);
+        let siblings = this.pendingInstanceMaterializationsByPrefix.get(materializationPrefix);
+        if (siblings === undefined) {
+          siblings = new Map();
+          this.pendingInstanceMaterializationsByPrefix.set(materializationPrefix, siblings);
+        }
+        siblings.set(materializationKey, pending);
         void pending.finally(() => {
           if (this.pendingInstanceMaterializations.get(materializationKey) === pending) {
             this.pendingInstanceMaterializations.delete(materializationKey);
+          }
+          const bucket = this.pendingInstanceMaterializationsByPrefix.get(materializationPrefix);
+          if (bucket !== undefined && bucket.get(materializationKey) === pending) {
+            bucket.delete(materializationKey);
+            if (bucket.size === 0) {
+              this.pendingInstanceMaterializationsByPrefix.delete(materializationPrefix);
+            }
           }
         }).catch(() => undefined);
       }
@@ -645,7 +664,8 @@ export class DefaultZLinkSpotManager {
         meshName,
         limit: this.options.activationConcurrencyLimitProvider?.(meshName) ?? 128,
         active: 0,
-        waiters: []
+        waiters: [],
+        waiterHead: 0
       };
       this.instanceActivationGates.set(meshName, gate);
     }
@@ -657,9 +677,9 @@ export class DefaultZLinkSpotManager {
     }
     return new Promise<() => void>((resolve, reject) => {
       const waiter = { resolve, reject, signal, abort: undefined as (() => void) | undefined };
+      const slot = gate!.waiters.length;
       waiter.abort = () => {
-        const index = gate!.waiters.indexOf(waiter);
-        if (index >= 0) gate!.waiters.splice(index, 1);
+        if (gate!.waiters[slot] === waiter) gate!.waiters[slot] = undefined;
         reject(signal?.reason);
       };
       signal?.addEventListener('abort', waiter.abort, { once: true });
@@ -676,14 +696,24 @@ export class DefaultZLinkSpotManager {
       reject: (error: unknown) => void;
       signal?: AbortSignal;
       abort?: () => void;
-    }>;
+    } | undefined>;
+    waiterHead: number;
   }): void {
-    const waiter = gate.waiters.shift();
-    if (waiter !== undefined) {
+    while (gate.waiterHead < gate.waiters.length) {
+      const waiter = gate.waiters[gate.waiterHead];
+      gate.waiters[gate.waiterHead] = undefined;
+      gate.waiterHead += 1;
+      if (gate.waiterHead >= gate.waiters.length) {
+        gate.waiters.length = 0;
+        gate.waiterHead = 0;
+      }
+      if (waiter === undefined) continue;
       if (waiter.abort !== undefined) waiter.signal?.removeEventListener('abort', waiter.abort);
       waiter.resolve(() => this.releaseInstanceActivation(gate));
       return;
     }
+    gate.waiters.length = 0;
+    gate.waiterHead = 0;
     gate.active -= 1;
     this.options.onInstanceActivationConcurrencyChanged?.(gate.meshName);
   }
@@ -700,8 +730,7 @@ export class DefaultZLinkSpotManager {
 
   isInstanceMaterializing(meshName: string, spotId: RoutingId): boolean {
     const prefix = instanceMaterializationPrefix(meshName, spotId);
-    return [...this.pendingInstanceMaterializations.keys()]
-      .some(key => key.startsWith(`${prefix}\0`));
+    return (this.pendingInstanceMaterializationsByPrefix.get(prefix)?.size ?? 0) > 0;
   }
 
   isInstanceClosing(meshName: string, spotId: RoutingId): boolean {
@@ -728,7 +757,7 @@ export class DefaultZLinkSpotManager {
       candidate.meshName === meshName && String(candidate.spotId) === String(spotId)
     );
     return activation !== undefined
-      && this.isInstanceFactory(meshName, activation.spotType)
+      && activation.domain.kind === 'instance'
       && activation.isIdleEvicting;
   }
 
@@ -738,7 +767,7 @@ export class DefaultZLinkSpotManager {
     );
     if (
       activation === undefined
-      || !this.isInstanceFactory(meshName, activation.spotType)
+      || activation.domain.kind !== 'instance'
       || !activation.isIdleFor(
         Date.now(),
         this.options.instanceSpotIdleTimeoutMs?.get(meshName) ?? 0
@@ -846,14 +875,6 @@ export class DefaultZLinkSpotManager {
     return factory;
   }
 
-  private isInstanceFactory(
-    meshName: string,
-    implementation: Type<ZLinkSpot>
-  ): boolean {
-    return [...(this.options.instanceSpotFactories?.get(meshName)?.values() ?? [])]
-      .some(factory => factory === implementation);
-  }
-
   private scheduleIdleSweep(): void {
     if (this.idleSweepTimer !== undefined) return;
     if (!this.hasIdleSweepTarget()) return;
@@ -882,7 +903,7 @@ export class DefaultZLinkSpotManager {
         const timeoutMs = this.options.instanceSpotIdleTimeoutMs?.get(activation.meshName) ?? 0;
         if (
           timeoutMs <= 0
-          || !this.isInstanceFactory(activation.meshName, activation.spotType)
+          || activation.domain.kind !== 'instance'
           || !activation.isIdleFor(now, timeoutMs)
           || !activation.beginIdleEviction()
         ) {
@@ -1095,7 +1116,7 @@ export class DefaultZLinkSpotManager {
       return false;
     }
     const currentTurn = activation.serial.isCurrentTurn;
-    const isInstance = this.isInstanceFactory(meshName, activation.spotType);
+    const isInstance = activation.domain.kind === 'instance';
     const beginClose = () => {
       const seal = activation.sealExecution();
       const operation = this.activations.startClose(
@@ -1504,13 +1525,14 @@ export class DefaultZLinkSpotManager {
       try {
         await this.ensureInstanceApplicationActivation(meshName, spotId);
         const activation = this.activations.resolve(meshName, spotId);
-        if (activation === undefined || !this.isInstanceFactory(meshName, activation.spotType)) {
+        if (activation === undefined || activation.domain.kind !== 'instance') {
           throw new ZLinkConfigurationException(
             `MeshNode Instance Spot target '${String(spotId)}' is not active.`
           );
         }
         const target = this.options.instanceSpotApplicationTargetProvider?.(meshName, spotId);
-        if (target !== undefined && activation.objectGeneration !== target.objectGeneration) {
+        if (target !== undefined
+          && activation.domain.objectGeneration !== target.objectGeneration) {
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.SpotGenerationStale,
             `Instance Spot target '${String(spotId)}' application generation is stale.`
@@ -2157,22 +2179,55 @@ export class DefaultZLinkSpotManager {
           // same mailbox turn.
           if (!replyActorJoin()) return;
         } else {
-          // A formal transfer must acknowledge the target admission before
-          // waiting for the source terminal; that terminal is what permits
-          // the detached target commit below to proceed.
           if (!replyActorJoin()) return;
           const commitEntryTransfer = async (): Promise<void> => {
-            const sourceLeaveSucceeded = await pendingTransfer.sourceLeaveTerminal;
-            if (!sourceLeaveSucceeded) {
-              throw new Error(
-                `Actor '${entryActor.context.actorId}' source leave callback failed before Entry Spot commit.`
+            try {
+              await this.options.dispatchEntryActorJoin?.(
+                meshName,
+                entryActor,
+                []
+              );
+            } finally {
+              this.formalRemoteTransfers.completeTargetLifecycle(
+                entryActor.context.actorId,
+                pendingTransfer.transferId
               );
             }
-            await this.options.dispatchEntryActorJoin?.(
-              meshName,
-              entryActor,
-              pendingTransfer.handoffBacklog
+            const sourceLeaveSubmitted = await pendingTransfer.sourceLeaveSubmitted;
+            if (!sourceLeaveSubmitted) {
+              throw new Error(
+                `Actor '${entryActor.context.actorId}' source authority commit failed before leave submission.`
+              );
+            }
+            const handoffResults = await replayActorHandoffBacklog(
+              pendingTransfer.handoffBacklog,
+              async (parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) => {
+                if (this.options.dispatchEntryActorPacket === undefined) {
+                  throw new Error('Entry Spot saved handoff replay requires its Actor packet runtime.');
+                }
+                return await this.options.dispatchEntryActorPacket(
+                  entryActor.context.actorId,
+                  parts,
+                  returnResponse,
+                  remoteBoundSessionTarget,
+                  fallbackActorRef
+                );
+              },
+              index => this.options.runtimeEventPublisher?.publish({
+                sourceName: 'zlink.framework.actor-handoff',
+                timestamp: new Date(),
+                marker: 'backlog_enqueued',
+                actorId: entryActor.context.actorId,
+                index
+              })
             );
+            const failedHandoff = handoffResults.find(result => !result.ok);
+            if (failedHandoff !== undefined) {
+              throw new Error(
+                `Actor '${entryActor.context.actorId}' saved Entry handoff packet `
+                + `${failedHandoff.index} failed: ${failedHandoff.error ?? 'unknown error'}.`
+              );
+            }
             this.formalRemoteTransfers.delete(entryActor.context.actorId);
           };
           this.options.detachedTaskRunner?.runDetached(
@@ -2191,6 +2246,9 @@ export class DefaultZLinkSpotManager {
         await this.options.actorTransferRuntime?.discardDeferredJoinAccepted(
           deferredJoinRoot
         );
+      }
+      if (targetCommitPublished !== true) {
+        this.formalRemoteTransfers.delete(actorId);
       }
       if (materialized && targetCommitPublished !== true) {
         await this.options.actorTransferRuntime?.rollbackRoutedActor(actor!);
@@ -2266,28 +2324,7 @@ export class DefaultZLinkSpotManager {
           );
         }
         this.options.actorTransferRuntime?.commitRoutedActor(actor, spotId, activation.spot);
-        const completeTargetCommit = async (sourceLeaveSucceeded: boolean): Promise<void> => {
-          if (sourceLeaveSucceeded && pendingTransfer !== undefined) {
-            await replayActorHandoffBacklog(
-              pendingTransfer.handoffBacklog,
-              (parts, returnResponse, remoteBoundSessionTarget, _fallbackActorRef) =>
-                this.dispatchActorPacket(
-                  activation,
-                  actor.context.actorId,
-                  parts,
-                  returnResponse,
-                  remoteBoundSessionTarget,
-                  undefined
-                ),
-              (index) => this.options.runtimeEventPublisher?.publish({
-                sourceName: 'zlink.framework.actor-handoff',
-                timestamp: new Date(),
-                marker: 'backlog_enqueued',
-                actorId: actor.context.actorId,
-                index
-              })
-            );
-          }
+        const completeTargetLifecycle = async (): Promise<void> => {
           await this.options.actorTransferRuntime?.claimRoutedActorLocation(
             actor,
             spotId,
@@ -2297,25 +2334,13 @@ export class DefaultZLinkSpotManager {
               membershipEpoch: control.currentMembershipEpoch
             }
           );
-          if (!sourceLeaveSucceeded) {
-            throw new Error(`Actor '${actor.context.actorId}' source leave callback failed after target commit.`);
-          }
+          // Make the Actor resolvable for lifecycle and saved-work dispatch,
+          // while formalRemoteTransfers continues to fence new ingress until
+          // the saved backlog has completed.
           activation.commitActorJoin(actor);
-          const updateBoundSessionRoute = async (): Promise<void> => {
-            await this.options.actorTransferRuntime?.publishRoutedActorOwnership(actor);
-            await this.options.actorTransferRuntime?.openRoutedActorSession(actor);
-          };
-          // Session route publication is post-commit work. The public Join
-          // completion and lifecycle callback must not wait for a Session
-          // owner ACK; the route update retries in its detached runtime task.
-          if (pendingTransfer !== undefined && this.options.detachedTaskRunner !== undefined) {
-            this.options.detachedTaskRunner.runDetached(
-              `actor transfer Session route ${actor.context.actorId}`,
-              updateBoundSessionRoute
-            );
-          } else {
-            await updateBoundSessionRoute();
-          }
+          await activation.spot.onJoinedActor(actor);
+        };
+        const completePublicJoin = async (): Promise<void> => {
           const deferredJoinRoot = pendingTransfer?.deferredJoinRoot
             ?? await this.options.actorTransferRuntime?.recoverDeferredJoinAccepted(actor.context.actorId);
           if (deferredJoinRoot !== undefined) {
@@ -2335,23 +2360,75 @@ export class DefaultZLinkSpotManager {
               )
             );
           }
-          this.formalRemoteTransfers.delete(actor.context.actorId);
-          // A transferred actor must receive its first lifecycle callback only
-          // after ownership and the bound-session route are publishable. The
-          // callback may send to the actor; invoking it before this point
-          // races the formal transfer reconciliation guard.
-          await activation.spot.onJoinedActor(actor);
+        };
+        const completeTargetReady = async (): Promise<void> => {
+          if (pendingTransfer !== undefined) {
+            const handoffResults = await replayActorHandoffBacklog(
+              pendingTransfer.handoffBacklog,
+              (parts, returnResponse, remoteBoundSessionTarget, _fallbackActorRef) =>
+                this.dispatchActorPacket(
+                  activation,
+                  actor.context.actorId,
+                  parts,
+                  returnResponse,
+                  remoteBoundSessionTarget,
+                  undefined
+                ),
+              (index) => this.options.runtimeEventPublisher?.publish({
+                sourceName: 'zlink.framework.actor-handoff',
+                timestamp: new Date(),
+                marker: 'backlog_enqueued',
+                actorId: actor.context.actorId,
+                index
+              })
+            );
+            const failedHandoff = handoffResults.find(result => !result.ok);
+            if (failedHandoff !== undefined) {
+              throw new Error(
+                `Actor '${actor.context.actorId}' saved handoff packet `
+                + `${failedHandoff.index} failed: ${failedHandoff.error ?? 'unknown error'}.`
+              );
+            }
+            // This registry owns target lifecycle and saved backlog
+            // reconciliation only. Session route readiness is enforced by
+            // the Session binding aggregate after this boundary.
+            this.formalRemoteTransfers.delete(actor.context.actorId);
+          }
+          const updateBoundSessionRoute = async (): Promise<void> => {
+            await this.options.actorTransferRuntime?.publishRoutedActorOwnership(actor);
+            await this.options.actorTransferRuntime?.openRoutedActorSession(actor);
+          };
+          // Session routing is an independent post-Ready branch. Callback
+          // sends are retained by the Session owner seal until this converges.
+          if (pendingTransfer !== undefined && this.options.detachedTaskRunner !== undefined) {
+            this.options.detachedTaskRunner.runDetached(
+              `actor transfer Session route ${actor.context.actorId}`,
+              updateBoundSessionRoute
+            );
+          } else {
+            await updateBoundSessionRoute();
+          }
         };
         if (pendingTransfer !== undefined) {
           const resume = async (): Promise<void> => {
-            const sourceLeaveSucceeded = await pendingTransfer.sourceLeaveTerminal;
             try {
-              await activation.serial.execute(() =>
-                completeTargetCommit(sourceLeaveSucceeded)
+              await activation.serial.post(completeTargetLifecycle);
+            } finally {
+              this.formalRemoteTransfers.completeTargetLifecycle(
+                actor.context.actorId,
+                pendingTransfer.transferId
               );
-            } catch (error) {
-              throw error;
             }
+            const sourceLeaveSubmitted = await pendingTransfer.sourceLeaveSubmitted;
+            if (!sourceLeaveSubmitted) {
+              throw new Error(
+                `Actor '${actor.context.actorId}' source authority commit failed before leave submission.`
+              );
+            }
+            await completePublicJoin();
+            // Saved handlers enter the Spot owner on their own turns. Run
+            // them only after the lifecycle turn above has been released.
+            await completeTargetReady();
           };
           this.options.detachedTaskRunner?.runDetached(
             `actor transfer target commit ${actor.context.actorId}`,
@@ -2362,7 +2439,9 @@ export class DefaultZLinkSpotManager {
           }
           return;
         }
-        await completeTargetCommit(true);
+        await completeTargetLifecycle();
+        await completePublicJoin();
+        await completeTargetReady();
         return;
       }
       if (control.lifecycleKind === ActorLifecycleKind.Left) {
@@ -2626,12 +2705,12 @@ export class DefaultZLinkSpotManager {
     }
   }
 
-  completeFormalSourceLeaveTerminal(
+  async completeFormalSourceLeaveTerminal(
     actorId: string,
     transferId: string,
     succeeded: boolean
-  ): boolean {
-    return this.formalRemoteTransfers.completeSourceLeaveTerminal(
+  ): Promise<boolean> {
+    return await this.formalRemoteTransfers.completeSourceLeaveTerminal(
       actorId,
       transferId,
       succeeded

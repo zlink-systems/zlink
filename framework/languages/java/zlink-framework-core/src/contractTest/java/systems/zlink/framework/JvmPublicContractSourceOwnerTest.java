@@ -1,4 +1,5 @@
 package systems.zlink.framework;
+import java.io.UncheckedIOException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -175,7 +176,7 @@ final class JvmPublicContractSourceOwnerTest {
         try {
             return Files.readString(path, StandardCharsets.UTF_8);
         } catch (IOException error) {
-            throw new java.io.UncheckedIOException(error);
+            throw new UncheckedIOException(error);
         }
     }
 

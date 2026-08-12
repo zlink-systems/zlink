@@ -1,4 +1,6 @@
 package systems.zlink.e2e.spotservice.gateway;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
+import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 
 import java.nio.file.Path;
 import org.springframework.boot.WebApplicationType;
@@ -46,13 +48,13 @@ public final class Program {
     @Bean
     GatewayHealthHttpServer gatewayHealthHttpServer(
         ZLinkSpotManager spots,
-        systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime meshRuntime,
+        ZLinkRouteMeshRuntime meshRuntime,
         GatewayOptions options) {
         return new GatewayHealthHttpServer(options.gatewayHttpEndpoint(), spots, meshRuntime);
     }
 
     @Bean
-    systems.zlink.framework.spring.ZLinkFrameworkConfigurer gatewayFramework(GatewayOptions gateway) {
+    ZLinkFrameworkConfigurer gatewayFramework(GatewayOptions gateway) {
         return options -> {
             String logDir = gateway.logDir();
             String gatewayRid = gateway.gatewayRid();

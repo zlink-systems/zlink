@@ -526,14 +526,14 @@ internal sealed class SpotActorTransferScenarioContext : IDisposable
         ?? throw new InvalidOperationException(
             "Host relocation response was null.");
 
-    public async Task<RelocationWorkloadReply> RequestActorWorkloadAsync(
+    public async Task<RelocationWorkloadRes> RequestActorWorkloadAsync(
         ZLinkHttpClient submittingNode,
         RelocationWorkloadCallReq request) =>
         (await submittingNode.Post("/workload/actors/request")
                 .Body(request)
                 .Timeout(TimeSpan.FromMilliseconds(
                     request.TimeoutMilliseconds))
-                .Async<RelocationWorkloadReply>())
+                .Async<RelocationWorkloadRes>())
             .Body
         ?? throw new InvalidOperationException(
             "Actor workload reply was null.");
@@ -569,14 +569,14 @@ internal sealed class SpotActorTransferScenarioContext : IDisposable
         ?? throw new InvalidOperationException(
             "Actor queue blocker response was null.");
 
-    public async Task<RelocationWorkloadReply> RequestSpotWorkloadAsync(
+    public async Task<RelocationWorkloadRes> RequestSpotWorkloadAsync(
         ZLinkHttpClient submittingNode,
         RelocationWorkloadCallReq request) =>
         (await submittingNode.Post("/workload/spots/request")
                 .Body(request)
                 .Timeout(TimeSpan.FromMilliseconds(
                     request.TimeoutMilliseconds))
-                .Async<RelocationWorkloadReply>())
+                .Async<RelocationWorkloadRes>())
             .Body
         ?? throw new InvalidOperationException(
             "Spot workload reply was null.");
@@ -728,13 +728,13 @@ internal sealed class SpotActorTransferScenarioContext : IDisposable
         return (await JoinRawAsync(client, actorId, request)).ToJoinTargetRes();
     }
 
-    public async Task<JoinResponse> JoinRawAsync(
+    public async Task<JoinRawRes> JoinRawAsync(
         ZLinkHttpClient client,
         string actorId,
         JoinTargetReq request)
     {
         return (await client.Post($"/actors/{actorId}/join").Body(request)
-                   .Async<JoinResponse>()).Body
+                   .Async<JoinRawRes>()).Body
                ?? throw new InvalidOperationException("Join response was null.");
     }
 
@@ -766,7 +766,7 @@ internal sealed class SpotActorTransferScenarioContext : IDisposable
     public async Task SendFromNodeAsync(
         ZLinkHttpClient client,
         string actorId,
-        HandoffPacket packet)
+        HandoffMsg packet)
     {
         // The selected process may have a stale bounded route. No owner RID
         // or ObjectGeneration is supplied by application code.
@@ -786,7 +786,7 @@ internal sealed class SpotActorTransferScenarioContext : IDisposable
         {
             using var response = await _transportProxyClient.PostAsJsonAsync(
                 $"{admin}/arm",
-                new ExternalTransportGateArm(
+                new ExternalTransportGateArmReq(
                     gateId,
                     marker,
                     afterGateId));
@@ -1039,7 +1039,7 @@ internal sealed record ClientOptions(
         => E2eConfiguration.Load<ClientOptions>(args);
 }
 
-internal sealed record ExternalTransportGateArm(
+internal sealed record ExternalTransportGateArmReq(
     string GateId,
     string Marker,
     string? AfterGateId);
@@ -1050,7 +1050,7 @@ internal sealed record ExternalTransportGateRes(
     int ReleasedCount,
     bool Released);
 
-internal sealed record JoinResponse(
+internal sealed record JoinRawRes(
     string Scenario,
     string ActorId,
     bool Accepted,

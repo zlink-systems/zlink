@@ -83,17 +83,17 @@ internal sealed class PayloadRequestHandler(EvidenceStore evidence)
 }
 
 internal sealed class RoutePingHandler(EvidenceStore evidence)
-    : IZLinkRouteRequestHandler<ScenarioRoutePing, ScenarioRoutePong>
+    : IZLinkRouteRequestHandler<ScenarioRouteReq, ScenarioRouteRes>
 {
-    public ValueTask<ScenarioRoutePong> HandleAsync(
-        ScenarioRoutePing request,
+    public ValueTask<ScenarioRouteRes> HandleAsync(
+        ScenarioRouteReq request,
         ZLinkRouteMessageContext context,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var source = context.SourceNodeRid.ToString();
         evidence.Add($"route-request|rid={evidence.Rid}|source={source}|value={request.Value}");
-        return ValueTask.FromResult(new ScenarioRoutePong($"route:{request.Value}", evidence.Rid, source));
+        return ValueTask.FromResult(new ScenarioRouteRes($"route:{request.Value}", evidence.Rid, source));
     }
 }
 

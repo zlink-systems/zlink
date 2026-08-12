@@ -117,7 +117,7 @@ inline void run_sm_d6_scenario (const std::string &session_stream_endpoint,
     std::optional<std::chrono::steady_clock::time_point> duplicate_received;
     std::optional<std::string> duplicate_payload;
     bound.on<zlink::stream_connector::packet_t> (
-      "ActorBindingReplaced",
+      "ActorBindingReplacedNotify",
       [&] (const zlink::stream_connector::packet_t &packet) {
           const std::lock_guard lock (close_gate);
           duplicate_payload = packet.payload.to_string ();

@@ -1,9 +1,15 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Arrays;
+import java.util.Optional;
 
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Consumer;
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
@@ -150,7 +156,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         return chain.thenRun(() -> staged.replayed = true);
     }
 
-    CompletionStage<java.util.Optional<byte[]>> replayActor(
+    CompletionStage<Optional<byte[]>> replayActor(
         Staged staged,
         ZLinkActorAcceptedJournal.Record record) {
         requireActive(staged);
@@ -164,6 +170,69 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
             staged.actor(), staged.request(), record);
     }
 
+    boolean acceptIngress(
+        Staged staged,
+        byte[] acceptedJournalRecord,
+        Consumer<List<Message>> reply,
+        Consumer<Throwable> failure) {
+        requireActive(staged);
+        synchronized (staged) {
+            if (staged.ingressClosed) {
+                return false;
+            }
+            staged.pendingIngress.add(new PendingIngress(
+                acceptedJournalRecord, reply, failure));
+            return true;
+        }
+    }
+
+    CompletionStage<Void> closeAndReplayIngress(Staged staged) {
+        requireActive(staged);
+        List<PendingIngress> pending;
+        synchronized (staged) {
+            if (staged.ingressClosed) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                        "standalone Actor staging ingress was already closed"));
+            }
+            staged.ingressClosed = true;
+            pending = List.copyOf(staged.pendingIngress);
+            staged.pendingIngress.clear();
+        }
+        CompletionStage<Void> replay = CompletableFuture.completedFuture(null);
+        for (PendingIngress ingress : pending) {
+            replay = replay.thenCompose(ignored -> replayActor(
+                    staged,
+                    ZLinkActorAcceptedJournal.decode(ingress.record()))
+                .handle((reply, failure) -> {
+                    if (failure != null) {
+                        Throwable cause = failure instanceof
+                            java.util.concurrent.CompletionException
+                                && failure.getCause() != null
+                            ? failure.getCause()
+                            : failure;
+                        if (ingress.failure() != null) {
+                            ingress.failure().accept(cause);
+                        }
+                        throw new java.util.concurrent.CompletionException(
+                            cause);
+                    }
+                    if (reply.isPresent() && ingress.reply() != null) {
+                        List<Message> parts = List.of(
+                            Message.from(reply.orElseThrow()));
+                        try {
+                            ingress.reply().accept(parts);
+                        } catch (RuntimeException callbackFailure) {
+                            parts.forEach(Message::close);
+                            throw callbackFailure;
+                        }
+                    }
+                    return null;
+                }));
+        }
+        return replay;
+    }
+
     private static void requireStagingPrefix(
         Staged staged,
         ZLinkCanonicalActorRelocationEnvelope.Decoded decoded) {
@@ -171,7 +240,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         if (decoded.objectGeneration() != initial.objectGeneration()
             || decoded.expectedAuthorityOwnerGeneration()
                 != initial.expectedAuthorityOwnerGeneration()
-            || !java.util.Arrays.equals(decoded.state(), initial.state())) {
+            || !Arrays.equals(decoded.state(), initial.state())) {
             throw new IllegalArgumentException(
                 "authority-selected Actor root differs from staged state");
         }
@@ -183,7 +252,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
             var left = initial.journal().get(index);
             var right = decoded.journal().get(index);
             if (left.sequence() != right.sequence()
-                || !java.util.Arrays.equals(left.payload(), right.payload())) {
+                || !Arrays.equals(left.payload(), right.payload())) {
                 throw new IllegalArgumentException(
                     "authority-selected Actor journal changed its prefix");
             }
@@ -226,6 +295,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
 
     CompletionStage<Void> discard(Staged staged) {
         Objects.requireNonNull(staged, "staged");
+        List<PendingIngress> pending;
         synchronized (staged) {
             if (staged.published) {
                 return CompletableFuture.failedFuture(
@@ -235,7 +305,17 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
             if (staged.terminal) {
                 return CompletableFuture.completedFuture(null);
             }
+            staged.ingressClosed = true;
             staged.terminal = true;
+            pending = List.copyOf(staged.pendingIngress);
+            staged.pendingIngress.clear();
+        }
+        IllegalStateException aborted = new IllegalStateException(
+            "Actor relocation target staging was aborted");
+        for (PendingIngress ingress : pending) {
+            if (ingress.failure() != null) {
+                ingress.failure().accept(aborted);
+            }
         }
         return backend.discard(staged.actor());
     }
@@ -274,8 +354,10 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         private final Request request;
         private final ZLinkCanonicalActorRelocationEnvelope.Decoded decoded;
         private final Object actor;
+        private final List<PendingIngress> pendingIngress = new ArrayList<>();
         private boolean replayed;
         private boolean published;
+        private boolean ingressClosed;
         private boolean terminal;
 
         private Staged(
@@ -300,13 +382,26 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         }
     }
 
+    private record PendingIngress(
+        byte[] record,
+        Consumer<List<Message>> reply,
+        Consumer<Throwable> failure) {
+        private PendingIngress {
+            record = Objects.requireNonNull(record, "record").clone();
+        }
+
+        @Override public byte[] record() {
+            return record.clone();
+        }
+    }
+
     interface Backend {
         CompletionStage<Object> prepare(
             Request request,
             byte[] state,
             ZLinkRelocationCancellation cancellation);
 
-        CompletionStage<java.util.Optional<byte[]>> replay(
+        CompletionStage<Optional<byte[]>> replay(
             Object actor,
             Request request,
             ZLinkActorAcceptedJournal.Record record);
@@ -383,7 +478,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         }
 
         @Override
-        public CompletionStage<java.util.Optional<byte[]>> replay(
+        public CompletionStage<Optional<byte[]>> replay(
             Object actor,
             Request request,
             ZLinkActorAcceptedJournal.Record record) {

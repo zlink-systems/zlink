@@ -15,7 +15,6 @@
 | RM-B3 | 구현 | owner lease 만료 후 stale descriptor 제외와 생존 provider 성공/bounded error marker가 있다. |
 | RM-C1 | 구현·process 통과 | `api-a`의 local Channel server weight를 0으로 제외한 뒤 `api-a` 역할 server가 unique ChannelName만으로 request/send한다. Remote `api-b` reply·handler evidence와 source handler 0건을 확인했다. 실제 process 증거는 `logs/20260728-232700-3148011`이며 M73의 cross-MeshNode 호출 경계를 함께 검증한다. |
 | RM-C2 | 구현 | targeted request by rid marker가 있다. |
-| RM-C3 | 구현 | 다중 provider 분산 marker가 있다. |
 | RM-C4 | 구현 | timeout 뒤 late reply 비오염 marker가 있다. |
 | RM-C5 | 구현 | 미등록 packet 처리 marker가 있다. |
 | RM-C7 | 구현 | `SetWeight`·descriptor `ChannelWeights`·runtime `Weight` 기반 75/25 분포 marker가 있다. |

@@ -8,6 +8,7 @@ data class SampleSettings(
     val apiBindUrl: String,
     val apiPublicUrl: String,
     val apiChannelEndpoint: String,
+    val apiChannelEndpoints: List<String>,
     val playEndpoint: String,
     val playEndpoints: List<String>,
     val routeEndpoint: String,
@@ -25,6 +26,9 @@ data class SampleSettings(
         require(apiBindUrl.isNotBlank()) { "sample.apiBindUrl is required" }
         require(apiPublicUrl.isNotBlank()) { "sample.apiPublicUrl is required" }
         require(apiChannelEndpoint.isNotBlank()) { "sample.apiChannelEndpoint is required" }
+        require(apiChannelEndpoints.size == 2 && apiChannelEndpoints.all { it.isNotBlank() }) {
+            "sample.apiChannelEndpoints must contain Api A and Api B endpoints"
+        }
         require(playEndpoint.isNotBlank()) { "sample.playEndpoint is required" }
         require(spotEndpoint.isNotBlank()) { "sample.spotEndpoint is required" }
         require(spotPubSubEndpoint.isNotBlank()) { "sample.spotPubSubEndpoint is required" }

@@ -226,20 +226,4 @@ public sealed class InboundDispatchOptionsTests
             64L * 1024L,
             registration.StreamNodes["stream"].SocketConfig.MaxMessageSize);
     }
-
-    private sealed class TestSession : IZLinkSession
-    {
-        public IZLinkSessionContext Context => null!;
-
-        public ValueTask OnConnectedAsync(CancellationToken cancellationToken) =>
-            ValueTask.CompletedTask;
-
-        public ValueTask OnDisconnectedAsync(CancellationToken cancellationToken) =>
-            ValueTask.CompletedTask;
-
-        public ValueTask OnErrorAsync(
-            ZLinkStreamError error,
-            CancellationToken cancellationToken) =>
-            ValueTask.CompletedTask;
-    }
 }

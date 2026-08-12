@@ -21,6 +21,7 @@ signature는 `bindings/go/contracts/`와 module root의 동일한 projection을 
 | [Module과 공개 package](#module과-공개-package) | import path, internal 경계, Core 0.9.0 raw 범위 |
 | [공개 계약 범주](#공개-계약-범주) | 범주별 공개 개념 표 |
 | [Context와 resource 수명](#context와-resource-수명) | Context/socket/monitor/poller/timer 소유·해제 규칙 |
+| [Byte HWM과 Auto-HWM](#byte-hwm과-auto-hwm) | Go `int`와 Core `uint64_t` byte HWM의 매핑 |
 | [Message와 ownership](#message와-ownership) | native storage, builder 경로별 ownership |
 | [Socket operation](#socket-operation) | builder terminal signature, socket별 operation, ROUTER completion control |
 | [Receive와 eventing](#receive와-eventing) | caller-provided receive 반환값, monitor·poller·timer |
@@ -72,6 +73,26 @@ method를 사용하지만 음수와 platform `uint64` 범위를 벗어난 값은
 Poller가 등록한 socket과 timer는 해당 resource의 handle을 빌려 사용한다. 따라서
 source를 `Close`하기 전에 poller에서 제거해야 하며, 하나의 poller에 대한 add,
 modify, remove와 wait 호출은 호출자가 직렬화한다.
+
+## Byte HWM과 Auto-HWM
+
+HWM의 계산과 queue admission은 Core가 담당한다. Go 바인딩은
+`SetSendHighWaterMark(int)`와 `SetReceiveHighWaterMark(int)`의 값을 검증한 뒤
+Core의 8-byte `uint64_t` option으로 변환한다. 음수는 거부하며 public 범위는
+`0`부터 실행 platform의 `MaxInt`까지다. Core에서 읽은 값이 `MaxInt`보다 크면
+getter는 값을 줄이지 않고 overflow error를 반환한다. 값 `0`은 무제한이다.
+
+`ContextOptions.SetAutoHwmMsgUnitBytes(int)`도 같은 범위 규칙으로 planning unit을
+Core에 전달한다. Core는 선택한 message slot 수에 planning unit을 곱해 planned
+byte HWM을 계산한다. 이 값은 평균 message 크기나 실제 admission charge가 아니다.
+Caller가 방향별 HWM을 설정하면 그 방향은 수동 override가 되어 Auto-HWM
+재계산에서 제외된다.
+
+실제 pipe에 쌓인 accounted byte가 applied HWM에 도달하면 Core가
+backpressure를 결정한다. Go 바인딩은 message 수를 다시 세지 않으며 Core result를
+기존 operation과 error 계약으로 전달한다. `MonitorStatus`의 planned, applied,
+deferred HWM과 in-flight 사용량은 `uint64` byte다. Pending message와
+`AutoHwmSocketMessageSlots`만 count 진단값이다.
 
 ## Message와 ownership
 

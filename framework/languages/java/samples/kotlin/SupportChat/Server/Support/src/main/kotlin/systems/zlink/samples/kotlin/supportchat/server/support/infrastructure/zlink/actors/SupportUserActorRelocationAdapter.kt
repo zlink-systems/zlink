@@ -1,5 +1,7 @@
 package systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.actors
 
+
+import systems.zlink.framework.actors.ZLinkActorJoinOperationId
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
@@ -49,6 +51,6 @@ class SupportUserActorRelocationAdapter : ZLinkActorRelocationAdapter<SupportUse
         val conversationId: String,
         val pendingConversationId: String,
         val completedJoinOperations:
-            Set<systems.zlink.framework.actors.ZLinkActorJoinOperationId>,
+            Set<ZLinkActorJoinOperationId>,
     )
 }

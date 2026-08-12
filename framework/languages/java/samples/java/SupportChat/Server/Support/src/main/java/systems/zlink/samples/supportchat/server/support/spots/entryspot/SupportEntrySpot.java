@@ -1,4 +1,6 @@
 package systems.zlink.samples.supportchat.server.support.spots.entryspot;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
@@ -30,32 +32,32 @@ public final class SupportEntrySpot implements ZLinkEntrySpot<SupportUserActor> 
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<ZLinkActorCreateResponse> onCreateActor(
+    public CompletionStage<ZLinkActorCreateResponse> onCreateActor(
         SupportUserActor actor,
         ZLinkMessage createRequest) {
         Messages.EnsureSupportUserActorReq request =
             createRequest.decode(Messages.EnsureSupportUserActorReq.class);
         actor.setIdentity(request.displayName(), request.role(), request.participantId());
         directory.remember(actor);
-        return java.util.concurrent.CompletableFuture.completedFuture(
+        return CompletableFuture.completedFuture(
             ZLinkActorCreateResponse.accept());
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onJoinedActor(SupportUserActor actor) {
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+    public CompletionStage<Void> onJoinedActor(SupportUserActor actor) {
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onLeaveActor(SupportUserActor actor) {
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+    public CompletionStage<Void> onLeaveActor(SupportUserActor actor) {
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onDisconnectActor(SupportUserActor actor) {
+    public CompletionStage<Void> onDisconnectActor(SupportUserActor actor) {
         if (SampleNames.Roles.Agent.equals(actor.role())) {
             assignment.setAvailable(actor.participantId(), actor.displayName(), false);
         }
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 }

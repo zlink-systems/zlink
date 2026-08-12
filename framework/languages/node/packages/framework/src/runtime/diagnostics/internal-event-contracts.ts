@@ -1,4 +1,4 @@
-import type { RoutingId, SpotId } from '../../contracts/Common';
+import type { RoutingId } from '../../contracts/Common';
 import type {
   ZLinkLocationRuntimeStatus,
   ZLinkLocationServiceSummary,
@@ -85,24 +85,6 @@ export enum ZLinkSpotEventKind {
   TimerHandlerFailed = 'timerHandlerFailed',
   TimerStoppedAfterUnhandledException = 'timerStoppedAfterUnhandledException'
 }
-
-export interface ZLinkSpotTimerDiagnostic {
-  readonly spotId: SpotId;
-  readonly isEntrySpot: boolean;
-  readonly timerName: string;
-  readonly handlerType: string;
-  readonly deliveryIndex: bigint;
-  readonly scheduledIndex: bigint;
-  readonly exceptionType: string;
-  readonly exceptionMessage: string;
-}
-
-export type ZLinkSpotEvent = ZLinkRuntimeEvent & {
-  readonly event:
-    | ZLinkSpotEventKind.TimerHandlerFailed
-    | ZLinkSpotEventKind.TimerStoppedAfterUnhandledException;
-  readonly timerDiagnostic: ZLinkSpotTimerDiagnostic;
-};
 
 export enum ZLinkSocketNativeEventType {
   Connected = 0x0001,

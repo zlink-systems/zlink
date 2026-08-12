@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Backend.DotNet.Adapters;
+
 namespace Zlink.Framework.Runtime.Backend.DotNet;
 
 internal sealed class ZLinkDotNetBackendAdapterFactory : IZLinkBackendAdapterFactory

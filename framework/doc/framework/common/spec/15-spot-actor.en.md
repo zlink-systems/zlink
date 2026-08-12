@@ -326,15 +326,12 @@ added to the Join procedure.
 Regardless of whether a bound Session exists, once the target's `OnJoinedActor`
 callback ends, the target Actor receives the `Accepted` result via the Join
 completion callback. Once this callback ends, the target Actor processes pending
-messages. If there's a bound Session, after the Join completion callback the target
-runtime sends the Session owner `sessionActorLocationUpdateReqMsg` to request an
-update to the binding route and current `ActorRef` location snapshot. This update
-doesn't block Join completion or Actor message processing. Once the session owner
-finishes the update, it returns `sessionActorLocationUpdateResMsg` as a separate send
-message. If there's no response, the target runtime resends the same request, and
-keeps trying the update until it gets a response or the Session or binding ends. A
-message arriving on the pre-update route is delivered to the target Actor by the
-source's Message Follow route.
+messages. If there's a bound Session, the Session owner seals that binding before
+relocation starts. After target preparation and the target-only Location Store CAS,
+the Session owner changes the binding route and current `ActorRef` location snapshot
+to the target and releases the seal. The Session neither selects the target nor
+changes the Location Store. A message arriving on the pre-update route is delivered
+to the target Actor by the source's Message Follow route.
 
 The completion, `OperationId`, optional reply, and retry cursor of a same-node and
 cross-node Join are preserved only while the current source and target processes are
@@ -353,6 +350,12 @@ a cross-node `Accepted`'s relocation manifest.
 | `Accepted` | The target Actor that committed the location change receives it. For a same-target no-op, the current Actor receives it. | Receives the current `ActorRef` and the optional reply the target User Spot's `OnActorJoin` callback returned. |
 | `Rejected` | The existing source Actor receives it. | Receives the optional reply the target User Spot's `OnActorJoin` callback returned. |
 | `Failed` | Before commit, the source Actor receives it. If it fails on the same target runtime after commit, the target Actor may receive it. If the process terminates, the callback isn't re-run on a different runtime. | Receives a typed framework error kind. |
+
+After relay-ready, the source relays cached work and sends cutover one-way. It waits for
+no relocation-completion reply and proceeds with Message Follow. An explicit target
+failure before CAS keeps the source owner. After CAS and queue opening, the target sends
+the Session route update one-way. A late or duplicate cutover or Session route update
+only records a Warning and doesn't change owner, membership, or route again.
 
 The error kind `Failed` delivers distinguishes the point of failure as follows. A
 result where the target's `OnActorJoin` callback normally declines isn't an error, so
@@ -459,6 +462,12 @@ Entry Spot doesn't call `OnCreateActor` or `OnActorJoin` — it only runs
 
 ### 4.2 The Order For Joining An Actor To A Spot On A Different Node
 
+The single source for the complete owner transition, ordered relay, target queue merge,
+and Location Store CAS is
+[Complete Actor And Spot Relocation Flow](28-relocation-flow.en.md). This section defines
+only target admission, membership, and lifecycle callbacks specific to Actor Join within
+that common flow.
+
 Once an Actor handler calls `JoinSpot(...)` or `JoinEntrySpot(...)` and calls
 `Defer()` on the returned call object, the framework runs the Join in the following
 order after the handler ends normally.
@@ -482,31 +491,26 @@ order after the handler ends normally.
    The target creates the Actor and reads application state and the saved existing
    queue, but doesn't run application work yet.
 5. A message arriving after the source seal is held in the source runtime's
-   size-bounded `ingress hold`. After sending the Restore request, the source
-   runtime relays the hold's messages and later messages arriving on the previous
-   route to the target. The target dispatcher also puts these messages in the same
-   temporary queue.
-6. Once the target finishes Actor Restore, it updates target membership, owner,
-   capacity, and generation in `LocationStore`, all at once. Once this commit
-   succeeds, the target becomes the new owner. The source keeps the hold's original
-   until it receives the target's dispatch-switchover completion.
-7. After commit, it calls the target Spot's `OnJoinedActor` and sends the source
-   Spot `OnLeaveActor` one-way. It then calls the Actor's Join completion callback.
-   Once the completion callback ends, saved existing Actor work is put into the real
-   Actor queue first, then the temporary queue's work moves in behind it. Then the
-   temporary queue registration is removed and it switches to the existing dispatch
-   path. After this switchover, the target Actor processes messages. A Session
-   location update response doesn't block Actor message processing.
-8. If the Actor is bound to a Session, the target runtime sends
-   `sessionActorLocationUpdateReqMsg` to the session owner after calling the Join
-   completion callback. The session owner atomically changes that Actor's binding
-   route and current `ActorRef` location snapshot to the target location and sends
-   `sessionActorLocationUpdateResMsg`. If there's no response 1 second after the
-   first send, the target runtime resends the same request for the first time.
-   Subsequent resend intervals are 1, 2, 4, 5 seconds, then stay at 5 seconds. The
-   session owner must keep the same result even after receiving the same request
-   multiple times. The route and physical STREAM connection of other Actors on the
-   same Session don't change.
+   `ingress hold`. The hold has no record-count or byte bound defined specifically
+   for relocation. Once target reports the temporary queue and Restore ready, source
+   relays the hold over the same ordered TCP connection. The target dispatcher puts it
+   in the same temporary queue.
+6. After sending the relay lane's current prefix, source sends cutover one-way on that
+   connection. Later arrivals enter the post-boundary span, so mailbox drain isn't
+   required. After Actor Restore, target runs the
+   target CAS membership, owner, capacity, and generation together in `LocationStore`.
+   It does so on cutover, or after a 1,000ms wait from the relay-ready reply while
+   recording a Warning. Only target performs this CAS. On success target becomes owner; on failure
+   the target queue doesn't open.
+7. After CAS, it calls the target Spot's `OnJoinedActor` and sends the source Spot
+   `OnLeaveActor` one-way. It then calls the Actor's Join completion callback. Saved
+   existing Actor work enters the real Actor queue first and relayed work follows, then
+   dispatch opens. Target sends no completion reply to source.
+8. For a bound Actor, after CAS and queue opening target runtime sends Session owner a
+   one-way target-route update. On an exact update within the default 3,000ms
+   `SessionRelocationSealTimeout`, Session owner changes route, submits held messages,
+   and releases the seal. On timeout it closes the physical STREAM connection and cleans
+   Session state.
 
 Since `Accepted` and `Rejected` are mutually exclusive results that don't happen at
 the same time, they're split with `alt` in the diagram. Whether a bound Session
@@ -527,37 +531,42 @@ sequenceDiagram
     participant TargetActor as Target Actor
     participant SessionOwner as Session owner
 
-    Handler->>SourceRuntime: call JoinSpot(...) then Defer() on the returned object
-    Handler-->>SourceRuntime: handler ends normally
+    Handler->>SourceRuntime: [local] call JoinSpot(...) then Defer() on the returned object
+    Handler-->>SourceRuntime: [local] handler ends normally
     Note over SourceRuntime,TargetSpot: the flow below is for a User Spot target
-    SourceRuntime->>TargetSpot: call OnActorJoin
+    SourceRuntime->>TargetSpot: [request] OnActorJoin · decide whether target Spot accepts Actor
     alt Accepted
-        TargetSpot-->>SourceRuntime: return Accepted with an optional reply
-        SourceRuntime->>SourceActor: block new messages on the source Actor
-        SourceRuntime->>RelocationStore: store state and the current queue
-        SourceRuntime->>TargetRuntime: send the Actor restore request first
-        TargetRuntime->>TargetTemp: register the Actor relocation temporary queue
-        TargetRuntime->>TargetActor: create the Actor and Restore application state
-        SourceRuntime->>TargetRuntime: relay ingress hold messages
-        TargetRuntime->>TargetTemp: add message to the temporary queue
-        TargetRuntime->>LocationStore: update membership/owner/capacity/generation
-        LocationStore-->>TargetRuntime: target owner confirmed
-        TargetRuntime->>TargetSpot: call OnJoinedActor
-        SourceRuntime-)SourceSpot: call OnLeaveActor (one-way)
-        TargetRuntime->>TargetActor: deliver Accepted via the Join completion callback
-        TargetRuntime->>TargetQueue: move temporary queue work behind existing work
-        TargetRuntime->>TargetTemp: remove the temporary queue, switch to existing dispatch
-        TargetRuntime-->>SourceRuntime: signal dispatch switchover complete
-        TargetQueue->>TargetActor: process messages in queue order
+        TargetSpot-->>SourceRuntime: [reply] Actor admission Accepted with optional application reply
+        SourceRuntime->>SourceActor: [local] block new messages on the source Actor
+        SourceRuntime->>RelocationStore: [request] store Actor state, unexecuted queue, and timers
+        RelocationStore-->>SourceRuntime: [reply] payload location and content checksum fixed
+        SourceRuntime->>TargetRuntime: [request] install temporary queue, Restore Actor, prepare relay
+        TargetRuntime->>TargetTemp: [local] register the Actor relocation temporary queue
+        TargetRuntime->>TargetActor: [local] create the Actor and Restore application state
+        TargetRuntime-->>SourceRuntime: [reply] Actor Restore and temporary queue ready · source still owner
+        SourceRuntime->>TargetRuntime: [send/request relay] ingress hold
+        TargetRuntime->>TargetTemp: [local] add message to the temporary queue
+        alt cutover arrives within 1,000ms
+            SourceRuntime->>TargetRuntime: [send] cutover · pre-boundary relay sent
+        else no cutover for 1,000ms after relay-ready reply
+            TargetRuntime->>TargetRuntime: [local] cutover_timeout Warning · proceed by fallback
+        end
+        TargetRuntime->>LocationStore: [request] CAS membership/owner if source fence still matches
+        LocationStore-->>TargetRuntime: [reply] target membership/owner CAS succeeds
+        TargetRuntime->>TargetSpot: [local] call OnJoinedActor
+        SourceRuntime-)SourceSpot: [send] OnLeaveActor
+        TargetRuntime->>TargetActor: [local] deliver Accepted via the Join completion callback
+        TargetRuntime->>TargetQueue: [local] move temporary queue work behind existing work
+        TargetRuntime->>TargetTemp: [local] remove the temporary queue, switch to existing dispatch
+        TargetQueue->>TargetActor: [local] process messages in queue order
         opt if a bound session exists
-            TargetRuntime-)SessionOwner: send sessionActorLocationUpdateReqMsg
-            SessionOwner->>SessionOwner: swap the binding route and current ActorRef snapshot
-            SessionOwner-)TargetRuntime: send sessionActorLocationUpdateResMsg
-            Note over TargetRuntime,SessionOwner: without a ResMsg, resend the same ReqMsg at 1s, 1s, 2s, 4s, then 5s intervals
+            TargetRuntime->>SessionOwner: [send] apply exact binding route, submit held, release seal
+            SessionOwner->>SessionOwner: [local] swap the binding route and current ActorRef snapshot
+            Note over TargetRuntime,SessionOwner: timeout closes Session · late update records Warning
         end
     else Rejected
-        TargetSpot-->>SourceRuntime: return Rejected with an optional reply
-        SourceRuntime->>SourceActor: keep existing source membership
+        TargetSpot-->>SourceRuntime: [reply] Actor admission Rejected with optional application reply
+        SourceRuntime->>SourceActor: [local] keep existing source membership
     end
 ```
 
@@ -567,8 +576,9 @@ sent after commit, so it isn't called on a pre-commit failure. A target that rec
 the Restore request first registers a relocation temporary queue. Messages and
 requests arriving in that time wait in the temporary queue and aren't run before
 moving to the real Actor queue. If it fails after target commit, it isn't rolled back
-to the source. Only while the same target process is running is it retried within
-the deadline; if the process terminates, relocation isn't automatically taken over.
+to the source. Only while
+the same target process is running is it retried within the deadline; if the process
+terminates, relocation isn't automatically taken over.
 
 If a reject, timeout, `Capture`/`Restore` failure, or aggregate commit conflict
 happens before commit, the target application instance isn't exposed. The relay
@@ -585,18 +595,21 @@ recover it.
 [ObjectGeneration](01-glossary.en.md#objectgeneration) is kept unchanged. Since the
 owner changes via a cross-node move, only `AuthorityOwnerGeneration` increases. The
 target Context uses the existing `ObjectGeneration` and the new owner generation.
-Once the bounded aggregate commit succeeds, it blocks the source Context from
+Once the Location Store CAS succeeds, it blocks the source Context from
 executing any further operations.
 
 A message arriving after `Defer()` but before the source seal is stored in
 `RelocationStore` together with the current Actor queue. A message arriving after the
-source seal is temporarily held in a size-bounded ingress hold. The source runtime
-keeps relaying the hold's records and later records arriving on the previous route to
-the target temporary queue. If interrupted before commit, the hold's records are
-restored to the source queue in arrival order, and the target temporary queue is
-discarded. If commit succeeds, the temporary queue's records move in behind the saved
-existing work. The source removes the hold original after receiving the target's
-dispatch-switchover completion.
+source seal is temporarily held in a relocation ingress hold. This hold has no
+relocation-specific record-count or byte bound.
+
+The source runtime keeps relaying the hold's records and later records arriving on the
+previous route to the target temporary queue. If interrupted before commit, the hold's
+records are restored to the source queue in arrival order, and the target temporary
+queue is discarded. If commit succeeds, the temporary queue's records move in behind
+the saved existing work. The source doesn't wait for target dispatch-switchover
+completion. After sending cutover, it changes ingress hold to Message Follow relay and
+removes the original when the defined Message Follow duration ends.
 
 In an application-requested User Spot join, the target User Spot's `OnActorJoin`
 first decides admission. In a cross-node Join, after the restore request and source
@@ -677,9 +690,10 @@ profile, or message codec to the relocation adapter contract. The Relocation Sto
 stores application bytes as-is as an opaque payload, and the framework only verifies
 its own root manifest/chunk/checksum.
 
-The byte sequence `Capture` returns for one participant is at most 64 MiB. An empty
-byte sequence is valid application state, and a null result is an adapter contract
-violation. Once the callback succeeds, the framework immediately copies the result or
+Relocation adds no separate size bound to the byte sequence returned by `Capture`.
+The size limits the Relocation Store and transport apply to ordinary payload still
+apply. An empty byte sequence is valid application state, and a null result is an
+adapter contract violation. Once the callback succeeds, the framework immediately copies the result or
 takes ownership of it, so the application doesn't change the result afterward. Bytes
 passed to `Restore` are only valid until the callback completes — the callback must
 copy them itself to keep them.
@@ -696,7 +710,7 @@ Policy and adapter registration don't change after startup.
 
 The exact stages and sequence diagrams for moving an Entry Spot Actor,
 `PerActor`/`SpotWide` User Spot, and Instance Spot in host relocation are defined by
-[Graceful Drain And Handoff §8](28-graceful-drain-handoff.en.md#8-the-order-for-relocating-one-unit).
+[Graceful Drain And Handoff §8](30-host-relocation-flow.en.md#8-the-order-for-relocating-one-unit).
 
 ## 6. Maintenance Aggregate Moving A User Spot And Member Actors Together
 
@@ -746,33 +760,26 @@ The current owner of an Actor belonging to a `SpotWide` User Spot follows the Us
 Spot aggregate authority. A per-Actor membership record points at that aggregate and
 doesn't publish owner one at a time during relocation.
 
-1. At a Spot queue turn boundary, once the aggregate's active unit, callback, and
-   expected payload byte permit are all obtained, the source User Spot's join/leave
-   and every participant's admission are reversibly sealed.
+1. At a Spot queue turn boundary, the source User Spot's join/leave and every
+   participant's application admission are reversibly sealed.
 2. The exact participant inventory is stored as an immutable tree, and root/count/
    digest are verified.
-3. Every relocation configuration, target type/state-preservation adapter
-   capability, and active/pending capacity are preflighted.
+3. Every relocation configuration and target type/state-preservation adapter
+   capability is checked.
 4. Every `PreserveStateWith` participant's state, not-yet-executed message queue,
-   accepted journal, and timer logical registration/pending tick are captured, and
-   target reservation/factory/restore are prepared with admission closed.
-5. A single CAS in the Location Store transitions aggregate owner, generation,
-   inventory root, and capacity. Once this CAS succeeds, the Spot and every member
+   and timer logical registration/pending tick are captured, and target factory/restore
+   are prepared with admission closed.
+5. The prepared target uses one Location Store CAS to transition aggregate owner,
+   generation, and inventory root. Once this CAS succeeds, the Spot and every member
    Actor use the new owner together.
-6. After the authority commit, target lifecycle callback, accepted message/journal
-   replay, and automatic framework timer restore finish, and the target User Spot
-   and member Actors start processing messages. For each bound Actor in the
-   aggregate, the target runtime sends the session owner
-   `sessionActorLocationUpdateReqMsg` requesting that route be changed to the
-   target. Along with the route switch, each bound-session's current Actor
-   location snapshot is also updated to the target MeshName/NodeRid, keeping the
-   same ActorId/ObjectGeneration. The route and physical STREAM connection of
-   Actors outside the aggregate on the same Session are kept. Once the session
-   owner finishes the update, it sends `sessionActorLocationUpdateResMsg`. Without
-   a response, the target runtime resends the same request starting 1 second after
-   the first send, at intervals of 1, 2, 4, 5 seconds, then stays at 5-second
-   intervals. The target User Spot and member Actors keep processing messages
-   while waiting for the response.
+6. After the authority commit, target lifecycle callbacks, saved-message replay,
+   and automatic framework timer restore finish, and the target User Spot and member
+   Actors start processing messages. For each bound Actor, target runtime sends the
+   Session owner a one-way route update after CAS and queue opening. The Session owner
+   changes that binding route and current Actor location snapshot to target and releases
+   the seal. If the update doesn't arrive before `SessionRelocationSealTimeout`, it
+   closes the physical Session. Routes of Actors outside the aggregate on the same
+   Session are unaffected.
 
 Step 4's restore must finish before step 5's aggregate commit. Since a `SpotWide`
 User Spot aggregate moves logical membership as-is, it doesn't call application
@@ -796,7 +803,7 @@ SpotId isn't created and the SpotId isn't reassigned after target activation.
 After the Spot authority commit, new `ToSpot`, Actor Create, and Join go to the
 target. The source shell only runs handler and relocation control for Actors still
 left on the source. Each Actor is an independent relocation unit — after sealing the
-Actor queue, it moves state, the not-yet-executed queue, accepted journal, timer,
+Actor queue, it moves state, the not-yet-executed queue, timer,
 session binding route, and bound-session current Actor location snapshot to the
 target. The snapshot keeps the same ActorId/ObjectGeneration and provides the target
 MeshName/NodeRid. Once a per-Actor owner CAS succeeds, a message arriving at the
@@ -820,9 +827,11 @@ application that overrides the callback can start the next round or match here.
 
 A failure before commit finishes an `Aborted` CAS, confirms route and source
 location snapshot cancellation, cleans up relocation root/reservation, and restores
-source state before reopening source admission. If a Location Store change's result
-isn't received, success or failure isn't guessed. Source admission isn't reopened
-before re-reading the same authority to confirm the source is owner.
+source state before reopening source admission. After cutover, if a Location Store
+change result isn't received, target doesn't guess; it re-reads the same authority. If
+the exact target isn't owner, it retries with the same fence until Restore validity
+expires. Failure to confirm owner transition by then records `location_update_failed`,
+removes the target Actor or Spot and temporary queue, and sends no Session route update.
 
 If `Capture` fails, the relocation payload isn't linked to the current authority. If
 `Restore` fails, the target staging instance and temporary queue are discarded. If
@@ -838,7 +847,7 @@ can be retried within the deadline, with target admission closed. If the source 
 target process terminates, a different runtime doesn't take over the relocation. If
 the target terminates after commit, authority keeps the target, but the object
 becomes unavailable. Automatic target replacement and relocation resumption after a
-process restart are defined separately in a future version.
+process restart are outside this contract.
 
 Because of retries within the same process, factory, `Restore`, and lifecycle
 callback can be called more than once. A callback must converge even when it
@@ -850,74 +859,41 @@ lease, and local admission deadline.
 
 ## 8. Message Follow
 
-After commit, within `MessageFollowDuration`, the source only relays a stale route
-using the committed source→target Message Follow route. The relay doesn't read the
-Store or run an application handler — it preserves the original operation ID,
-generation, payload, and reply route. If a bound Session's
-`sessionRelocationRouteUpdate` is in progress, that Actor's Message Follow route is
-also removed once it receives `sessionActorLocationUpdateResMsg` or
-`MessageFollowDuration` ends. Since the target runtime separately keeps resending
-the session location update, the Message Follow route isn't kept indefinitely, and
-the source host's Shutdown doesn't wait for this response either. Once the route
-expires, a request arriving on the previous route ends with `Unavailable`.
+After commit and within `MessageFollowDuration`, the source relays messages arriving at
+the old address to the committed target. Relay doesn't read the Store or run an
+application handler, and it preserves original operation identity, generation, payload,
+and reply route. After route duration ends, a request arriving at the old address ends
+with `Unavailable`.
 
-The Message Follow route exactly verifies the global key, ObjectGeneration,
-source/target AuthorityOwnerGeneration, and [owner fence](01-glossary.en.md#owner-fence).
-Owner generation increases per hop, up to 8 hops max. One route's queue is at most
-1024 messages and 16 MiB, and also respects the negotiated message bound. Message
-Follow duration expiry, no route, and a loop are `Unavailable`; generation mismatch
-is `InvalidOperation`; exceeding the bound is `CapacityExceeded`. The framework
-doesn't hidden-retry a failed operation against a fresh owner.
-This `ObjectGeneration` check confirms the relocation route belongs to the same
-incarnation. A regular Actor/Spot message's target is the logical ID, and a
-generation mismatch doesn't restrict the handler target.
-
-A User Spot aggregate's Spot and member Actor Message Follow routes are registered
-under the same commit generation.
+Message Follow isn't a resend queue waiting for a Session route ACK. Even after the
+one-way Session route update changes the route, it remains for the
+defined period to handle server messages already sent to the old address. There's no
+global ordering promise between messages from different connections.
 
 ## 9. Bound Session
 
-Even when an Actor moves, the physical STREAM connection, session identity, and
-ObjectGeneration are kept. Once owner/membership commit and Actor restore finish,
-the target Actor starts message processing. If moved via Join, the target runtime
-first calls the Join completion callback. The target runtime then sends the session
-owner `sessionActorLocationUpdateReqMsg` requesting that Actor's
-[binding route](01-glossary.en.md#binding-route) and current `ActorRef` location
-snapshot be changed to the target. The session owner verifies the
-[binding token](01-glossary.en.md#binding-token), AuthorityOwnerGeneration, and
-sequence barrier, then atomically updates both values and sends
-`sessionActorLocationUpdateResMsg`. Even if multiple Actors are bound on one
-Session, the route of an Actor that didn't move isn't changed.
+The physical STREAM connection, Session identity, and ObjectGeneration remain when an
+Actor moves. Before relocation starts, the Session owner seals that Actor binding and
+holds Session requests and pushes.
 
-Once the route switch succeeds, the current `ActorRef` location snapshot the
-bound-session API returns is also updated to match the same transition. The returned
-snapshot keeps `ActorId` and `ObjectGeneration` and provides the target `MeshName`
-and `NodeRid`. Each `ActorRef` value is an immutable snapshot, but a bound-session
-accessor like `IZLinkSessionActor.Ref` or `ZLinkSessionActor.ref()` must return the
-current snapshot after a route switch. The application doesn't rebind to learn about
-an Actor relocation.
+After Actor/Spot preparation, target performs the Location Store CAS on cutover or after
+the 1,000ms fallback. Once CAS, target queue opening, and lifecycle finish, target runtime
+sends Session owner a one-way route update. On an exact update, Session owner changes the
+binding route and current `ActorRef` location snapshot to target, submits held Session
+messages, and releases the seal. `SessionRelocationSealTimeout` defaults to 3,000ms; on
+timeout, Session owner closes the physical Session. The Session neither selects target nor changes the
+Location Store.
 
-The two messages aren't a synchronous transport request/reply — they're
-independent send packets. The target runtime proceeds with Actor message processing
-and Join completion without waiting for the response. If
-`sessionActorLocationUpdateResMsg` isn't received, the same
-`sessionActorLocationUpdateReqMsg` is resent for the first time 1 second later. If
-there's still no response, it resends at intervals of 1, 2, 4, 5 seconds, then keeps
-a 5-second interval afterward. The session owner processes a request with the same
-relocation ID and binding generation idempotently. Even before the response is
-received, the Message Follow route only delivers a message arriving on the previous
-route to the target Actor up to `MessageFollowDuration`. Afterward the request ends
-with `Unavailable`, but the target runtime's location-update resend continues on the
-running target runtime. If the target runtime terminates, a different runtime
-doesn't automatically take over resending the same request.
-A packet, reply, push, or close of a previous owner generation, binding token, and
-sequence isn't applied to the current binding. A route update is only allowed for a
-relocation matching the bound ObjectGeneration — a new incarnation under the same
-ActorId needs an explicit bind.
+The Session owner validates only current Session identity, binding generation,
+ActorId/ObjectGeneration, and relocation identity. It doesn't revalidate
+AuthorityOwnerGeneration, a numeric high-water, or an Actor Location mirror. The
+transport boundary validates peer and node generation, and the target Location Store CAS
+validates owner change, once each.
 
-The two messages' fields, duplicate handling, and resend-stop conditions are defined
-by
-[Session-Actor Dispatch §5.1](20-session-actor-dispatch.en.md#51-session-actor-location-update-message).
+A late or duplicate cutover or Session route update only records a Warning and doesn't
+change route, seal, or authority again. Other Actor routes on the same Session aren't
+affected. The exact Session route contract is defined by
+[Session-Actor Dispatch §5](20-session-actor-dispatch.en.md#5-actor-relocation-route-barrier).
 
 ## 10. Implementation And Contract-Test Verification Requirements
 
@@ -976,7 +952,7 @@ by
   aggregate commit ID aren't reused.
 - A message after `Defer()` but before the source seal goes in the Actor queue
   behind the barrier; only a post-seal message is held in the
-  [bounded ingress hold](01-glossary.en.md#relocation-ingress-hold).
+  [relocation ingress hold](01-glossary.en.md#relocation-ingress-hold).
 - A cross-node Join's target dispatcher registers the relocation temporary queue
   before the Actor instance. A message in this queue during Restore doesn't run an
   application handler.
@@ -994,11 +970,12 @@ by
 - `PreserveStateWith` restores application state at the handler-end boundary along
   with framework queue/timer; `RecreateOnRelocation` restores only framework
   queue/timer, without application state.
-- A User Spot and member Actors transition together under one generation of the
-  [bounded aggregate commit](01-glossary.en.md#bounded-aggregate-commit).
+- A User Spot and member Actors switch together in one Location Store conditional
+  batch CAS performed by the target.
 - A post-commit failure doesn't roll back just some participants to the source.
-- Message Follow only uses a bounded committed route and preserves
+- Message Follow only uses a committed route. Its relay queue has no
+  relocation-specific item-count or byte bound, and it preserves
   [operation identity](01-glossary.en.md#operation-identity).
-- A bound STREAM connection doesn't move — only that Actor's binding route and
-  bound-session current location snapshot change to the target, via authority
-  generation and sequence barrier. ActorId/ObjectGeneration are kept.
+- A bound STREAM connection doesn't move. In one Session owner, current Session,
+  binding generation, and relocation identity are checked, and only that Actor route
+  and location snapshot change to the target. ActorId/ObjectGeneration are kept.

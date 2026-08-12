@@ -1,5 +1,8 @@
 package systems.zlink.e2e.kotlin.observabilityops.a5.server
 
+
+import systems.zlink.framework.channels.ZLinkChannelRuntimeOptions
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
@@ -16,8 +19,8 @@ import java.time.Duration
 
 class A5HttpServer(
     private val json: ObjectMapper,
-    private val runtimeOptions: systems.zlink.framework.channels.ZLinkChannelRuntimeOptions,
-    private val runtime: ObjectProvider<systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime>,
+    private val runtimeOptions: ZLinkChannelRuntimeOptions,
+    private val runtime: ObjectProvider<ZLinkFrameworkRuntime>,
     private val routes: ZLinkRouteClient,
     private val evidence: FlowEvidence,
 ) : SmartLifecycle {
@@ -47,9 +50,9 @@ class A5HttpServer(
         try {
             val reply = routes.requestToChannel(
                 Contracts.CHANNEL,
-                Contracts.ProbeRequest(query(exchange, "value"), query(exchange, "fail") == "true"),
+                Contracts.ProbeReq(query(exchange, "value"), query(exchange, "fail") == "true"),
             ).timeout(Duration.ofSeconds(5))
-                .submit(Contracts.ProbeReply::class.java)
+                .submit(Contracts.ProbeRes::class.java)
                 .toCompletableFuture()
                 .join()
             write(exchange, 200, json.writeValueAsString(reply))

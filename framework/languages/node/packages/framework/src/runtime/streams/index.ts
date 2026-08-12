@@ -29,8 +29,13 @@ import type {
 import type { ZLinkMeshCompletionTable } from '../backend/mesh-completion-table';
 import type { ZLinkApplicationWorkClaim } from '../admission';
 import type { ZLinkInboundDispatchBudget } from '../dispatch/inbound-dispatch-budget';
-import type { ZLinkMeshSubmitterRegistry } from '../messaging';
+import {
+  createStandaloneMeshSubmitterRegistry,
+  type ZLinkMeshSubmitterRegistry
+} from '../messaging';
 import type { StreamSessionService } from '../foundation/service-runtime-contracts';
+import { registerServiceSessionBindingIngressPort } from
+  '../foundation/service-session-binding-ingress-port';
 import {
   messageToBytes,
   ZLinkStreamCodec,
@@ -38,9 +43,11 @@ import {
   ZLinkStreamMessageKind,
   type ZLinkStreamReplyMessageKind
 } from './protocol';
+import { ZLinkActorSessionBindingRegistry } from './actor-session-binding-registry';
 import {
-  ZLinkActorSessionBindingRegistry
-} from './actor-session-binding-registry';
+  actorSessionBindingRuntimeOwner,
+  registerActorSessionBindingRuntimeOwner
+} from './actor-session-binding-runtime-owner';
 import { ZLinkActorSessionLifecycleCoordinator } from './actor-session-lifecycle-coordinator';
 import {
   decompressStreamPayload,
@@ -230,8 +237,16 @@ export class ZLinkStreamRuntimeManager {
             ?? (isPrimaryMesh ? meshCompletions : undefined);
           const createService = meshNode?.createStreamSessionService;
           if (typeof createService !== 'function' || completions === undefined) continue;
+          const service = createService.call(meshNode, socket.nativeInstance as never);
+          const bindingOwner = actorSessionBindingRuntimeOwner(this.options.bindingRuntime);
+          registerServiceSessionBindingIngressPort(service, {
+            retainOutbound: (claim, delivery) =>
+              bindingOwner.admitRelocationOutbound(claim, delivery),
+            clearOutbound: (actorId, error) =>
+              bindingOwner.clearRelocation(actorId, error)
+          });
           nativeSessionRoutes.set(meshName, {
-            service: createService.call(meshNode, socket.nativeInstance as never),
+            service,
             completions
           });
         }
@@ -314,31 +329,69 @@ export class ZLinkStreamRuntimeManager {
 
 }
 
+const ownedStreamBindingRuntimeSubmitters =
+  new WeakMap<ZLinkStreamBindingRuntime, ZLinkMeshSubmitterRegistry>();
+
+function disposeOwnedStreamBindingRuntime(runtime: ZLinkStreamBindingRuntime): void {
+  const submitters = ownedStreamBindingRuntimeSubmitters.get(runtime);
+  if (submitters === undefined) return;
+  ownedStreamBindingRuntimeSubmitters.delete(runtime);
+  submitters.dispose();
+}
+
 export class ZLinkStreamSessionRuntime extends ZLinkStreamSessionRuntimeCore {
+  private readonly ownedBindingRuntime: ZLinkStreamBindingRuntime | undefined;
+
   constructor(
     options: ZLinkStreamSessionRuntimeOptions,
     routingId: unknown,
     removeSession?: (sessionId: string, session: ZLinkStreamSessionRuntime) => void
   ) {
+    const bindingRuntime = options.bindingRuntime ?? new ZLinkStreamBindingRuntime();
     super(
       {
         ...options,
-        bindingRuntime: options.bindingRuntime ?? new ZLinkStreamBindingRuntime()
+        bindingRuntime
       },
       routingId,
       removeSession === undefined
         ? undefined
         : (sessionId, session) => removeSession(sessionId, session as unknown as ZLinkStreamSessionRuntime)
     );
+    this.ownedBindingRuntime = options.bindingRuntime === undefined ? bindingRuntime : undefined;
+  }
+
+  override async dispose(): Promise<void> {
+    try {
+      await super.dispose();
+    } finally {
+      if (this.ownedBindingRuntime !== undefined) {
+        disposeOwnedStreamBindingRuntime(this.ownedBindingRuntime);
+      }
+    }
   }
 }
 
 export class ZLinkStreamSessionNodeRuntime extends ZLinkStreamSessionNodeRuntimeCore {
+  private readonly ownedBindingRuntime: ZLinkStreamBindingRuntime | undefined;
+
   constructor(options: ZLinkStreamSessionNodeRuntimeOptions) {
+    const bindingRuntime = options.bindingRuntime ?? new ZLinkStreamBindingRuntime();
     super({
       ...options,
-      bindingRuntime: options.bindingRuntime ?? new ZLinkStreamBindingRuntime()
+      bindingRuntime
     });
+    this.ownedBindingRuntime = options.bindingRuntime === undefined ? bindingRuntime : undefined;
+  }
+
+  override async dispose(): Promise<void> {
+    try {
+      await super.dispose();
+    } finally {
+      if (this.ownedBindingRuntime !== undefined) {
+        disposeOwnedStreamBindingRuntime(this.ownedBindingRuntime);
+      }
+    }
   }
 }
 
@@ -351,8 +404,13 @@ export class ZLinkStreamBindingRuntime {
   private readonly boundActorRelay: ZLinkBoundActorRelaySender;
 
   constructor(options: ZLinkStreamBindingRuntimeOptions = {}) {
+    const meshSubmitters = options.meshSubmitters ?? createStandaloneMeshSubmitterRegistry();
+    if (options.meshSubmitters === undefined) {
+      ownedStreamBindingRuntimeSubmitters.set(this, meshSubmitters);
+    }
     const runtimeOptions = {
       ...options,
+      meshSubmitters,
       actorBindTimeoutMs: options.actorBindTimeoutMs ?? DEFAULT_ACTOR_BIND_TIMEOUT_MS
     };
     this.routes = new ZLinkActorSessionBindingRegistry<DefaultZLinkSessionContext, DefaultZLinkSessionActor>();
@@ -372,6 +430,28 @@ export class ZLinkStreamBindingRuntime {
       runtimeOptions,
       actorSessionLifecycle
     );
+    registerActorSessionBindingRuntimeOwner(this, {
+      sealRelocation: (claim, expected, signal) =>
+        this.routes.sealRelocation(claim, expected, signal),
+      relocationSnapshot: (actorId, sealId) =>
+        this.routes.relocationSnapshot(actorId, sealId),
+      retainRelocationOutbound: (actorId, operation) =>
+        this.routes.retainRelocationOutbound(actorId, operation),
+      admitRelocationOutbound: (claim, operation) =>
+        this.routes.admitRelocationOutbound(claim, operation),
+      discardRelocationOutbound: (actorId, sealId, error) =>
+        this.routes.discardRelocationOutbound(actorId, sealId, error),
+      advanceRelocationOwner: (...args) => this.routes.advanceRelocationOwner(...args),
+      applyRelocation: (...args) => this.routes.applyRelocation(...args),
+      observeRelocationTerminal: (...args) => this.routes.observeRelocationTerminal(...args),
+      clearRelocation: (actorId, error) => this.routes.clearRelocation(actorId, error),
+      committedRoute: actorId => {
+        const route = this.routes.route(actorId);
+        return route === undefined
+          ? undefined
+          : { actor: route.actor.ref, authorityFence: route.authorityFence };
+      }
+    });
   }
 
   createSessionContext(
@@ -420,13 +500,11 @@ export class ZLinkStreamBindingRuntime {
     if (typeof bindingToken !== 'string') {
       return undefined;
     }
-    const route = this.routes.route(actor.actorId);
-    if (route === undefined || route.actor !== actor || route.bindingToken !== bindingToken) {
-      return undefined;
-    }
+    const claim = this.routes.capturePendingReplyClaim(actor.actorId, actor, bindingToken);
+    if (claim === undefined) return undefined;
     return new DefaultZLinkBoundSessionResponseTarget(
       this.frameMessages,
-      route.context,
+      claim.context,
       actor.actorId
     );
   }
@@ -466,6 +544,10 @@ export class ZLinkStreamBindingRuntime {
     readonly ownerLeaseGeneration: bigint;
   } | undefined {
     return this.sessionActors.authorityFence(actorId);
+  }
+
+  sessionRouteFence(actorId: string) {
+    return this.sessionActors.sessionRouteFence(actorId);
   }
 
   sealActorRoute(input: {

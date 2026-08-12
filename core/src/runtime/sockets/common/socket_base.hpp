@@ -190,9 +190,21 @@ class socket_base_t : public own_t,
                      int flags_,
                      uint64_t *connection_id_out_ = NULL,
                      zlink::pipe_t **source_pipe_out_ = NULL);
+    //  These three return a pipe whose lifetime is PINNED: they take a
+    //  lifetime ref while the transport-pair table is locked, because the
+    //  table slot is the only thing that proves the pipe is still alive and
+    //  the caller dereferences the result after the table is unlocked. Every
+    //  caller must call release_lifetime_ref () after its last dereference,
+    //  including on its error paths.
     pipe_t *completion_pipe_for_application (pipe_t *application_pipe_) const;
     pipe_t *application_pipe_for_completion (pipe_t *completion_pipe_) const;
     pipe_t *completion_pipe_for_peer (const zlink_routing_id_t *peer_rid_) const;
+    //  NOT YET pinned, only because router_admission.cpp uses it as a plain
+    //  predicate and would leak a pin. Its other caller,
+    //  send_completion_frames_for_transport_pair (), DOES dereference the
+    //  result after the table is unlocked - the same shape as the bug fixed
+    //  above - so this accessor still needs the pin plus a matching release
+    //  at the router_admission call site.
     pipe_t *completion_pipe_for_transport_pair (uint64_t transport_pair_id_,
                                                 uint64_t transport_pair_generation_) const;
     //  Request/reply submit entries write to transport pipes directly instead

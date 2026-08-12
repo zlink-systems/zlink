@@ -1,4 +1,5 @@
 package systems.zlink.e2e.resiliencelifecycle.client.Support;
+import java.util.List;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -217,7 +218,7 @@ public final class ResilienceScenarioContext {
         return false;
     }
 
-    private java.util.List<Contracts.PeerLocation> peers() {
+    private List<Contracts.PeerLocation> peers() {
         return ZLinkHttpClient.create(endpoint).get("/operations/peers")
             .submit(Contracts.PeerSnapshot.class).toCompletableFuture().join().body()
             .peers();

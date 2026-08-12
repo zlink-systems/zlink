@@ -1,4 +1,9 @@
 package systems.zlink.e2e.resiliencelifecycle.provider.endpoints;
+import com.sun.net.httpserver.HttpExchange;
+import java.io.IOException;
+import java.time.Duration;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -21,7 +26,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
     private final ConfigurableApplicationContext applicationContext;
     private final ZLinkFrameworkLifecycle drain;
     private HttpServer server;
-    private java.util.concurrent.ExecutorService executor;
+    private ExecutorService executor;
     private boolean running;
 
     public EvidenceHttpServer(
@@ -47,7 +52,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
         try {
             URI uri = URI.create(endpoint);
             server = HttpServer.create(new InetSocketAddress(uri.getHost(), uri.getPort()), 0);
-            executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+            executor = Executors.newVirtualThreadPerTaskExecutor();
             server.setExecutor(executor);
             server.createContext("/health", exchange -> write(exchange, 200, "ok\n"));
             server.createContext("/evidence", exchange -> {
@@ -81,7 +86,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
             server.createContext("/admin/fault/none", exchange -> setObserverThrows(exchange, false));
             server.createContext("/admin/shutdown", exchange -> {
                 state.record("AdminShutdown", state.providerRid());
-                var result = drain.shutdown(java.time.Duration.ofSeconds(30))
+                var result = drain.shutdown(Duration.ofSeconds(30))
                     .toCompletableFuture().join();
                 String terminal = result.outcome() == systems.zlink.framework.runtime.host
                     .ZLinkFrameworkTerminationOutcome.STOPPED ? "Drained" : "ForceStopped";
@@ -98,25 +103,25 @@ public final class EvidenceHttpServer implements SmartLifecycle {
     }
 
     private void setGrayFailure(
-        com.sun.net.httpserver.HttpExchange exchange,
-        boolean enabled) throws java.io.IOException {
+        HttpExchange exchange,
+        boolean enabled) throws IOException {
         state.grayFailure(enabled);
         state.record("GrayFailureMode", String.valueOf(enabled));
         write(exchange, 200, "{\"grayFailure\":" + enabled + "}\n");
     }
 
     private void setObserverThrows(
-        com.sun.net.httpserver.HttpExchange exchange,
-        boolean enabled) throws java.io.IOException {
+        HttpExchange exchange,
+        boolean enabled) throws IOException {
         state.observerThrows(enabled);
         state.record("ObserverFaultMode", String.valueOf(enabled));
         write(exchange, 200, "{\"observerThrows\":" + enabled + "}\n");
     }
 
     private void setWeight(
-        com.sun.net.httpserver.HttpExchange exchange,
+        HttpExchange exchange,
         int weight,
-        String status) throws java.io.IOException {
+        String status) throws IOException {
         runtimeOptions.channel(Contracts.CHANNEL).weight(weight);
         state.weight(weight);
         state.record("AdminWeight", String.valueOf(weight));
@@ -124,9 +129,9 @@ public final class EvidenceHttpServer implements SmartLifecycle {
     }
 
     private static void write(
-        com.sun.net.httpserver.HttpExchange exchange,
+        HttpExchange exchange,
         int status,
-        String value) throws java.io.IOException {
+        String value) throws IOException {
         byte[] body = value.getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(status, body.length);
         exchange.getResponseBody().write(body);
@@ -134,8 +139,8 @@ public final class EvidenceHttpServer implements SmartLifecycle {
     }
 
     private void writeJson(
-        com.sun.net.httpserver.HttpExchange exchange,
-        Object value) throws java.io.IOException {
+        HttpExchange exchange,
+        Object value) throws IOException {
         byte[] body = json.writeValueAsBytes(value);
         exchange.getResponseHeaders().add("Content-Type", "application/json");
         exchange.sendResponseHeaders(200, body.length);

@@ -33,7 +33,7 @@ ingest와 지급 transaction을 추가해야 하며 이 sample의 완료 기준�
 ### 2.1 기능 요구사항
 
 - Client가 GameApi STREAM에 연결하고 JoinSessionReq/Res로 현재 quest progress를 받는다.
-- KillMonsterReq, CollectItemReq와 EnterAreaReq를 서버가 검증하고 gameplay event를 만든다.
+- `KillMonsterReq`, `CollectItemMsg`, `EnterAreaMsg`를 서버가 검증하고 gameplay event를 만든다.
 - 같은 PlayerId의 event는 하나의 PlayerQuestSpot에서 순서대로 판정한다.
 - quest progress는 QuestProgressNotify로 push되고 reconnect 뒤 조회로 복원된다.
 - completion과 reward decision event는 같은 source event에 대해 중복 append하지 않는다.
@@ -200,14 +200,14 @@ message KillMonsterRes {
   eventId: string
 }
 
-message CollectItemReq {
+message CollectItemMsg {
   playerId: string
   itemId: string
   count: int32
   idempotencyKey: string
 }
 
-message EnterAreaReq {
+message EnterAreaMsg {
   playerId: string
   areaId: string
   idempotencyKey: string
@@ -364,7 +364,7 @@ sequenceDiagram
 ```
 
 `KillMonsterReq/Res`의 response는 GameApi가 action을 접수해 만든 EventId를 반환한다.
-`CollectItemReq`와 `EnterAreaReq`는 response가 없는 one-way action이며, 접수 이후의 progress와
+`CollectItemMsg`와 `EnterAreaMsg`는 response가 없는 one-way action이며, 접수 이후의 progress와
 completion notify를 별도로 확인한다. 모든 progress와 completion notify는 PlayerQuestSpot이 event
 stream과 projection을 갱신한 뒤 보낸다. one-way send 완료는 target handler의 domain append 완료를
 뜻하지 않으므로 self-check는 notify와 evidence를 따로 확인한다.

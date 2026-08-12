@@ -10,10 +10,11 @@ title: "6. target 선택과 route cache"
 >
 > **계약 소유** — 선택 순서와 tiebreak는 [Channel 메시징](../spec/08-channel-messaging.ko.md)이,
 > cache 수명과 무효화 조건은 [Spot·Actor routing](../spec/18-object-routing.ko.md)이 소유한다.
-> 이 장은 그 계약을 만족시키는 **구조**와, 네 구현에서 관찰된 어긋남을 다룬다.
+> 이 장은 그 계약을 만족시키는 **구조**와, 선택 authority가 갈릴 때 나타나는 실패를 다룬다.
 
-이름 하나로 대상을 고르는 구조와, 그 조회를 얼마나 자주 하느냐를 다룬다. **위치 투명
-메시징의 성능은 사실상 이 문서의 캐시 하나로 결정된다.**
+이름 하나로 대상을 고르는 구조와 위치 조회 주기를 설명한다. Location Store는 보통 다른
+process에 있으므로, route cache를 어떻게 사용하느냐가 위치 기반 messaging의 latency와
+throughput에 직접 영향을 준다.
 
 ## 1. 위치 조회를 message마다 하지 않는다
 
@@ -21,7 +22,7 @@ title: "6. target 선택과 route cache"
 
 객체 ID로 message를 보내려면 지금 어느 node가 그 객체를 맡고 있는지 알아야 한다. 이
 정보는 Location Store에 있고, Store는 보통 다른 process(Redis 등)다. message마다
-조회하면 **모든 호출에 저장소 왕복이 하나씩 붙는다.**
+조회하면 **모든 호출에서 저장소를 한 번 왕복한다.**
 
 ### 결정
 
@@ -62,25 +63,27 @@ component가 완료한 뒤에만 resolver가 `Missing`을 반환한다.
 |---|---|
 | `RouteCacheMaxAge` | 캐시 자체의 최대 보관 시간 |
 | owner의 수락 기한 | 이 시간이 지나면 그 owner는 더 이상 수락하지 않는다 |
-| [Message Follow 기간](../spec/01-glossary.ko.md#message-follow-duration)보다 **최소 5초 짧게** | 우회 경로가 닫히기 전에 캐시가 먼저 만료되어야 한다 ([`18:143-145`](../spec/18-object-routing.ko.md), [`21:693-695`](../spec/21-location-runtime.ko.md)) |
+| [Message Follow 기간](../spec/01-glossary.ko.md#message-follow-duration)보다 **최소 5초 짧게** | 우회 경로가 닫히기 전에 캐시가 먼저 만료되어야 한다 ([Spot·Actor routing 「2.4 이전 owner route에 도착한 message」](../spec/18-object-routing.ko.md#24-이전-owner-route에-도착한-message), [Location runtime 「6.3 이전 owner로 도착한 message를 새 owner에게 전달한다」](../spec/21-location-runtime.ko.md#63-이전-owner로-도착한-message를-새-owner에게-전달한다)) |
 
 ## 1.1 수동 object peer에서도 admission fence를 보존한다
 
 Location Store가 반환한 object peer descriptor에는 endpoint, RID, lifecycle generation과
-security identity가 함께 있다. 수동 endpoint는 연결 의도만 제공하지만, runtime이 그 endpoint를
-descriptor와 매칭해 object peer를 보강하는 순간에는 이 네 값 중 handshake에 필요한 값을
-transport로 모두 전달해야 한다. 정식 계약은 [RouteMesh topology](../spec/07-channel-topology.ko.md)의
-peer handshake가 소유한다.
+security identity가 들어 있다. 수동 endpoint 설정은 연결 의도만 제공한다. Runtime이 이
+endpoint를 descriptor와 연결하여 object peer로 사용할 때는, handshake에 필요한 descriptor
+값을 transport에도 모두 전달해야 한다. 정식 계약은
+[RouteMesh topology](../spec/07-channel-topology.ko.md)의 peer handshake가 소유한다.
 
-현재 JVM 경로는 MeshNode 시작 시 object role과 관계없이 manual endpoint-only intent를 먼저
-등록한다. `ZLinkFrameworkRuntime.connectManualObjectPeers`,
-`ZLinkLocationAutoConnectHost.MeshNodeExecutor`와 `ZLinkSpotRuntime.ensureManualObjectPeer`가
+JVM 경로는 다음 순서로 이 값을 전달한다. MeshNode를 시작할 때 먼저 manual endpoint-only
+intent를 등록한다. 이후 `ZLinkFrameworkRuntime.connectManualObjectPeers`,
+`ZLinkLocationAutoConnectHost.MeshNodeExecutor` 또는 `ZLinkSpotRuntime.ensureManualObjectPeer`가
 descriptor를 찾으면 `replacePeerConnection(endpoint, rid, lifecycleGeneration,
-securityIdentity)`를 호출한다. 교체 경로는 이전 intent의 transport liveness close를 확인할 때까지
-새 intent를 설치하지 않는다. `ZLinkJavaRawMeshNode`는 각 intent와 실제 peer routing ID, close
-상태를 보관하고 admission fence와 liveness event를 함께 처리한다. descriptor를 찾지 못한
-endpoint-only intent는 placement를 주장하지 않는다. 호출자가 generation이나 security identity를
-직접 설정하는 우회는 허용하지 않는다.
+securityIdentity)`를 호출한다.
+
+교체 경로는 이전 intent의 transport liveness close를 확인한 뒤에만 새 intent를 설치한다.
+`ZLinkJavaRawMeshNode`는 intent, 실제 peer routing ID와 close 상태를 함께 보관하여 admission
+fence와 liveness event를 처리한다. Descriptor를 찾지 못한 endpoint-only intent는 placement
+근거로 사용하지 않는다. Caller가 generation이나 security identity를 직접 설정하여 이 절차를
+우회할 수 없다.
 
 ## 2. 이동과 캐시가 만나는 지점 — 성능 절벽
 
@@ -114,25 +117,38 @@ flowchart LR
 우회는 **캐시가 갱신될 때까지의 과도기를 메우는 장치**이지 정상 경로가 아니다. 알림이
 없으면 캐시 수명이 끝날 때까지 우회가 계속된다.
 
-**통지 record의 공통 wire는 schema에 고정되었다.** `service-wire-v1.schema.json`의 command
-50 `messageFollow`가 source·target route fence, hop count, relay 시점의 queue 회계와
-원래 operation/reply route를 정의한다. flags와 application payload는 허용하지 않는다.
-다만 schema가 있다는 사실만으로 각 언어의 relay·수신·cache 무효화가 완료되는 것은 아니다.
-각 runtime은 source route의 object·authority generation과 target node를 확인하고, 더 새로운
-cache 항목을 지우지 않는 조건까지 구현해야 한다.
+**통지 record의 공통 wire 형식은 schema가 정한다.** `service-wire-v1.schema.json`의 command
+50 `messageFollow`에는 source와 target route의 fence, hop count, relay 시점의 queue 회계,
+원래 operation ID와 reply route가 들어간다. Flags와 application payload는 허용하지 않는다.
 
-**중복 억제 구현 예시 — 공통 완료 조건이 아니다.**
+Schema는 record 형식만 고정한다. 각 runtime은 record를 relay하고 수신한 뒤, source route의
+object generation, authority generation과 target node를 검증해야 한다. 현재 cache 항목이 이
+값과 일치할 때만 무효화하여, 이미 저장된 더 새로운 route를 지우지 않는다.
 
-- `(보낸 runtime, 객체, owner 세대)` 조합마다 처음 한 번만 보낸다. 이동 직후 트래픽이
-  몰리는 객체에서 message마다 통지를 붙이면 통지 record가 업무 message만큼 늘어난다.
-- 같은 통지가 전송 중이면 추가 통지는 합친다.
-- 통지는 유실되어도 캐시 수명이 끝나면 만료되므로 재전송을 보장하지 않는다.
-- 중복 억제 표식은 별도 집합이 아니라 기존 캐시 항목에 넣고, 캐시 항목이 사라질 때 함께
-  없앤다. 별도 집합을 두면 이동한 객체 수만큼 상태가 계속 늘어난다.
+중복 억제는 전용 registry가 맡는다. Key는 source와 target route fence의 모든 field를
+포함한다. Object kind와 논리 ID뿐 아니라 object generation, target node RID·generation,
+authority owner generation과 owner lease generation도 source와 target 양쪽 값으로
+비교한다. 일부 generation만 key로 쓰면 이전 route에서 남은 표식이 새 target으로 보내야
+할 통지까지 막을 수 있다.
 
-구현은 이 예시와 다른 suppression 구조를 사용할 수 있다. 공통 조건은 같은 object·authority generation과
-target node를 가리키는 cache만 무효화하고 더 새로운 route를 지우지 않으며, 알림이 유실되어도 cache
-lifetime 뒤 stale route를 만료시키고, 중복 상태가 원래 operation의 terminal 결과를 바꾸지 않는 것이다.
+```mermaid
+stateDiagram-v2
+    [*] --> idle: exact route fence를 보관한다
+    idle --> inFlight: 통지 전송 권한을 얻는다
+    inFlight --> sentUntilExpiry: 전송 성공
+    inFlight --> idle: 전송 실패
+    sentUntilExpiry --> [*]: route cache 만료 또는 교체
+    idle --> [*]: route cache 만료 또는 교체
+```
+
+`inFlight`에서는 같은 key의 추가 전송을 시작하지 않는다. 전송에 성공하면 cache route가
+만료될 때까지 `sentUntilExpiry`를 유지하고, 실패하면 다시 시도할 수 있도록 `idle`로
+전이한다. Registry는 자체 expiry timer를 만들지 않고 route cache가 만료·교체되는 시점에
+같은 key를 제거한다.
+
+이 registry는 통지 중복만 관리한다. 원래 operation의 payload, reply route와 terminal
+completion은 각각의 기존 owner가 계속 관리한다. 따라서 suppression 상태가 원래
+operation의 terminal 결과를 만들거나 바꾸지 않는다.
 
 ## 3. 후보 목록을 호출마다 만들지 않는다
 
@@ -143,7 +159,7 @@ lifetime 뒤 stale route를 만료시키고, 중복 상태가 원래 operation�
 때 새 목록을 만들어 바꿔 끼우고, 호출 경로에서는 필터링과 정렬을 하지 않는다.
 
 호출마다 전체 peer를 훑어 조건을 확인하면 peer 수에 비례하는 비용이 모든 호출에
-붙는다. peer 상태는 message 빈도보다 훨씬 드물게 바뀐다.
+발생한다. peer 상태는 message 빈도보다 훨씬 드물게 바뀐다.
 
 ## 4. 선택을 어느 계층이 하는가
 
@@ -160,14 +176,15 @@ server를 고른 뒤 주소나 전용 연결로 보내므로 Core에는 고를 �
 경로를 위한 것이다.
 
 세 번째는 ClientServer transport가 등록되지 않은 채널에서만 쓰는 **fallback**이다. socket
-하나에 여러 연결이 붙고 제출에 대상이 없으므로 Core의 load balancer가 고른다. 이 경로에서
+하나가 여러 connection을 포함하고 제출에 대상이 없으므로 Core의 load balancer가 고른다. 이 경로에서
 framework는 선택에 관여하지 않는다.
 
 ### 연결 관리는 Core의 몫이다
 
-**결정 — framework는 socket 하나가 관리하는 연결 집합을 대신 관리하지 않는다.** framework가
-Core에 알리는 것은 **어떤 endpoint가 후보인가**와 **각 후보의 weight**까지다. 그 endpoint에
-언제 연결하고, 끊기면 언제 다시 붙이고, 그중 어느 연결로 이 message를 보낼지는 Core가 정한다.
+**결정 — framework는 socket 하나에 속한 connection 집합을 Core 대신 관리하지 않는다.**
+Framework는 후보 endpoint와 각 후보의 weight만 Core에 전달한다. Core는 각 endpoint에 언제
+연결할지, 연결이 끊겼을 때 언제 다시 연결할지, 현재 connection 중 어느 것으로 message를
+보낼지를 결정한다.
 
 이 경계를 넘으면 세 가지가 함께 중복된다.
 
@@ -177,16 +194,16 @@ Core에 알리는 것은 **어떤 endpoint가 후보인가**와 **각 후보의 
 | 후보마다 socket 하나씩 | socket·fd·monitor 자원이 후보 수에 비례해 늘어난다 |
 | 연결 순서로 선택 유도 | Core는 연결 순서에 대해 아무것도 약속하지 않는다 |
 
-**함정 — 연결 순서로 Core의 선택을 유도하려 하면 안 된다.** 한 구현이 실제로 이렇게 한다.
-후보 목록을 계산한 winner가 맨 앞에 오도록 회전시켜 넘기는데, 받는 쪽이 집합에 넣어 순서를
-지우고 Core도 순서를 약속하지 않아 **아무 효과가 없다.** 계산 결과가 어디에도 도달하지 않는
-코드가 남아 있는 상태다.
+**함정 — 연결 순서로 Core의 선택을 유도하려 하면 안 된다.** 계산한 winner가 맨 앞에 오도록
+후보 목록을 회전해도, 받는 쪽이 집합에 넣으면 순서가 사라진다. Core도 연결 순서를
+약속하지 않으므로 **선택 결과가 적용되지 않는다.**
 
 **후보마다 socket을 하나씩 만들어 framework가 고르는 구조는 판정이 갈린다.** 겉보기에
 "framework가 고른다"가 성립하지만, 그 대가로 연결 수명과 재연결을 framework가 떠안는다.
 
-**판정 기준은 "대체 가능한가"가 아니다.** application 관점에서 대체 가능하더라도, 선택에
-필요한 조건을 하위 계층이 모르면 넘길 수 없다. 기준은 이것이다.
+Application 관점에서 후보가 서로 대체 가능하다는 사실만으로 선택 책임을 하위 계층에
+넘길 수는 없다. 하위 계층이 선택 조건을 알지 못하면 계약에 맞는 후보를 고를 수 없기
+때문이다. 판정 기준은 다음과 같다.
 
 > **하위 계층이 선택 시점에 eligibility 조건·weight·안정적 식별자를 모두 알고 강제할 수
 > 있는가?**
@@ -205,9 +222,10 @@ ClientServer가 그렇다. server 후보는 같은 ChannelName을 처리하므�
 않았거나 drain 중인 연결이 선택될 수 있다.** 그래서 지금은 per-server 연결과 framework
 선택이 맞다.
 
-**합치려면 투영 API가 먼저다.** 하위 계층에 RID별 승인·weight·활성 상태를 갱신하는 경로나,
-framework가 고른 RID로 대상을 지정하는 송신 경로 중 하나가 필요하다. 그 전에는 per-server
-연결과 선택기를 지우지 않는다.
+Connection을 socket 하나로 합치려면, framework의 선택 정보를 하위 계층에 전달하는 API가
+먼저 필요하다. 이런 API를 projection API라고 한다. RID별 승인, weight와 active 상태를 Core에
+갱신하는 경로를 제공하거나, framework가 선택한 RID를 송신 대상에 직접 지정할 수 있어야
+한다. 이 경로가 없으면 per-server connection과 framework selector를 유지한다.
 
 ### 확인할 것
 
@@ -268,13 +286,13 @@ weight가 같은 두 후보는 `A, B, A, B`로 번갈아 나온다 — spec의 �
 | RouteMesh | node RID |
 | ClientServer | Server RID |
 
-같은 target을 가리키는 다른 값(연결 경로, 등록 출처, 연결 map key)을 식별자로 쓰면
-구현마다 순서가 갈린다. 실제로 한 구현이 연결 map key를 쓰고 있다.
+같은 target을 가리키더라도 연결 경로, 등록 출처나 연결 map key를 후보 식별자로 쓰면
+연결을 만든 순서에 따라 tiebreak 결과가 달라진다.
 
 ### 절차를 지키면서 호출 비용을 낮추는 방법
 
 위 절차를 글자 그대로 호출마다 수행하면 후보 수 N에 비례하는 비용이 **모든 send**에
-붙는다. 후보가 늘수록 한 channel의 송신 처리량이 선택기 한 곳에서 막힌다.
+발생한다. 후보가 늘수록 한 channel의 송신 처리량이 선택기 한 곳에서 제한된다.
 
 **결정 — 후보 목록이 바뀔 때 순서를 미리 계산해 두고, 호출은 cursor만 옮긴다.** 다만
 주기를 확정하는 조건이 있다.

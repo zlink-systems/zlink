@@ -704,6 +704,50 @@ test('ZLinkModule.forRootFactory maps zlinkRequestHandler providers from NestJS 
   await app.close();
 });
 
+test('forRootFactory can disable implicit handlers while retaining explicit DI handlers', async () => {
+  const apiEndpoint = await reserveTcpEndpoint();
+  class ImplicitHandler {
+    async handle() {
+      return { source: 'implicit' };
+    }
+  }
+  class ExplicitHandler {
+    async handle() {
+      return { source: 'explicit' };
+    }
+  }
+  nestjs.zlinkRequestHandler('api', 'ImplicitReq')(ImplicitHandler);
+
+  class HandlerModule {}
+  Module({
+    imports: [nestjs.ZLinkModule.forRootFactory({
+      useFactory: () => {
+        const builder = nestjs.zlinkFramework();
+        builder.disableImplicitHandlerAutoRegistration();
+        builder.addRouteMesh('api')
+          .listen(apiEndpoint)
+          .routingId('api-node')
+          .channel('api').server()
+          .addHandlerGroup('api')
+          .addRequestHandler('ExplicitReq', ExplicitHandler);
+        return builder.build();
+      }
+    })],
+    providers: [ImplicitHandler, ExplicitHandler]
+  })(HandlerModule);
+
+  const app = await NestFactory.createApplicationContext(HandlerModule, { logger: false, abortOnError: false });
+  const handlers = app.get(nestjs.ZLINK_FRAMEWORK_REGISTRATION).spotNodes.get('api').meshChannels.api.requestHandlers;
+
+  assert.deepEqual(handlers.map((handler) => handler.packetName), ['ExplicitReq']);
+  assert.deepEqual(
+    await handlers[0].handler.handle(Buffer.from('{}'), {}),
+    { source: 'explicit' }
+  );
+
+  await app.close();
+});
+
 test('zlinkModule registers discovered handler providers in the application module context', async () => {
   const apiEndpoint = await reserveTcpEndpoint();
   const roleRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'zlink-nest-provider-discovery-'));
@@ -1195,7 +1239,9 @@ test('ZLinkModule.forRoot exposes exact create calls for registered Spot factori
   const localConfigured = spotManager.create(LocalStageSpot.name).inMesh('game');
 
   assert.equal(typeof configured.submit, 'function');
+  assert.equal(typeof configured.yield, 'function');
   assert.equal(typeof localConfigured.submit, 'function');
+  assert.equal(typeof localConfigured.yield, 'function');
 });
 
 test('ZLinkModule.forRoot preserves Spot factories in the formal MeshNode registration', async () => {

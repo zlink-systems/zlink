@@ -687,8 +687,8 @@ internal sealed class ZLinkMeshChannelRoleBuilder(
 
     public IZLinkMeshChannelClientBuilder Client()
     {
-        var membership = Select(isServer: false);
-        return new ZLinkMeshChannelClientBuilder(membership);
+        Select(isServer: false);
+        return new ZLinkMeshChannelClientBuilder();
     }
 
     public IZLinkMeshChannelServerBuilder Server()
@@ -710,12 +710,8 @@ internal sealed class ZLinkMeshChannelRoleBuilder(
     }
 }
 
-internal sealed class ZLinkMeshChannelClientBuilder(
-    ZLinkMeshChannelMembership membership) : IZLinkMeshChannelClientBuilder
+internal sealed class ZLinkMeshChannelClientBuilder : IZLinkMeshChannelClientBuilder
 {
-    // Keep the selected registration strongly owned by this builder until the
-    // configuration callback returns; no additional Client settings exist.
-    private readonly ZLinkMeshChannelMembership _membership = membership;
 }
 
 // Logical channel membership builder (spec 05-route-mesh §4). Weight and the

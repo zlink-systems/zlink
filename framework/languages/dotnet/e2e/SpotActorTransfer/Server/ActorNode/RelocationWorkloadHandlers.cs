@@ -8,11 +8,11 @@ namespace SpotActorTransfer.ActorNode;
 
 internal static class RelocationWorkloadHandlers
 {
-    internal static RelocationWorkloadReply Reply(
+    internal static RelocationWorkloadRes Reply(
         string targetId,
         string nodeRid,
         ulong objectGeneration,
-        RelocationWorkloadRequest request,
+        RelocationWorkloadReq request,
         EvidenceStore evidence,
         string? observedOperationId,
         string? correlationId)
@@ -32,7 +32,7 @@ internal static class RelocationWorkloadHandlers
             + $"owner={nodeRid};"
             + $"generation={objectGeneration};"
             + $"withinDeadline={withinDeadline}");
-        return new RelocationWorkloadReply(
+        return new RelocationWorkloadRes(
             request.Scenario,
             request.Sequence,
             operationId,
@@ -48,7 +48,7 @@ internal static class RelocationWorkloadHandlers
         string targetId,
         string nodeRid,
         ulong objectGeneration,
-        RelocationWorkloadPacket packet,
+        RelocationWorkloadMsg packet,
         EvidenceStore evidence,
         string? observedOperationId)
     {
@@ -70,14 +70,14 @@ internal sealed class EntryWorkloadRequestHandler(EvidenceStore evidence)
     : IZLinkEntrySpotActorRequestHandler<
         TransferEntrySpot,
         TransferActor,
-        RelocationWorkloadRequest,
-        RelocationWorkloadReply>
+        RelocationWorkloadReq,
+        RelocationWorkloadRes>
 {
-    public ValueTask<RelocationWorkloadReply> HandleAsync(
+    public ValueTask<RelocationWorkloadRes> HandleAsync(
         TransferEntrySpot spot,
         TransferActor actor,
         IZLinkMessageContext context,
-        RelocationWorkloadRequest request,
+        RelocationWorkloadReq request,
         CancellationToken cancellationToken)
     {
         _ = context;
@@ -133,13 +133,13 @@ internal sealed class EntryWorkloadSendHandler(EvidenceStore evidence)
     : IZLinkEntrySpotActorSendHandler<
         TransferEntrySpot,
         TransferActor,
-        RelocationWorkloadPacket>
+        RelocationWorkloadMsg>
 {
     public ValueTask HandleAsync(
         TransferEntrySpot spot,
         TransferActor actor,
         IZLinkMessageContext context,
-        RelocationWorkloadPacket message,
+        RelocationWorkloadMsg message,
         CancellationToken cancellationToken)
     {
         _ = spot;
@@ -157,19 +157,19 @@ internal sealed class EntryWorkloadSendHandler(EvidenceStore evidence)
     }
 }
 
-[ZLinkSpotActorRequestHandler(nameof(RelocationWorkloadRequest))]
+[ZLinkSpotActorRequestHandler(nameof(RelocationWorkloadReq))]
 internal sealed class UserSpotActorWorkloadRequestHandler(EvidenceStore evidence)
     : IZLinkSpotActorRequestHandler<
         TransferUserSpot,
         TransferActor,
-        RelocationWorkloadRequest,
-        RelocationWorkloadReply>
+        RelocationWorkloadReq,
+        RelocationWorkloadRes>
 {
-    public ValueTask<RelocationWorkloadReply> HandleAsync(
+    public ValueTask<RelocationWorkloadRes> HandleAsync(
         TransferUserSpot spot,
         TransferActor actor,
         IZLinkMessageContext context,
-        RelocationWorkloadRequest request,
+        RelocationWorkloadReq request,
         CancellationToken cancellationToken)
     {
         _ = context;
@@ -186,18 +186,18 @@ internal sealed class UserSpotActorWorkloadRequestHandler(EvidenceStore evidence
     }
 }
 
-[ZLinkSpotActorSendHandler(nameof(RelocationWorkloadPacket))]
+[ZLinkSpotActorSendHandler(nameof(RelocationWorkloadMsg))]
 internal sealed class UserSpotActorWorkloadSendHandler(EvidenceStore evidence)
     : IZLinkSpotActorSendHandler<
         TransferUserSpot,
         TransferActor,
-        RelocationWorkloadPacket>
+        RelocationWorkloadMsg>
 {
     public ValueTask HandleAsync(
         TransferUserSpot spot,
         TransferActor actor,
         IZLinkMessageContext context,
-        RelocationWorkloadPacket message,
+        RelocationWorkloadMsg message,
         CancellationToken cancellationToken)
     {
         _ = spot;
@@ -215,20 +215,20 @@ internal sealed class UserSpotActorWorkloadSendHandler(EvidenceStore evidence)
     }
 }
 
-[ZLinkSpotActorRequestHandler(nameof(RelocationWorkloadRequest))]
+[ZLinkSpotActorRequestHandler(nameof(RelocationWorkloadReq))]
 internal sealed class PayloadUserSpotActorWorkloadRequestHandler(
     EvidenceStore evidence)
     : IZLinkSpotActorRequestHandler<
         RelocationPayloadUserSpot,
         TransferActor,
-        RelocationWorkloadRequest,
-        RelocationWorkloadReply>
+        RelocationWorkloadReq,
+        RelocationWorkloadRes>
 {
-    public ValueTask<RelocationWorkloadReply> HandleAsync(
+    public ValueTask<RelocationWorkloadRes> HandleAsync(
         RelocationPayloadUserSpot spot,
         TransferActor actor,
         IZLinkMessageContext context,
-        RelocationWorkloadRequest request,
+        RelocationWorkloadReq request,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -244,19 +244,19 @@ internal sealed class PayloadUserSpotActorWorkloadRequestHandler(
     }
 }
 
-[ZLinkSpotActorSendHandler(nameof(RelocationWorkloadPacket))]
+[ZLinkSpotActorSendHandler(nameof(RelocationWorkloadMsg))]
 internal sealed class PayloadUserSpotActorWorkloadSendHandler(
     EvidenceStore evidence)
     : IZLinkSpotActorSendHandler<
         RelocationPayloadUserSpot,
         TransferActor,
-        RelocationWorkloadPacket>
+        RelocationWorkloadMsg>
 {
     public ValueTask HandleAsync(
         RelocationPayloadUserSpot spot,
         TransferActor actor,
         IZLinkMessageContext context,
-        RelocationWorkloadPacket message,
+        RelocationWorkloadMsg message,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -272,20 +272,20 @@ internal sealed class PayloadUserSpotActorWorkloadSendHandler(
     }
 }
 
-[ZLinkSpotActorRequestHandler(nameof(RelocationWorkloadRequest))]
+[ZLinkSpotActorRequestHandler(nameof(RelocationWorkloadReq))]
 internal sealed class PerActorUserSpotActorWorkloadRequestHandler(
     EvidenceStore evidence)
     : IZLinkSpotActorRequestHandler<
         RelocationPayloadPerActorUserSpot,
         TransferActor,
-        RelocationWorkloadRequest,
-        RelocationWorkloadReply>
+        RelocationWorkloadReq,
+        RelocationWorkloadRes>
 {
-    public ValueTask<RelocationWorkloadReply> HandleAsync(
+    public ValueTask<RelocationWorkloadRes> HandleAsync(
         RelocationPayloadPerActorUserSpot spot,
         TransferActor actor,
         IZLinkMessageContext context,
-        RelocationWorkloadRequest request,
+        RelocationWorkloadReq request,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -301,19 +301,19 @@ internal sealed class PerActorUserSpotActorWorkloadRequestHandler(
     }
 }
 
-[ZLinkSpotActorSendHandler(nameof(RelocationWorkloadPacket))]
+[ZLinkSpotActorSendHandler(nameof(RelocationWorkloadMsg))]
 internal sealed class PerActorUserSpotActorWorkloadSendHandler(
     EvidenceStore evidence)
     : IZLinkSpotActorSendHandler<
         RelocationPayloadPerActorUserSpot,
         TransferActor,
-        RelocationWorkloadPacket>
+        RelocationWorkloadMsg>
 {
     public ValueTask HandleAsync(
         RelocationPayloadPerActorUserSpot spot,
         TransferActor actor,
         IZLinkMessageContext context,
-        RelocationWorkloadPacket message,
+        RelocationWorkloadMsg message,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -340,12 +340,12 @@ internal sealed class PayloadUserSpotWorkloadRequestHandler(EvidenceStore eviden
     : SpotWorkloadHandler(evidence),
         IZLinkSpotRequestHandler<
             RelocationPayloadUserSpot,
-            RelocationWorkloadRequest,
-            RelocationWorkloadReply>
+            RelocationWorkloadReq,
+            RelocationWorkloadRes>
 {
-    public ValueTask<RelocationWorkloadReply> HandleAsync(
+    public ValueTask<RelocationWorkloadRes> HandleAsync(
         RelocationPayloadUserSpot spot,
-        RelocationWorkloadRequest request,
+        RelocationWorkloadReq request,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -395,11 +395,11 @@ internal sealed class PayloadUserSpotWorkloadSendHandler(EvidenceStore evidence)
     : SpotWorkloadHandler(evidence),
         IZLinkSpotPacketHandler<
             RelocationPayloadUserSpot,
-            RelocationWorkloadPacket>
+            RelocationWorkloadMsg>
 {
     public ValueTask HandleAsync(
         RelocationPayloadUserSpot spot,
-        RelocationWorkloadPacket message,
+        RelocationWorkloadMsg message,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -419,12 +419,12 @@ internal sealed class PayloadPerActorUserSpotWorkloadRequestHandler(
     : SpotWorkloadHandler(evidence),
         IZLinkSpotRequestHandler<
             RelocationPayloadPerActorUserSpot,
-            RelocationWorkloadRequest,
-            RelocationWorkloadReply>
+            RelocationWorkloadReq,
+            RelocationWorkloadRes>
 {
-    public ValueTask<RelocationWorkloadReply> HandleAsync(
+    public ValueTask<RelocationWorkloadRes> HandleAsync(
         RelocationPayloadPerActorUserSpot spot,
-        RelocationWorkloadRequest request,
+        RelocationWorkloadReq request,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -444,11 +444,11 @@ internal sealed class PayloadPerActorUserSpotWorkloadSendHandler(
     : SpotWorkloadHandler(evidence),
         IZLinkSpotPacketHandler<
             RelocationPayloadPerActorUserSpot,
-            RelocationWorkloadPacket>
+            RelocationWorkloadMsg>
 {
     public ValueTask HandleAsync(
         RelocationPayloadPerActorUserSpot spot,
-        RelocationWorkloadPacket message,
+        RelocationWorkloadMsg message,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -467,12 +467,12 @@ internal sealed class PayloadInstanceSpotWorkloadRequestHandler(EvidenceStore ev
     : SpotWorkloadHandler(evidence),
         IZLinkSpotRequestHandler<
             RelocationPayloadInstanceSpot,
-            RelocationWorkloadRequest,
-            RelocationWorkloadReply>
+            RelocationWorkloadReq,
+            RelocationWorkloadRes>
 {
-    public ValueTask<RelocationWorkloadReply> HandleAsync(
+    public ValueTask<RelocationWorkloadRes> HandleAsync(
         RelocationPayloadInstanceSpot spot,
-        RelocationWorkloadRequest request,
+        RelocationWorkloadReq request,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -491,11 +491,11 @@ internal sealed class PayloadInstanceSpotWorkloadSendHandler(EvidenceStore evide
     : SpotWorkloadHandler(evidence),
         IZLinkSpotPacketHandler<
             RelocationPayloadInstanceSpot,
-            RelocationWorkloadPacket>
+            RelocationWorkloadMsg>
 {
     public ValueTask HandleAsync(
         RelocationPayloadInstanceSpot spot,
-        RelocationWorkloadPacket message,
+        RelocationWorkloadMsg message,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -515,12 +515,12 @@ internal sealed class RelocationReadyUserSpotWorkloadRequestHandler(
     : SpotWorkloadHandler(evidence),
         IZLinkSpotRequestHandler<
             RelocationReadyUserSpot,
-            RelocationWorkloadRequest,
-            RelocationWorkloadReply>
+            RelocationWorkloadReq,
+            RelocationWorkloadRes>
 {
-    public ValueTask<RelocationWorkloadReply> HandleAsync(
+    public ValueTask<RelocationWorkloadRes> HandleAsync(
         RelocationReadyUserSpot spot,
-        RelocationWorkloadRequest request,
+        RelocationWorkloadReq request,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -540,12 +540,12 @@ internal sealed class RelocationReadyDefaultUserSpotWorkloadRequestHandler(
     : SpotWorkloadHandler(evidence),
         IZLinkSpotRequestHandler<
             RelocationReadyDefaultUserSpot,
-            RelocationWorkloadRequest,
-            RelocationWorkloadReply>
+            RelocationWorkloadReq,
+            RelocationWorkloadRes>
 {
-    public ValueTask<RelocationWorkloadReply> HandleAsync(
+    public ValueTask<RelocationWorkloadRes> HandleAsync(
         RelocationReadyDefaultUserSpot spot,
-        RelocationWorkloadRequest request,
+        RelocationWorkloadReq request,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

@@ -4,6 +4,7 @@ umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT_DIR/../redis-common.sh"
+zlink_dotnet_e2e_acquire_run_lock "$0" "$@"
 
 SCENARIO="${*:-all}"
 SCENARIO="${SCENARIO// /,}"
@@ -21,7 +22,7 @@ CONFIG12_SCENARIOS=(
 )
 if [[ "$SCENARIO" == "all" ]]; then
   for scenario in "${CONFIG12_SCENARIOS[@]}"; do
-    "$0" "$scenario"
+    bash "$0" "$scenario"
   done
   echo "channel-egress-routing e2e result=passed scenarios=${#CONFIG12_SCENARIOS[@]}"
   exit 0
@@ -31,7 +32,7 @@ if [[ "$SCENARIO" == *,* ]]; then
   selected_count=0
   for scenario in "${selected_scenarios[@]}"; do
     [[ -n "$scenario" ]] || continue
-    "$0" "$scenario"
+    bash "$0" "$scenario"
     selected_count=$((selected_count + 1))
   done
   echo "channel-egress-routing e2e result=passed scenarios=$selected_count"
@@ -65,7 +66,7 @@ cleanup() {
   done
   wait "${pids[@]:-}" 2>/dev/null || true
   if [[ -n "$REDIS_CONTAINER" ]]; then
-    timeout -k 2s 10s docker rm -fv "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+    zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
   rm -rf "$CONFIG_DIR"
   if [[ "$code" != "0" ]]; then
@@ -75,13 +76,7 @@ cleanup() {
 trap cleanup EXIT
 
 pick_port() {
-  python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
+  zlink_dotnet_e2e_allocate_ports 1
 }
 
 declare -A URLS=()

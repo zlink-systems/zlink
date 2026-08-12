@@ -28,6 +28,7 @@ import {
 } from '../messaging/submission-result';
 import type {
   ZLinkChannelClientTransport,
+  ZLinkChannelClientTransportSource,
   ZLinkRouteClientTransport,
   ZLinkSpotPublisherClientTransport
 } from './channel-transports';
@@ -47,7 +48,7 @@ import { resolveFrameworkPacketName } from '../messaging/packet-name';
 export class DefaultZLinkChannelClient implements ZLinkChannelClient {
   constructor(
     private readonly registration: ZLinkFrameworkRegistration,
-    private readonly transport?: ZLinkChannelClientTransport
+    private readonly transport?: ZLinkChannelClientTransportSource
   ) {}
 
   sendToChannel(channelName: string, message: unknown): ZLinkSendCall {
@@ -103,17 +104,20 @@ export class DefaultZLinkChannelClient implements ZLinkChannelClient {
   }
 
   private requireTransport(): ZLinkChannelClientTransport {
-    if (this.transport === undefined) {
+    const transport = typeof this.transport === 'function'
+      ? this.transport()
+      : this.transport;
+    if (transport === undefined) {
       throw new ZLinkConfigurationException('Channel runtime is not started.');
     }
-    return this.transport;
+    return transport;
   }
 }
 
 export class DefaultZLinkFanoutClient implements ZLinkFanoutClient {
   constructor(
     private readonly registration: ZLinkFrameworkRegistration,
-    private readonly transport?: ZLinkChannelClientTransport
+    private readonly transport?: ZLinkChannelClientTransportSource
   ) {}
 
   publish(channelName: string, event: unknown): ZLinkFanoutPublishCall;
@@ -157,10 +161,13 @@ export class DefaultZLinkFanoutClient implements ZLinkFanoutClient {
   }
 
   private requireTransport(): ZLinkChannelClientTransport {
-    if (this.transport === undefined) {
+    const transport = typeof this.transport === 'function'
+      ? this.transport()
+      : this.transport;
+    if (transport === undefined) {
       throw new ZLinkConfigurationException('Channel runtime is not started.');
     }
-    return this.transport;
+    return transport;
   }
 }
 

@@ -27,13 +27,13 @@ public final class IdentityOperations {
         CompletionStage<ZLinkActorCreateResult> actor = actors
             .getOrCreate(request.actorId(), Contracts.OBJECT_ACTOR_TYPE)
             .inMesh(request.meshName())
-            .request(request.marker())
+            .request(new Contracts.IdentityActorCreateReq(request.marker()))
             .timeout(TIMEOUT)
             .submit();
         CompletionStage<ZLinkSpotCreateResult> spot = spots
             .getOrCreate(request.spotId(), Contracts.OBJECT_SPOT_TYPE)
             .inMesh(request.meshName())
-            .request(request.marker())
+            .request(new Contracts.IdentitySpotCreateReq(request.marker()))
             .timeout(TIMEOUT)
             .submit();
         return actor.thenCombine(spot, (actorResult, spotResult) ->

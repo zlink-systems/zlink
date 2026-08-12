@@ -51,7 +51,7 @@ validate_selected_suites() {
       echo "[kotlin-e2e] aggregate_incomplete reason=missing_suite suite=$scenario" >&2
       return 1
     fi
-    if [[ ! -x "$runner" ]]; then
+    if [[ ! -f "$runner" ]]; then
       echo "[kotlin-e2e] aggregate_incomplete reason=missing_runner suite=$scenario runner=$runner" >&2
       return 1
     fi
@@ -71,7 +71,8 @@ run_scenario_with_retry() {
     set +e
     (
       cd "$SCRIPT_DIR/$scenario" &&
-        nice -n 10 timeout "${ZLINK_KOTLIN_E2E_SCENARIO_TIMEOUT_SECONDS:-1800}s" ./run_e2e.sh "${selector}"
+        nice -n 10 timeout "${ZLINK_KOTLIN_E2E_SCENARIO_TIMEOUT_SECONDS:-1800}s" \
+          bash ./run_e2e.sh "${selector}"
     ) 2>&1 | tee "${output}"
     local status="${PIPESTATUS[0]}"
     set -e

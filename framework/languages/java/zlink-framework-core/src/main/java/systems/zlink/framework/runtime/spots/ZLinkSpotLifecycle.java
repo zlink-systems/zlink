@@ -1,4 +1,12 @@
 package systems.zlink.framework.runtime.spots;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Objects;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.atomic.AtomicReference;
+import systems.zlink.framework.runtime.internal.spots.ZLinkSpotIdValidator;
+import systems.zlink.framework.spots.ZLinkActorCreateResponse;
+import systems.zlink.framework.spots.ZLinkSpotCloseReason;
 
 import java.util.Collection;
 import java.util.List;
@@ -12,6 +20,7 @@ import java.util.concurrent.Executor;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkCloseException;
 import systems.zlink.framework.actors.ZLinkActor;
+import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -65,7 +74,7 @@ final class ZLinkSpotLifecycle {
         this.backendExecutor = backendExecutor;
         this.locations = locations;
         this.registeredSpotTypes = Set.copyOf(registeredSpotTypes);
-        this.entrySpots = new java.util.ArrayList<>();
+        this.entrySpots = new ArrayList<>();
         this.activationFactory = activationFactory;
         this.actorOccupancy = actorOccupancy;
     }
@@ -241,6 +250,27 @@ final class ZLinkSpotLifecycle {
                     .ZLinkSpotRelocationReadyOutcome.RELOCATED);
     }
 
+    Object beginReservedIngressHold(PreparedUserSpot prepared) {
+        requireNewPrepared(prepared);
+        return prepared.created().activation().context
+            .trySealRelocation()
+            .orElseThrow(() -> new IllegalStateException(
+                "reserved relocation target ingress could not be sealed"));
+    }
+
+    void resumeReservedIngress(
+        PreparedUserSpot prepared,
+        Object ingressHold) {
+        requireNewPrepared(prepared);
+        if (!(ingressHold
+                instanceof ZLinkAsyncSerialQueue.RelocationSeal seal)
+            || !prepared.created().activation().context
+                .abortRelocation(seal)) {
+            throw new IllegalStateException(
+                "reserved relocation target ingress hold was lost");
+        }
+    }
+
     CompletionStage<List<byte[]>> replayReserved(
         PreparedUserSpot prepared,
         ZLinkSpotAcceptedJournal.Record record) {
@@ -319,9 +349,9 @@ final class ZLinkSpotLifecycle {
     CompletionStage<Void> completeRelocationSource(
         String spotId,
         long objectGeneration,
-        java.time.Instant deadline) {
+        Instant deadline) {
         requireSpotId(spotId);
-        java.util.Objects.requireNonNull(deadline, "deadline");
+        Objects.requireNonNull(deadline, "deadline");
         SpotActivation current = spots.get(spotId);
         if (current == null) {
             return CompletableFuture.completedFuture(null);
@@ -339,7 +369,7 @@ final class ZLinkSpotLifecycle {
                 "User Spot relocation source changed during cleanup"));
         }
         current.close(
-            systems.zlink.framework.spots.ZLinkSpotCloseReason.RELOCATION_OUT,
+            ZLinkSpotCloseReason.RELOCATION_OUT,
             deadline);
         ZLinkRuntimeMetrics.add(
             "zlink.spot.count", -1, Map.of("kind", "user"));
@@ -391,7 +421,7 @@ final class ZLinkSpotLifecycle {
     }
 
     CompletionStage<Void> awaitApplicationTurns() {
-        List<CompletableFuture<Void>> barriers = new java.util.ArrayList<>();
+        List<CompletableFuture<Void>> barriers = new ArrayList<>();
         for (EntrySpotActivation activation : entrySpots) {
             barriers.add(
                 activation.context.awaitAllLanes().toCompletableFuture());
@@ -403,7 +433,7 @@ final class ZLinkSpotLifecycle {
         return CompletableFuture.allOf(barriers.toArray(CompletableFuture[]::new));
     }
 
-    CompletionStage<systems.zlink.framework.spots.ZLinkActorCreateResponse> notifyEntrySpotActorCreated(
+    CompletionStage<ZLinkActorCreateResponse> notifyEntrySpotActorCreated(
         RoutingId nodeRid,
         ZLinkActor actor,
         ZLinkMessage createRequest,
@@ -413,8 +443,8 @@ final class ZLinkSpotLifecycle {
                 return activation.notifyActorCreated(actor, createRequest, createContext);
             }
         }
-        return java.util.concurrent.CompletableFuture.completedFuture(
-            systems.zlink.framework.spots.ZLinkActorCreateResponse.accept());
+        return CompletableFuture.completedFuture(
+            ZLinkActorCreateResponse.accept());
     }
 
     ZLinkSpot<?> spotFor(String spotId) {
@@ -473,12 +503,12 @@ final class ZLinkSpotLifecycle {
     }
 
     CompletionStage<Void> closeAllAsync() {
-        return closeAllAsync(java.time.Instant.now());
+        return closeAllAsync(Instant.now());
     }
 
-    CompletionStage<Void> closeAllAsync(java.time.Instant deadline) {
-        java.util.concurrent.atomic.AtomicReference<RuntimeException> firstFailure =
-            new java.util.concurrent.atomic.AtomicReference<>();
+    CompletionStage<Void> closeAllAsync(Instant deadline) {
+        AtomicReference<RuntimeException> firstFailure =
+            new AtomicReference<>();
         List<EntrySpotActivation> closingEntrySpots = List.copyOf(entrySpots);
         List<SpotActivation> closingSpots = List.copyOf(spots.values());
         for (EntrySpotActivation entrySpot : closingEntrySpots) {
@@ -504,7 +534,7 @@ final class ZLinkSpotLifecycle {
             ZLinkRuntimeMetrics.add("zlink.spot.count", -spots.size(), Map.of("kind", "user"));
         }
         spots.clear();
-        List<CompletableFuture<Void>> cleanups = new java.util.ArrayList<>();
+        List<CompletableFuture<Void>> cleanups = new ArrayList<>();
         for (EntrySpotActivation entrySpot : closingEntrySpots) {
             cleanups.add(locations.releaseEntrySpotAsync(entrySpot.context.nodeRid())
                 .handle((ignored, error) -> {
@@ -527,13 +557,13 @@ final class ZLinkSpotLifecycle {
     }
 
     private static void recordCloseFailure(
-        java.util.concurrent.atomic.AtomicReference<RuntimeException> target,
+        AtomicReference<RuntimeException> target,
         Throwable error) {
         if (error == null) {
             return;
         }
         Throwable value = error;
-        while (value instanceof java.util.concurrent.CompletionException && value.getCause() != null) {
+        while (value instanceof CompletionException && value.getCause() != null) {
             value = value.getCause();
         }
         RuntimeException failure = value instanceof RuntimeException runtime
@@ -548,13 +578,13 @@ final class ZLinkSpotLifecycle {
 
     CompletionStage<Void> releaseRecreatableSpots() {
         return releaseRecreatableSpots(
-            systems.zlink.framework.spots.ZLinkSpotCloseReason.HOST_SHUTDOWN,
-            java.time.Instant.now());
+            ZLinkSpotCloseReason.HOST_SHUTDOWN,
+            Instant.now());
     }
 
     CompletionStage<Void> releaseRecreatableSpots(
-        systems.zlink.framework.spots.ZLinkSpotCloseReason reason,
-        java.time.Instant deadline) {
+        ZLinkSpotCloseReason reason,
+        Instant deadline) {
         List<String> spotIds = List.copyOf(spots.keySet());
         for (String spotId : spotIds) {
             if (actorOccupancy.hasActorsInSpot(spotId)) {
@@ -562,15 +592,15 @@ final class ZLinkSpotLifecycle {
                     "recreatable spot still has actors: " + spotId));
             }
         }
-        List<SpotActivation> released = new java.util.ArrayList<>(spotIds.size());
+        List<SpotActivation> released = new ArrayList<>(spotIds.size());
         for (String spotId : spotIds) {
             SpotActivation activation = spots.remove(spotId);
             if (activation != null) {
                 released.add(activation);
             }
         }
-        java.util.concurrent.atomic.AtomicReference<RuntimeException> firstFailure =
-            new java.util.concurrent.atomic.AtomicReference<>();
+        AtomicReference<RuntimeException> firstFailure =
+            new AtomicReference<>();
         for (SpotActivation activation : released) {
             recordCloseFailure(
                 firstFailure,
@@ -578,7 +608,7 @@ final class ZLinkSpotLifecycle {
                     () -> activation.close(reason, deadline),
                     null));
         }
-        List<CompletableFuture<Void>> cleanups = new java.util.ArrayList<>(released.size());
+        List<CompletableFuture<Void>> cleanups = new ArrayList<>(released.size());
         for (SpotActivation activation : released) {
             cleanups.add(locations.releaseUserSpotAsync(
                     primaryNode.routingId(), activation.backendSpot.spotId())
@@ -713,7 +743,7 @@ final class ZLinkSpotLifecycle {
 
     private static void requireSpotId(String spotId) {
         try {
-            systems.zlink.framework.runtime.internal.spots.ZLinkSpotIdValidator
+            ZLinkSpotIdValidator
                 .requireValid(spotId);
         } catch (IllegalArgumentException error) {
             throw new ZLinkConfigurationException(error.getMessage(), error);

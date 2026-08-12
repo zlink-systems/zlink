@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime;
 using Zlink.Framework.AspNetCore;
+using Zlink.Framework.Contracts.Messaging;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -177,50 +178,71 @@ public sealed class ActorClientTests
     }
 
     [Fact]
-    public void EveryOneWayBuilder_UsesSingleSubmissionGate()
+    public async Task OneWayBuilders_RejectSecondTerminalWithAlreadySubmitted()
     {
-        var terminalInterfaces = new[]
+        var services = new ServiceCollection();
+        var registration = new ZLinkFrameworkRegistration();
+        services.AddSingleton(registration);
+        await using var provider = services.BuildServiceProvider();
+        var runtime = new ZLinkFrameworkRuntime(
+            provider,
+            null!,
+            registration,
+            new ZLinkHandlerRegistry([]),
+            new ZLinkHandlerDispatcher(
+                provider.GetRequiredService<IServiceScopeFactory>(),
+                registration));
+        var session = new ZLinkSessionContext(
+            runtime,
+            new OneWayTestStream(),
+            new OneWayTestSessionHandlerRegistry(),
+            static () => ValueTask.CompletedTask,
+            static _ => ValueTask.CompletedTask);
+
+        IZLinkSendCall send = new ZLinkRouteClient(runtime)
+            .SendToChannel("missing", new OneWayMessage("send"));
+        IZLinkPublishCall publish = new ZLinkSpotPublisherClientService(runtime)
+            .Publish("missing", "topic", new OneWayMessage("publish"));
+        IZLinkActorSendCall actorSend = new ZLinkActorClient(runtime)
+            .SendToActor("actor", new OneWayMessage("actor"));
+        IZLinkBoundSessionSendCall boundSessionSend =
+            new ZLinkBoundSessionService(runtime)
+                .Create("actor")
+                .Send(new OneWayMessage("bound-session"));
+        IZLinkSessionSendCall sessionSend = session.Client
+            .Send(new OneWayMessage("session"));
+        IZLinkSessionReplyCall sessionReply = session.Client
+            .Reply(new OneWayMessage("reply"));
+
+        var terminals = new (string Contract, Func<CancellationToken, ValueTask> Async)[]
         {
-            typeof(IZLinkSendCall),
-            typeof(IZLinkPublishCall),
-            typeof(IZLinkActorSendCall),
-            typeof(IZLinkBoundSessionSendCall),
-            typeof(IZLinkSessionSendCall),
-            typeof(IZLinkSessionReplyCall)
+            (nameof(IZLinkSendCall), send.Async),
+            (nameof(IZLinkPublishCall), publish.Async),
+            (nameof(IZLinkActorSendCall), actorSend.Async),
+            (nameof(IZLinkBoundSessionSendCall), boundSessionSend.Async),
+            (nameof(IZLinkSessionSendCall), sessionSend.Async),
+            (nameof(IZLinkSessionReplyCall), sessionReply.Async)
         };
-        var builders = typeof(ZLinkActorClient).Assembly
-            .GetTypes()
-            .Where(type => !type.IsAbstract
-                           && terminalInterfaces.Any(contract => contract.IsAssignableFrom(type)))
-            .ToArray();
 
-        Assert.NotEmpty(builders);
-        Assert.All(builders, type => Assert.True(
-            HasSubmissionGate(type),
-            $"{type.FullName} does not enforce single-use submission."));
-    }
+        foreach (var terminal in terminals)
+        {
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            _ = await Record.ExceptionAsync(
+                () => terminal.Async(cancellation.Token).AsTask());
 
-    [Fact]
-    public void OneWayGate_RejectsSecondTerminalWithAlreadySubmitted()
-    {
-        var gate = new ZLinkOneWayCallGate("Actor send");
-        gate.Claim();
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(
+                () => terminal.Async(CancellationToken.None).AsTask());
 
-        var error = Assert.Throws<ZLinkFrameworkException>(gate.Claim);
-
-        Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, error.Kind);
-    }
-
-    private static bool HasSubmissionGate(Type type)
-    {
-        for (var current = type; current is not null; current = current.BaseType)
-            if (current.GetFields(
-                    System.Reflection.BindingFlags.Instance
-                    | System.Reflection.BindingFlags.NonPublic)
-                .Any(field => field.FieldType == typeof(ZLinkOneWayCallGate)))
-                return true;
-
-        return false;
+            Assert.Equal(
+                ZLinkFrameworkErrorKind.InvalidOperation,
+                error.Kind);
+            Assert.True(
+                error.Message.Contains(
+                    "already submitted",
+                    StringComparison.Ordinal),
+                $"{terminal.Contract} did not report second-terminal rejection.");
+        }
     }
 
     private static IReadOnlyList<Message> ActorReplyParts(
@@ -248,4 +270,38 @@ public sealed class ActorClientTests
     }
 
     private sealed record DecodedActorReply(string Value);
+
+    private sealed record OneWayMessage(string Value);
+
+    private sealed class OneWayTestSessionHandlerRegistry
+        : IZLinkSessionHandlerRegistry
+    {
+        public void AddHandler<THandler>() where THandler : class { }
+
+        public void AddHandler<THandler>(string packetName)
+            where THandler : class { }
+
+        public ValueTask<bool> TryHandleAsync(
+            ZLinkSessionDispatchContext dispatch,
+            ZLinkMessage payload,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(false);
+    }
+
+    private sealed class OneWayTestStream : IZLinkStream
+    {
+        public string SessionId => "one-way";
+
+        public RoutingId? RoutingId => null;
+
+        public string? LocalAddr => null;
+
+        public string? RemoteAddr => null;
+
+        public bool Write(
+            ZLinkMessage payload,
+            SendFlags flags = SendFlags.None) => false;
+
+        public ValueTask CloseAsync() => ValueTask.CompletedTask;
+    }
 }

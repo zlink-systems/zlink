@@ -22,7 +22,7 @@ store endpoint와 실행별 key prefix를 넘긴다. client scenario는 publishe
 | `feature-map.ko.md` | `feature-map.ko.md` | docs | done | `.NET feature-map`처럼 Pub/Sub subscriber 역할 server의 bounded `/evidence/wait`를 성공 기준으로 반영했다. |
 | `run_e2e.sh` | `run_e2e.sh` | runner | done | registry role 없이 publisher/subscriber role project binary를 시작하고 Redis location endpoint/key prefix, readiness, cleanup, 실패 로그 출력을 처리한다. |
 | `Shared/PubSub.Shared.csproj` | `Shared/build.gradle.kts` | build | done | Kotlin Shared project로 분리했다. |
-| `Shared/Messages.cs` | `Shared/src/main/kotlin/systems/zlink/e2e/kotlin/pubsub/shared/Messages.kt` | shared | done | 기존 `Contracts.kt`의 `EventMsg`, `EvidenceEntry`, `EvidenceSnapshot`을 Shared로 옮겼다. |
+| `Shared/Messages.cs` | `Shared/src/main/kotlin/systems/zlink/e2e/kotlin/pubsub/shared/Messages.kt` | shared | done | 기존 `Contracts.kt`의 `Event`, `EvidenceEntry`, `EvidenceSnapshot`을 Shared로 옮겼다. |
 | `Client/PubSub.Client.csproj` | `Client/build.gradle.kts` | build | done | Client application project로 분리했다. |
 | `Client/Program.cs` | `Client/src/main/kotlin/systems/zlink/e2e/kotlin/pubsub/client/Program.kt` | client-entry | done | Client는 Spring framework client를 들지 않고 publisher role HTTP endpoint를 호출한다. |
 | `Client/Support/ClientOptions.cs` | `Client/src/main/kotlin/systems/zlink/e2e/kotlin/pubsub/client/Support/ClientOptions.kt` | support | done | Client CLI option parsing으로 분리했다. |

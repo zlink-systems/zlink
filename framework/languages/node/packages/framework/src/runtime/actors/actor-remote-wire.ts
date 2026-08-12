@@ -2,7 +2,7 @@ import type { RoutingId, SpotId, ZLinkActorJoinOperationId } from '../../contrac
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendActorRef } from '../backend/contracts';
 import type { ZLinkRemoteBoundSessionTarget } from './actor-runtime-state';
-import type { ZLinkActorHandoffPacket, ZLinkActorHandoffResult } from './actor-handoff';
+import type { ZLinkActorHandoffPacket } from './actor-handoff';
 import { decodeRoutingId, routingIdWireHex } from '../routing-id';
 import { frameworkPayloadContentType } from '../messaging/payload-codec';
 
@@ -89,45 +89,6 @@ export interface ZLinkRemoteActorJoinWirePayload {
   readonly completionOperationLow?: unknown;
 }
 
-export interface ZLinkRemoteActorJoinRequest {
-  readonly packetName: typeof REMOTE_ACTOR_JOIN_PACKET;
-  readonly actorId: string;
-  readonly actorType: string;
-  readonly actorNodeRid: string;
-  readonly actorNodeRidHex?: string;
-  readonly actorGeneration: string;
-  readonly expectedMembershipEpoch: string;
-  readonly actorEntryNodeRid?: string;
-  readonly actorEntryNodeRidHex?: string;
-  readonly actorCreateRequest?: string;
-  readonly phase?: ZLinkRemoteActorJoinPhase;
-  readonly transferId?: string;
-  readonly transferAdapterKey?: string;
-  readonly transferState?: string;
-  readonly transferStateReference?: string;
-  readonly transferStateChecksumCrc32c?: number;
-  readonly routerChannelId?: string;
-  readonly sourceSpotId?: string;
-  readonly boundSessionRouterChannelId?: string;
-  readonly boundSessionTargetNodeRid?: string;
-  readonly boundSessionTargetNodeRidHex?: string;
-  readonly boundSessionSpotId?: string;
-  readonly boundSessionNodeRid?: string;
-  readonly boundSessionNodeRidHex?: string;
-  readonly boundSessionRid?: string;
-  readonly boundSessionRidHex?: string;
-  readonly boundSessionBindingGeneration?: string;
-  readonly boundSessionPreviousAuthorityOwnerGeneration?: string;
-  readonly boundSessionPreviousOwnerLeaseGeneration?: string;
-  readonly boundSessionAcceptedHighWater?: string;
-  readonly boundSessionRelocationSealId?: string;
-  readonly boundSessionAcceptedJournalReference?: string;
-  readonly boundSessionAcceptedJournalChecksumCrc32c?: number;
-  readonly handoffBacklog?: readonly ZLinkActorHandoffPacket[];
-  readonly completionOperationHigh?: string;
-  readonly completionOperationLow?: string;
-}
-
 export interface ZLinkRemoteActorJoinRequestPayload {
   readonly packetName: typeof REMOTE_ACTOR_JOIN_PACKET;
   readonly spotId?: string;
@@ -191,15 +152,6 @@ interface ZLinkRemoteActorJoinRequestPayloadOptions {
   readonly transferStateChecksumCrc32c?: number;
   readonly handoffBacklog?: readonly ZLinkActorHandoffPacket[];
   readonly completionOperationId?: ZLinkActorJoinOperationId;
-}
-
-export interface ZLinkRemoteActorJoinReply {
-  readonly accepted: boolean;
-  readonly actorNodeRid: string;
-  readonly actorNodeRidHex?: string;
-  readonly actorId: string;
-  readonly actorGeneration: string;
-  readonly handoffResults?: readonly ZLinkActorHandoffResult[];
 }
 
 export function buildRemoteActorJoinRequestPayload(

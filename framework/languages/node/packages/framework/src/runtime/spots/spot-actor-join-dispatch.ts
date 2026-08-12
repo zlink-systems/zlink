@@ -1,5 +1,4 @@
 import type {
-  ActorRef,
   RoutingId,
   ZLinkActor,
   ZLinkMessage,
@@ -38,6 +37,7 @@ import type { ZLinkSpotHandlerRegistration } from './spot-handler-registry';
 import type { ZLinkSpotSerialExecutor } from './spot-serial-executor';
 import type { ZLinkApplicationWorkClaim } from '../admission';
 import type { ZLinkActorHandoffPacket, ZLinkActorHandoffResult } from '../actors/actor-handoff';
+import type { ZLinkActorPacketDelivery } from './spot-actor-packet-dispatch';
 import type {
   ZLinkSpotActorTransferRuntime,
   ZLinkSpotBoundSessionRuntime
@@ -77,13 +77,7 @@ interface ZLinkSpotActorAdmissionRuntime {
 }
 
 interface ZLinkSpotActorPacketRuntime {
-  readonly handle: (
-    actorId: string,
-    parts: readonly Message[],
-    returnResponse?: boolean,
-    remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
-    fallbackActorRef?: ActorRef
-  ) => Promise<unknown>;
+  readonly handle: (delivery: ZLinkActorPacketDelivery) => Promise<unknown>;
   readonly bindRemoteSession?: (
     actor: ZLinkBackendActorRef,
     sourceNodeRid: RoutingId,

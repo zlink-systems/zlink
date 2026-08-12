@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.binding;
+import java.util.function.BooleanSupplier;
 
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
@@ -42,7 +43,7 @@ final class ZLinkJavaMeshDispatchPump implements AutoCloseable {
 
     private final Source source;
     private final Function<ZLinkMeshDispatchRecord, CompletionStage<Void>> receiver;
-    private final java.util.function.BooleanSupplier canReceiveApplication;
+    private final BooleanSupplier canReceiveApplication;
     private final ExecutorService executor;
     private final AtomicInteger pendingDomains = new AtomicInteger();
     private final AtomicBoolean scheduled = new AtomicBoolean();
@@ -70,7 +71,7 @@ final class ZLinkJavaMeshDispatchPump implements AutoCloseable {
     ZLinkJavaMeshDispatchPump(
         Source source,
         Function<ZLinkMeshDispatchRecord, CompletionStage<Void>> receiver,
-        java.util.function.BooleanSupplier canReceiveApplication,
+        BooleanSupplier canReceiveApplication,
         ExecutorService executor) {
         this.source = Objects.requireNonNull(source, "source");
         this.receiver = Objects.requireNonNull(receiver, "receiver");

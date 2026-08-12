@@ -49,7 +49,7 @@ import {
 import {
   BoundPushNotify,
   BoundPushReq,
-  HandoffProbe,
+  HandoffProbeMsg,
   JoinTargetReq,
   ProbeReq,
   ObservabilityOpsNames,
@@ -309,7 +309,7 @@ class ProbeHandler implements ZLinkSpotActorRequestHandler<TransferUserSpot, Tra
 })
 class HandoffHandler {
   @ZLinkSpotActorSend(ObservabilityOpsNames.packetHandoff)
-  async handle(_spot: TransferUserSpot, actor: TransferActor, _context: ZLinkMessageContext, message: HandoffProbe): Promise<void> {
+  async handle(_spot: TransferUserSpot, actor: TransferActor, _context: ZLinkMessageContext, message: HandoffProbeMsg): Promise<void> {
     evidence.add(
       message.scenario,
       actor.actorId,
@@ -325,9 +325,9 @@ class HandoffHandler {
   entrySpot: () => TransferEntrySpot,
   packetName: ObservabilityOpsNames.packetHandoff
 })
-class EntryHandoffHandler implements ZLinkEntrySpotActorSendHandler<TransferEntrySpot, TransferActor, HandoffProbe> {
+class EntryHandoffHandler implements ZLinkEntrySpotActorSendHandler<TransferEntrySpot, TransferActor, HandoffProbeMsg> {
   @ZLinkSpotActorSend(ObservabilityOpsNames.packetHandoff)
-  async handle(_spot: TransferEntrySpot, actor: TransferActor, _context: ZLinkMessageContext, message: HandoffProbe): Promise<void> {
+  async handle(_spot: TransferEntrySpot, actor: TransferActor, _context: ZLinkMessageContext, message: HandoffProbeMsg): Promise<void> {
     evidence.add(message.scenario, actor.actorId, 'entry_packet_handler', message.marker);
   }
 }
@@ -631,8 +631,8 @@ async function main(): Promise<void> {
     },
     {
       method: 'POST', path: /^\/actors\/([^/]+)\/handoff$/, handle: async (body, match) => {
-        const input = body as HandoffProbe;
-        await actorClient.sendToActor(match![1], new HandoffProbe(input.scenario, input.marker, input.delayMs, input.requestTimeoutMs)).submit();
+        const input = body as HandoffProbeMsg;
+        await actorClient.sendToActor(match![1], new HandoffProbeMsg(input.scenario, input.marker, input.delayMs, input.requestTimeoutMs)).submit();
         return { accepted: true };
       }
     },
@@ -640,8 +640,8 @@ async function main(): Promise<void> {
       method: 'POST', path: /^\/actors\/([^/]+)\/handoff-stale$/, handle: async (body, match) => {
         const actor = capturedActorRefs.get(match![1]);
         if (actor === undefined) throw new Error(`Actor '${match![1]}' does not have a captured ref.`);
-        const input = body as HandoffProbe;
-        await actorClient.sendToActor(match![1], new HandoffProbe(input.scenario, input.marker, input.delayMs, input.requestTimeoutMs)).submit();
+        const input = body as HandoffProbeMsg;
+        await actorClient.sendToActor(match![1], new HandoffProbeMsg(input.scenario, input.marker, input.delayMs, input.requestTimeoutMs)).submit();
         return { accepted: true };
       }
     },

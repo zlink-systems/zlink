@@ -29,7 +29,7 @@ inline void run_sm_b5_scenario (const std::string &play_http_endpoint)
                              .display_name = "SM-B5 Missing",
                              .level = 5,
                              .tags = {"missing", "actor"}},
-          .packet_name = "MissingActorPacket"})
+          .packet_name = "MissingActorReq"})
         .submit_raw ()
         .result ();
     if (!missing) {

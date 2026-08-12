@@ -2289,19 +2289,19 @@ host_maintenance_runtime_t::host_maintenance_runtime_t (
 void host_maintenance_runtime_t::mark_serving ()
 {
     std::lock_guard lock (_mutex);
-    if (_state != host_runtime_state_t::preparing)
+    if (_state != maintenance_admission_state_t::preparing)
         throw std::logic_error ("host can become serving only from preparing");
-    _state = host_runtime_state_t::serving;
+    _state = maintenance_admission_state_t::serving;
 }
 
 void host_maintenance_runtime_t::mark_error ()
 {
     std::lock_guard lock (_mutex);
-    if (_state != host_runtime_state_t::stopped)
-        _state = host_runtime_state_t::error;
+    if (_state != maintenance_admission_state_t::stopped)
+        _state = maintenance_admission_state_t::error;
 }
 
-host_runtime_state_t host_maintenance_runtime_t::state () const
+maintenance_admission_state_t host_maintenance_runtime_t::state () const
 {
     std::lock_guard lock (_mutex);
     return _state;
@@ -2331,7 +2331,7 @@ termination_result_t host_maintenance_runtime_t::terminate (
         std::unique_lock lock (_mutex);
         if (_terminal)
             return *_terminal;
-        if (_state == host_runtime_state_t::stopped) {
+        if (_state == maintenance_admission_state_t::stopped) {
             return {
               intent, termination_outcome_t::stopped,
               termination_reason_t::none};
@@ -2348,7 +2348,7 @@ termination_result_t host_maintenance_runtime_t::terminate (
             return _attempt_results.at (attempt);
         }
         if (intent == termination_intent_t::retire
-            && _state != host_runtime_state_t::serving) {
+            && _state != maintenance_admission_state_t::serving) {
             return {
               intent, termination_outcome_t::blocked,
               termination_reason_t::runtime_not_ready};
@@ -2461,12 +2461,12 @@ termination_result_t host_maintenance_runtime_t::run_retire ()
         std::lock_guard lock (_mutex);
         if (_shutdown_claimed) {
             _effective_intent = termination_intent_t::shutdown;
-            _state = host_runtime_state_t::draining;
+            _state = maintenance_admission_state_t::draining;
         } else if (preflight.status
                    == target_preflight_status_t::eligible
                    && exact_preflight) {
             _effective_intent = termination_intent_t::retire;
-            _state = host_runtime_state_t::retiring;
+            _state = maintenance_admission_state_t::retiring;
         } else {
             termination_reason_t reason =
               termination_reason_t::target_unavailable;
@@ -2506,12 +2506,12 @@ termination_result_t host_maintenance_runtime_t::run_retire ()
           }
           {
               std::lock_guard lock (_mutex);
-              _state = host_runtime_state_t::draining;
+              _state = maintenance_admission_state_t::draining;
           }
           _sessions.force_close_all ();
           {
               std::lock_guard lock (_mutex);
-              _state = host_runtime_state_t::stopped;
+              _state = maintenance_admission_state_t::stopped;
           }
           return termination_result_t{
             termination_intent_t::retire,
@@ -2598,13 +2598,13 @@ termination_result_t host_maintenance_runtime_t::run_retire ()
     }
     {
         std::lock_guard lock (_mutex);
-        _state = host_runtime_state_t::draining;
+        _state = maintenance_admission_state_t::draining;
     }
     if (!_sessions.try_seal_all ()) {
         _sessions.force_close_all ();
         {
             std::lock_guard lock (_mutex);
-            _state = host_runtime_state_t::stopped;
+            _state = maintenance_admission_state_t::stopped;
         }
         return {
           termination_intent_t::retire,
@@ -2613,7 +2613,7 @@ termination_result_t host_maintenance_runtime_t::run_retire ()
     }
     {
         std::lock_guard lock (_mutex);
-        _state = host_runtime_state_t::stopped;
+        _state = maintenance_admission_state_t::stopped;
     }
     return {
       termination_intent_t::retire,
@@ -2628,7 +2628,7 @@ termination_result_t host_maintenance_runtime_t::run_shutdown (
     {
         std::lock_guard lock (_mutex);
         _effective_intent = effective_intent;
-        _state = host_runtime_state_t::draining;
+        _state = maintenance_admission_state_t::draining;
         acquire_inventory = !_inventory_sealed;
     }
     if (acquire_inventory) {
@@ -2637,7 +2637,7 @@ termination_result_t host_maintenance_runtime_t::run_shutdown (
         if (!inventory) {
             {
                 std::lock_guard lock (_mutex);
-                _state = host_runtime_state_t::stopped;
+                _state = maintenance_admission_state_t::stopped;
             }
             return {
               effective_intent,
@@ -2652,7 +2652,7 @@ termination_result_t host_maintenance_runtime_t::run_shutdown (
         _sessions.force_close_all ();
     {
         std::lock_guard lock (_mutex);
-        _state = host_runtime_state_t::stopped;
+        _state = maintenance_admission_state_t::stopped;
     }
     return {
       effective_intent,
@@ -2679,8 +2679,8 @@ void host_maintenance_runtime_t::complete_attempt (
         else {
             release_inventory = _inventory_sealed;
             _inventory_sealed = false;
-            if (_state == host_runtime_state_t::retiring)
-                _state = host_runtime_state_t::serving;
+            if (_state == maintenance_admission_state_t::retiring)
+                _state = maintenance_admission_state_t::serving;
         }
     }
     if (release_inventory)

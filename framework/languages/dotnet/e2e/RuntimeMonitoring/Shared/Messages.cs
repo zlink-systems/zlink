@@ -15,6 +15,8 @@ public sealed record ProfileReq(string Value, string Marker);
 
 public sealed record ProfileRes(string Value, string ProviderRid, string Marker);
 
+public sealed record ProfileEvent(string Value, string Marker);
+
 public sealed record DrainResultRes(string Result, string? Reason = null);
 
 public sealed record MeshRuntimeSnapshotRes(

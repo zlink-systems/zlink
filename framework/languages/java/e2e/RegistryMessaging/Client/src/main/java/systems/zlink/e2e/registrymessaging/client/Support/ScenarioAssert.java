@@ -1,4 +1,7 @@
 package systems.zlink.e2e.registrymessaging.client.Support;
+import java.util.HashSet;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 
 import java.util.Arrays;
 import java.util.Set;
@@ -37,7 +40,7 @@ public final class ScenarioAssert {
     public static Contracts.ProfileRes requestProfileEventually(
         ZLinkHttpClient role,
         String marker) {
-        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(15);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
         RuntimeException lastError = null;
         while (System.nanoTime() < deadline) {
             try {
@@ -56,8 +59,8 @@ public final class ScenarioAssert {
         ZLinkHttpClient role,
         String markerPrefix,
         Set<String> expectedProviders) {
-        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30);
-        Set<String> providers = new java.util.HashSet<>();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        Set<String> providers = new HashSet<>();
         int index = 0;
         while (System.nanoTime() < deadline && !providers.containsAll(expectedProviders)) {
             Contracts.ProfileRes reply = requestProfileEventually(role, markerPrefix + "-" + index);
@@ -72,7 +75,7 @@ public final class ScenarioAssert {
         ZLinkHttpClient first,
         ZLinkHttpClient second,
         String contains) {
-        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
         String[] combined = concat(evidence(first), evidence(second));
         while (System.nanoTime() < deadline) {
             combined = concat(evidence(first), evidence(second));
@@ -85,7 +88,7 @@ public final class ScenarioAssert {
     }
 
     public static String[] concat(String[] first, String[] second) {
-        return java.util.stream.Stream.concat(Arrays.stream(first), Arrays.stream(second))
+        return Stream.concat(Arrays.stream(first), Arrays.stream(second))
             .toArray(String[]::new);
     }
 

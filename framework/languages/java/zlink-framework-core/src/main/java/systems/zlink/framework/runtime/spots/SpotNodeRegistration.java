@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.spots;
+import java.util.Locale;
+import java.util.UUID;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -69,8 +71,8 @@ public final class SpotNodeRegistration {
         if (entrySpotId == null) {
             entrySpotId = nodeName
                 + "-entry-"
-                + java.util.UUID.randomUUID().toString()
-                    .toLowerCase(java.util.Locale.ROOT);
+                + UUID.randomUUID().toString()
+                    .toLowerCase(Locale.ROOT);
         }
         return entrySpotId;
     }

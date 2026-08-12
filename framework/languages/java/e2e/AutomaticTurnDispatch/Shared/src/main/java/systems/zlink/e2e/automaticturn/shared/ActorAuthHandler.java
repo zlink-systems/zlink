@@ -1,4 +1,5 @@
 package systems.zlink.e2e.automaticturn.shared;
+import systems.zlink.framework.actors.ActorRef;
 
 import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
@@ -34,7 +35,7 @@ public final class ActorAuthHandler
                 .submit());
     }
 
-    private static systems.zlink.framework.actors.ActorRef requireActor(
+    private static ActorRef requireActor(
         ZLinkActorCreateResult result) {
         return switch (result) {
             case ZLinkActorCreateResult.Existing existing -> existing.actor();

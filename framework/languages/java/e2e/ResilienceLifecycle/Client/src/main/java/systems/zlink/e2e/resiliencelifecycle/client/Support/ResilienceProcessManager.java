@@ -1,4 +1,5 @@
 package systems.zlink.e2e.resiliencelifecycle.client.Support;
+import java.nio.file.FileAlreadyExistsException;
 
 import java.io.IOException;
 import java.net.ServerSocket;
@@ -104,7 +105,7 @@ public final class ResilienceProcessManager implements AutoCloseable {
     public void touchSignal(String name) {
         try {
             Files.createFile(controlDir().resolve(name));
-        } catch (java.nio.file.FileAlreadyExistsException ignored) {
+        } catch (FileAlreadyExistsException ignored) {
         } catch (IOException error) {
             throw new IllegalStateException("failed to create control signal " + name, error);
         }

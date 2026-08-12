@@ -27,6 +27,7 @@ internal sealed record ZLinkCanonicalRelocationAuthorityState(
     byte SourceCleanupState)
 {
     internal ulong AggregateGeneration { get; init; }
+    internal string CoordinatorExpectedAuthorityStoreVersion { get; init; } = "";
 }
 
 internal sealed record ZLinkCanonicalRelocationAuthorityProjection(
@@ -118,11 +119,14 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
             var pendingCount = relocation.U32();
             var cleanup = relocation.U8();
             var aggregateGeneration = 0UL;
+            var coordinatorExpectedStoreVersion = string.Empty;
             if (!relocation.End)
             {
                 if (relocation.U8() != 1)
                     return false;
                 aggregateGeneration = relocation.U64();
+                if (!relocation.End)
+                    coordinatorExpectedStoreVersion = relocation.Text8();
             }
             if (!relocation.End)
                 return false;
@@ -151,7 +155,9 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
                 coordinatorNodeRid, coordinatorNodeGeneration,
                 phase, reference, checksum, applicationVersion, cleanup)
             {
-                AggregateGeneration = aggregateGeneration
+                AggregateGeneration = aggregateGeneration,
+                CoordinatorExpectedAuthorityStoreVersion =
+                    coordinatorExpectedStoreVersion
             };
             projection = new ZLinkCanonicalRelocationAuthorityProjection(
                 high, low, attempt, targetOwner, targetLease, phase,
@@ -445,6 +451,12 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
         WriteU64(
             body,
             root?.AggregateGeneration ?? value.AggregateGeneration);
+        if (!string.IsNullOrWhiteSpace(
+                value.CoordinatorExpectedAuthorityStoreVersion))
+            WriteText8(
+                body,
+                value.CoordinatorExpectedAuthorityStoreVersion,
+                optional: false);
         using var slot = new MemoryStream();
         slot.WriteByte(1);
         WriteU32(slot, checked((uint)body.Length));

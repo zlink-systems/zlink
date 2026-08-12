@@ -1,4 +1,8 @@
 package systems.zlink.e2e.runtimemonitoring.trigger;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
+import java.util.ArrayList;
+import java.util.List;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -80,7 +84,7 @@ public final class Program {
         private final ObjectMapper json;
         private final TriggerEvidence evidence;
         private final String endpoint;
-        private com.sun.net.httpserver.HttpServer server;
+        private HttpServer server;
         private boolean running;
 
         public TriggerEndpoints(
@@ -98,7 +102,7 @@ public final class Program {
         public void start() {
             try {
                 URI uri = URI.create(endpoint);
-                server = com.sun.net.httpserver.HttpServer.create(
+                server = HttpServer.create(
                     new InetSocketAddress(uri.getHost(), uri.getPort()), 0);
                 server.createContext("/health", exchange -> write(exchange, "ok\n"));
                 server.createContext("/evidence", exchange ->
@@ -127,15 +131,15 @@ public final class Program {
         }
 
         private static void write(
-            com.sun.net.httpserver.HttpExchange exchange,
-            String value) throws java.io.IOException {
+            HttpExchange exchange,
+            String value) throws IOException {
             write(exchange, 200, value);
         }
 
         private static void write(
-            com.sun.net.httpserver.HttpExchange exchange,
+            HttpExchange exchange,
             int status,
-            String value) throws java.io.IOException {
+            String value) throws IOException {
             byte[] body = value.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "text/plain");
             exchange.sendResponseHeaders(status, body.length);
@@ -144,7 +148,7 @@ public final class Program {
         }
 
         private void writeJson(
-            com.sun.net.httpserver.HttpExchange exchange,
+            HttpExchange exchange,
             int status,
             Object value) throws IOException {
             byte[] body = json.writeValueAsBytes(value);
@@ -174,7 +178,7 @@ public final class Program {
     }
 
     public static final class TriggerEvidence {
-        private final java.util.List<Contracts.EvidenceEntry> entries = new java.util.ArrayList<>();
+        private final List<Contracts.EvidenceEntry> entries = new ArrayList<>();
 
         public synchronized void record(
             String surface,
@@ -185,7 +189,7 @@ public final class Program {
         }
 
         public synchronized Contracts.EvidenceSnapshot snapshot() {
-            return new Contracts.EvidenceSnapshot(java.util.List.copyOf(entries));
+            return new Contracts.EvidenceSnapshot(List.copyOf(entries));
         }
     }
 

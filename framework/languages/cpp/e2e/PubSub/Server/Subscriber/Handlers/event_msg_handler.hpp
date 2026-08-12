@@ -13,13 +13,13 @@ template <const char *Topic> class event_handler_t
 {
   public:
     using dependency_types = zlink::framework::dependency_list_t<evidence_store_t>;
-    using event_type = event_msg_t;
+    using event_type = event_t;
     static constexpr const char *topic_name = Topic;
 
     explicit event_handler_t (evidence_store_t &state) : _state (state) {}
 
     void handle (
-      const event_msg_t &event,
+      const event_t &event,
       const zlink::framework::publish_message_context_t &context)
     {
         if (_state.handler_delay_ms > 0) {

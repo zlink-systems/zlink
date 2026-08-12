@@ -1,4 +1,6 @@
 package systems.zlink.e2e.spotservice.shared;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.channels.ZLinkSendHandler;
 import systems.zlink.framework.ZLinkMessageContext;
@@ -11,10 +13,10 @@ public final class IngressMsgHandler implements ZLinkSendHandler<Contracts.Outbo
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> handle(
+    public CompletionStage<Void> handle(
         Contracts.OutboundMsg message,
         ZLinkMessageContext context) {
         state.record("IngressMsg", "channel", message.value());
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 }

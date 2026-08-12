@@ -1,4 +1,5 @@
 package systems.zlink.framework.spring;
+import java.util.Objects;
 
 import org.springframework.boot.actuate.health.Health;
 import org.springframework.boot.actuate.health.HealthIndicator;
@@ -8,7 +9,7 @@ public final class ZLinkDrainReadinessContributor implements HealthIndicator {
     private final ZLinkFrameworkLifecycle lifecycle;
 
     public ZLinkDrainReadinessContributor(ZLinkFrameworkLifecycle lifecycle) {
-        this.lifecycle = java.util.Objects.requireNonNull(lifecycle, "lifecycle");
+        this.lifecycle = Objects.requireNonNull(lifecycle, "lifecycle");
     }
 
     @Override

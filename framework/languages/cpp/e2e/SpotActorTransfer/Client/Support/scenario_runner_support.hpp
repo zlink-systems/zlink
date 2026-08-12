@@ -279,7 +279,9 @@ inline void scenario_runner_t::joined_timeout_terminal ()
     wait_evidence (
       _nodes.b,
       {"ST-C3|" + actor_id + "|joined_wait|" + target.spot_id});
-    std::this_thread::sleep_for (std::chrono::milliseconds (1200));
+    // The deferred join carries a 3s deadline; keep the joined gate closed
+    // past that deadline so the completion terminal is deadline_exceeded.
+    std::this_thread::sleep_for (std::chrono::milliseconds (3500));
     release_joined_gate (_nodes.b, target.spot_id);
     wait_evidence (
       _nodes.b,

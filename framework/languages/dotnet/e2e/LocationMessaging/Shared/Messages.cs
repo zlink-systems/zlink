@@ -6,6 +6,8 @@ public sealed record ProfileRes(string Value, string ProviderRid);
 
 public sealed record ProfileMsg(string CommandId);
 
+public sealed record ProfileEvent(string CommandId);
+
 public sealed record BackpressureMsg(string CommandId, string Payload);
 
 public sealed record MissingProfileReq(string Value);
@@ -55,11 +57,11 @@ public sealed record WorkflowReq(string Value);
 
 public sealed record WorkflowRes(string Value, string ProviderRid);
 
-public sealed record ScenarioRoutePing(string Value);
+public sealed record ScenarioRouteReq(string Value);
 
-public sealed record TargetedRoutePing(string TargetRid, string Value);
+public sealed record TargetedRouteReq(string TargetRid, string Value);
 
-public sealed record ScenarioRoutePong(
+public sealed record ScenarioRouteRes(
     string Value,
     string ProviderRid,
     string SourceRid);

@@ -20,10 +20,16 @@ internal static class ZLinkActorReplyDecoder
         {
             if (reply.Count == 1)
             {
-                var frame = reply[0].AsReadOnlySpan();
-                if (!ZLinkStreamFrameCodec.TryDecode(frame, out var headerBytes, out payload))
+                var frameMemory = reply[0].AsReadOnlyMemory();
+                if (!ZLinkStreamFrameCodec.TryDecode(
+                        frameMemory.Span, out var headerBytes, out payload))
                     throw new InvalidOperationException("Actor request reply frame is invalid.");
-                header = ZLinkStreamProtocolDefaults.DecodeHeader(headerBytes.ToArray());
+                // The header always sits at PrefixSize inside the frame, so
+                // re-slicing the frame memory decodes without copying the
+                // header bytes out first.
+                header = ZLinkStreamProtocolDefaults.DecodeHeader(
+                    frameMemory.Slice(
+                        ZLinkStreamFrameCodec.PrefixSize, headerBytes.Length));
             }
             else
             {

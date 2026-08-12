@@ -1,5 +1,7 @@
 package systems.zlink.e2e.kotlin.registrationcodec.codecrequester
 
+
+import systems.zlink.framework.channels.ZLinkClient
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.boot.ApplicationArguments
 import org.springframework.boot.WebApplicationType
@@ -52,7 +54,7 @@ class CodecRequesterApplication {
                 .connect(options.serverEndpoint)
         }
 
-    @Bean fun codecRequesterProbe(client: systems.zlink.framework.channels.ZLinkClient): CodecRequesterProbe =
+    @Bean fun codecRequesterProbe(client: ZLinkClient): CodecRequesterProbe =
         CodecRequesterProbe(client)
 }
 

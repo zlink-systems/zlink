@@ -17,7 +17,7 @@ option은 CLI argument로 받는다. 파일별 재분류 상태는 `porting-inve
 | RC-A5 | 구현 완료 | `RcA5FilterOrderingScenario`가 `FirstOrderFilter`와 `SecondOrderFilter` 순서 evidence를 확인한다. |
 | RC-A6 | 구현 완료 | `Server/InvalidDuplicate` process가 duplicate packet registration startup failure를 내는지 runner가 확인한다. |
 | RC-B1 | 구현 완료 | `RcB1JsonCodecScenario`가 JSON request/send round-trip과 evidence를 확인한다. |
-| RC-B2 | 구현 완료 | `RcB2ProtobufCodecScenario`가 Protobuf `StringValue` request/send round-trip과 evidence를 확인한다. |
+| RC-B2 | 구현 완료 | `RcB2ProtobufCodecScenario`가 Protobuf `ProtobufEchoReq/Res/Msg` request/send round-trip과 evidence를 확인한다. |
 | RC-B3 | 구현 완료 | `RcB3MessagePackCodecScenario`가 MessagePack 대상 DTO request/send round-trip과 evidence를 확인한다. |
 | RC-B4 | 구현 완료 | `RcB4CodecCoexistenceScenario`가 JSON/Protobuf/MessagePack codec 공존 처리를 확인한다. |
 | RC-B5 | 구현 완료 | `Server/JsonOnlyPeer`와 `Server/CodecRequester` process가 codec mismatch error와 이후 정상 JSON traffic 회복을 확인한다. |

@@ -155,11 +155,11 @@ class evidence_wait_handler_t
 {
   public:
     using dependency_types = fw::dependency_list_t<session_evidence_store_t>;
-    using request_type = e2e::actor_call_request_t;
-    using reply_type = e2e::actor_call_response_t;
+    using request_type = e2e::actor_call_req_t;
+    using reply_type = e2e::actor_call_res_t;
     explicit evidence_wait_handler_t (session_evidence_store_t &evidence) : _evidence (evidence) {}
 
-    e2e::actor_call_response_t handle (const e2e::actor_call_request_t &request)
+    e2e::actor_call_res_t handle (const e2e::actor_call_req_t &request)
     {
         return {request.scenario, request.actor_id,
                 _evidence.wait (request.actor_id, request.value) ? "observed" : "timeout", ""};

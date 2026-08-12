@@ -9,12 +9,19 @@ import {
   BingoNumberDrawnNotify,
   BingoRewardAcquiredEvent,
   BingoRewardAnnouncedNotify,
+  BingoRoomCreateReq,
   BingoRoomJoinReq,
   BingoRoomJoinRes,
+  DeliverBingoGameEndedMsg,
+  DeliverBingoGameStartedMsg,
+  DeliverBingoNumberDrawnMsg,
+  DeliverBingoRewardAnnouncedMsg,
+  DeliverPlayerJoinedMsg,
   GetPlayerRecordReq,
   ReportBingoResultReq,
   PlayerJoinedNotify,
-  SubmitBingoCardRes
+  SubmitBingoCardRes,
+  LeaveFinishedBingoRoomMsg
 } from '../../../../../../Shared/Contracts/bingo-messages.generated';
 import { BingoRoomGame } from '../../../../Domain/Bingo/bingo-room-game';
 import { BingoRoomStatus } from '../../../../Domain/Bingo/bingo-room-game';
@@ -22,7 +29,6 @@ import { createRoomSettings, roomSettingsFromPayload } from '../../../../Domain/
 import { SampleNames } from '../../../../../Configuration/sample-names';
 import { BingoRoomTimerHandler } from './Handlers/bingo-room-timer-handler';
 import { PlayerActor } from '../../Actors/player-actor';
-import { LeaveFinishedBingoRoom } from '../../../../../../Shared/Contracts/bingo-messages.generated';
 import type {
   ZLinkActorClient,
   ZLinkMessage,
@@ -38,8 +44,7 @@ import type {
   BingoRoomSnapshot
 } from '../../../../Domain/Bingo/bingo-room-game';
 import type {
-  BingoRoomSettings as BingoRoomRuntimeSettings,
-  BingoRoomSettingsInput
+  BingoRoomSettings as BingoRoomRuntimeSettings
 } from '../../../../Domain/Bingo/bingo-room-models';
 import type {
   GetPlayerRecordRes,
@@ -82,8 +87,8 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
 
   async onCreate(request: ZLinkMessage): Promise<ZLinkSpotCreateResponse> {
     this.roomId = this.context.spotId;
-    const settings = request.decode<BingoRoomSettingsInput>(Object as never);
-    this.initializeRoom(roomSettingsFromPayload(settings));
+    const create = request.decode<BingoRoomCreateReq>();
+    this.initializeRoom(roomSettingsFromPayload(create.settings));
     return { accepted: true };
   }
 
@@ -223,14 +228,16 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     const state = this.snapshot();
     await this.pushPlayers(
       this.playerActors(),
-      new BingoNumberDrawnNotify({ roomId: this.roomId, drawSeq: drawn.drawSeq, number: drawn.number, state })
+      new DeliverBingoNumberDrawnMsg({
+        notification: new BingoNumberDrawnNotify({ roomId: this.roomId, drawSeq: drawn.drawSeq, number: drawn.number, state })
+      })
     );
     if (drawn.finished) {
       await this.drawTimer?.cancel();
       this.drawTimer = undefined;
       await this.pushPlayers(
         this.playerActors(),
-        new BingoGameEndedNotify({ state })
+        new DeliverBingoGameEndedMsg({ notification: new BingoGameEndedNotify({ state }) })
       );
       await this.publishReward(state);
       await this.leaveFinishedActors();
@@ -253,7 +260,9 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     await Promise.all([...this.observerActors.values()].map((observer) =>
       this.notifyActor(
         observer,
-        new BingoRewardAnnouncedNotify({ ...event })
+        new DeliverBingoRewardAnnouncedMsg({
+          notification: new BingoRewardAnnouncedNotify({ ...event })
+        })
       )
     ));
   }
@@ -278,7 +287,7 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
       const actorId = player.actor.actorId;
       if (this.playerIds.has(actorId)) {
         await this.actorClient
-          .sendToActor(actorId, new LeaveFinishedBingoRoom({}))
+          .sendToActor(actorId, new LeaveFinishedBingoRoomMsg({}))
           .submit();
       }
     }
@@ -307,13 +316,15 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
   ): Promise<void> {
     await this.pushPlayers(
       this.playerActors().filter((entry) => entry !== actorId),
-      new PlayerJoinedNotify({
-        roomId: this.roomId,
-        actorId,
-        displayName,
-        seat,
-        isHost,
-        state
+      new DeliverPlayerJoinedMsg({
+        notification: new PlayerJoinedNotify({
+          roomId: this.roomId,
+          actorId,
+          displayName,
+          seat,
+          isHost,
+          state
+        })
       })
     );
   }
@@ -321,7 +332,9 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
   private async notifyGameStarted(): Promise<void> {
     await this.pushPlayers(
       this.playerActors(),
-      new BingoGameStartedNotify({ state: this.snapshot() })
+      new DeliverBingoGameStartedMsg({
+        notification: new BingoGameStartedNotify({ state: this.snapshot() })
+      })
     );
   }
 

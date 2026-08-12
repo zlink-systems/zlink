@@ -1,4 +1,7 @@
 package systems.zlink.framework.runtime.spots;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.spots.ZLinkSpotRelocationReadyCall;
 
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
@@ -73,11 +76,11 @@ record ZLinkEntrySpotBackedContext(
     }
 
     @Override
-    public systems.zlink.framework.spots.ZLinkSpotRelocationReadyCall
+    public ZLinkSpotRelocationReadyCall
         relocationReady() {
         return () -> {
-            throw new systems.zlink.framework.errors.ZLinkFrameworkException(
-                systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind
                     .NOT_CONFIGURED,
                 "Entry Spot does not support relocationReady().defer()");
         };
@@ -85,7 +88,7 @@ record ZLinkEntrySpotBackedContext(
 
     @Override
     public CompletionStage<Void> leaveActor(ZLinkActor actor) {
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override

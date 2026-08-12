@@ -30,6 +30,27 @@ export interface ZLinkRemoteBoundSessionTarget {
   readonly relocationSealId?: string;
   readonly acceptedJournalReference?: string;
   readonly acceptedJournalChecksumCrc32c?: number;
+  readonly serviceWireRelocation?: {
+    readonly relocation: {
+      readonly high: bigint;
+      readonly low: bigint;
+    };
+    readonly coordinator: {
+      readonly ownerId: string;
+      readonly leaseGeneration: bigint;
+      readonly nodeRid: string;
+      readonly nodeGeneration: bigint;
+      readonly expectedAuthorityStoreVersion: string;
+    };
+    readonly session: {
+      readonly sessionOwnerNodeRid: string;
+      readonly sessionOwnerNodeGeneration: bigint;
+      readonly sessionOwnerId: string;
+      readonly sessionOwnerLeaseGeneration: bigint;
+      readonly sessionRid: string;
+      readonly bindingGeneration: bigint;
+    };
+  };
 }
 
 /**
@@ -64,7 +85,9 @@ export function mergeRemoteBoundSessionTarget(
     relocationSealId: target.relocationSealId ?? fallback.relocationSealId,
     acceptedJournalReference: target.acceptedJournalReference ?? fallback.acceptedJournalReference,
     acceptedJournalChecksumCrc32c:
-      target.acceptedJournalChecksumCrc32c ?? fallback.acceptedJournalChecksumCrc32c
+      target.acceptedJournalChecksumCrc32c ?? fallback.acceptedJournalChecksumCrc32c,
+    serviceWireRelocation:
+      target.serviceWireRelocation ?? fallback.serviceWireRelocation
   };
   return merged;
 }
@@ -86,7 +109,8 @@ function hasRelocationFence(target: ZLinkRemoteBoundSessionTarget): boolean {
   return target.acceptedHighWater !== undefined
     || target.relocationSealId !== undefined
     || target.acceptedJournalReference !== undefined
-    || target.acceptedJournalChecksumCrc32c !== undefined;
+    || target.acceptedJournalChecksumCrc32c !== undefined
+    || target.serviceWireRelocation !== undefined;
 }
 
 export interface ZLinkRemoteActorPacketTarget {
@@ -583,6 +607,7 @@ function clearAcceptedJournalFence(
     relocationSealId: _relocationSealId,
     acceptedJournalReference: _acceptedJournalReference,
     acceptedJournalChecksumCrc32c: _acceptedJournalChecksumCrc32c,
+    serviceWireRelocation: _serviceWireRelocation,
     ...withoutAcceptedJournalFence
   } = current;
   return withoutAcceptedJournalFence;

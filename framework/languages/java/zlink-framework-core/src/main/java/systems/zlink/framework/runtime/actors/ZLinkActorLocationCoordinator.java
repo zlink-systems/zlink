@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.actors;
+import systems.zlink.framework.spots.SpotRef;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -83,7 +84,7 @@ final class ZLinkActorLocationCoordinator {
     //  Resolves the Spot an Actor currently belongs to. The Actor authority row
     //  already carries the current Spot id, so this reads the same row `find`
     //  uses instead of taking a second lookup path.
-    CompletionStage<Optional<systems.zlink.framework.spots.SpotRef>>
+    CompletionStage<Optional<SpotRef>>
         findStoredSpotRef(String actorId) {
         if (resolvers == null) {
             return CompletableFuture.completedFuture(Optional.empty());
@@ -93,7 +94,7 @@ final class ZLinkActorLocationCoordinator {
                     || row.spotId() == null
                     || row.spotId().isEmpty()
                 ? Optional.empty()
-                : Optional.of(new systems.zlink.framework.spots.SpotRef(
+                : Optional.of(new SpotRef(
                     row.spotId(),
                     row.authorityOwnerGeneration(),
                     row.meshName(),

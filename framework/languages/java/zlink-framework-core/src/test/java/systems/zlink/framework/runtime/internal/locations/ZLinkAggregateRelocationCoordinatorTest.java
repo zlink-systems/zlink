@@ -1,4 +1,8 @@
 package systems.zlink.framework.runtime.internal.locations;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.concurrent.CompletionException;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -63,7 +67,7 @@ final class ZLinkAggregateRelocationCoordinatorTest {
             new ZLinkAggregateRelocationCoordinator(authority, relocation);
 
         var failure = assertThrows(
-            java.util.concurrent.CompletionException.class,
+            CompletionException.class,
             () -> coordinator.prepare(request(), NEVER)
                 .toCompletableFuture().join());
         assertInstanceOf(
@@ -296,6 +300,251 @@ final class ZLinkAggregateRelocationCoordinatorTest {
     }
 
     @Test
+    void replayPendingCommitCannotPublishOrRestartUntilExactActivation() {
+        FakeAuthorityStore authority = new FakeAuthorityStore();
+        FakeRelocationStore relocation = new FakeRelocationStore();
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            authority, relocation);
+        var prepared = coordinator.prepareReplayPending(request(), NEVER)
+            .toCompletableFuture().join();
+        coordinator.commit(prepared, NEVER).toCompletableFuture().join();
+
+        assertEquals(3, authority.progress.phase());
+        var expected = prepared.request().participants().stream()
+            .map(value -> new ZLinkAggregateRelocationCoordinator
+                .ExpectedParticipant(
+                    value.authorityKey(),
+                    value.objectGeneration(),
+                    value.authorityOwnerGeneration()))
+            .toList();
+        var completion = ZLinkServiceRelocationEnvelopeCodec
+            .decode(goldenRoot()).terminalCompletions().getFirst();
+        var finalCut = coordinator.updateCanonicalReplay(
+                expected,
+                prepared.fence(),
+                prepared.request().targetOwner(),
+                current -> ZLinkServiceRelocationEnvelopeCodec
+                    .completeDelivery(
+                        current,
+                        completion.operationHigh(),
+                        completion.operationLow(),
+                        completion.sourceOwnerId(),
+                        completion.sourceOwnerLeaseGeneration(),
+                        RoutingId.from(completion.sourceNodeRid()),
+                        completion.sourceNodeGeneration(),
+                        2),
+                NEVER)
+            .toCompletableFuture().join();
+        int rootsAtFinalCut = relocation.valueCount();
+        var targetFailure = assertThrows(
+            CompletionException.class,
+            () -> coordinator.readPublishedAggregate(
+                    expected,
+                    prepared.fence(),
+                    prepared.request().targetOwner(),
+                    prepared.inventoryDigest(),
+                    NEVER)
+                .toCompletableFuture().join());
+        assertInstanceOf(
+            ZLinkAggregateRelocationCoordinator.RelocationDataLostException.class,
+            targetFailure.getCause());
+        var restartFailure = assertThrows(
+            CompletionException.class,
+            () -> new ZLinkRelocationStartupScanner(authority, relocation)
+                .scan(NEVER).toCompletableFuture().join());
+        assertTrue(restartFailure.getCause().getMessage()
+            .contains("remained pending"));
+
+        var activated = coordinator.activateCanonicalReplay(prepared, NEVER)
+            .toCompletableFuture().join();
+
+        assertEquals(4, authority.progress.phase());
+        var publishedRoot = coordinator.readPublishedAggregate(
+                expected,
+                prepared.fence(),
+                prepared.request().targetOwner(),
+                prepared.inventoryDigest(),
+                NEVER)
+            .toCompletableFuture().join();
+        assertArrayEquals(
+            finalCut.root().canonicalBytes(),
+            publishedRoot.payload(),
+            "phase 4 must atomically publish the already-final root");
+        coordinator.activateCanonicalReplay(prepared, NEVER)
+            .toCompletableFuture().join();
+        assertEquals(rootsAtFinalCut, relocation.valueCount(),
+            "phase 4 retry must not mutate or append the durable root");
+        var activatedRestart = assertThrows(
+            CompletionException.class,
+            () -> new ZLinkRelocationStartupScanner(authority, relocation)
+                .scan(NEVER).toCompletableFuture().join());
+        assertTrue(activatedRestart.getCause().getMessage()
+            .contains("fail explicitly"));
+        coordinator.completeSourceCleanup(activated, goldenRoot(), NEVER)
+            .toCompletableFuture().join();
+        assertEquals(1, new ZLinkRelocationStartupScanner(
+            authority, relocation).scan(NEVER)
+            .toCompletableFuture().join().size());
+    }
+
+    @Test
+    void startupScannerFinishesANormalizationInterruptedBeforeMarkerRemoval() {
+        FakeAuthorityStore authority = new FakeAuthorityStore();
+        FakeRelocationStore relocation = new FakeRelocationStore();
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            authority, relocation);
+        var source = request();
+        var activated = coordinator.commit(
+                coordinator.prepare(source, NEVER)
+                    .toCompletableFuture().join(),
+                NEVER)
+            .toCompletableFuture().join();
+        coordinator.completeSourceCleanup(activated, goldenRoot(), NEVER)
+            .toCompletableFuture().join();
+        for (var participant : source.participants()) {
+            normalizeRow(authority, participant.authorityKey());
+        }
+
+        var candidates = new ZLinkRelocationStartupScanner(
+            authority, relocation).scan(NEVER).toCompletableFuture().join();
+
+        assertTrue(candidates.isEmpty(),
+            "a fully normalized aggregate has nothing left to recover");
+        assertNull(authority.progress,
+            "startup recovery removes the marker the interrupted "
+                + "normalization left behind");
+    }
+
+    @Test
+    void startupScannerFinishesNormalizationWhenParticipantRowsAreGone() {
+        FakeAuthorityStore authority = new FakeAuthorityStore();
+        FakeRelocationStore relocation = new FakeRelocationStore();
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            authority, relocation);
+        var source = request();
+        var activated = coordinator.commit(
+                coordinator.prepare(source, NEVER)
+                    .toCompletableFuture().join(),
+                NEVER)
+            .toCompletableFuture().join();
+        coordinator.completeSourceCleanup(activated, goldenRoot(), NEVER)
+            .toCompletableFuture().join();
+        for (var participant : source.participants()) {
+            authority.rows.remove(participant.authorityKey());
+        }
+
+        var candidates = new ZLinkRelocationStartupScanner(
+            authority, relocation).scan(NEVER).toCompletableFuture().join();
+
+        assertTrue(candidates.isEmpty(),
+            "a deleted participant publishes no relocation slot");
+        assertNull(authority.progress);
+    }
+
+    @Test
+    void startupScannerStillFailsWhenOnlySomeParticipantsAreNormalized() {
+        FakeAuthorityStore authority = new FakeAuthorityStore();
+        FakeRelocationStore relocation = new FakeRelocationStore();
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            authority, relocation);
+        var source = request();
+        var activated = coordinator.commit(
+                coordinator.prepare(source, NEVER)
+                    .toCompletableFuture().join(),
+                NEVER)
+            .toCompletableFuture().join();
+        coordinator.completeSourceCleanup(activated, goldenRoot(), NEVER)
+            .toCompletableFuture().join();
+        normalizeRow(authority, source.participants().getFirst().authorityKey());
+
+        var failure = assertThrows(
+            CompletionException.class,
+            () -> new ZLinkRelocationStartupScanner(authority, relocation)
+                .scan(NEVER).toCompletableFuture().join());
+
+        var lost = assertInstanceOf(
+            ZLinkAggregateRelocationCoordinator.RelocationDataLostException.class,
+            failure.getCause());
+        assertTrue(lost.getMessage().contains("partially"), lost.getMessage());
+        assertNotNull(authority.progress,
+            "a partially visible publication keeps its marker");
+    }
+
+    @Test
+    void startupScannerDiscardsAMarkerWhoseParticipantsVanishedBeforeCleanup() {
+        // The shape a ZoneWorld replacement start observed: one Actor
+        // participant whose row the retiring node deleted while the marker
+        // still reported source cleanup as incomplete. No authority points at
+        // the root any more, so no later start in the scope may die on it.
+        FakeAuthorityStore authority = new FakeAuthorityStore();
+        FakeRelocationStore relocation = new FakeRelocationStore();
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            authority, relocation);
+        var source = request();
+        coordinator.commit(
+                coordinator.prepare(source, NEVER)
+                    .toCompletableFuture().join(),
+                NEVER)
+            .toCompletableFuture().join();
+        assertFalse(authority.progress.sourceCleanupCompleted());
+        for (var participant : source.participants()) {
+            authority.rows.remove(participant.authorityKey());
+        }
+
+        var candidates = new ZLinkRelocationStartupScanner(
+            authority, relocation).scan(NEVER).toCompletableFuture().join();
+
+        assertTrue(candidates.isEmpty());
+        assertNull(authority.progress,
+            "an orphaned marker is removed even before cleanup was recorded");
+    }
+
+    @Test
+    void startupScannerStartsEvenWhenTheStoreRefusesTheOrphanRemoval() {
+        // A replacement process runs under a newer owner lease, so the store
+        // may fence the removal of a marker the retired lease left behind.
+        // An orphan nobody points through still must not block the start.
+        FakeAuthorityStore authority = new FakeAuthorityStore();
+        FakeRelocationStore relocation = new FakeRelocationStore();
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            authority, relocation);
+        var source = request();
+        coordinator.commit(
+                coordinator.prepare(source, NEVER)
+                    .toCompletableFuture().join(),
+                NEVER)
+            .toCompletableFuture().join();
+        for (var participant : source.participants()) {
+            authority.rows.remove(participant.authorityKey());
+        }
+        authority.refuseProgressRemoval = true;
+
+        var candidates = new ZLinkRelocationStartupScanner(
+            authority, relocation).scan(NEVER).toCompletableFuture().join();
+
+        assertTrue(candidates.isEmpty());
+        assertNotNull(authority.progress,
+            "a fenced removal leaves the marker for whoever can remove it");
+    }
+
+    private static void normalizeRow(
+        FakeAuthorityStore authority,
+        String authorityKey) {
+        ZLinkAuthoritySnapshot row = authority.rows.get(authorityKey);
+        var publication = ZLinkCanonicalRelocationAuthorityStateCodec.decode(
+            row.payload());
+        authority.rows.put(authorityKey, new ZLinkAuthoritySnapshot(
+            "steady-" + authorityKey,
+            publication.applicationPayload(),
+            row.objectGeneration(),
+            row.authorityOwnerGeneration(),
+            row.ownerId(),
+            row.ownerLeaseGeneration(),
+            row.allocation(),
+            row.storeNow()));
+    }
+
+    @Test
     void canonicalReplyEvidenceSurvivesSourceCleanupPublication() {
         FakeAuthorityStore authority = new FakeAuthorityStore();
         FakeRelocationStore relocation = new FakeRelocationStore();
@@ -387,7 +636,7 @@ final class ZLinkAggregateRelocationCoordinatorTest {
                         value.objectGeneration(),
                         value.authorityOwnerGeneration()))
                 .toList();
-        expected = new java.util.ArrayList<>(expected);
+        expected = new ArrayList<>(expected);
         var first = expected.getFirst();
         expected.set(0, new ZLinkAggregateRelocationCoordinator
             .ExpectedParticipant(
@@ -397,7 +646,7 @@ final class ZLinkAggregateRelocationCoordinatorTest {
 
         var exact = expected;
         var failure = assertThrows(
-            java.util.concurrent.CompletionException.class,
+            CompletionException.class,
             () -> coordinator.readPublishedAggregate(
                     exact,
                     published.fence(),
@@ -468,7 +717,7 @@ final class ZLinkAggregateRelocationCoordinatorTest {
 
         relocation.corruptChunk();
         var failure = assertThrows(
-            java.util.concurrent.CompletionException.class,
+            CompletionException.class,
             () -> ZLinkRelocationTreeStore.read(
                     relocation,
                     stored.root().reference(),
@@ -618,7 +867,7 @@ final class ZLinkAggregateRelocationCoordinatorTest {
                 try {
                     var match = LOGICAL_HEX.matcher(Files.readString(fixture));
                     if (match.find()) return HexFormat.of().parseHex(match.group(1));
-                } catch (java.io.IOException failure) {
+                } catch (IOException failure) {
                     throw new IllegalStateException(failure);
                 }
             }
@@ -719,6 +968,7 @@ final class ZLinkAggregateRelocationCoordinatorTest {
         private long ownerGenerationGap = 1;
         private ZLinkAggregateProgress progress;
         private String progressStoreVersion;
+        private boolean refuseProgressRemoval;
         private final Map<String, ZLinkAuthoritySnapshot> rows =
             new ConcurrentHashMap<>();
 
@@ -824,7 +1074,8 @@ final class ZLinkAggregateRelocationCoordinatorTest {
             ZLinkAggregateFence fence,
             String expectedStoreVersion,
             ZLinkStoreCancellation cancellation) {
-            if (progress == null
+            if (refuseProgressRemoval
+                || progress == null
                 || !progressStoreVersion.equals(expectedStoreVersion)) {
                 return CompletableFuture.completedFuture(false);
             }
@@ -874,7 +1125,7 @@ final class ZLinkAggregateRelocationCoordinatorTest {
                     == expected)
                 .map(value -> new ZLinkAuthorityEntry(
                     value.getKey(), value.getValue()))
-                .sorted(java.util.Comparator.comparing(
+                .sorted(Comparator.comparing(
                     ZLinkAuthorityEntry::key))
                 .toList();
             return CompletableFuture.completedFuture(

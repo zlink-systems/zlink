@@ -23,7 +23,7 @@ namespace Zlink.Framework.Runtime.Backend.Contracts;
 internal sealed class ZLinkBackendRouteReceived : IDisposable
 {
     private readonly Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? _reply;
-    private bool _disposed;
+    private int _disposed;
 
     public ZLinkBackendRouteReceived(
         IReadOnlyList<Message> parts,
@@ -110,8 +110,7 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         try
         {
             ZLinkMessageParts.DisposeAll(Parts);
@@ -130,7 +129,7 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
 /// </summary>
 internal sealed class ZLinkBackendSubscribeMessage : IDisposable
 {
-    private bool _disposed;
+    private int _disposed;
 
     public ZLinkBackendSubscribeMessage(
         string channelName,
@@ -162,8 +161,7 @@ internal sealed class ZLinkBackendSubscribeMessage : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         try
         {
             ZLinkMessageParts.DisposeAll(Parts);

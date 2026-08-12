@@ -1,5 +1,7 @@
 package systems.zlink.framework.kotlin
 
+
+import java.util.concurrent.CompletableFuture
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -273,7 +275,7 @@ fun ZLinkStreamConnector.messages(
             // instead of turning normal cancellation into a callback failure.
             message.payload().payload().close()
         }
-        java.util.concurrent.CompletableFuture.completedFuture(null)
+        CompletableFuture.completedFuture(null)
     }
     awaitClose {
         registration.close()
@@ -283,7 +285,7 @@ fun ZLinkStreamConnector.messages(
 fun ZLinkStreamConnector.errors(): Flow<ZLinkStreamError> = callbackFlow {
     val registration = onErrorReceived { error ->
         trySend(error)
-        java.util.concurrent.CompletableFuture.completedFuture(null)
+        CompletableFuture.completedFuture(null)
     }
     awaitClose {
         registration.close()

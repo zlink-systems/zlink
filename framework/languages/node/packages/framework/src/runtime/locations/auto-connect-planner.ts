@@ -1,13 +1,9 @@
-import type { RoutingId } from '../../contracts/Common';
 import {
   ZLinkLocationAutoConnectType,
   ZLinkLocationRole,
   type ZLinkPeerLocation
 } from './internal-location-contracts';
-import {
-  zlinkLocationAutoConnectTypeName,
-  zlinkLocationRoleName
-} from './canonical-codec';
+import { zlinkLocationRoleName } from './canonical-codec';
 import { ZLinkLocationKeyCodec } from './key-codec';
 import { routingIdsEqual } from '../routing-id';
 import type {
@@ -99,35 +95,6 @@ export const ZLinkAutoConnectPlanner = Object.freeze({
       }));
   }
 });
-
-export function formatAutoConnectDecision(local: ZLinkAutoConnectLocal, peer: ZLinkPeerLocation): string {
-  if (peer.autoConnectType !== local.autoConnectType) {
-    return `skip:type=${zlinkLocationAutoConnectTypeName(peer.autoConnectType)}`;
-  }
-  if (peer.meshName !== local.meshName) {
-    return `skip:mesh=${peer.meshName}`;
-  }
-  if (!ZLinkAutoConnectPlanner.isRoleAllowed(peer.autoConnectType, peer.role)) {
-    return `skip:role=${zlinkLocationRoleName(peer.role)}`;
-  }
-  if (peer.endpoint.length === 0) {
-    return 'skip:empty-endpoint';
-  }
-  if (peer.draining) {
-    return 'skip:draining';
-  }
-  if (isAutoConnectSelf(local, peer)) {
-    return 'skip:self';
-  }
-  if (!shouldDialAutoConnectPeer(local, peer)) {
-    return `skip:not-initiator localRid=${formatAutoConnectRid(local.nodeRid)}`;
-  }
-  return 'dial';
-}
-
-export function formatAutoConnectRid(rid: RoutingId | undefined): string {
-  return rid === undefined ? '<none>' : encodeRoutingIdHex(rid);
-}
 
 function autoConnectTargetKeyOf(peer: ZLinkPeerLocation): string {
   const identity = peer.nodeRid === undefined ? peer.endpoint : encodeRoutingIdHex(peer.nodeRid);

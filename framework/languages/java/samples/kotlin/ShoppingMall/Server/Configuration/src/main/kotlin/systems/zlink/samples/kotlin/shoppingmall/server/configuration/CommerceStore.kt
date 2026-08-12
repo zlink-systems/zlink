@@ -1,5 +1,7 @@
 package systems.zlink.samples.kotlin.shoppingmall.server.configuration
 
+
+import java.nio.channels.FileLock
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
@@ -516,7 +518,7 @@ class CommerceStore(private val topology: SampleTopology) {
         }
     }
 
-    private fun acquire(channel: FileChannel): java.nio.channels.FileLock {
+    private fun acquire(channel: FileChannel): FileLock {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
         var lock = channel.tryLock()
         while (lock == null && System.nanoTime() < deadline) {

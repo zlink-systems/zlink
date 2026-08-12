@@ -1,4 +1,8 @@
 package systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.bingoroomspot;
+import java.util.ArrayList;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.function.Function;
 
 
 import java.time.Duration;
@@ -30,7 +34,7 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     private final Map<String, PlayerActor> observers = new HashMap<>();
     private final Map<String, Messages.BingoRoomJoinReq> pendingJoins = new HashMap<>();
     private final List<Messages.BingoRewardAcquiredEvent> pendingObserverRewards =
-        new java.util.ArrayList<>();
+        new ArrayList<>();
     private BingoRoomModels.BingoRoomSettings settings =
         BingoRoomModels.BingoRoomSettings.create("two-player", 0, SampleTimings.DrawPeriod.toMillis());
     private BingoRoomGame game;
@@ -51,12 +55,12 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<ZLinkSpotCreateResponse> onCreate(ZLinkMessage request) {
-        return java.util.concurrent.CompletableFuture.completedFuture(settingsInitializer.handle(this, request));
+    public CompletionStage<ZLinkSpotCreateResponse> onCreate(ZLinkMessage request) {
+        return CompletableFuture.completedFuture(settingsInitializer.handle(this, request));
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
+    public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
         String actorId,
         ZLinkMessage request) {
         Messages.BingoRoomJoinReq joinRequest = request.decode(Messages.BingoRoomJoinReq.class);
@@ -65,12 +69,12 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
             ? observerJoinState(joinRequest)
             : game.previewJoin(actorId, joinRequest.getDisplayName());
         pendingJoins.put(actorId, joinRequest);
-        return java.util.concurrent.CompletableFuture.completedFuture(
+        return CompletableFuture.completedFuture(
             ZLinkSpotActorJoinResult.accept(BingoMessages.bingoRoomJoinRes(preview)));
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onJoinedActor(
+    public CompletionStage<Void> onJoinedActor(
         PlayerActor actor) {
         Messages.BingoRoomJoinReq request = pendingJoins.get(actor.actorId());
         if (request == null) {
@@ -83,13 +87,13 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
                 List.copyOf(pendingObserverRewards);
             pendingObserverRewards.clear();
             if (pendingRewards.isEmpty()) {
-                return java.util.concurrent.CompletableFuture.completedFuture(null);
+                return CompletableFuture.completedFuture(null);
             }
-            return java.util.concurrent.CompletableFuture.allOf(
+            return CompletableFuture.allOf(
                 pendingRewards.stream()
                     .map(this::notifyObservers)
-                    .map(java.util.concurrent.CompletionStage::toCompletableFuture)
-                    .toArray(java.util.concurrent.CompletableFuture[]::new));
+                    .map(CompletionStage::toCompletableFuture)
+                    .toArray(CompletableFuture[]::new));
         }
         return context.outbound()
             .requestToChannel(SampleNames.ApiChannel, BingoMessages.getPlayerRecordReq(actor.actorId()))
@@ -105,11 +109,11 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onLeaveActor(
+    public CompletionStage<Void> onLeaveActor(
         PlayerActor actor) {
         if (!actors.containsKey(actor.actorId()) || game == null) {
             observers.remove(actor.actorId());
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
         Messages.BingoRoomState finalState = game.snapshot();
         Messages.ReportBingoResultReq report = BingoMessages.reportBingoResultReq(
@@ -125,16 +129,16 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onDisconnectActor(
+    public CompletionStage<Void> onDisconnectActor(
         PlayerActor actor) {
         actor.markDisconnected();
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onInitialize() {
+    public CompletionStage<Void> onInitialize() {
         if (settings.observerMode()) {
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
         return context.addTimer(
                 "bingo-draw",
@@ -145,16 +149,16 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onClosing() {
+    public CompletionStage<Void> onClosing() {
         return timer == null
-            ? java.util.concurrent.CompletableFuture.completedFuture(null)
+            ? CompletableFuture.completedFuture(null)
             : timer.cancel();
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Void> onRelocationReadyCompleted(
+    public CompletionStage<Void> onRelocationReadyCompleted(
         ZLinkSpotRelocationReadyCompletion completion) {
-        return java.util.concurrent.CompletableFuture.completedFuture(null);
+        return CompletableFuture.completedFuture(null);
     }
 
     public Messages.BingoRoomJoinRes join(
@@ -173,9 +177,7 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
         actors.put(actor.actorId(), actor);
         BingoRoomGame.Change change = game.join(
             actor.actorId(), request.getDisplayName(), wins, losses);
-        publishEvents(
-            change.events(),
-            actorId -> actorId.equals(actor.actorId()) ? null : actors.get(actorId));
+        publishEvents(change.events(), actors::get);
         return BingoMessages.bingoRoomJoinRes(change.state());
     }
 
@@ -213,9 +215,9 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
         return BingoMessages.submitBingoCardRes(change.state());
     }
 
-    public java.util.concurrent.CompletionStage<Void> tick() {
+    public CompletionStage<Void> tick() {
         if (game == null || cleanupStarted) {
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
         BingoRoomGame.Change change = game.drawNext();
         publishEvents(change.events(), actors::get);
@@ -228,31 +230,31 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
             });
     }
 
-    public java.util.concurrent.CompletionStage<Void> announceReward(
+    public CompletionStage<Void> announceReward(
         Messages.BingoRewardAcquiredEvent event) {
         if (!settings.observerMode()
             || !event.getRoomId().equals(settings.observedRoomId())) {
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
         if (observers.isEmpty()) {
             pendingObserverRewards.add(event);
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
         return notifyObservers(event)
             .thenRun(() -> context.relocationReady().defer());
     }
 
-    private java.util.concurrent.CompletionStage<Void> notifyObservers(
+    private CompletionStage<Void> notifyObservers(
         Messages.BingoRewardAcquiredEvent event) {
-        java.util.List<java.util.concurrent.CompletionStage<Void>> notifications =
-            new java.util.ArrayList<>();
+        List<CompletionStage<Void>> notifications =
+            new ArrayList<>();
         for (PlayerActor observer : List.copyOf(observers.values())) {
             notifications.add(observer.push(rewardNotification(event)));
         }
-        return java.util.concurrent.CompletableFuture.allOf(
+        return CompletableFuture.allOf(
             notifications.stream()
-                .map(java.util.concurrent.CompletionStage::toCompletableFuture)
-                .toArray(java.util.concurrent.CompletableFuture[]::new));
+                .map(CompletionStage::toCompletableFuture)
+                .toArray(CompletableFuture[]::new));
     }
 
     private Messages.BingoRewardAnnouncedNotify rewardNotification(
@@ -316,25 +318,25 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
         Messages.BingoRoomState state) {
     }
 
-    private java.util.concurrent.CompletionStage<Void> leaveFinishedActors(BingoRoomGame.Change change) {
+    private CompletionStage<Void> leaveFinishedActors(BingoRoomGame.Change change) {
         if (cleanupStarted || !change.state().getStatus().equals("Finished")) {
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
 
         cleanupStarted = true;
-        java.util.List<java.util.concurrent.CompletableFuture<Void>> leaves = new java.util.ArrayList<>();
+        List<CompletableFuture<Void>> leaves = new ArrayList<>();
         for (PlayerActor actor : actors.values().toArray(PlayerActor[]::new)) {
             actor.markForDestroyAfterRoomLeave();
             leaves.add(context.leaveActor(actor).toCompletableFuture());
         }
-        return java.util.concurrent.CompletableFuture.allOf(
-            leaves.toArray(java.util.concurrent.CompletableFuture[]::new));
+        return CompletableFuture.allOf(
+            leaves.toArray(CompletableFuture[]::new));
     }
 
-    private java.util.concurrent.CompletionStage<Void> publishWinner(
+    private CompletionStage<Void> publishWinner(
         BingoRoomGame.Change change) {
         if (!change.state().getStatus().equals("Finished") || change.state().getWinnersList().isEmpty()) {
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(null);
         }
         String winner = change.state().getWinnersList().getFirst();
         return context.outbound()
@@ -353,7 +355,7 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
 
     private void publishEvents(
         List<BingoRoomModels.RoomEvent> events,
-        java.util.function.Function<String, PlayerActor> actorResolver) {
+        Function<String, PlayerActor> actorResolver) {
         for (BingoRoomModels.RoomEvent event : events) {
             publishEvent(event, actorResolver.apply(event.recipientActorId()));
         }

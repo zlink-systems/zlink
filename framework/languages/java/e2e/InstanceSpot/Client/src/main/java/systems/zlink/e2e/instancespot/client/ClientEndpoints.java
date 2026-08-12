@@ -1,4 +1,5 @@
 package systems.zlink.e2e.instancespot.client;
+import java.util.Map;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -47,36 +48,36 @@ public final class ClientEndpoints implements SmartLifecycle {
             server.createContext("/health", exchange -> HttpSupport.writeJson(
                 exchange,
                 json,
-                java.util.Map.of("status", "ready", "rid", options.rid())));
+                Map.of("status", "ready", "rid", options.rid())));
             server.createContext("/lookup", exchange -> {
                 var request = HttpSupport.readJson(
-                    exchange, json, java.util.Map.class);
+                    exchange, json, Map.class);
                 String spotId = String.valueOf(request.get("spotId"));
                 HttpSupport.writeJson(exchange, json, lookup(spotId));
             });
             server.createContext("/request", exchange -> {
-                Contracts.InstanceRequest request = HttpSupport.readJson(
-                    exchange, json, Contracts.InstanceRequest.class);
+                Contracts.InstanceReq request = HttpSupport.readJson(
+                    exchange, json, Contracts.InstanceReq.class);
                 HttpSupport.writeJson(exchange, json, request(request));
             });
             server.createContext("/send", exchange -> {
-                Contracts.InstanceSend request = HttpSupport.readJson(
-                    exchange, json, Contracts.InstanceSend.class);
+                Contracts.InstanceMsg request = HttpSupport.readJson(
+                    exchange, json, Contracts.InstanceMsg.class);
                 HttpSupport.writeJson(exchange, json, send(request));
             });
             server.createContext("/close", exchange -> {
-                Contracts.CloseRequest request = HttpSupport.readJson(
-                    exchange, json, Contracts.CloseRequest.class);
+                Contracts.CloseMsg request = HttpSupport.readJson(
+                    exchange, json, Contracts.CloseMsg.class);
                 HttpSupport.writeJson(exchange, json, sendClose(request));
             });
             server.createContext("/concurrent", exchange -> {
-                Contracts.ConcurrentRequest request = HttpSupport.readJson(
-                    exchange, json, Contracts.ConcurrentRequest.class);
+                Contracts.ConcurrentReq request = HttpSupport.readJson(
+                    exchange, json, Contracts.ConcurrentReq.class);
                 HttpSupport.writeJson(exchange, json, concurrent(request));
             });
             server.createContext("/shutdown", exchange -> {
                 HttpSupport.writeJson(
-                    exchange, json, java.util.Map.of("status", "stopping"));
+                    exchange, json, Map.of("status", "stopping"));
                 HttpSupport.shutdownAsync();
             });
             server.start();
@@ -88,20 +89,20 @@ public final class ClientEndpoints implements SmartLifecycle {
         }
     }
 
-    private Contracts.RequestOutcome request(Contracts.InstanceRequest request) {
+    private Contracts.InstanceCallRes request(Contracts.InstanceReq request) {
         try {
-            Contracts.InstanceReply reply = routes
+            Contracts.InstanceRes reply = routes
                 .requestToSpot(request.spotId(), request)
                 .instanceSpot(Contracts.STABLE_TYPE)
                 .inMesh(Contracts.MESH)
                 .timeout(Duration.ofMillis(request.timeoutMilliseconds()))
-                .submit(Contracts.InstanceReply.class)
+                .submit(Contracts.InstanceRes.class)
                 .toCompletableFuture()
                 .join();
-            return new Contracts.RequestOutcome(true, reply, "", "");
+            return new Contracts.InstanceCallRes(true, reply, "", "");
         } catch (RuntimeException error) {
             Throwable cause = unwrap(error);
-            return new Contracts.RequestOutcome(
+            return new Contracts.InstanceCallRes(
                 false,
                 null,
                 errorKind(cause),
@@ -109,15 +110,15 @@ public final class ClientEndpoints implements SmartLifecycle {
         }
     }
 
-    private Contracts.LookupOutcome lookup(String spotId) {
+    private Contracts.LookupRes lookup(String spotId) {
         try {
             var result = spots.find(spotId).toCompletableFuture().join();
             if (result.isEmpty()) {
-                return new Contracts.LookupOutcome(
+                return new Contracts.LookupRes(
                     false, spotId, 0, "", "", "", "");
             }
             SpotRef ref = result.get();
-            return new Contracts.LookupOutcome(
+            return new Contracts.LookupRes(
                 true,
                 ref.spotId(),
                 ref.objectGeneration(),
@@ -127,7 +128,7 @@ public final class ClientEndpoints implements SmartLifecycle {
                 "");
         } catch (RuntimeException error) {
             Throwable cause = unwrap(error);
-            return new Contracts.LookupOutcome(
+            return new Contracts.LookupRes(
                 false,
                 spotId,
                 0,
@@ -138,7 +139,7 @@ public final class ClientEndpoints implements SmartLifecycle {
         }
     }
 
-    private Contracts.SendOutcome send(Contracts.InstanceSend request) {
+    private Contracts.SendSubmitRes send(Contracts.InstanceMsg request) {
         try {
             routes
                 .sendToSpot(request.spotId(), request)
@@ -147,17 +148,17 @@ public final class ClientEndpoints implements SmartLifecycle {
                 .submit()
                 .toCompletableFuture()
                 .join();
-            return new Contracts.SendOutcome(true, "", "");
+            return new Contracts.SendSubmitRes(true, "", "");
         } catch (RuntimeException error) {
             Throwable cause = unwrap(error);
-            return new Contracts.SendOutcome(
+            return new Contracts.SendSubmitRes(
                 false,
                 errorKind(cause),
                 cause.getMessage() == null ? "" : cause.getMessage());
         }
     }
 
-    private Contracts.SendOutcome sendClose(Contracts.CloseRequest close) {
+    private Contracts.SendSubmitRes sendClose(Contracts.CloseMsg close) {
         try {
             routes
                 .sendToSpot(close.spotId(), close)
@@ -166,30 +167,30 @@ public final class ClientEndpoints implements SmartLifecycle {
                 .submit()
                 .toCompletableFuture()
                 .join();
-            return new Contracts.SendOutcome(true, "", "");
+            return new Contracts.SendSubmitRes(true, "", "");
         } catch (RuntimeException error) {
             Throwable cause = unwrap(error);
-            return new Contracts.SendOutcome(
+            return new Contracts.SendSubmitRes(
                 false,
                 errorKind(cause),
                 cause.getMessage() == null ? "" : cause.getMessage());
         }
     }
 
-    private Contracts.ConcurrentOutcome concurrent(
-        Contracts.ConcurrentRequest request) {
-        List<CompletableFuture<Contracts.RequestOutcome>> futures = new ArrayList<>();
+    private Contracts.ConcurrentRes concurrent(
+        Contracts.ConcurrentReq request) {
+        List<CompletableFuture<Contracts.InstanceCallRes>> futures = new ArrayList<>();
         for (int index = 0; index < request.count(); index++) {
             int operationIndex = index;
             futures.add(CompletableFuture.supplyAsync(() -> request(
-                new Contracts.InstanceRequest(
+                new Contracts.InstanceReq(
                     request.spotId(),
                     request.operationPrefix() + "-" + operationIndex,
                     "payload-" + operationIndex,
                     request.timeoutMilliseconds())), executor));
         }
         CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();
-        return new Contracts.ConcurrentOutcome(
+        return new Contracts.ConcurrentRes(
             futures.stream().map(CompletableFuture::join).toList());
     }
 

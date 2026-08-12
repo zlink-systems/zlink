@@ -975,8 +975,6 @@ encode_message_follow (const message_follow_notice_t &notice)
 {
     if (notice.hop_count == 0
         || notice.hop_count > messageFollowHopCount
-        || notice.queued_messages > messageFollowMessages
-        || notice.queued_bytes > messageFollowBytes
         || (notice.original_operation.high == 0
             && notice.original_operation.low == 0)
         || notice.source.index () != notice.target.index ()) {
@@ -998,7 +996,7 @@ encode_message_follow (const message_follow_notice_t &notice)
     append_u64 (body, notice.original_operation.high);
     append_u64 (body, notice.original_operation.low);
     append_u64 (body, notice.original_reply_route_id);
-    if (body.size () > messageFollowBytes) {
+    if (body.size () > messageFollowControlEnvelopeBytes) {
         throw service_wire_error_t (
           "Message Follow notice exceeds its encoded byte bound");
     }
@@ -1022,7 +1020,7 @@ decode_message_follow (std::span<const std::uint8_t> bytes)
         throw service_wire_error_t (
           "Message Follow notice version must be one");
     const auto body_length = read_u32 (bytes, offset);
-    if (body_length > messageFollowBytes
+    if (body_length > messageFollowControlEnvelopeBytes
         || bytes.size () - offset != body_length)
         throw service_wire_error_t (
           "Message Follow notice has an invalid body length");
@@ -1419,7 +1417,8 @@ std::vector<std::uint8_t> encode_session_relocation_routed (
         || record.current_authority_owner_generation == 0
         || (record.action != session_relocation_route_action_t::commit
             && record.action
-                 != session_relocation_route_action_t::abort)) {
+                 != session_relocation_route_action_t::abort)
+        || static_cast<std::uint8_t> (record.result) > 3) {
         throw service_wire_error_t (
           "Session relocation routed ACK contains an invalid exact fence");
     }
@@ -1448,6 +1447,7 @@ std::vector<std::uint8_t> encode_session_relocation_routed (
     append_bytes8 (bytes, record.session_routing_id, "Session RID");
     append_u64 (bytes, record.binding_generation);
     bytes.push_back (static_cast<std::uint8_t> (record.action));
+    bytes.push_back (static_cast<std::uint8_t> (record.result));
     append_u64 (bytes, record.current_authority_owner_generation);
     append_u64 (bytes, record.last_accepted_session_sequence);
     return bytes;
@@ -1491,6 +1491,11 @@ session_relocation_routed_t decode_session_relocation_routed (
           "Session relocation routed action is truncated");
     record.action =
       static_cast<session_relocation_route_action_t> (bytes[offset++]);
+    if (offset >= bytes.size ())
+        throw service_wire_error_t (
+          "Session relocation routed result is truncated");
+    record.result =
+      static_cast<session_relocation_route_result_t> (bytes[offset++]);
     record.current_authority_owner_generation = read_u64 (bytes, offset);
     record.last_accepted_session_sequence = read_u64 (bytes, offset);
     if (offset != bytes.size ())

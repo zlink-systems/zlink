@@ -14,7 +14,6 @@ internal sealed partial class ZLinkEntrySpotActivation :
         => ZLinkUserSpotExecutionMode.PerActor;
     private static readonly AsyncLocal<ZLinkEntrySpotActivation?> Current = new();
     private readonly ZLinkSpotActorHandlerRegistry _actorHandlers;
-    private readonly SemaphoreSlim _actorJoinDrainGate = new(1, 1);
     private readonly ZLinkSpotActorJoinRegistry _actorJoins = new();
     private readonly ZLinkSpotActorMembership _actors = new();
     private ZLinkSpotActivationDispatcher _dispatcher = null!;
@@ -26,7 +25,6 @@ internal sealed partial class ZLinkEntrySpotActivation :
     private ZLinkSpotOutboundTransport _outbound = null!;
     private ZLinkSpotOutboundEndpoint _outboundEndpoint = null!;
     private readonly ZLinkSpotPacketRegistry _packets = new();
-    private readonly SemaphoreSlim _routeDrainGate = new(1, 1);
     private readonly ZLinkFrameworkRuntime _runtime;
     private readonly AsyncServiceScope _scope;
     private ZLinkSerialExecutionQueue _serial = null!;
@@ -250,6 +248,13 @@ internal sealed partial class ZLinkEntrySpotActivation :
                 actor.Context.ActorId,
                 ct => DestroyActorCoreAsync(actor, ct)))
             return ValueTask.CompletedTask;
+
+        if (ZLinkSerialTurn.Current is { } turn)
+        {
+            return turn.YieldFrameworkCallAsync(
+                ct => DestroyActorCoreAsync(actor, ct),
+                cancellationToken);
+        }
 
         return DestroyActorCoreAsync(actor, cancellationToken);
     }

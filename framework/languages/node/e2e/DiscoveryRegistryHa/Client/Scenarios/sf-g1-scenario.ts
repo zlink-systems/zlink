@@ -12,7 +12,7 @@ interface MeshRow {
   };
 }
 
-interface CapacityResult {
+interface CapacityRes {
   readonly status: string;
   readonly errorKind?: string;
   readonly actorId?: string;
@@ -83,10 +83,10 @@ async function providerCapacity(options: ClientOptions): Promise<MeshRow> {
   return provider;
 }
 
-async function createActor(options: ClientOptions, actorId: string): Promise<CapacityResult> {
+async function createActor(options: ClientOptions, actorId: string): Promise<CapacityRes> {
   return await postJson(options.providerAUrl, '/capacity/actors', { actorId });
 }
 
-async function createSpot(options: ClientOptions, spotId: string, failFactory: boolean): Promise<CapacityResult> {
+async function createSpot(options: ClientOptions, spotId: string, failFactory: boolean): Promise<CapacityRes> {
   return await postJson(options.providerAUrl, '/capacity/spots', { spotId, failFactory });
 }

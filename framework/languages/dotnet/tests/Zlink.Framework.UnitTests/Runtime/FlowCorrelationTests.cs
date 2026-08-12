@@ -1,9 +1,5 @@
-using System.Reflection;
-using Microsoft.Extensions.DependencyInjection;
-using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
-using Zlink.Framework.Runtime.Codecs;
 using Zlink.Framework.Runtime.Dispatch;
 
 namespace Zlink.Framework.UnitTests;
@@ -16,10 +12,10 @@ public sealed class FlowCorrelationTests
         var correlations = new[]
         {
             ZlinkStreamCorrelation.Next(),
-            CreateFrameworkCorrelation(),
+            CreateChannelCorrelation(),
             CreateChannelCorrelation(),
             ZlinkStreamCorrelation.Next(),
-            CreateFrameworkCorrelation(),
+            CreateChannelCorrelation(),
             CreateChannelCorrelation()
         }.Select(value => Convert.ToUInt64(value, 16)).ToArray();
 
@@ -36,27 +32,6 @@ public sealed class FlowCorrelationTests
             ZLinkMessageKind.Request,
             "orders",
             "GetOrder").CorrelationId);
-
-    private static string CreateFrameworkCorrelation()
-    {
-        var createPacketParts = typeof(ZLinkActorClient).GetMethod(
-            "CreatePacketParts",
-            BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(createPacketParts);
-        var parts = Assert.IsAssignableFrom<IReadOnlyList<Message>>(
-            createPacketParts.MakeGenericMethod(typeof(string)).Invoke(
-                null,
-                [ZlinkStreamMessageKind.Send, null, "packet", "payload", null]));
-        try
-        {
-            return Assert.IsType<string>(
-                ZLinkStreamProtocolDefaults.DecodeHeader(parts[0].AsReadOnlyMemory()).CorrelationId);
-        }
-        finally
-        {
-            ZLinkMessageParts.DisposeAll(parts);
-        }
-    }
 
     [Fact]
     public void UuidV7_generator_emits_the_frozen_canonical_format()
@@ -97,27 +72,6 @@ public sealed class FlowCorrelationTests
         var application = Assert.IsType<ZLinkFlowValue>(ZLinkFlowContext.Current);
         Assert.NotEqual(flowId, application.FlowId);
         Assert.Equal(ZLinkFlowOrigin.Application, application.Origin);
-    }
-
-    [Fact]
-    public void Lifecycle_entry_and_bound_push_preserve_the_root_flow()
-    {
-        using var lifecycle = ZLinkFlowContext.Enter(null, null, true, ZLinkFlowOrigin.Lifecycle);
-        var root = Assert.IsType<ZLinkFlowValue>(ZLinkFlowContext.Current);
-        Assert.Equal(ZLinkFlowOrigin.Lifecycle, root.Origin);
-
-        var createFrame = typeof(ZLinkBoundSessionService).GetMethod(
-            "CreateBoundSessionFrame",
-            BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(createFrame);
-        var frame = Assert.IsType<byte[]>(createFrame.MakeGenericMethod(typeof(string)).Invoke(
-            null,
-            ["push", new Dictionary<string, string>(), "payload", new ZLinkCodecRegistryBuilder()]));
-        Assert.True(ZLinkStreamFrameCodec.TryDecode(frame, out var headerBytes, out _));
-        var header = ZLinkStreamProtocolDefaults.DecodeHeader(headerBytes.ToArray());
-
-        Assert.Equal(root.FlowId, header.FlowId);
-        Assert.Equal((ZlinkStreamFlowOrigin)(byte)root.Origin, header.FlowOrigin);
     }
 
     [Fact]

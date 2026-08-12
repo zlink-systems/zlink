@@ -4,14 +4,14 @@ import { getJson, postJson } from '../../../http-client';
 import { readRouteStatus } from '../Support/public-status';
 import { ensure } from '../Support/scenario-assert';
 
-interface SpotResult {
+interface SpotCreateRes {
   readonly state: string;
   readonly spotId?: string;
 }
 
 export async function runMonB2(options: ClientOptions): Promise<void> {
-  const first = await postJson<SpotResult>(options.serviceUrl, '/spot/create', {});
-  const second = await postJson<SpotResult>(options.serviceUrl, '/spot/create', {});
+  const first = await postJson<SpotCreateRes>(options.serviceUrl, '/spot/create', {});
+  const second = await postJson<SpotCreateRes>(options.serviceUrl, '/spot/create', {});
   ensure(first.state === 'created' && first.spotId !== undefined, 'MON-B2 first local target was not created.');
   ensure(second.state === 'created' && second.spotId !== undefined, 'MON-B2 second local target was not created.');
 

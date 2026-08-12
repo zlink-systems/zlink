@@ -20,8 +20,7 @@ Runner는 `Caller`, `MeshTarget`, `FanoutPublisher`를 서로 다른 process로 
 | SA-E2E-06 | 미구현 | Source admission barrier와 source 종료 뒤에도 terminal을 보관하는 독립 `EvidenceCollector`가 없다. |
 | SA-E2E-07 | 미구현 | Process topology에 AbortSignal winner와 Logical Multicast commit 전·후 barrier를 연결해야 한다. |
 | SA-E2E-08 | 부분 구현 | Self RID direct를 기존 node-direct dispatcher에 local admission으로 전달한다. Local·remote 즉시 수락은 각각 `Submitted`이고 각 process의 handler가 한 번 처리한다. Pending·deadline과 transport observer 비교는 아직 없다. |
-| SA-E2E-09 | 부분 구현 | ChannelName call이 positive-weight target에서 한 번 처리되는지 확인한다. Pending deadline과 선택 member observer가 없다. |
-| SA-E2E-10 | 미구현 | ClientServer 역할 process와 DEALER admission evidence가 없다. RouteMesh Channel로 대체하지 않는다. |
+| SA-E2E-09 | 부분 구현 | RouteMesh Channel의 positive path는 구현했다. 통합된 ClientServer variant와 두 topology의 pending·deadline evidence는 E2E 구현 단계에서 같은 scenario에 추가한다. |
 | SA-E2E-11 | 미구현 | Spot generation, stale handle과 local·remote mailbox gate를 같은 runner에 연결해야 한다. |
 | SA-E2E-12 | 미구현 | Actor generation, stale handle과 local·remote mailbox gate를 같은 runner에 연결해야 한다. |
 | SA-E2E-13 | 미구현 | Binding async publish는 구현됐지만 process runner에는 executor handoff observer와 `PublishSnapshotBarrier`가 없다. Focused contract test를 process 완료 증거로 바꾸지 않는다. |

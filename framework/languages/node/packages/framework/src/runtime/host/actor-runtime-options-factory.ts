@@ -40,6 +40,9 @@ import type { ZLinkMeshSubmitterRegistry } from '../messaging';
 
 export interface ZLinkActorRuntimeOptionsFactoryOptions {
   readonly registration: ZLinkFrameworkRegistration;
+  /** Message flow tracer, so a failed deferred Join records its cause on the flow. */
+  readonly messageFlow?: () =>
+    import('../diagnostics/message-flow').ZLinkMessageFlowTracer | undefined;
   readonly routeTransport: ZLinkActorRoutedJoinTransport;
   readonly streamBindingRuntime: ZLinkStreamActorLifecyclePort & ZLinkNativeFallbackBoundSessionPort;
   readonly providerResolver?: ZLinkProviderResolver;
@@ -89,7 +92,7 @@ export interface ZLinkActorRuntimeOptionsFactoryOptions {
 export class ZLinkActorRuntimeOptionsFactory {
   constructor(private readonly options: ZLinkActorRuntimeOptionsFactoryOptions) {}
 
-  createActorManagerOptions(_spotRouteResolver?: ZLinkSpotRouteResolver): Pick<
+  createActorManagerOptions(): Pick<
     ZLinkActorManagerOptions,
     | 'joinCoordinator'
     | 'actorMeshNameProvider'
@@ -121,6 +124,7 @@ export class ZLinkActorRuntimeOptionsFactory {
         return spotManager.leaveActorInMesh(meshName, spotId, actor, signal);
       },
       joinCoordinator: new ZLinkActorNativeJoinCoordinator({
+        messageFlow: () => this.options.messageFlow?.(),
         node: this.options.primaryMeshNode,
         completionTableProvider: this.options.primaryMeshCompletions,
         spotRouteResolver: this.options.createLocationSpotRouteResolver(),
@@ -170,6 +174,7 @@ export class ZLinkActorRuntimeOptionsFactory {
                 meshName: meshName ?? this.options.primaryMeshName() ?? '',
                 nodeRid: actorRef.nodeRid,
                 ownershipGeneration: state?.locationGeneration,
+                ownerLeaseGeneration: state?.ownerLeaseGeneration,
                 bindingGeneration: state?.boundSessionBindingGeneration
               } as ActorRef;
         },

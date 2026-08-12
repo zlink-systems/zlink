@@ -14,7 +14,6 @@ import { PacketNames } from './messages';
 const messageTypesByPacketName: Readonly<Record<string, string>> = {
   [PacketNames.authenticateReq]: 'AuthenticateReq',
   [PacketNames.authenticatePlayerReq]: 'AuthenticatePlayerReq',
-  [PacketNames.ensurePlayerActorReq]: 'EnsurePlayerActorReq',
   [PacketNames.matchBingoReq]: 'MatchBingoReq',
   [PacketNames.matchBingoApiReq]: 'MatchBingoApiReq',
   [PacketNames.bingoRoomJoinReq]: 'BingoRoomJoinReq',
@@ -32,7 +31,6 @@ const messageTypesByPacketName: Readonly<Record<string, string>> = {
 const responseTypesByRequestPacketName: Readonly<Record<string, string>> = {
   [PacketNames.authenticateReq]: 'AuthenticateRes',
   [PacketNames.authenticatePlayerReq]: 'AuthenticatePlayerRes',
-  [PacketNames.ensurePlayerActorReq]: 'EnsurePlayerActorRes',
   [PacketNames.matchBingoReq]: 'MatchBingoRes',
   [PacketNames.matchBingoApiReq]: 'MatchBingoApiRes',
   [PacketNames.bingoRoomJoinReq]: 'BingoRoomJoinRes',

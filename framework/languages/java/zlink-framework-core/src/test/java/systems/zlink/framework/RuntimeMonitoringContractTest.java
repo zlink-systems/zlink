@@ -1,4 +1,5 @@
 package systems.zlink.framework;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -120,7 +121,7 @@ final class RuntimeMonitoringContractTest {
             0,
             channels,
             List.of(),
-            new ZLinkPlacementSnapshot(true, 2, 3, java.util.Optional.empty()),
+            new ZLinkPlacementSnapshot(true, 2, 3, Optional.empty()),
             1,
             Instant.now());
 

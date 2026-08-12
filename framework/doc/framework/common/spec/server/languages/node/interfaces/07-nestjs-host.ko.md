@@ -168,6 +168,7 @@ export interface ZLinkLocationOptions {
 
 export interface ZLinkNestFrameworkOptionsBuilder {
     options(options: ZLinkNestFrameworkAdditionalOptions): this;
+    disableImplicitHandlerAutoRegistration(): this;
     codecs(): ZLinkNestCodecRegistryBuilder;
     configureDispatch(): ZLinkDispatchOptionsBuilder;
     addLocationStore(store: ZLinkLocationStore): this;
@@ -210,6 +211,12 @@ export type ZLinkNestProviderDiscoveryRoot = string | {
     readonly options?: ZLinkNestProviderDiscoveryOptions;
 };
 ```
+
+`disableImplicitHandlerAutoRegistration()`은 이 builder가 만드는 module에서 Nest provider metadata와
+role root를 scan해 handler를 자동 등록하는 동작을 끈다. 기본값은 자동 등록이다. 이 method를 호출해도
+`addRequestHandler(...)`, `addSendHandler(...)`, Session의 `context.handlers.addHandler(...)`와
+Spot의 `context.handlers`에 직접 등록한 handler는 유지되며 Nest DI로 instance를 만든다. 자동 등록과
+수동 등록을 sample 하나에서 명확히 구분해야 할 때만 module 전체에 적용한다.
 
 ## 5. MeshNode, Channel, Spot과 STREAM builder
 

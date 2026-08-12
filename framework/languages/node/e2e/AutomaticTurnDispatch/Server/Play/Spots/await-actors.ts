@@ -8,7 +8,7 @@ import type {
   ActorFastMsg,
   ActorFastReq,
   ActorAwaitReq,
-  DeferredJoinFailureMsg,
+  DeferredJoinFailureReq,
   DelayRes
 } from '../../../Shared/messages';
 import { ActorPushNotify, AutomaticTurnDispatchNames } from '../../../Shared/messages';
@@ -315,18 +315,18 @@ export class SpotActorJoinAwaitHandler
 @zlinkSpotActorRequestHandler({
   spot: () => AwaitProbeSpot,
   actor: () => AwaitActor,
-  packetName: 'DeferredJoinFailureMsg'
+  packetName: 'DeferredJoinFailureReq'
 })
 export class SpotActorDeferredJoinFailureHandler
-  implements ZLinkSpotActorRequestHandler<AwaitProbeSpot, AwaitActor, DeferredJoinFailureMsg, ActorAwaitRes> {
+  implements ZLinkSpotActorRequestHandler<AwaitProbeSpot, AwaitActor, DeferredJoinFailureReq, ActorAwaitRes> {
   constructor(private readonly evidence: EvidenceStore) {}
 
-  @ZLinkSpotActorRequest('DeferredJoinFailureMsg')
+  @ZLinkSpotActorRequest('DeferredJoinFailureReq')
   async handle(
     spot: AwaitProbeSpot,
     actor: AwaitActor,
     context: ZLinkMessageContext,
-    request: DeferredJoinFailureMsg
+    request: DeferredJoinFailureReq
   ): Promise<ActorAwaitRes> {
     void context;
     if (actor.actorId !== request.firstActorId) {

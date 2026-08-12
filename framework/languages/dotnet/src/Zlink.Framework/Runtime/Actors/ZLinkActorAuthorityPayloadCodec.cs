@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.Runtime.Actors;
 
@@ -395,74 +396,14 @@ internal static class ZLinkActorAuthorityPayloadCodec
         }
     }
 
-    internal static ZLinkAuthorityKey AuthorityKey(string actorId)
-    {
-        var bytes = new UTF8Encoding(false, true).GetBytes(actorId);
-        if (bytes.Length is 0 or > byte.MaxValue || actorId.Contains('\0'))
-            throw new ArgumentOutOfRangeException(nameof(actorId));
-        var builder = new StringBuilder($"zla1:a:{bytes.Length}:");
-        foreach (var item in bytes)
-        {
-            if (item is >= (byte)'A' and <= (byte)'Z'
-                or >= (byte)'a' and <= (byte)'z'
-                or >= (byte)'0' and <= (byte)'9'
-                or (byte)'-' or (byte)'.' or (byte)'_' or (byte)'~')
-                builder.Append((char)item);
-            else
-                builder.Append('%').Append(item.ToString("X2"));
-        }
-        return new ZLinkAuthorityKey(builder.ToString());
-    }
+    internal static ZLinkAuthorityKey AuthorityKey(string actorId) =>
+        ZLinkAuthorityKeyCodec.EncodeActor(actorId);
 
     internal static bool TryGetActorId(
         ZLinkAuthorityKey key,
         out string actorId)
     {
-        actorId = string.Empty;
-        const string prefix = "zla1:a:";
-        if (!key.Value.StartsWith(prefix, StringComparison.Ordinal))
-            return false;
-        var lengthEnd = key.Value.IndexOf(':', prefix.Length);
-        if (lengthEnd < 0
-            || !int.TryParse(
-                key.Value.AsSpan(prefix.Length, lengthEnd - prefix.Length),
-                out var expectedLength)
-            || expectedLength is < 1 or > byte.MaxValue)
-            return false;
-
-        var encoded = key.Value.AsSpan(lengthEnd + 1);
-        var bytes = new List<byte>(expectedLength);
-        for (var index = 0; index < encoded.Length;)
-        {
-            if (encoded[index] != '%')
-            {
-                if (encoded[index] > 0x7f)
-                    return false;
-                bytes.Add((byte)encoded[index++]);
-                continue;
-            }
-            if (index + 2 >= encoded.Length
-                || !byte.TryParse(
-                    encoded.Slice(index + 1, 2),
-                    System.Globalization.NumberStyles.HexNumber,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out var value))
-                return false;
-            bytes.Add(value);
-            index += 3;
-        }
-        if (bytes.Count != expectedLength)
-            return false;
-        try
-        {
-            actorId = new UTF8Encoding(false, true).GetString([.. bytes]);
-            return actorId.Length > 0 && !actorId.Contains('\0');
-        }
-        catch (DecoderFallbackException)
-        {
-            actorId = string.Empty;
-            return false;
-        }
+        return ZLinkAuthorityKeyCodec.TryDecodeActor(key, out actorId);
     }
 
     private sealed class Writer

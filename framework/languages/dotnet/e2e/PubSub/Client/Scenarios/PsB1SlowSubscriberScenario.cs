@@ -61,6 +61,35 @@ internal static class PsB1SlowSubscriberScenario
             slowEvidence.Any(line => line.Contains("delay-start|", StringComparison.Ordinal)
                                      && line.Contains($"run={runId}", StringComparison.Ordinal)),
             "PS-B1 expected slow subscriber delay evidence.");
+
+        const int loadCount = 120;
+        const int batchSize = 12;
+        for (var batchStart = 0; batchStart < loadCount; batchStart += batchSize)
+        {
+            var publishes = Enumerable.Range(batchStart, Math.Min(batchSize, loadCount - batchStart))
+                .Select(index => publisher.Post("/publish/event")
+                    .Query("topic", PubSubNames.MainTopic)
+                    .Query("runId", runId)
+                    .Query("sequence", (index + 9).ToString())
+                    .Query("value", $"fanout-load-{index + 1}")
+                    .AsyncRaw()
+                    .AsTask());
+            await Task.WhenAll(publishes);
+        }
+
+        var tailSequence = loadCount + 8;
+        var loadWaits = fastSubscribers.Select(subscriber => subscriber.Post("/evidence/wait")
+            .Body(new EvidenceWaitReq([], [], 5000)
+            {
+                ContainsAllLineGroups =
+                [
+                    ["event|", $"run={runId}", $"topic={PubSubNames.MainTopic}", $"seq={tailSequence}"]
+                ]
+            })
+            .Async<string[]>()
+            .AsTask());
+        await Task.WhenAll(loadWaits);
+
         Console.WriteLine("scenario PS-B1 passed");
     }
 }

@@ -20,7 +20,7 @@ title: "12. 운영 — 런타임 메트릭 · graceful drain · readiness · Nod
 > **이 장의 계약 소유 문서** — 공통 스펙
 > [Runtime 상태 조회와 운영 진단](../../../common/spec/24-runtime-monitoring.ko.md),
 > [런타임 메트릭](../../../common/spec/25-runtime-metrics.ko.md)과
-> [Graceful Drain & Handoff](../../../common/spec/28-graceful-drain-handoff.ko.md)가 소유한다.
+> [Graceful Drain & Handoff](../../../common/spec/30-host-relocation-flow.ko.md)가 소유한다.
 > 언어별 표면의 정식 정의는
 > [언어별 topology·monitoring 공개 계약](../../../common/spec/server/languages/README.ko.md)이
 > 소유한다.
@@ -68,7 +68,7 @@ meterProvider.getMeter('zlink.framework');
 
 계기 카탈로그는 다음과 같다. MeshNode, object·STREAM, location·fanout 계기의 라벨·단위·종류는
 [Runtime Metrics §§3~5](../../../common/spec/25-runtime-metrics.ko.md)가 정하고, drain 계기는
-[Host Relocate와 Shutdown §13](../../../common/spec/28-graceful-drain-handoff.ko.md#13-관측-정보)이 정한다.
+[Host relocation 전체 흐름 §13](../../../common/spec/30-host-relocation-flow.ko.md#13-관측-정보)이 정한다.
 
 | 계기 | 무엇을 재나 |
 |---|---|
@@ -365,6 +365,6 @@ stopped · error)을 그대로 관측한다. 표기는 언어를 따른다. Stat
 ## 7. 관련 문서
 
 - 이 챕터 계약의 실행 검증 예문: [13. Interface 카탈로그](13-interface-catalog.ko.md) §7 — 검증 클래스 `FrameworkRuntimeContracts`
-- 정식 계약: [Host Relocate와 Shutdown](../../../common/spec/28-graceful-drain-handoff.ko.md) · [Runtime Metrics](../../../common/spec/25-runtime-metrics.ko.md)
+- 정식 계약: [Host relocation 전체 흐름](../../../common/spec/30-host-relocation-flow.ko.md) · [Runtime Metrics](../../../common/spec/25-runtime-metrics.ko.md)
 - 상태 관측과 진단: [11. Monitoring](11-monitoring.ko.md)
 - relocation 경계를 application이 정하는 Spot: [06-spot §7](06-spot.ko.md#7-relocation을-시작해도-되는-시점-알리기)

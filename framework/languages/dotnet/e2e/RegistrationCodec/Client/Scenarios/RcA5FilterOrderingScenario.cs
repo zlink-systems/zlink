@@ -14,16 +14,16 @@ internal static class RcA5FilterOrderingScenario
     {
         await requester.Post("/registration/di-filter-order").Async<EchoRes[]>();
         var lines = (await evidenceServer.Post("/evidence/wait")
-            .Body(new EvidenceWaitReq(["filter|", "packet=EchoDi"]))
+            .Body(new EvidenceWaitReq(["filter|", "packet=EchoDiReq"]))
             .Async<string[]>()).Body;
         ZlinkStreamAssert.Ensure(
             lines.Count(line => line.Contains("filter|", StringComparison.Ordinal)
-                                && line.Contains("packet=EchoDi", StringComparison.Ordinal)) >= 4,
+                                && line.Contains("packet=EchoDiReq", StringComparison.Ordinal)) >= 4,
             "RC-A5 filter evidence missing.");
 
         var filter = lines
             .Where(line => line.Contains("filter|", StringComparison.Ordinal)
-                           && line.Contains("packet=EchoDi", StringComparison.Ordinal))
+                           && line.Contains("packet=EchoDiReq", StringComparison.Ordinal))
             .Take(4)
             .ToArray();
         ZlinkStreamAssert.Ensure(

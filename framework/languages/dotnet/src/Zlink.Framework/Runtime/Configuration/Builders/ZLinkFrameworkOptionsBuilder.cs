@@ -152,20 +152,6 @@ internal sealed class ZLinkFrameworkOptionsBuilder : IZLinkFrameworkOptions
         _registration.Locations.RelocationStoreInstance = store;
     }
 
-    internal void AddLocationRepositoryForTests(
-        IZLinkLocationRepository repository)
-    {
-        ArgumentNullException.ThrowIfNull(repository);
-        _registration.Locations.SetTestRepository(repository);
-    }
-
-    internal void AddRelocationRepositoryForTests(
-        IZLinkRelocationRepository repository)
-    {
-        ArgumentNullException.ThrowIfNull(repository);
-        _registration.Locations.SetTestRelocationRepository(repository);
-    }
-
     public ZLinkLocationOptions ConfigureLocations()
     {
         return _registration.Locations.Options;

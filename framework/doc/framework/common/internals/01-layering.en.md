@@ -10,17 +10,17 @@ title: "1. Layer Boundary And Identifier"
 > into, and which value must not be merged into one.
 >
 > **Contract ownership** — the shutdown procedure and order is owned
-> by [Host Relocate And Shutdown](../spec/28-graceful-drain-handoff.en.md),
+> by [Complete Host Relocation Flow](../spec/30-host-relocation-flow.en.md),
 > and the identifier's format and lifetime is owned by the
 > [glossary](../spec/01-glossary.en.md).
-> This chapter covers the **structure** that satisfies that contract,
-> and the mismatch observed across the four implementations.
+> This chapter covers the **structure** that satisfies that contract and
+> the failures that become visible when a boundary is violated.
 
-Covers what chunk to split the runtime into, and which value must not
-be merged into one. These two decisions are hardest to change later —
-a wrong boundary spreads through the whole codebase, and merged
-identifiers make it impossible to ask again "until when is this value
-valid."
+This chapter explains where runtime responsibilities are separated and how identifiers
+with different lifetimes remain distinct. These boundaries determine dependency direction
+throughout the codebase and are therefore difficult to change later. If identifiers with
+different lifetimes are merged, the scope and period in which the value is valid can no
+longer be determined.
 
 ## 1. Keep The Binding Boundary Semantic
 
@@ -28,13 +28,14 @@ valid."
 responsibility graph. The graph is defined by semantic ownership and
 runtime cost, not by a binding's type names, package layout, or syntax.
 
-The Framework has a public contract and two internal runtime zones. Its
-public contract and semantic runtime core are binding-neutral. Its
-binding-facing integration may use a binding public API directly when
-that operation already has the exact Framework meaning, ownership,
-lifetime, readiness, and error semantics. A semantic adapter or port is
-used only when those semantics differ or when several binding objects
-must be composed into one Framework operation.
+The Framework is separated into a public contract, a runtime core that implements Framework
+meaning, and an integration area that connects to the binding. Binding types are not
+exposed by the public contract or runtime core.
+
+The integration area calls a binding public API directly when the binding operation already
+has the Framework contract's meaning, ownership, lifetime, readiness, and errors. It adds a
+semantic adapter or port only when one of those properties differs or when several binding
+objects must be combined into one Framework operation.
 
 `SpotNode` and `Stream` are common examples of such composition. They
 are not a special exemption: every proposed adapter must pass the same
@@ -51,20 +52,16 @@ flowchart TB
     BINDING --> CORE["Core"]
 ```
 
-The public contract and semantic runtime core must not expose binding
-types. Only the binding-facing integration may reference binding public
-types. A binding-specific type must not be copied into a Framework
-domain contract merely to preserve an artificial abstraction boundary.
-An adapter is part of the runtime implementation and must not move a
+Only the integration area may reference binding public types. It does not copy the same
+types into a Framework domain contract merely to preserve the shape of an abstraction
+layer. An adapter is also part of the runtime implementation, so it does not move a
 Framework decision into the binding package.
 
-The boundary protects meaning and ownership, not a particular number of
-classes. The same graph must be present in every language: a semantic
-runtime core, one binding-facing integration edge, direct use when
-semantics already match, and a semantic adapter only when a documented
-mismatch remains. Binding types do not spread through public or domain
-contracts. This is the boundary described by "The POSDDD Review Gate"
-and "The Performance Gate" below.
+This boundary protects meaning and ownership, rather than a particular class count. Every
+language implementation keeps the same responsibility graph: use a binding API directly
+when meanings match, and let an adapter handle a verified mismatch in one place. The
+operation classification, POSDDD review gate, and performance gate below provide the
+criteria for that choice.
 
 **Why.** A binding changes on a cycle separate from Framework. If the
 binding type and its ownership rules are scattered through the public
@@ -138,7 +135,7 @@ The following shapes are design failures in every language.
 
 - A `*Wrapper` class whose methods have the same arguments and result
   as the binding object.
-- A one-implementation `IBackend*` interface created only for tests or
+- An `IBackend*` interface that wraps one concrete target only for tests or
   a hypothetical backend.
 - A facade that only renames binding methods or exposes a second copy of
   the binding options.
@@ -192,19 +189,17 @@ execution unit an Actor belongs to, closes first while a STREAM
 session still holds that Actor, the situation can't be reproduced and
 which side is at fault can't be judged.
 
-In one implementation, code that **branches by checking the concrete
-type** to align the shutdown order is in the shutdown path. This is a
-sign the design of "handling topology abstractly" has already broken
-— unable to express order with the abstract type, it asked back for
-the concrete type.
+If the shutdown path **branches by checking the concrete type** to
+choose an order, the topology abstraction has broken. The abstract
+type no longer expresses the order, so each added topology adds another
+shutdown branch and the same resource can close in a different order
+depending on the execution path.
 
 ### Don't Put Shutdown Logic In The Host Integration Layer
 
-In one implementation, a substantial portion of shutdown coordination
-is in the web framework integration package. That means the runtime
-alone can't clean itself up to the end.
-
-This makes shutdown behave differently, or not happen at all, in a
+Putting a substantial portion of shutdown coordination in the web
+framework integration package prevents the runtime from completing its
+own cleanup. Shutdown then behaves differently, or doesn't happen at all, in a
 spot that doesn't use that integration — a console host, a test, a
 different framework. The integration layer **only connects the
 runtime's start/stop to the host lifecycle**, and what to clean up in
@@ -212,11 +207,11 @@ what order is owned by the runtime.
 
 ### Don't Implement The Same Protocol Twice
 
-In one implementation, the client connection library has **the same
-protocol stack separate from the framework.** Pending request
-management, connection keep-alive, and close handling each exist
-separately on both sides. A situation where only one side gets fixed
-inevitably occurs, and which side is canonical isn't left in the code.
+If the client connection library and the framework **implement the same
+protocol stack separately**, pending-request management, connection
+keep-alive, and close handling have two authorities. A fix applied to
+only one side then makes the two stacks interpret the same wire input
+differently.
 
 Protocol handling is implemented in one place, and both sides use it.
 
@@ -239,23 +234,23 @@ into one makes even an urgent shutdown wait for a move to finish.
 already confirmed; if the conditions differ, reject.** If the mode or
 target version matches, join the in-progress procedure. If different,
 don't wait — end with `Blocked/OperationInProgress`
-([Host Relocate And Shutdown 「6. Concurrent Calls And
-Cancellation」](../spec/28-graceful-drain-handoff.en.md#6-concurrent-calls-and-cancellation)).
+([Complete Host Relocation Flow 「6. Concurrent Calls And
+Cancellation」](../spec/30-host-relocation-flow.en.md#6-concurrent-calls-and-cancellation)).
 If two procedures of the same kind run overlapped with different
 conditions, which result is final can't be decided.
 
 **A Relocate and Shutdown overlap is handled differently.** Here it's
 not a rejection — shutdown wins, and the side waiting for relocation
 ends with `Blocked/ShutdownRequested`
-([Host Relocate And Shutdown 「11. The Race Between Shutdown And
-Relocate」](../spec/28-graceful-drain-handoff.en.md#11-the-race-between-shutdown-and-relocate)).
+([Complete Host Relocation Flow 「11. The Race Between Shutdown And
+Relocate」](../spec/30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate)).
 Since shutdown cleans up everything of this host anyway, there's no
 reason to finish the relocation.
 
 **Decision — a shutdown-after-relocation checks the whole host at once
 before changing state**
-([Host Relocate And Shutdown 「4. Conditions Checked Before Selecting A
-Target」](../spec/28-graceful-drain-handoff.en.md#4-conditions-checked-before-selecting-a-target)).
+([Complete Host Relocation Flow 「4. Conditions Checked Before Selecting A
+Target」](../spec/30-host-relocation-flow.en.md#4-conditions-checked-before-selecting-a-target)).
 If new work is blocked before this check, that node would have been
 stopped for no reason once it learns it can't move
 ([5. Message Continuity During A Move 「1. The Four
@@ -263,20 +258,28 @@ Boundaries」](05-relocation-continuity.en.md#1-four-boundaries)).
 
 It doesn't immediately reject just because there's no node to receive
 it right now. **After waiting for target information to spread up to
-a set time,** it ends with `Blocked/TargetUnavailable` (`28:288`).
+a set time,** it ends with `Blocked/TargetUnavailable`
+([Complete Host Relocation Flow 「5.1 When There's No Target
+Yet」](../spec/30-host-relocation-flow.en.md#51-when-theres-no-target-yet)).
 Since the rejected result isn't stored, requesting again checks from
-the start (`28:326`).
+the start
+([Complete Host Relocation Flow 「6. Concurrent Calls And
+Cancellation」](../spec/30-host-relocation-flow.en.md#6-concurrent-calls-and-cancellation)).
 
 If there's **not a single** target to move, it succeeds even with no
 node to receive it. Here too, the host state transition and new work
-blocking is the same as any other relocation (`28:281-285`).
+blocking is the same as any other relocation
+([Complete Host Relocation Flow 「5.1 When There's No Target
+Yet」](../spec/30-host-relocation-flow.en.md#51-when-theres-no-target-yet)).
 
 **Decision — failure handling differs before and after confirmation,
 but neither ends the host.** A failure before the first relocation is
 confirmed returns to the original state. A failure after confirmation
 **leaves what's already moved on the receiving node**, reprocesses
-only the not-yet-moved work, and **returns to `Serving`** (`28:152`,
-`28:274`). Shutdown only happens if the caller separately requests it.
+only the not-yet-moved work, and **returns to `Serving`**
+([Complete Host Relocation Flow 「10. Relocate Completion And
+Failure」](../spec/30-host-relocation-flow.en.md#10-relocate-completion-and-failure)).
+Shutdown only happens if the caller separately requests it.
 
 **Decision — an observation subscriber can't hold up shutdown
 progress.** Shutdown proceeds even if the subscriber doesn't respond.
@@ -361,8 +364,8 @@ flowchart TB
 **Step 4 coming before step 5 is the key.** The callback receiving the
 shutdown reason must run while that object's membership and local
 instance are still valid
-([Host Relocate And Shutdown 「11. The Race Between Shutdown And
-Relocate」](../spec/28-graceful-drain-handoff.en.md#11-the-race-between-shutdown-and-relocate)).
+([Complete Host Relocation Flow 「11. The Race Between Shutdown And
+Relocate」](../spec/30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate)).
 If the timer and session are stopped first, what the callback needs is
 already gone.
 
@@ -416,27 +419,24 @@ There's also a way to solve this by making the value itself large, but
 identifier)` combination. The value's length and internal format
 aren't a public contract, so it can differ per language.
 
-One implementation had **three** in-progress call identifier formats
-coexisting. A spot converting between them arose, and following which
-path uses which format required tracing the call graph. Keep the
-format to one.
+Multiple in-progress call identifier formats create conversion points
+and force maintainers to trace the call graph to determine which path
+uses which format. Keep one format inside the runtime.
 
 ### Typing Only Part Leaves The Rest As A String
 
-In one implementation, only node RID has a dedicated type, and mesh
-name/object ID/channel name are all plain strings. In a different
-implementation, all four are strings. Keeping it this way creates two
-problems.
+Making only node RID a dedicated type, or keeping every identifier as a
+plain string, creates the following problems.
 
 First, **swapping different identifiers still compiles.** The type
 doesn't catch the mistake of passing a channel name where an object ID
 belongs.
 
-Second, **multiple representations of the same value arise.** One
-implementation, when comparing a routing id, builds several
-candidates differing in case and hex notation and matches them one by
-one. It's a sign the representation split crossing boundaries, and the
-comparison cost is added per value.
+Second, **multiple representations of the same value arise.** If
+comparing a routing id requires building candidates with different case
+and hexadecimal notation and checking them one at a time, the
+representation changed at a boundary. It also adds candidate-building
+cost for every value.
 
 **Decision — keep each identifier as its own dedicated type, and fix
 one representation.** If a spot must handle it as a string, convert
@@ -462,8 +462,7 @@ depending on that value's stability.
 
 - Binding types do not appear in Framework public or domain contracts,
   and binding-facing code uses only the binding public API.
-- There's no contract layer with only one implementation that just
-  forwards the call as is.
+- No contract layer merely forwards calls to a single concrete target.
 - A binding-facing type is either used directly because its meaning and
   ownership already match, or it owns a documented semantic conversion.
 - No pass-through wrapper duplicates a binding surface.

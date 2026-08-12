@@ -1,4 +1,6 @@
 package systems.zlink.framework.runtime.actors;
+import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -80,7 +82,7 @@ final class ZLinkActorSpotRoutePacketsTest {
             List<Message> parts = ZLinkActorSpotRoutePackets.createActorPacketParts(
                 actor,
                 new ZLinkStreamHeader(
-                    "ProbeReq", java.util.Map.of(), java.util.Optional.of(7L)),
+                    "ProbeReq", Map.of(), Optional.of(7L)),
                 payload,
                 route);
             try {
@@ -107,7 +109,7 @@ final class ZLinkActorSpotRoutePacketsTest {
             List<Message> parts = ZLinkActorSpotRoutePackets.createActorPacketParts(
                 actor,
                 new ZLinkStreamHeader(
-                    "DeferredSend", java.util.Map.of(), java.util.Optional.empty()),
+                    "DeferredSend", Map.of(), Optional.empty()),
                 payload,
                 null,
                 17L,

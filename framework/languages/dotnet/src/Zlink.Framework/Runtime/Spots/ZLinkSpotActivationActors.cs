@@ -274,22 +274,6 @@ internal abstract partial class ZLinkSpotActivation
         }
     }
 
-    internal ValueTask CompleteTransferredActorJoinAsync(
-        ZLinkActorRuntimeState actorState,
-        CancellationToken cancellationToken)
-    {
-        var actor = actorState.Actor
-                    ?? throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.NotFound,
-                        $"Actor '{actorState.ActorId}' has no transferred instance at commit.");
-        return ReferenceEquals(ZLinkSpotAmbientContext.CurrentOrDefault, this)
-            ? NotifyJoinedActorCoreAsync(actor, cancellationToken)
-            : ExecuteSerializedAsync(
-                static (activation, state, ct) => activation.NotifyJoinedActorCoreAsync(state, ct),
-                actor,
-                cancellationToken);
-    }
-
     internal ValueTask CompleteTransferredActorJoinLifecycleAsync(
         ZLinkActorRuntimeState actorState,
         string handoffId,

@@ -1,4 +1,5 @@
 package systems.zlink.framework.execution;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -153,7 +154,7 @@ final class ZLinkCompositeRelocationBarrierTest {
             })
             .toCompletableFuture();
 
-        CompletableFuture<java.util.Optional<
+        CompletableFuture<Optional<
             ZLinkCompositeRelocationBarrier.Seal>> sealing =
                 barrier.sealAtTurnBoundary(
                     lanes(spot, actor, timer),
@@ -194,7 +195,7 @@ final class ZLinkCompositeRelocationBarrierTest {
             new byte[] {9},
             () -> CompletableFuture.completedFuture(null))
             .toCompletableFuture();
-        CompletableFuture<java.util.Optional<
+        CompletableFuture<Optional<
             ZLinkCompositeRelocationBarrier.Seal>> sealing =
                 barrier.sealAtTurnBoundary(
                     lanes(spot, actor, timer),
@@ -227,7 +228,7 @@ final class ZLinkCompositeRelocationBarrierTest {
         }).toCompletableFuture();
         yielded.get(3, TimeUnit.SECONDS);
 
-        CompletableFuture<java.util.Optional<
+        CompletableFuture<Optional<
             ZLinkCompositeRelocationBarrier.Seal>> sealing =
                 barrier.sealAtTurnBoundary(
                     lanes(spot, actor, timer),

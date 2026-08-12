@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.messaging;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.handlers.ZLinkPacket;
+import systems.zlink.framework.messaging.ZLinkMessage;
 
 public final class ZLinkPacketNames {
     private ZLinkPacketNames() {
@@ -14,6 +15,9 @@ public final class ZLinkPacketNames {
         }
         if (payload instanceof Message) {
             return "Message";
+        }
+        if (payload instanceof ZLinkMessage message) {
+            return resolve(message.declaredType());
         }
         return resolve(payload.getClass());
     }

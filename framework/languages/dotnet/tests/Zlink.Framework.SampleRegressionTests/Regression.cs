@@ -67,9 +67,17 @@ public sealed partial class RegressionTests
                     violations.Add("manual MeshNode peer connection");
                 if (source.Path.Contains(
                         $"{Path.DirectorySeparatorChar}Server{Path.DirectorySeparatorChar}",
-                        StringComparison.Ordinal)
-                    && source.Text.Contains("ZLinkHttpClient.Create(", StringComparison.Ordinal))
-                    violations.Add("server-to-server ZLinkHttpClient");
+                        StringComparison.Ordinal))
+                {
+                    if (source.Text.Contains("ZLinkHttpClient.Create(", StringComparison.Ordinal))
+                        violations.Add("server-to-server ZLinkHttpClient");
+                    var withoutRedisConnections = source.Text.Replace(
+                        "ConnectionMultiplexer.Connect(",
+                        string.Empty,
+                        StringComparison.Ordinal);
+                    if (withoutRedisConnections.Contains(".Connect(", StringComparison.Ordinal))
+                        violations.Add("manual server endpoint connection");
+                }
                 return violations.Select(violation =>
                     $"{Path.GetRelativePath(samplesRoot, source.Path)}:{violation}");
             })
@@ -100,6 +108,77 @@ public sealed partial class RegressionTests
         Assert.Contains("AddHandlersFromAssembly", combined, StringComparison.Ordinal);
         Assert.DoesNotContain("DisableImplicitHandlerAutoRegistration", combined, StringComparison.Ordinal);
         Assert.DoesNotContain(".PeerConnections.Connect(", combined, StringComparison.Ordinal);
+        var withoutRedisConnections = combined.Replace(
+            "ConnectionMultiplexer.Connect(",
+            string.Empty,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(".Connect(", withoutRedisConnections, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Sample_Wire_Message_Names_Expose_Their_Call_Semantics()
+    {
+        var sampleFiles = Directory
+            .EnumerateFiles(ResolveSamplesRoot(), "*", SearchOption.AllDirectories)
+            .Where(static path => (path.EndsWith(".cs", StringComparison.Ordinal)
+                                   || path.EndsWith(".proto", StringComparison.Ordinal))
+                                  && !path.Contains(
+                                      $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
+                                      StringComparison.Ordinal)
+                                  && !path.Contains(
+                                      $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
+                                      StringComparison.Ordinal))
+            .ToArray();
+        var combined = string.Join(Environment.NewLine, sampleFiles.Select(File.ReadAllText));
+
+        foreach (var obsoleteWireName in new[]
+                 {
+                     "CollectItemReq",
+                     "EnterAreaReq",
+                     "EnterZoneMsg"
+                 })
+            Assert.DoesNotContain(obsoleteWireName, combined, StringComparison.Ordinal);
+
+        foreach (var requiredWireName in new[]
+                 {
+                     "CollectItemMsg",
+                     "EnterAreaMsg",
+                     "MatchBingoReq",
+                     "MatchBingoRes",
+                     "ObserveBingoEventsReq",
+                     "ObserveBingoEventsRes",
+                     "JoinConversationReq",
+                     "JoinConversationRes",
+                     "QuestProgressMsg",
+                     "QuestProgressNotify",
+                     "QuestCompletedMsg",
+                     "QuestCompletedNotify",
+                     "EnterZoneReq",
+                     "EnterZoneRes",
+                     "MessageFollowProbeMsg",
+                     "MessageFollowProbeReq",
+                     "MessageFollowProbeRes",
+                     "PlayerActorCreateReq",
+                     "BingoRoomCreateReq"
+                 })
+            Assert.Contains(requiredWireName, combined, StringComparison.Ordinal);
+
+        var forbiddenWireSuffix = new Regex(
+            @"(?m)^\s*(?:(?:public|internal)\s+)?(?:sealed\s+)?(?:record|class|message)\s+\w+(?:Command|Result|Ack)\b",
+            RegexOptions.CultureInvariant);
+        var forbiddenSharedContracts = sampleFiles
+            .Select(path => (Path: path, Relative: NormalizeRelativePath(
+                Path.GetRelativePath(ResolveSamplesRoot(), path))))
+            .Where(source => source.Relative.Split('/') is { Length: > 2 } parts
+                             && string.Equals(parts[1], "Shared", StringComparison.Ordinal))
+            .Where(source => forbiddenWireSuffix.IsMatch(File.ReadAllText(source.Path)))
+            .Select(source => source.Relative)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        Assert.True(
+            forbiddenSharedContracts.Length == 0,
+            "Shared wire contracts must use Req/Res, Msg, Notify, or publish-only Event suffixes: "
+            + string.Join(", ", forbiddenSharedContracts));
     }
 
     [Fact]
@@ -275,7 +354,9 @@ public sealed partial class RegressionTests
             shellRunner,
             StringComparison.Ordinal);
         Assert.Contains($"if [[ -n \"${{{containerVariable}}}\" ]]; then", shellRunner, StringComparison.Ordinal);
-        Assert.Contains($"docker rm -fv \"${{{containerVariable}}}\"", shellRunner, StringComparison.Ordinal);
+        Assert.Contains($"zlink_redis_remove_by_id \"${{{containerVariable}}}\"", shellRunner,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("docker rm -fv", shellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("docker run -d --rm", shellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("-p \"127.0.0.1::6379\"", shellRunner, StringComparison.Ordinal);
         Assert.Contains("RUN_SUCCEEDED=0", shellRunner, StringComparison.Ordinal);
@@ -379,8 +460,8 @@ public sealed partial class RegressionTests
         Assert.Contains("ValueTask DestroyActorAsync(", actorSpec, StringComparison.Ordinal);
         Assert.Contains("Entry Spot은 close operation 대신 Actor destroy", spotModelSpec, StringComparison.Ordinal);
         Assert.Contains("Entry Spot context의 `destroyActor`를 호출한다", ticTacToeSampleSpec, StringComparison.Ordinal);
-        Assert.Contains("`destroyActor`는 `onLeaveActor`나 다른 lifecycle callback을 호출하지 않고", ticTacToeSampleSpec, StringComparison.Ordinal);
-        Assert.Contains("native actor ref, framework registry, bound session binding을 정리한다", ticTacToeSampleSpec, StringComparison.Ordinal);
+        Assert.Contains("disconnected lifecycle callback을 실행하고 binding을 정리한다", ticTacToeSampleSpec, StringComparison.Ordinal);
+        Assert.Contains("membership 변경이나 destroy를 시작하지 않는다", ticTacToeSampleSpec, StringComparison.Ordinal);
         Assert.Empty(offenders.Order(StringComparer.Ordinal));
     }
 

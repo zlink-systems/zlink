@@ -28,9 +28,9 @@ internal sealed class ReadWorkflowHandler
 }
 
 internal sealed class WorkflowSignalHandler(WorkflowEvidenceStore evidence)
-    : IZLinkSpotPacketHandler<WorkflowSpot, WorkflowSignalReq>
+    : IZLinkSpotPacketHandler<WorkflowSpot, WorkflowSignalMsg>
 {
-    public ValueTask HandleAsync(WorkflowSpot spot, WorkflowSignalReq message,
+    public ValueTask HandleAsync(WorkflowSpot spot, WorkflowSignalMsg message,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.locations;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -198,7 +199,7 @@ final class ZLinkLocationLifecycleTest {
     private static final class ActorJoinStore
         extends ZLinkLocationStoreTestAdapter {
         private final Map<String, ZLinkAuthoritySnapshot> rows =
-            new java.util.concurrent.ConcurrentHashMap<>();
+            new ConcurrentHashMap<>();
         private final RoutingId node;
         private final String actorId;
         private final String spotId;

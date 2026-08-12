@@ -22,7 +22,8 @@ internal sealed class ZLinkSpotLocationLifecycle(
         CancellationToken cancellationToken = default)
     {
         runtime.EnsureOwnerAdmissionOpen();
-        if (spotKind == ZLinkSpotKind.Entry)
+        var lifecycleKind = ZLinkSpotLifecycleKind.FromBoundary(spotKind);
+        if (lifecycleKind is ZLinkSpotLifecycleKind.Entry)
         {
             Track(
                 spotId,
@@ -33,7 +34,7 @@ internal sealed class ZLinkSpotLocationLifecycle(
                 spotType,
                 nodeRid,
                 nodeGeneration,
-                spotKind,
+                lifecycleKind,
                 deactivate);
             return ZLinkLocationWriteStatus.Stored;
         }
@@ -52,7 +53,7 @@ internal sealed class ZLinkSpotLocationLifecycle(
                 spotType,
                 nodeRid,
                 nodeGeneration,
-                spotKind)
+                lifecycleKind)
             || authorityOwnerGeneration != 0
                && snapshot.AuthorityOwnerGeneration != authorityOwnerGeneration
             || snapshot.OwnerId != runtime.OwnerToken.OwnerId
@@ -69,7 +70,7 @@ internal sealed class ZLinkSpotLocationLifecycle(
             spotType,
             nodeRid,
             nodeGeneration,
-            spotKind,
+            lifecycleKind,
             deactivate);
         return ZLinkLocationWriteStatus.Stored;
     }
@@ -102,6 +103,8 @@ internal sealed class ZLinkSpotLocationLifecycle(
         CancellationToken cancellationToken)
     {
         runtime.EnsureOwnerAdmissionOpen();
+        var lifecycleKind =
+            ZLinkSpotLifecycleKind.RelocatableFromBoundary(spotKind);
         var read = await runtime.Store.ReadAuthorityAsync(
                 ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId.Value),
                 cancellationToken)
@@ -109,9 +112,7 @@ internal sealed class ZLinkSpotLocationLifecycle(
         if (read is not ZLinkAuthorityReadResult.Found found)
             return ZLinkLocationWriteStatus.RejectedConflict;
         var snapshot = found.Snapshot;
-        var expectedKind = spotKind == ZLinkSpotKind.Instance
-            ? ZLinkPlacementObjectKind.InstanceSpot
-            : ZLinkPlacementObjectKind.UserSpot;
+        var expectedKind = lifecycleKind.PlacementKind!.Value;
         if (snapshot.ObjectGeneration != objectGeneration
             || snapshot.AuthorityOwnerGeneration
                != authorityOwnerGeneration
@@ -137,7 +138,7 @@ internal sealed class ZLinkSpotLocationLifecycle(
             stableType,
             nodeRid,
             nodeGeneration,
-            spotKind,
+            lifecycleKind,
             deactivate);
         return ZLinkLocationWriteStatus.Stored;
     }
@@ -239,7 +240,7 @@ internal sealed class ZLinkSpotLocationLifecycle(
         string? spotType,
         RoutingId nodeRid,
         ulong nodeGeneration,
-        ZLinkSpotKind spotKind,
+        ZLinkSpotLifecycleKind spotKind,
         Func<CancellationToken, ValueTask>? deactivate)
     {
         lock (_gate)
@@ -264,29 +265,15 @@ internal sealed class ZLinkSpotLocationLifecycle(
         string? spotType,
         RoutingId nodeRid,
         ulong nodeGeneration,
-        ZLinkSpotKind spotKind)
+        ZLinkSpotLifecycleKind spotKind)
     {
-        if (spotKind == ZLinkSpotKind.User
-            && ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
-                snapshot.Payload.Span,
-                out var user))
-            return user.State == ZLinkUserSpotAuthorityState.Ready
-                   && user.SpotId == spotId.Value
-                   && user.MeshName == meshName.Value
-                   && user.NodeRid == nodeRid
-                   && user.NodeGeneration == nodeGeneration
-                   && (spotType is null || user.StableType == spotType);
-
-        return spotKind == ZLinkSpotKind.Instance
-               && ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
-                   snapshot.Payload.Span,
-                   out var instance)
-               && instance.State == ZLinkInstanceSpotAuthorityState.Ready
-               && instance.SpotId == spotId.Value
-               && instance.MeshName == meshName.Value
-               && instance.NodeRid == nodeRid
-               && instance.NodeGeneration == nodeGeneration
-               && (spotType is null || instance.StableType == spotType);
+        return spotKind.MatchesReady(
+            snapshot,
+            meshName,
+            spotId,
+            spotType,
+            nodeRid,
+            nodeGeneration);
     }
 
     private static ZLinkSpotId? TryDecodeCanonicalSpotId(string canonicalKey)
@@ -303,24 +290,13 @@ internal sealed class ZLinkSpotLocationLifecycle(
         ZLinkSpotId spotId,
         TrackedSpot tracked)
     {
-        return (ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
-                    snapshot.Payload.Span,
-                    out var user)
-                && user.SpotId == spotId.Value
-                && tracked.SpotKind == ZLinkSpotKind.User
-                && user.MeshName == tracked.MeshName.Value
-                && user.StableType == tracked.SpotType
-                && user.NodeRid == tracked.NodeRid
-                && user.NodeGeneration == tracked.NodeGeneration)
-               || (ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
-                       snapshot.Payload.Span,
-                       out var instance)
-                   && instance.SpotId == spotId.Value
-                   && tracked.SpotKind == ZLinkSpotKind.Instance
-                   && instance.MeshName == tracked.MeshName.Value
-                   && instance.StableType == tracked.SpotType
-                   && instance.NodeRid == tracked.NodeRid
-                   && instance.NodeGeneration == tracked.NodeGeneration);
+        return tracked.SpotKind.MatchesTracked(
+            snapshot,
+            spotId,
+            tracked.MeshName,
+            tracked.SpotType,
+            tracked.NodeRid,
+            tracked.NodeGeneration);
     }
 
     private sealed record TrackedSpot(
@@ -331,6 +307,6 @@ internal sealed class ZLinkSpotLocationLifecycle(
         string? SpotType,
         RoutingId NodeRid,
         ulong NodeGeneration,
-        ZLinkSpotKind SpotKind,
+        ZLinkSpotLifecycleKind SpotKind,
         Func<CancellationToken, ValueTask>? Deactivate);
 }

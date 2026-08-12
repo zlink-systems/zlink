@@ -6,7 +6,7 @@ class PlayerActorRelocationAdapter implements ZLinkActorRelocationAdapter<Player
   async capture(actor: PlayerActor): Promise<Uint8Array> {
     return new TextEncoder().encode(JSON.stringify(new PlayerActorTransferState({
       displayName: actor.displayName,
-      destroyAfterEntrySpotJoin: false,
+      destroyAfterEntrySpotJoin: actor.destroyAfterEntrySpotJoin,
       disconnected: false
     })));
   }
@@ -14,6 +14,7 @@ class PlayerActorRelocationAdapter implements ZLinkActorRelocationAdapter<Player
   async restore(actor: PlayerActor, payload: Uint8Array): Promise<void> {
     const restored = JSON.parse(new TextDecoder().decode(payload)) as PlayerActorTransferState;
     actor.displayName = restored.displayName;
+    actor.destroyAfterEntrySpotJoin = restored.destroyAfterEntrySpotJoin;
   }
 }
 

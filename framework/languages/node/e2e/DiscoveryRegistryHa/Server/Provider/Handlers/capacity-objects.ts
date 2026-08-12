@@ -21,6 +21,7 @@ import {
   zlinkSpotActorRequestHandler
 } from '@zlink-systems/nestjs';
 import { waitForScenarioGate } from '../Infrastructure/scenario-gates';
+import { Config6ActorCreateReq, Config6UserSpotCreateReq } from '../../../Shared/messages';
 import { ObjectRequestHandler } from './object-request-handler';
 
 export const Config6ActorType = 'Config6Actor';
@@ -65,7 +66,7 @@ export class Config6EntrySpot implements ZLinkEntrySpot<Config6Actor> {
   readonly context!: ZLinkEntrySpotContext<Config6Actor>;
 
   async onCreateActor(actor: Config6Actor, request: ZLinkMessage): Promise<{ accepted: boolean }> {
-    actor.state = request.decode<{ readonly state?: string }>(Object as never).state ?? '';
+    actor.state = request.decode(Config6ActorCreateReq).state;
     return { accepted: true };
   }
 
@@ -86,12 +87,7 @@ export class Config6UserSpot implements ZLinkSpot<Config6Actor> {
   }
 
   async onCreate(request: ZLinkMessage): Promise<{ accepted: boolean }> {
-    const value = request.decode<{
-      readonly failFactory?: boolean;
-      readonly state?: string;
-      readonly stateLength?: number;
-      readonly fillByte?: number;
-    }>(Object as never);
+    const value = request.decode(Config6UserSpotCreateReq);
     if (value.failFactory === true) {
       throw new Error('injected Config 6 User Spot factory failure');
     }
@@ -147,11 +143,19 @@ export class Config6JoinReq {
   constructor(readonly spotId: string) {}
 }
 
+export interface Config6JoinRes {
+  readonly accepted: true;
+}
+
 @ZLinkPacket('Config6ProbeReq')
 export class Config6ProbeReq {}
 
 @ZLinkPacket('Config6LeaveReq')
 export class Config6LeaveReq {}
+
+export interface Config6LeaveRes {
+  readonly accepted: true;
+}
 
 export interface Config6ProbeRes {
   readonly actorId: string;
@@ -170,14 +174,14 @@ export interface Config6ProbeRes {
   packetName: 'Config6JoinReq'
 })
 export class Config6JoinHandler implements
-  ZLinkEntrySpotActorRequestHandler<Config6EntrySpot, Config6Actor, Config6JoinReq, { accepted: true }> {
+  ZLinkEntrySpotActorRequestHandler<Config6EntrySpot, Config6Actor, Config6JoinReq, Config6JoinRes> {
   @ZLinkSpotActorRequest('Config6JoinReq')
   async handle(
     _spot: Config6EntrySpot,
     actor: Config6Actor,
     _context: ZLinkMessageContext,
     request: Config6JoinReq
-  ): Promise<{ accepted: true }> {
+  ): Promise<Config6JoinRes> {
     actor.context.joinSpot(request.spotId, {}).timeout(10_000).defer();
     return { accepted: true };
   }
@@ -215,12 +219,12 @@ export class Config6ProbeHandler implements
   packetName: 'Config6LeaveReq'
 })
 export class Config6LeaveHandler implements
-  ZLinkSpotActorRequestHandler<Config6UserSpot, Config6Actor, Config6LeaveReq, { accepted: true }> {
+  ZLinkSpotActorRequestHandler<Config6UserSpot, Config6Actor, Config6LeaveReq, Config6LeaveRes> {
   @ZLinkSpotActorRequest('Config6LeaveReq')
   async handle(
     spot: Config6UserSpot,
     actor: Config6Actor
-  ): Promise<{ accepted: true }> {
+  ): Promise<Config6LeaveRes> {
     // Let the current actor request reach its terminal before starting the
     // leave operation, which uses the same actor route.
     setImmediate(() => {

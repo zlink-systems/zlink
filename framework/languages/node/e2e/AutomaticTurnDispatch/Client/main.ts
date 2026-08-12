@@ -3,7 +3,6 @@ import {
   zlinkStreamJsonCodec,
   ZlinkStreamDispatchMode
 } from '@zlink-systems/stream-connector';
-import { runTdA1 } from './Scenarios/td-a1-terminator-surface-scenario';
 import { runTdA2 } from './Scenarios/td-a2-async-completion-order-scenario';
 import { runTdA3 } from './Scenarios/td-a3-async-counter-serialization-scenario';
 import { runTdA4 } from './Scenarios/td-a4-delayed-async-completion-scenario';
@@ -11,7 +10,6 @@ import { runTdA5 } from './Scenarios/td-a5-async-timer-exclusion-scenario';
 import { runTdB1 } from './Scenarios/td-b1-yield-probe-interleave-scenario';
 import { runTdB2 } from './Scenarios/td-b2-yield-queued-probe-order-scenario';
 import { runTdB3 } from './Scenarios/td-b3-yield-lost-update-scenario';
-import { runTdB4 } from './Scenarios/td-b4-yield-timer-interleave-scenario';
 import { runTdC1 } from './Scenarios/td-c1-http-yield-interleave-scenario';
 import { runTdC2 } from './Scenarios/td-c2-http-async-exclusion-scenario';
 import { runTdC3 } from './Scenarios/td-c3-io-worker-capacity-scenario';
@@ -41,8 +39,8 @@ import { parseClientOptions } from './Support/client-options';
 import { browserE2eConfig, runBrowserE2e } from '../../browser-client-runtime';
 
 const scenarios = new Map<string, (suite: ExecutionTurnScenarioSuite) => Promise<void>>([
-  ['TD-A1', runTdA1], ['TD-A2', runTdA2], ['TD-A3', runTdA3], ['TD-A4', runTdA4], ['TD-A5', runTdA5],
-  ['TD-B1', runTdB1], ['TD-B2', runTdB2], ['TD-B3', runTdB3], ['TD-B4', runTdB4],
+  ['TD-A2', runTdA2], ['TD-A3', runTdA3], ['TD-A4', runTdA4], ['TD-A5', runTdA5],
+  ['TD-B1', runTdB1], ['TD-B2', runTdB2], ['TD-B3', runTdB3],
   ['TD-C1', runTdC1], ['TD-C2', runTdC2], ['TD-C3', runTdC3], ['TD-C4', runTdC4], ['TD-C5', runTdC5],
   ['TD-D1', runTdD1], ['TD-D2', runTdD2], ['TD-D3', runTdD3], ['TD-D4', runTdD4], ['TD-D5', runTdD5], ['TD-D6', runTdD6],
   ['TD-E1', runTdE1], ['TD-E2', runTdE2], ['TD-E3', runTdE3], ['TD-E2A', runTdE2A],

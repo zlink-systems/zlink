@@ -1,0 +1,110 @@
+{
+  "fixture": "zlink.framework.serial-execution",
+  "version": 1,
+  "limits": {
+    "application": {
+      "messageCapacity": 1024,
+      "byteCapacity": 67108864
+    },
+    "lifecycle": {
+      "messageCapacity": 128,
+      "byteCapacity": 4194304
+    },
+    "ownerTimeBudgetMilliseconds": 10,
+    "lifecycleBurstLimit": 8,
+    "fixedWorkByteCost": 256
+  },
+  "accountingScenarios": [
+    {
+      "name": "application-count-boundary",
+      "lane": "application",
+      "retainedPayloadBytesPerWork": 0,
+      "acceptedWorkCount": 1024,
+      "nextAdmission": "capacityExceeded",
+      "runningWorkConsumesReservation": true
+    },
+    {
+      "name": "lifecycle-count-boundary",
+      "lane": "lifecycle",
+      "retainedPayloadBytesPerWork": 0,
+      "acceptedWorkCount": 128,
+      "nextAdmission": "capacityExceeded",
+      "runningWorkConsumesReservation": true
+    },
+    {
+      "name": "application-byte-boundary",
+      "lane": "application",
+      "retainedPayloadBytesPerWork": 67108608,
+      "acceptedWorkCount": 1,
+      "nextAdmission": "capacityExceeded",
+      "runningWorkConsumesReservation": true
+    },
+    {
+      "name": "lifecycle-byte-boundary",
+      "lane": "lifecycle",
+      "retainedPayloadBytesPerWork": 4194048,
+      "acceptedWorkCount": 1,
+      "nextAdmission": "capacityExceeded",
+      "runningWorkConsumesReservation": true
+    }
+  ],
+  "admissionInvariants": {
+    "commit": [
+      "stateCheck",
+      "countReservation",
+      "byteReservation",
+      "acceptedSequenceAllocation",
+      "fifoAppend"
+    ],
+    "rejectionPreserves": [
+      "countReservation",
+      "byteReservation",
+      "acceptedSequence",
+      "authorityFence"
+    ],
+    "enqueueFailureRestoresReservation": true,
+    "releaseOccursAfterTerminalCompletion": true
+  },
+  "arbitrationScenarios": [
+    {
+      "name": "lifecycle-debt-yields-to-application",
+      "applicationInput": ["A1", "A2"],
+      "lifecycleInput": ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9"],
+      "expectedSelection": ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "A1", "L9", "A2"]
+    }
+  ],
+  "sameOwnerCalls": [
+    {
+      "target": "selfActor",
+      "async": "invalidOperation",
+      "yield": "invalidOperation",
+      "actorClaimAfterYield": "retained"
+    },
+    {
+      "target": "sameSpot",
+      "async": "invalidOperation",
+      "yield": "resumeOnNewTurn",
+      "actorClaimAfterYield": "notApplicable"
+    },
+    {
+      "target": "differentMemberActorOnSameSpot",
+      "async": "invalidOperation",
+      "yield": "resumeOnNewTurn",
+      "actorClaimAfterYield": "retained"
+    },
+    {
+      "target": "differentOwner",
+      "async": "awaitWithoutGateRelease",
+      "yield": "resumeOnNewTurn",
+      "actorClaimAfterYield": "retainedWhenPresent"
+    }
+  ],
+  "dispatchInvariants": {
+    "applicationAndLifecycleUseDistinctFifos": true,
+    "applicationAndLifecycleHaveIndependentAdmission": true,
+    "emptyToNonEmptySchedulesImmediately": true,
+    "pollingIsNotAProgressMechanism": true,
+    "implicitInlineExecution": false,
+    "resumeAfterYieldUsesNewTurn": true
+  }
+}

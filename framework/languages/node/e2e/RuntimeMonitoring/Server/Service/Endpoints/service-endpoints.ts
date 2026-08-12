@@ -1,5 +1,10 @@
 import type { EvidenceWaitReq } from '../../../Shared/messages';
-import { MonitoringPublish, RuntimeMonitoringNames } from '../../../Shared/messages';
+import {
+  MonitoringActorCreateReq,
+  MonitoringEvent,
+  MonitoringSpotCreateReq,
+  RuntimeMonitoringNames
+} from '../../../Shared/messages';
 import type { EvidenceStore } from '../Infrastructure/evidence-store';
 import type { HttpRoute } from '../Support/http-server';
 import {
@@ -106,7 +111,7 @@ export function createServiceEndpoints(
             RuntimeMonitoringNames.spotChannel,
             RuntimeMonitoringNames.spotChannel,
             RuntimeMonitoringNames.publishTopic,
-            new MonitoringPublish(marker, blockerBytes === 0 ? undefined : 'x'.repeat(blockerBytes))
+            new MonitoringEvent(marker, blockerBytes === 0 ? undefined : 'x'.repeat(blockerBytes))
           )
           .submit();
         evidence.add(`publish-submitted|rid=${evidence.rid}|marker=${marker}`);
@@ -121,7 +126,7 @@ export function createServiceEndpoints(
           const created = await spots
             .create(MonitoringUserSpot.name)
             .inMesh(RuntimeMonitoringNames.spotChannel)
-            .request({})
+            .request(new MonitoringSpotCreateReq())
             .submit();
           const result = {
             state: created.state,
@@ -159,7 +164,7 @@ export function createServiceEndpoints(
           const created = await actors
             .create(actorId, RuntimeMonitoringNames.actorType)
             .inMesh(RuntimeMonitoringNames.spotChannel)
-            .request({})
+            .request(new MonitoringActorCreateReq())
             .submit();
           if (created.status === 'rejected') {
             return { state: created.status, reply: created.reply };

@@ -1,4 +1,5 @@
 package systems.zlink.samples.supportchat.server.api.handlers;
+import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.channels.ZLinkClient;
 import systems.zlink.framework.ZLinkMessageContext;
@@ -18,7 +19,7 @@ public final class OpenConversationHandler
     }
 
     @Override
-    public java.util.concurrent.CompletionStage<Messages.OpenConversationApiRes> handle(
+    public CompletionStage<Messages.OpenConversationApiRes> handle(
         Messages.OpenConversationApiReq request,
         ZLinkMessageContext context) {
         return channels.requestToChannel(

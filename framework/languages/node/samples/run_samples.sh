@@ -20,11 +20,11 @@ fi
 
 for sample in "${samples[@]}"; do
   runner="${SCRIPT_DIR}/${sample}/run_sample.sh"
-  if [[ ! -x "${runner}" ]]; then
+  if [[ ! -f "${runner}" ]]; then
     echo "Unknown Node sample '${sample}'." >&2
     exit 1
   fi
   echo "sample ${sample} start"
-  "${runner}"
+  bash "${runner}"
   echo "sample ${sample} completed"
 done

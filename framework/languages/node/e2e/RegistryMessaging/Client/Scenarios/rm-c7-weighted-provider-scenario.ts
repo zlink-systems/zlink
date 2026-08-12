@@ -1,4 +1,4 @@
-// RM-C7: Weight에 따라 provider 선택 비율을 정한다 시나리오를 검증한다.
+// RM-C7: Weight profile에 따라 provider를 선택한다 시나리오를 검증한다.
 import type { ClientOptions } from '../Support/client-options';
 import { DynamicClusterLauncher } from '../Support/dynamic-cluster-launcher';
 import { getJson, postJson } from '../../../http-client';
