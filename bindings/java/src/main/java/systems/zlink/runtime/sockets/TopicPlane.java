@@ -30,6 +30,7 @@ import systems.zlink.runtime.nativeapi.RecvScratch;
 
 final class TopicPlane {
     private final NativeSocketRuntime socket;
+    private ContractAccess.TopicMessageAccess topicMessageAccess;
     // Reuse the latest decoded topic for the common case where a subscription
     // receives a long sequence of frames on one topic.
     private MemorySegment lastReceivedTopicSegment;
@@ -232,12 +233,20 @@ final class TopicPlane {
     private boolean subscribeIntoFastNoWait(TopicMessage result) {
         socket.ensureOpen();
         socket.prepareRecvLikeOperation();
+        ContractAccess.TopicMessageAccess access = topicMessageAccess;
+        if (access == null) {
+            // HOT PATH: TopicMessage has registered its contract bridge before
+            // a caller can supply it here. Cache that bridge per socket so the
+            // single-part receive path does not perform two volatile bridge
+            // lookups for every delivered frame.
+            access = ContractAccess.topicMessageAccessForRuntime();
+            topicMessageAccess = access;
+        }
         RecvScratch scratch = socket.recvScratch();
         while (true) {
             scratch.topicLenOut.set(ValueLayout.JAVA_LONG, 0,
                 RecvScratch.TOPIC_CAPACITY);
-            Message part = ContractAccess.topicMessagePrepareReusableSinglePart(
-                result);
+            Message part = access.prepareReusableSinglePart(result);
             boolean success = false;
             boolean retainForNextReceive = false;
             int errno = 0;
@@ -266,8 +275,7 @@ final class TopicPlane {
                     String topicId = decodeReceivedTopicString(
                         scratch.topicOut, topicLength);
                     success = true;
-                    InternalAccess.topicMessageAdoptSingle(result, routingId,
-                        topicId, part);
+                    access.adoptSingle(result, routingId, topicId, part);
                     return true;
                 }
                 errno = Native.errno();

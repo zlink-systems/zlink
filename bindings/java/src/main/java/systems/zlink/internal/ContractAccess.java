@@ -653,6 +653,11 @@ public final class ContractAccess {
         return pollEventsAccess();
     }
 
+    /** Runtime-only access cache for subscription receive hot paths. */
+    public static TopicMessageAccess topicMessageAccessForRuntime() {
+        return topicMessageAccess();
+    }
+
     public static Object messageDataSegment(Message message) {
         return messageAccess().dataSegment(message);
     }
