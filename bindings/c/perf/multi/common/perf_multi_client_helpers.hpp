@@ -901,7 +901,14 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
             continue;
         }
 
-        const int poll_rc = perf_socket_poll (&poll_items[0], static_cast<int> (poll_count), -1);
+        // The echo requester owns the active deadline.  Bound this wait by
+        // the remaining interval so a quiet peer cannot leave the active
+        // phase blocked past its configured duration.
+        const int poll_timeout = remaining_poll_timeout_ms (deadline);
+        if (poll_timeout <= 0)
+            break;
+        const int poll_rc = perf_socket_poll (&poll_items[0], static_cast<int> (poll_count),
+                                              poll_timeout);
         if (poll_rc < 0) {
             if (bench_debug_enabled ()) {
                 std::cerr << "[perf-multi-echo] poll error phase="

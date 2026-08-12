@@ -207,8 +207,21 @@ inline bool run_receive_window (void *server,
         std::chrono::duration<double> (measure_seconds));
 
     while (!perf_stop_requested ().load (std::memory_order_acquire)) {
+        if (std::chrono::steady_clock::now () >= deadline)
+            break;
+
         poll_item.revents = 0;
-        const int poll_rc = perf_socket_poll (&poll_item, 1, -1);
+        // A stop token may be consumed while draining an already-ready
+        // socket.  It is the final wire signal for this phase.  Once seen,
+        // wait only for the remainder of the active interval so the next
+        // empty poll cannot leave the server blocked forever.
+        long poll_timeout = -1;
+        if (stop_count > 0) {
+            const long remaining_ms = std::chrono::duration_cast<std::chrono::milliseconds> (
+              deadline - std::chrono::steady_clock::now ()).count ();
+            poll_timeout = std::max<long> (1, remaining_ms);
+        }
+        const int poll_rc = perf_socket_poll (&poll_item, 1, poll_timeout);
         if (poll_rc < 0) {
             if (zlink_errno () == EINTR)
                 continue;
