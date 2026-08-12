@@ -9,6 +9,15 @@ namespace Systems.Zlink;
 // Message.cs.
 public sealed partial class Message : IDisposable, IAsyncDisposable
 {
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static Message RentForNativeReceive()
+    {
+        // HOT PATH: TopicMessage owns a received native frame until disposal.
+        // A returned wrapper has no live native handle, so the thread-local
+        // pool can reuse its managed identity without weakening that ownership.
+        return RentFromPool();
+    }
+
     // Pool-aware adoption used by the routed single-part receive fast path,
     // where Message lifetime is bounded by the immediate caller scope.
     internal static Message AdoptNativeFromPool(ref ZlinkMsg source)

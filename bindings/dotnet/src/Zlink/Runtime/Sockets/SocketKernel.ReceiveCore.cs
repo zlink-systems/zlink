@@ -229,7 +229,7 @@ internal sealed partial class SocketKernel
         }
     }
 
-    private bool ReceiveSubscribedParts(int flags,
+    private unsafe bool ReceiveSubscribedParts(int flags,
         byte[] topicBuffer, Message reusableSinglePart,
         out RoutingIdSnapshot routingId, out int topicLength,
         out Message? singlePart, out MultipartMessageCollection? parts,
@@ -256,15 +256,42 @@ internal sealed partial class SocketKernel
                             NativeMethods.zlink_errno());
                     initialized = true;
                 }
-                var rc = firstPart
-                    ? NativeMethods.zlink_subscribe_part(Handle,
-                        out var sourceRoutingId, topicBuffer,
-                        (nuint)topicBuffer.Length, out var nativeTopicLength,
-                        ref reusableSinglePart.Handle, out var hasMore, flags)
-                    : NativeMethods.zlink_subscribe_part(Handle,
-                        out sourceRoutingId, topicBuffer,
-                        (nuint)topicBuffer.Length, out nativeTopicLength, ref part,
-                        out hasMore, flags);
+                int rc;
+                IntPtr sourceRoutingId;
+                nuint nativeTopicLength;
+                int hasMore;
+                if (allowNoData)
+                {
+                    // HOT PATH: ready socket drains use DONT_WAIT, so this
+                    // native call cannot wait for transport I/O or reenter
+                    // managed code. Avoid a GC transition for each frame.
+                    fixed (byte* topicId = topicBuffer)
+                    {
+                        rc = firstPart
+                            ? NativeMethods.zlink_subscribe_part_dont_wait(Handle,
+                                out sourceRoutingId, topicId,
+                                (nuint)topicBuffer.Length,
+                                out nativeTopicLength,
+                                ref reusableSinglePart.Handle, out hasMore, flags)
+                            : NativeMethods.zlink_subscribe_part_dont_wait(Handle,
+                                out sourceRoutingId, topicId,
+                                (nuint)topicBuffer.Length,
+                                out nativeTopicLength, ref part,
+                                out hasMore, flags);
+                    }
+                }
+                else
+                {
+                    rc = firstPart
+                        ? NativeMethods.zlink_subscribe_part(Handle,
+                            out sourceRoutingId, topicBuffer,
+                            (nuint)topicBuffer.Length, out nativeTopicLength,
+                            ref reusableSinglePart.Handle, out hasMore, flags)
+                        : NativeMethods.zlink_subscribe_part(Handle,
+                            out sourceRoutingId, topicBuffer,
+                            (nuint)topicBuffer.Length, out nativeTopicLength, ref part,
+                            out hasMore, flags);
+                }
                 if (rc != 0)
                 {
                     if (firstPart)

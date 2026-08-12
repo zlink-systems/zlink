@@ -43,7 +43,7 @@ pattern·transport 평균의 완료 목표다.
 | C++ | `MULTI_STREAM` | tcp | 99.50 / 99.83 / 96.60 / 99.53% | 98.85% | 85% | 통과 |
 | .NET | 전체 | 전체 | 재측정 대기 | - | - | 진행 중 |
 | .NET | `MULTI_DEALER_DEALER` | tcp | 33.59 / 58.56 / 148.39 / 78.57 / 137.74 / 91.77% | 91.44% | 85% | 통과 |
-| .NET | `MULTI_PUBSUB` | tcp | 66.58 / 60.71 / 57.22 / 76.19 / 110.03 / 103.58% | 79.05% | 85% | 미달 |
+| .NET | `MULTI_PUBSUB` | tcp | 66.16 / 69.85 / 66.91 / 86.00 / 99.39 / 118.34% | 84.44% | 85% | 미달 |
 | Java | `MULTI_DEALER_DEALER` | tcp | 재측정 대기 | - | 90% | 진행 중 |
 | Java | `MULTI_DEALER_ROUTER_REQREP` | tcp | 재측정 대기 | - | 70% | 진행 중 |
 | Java | `MULTI_DEALER_ROUTER_SENDSEND` | tcp | 재측정 대기 | - | 85% | 진행 중 |

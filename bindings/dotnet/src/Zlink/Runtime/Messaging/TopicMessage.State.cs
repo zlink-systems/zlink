@@ -174,7 +174,10 @@ public sealed partial class TopicMessage
         var candidate = _reusableSinglePart;
         if (candidate == null)
         {
-            candidate = new Message();
+            // HOT PATH: the wrapper remains private until a receive succeeds.
+            // Rent only wrappers returned by Message.Dispose so a retained
+            // public Message can never be repurposed for another receive.
+            candidate = Message.RentForNativeReceive();
             _reusableSinglePart = candidate;
         }
         candidate.PrepareForNativeReceive();

@@ -40,3 +40,47 @@ private candidate를 분리했다. successful single-part receive에서만 두 w
 
 - C: `/tmp/zlink-dotnet-pub-twoslot-c/multi/report/perf_c_multi_linux_20260813_012815_dotnet-pub-twoslot-c.txt`
 - .NET: `/tmp/zlink-dotnet-pub-twoslot-dotnet/multi/report/perf_dotnet_multi_linux_20260813_012849_dotnet-pub-twoslot-dotnet.txt`
+
+## 채택한 receive wrapper pool 연결
+
+`TopicMessage`가 새 private receive wrapper를 만들 때 기존 `Message` ThreadLocal
+pool을 사용하도록 연결했다. pool에는 `Dispose()`로 native handle을 닫은 wrapper만
+들어가므로, 호출자가 보관 중인 공개 `Message`를 다음 receive에 재사용하지 않는다.
+이 변경으로 `pubsub_single_part_pool_reuses_only_released_wrapper` 계약 테스트가 통과했다.
+
+multi perf는 client별 `TopicMessage`를 active phase 동안 재사용하므로 steady-state
+throughput을 이 pool 변경의 효과로 해석하지 않는다. 새 envelope를 반복해서 만드는
+일반 사용 경로의 managed wrapper 할당을 줄이는 구조 개선으로 채택한다.
+
+## 채택한 DONT_WAIT native transition
+
+poller가 ready socket을 반환한 뒤 수신 queue를 drain하는 `RecvFlags.DontWait` 경로는
+blocking transport I/O를 기다리지 않는다. 이 경로에만 `SuppressGCTransition` native
+import를 사용하고, 일반 blocking receive는 기존 import를 유지했다. `msg_size`와
+`msg_data`는 이미 같은 최적화가 적용되어 있다.
+
+100 clients, TCP, 3초 active duration, auto-HWM balanced, I/O thread 4, release Core
+0.10.1 조건에서 C를 먼저 실행하고 .NET을 실행했다.
+
+| Size | C throughput | .NET throughput | C 대비 |
+|---:|---:|---:|---:|
+| 64B | 1,626,870.3 msg/s | 1,076,473.0 msg/s | 66.16% |
+| 256B | 1,677,318.7 msg/s | 1,171,615.3 msg/s | 69.85% |
+| 1024B | 1,425,674.0 msg/s | 953,951.7 msg/s | 66.91% |
+| 4096B | 575,030.3 msg/s | 494,540.3 msg/s | 86.00% |
+| 65536B | 112,829.7 msg/s | 112,146.0 msg/s | 99.39% |
+| 131072B | 52,464.7 msg/s | 62,087.0 msg/s | 118.34% |
+
+산술평균은 `84.44%`다. 이전 확인값 `79.05%`보다 높지만 목표 `85%`에는 `0.56%p`
+미달한다. `test_pubsub` 15건도 통과했다.
+
+- C: `/tmp/zlink-dotnet-topic-pool-c/multi/report/perf_c_multi_linux_20260813_035201_dotnet-topic-pool-c.txt`
+- .NET: `/tmp/zlink-dotnet-subscribe-dontwait-dotnet/multi/report/perf_dotnet_multi_linux_20260813_035508_dotnet-subscribe-dontwait.txt`
+
+`DONT_WAIT` wrapper의 바깥 exception filter 제거도 확인했지만 추가 개선을 재현하지
+못했고 multipart 오류 변환 범위를 바꿀 이유가 없었다. 이 후보는 채택하지 않았다.
+
+`zlink_msg_size`와 `zlink_msg_data`를 한 native call로 합치려면 Core public C ABI를
+변경하거나 별도 native shim을 package에 추가해야 한다. 전자는 이 작업의 제약에 맞지
+않고 후자는 배포 구조를 넓히므로, 현재 .NET PUB/SUB 대상의 다음 작은 hot-path 후보로
+채택하지 않았다.
