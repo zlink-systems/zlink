@@ -102,12 +102,16 @@ inline napi_value create_native_message_frame_handle (napi_env env, native_messa
     return native_message;
 }
 
-inline napi_value create_native_message_value (napi_env env, native_message_frame_t *frame)
+inline napi_value create_native_message_value (napi_env env, native_message_frame_t *frame,
+                                               bool include_data = true)
 {
-    napi_value data = create_native_message_data_buffer (env, frame);
-    if (!data) {
-        release_native_message_frame (frame);
-        return NULL;
+    napi_value data = NULL;
+    if (include_data) {
+        data = create_native_message_data_buffer (env, frame);
+        if (!data) {
+            release_native_message_frame (frame);
+            return NULL;
+        }
     }
     napi_value native_message = create_native_message_frame_handle (env, frame);
     if (!native_message) {
@@ -117,7 +121,8 @@ inline napi_value create_native_message_value (napi_env env, native_message_fram
 
     napi_value out;
     napi_create_object (env, &out);
-    napi_set_named_property (env, out, "data", data);
+    if (include_data)
+        napi_set_named_property (env, out, "data", data);
     napi_set_named_property (env, out, "nativeMessage", native_message);
     release_native_message_frame (frame);
     return out;

@@ -2358,6 +2358,20 @@ native frame 공유 여부와 무관했던 managed Message의 writable-state 기
 Message의 send ownership 규칙은 유지한다. 상세 결과는
 `log/2026-08-12-node-pub-managed-weakset.ko.md`에 기록한다.
 
+### 11.29 Node native Message lazy Buffer view 측정 결과
+
+`MULTI_PUBSUB / tcp`, 64·256·1024·4096·65536·131072B, clients `100`, duration `1초`,
+runs `1`, balanced auto-HWM에서 C를 먼저, lazy `Message.from(Buffer)`와 direct Buffer를 각각 단독 실행했다.
+
+| 전송 입력 | C 대비 throughput 비율 (size 순서) | 산술평균 | 결과 |
+|---|---|---:|---|
+| lazy `Message.from(Buffer)` | 19.21 / 20.31 / 22.65 / 35.96 / 40.52 / 38.94% | 29.60% | direct Buffer 29.84%보다 낮음 |
+| direct Buffer | 18.57 / 20.57 / 22.37 / 31.47 / 42.90 / 43.76% | 29.84% | standard harness 유지 |
+
+`Message.from()`과 `Message.allocate()`는 send-only 경로에서 external Buffer view를 lazy하게 만든다.
+`Message.allocate().data()`는 writable Buffer alias 때문에 copy-on-send를 사용하므로 standard send 경로로
+바꾸지 않는다. 상세 결과는 `log/2026-08-12-node-native-message-send.ko.md`에 기록한다.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.

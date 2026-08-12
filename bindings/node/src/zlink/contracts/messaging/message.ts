@@ -25,10 +25,10 @@ type MutableMessageState = {
 
 /** @internal */
 export interface MessageNativeOperations {
-  allocate(size: number): { data: Buffer; nativeMessage: unknown };
+  allocate(size: number): { data?: Buffer; nativeMessage: unknown };
   close(nativeMessage: unknown): void;
   data(nativeMessage: unknown): Buffer;
-  fromBuffer(data: Buffer): { data: Buffer; nativeMessage: unknown };
+  fromBuffer(data: Buffer): { data?: Buffer; nativeMessage: unknown };
   size(nativeMessage: unknown): number;
 }
 
@@ -75,7 +75,7 @@ function normalizeBufferLike(value: BufferLike, label = 'value'): Buffer {
  * runtime may reuse the returned wrapper identity.
  */
 export class Message {
-  private _buffer!: Buffer;
+  private _buffer!: Buffer | undefined;
   private _refCount!: number;
   private _properties!: Readonly<Record<string, string>>;
   /** Opaque owner when this message uses native storage. */

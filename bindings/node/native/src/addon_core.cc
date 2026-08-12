@@ -1569,7 +1569,9 @@ napi_value message_from_buffer (napi_env env, napi_callback_info info)
         delete frame;
         return throw_last_error (env, "message native allocation failed");
     }
-    return create_native_message_value (env, frame);
+    // Message.from() can be submitted without exposing data().  Defer the
+    // external Buffer view until JavaScript actually asks for it.
+    return create_native_message_value (env, frame, false);
 }
 
 napi_value message_allocate (napi_env env, napi_callback_info info)
@@ -1591,7 +1593,9 @@ napi_value message_allocate (napi_env env, napi_callback_info info)
         delete frame;
         return throw_last_error (env, "message native allocation failed");
     }
-    return create_native_message_value (env, frame);
+    // Allocation owns native storage immediately; its JavaScript Buffer view
+    // is created lazily by Message.data().
+    return create_native_message_value (env, frame, false);
 }
 
 napi_value message_frame_data (napi_env env, napi_callback_info info)
