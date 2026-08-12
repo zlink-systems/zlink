@@ -236,8 +236,11 @@ final class TopicPlane {
         while (true) {
             scratch.topicLenOut.set(ValueLayout.JAVA_LONG, 0,
                 RecvScratch.TOPIC_CAPACITY);
-            Message part = InternalAccess.messageAcquireReceive();
+            Message part = ContractAccess.topicMessagePrepareReusableSinglePart(
+                result);
             boolean success = false;
+            boolean retainForNextReceive = false;
+            int errno = 0;
             try {
                 int rc = Native.subscribePartNoWaitCritical(socket.handle(),
                     scratch.sourceRidOut, scratch.topicOut,
@@ -267,8 +270,12 @@ final class TopicPlane {
                         topicId, part);
                     return true;
                 }
+                errno = Native.errno();
+                retainForNextReceive = errno == NativeErrno.EINTR
+                    || errno == NativeErrno.EAGAIN
+                    || errno == NativeErrno.EWOULDBLOCK_WIN;
             } finally {
-                if (!success) {
+                if (!success && !retainForNextReceive) {
                     try {
                         part.close();
                     } catch (RuntimeException ignored) {
@@ -276,7 +283,6 @@ final class TopicPlane {
                 }
             }
 
-            int errno = Native.errno();
             if (errno == NativeErrno.EINTR) {
                 continue;
             }

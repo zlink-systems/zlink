@@ -42,7 +42,6 @@ final class PerfMeasurement {
             return nettyPooledPayloadTemplate(size, capacity);
         }
         Message payload = new Message(capacity);
-        payload.fill((byte) 'a');
         payload.writeIntLe(0, MAGIC);
         payload.writeIntLe(4, RUN_ID);
         payload.writeIntLe(9, size);
@@ -54,9 +53,6 @@ final class PerfMeasurement {
             capacity, capacity);
         try {
             payload.writerIndex(capacity);
-            for (int i = 0; i < capacity; i++) {
-                payload.setByte(i, 'a');
-            }
             payload.setIntLE(0, MAGIC);
             payload.setIntLE(4, RUN_ID);
             payload.setIntLE(9, size);

@@ -191,11 +191,11 @@ final class PerfMultiPubSub {
                                                     PerfSocketPollSet writable,
                                                     Message message) {
         while (true) {
-            try (Message outbound = Message.from(message)) {
+            try {
                 if (pub.publish(TOPIC)
-                        .message(outbound)
-                        .flags(SendFlags.DONT_WAIT)
-                        .submit()) {
+                    .message(message)
+                    .flags(SendFlags.DONT_WAIT)
+                    .submit()) {
                     return;
                 }
             } catch (ZlinkSubmitException ex) {
@@ -235,17 +235,13 @@ final class PerfMultiPubSub {
             if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
                 return true;
             }
-            PerfUtil.Header header = PerfUtil.decodeHeader(
-                received.firstPart(), config.size());
-            if (header == null) {
+            int phase = PerfUtil.recordOneWayLatency(metrics,
+                received.firstPart(), config.size(), activeEnd);
+            if (phase == PerfUtil.PHASE_UNKNOWN) {
                 continue;
             }
-            if (header.phase() == PerfUtil.PHASE_COOLDOWN) {
+            if (phase == PerfUtil.PHASE_COOLDOWN) {
                 return true;
-            }
-            if (header.phase() == PerfUtil.PHASE_ACTIVE
-                && System.nanoTime() < activeEnd) {
-                metrics.recordNanos(header.latencyNanos());
             }
         }
     }

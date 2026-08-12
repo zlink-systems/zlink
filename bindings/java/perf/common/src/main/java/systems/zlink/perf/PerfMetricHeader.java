@@ -42,6 +42,15 @@ final class PerfMetricHeader {
                                        Message message,
                                        int expectedSize,
                                        boolean halfRoundTrip) {
+        return recordActiveLatency(metrics, message, expectedSize,
+            halfRoundTrip, PerfUtil.nowNs());
+    }
+
+    static boolean recordActiveLatency(PerfUtil.Metrics metrics,
+                                       Message message,
+                                       int expectedSize,
+                                       boolean halfRoundTrip,
+                                       long receivedNanoTime) {
         if (message == null || message.size() < PerfUtil.HEADER_SIZE) {
             return false;
         }
@@ -59,8 +68,50 @@ final class PerfMetricHeader {
             return false;
         }
         long sentTsNs = message.readLongLe(21);
-        long latencyNanos = Math.max(0L, PerfUtil.nowNs() - sentTsNs);
+        long latencyNanos = Math.max(0L, receivedNanoTime - sentTsNs);
         metrics.recordNanos(halfRoundTrip ? latencyNanos / 2L : latencyNanos);
         return true;
+    }
+
+    static int phase(Message message, int expectedSize) {
+        if (message == null || message.size() < PerfUtil.HEADER_SIZE) {
+            return PerfUtil.PHASE_UNKNOWN;
+        }
+        if (message.readIntLe(0) != GENERIC_MAGIC
+            || message.readIntLe(4) != PerfMeasurement.runId()
+            || message.readIntLe(9) != expectedSize) {
+            return PerfUtil.PHASE_UNKNOWN;
+        }
+        int phase = message.readIntLe(8) & 0xFF;
+        return phase == PerfUtil.PHASE_WARMUP
+            || phase == PerfUtil.PHASE_ACTIVE
+            || phase == PerfUtil.PHASE_COOLDOWN
+            ? phase : PerfUtil.PHASE_UNKNOWN;
+    }
+
+    static int recordOneWayLatency(PerfUtil.Metrics metrics, Message message,
+                                   int expectedSize, long activeEnd) {
+        if (message == null || message.size() < PerfUtil.HEADER_SIZE) {
+            return PerfUtil.PHASE_UNKNOWN;
+        }
+        if (message.readIntLe(0) != GENERIC_MAGIC
+            || message.readIntLe(4) != PerfMeasurement.runId()
+            || message.readIntLe(9) != expectedSize) {
+            return PerfUtil.PHASE_UNKNOWN;
+        }
+        int phase = message.readIntLe(8) & 0xFF;
+        if (phase != PerfUtil.PHASE_WARMUP
+            && phase != PerfUtil.PHASE_ACTIVE
+            && phase != PerfUtil.PHASE_COOLDOWN) {
+            return PerfUtil.PHASE_UNKNOWN;
+        }
+        if (phase == PerfUtil.PHASE_ACTIVE) {
+            long receivedAt = PerfUtil.nowNs();
+            if (receivedAt < activeEnd) {
+                long sentTsNs = message.readLongLe(21);
+                metrics.recordNanos(Math.max(0L, receivedAt - sentTsNs));
+            }
+        }
+        return phase;
     }
 }

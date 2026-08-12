@@ -16,12 +16,8 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.SocketType;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
-import systems.zlink.contracts.sockets.SubmitResult;
-import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.perf.PerfControl;
 import systems.zlink.perf.PerfSocketPollSet;
-import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -89,6 +85,9 @@ final class PerfMultiRouterRouter {
                         continue;
                     }
                     while (true) {
+                        if (stopRequested.get()) {
+                            break;
+                        }
                         boolean ok;
                         try {
                             ok = server.recv(receivedBuffer, RecvFlags.DONT_WAIT);
@@ -242,11 +241,10 @@ final class PerfMultiRouterRouter {
                         waitingWritable[idx]);
                 }
                 rrIndex = (startIndex + 1) % n;
-                // Match C run_echo_window_round_robin: traffic readiness, not
-                // an arbitrary timer tick, advances the active loop. The
-                // deadline is checked at the next loop boundary after this
-                // ready set is drained.
-                int readyCount = pollSet.poll(-1);
+                // The requester owns the active deadline. Bound the wait by
+                // its remaining interval so a quiet relay cannot keep this
+                // phase past the configured duration.
+                int readyCount = pollSet.poll(remainingTimeoutMs(activeEnd));
                 for (int readyOffset = 0; readyOffset < readyCount;
                      readyOffset++) {
                     int idx = pollSet.readyIndexAt(readyOffset);
@@ -270,14 +268,8 @@ final class PerfMultiRouterRouter {
             }
             replyBuffer.close();
             Message.closeAll(List.of(payloads));
-            for (int i = 0; i < n; i++) {
-                try (Message stop = PerfStopToken.newMessage();
-                     PerfSocketPollSet stopPoll = PerfSocketPollSet.fromSockets(
-                         List.of(clients.get(i)), PollEventFlags.POLLOUT)) {
-                    stopPoll.setEvents(0);
-                    sendStopToken(clients.get(i), stopPoll, stop);
-                }
-            }
+            // C routed echo ends the relay through the runner control path.
+            // Do not inject an extra routed stop frame after active traffic.
         }
         // ctx auto-HWM was already applied at setup; reference kept for the
         // compiler so the parameter isn't flagged unused.
@@ -323,31 +315,6 @@ final class PerfMultiRouterRouter {
             .submit();
     }
 
-    private static void sendStopToken(RouterSocket client,
-                                      PerfSocketPollSet pollSet,
-                                      Message stop) {
-        while (true) {
-            try {
-                if (client.send(SERVER_ID)
-                    .message(stop)
-                    .flags(SendFlags.DONT_WAIT)
-                    .submit()) {
-                    return;
-                }
-            } catch (ZlinkSubmitException ex) {
-                if (!isTransient(ex)) {
-                    throw ex;
-                }
-            } catch (ZlinkException ex) {
-                if (!isTransient(ex)) {
-                    throw ex;
-                }
-            }
-            pollSet.setEvents(0, PollEventFlags.POLLOUT);
-            pollSet.poll(-1);
-        }
-    }
-
     private static void updatePollMask(PerfSocketPollSet pollSet, int idx,
                                        boolean waitingReply,
                                        boolean waitingWritable) {
@@ -357,6 +324,15 @@ final class PerfMultiRouterRouter {
         } else {
             pollSet.setEvents(idx, PollEventFlags.POLLIN);
         }
+    }
+
+    private static int remainingTimeoutMs(long deadline) {
+        long remainingNs = deadline - System.nanoTime();
+        if (remainingNs <= 0) {
+            return 0;
+        }
+        return (int) Math.min(Integer.MAX_VALUE,
+            (remainingNs + 999_999L) / 1_000_000L);
     }
 
     private static void flushPending(RouterSocket server,
@@ -383,10 +359,4 @@ final class PerfMultiRouterRouter {
         }
     }
 
-    private static boolean isTransient(ZlinkException ex) {
-        if (ex instanceof ZlinkSubmitException submit) {
-            return submit.getResult() == SubmitResult.BACKPRESSURED;
-        }
-        return ex.getNativeErrno() == 11 || ex.getNativeErrno() == 4;
-    }
 }

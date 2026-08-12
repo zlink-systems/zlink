@@ -19,7 +19,6 @@ import systems.zlink.perf.PerfControl;
 import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
-import systems.zlink.perf.PerfMessageTemplatePool;
 import java.util.ArrayList;
 import java.time.Duration;
 import java.util.List;
@@ -50,17 +49,27 @@ final class PerfMultiDealerDealer {
             // not determine the measured interval.
             long measureDeadline = System.nanoTime()
                 + config.durationSeconds() * 1_000_000_000L;
+            boolean stopSeen = false;
             while (true) {
-                if (System.nanoTime() >= measureDeadline) {
+                long now = System.nanoTime();
+                if (now >= measureDeadline) {
                     break;
                 }
                 pollSet.setEvents(0, PollEventFlags.POLLIN);
-                int readyCount = pollSet.poll(-1);
+                // A stop token can be consumed while a ready socket is
+                // drained. Once that final wire signal is seen, wait only
+                // for the remaining active interval. This prevents a later
+                // empty -1 poll from keeping the server alive forever.
+                int timeoutMs = stopSeen
+                    ? remainingTimeoutMs(measureDeadline, now)
+                    : -1;
+                int readyCount = pollSet.poll(timeoutMs);
                 if (readyCount <= 0
                     || !pollSet.readyHasEventAt(0, PollEventFlags.POLLIN)) {
                     continue;
                 }
-                drainCounted(server, received, config, metrics, measureDeadline);
+                stopSeen |= drainCounted(server, received, config, metrics,
+                    measureDeadline);
                 if (System.nanoTime() >= measureDeadline) {
                     break;
                 }
@@ -75,34 +84,43 @@ final class PerfMultiDealerDealer {
         }
     }
 
-    private static void drainCounted(DealerSocket server, Received received,
-                                      PerfUtil.Config config,
-                                      PerfUtil.Metrics metrics,
-                                      long measureDeadline) {
+    private static boolean drainCounted(DealerSocket server, Received received,
+                                        PerfUtil.Config config,
+                                        PerfUtil.Metrics metrics,
+                                        long measureDeadline) {
         // C receives one message after a readiness wake, then checks the
         // deadline before draining further. This keeps the active boundary
         // from counting an already queued post-deadline tail.
         if (!PerfUtil.recvNoWait(server, received)) {
-            return;
+            return false;
         }
-        recordCounted(received, config, metrics);
+        boolean stopSeen = recordCounted(received, config, metrics);
         if (System.nanoTime() >= measureDeadline) {
-            return;
+            return stopSeen;
         }
         while (true) {
             if (!PerfUtil.recvNoWait(server, received)) {
-                return;
+                return stopSeen;
             }
-            recordCounted(received, config, metrics);
+            stopSeen |= recordCounted(received, config, metrics);
         }
     }
 
-    private static void recordCounted(Received received, PerfUtil.Config config,
-                                      PerfUtil.Metrics metrics) {
-        if (!PerfStopToken.isStopTokenMessage(received.firstPart())) {
-            PerfUtil.recordActiveLatency(metrics, received.firstPart(),
-                config.size(), false);
+    private static boolean recordCounted(Received received,
+                                         PerfUtil.Config config,
+                                         PerfUtil.Metrics metrics) {
+        if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
+            return true;
         }
+        PerfUtil.recordActiveLatency(metrics, received.firstPart(),
+            config.size(), false);
+        return false;
+    }
+
+    private static int remainingTimeoutMs(long deadline, long now) {
+        long remainingNs = Math.max(1L, deadline - now);
+        return (int) Math.min(Integer.MAX_VALUE,
+            (remainingNs + 999_999L) / 1_000_000L);
     }
 
     private static void drainTailUncounted(DealerSocket server,
@@ -164,8 +182,6 @@ final class PerfMultiDealerDealer {
             pollSockets.addAll(clients);
             try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
                      pollSockets, PollEventFlags.POLLOUT)) {
-                try (PerfMessageTemplatePool payloadPool =
-                         new PerfMessageTemplatePool(config.size(), 256)) {
                 for (int i = 0; i < clients.size(); i++) {
                     pollSet.setEvents(i);
                 }
@@ -191,7 +207,7 @@ final class PerfMultiDealerDealer {
                         // message) keeps stamp-to-wire tight like C.
                         DealerSocket socket = clients.get(index);
                         while (System.nanoTime() < activeEnd) {
-                            if (sendOneActive(socket, payloadPool, config.size(),
+                            if (sendOneActive(socket, config.size(),
                                     activeEnd)) {
                                 progressed = true;
                                 continue;
@@ -208,7 +224,6 @@ final class PerfMultiDealerDealer {
                     // PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven wait for
                     // POLLOUT readiness; no timer-based fallback.
                     pollWritable(pollSet, pending, -1);
-                }
                 }
             }
             // C parity: send one wire-level stop token on every client socket
@@ -251,13 +266,9 @@ final class PerfMultiDealerDealer {
     // send_status_ok, false on transient backpressure (send_status_blocked);
     // a non-transient error is fatal.
     private static boolean sendOneActive(DealerSocket socket,
-                                         PerfMessageTemplatePool payloadPool,
                                          int size, long activeEnd) {
-        Message payload = payloadPool.acquire(size,
-            (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime(), activeEnd);
-        if (payload == null) {
-            return false;
-        }
+        Message payload = PerfUtil.payload(size, (byte) PerfUtil.PHASE_ACTIVE,
+            System.nanoTime());
         try (payload) {
             return socket.send().message(payload)
                 .flags(SendFlags.DONT_WAIT).submit();

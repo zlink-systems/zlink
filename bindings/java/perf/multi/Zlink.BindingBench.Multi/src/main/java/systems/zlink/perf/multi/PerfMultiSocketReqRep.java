@@ -22,7 +22,6 @@ import systems.zlink.perf.PerfControl;
 import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
-import systems.zlink.perf.PerfMessageTemplatePool;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -156,14 +155,11 @@ final class PerfMultiSocketReqRep {
             AtomicBoolean slotWaiting = waiting[i];
             callbacks[i] = (result, parts) -> {
                 try {
+                    long receivedAt = System.nanoTime();
                     if (result == RequestResult.OK && parts != null
-                        && !parts.isEmpty() && System.nanoTime() < activeEnd) {
-                        PerfUtil.Header header = PerfUtil.decodeHeader(parts.get(0),
-                            config.size());
-                        if (header != null
-                            && header.phase() == PerfUtil.PHASE_ACTIVE) {
-                            metrics.recordNanos(header.latencyNanos() / 2L);
-                        }
+                        && !parts.isEmpty() && receivedAt < activeEnd) {
+                        PerfUtil.recordActiveLatency(metrics, parts.get(0),
+                            config.size(), true, receivedAt);
                     }
                 } catch (Throwable ex) {
                     failure.compareAndSet(null, ex);
@@ -176,19 +172,14 @@ final class PerfMultiSocketReqRep {
             };
         }
 
-        try (PerfMessageTemplatePool payloadPool =
-                 new PerfMessageTemplatePool(config.size(), count)) {
-            while (System.nanoTime() < activeEnd && failure.get() == null) {
+        while (System.nanoTime() < activeEnd && failure.get() == null) {
                 boolean progress = false;
                 for (int i = 0; i < count; i++) {
                     if (waiting[i].get()) {
                         continue;
                     }
-                    Message payload = payloadPool.acquire(config.size(),
-                        (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime(), activeEnd);
-                    if (payload == null) {
-                        break;
-                    }
+                    Message payload = PerfUtil.payload(config.size(),
+                        (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
                     waiting[i].set(true);
                     try (payload) {
                         boolean accepted = submit(clients.get(i), routedClients,
@@ -210,15 +201,14 @@ final class PerfMultiSocketReqRep {
                     completions.poll(50);
                 }
             }
-            long drainEnd = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(
-                Math.max(1_000, requestTimeoutMs * 4));
-            while (anyWaiting(waiting) && System.nanoTime() < drainEnd) {
-                completions.poll(50);
-            }
-            if (anyWaiting(waiting) || failure.get() != null) {
-                throw new IllegalStateException("multi socket reqrep failed",
-                    failure.get());
-            }
+        long drainEnd = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(
+            Math.max(1_000, requestTimeoutMs * 4));
+        while (anyWaiting(waiting) && System.nanoTime() < drainEnd) {
+            completions.poll(50);
+        }
+        if (anyWaiting(waiting) || failure.get() != null) {
+            throw new IllegalStateException("multi socket reqrep failed",
+                failure.get());
         }
 
         for (Socket client : clients) {

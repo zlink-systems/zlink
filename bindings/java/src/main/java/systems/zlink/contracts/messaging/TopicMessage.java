@@ -21,6 +21,10 @@ public final class TopicMessage implements AutoCloseable {
     // immutable List per message (parity with Received.populateRoutedSinglePart
     // zero-realloc reuse).
     private ArrayList<Message> reusableSingle;
+    // A receive candidate is never published through parts(). Once it is
+    // adopted, the former public part becomes the next candidate. Keeping the
+    // two roles separate preserves the caller-provided result until a later
+    // receive succeeds.
     private Message reusableSinglePart;
 
     static {
@@ -63,15 +67,19 @@ public final class TopicMessage implements AutoCloseable {
     // intermediate fresh TopicMessage + Message[] + List.of allocations that
     // adoptFrom(subscribe(...)) incurs per message.
     void adoptSingle(RoutingId routingId, String topicId, Message part) {
-        closePartsExcept(part);
+        Message previous = reusableSinglePart(parts);
+        closePartsExcept(part, previous);
         ArrayList<Message> slot = reusableSingle;
         if (slot == null) {
             slot = new ArrayList<>(1);
             reusableSingle = slot;
+            slot.add(part);
+        } else if (slot.isEmpty()) {
+            slot.add(part);
         } else {
-            slot.clear();
+            slot.set(0, part);
         }
-        slot.add(part);
+        reusableSinglePart = previous;
         this.routingId = routingId;
         this.topic = topicId == null ? "" : topicId;
         this.parts = slot;
@@ -82,19 +90,28 @@ public final class TopicMessage implements AutoCloseable {
         Message part = reusableSinglePart;
         if (part == null || !ContractAccess.messageIsReusable(part)) {
             part = new Message();
-            reusableSinglePart = part;
-            return part;
+        } else {
+            ContractAccess.messageResetReusable(part);
         }
-        ContractAccess.messageResetReusable(part);
+        reusableSinglePart = part;
         return part;
     }
 
-    private void closePartsExcept(Message keep) {
+    private static Message reusableSinglePart(List<Message> parts) {
+        if (parts == null || parts.size() != 1) {
+            return null;
+        }
+        Message part = parts.get(0);
+        return part != null && ContractAccess.messageIsReusable(part)
+            ? part : null;
+    }
+
+    private void closePartsExcept(Message keep, Message retain) {
         if (closed || parts == null || parts.isEmpty()) {
             return;
         }
         for (Message part : parts) {
-            if (part == keep) {
+            if (part == keep || part == retain) {
                 continue;
             }
             part.closeFromOwner();
@@ -104,6 +121,10 @@ public final class TopicMessage implements AutoCloseable {
     void adoptFrom(TopicMessage source) {
         if (source == this)
             return;
+        if (reusableSinglePart != null && source.parts != null
+            && source.parts.contains(reusableSinglePart)) {
+            reusableSinglePart = null;
+        }
         close();
         this.routingId = source.routingId;
         this.topic = source.topic;
@@ -160,5 +181,6 @@ public final class TopicMessage implements AutoCloseable {
             && (parts == null || !parts.contains(reusableSinglePart))) {
             reusableSinglePart.closeFromOwner();
         }
+        reusableSinglePart = null;
     }
 }

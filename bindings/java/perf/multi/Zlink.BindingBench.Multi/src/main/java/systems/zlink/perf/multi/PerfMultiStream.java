@@ -4,6 +4,7 @@ package systems.zlink.perf.multi;
 
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SocketType;
@@ -11,6 +12,7 @@ import systems.zlink.contracts.sockets.StreamSocket;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.perf.PerfControl;
+import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
 import java.io.BufferedReader;
@@ -19,6 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 final class PerfMultiStream {
@@ -34,22 +37,21 @@ final class PerfMultiStream {
         try (Context ctx = PerfUtil.newContext(config);
             StreamSocket server = ctx.createStreamSocket()) {
             PerfUtil.applySocketOptions(server, config);
-            PerfUtil.recalculateAutoHwm(ctx);
-            PerfUtil.printMultiSocketAutoHwm(config, server, "server",
-                "server", SocketType.STREAM);
             PerfUtil.configureServerTls(server, config.transport());
             Duration streamTimeout = Duration.ofMillis(streamTimeoutMs());
             server.options().sendTimeout(streamTimeout);
             server.options().recvTimeout(streamTimeout);
-            server.setSendReadyHandler(() -> pending.drain(server, stopRequested, stopSignal));
             server.bind(config.endpoint());
+            PerfUtil.recalculateAutoHwm(ctx);
+            PerfUtil.printMultiSocketAutoHwm(config, server, "server",
+                "server", SocketType.STREAM);
             PerfControl.emitReady(config.endpoint());
             server.onPacket(
                 (routingId, header, body) ->
                     onPacket(server, routingId, header, body,
                         pending, stopRequested, stopSignal));
 
-            waitForStop(stopRequested, stopSignal);
+            runPendingLoop(server, pending, stopRequested, stopSignal);
             return PerfUtil.Result.silent(config);
         } finally {
             stopRequested.set(true);
@@ -124,14 +126,29 @@ final class PerfMultiStream {
         return packet;
     }
 
-    private static void waitForStop(AtomicBoolean stopRequested, Object stopSignal) {
-        synchronized (stopSignal) {
+    private static void runPendingLoop(StreamSocket server,
+                                       PendingPackets pending,
+                                       AtomicBoolean stopRequested,
+                                       Object stopSignal) {
+        // C runs a dedicated pending-send loop: a queued reply waits for the
+        // STREAM socket's POLLOUT readiness and is then drained until it
+        // backpressures again. Do not use send_ready_handler here; that would
+        // move the benchmark's backpressure work to a runtime callback.
+        try (PerfSocketPollSet writable = PerfSocketPollSet.fromSockets(
+                 List.of(server), PollEventFlags.POLLOUT)) {
             while (!stopRequested.get()) {
-                try {
-                    stopSignal.wait();
-                } catch (InterruptedException ex) {
-                    Thread.currentThread().interrupt();
-                    throw new IllegalStateException("stream stop wait interrupted", ex);
+                if (!pending.hasPending()) {
+                    // C waits on its pending-queue condition with the same
+                    // auxiliary 50 ms control bound before it has POLLOUT
+                    // work. This is not an active-phase timer fallback.
+                    pending.awaitWork(stopRequested, 50);
+                    continue;
+                }
+                writable.setEvents(0, PollEventFlags.POLLOUT);
+                int readyCount = writable.poll(50);
+                if (readyCount > 0
+                    && writable.readyHasEventAt(0, PollEventFlags.POLLOUT)) {
+                    pending.drain(server, stopRequested, stopSignal);
                 }
             }
         }
@@ -181,6 +198,27 @@ final class PerfMultiStream {
                     }
                 }
                 queue.addLast(new PendingPacket(routingId, packet));
+                lock.notifyAll();
+            }
+        }
+
+        boolean hasPending() {
+            synchronized (lock) {
+                return !queue.isEmpty();
+            }
+        }
+
+        void awaitWork(AtomicBoolean stopRequested, long timeoutMs) {
+            synchronized (lock) {
+                if (closed || stopRequested.get() || !queue.isEmpty()) {
+                    return;
+                }
+                try {
+                    lock.wait(timeoutMs);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("stream pending wait interrupted", ex);
+                }
             }
         }
 
