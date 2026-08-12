@@ -123,3 +123,19 @@
 
 - C: `/tmp/zlink-java-header-read-c/multi/report/perf_c_multi_linux_20260813_030501_header-read-c.txt`
 - Java: `/tmp/zlink-java-header-read-java/multi/report/perf_java_multi_linux_20260813_030538_header-read-java.txt`
+
+## PUB/SUB header 단일 검증 결과
+
+`MULTI_PUBSUB/tcp`에서 같은 header 단일 검증 경로는 74.63%였다. 목표 90%에는
+미달한다.
+
+- C: `/tmp/zlink-java-header-single-call-c/multi/report/perf_c_multi_linux_20260813_031221_header-single-call-c.txt`
+- Java: `/tmp/zlink-java-header-single-call-java/multi/report/perf_java_multi_linux_20260813_031258_header-single-call-java.txt`
+
+## receive metadata bridge 후보 결과
+
+size와 data address를 하나의 Java private bridge downcall로 읽는 후보의
+`MULTI_PUBSUB/tcp` 평균은 73.49%였다. 기존 74.63%보다 낮아 후보 구현은 제거했다.
+
+- C: `/tmp/zlink-java-metadata-c/multi/report/perf_c_multi_linux_20260813_031622_metadata-c.txt`
+- Java: `/tmp/zlink-java-metadata-java/multi/report/perf_java_multi_linux_20260813_031659_metadata-java.txt`

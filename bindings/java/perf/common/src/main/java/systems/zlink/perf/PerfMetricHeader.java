@@ -16,28 +16,11 @@ final class PerfMetricHeader {
 
     static PerfUtil.Header decode(Message message, int expectedSize,
                                   long receivedNanoTime) {
-        if (message == null || message.size() < PerfUtil.HEADER_SIZE) {
+        int phase = headerPhase(message, expectedSize);
+        if (phase == PerfUtil.PHASE_UNKNOWN) {
             return null;
         }
-        if (ContractAccess.messageReadIntLeUnchecked(message, 0)
-            != GENERIC_MAGIC) {
-            return null;
-        }
-        if (ContractAccess.messageReadIntLeUnchecked(message, 4)
-            != PerfMeasurement.runId()) {
-            return null;
-        }
-        int phase = ContractAccess.messageReadIntLeUnchecked(message, 8) & 0xFF;
-        if (phase != PerfUtil.PHASE_WARMUP
-            && phase != PerfUtil.PHASE_ACTIVE
-            && phase != PerfUtil.PHASE_COOLDOWN) {
-            return null;
-        }
-        if (ContractAccess.messageReadIntLeUnchecked(message, 9)
-            != expectedSize) {
-            return null;
-        }
-        long sentTsNs = ContractAccess.messageReadLongLeUnchecked(message, 21);
+        long sentTsNs = ContractAccess.messageMetricHeaderSentTimestamp(message);
         long latencyNanos = Math.max(0L, receivedNanoTime - sentTsNs);
         return new PerfUtil.Header((byte) phase, latencyNanos, sentTsNs);
     }
@@ -55,77 +38,43 @@ final class PerfMetricHeader {
                                        int expectedSize,
                                        boolean halfRoundTrip,
                                        long receivedNanoTime) {
-        if (message == null || message.size() < PerfUtil.HEADER_SIZE) {
-            return false;
-        }
-        if (ContractAccess.messageReadIntLeUnchecked(message, 0)
-            != GENERIC_MAGIC) {
-            return false;
-        }
-        if (ContractAccess.messageReadIntLeUnchecked(message, 4)
-            != PerfMeasurement.runId()) {
-            return false;
-        }
-        int phase = ContractAccess.messageReadIntLeUnchecked(message, 8) & 0xFF;
+        int phase = headerPhase(message, expectedSize);
         if (phase != PerfUtil.PHASE_ACTIVE) {
             return false;
         }
-        if (ContractAccess.messageReadIntLeUnchecked(message, 9)
-            != expectedSize) {
-            return false;
-        }
-        long sentTsNs = ContractAccess.messageReadLongLeUnchecked(message, 21);
+        long sentTsNs = ContractAccess.messageMetricHeaderSentTimestamp(message);
         long latencyNanos = Math.max(0L, receivedNanoTime - sentTsNs);
         metrics.recordNanos(halfRoundTrip ? latencyNanos / 2L : latencyNanos);
         return true;
     }
 
     static int phase(Message message, int expectedSize) {
-        if (message == null || message.size() < PerfUtil.HEADER_SIZE) {
-            return PerfUtil.PHASE_UNKNOWN;
-        }
-        if (ContractAccess.messageReadIntLeUnchecked(message, 0)
-                != GENERIC_MAGIC
-            || ContractAccess.messageReadIntLeUnchecked(message, 4)
-                != PerfMeasurement.runId()
-            || ContractAccess.messageReadIntLeUnchecked(message, 9)
-                != expectedSize) {
-            return PerfUtil.PHASE_UNKNOWN;
-        }
-        int phase = ContractAccess.messageReadIntLeUnchecked(message, 8) & 0xFF;
-        return phase == PerfUtil.PHASE_WARMUP
-            || phase == PerfUtil.PHASE_ACTIVE
-            || phase == PerfUtil.PHASE_COOLDOWN
-            ? phase : PerfUtil.PHASE_UNKNOWN;
+        return headerPhase(message, expectedSize);
     }
 
     static int recordOneWayLatency(PerfUtil.Metrics metrics, Message message,
                                    int expectedSize, long activeEnd) {
-        if (message == null || message.size() < PerfUtil.HEADER_SIZE) {
-            return PerfUtil.PHASE_UNKNOWN;
-        }
-        if (ContractAccess.messageReadIntLeUnchecked(message, 0)
-                != GENERIC_MAGIC
-            || ContractAccess.messageReadIntLeUnchecked(message, 4)
-                != PerfMeasurement.runId()
-            || ContractAccess.messageReadIntLeUnchecked(message, 9)
-                != expectedSize) {
-            return PerfUtil.PHASE_UNKNOWN;
-        }
-        int phase = ContractAccess.messageReadIntLeUnchecked(message, 8) & 0xFF;
-        if (phase != PerfUtil.PHASE_WARMUP
-            && phase != PerfUtil.PHASE_ACTIVE
-            && phase != PerfUtil.PHASE_COOLDOWN) {
+        int phase = headerPhase(message, expectedSize);
+        if (phase == PerfUtil.PHASE_UNKNOWN) {
             return PerfUtil.PHASE_UNKNOWN;
         }
         if (phase == PerfUtil.PHASE_ACTIVE) {
             long receivedAt = PerfUtil.nowNs();
             if (receivedAt < activeEnd) {
-                long sentTsNs = ContractAccess.messageReadLongLeUnchecked(
-                    message, 21);
+                long sentTsNs = ContractAccess.messageMetricHeaderSentTimestamp(
+                    message);
                 metrics.recordNanos(Math.max(0L, receivedAt - sentTsNs));
             }
         }
         return phase;
+    }
+
+    private static int headerPhase(Message message, int expectedSize) {
+        if (message == null) {
+            return PerfUtil.PHASE_UNKNOWN;
+        }
+        int phase = ContractAccess.messageMetricHeaderPhase(message,
+            expectedSize, PerfMeasurement.runId());
+        return phase < 0 ? PerfUtil.PHASE_UNKNOWN : phase;
     }
 }

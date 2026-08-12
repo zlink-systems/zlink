@@ -149,13 +149,14 @@ public final class Message implements AutoCloseable {
             }
 
             @Override
-            public int readIntLeUnchecked(Message message, int offset) {
-                return message.readIntLeUnchecked(offset);
+            public int metricHeaderPhase(Message message, int expectedSize,
+                                         int expectedRunId) {
+                return message.metricHeaderPhase(expectedSize, expectedRunId);
             }
 
             @Override
-            public long readLongLeUnchecked(Message message, int offset) {
-                return message.readLongLeUnchecked(offset);
+            public long metricHeaderSentTimestamp(Message message) {
+                return message.metricHeaderSentTimestamp();
             }
 
         });
@@ -525,6 +526,24 @@ public final class Message implements AutoCloseable {
     private long readLongLeUnchecked(int offset) {
         long value = UNSAFE.getLong(null, cachedAddress + offset);
         return NATIVE_LITTLE_ENDIAN ? value : Long.reverseBytes(value);
+    }
+
+    private int metricHeaderPhase(int expectedSize, int expectedRunId) {
+        // Internal perf path: validate the frame once, then read all header
+        // fields directly from its native storage.  The public read methods
+        // retain their per-call range validation.
+        if (!valid || closed || cachedSize < 29
+            || readIntLeUnchecked(0) != 0x5A4C4E4B
+            || readIntLeUnchecked(4) != expectedRunId
+            || readIntLeUnchecked(9) != expectedSize) {
+            return -1;
+        }
+        int phase = readIntLeUnchecked(8) & 0xFF;
+        return phase == 0 || phase == 1 || phase == 2 ? phase : -1;
+    }
+
+    private long metricHeaderSentTimestamp() {
+        return readLongLeUnchecked(21);
     }
 
     public ByteBuffer dataBuffer() {
@@ -975,6 +994,7 @@ public final class Message implements AutoCloseable {
         cachedSize = size;
         cachedAddress = size > 0 ? ContractAccess.nativeMessageDataAddress(msg) : 0L;
     }
+
 
     private void clearPayloadCache() {
         cachedSize = 0;

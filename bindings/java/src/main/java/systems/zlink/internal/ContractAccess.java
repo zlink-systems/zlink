@@ -261,9 +261,10 @@ public final class ContractAccess {
 
         Message acquireReceive();
 
-        int readIntLeUnchecked(Message message, int offset);
+        int metricHeaderPhase(Message message, int expectedSize,
+                              int expectedRunId);
 
-        long readLongLeUnchecked(Message message, int offset);
+        long metricHeaderSentTimestamp(Message message);
 
     }
 
@@ -727,12 +728,15 @@ public final class ContractAccess {
         return messageAccess().acquireReceive();
     }
 
-    public static int messageReadIntLeUnchecked(Message message, int offset) {
-        return messageAccess().readIntLeUnchecked(message, offset);
+    public static int messageMetricHeaderPhase(Message message,
+                                               int expectedSize,
+                                               int expectedRunId) {
+        return messageAccess().metricHeaderPhase(message, expectedSize,
+            expectedRunId);
     }
 
-    public static long messageReadLongLeUnchecked(Message message, int offset) {
-        return messageAccess().readLongLeUnchecked(message, offset);
+    public static long messageMetricHeaderSentTimestamp(Message message) {
+        return messageAccess().metricHeaderSentTimestamp(message);
     }
 
 
