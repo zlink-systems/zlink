@@ -1158,7 +1158,7 @@ pattern은 11.6 재측정값을 사용하고, request/reply는 이 절의 최신
 | Transport | Pattern | 평균 | 최소 기준 | 판정 |
 |-----------|---------|-----:|----------:|------|
 | `tcp` | `MULTI_DEALER_DEALER` | 66.05% | 70% | 미달·개선 진행 |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 46.62% | 50% | 미달·개선 진행 |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 71.11% | 50% | 통과 |
 | `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 58.34% | 50% | 통과 |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 55.42% | 50% | 통과 |
 | `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 53.51% | 50% | 통과 |

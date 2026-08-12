@@ -598,14 +598,25 @@ public final class Received implements AutoCloseable {
     }
 
     private final class SendBuilder implements SendOperation, SendSubmitOperation {
-        private final BuilderParts parts = new BuilderParts();
+        private Message singlePart;
+        private ArrayList<Message> parts;
         private SendFlags flags = SendFlags.NONE;
         private boolean submitted;
 
         @Override
         public SendSubmitOperation message(Message part) {
             ensureNotSubmitted();
-            parts.add(part);
+            Objects.requireNonNull(part, "part");
+            if (parts != null) {
+                parts.add(part);
+            } else if (singlePart == null) {
+                singlePart = part;
+            } else {
+                parts = new ArrayList<>(4);
+                parts.add(singlePart);
+                parts.add(part);
+                singlePart = null;
+            }
             return this;
         }
 
@@ -619,34 +630,38 @@ public final class Received implements AutoCloseable {
         @Override
         public boolean submit() {
             ensureNotSubmitted();
-            if (parts.isEmpty())
+            if (singlePart == null && (parts == null || parts.isEmpty()))
                 throw new IllegalArgumentException("at least one message required");
             submitted = true;
             if (routedSingleSendSender != null && routingIdBytes != null
-                && parts.parts == null) {
+                && parts == null) {
                 try {
                     return routedSingleSendSender.submit(routingIdBytes,
-                        parts.singlePart, flags);
+                        singlePart, flags);
                 } catch (IllegalStateException ex) {
                     throw new ZlinkSubmitException(SubmitResult.TERMINATED);
                 }
             }
-            if (singleSendSender != null && parts.parts == null) {
+            if (singleSendSender != null && parts == null) {
                 try {
-                    return singleSendSender.apply(parts.singlePart, flags);
+                    return singleSendSender.apply(singlePart, flags);
                 } catch (IllegalStateException ex) {
                     throw new ZlinkSubmitException(SubmitResult.TERMINATED);
                 }
             }
             if (routedMultipartSendSender != null && routingIdBytes != null) {
                 try {
-                    return routedMultipartSendSender.submit(routingIdBytes,
-                        parts.asList(), flags);
+                    return routedMultipartSendSender.submit(routingIdBytes, parts(),
+                        flags);
                 } catch (IllegalStateException ex) {
                     throw new ZlinkSubmitException(SubmitResult.TERMINATED);
                 }
             }
-            return submitSend(parts.asList(), flags);
+            return submitSend(parts(), flags);
+        }
+
+        private List<Message> parts() {
+            return parts == null ? List.of(singlePart) : parts;
         }
 
         private void ensureNotSubmitted() {

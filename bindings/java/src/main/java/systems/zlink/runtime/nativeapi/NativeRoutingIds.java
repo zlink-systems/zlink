@@ -30,6 +30,24 @@ public final class NativeRoutingIds {
         if (size == 0) {
             return null;
         }
+        if (size <= 16) {
+            long lo = nativeRid.get(ValueLayout.JAVA_LONG_UNALIGNED,
+                NativeLayouts.ROUTING_ID_DATA_OFFSET);
+            long hi = size > 8
+                ? nativeRid.get(ValueLayout.JAVA_LONG_UNALIGNED,
+                    NativeLayouts.ROUTING_ID_DATA_OFFSET + 8)
+                : 0L;
+            int loBits = (size >= 8 ? 8 : size) * 8;
+            lo &= loBits == 64 ? -1L : ((1L << loBits) - 1L);
+            int hiBits = Math.max(0, size - 8) * 8;
+            hi &= hiBits == 64 ? -1L
+                : (hiBits == 0 ? 0L : ((1L << hiBits) - 1L));
+            RoutingId cached = ContractAccess.routingIdTryFromInlineCached(
+                size, lo, hi);
+            if (cached != null) {
+                return ContractAccess.routingIdTrustedBytes(cached);
+            }
+        }
         byte[] value = new byte[size];
         MemorySegment.copy(nativeRid, NativeLayouts.ROUTING_ID_DATA_OFFSET,
             MemorySegment.ofArray(value), 0, size);
