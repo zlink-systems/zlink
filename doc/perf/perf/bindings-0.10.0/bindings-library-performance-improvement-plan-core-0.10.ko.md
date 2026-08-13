@@ -76,6 +76,7 @@ pattern·transport 평균은 최소 기준과 중앙값 목표를 함께 판정�
 | Node | `MULTI_ROUTER_ROUTER_SENDSEND` | ws | 51.41 / 48.08 / 48.34 / 52.98 / 67.56 / 74.32% | 57.12% | 30% / 60% | 최소 통과, 중앙값 미달, hot path 검토 중 |
 | Node | `MULTI_ROUTER_ROUTER_SENDSEND` | wss | 64.69 / 46.39 / 76.62 / 59.55 / 103.86 / 94.20% | 74.22% | 30% / 60% | 중앙값 통과 |
 | Node | `MULTI_STREAM` | tcp | 48.13 / 49.71 / 50.61 / 90.29% | 59.69% | 30% / 60% | 최소 통과, 중앙값 미달 |
+| Node | `MULTI_STREAM` | tls | 56.50 / 59.85 / 62.92 / 102.94% | 70.55% | 30% / 60% | 중앙값 통과 |
 | Node | non-tcp | 전체 | 재측정 대기 | - | - | 진행 중 |
 
 Java 공개 API 경로 재측정 결과는
@@ -94,7 +95,7 @@ native ready event를 직접 읽고 해당 socket을 `DONT_WAIT`로 drain한다.
 | C++ | 9 | 96.93% |
 | .NET | 7 | 96.37% |
 | Java | 7 | 82.82% |
-| Node | 17 | 58.57% |
+| Node | 18 | 59.23% |
 
 ## 완료 조건
 
