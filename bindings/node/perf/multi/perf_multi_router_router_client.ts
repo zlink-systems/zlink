@@ -81,20 +81,18 @@ async function main() {
     let seq = 1n;
 
     const drainReply = (index) => {
-      let progressed = false;
-      while (true) {
-        const echoed = replyMessages[index];
-        if (!recvNoWaitInto(routers[index], echoed)) {
-          break;
-        }
-        waiting[index] = false;
-        collector.recordPayload(echoed.parts[0].data(), currentEpochNs());
-        progressed = true;
+      const echoed = replyMessages[index];
+      if (!recvNoWaitInto(routers[index], echoed)) {
+        return false;
       }
-      return progressed;
+      waiting[index] = false;
+      collector.recordPayload(echoed.parts[0].data(), currentEpochNs());
+      // HOT PATH: each ROUTER client has one request in flight.  C waits for
+      // this socket's POLLIN event, receives one reply, then permits its next
+      // send.  Do not probe every socket with recv(DONT_WAIT) each round.
+      return true;
     };
     while (currentEpochNs() < activeStopNs) {
-      let progressed = false;
       for (let i = 0; i < routers.length; i += 1) {
         if (waiting[i] || sendPending[i]) {
           continue;
@@ -111,19 +109,19 @@ async function main() {
         }
         waiting[i] = true;
         seq += 1n;
-        progressed = true;
-      }
-      for (let i = 0; i < routers.length; i += 1) {
-        progressed = drainReply(i) || progressed;
-      }
-      if (progressed) {
-        continue;
       }
 
-      // PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven `-1` wait.
+      // Match C's active window: wait only for registered socket readiness
+      // and never probe a non-ready socket through the binding boundary.
+      const remainingMs = Math.ceil(
+        (Number(activeStopNs) - Number(currentEpochNs())) / 1_000_000
+      );
+      if (remainingMs <= 0) {
+        break;
+      }
       const readyCount = poller.wait(
         pollBuffer,
-        process.platform === 'win32' ? 50 : -1
+        Math.max(1, Math.min(remainingMs, 2_147_483_647))
       );
       if (readyCount === 0) {
         continue;

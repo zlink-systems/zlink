@@ -75,20 +75,18 @@ async function main() {
     let seq = 1n;
 
     const drainReply = (index) => {
-      let progressed = false;
-      while (true) {
-        const echoed = replyMessages[index];
-        if (!recvNoWaitInto(dealers[index], echoed)) {
-          break;
-        }
-        waiting[index] = false;
-        collector.recordPayload(echoed.parts[0].data(), currentEpochNs());
-        progressed = true;
+      const echoed = replyMessages[index];
+      if (!recvNoWaitInto(dealers[index], echoed)) {
+        return false;
       }
-      return progressed;
+      waiting[index] = false;
+      collector.recordPayload(echoed.parts[0].data(), currentEpochNs());
+      // HOT PATH: C receives only after this socket's POLLIN event, then
+      // allows its next send.  Avoid probing every non-ready socket through
+      // the Node/native boundary on each round.
+      return true;
     };
     while (currentEpochNs() < activeStopNs) {
-      let progressed = false;
       for (let i = 0; i < dealers.length; i += 1) {
         if (waiting[i] || sendPending[i]) {
           continue;
@@ -105,21 +103,18 @@ async function main() {
         }
         waiting[i] = true;
         seq += 1n;
-        progressed = true;
-      }
-      for (let i = 0; i < dealers.length; i += 1) {
-        progressed = drainReply(i) || progressed;
-      }
-      if (progressed) {
-        continue;
       }
 
-      // PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven `-1` wait. The echo
-      // reply (POLLIN) or send-readiness (POLLOUT) wakeup arrives via core,
-      // so timer-bound polling is unnecessary.
+      // Match C's active deadline while waiting only for registered readiness.
+      const remainingMs = Math.ceil(
+        (Number(activeStopNs) - Number(currentEpochNs())) / 1_000_000
+      );
+      if (remainingMs <= 0) {
+        break;
+      }
       const readyCount = poller.wait(
         pollBuffer,
-        process.platform === 'win32' ? 50 : -1
+        Math.max(1, Math.min(remainingMs, 2_147_483_647))
       );
       if (readyCount === 0) {
         continue;
