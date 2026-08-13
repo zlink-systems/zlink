@@ -1,4 +1,4 @@
-# .NET DEALER/ROUTER SENDSEND WSS 측정 결과
+# .NET ROUTER/ROUTER SENDSEND WSS 측정 결과
 
 ## 측정 조건
 
@@ -15,4 +15,4 @@
 
 | Pattern | 64B | 256B | 1024B | 4096B | 65536B | 131072B | 산술평균 | 판정 |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
-| `MULTI_DEALER_ROUTER_SENDSEND` | 85.95% | 87.52% | 90.24% | 94.33% | 106.55% | 104.70% | 94.88% | 중앙값 통과 |
+| `MULTI_ROUTER_ROUTER_SENDSEND` | 88.90% | 93.13% | 87.19% | 87.77% | 101.07% | 102.73% | 93.47% | 중앙값 통과 |
