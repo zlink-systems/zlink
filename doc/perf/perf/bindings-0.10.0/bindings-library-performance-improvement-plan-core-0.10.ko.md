@@ -89,7 +89,7 @@ pattern·transport 평균은 최소 기준과 중앙값 목표를 함께 판정�
 | Node | `MULTI_DEALER_ROUTER_SENDSEND` | tls | 60.26 / 61.85 / 64.21 / 58.05 / 88.45 / 93.47% | 71.05% | 33% / 60% | 중앙값 통과 |
 | Node | `MULTI_DEALER_ROUTER_SENDSEND` | ws | 65.54 / 62.45 / 62.44 / 61.80 / 73.49 / 78.32% | 67.34% | 33% / 60% | 중앙값 통과 |
 | Node | `MULTI_DEALER_ROUTER_SENDSEND` | wss | 64.53 / 63.02 / 64.68 / 68.87 / 97.47 / 99.49% | 76.34% | 33% / 60% | 중앙값 통과 |
-| Node | `MULTI_ROUTER_ROUTER_SENDSEND` | tcp | 45.77 / 37.66 / 29.97 / 30.23 / 48.36 / 49.09% | 40.18% | 30% / 60% | 최소 통과, 중앙값 미달 |
+| Node | `MULTI_ROUTER_ROUTER_SENDSEND` | tcp | 50.25 / 43.55 / 45.54 / 49.27 / 70.76 / 67.06% | 54.41% | 30% / 60% | 최소 통과, 중앙값 미달, 보류 |
 | Node | `MULTI_ROUTER_ROUTER_SENDSEND` | tls | 56.91 / 53.92 / 56.70 / 57.61 / 90.23 / 94.32% | 68.28% | 30% / 60% | 중앙값 통과 |
 | Node | `MULTI_ROUTER_ROUTER_SENDSEND` | ws | 55.39 / 48.30 / 47.89 / 51.73 / 73.68 / 72.97% | 58.33% | 30% / 60% | 최소 통과, 중앙값 미달, 보류 |
 | Node | `MULTI_ROUTER_ROUTER_SENDSEND` | wss | 64.69 / 46.39 / 76.62 / 59.55 / 103.86 / 94.20% | 74.22% | 30% / 60% | 중앙값 통과 |
@@ -114,7 +114,7 @@ Java multi runner는 public `Poller`와 재사용 `PollEvents`로 C와 같은 �
 | C++ | 9 | 96.93% |
 | .NET | 7 | 96.37% |
 | Java | 25 | 82.07% |
-| Node | 20 | 60.16% |
+| Node | 20 | 60.87% |
 
 ## 완료 조건
 
