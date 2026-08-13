@@ -69,8 +69,9 @@ pattern·transport 평균은 최소 기준과 중앙값 목표를 함께 판정�
 | Node | `MULTI_DEALER_ROUTER_SENDSEND` | ws | 65.16 / 69.67 / 60.92 / 60.28 / 77.60 / 80.12% | 68.96% | 33% / 60% | 중앙값 통과 |
 | Node | `MULTI_DEALER_ROUTER_SENDSEND` | wss | 64.53 / 63.02 / 64.68 / 68.87 / 97.47 / 99.49% | 76.34% | 33% / 60% | 중앙값 통과 |
 | Node | `MULTI_ROUTER_ROUTER_SENDSEND` | tcp | 45.77 / 37.66 / 29.97 / 30.23 / 48.36 / 49.09% | 40.18% | 30% / 60% | 최소 통과, 중앙값 미달 |
-| Node | `MULTI_ROUTER_ROUTER_SENDSEND` | tls | 53.70 / 49.59 / 52.18 / 56.79 / 93.03 / 90.75% | 66.01% | 30% / 60% | 중앙값 통과 |
+| Node | `MULTI_ROUTER_ROUTER_SENDSEND` | tls | 56.91 / 53.92 / 56.70 / 57.61 / 90.23 / 94.32% | 68.28% | 30% / 60% | 중앙값 통과 |
 | Node | `MULTI_ROUTER_ROUTER_SENDSEND` | ws | 51.41 / 48.08 / 48.34 / 52.98 / 67.56 / 74.32% | 57.12% | 30% / 60% | 최소 통과, 중앙값 미달, hot path 검토 중 |
+| Node | `MULTI_ROUTER_ROUTER_SENDSEND` | wss | 64.69 / 46.39 / 76.62 / 59.55 / 103.86 / 94.20% | 74.22% | 30% / 60% | 중앙값 통과 |
 | Node | `MULTI_STREAM` | tcp | 48.13 / 49.71 / 50.61 / 90.29% | 59.69% | 30% / 60% | 최소 통과, 중앙값 미달 |
 | Node | non-tcp | 전체 | 재측정 대기 | - | - | 진행 중 |
 
@@ -90,7 +91,7 @@ native ready event를 직접 읽고 해당 socket을 `DONT_WAIT`로 drain한다.
 | C++ | 9 | 96.93% |
 | .NET | 7 | 96.37% |
 | Java | 7 | 82.82% |
-| Node | 13 | 58.90% |
+| Node | 14 | 60.15% |
 
 ## 완료 조건
 
