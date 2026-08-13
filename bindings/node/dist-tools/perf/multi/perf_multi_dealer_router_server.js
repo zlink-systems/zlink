@@ -25,11 +25,11 @@ function receiveAndQueueReplies(router, pending, received) {
             if (!received.routingId || received.requestSeq) {
                 continue;
             }
-            const routingId = received.routingId;
             const payload = received.singlePartOrThrow();
             if (isStopTokenParts([payload])) {
                 return true;
             }
+            const routingId = received.routingId;
             if (pending.length === 0 && trySocketSend(router, routingId, payload)) {
                 continue;
             }
@@ -51,6 +51,7 @@ async function main() {
     let pollBuffer = null;
     let rl = null;
     let stop = false;
+    let pollMask = POLLIN;
     try {
         applySocketPolicy(router);
         configureTlsServer(router, options.transport);
@@ -71,7 +72,6 @@ async function main() {
             }
         })();
         while (!stop) {
-            poller.modify(router, pollEvents(POLLIN | POLLOUT));
             const ready = waitPollerOne(poller, pollBuffer, process.platform === 'win32' ? 50 : -1);
             if (!ready) {
                 continue;
@@ -82,6 +82,14 @@ async function main() {
             if (pollEventHas(ready, POLLIN)) {
                 stop = receiveAndQueueReplies(router, pending, received);
                 drainPending(router, pending);
+            }
+            const nextPollMask = pending.length > 0 ? POLLIN | POLLOUT : POLLIN;
+            if (nextPollMask !== pollMask) {
+                // HOT PATH: C enables POLLOUT only while an EAGAIN reply is queued.
+                // An idle ROUTER is normally writable, so unconditional POLLOUT
+                // registration creates a busy loop and starves receive-and-relay.
+                poller.modify(router, pollEvents(nextPollMask));
+                pollMask = nextPollMask;
             }
         }
     }

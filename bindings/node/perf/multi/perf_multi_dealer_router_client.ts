@@ -56,7 +56,7 @@ async function main() {
     for (let i = 0; i < dealers.length; i += 1) {
       await waitForConnectionReady(dealers[i], () => dealers[i].connect(options.endpoint));
       applyAutoHwmMsgUnit(ctx, options.msgSize);
-      poller.add(dealers[i], pollEvents(POLLIN | POLLOUT), i);
+      poller.add(dealers[i], pollEvents(POLLIN), i);
     }
     ctx.recalculateAutoHwm();
     for (const dealer of dealers) {
@@ -97,6 +97,10 @@ async function main() {
         const sent = trySocketSend(dealers[i], payloads[i]);
         if (!sent) {
           sendPending[i] = true;
+          // HOT PATH: C registers POLLOUT only after this socket reports
+          // backpressure. Keeping writable sockets in every wait turns the
+          // round-trip loop into a busy poll and hides binding receive cost.
+          poller.modify(dealers[i], pollEvents(POLLIN | POLLOUT));
           continue;
         }
         waiting[i] = true;
@@ -128,6 +132,9 @@ async function main() {
         const event = { revents: pollBuffer.revents(offset) };
         if (pollEventHas(event, POLLOUT)) {
           sendPending[index] = false;
+          // The eager send loop performs the next attempt. Remove POLLOUT
+          // first so sockets awaiting replies wake this poller only on data.
+          poller.modify(dealers[index], pollEvents(POLLIN));
         }
         if (pollEventHas(event, POLLIN)) {
           drainReply(index);

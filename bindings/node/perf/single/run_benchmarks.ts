@@ -306,6 +306,7 @@ async function main() {
   // C: print_effective_options does print("\n## Effective Options ...").
   // The report file's first line is therefore an empty line.
   emit('');
+  emit(`META,node_runtime,${process.versions.node}`);
   if (process.env.ZLINK_PERF_RUNTIME_LIBZLINK) {
     emit(`META,runtime_libzlink,${process.env.ZLINK_PERF_RUNTIME_LIBZLINK}`);
     emit('');

@@ -62,7 +62,7 @@ async function main() {
     for (let i = 0; i < routers.length; i += 1) {
       await waitForConnectionReady(routers[i], () => routers[i].connect(options.endpoint));
       applyAutoHwmMsgUnit(ctx, options.msgSize);
-      poller.add(routers[i], pollEvents(POLLIN | POLLOUT), i);
+      poller.add(routers[i], pollEvents(POLLIN), i);
     }
     ctx.recalculateAutoHwm();
     for (const router of routers) {
@@ -103,6 +103,10 @@ async function main() {
         const sent = trySocketSend(routers[i], SERVER_ROUTING_ID, payloads[i]);
         if (!sent) {
           sendPending[i] = true;
+          // HOT PATH: match the C requester and subscribe to POLLOUT only
+          // for a socket that actually backpressured. An always-writable
+          // socket otherwise wakes the poller while replies are pending.
+          poller.modify(routers[i], pollEvents(POLLIN | POLLOUT));
           continue;
         }
         waiting[i] = true;
@@ -132,6 +136,9 @@ async function main() {
         const event = { revents: pollBuffer.revents(offset) };
         if (pollEventHas(event, POLLOUT)) {
           sendPending[index] = false;
+          // The next send is attempted eagerly; until it backpressures again,
+          // only a reply should wake the socket's poll registration.
+          poller.modify(routers[index], pollEvents(POLLIN));
         }
         if (pollEventHas(event, POLLIN)) {
           drainReply(index);

@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <new>
+#include <vector>
 
 // A Message owns this frame. Its Buffer is only a JavaScript view of the
 // zlink_msg_t storage; it is never the owning payload allocation.
@@ -22,6 +23,62 @@ struct native_message_frame_handle_t
     native_message_frame_t *frame;
 };
 
+class native_message_frame_pool_t
+{
+  public:
+    native_message_frame_pool_t () { frames.reserve (64); }
+
+    ~native_message_frame_pool_t ()
+    {
+        for (size_t i = 0; i < frames.size (); ++i)
+            delete frames[i];
+    }
+
+    native_message_frame_t *acquire ()
+    {
+        if (frames.empty ())
+            return new (std::nothrow) native_message_frame_t;
+        native_message_frame_t *frame = frames.back ();
+        frames.pop_back ();
+        frame->references.store (1, std::memory_order_relaxed);
+        return frame;
+    }
+
+    void recycle (native_message_frame_t *frame)
+    {
+        // HOT PATH: routed single-part recv creates one frame per message.
+        // Keep a small per-JS-thread reserve after ownership reaches zero so
+        // relay workloads do not enter the general allocator for every recv.
+        // The bound prevents retained user messages from growing this cache.
+        if (frames.size () < 64) {
+            frames.push_back (frame);
+            return;
+        }
+        delete frame;
+    }
+
+  private:
+    std::vector<native_message_frame_t *> frames;
+};
+
+inline native_message_frame_pool_t &native_message_frame_pool ()
+{
+    // Synchronous N-API recv and its finalizers execute on the owning JS
+    // thread. Thread-local ownership avoids a lock in this message hot path.
+    static thread_local native_message_frame_pool_t pool;
+    return pool;
+}
+
+inline native_message_frame_t *acquire_native_message_frame ()
+{
+    return native_message_frame_pool ().acquire ();
+}
+
+inline void recycle_native_message_frame (native_message_frame_t *frame)
+{
+    native_message_frame_pool ().recycle (frame);
+}
+
 inline void retain_native_message_frame (native_message_frame_t *frame)
 {
     frame->references.fetch_add (1, std::memory_order_relaxed);
@@ -32,7 +89,7 @@ inline void release_native_message_frame (native_message_frame_t *frame)
     if (!frame || frame->references.fetch_sub (1, std::memory_order_acq_rel) != 1)
         return;
     zlink_msg_close (&frame->message);
-    delete frame;
+    recycle_native_message_frame (frame);
 }
 
 inline native_message_frame_t *get_native_message_frame (napi_env env, napi_value value,
@@ -130,18 +187,18 @@ inline napi_value create_native_message_value (napi_env env, native_message_fram
 
 inline napi_value move_message_to_native_value (napi_env env, zlink_msg_t *source)
 {
-    native_message_frame_t *frame = new (std::nothrow) native_message_frame_t;
+    native_message_frame_t *frame = acquire_native_message_frame ();
     if (!frame) {
         napi_throw_error (env, NULL, "native message frame allocation failed");
         return NULL;
     }
     if (zlink_msg_init (&frame->message) != 0) {
-        delete frame;
+        recycle_native_message_frame (frame);
         return throw_last_error (env, "native message frame init failed");
     }
     if (zlink_msg_move (&frame->message, source) != 0) {
         zlink_msg_close (&frame->message);
-        delete frame;
+        recycle_native_message_frame (frame);
         return throw_last_error (env, "native message frame move failed");
     }
     return create_native_message_value (env, frame);
@@ -149,18 +206,18 @@ inline napi_value move_message_to_native_value (napi_env env, zlink_msg_t *sourc
 
 inline napi_value move_message_to_native_frame_value (napi_env env, zlink_msg_t *source)
 {
-    native_message_frame_t *frame = new (std::nothrow) native_message_frame_t;
+    native_message_frame_t *frame = acquire_native_message_frame ();
     if (!frame) {
         napi_throw_error (env, NULL, "native message frame allocation failed");
         return NULL;
     }
     if (zlink_msg_init (&frame->message) != 0) {
-        delete frame;
+        recycle_native_message_frame (frame);
         return throw_last_error (env, "native message frame init failed");
     }
     if (zlink_msg_move (&frame->message, source) != 0) {
         zlink_msg_close (&frame->message);
-        delete frame;
+        recycle_native_message_frame (frame);
         return throw_last_error (env, "native message frame move failed");
     }
     napi_value native_message = create_native_message_frame_handle (env, frame);
