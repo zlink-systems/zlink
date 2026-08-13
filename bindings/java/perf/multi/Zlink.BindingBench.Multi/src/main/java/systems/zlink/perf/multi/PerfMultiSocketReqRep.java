@@ -19,6 +19,7 @@ import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.perf.PerfControl;
+import systems.zlink.perf.PerfMessageTemplatePool;
 import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
@@ -180,14 +181,24 @@ final class PerfMultiSocketReqRep {
             };
         }
 
-        while (System.nanoTime() < activeEnd && failure.get() == null) {
+        // Keep reusable native payload storage per concurrent request slot.
+        // acquire() returns an independent Message owner, so request submit
+        // still consumes the caller's message exactly as the public contract
+        // requires while the template is reused after Core releases it.
+        try (PerfMessageTemplatePool payloads = new PerfMessageTemplatePool(
+                config.size(), Math.max(4, count * 2))) {
+            while (System.nanoTime() < activeEnd && failure.get() == null) {
                 boolean progress = false;
                 for (int i = 0; i < count; i++) {
                     if (waiting[i].get()) {
                         continue;
                     }
-                    Message payload = PerfUtil.payload(config.size(),
-                        (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
+                    Message payload = payloads.acquire(config.size(),
+                        (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime(),
+                        activeEnd);
+                    if (payload == null) {
+                        break;
+                    }
                     waiting[i].set(true);
                     try (payload) {
                         boolean accepted = submit(clients.get(i), routedClients,
@@ -209,6 +220,7 @@ final class PerfMultiSocketReqRep {
                     completions.poll(50);
                 }
             }
+        }
         long drainEnd = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(
             Math.max(1_000, requestTimeoutMs * 4));
         while (anyWaiting(waiting) && System.nanoTime() < drainEnd) {
