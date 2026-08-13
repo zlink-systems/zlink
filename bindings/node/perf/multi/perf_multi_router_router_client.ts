@@ -22,7 +22,6 @@ const {
   applySocketPolicy,
   emitMultiSocketHwmDetail,
   pollEvents,
-  pollEventHas,
   recvNoWaitInto,
   sendStopTokenOnce,
   trySocketSend,
@@ -131,14 +130,16 @@ async function main() {
         if (!Number.isInteger(index) || index < 0 || index >= routers.length) {
           continue;
         }
-        const event = { revents: pollBuffer.revents(offset) };
-        if (pollEventHas(event, POLLOUT)) {
+        // HOT PATH: PollEvents already exposes the Core event mask. Avoid a
+        // per-ready-event wrapper allocation before the C-equivalent drain.
+        const revents = pollBuffer.revents(offset);
+        if ((revents & POLLOUT) !== 0) {
           sendPending[index] = false;
           // The next send is attempted eagerly; until it backpressures again,
           // only a reply should wake the socket's poll registration.
           poller.modify(routers[index], pollEvents(POLLIN));
         }
-        if (pollEventHas(event, POLLIN)) {
+        if ((revents & POLLIN) !== 0) {
           drainReply(index);
         }
       }

@@ -5,7 +5,7 @@ const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createPayload, createRunId, HEADER_SIZE, currentEpochNs, summarizeMetrics, stampPayload } = require('../common/perf_metrics');
 const { configureTlsClient } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
-const { POLLIN, POLLOUT, applyAutoHwmMsgUnit, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, recvNoWaitInto, sendStopTokenOnce, trySocketSend, waitForConnectionReady } = require('./perf_multi_runtime');
+const { POLLIN, POLLOUT, applyAutoHwmMsgUnit, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, recvNoWaitInto, sendStopTokenOnce, trySocketSend, waitForConnectionReady } = require('./perf_multi_runtime');
 const SERVER_ID = Buffer.from('SERVER', 'ascii');
 const SERVER_ROUTING_ID = zlink.RoutingId.from(SERVER_ID);
 async function main() {
@@ -97,14 +97,16 @@ async function main() {
                 if (!Number.isInteger(index) || index < 0 || index >= routers.length) {
                     continue;
                 }
-                const event = { revents: pollBuffer.revents(offset) };
-                if (pollEventHas(event, POLLOUT)) {
+                // HOT PATH: PollEvents already exposes the Core event mask. Avoid a
+                // per-ready-event wrapper allocation before the C-equivalent drain.
+                const revents = pollBuffer.revents(offset);
+                if ((revents & POLLOUT) !== 0) {
                     sendPending[index] = false;
                     // The next send is attempted eagerly; until it backpressures again,
                     // only a reply should wake the socket's poll registration.
                     poller.modify(routers[index], pollEvents(POLLIN));
                 }
-                if (pollEventHas(event, POLLIN)) {
+                if ((revents & POLLIN) !== 0) {
                     drainReply(index);
                 }
             }

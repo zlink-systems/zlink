@@ -87,17 +87,16 @@ pattern·transport 평균은 최소 기준과 중앙값 목표를 함께 판정�
 | Node | `MULTI_DEALER_DEALER` | wss | 17.37 / 50.09 / 47.69 / 68.84 / 89.18 / 112.29% | 64.24% | 35% / 60% | 중앙값 통과 |
 | Node | `MULTI_DEALER_ROUTER_SENDSEND` | tcp | 61.09 / 57.18 / 58.10 / 64.00 / 78.35 / 73.78% | 65.42% | 33% / 60% | 중앙값 통과 |
 | Node | `MULTI_DEALER_ROUTER_SENDSEND` | tls | 60.26 / 61.85 / 64.21 / 58.05 / 88.45 / 93.47% | 71.05% | 33% / 60% | 중앙값 통과 |
-| Node | `MULTI_DEALER_ROUTER_SENDSEND` | ws | 65.16 / 69.67 / 60.92 / 60.28 / 77.60 / 80.12% | 68.96% | 33% / 60% | 중앙값 통과 |
+| Node | `MULTI_DEALER_ROUTER_SENDSEND` | ws | 65.54 / 62.45 / 62.44 / 61.80 / 73.49 / 78.32% | 67.34% | 33% / 60% | 중앙값 통과 |
 | Node | `MULTI_DEALER_ROUTER_SENDSEND` | wss | 64.53 / 63.02 / 64.68 / 68.87 / 97.47 / 99.49% | 76.34% | 33% / 60% | 중앙값 통과 |
 | Node | `MULTI_ROUTER_ROUTER_SENDSEND` | tcp | 45.77 / 37.66 / 29.97 / 30.23 / 48.36 / 49.09% | 40.18% | 30% / 60% | 최소 통과, 중앙값 미달 |
 | Node | `MULTI_ROUTER_ROUTER_SENDSEND` | tls | 56.91 / 53.92 / 56.70 / 57.61 / 90.23 / 94.32% | 68.28% | 30% / 60% | 중앙값 통과 |
-| Node | `MULTI_ROUTER_ROUTER_SENDSEND` | ws | 51.41 / 48.08 / 48.34 / 52.98 / 67.56 / 74.32% | 57.12% | 30% / 60% | 최소 통과, 중앙값 미달, hot path 검토 중 |
+| Node | `MULTI_ROUTER_ROUTER_SENDSEND` | ws | 55.39 / 48.30 / 47.89 / 51.73 / 73.68 / 72.97% | 58.33% | 30% / 60% | 최소 통과, 중앙값 미달, 보류 |
 | Node | `MULTI_ROUTER_ROUTER_SENDSEND` | wss | 64.69 / 46.39 / 76.62 / 59.55 / 103.86 / 94.20% | 74.22% | 30% / 60% | 중앙값 통과 |
 | Node | `MULTI_STREAM` | tcp | 48.13 / 49.71 / 50.61 / 90.29% | 59.69% | 30% / 60% | 최소 통과, 중앙값 미달 |
 | Node | `MULTI_STREAM` | tls | 56.50 / 59.85 / 62.92 / 102.94% | 70.55% | 30% / 60% | 중앙값 통과 |
 | Node | `MULTI_STREAM` | ws | 52.74 / 52.62 / 58.55 / 101.96% | 66.47% | 30% / 60% | 중앙값 통과 |
 | Node | `MULTI_STREAM` | wss | 60.28 / 62.84 / 62.32 / 98.28% | 70.93% | 30% / 60% | 중앙값 통과 |
-| Node | non-tcp | 전체 | 재측정 대기 | - | - | 진행 중 |
 
 Java 공개 API 경로 재측정 결과는
 `log/2026-08-13-java-public-api-policy-audit.ko.md`에 있다. Node PUB/SUB의 C parity
@@ -115,7 +114,7 @@ Java multi runner는 public `Poller`와 재사용 `PollEvents`로 C와 같은 �
 | C++ | 9 | 96.93% |
 | .NET | 7 | 96.37% |
 | Java | 25 | 82.07% |
-| Node | 20 | 60.18% |
+| Node | 20 | 60.16% |
 
 ## 완료 조건
 

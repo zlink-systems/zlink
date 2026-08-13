@@ -15,7 +15,6 @@ const {
   applySocketPolicy,
   emitMultiSocketHwmDetail,
   pollEvents,
-  pollEventHas,
   trySocketSend,
   waitPollerOne
 } = require('./perf_multi_runtime');
@@ -93,10 +92,13 @@ async function main() {
       if (!ready) {
         continue;
       }
-      if (pollEventHas(ready, POLLOUT)) {
+      // HOT PATH: waitPollerOne returns the Core revents mask. Test it
+      // directly so each ready relay event avoids generic event inspection.
+      const revents = ready.revents;
+      if ((revents & POLLOUT) !== 0) {
         drainPending(router, pending);
       }
-      if (pollEventHas(ready, POLLIN)) {
+      if ((revents & POLLIN) !== 0) {
         stop = receiveAndQueueReplies(router, pending, received);
         drainPending(router, pending);
       }

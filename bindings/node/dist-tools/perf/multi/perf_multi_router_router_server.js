@@ -6,7 +6,7 @@ const zlink = require('@zlink-systems/zlink');
 const { configureTlsServer } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
 const { isStopTokenParts } = require('../perf_stop_token');
-const { POLLIN, POLLOUT, applyAutoHwmMsgUnit, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, trySocketSend, waitPollerOne } = require('./perf_multi_runtime');
+const { POLLIN, POLLOUT, applyAutoHwmMsgUnit, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, trySocketSend, waitPollerOne } = require('./perf_multi_runtime');
 function drainPending(router, pending) {
     while (pending.length > 0) {
         const reply = pending[0];
@@ -77,10 +77,13 @@ async function main() {
             if (!ready) {
                 continue;
             }
-            if (pollEventHas(ready, POLLOUT)) {
+            // HOT PATH: waitPollerOne returns the Core revents mask. Test it
+            // directly so each ready relay event avoids generic event inspection.
+            const revents = ready.revents;
+            if ((revents & POLLOUT) !== 0) {
                 drainPending(router, pending);
             }
-            if (pollEventHas(ready, POLLIN)) {
+            if ((revents & POLLIN) !== 0) {
                 stop = receiveAndQueueReplies(router, pending, received);
                 drainPending(router, pending);
             }
