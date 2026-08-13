@@ -336,6 +336,15 @@ export function canShareNativeMessage(message: Message): boolean {
   return state._nativeMessage !== undefined;
 }
 
+/** @internal True when receive data was observed and remains in managed storage. */
+export function hasObservedManagedReceiveData(message: Message): boolean {
+  const state = message as unknown as MutableMessageState;
+  return state._buffer !== undefined
+    && state._nativeMessage === undefined
+    && state._refCount > 0
+    && !state._released;
+}
+
 /** @internal Mark a successfully submitted message empty without another native call. */
 export function consumeSubmittedMessage(message: Message): void {
   const state = message as unknown as MutableMessageState;

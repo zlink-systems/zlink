@@ -8,6 +8,7 @@ import {
   TopicMessage,
   type MessageLike
 } from '../../contracts';
+import { hasObservedManagedReceiveData } from '../../contracts/messaging/message';
 import { routingIdFromOwnedBuffer } from '../core/routing_id';
 import {
   messageFromOwnedBuffer,
@@ -77,6 +78,20 @@ interface RoutedReceiveContext {
 }
 
 const routedReceiveContexts = new WeakMap<Received, RoutedReceiveContext>();
+
+export function routedReceivedPrefersManagedBuffer(target: Received): boolean {
+  const parts = target.parts;
+  // HOT PATH: a reusable Received reveals its stable consumer role. A data
+  // reader should avoid a second addon call on the next receive, while a
+  // relay consumes the native frame and therefore stays on the movable path.
+  return parts.length === 1
+    && parts[0].size() <= 64
+    && hasObservedManagedReceiveData(parts[0]);
+}
+
+export function routedReceivedCachedRoutingBytes(target: Received): Buffer | null {
+  return routedReceiveContexts.get(target)?.cachedRoutingBytes ?? null;
+}
 
 function envelopeOf(raw: NativeReceivedRaw): NativeReceivedEnvelope | null {
   const candidate = raw as NativeReceivedEnvelope;
@@ -283,7 +298,8 @@ export function materializeRoutedReceivedInto(
     context.cachedRoutingBytes = null;
     context.cachedRoutingId = null;
   } else if (context.cachedRoutingBytes === null
-      || !context.cachedRoutingBytes.equals(context.routingId)) {
+      || (context.cachedRoutingBytes !== context.routingId
+        && !context.cachedRoutingBytes.equals(context.routingId))) {
     context.cachedRoutingBytes = context.routingId;
     context.cachedRoutingId = wrapNativeRoutingId(context.routingId);
   }

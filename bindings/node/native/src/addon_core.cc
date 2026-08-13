@@ -276,84 +276,6 @@ int subscribe_parts (void *sock,
     return ZLINK_RECV_OK;
 }
 
-int router_recv_parts (void *router,
-                       zlink_routing_id_t *peer_rid,
-                       uint64_t *request_seq,
-                       std::vector<zlink_msg_t> *parts,
-                       int32_t flags,
-                       uint64_t *transport_pair_id = NULL,
-                       uint64_t *transport_pair_generation = NULL)
-{
-    const zlink_routing_id_t *peer_rid_ptr = NULL;
-    zlink_msg_t first_part;
-    if (zlink_msg_init (&first_part) != 0)
-        return ZLINK_RECV_INTERNAL_ERROR;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-
-    copy_routing_id (peer_rid, NULL);
-    if (request_seq)
-        *request_seq = 0;
-    if (transport_pair_id)
-        *transport_pair_id = 0;
-    if (transport_pair_generation)
-        *transport_pair_generation = 0;
-    if (parts)
-        parts->clear ();
-
-    int rc = (transport_pair_id && transport_pair_generation)
-      ? zlink_router_recv_part_v2 (router, &peer_rid_ptr, request_seq,
-                                   transport_pair_id, transport_pair_generation,
-                                   &first_part, &has_more,
-                                   static_cast<zlink_recv_flags_t> (flags))
-      : zlink_router_recv_part (router, &peer_rid_ptr, request_seq, &first_part,
-                                &has_more, static_cast<zlink_recv_flags_t> (flags));
-    if (rc != ZLINK_RECV_OK) {
-        zlink_msg_close (&first_part);
-        return rc;
-    }
-
-    copy_routing_id (peer_rid, peer_rid_ptr);
-    if (!parts) {
-        zlink_msg_close (&first_part);
-        errno = EFAULT;
-        return ZLINK_RECV_INTERNAL_ERROR;
-    }
-    parts->clear ();
-    if (!append_msg_move (parts, &first_part)) {
-        zlink_msg_close (&first_part);
-        errno = ENOMEM;
-        return ZLINK_RECV_INTERNAL_ERROR;
-    }
-    while (has_more) {
-        const zlink_routing_id_t *next_peer_rid = NULL;
-        uint64_t next_request_seq = 0;
-        zlink_msg_t next_part;
-        if (zlink_msg_init (&next_part) != 0) {
-            close_msg_vector (*parts);
-            parts->clear ();
-            return ZLINK_RECV_INTERNAL_ERROR;
-        }
-        zlink_part_flag_t more = ZLINK_PART_FINAL;
-        rc = zlink_router_recv_part (router, &next_peer_rid, &next_request_seq,
-                                     &next_part, &more, ZLINK_RECV_FLAGS_DONTWAIT);
-        if (rc != ZLINK_RECV_OK) {
-            zlink_msg_close (&next_part);
-            close_msg_vector (*parts);
-            parts->clear ();
-            return rc;
-        }
-        if (!append_msg_move (parts, &next_part)) {
-            zlink_msg_close (&next_part);
-            close_msg_vector (*parts);
-            parts->clear ();
-            errno = ENOMEM;
-            return ZLINK_RECV_INTERNAL_ERROR;
-        }
-        has_more = more;
-    }
-    return ZLINK_RECV_OK;
-}
-
 int send_parts (void *sock, zlink_msg_t *parts, size_t part_count, zlink_send_flags_t flags)
 {
     return submit_msg_parts (parts, part_count, [sock, flags] (zlink_msg_t *part,
@@ -507,10 +429,12 @@ napi_value create_router_recv_message_value (napi_env env,
                                              uint64_t transport_pair_id,
                                              uint64_t transport_pair_generation,
                                              zlink_msg_t *parts,
-                                             size_t part_count)
+                                             size_t part_count,
+                                             bool prefer_managed_single_part,
+                                             napi_value cached_routing_id)
 {
     napi_value obj;
-    if (part_count == 1) {
+    if (part_count == 1 && !prefer_managed_single_part) {
         // Router relay is a common application path. Keep its sole received
         // frame in msg_t storage until the caller either reads data() or sends
         // it again. A successful send can then transfer the same ownership to
@@ -520,10 +444,20 @@ napi_value create_router_recv_message_value (napi_env env,
         if (!native_message)
             return NULL;
         napi_set_named_property (env, obj, "nativeMessage", native_message);
-        napi_value rid = create_routing_id_value (env, routing_id);
+        napi_value rid = create_routing_id_value_reusing (
+          env, routing_id, cached_routing_id);
         napi_set_named_property (env, obj, "routingId", rid);
     } else {
+        // HOT PATH: a stable terminal reader asked for managed storage. Copy
+        // the single part while this recv call is already across the N-API
+        // boundary instead of returning a frame handle and crossing again
+        // from Message.data(). Multipart keeps its existing representation.
         obj = create_recv_message_value (env, routing_id, parts, part_count);
+        if (obj && routing_id.size > 0 && cached_routing_id != NULL) {
+            napi_value rid = create_routing_id_value_reusing (
+              env, routing_id, cached_routing_id);
+            napi_set_named_property (env, obj, "routingId", rid);
+        }
     }
     if (!obj)
         return NULL;
@@ -541,6 +475,83 @@ napi_value create_router_recv_message_value (napi_env env,
         napi_set_named_property (env, obj, "transportPairGeneration", pair_generation_value);
     }
     return obj;
+}
+
+int router_recv_message_value (napi_env env,
+                               void *router,
+                               int32_t flags,
+                               bool prefer_managed_single_part,
+                               napi_value cached_routing_id,
+                               napi_value *out)
+{
+    const zlink_routing_id_t *peer_rid_ptr = NULL;
+    zlink_routing_id_t peer_rid;
+    uint64_t request_seq = 0;
+    uint64_t transport_pair_id = 0;
+    uint64_t transport_pair_generation = 0;
+    zlink_msg_t first_part;
+    if (zlink_msg_init (&first_part) != 0)
+        return ZLINK_RECV_INTERNAL_ERROR;
+    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+
+    const int rc = zlink_router_recv_part_v2 (
+      router, &peer_rid_ptr, &request_seq, &transport_pair_id,
+      &transport_pair_generation, &first_part, &has_more,
+      static_cast<zlink_recv_flags_t> (flags));
+    if (rc != ZLINK_RECV_OK) {
+        zlink_msg_close (&first_part);
+        return rc;
+    }
+    copy_routing_id (&peer_rid, peer_rid_ptr);
+
+    if (!has_more) {
+        // HOT PATH: routed perf and ordinary RPCs are usually one-part.
+        // Avoid constructing a heap-backed vector before moving the frame to
+        // its JS owner; multipart receives retain the generic path below.
+        *out = create_router_recv_message_value (
+          env, peer_rid, request_seq, transport_pair_id, transport_pair_generation,
+          &first_part, 1, prefer_managed_single_part, cached_routing_id);
+        zlink_msg_close (&first_part);
+        return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
+    }
+
+    std::vector<zlink_msg_t> parts;
+    if (!append_msg_move (&parts, &first_part)) {
+        zlink_msg_close (&first_part);
+        errno = ENOMEM;
+        return ZLINK_RECV_INTERNAL_ERROR;
+    }
+    while (has_more) {
+        const zlink_routing_id_t *next_peer_rid = NULL;
+        uint64_t next_request_seq = 0;
+        zlink_msg_t next_part;
+        if (zlink_msg_init (&next_part) != 0) {
+            close_msg_vector (parts);
+            return ZLINK_RECV_INTERNAL_ERROR;
+        }
+        zlink_part_flag_t more = ZLINK_PART_FINAL;
+        const int next_rc = zlink_router_recv_part (
+          router, &next_peer_rid, &next_request_seq, &next_part, &more,
+          ZLINK_RECV_FLAGS_DONTWAIT);
+        if (next_rc != ZLINK_RECV_OK) {
+            zlink_msg_close (&next_part);
+            close_msg_vector (parts);
+            return next_rc;
+        }
+        if (!append_msg_move (&parts, &next_part)) {
+            zlink_msg_close (&next_part);
+            close_msg_vector (parts);
+            errno = ENOMEM;
+            return ZLINK_RECV_INTERNAL_ERROR;
+        }
+        has_more = more;
+    }
+
+    *out = create_router_recv_message_value (
+      env, peer_rid, request_seq, transport_pair_id, transport_pair_generation,
+      parts.data (), parts.size (), prefer_managed_single_part, cached_routing_id);
+    close_msg_vector (parts);
+    return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
 }
 
 napi_value create_subscription_event_value (napi_env env,
@@ -3475,48 +3486,43 @@ napi_value router_completion_control_handler (
 
 napi_value router_recv_message (napi_env env, napi_callback_info info)
 {
-    napi_value argv[2];
-    size_t argc = 2;
+    napi_value argv[4];
+    size_t argc = 4;
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
     void *router = NULL;
     napi_get_value_external (env, argv[0], &router);
     int32_t flags = 0;
     if (argc >= 2)
         napi_get_value_int32 (env, argv[1], &flags);
+    bool prefer_managed_single_part = false;
+    if (argc >= 3)
+        napi_get_value_bool (env, argv[2], &prefer_managed_single_part);
+    napi_value cached_routing_id = argc >= 4 ? argv[3] : NULL;
 
-    zlink_routing_id_t peer_rid;
-    uint64_t request_seq = 0;
-    uint64_t transport_pair_id = 0;
-    uint64_t transport_pair_generation = 0;
-    std::vector<zlink_msg_t> parts;
-    int rc = router_recv_parts (router, &peer_rid, &request_seq, &parts, flags,
-                                &transport_pair_id, &transport_pair_generation);
+    napi_value out = NULL;
+    const int rc = router_recv_message_value (
+      env, router, flags, prefer_managed_single_part, cached_routing_id, &out);
     if (rc != ZLINK_RECV_OK)
         return throw_last_error (env, "routerRecvMessage failed");
-
-    napi_value out =
-      create_router_recv_message_value (env, peer_rid, request_seq, transport_pair_id,
-                                        transport_pair_generation, parts.data (), parts.size ());
-    close_msg_vector (parts);
     return out;
 }
 
 napi_value router_try_recv_message (napi_env env, napi_callback_info info)
 {
-    napi_value argv[1];
-    size_t argc = 1;
+    napi_value argv[3];
+    size_t argc = 3;
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
     void *router = NULL;
     napi_get_value_external (env, argv[0], &router);
+    bool prefer_managed_single_part = false;
+    if (argc >= 2)
+        napi_get_value_bool (env, argv[1], &prefer_managed_single_part);
+    napi_value cached_routing_id = argc >= 3 ? argv[2] : NULL;
 
-    zlink_routing_id_t peer_rid;
-    uint64_t request_seq = 0;
-    uint64_t transport_pair_id = 0;
-    uint64_t transport_pair_generation = 0;
-    std::vector<zlink_msg_t> parts;
-    int rc = router_recv_parts (router, &peer_rid, &request_seq, &parts,
-                                ZLINK_RECV_FLAGS_DONTWAIT,
-                                &transport_pair_id, &transport_pair_generation);
+    napi_value out = NULL;
+    const int rc = router_recv_message_value (
+      env, router, ZLINK_RECV_FLAGS_DONTWAIT, prefer_managed_single_part,
+      cached_routing_id, &out);
     if (rc != ZLINK_RECV_OK) {
         if (zlink_errno () == EAGAIN) {
             napi_value none;
@@ -3526,10 +3532,6 @@ napi_value router_try_recv_message (napi_env env, napi_callback_info info)
         return throw_last_error (env, "routerRecvMessageNoWait failed");
     }
 
-    napi_value out =
-      create_router_recv_message_value (env, peer_rid, request_seq, transport_pair_id,
-                                        transport_pair_generation, parts.data (), parts.size ());
-    close_msg_vector (parts);
     return out;
 }
 

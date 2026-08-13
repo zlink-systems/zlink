@@ -21,8 +21,17 @@ export interface SocketNativeBinding {
   handleGetRoutingId: (handle: NativeHandle) => Buffer;
   handleSetRoutingId: (handle: NativeHandle, routingId: Buffer) => void;
   monitorOpen: (socket: NativeHandle, eventMask: number) => NativeHandle;
-  routerRecvMessage: (socket: NativeHandle, flags: number) => NativeReceivedRaw | null;
-  routerRecvMessageNoWait: (socket: NativeHandle) => NativeReceivedRaw | null;
+  routerRecvMessage: (
+    socket: NativeHandle,
+    flags: number,
+    preferManagedSinglePart?: boolean,
+    cachedRoutingId?: Buffer | null
+  ) => NativeReceivedRaw | null;
+  routerRecvMessageNoWait: (
+    socket: NativeHandle,
+    preferManagedSinglePart?: boolean,
+    cachedRoutingId?: Buffer | null
+  ) => NativeReceivedRaw | null;
   routerReply: (
     socket: NativeHandle,
     peerRid: Buffer,

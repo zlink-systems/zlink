@@ -5,6 +5,7 @@
 #include "addon_common_api.h"
 
 #include <atomic>
+#include <cstring>
 #include <new>
 #include <vector>
 
@@ -253,6 +254,27 @@ inline napi_value create_routing_id_value (napi_env env, const zlink_routing_id_
         return none;
     }
     return create_buffer_copy_or_empty (env, rid.data, rid.size);
+}
+
+inline napi_value create_routing_id_value_reusing (
+  napi_env env, const zlink_routing_id_t &rid, napi_value candidate)
+{
+    if (candidate != NULL && rid.size > 0) {
+        bool is_buffer = false;
+        if (napi_is_buffer (env, candidate, &is_buffer) == napi_ok && is_buffer) {
+            void *data = NULL;
+            size_t size = 0;
+            if (napi_get_buffer_info (env, candidate, &data, &size) == napi_ok
+                && size == rid.size
+                && std::memcmp (data, rid.data, size) == 0) {
+                // HOT PATH: stable routed peers repeat the same small identity
+                // on every receive. Reuse the caller-held Buffer after byte
+                // validation instead of allocating and copying it again.
+                return candidate;
+            }
+        }
+    }
+    return create_routing_id_value (env, rid);
 }
 
 enum message_snapshot_flags_t
