@@ -17,6 +17,7 @@ import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.SocketType;
 import systems.zlink.perf.PerfControl;
+import systems.zlink.perf.PerfMessageTemplatePool;
 import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfUtil;
 import java.nio.charset.StandardCharsets;
@@ -209,9 +210,6 @@ final class PerfMultiRouterRouter {
         Message[] payloads = new Message[n];
         boolean[] waitingReply = new boolean[n];
         boolean[] waitingWritable = new boolean[n];
-        for (int i = 0; i < n; i++) {
-            payloads[i] = PerfUtil.payloadTemplate(msgSize);
-        }
         List<systems.zlink.contracts.sockets.Socket> socketsAsBase = new ArrayList<>(n);
         for (RouterSocket c : clients) {
             socketsAsBase.add(c);
@@ -222,7 +220,9 @@ final class PerfMultiRouterRouter {
         // avoiding the per-recv Received + ArrayList allocation.
         systems.zlink.contracts.messaging.Received replyBuffer = new systems.zlink.contracts.messaging.Received();
         try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
-                socketsAsBase, PollEventFlags.POLLIN)) {
+                socketsAsBase, PollEventFlags.POLLIN);
+             PerfMessageTemplatePool payloadPool = new PerfMessageTemplatePool(
+                 msgSize, Math.max(4, n * 2))) {
             long activeEnd = System.nanoTime()
                 + (long) durationSeconds * 1_000_000_000L;
             while (System.nanoTime() < activeEnd) {
@@ -230,8 +230,12 @@ final class PerfMultiRouterRouter {
                 for (int i = 0; i < n; i++) {
                     int idx = (startIndex + i) % n;
                     if (waitingReply[idx] || waitingWritable[idx]) continue;
-                    payloads[idx] = PerfUtil.resetAndWritePayload(payloads[idx], msgSize,
-                        (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
+                    payloads[idx] = payloadPool.acquire(msgSize,
+                        (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime(),
+                        activeEnd);
+                    if (payloads[idx] == null) {
+                        break;
+                    }
                     if (trySendPayload(clients.get(idx), payloads[idx])) {
                         waitingReply[idx] = true;
                     } else {
@@ -267,7 +271,7 @@ final class PerfMultiRouterRouter {
                 }
             }
             replyBuffer.close();
-            Message.closeAll(List.of(payloads));
+            Message.closeAll(payloads);
             // C routed echo ends the relay through the runner control path.
             // Do not inject an extra routed stop frame after active traffic.
         }
