@@ -47,7 +47,7 @@ pattern·transport 평균은 최소 기준과 중앙값 목표를 함께 판정�
 | .NET | 전체 | 전체 | 재측정 대기 | - | - | 진행 중 |
 | .NET | `MULTI_DEALER_DEALER` | tcp | 33.59 / 58.56 / 148.39 / 78.57 / 137.74 / 91.77% | 91.44% | 64% / 85% | 중앙값 통과 |
 | .NET | `MULTI_PUBSUB` | tcp | 57.26 / 65.57 / 66.18 / 82.40 / 93.94 / 99.69% | 77.51% | 64% / 85% | 최소 통과, 중앙값 미달 |
-| Java | `MULTI_DEALER_DEALER` | tcp | 63.11 / 79.38 / 92.08 / 56.69 / 53.26 / 75.68% | 70.03% | 70% / 90% | 최소 통과, 중앙값 미달 |
+| Java | `MULTI_DEALER_DEALER` | tcp | 51.97 / 69.07 / 94.88 / 84.75 / 105.66 / 86.39% | 82.12% | 70% / 90% | 최소 통과, 중앙값 미달 |
 | Java | `MULTI_DEALER_ROUTER_REQREP` | tcp | 57.85 / 60.72 / 60.08 / 85.05 / 140.45 / 108.90% | 85.51% | 50% / 70% | 중앙값 통과 |
 | Java | `MULTI_DEALER_ROUTER_SENDSEND` | tcp | 68.65 / 69.48 / 69.41 / 73.75 / 141.34 / 103.96% | 87.77% | 75% / 85% | 중앙값 통과 |
 | Java | `MULTI_PUBSUB` | tcp | 64.14 / 62.78 / 67.31 / 52.90 / 66.90 / 67.42% | 63.57% | 70% / 90% | 최소 미달 |
@@ -64,6 +64,18 @@ Java 공개 API 경로 재측정 결과는
 결과는 `log/2026-08-12-node-pubsub-poll-parity.ko.md`에 있다.
 Java multi runner는 `log/2026-08-13-java-native-poller-parity.ko.md`부터 C와 같이
 native ready event를 직접 읽고 해당 socket을 `DONT_WAIT`로 drain한다.
+
+## 언어별 현재 평균
+
+아래 평균은 위 표에서 완료된 TCP pattern 평균을 같은 가중치로 계산한 값이다. 아직
+`재측정 대기`인 transport와 pattern은 포함하지 않는다.
+
+| 언어 | 포함 pattern 수 | C 대비 단순평균 |
+|---|---:|---:|
+| C++ | 9 | 96.93% |
+| .NET | 2 | 84.48% |
+| Java | 5 | 81.01% |
+| Node | 5 | 49.46% |
 
 ## 완료 조건
 
