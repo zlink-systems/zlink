@@ -131,7 +131,7 @@ copy_public_headers() {
   mkdir -p "${dir}"
   mkdir -p "${dir}/zlink"
 
-  # Core 0.10.1 owns only the raw C headers. Remove the retired service tree and
+  # Core 0.11.0 owns only the raw C headers. Remove the retired service tree and
   # replace each Core-owned lowercase group without touching binding-owned
   # trees such as the C++ Contracts directory.
   rm -rf "${dir}/zlink/service"

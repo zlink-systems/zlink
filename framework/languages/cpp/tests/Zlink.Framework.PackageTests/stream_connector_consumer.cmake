@@ -62,7 +62,7 @@ foreach(required_path IN ITEMS
     "${consumer_install_prefix}/lib/libzlink_stream_connector.a"
     "${consumer_install_prefix}/lib/libzlink_cpp.a"
     "${consumer_install_prefix}/lib/liblz4.a"
-    "${consumer_install_prefix}/lib/libzlink.so.0.10.1")
+    "${consumer_install_prefix}/lib/libzlink.so.0.11.0")
   if(NOT EXISTS "${required_path}")
     message(FATAL_ERROR "stream connector component is missing: ${required_path}")
   endif()

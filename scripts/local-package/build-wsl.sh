@@ -15,7 +15,7 @@ usage() {
 Usage: build-wsl.sh [options] [c] [cpp] [dotnet] [go] [java] [node] [python] [rust]
 
 With no language arguments, builds all eight first-party bindings at version
-0.10.1 into .artifacts/wsl. By default the exact Core release is downloaded
+0.11.0 into .artifacts/wsl. By default the exact Core release is downloaded
 and verified; set --core-source local when testing an in-progress Core build.
 
 Options:

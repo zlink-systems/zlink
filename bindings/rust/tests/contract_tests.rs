@@ -192,7 +192,7 @@ fn routing_id_max_length() {
 #[test]
 fn version_returns_valid_triple() {
     let (major, minor, patch) = version();
-    assert_eq!((major, minor, patch), (0, 10, 1));
+    assert_eq!((major, minor, patch), (0, 11, 0));
 }
 
 #[test]
