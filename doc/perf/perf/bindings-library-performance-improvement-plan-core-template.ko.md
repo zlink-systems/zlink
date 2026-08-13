@@ -385,7 +385,8 @@ canonical reference runner다. 선택한 하나의 비교 대상은 다음 의�
 - throughput, 평균 latency, p95/p99의 산출 방식과 runs 중앙값 집계
 - latency sample cap 기본값 1,000,000, `0`일 때 percentile sample 미보관, 전체 count·sum
   집계, C reference와 동일한 bounded reservoir 교체 알고리즘과 percentile 보간
-- 고정한 Core release runtime, auto-HWM message unit, I/O thread 수, client 수와 timeout
+- 고정한 Core release runtime, auto-HWM profile과 적용 `SNDHWM`·`RCVHWM`, I/O thread 수,
+  client 수와 timeout
 
 위 항목 중 하나라도 C와 binding에서 다르면 수치는 비교 자료로만 남기고 기준값이나
 통과 판정에 사용하지 않는다. 정책과 reference runner를 수정한 경우에는 같은
@@ -635,7 +636,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 - 평균 latency 비율과 개별 반복값. p95와 p99는 진단 자료로만 기록한다.
 - throughput과 평균 latency의 원시 반복값
 - Effective Options 일치 여부
-- auto-HWM의 `MsgUnit(B)` 일치 여부
+- auto-HWM profile과 적용 `SNDHWM`·`RCVHWM`
 - 실제 client 수, STREAM client 수, memory guard cap 발생 여부
 - 반복 측정값과 최종 판정
 - 필요한 경우 판정에 사용하지 않은 진단값과 제외 이유

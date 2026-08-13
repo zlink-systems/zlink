@@ -24,7 +24,7 @@
 - 측정 전에는 C runner, binding runner, `doc/perf` 정책 문서, 이 시트의 pattern·transport·size·client 수를 대조한다. binding runner에 실제로 등록되지 않은 pattern은 `미지원`으로 표시한다.
 - 실제 Core runtime 버전은 runner 또는 binding public version API와 `share/zlink/core-package-provenance.json`으로 확인한다. 이전 local package, 오래된 runtime, source build 결과를 기준값으로 사용하지 않는다.
 - C와 binding report가 모두 `status: complete`이고 같은 session 조건을 가질 때만 공식 비교와 표 갱신에 사용한다. timeout, runtime mismatch, message size·client 수 불일치는 성능 판정이 아니라 측정 조건 오류다.
-- Effective Options, 실제 client 수, I/O thread 수, auto-HWM의 `MsgUnit(B)`, memory guard cap 발생 여부를 C와 binding에서 함께 확인한다. 무시되는 runner option이나 한쪽에만 적용된 cap이 있으면 그 결과를 paired 비교에 사용하지 않는다.
+- Effective Options, 실제 client 수, I/O thread 수, auto-HWM profile과 적용 `SNDHWM`·`RCVHWM`, memory guard cap 발생 여부를 C와 binding에서 함께 확인한다. 무시되는 runner option이나 한쪽에만 적용된 cap이 있으면 그 결과를 paired 비교에 사용하지 않는다.
 - perf harness는 C와 의미가 다르거나 실제 버그 또는 정책 위반이 있을 때만 수정한다. throughput을 높이기 위해 public API를 우회하거나 C API를 직접 호출하거나, timeout·sleep·retry를 늘리거나, client 수를 줄이지 않는다.
 - 개선 전후 비교는 같은 Core release runtime, host session, transport·pattern·size 조건으로 실행한다. Core release, package provenance, host boot 또는 성능 관련 환경이 바뀌면 C 기준을 다시 측정한다.
 - `log/`에는 paired C·binding 원본 수치, 계산 결과, 개선 전후 비교와 최종 판정만 남긴다.
