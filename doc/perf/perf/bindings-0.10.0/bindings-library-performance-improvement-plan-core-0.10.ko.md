@@ -65,7 +65,7 @@ pattern·transport 평균은 최소 기준과 중앙값 목표를 함께 판정�
 | Java | `MULTI_DEALER_ROUTER_REQREP` | tcp | 57.85 / 60.72 / 60.08 / 85.05 / 140.45 / 108.90% | 85.51% | 50% / 70% | 중앙값 통과 |
 | Java | `MULTI_DEALER_ROUTER_REQREP` | tls | 67.10 / 58.60 / 64.78 / 69.08 / 163.30 / 81.78% | 84.11% | 50% / 70% | 중앙값 통과 |
 | Java | `MULTI_DEALER_ROUTER_REQREP` | ws | 67.26 / 71.06 / 68.51 / 66.37 / 80.16 / 78.82% | 72.03% | 50% / 70% | 중앙값 통과 |
-| Java | `MULTI_DEALER_ROUTER_REQREP` | wss | 64.30 / 61.32 / 67.17 / 68.65 / 77.71 / 69.46% | 68.10% | 50% / 70% | 최소 통과, 중앙값 미달, 보류 |
+| Java | `MULTI_DEALER_ROUTER_REQREP` | wss | 69.71 / 183.67 / 62.05 / 70.44 / 78.90 / 80.91% | 90.94% | 50% / 70% | 중앙값 통과 |
 | Java | `MULTI_DEALER_ROUTER_SENDSEND` | tcp | 68.65 / 69.48 / 69.41 / 73.75 / 141.34 / 103.96% | 87.77% | 75% / 85% | 중앙값 통과 |
 | Java | `MULTI_DEALER_ROUTER_SENDSEND` | tls | 84.84 / 105.18 / 79.15 / 78.41 / 96.98 / 93.19% | 89.63% | 75% / 85% | 중앙값 통과 |
 | Java | `MULTI_DEALER_ROUTER_SENDSEND` | ws | 83.19 / 76.00 / 78.10 / 72.83 / 96.73 / 96.04% | 83.81% | 75% / 85% | 최소 통과, 중앙값 미달 |
@@ -119,7 +119,7 @@ Java multi runner는 public `Poller`와 재사용 `PollEvents`로 C와 같은 �
 |---|---:|---:|
 | C++ | 13 | 97.60% |
 | .NET | 9 | 94.52% |
-| Java | 25 | 81.97% |
+| Java | 25 | 82.88% |
 | Node | 20 | 60.87% |
 
 ## 완료 조건
