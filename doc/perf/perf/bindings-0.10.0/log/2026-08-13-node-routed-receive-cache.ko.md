@@ -46,9 +46,13 @@ Buffer로 materialize한다. 그 외에는 native frame을 유지해 unread rela
 | `MULTI_DEALER_DEALER` | 41.93% | 최소 기준 35% 통과, 중앙값 목표 60% 미달 |
 | `MULTI_PUBSUB` | 40.07% | 최소 기준 35% 통과, 중앙값 목표 60% 미달 |
 | `MULTI_ROUTER_ROUTER_SENDSEND` | 40.18% | 최소 기준 30% 통과, 중앙값 목표 60% 미달 |
+| `MULTI_STREAM` | 59.69% | 최소 기준 30% 통과, 중앙값 목표 60% 미달 |
 
 PUB/SUB 전체 run의 65536B case는 Core mutex `Invalid argument`으로 실패했다. 같은 조건의
 단독 실행은 35,883.0 msg/s로 완료했고, 표에는 이 결과를 사용했다.
+
+STREAM C report: `/tmp/zlink-node22-stream-final-c/multi/report/perf_c_multi_linux_20260813_212342_node22-stream-final-c.txt`
+Node report: `/tmp/zlink-node22-stream-final/multi/report/perf_node_multi_linux_20260813_212432_node22-stream-final.txt`
 
 ## 검증
 

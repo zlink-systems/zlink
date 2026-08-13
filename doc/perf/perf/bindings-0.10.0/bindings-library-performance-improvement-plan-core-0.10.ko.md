@@ -56,7 +56,8 @@ pattern·transport 평균은 최소 기준과 중앙값 목표를 함께 판정�
 | Node | `MULTI_DEALER_DEALER` | tcp | 27.17 / 39.57 / 31.30 / 48.56 / 42.68 / 62.30% | 41.93% | 35% / 60% | 최소 통과, 중앙값 미달 |
 | Node | `MULTI_DEALER_ROUTER_SENDSEND` | tcp | 61.09 / 57.18 / 58.10 / 64.00 / 78.35 / 73.78% | 65.42% | 33% / 60% | 중앙값 통과 |
 | Node | `MULTI_ROUTER_ROUTER_SENDSEND` | tcp | 45.77 / 37.66 / 29.97 / 30.23 / 48.36 / 49.09% | 40.18% | 30% / 60% | 최소 통과, 중앙값 미달 |
-| Node | 나머지 | 전체 | 재측정 대기 | - | - | 진행 중 |
+| Node | `MULTI_STREAM` | tcp | 48.13 / 49.71 / 50.61 / 90.29% | 59.69% | 30% / 60% | 최소 통과, 중앙값 미달 |
+| Node | non-tcp | 전체 | 재측정 대기 | - | - | 진행 중 |
 
 Java 공개 API 경로 재측정 결과는
 `log/2026-08-13-java-public-api-policy-audit.ko.md`에 있다. Node PUB/SUB의 C parity
