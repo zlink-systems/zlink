@@ -38,7 +38,7 @@ Runner는 Caller, Mesh target과 classic fanout publisher를 서로 다른 proce
 
 ```bash
 ZLINK_LOCAL_PACKAGE_ROOT=/path/to/candidate \
-ZLINK_CORE_PACKAGE_PREFIX=/path/to/approved/zlink-core/0.10.1 \
+ZLINK_CORE_PACKAGE_PREFIX=/path/to/approved/zlink-core/0.11.0 \
 ZLINK_CORE_PACKAGE_EVIDENCE=/path/to/core-package-20260801.json \
   ./framework/languages/java/e2e/SubmitAdmission/run_e2e.sh all
 

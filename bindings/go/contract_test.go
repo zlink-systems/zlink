@@ -16,8 +16,8 @@ import (
 
 func TestRuntimeVersionIsAvailable(t *testing.T) {
 	version := zlink.RuntimeVersion()
-	if version.Major != 0 || version.Minor != 10 || version.Patch != 1 {
-		t.Fatalf("RuntimeVersion() = %d.%d.%d, want 0.10.1", version.Major, version.Minor, version.Patch)
+	if version.Major != 0 || version.Minor != 11 || version.Patch != 0 {
+		t.Fatalf("RuntimeVersion() = %d.%d.%d, want 0.11.0", version.Major, version.Minor, version.Patch)
 	}
 }
 
@@ -49,8 +49,8 @@ func TestDirectCommonHeaderVersionMatchesPackage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preprocess zlink/common.h: %v\n%s", err, output)
 	}
-	if got := lastNonEmptyLine(string(output)); got != "1" {
-		t.Fatalf("ZLINK_VERSION_PATCH from direct zlink/common.h include = %q, want 1", got)
+	if got := lastNonEmptyLine(string(output)); got != "0" {
+		t.Fatalf("ZLINK_VERSION_PATCH from direct zlink/common.h include = %q, want 0", got)
 	}
 }
 

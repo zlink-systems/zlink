@@ -67,7 +67,7 @@ function forbiddenPackageExports(exportsValue) {
     const packageJson = JSON.parse(node_fs_1.default.readFileSync(node_path_1.default.resolve(__dirname, '../../package.json'), 'utf8'));
     strict_1.default.deepEqual(forbiddenPackageExports(packageJson.exports), []);
 });
-(0, node_test_1.default)('bindings samples stay on the Core 0.10.1 raw socket boundary', () => {
+(0, node_test_1.default)('bindings samples stay on the Core 0.11.0 raw socket boundary', () => {
     const sampleRoots = [
         node_path_1.default.resolve(__dirname, '../../samples'),
         node_path_1.default.resolve(__dirname, '../../../javascript/samples')

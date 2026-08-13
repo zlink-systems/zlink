@@ -9,8 +9,8 @@ zlink_cpp_sample_prepare_build() {
   # versions and dependency prefixes are fixed by that tree's cache so a
   # sample cannot silently create or select a second build provenance.
   BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-$cpp_root/build}"
-  local cpp_version="0.10.1"
-  local core_version="0.10.1"
+  local cpp_version="0.11.0"
+  local core_version="0.11.0"
   local dependency_prefix=""
   local toolchain_file=""
   local build_type="Release"
