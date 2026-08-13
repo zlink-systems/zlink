@@ -15,6 +15,7 @@ import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.runtime.nativeapi.Native;
 import systems.zlink.runtime.nativeapi.NativeErrno;
 import systems.zlink.runtime.nativeapi.RequestReplySupport;
+import systems.zlink.runtime.nativeapi.RequestProgressPump;
 import systems.zlink.runtime.nativeapi.RoutedRequestSupport;
 
 final class RequestSubmitLoop {
@@ -67,13 +68,21 @@ final class RequestSubmitLoop {
                                   BiConsumer<RequestResult, List<Message>> callback,
                                   RequestSubmission submission) {
         long requestId = RoutedRequestSupport.nextRequestId();
-        CompletableFuture<Void> progress =
-            RoutedRequestSupport.registerDirectPending(requestId, callback);
+        boolean callerOwnsProgress =
+            RequestProgressPump.hasExternalProgress(socketHandle);
+        CompletableFuture<Void> progress = callerOwnsProgress ? null
+            : RoutedRequestSupport.registerDirectPending(requestId, callback);
+        if (callerOwnsProgress) {
+            RoutedRequestSupport.registerDirectPendingWithoutProgress(requestId,
+                callback);
+        }
         try {
             submission.submit(RoutedRequestSupport.replyCallback(),
                 RoutedRequestSupport.userData(requestId));
-            RequestReplySupport.startSocketRequestProgress(progress,
-                socketHandle, progressLabel);
+            if (progress != null) {
+                RequestReplySupport.startSocketRequestProgress(progress,
+                    socketHandle, progressLabel);
+            }
             return true;
         } catch (ZlinkSubmitException ex) {
             RoutedRequestSupport.removeDirectPending(requestId);

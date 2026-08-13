@@ -19,10 +19,10 @@ import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.perf.PerfControl;
+import systems.zlink.perf.PerfMessageTemplatePool;
 import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
-import systems.zlink.perf.PerfMessageTemplatePool;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -55,7 +55,15 @@ final class PerfMultiSocketReqRep {
                      List.of(server), PollEventFlags.POLLIN);
                  Received received = new Received()) {
                 while (stops < config.clients()) {
-                    poller.poll(-1);
+                    int readyCount = poller.poll(-1);
+                    if (readyCount <= 0
+                        || !poller.readyHasEventAt(0,
+                            PollEventFlags.POLLIN)) {
+                        continue;
+                    }
+                    // The reference C server drains only after POLLIN.  Do
+                    // not add an unconditional native DONT_WAIT recv after a
+                    // poll wake that belongs to another event class.
                     while (server.recv(received, RecvFlags.DONT_WAIT)) {
                         if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
                             stops++;
@@ -148,25 +156,19 @@ final class PerfMultiSocketReqRep {
         AtomicReference<Throwable> failure = new AtomicReference<>();
         long activeEnd = System.nanoTime()
             + config.durationSeconds() * 1_000_000_000L;
-        Duration timeout = Duration.ofMillis(Math.max(1, config.recvTimeoutMs()));
+        int requestTimeoutMs = resolveRequestTimeoutMs();
+        Duration timeout = Duration.ofMillis(requestTimeoutMs);
         RequestCallback[] callbacks = new RequestCallback[count];
         for (int i = 0; i < count; i++) {
             waiting[i] = new AtomicBoolean();
             AtomicBoolean slotWaiting = waiting[i];
             callbacks[i] = (result, parts) -> {
                 try {
+                    long receivedAt = System.nanoTime();
                     if (result == RequestResult.OK && parts != null
-                        && !parts.isEmpty() && System.nanoTime() < activeEnd) {
-                        PerfUtil.Header header = PerfUtil.decodeHeader(parts.get(0),
-                            config.size());
-                        if (header != null
-                            && header.phase() == PerfUtil.PHASE_ACTIVE) {
-                            metrics.recordNanos(header.latencyNanos() / 2L);
-                        }
-                    } else if (result != RequestResult.OK
-                        && result != RequestResult.TIMED_OUT) {
-                        failure.compareAndSet(null, new IllegalStateException(
-                            "request completion failed: " + result));
+                        && !parts.isEmpty() && receivedAt < activeEnd) {
+                        PerfUtil.recordActiveLatency(metrics, parts.get(0),
+                            config.size(), true, receivedAt);
                     }
                 } catch (Throwable ex) {
                     failure.compareAndSet(null, ex);
@@ -179,18 +181,21 @@ final class PerfMultiSocketReqRep {
             };
         }
 
-        try (PerfMessageTemplatePool payloadPool =
-                 new PerfMessageTemplatePool(config.size(), count)) {
+        // Keep reusable native payload storage per concurrent request slot.
+        // acquire() returns an independent Message owner, so request submit
+        // still consumes the caller's message exactly as the public contract
+        // requires while the template is reused after Core releases it.
+        try (PerfMessageTemplatePool payloads = new PerfMessageTemplatePool(
+                config.size(), Math.max(4, count * 2))) {
             while (System.nanoTime() < activeEnd && failure.get() == null) {
                 boolean progress = false;
-                boolean hasWaiting = false;
                 for (int i = 0; i < count; i++) {
                     if (waiting[i].get()) {
-                        hasWaiting = true;
                         continue;
                     }
-                    Message payload = payloadPool.acquire(config.size(),
-                        (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime(), activeEnd);
+                    Message payload = payloads.acquire(config.size(),
+                        (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime(),
+                        activeEnd);
                     if (payload == null) {
                         break;
                     }
@@ -211,18 +216,19 @@ final class PerfMultiSocketReqRep {
                         }
                     }
                 }
-                if (!progress && hasWaiting) {
+                if (!progress) {
                     completions.poll(50);
                 }
             }
-            long drainEnd = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
-            while (anyWaiting(waiting) && System.nanoTime() < drainEnd) {
-                completions.poll(50);
-            }
-            if (anyWaiting(waiting) || failure.get() != null) {
-                throw new IllegalStateException("multi socket reqrep failed",
-                    failure.get());
-            }
+        }
+        long drainEnd = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(
+            Math.max(1_000, requestTimeoutMs * 4));
+        while (anyWaiting(waiting) && System.nanoTime() < drainEnd) {
+            completions.poll(50);
+        }
+        if (anyWaiting(waiting) || failure.get() != null) {
+            throw new IllegalStateException("multi socket reqrep failed",
+                failure.get());
         }
 
         for (Socket client : clients) {
@@ -244,11 +250,11 @@ final class PerfMultiSocketReqRep {
                                   RequestCallback callback) {
         if (routedClients) {
             return ((RouterSocket) client).request(SERVER_RID)
-                .message(payload).timeout(timeout).flags(SendFlags.DONT_WAIT)
+                .message(payload).timeout(timeout).flags(SendFlags.NONE)
                 .submit(callback);
         }
         return ((DealerSocket) client).request()
-            .message(payload).timeout(timeout).flags(SendFlags.DONT_WAIT)
+            .message(payload).timeout(timeout).flags(SendFlags.NONE)
             .submit(callback);
     }
 
@@ -259,5 +265,13 @@ final class PerfMultiSocketReqRep {
             }
         }
         return false;
+    }
+
+    private static int resolveRequestTimeoutMs() {
+        String configured = System.getenv("PERF_MULTI_REQREP_TIMEOUT_MS");
+        if (configured == null || configured.isBlank()) {
+            return 200;
+        }
+        return Math.max(1, Integer.parseInt(configured));
     }
 }

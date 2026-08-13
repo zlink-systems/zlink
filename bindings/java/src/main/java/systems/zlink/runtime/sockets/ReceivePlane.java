@@ -21,6 +21,10 @@ import systems.zlink.runtime.nativeapi.NativeRoutingIds;
 import systems.zlink.runtime.nativeapi.RecvScratch;
 
 final class ReceivePlane {
+    // HOT PATH: resolve the contract bridge once. Each nonblocking frame then
+    // writes caller-owned Received storage without a volatile lookup.
+    private static final ContractAccess.ReceivedAccess RECEIVED_ACCESS =
+        ContractAccess.receivedAccessForRuntime();
     private final NativeSocketRuntime socket;
     private final ThreadLocal<MultipartReceiveState> multipartReceiveState =
         ThreadLocal.withInitial(MultipartReceiveState::new);
@@ -34,16 +38,16 @@ final class ReceivePlane {
     boolean recvInto(Received result, ReceiveFlag flags) {
         Objects.requireNonNull(result, "result");
         Objects.requireNonNull(flags, "flags");
-        if (flags == ReceiveFlag.DONTWAIT
-            && !multipartReceiveState.get().hasPending()) {
-            return recvIntoNoWait(result);
+        MultipartReceiveState state = multipartReceiveState.get();
+        if (flags == ReceiveFlag.DONTWAIT && !state.hasPending()) {
+            return recvIntoNoWait(result, state);
         }
         Message frame = nextRecvFrame(flags, flags == ReceiveFlag.DONTWAIT);
         if (frame == null) {
             return false;
         }
         if (!frame.more()) {
-            ContractAccess.receivedPopulateRoutedSinglePart(result, null, frame,
+            RECEIVED_ACCESS.populateRoutedSinglePart(result, null, frame,
                 0L, false, null, null);
             return true;
         }
@@ -152,7 +156,11 @@ final class ReceivePlane {
     }
 
     void prepareRecvLikeOperation() {
-        multipartReceiveState.get().closeRemaining();
+        prepareRecvLikeOperation(multipartReceiveState.get());
+    }
+
+    private void prepareRecvLikeOperation(MultipartReceiveState state) {
+        state.closeRemaining();
         Received active = activeLazyReceive.get();
         if (active != null) {
             InternalAccess.receivedForceMaterialize(active);
@@ -180,8 +188,9 @@ final class ReceivePlane {
         return multipartReceiveState.get().pendingCount();
     }
 
-    private boolean recvIntoNoWait(Received result) {
-        prepareRecvLikeOperation();
+    private boolean recvIntoNoWait(Received result,
+                                   MultipartReceiveState state) {
+        prepareRecvLikeOperation(state);
         RecvScratch scratch = socket.recvScratch();
         while (true) {
             Message frame = InternalAccess.messageAcquireReceive();
@@ -197,7 +206,7 @@ final class ReceivePlane {
                         scratch.hasMoreOut.get(ValueLayout.JAVA_INT, 0) != 0;
                     InternalAccess.messageFinishReceive(frame, hasMore);
                     if (!hasMore) {
-                        ContractAccess.receivedPopulateRoutedSinglePart(result,
+                        RECEIVED_ACCESS.populateRoutedSinglePart(result,
                             null, frame, 0L, false, null, null);
                     } else {
                         Received fresh = InternalAccess.receivedLazy(
@@ -205,7 +214,7 @@ final class ReceivePlane {
                             new BasicReceiveCursor(
                                 ReceiveFlag.DONTWAIT.getValue()),
                             0L, false, null, null);
-                        ContractAccess.receivedAdoptFrom(result, fresh);
+                        RECEIVED_ACCESS.adoptFrom(result, fresh);
                     }
                     return true;
                 }

@@ -229,8 +229,9 @@ internal sealed partial class SocketKernel
         }
     }
 
-    private bool ReceiveSubscribedParts(int flags,
-        byte[] topicBuffer, out RoutingIdSnapshot routingId, out int topicLength,
+    private unsafe bool ReceiveSubscribedParts(int flags,
+        byte[] topicBuffer, Message reusableSinglePart,
+        out RoutingIdSnapshot routingId, out int topicLength,
         out Message? singlePart, out MultipartMessageCollection? parts,
         bool allowNoData = false)
     {
@@ -244,19 +245,58 @@ internal sealed partial class SocketKernel
         {
             while (true)
             {
+                var firstPart = nativePartCount == 0;
                 ZlinkMsg part = default;
-                var initRc = NativeMethods.zlink_msg_init(ref part);
-                if (initRc != 0)
-                    throw ZlinkException.CreateRecvException(
-                        NativeMethods.zlink_errno());
-                var initialized = true;
-                var rc = NativeMethods.zlink_subscribe_part(Handle,
-                    out var sourceRoutingId, topicBuffer,
-                    (nuint)topicBuffer.Length, out var nativeTopicLength, ref part,
-                    out var hasMore, flags);
+                var initialized = !firstPart;
+                if (!firstPart)
+                {
+                    var initRc = NativeMethods.zlink_msg_init(ref part);
+                    if (initRc != 0)
+                        throw ZlinkException.CreateRecvException(
+                            NativeMethods.zlink_errno());
+                    initialized = true;
+                }
+                int rc;
+                IntPtr sourceRoutingId;
+                nuint nativeTopicLength;
+                int hasMore;
+                if (allowNoData)
+                {
+                    // HOT PATH: ready socket drains use DONT_WAIT, so this
+                    // native call cannot wait for transport I/O or reenter
+                    // managed code. Avoid a GC transition for each frame.
+                    fixed (byte* topicId = topicBuffer)
+                    {
+                        rc = firstPart
+                            ? NativeMethods.zlink_subscribe_part_dont_wait(Handle,
+                                out sourceRoutingId, topicId,
+                                (nuint)topicBuffer.Length,
+                                out nativeTopicLength,
+                                ref reusableSinglePart.Handle, out hasMore, flags)
+                            : NativeMethods.zlink_subscribe_part_dont_wait(Handle,
+                                out sourceRoutingId, topicId,
+                                (nuint)topicBuffer.Length,
+                                out nativeTopicLength, ref part,
+                                out hasMore, flags);
+                    }
+                }
+                else
+                {
+                    rc = firstPart
+                        ? NativeMethods.zlink_subscribe_part(Handle,
+                            out sourceRoutingId, topicBuffer,
+                            (nuint)topicBuffer.Length, out nativeTopicLength,
+                            ref reusableSinglePart.Handle, out hasMore, flags)
+                        : NativeMethods.zlink_subscribe_part(Handle,
+                            out sourceRoutingId, topicBuffer,
+                            (nuint)topicBuffer.Length, out nativeTopicLength, ref part,
+                            out hasMore, flags);
+                }
                 if (rc != 0)
                 {
-                    if (initialized)
+                    if (firstPart)
+                        reusableSinglePart.CloseAfterFailedNativeReceive();
+                    else if (initialized)
                         NativeMethods.zlink_msg_close(ref part);
                     var errno = NativeMethods.zlink_errno();
                     if (allowNoData && nativePartCount == 0
@@ -267,19 +307,24 @@ internal sealed partial class SocketKernel
                 }
 
                 initialized = false;
-                if (nativePartCount == 0)
+                if (firstPart)
                 {
                     routingId = RoutingIdSnapshot.FromPointer(sourceRoutingId);
                     topicLength = checked((int)nativeTopicLength);
                 }
 
-                if (hasMore == 0 && nativePartCount == 0)
+                if (hasMore == 0 && firstPart)
                 {
-                    singlePart = Message.AdoptNativeFromPool(ref part);
+                    singlePart = reusableSinglePart;
                     return true;
                 }
 
-                AppendNativePart(ref nativeParts, ref nativePartCount, ref part);
+                if (firstPart)
+                    AppendNativePart(ref nativeParts, ref nativePartCount,
+                        ref reusableSinglePart.Handle);
+                else
+                    AppendNativePart(ref nativeParts, ref nativePartCount,
+                        ref part);
                 if (hasMore == 0)
                     break;
             }

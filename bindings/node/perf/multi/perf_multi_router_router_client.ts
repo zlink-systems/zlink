@@ -22,7 +22,6 @@ const {
   applySocketPolicy,
   emitMultiSocketHwmDetail,
   pollEvents,
-  pollEventHas,
   recvNoWaitInto,
   sendStopTokenOnce,
   trySocketSend,
@@ -62,7 +61,7 @@ async function main() {
     for (let i = 0; i < routers.length; i += 1) {
       await waitForConnectionReady(routers[i], () => routers[i].connect(options.endpoint));
       applyAutoHwmMsgUnit(ctx, options.msgSize);
-      poller.add(routers[i], pollEvents(POLLIN | POLLOUT), i);
+      poller.add(routers[i], pollEvents(POLLIN), i);
     }
     ctx.recalculateAutoHwm();
     for (const router of routers) {
@@ -81,20 +80,18 @@ async function main() {
     let seq = 1n;
 
     const drainReply = (index) => {
-      let progressed = false;
-      while (true) {
-        const echoed = replyMessages[index];
-        if (!recvNoWaitInto(routers[index], echoed)) {
-          break;
-        }
-        waiting[index] = false;
-        collector.recordPayload(echoed.parts[0].data(), currentEpochNs());
-        progressed = true;
+      const echoed = replyMessages[index];
+      if (!recvNoWaitInto(routers[index], echoed)) {
+        return false;
       }
-      return progressed;
+      waiting[index] = false;
+      collector.recordPayload(echoed.parts[0].data(), currentEpochNs());
+      // HOT PATH: each ROUTER client has one request in flight.  C waits for
+      // this socket's POLLIN event, receives one reply, then permits its next
+      // send.  Do not probe every socket with recv(DONT_WAIT) each round.
+      return true;
     };
     while (currentEpochNs() < activeStopNs) {
-      let progressed = false;
       for (let i = 0; i < routers.length; i += 1) {
         if (waiting[i] || sendPending[i]) {
           continue;
@@ -103,23 +100,27 @@ async function main() {
         const sent = trySocketSend(routers[i], SERVER_ROUTING_ID, payloads[i]);
         if (!sent) {
           sendPending[i] = true;
+          // HOT PATH: match the C requester and subscribe to POLLOUT only
+          // for a socket that actually backpressured. An always-writable
+          // socket otherwise wakes the poller while replies are pending.
+          poller.modify(routers[i], pollEvents(POLLIN | POLLOUT));
           continue;
         }
         waiting[i] = true;
         seq += 1n;
-        progressed = true;
-      }
-      for (let i = 0; i < routers.length; i += 1) {
-        progressed = drainReply(i) || progressed;
-      }
-      if (progressed) {
-        continue;
       }
 
-      // PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven `-1` wait.
+      // Match C's active window: wait only for registered socket readiness
+      // and never probe a non-ready socket through the binding boundary.
+      const remainingMs = Math.ceil(
+        (Number(activeStopNs) - Number(currentEpochNs())) / 1_000_000
+      );
+      if (remainingMs <= 0) {
+        break;
+      }
       const readyCount = poller.wait(
         pollBuffer,
-        process.platform === 'win32' ? 50 : -1
+        Math.max(1, Math.min(remainingMs, 2_147_483_647))
       );
       if (readyCount === 0) {
         continue;
@@ -129,11 +130,16 @@ async function main() {
         if (!Number.isInteger(index) || index < 0 || index >= routers.length) {
           continue;
         }
-        const event = { revents: pollBuffer.revents(offset) };
-        if (pollEventHas(event, POLLOUT)) {
+        // HOT PATH: PollEvents already exposes the Core event mask. Avoid a
+        // per-ready-event wrapper allocation before the C-equivalent drain.
+        const revents = pollBuffer.revents(offset);
+        if ((revents & POLLOUT) !== 0) {
           sendPending[index] = false;
+          // The next send is attempted eagerly; until it backpressures again,
+          // only a reply should wake the socket's poll registration.
+          poller.modify(routers[index], pollEvents(POLLIN));
         }
-        if (pollEventHas(event, POLLIN)) {
+        if ((revents & POLLIN) !== 0) {
           drainReply(index);
         }
       }

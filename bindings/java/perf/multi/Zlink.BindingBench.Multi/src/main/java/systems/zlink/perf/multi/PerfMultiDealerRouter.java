@@ -19,7 +19,6 @@ import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.perf.PerfControl;
 import systems.zlink.perf.PerfSocketPollSet;
-import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
 import java.time.Duration;
 import java.nio.charset.StandardCharsets;
@@ -27,6 +26,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 final class PerfMultiDealerRouter {
     private static final MonitorEventType READY_EVENT =
@@ -36,6 +36,7 @@ final class PerfMultiDealerRouter {
     }
 
     static PerfUtil.Result runServer(PerfUtil.Config config) {
+        AtomicBoolean stopRequested = PerfControl.watchStopSignal("dealer-router server");
         try (Context ctx = PerfUtil.newContext(config);
              RouterSocket server = ctx.createRouterSocket();
              var monitor = server.monitorOpen(MonitorEventType.CONNECTION_READY)) {
@@ -54,34 +55,43 @@ final class PerfMultiDealerRouter {
             PerfUtil.recalculateAutoHwm(ctx);
             PerfUtil.printMultiMonitorAutoHwm(config, monitor, "server",
                 "server", SocketType.ROUTER);
-            int stops = 0;
             Deque<PendingReply> pendingReplies = new ArrayDeque<>();
             systems.zlink.contracts.messaging.Received receivedBuffer = new systems.zlink.contracts.messaging.Received();
             try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
                 List.of(server), PollEventFlags.POLLIN)) {
-                // PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven wait (-1);
-                // server exits after observing one wire-level stop token per
-                // expected client.
-                while (stops < config.clients()) {
+                // The C relay remains active until the runner sends STOP.
+                // A client wire token is ordinary relay traffic, not a
+                // server termination condition.
+                while (!stopRequested.get()) {
                     if (pendingReplies.isEmpty()) {
                         pollSet.setEvents(0, PollEventFlags.POLLIN);
                     } else {
                         pollSet.setEvents(0, PollEventFlags.POLLIN,
                             PollEventFlags.POLLOUT);
                     }
-                    int readyCount = pollSet.poll(-1);
-                    if (readyCount > 0
-                        && pollSet.readyHasEventAt(0, PollEventFlags.POLLOUT)) {
+                    int readyCount = pollSet.poll(50);
+                    if (readyCount <= 0) {
+                        continue;
+                    }
+                    boolean writable = pollSet.readyHasEventAt(0,
+                        PollEventFlags.POLLOUT);
+                    boolean readable = pollSet.readyHasEventAt(0,
+                        PollEventFlags.POLLIN);
+                    if (writable) {
                         flushPending(server, pendingReplies);
                     }
+                    // Match the C relay: a DONT_WAIT drain starts only when
+                    // the poller reported this socket readable.  Calling recv
+                    // after every auxiliary STOP wake changes the hot path.
+                    if (!readable) {
+                        continue;
+                    }
                     while (true) {
-                        if (!server.recv(receivedBuffer, systems.zlink.contracts.sockets.RecvFlags.DONT_WAIT)) {
+                        if (stopRequested.get()) {
                             break;
                         }
-                        if (PerfStopToken.isStopTokenMessage(receivedBuffer.firstPart())) {
-                            stops++;
-                            receivedBuffer.close();
-                            continue;
+                        if (!server.recv(receivedBuffer, systems.zlink.contracts.sockets.RecvFlags.DONT_WAIT)) {
+                            break;
                         }
                         if (pendingReplies.isEmpty()
                             && receivedBuffer.send()
@@ -207,13 +217,10 @@ final class PerfMultiDealerRouter {
                         waitingWritable[idx]);
                 }
                 rrIndex = (startIndex + 1) % n;
-                long remainingNs = activeEnd - System.nanoTime();
-                if (remainingNs <= 0L) {
-                    break;
-                }
-                int waitMs = (int) Math.min(Integer.MAX_VALUE,
-                    Math.max(1L, remainingNs / 1_000_000L));
-                int readyCount = pollSet.poll(waitMs);
+                // The requester owns the active deadline. Bound the wait by
+                // its remaining interval so a quiet relay cannot keep this
+                // phase past the configured duration.
+                int readyCount = pollSet.poll(remainingTimeoutMs(activeEnd));
                 for (int readyOffset = 0; readyOffset < readyCount; readyOffset++) {
                     int idx = pollSet.readyIndexAt(readyOffset);
                     boolean writable =
@@ -237,15 +244,9 @@ final class PerfMultiDealerRouter {
             }
             replyBuffer.close();
             Message.closeAll(List.of(payloads));
-            for (DealerSocket client : clients) {
-                try (Message stop = PerfStopToken.newMessage();
-                     PerfSocketPollSet stopPoll = PerfSocketPollSet.fromSockets(
-                         List.of(client), PollEventFlags.POLLOUT)) {
-                    stopPoll.setEvents(0);
-                    sendUntilSent(client, stopPoll, stop,
-                        System.nanoTime() + Duration.ofSeconds(5).toNanos());
-                }
-            }
+            // C routed echo ends the relay through the runner control path.
+            // Do not inject an extra routed stop frame into the measured
+            // topology after the active client phase.
         }
     }
 
@@ -287,43 +288,13 @@ final class PerfMultiDealerRouter {
         }
     }
 
-    private static void sendUntilSent(DealerSocket client, PerfSocketPollSet pollSet,
-                                      Message part,
-                                      long deadlineNs) {
-        while (true) {
-            if (client.send().message(part).flags(SendFlags.DONT_WAIT).submit()) {
-                return;
-            }
-            if (System.nanoTime() >= deadlineNs) {
-                throw new IllegalStateException("dealer/router send timed out");
-            }
-            // PERF_MULTI_TEST_POLICY § 1.3.1: wait for POLLOUT readiness.
-            // The finite wait preserves the application-level deadline when
-            // the peer has already stopped producing a readiness transition.
-            long remainingNs = deadlineNs - System.nanoTime();
-            int waitMs = (int) Math.min(Integer.MAX_VALUE,
-                Math.max(1L, remainingNs / 1_000_000L));
-            pollSet.setEvents(0, PollEventFlags.POLLOUT);
-            pollSet.poll(waitMs);
+    private static int remainingTimeoutMs(long deadline) {
+        long remainingNs = deadline - System.nanoTime();
+        if (remainingNs <= 0) {
+            return 0;
         }
-    }
-
-    private static boolean awaitReadable(PerfSocketPollSet pollSet, long deadlineNs) {
-        // PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven wait for POLLIN.
-        // Deadline check is application-level; poller timeout is -1.
-        while (System.nanoTime() < deadlineNs) {
-            try {
-                pollSet.setEvents(0, PollEventFlags.POLLIN);
-                if (pollSet.poll(-1) > 0) {
-                    return true;
-                }
-            } catch (systems.zlink.contracts.errors.ZlinkException ex) {
-                if (ex.getNativeErrno() != 11 && ex.getNativeErrno() != 4) {
-                    throw ex;
-                }
-            }
-        }
-        return false;
+        return (int) Math.min(Integer.MAX_VALUE,
+            (remainingNs + 999_999L) / 1_000_000L);
     }
 
     private static void flushPending(RouterSocket server,

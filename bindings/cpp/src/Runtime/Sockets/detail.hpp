@@ -35,7 +35,7 @@ class recv_part_out_guard_t
         // message has no payload to restore. Skipping save/restore for the
         // empty case avoids one native message init/close pair per receive
         // while keeping the public failure contract for non-empty messages.
-        if (_part.valid () && zlink_msg_size (native_handle (_part)) > 0) {
+        if (_part.valid () && has_payload (_part)) {
             move_to_native (_part, &_saved);
             _has_saved = true;
         }
@@ -87,6 +87,7 @@ inline int recv_single_part_message (void *handle_,
                        static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
     if (rc != 0)
         return rc;
+    refresh_payload_presence (part_out_);
     if (has_more != ZLINK_PART_FINAL) {
         errno = EMSGSIZE;
         return -1;
@@ -119,6 +120,7 @@ inline int recv_single_part_routed_message (void *handle_,
       &has_more, static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
     if (rc != 0)
         return rc;
+    refresh_payload_presence (part_out_);
     if (has_more != ZLINK_PART_FINAL || request_seq != 0 || !source_node_rid
         || source_node_rid->size == 0) {
         errno = has_more != ZLINK_PART_FINAL ? EMSGSIZE : EPROTO;

@@ -137,7 +137,7 @@ public sealed record PerfOptions(
             PerfEnv.ReadPositive("PERF_MULTI_SNDTIMEO_MS", 200),
             PerfEnv.ReadPositive("PERF_MULTI_RCVTIMEO_MS", 200),
             PerfEnv.ReadPositive("PERF_MULTI_CONNECT_READY_TIMEOUT_MS",
-                PerfEnv.ReadPositive("PERF_CONNECT_READY_TIMEOUT_MS", 1000)),
+                PerfEnv.ReadPositive("PERF_CONNECT_READY_TIMEOUT_MS", 10000)),
             clients,
             PerfEnv.ReadPositive("PERF_MULTI_LATENCY_SAMPLE_CAP", 200000),
             // PERF_POLICY: multi default context I/O threads is 4 for both

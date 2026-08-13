@@ -544,7 +544,7 @@ function buildClientSpawn(clientPath, clientArgs, args) {
     return buildPinnedSpawn(process.execPath, [clientPath, ...clientArgs], args);
   }
   let streamClients = args.clients;
-  const nonTcpMax = Number(process.env.PERF_STREAM_NON_TCP_CLIENTS_MAX || process.env.PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX || 1000);
+  const nonTcpMax = Number(process.env.PERF_STREAM_NON_TCP_CLIENTS_MAX || process.env.PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX || 10000);
   if (args.transport !== 'tcp' && Number.isFinite(streamClients) && Number.isFinite(nonTcpMax) && streamClients > nonTcpMax) {
     streamClients = Math.trunc(nonTcpMax);
   }

@@ -13,6 +13,8 @@ import {
   materializeReceivedInto,
   materializeRoutedReceivedInto,
   materializeTopicMessage,
+  routedReceivedCachedRoutingBytes,
+  routedReceivedPrefersManagedBuffer,
 } from '../messaging/message_materializer';
 import {
   normalizeMessageLikePayload,
@@ -276,11 +278,25 @@ export class RoutedMessageSocket extends SendReadySocket {
    * Receives into caller-provided storage. See {@link MessageSocket.recv}.
    */
   recv(result: Received, flags: RecvFlags = RecvFlags.None): boolean {
+    // HOT PATH: terminal readers repeatedly materialize data(), whereas
+    // relays consume the movable native frame. Use the previous refill to
+    // select the next internal storage mode without changing the public API.
+    const preferManagedSinglePart = routedReceivedPrefersManagedBuffer(result);
+    const cachedRoutingId = routedReceivedCachedRoutingBytes(result);
     let raw;
     try {
       raw = ((flags | 0) & (RecvFlags.DontWait | 0))
-        ? native.routerRecvMessageNoWait(getNativeHandle(this))
-        : native.routerRecvMessage(getNativeHandle(this), flags | 0);
+        ? native.routerRecvMessageNoWait(
+            getNativeHandle(this),
+            preferManagedSinglePart,
+            cachedRoutingId
+          )
+        : native.routerRecvMessage(
+            getNativeHandle(this),
+            flags | 0,
+            preferManagedSinglePart,
+            cachedRoutingId
+          );
     } catch (error) {
       throw recvNativeError(error, flags, 'recv failed');
     }

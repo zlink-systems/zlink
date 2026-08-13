@@ -320,7 +320,24 @@ if(ZLINK_CPP_BUILD_TESTS OR ZLINK_CPP_BUILD_SAMPLES)
       )
     endif()
   else()
-    find_package(Boost CONFIG REQUIRED COMPONENTS asio)
+    # Boost.Asio is header-only. Ubuntu's Boost package intentionally does
+    # not export a separate boost_asioConfig.cmake component, so resolve the
+    # normal Boost headers and provide the target used below.
+    find_package(Boost CONFIG REQUIRED)
+    if(NOT TARGET Boost::asio)
+      add_library(zlink_cpp_system_boost_asio INTERFACE)
+      add_library(Boost::asio ALIAS zlink_cpp_system_boost_asio)
+      if(TARGET Boost::headers)
+        target_link_libraries(zlink_cpp_system_boost_asio INTERFACE Boost::headers)
+      elseif(TARGET Boost::boost)
+        target_link_libraries(zlink_cpp_system_boost_asio INTERFACE Boost::boost)
+      else()
+        target_include_directories(
+          zlink_cpp_system_boost_asio
+          INTERFACE "${Boost_INCLUDE_DIRS}"
+        )
+      endif()
+    endif()
   endif()
 
   function(add_cpp_binding_executable target_name source_file)

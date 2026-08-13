@@ -23,6 +23,30 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         IsValid = true;
     }
 
+    // TopicMessage keeps this wrapper private while a caller-provided receive
+    // result is still exposed. Reinitializing in place avoids a pool round
+    // trip without making the wrapper observable before a receive succeeds.
+    internal void PrepareForNativeReceive()
+    {
+        if (IsValid)
+            NativeMethods.zlink_msg_close(ref _msg);
+        _msg = default;
+        _knownSize = -1;
+        IsValid = false;
+        var rc = NativeMethods.zlink_msg_init(ref _msg);
+        if (rc != 0)
+            throw ZlinkException.CreateRecvException(NativeMethods.zlink_errno());
+        IsValid = true;
+    }
+
+    internal void CloseAfterFailedNativeReceive()
+    {
+        if (!IsValid)
+            return;
+        NativeMethods.zlink_msg_close(ref _msg);
+        Invalidate(clearHandle: true);
+    }
+
     internal void ReplaceNativeOwned(ref ZlinkMsg source)
     {
         Close();
@@ -72,9 +96,17 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Message AllocateCoreValidated(int size)
     {
-        var message = new Message(false);
-        message.InitSizeOnInvalidMessage(size);
-        return message;
+        var message = RentFromPool();
+        try
+        {
+            message.InitSizeOnInvalidMessage(size);
+            return message;
+        }
+        catch
+        {
+            message.TryReturnToPool();
+            throw;
+        }
     }
 
     private unsafe Span<byte> AsSpanCore()

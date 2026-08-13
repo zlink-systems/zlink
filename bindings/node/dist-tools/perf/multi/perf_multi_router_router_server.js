@@ -6,7 +6,7 @@ const zlink = require('@zlink-systems/zlink');
 const { configureTlsServer } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
 const { isStopTokenParts } = require('../perf_stop_token');
-const { POLLIN, POLLOUT, applyAutoHwmMsgUnit, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, trySocketSend, waitPollerOne } = require('./perf_multi_runtime');
+const { POLLIN, POLLOUT, applyAutoHwmMsgUnit, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, trySocketSend, waitPollerOne } = require('./perf_multi_runtime');
 function drainPending(router, pending) {
     while (pending.length > 0) {
         const reply = pending[0];
@@ -25,11 +25,11 @@ function receiveAndQueueReplies(router, pending, received) {
             if (!received.routingId || received.requestSeq) {
                 continue;
             }
-            const routingId = received.routingId;
             const payload = received.singlePartOrThrow();
             if (isStopTokenParts([payload])) {
                 return true;
             }
+            const routingId = received.routingId;
             if (pending.length === 0 && trySocketSend(router, routingId, payload)) {
                 continue;
             }
@@ -51,6 +51,7 @@ async function main() {
     let pollBuffer = null;
     let rl = null;
     let stop = false;
+    let pollMask = POLLIN;
     try {
         applySocketPolicy(router);
         configureTlsServer(router, options.transport);
@@ -72,17 +73,27 @@ async function main() {
             }
         })();
         while (!stop) {
-            poller.modify(router, pollEvents(POLLIN | POLLOUT));
             const ready = waitPollerOne(poller, pollBuffer, process.platform === 'win32' ? 50 : -1);
             if (!ready) {
                 continue;
             }
-            if (pollEventHas(ready, POLLOUT)) {
+            // HOT PATH: waitPollerOne returns the Core revents mask. Test it
+            // directly so each ready relay event avoids generic event inspection.
+            const revents = ready.revents;
+            if ((revents & POLLOUT) !== 0) {
                 drainPending(router, pending);
             }
-            if (pollEventHas(ready, POLLIN)) {
+            if ((revents & POLLIN) !== 0) {
                 stop = receiveAndQueueReplies(router, pending, received);
                 drainPending(router, pending);
+            }
+            const nextPollMask = pending.length > 0 ? POLLIN | POLLOUT : POLLIN;
+            if (nextPollMask !== pollMask) {
+                // HOT PATH: keep the relay asleep on POLLIN unless a queued reply
+                // needs a writable notification. This is the C relay poll contract;
+                // permanent POLLOUT interest makes an idle ROUTER spin.
+                poller.modify(router, pollEvents(nextPollMask));
+                pollMask = nextPollMask;
             }
         }
     }

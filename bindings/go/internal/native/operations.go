@@ -55,7 +55,9 @@ type ReplySubmitOp interface {
 }
 
 type sendBuilder struct {
+	first [1]sendBuilderPart
 	parts []sendBuilderPart
+	count int
 	flags SendFlags
 	submitOnce
 	submit func(parts []sendBuilderPart, flags SendFlags) error
@@ -73,18 +75,33 @@ func newSendBuilder(submit func(parts []sendBuilderPart, flags SendFlags) error)
 }
 
 func (b *sendBuilder) Message(message *Message) SendSubmitOp {
-	b.parts = append(b.parts, sendBuilderPart{message: message})
+	b.append(sendBuilderPart{message: message})
 	return b
 }
 
 func (b *sendBuilder) MoveMessage(message *Message) SendSubmitOp {
-	b.parts = append(b.parts, sendBuilderPart{message: message, move: true})
+	b.append(sendBuilderPart{message: message, move: true})
 	return b
 }
 
 func (b *sendBuilder) Bytes(data []byte) SendSubmitOp {
-	b.parts = append(b.parts, sendBuilderPart{data: data, bytes: true})
+	b.append(sendBuilderPart{data: data, bytes: true})
 	return b
+}
+
+// append keeps the common single-part submit on the builder itself. A slice is
+// required only after the caller adds a second multipart frame.
+func (b *sendBuilder) append(part sendBuilderPart) {
+	if b.count == 0 {
+		b.first[0] = part
+		b.count = 1
+		return
+	}
+	if b.count == 1 {
+		b.parts = append(b.parts, b.first[0])
+	}
+	b.parts = append(b.parts, part)
+	b.count++
 }
 
 func (b *sendBuilder) Flags(flags SendFlags) SendSubmitOp {
@@ -96,16 +113,24 @@ func (b *sendBuilder) Submit(ctx context.Context) (bool, error) {
 	if err := contextError(ctx); err != nil {
 		return false, err
 	}
-	if len(b.parts) == 0 {
+	if b.count == 0 {
 		return false, configInvalidArgumentError()
 	}
 	if err := b.markSubmitted(); err != nil {
 		return false, err
 	}
-	if err := b.submit(b.parts, b.flags); err != nil {
+	parts := b.parts
+	if b.count == 1 {
+		parts = b.singlePart()
+	}
+	if err := b.submit(parts, b.flags); err != nil {
 		return submitBackpressureAsNotSubmitted(err)
 	}
 	return true, nil
+}
+
+func (b *sendBuilder) singlePart() []sendBuilderPart {
+	return b.first[:]
 }
 
 type requestBuilderState struct {

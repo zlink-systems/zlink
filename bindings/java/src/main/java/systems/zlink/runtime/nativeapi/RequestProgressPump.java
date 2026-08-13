@@ -107,6 +107,16 @@ public final class RequestProgressPump {
         }
     }
 
+    /** Returns whether a caller-owned poller drives completion for the socket. */
+    public static boolean hasExternalProgress(MemorySegment socketHandle) {
+        if (socketHandle == null || socketHandle.address() == 0) {
+            return false;
+        }
+        synchronized (PROGRESS_OWNER_LOCK) {
+            return EXTERNAL_PROGRESS.containsKey(socketHandle.address());
+        }
+    }
+
     private static void track(CompletableFuture<?> future,
                               MemorySegment handle,
                               String threadName) {

@@ -30,6 +30,11 @@ import systems.zlink.runtime.nativeapi.RecvScratch;
 
 final class TopicPlane {
     private final NativeSocketRuntime socket;
+    private ContractAccess.TopicMessageAccess topicMessageAccess;
+    // Reuse the latest decoded topic for the common case where a subscription
+    // receives a long sequence of frames on one topic.
+    private MemorySegment lastReceivedTopicSegment;
+    private String lastReceivedTopic;
 
     TopicPlane(NativeSocketRuntime socket) {
         this.socket = socket;
@@ -180,7 +185,7 @@ final class TopicPlane {
                                     RecvScratch.TOPIC_CAPACITY,
                                     scratch.topicLenOut.get(
                                         ValueLayout.JAVA_LONG, 0));
-                            topicId = decodeTopicString(
+                            topicId = decodeReceivedTopicString(
                                 scratch.topicOut, topicLength);
                         }
                         parts.add(part);
@@ -228,12 +233,23 @@ final class TopicPlane {
     private boolean subscribeIntoFastNoWait(TopicMessage result) {
         socket.ensureOpen();
         socket.prepareRecvLikeOperation();
+        ContractAccess.TopicMessageAccess access = topicMessageAccess;
+        if (access == null) {
+            // HOT PATH: TopicMessage has registered its contract bridge before
+            // a caller can supply it here. Cache that bridge per socket so the
+            // single-part receive path does not perform two volatile bridge
+            // lookups for every delivered frame.
+            access = ContractAccess.topicMessageAccessForRuntime();
+            topicMessageAccess = access;
+        }
         RecvScratch scratch = socket.recvScratch();
         while (true) {
             scratch.topicLenOut.set(ValueLayout.JAVA_LONG, 0,
                 RecvScratch.TOPIC_CAPACITY);
-            Message part = InternalAccess.messageAcquireReceive();
+            Message part = access.prepareReusableSinglePart(result);
             boolean success = false;
+            boolean retainForNextReceive = false;
+            int errno = 0;
             try {
                 int rc = Native.subscribePartNoWaitCritical(socket.handle(),
                     scratch.sourceRidOut, scratch.topicOut,
@@ -256,15 +272,18 @@ final class TopicPlane {
                     int topicLength = NativeSocketRuntime.normalizeTopicLength(
                         scratch.topicOut, RecvScratch.TOPIC_CAPACITY,
                         scratch.topicLenOut.get(ValueLayout.JAVA_LONG, 0));
-                    String topicId = decodeTopicString(
+                    String topicId = decodeReceivedTopicString(
                         scratch.topicOut, topicLength);
                     success = true;
-                    InternalAccess.topicMessageAdoptSingle(result, routingId,
-                        topicId, part);
+                    access.adoptSingle(result, routingId, topicId, part);
                     return true;
                 }
+                errno = Native.errno();
+                retainForNextReceive = errno == NativeErrno.EINTR
+                    || errno == NativeErrno.EAGAIN
+                    || errno == NativeErrno.EWOULDBLOCK_WIN;
             } finally {
-                if (!success) {
+                if (!success && !retainForNextReceive) {
                     try {
                         part.close();
                     } catch (RuntimeException ignored) {
@@ -272,7 +291,6 @@ final class TopicPlane {
                 }
             }
 
-            int errno = Native.errno();
             if (errno == NativeErrno.EINTR) {
                 continue;
             }
@@ -294,13 +312,30 @@ final class TopicPlane {
         return new String(raw, StandardCharsets.UTF_8);
     }
 
+    private String decodeReceivedTopicString(MemorySegment topicOut,
+                                             int topicLength) {
+        if (topicLength == 0) {
+            return "";
+        }
+        MemorySegment previous = lastReceivedTopicSegment;
+        if (previous != null && previous.byteSize() == topicLength
+            && topicOut.asSlice(0, topicLength).mismatch(previous) == -1) {
+            return lastReceivedTopic;
+        }
+        byte[] raw = topicOut.asSlice(0, topicLength)
+            .toArray(ValueLayout.JAVA_BYTE);
+        lastReceivedTopicSegment = MemorySegment.ofArray(raw);
+        lastReceivedTopic = new String(raw, StandardCharsets.UTF_8);
+        return lastReceivedTopic;
+    }
+
     private TopicMessage subscribeAssembleRemainder(RecvScratch scratch,
                                                     Message firstPart) {
         RoutingId routingId = NativeRoutingIds.readOut(scratch.sourceRidOut);
         int topicLength = NativeSocketRuntime.normalizeTopicLength(
             scratch.topicOut, RecvScratch.TOPIC_CAPACITY,
             scratch.topicLenOut.get(ValueLayout.JAVA_LONG, 0));
-        String topicId = decodeTopicString(scratch.topicOut,
+        String topicId = decodeReceivedTopicString(scratch.topicOut,
             topicLength);
         ArrayList<Message> parts = new ArrayList<>();
         parts.add(firstPart);

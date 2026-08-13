@@ -15,7 +15,6 @@ const {
   applySocketPolicy,
   emitMultiSocketHwmDetail,
   pollEvents,
-  pollEventHas,
   trySocketSend,
   waitPollerOne
 } = require('./perf_multi_runtime');
@@ -39,11 +38,11 @@ function receiveAndQueueReplies(router, pending, received) {
       if (!received.routingId || received.requestSeq) {
         continue;
       }
-      const routingId = received.routingId;
       const payload = received.singlePartOrThrow();
       if (isStopTokenParts([payload])) {
         return true;
       }
+      const routingId = received.routingId;
       if (pending.length === 0 && trySocketSend(router, routingId, payload)) {
         continue;
       }
@@ -65,6 +64,7 @@ async function main() {
   let pollBuffer = null;
   let rl = null;
   let stop = false;
+  let pollMask = POLLIN;
 
   try {
     applySocketPolicy(router);
@@ -88,17 +88,27 @@ async function main() {
     })();
 
     while (!stop) {
-      poller.modify(router, pollEvents(POLLIN | POLLOUT));
       const ready = waitPollerOne(poller, pollBuffer, process.platform === 'win32' ? 50 : -1);
       if (!ready) {
         continue;
       }
-      if (pollEventHas(ready, POLLOUT)) {
+      // HOT PATH: waitPollerOne returns the Core revents mask. Test it
+      // directly so each ready relay event avoids generic event inspection.
+      const revents = ready.revents;
+      if ((revents & POLLOUT) !== 0) {
         drainPending(router, pending);
       }
-      if (pollEventHas(ready, POLLIN)) {
+      if ((revents & POLLIN) !== 0) {
         stop = receiveAndQueueReplies(router, pending, received);
         drainPending(router, pending);
+      }
+      const nextPollMask = pending.length > 0 ? POLLIN | POLLOUT : POLLIN;
+      if (nextPollMask !== pollMask) {
+        // HOT PATH: C enables POLLOUT only while an EAGAIN reply is queued.
+        // An idle ROUTER is normally writable, so unconditional POLLOUT
+        // registration creates a busy loop and starves receive-and-relay.
+        poller.modify(router, pollEvents(nextPollMask));
+        pollMask = nextPollMask;
       }
     }
   } finally {

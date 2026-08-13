@@ -259,6 +259,50 @@ public sealed class test_pubsub
         }
     }
 
+    [Fact]
+    public void pubsub_reused_storage_preserves_result_on_no_data_and_alternates_parts()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+        if (!CoreTestSupport.IsTransportSupported("inproc"))
+            return;
+
+        using var ctx = Zlink.CreateContext();
+        using var publisher = ctx.CreatePubSocket();
+        using var subscriber = ctx.CreateSubSocket();
+        string endpoint = CoreTestSupport.NewEndpoint("inproc",
+            "pubsub-reused-storage-slots");
+        publisher.Bind(endpoint);
+        subscriber.Connect(endpoint);
+        subscriber.SetSubscription(string.Empty);
+        Thread.Sleep(100);
+
+        using var result = new TopicMessage();
+        CoreTestSupport.PublishWithRetry(publisher, "first", "one"u8, 2000);
+        Assert.True(SubscribeWithTimeout(subscriber, result, 2000));
+        Message first = result.SinglePartOrThrow();
+        Assert.Equal("first", result.Topic);
+        Assert.Equal("one", first.GetString());
+
+        Assert.False(subscriber.Subscribe(result, RecvFlags.DontWait));
+        Assert.Same(first, result.SinglePartOrThrow());
+        Assert.Equal("first", result.Topic);
+        Assert.Equal("one", result.SinglePartOrThrow().GetString());
+
+        CoreTestSupport.PublishWithRetry(publisher, "second", "two"u8, 2000);
+        Assert.True(SubscribeWithTimeout(subscriber, result, 2000));
+        Message second = result.SinglePartOrThrow();
+        Assert.NotSame(first, second);
+        Assert.Equal("second", result.Topic);
+        Assert.Equal("two", second.GetString());
+
+        CoreTestSupport.PublishWithRetry(publisher, "third", "three"u8, 2000);
+        Assert.True(SubscribeWithTimeout(subscriber, result, 2000));
+        Assert.Same(first, result.SinglePartOrThrow());
+        Assert.Equal("third", result.Topic);
+        Assert.Equal("three", result.SinglePartOrThrow().GetString());
+    }
+
     private static TopicMessage SubscribeMessageWithTimeout(
         ISubscriberSocket socket, int timeoutMs)
     {

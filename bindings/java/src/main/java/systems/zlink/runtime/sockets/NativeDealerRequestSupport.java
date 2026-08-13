@@ -14,10 +14,8 @@ import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.runtime.nativeapi.InternalAccess;
 import systems.zlink.runtime.nativeapi.Native;
-import systems.zlink.runtime.nativeapi.NativeLayouts;
 import systems.zlink.runtime.nativeapi.RequestReplySupport;
 import systems.zlink.runtime.nativeapi.RoutedRequestSupport;
-import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.time.Duration;
 import java.util.List;
@@ -169,12 +167,16 @@ final class NativeDealerRequestSupport {
                                              int timeoutMs,
                                              MemorySegment handler,
                                              MemorySegment userData) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment nativeMsg = arena.allocate(NativeLayouts.MESSAGE_LAYOUT);
-            InternalAccess.messageCopyTo(part, nativeMsg);
-            return Native.dealerRequestPart(
-                InternalAccess.socketHandle(socket), nativeMsg, flags,
-                partFlag, timeoutMs, handler, userData);
+        // HOT PATH: Message already owns a native msg_t. A successful request
+        // consumes that frame by contract, so pass it directly to Core instead
+        // of allocating a temporary msg_t and copying its payload per part.
+        int rc = Native.dealerRequestPart(
+            InternalAccess.socketHandle(socket),
+            InternalAccess.messageNativeHandle(part), flags, partFlag,
+            timeoutMs, handler, userData);
+        if (rc == 0) {
+            InternalAccess.messageMarkTransferred(part);
         }
+        return rc;
     }
 }

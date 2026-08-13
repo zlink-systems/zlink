@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_DIR="$(cd "${ROOT_DIR}/../../.." && pwd)"
 source "${REPO_DIR}/bindings/tools/local_core_runtime.sh"
+source "${ROOT_DIR}/require_java22.sh"
 JAVA_BINDINGS_DIR="$(cd "${ROOT_DIR}/.." && pwd)"
 STREAM_CLIENT="${REPO_DIR}/bindings/c/build/perf/perf_stream_client"
 STREAM_CLIENT_DIR="${REPO_DIR}/bindings/c/perf/common/streamclient"
@@ -42,7 +43,7 @@ SNDTIMEO_MS="${PERF_MULTI_SNDTIMEO_MS:-${PERF_SNDTIMEO_MS:-200}}"
 RCVTIMEO_MS="${PERF_MULTI_RCVTIMEO_MS:-${PERF_RCVTIMEO_MS:-200}}"
 CTX_AUTO_HWM_ENABLE="${PERF_CTX_AUTO_HWM_ENABLE:-1}"
 CTX_AUTO_HWM_PROFILE="${PERF_MULTI_CTX_AUTO_HWM_PROFILE:-${PERF_CTX_AUTO_HWM_PROFILE:-balanced}}"
-CONNECT_READY_TIMEOUT_MS="${PERF_MULTI_CONNECT_READY_TIMEOUT_MS:-${PERF_CONNECT_READY_TIMEOUT_MS:-1000}}"
+CONNECT_READY_TIMEOUT_MS="${PERF_MULTI_CONNECT_READY_TIMEOUT_MS:-${PERF_CONNECT_READY_TIMEOUT_MS:-10000}}"
 SPOT_READY_TIMEOUT_MS="$(( CONNECT_READY_TIMEOUT_MS * 6 ))"
 if (( SPOT_READY_TIMEOUT_MS < 1000 )); then
   SPOT_READY_TIMEOUT_MS=1000
@@ -53,7 +54,7 @@ RUN_COOLDOWN_MS="${PERF_MULTI_RUN_COOLDOWN_MS:-${PERF_RUN_COOLDOWN_MS:-3000}}"
 SERVER_READY_TIMEOUT_MS="${PERF_MULTI_SERVER_READY_TIMEOUT_MS:-${PERF_SERVER_READY_TIMEOUT_MS:-10000}}"
 SERVER_SHUTDOWN_TIMEOUT_MS="${PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_SERVER_SHUTDOWN_TIMEOUT_MS:-5000}}"
 SERVER_BIND_PORT="${PERF_MULTI_SERVER_BIND_PORT:-${PERF_SERVER_BIND_PORT:-0}}"
-MONITOR_HWM="${PERF_MULTI_MONITOR_HWM:-${PERF_MONITOR_HWM:-1000}}"
+MONITOR_HWM="${PERF_MULTI_MONITOR_HWM:-${PERF_MONITOR_HWM:-4096000}}"
 CONNECT_CONCURRENCY="${PERF_MULTI_CONNECT_CONCURRENCY:-${PERF_CONNECT_CONCURRENCY:-}}"
 DEFAULT_CLIENTS="${PERF_MULTI_DEFAULT_CLIENTS:-${PERF_DEFAULT_CLIENTS:-100}}"
 STREAM_DEFAULT_CLIENTS="${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-10000}}"
@@ -212,7 +213,7 @@ for numeric_opt in SNDTIMEO_MS RCVTIMEO_MS CONNECT_READY_TIMEOUT_MS TRANSPORT_TR
 done
 
 if [[ "${PATTERN}" == "ALL" ]]; then
-  PATTERN="MULTI_DEALER_DEALER,MULTI_DEALER_ROUTER,MULTI_DEALER_ROUTER_REQREP,MULTI_ROUTER_ROUTER,MULTI_ROUTER_ROUTER_REQREP,MULTI_PUBSUB,MULTI_SPOT,MULTI_SPOT_REQREP,MULTI_SPOT_SENDSEND,MULTI_STREAM"
+  PATTERN="MULTI_DEALER_DEALER,MULTI_DEALER_ROUTER_SENDSEND,MULTI_DEALER_ROUTER_REQREP,MULTI_ROUTER_ROUTER_SENDSEND,MULTI_ROUTER_ROUTER_REQREP,MULTI_PUBSUB,MULTI_STREAM"
 fi
 
 detect_platform() {
@@ -735,6 +736,8 @@ if [[ "${PIN_CPU}" -eq 1 ]]; then
   stream_client_prefix=("taskset" "-c" "0")
 fi
 
+require_java22
+
 mkdir -p "${RESULTS_ROOT}/multi/tmp" "${RESULTS_ROOT}/multi/report"
 if [[ -n "${OUTPUT_PATH}" ]]; then
   mkdir -p "$(dirname "${OUTPUT_PATH}")"
@@ -1073,6 +1076,16 @@ run_socket_case() {
   local client_exit=0
   local server_exit=0
   wait_for_pid_or_kill "${client_pid}" "$(( (DURATION + 20) * 1000 ))" "client" || client_exit=$?
+  # C's comparison runner sends STOP to a routed relay after the client
+  # reports completion. Raw one-way and request/reply servers end on their
+  # own wire-level stop tokens, so this control transition applies only to
+  # the relay patterns.
+  if [[ "${bare_pattern}" == "DEALER_ROUTER" \
+     || "${bare_pattern}" == "DEALER_ROUTER_SENDSEND" \
+     || "${bare_pattern}" == "ROUTER_ROUTER" \
+     || "${bare_pattern}" == "ROUTER_ROUTER_SENDSEND" ]]; then
+    printf 'STOP\n' >&${server_fd}
+  fi
   exec {client_fd}>&-
   wait_for_pid_or_kill "${server_pid}" "${SERVER_SHUTDOWN_TIMEOUT_MS}" "server" || server_exit=$?
   exec {server_fd}>&-
@@ -1081,8 +1094,11 @@ run_socket_case() {
   append_auto_hwm_details "${client_log}"
 
   if [[ "${bare_pattern}" == "DEALER_ROUTER" \
+     || "${bare_pattern}" == "DEALER_ROUTER_SENDSEND" \
      || "${bare_pattern}" == "DEALER_ROUTER_REQREP" \
-     || "${bare_pattern}" == "ROUTER_ROUTER" || "${bare_pattern}" == "PUBSUB" \
+     || "${bare_pattern}" == "ROUTER_ROUTER" \
+     || "${bare_pattern}" == "ROUTER_ROUTER_SENDSEND" \
+     || "${bare_pattern}" == "PUBSUB" \
      || "${bare_pattern}" == "ROUTER_ROUTER_REQREP" \
      || "${bare_pattern}" == "SPOT_REQREP" \
      || "${bare_pattern}" == "SPOT_SENDSEND" \
@@ -1371,7 +1387,7 @@ for pattern_index in "${!patterns[@]}"; do
 done
 
 python_status=0
-python3 - "${ROOT_DIR}/report_common.py" "${tmp_metrics}" "${tmp_failures}" "${tmp_auto_hwm}" "${tmp_plan}" "${tmp_skips}" "${report}" \
+ZLINK_PERF_REPO_DIR="${REPO_DIR}" python3 - "${ROOT_DIR}/report_common.py" "${tmp_metrics}" "${tmp_failures}" "${tmp_auto_hwm}" "${tmp_plan}" "${tmp_skips}" "${report}" \
   "${RUNS}" "${DURATION}" "${CLIENTS}" "${SERVICE_CLIENTS}" \
   "${display_server_io_threads}" "${display_client_io_threads}" \
   "${display_hwm}" "${display_send_hwm}" "${display_recv_hwm}" "${display_sndbuf}" "${display_rcvbuf}" \
@@ -1415,7 +1431,8 @@ all_metrics = ["throughput", "bandwidth", "latency", "latency_p95", "latency_p99
 
 ECHO_PATTERNS = {
     "MULTI_DEALER_ROUTER", "MULTI_DEALER_ROUTER_REQREP",
-    "MULTI_ROUTER_ROUTER", "MULTI_ROUTER_ROUTER_REQREP", "MULTI_SPOT_REQREP",
+    "MULTI_DEALER_ROUTER_SENDSEND", "MULTI_ROUTER_ROUTER",
+    "MULTI_ROUTER_ROUTER_SENDSEND", "MULTI_ROUTER_ROUTER_REQREP", "MULTI_SPOT_REQREP",
     "MULTI_SPOT_SENDSEND", "MULTI_STREAM",
 }
 
@@ -1721,9 +1738,10 @@ def get_cpu_model():
 
 def get_commit():
     try:
+        repo_dir = os.environ.get("ZLINK_PERF_REPO_DIR")
         out = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"],
-            cwd=str(Path(report_path).resolve().parent),
+            cwd=repo_dir or str(Path(report_path).resolve().parent),
             stderr=subprocess.DEVNULL,
         )
         return out.decode().strip() or "unknown"

@@ -29,10 +29,7 @@ final class PerfMultiPubSub {
     private static final String TOPIC = "bench";
     private static final MonitorEventType READY_EVENT =
         MonitorEventType.CONNECTION_READY;
-    private static final long STOP_DRAIN_GRACE_NANOS =
-        Duration.ofMillis(500).toNanos();
-    private static final long STOP_PUBLISH_GRACE_NANOS =
-        Duration.ofSeconds(2).toNanos();
+    private static final int RECEIVE_POLL_TIMEOUT_MS = 100;
 
     private PerfMultiPubSub() {
     }
@@ -77,6 +74,7 @@ final class PerfMultiPubSub {
         PerfUtil.Metrics metrics = new PerfUtil.Metrics(config);
         List<SubSocket> subscribers = new ArrayList<>(config.clients());
         List<SocketMonitor> monitors = new ArrayList<>(config.clients());
+        List<TopicMessage> receivedSlots = new ArrayList<>(config.clients());
         Context ctx = PerfUtil.newContext(config);
         try {
             for (int i = 0; i < config.clients(); i++) {
@@ -93,6 +91,7 @@ final class PerfMultiPubSub {
                 sub.setSubscription("");
                 subscribers.add(sub);
                 monitors.add(monitor);
+                receivedSlots.add(new TopicMessage());
             }
             // C parity: perf_multi_client_helpers.hpp applies
             // apply_benchmark_socket_options (auto-HWM) BEFORE zlink_connect
@@ -129,22 +128,17 @@ final class PerfMultiPubSub {
                 pollSockets, PollEventFlags.POLLIN)) {
                 long activeEnd = System.nanoTime()
                     + config.durationSeconds() * 1_000_000_000L;
-                // The active deadline is authoritative for measurement. After
-                // it expires, briefly drain for the stop token so normal
-                // teardown completes, but do not let a large PUB/SUB backlog
-                // turn the control terminator into an unbounded test hang.
+                // Match C run_recv_duration: the active deadline ends the
+                // receive loop. A delayed stop token must not extend the
+                // measurement or drain an already queued PUB/SUB backlog.
                 boolean phaseDone = false;
                 while (!phaseDone) {
                     long remainingNs = activeEnd - System.nanoTime();
-                    if (remainingNs <= -STOP_DRAIN_GRACE_NANOS) {
+                    if (remainingNs <= 0L) {
                         break;
                     }
-                    long pollBudgetNs = remainingNs > 0L
-                        ? remainingNs
-                        : Math.max(1L,
-                            STOP_DRAIN_GRACE_NANOS + remainingNs);
-                    int waitMs = (int) Math.min(Integer.MAX_VALUE,
-                        Math.max(1L, pollBudgetNs / 1_000_000L));
+                    int waitMs = (int) Math.min(RECEIVE_POLL_TIMEOUT_MS,
+                        Math.max(1L, remainingNs / 1_000_000L));
                     int readyCount = pollSet.poll(waitMs);
                     if (readyCount <= 0) {
                         continue;
@@ -155,8 +149,9 @@ final class PerfMultiPubSub {
                             PollEventFlags.POLLIN)) {
                             continue;
                         }
-                        if (drainSubscriber(subscribers.get(index), config,
-                            metrics, activeEnd)) {
+                        if (drainSubscriber(subscribers.get(index),
+                            receivedSlots.get(index), config, metrics,
+                            activeEnd)) {
                             phaseDone = true;
                         }
                     }
@@ -164,6 +159,12 @@ final class PerfMultiPubSub {
             }
             return metrics.finishMulti(config);
         } finally {
+            for (TopicMessage received : receivedSlots) {
+                try {
+                    received.close();
+                } catch (RuntimeException ignored) {
+                }
+            }
             for (SocketMonitor monitor : monitors) {
                 try {
                     monitor.close();
@@ -190,11 +191,11 @@ final class PerfMultiPubSub {
                                                     PerfSocketPollSet writable,
                                                     Message message) {
         while (true) {
-            try (Message outbound = Message.from(message)) {
+            try {
                 if (pub.publish(TOPIC)
-                        .message(outbound)
-                        .flags(SendFlags.DONT_WAIT)
-                        .submit()) {
+                    .message(message)
+                    .flags(SendFlags.DONT_WAIT)
+                    .submit()) {
                     return;
                 }
             } catch (ZlinkSubmitException ex) {
@@ -217,42 +218,38 @@ final class PerfMultiPubSub {
     // mirroring C perf_multi_pubsub_client.cpp recv_one_pubsub_message: the
     // stop token is checked before header decode and ends the phase; counting
     // remains bounded by the active deadline.
-    private static boolean drainSubscriber(SubSocket sub, PerfUtil.Config config,
+    private static boolean drainSubscriber(SubSocket sub, TopicMessage received,
+                                           PerfUtil.Config config,
                                            PerfUtil.Metrics metrics,
                                            long activeEnd) {
-        TopicMessage received = new TopicMessage();
         while (true) {
+            // C checks the active deadline while draining each ready socket.
+            // Do the same so one busy SUB cannot consume the post-deadline
+            // interval before the outer loop observes it.
+            if (System.nanoTime() >= activeEnd) {
+                return true;
+            }
             if (!sub.subscribe(received, RecvFlags.DONT_WAIT)) {
                 return false;
             }
-            try {
-                if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
-                    return true;
-                }
-                PerfUtil.Header header = PerfUtil.decodeHeader(
-                    received.firstPart(), config.size());
-                if (header == null) {
-                    continue;
-                }
-                if (header.phase() == PerfUtil.PHASE_COOLDOWN) {
-                    return true;
-                }
-                if (header.phase() == PerfUtil.PHASE_ACTIVE
-                    && System.nanoTime() < activeEnd) {
-                    metrics.recordNanos(header.latencyNanos());
-                }
-            } finally {
-                received.close();
+            if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
+                return true;
+            }
+            int phase = PerfUtil.recordOneWayLatency(metrics,
+                received.firstPart(), config.size(), activeEnd);
+            if (phase == PerfUtil.PHASE_UNKNOWN) {
+                continue;
+            }
+            if (phase == PerfUtil.PHASE_COOLDOWN) {
+                return true;
             }
         }
     }
 
-    // Publish the stop token on the topic with blocking semantics, retrying
-    // through transient backpressure. The retry is bounded because the Java
-    // client records a fixed active window and may already be draining a large
-    // backlog; teardown must not outlive the measured case.
+    // C retries a transient stop-token publish until it succeeds. The token
+    // terminates the subscriber phase, so reporting a successful server run
+    // without delivering it changes the benchmark lifecycle.
     private static void publishStopToken(PubSocket pub) {
-        long deadline = System.nanoTime() + STOP_PUBLISH_GRACE_NANOS;
         while (true) {
             try (Message stop = PerfStopToken.newMessage()) {
                 if (pub.publish(TOPIC)
@@ -265,12 +262,6 @@ final class PerfMultiPubSub {
                 if (!isTransientSubmit(ex)) {
                     throw ex;
                 }
-                if (System.nanoTime() >= deadline) {
-                    return;
-                }
-            }
-            if (System.nanoTime() >= deadline) {
-                return;
             }
         }
     }

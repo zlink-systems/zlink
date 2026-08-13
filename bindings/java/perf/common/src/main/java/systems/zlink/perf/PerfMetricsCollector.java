@@ -18,9 +18,9 @@ final class PerfMetricsCollector {
     private long singleSampleCount;
     private long singleSum;
     private ThreadReservoir singleReservoir;
-    // Per-thread latency sample arrays. C perf stores all samples and computes
-    // interpolated percentiles; Java keeps the same metric meaning while still
-    // avoiding one global synchronized hot path.
+    // Per-thread latency reservoirs use the same bounded sampling rule as the
+    // C harness. The cap bounds measurement memory and must not turn an
+    // unbounded Java array into part of the measured receive path.
     private final ThreadLocal<ThreadReservoir> threadReservoir;
     private final List<ThreadReservoir> registry =
         new ArrayList<>();
@@ -145,16 +145,29 @@ final class PerfMetricsCollector {
     private static final class ThreadReservoir {
         private long[] samples;
         private int size;
+        private final int sampleCap;
+        private long samplesSeen;
+        private int randomState = 0xA341316C;
 
-        ThreadReservoir(int initialCapacity) {
-            this.samples = new long[Math.max(1, initialCapacity)];
+        ThreadReservoir(int sampleCap) {
+            this.sampleCap = Math.max(0, sampleCap);
+            this.samples = new long[this.sampleCap];
         }
 
         void add(long value) {
-            if (size == samples.length) {
-                samples = Arrays.copyOf(samples, samples.length * 2);
+            samplesSeen++;
+            if (sampleCap == 0) {
+                return;
             }
-            samples[size++] = value;
+            if (size < sampleCap) {
+                samples[size++] = value;
+                return;
+            }
+            randomState = randomState * 1664525 + 1013904223;
+            long slot = Integer.toUnsignedLong(randomState) % samplesSeen;
+            if (slot < sampleCap) {
+                samples[(int) slot] = value;
+            }
         }
 
         long[] snapshot() {
@@ -183,7 +196,8 @@ final class PerfMetricsCollector {
         String envName = "multi".equals(suite)
             ? "PERF_MULTI_LATENCY_SAMPLE_CAP"
             : "PERF_SINGLE_LATENCY_SAMPLE_CAP";
-        return Math.max(1, intEnv(envName, 200_000));
+        int fallback = "multi".equals(suite) ? 65_536 : 200_000;
+        return Math.max(0, intEnv(envName, fallback));
     }
 
     private static int intEnv(String name, int fallback) {

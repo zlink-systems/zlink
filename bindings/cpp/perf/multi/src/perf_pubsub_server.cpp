@@ -86,7 +86,6 @@ bool publish_stop_token (::perf::socket_t &publisher)
 
 bool run_phase (::perf::socket_t &publisher,
                 zlink::poller_t &publisher_poller,
-                std::vector<char> &payload,
                 size_t msg_size,
                 uint32_t run_id,
                 uint64_t &seq,
@@ -101,25 +100,20 @@ bool run_phase (::perf::socket_t &publisher,
         return true;
 
     try {
-        const size_t send_size =
-          std::min (payload.size (), std::max<size_t> (static_cast<size_t> (1), msg_size));
+        const size_t send_size = std::max<size_t> (static_cast<size_t> (1), msg_size);
         const auto deadline = std::chrono::steady_clock::now () + duration;
         while (std::chrono::steady_clock::now () < deadline) {
-            // Stamp every published message, matching the C reference's
-            // publish_once() call. A single stamp for the whole active phase
-            // measures queue age from phase start instead of message latency.
-            if (!perf_metric::stamp_payload (payload.data (), send_size, run_id, phase, msg_size,
-                                             seq++, perf_metric::now_ns ()))
+            zlink::message_t payload_part (send_size);
+            if (!payload_part.valid ())
                 return false;
-
+            // HOT PATH: construct the native payload that the public publish
+            // operation consumes, then stamp its frame directly. Copying a
+            // temporary vector into every message adds no wire-level value.
+            if (!perf_metric::stamp_payload (payload_part.data (), send_size,
+                                             run_id, phase, msg_size, seq++,
+                                             perf_metric::now_ns ()))
+                return false;
             for (;;) {
-                zlink::message_t payload_part (send_size);
-                if (!payload_part.valid ())
-                    return false;
-
-                if (send_size > 0)
-                    std::memcpy (payload_part.data (), payload.data (), send_size);
-
                 const int sent = publisher.publish (
                   k_topic, payload_part, static_cast<int> (zlink::send_flags_t::dontwait));
                 if (sent == 0)
@@ -184,11 +178,10 @@ bool perf_pubsub_server (const std::string &lib_name, const std::string &transpo
         return false;
     }
 
-    std::vector<char> payload (std::max<size_t> (msg_size, perf_metric::header_size ()), 'p');
     const uint32_t run_id = 1U;
     uint64_t seq = 1;
 
-    if (!run_phase (publisher.sock (), publisher_poller, payload, msg_size, run_id, seq,
+    if (!run_phase (publisher.sock (), publisher_poller, msg_size, run_id, seq,
                     perf_metric::phase_active,
                     std::chrono::seconds (std::max (1, settings.duration_seconds)), true))
         return false;
