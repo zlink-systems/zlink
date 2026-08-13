@@ -10,7 +10,7 @@
 - throughput 비율은 `binding throughput / C throughput * 100`이다.
 - 한 transport·pattern의 판정값은 모든 message size 비율의 산술평균이다.
 - public contract의 public interface는 변경하지 않는다.
-- 측정 명령, 후보 검토, Sol review와 원복 근거는 `log/`에 기록한다.
+- 측정 조건과 결과는 `log/`에 기록한다.
 
 ## 목표
 
@@ -57,6 +57,9 @@ pattern·transport 평균은 최소 기준과 중앙값 목표를 함께 판정�
 | Java | `MULTI_DEALER_DEALER` | ws | 59.93 / 83.06 / 98.78 / 80.03 / 117.48 / 88.95% | 88.04% | 70% / 90% | 최소 통과, 중앙값 미달 |
 | Java | `MULTI_DEALER_DEALER` | wss | 64.00 / 88.39 / 101.26 / 87.47 / 89.22 / 84.45% | 85.80% | 70% / 90% | 최소 통과, 중앙값 미달 |
 | Java | `MULTI_DEALER_ROUTER_REQREP` | tcp | 57.85 / 60.72 / 60.08 / 85.05 / 140.45 / 108.90% | 85.51% | 50% / 70% | 중앙값 통과 |
+| Java | `MULTI_DEALER_ROUTER_REQREP` | tls | 67.10 / 58.60 / 64.78 / 69.08 / 163.30 / 81.78% | 84.11% | 50% / 70% | 중앙값 통과 |
+| Java | `MULTI_DEALER_ROUTER_REQREP` | ws | 67.26 / 71.06 / 68.51 / 66.37 / 80.16 / 78.82% | 72.03% | 50% / 70% | 중앙값 통과 |
+| Java | `MULTI_DEALER_ROUTER_REQREP` | wss | 43.55 / 40.19 / 42.07 / 45.26 / 54.80 / 67.46% | 48.89% | 50% / 70% | 최소 기준 미달, hot path 검토 중 |
 | Java | `MULTI_DEALER_ROUTER_SENDSEND` | tcp | 68.65 / 69.48 / 69.41 / 73.75 / 141.34 / 103.96% | 87.77% | 75% / 85% | 중앙값 통과 |
 | Java | `MULTI_DEALER_ROUTER_SENDSEND` | tls | 84.84 / 105.18 / 79.15 / 78.41 / 96.98 / 93.19% | 89.63% | 75% / 85% | 중앙값 통과 |
 | Java | `MULTI_DEALER_ROUTER_SENDSEND` | ws | 83.19 / 76.00 / 78.10 / 72.83 / 96.73 / 96.04% | 83.81% | 75% / 85% | 최소 통과, 중앙값 미달 |
@@ -99,8 +102,8 @@ pattern·transport 평균은 최소 기준과 중앙값 목표를 함께 판정�
 Java 공개 API 경로 재측정 결과는
 `log/2026-08-13-java-public-api-policy-audit.ko.md`에 있다. Node PUB/SUB의 C parity
 결과는 `log/2026-08-12-node-pubsub-poll-parity.ko.md`에 있다.
-Java multi runner는 `log/2026-08-13-java-native-poller-parity.ko.md`부터 C와 같이
-native ready event를 직접 읽고 해당 socket을 `DONT_WAIT`로 drain한다.
+Java multi runner는 public `Poller`와 재사용 `PollEvents`로 C와 같은 한 번의 poll 뒤
+해당 ready socket을 `DONT_WAIT`로 drain한다.
 
 ## 언어별 현재 평균
 
@@ -111,7 +114,7 @@ native ready event를 직접 읽고 해당 socket을 `DONT_WAIT`로 drain한다.
 |---|---:|---:|
 | C++ | 9 | 96.93% |
 | .NET | 7 | 96.37% |
-| Java | 22 | 82.40% |
+| Java | 25 | 80.71% |
 | Node | 20 | 60.18% |
 
 ## 완료 조건

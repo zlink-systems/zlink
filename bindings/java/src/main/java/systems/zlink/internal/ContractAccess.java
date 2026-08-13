@@ -50,6 +50,9 @@ public final class ContractAccess {
 
         void markEvent(PollEvents events, int index, int sourceKindValue,
                        long slot, int revents, int fd);
+
+        void markSocketEvent(PollEvents events, int index, long slot,
+                             int revents);
     }
 
     public interface RoutingIdAccess {
@@ -378,6 +381,11 @@ public final class ContractAccess {
                                            int revents, int fd) {
         pollEventsAccess().markEvent(events, index, sourceKindValue, slot,
             revents, fd);
+    }
+
+    public static void pollEventsMarkSocketEvent(PollEvents events, int index,
+                                                 long slot, int revents) {
+        pollEventsAccess().markSocketEvent(events, index, slot, revents);
     }
 
     public static RoutingId routingIdFromTrusted(byte[] value) {
